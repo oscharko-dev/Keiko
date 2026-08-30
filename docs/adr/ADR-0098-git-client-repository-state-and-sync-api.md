@@ -276,6 +276,13 @@ The group registers four POST routes:
   `GitSyncOutcome` and append content-free `recordGitSyncEvidence`; uninspectable worktrees return a
   409 without invoking network Git.
 
+The execute routes also require the server-owned accepted-run Authority Envelope and re-check its
+identity immediately before the network command. A continuity denial returns the same correlated
+403 contract as admission and emits the body-free no-spawn marker; because no fetch or pull attempt
+occurred, it does not append a synthetic `git-error` record to the sync ledger. This runtime-authority
+gate does not route fetch/pull through the governed mutation kernel or widen its frozen action-kind
+taxonomy.
+
 The group is registered in `routes.ts` by spreading `...GIT_DELIVERY_SYNC_ROUTE_GROUP` next to the
 other git-delivery groups, with a comment citing #1573.
 

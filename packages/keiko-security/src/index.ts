@@ -74,6 +74,7 @@ export {
 export {
   DEFAULT_WINDOWS_SYSTEM_ROOT,
   WINDOWS_CMD_METACHARACTER_SOURCE,
+  resolveWindowsPowerShellExecutable,
   resolveWindowsSystemBinary,
   resolveWindowsSystemDirectory,
   resolveWindowsSystemExecutable,

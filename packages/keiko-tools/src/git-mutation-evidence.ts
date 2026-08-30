@@ -133,6 +133,7 @@ const ACTION_HINT_BY_BLOCK_REASON: Readonly<
   Record<GitDeliveryBlockReason, GitDeliveryRecoveryActionHint>
 > = {
   "policy-pack-blocked": "adjust-policy-target",
+  "authority-denied": "adjust-policy-target",
   "protected-branch": "adjust-policy-target",
   "provider-capability-absent": "adjust-policy-target",
   "approval-expired": "request-approval",

@@ -251,6 +251,7 @@ function mapAdapterError(
   deps: UiHandlerDeps,
   error: NativeFileDialogAdapterError,
 ): RouteResult {
+  emitAdapterDiagnostic(ctx, deps, error);
   if (error.reason === "unsupported") {
     return dialogError(
       501,
@@ -259,7 +260,6 @@ function mapAdapterError(
       ctx.correlationId,
     );
   }
-  emitAdapterDiagnostic(ctx, deps, error);
   if (error.reason === "timeout") {
     return dialogError(
       504,

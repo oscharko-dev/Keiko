@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createPortablePlatformVerifier } from "./update-portable-platform-verification.js";
 
 interface CommandCall {
@@ -38,17 +38,18 @@ type CommandCallRecorder = (
 const WINDOWS_SIGNER = "A".repeat(40);
 const MACOS_TEAM_OUTPUT = "TeamIdentifier=ABCDE12345\n";
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
-
 describe("portable platform verification", () => {
   it("runs local Authenticode verification for Windows launchers", async () => {
-    vi.stubEnv("SystemRoot", String.raw`D:\Attacker`);
+    const trustedRoot = String.raw`D:\Windows`;
     const recorder = commandRecorder(() => WINDOWS_SIGNER);
     const verifier = createPortablePlatformVerifier({
       hostPlatform: "win32",
       runCommand: recorder.run,
+      windowsSystem: {
+        env: { SystemRoot: trustedRoot },
+        existsAsFile: () => true,
+        identityCheck: (candidate) => candidate === trustedRoot,
+      },
     });
 
     await verifier({
@@ -59,16 +60,50 @@ describe("portable platform verification", () => {
     });
 
     expect(recorder.calls).toHaveLength(2);
-    expect(recorder.calls[0]?.command).toBe(
-      String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
-    );
+    expect(recorder.calls.map((call) => call.command)).toEqual([
+      String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+      String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+    ]);
     expect(recorder.calls[0]?.args.join(" ")).toContain("Get-AuthenticodeSignature");
     expect(recorder.calls[0]?.args.at(-1)).toBe("C:\\Users\\keiko\\Keiko.exe");
     expect(recorder.calls[1]?.args.at(-1)).toBe("C:\\Users\\keiko\\current\\Keiko.exe");
-    expect(recorder.calls[0]?.env).toMatchObject({
-      SystemRoot: String.raw`C:\Windows`,
-      WINDIR: String.raw`C:\Windows`,
+    expect(recorder.calls.map((call) => call.env)).toEqual([
+      {
+        ComSpec: String.raw`D:\Windows\System32\cmd.exe`,
+        PATH: String.raw`D:\Windows\System32;D:\Windows`,
+        SystemRoot: trustedRoot,
+        WINDIR: trustedRoot,
+      },
+      {
+        ComSpec: String.raw`D:\Windows\System32\cmd.exe`,
+        PATH: String.raw`D:\Windows\System32;D:\Windows`,
+        SystemRoot: trustedRoot,
+        WINDIR: trustedRoot,
+      },
+    ]);
+  });
+
+  it("rejects a hostile Windows system root before invoking the command runner", async () => {
+    const recorder = commandRecorder(() => WINDOWS_SIGNER);
+    const verifier = createPortablePlatformVerifier({
+      hostPlatform: "win32",
+      runCommand: recorder.run,
+      windowsSystem: {
+        env: { SystemRoot: String.raw`D:\Attacker` },
+        existsAsFile: () => true,
+        identityCheck: () => false,
+      },
     });
+
+    await expect(
+      verifier({
+        target: "windows-x64",
+        stagedRoot: String.raw`C:\Users\keiko\stage`,
+        launcherPath: String.raw`C:\Users\keiko\stage\Keiko.exe`,
+        currentLauncherPath: String.raw`C:\Users\keiko\current\Keiko.exe`,
+      }),
+    ).rejects.toMatchObject({ name: "WindowsSystemDirectoryError" });
+    expect(recorder.calls).toEqual([]);
   });
 
   it("runs local codesign, stapler, and Gatekeeper assessment for macOS app bundles", async () => {

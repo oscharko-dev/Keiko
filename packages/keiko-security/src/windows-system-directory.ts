@@ -15,9 +15,10 @@
 // `\\?\GLOBALROOT` escape reaches that namespace without consulting process environment variables,
 // drive mappings, the workspace, or PATH. On win32 this module compares the filesystem identity of
 // an environment-selected candidate with that OS-owned reference and rejects a reparse anywhere in
-// its resolved path. `resolveWindowsSystemDirectory` retains the conventional path only for a
-// sanitized child environment; executable resolvers traverse the authoritative GLOBALROOT path.
-// Shape and binary-existence checks remain defence in depth; identity is the trust decision.
+// its resolved path. The OS-owned GLOBALROOT spelling is the identity oracle only: Node's Windows
+// process launcher rejects it as an image path, so executable resolvers return the conventional,
+// identity-approved drive path. Shape and binary-existence checks remain defence in depth;
+// identity is the trust decision.
 
 import { lstatSync, realpathSync, statSync } from "node:fs";
 import { win32 as win32Path } from "node:path";
@@ -42,6 +43,12 @@ export class WindowsSystemBinaryMissingError extends Error {
 
 export const DEFAULT_WINDOWS_SYSTEM_ROOT = String.raw`C:\Windows`;
 const WINDOWS_OBJECT_MANAGER_SYSTEM_ROOT = String.raw`\\?\GLOBALROOT\SystemRoot`;
+const WINDOWS_POWERSHELL_EXECUTABLE_SEGMENTS = [
+  "System32",
+  "WindowsPowerShell",
+  "v1.0",
+  "powershell.exe",
+] as const;
 
 // Drive-absolute only (`C:\...`). Deliberately excludes every other Windows path SHAPE that
 // resolves against something other than one fixed drive letter: UNC (`\\server\share\...`) and
@@ -119,7 +126,11 @@ function comparableWindowsPath(path: string): string {
   const withoutLocalDevicePrefix = /^\\\\\?\\[A-Za-z]:\\/u.test(normalized)
     ? normalized.slice(4)
     : normalized;
-  return withoutLocalDevicePrefix.replace(/\\+$/u, "").toLowerCase();
+  let end = withoutLocalDevicePrefix.length;
+  while (end > 0 && withoutLocalDevicePrefix.codePointAt(end - 1) === 92) {
+    end -= 1;
+  }
+  return withoutLocalDevicePrefix.slice(0, end).toLowerCase();
 }
 
 // Uses stable filesystem object identity rather than path text. BigInt stats avoid precision loss
@@ -230,8 +241,9 @@ function assertSafeSystemPathSegment(segment: string): void {
  * Resolve a fixed, literal executable path beneath the authenticated Windows root. This is the
  * nested counterpart to `resolveWindowsSystemBinary` for OS tools such as
  * `System32/WindowsPowerShell/v1.0/powershell.exe`. Every component is a bare segment, and the
- * production path is joined beneath the OS-owned GLOBALROOT namespace so the selected environment
- * path is never traversed again after identity validation.
+ * production path is joined beneath the conventional drive path after that root has been matched
+ * to the OS-owned GLOBALROOT identity. `CreateProcessW` cannot launch the GLOBALROOT object-manager
+ * spelling; the validated candidate is therefore both the trust-preserving and executable form.
  */
 export function resolveWindowsSystemExecutable(
   segments: readonly string[],
@@ -246,17 +258,33 @@ export function resolveWindowsSystemExecutable(
   }
   for (const segment of segments) assertSafeSystemPathSegment(segment);
   const selectedRoot = resolveWindowsSystemDirectory(env, identityCheck);
-  // The test identity port changes only the decision, never the path selected after acceptance.
-  // Referential equality is not a trust boundary: a wrapper around the production checker must be
-  // just as safe as the function itself. Every real win32 resolution therefore uses GLOBALROOT;
-  // off-Windows hermetic tests retain their lexical Windows join.
-  const executableRoot =
-    process.platform === "win32" ? WINDOWS_OBJECT_MANAGER_SYSTEM_ROOT : selectedRoot;
-  const resolved = win32Path.join(executableRoot, ...segments);
+  // GLOBALROOT remains the identity oracle above. It must not become the CreateProcess image path:
+  // Node rejects that NT object-manager spelling with EINVAL on Windows. The selected root is
+  // drive-absolute, reparse-free, and identity-matched before this conventional path is formed.
+  const resolved = win32Path.join(selectedRoot, ...segments);
   if (!existsAsFile(resolved)) {
     throw new WindowsSystemBinaryMissingError();
   }
   return resolved;
+}
+
+/**
+ * The single nested executable contract for inbox Windows PowerShell 5.1.
+ *
+ * Keeping these literal segments at the trust-owning layer prevents callers from silently drifting
+ * to a different executable while retaining the shared SystemRoot validation.
+ */
+export function resolveWindowsPowerShellExecutable(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  existsAsFile: WindowsBinaryExistsCheck | undefined = defaultWindowsBinaryExists,
+  identityCheck: WindowsSystemDirectoryIdentityCheck | undefined = defaultSystemDirectoryIdentity,
+): string {
+  return resolveWindowsSystemExecutable(
+    WINDOWS_POWERSHELL_EXECUTABLE_SEGMENTS,
+    env,
+    existsAsFile,
+    identityCheck,
+  );
 }
 
 /**

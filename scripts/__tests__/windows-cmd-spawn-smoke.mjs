@@ -43,6 +43,8 @@ assert.equal(
   "win32",
   "windows-cmd-spawn-smoke: this smoke must run on a Windows host",
 );
+const ACTUAL_SYSTEM_ROOT = process.env.SystemRoot ?? process.env.WINDIR;
+assert.notEqual(ACTUAL_SYSTEM_ROOT, undefined, "Windows did not expose its system root");
 
 // Records the argv the child actually received. Node parses its own command line with the CRT rules
 // CreateProcess feeds it, so this observation is not filtered through a second cmd.exe parse.
@@ -120,8 +122,8 @@ function spawnThroughWrapper(shimPath, args, root, outPath) {
   );
   assert.equal(
     invocation.command.toLowerCase(),
-    String.raw`\\?\GLOBALROOT\SystemRoot\System32\cmd.exe`.toLowerCase(),
-    "the production wrapper must spawn through the OS-owned SystemRoot namespace",
+    join(ACTUAL_SYSTEM_ROOT, "System32", "cmd.exe").toLowerCase(),
+    "the production wrapper must spawn the identity-approved conventional System32 command",
   );
   rmSync(outPath, { force: true });
   return spawnSync(invocation.command, invocation.args, {
@@ -263,9 +265,7 @@ function runWindowsCmdSpawnSmoke() {
     const fakeSystemRoot = join(root, "fake-windows");
     writeFixture(join(fakeSystemRoot, "System32", "cmd.exe"), "not an operating-system binary");
     const junctionSystemRoot = join(root, "junction-windows");
-    const actualSystemRoot = process.env.SystemRoot ?? process.env.WINDIR;
-    assert.notEqual(actualSystemRoot, undefined, "Windows did not expose its system root");
-    symlinkSync(actualSystemRoot, junctionSystemRoot, "junction");
+    symlinkSync(ACTUAL_SYSTEM_ROOT, junctionSystemRoot, "junction");
     assertSystemRootRejectedBeforeSpawn("workspace fake root", ordinaryShim, fakeSystemRoot);
     assertSystemRootRejectedBeforeSpawn(
       "workspace junction root",

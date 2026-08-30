@@ -9,8 +9,8 @@ import {
 import { resolveEditorM11Settings } from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
 import { expectViewportModal } from "./support/modal.js";
 import { clickWindowChromeButton } from "./support/window-chrome.js";
-import { focusMonacoInput } from "./support/editor-chord.js";
-import { replaceEditorBuffer } from "./support/editor-chord.js";
+import { enterEmptyEditorBuffer, replaceEditorBuffer } from "./support/editor-chord.js";
+import { isBenignWebKitResizeObserverDelivery } from "./support/editorWorkspace.js";
 
 const CHAT_MODEL_ID = "e2e-chat-model";
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
@@ -31,11 +31,17 @@ function isBenignMonacoCancellation(error: Error): boolean {
 
 function collectPageErrors(page: Page): () => void {
   const errors: string[] = [];
+  const browserName = page.context().browser()?.browserType().name();
   page.on("pageerror", (error) => {
     // Monaco can surface a benign cancellation as an unhandled page error when an inline-completion
     // request is superseded while the smoke test continues. Keep the guard strict for all real app
     // errors, but do not fail the release smoke on that editor-internal cancellation noise.
-    if (isBenignMonacoCancellation(error)) return;
+    if (
+      isBenignMonacoCancellation(error) ||
+      isBenignWebKitResizeObserverDelivery(browserName, error)
+    ) {
+      return;
+    }
     errors.push(error.message);
   });
   return () => {
@@ -231,6 +237,20 @@ async function replaceMonacoText(
   workspaceRoot: string,
 ): Promise<void> {
   await replaceEditorBuffer(page, editorWindow, text, workspaceRoot);
+}
+
+async function enterInitialMonacoText(
+  page: Page,
+  editorWindow: ReturnType<Page["getByRole"]>,
+  text: string,
+  workspaceRoot: string,
+  browserName: string,
+): Promise<void> {
+  if (browserName === "firefox") {
+    await enterEmptyEditorBuffer(page, editorWindow, text, workspaceRoot);
+    return;
+  }
+  await replaceMonacoText(page, editorWindow, text, workspaceRoot);
 }
 
 async function stubInlineCompletionRoutes(page: Page): Promise<{
@@ -465,8 +485,8 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   // corruption surface later as an unrelated strict-mode violation.
   // The PRODUCT is not implicated: its own platform detection reads `navigator.platform` from the
   // page and accepts `metaKey || ctrlKey`. What is unproven on Gecko is this buffer-replacement
-  // TEST GESTURE, not the editor. Everything else in this smoke — 69 of 72 journeys — runs on
-  // Firefox, and all 72 run on Chromium (Edge/Chrome, the fleet browsers).
+  // TEST GESTURE, not the editor. Everything else in this smoke — 72 of 73 journeys — runs on
+  // Firefox, and all 73 run on Chromium and WebKit.
   test.skip(
     browserName === "firefox",
     "Monaco select-all does not reach the EditContext fallback surface on Gecko; the buffer-replacement gesture is unproven there (the rest of this smoke runs on Firefox)",
@@ -580,6 +600,7 @@ test("selected workspace keeps root-relative ids and internal navigation @smoke"
 test("editor presents the VS Code-feeling UX surface: status bar, tabs, cursor, command palette @smoke", async ({
   page,
   request,
+  browserName,
 }, testInfo) => {
   // Issue #1205: the browser interaction smoke for the VS Code-feeling UX — the unified status bar,
   // accessible tabs, live cursor reporting, and Monaco's native command palette carrying the Keiko
@@ -605,7 +626,7 @@ test("editor presents the VS Code-feeling UX surface: status bar, tabs, cursor, 
   await expect(editorWindow.getByRole("tabpanel")).toBeVisible();
 
   // Typing updates the live cursor field; "const answer = 42;" is 18 chars → caret at column 19.
-  await replaceMonacoText(page, editorWindow, "const answer = 42;", projectPath);
+  await enterInitialMonacoText(page, editorWindow, "const answer = 42;", projectPath, browserName);
   await expect(statusBar.locator('[data-field="cursor"]')).toHaveText("Ln 1, Col 19");
 
   // Command palette integration: F1 opens Monaco's native palette carrying the Keiko Generate Tests
@@ -634,23 +655,6 @@ test("editor surfaces diagnostics and hover from the governed language service @
   request,
   browserName,
 }) => {
-  // KNOWN CROSS-ENGINE GAP — Gecko only, tracked, NOT a silent exclusion.
-  // This journey replaces the whole editor buffer before asserting. Monaco 0.56 uses the
-  // EditContext API where it exists and falls back to `textarea.inputarea` where it does not;
-  // Firefox has no EditContext (verified from a trace snapshot of this editor:
-  // `native-edit-context` 0 occurrences, `inputarea` 2). On that fallback surface neither Ctrl+A
-  // nor Cmd+A reaches Monaco's keybinding service, so the delete-plus-paste sequence cannot replace
-  // the full model and stale content survives. The shared helper
-  // (support/editor-chord.ts) now fails loudly at that exact point instead of letting the
-  // corruption surface later as an unrelated strict-mode violation.
-  // The PRODUCT is not implicated: its own platform detection reads `navigator.platform` from the
-  // page and accepts `metaKey || ctrlKey`. What is unproven on Gecko is this buffer-replacement
-  // TEST GESTURE, not the editor. Everything else in this smoke — 69 of 72 journeys — runs on
-  // Firefox, and all 72 run on Chromium (Edge/Chrome, the fleet browsers).
-  test.skip(
-    browserName === "firefox",
-    "Monaco select-all does not reach the EditContext fallback surface on Gecko; the buffer-replacement gesture is unproven there (the rest of this smoke runs on Firefox)",
-  );
   // Issue #1201: the deterministic server language service drives Monaco markers (diagnostics) and the
   // hover widget (quick info) for a TS/JS buffer. This proves the end-to-end browser path: edit ->
   // governed BFF (/api/editor/language) -> Monaco surface, against the real app (no mocks). The first
@@ -682,11 +686,12 @@ test("editor surfaces diagnostics and hover from the governed language service @
   await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
 
   // A buffer with a deliberate type error on line 1 and a hoverable symbol used on line 2.
-  await replaceMonacoText(
+  await enterInitialMonacoText(
     page,
     editorWindow,
-    "const greeting: string = 42;\ngreeting;\n",
+    "const greeting: string = 42;\ngreeting;",
     projectPath,
+    browserName,
   );
 
   // Diagnostics: the type error must surface as a Monaco error squiggle (markers set by the bridge
@@ -726,23 +731,6 @@ test("editor inline ghost text renders and Tab accepts it @smoke", async ({
   request,
   browserName,
 }) => {
-  // KNOWN CROSS-ENGINE GAP — Gecko only, tracked, NOT a silent exclusion.
-  // This journey replaces the whole editor buffer before asserting. Monaco 0.56 uses the
-  // EditContext API where it exists and falls back to `textarea.inputarea` where it does not;
-  // Firefox has no EditContext (verified from a trace snapshot of this editor:
-  // `native-edit-context` 0 occurrences, `inputarea` 2). On that fallback surface neither Ctrl+A
-  // nor Cmd+A reaches Monaco's keybinding service, so the delete-plus-paste sequence cannot replace
-  // the full model and stale content survives. The shared helper
-  // (support/editor-chord.ts) now fails loudly at that exact point instead of letting the
-  // corruption surface later as an unrelated strict-mode violation.
-  // The PRODUCT is not implicated: its own platform detection reads `navigator.platform` from the
-  // page and accepts `metaKey || ctrlKey`. What is unproven on Gecko is this buffer-replacement
-  // TEST GESTURE, not the editor. Everything else in this smoke — 69 of 72 journeys — runs on
-  // Firefox, and all 72 run on Chromium (Edge/Chrome, the fleet browsers).
-  test.skip(
-    browserName === "firefox",
-    "Monaco select-all does not reach the EditContext fallback surface on Gecko; the buffer-replacement gesture is unproven there (the rest of this smoke runs on Firefox)",
-  );
   const projectPath = createProjectFixture();
   const relativePath = "packages/keiko-cli/src/run.ts";
   const absolutePath = join(projectPath, relativePath);
@@ -751,7 +739,19 @@ test("editor inline ghost text renders and Tab accepts it @smoke", async ({
   const assertNoPageErrors = collectPageErrors(page);
 
   const editorWindow = await openSmokeEditor(page, request, projectPath, relativePath);
-  await replaceMonacoText(page, editorWindow, "export function answer() {\n  ret", projectPath);
+  if (browserName === "firefox") {
+    // Trusted Gecko key events exercise Monaco's real auto-indent/auto-close behaviour. Type only
+    // the characters a user supplies and verify the complete formatted model they produce.
+    await enterEmptyEditorBuffer(
+      page,
+      editorWindow,
+      "export function answer() {\nret",
+      projectPath,
+      "export function answer() {\n  ret\n}",
+    );
+  } else {
+    await replaceMonacoText(page, editorWindow, "export function answer() {\n  ret", projectPath);
+  }
   await expect.poll(() => inlineRequests.length).toBeGreaterThan(0);
   await expect(page.getByRole("alert").filter({ hasText: "urn 42;" }).first()).toBeVisible();
 
@@ -826,43 +826,27 @@ test("memory and local-knowledge navigation surfaces load without client errors 
   assertNoPageErrors();
 });
 
-// The Gecko-safe half of the three journeys above, and the reason they can stay skipped without
-// leaving the editor unproven on a second engine (PR #3355 review).
-//
-// What those three skip is one GESTURE: replacing the whole buffer via select-all, delete, and
-// paste.
-// Monaco 0.56 has no EditContext on Gecko, so the chord never reaches its keybinding service.
-// Everything AROUND that gesture — mounting the editor, loading a file through the governed read
-// path, rendering its content, the status bar, tab switching, closing — is engine-independent
-// product surface, and it was the part left untested on Firefox.
-//
-// This journey exercises exactly that, on BOTH engines, with no buffer replacement anywhere. It
-// deliberately does not try to edit: an editing proof on Gecko needs a gesture that works there,
-// and inventing one here would re-open the very question the skips document.
-test("editor opens and renders a governed file read on both engines @smoke", async ({
+// Gecko-safe edit/save proof. The full conflict/reload journey above still needs whole-buffer
+// replacement and keeps its explicit Firefox skip, but a known-empty model can be mutated through
+// Monaco's real key-event input on every engine without relying on select-all.
+test("editor edits and saves a known-empty governed file on both engines @smoke", async ({
   page,
   request,
+  browserName,
 }) => {
   const projectPath = createProjectFixture();
   const relativePath = "packages/keiko-cli/src/run.ts";
-  writeFileSync(join(projectPath, relativePath), "export const first = 1;\n", "utf8");
+  const absolutePath = join(projectPath, relativePath);
+  writeFileSync(absolutePath, "", "utf8");
   const assertNoPageErrors = collectPageErrors(page);
 
-  // openSmokeEditor already proves the tree navigation, the "Open in editor" action, that Monaco
-  // mounts, and that no duplicate workspace-trust dialog appears — all on whichever engine runs it.
   const editorWindow = await openSmokeEditor(page, request, projectPath, relativePath);
-
-  // The file's REAL content reached Monaco through the governed read path, not an empty shell.
-  await expect(editorWindow.locator(".view-line").first()).toContainText("export const first");
-  // The unified status bar is mounted and reports the clean buffer (nothing was edited here).
-  await expect(editorWindow.locator('[data-field="save"]')).toBeVisible();
-  // The opened file owns the active tab.
-  await expect(editorWindow.getByRole("tab", { selected: true })).toContainText("run.ts");
-  // And the editor's input surface exists on this engine — the EditContext div on Chromium, the
-  // textarea fallback on Gecko. `focusMonacoInput` resolves whichever one this engine created, so
-  // this asserts the surface is REACHABLE without performing the buffer-replacement gesture the
-  // three skips above document as unproven on Gecko.
-  await focusMonacoInput(editorWindow);
+  const content = "export const crossEngineEdit = true;";
+  await enterInitialMonacoText(page, editorWindow, content, projectPath, browserName);
+  await expect(editorWindow.locator('[data-field="save"]')).toHaveText("Unsaved");
+  await editorWindow.getByRole("button", { name: "Save" }).click();
+  await expect.poll(() => readFileSync(absolutePath, "utf8")).toBe(content);
+  await expect(editorWindow.locator('[data-field="save"]')).toHaveText("Saved");
 
   assertNoPageErrors();
 });

@@ -18,7 +18,6 @@ import {
 const CMD_PATH = String.raw`C:\Users\test\AppData\Roaming\npm\npm.cmd`;
 const UNC_CMD_PATH = String.raw`\\build-server\share\tools\npm.cmd`;
 const SHIM_CMD_PATH = String.raw`C:\proj\node_modules\.bin\tsserver.cmd`;
-const GLOBALROOT_SYSTEM_ROOT = String.raw`\\?\GLOBALROOT\SystemRoot`;
 const TRUSTED_SYSTEM_ROOT = {
   existsAsFile: (): boolean => true,
   systemDirectoryIdentity: (): boolean => true,
@@ -29,13 +28,8 @@ const WIN_ENV = {
   ...TRUSTED_SYSTEM_ROOT,
 };
 
-// Production win32 always traverses the OS-owned namespace after the injected identity decision;
-// an off-host hermetic run cannot traverse that namespace and deliberately retains the selected
-// lexical fixture root. Do not fake process.platform here: the real Windows lane must exercise the
-// production branch that this expectation describes.
 function expectedSystemBinary(selectedRoot: string, binaryName: string): string {
-  const root = process.platform === "win32" ? GLOBALROOT_SYSTEM_ROOT : selectedRoot;
-  return `${root}\\System32\\${binaryName}`;
+  return `${selectedRoot}\\System32\\${binaryName}`;
 }
 
 const CMD_EXE = expectedSystemBinary(String.raw`C:\Windows`, "cmd.exe");

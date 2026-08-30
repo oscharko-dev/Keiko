@@ -235,6 +235,30 @@ async function performReplacementGesture(
 }
 
 /**
+ * Enters `text` into an editor whose model is known to be empty. Real key events drive Monaco's
+ * native textarea path on Gecko; page-dispatched clipboard events are correctly untrusted there,
+ * while direct protocol insertion duplicates the textarea payload in Monaco 0.56 on Firefox. No
+ * select-all is needed for an empty model. The exact hot-exit write remains the product-backed
+ * assertion, so a silent gesture, input transformation or stale model fails closed.
+ */
+export async function enterEmptyEditorBuffer(
+  page: Page,
+  editorWindow: Locator,
+  text: string,
+  workspaceRoot: string,
+  expectedContent = text,
+): Promise<void> {
+  const identity = await activeEditorIdentity(editorWindow);
+  await focusMonacoInput(editorWindow);
+  const expectation = { ...identity, content: expectedContent, workspaceRoot };
+  const exactBufferObserved = page.waitForRequest(
+    (request) => isExactHotExitWrite(request, expectation),
+    { timeout: 10_000 },
+  );
+  await Promise.all([exactBufferObserved, page.keyboard.type(text)]);
+}
+
+/**
  * Replaces the whole editor buffer with `text` — the shared, fail-closed version of the
  * click-selectAll-insert dance that several specs previously each carried their own copy of. The
  * calling journeys retain an explicit Gecko skip until Monaco's fallback input accepts select-all.

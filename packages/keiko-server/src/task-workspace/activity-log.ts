@@ -1,8 +1,8 @@
 // Body-free server-activity-log evidence for the task-workspace lifecycle (Issue #445-#448, Epic
 // #443, AGENTS.md §8).
 //
-// Every provision/activate/pause/resume/handoff/reconcile/repair/cleanup outcome already writes ONE
-// content-free document to the EvidenceStore (evidence.ts's `appendWorkspaceLifecycleEvidence`) — but
+// Every provision/activate/pause/resume/handoff/reconcile/repair/cleanup outcome attempts ONE
+// content-free document in the EvidenceStore (evidence.ts's `appendWorkspaceLifecycleEvidence`) — but
 // that ledger is a SEPARATE audit surface, keyed by event id and read back through the evidence store,
 // never through `<stateDir>/logs/server.log`. Before this module, no task-workspace service emitted a
 // `ServerLogEvent` at all, so the machine-reconstruction contract ADR-0173 requires of the activity log
@@ -10,9 +10,10 @@
 // reconciled, or cleaned up" — only the evidence ledger could, and an operator/agent reconstructing a
 // defect from `server.log` alone (the documented Rule-2 path, AGENTS.md §8) has no entry point into it.
 //
-// This is the ONE shared adapter every one of the five services' own central `emit`-style helper calls
-// alongside its EvidenceStore write, at the exact point it already builds the matching record — so the
-// two never drift out of step and always carry the SAME correlationId.
+// `recordWorkspaceLifecycle` is the ONE shared adapter every service's central `emit`-style helper
+// calls at the point it builds the matching record. It owns both the EvidenceStore append and the
+// activity-log projection; a failed append emits its own correlated diagnostic before the ordinary
+// lifecycle line, so a missing ledger record can never look like a fully persisted outcome.
 //
 // SHAPE, FOLLOWING THE ESTABLISHED CONVENTION
 //
@@ -28,11 +29,10 @@
 // of every git-delivery action kind, with the differentiator riding in `extra`/`errorKind` rather than
 // in a combinatorial explosion of op literals (`task-workspace.provision.completed`,
 // `task-workspace.provision.failed`, `task-workspace.activate.completed`, ... — sixteen-plus literals
-// for eight operations × outcome-class, none of them reachable as a single static string at the one
-// `.write()` call site the op-catalog generator can resolve; see AGENTS.md's op-catalog rule). An agent
-// reconstructing a run filters this one op by `extra.operation` (`provision`/`activate`/.../`cleanup`)
-// and `extra.outcome`, exactly as it already filters `git.delivery.mutation.completed` by
-// `extra.actionKind`/`extra.status`.
+// for eight operations × outcome-class). The single write site below uses a top-level literal const,
+// so the op-catalog generator resolves the closed op without dynamic string construction. An agent
+// reconstructing a run filters this one op by `extra.operation` (`provision`/`activate`/.../`cleanup`),
+// then by `extra.outcome` for settled outcomes or `errorKind` for a thrown rejection.
 //
 // `errorKind` on a failure-classified outcome is always a short identifier/taxonomy code, never a
 // sentence. Lowercase hyphenated `WorkspaceLifecycleOutcome`/`WorkspaceReconciliationStatus`
@@ -40,16 +40,28 @@
 // shared `ERROR_KIND_PATTERN` (keiko-contracts/observability.ts, ADR-0173 D11). No second vocabulary
 // is needed; each caller's existing closed code set already conforms.
 
+import { sha256Hex } from "@oscharko-dev/keiko-security";
+import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { correlationIdOrUnknown } from "../correlation.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import type { WorkspaceLifecycleOperation, WorkspaceLifecycleOutcome } from "./evidence.js";
+import { TaskWorkspaceError } from "./errors.js";
+import {
+  appendWorkspaceLifecycleEvidence,
+  type WorkspaceLifecycleEvidenceRecord,
+  type WorkspaceLifecycleOperation,
+  type WorkspaceLifecycleOutcome,
+} from "./evidence.js";
 
-// The one literal this module's single `.write()` call site carries — see the module comment for why
-// it is one op rather than one per operation. Declared as a top-level UPPER_SNAKE const so the
-// op-catalog generator resolves it as a literal (`generate-op-catalog.mjs`'s `collectConstStrings`)
-// even though the `.write()` call itself references the constant rather than restating the string.
+// The one literal this module's shared write site carries — see the module comment for why it is one
+// op rather than one per operation. Declared as a top-level UPPER_SNAKE const so the op-catalog
+// generator resolves it as a literal (`generate-op-catalog.mjs`'s `collectConstStrings`) even though
+// the `.write()` call references the constant rather than restating the string.
 const TASK_WORKSPACE_LIFECYCLE_OP = "task-workspace.lifecycle";
+const EVIDENCE_PERSISTENCE_ERROR_KIND = "EVIDENCE_PERSISTENCE_FAILED";
+const WORKSPACE_LOG_IDENTITY_PREFIX = "wsref_";
+const RECORDED_FAILURE_LOG_KEYS = new WeakMap<TaskWorkspaceError, Set<string>>();
 
 // Every #445-#448 service deps bundle carries this OPTIONAL seam, mirroring
 // `GitDeliveryTerminationLogSeam` (gitDelivery/execution.ts): production falls back to the process-wide
@@ -74,6 +86,9 @@ export interface WorkspaceLifecycleLogInput {
   readonly operation: WorkspaceLifecycleOperation;
   readonly outcome: WorkspaceLifecycleOutcome;
   readonly workspaceId: string;
+  // Kept on this private adapter input so the formatted-line regression can exercise hostile values
+  // at the final projection boundary. It is deliberately NEVER copied into `extra`: taskId is a
+  // free-form API value, while workspaceId is the operation's deterministic opaque identity.
   readonly taskId: string;
   readonly correlationId: string | undefined;
   readonly attempt: number;
@@ -90,24 +105,49 @@ export interface WorkspaceLifecycleLogInput {
   readonly errorCode?: string | undefined;
 }
 
+export interface WorkspaceLifecycleFailureInput {
+  readonly operation: WorkspaceLifecycleOperation;
+  readonly workspaceIdentitySeed: string;
+  readonly correlationId: string | undefined;
+  // Some operations persist and log a classified lifecycle failure before rethrowing the same
+  // rejection. Their operation-local tracker suppresses a second, less-specific diagnostic line.
+  readonly failureOutcomeAlreadyRecorded?: (() => boolean) | undefined;
+}
+
+export interface RecordWorkspaceLifecycleInput {
+  readonly evidenceStore: EvidenceStore;
+  readonly record: WorkspaceLifecycleEvidenceRecord;
+  readonly redactString: (input: string) => string;
+  readonly errorCode?: string | undefined;
+}
+
+interface WorkspaceErrorTrace {
+  readonly frames?: readonly string[] | undefined;
+  readonly causeChain?: readonly string[] | undefined;
+}
+
 function resolvedErrorKind(input: WorkspaceLifecycleLogInput): string | undefined {
   if (input.errorCode !== undefined) return input.errorCode;
   return FAILURE_OUTCOMES.has(input.outcome) ? input.outcome : undefined;
 }
 
-// The ONE place a #445-#448 lifecycle outcome becomes a `server.log` line. Called from each service's
-// own central `emit`-style helper, at the exact point it already builds the matching EvidenceStore
-// record (evidence.ts), so the two can never drift out of step.
+function writeWorkspaceLog(
+  seam: WorkspaceActivityLogSeam,
+  event: Omit<ServerLogEvent, "category" | "op">,
+): void {
+  const sink = seam.activityLog ?? processServerLogSink();
+  sink.write({ ...event, category: "diagnostic", op: TASK_WORKSPACE_LIFECYCLE_OP });
+}
+
+// The ONE projection for a settled #445-#448 lifecycle outcome. `recordWorkspaceLifecycle` below owns
+// the paired EvidenceStore append; direct callers exist only for the projection's focused unit tests.
 export function logWorkspaceLifecycle(
   seam: WorkspaceActivityLogSeam,
   input: WorkspaceLifecycleLogInput,
 ): void {
-  const sink = seam.activityLog ?? processServerLogSink();
   const errorKind = resolvedErrorKind(input);
-  sink.write({
+  writeWorkspaceLog(seam, {
     level: errorKind === undefined ? "info" : "warn",
-    category: "diagnostic",
-    op: TASK_WORKSPACE_LIFECYCLE_OP,
     correlationId: correlationIdOrUnknown(input.correlationId),
     durationMs: input.durationMs,
     ...(errorKind === undefined ? {} : { errorKind }),
@@ -115,9 +155,124 @@ export function logWorkspaceLifecycle(
       operation: input.operation,
       outcome: input.outcome,
       workspaceId: input.workspaceId,
-      taskId: input.taskId,
       attempt: input.attempt,
       worktreeCount: input.worktreeCount,
     },
   });
+}
+
+function errorTrace(error: unknown): WorkspaceErrorTrace {
+  const frames = keikoStackFrames(error);
+  const causes = causeChain(error);
+  return {
+    ...(frames.length === 0 ? {} : { frames }),
+    ...(causes.length === 0 ? {} : { causeChain: causes }),
+  };
+}
+
+function workspaceLogIdentity(workspaceId: string): string {
+  const digest = sha256Hex(`task-workspace-log-v1\0${workspaceId}`).slice(0, 24);
+  return `${WORKSPACE_LOG_IDENTITY_PREFIX}${digest}`;
+}
+
+function logWorkspaceEvidencePersistenceFailure(
+  seam: WorkspaceActivityLogSeam,
+  record: WorkspaceLifecycleEvidenceRecord,
+  error: unknown,
+): void {
+  writeWorkspaceLog(seam, {
+    level: "error",
+    correlationId: correlationIdOrUnknown(record.event.correlationId),
+    errorKind: EVIDENCE_PERSISTENCE_ERROR_KIND,
+    extra: {
+      operation: record.operation,
+      outcome: record.outcome,
+      workspaceId: record.event.workspaceId,
+      eventId: record.event.eventId,
+      evidencePersistence: "failed",
+      ...errorTrace(error),
+    },
+  });
+}
+
+export function recordWorkspaceLifecycle(
+  seam: WorkspaceActivityLogSeam,
+  input: RecordWorkspaceLifecycleInput,
+): void {
+  const { record } = input;
+  appendWorkspaceLifecycleEvidence(input.evidenceStore, record, input.redactString, (error) => {
+    logWorkspaceEvidencePersistenceFailure(seam, record, error);
+  });
+  logWorkspaceLifecycle(seam, {
+    operation: record.operation,
+    outcome: record.outcome,
+    workspaceId: record.event.workspaceId,
+    taskId: record.event.taskId,
+    correlationId: record.event.correlationId,
+    attempt: record.attempt,
+    durationMs: record.durationMs,
+    worktreeCount: record.worktreeCount,
+    errorCode: input.errorCode,
+  });
+}
+
+function logWorkspaceLifecycleFailure(
+  seam: WorkspaceActivityLogSeam,
+  input: WorkspaceLifecycleFailureInput,
+  error: TaskWorkspaceError,
+): void {
+  writeWorkspaceLog(seam, {
+    level: error.outcome === "failed" ? "error" : "warn",
+    correlationId: correlationIdOrUnknown(input.correlationId),
+    errorKind: error.code,
+    extra: {
+      operation: input.operation,
+      workspaceIdentity: workspaceLogIdentity(input.workspaceIdentitySeed),
+      ...errorTrace(error),
+    },
+  });
+}
+
+function failureLogKey(input: WorkspaceLifecycleFailureInput): string {
+  // Nested service boundaries can derive different fallback identity seeds for the same invalid
+  // request (for example lifecycle sees an empty workspaceId while provisioning uses
+  // "invalid-activation"). The thrown error object's identity already scopes this propagation; the
+  // operation + correlation pair prevents a genuinely different nested operation from disappearing.
+  return `${input.operation}\0${correlationIdOrUnknown(input.correlationId)}`;
+}
+
+function failureLogWasRecorded(
+  input: WorkspaceLifecycleFailureInput,
+  error: TaskWorkspaceError,
+): boolean {
+  return (
+    RECORDED_FAILURE_LOG_KEYS.get(error)?.has(failureLogKey(input)) === true ||
+    input.failureOutcomeAlreadyRecorded?.() === true
+  );
+}
+
+function markFailureLogRecorded(
+  input: WorkspaceLifecycleFailureInput,
+  error: TaskWorkspaceError,
+): void {
+  const key = failureLogKey(input);
+  const recorded = RECORDED_FAILURE_LOG_KEYS.get(error);
+  if (recorded === undefined) RECORDED_FAILURE_LOG_KEYS.set(error, new Set([key]));
+  else recorded.add(key);
+}
+
+export async function runWithWorkspaceLifecycleFailureLogging<T>(
+  seam: WorkspaceActivityLogSeam,
+  input: WorkspaceLifecycleFailureInput,
+  action: () => T | Promise<T>,
+): Promise<T> {
+  try {
+    return await action();
+  } catch (error) {
+    if (error instanceof TaskWorkspaceError) {
+      if (!failureLogWasRecorded(input, error)) logWorkspaceLifecycleFailure(seam, input, error);
+      markFailureLogRecorded(input, error);
+    }
+    throw error;
+  }
 }

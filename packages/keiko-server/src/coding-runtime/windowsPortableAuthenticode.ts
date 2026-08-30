@@ -2,9 +2,9 @@ import { execFile, spawnSync } from "node:child_process";
 import { win32 as win32Path } from "node:path";
 import {
   emitSecurityLogEvent,
+  resolveWindowsPowerShellExecutable,
   resolveWindowsSystemBinary,
   resolveWindowsSystemDirectory,
-  resolveWindowsSystemExecutable,
   securityErrorKind,
   type SecurityLogSink,
   type WindowsBinaryExistsCheck,
@@ -17,13 +17,6 @@ import { processServerLogSink } from "../process-log-sink.js";
 
 const WINDOWS_SIGNATURE_TIMEOUT_MS = 10_000;
 const WINDOWS_SIGNER_THUMBPRINT = /^[A-F0-9]{40}$/u;
-
-const WINDOWS_POWERSHELL_SEGMENTS = [
-  "System32",
-  "WindowsPowerShell",
-  "v1.0",
-  "powershell.exe",
-] as const;
 
 export interface WindowsAuthenticodeCommandOptions {
   readonly env: NodeJS.ProcessEnv;
@@ -88,8 +81,7 @@ export function resolveWindowsAuthenticodeSystem(
   const env = options.env ?? process.env;
   try {
     const systemRoot = resolveWindowsSystemDirectory(env, options.identityCheck);
-    const command = resolveWindowsSystemExecutable(
-      WINDOWS_POWERSHELL_SEGMENTS,
+    const command = resolveWindowsPowerShellExecutable(
       env,
       options.existsAsFile,
       options.identityCheck,

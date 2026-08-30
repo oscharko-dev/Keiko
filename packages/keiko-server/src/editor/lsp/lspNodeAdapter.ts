@@ -179,6 +179,10 @@ export type LspSpawnFn = (
 ) => LspSpawnHandle & {
   kill(signal: NodeJS.Signals): void;
   lastKillResult?(): LspProcessKillResult | undefined;
+  /** Releases adapter-owned HOME/runtime state only after the manager proves whole-tree teardown. */
+  releaseRuntimeResources?(): void;
+  /** Present only when an adapter established an OS-owned lifetime boundary before spawn. */
+  treeLifetimeBoundary?: "os-owned" | undefined;
   onExit(callback: (code: number | null) => void): void;
   onError(callback: (error: Error) => void): void;
 };
@@ -426,7 +430,10 @@ function mergeKillResults(
   return next ?? previous;
 }
 
-function wrapChild(child: ChildProcessWithoutNullStreams): ReturnType<LspSpawnFn> {
+function wrapChild(
+  child: ChildProcessWithoutNullStreams,
+  releaseRuntimeResources: () => void,
+): ReturnType<LspSpawnFn> {
   const stdin = child.stdin;
   const stdout = child.stdout;
   const stderr = child.stderr;
@@ -449,6 +456,7 @@ function wrapChild(child: ChildProcessWithoutNullStreams): ReturnType<LspSpawnFn
       lastKillResult = killWrappedChild(child, signal);
     },
     lastKillResult: (): LspProcessKillResult | undefined => lastKillResult,
+    releaseRuntimeResources,
     onExit: (callback): void => {
       child.on("exit", (code) => {
         callback(code);
@@ -546,11 +554,11 @@ export function createDefaultLspSpawnFn(
       throw new LspProcessError("EXECUTABLE_NOT_FOUND");
     }
     const home = homeFactory();
-    // Removes the ephemeral HOME exactly once, on whichever failure/exit path fires first. Every
+    // Removes the ephemeral HOME exactly once, on whichever safe failure/release path fires first. Every
     // path after createEphemeralHome() must run it: a SYNCHRONOUS throw (buildLspSpawnPlan rejecting
     // a control character or an untrusted SystemRoot, or spawn itself),
-    // an ASYNCHRONOUS spawn failure ('error' with no 'exit' following — ENOENT's normal shape), and
-    // the ordinary exit. Before this guard, the sync throws leaked one keiko-lsp-home-* directory
+    // an ASYNCHRONOUS spawn failure ('error' with no 'exit' following — ENOENT's normal shape), or
+    // the manager's post-containment release. Before this guard, sync throws leaked one HOME directory
     // per spawn attempt and emitted no lsp.spawn.failed line.
     const cleanupHomeOnce = oneShotCleanup(() => {
       home.cleanup();
@@ -561,8 +569,11 @@ export function createDefaultLspSpawnFn(
       const plan = buildLspSpawnPlan(executable, args, childEnv, cwd);
       const child = spawnChild(plan.command, plan.args, plan.options);
       spawnedChild = child;
-      child.once("exit", cleanupHomeOnce);
-      const wrapped = wrapChild(child);
+      // The immediate child's exit is not proof that descendants stopped using HOME. The manager
+      // releases this one-shot cleanup only after confirmed whole-tree termination (or an OS-owned
+      // lifetime boundary supplied by another adapter); an unsolicited root exit intentionally
+      // retains the directory together with its durable quarantine lease.
+      const wrapped = wrapChild(child, cleanupHomeOnce);
       // Spawn success is the child's real `spawn` event, not spawn() returning: dispatch always
       // returns, while ENOENT and friends arrive asynchronously via `error`.
       let spawnConfirmed = false;
@@ -604,19 +615,20 @@ function cleanOrTerminateUnwrappedChild(child: ChildProcess, cleanup: () => void
   child.on("error", () => {
     if (child.pid === undefined) cleanup();
   });
-  if (child.exitCode != null || child.signalCode != null) cleanup();
-  else terminateUnwrappedChild(child);
+  if (child.exitCode != null || child.signalCode != null) return;
+  const result = terminateUnwrappedChild(child);
+  if (result?.treeContainment === "confirmed") child.once("exit", cleanup);
 }
 
-function terminateUnwrappedChild(child: ChildProcess): void {
+function terminateUnwrappedChild(child: ChildProcess): LspProcessKillResult | undefined {
   const pid = child.pid;
   if (pid === undefined) {
-    safeKill(child, "SIGKILL");
-    return;
+    return safeKill(child, "SIGKILL");
   }
-  if (child.exitCode != null || child.signalCode != null) return;
+  if (child.exitCode != null || child.signalCode != null) return undefined;
   const result = nodeGroupKill(pid, child, "SIGKILL");
   logLspProcessTerminated(pid, "SIGKILL", result.windowsTreeKill, result.treeContainment);
+  return result;
 }
 
 export const defaultLspSpawnFn: LspSpawnFn = createDefaultLspSpawnFn();

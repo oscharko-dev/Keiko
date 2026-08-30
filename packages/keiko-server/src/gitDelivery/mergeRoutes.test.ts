@@ -392,17 +392,31 @@ describe("merge execute (governed)", () => {
   it("returns approval-required and executes NOTHING without an approval token, still recording evidence (AC1/AC4)", async () => {
     const adapter = recordingMergeAdapter(READY_PROVIDER);
     const evidence = capturingEvidenceStore();
+    const activity: ServerLogEvent[] = [];
     const handler = createHandleMergeExecute({
-      execution: seams({ mergeAdapterFactory: () => adapter.adapter }),
+      execution: seams({
+        mergeAdapterFactory: () => adapter.adapter,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
     });
     const res = await handler(
-      ctxFor(EXECUTE, mergeBody()),
+      {
+        ...ctxFor(EXECUTE, mergeBody()),
+        correlationId: "request-correlation-merge-approval-held",
+      },
       deps({ evidenceStore: evidence.store }),
     );
     const body = res.body as GitDeliveryMergeExecuteResponseBody;
     expect(body.status).toBe("approval-required");
     expect(adapter.merges()).toBe(0);
     expect(evidence.count()).toBeGreaterThan(0);
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({ correlationId: "request-correlation-merge-approval-held" });
+    expect(completed?.extra).toMatchObject({ status: "approval-required" });
   });
 
   it("rejects a forged browser-supplied approval object before merge execution", async () => {
@@ -453,13 +467,25 @@ describe("merge execute (governed)", () => {
       providerCapableStrategies: ["squash"],
     });
     const evidence = capturingEvidenceStore();
+    const activity: ServerLogEvent[] = [];
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const approval = issueMergeApproval(approvalStore);
     const handler = createHandleMergeExecute({
-      execution: seams({ mergeAdapterFactory: () => adapter.adapter, approvalStore }),
+      execution: seams({
+        mergeAdapterFactory: () => adapter.adapter,
+        approvalStore,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
     });
     const res = await handler(
-      ctxFor(EXECUTE, mergeBody({ approval })),
+      {
+        ...ctxFor(EXECUTE, mergeBody({ approval })),
+        correlationId: "request-correlation-merge-blocked",
+      },
       deps({ evidenceStore: evidence.store }),
     );
     const body = res.body as GitDeliveryMergeExecuteResponseBody;
@@ -467,20 +493,41 @@ describe("merge execute (governed)", () => {
     expect((body.readinessBlockers ?? []).map((b) => b.code)).toContain("conflicts");
     expect(adapter.merges()).toBe(0);
     expect(evidence.count()).toBeGreaterThan(0);
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({ correlationId: "request-correlation-merge-blocked" });
+    expect(completed?.extra).toMatchObject({ status: "blocked" });
   });
 
   it("executes the merge when policy, approval, and readiness all pass (AC1)", async () => {
     const adapter = recordingMergeAdapter(READY_PROVIDER);
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const approval = issueMergeApproval(approvalStore);
+    const activity: ServerLogEvent[] = [];
     const handler = createHandleMergeExecute({
-      execution: seams({ mergeAdapterFactory: () => adapter.adapter, approvalStore }),
+      execution: seams({
+        mergeAdapterFactory: () => adapter.adapter,
+        approvalStore,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
     });
-    const res = await handler(ctxFor(EXECUTE, mergeBody({ approval })), deps());
+    const res = await handler(
+      {
+        ...ctxFor(EXECUTE, mergeBody({ approval })),
+        correlationId: "request-correlation-merge-success",
+      },
+      deps(),
+    );
     const body = res.body as GitDeliveryMergeExecuteResponseBody;
     expect(body.status).toBe("succeeded");
     expect(body.merged).toBe(true);
     expect(adapter.merges()).toBe(1);
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({ correlationId: "request-correlation-merge-success" });
+    expect(completed?.extra).toMatchObject({ actionKind: "merge", status: "succeeded" });
   });
 
   // The continuity guard re-checks authority right before remote dispatch (a TOCTOU gap: policy/preflight
@@ -496,6 +543,7 @@ describe("merge execute (governed)", () => {
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const approval = issueMergeApproval(approvalStore);
     const evidence = capturingEvidenceStore();
+    const activity: ServerLogEvent[] = [];
     const baseAuthority = permittedGitDeliveryAuthority(
       () => projectId,
       () => projectId,
@@ -512,23 +560,57 @@ describe("merge execute (governed)", () => {
       },
     };
     const handler = createHandleMergeExecute({
-      execution: seams({ mergeAdapterFactory: () => adapter.adapter, approvalStore }),
+      execution: seams({
+        mergeAdapterFactory: () => adapter.adapter,
+        approvalStore,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
     });
 
     const res = await handler(
-      ctxFor(EXECUTE, mergeBody({ approval })),
+      {
+        ...ctxFor(EXECUTE, mergeBody({ approval })),
+        correlationId: "request-correlation-merge-continuity",
+      },
       deps({ gitDeliveryAuthority: authority, evidenceStore: evidence.store }),
     );
 
     // HTTP contract: the SAME 403 envelope the up-front admission gate returns — never a 200 claiming an
     // internal, retryable failure for a request that was refused before anything was dispatched.
     expect(res.status).toBe(403);
-    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+    expect(res.body).toEqual({
+      error: {
+        code: "GIT_DELIVERY_AUTHORITY_DENIED",
+        message: "The accepted runtime authority does not admit this Git delivery operation.",
+        correlationId: "request-correlation-merge-continuity",
+      },
+    });
+    expect(res.headers).toEqual({
+      "X-Keiko-Correlation-Id": "request-correlation-merge-continuity",
+    });
     expect(reads).toBe(2);
     expect(adapter.merges()).toBe(0);
-    // Evidence contract: no misleading "failed"/retryable record for an attempt the client is never told
-    // happened — consistent with the up-front denial, which also records nothing to the evidence ledger.
-    expect(evidence.count()).toBe(0);
+    expect(evidence.count()).toBe(1);
+    expect(evidence.raw()).toContain('"outcomeClass":"blocked"');
+    expect(evidence.raw()).toContain('"blockReason":"authority-denied"');
+    expect(evidence.raw()).toContain('"disposition":"policy-forbidden"');
+    expect(evidence.raw()).not.toContain('"execution":');
+    expect(
+      activity
+        .filter((event) => event.op.startsWith("git.delivery.authority."))
+        .map((event) => event.extra?.phase),
+    ).toEqual(["admission", "continuity"]);
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({ correlationId: "request-correlation-merge-continuity" });
+    expect(completed?.extra).toMatchObject({
+      status: "blocked",
+      phaseReached: "execute",
+      blockReason: "authority-denied",
+    });
   });
 
   // F4: the SAME mid-flight authority-replacement scenario as the previous test, but asserting the
@@ -585,7 +667,8 @@ describe("merge execute (governed)", () => {
     const marker = activity.find((event) => event.op === "git.delivery.dispatch.no-spawn");
     expect(marker).toBeDefined();
     expect(marker?.correlationId).toBe("request-correlation-merge-no-spawn");
-    expect(marker?.extra?.actionKind).toBe("merge");
+    expect(marker?.extra?.operation).toBe("merge");
+    expect(marker?.status).toBe(403);
   });
 
   it("normalizes a provider rejection into a typed reason + recovery disposition (AC3/AC4)", async () => {
@@ -598,14 +681,71 @@ describe("merge execute (governed)", () => {
     });
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const approval = issueMergeApproval(approvalStore);
+    const activity: ServerLogEvent[] = [];
     const handler = createHandleMergeExecute({
-      execution: seams({ mergeAdapterFactory: () => adapter.adapter, approvalStore }),
+      execution: seams({
+        mergeAdapterFactory: () => adapter.adapter,
+        approvalStore,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
     });
-    const res = await handler(ctxFor(EXECUTE, mergeBody({ approval })), deps());
+    const res = await handler(
+      {
+        ...ctxFor(EXECUTE, mergeBody({ approval })),
+        correlationId: "request-correlation-merge-rejected",
+      },
+      deps(),
+    );
     const body = res.body as GitDeliveryMergeExecuteResponseBody;
     expect(body.mergeRejectionReason).toBe("conflict");
     expect(body.recoveryDisposition).toBe("user-fixable");
     expect(body.recoveryActionHint).toBe("resolve-conflicts");
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({
+      level: "warn",
+      correlationId: "request-correlation-merge-rejected",
+      errorKind: "conflict",
+    });
+    expect(completed?.extra).toMatchObject({ status: "recovery-required" });
+  });
+
+  it("logs a snapshot precondition throw with the request correlation id", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issueMergeApproval(approvalStore);
+    const activity: ServerLogEvent[] = [];
+    const handler = createHandleMergeExecute({
+      execution: seams({
+        approvalStore,
+        snapshotReader: () => Promise.reject(new Error("host path must stay private")),
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
+    });
+
+    const res = await handler(
+      {
+        ...ctxFor(EXECUTE, mergeBody({ approval })),
+        correlationId: "request-correlation-merge-snapshot",
+      },
+      deps(),
+    );
+
+    expect(res.status).toBe(409);
+    const failed = activity.find((event) => event.op === "git.delivery.mutation.failed");
+    expect(failed).toMatchObject({
+      level: "error",
+      correlationId: "request-correlation-merge-snapshot",
+    });
+    expect(typeof failed?.errorKind).toBe("string");
+    expect(failed?.extra).toEqual({ actionKind: "merge", phaseReached: "snapshot" });
+    expect(JSON.stringify(activity)).not.toContain("host path must stay private");
   });
 });
 

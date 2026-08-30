@@ -40,21 +40,18 @@ process.env.KEIKO_LOCAL_STATE_AUDITOR ??= resolve(
 // keiko-cli (unit-tested); the facade only installs it.
 installProcessGuards();
 
-// runCli returns a number for synchronous commands and a Promise<number> for
-// the async `run` command; Promise.resolve normalises both before exiting.
-void Promise.resolve(
-  runCli(
-    process.argv.slice(2),
-    {
-      out: (text: string): void => {
-        process.stdout.write(text);
-      },
-      err: (text: string): void => {
-        process.stderr.write(text);
-      },
+// Await normalizes synchronous and asynchronous commands. Assigning exitCode preserves the result
+// while letting detached-helper error handlers finish their lazy activity-log drain; process.exit()
+// would truncate those late events.
+process.exitCode = await runCli(
+  process.argv.slice(2),
+  {
+    out: (text: string): void => {
+      process.stdout.write(text);
     },
-    process.env,
-  ),
-).then((code) => {
-  process.exit(code);
-});
+    err: (text: string): void => {
+      process.stderr.write(text);
+    },
+  },
+  process.env,
+);

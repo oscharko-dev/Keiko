@@ -458,6 +458,10 @@ typedef struct {
   wchar_t managed_root[KEIKO_PATH_CAP];
   wchar_t tar_path[KEIKO_PATH_CAP];
   wchar_t command[KEIKO_COMMAND_CAP];
+  // Monotonic lifetime latch: once watchdog termination cannot positively prove that its whole
+  // Job Object is empty, no code in this installer may delete staging. Leaving verified temporary
+  // files behind is recoverable; racing cleanup against a possibly-live descendant is not.
+  int staging_cleanup_permitted;
 } keiko_setup_buffers;
 
 static keiko_setup_buffers *keiko_allocate_buffers(void) {
@@ -465,7 +469,12 @@ static keiko_setup_buffers *keiko_allocate_buffers(void) {
   if (heap == NULL) {
     return NULL;
   }
-  return (keiko_setup_buffers *)HeapAlloc(heap, HEAP_ZERO_MEMORY, sizeof(keiko_setup_buffers));
+  keiko_setup_buffers *buffers =
+      (keiko_setup_buffers *)HeapAlloc(heap, HEAP_ZERO_MEMORY, sizeof(keiko_setup_buffers));
+  if (buffers != NULL) {
+    buffers->staging_cleanup_permitted = 1;
+  }
+  return buffers;
 }
 
 static void keiko_free_buffers(keiko_setup_buffers *buffers) {
@@ -647,10 +656,14 @@ typedef struct {
   PROCESS_INFORMATION process;
   // Non-NULL for every child a caller actually receives: keiko_spawn_in_job fails the WHOLE spawn
   // (child torn down, *out zeroed, returns 0) rather than resuming a child it could not put in a
-  // job, so a caller that gets one back always has real containment. NEVER configured
-  // kill-on-close: on the SUCCESS path of the launch step, the started Keiko app must outlive this
-  // installer, so the job handle is simply closed; only the WATCHDOG path terminates the job.
+  // job, so a caller that gets one back always has real containment. Kill-on-close is armed only
+  // by an UNCERTAIN watchdog reap: on the success path of the launch step, the started Keiko app
+  // must outlive this installer, so the ordinary job handle is simply closed.
   HANDLE job;
+  // A watchdog path that could neither prove the job empty nor arm kill-on-close retains the
+  // handle until process exit. The setup-lifetime latch independently forbids staging cleanup, so
+  // this is containment defence in depth rather than the only response to an uncertain reap.
+  int retain_job_handle;
 } keiko_child;
 
 // Spawns suspended, assigns the process to a fresh Job Object, then resumes — the assign must win
@@ -704,39 +717,123 @@ static int keiko_spawn_in_job(const wchar_t *application, wchar_t *command_line,
 // TerminateProcess and TerminateJobObject are both documented ASYNCHRONOUS: each only requests
 // termination and can return before every associated process has actually exited
 // (learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminateprocess).
-// Waiting on just the direct child's handle — the previous shape here — could return while a
-// descendant was still alive and still holding staging-file handles, right as the caller
-// (keiko_close_child) closes this job handle: `keiko_child.job` is deliberately NEVER configured
-// kill-on-close (the launch step's successfully-started Keiko app must survive this installer), so
-// closing it without first observing the job empty would release any survivor unmanaged — the
-// exact defect class this containment exists to close. The bounded
-// JobObjectBasicAccountingInformation poll below reuses the shape
-// native/runtime-supervisor/windows/keiko_runtime_supervisor.c's reconcile_job already proves for
-// this identical contract, gated on TerminateJobObject's own return value rather than discarding
-// it: a failed request has nothing to observe, so this falls through to the direct-process kill
-// below exactly as before.
-static void keiko_terminate_child_tree(keiko_child *child) {
-  if (child->job != NULL && TerminateJobObject(child->job, 1)) {
-    for (int attempt = 0; attempt < KEIKO_JOB_REAP_ATTEMPTS; attempt++) {
-      JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
-      ZeroMemory(&accounting, sizeof(accounting));
-      if (!QueryInformationJobObject(child->job, JobObjectBasicAccountingInformation, &accounting,
-                                     sizeof(accounting), NULL) ||
-          accounting.ActiveProcesses == 0) {
-        break;
-      }
-      Sleep(KEIKO_JOB_REAP_POLL_MS);
-    }
+// Waiting on just the direct child's handle could return while a descendant still holds staging
+// files. The bounded JobObjectBasicAccountingInformation poll below therefore distinguishes three
+// facts: positively empty, kill-on-close armed but not yet observed empty, and fully unconfirmed.
+// Only the first keeps destructive staging cleanup enabled. The latter two monotonically close the
+// setup-lifetime cleanup latch; a failed QueryInformationJobObject or SetInformationJobObject can
+// therefore leave recoverable temporary files, never race deletion against a possibly-live tree.
+typedef enum {
+  KEIKO_JOB_PROBE_FAILED = -1,
+  KEIKO_JOB_PROBE_ACTIVE = 0,
+  KEIKO_JOB_PROBE_EMPTY = 1
+} keiko_job_probe;
+
+typedef enum {
+  KEIKO_JOB_REAP_UNCONFIRMED = 0,
+  KEIKO_JOB_REAP_CONFIRMED = 1,
+  KEIKO_JOB_REAP_KILL_ON_CLOSE_ARMED = 2
+} keiko_job_reap_result;
+
+typedef struct {
+  int (*terminate_job)(HANDLE job);
+  keiko_job_probe (*probe_job)(HANDLE job);
+  int (*arm_kill_on_close)(HANDLE job);
+  void (*sleep_ms)(DWORD milliseconds);
+  void (*terminate_process)(HANDLE process);
+  void (*wait_process)(HANDLE process, DWORD milliseconds);
+} keiko_child_termination_ops;
+
+static keiko_job_probe keiko_probe_job(HANDLE job) {
+  JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
+  ZeroMemory(&accounting, sizeof(accounting));
+  if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting,
+                                 sizeof(accounting), NULL)) {
+    return KEIKO_JOB_PROBE_FAILED;
   }
-  // Best-effort backstop: harmless (and typically already-a-no-op, since the direct child is itself
-  // a member of the job just reaped above) when the job wait already settled it; the only path that
-  // still needs it is a failed TerminateJobObject request or an exhausted poll bound.
-  (void)TerminateProcess(child->process.hProcess, 1);
-  (void)WaitForSingleObject(child->process.hProcess, KEIKO_CHILD_EXIT_GRACE_MS);
+  return accounting.ActiveProcesses == 0 ? KEIKO_JOB_PROBE_EMPTY : KEIKO_JOB_PROBE_ACTIVE;
+}
+
+static int keiko_arm_job_kill_on_close(HANDLE job) {
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+  ZeroMemory(&limits, sizeof(limits));
+  // This is a freshly-created Keiko-owned job with no other configured limits, so setting the one
+  // fail-closed flag cannot erase a caller-owned policy. Closing its final handle then terminates
+  // any descendant whose asynchronous TerminateJobObject request has not completed.
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  return SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
+}
+
+static int keiko_terminate_job(HANDLE job) {
+  return TerminateJobObject(job, 1) != 0;
+}
+
+static void keiko_sleep(DWORD milliseconds) {
+  Sleep(milliseconds);
+}
+
+static void keiko_terminate_process(HANDLE process) {
+  (void)TerminateProcess(process, 1);
+}
+
+static void keiko_wait_process(HANDLE process, DWORD milliseconds) {
+  (void)WaitForSingleObject(process, milliseconds);
+}
+
+static const keiko_child_termination_ops KEIKO_CHILD_TERMINATION_OPS = {
+    keiko_terminate_job, keiko_probe_job, keiko_arm_job_kill_on_close,
+    keiko_sleep, keiko_terminate_process, keiko_wait_process};
+
+static keiko_job_reap_result keiko_reap_job_with(
+    HANDLE job, const keiko_child_termination_ops *ops) {
+  if (job == NULL || !ops->terminate_job(job)) {
+    return job != NULL && ops->arm_kill_on_close(job) ? KEIKO_JOB_REAP_KILL_ON_CLOSE_ARMED
+                                                       : KEIKO_JOB_REAP_UNCONFIRMED;
+  }
+  for (int attempt = 0; attempt < KEIKO_JOB_REAP_ATTEMPTS; attempt++) {
+    keiko_job_probe probe = ops->probe_job(job);
+    if (probe == KEIKO_JOB_PROBE_EMPTY) {
+      return KEIKO_JOB_REAP_CONFIRMED;
+    }
+    // An observation error is never "empty". Stop spending the poll budget and move directly to
+    // the independent kill-on-close backstop; an ACTIVE observation may still settle on a retry.
+    if (probe == KEIKO_JOB_PROBE_FAILED) {
+      break;
+    }
+    ops->sleep_ms(KEIKO_JOB_REAP_POLL_MS);
+  }
+  return ops->arm_kill_on_close(job) ? KEIKO_JOB_REAP_KILL_ON_CLOSE_ARMED
+                                     : KEIKO_JOB_REAP_UNCONFIRMED;
+}
+
+static keiko_job_reap_result keiko_terminate_child_tree_with(
+    keiko_child *child, int *staging_cleanup_permitted,
+    const keiko_child_termination_ops *ops) {
+  keiko_job_reap_result reap = keiko_reap_job_with(child->job, ops);
+  if (reap != KEIKO_JOB_REAP_CONFIRMED) {
+    // Kill-on-close is a termination request, not an exit observation. Until ActiveProcesses == 0
+    // was positively observed, fail closed for the rest of this setup lifetime and retain staging.
+    *staging_cleanup_permitted = 0;
+  }
+  if (reap == KEIKO_JOB_REAP_UNCONFIRMED && child->job != NULL) {
+    child->retain_job_handle = 1;
+  }
+  // Best-effort backstop: harmless (and typically already a no-op, since the direct child is a
+  // member of the job) when the job wait settled it. It cannot upgrade an unconfirmed whole-tree
+  // result, so the lifetime latch above remains closed regardless of the direct child's exit.
+  ops->terminate_process(child->process.hProcess);
+  ops->wait_process(child->process.hProcess, KEIKO_CHILD_EXIT_GRACE_MS);
+  return reap;
+}
+
+static keiko_job_reap_result keiko_terminate_child_tree(keiko_child *child,
+                                                        int *staging_cleanup_permitted) {
+  return keiko_terminate_child_tree_with(child, staging_cleanup_permitted,
+                                         &KEIKO_CHILD_TERMINATION_OPS);
 }
 
 static void keiko_close_child(keiko_child *child) {
-  if (child->job != NULL) {
+  if (child->job != NULL && !child->retain_job_handle) {
     (void)CloseHandle(child->job);
   }
   (void)CloseHandle(child->process.hThread);
@@ -746,10 +843,11 @@ static void keiko_close_child(keiko_child *child) {
 // Waits up to `timeout_ms` for the child to exit; on expiry the whole tree is terminated and the
 // run reported failed. Split from keiko_run_and_wait so the behaviour test can drive it with a
 // short deadline against a real descendant-spawning child.
-static int keiko_wait_or_terminate(keiko_child *child, DWORD timeout_ms) {
+static int keiko_wait_or_terminate(keiko_child *child, DWORD timeout_ms,
+                                   int *staging_cleanup_permitted) {
   DWORD exit_code = 1;
   if (WaitForSingleObject(child->process.hProcess, timeout_ms) != WAIT_OBJECT_0) {
-    keiko_terminate_child_tree(child);
+    (void)keiko_terminate_child_tree(child, staging_cleanup_permitted);
   } else {
     (void)GetExitCodeProcess(child->process.hProcess, &exit_code);
   }
@@ -762,7 +860,8 @@ static int keiko_wait_or_terminate(keiko_child *child, DWORD timeout_ms) {
 // ~130 MB archive, the governed setup, or the launch health window) comes close to it, but a wedged
 // child — INCLUDING every descendant it started, via the Job Object — is terminated and reported as
 // a failure instead of hanging the installer forever.
-static int keiko_run_and_wait(const wchar_t *application, wchar_t *command_line) {
+static int keiko_run_and_wait(const wchar_t *application, wchar_t *command_line,
+                              int *staging_cleanup_permitted) {
   STARTUPINFOW startup;
   keiko_child child;
   ZeroMemory(&startup, sizeof(startup));
@@ -770,7 +869,8 @@ static int keiko_run_and_wait(const wchar_t *application, wchar_t *command_line)
   if (!keiko_spawn_in_job(application, command_line, &startup, FALSE, &child)) {
     return 0;
   }
-  int ok = keiko_wait_or_terminate(&child, (DWORD)KEIKO_CHILD_TIMEOUT_MS);
+  int ok = keiko_wait_or_terminate(&child, (DWORD)KEIKO_CHILD_TIMEOUT_MS,
+                                   staging_cleanup_permitted);
   keiko_close_child(&child);
   return ok;
 }
@@ -833,7 +933,7 @@ static int keiko_drain_pipe(HANDLE read_end, HANDLE child, char *out, int cap) {
 // Runs an application capturing up to KEIKO_RESOLVE_OUTPUT_CAP bytes of its stdout (stderr stays on
 // this process's console). Returns 1 with the captured length only when the child exits 0.
 static int keiko_run_capture(const wchar_t *application, wchar_t *command_line, char *out,
-                             int cap, int *out_len) {
+                             int cap, int *out_len, int *staging_cleanup_permitted) {
   SECURITY_ATTRIBUTES attributes;
   ZeroMemory(&attributes, sizeof(attributes));
   attributes.nLength = sizeof(attributes);
@@ -864,20 +964,17 @@ static int keiko_run_capture(const wchar_t *application, wchar_t *command_line, 
   (void)CloseHandle(write_end);
   int total = keiko_drain_pipe(read_end, child.process.hProcess, out, cap);
   (void)CloseHandle(read_end);
-  DWORD exit_code = 1;
   // The drain loop above already observed the deadline, so this wait only collects a child that has
-  // finished (or is finishing) — it is not the watchdog. A child still alive here has blown the
-  // deadline or wedged after closing stdout: its whole tree is terminated (Job Object) rather than
-  // waited on for 20 minutes — descendants of a wedged resolve-root must not outlive the verdict.
-  if (WaitForSingleObject(child.process.hProcess, KEIKO_CHILD_EXIT_GRACE_MS) != WAIT_OBJECT_0) {
-    keiko_terminate_child_tree(&child);
-  } else {
-    (void)GetExitCodeProcess(child.process.hProcess, &exit_code);
-  }
+  // finished (or is finishing). Reuse the one lifetime/exit-code primitive used by the non-capture
+  // runner: a child still alive here has blown the deadline or wedged after closing stdout, and the
+  // shared path terminates its whole Job Object rather than duplicating a subtly different
+  // single-process fallback here.
+  int ok = keiko_wait_or_terminate(&child, KEIKO_CHILD_EXIT_GRACE_MS,
+                                   staging_cleanup_permitted);
   keiko_close_child(&child);
   out[total] = '\0';
   *out_len = total;
-  return exit_code == 0;
+  return ok;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1130,7 +1227,7 @@ static int keiko_extract_archive(keiko_setup_buffers *b) {
                    b->tar_path, b->zip_path, b->staging_dir) <= 0) {
     return 0;
   }
-  return keiko_run_and_wait(b->tar_path, b->command);
+  return keiko_run_and_wait(b->tar_path, b->command, &b->staging_cleanup_permitted);
 }
 
 static int keiko_payload_contents_present(const keiko_setup_buffers *b) {
@@ -1160,7 +1257,7 @@ static int keiko_resolve_managed_root(keiko_setup_buffers *b) {
   }
   int output_len = 0;
   int ok = keiko_run_capture(b->node_path, b->command, output, KEIKO_RESOLVE_OUTPUT_CAP,
-                             &output_len) &&
+                             &output_len, &b->staging_cleanup_permitted) &&
            keiko_parse_managed_root(output, output_len, b->managed_root, KEIKO_PATH_CAP);
   (void)HeapFree(GetProcessHeap(), 0, output);
   return ok;
@@ -1172,7 +1269,7 @@ static int keiko_run_setup_step(keiko_setup_buffers *b) {
                       L"--managed-root \"%ls\"",
                       b->node_path, b->cli_path, KEIKO_WIDEN(KEIKO_SETUP_TARGET), b->extract_dir,
                       b->managed_root) > 0 &&
-         keiko_run_and_wait(b->node_path, b->command);
+         keiko_run_and_wait(b->node_path, b->command, &b->staging_cleanup_permitted);
 }
 
 static int keiko_run_launch_step(keiko_setup_buffers *b) {
@@ -1192,7 +1289,7 @@ static int keiko_run_launch_step(keiko_setup_buffers *b) {
                       L"--managed-root \"%ls\"",
                       managed_node, managed_cli, KEIKO_WIDEN(KEIKO_SETUP_TARGET), b->managed_root,
                       b->managed_root) > 0 &&
-         keiko_run_and_wait(managed_node, b->command);
+         keiko_run_and_wait(managed_node, b->command, &b->staging_cleanup_permitted);
   }
   keiko_free_path(managed_node);
   keiko_free_path(managed_cli);
@@ -1245,6 +1342,9 @@ static int keiko_remove_staging_tree(const wchar_t *staging) {
 }
 
 static int keiko_cleanup_staging(const keiko_setup_buffers *b) {
+  if (!b->staging_cleanup_permitted) {
+    return 0;
+  }
   wchar_t *staging = keiko_alloc_path();
   if (staging == NULL) {
     return 0;
@@ -1317,7 +1417,7 @@ static int keiko_run_setup(keiko_setup_buffers *b) {
   }
 
   fwprintf(stdout, L"[6/6] Removing temporary application files...\n");
-  if (!keiko_cleanup_staging(b)) {
+  if (!b->staging_cleanup_permitted || !keiko_cleanup_staging(b)) {
     fwprintf(stderr, L"Keiko is running, but its temporary files could not be removed.\n");
     return KEIKO_EXIT_CLEANUP;
   }
@@ -1381,7 +1481,13 @@ int wmain(int argc, wchar_t **argv) {
   }
   int exit_code = keiko_run_setup(buffers);
   if (exit_code != KEIKO_EXIT_OK) {
-    (void)keiko_cleanup_staging(buffers);
+    if (buffers->staging_cleanup_permitted) {
+      (void)keiko_cleanup_staging(buffers);
+    } else {
+      fwprintf(stderr,
+               L"Keiko setup retained its temporary files because child process-tree termination "
+               L"could not be confirmed.\n");
+    }
     // One consistent failure trailer after the specific step reason above, so a scripted (/quiet)
     // install and a human both get an unambiguous "setup failed" signal — the wording the retired
     // batch installer emitted, and the signal the Windows setup smoke asserts.

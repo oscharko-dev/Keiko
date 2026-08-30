@@ -112,6 +112,19 @@ describe.skipIf(process.platform === "win32")("resolveGitExecutable", () => {
     });
   });
 
+  it("rejects a workspace-contained symlink before following it to a trusted external image", () => {
+    const externalBin = temporary("keiko-git-executable-external-");
+    const externalGit = writeGit(externalBin);
+    const workspaceBin = join(workspace, "bin");
+    mkdirSync(workspaceBin);
+    symlinkSync(externalGit, join(workspaceBin, "git"));
+
+    expect(resolveGitExecutable({ PATH: workspaceBin }, workspace)).toEqual({
+      ok: false,
+      reason: "untrusted-location",
+    });
+  });
+
   // KEIKO-0263: the resolver now returns a discriminated union so the runner (and any other
   // caller) can tell "an executable exists but lives in an untrusted location" apart from
   // "no git on PATH at all". Both used to be a bare undefined mapping to the same operator
@@ -258,3 +271,20 @@ describe.skipIf(process.platform === "win32")("resolveGitExecutable", () => {
     });
   });
 });
+
+describe.runIf(process.platform === "win32")(
+  "resolveGitExecutable Windows reparse containment",
+  () => {
+    it("rejects a workspace PATH junction to an external git.exe", () => {
+      const externalBin = temporary("keiko-git-executable-windows-external-");
+      writeFileSync(join(externalBin, "git.exe"), "MZ", { mode: 0o755 });
+      const workspaceBin = join(workspace, "bin");
+      symlinkSync(externalBin, workspaceBin, "junction");
+
+      expect(resolveGitExecutable({ PATH: workspaceBin }, workspace, "win32")).toEqual({
+        ok: false,
+        reason: "untrusted-location",
+      });
+    });
+  },
+);

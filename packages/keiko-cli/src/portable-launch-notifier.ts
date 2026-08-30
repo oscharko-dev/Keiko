@@ -1,16 +1,15 @@
 import { spawn } from "node:child_process";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
-  WindowsSystemBinaryMissingError,
-  WindowsSystemDirectoryError,
   emitSecurityLogEvent,
+  resolveWindowsPowerShellExecutable,
   resolveWindowsSystemDirectory,
-  resolveWindowsSystemExecutable,
   securityErrorKind,
   type SecurityLogSink,
   type WindowsBinaryExistsCheck,
   type WindowsSystemDirectoryIdentityCheck,
 } from "@oscharko-dev/keiko-security";
+import { emitCliWindowsSystemFailure } from "./security-log.js";
 
 /**
  * A desktop double-click gives the portable launcher no terminal: every `io.err` line vanishes and
@@ -32,8 +31,6 @@ import {
 
 const MAX_ALERT_MESSAGE_LENGTH = 400;
 const OSASCRIPT_EXECUTABLE = "/usr/bin/osascript";
-const WINDOWS_POWERSHELL_PARTS = ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"];
-
 export type PortableFailureNotifierFn = (message: string, env: EnvSource) => void;
 
 export interface PortableFailureNotifierDeps {
@@ -152,15 +149,10 @@ function resolveWindowsAlertSystem(
   try {
     return {
       systemRoot: resolveWindowsSystemDirectory(env, identityCheck),
-      command: resolveWindowsSystemExecutable(
-        WINDOWS_POWERSHELL_PARTS,
-        env,
-        existsAsFile,
-        identityCheck,
-      ),
+      command: resolveWindowsPowerShellExecutable(env, existsAsFile, identityCheck),
     };
   } catch (error) {
-    logWindowsAlertSystemFailure(error, securityLogSink);
+    emitCliWindowsSystemFailure(error, securityLogSink, "portable-failure-alert");
     throw error;
   }
 }
@@ -203,26 +195,6 @@ function spawnWindowsAlertChild(
   } catch (error) {
     logWindowsAlertSpawnFailure(error, securityLogSink);
     throw error;
-  }
-}
-
-function logWindowsAlertSystemFailure(error: unknown, sink: SecurityLogSink | undefined): void {
-  if (error instanceof WindowsSystemDirectoryError) {
-    emitSecurityLogEvent(sink, {
-      level: "warn",
-      category: "security",
-      op: "security.windows-portable-alert.system-root-refused",
-      errorKind: securityErrorKind(error),
-      extra: { surface: "portable-failure-alert" },
-    });
-  } else if (error instanceof WindowsSystemBinaryMissingError) {
-    emitSecurityLogEvent(sink, {
-      level: "error",
-      category: "diagnostic",
-      op: "security.windows-portable-alert.system-binary-missing",
-      errorKind: securityErrorKind(error),
-      extra: { surface: "portable-failure-alert" },
-    });
   }
 }
 

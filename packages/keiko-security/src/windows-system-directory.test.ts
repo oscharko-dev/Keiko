@@ -17,6 +17,7 @@ import {
   WINDOWS_CMD_METACHARACTER_SOURCE,
   WindowsSystemBinaryMissingError,
   WindowsSystemDirectoryError,
+  resolveWindowsPowerShellExecutable,
   resolveWindowsSystemBinary,
   resolveWindowsSystemDirectory,
   resolveWindowsSystemExecutable,
@@ -40,11 +41,9 @@ const HOSTILE_SYSTEM_ROOT_VECTORS: readonly [label: string, value: string][] = [
   ["a colon introducing a trailing $DATA stream marker", String.raw`C:\Windows\System32:$DATA`],
 ];
 const TRUSTED_SYSTEM_ROOT = (): boolean => true;
-const GLOBALROOT_SYSTEM_ROOT = String.raw`\\?\GLOBALROOT\SystemRoot`;
 
 function expectedSystemExecutable(selectedRoot: string, ...segments: readonly string[]): string {
-  const root = process.platform === "win32" ? GLOBALROOT_SYSTEM_ROOT : selectedRoot;
-  return [root, ...segments].join("\\");
+  return [selectedRoot, ...segments].join("\\");
 }
 
 describe("resolveWindowsSystemDirectory", () => {
@@ -307,6 +306,40 @@ describe("resolveWindowsSystemExecutable", () => {
   });
 });
 
+describe("resolveWindowsPowerShellExecutable", () => {
+  it("pins the exact inbox PowerShell 5.1 executable segments", () => {
+    const checked: string[] = [];
+
+    expect(
+      resolveWindowsPowerShellExecutable(
+        { SystemRoot: String.raw`D:\Windows` },
+        (path) => {
+          checked.push(path);
+          return true;
+        },
+        TRUSTED_SYSTEM_ROOT,
+      ),
+    ).toBe(
+      expectedSystemExecutable(
+        String.raw`D:\Windows`,
+        "System32",
+        "WindowsPowerShell",
+        "v1.0",
+        "powershell.exe",
+      ),
+    );
+    expect(checked).toEqual([
+      expectedSystemExecutable(
+        String.raw`D:\Windows`,
+        "System32",
+        "WindowsPowerShell",
+        "v1.0",
+        "powershell.exe",
+      ),
+    ]);
+  });
+});
+
 // After the OS-identity boundary accepts the directory, the binary still has an independent
 // operational existence check. The two injected seams keep those decisions distinct and let both
 // branches run hermetically without a real `C:\...` filesystem on this host.
@@ -384,10 +417,10 @@ describe("resolveWindowsSystemBinary — resolved-binary existence (finding 4)",
     });
 
     it("actually checks the filesystem when the platform is genuinely win32", () => {
-      // The candidate root cannot be fake on production win32 any more: accepted binaries are read
-      // through GLOBALROOT. A GUID-named binary below that genuine root is guaranteed absent, on a
-      // real Windows developer host as well as CI, and therefore pins the production filesystem
-      // check without weakening the root-identity decision.
+      // The candidate root cannot be fake on production win32: it must first match GLOBALROOT's
+      // identity. A GUID-named binary below that approved root is guaranteed absent on a real
+      // Windows developer host as well as CI, and therefore pins the production filesystem check
+      // without weakening the root-identity decision.
       Object.defineProperty(process, "platform", { ...platform, value: "win32" });
       expect(() =>
         resolveWindowsSystemBinary(

@@ -35,6 +35,23 @@ import {
   windowsStartMenuRegistrationPath,
 } from "./portable-maintenance.js";
 
+const TRUSTED_WINDOWS_POWERSHELL = String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`;
+// Frozen historical bytes: migration coverage must not move in lockstep with today's generator.
+const PREVIOUSLY_SHIPPED_POWERSHELL_LINE =
+  "@powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " +
+  "JABlAHgAZQA9AFsAUwB5AHMAdABlAG0ALgBUAGUAeAB0AC4ARQBuAGMAbwBkAGkAbgBnAF0AOgA6AFUAVABGADgALgBHAGUAdABTAHQAcgBpAG4AZwAoAFsAUwB5AHMAdABlAG0ALgBDAG8AbgB2AGUAcgB0AF0AOgA6AEYAcgBvAG0AQgBhAHMAZQA2ADQAUwB0AHIAaQBuAGcAKAAkAGUAbgB2ADoASwBFAEkASwBPAF8ARQBYAEUAXwBCADYANAApACkAOwAkAGEAcgBnAHUAbQBlAG4AdABzAD0AQAAoACcAcwB0AGEAcgB0ACcALAAnAC0ALQBvAHAAZQBuACcAKQA7AGkAZgAoACQAZQBuAHYAOgBLAEUASQBLAE8AXwBQAE8AUgBUACkAewAkAGEAcgBnAHUAbQBlAG4AdABzACsAPQBAACgAJwAtAC0AcABvAHIAdAAnACwAJABlAG4AdgA6AEsARQBJAEsATwBfAFAATwBSAFQAKQB9ADsAUwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgAC0ARgBpAGwAZQBQAGEAdABoACAAJABlAHgAZQAgAC0AQQByAGcAdQBtAGUAbgB0AEwAaQBzAHQAIAAkAGEAcgBnAHUAbQBlAG4AdABzAA==";
+
+function previouslyShippedWindowsLauncher(exe: string): string {
+  return [
+    "@setlocal DisableDelayedExpansion",
+    `@set "KEIKO_EXE_B64=${Buffer.from(exe, "utf8").toString("base64")}"`,
+    '@set "KEIKO_PORT="',
+    PREVIOUSLY_SHIPPED_POWERSHELL_LINE,
+    "@endlocal",
+    "",
+  ].join("\r\n");
+}
+
 function recordingCliSink(stateDir: string): {
   readonly sink: SecurityLogSink;
   readonly events: SecurityLogEvent[];
@@ -140,6 +157,29 @@ describe("portable native registration policy", () => {
         io,
       );
       expect(repaired).toBeGreaterThan(0);
+      expect(existsSync(windowsStartMenuRegistrationPath(env, home))).toBe(true);
+      expect(existsSync(legacyPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("retires the exact previously shipped encoded launcher during setup migration", () => {
+    const root = mkdtempSync(join(homedir(), ".keiko-install-encoded-migration-"));
+    try {
+      const home = join(root, "home");
+      const env = { APPDATA: join(home, "AppData", "Roaming") };
+      const installRoot = join(home, "Keiko Program");
+      const layout = layoutFor("windows-x64", installRoot);
+      const legacyPath = windowsLegacyStartMenuRegistrationPath(env, home);
+      mkdirSync(dirname(legacyPath), { recursive: true });
+      writeFileSync(legacyPath, previouslyShippedWindowsLauncher(layout.primaryLauncherPath));
+      const io = { out: (): undefined => undefined, err: (): undefined => undefined };
+
+      installNativeRegistration(layout, "windows-x64", installRoot, env, home, io, {
+        resolveWindowsPowerShell: () => TRUSTED_WINDOWS_POWERSHELL,
+      });
+
       expect(existsSync(windowsStartMenuRegistrationPath(env, home))).toBe(true);
       expect(existsSync(legacyPath)).toBe(false);
     } finally {
@@ -287,15 +327,15 @@ describe("portable native registration policy", () => {
         windowsLauncher.generateContent({ exe: layout.primaryLauncherPath, port: undefined }),
       );
 
-      const removed = removePortableRegistrationArtifacts(
+      const removed = removePortableRegistrationArtifacts({
         layout,
-        "windows-x64",
-        installRoot,
+        target: "windows-x64",
+        managedRoot: installRoot,
         env,
         home,
-        true,
+        dryRun: true,
         io,
-      );
+      });
       expect(removed).toBeGreaterThan(0);
       expect(existsSync(windowsStartMenuRegistrationPath(env, home))).toBe(true);
       expect(existsSync(legacyPath)).toBe(true);
@@ -343,6 +383,44 @@ describe("portable native registration policy", () => {
       const nestedLauncher = join(linkedParent, "Keiko.bat");
       writeFileSync(join(outside, "Keiko.bat"), canonical);
       expect(parseWindowsStartMenuRegistration(nestedLauncher)).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts only the encoded launcher whose PowerShell path is the trusted resolver", () => {
+    const root = mkdtempSync(join(homedir(), ".keiko-registration-powershell-trust-"));
+    try {
+      const exe = "C:\\Program Files\\Keiko\\Keiko.exe";
+      const launcher = join(root, "Keiko.bat");
+      const parse = (): string | undefined =>
+        parseWindowsStartMenuRegistration(
+          launcher,
+          {},
+          {
+            resolveWindowsPowerShell: () => TRUSTED_WINDOWS_POWERSHELL,
+          },
+        );
+      writeFileSync(
+        launcher,
+        windowsLauncher.generateContent({
+          exe,
+          port: undefined,
+          windowsPowerShellPath: TRUSTED_WINDOWS_POWERSHELL,
+        }),
+      );
+      expect(parse()).toBe(exe);
+
+      const foreignPowerShell = String.raw`C:\attacker\System32\WindowsPowerShell\v1.0\powershell.exe`;
+      writeFileSync(
+        launcher,
+        windowsLauncher.generateContent({
+          exe,
+          port: undefined,
+          windowsPowerShellPath: foreignPowerShell,
+        }),
+      );
+      expect(parse()).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GitEditorDiffResponse } from "@oscharko-dev/keiko-contracts";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
@@ -12,7 +12,7 @@ import {
   seedEditorWindow,
   type GitEditorWorkspace,
 } from "./support/editorWorkspace.js";
-import { replaceEditorBuffer } from "./support/editor-chord.js";
+import { enterEmptyEditorBuffer, replaceEditorBuffer } from "./support/editor-chord.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 
@@ -237,8 +237,16 @@ test("conflict actions are navigable, undoable, and remain buffer-only until sav
   expect(errors).toEqual([]);
 });
 
-test("Files reflects conflict, folder, ignored, and post-save status", async ({ page }) => {
+test("Files reflects conflict, folder, ignored, and post-save status", async ({
+  page,
+  browserName,
+}) => {
   const fixture = createGitEditorWorkspace();
+  // Gecko's textarea surface does not support the proven select-all replacement gesture. Keep its
+  // file Git-modified but empty so real key input can still prove an exact product-backed mutation.
+  if (browserName === "firefox") {
+    writeFileSync(join(fixture.root, fixture.nestedChangedPath), "", "utf8");
+  }
   await seedFilesAndEditorWindows(page, fixture);
   const errors = collectPageErrors(page);
   let statusReads = 0;
@@ -266,12 +274,9 @@ test("Files reflects conflict, folder, ignored, and post-save status", async ({ 
   ).toBeVisible();
   const beforeSave = statusReads;
   const workspace = page.locator(EDITOR_SELECTORS.workspace).first();
-  await replaceEditorBuffer(
-    page,
-    workspace.locator(EDITOR_SELECTORS.pane).first(),
-    "export const nested = 2235;\n",
-    fixture.root,
-  );
+  const pane = workspace.locator(EDITOR_SELECTORS.pane).first();
+  const editBuffer = browserName === "firefox" ? enterEmptyEditorBuffer : replaceEditorBuffer;
+  await editBuffer(page, pane, "export const nested = 2235;\n", fixture.root);
   await page.keyboard.press("Control+KeyS");
   await expect(workspace.locator(EDITOR_SELECTORS.saveField)).toHaveText("Saved");
   await expect.poll(() => statusReads).toBeGreaterThan(beforeSave);

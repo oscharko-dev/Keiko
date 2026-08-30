@@ -44,16 +44,13 @@ const NODE_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   { executable: "node" },
   ...DEFAULT_COMMAND_RULES,
 ]);
-const GLOBALROOT_SYSTEM_ROOT = String.raw`\\?\GLOBALROOT\SystemRoot`;
-
 function windowsSystemRootFixture(offHostRoot: string): string {
   if (process.platform !== "win32") return offHostRoot;
   return process.env.SystemRoot ?? process.env.WINDIR ?? String.raw`C:\Windows`;
 }
 
 function expectedWindowsSystemBinary(selectedRoot: string, binaryName: string): string {
-  const root = process.platform === "win32" ? GLOBALROOT_SYSTEM_ROOT : selectedRoot;
-  return `${root}\\System32\\${binaryName}`;
+  return `${selectedRoot}\\System32\\${binaryName}`;
 }
 
 beforeEach(() => {
@@ -2412,6 +2409,7 @@ describe("createWindowsTaskkillBudget — aggregate stall budget", () => {
     const budget = createWindowsTaskkillBudget(() => now);
     for (let i = 0; i < 6; i += 1) {
       expect(budget.tryConsume()).toBe(true);
+      budget.refund(0);
     }
     expect(budget.tryConsume()).toBe(false);
     // One ms short of the window: still exhausted — the reset is a hard boundary, not a leak.
@@ -2423,6 +2421,23 @@ describe("createWindowsTaskkillBudget — aggregate stall budget", () => {
       expect(budget.tryConsume()).toBe(true);
     }
     expect(budget.tryConsume()).toBe(false);
+  });
+
+  it("keeps pre-spawn kill reservations charged across a window reset", () => {
+    let now = 0;
+    const budget = createWindowsTaskkillBudget(() => now);
+    const reservation = budget.reserve(2);
+    expect(reservation).toBeDefined();
+
+    now = 60_000;
+    for (let index = 0; index < 4; index += 1) {
+      expect(budget.tryConsume()).toBe(true);
+      budget.refund(0);
+    }
+    expect(budget.tryConsume()).toBe(false);
+
+    reservation?.release();
+    expect(budget.tryConsume()).toBe(true);
   });
 
   it("gives every factory call its own private counter — no shared state across instances", () => {
@@ -2534,6 +2549,45 @@ describe("nodeWindowsTreeKillWith — the budget gates the spawn, not just the r
 });
 
 describe("Windows pre-spawn termination capacity", () => {
+  it("shares one rolling stall budget with direct LSP-style tree kills", () => {
+    let now = 0;
+    const budget = createWindowsTaskkillBudget(() => now);
+    const runTaskkill = vi.fn(() => {
+      now += 5_000;
+      return { status: 0 };
+    });
+    const resolveInvocation = (pid: number): ReturnType<typeof windowsTaskkillInvocation> => ({
+      command: String.raw`D:\Windows\System32\taskkill.exe`,
+      args: ["/PID", String(pid), "/T", "/F"],
+    });
+    const capacity = createWindowsTerminationCapacity(
+      1,
+      undefined,
+      resolveInvocation,
+      runTaskkill,
+      budget,
+      () => now,
+    );
+    const directTreeKill = nodeWindowsTreeKillWith(
+      runTaskkill,
+      budget,
+      () => now,
+      resolveInvocation,
+    );
+    const reservation = capacity.reserve({ SystemRoot: String.raw`D:\Windows` });
+
+    expect(reservation?.kill(4242, {})).toBe("succeeded");
+    expect(reservation?.kill(4242, {})).toBe("succeeded");
+    reservation?.release();
+    for (let index = 0; index < 4; index += 1) {
+      expect(directTreeKill(4242, {})).toBe("succeeded");
+    }
+
+    const nextBatch = capacity.reserve({ SystemRoot: String.raw`D:\Windows` });
+    expect(nextBatch).toBeUndefined();
+    expect(runTaskkill).toHaveBeenCalledTimes(6);
+  });
+
   it("binds the authenticated taskkill path across later environment mutation", () => {
     const seenRoots: (string | undefined)[] = [];
     const seenCommands: string[] = [];
@@ -2542,7 +2596,7 @@ describe("Windows pre-spawn termination capacity", () => {
       undefined,
       (_pid, env) => {
         seenRoots.push(env.SystemRoot);
-        return { command: String.raw`\\?\GLOBALROOT\SystemRoot\System32\taskkill.exe`, args: [] };
+        return { command: String.raw`D:\Windows\System32\taskkill.exe`, args: [] };
       },
       (command) => {
         seenCommands.push(command);
@@ -2556,7 +2610,7 @@ describe("Windows pre-spawn termination capacity", () => {
     mutableEnv.SystemRoot = String.raw`C:\workspace\fake-windows`;
     expect(reservation?.kill(4242, mutableEnv)).toBe("succeeded");
     expect(seenRoots).toEqual([String.raw`D:\Windows`]);
-    expect(seenCommands).toEqual([String.raw`\\?\GLOBALROOT\SystemRoot\System32\taskkill.exe`]);
+    expect(seenCommands).toEqual([String.raw`D:\Windows\System32\taskkill.exe`]);
     reservation?.release();
   });
 });

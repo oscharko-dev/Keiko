@@ -36,9 +36,11 @@ import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { activePointerKey, workspaceKey } from "./mutex.js";
 import { TaskWorkspaceError } from "./errors.js";
 import { correlationIdOrUnknown } from "../correlation.js";
-import { logWorkspaceLifecycle } from "./activity-log.js";
 import {
-  appendWorkspaceLifecycleEvidence,
+  recordWorkspaceLifecycle,
+  runWithWorkspaceLifecycleFailureLogging,
+} from "./activity-log.js";
+import {
   buildWorkspaceEvent,
   WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
   type WorkspaceLifecycleOperation,
@@ -104,9 +106,9 @@ function emit(
     fromState: input.fromState,
     toState: input.instance.lifecycleState,
   });
-  appendWorkspaceLifecycleEvidence(
-    ctx.deps.evidenceStore,
-    {
+  recordWorkspaceLifecycle(ctx.deps, {
+    evidenceStore: ctx.deps.evidenceStore,
+    record: {
       kind: WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
       schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
       recordedAt: input.nowMs,
@@ -117,18 +119,7 @@ function emit(
       worktreeCount: 0,
       event,
     },
-    ctx.deps.redactString,
-  );
-  // Same operation, SAME correlationId, into the server activity log (AGENTS.md §8).
-  logWorkspaceLifecycle(ctx.deps, {
-    operation: input.operation,
-    outcome: input.outcome,
-    workspaceId: input.instance.workspaceId,
-    taskId: input.instance.taskId,
-    correlationId,
-    attempt: 1,
-    durationMs: 0,
-    worktreeCount: 0,
+    redactString: ctx.deps.redactString,
   });
 }
 
@@ -370,6 +361,55 @@ const HANDOFF_SPEC: DirectTransitionSpec = {
   clearPointerIfActive: false,
 };
 
+function runLoggedSetActive(
+  ctx: LifecycleCtx,
+  request: SetActiveWorkspaceRequest,
+): Promise<ActiveWorkspaceView> {
+  return runWithWorkspaceLifecycleFailureLogging(
+    ctx.deps,
+    {
+      operation: "activate",
+      workspaceIdentitySeed: request.workspaceId,
+      correlationId: request.correlationId,
+    },
+    () => setActiveImpl(ctx, request),
+  );
+}
+
+function runLoggedDirectTransition(
+  ctx: LifecycleCtx,
+  request: WorkspaceLifecycleActionRequest,
+  spec: DirectTransitionSpec,
+): Promise<WorkspaceLifecycleActionResult> {
+  return runWithWorkspaceLifecycleFailureLogging(
+    ctx.deps,
+    {
+      operation: spec.operation,
+      workspaceIdentitySeed: request.workspaceId,
+      correlationId: request.correlationId,
+    },
+    () =>
+      ctx.deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () =>
+        runDirectTransition(ctx, request, spec),
+      ),
+  );
+}
+
+function runLoggedResume(
+  ctx: LifecycleCtx,
+  request: WorkspaceLifecycleActionRequest,
+): Promise<WorkspaceLifecycleActionResult> {
+  return runWithWorkspaceLifecycleFailureLogging(
+    ctx.deps,
+    {
+      operation: "resume",
+      workspaceIdentitySeed: request.workspaceId,
+      correlationId: request.correlationId,
+    },
+    () => resumeImpl(ctx, request),
+  );
+}
+
 export function createWorkspaceLifecycleService(
   deps: WorkspaceLifecycleServiceDeps,
 ): WorkspaceLifecycleService {
@@ -378,23 +418,19 @@ export function createWorkspaceLifecycleService(
     list: (repositoryRoot: string): readonly WorkspaceInstance[] => listImpl(ctx, repositoryRoot),
     getActive: (): ActiveWorkspaceView | undefined => getActiveImpl(ctx),
     setActive: (request: SetActiveWorkspaceRequest): Promise<ActiveWorkspaceView> =>
-      setActiveImpl(ctx, request),
+      runLoggedSetActive(ctx, request),
     clearActive: (): void => {
       deps.activePointerStore.clear();
     },
     // pause / handoff are direct transitions on one instance — serialized under its `ws:` key (#449,
     // ADR-0093 D1) so they cannot race a concurrent activate/repair/cleanup of the same workspace.
     pause: (request: WorkspaceLifecycleActionRequest): Promise<WorkspaceLifecycleActionResult> =>
-      ctx.deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () =>
-        runDirectTransition(ctx, request, PAUSE_SPEC),
-      ),
+      runLoggedDirectTransition(ctx, request, PAUSE_SPEC),
     resume: (request: WorkspaceLifecycleActionRequest): Promise<WorkspaceLifecycleActionResult> =>
-      resumeImpl(ctx, request),
+      runLoggedResume(ctx, request),
     prepareHandoff: (
       request: WorkspaceLifecycleActionRequest,
     ): Promise<WorkspaceLifecycleActionResult> =>
-      ctx.deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () =>
-        runDirectTransition(ctx, request, HANDOFF_SPEC),
-      ),
+      runLoggedDirectTransition(ctx, request, HANDOFF_SPEC),
   };
 }

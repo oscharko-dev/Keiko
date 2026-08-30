@@ -297,6 +297,14 @@ static void write_file(const wchar_t *path, const char *contents) {
   (void)CloseHandle(file);
 }
 
+static int run_and_wait_with_confirmed_cleanup(const wchar_t *application,
+                                               wchar_t *command_line) {
+  int staging_cleanup_permitted = 1;
+  int ok = keiko_run_and_wait(application, command_line, &staging_cleanup_permitted);
+  assert(staging_cleanup_permitted == 1);
+  return ok;
+}
+
 // The drain loop must return promptly when the writer closes, and must capture what was written.
 static void test_drain_pipe_reads_and_ends_at_eof(void) {
   SECURITY_ATTRIBUTES attributes;
@@ -420,7 +428,7 @@ static void test_remove_tree_unlinks_junctions_without_following(void) {
   static wchar_t command[KEIKO_COMMAND_CAP];
   assert(_snwprintf_s(command, KEIKO_COMMAND_CAP, _TRUNCATE,
                       L"\"%ls\" /d /s /c mklink /J \"%ls\" \"%ls\"", cmd_exe, link, outside) > 0);
-  assert(keiko_run_and_wait(cmd_exe, command) == 1);
+  assert(run_and_wait_with_confirmed_cleanup(cmd_exe, command) == 1);
   // GetFileAttributesW returns INVALID_FILE_ATTRIBUTES (0xFFFFFFFF) on failure, and that all-ones
   // value ANDed with FILE_ATTRIBUTE_REPARSE_POINT is itself nonzero — so a bare `&` check here would
   // pass even if mklink silently produced no junction at all. Check existence first, explicitly.
@@ -460,7 +468,7 @@ static void test_remove_tree_refuses_a_junction_root(void) {
   static wchar_t command[KEIKO_COMMAND_CAP];
   assert(_snwprintf_s(command, KEIKO_COMMAND_CAP, _TRUNCATE,
                       L"\"%ls\" /d /s /c mklink /J \"%ls\" \"%ls\"", cmd_exe, link, outside) > 0);
-  assert(keiko_run_and_wait(cmd_exe, command) == 1);
+  assert(run_and_wait_with_confirmed_cleanup(cmd_exe, command) == 1);
 
   // Handed the LINK as the root: refuse rather than descend.
   assert(keiko_remove_tree(link) == 0);
@@ -517,7 +525,9 @@ static void test_watchdog_terminates_the_descendant_tree(void) {
   }
   assert(before.ActiveProcesses >= 2); // the tree really is a tree
 
-  assert(keiko_wait_or_terminate(&child, 200) == 0); // deadline expires -> terminate the tree
+  int staging_cleanup_permitted = 1;
+  assert(keiko_wait_or_terminate(&child, 200, &staging_cleanup_permitted) == 0);
+  assert(staging_cleanup_permitted == 1); // zero active processes was positively observed
 
   // This assertion is a direct proof of keiko_terminate_child_tree's own bounded
   // ActiveProcesses==0 poll, not a hopeful immediate check: TerminateProcess/TerminateJobObject are
@@ -533,10 +543,147 @@ static void test_watchdog_terminates_the_descendant_tree(void) {
   keiko_close_child(&child);
 }
 
+static void test_job_reap_helpers_fail_closed(void) {
+  // An observation failure is not an empty job. This is the exact branch that previously broke
+  // out of the reap loop and released containment.
+  assert(keiko_probe_job(INVALID_HANDLE_VALUE) == KEIKO_JOB_PROBE_FAILED);
+
+  HANDLE job = CreateJobObjectW(NULL, NULL);
+  assert(job != NULL);
+  assert(keiko_probe_job(job) == KEIKO_JOB_PROBE_EMPTY);
+  assert(keiko_arm_job_kill_on_close(job) != 0);
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+  ZeroMemory(&limits, sizeof(limits));
+  assert(QueryInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits),
+                                   NULL) != 0);
+  assert((limits.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE) != 0);
+  assert(CloseHandle(job) != 0);
+}
+
+static int injected_terminate_job_calls = 0;
+static int injected_probe_job_calls = 0;
+static int injected_arm_kill_on_close_calls = 0;
+static int injected_terminate_process_calls = 0;
+static int injected_wait_process_calls = 0;
+
+static int injected_terminate_job(HANDLE job) {
+  (void)job;
+  injected_terminate_job_calls++;
+  return 1;
+}
+
+static keiko_job_probe injected_probe_job_failure(HANDLE job) {
+  (void)job;
+  injected_probe_job_calls++;
+  return KEIKO_JOB_PROBE_FAILED;
+}
+
+static int injected_arm_kill_on_close_failure(HANDLE job) {
+  (void)job;
+  injected_arm_kill_on_close_calls++;
+  return 0;
+}
+
+static void injected_no_sleep(DWORD milliseconds) {
+  (void)milliseconds;
+}
+
+static void injected_terminate_process(HANDLE process) {
+  (void)process;
+  injected_terminate_process_calls++;
+}
+
+static void injected_wait_process(HANDLE process, DWORD milliseconds) {
+  (void)process;
+  (void)milliseconds;
+  injected_wait_process_calls++;
+}
+
+static void reset_injected_termination_calls(void) {
+  injected_terminate_job_calls = 0;
+  injected_probe_job_calls = 0;
+  injected_arm_kill_on_close_calls = 0;
+  injected_terminate_process_calls = 0;
+  injected_wait_process_calls = 0;
+}
+
+static void test_unconfirmed_job_reap_blocks_staging_cleanup(void) {
+  reset_injected_termination_calls();
+  keiko_setup_buffers *buffers = keiko_allocate_buffers();
+  assert(buffers != NULL);
+  assert(buffers->staging_cleanup_permitted == 1);
+  make_temp_dir(buffers->staging_dir, KEIKO_PATH_CAP, L"keiko-test-reap-uncertain");
+  wchar_t sentinel[MAX_PATH];
+  assert(_snwprintf_s(sentinel, MAX_PATH, _TRUNCATE, L"%ls\\sentinel.txt",
+                      buffers->staging_dir) > 0);
+  write_file(sentinel, "must remain while descendant state is unknown");
+
+  keiko_child child;
+  ZeroMemory(&child, sizeof(child));
+  child.job = (HANDLE)(uintptr_t)1;
+  child.process.hProcess = (HANDLE)(uintptr_t)2;
+  const keiko_child_termination_ops injected = {
+      injected_terminate_job,
+      injected_probe_job_failure,
+      injected_arm_kill_on_close_failure,
+      injected_no_sleep,
+      injected_terminate_process,
+      injected_wait_process,
+  };
+
+  assert(keiko_terminate_child_tree_with(&child, &buffers->staging_cleanup_permitted, &injected) ==
+         KEIKO_JOB_REAP_UNCONFIRMED);
+  assert(injected_terminate_job_calls == 1);
+  assert(injected_probe_job_calls == 1);
+  assert(injected_arm_kill_on_close_calls == 1);
+  assert(injected_terminate_process_calls == 1);
+  assert(injected_wait_process_calls == 1);
+  assert(child.retain_job_handle == 1);
+  assert(buffers->staging_cleanup_permitted == 0);
+
+  // This is the load-bearing outcome: even the ordinary failure-path cleanup call cannot mutate
+  // staging after both the job observation and kill-on-close backstop failed.
+  assert(keiko_cleanup_staging(buffers) == 0);
+  assert(GetFileAttributesW(sentinel) != INVALID_FILE_ATTRIBUTES);
+  assert(GetFileAttributesW(buffers->staging_dir) != INVALID_FILE_ATTRIBUTES);
+
+  (void)DeleteFileW(sentinel);
+  (void)RemoveDirectoryW(buffers->staging_dir);
+  keiko_free_buffers(buffers);
+}
+
+static void test_capture_reports_the_shared_wait_result(void) {
+  wchar_t system_dir[MAX_PATH];
+  assert(GetSystemDirectoryW(system_dir, MAX_PATH) != 0);
+  wchar_t cmd_exe[MAX_PATH];
+  assert(_snwprintf_s(cmd_exe, MAX_PATH, _TRUNCATE, L"%ls\\cmd.exe", system_dir) > 0);
+  static wchar_t command[KEIKO_COMMAND_CAP];
+  char output[128];
+  int output_len = -1;
+  int staging_cleanup_permitted = 1;
+
+  assert(_snwprintf_s(command, KEIKO_COMMAND_CAP, _TRUNCATE,
+                      L"\"%ls\" /d /s /c echo capture-contract", cmd_exe) > 0);
+  assert(keiko_run_capture(cmd_exe, command, output, (int)sizeof(output), &output_len,
+                           &staging_cleanup_permitted) == 1);
+  assert(staging_cleanup_permitted == 1);
+  assert(output_len > 0);
+  assert(strstr(output, "capture-contract") != NULL);
+
+  output_len = -1;
+  assert(_snwprintf_s(command, KEIKO_COMMAND_CAP, _TRUNCATE,
+                      L"\"%ls\" /d /s /c exit /b 7", cmd_exe) > 0);
+  assert(keiko_run_capture(cmd_exe, command, output, (int)sizeof(output), &output_len,
+                           &staging_cleanup_permitted) == 0);
+  assert(staging_cleanup_permitted == 1);
+  assert(output_len == 0);
+}
+
 int wmain(void) {
   keiko_setup_buffers *buffers = keiko_allocate_buffers();
   assert(buffers != NULL);
   assert(sizeof(buffers->command) / sizeof(buffers->command[0]) == (size_t)KEIKO_COMMAND_CAP);
+  assert(buffers->staging_cleanup_permitted == 1);
   keiko_free_buffers(buffers);
 
   test_argument_allowlist();
@@ -554,5 +701,8 @@ int wmain(void) {
   test_remove_tree_unlinks_junctions_without_following();
   test_remove_tree_refuses_a_junction_root();
   test_watchdog_terminates_the_descendant_tree();
+  test_job_reap_helpers_fail_closed();
+  test_unconfirmed_job_reap_blocks_staging_cleanup();
+  test_capture_reports_the_shared_wait_result();
   return 0;
 }

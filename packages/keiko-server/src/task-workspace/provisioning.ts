@@ -49,9 +49,11 @@ import {
 } from "./managed-root.js";
 import { TaskWorkspaceError } from "./errors.js";
 import { correlationIdOrUnknown } from "../correlation.js";
-import { logWorkspaceLifecycle } from "./activity-log.js";
 import {
-  appendWorkspaceLifecycleEvidence,
+  recordWorkspaceLifecycle,
+  runWithWorkspaceLifecycleFailureLogging,
+} from "./activity-log.js";
+import {
   buildWorkspaceEvent,
   WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
   type WorkspaceLifecycleOperation,
@@ -86,6 +88,9 @@ interface ProvisioningCtx {
   // in each helper's signature: the ctx is already threaded everywhere the adapter is built, so this
   // needed no new parameter on any private function (PR #3355 review, P2).
   readonly correlationId: string;
+  // Operation-local: an emitted classified failure must not be followed by a duplicate generic
+  // rejection line when the same TaskWorkspaceError crosses the public service boundary.
+  failureOutcomeRecorded: boolean;
 }
 
 interface RepositoryContext {
@@ -220,9 +225,9 @@ function emit(ctx: ProvisioningCtx, input: EmitInput): void {
     ...(input.toState !== undefined ? { toState: input.toState } : {}),
     ...(input.lockId !== undefined ? { lockId: input.lockId } : {}),
   });
-  appendWorkspaceLifecycleEvidence(
-    ctx.deps.evidenceStore,
-    {
+  recordWorkspaceLifecycle(ctx.deps, {
+    evidenceStore: ctx.deps.evidenceStore,
+    record: {
       kind: WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
       schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
       recordedAt: input.nowMs,
@@ -233,21 +238,10 @@ function emit(ctx: ProvisioningCtx, input: EmitInput): void {
       worktreeCount: 0,
       event,
     },
-    ctx.deps.redactString,
-  );
-  // Same operation, SAME correlationId, into the server activity log (AGENTS.md §8) — see
-  // activity-log.ts for why this is one shared call rather than duplicated per service.
-  logWorkspaceLifecycle(ctx.deps, {
-    operation: input.operation,
-    outcome: input.outcome,
-    workspaceId: input.workspaceId,
-    taskId: input.taskId,
-    correlationId,
-    attempt: 1,
-    durationMs: 0,
-    worktreeCount: 0,
+    redactString: ctx.deps.redactString,
     errorCode: input.errorCode,
   });
+  if (input.errorCode !== undefined) ctx.failureOutcomeRecorded = true;
 }
 
 // ─── repository resolution ─────────────────────────────────────────────────────────────────────
@@ -823,6 +817,40 @@ function activateImpl(
 
 // ─── factory ─────────────────────────────────────────────────────────────────────────────────────
 
+function runLoggedProvision(
+  ctx: ProvisioningCtx,
+  request: WorkspaceProvisionRequest,
+): Promise<WorkspaceProvisionResult> {
+  return runWithWorkspaceLifecycleFailureLogging(
+    ctx.deps,
+    {
+      operation: "provision",
+      // The seed is hashed before logging. Prefer the task identity when present; an invalid
+      // request with no task still gets a stable, body-free identity from its request path.
+      workspaceIdentitySeed: request.taskId || request.repositoryRequestPath,
+      correlationId: request.correlationId,
+      failureOutcomeAlreadyRecorded: () => ctx.failureOutcomeRecorded,
+    },
+    () => provisionImpl(ctx, request),
+  );
+}
+
+function runLoggedActivation(
+  ctx: ProvisioningCtx,
+  request: WorkspaceActivateRequest,
+): Promise<WorkspaceActivateResult> {
+  return runWithWorkspaceLifecycleFailureLogging(
+    ctx.deps,
+    {
+      operation: "activate",
+      workspaceIdentitySeed: request.workspaceId || request.taskId || "invalid-activation",
+      correlationId: request.correlationId,
+      failureOutcomeAlreadyRecorded: () => ctx.failureOutcomeRecorded,
+    },
+    () => activateImpl(ctx, request),
+  );
+}
+
 export function createWorkspaceProvisioningService(
   deps: WorkspaceProvisioningServiceDeps,
 ): WorkspaceProvisioningService {
@@ -833,12 +861,13 @@ export function createWorkspaceProvisioningService(
     deps,
     lockTtlMs,
     correlationId: correlationIdOrUnknown(correlationId),
+    failureOutcomeRecorded: false,
   });
   return {
     provision: (request: WorkspaceProvisionRequest): Promise<WorkspaceProvisionResult> =>
-      provisionImpl(ctxFor(request.correlationId), request),
+      runLoggedProvision(ctxFor(request.correlationId), request),
     activate: (request: WorkspaceActivateRequest): Promise<WorkspaceActivateResult> =>
-      activateImpl(ctxFor(request.correlationId), request),
+      runLoggedActivation(ctxFor(request.correlationId), request),
     getInstance: (workspaceId: string): WorkspaceInstance | undefined =>
       deps.store.getById(workspaceId),
     // No request, so no operation id to join to: `ensureIdentity` is a synchronous store write with

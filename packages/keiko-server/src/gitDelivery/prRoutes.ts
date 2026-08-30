@@ -328,6 +328,7 @@ async function dispatchGovernedPr(input: GovernedPrDispatch): Promise<RouteResul
     admitted: authority,
     next: seams.beforeRemoteDispatch,
     denialCapture,
+    audit: { logSink: seams.activityLog },
   });
   try {
     const result = await executeGovernedPullRequest(
@@ -366,6 +367,7 @@ async function handlePrExecute(
     workspace,
     "pull-request",
     target,
+    { logSink: seams.activityLog },
   );
   if (!authority.allowed) return authority.result;
   const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {

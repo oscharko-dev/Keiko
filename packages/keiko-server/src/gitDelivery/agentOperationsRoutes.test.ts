@@ -581,7 +581,11 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
         op: "git.delivery.authority.denied",
         correlationId: "717cfe41-510a-4f53-aa43-a48c6829452d",
         status: 403,
-        extra: { operation: "branch-switch", reason: "workspace-unresolvable" },
+        extra: {
+          operation: "branch-switch",
+          phase: "admission",
+          reason: "workspace-unresolvable",
+        },
       }),
     );
   });

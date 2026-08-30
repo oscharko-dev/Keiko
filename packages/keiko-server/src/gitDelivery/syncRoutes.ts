@@ -20,9 +20,12 @@ import type {
   GitSyncOperation,
   GitSyncPreview,
 } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { GIT_SYNC_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-sync";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import { logGitDeliveryNoSpawnRefusal } from "./execution.js";
 import {
   hasOnlyAllowedKeys,
   isNonEmptyString,
@@ -35,6 +38,8 @@ import {
   gitDeliveryAuthorityContinuityGuard,
   gitDeliveryAuthorityGate,
   prepareGitDeliveryRequest,
+  type GitDeliveryAuthorityContinuityDenialCapture,
+  type GitDeliveryAuthorityIdentity,
   type GitDeliveryRequestErrors,
 } from "./requestPreparation.js";
 import {
@@ -220,6 +225,69 @@ function persistSyncResult(
   );
 }
 
+interface SyncDispatchInput {
+  readonly ctx: RouteContext;
+  readonly deps: UiHandlerDeps;
+  readonly operation: GitSyncOperation;
+  readonly seams: GitDeliverySyncSeams;
+  readonly projectId: string;
+  readonly workspace: WorkspaceInfo;
+  readonly before: GitSyncPreview;
+  readonly remote: string | undefined;
+  readonly authority: GitDeliveryAuthorityIdentity;
+}
+
+interface SyncDispatchResult {
+  readonly result: SyncExecuteResult;
+  readonly denial?: RouteResult | undefined;
+}
+
+async function dispatchSync(input: SyncDispatchInput): Promise<SyncDispatchResult> {
+  const denialCapture: GitDeliveryAuthorityContinuityDenialCapture = {};
+  const activityLog = input.seams.activityLog ?? processServerLogSink();
+  const authorityGuard = gitDeliveryAuthorityContinuityGuard({
+    ctx: input.ctx,
+    deps: input.deps,
+    projectId: input.projectId,
+    workspace: input.workspace,
+    operation: input.operation,
+    target: input.before.branch === undefined ? {} : { headBranchName: input.before.branch },
+    admitted: input.authority,
+    next: input.seams.beforeRemoteDispatch,
+    denialCapture,
+    audit: { logSink: input.seams.activityLog },
+  });
+  const beforeRemoteDispatch = (): boolean => {
+    const allowed = authorityGuard();
+    if (!allowed) {
+      logGitDeliveryNoSpawnRefusal(activityLog, input.operation, input.seams.correlationId);
+    }
+    return allowed;
+  };
+  const result = await runSyncExecute(
+    input.operation,
+    input.workspace.root,
+    input.remote,
+    { ...input.seams, beforeRemoteDispatch },
+    input.before,
+  );
+  if (denialCapture.result === undefined) return { result };
+  return { result, denial: denialCapture.result };
+}
+
+function completedSyncResponse(
+  deps: UiHandlerDeps,
+  operation: GitSyncOperation,
+  remote: string | undefined,
+  workspaceRoot: string,
+  before: GitSyncPreview,
+  result: SyncExecuteResult,
+  now: () => number,
+): RouteResult {
+  persistSyncResult(deps, operation, remote, workspaceRoot, before, result, now());
+  return { status: 200, body: deps.redactor(executeResponse(operation, remote, result)) };
+}
+
 async function handleSyncExecute(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -230,7 +298,17 @@ async function handleSyncExecute(
   if (!prepared.ok) return prepared.result;
   const { workspace } = prepared;
   const { projectId, remote } = prepared.value;
-  const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, operation);
+  const authority = gitDeliveryAuthorityGate(
+    ctx,
+    deps,
+    projectId,
+    workspace,
+    operation,
+    {},
+    {
+      logSink: seams.activityLog,
+    },
+  );
   if (!authority.allowed) return authority.result;
   let before: GitSyncPreview;
   try {
@@ -238,33 +316,27 @@ async function handleSyncExecute(
   } catch {
     return errResult(409, "GIT_DELIVERY_SYNC_WORKTREE_UNAVAILABLE");
   }
-  const beforeRemoteDispatch = gitDeliveryAuthorityContinuityGuard({
+  const dispatched = await dispatchSync({
     ctx,
     deps,
     projectId,
+    operation,
+    seams,
     workspace,
-    operation,
-    target: before.branch === undefined ? {} : { headBranchName: before.branch },
-    admitted: authority,
-    next: seams.beforeRemoteDispatch,
-  });
-  const result = await runSyncExecute(
-    operation,
-    workspace.root,
-    remote,
-    { ...seams, beforeRemoteDispatch },
     before,
-  );
-  persistSyncResult(
+    remote,
+    authority,
+  });
+  if (dispatched.denial !== undefined) return dispatched.denial;
+  return completedSyncResponse(
     deps,
     operation,
     remote,
     workspace.root,
     before,
-    result,
-    (seams.now ?? Date.now)(),
+    dispatched.result,
+    seams.now ?? Date.now,
   );
-  return { status: 200, body: deps.redactor(executeResponse(operation, remote, result)) };
 }
 
 export const createHandleSyncExecute = (

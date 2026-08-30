@@ -21,7 +21,12 @@ import {
   preflightSpawnEnv,
   resolveExecutableOutsideWorkspace,
 } from "./lspNodeAdapter.js";
-import type { KillScheduler, KillableChild, LspProcessKillResult } from "./lspNodeAdapter.js";
+import type {
+  KillScheduler,
+  KillableChild,
+  LspProcessKillResult,
+  LspSpawnFn,
+} from "./lspNodeAdapter.js";
 import {
   executableFixtureName,
   writeExecutableFixture,
@@ -54,6 +59,13 @@ function makeTempDir(prefix: string): string {
     rmSync(dir, { recursive: true, force: true });
   });
   return dir;
+}
+
+function releaseAdapterRuntime(handle: ReturnType<LspSpawnFn>): void {
+  if (handle.releaseRuntimeResources === undefined) {
+    throw new Error("adapter runtime cleanup is unavailable");
+  }
+  handle.releaseRuntimeResources();
 }
 
 function makeWorkspace(root: string): WorkspaceInfo {
@@ -564,6 +576,7 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
         resolve();
       });
     });
+    releaseAdapterRuntime(handle);
 
     const spawned = events.find((event) => event.op === "lsp.spawn.completed");
     expect(spawned).toBeDefined();
@@ -618,6 +631,7 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     } finally {
       process.kill = nativeKill;
     }
+    releaseAdapterRuntime(handle);
 
     // No raw-pid signal may leave this path — that pid may already belong to someone else.
     expect(signalled).toEqual([]);
@@ -687,7 +701,7 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     expect(leaked).toEqual([]);
   });
 
-  it("keeps HOME owned after a post-spawn error until the child exit is observed", async () => {
+  it("keeps HOME owned after root exit until the manager explicitly releases proven tree resources", async () => {
     const events = captureLog();
     const binDir = makeTempDir("keiko-lsp-post-spawn-error-");
     const executable = writeNodeExecutableFixture(
@@ -733,8 +747,11 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
         resolve();
       });
     });
-    handle.kill("SIGTERM");
+    handle.kill("SIGKILL");
     await exited;
+    expect(handle.lastKillResult?.()?.treeContainment).toBe("confirmed");
+    expect(existsSync(homePath)).toBe(true);
+    releaseAdapterRuntime(handle);
     expect(existsSync(homePath)).toBe(false);
   });
 
@@ -796,6 +813,7 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     });
     handle.kill("SIGTERM");
     await exited;
+    releaseAdapterRuntime(handle);
 
     const terminated = events.find((event) => event.op === "lsp.process.terminated");
     expect(terminated).toBeDefined();

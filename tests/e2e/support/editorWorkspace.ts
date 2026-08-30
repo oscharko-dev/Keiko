@@ -527,6 +527,18 @@ export function isBenignMonacoCancellation(message: string): boolean {
   return /\b(monaco|inline[-\s]?completion|suggest|editor)\b/iu.test(message);
 }
 
+/** WebKit reports deferred ResizeObserver delivery as a location-less browser diagnostic. */
+export function isBenignWebKitResizeObserverDelivery(
+  browserName: string | undefined,
+  error: Error,
+): boolean {
+  return (
+    browserName === "webkit" &&
+    error.message === "ResizeObserver loop completed with undelivered notifications." &&
+    (error.stack === undefined || error.stack.length === 0)
+  );
+}
+
 function isExpectedTaskWorkspaceProbeDenial(message: string): boolean {
   return message.includes("status of 403") && message.includes("/api/task-workspaces?root=");
 }
@@ -537,8 +549,14 @@ function isExpectedTaskWorkspaceProbeDenial(message: string): boolean {
  */
 export function collectPageErrors(page: Page): readonly string[] {
   const errors: string[] = [];
+  const browserName = page.context().browser()?.browserType().name();
   page.on("pageerror", (error) => {
-    if (isBenignMonacoCancellation(error.message)) return;
+    if (
+      isBenignMonacoCancellation(error.message) ||
+      isBenignWebKitResizeObserverDelivery(browserName, error)
+    ) {
+      return;
+    }
     errors.push(error.message.slice(0, 160));
   });
   page.on("console", (message) => {

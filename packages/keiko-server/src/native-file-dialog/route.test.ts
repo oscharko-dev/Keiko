@@ -598,6 +598,27 @@ describe("native file dialog route", () => {
     expect(diagnostics).toHaveLength(1);
   });
 
+  it("maps an unavailable platform helper to 501 with a correlated diagnostic", async () => {
+    const unavailable: NativeFileDialogAdapter = {
+      open: () =>
+        Promise.reject(
+          new NativeFileDialogAdapterError("unsupported", "system helper is unavailable"),
+        ),
+      cancel: (): void => {
+        /* no-op — test fake, nothing in flight */
+      },
+    };
+    const { deps, diagnostics } = buildDeps({ adapter: unavailable });
+
+    const result = await handleNativeFileDialogOpen(openContext({ mode: "open-file" }), deps);
+
+    expect(result.status).toBe(501);
+    expect(errorOf(result.body).code).toBe("NATIVE_DIALOG_UNSUPPORTED");
+    expect(diagnostics).toMatchObject([
+      { source: "native-file-dialog", correlationId: CORRELATION_ID },
+    ]);
+  });
+
   it("normalizes the defaultPath hint before it reaches the adapter", async () => {
     const root = await tempDir("keiko-native-hint-");
     const file = join(root, "seed.txt");

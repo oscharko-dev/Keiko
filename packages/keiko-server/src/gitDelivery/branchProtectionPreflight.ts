@@ -1,6 +1,8 @@
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import type { GitDeliveryBranchProtection } from "@oscharko-dev/keiko-contracts";
-import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-tools";
+import type {
+  CommandTerminationEvidence,
+  GitDeliveryBranchProtection,
+} from "@oscharko-dev/keiko-contracts";
 import {
   readGitRemoteUrl,
   readNodeGitBranchProtection,

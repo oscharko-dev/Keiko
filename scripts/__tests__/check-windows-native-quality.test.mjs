@@ -37,29 +37,30 @@ function hasPwsh() {
   }
 }
 
-// Runs ONLY the gate's flag-derivation block — BOTH producers' — against the given launcher /
-// setup-bootstrap sources, and reports whether it accepted. The block is lifted from the gate
-// itself at test time, so this cannot drift from what ships: if someone rewrites the derivation,
-// this harness runs the rewritten version. Each source defaults to the real production file, so a
-// test can sabotage one producer while the other stays genuine — proving the two derivations are
-// independent, not that either one alone works.
+// Runs ONLY the gate's shared flag-derivation helper against both producers. The helper is lifted
+// from the gate at test time, so this cannot drift from what ships: if someone rewrites the
+// derivation, this harness runs the rewritten version. Each source defaults to the real production
+// file, so a test can sabotage one producer while the other stays genuine.
 function derivationAccepts({
   launcherSourcePath = PRODUCTION_LAUNCHER,
   setupBootstrapSourcePath = PRODUCTION_SETUP_BOOTSTRAP,
 } = {}) {
   const gate = readFileSync(GATE, "utf8");
-  const start = gate.indexOf("$launcherFunctionStart");
-  const end = gate.indexOf("$setupBootstrapMTFlag");
-  expect(start, "derivation block start marker missing from the gate").toBeGreaterThan(-1);
+  const start = gate.indexOf("function Get-ActiveNativeProducerSource");
+  const end = gate.indexOf("$root = Split-Path");
+  expect(start, "derivation helper start marker missing from the gate").toBeGreaterThan(-1);
   expect(end, "derivation block end marker missing from the gate").toBeGreaterThan(start);
-  const block = gate.slice(start, end);
+  const helpers = gate.slice(start, end);
 
   const script = [
     "$ErrorActionPreference = 'Stop'",
-    `$productionScriptSource = Get-Content -Raw ${JSON.stringify(launcherSourcePath)}`,
-    `$setupBuildScriptSource = Get-Content -Raw ${JSON.stringify(setupBootstrapSourcePath)}`,
+    helpers,
+    `$launcherSource = Get-Content -Raw ${JSON.stringify(launcherSourcePath)}`,
+    `$setupSource = Get-Content -Raw ${JSON.stringify(setupBootstrapSourcePath)}`,
+    `$required = @('"/MT"', '"/DEPENDENTLOADFLAG:0x800"')`,
     "try {",
-    block,
+    "  Assert-NativeProducerLinkFlags -Source $launcherSource -FunctionName 'compileWindowsLauncher' -EndMarker 'function requireWindowsLauncherIconSource(' -ProducerPath 'scripts/stage-portable-runtime.mjs' -RequiredFlagLiterals $required",
+    "  Assert-NativeProducerLinkFlags -Source $setupSource -FunctionName 'compileSetupBootstrap' -EndMarker 'function fsyncFile(' -ProducerPath 'scripts/build-windows-portable-setup.mjs' -RequiredFlagLiterals $required",
     "  'ACCEPTED'",
     "} catch { 'REJECTED: ' + $_.Exception.Message }",
   ].join("\n");
@@ -133,6 +134,20 @@ describe.skipIf(!hasPwsh())("check-windows-native-quality flag derivation", () =
   it("rejects a setup-bootstrap flag that survives only in a comment, not in the argument list", () => {
     const setupBootstrapSourcePath = copySetupBootstrapWith((source) =>
       source.replace('        "/MT",\n', '        // "/MT",\n'),
+    );
+    expect(derivationAccepts({ setupBootstrapSourcePath })).toContain("REJECTED");
+  });
+
+  it("rejects a launcher flag hidden inside an interior block-comment line", () => {
+    const launcherSourcePath = copyLauncherWith((source) =>
+      source.replace('        "/MT",\n', '        /*\n        "/MT",\n        */\n'),
+    );
+    expect(derivationAccepts({ launcherSourcePath })).toContain("REJECTED");
+  });
+
+  it("rejects a setup-bootstrap flag hidden inside an interior block-comment line", () => {
+    const setupBootstrapSourcePath = copySetupBootstrapWith((source) =>
+      source.replace('        "/MT",\n', '        /*\n        "/MT",\n        */\n'),
     );
     expect(derivationAccepts({ setupBootstrapSourcePath })).toContain("REJECTED");
   });

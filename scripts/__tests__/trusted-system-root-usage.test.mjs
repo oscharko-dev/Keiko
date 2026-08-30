@@ -55,6 +55,14 @@ const EXPANDS_SYSTEM_ROOT_IN_BATCH_PATH = /%(?:SystemRoot|WINDIR)%\\+System32\b/
 const HARDCODES_DEFAULT_SYSTEM32_PATH = /\bC:\\+Windows\\+System32\b/iu;
 const PATH_MARKER = /System32|[\\/]/u;
 
+function containsRawSystemRootToken(text) {
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, text);
+  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    if (RAW_SYSTEM_ROOT_PROPERTIES.has(scanner.getTokenValue())) return true;
+  }
+  return false;
+}
+
 // Comments are stripped first: this very pin's own explanatory comments quote the banned pattern,
 // and so does every fixed call site's comment. A scanner that flagged those would be unusable.
 function stripComments(text) {
@@ -170,13 +178,13 @@ function sourceJoinsRawSystemRoot(sourceFile) {
 }
 
 function joinsAPathFromRawSystemRoot(text) {
-  const sourceFile = ts.createSourceFile("scanner-fixture.ts", text, ts.ScriptTarget.Latest, true);
   const code = stripComments(text);
-  return (
-    sourceJoinsRawSystemRoot(sourceFile) ||
-    EXPANDS_SYSTEM_ROOT_IN_BATCH_PATH.test(code) ||
-    HARDCODES_DEFAULT_SYSTEM32_PATH.test(code)
-  );
+  if (EXPANDS_SYSTEM_ROOT_IN_BATCH_PATH.test(code) || HARDCODES_DEFAULT_SYSTEM32_PATH.test(code)) {
+    return true;
+  }
+  if (!containsRawSystemRootToken(text)) return false;
+  const sourceFile = ts.createSourceFile("scanner-fixture.ts", text, ts.ScriptTarget.Latest, true);
+  return sourceJoinsRawSystemRoot(sourceFile);
 }
 
 describe("trusted Windows system-root usage (whole-class pin)", () => {
@@ -210,6 +218,10 @@ describe("trusted Windows system-root usage (whole-class pin)", () => {
       [
         "optional-chained bracket access",
         'const p = join(process.env?.["SystemRoot"] ?? "C:\\\\Windows", "System32");',
+      ],
+      [
+        "Unicode-escaped bracket access",
+        String.raw`const p = join(process.env["System\x52oot"], "System32");`,
       ],
       [
         "bare env (no process. prefix), bracket access",

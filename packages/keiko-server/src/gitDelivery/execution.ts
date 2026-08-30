@@ -9,16 +9,17 @@
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type {
+  CommandTerminationEvidence,
   GitDeliveryActionKind,
   GitDeliveryApprovalRequirement,
   GitDeliveryRepoPolicyPack,
+  GitSyncOperation,
 } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   buildGitDeliveryEvidenceRecord,
   runGitMutation,
-  type CommandTerminationEvidence,
   type GitLocalMutationAdapter,
   type GitMutationCommand,
   type GitMutationLifecycleResult,
@@ -144,15 +145,15 @@ export function gitDeliveryTerminationHandler(
 // authority-decision line) proves no process was spawned for this specific dispatch attempt.
 export function logGitDeliveryNoSpawnRefusal(
   activityLog: ServerLogSink,
-  actionKind: GitDeliveryActionKind,
+  operation: GitDeliveryActionKind | GitSyncOperation,
   correlationId: string | undefined,
 ): void {
   activityLog.write({
     category: "security",
     op: "git.delivery.dispatch.no-spawn",
     correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    status: 409,
-    extra: { actionKind },
+    status: 403,
+    extra: { operation },
   });
 }
 
@@ -271,6 +272,50 @@ export function persistGitDeliveryEvidence(
   );
 }
 
+// The remote gateways need a synthetic adapter result when the last-moment Authority Envelope
+// continuity guard refuses dispatch. That transport stand-in is `aborted`, but the durable audit fact
+// is a governance block: the accepted run no longer admitted the operation and no process started.
+// Project it onto the existing lifecycle/evidence schema instead of persisting the misleading
+// retryable internal-error result or growing a second authority ledger.
+export function authorityDeniedGitDeliveryLifecycle(
+  result: GitMutationLifecycleResult,
+): GitMutationLifecycleResult {
+  return {
+    ...result,
+    envelope: {
+      ...result.envelope,
+      // The adapter result exists only to unwind the kernel without dispatching. Keeping it on the
+      // durable envelope would falsely claim that an execution was attempted.
+      executionResult: undefined,
+    },
+    outcome: {
+      status: "blocked",
+      category: "policy-block",
+      blockReason: "authority-denied",
+    },
+    phaseReached: "execute",
+  };
+}
+
+interface GitDeliveryLifecycleRecordInput {
+  readonly deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">;
+  readonly result: GitMutationLifecycleResult;
+  readonly snapshot: GitWorktreeSnapshot;
+  readonly repoId: string;
+  readonly now: () => number;
+  readonly activityLog: ServerLogSink;
+  readonly correlationId: string | undefined;
+  readonly authorityDenied: boolean;
+}
+
+export function recordGitDeliveryLifecycle(input: GitDeliveryLifecycleRecordInput): void {
+  const lifecycle = input.authorityDenied
+    ? authorityDeniedGitDeliveryLifecycle(input.result)
+    : input.result;
+  persistGitDeliveryEvidence(input.deps, lifecycle, input.snapshot, input.repoId, input.now);
+  logGitDeliveryMutation(input.activityLog, lifecycle, input.correlationId);
+}
+
 /**
  * Runs ONE governed local mutation end-to-end: live snapshot → kernel (preflight + policy + approval +
  * execute) → evidence. Returns the kernel lifecycle result; the caller projects it into a content-free
@@ -338,6 +383,10 @@ export function logGitDeliveryMutation(
     outcome.status === "failed" || outcome.status === "recovery-required"
       ? (outcome.executionResult.errorCode ?? "internal-error")
       : undefined;
+  const blockReason =
+    outcome.status === "blocked" && outcome.category === "policy-block"
+      ? outcome.blockReason
+      : undefined;
   log.write({
     // Without an explicit level this line defaulted to `info`, so a FAILED governed mutation or
     // push was filtered out entirely under `KEIKO_LOG_LEVEL=warn` — the threshold an operator
@@ -360,6 +409,7 @@ export function logGitDeliveryMutation(
       preflightBlockingCount: preflight.blocking.length,
       requiredApproverCount:
         outcome.status === "approval-required" ? outcome.requiredApprovers.length : 0,
+      blockReason,
       executionErrorCode,
     },
   });

@@ -150,6 +150,14 @@ function trustedCandidate(
   if (platform === "win32" && !isRegularFile(candidate)) {
     return { ok: false, reason: "not-found" };
   }
+  // Reject the PATH-selected spelling before following any symlink/reparse chain. Checking only
+  // the final real path lets a workspace-controlled `<workspace>/bin/git` point at an otherwise
+  // trusted external image and escape the workspace check by resolution. The second, resolved
+  // containment check below remains necessary for the inverse shape: an external spelling whose
+  // target enters the workspace.
+  if (isContained(cwd, candidate)) {
+    return { ok: false, reason: "untrusted-location" };
+  }
   try {
     const real = realpathSync(candidate);
     // T23: a reparse point (symlink/junction) can resolve `candidate` to an entirely different file

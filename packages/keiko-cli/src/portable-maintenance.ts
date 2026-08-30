@@ -15,20 +15,20 @@ import {
   WINDOWS_SHORTCUT_MAX_BYTES,
   WindowsSystemBinaryMissingError,
   WindowsSystemDirectoryError,
-  emitSecurityLogEvent,
   equivalentWindowsShortcutPath,
   readWindowsShortcutDefinition,
-  resolveWindowsSystemExecutable,
-  securityErrorKind,
+  resolveWindowsPowerShellExecutable,
   type SecurityLogSink,
   writeWindowsShortcutDefinition,
 } from "@oscharko-dev/keiko-security";
 import {
   parseWindowsLauncherContent,
-  windowsLauncher,
+  type WindowsLauncherParseOptions,
+  windowsLauncherContentMatches,
   windowsLauncherNeedsPowerShell,
 } from "./launcher-platforms.js";
 import type { CliIo } from "./runner.js";
+import { emitCliWindowsSystemFailure } from "./security-log.js";
 import { defaultManagedRoot, type PortableLayout, type PortableTarget } from "./portable-shared.js";
 
 export type ManagedRootMode = "default" | "custom";
@@ -37,6 +37,17 @@ export type NativeRegistrationKind = "windows-start-menu" | "macos-system-applic
 export interface PortableRegistrationOptions {
   readonly securityLogSink?: SecurityLogSink | undefined;
   readonly resolveWindowsPowerShell?: ((env: EnvSource) => string) | undefined;
+}
+
+export interface PortableRegistrationRemovalInput {
+  readonly layout: PortableLayout;
+  readonly target: PortableTarget;
+  readonly managedRoot: string;
+  readonly env: EnvSource;
+  readonly home: string;
+  readonly dryRun: boolean;
+  readonly io: CliIo;
+  readonly options?: PortableRegistrationOptions | undefined;
 }
 
 interface RegistrationPlan {
@@ -171,7 +182,10 @@ export function parseWindowsStartMenuRegistration(
         registrationSecurityLogSink(options),
       );
     if (stat.size <= 0 || stat.size > WINDOWS_LAUNCHER_MAX_BYTES) return undefined;
-    return parseWindowsLauncherContent(readFileSync(path, "utf8"));
+    return parseWindowsLauncherContent(
+      readFileSync(path, "utf8"),
+      windowsLauncherParseOptions(env, options),
+    );
   } catch (error) {
     reraiseShortcutHostFailure(error);
     return undefined;
@@ -182,6 +196,20 @@ function registrationSecurityLogSink(
   options: PortableRegistrationOptions | undefined,
 ): SecurityLogSink | undefined {
   return options === undefined ? undefined : options.securityLogSink;
+}
+
+function resolveWindowsPowerShell(
+  env: EnvSource,
+  options: PortableRegistrationOptions | undefined,
+): string {
+  return options?.resolveWindowsPowerShell?.(env) ?? resolveWindowsPowerShellExecutable(env);
+}
+
+function windowsLauncherParseOptions(
+  env: EnvSource,
+  options: PortableRegistrationOptions | undefined,
+): WindowsLauncherParseOptions {
+  return { resolveTrustedWindowsPowerShell: () => resolveWindowsPowerShell(env, options) };
 }
 
 function parseWindowsShortcutRegistration(
@@ -413,60 +441,38 @@ function windowsShortcutMatches(
   );
 }
 
-function legacyWindowsRegistrationPlan(
+function legacyWindowsParseOptions(
   layout: PortableLayout,
   env: EnvSource,
-  home: string,
   options: PortableRegistrationOptions,
-): RegistrationPlan {
-  return {
-    kind: "windows-start-menu",
-    path: windowsLegacyStartMenuRegistrationPath(env, home),
-    artifact: {
-      type: "text-file",
-      expectedContent: windowsLauncher.generateContent({
-        exe: layout.primaryLauncherPath,
-        port: undefined,
-        ...(windowsLauncherNeedsPowerShell(layout.primaryLauncherPath)
-          ? {
-              windowsPowerShellPath:
-                options.resolveWindowsPowerShell?.(env) ??
-                resolveWindowsSystemExecutable(
-                  ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"],
-                  env,
-                ),
-            }
-          : {}),
-      }),
-      fileMode: windowsLauncher.fileMode,
-    },
-    env,
-    securityLogSink: options.securityLogSink,
-  };
+): WindowsLauncherParseOptions | undefined {
+  if (!windowsLauncherNeedsPowerShell(layout.primaryLauncherPath)) return undefined;
+  const trustedPowerShell = resolveWindowsPowerShell(env, options);
+  return { resolveTrustedWindowsPowerShell: () => trustedPowerShell };
 }
 
-function logLegacyWindowsSystemFailure(error: unknown, sink: SecurityLogSink | undefined): boolean {
-  if (error instanceof WindowsSystemDirectoryError) {
-    emitSecurityLogEvent(sink, {
-      level: "warn",
-      category: "security",
-      op: "security.windows-portable-legacy-launcher.system-root-refused",
-      errorKind: securityErrorKind(error),
-      extra: { surface: "legacy-start-menu-cleanup" },
-    });
+function removeManagedLegacyWindowsLauncher(
+  path: string,
+  executablePath: string,
+  parseOptions: WindowsLauncherParseOptions | undefined,
+  dryRun: boolean,
+  io: CliIo,
+): boolean {
+  const status = ensureRegularUnlinkedArtifact(path, WINDOWS_LAUNCHER_MAX_BYTES);
+  if (status === "missing") return false;
+  const content = readFileSync(path, "utf8");
+  if (
+    !windowsLauncherContentMatches(content, { exe: executablePath, port: undefined }, parseOptions)
+  ) {
+    throw new Error(`portable registration refused unknown artifact at ${path}`);
+  }
+  if (dryRun) {
+    io.out(`would-remove: ${path}\n`);
     return true;
   }
-  if (error instanceof WindowsSystemBinaryMissingError) {
-    emitSecurityLogEvent(sink, {
-      level: "error",
-      category: "diagnostic",
-      op: "security.windows-portable-legacy-launcher.system-binary-missing",
-      errorKind: securityErrorKind(error),
-      extra: { surface: "legacy-start-menu-cleanup" },
-    });
-    return true;
-  }
-  return false;
+  unlinkSync(path);
+  io.out(`removed: ${path}\n`);
+  return true;
 }
 
 function removeLegacyWindowsRegistration(
@@ -478,16 +484,25 @@ function removeLegacyWindowsRegistration(
   options: PortableRegistrationOptions,
 ): boolean {
   try {
-    const legacyPlan = legacyWindowsRegistrationPlan(layout, env, home, options);
-    return removeVerifiedFileArtifact(legacyPlan, dryRun, io);
+    const parseOptions = legacyWindowsParseOptions(layout, env, options);
+    return removeManagedLegacyWindowsLauncher(
+      windowsLegacyStartMenuRegistrationPath(env, home),
+      layout.primaryLauncherPath,
+      parseOptions,
+      dryRun,
+      io,
+    );
   } catch (error) {
-    const systemFailure = logLegacyWindowsSystemFailure(error, options.securityLogSink);
+    const systemFailure = emitCliWindowsSystemFailure(
+      error,
+      options.securityLogSink,
+      "legacy-start-menu-cleanup",
+    );
+    const refusalReason = error instanceof Error ? error.message : "removal was refused";
     io.err(
       systemFailure
         ? "keiko portable: legacy Start Menu launcher was left in place because the trusted Windows launch helper is unavailable.\n"
-        : `keiko portable: legacy Start Menu launcher was left in place: ${
-            error instanceof Error ? error.message : "removal was refused"
-          }\n`,
+        : `keiko portable: legacy Start Menu launcher was left in place: ${refusalReason}\n`,
     );
     return false;
   }
@@ -697,16 +712,16 @@ export function removePortableManagedInstall(
   }
 }
 
-export function removePortableRegistrationArtifacts(
-  layout: PortableLayout,
-  target: PortableTarget,
-  managedRoot: string,
-  env: EnvSource,
-  home: string,
-  dryRun: boolean,
-  io: CliIo,
-  options: PortableRegistrationOptions = {},
-): number {
+export function removePortableRegistrationArtifacts({
+  layout,
+  target,
+  managedRoot,
+  env,
+  home,
+  dryRun,
+  io,
+  options = {},
+}: PortableRegistrationRemovalInput): number {
   let removed = 0;
   for (const plan of registrationPlans(layout, target, managedRoot, env, home, options)) {
     removed += removeVerifiedFileArtifact(plan, dryRun, io) ? 1 : 0;

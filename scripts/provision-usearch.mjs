@@ -41,17 +41,17 @@ const DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024;
 // pin scans packages/*/src, not scripts/. `resolveWindowsSystemDirectory` adds the canonical-shape
 // validation (throws on a hostile override); the existence check stays with `systemBinary()` below,
 // which already performs it and fails closed through this script's own `fail()`, not by throwing.
-export function systemBinariesFor(hostPlatform, systemRoot) {
-  return hostPlatform === "win32"
-    ? {
-        curl: join(
-          resolveWindowsSystemDirectory({ SystemRoot: systemRoot }),
-          "System32",
-          "curl.exe",
-        ),
-        tar: join(resolveWindowsSystemDirectory({ SystemRoot: systemRoot }), "System32", "tar.exe"),
-      }
-    : { curl: "/usr/bin/curl", tar: "/usr/bin/tar" };
+export function systemBinariesFor(
+  hostPlatform,
+  systemRoot,
+  resolveSystemRoot = resolveWindowsSystemDirectory,
+) {
+  if (hostPlatform !== "win32") return { curl: "/usr/bin/curl", tar: "/usr/bin/tar" };
+  const trustedSystemRoot = resolveSystemRoot({ SystemRoot: systemRoot });
+  return {
+    curl: join(trustedSystemRoot, "System32", "curl.exe"),
+    tar: join(trustedSystemRoot, "System32", "tar.exe"),
+  };
 }
 
 const SYSTEM_BINARIES = systemBinariesFor(platform, env.SystemRoot);

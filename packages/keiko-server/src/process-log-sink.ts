@@ -32,7 +32,7 @@ import type {
   ConsolidationLogEvent,
   ConsolidationLogSink,
 } from "@oscharko-dev/keiko-memory-consolidation";
-import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-tools";
+import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_SERVER_LOG_LEVEL,
   getServerLogger,

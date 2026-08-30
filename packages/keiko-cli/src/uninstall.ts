@@ -475,16 +475,16 @@ function removePortableManagedStep(
     removePortableManagedInstall(record.layout, io, true);
     assertPortableRegistrationRemovable(record, env, homedir, securityLogSink);
   }
-  removePortableRegistrationArtifacts(
-    record.layout,
-    record.target,
-    record.managedRoot,
+  removePortableRegistrationArtifacts({
+    layout: record.layout,
+    target: record.target,
+    managedRoot: record.managedRoot,
     env,
-    homedir,
-    opts.dryRun,
+    home: homedir,
+    dryRun: opts.dryRun,
     io,
-    { securityLogSink },
-  );
+    options: { securityLogSink },
+  });
 }
 
 function inspectPortableManagedInstallForRemoval(
@@ -504,16 +504,16 @@ function assertPortableRegistrationRemovable(
   securityLogSink?: SecurityLogSink,
 ): void {
   if (record.layout === undefined || record.managedRoot === undefined) return;
-  removePortableRegistrationArtifacts(
-    record.layout,
-    record.target,
-    record.managedRoot,
+  removePortableRegistrationArtifacts({
+    layout: record.layout,
+    target: record.target,
+    managedRoot: record.managedRoot,
     env,
-    homedir,
-    true,
-    { out: (_text: string): void => undefined, err: (_text: string): void => undefined },
-    { securityLogSink },
-  );
+    home: homedir,
+    dryRun: true,
+    io: { out: (_text: string): void => undefined, err: (_text: string): void => undefined },
+    options: { securityLogSink },
+  });
 }
 
 function refuseUnsafeStateRoot(

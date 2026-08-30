@@ -1,8 +1,134 @@
 import { randomUUID } from "node:crypto";
-import type { SecurityLogEvent, SecurityLogSink } from "@oscharko-dev/keiko-security";
+import {
+  emitSecurityLogEvent,
+  securityErrorKind,
+  type SecurityLogEvent,
+  type SecurityLogSink,
+  WindowsSystemBinaryMissingError,
+  WindowsSystemDirectoryError,
+} from "@oscharko-dev/keiko-security";
 
 /** Builds the existing activity-log sink for the state directory selected by one CLI command. */
 export type CliSecurityLogSinkFactory = (stateDir: string) => SecurityLogSink;
+
+export type CliWindowsSystemSurface =
+  | "launcher-install"
+  | "legacy-start-menu-cleanup"
+  | "portable-failure-alert"
+  | "start-open-browser";
+
+function emitWindowsSystemRootRefusal(
+  error: WindowsSystemDirectoryError,
+  sink: SecurityLogSink | undefined,
+  surface: CliWindowsSystemSurface,
+): void {
+  const details = {
+    errorKind: securityErrorKind(error),
+    extra: { surface },
+  } as const;
+  switch (surface) {
+    case "launcher-install":
+      emitSecurityLogEvent(sink, {
+        ...details,
+        level: "warn",
+        category: "security",
+        op: "security.windows-launcher.system-root-refused",
+      });
+      break;
+    case "legacy-start-menu-cleanup":
+      emitSecurityLogEvent(sink, {
+        ...details,
+        level: "warn",
+        category: "security",
+        op: "security.windows-portable-legacy-launcher.system-root-refused",
+      });
+      break;
+    case "portable-failure-alert":
+      emitSecurityLogEvent(sink, {
+        ...details,
+        level: "warn",
+        category: "security",
+        op: "security.windows-portable-alert.system-root-refused",
+      });
+      break;
+    case "start-open-browser":
+      emitSecurityLogEvent(sink, {
+        ...details,
+        level: "warn",
+        category: "security",
+        op: "security.windows-lifecycle-opener.system-root-refused",
+      });
+      break;
+  }
+}
+
+function emitWindowsSystemBinaryMissing(
+  error: WindowsSystemBinaryMissingError,
+  sink: SecurityLogSink | undefined,
+  surface: CliWindowsSystemSurface,
+): void {
+  const details = {
+    errorKind: securityErrorKind(error),
+    extra: { surface },
+  } as const;
+  switch (surface) {
+    case "launcher-install":
+      emitSecurityLogEvent(sink, {
+        ...details,
+        level: "error",
+        category: "diagnostic",
+        op: "security.windows-launcher.system-binary-missing",
+      });
+      break;
+    case "legacy-start-menu-cleanup":
+      emitSecurityLogEvent(sink, {
+        ...details,
+        level: "error",
+        category: "diagnostic",
+        op: "security.windows-portable-legacy-launcher.system-binary-missing",
+      });
+      break;
+    case "portable-failure-alert":
+      emitSecurityLogEvent(sink, {
+        ...details,
+        level: "error",
+        category: "diagnostic",
+        op: "security.windows-portable-alert.system-binary-missing",
+      });
+      break;
+    case "start-open-browser":
+      emitSecurityLogEvent(sink, {
+        ...details,
+        level: "error",
+        category: "diagnostic",
+        op: "security.windows-lifecycle-opener.system-binary-missing",
+      });
+      break;
+  }
+}
+
+/**
+ * Emit the CLI's one closed, body-free event shape for trusted Windows helper resolution.
+ *
+ * The surface is a closed union and selects fixed catalog operations; neither the thrown message
+ * nor a path can enter the event. Returning whether the error belongs to this contract lets callers
+ * preserve their existing typed-error control flow without reimplementing the dispatch.
+ */
+export function emitCliWindowsSystemFailure(
+  error: unknown,
+  sink: SecurityLogSink | undefined,
+  surface: CliWindowsSystemSurface,
+): boolean {
+  if (error instanceof WindowsSystemDirectoryError) {
+    emitWindowsSystemRootRefusal(error, sink, surface);
+    return true;
+  }
+  if (error instanceof WindowsSystemBinaryMissingError) {
+    emitWindowsSystemBinaryMissing(error, sink, surface);
+    return true;
+  }
+  return false;
+}
 
 /**
  * Bind security-package events to one real CLI invocation.

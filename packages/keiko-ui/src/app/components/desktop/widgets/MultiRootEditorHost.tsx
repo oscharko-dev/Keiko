@@ -29,6 +29,7 @@ import type { WorkspaceManifestView } from "../hooks/useWorkspaceManifest";
 import { WorkspaceTrustBadge } from "../workspace-trust/WorkspaceTrustSurfaces";
 import { useWorkspaceTrust } from "../workspace-trust/useWorkspaceTrust";
 import { rovingTabTargetFile } from "./cards/editorPaneGeometry";
+import { editorPaneWindowId } from "./cards/editorPaneWindowId";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
 import styles from "./MultiRootEditorHost.module.css";
 
@@ -412,7 +413,7 @@ export function MultiRootEditorHost({
                 root={root.canonicalRoot}
                 agentRootBinding={agentRootBinding(manifest, root)}
                 sessionActive={active}
-                windowId={`${baseProps.windowId ?? "editor"}-${root.rootRef}`}
+                windowId={editorPaneWindowId(baseProps.windowId, root.rootRef)}
                 onWorkspaceChange={sessionChangeHandlers.get(root.rootRef)}
               />
             </Activity>

@@ -26,13 +26,17 @@
 // SOURCE_ROOTS is first-party code only, but the exported UI also SHIPS dependency code unmodified
 // — Babel's post-build pass (transpile-ui-static-js.mjs) runs with `useBuiltIns: false`, so it
 // lowers syntax but never adds a missing runtime API, and it never touches a dependency's own
-// guarded-API *calls* either way. A guarded API called from inside a bundled dependency was
-// therefore invisible to this gate: `pdfjs-dist` (loaded by `PdfCitationPreviewWindow.tsx`)
-// unconditionally calls `Promise.withResolvers` and, on its URL-backed load path, `URL.parse` —
-// both above several of the floors this file declared until this same change raised them. See
-// DEPENDENCY_FILES below.
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+// guarded-API *calls* either way. The dependency scan is therefore a graph, not a hand-maintained
+// list: value imports, dynamic imports and `new URL(..., import.meta.url)` worker edges in the two
+// first-party roots seed a recursive browser dependency closure. That reaches both PDF.js realms,
+// Monaco's main module and worker, every Monaco feature/language registration Keiko actually
+// imports, and their transitive JS/CSS edges. Type-only imports, tests and declarations are not
+// runtime edges. An unreadable or unresolved edge fails closed instead of silently shrinking the
+// proof.
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { parse as babelParse } from "@babel/parser";
 // Imported, never restated: a second copy of these numbers here would drift from the transpiler's
 // own copy exactly the way the browserslist declaration drifted from the product. The module is
 // `isMainModule`-guarded, so importing it runs no transpilation.
@@ -41,19 +45,15 @@ import { isMainModule } from "./lib/is-main-module.mjs";
 
 const UI_PACKAGE = "packages/keiko-ui/package.json";
 const SOURCE_ROOTS = ["packages/keiko-ui/src", "packages/keiko-editor/src"];
+const DEPENDENCY_SCRIPT_EXTENSIONS = new Set([".cjs", ".js", ".mjs"]);
+const SCANNABLE_DEPENDENCY_EXTENSIONS = new Set([...DEPENDENCY_SCRIPT_EXTENSIONS, ".css"]);
+const RESOLUTION_EXTENSIONS = ["", ".js", ".mjs", ".cjs", ".css", ".json"];
 
-// Bundled-dependency entry points that ship into the browser bundle byte-for-byte. Curated by hand
-// for the same reason GUARDED_APIS is: scanning the full `node_modules` closure would false-positive
-// on code that never ships (Node-only fallbacks, build tooling, test helpers) and cost real time on
-// every run. These are exactly the two files `loadPdfJs()` in
-// packages/keiko-ui/src/app/components/desktop/widgets/cards/PdfCitationPreviewWindow.tsx loads at
-// runtime — the main-thread pdf.js module and the worker script it points
-// `GlobalWorkerOptions.workerSrc` at. Add an entry here whenever a new dependency is imported
-// directly into the shipped UI bundle (as opposed to only used at build time).
-const DEPENDENCY_FILES = [
-  "node_modules/pdfjs-dist/build/pdf.mjs",
-  "node_modules/pdfjs-dist/build/pdf.worker.mjs",
-];
+/** Matches Array#sort's locale-independent UTF-16 code-unit ordering. */
+function compareCodeUnits(left, right) {
+  if (left < right) return -1;
+  return left > right ? 1 : 0;
+}
 
 // CSS is scanned too, and the reason is not symmetry. A missing JS API throws on first use, which
 // is loud; an unsupported SELECTOR is silently ignored, so the rule never applies and the app
@@ -162,23 +162,29 @@ export const GUARDED_APIS = [
     pattern: /\bIntl\.Segmenter\b/,
     minimum: { chrome: 87, edge: 87, firefox: 125, safari: 14.1 },
   },
-  // IDX58 finding. Not first-party — DEPENDENCY_FILES is what makes these two reachable at all;
-  // `pdfjs-dist@6.2.108`'s `PDFDocumentLoadingTask` (constructed on every `getDocument()` call,
-  // both the `{data}` and `{url}` forms) calls this unconditionally in a class-field initializer.
-  // Versions per caniuse (mdn-javascript_builtins_promise_withresolvers), checked 2026-08-30.
+  // PDF.js's legacy bundle retains these call sites but executes bundled core-js implementations
+  // before them. `providedBy` is satisfied only when an unconditionally reached webpack module
+  // imports a semantically verified core-js exporter and calls it at module top level before the
+  // guarded API's first use — not by a comment, string, local `$`, dead branch, or similarly-shaped
+  // arbitrary call. A modern bundle (or a broken legacy update) still fails at the declared floor. The
+  // real-browser PDF smoke independently removes the host implementations in both realms before
+  // parsing a PDF.
+  {
+    name: "Promise.try",
+    pattern: /\bPromise\.try\s*\(/,
+    providedBy: "Promise.try",
+    minimum: { chrome: 128, edge: 128, firefox: 134, safari: 18.2 },
+  },
   {
     name: "Promise.withResolvers",
     pattern: /\bPromise\.withResolvers\s*\(/,
+    providedBy: "Promise.withResolvers",
     minimum: { chrome: 119, edge: 119, firefox: 121, safari: 17.4 },
   },
-  // IDX58 finding, continued. `pdfjs-dist`'s `getUrlProp()` calls this on every `getDocument({url})`
-  // call (the range-request path `PdfCitationPreviewWindow.tsx` uses for large PDFs); the worker
-  // script (`pdf.worker.mjs`) calls it too. Versions per caniuse (mdn-api_url_parse_static), checked
-  // 2026-08-30 — a materially newer floor than every other guarded API in this file, which is why it
-  // now sets the declared minimum in packages/keiko-ui/package.json.
   {
     name: "URL.parse",
     pattern: /\bURL\.parse\s*\(/,
+    providedBy: "URL.parse",
     minimum: { chrome: 126, edge: 126, firefox: 126, safari: 18 },
   },
 ];
@@ -195,13 +201,212 @@ function collectSources(roots = SOURCE_ROOTS) {
       if (entry.name === "node_modules" || entry.name === "dist") continue;
       const path = join(dir, entry.name);
       if (entry.isDirectory()) walk(path);
-      else if (/\.(ts|tsx|css)$/.test(entry.name) && !/\.test\.(ts|tsx)$/.test(entry.name)) {
+      else if (
+        /\.(ts|tsx|css)$/u.test(entry.name) &&
+        !/\.(?:d|test)\.(?:ts|tsx)$/u.test(entry.name)
+      ) {
         files.push(path);
       }
     }
   };
   for (const root of roots) walk(root);
   return files;
+}
+
+function isImportMetaUrl(node) {
+  if (node?.type !== "MemberExpression" || node.computed) return false;
+  if (node.property?.type !== "Identifier" || node.property.name !== "url") return false;
+  const object = node.object;
+  if (object.type !== "MetaProperty") return false;
+  return object.meta.name === "import" && object.property.name === "meta";
+}
+
+function importDeclarationSpecifier(node) {
+  if (node.type !== "ImportDeclaration" || node.importKind === "type") return undefined;
+  const hasRuntimeBinding = node.specifiers.some((specifier) => specifier.importKind !== "type");
+  return node.specifiers.length === 0 || hasRuntimeBinding ? node.source.value : undefined;
+}
+
+function dynamicImportSpecifier(node) {
+  const argument = node.arguments?.[0];
+  if (node.type === "CallExpression" && node.callee?.type === "Import") {
+    return argument?.type === "StringLiteral" ? argument.value : undefined;
+  }
+  return undefined;
+}
+
+function requireSpecifier(node, functionDepth, allowRequire) {
+  const argument = node.arguments?.[0];
+  if (
+    allowRequire &&
+    functionDepth === 0 &&
+    node.type === "CallExpression" &&
+    node.callee?.type === "Identifier" &&
+    node.callee.name === "require"
+  ) {
+    return argument?.type === "StringLiteral" ? argument.value : undefined;
+  }
+  return undefined;
+}
+
+function workerUrlSpecifier(node) {
+  const argument = node.arguments?.[0];
+  if (
+    node.type === "NewExpression" &&
+    node.callee?.type === "Identifier" &&
+    node.callee.name === "URL" &&
+    argument?.type === "StringLiteral" &&
+    isImportMetaUrl(node.arguments?.[1])
+  ) {
+    return argument.value;
+  }
+  return undefined;
+}
+
+function expressionSpecifier(node, functionDepth, allowRequire) {
+  const dynamicImport = dynamicImportSpecifier(node);
+  if (dynamicImport !== undefined) return dynamicImport;
+  const required = requireSpecifier(node, functionDepth, allowRequire);
+  return required ?? workerUrlSpecifier(node);
+}
+
+function runtimeSpecifier(node, functionDepth, allowRequire) {
+  const declaration = importDeclarationSpecifier(node);
+  if (declaration !== undefined) return declaration;
+  if (
+    (node.type === "ExportNamedDeclaration" || node.type === "ExportAllDeclaration") &&
+    node.exportKind !== "type"
+  ) {
+    return node.source?.value;
+  }
+  if (node.type === "ImportExpression") {
+    return node.source?.type === "StringLiteral" ? node.source.value : undefined;
+  }
+  return expressionSpecifier(node, functionDepth, allowRequire);
+}
+
+function childFunctionDepth(node, functionDepth) {
+  return /^(?:ArrowFunctionExpression|ClassMethod|FunctionDeclaration|FunctionExpression|ObjectMethod)$/u.test(
+    node.type,
+  )
+    ? functionDepth + 1
+    : functionDepth;
+}
+
+function walkRuntimeValue(value, state, functionDepth) {
+  if (Array.isArray(value)) {
+    for (const child of value) walkRuntimeSpecifiers(child, state, functionDepth);
+  } else if (value !== null && typeof value === "object" && typeof value.type === "string") {
+    walkRuntimeSpecifiers(value, state, functionDepth);
+  }
+}
+
+function walkRuntimeSpecifiers(node, state, functionDepth = 0) {
+  if (node === null || typeof node !== "object") return;
+  const specifier = runtimeSpecifier(node, functionDepth, state.allowRequire);
+  if (typeof specifier === "string") state.specifiers.add(specifier);
+  const childDepth = childFunctionDepth(node, functionDepth);
+  for (const value of Object.values(node)) walkRuntimeValue(value, state, childDepth);
+}
+
+function parserPlugins(path) {
+  if (path.endsWith(".tsx")) return ["jsx", "typescript"];
+  return path.endsWith(".ts") ? ["typescript"] : [];
+}
+
+export function runtimeSpecifiers(path, text = readFileSync(path, "utf8")) {
+  if (path.endsWith(".css")) return [];
+  const ast = babelParse(text, {
+    sourceType: "unambiguous",
+    plugins: parserPlugins(path),
+  });
+  const state = {
+    // ESM dependencies occasionally create a local `require` for a Node-only fallback (PDF.js's
+    // optional native canvas path is the live case). A browser bundler does not follow that local
+    // call. CJS entry points do use top-level global `require`, which remains part of their graph.
+    allowRequire: !path.endsWith(".mjs"),
+    specifiers: new Set(),
+  };
+  walkRuntimeSpecifiers(ast, state);
+  return [...state.specifiers];
+}
+
+function resolvedFileCandidate(candidate) {
+  for (const suffix of RESOLUTION_EXTENSIONS) {
+    try {
+      const path = `${candidate}${suffix}`;
+      if (statSync(path).isFile()) return path;
+    } catch {
+      // Try the next deterministic candidate.
+    }
+  }
+  for (const suffix of RESOLUTION_EXTENSIONS.slice(1)) {
+    try {
+      const path = join(candidate, `index${suffix}`);
+      if (statSync(path).isFile()) return path;
+    } catch {
+      // Try the next deterministic candidate.
+    }
+  }
+  return undefined;
+}
+
+function isIgnoredRuntimeSpecifier(specifier) {
+  return (
+    specifier.startsWith("node:") ||
+    specifier.startsWith("@/") ||
+    specifier.startsWith("@oscharko-dev/")
+  );
+}
+
+export function resolveRuntimeSpecifier(importer, specifier) {
+  if (isIgnoredRuntimeSpecifier(specifier)) return undefined;
+  if (specifier.startsWith(".") || isAbsolute(specifier)) {
+    const candidate = isAbsolute(specifier) ? specifier : resolve(dirname(importer), specifier);
+    const resolved = resolvedFileCandidate(candidate);
+    if (resolved !== undefined) return resolved;
+    throw new Error(`cannot resolve ${JSON.stringify(specifier)} from ${importer}`);
+  }
+  try {
+    return createRequire(resolve(importer)).resolve(specifier);
+  } catch (error) {
+    throw new Error(`cannot resolve ${JSON.stringify(specifier)} from ${importer}`, {
+      cause: error,
+    });
+  }
+}
+
+function scannableDependencyPath(path) {
+  return SCANNABLE_DEPENDENCY_EXTENSIONS.has(extname(path));
+}
+
+export function collectDependencyClosure(entryFiles, resolver = resolveRuntimeSpecifier) {
+  const pending = [...entryFiles];
+  const paths = new Set();
+  while (pending.length > 0) {
+    const path = pending.pop();
+    if (path === undefined || paths.has(path) || !scannableDependencyPath(path)) continue;
+    const text = readFileSync(path, "utf8");
+    paths.add(path);
+    if (!DEPENDENCY_SCRIPT_EXTENSIONS.has(extname(path))) continue;
+    for (const specifier of runtimeSpecifiers(path, text)) {
+      const resolved = resolver(path, specifier);
+      if (resolved !== undefined) pending.push(resolved);
+    }
+  }
+  return [...paths].sort(compareCodeUnits);
+}
+
+export function deriveDependencyEntryFiles(firstPartySources, resolver = resolveRuntimeSpecifier) {
+  const entries = new Set();
+  for (const source of firstPartySources) {
+    for (const specifier of runtimeSpecifiers(source.path, source.text)) {
+      if (specifier.startsWith(".") || isIgnoredRuntimeSpecifier(specifier)) continue;
+      const resolved = resolver(source.path, specifier);
+      if (resolved?.includes(`${join("node_modules", "")}`) === true) entries.add(resolved);
+    }
+  }
+  return [...entries].sort(compareCodeUnits);
 }
 
 // "chrome >= 111" -> { engine: "chrome", floor: 111 }. Any other shape is a failure: this gate
@@ -309,30 +514,271 @@ export function transpileFloorViolations(floors, targets = TRANSPILE_TARGETS) {
   return found;
 }
 
-function matchingSourcePaths(sources, pattern) {
-  return sources.filter(({ text }) => pattern.test(text)).map(({ path }) => path);
+function propertyKey(property) {
+  if (property?.computed === true) return undefined;
+  if (property?.key?.type === "Identifier") return property.key.name;
+  return property?.key?.type === "StringLiteral" ? property.key.value : undefined;
+}
+
+function objectProperty(object, key) {
+  return object?.type === "ObjectExpression"
+    ? object.properties.find((property) => propertyKey(property) === key)
+    : undefined;
+}
+
+function exportCallOptions(node) {
+  if (node.type !== "CallExpression" || node.callee?.type !== "Identifier") return undefined;
+  return node.arguments[0];
+}
+
+function staticExportTarget(node) {
+  const options = exportCallOptions(node);
+  if (options === undefined) return undefined;
+  const targetProperty = objectProperty(options, "target");
+  const staticProperty = objectProperty(options, "stat");
+  const target = targetProperty?.value;
+  if (target?.type !== "StringLiteral") return undefined;
+  return staticProperty?.value?.type === "BooleanLiteral" && staticProperty.value.value
+    ? target.value
+    : undefined;
+}
+
+function functionExportName(property) {
+  const member = propertyKey(property);
+  if (member === undefined) return undefined;
+  return property.value?.type === "FunctionExpression" || property.type === "ObjectMethod"
+    ? member
+    : undefined;
+}
+
+function providedApiFromCall(node) {
+  const target = staticExportTarget(node);
+  if (target === undefined) return undefined;
+  const exports = node.arguments[1];
+  for (const property of exports?.type === "ObjectExpression" ? exports.properties : []) {
+    const member = functionExportName(property);
+    if (member !== undefined) return { name: `${target}.${member}`, position: node.start ?? 0 };
+  }
+  return undefined;
+}
+
+function webpackModuleId(node) {
+  if (
+    node?.type !== "CallExpression" ||
+    node.callee?.type !== "Identifier" ||
+    node.callee.name !== "__webpack_require__"
+  ) {
+    return undefined;
+  }
+  const value = node.arguments[0];
+  return value?.type === "NumericLiteral" || value?.type === "StringLiteral"
+    ? String(value.value)
+    : undefined;
+}
+
+function directRequireBindings(statements) {
+  const bindings = new Map();
+  for (const statement of statements) {
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of statement.declarations) {
+      const id = webpackModuleId(declaration.init);
+      if (declaration.id?.type === "Identifier" && id !== undefined) {
+        bindings.set(declaration.id.name, {
+          moduleId: id,
+          position: declaration.start ?? statement.start ?? 0,
+        });
+      }
+    }
+  }
+  return bindings;
+}
+
+function directRequirePositions(statements) {
+  const positions = new Map();
+  for (const statement of statements) {
+    if (statement.type === "ExpressionStatement") {
+      const id = webpackModuleId(statement.expression);
+      if (id !== undefined) positions.set(id, statement.start ?? 0);
+    }
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of statement.declarations) {
+      const id = webpackModuleId(declaration.init);
+      if (id !== undefined) positions.set(id, declaration.start ?? statement.start ?? 0);
+    }
+  }
+  return positions;
+}
+
+function webpackFactoryKey(property) {
+  if (property?.computed === true) return undefined;
+  const key = property?.key;
+  return key?.type === "NumericLiteral" || key?.type === "StringLiteral"
+    ? String(key.value)
+    : undefined;
+}
+
+function webpackModuleFactories(ast) {
+  const declarators = ast.program.body
+    .filter((node) => node.type === "VariableDeclaration")
+    .flatMap((node) => node.declarations);
+  const table = declarators.find(
+    (declaration) =>
+      declaration.id?.type === "Identifier" && declaration.id.name === "__webpack_modules__",
+  )?.init;
+  const factories = new Map();
+  for (const property of table?.type === "ObjectExpression" ? table.properties : []) {
+    const key = webpackFactoryKey(property);
+    if (key !== undefined && property.type === "ObjectMethod") factories.set(key, property);
+  }
+  return factories;
+}
+
+function isMember(node, objectName, propertyName) {
+  return (
+    node?.type === "MemberExpression" &&
+    !node.computed &&
+    node.object?.type === "Identifier" &&
+    node.object.name === objectName &&
+    node.property?.type === "Identifier" &&
+    node.property.name === propertyName
+  );
+}
+
+function assignedExportFunction(statement, moduleName) {
+  if (statement.type !== "ExpressionStatement") return undefined;
+  const expression = statement.expression;
+  if (expression.type !== "AssignmentExpression") return undefined;
+  if (!isMember(expression.left, moduleName, "exports")) return undefined;
+  return expression.right.type === "FunctionExpression" ? expression.right : undefined;
+}
+
+function exportedFunction(factory) {
+  if (factory === undefined) return undefined;
+  const moduleParameter = factory.params[0];
+  if (moduleParameter?.type !== "Identifier") return undefined;
+  for (const statement of factory.body.body) {
+    const exported = assignedExportFunction(statement, moduleParameter.name);
+    if (exported !== undefined) return exported;
+  }
+  return undefined;
+}
+
+function collectNodeValue(value, visit) {
+  if (Array.isArray(value)) {
+    for (const child of value) walkNodes(child, visit);
+  } else if (value !== null && typeof value === "object" && typeof value.type === "string") {
+    walkNodes(value, visit);
+  }
+}
+
+function walkNodes(node, visit) {
+  if (node === null || typeof node !== "object") return;
+  visit(node);
+  for (const value of Object.values(node)) collectNodeValue(value, visit);
+}
+
+function isImportedTargetWrite(node, options, bindings, factories) {
+  if (node.type !== "CallExpression" || node.callee?.type !== "Identifier") return false;
+  const required = bindings.get(node.callee.name);
+  const optionsArgument = node.arguments[3];
+  return (
+    required !== undefined &&
+    factories.has(required.moduleId) &&
+    optionsArgument?.type === "Identifier" &&
+    optionsArgument.name === options
+  );
+}
+
+function recordCoreJsExporterSignal(node, state) {
+  if (isMember(node, state.options, "stat")) state.signals.readsStat = true;
+  if (isMember(node, state.options, "target")) state.signals.readsTarget = true;
+  if (node.type === "ForInStatement" && node.right?.name === state.source) {
+    state.signals.loopsSource = true;
+  }
+  if (isImportedTargetWrite(node, state.options, state.bindings, state.factories)) {
+    state.signals.writesTarget = true;
+  }
+}
+
+function coreJsExporterSignals(exporter, bindings, factories) {
+  const options = exporter.params[0]?.type === "Identifier" ? exporter.params[0].name : undefined;
+  const source = exporter.params[1]?.type === "Identifier" ? exporter.params[1].name : undefined;
+  const signals = { loopsSource: false, readsStat: false, readsTarget: false, writesTarget: false };
+  const state = { bindings, factories, options, signals, source };
+  walkNodes(exporter.body, (node) => recordCoreJsExporterSignal(node, state));
+  return signals;
+}
+
+function isCoreJsExporterFactory(factory, factories) {
+  const exporter = factory === undefined ? undefined : exportedFunction(factory);
+  if (exporter === undefined || exporter.params.length < 2) return false;
+  const bindings = directRequireBindings(factory.body.body);
+  const signals = coreJsExporterSignals(exporter, bindings, factories);
+  return Object.values(signals).every(Boolean);
+}
+
+function providedApiForStatement(statement, bindings, factories) {
+  if (statement.type !== "ExpressionStatement") return undefined;
+  const call = statement.expression;
+  if (call.type !== "CallExpression" || call.callee?.type !== "Identifier") return undefined;
+  const provider = bindings.get(call.callee.name);
+  if (provider === undefined || provider.position >= (call.start ?? 0)) return undefined;
+  return isCoreJsExporterFactory(factories.get(provider.moduleId), factories)
+    ? providedApiFromCall(call)
+    : undefined;
+}
+
+function providedApisForFactory(factory, factories) {
+  const positions = new Map();
+  const bindings = directRequireBindings(factory.body.body);
+  for (const statement of factory.body.body) {
+    const provided = providedApiForStatement(statement, bindings, factories);
+    if (provided !== undefined) positions.set(provided.name, provided.position);
+  }
+  return positions;
+}
+
+export function providedRuntimeApiPositions(path, text = readFileSync(path, "utf8")) {
+  const ast = babelParse(text, { sourceType: "unambiguous", plugins: parserPlugins(path) });
+  const positions = new Map();
+  const factories = webpackModuleFactories(ast);
+  const rootImports = directRequirePositions(ast.program.body);
+  for (const [moduleId, factory] of factories) {
+    const importPosition = rootImports.get(moduleId);
+    if (importPosition === undefined) continue;
+    for (const name of providedApisForFactory(factory, factories).keys()) {
+      if (!positions.has(name)) positions.set(name, importPosition);
+    }
+  }
+  return positions;
+}
+
+export function providedRuntimeApis(path, text = readFileSync(path, "utf8")) {
+  return new Set(providedRuntimeApiPositions(path, text).keys());
+}
+
+function providerPrecedesFirstCall(path, text, api) {
+  if (api.providedBy === undefined) return false;
+  const firstCall = text.search(api.pattern);
+  const provider = providedRuntimeApiPositions(path, text).get(api.providedBy);
+  return provider !== undefined && provider < firstCall;
+}
+
+function matchingSourcePaths(sources, api) {
+  return sources
+    .filter(
+      ({ path, text }) => api.pattern.test(text) && !providerPrecedesFirstCall(path, text, api),
+    )
+    .map(({ path }) => path);
 }
 
 function sourceEntries(paths) {
   return paths.map((path) => ({ path, text: readFileSync(path, "utf8") }));
 }
 
-// Dependency paths are a curated part of the gate contract. A missing package install or a moved
-// upstream entry point must fail closed with a stable diagnosis, but must not abort the rest of the
-// scan: another readable dependency can still expose an independent floor violation worth reporting
-// in the same run.
-function readableDependencyEntries(paths) {
-  const entries = [];
-  let readFailed = false;
-  for (const path of paths) {
-    try {
-      entries.push({ path, text: readFileSync(path, "utf8") });
-    } catch {
-      fail(`bundled dependency file is missing or unreadable: ${path}`);
-      readFailed = true;
-    }
-  }
-  return { entries, readFailed };
+export function dependencyClosureForSources(sourceRoots = SOURCE_ROOTS) {
+  const firstPartySources = sourceEntries(collectSources(sourceRoots));
+  return collectDependencyClosure(deriveDependencyEntryFiles(firstPartySources));
 }
 
 // Every guarded API that the sources actually call, checked against the declared floors.
@@ -340,39 +786,40 @@ function apiViolations(sources, floors) {
   const violations = [];
   const scripts = sources.filter(({ path }) => !path.endsWith(".css"));
   for (const api of GUARDED_APIS) {
-    const users = matchingSourcePaths(scripts, api.pattern);
+    const users = matchingSourcePaths(scripts, api);
     if (users.length > 0) violations.push(...violationsFor(api, users, floors));
   }
   // GUARDED_CSS is checked against `.css` files AND script sources that can inject CSS at runtime.
   // First-party debug-monaco-styles.ts builds a `<style>` element from a `color-mix(...)` template
-  // literal, and the curated pdfjs `.mjs` entry assigns the same function through an inline style.
+  // literal, and bundled dependency JS assigns the same function through an inline style.
   // Restricting this scan to stylesheet extensions — or only first-party TS/TSX — leaves shipped
   // runtime CSS invisible even though the dependency entries are already in `sources`.
-  const cssCapableSources = sources.filter(({ path }) => /\.(css|mjs|ts|tsx)$/u.test(path));
+  const cssCapableSources = sources.filter(({ path }) =>
+    /\.(?:cjs|css|js|mjs|ts|tsx)$/u.test(path),
+  );
   for (const feature of GUARDED_CSS) {
-    const users = matchingSourcePaths(cssCapableSources, feature.pattern);
+    const users = matchingSourcePaths(cssCapableSources, feature);
     if (users.length > 0) violations.push(...violationsFor(feature, users, floors));
   }
   return violations;
 }
 
-// `uiPackage`/`sourceRoots`/`dependencyFiles` default to the production paths, so the CLI below is
-// unchanged. They exist so a test can drive every branch of this orchestration against a fixture
-// instead of leaving it to run only in CI, where a wrong branch shows up as a confusing pass rather
-// than a failure. A test that wants an isolated first-party fixture passes `dependencyFiles: []` —
-// otherwise every fixture run would also scan the REAL installed pdfjs-dist against the fixture's
-// (often deliberately low) floors and fail for reasons unrelated to what that fixture is testing.
+// `uiPackage`/`sourceRoots` default to the production paths, so the CLI below is unchanged. Tests
+// can inject `dependencyFiles` as graph roots to isolate a fixture; production derives those roots
+// from every first-party runtime import and worker URL. Injected roots still follow their transitive
+// edges, so the test seam cannot turn the closure scan into another flat allowlist.
 //
 // Broken out of `main` itself: the `complexity` ESLint rule charges one point per default value in
 // a destructured parameter, and three of them (plus the outer `= {}`) would push `main` over this
 // file's own complexity ceiling for a change that adds no new decision to `main`'s own control flow.
 function resolveMainOptions(options = {}) {
-  const {
-    uiPackage = UI_PACKAGE,
-    sourceRoots = SOURCE_ROOTS,
-    dependencyFiles = DEPENDENCY_FILES,
-  } = options;
+  const { uiPackage = UI_PACKAGE, sourceRoots = SOURCE_ROOTS, dependencyFiles } = options;
   return { uiPackage, sourceRoots, dependencyFiles };
+}
+
+function dependencyEntries(firstPartySources, dependencyFiles) {
+  const entryFiles = dependencyFiles ?? deriveDependencyEntryFiles(firstPartySources);
+  return sourceEntries(collectDependencyClosure(entryFiles));
 }
 
 export function main(options = {}) {
@@ -387,8 +834,14 @@ export function main(options = {}) {
   }
 
   const firstPartySources = sourceEntries(collectSources(sourceRoots));
-  const dependencyResult = readableDependencyEntries(dependencyFiles);
-  const sources = [...firstPartySources, ...dependencyResult.entries];
+  let bundledSources;
+  try {
+    bundledSources = dependencyEntries(firstPartySources, dependencyFiles);
+  } catch (error) {
+    fail(`bundled dependency closure could not be derived: ${String(error)}`);
+    return;
+  }
+  const sources = [...firstPartySources, ...bundledSources];
   if (sources.length === 0) {
     fail("no UI sources were found — the scan would pass vacuously");
     return;
@@ -403,10 +856,10 @@ export function main(options = {}) {
     );
     return;
   }
-  if (dependencyResult.readFailed) return;
   console.log(
     `browser-baseline: PASS — ${String(declaration.count)} declared floor(s) satisfy every guarded ` +
-      `API across ${String(sources.length)} UI source files.`,
+      `API across ${String(firstPartySources.length)} first-party and ` +
+      `${String(bundledSources.length)} bundled dependency source files.`,
   );
 }
 

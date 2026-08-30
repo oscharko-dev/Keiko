@@ -1,7 +1,7 @@
-// The two release-smoke lanes run the SAME @smoke journeys on two engines, back to back, in one CI
+// The release-smoke lanes run the SAME @smoke journeys on three engines, back to back, in one CI
 // job. Before this pin, `playwright.config.ts` derived its state identity from `GITHUB_RUN_ID`
-// alone — one value for both steps — so Firefox started against Chromium's already-mutated SQLite,
-// memory and evidence stores (PR #3355 review, P1).
+// alone — one value for every step — so later engines started against Chromium's already-mutated
+// SQLite, memory and evidence stores (PR #3355 review, P1).
 //
 // That is not theoretical. `memory-journal.smoke.spec.ts` ends with a persisted content-free Refused
 // row, and the next run of the same journey opens by expecting an empty Journal: the Gecko lane
@@ -9,7 +9,7 @@
 // order. Reproduced locally at the time — shared state dir gave `firefox 1 failed` with the exact CI
 // error; isolated dirs passed both.
 //
-// The isolation is now derived from `--project=`, which is already how the two lanes differ, so it
+// The isolation is now derived from `--project=`, which is already how the lanes differ, so it
 // cannot be forgotten the way a separate env var can. This file pins that derivation end to end:
 // the scripts still pass distinct projects, and the config still turns them into distinct state
 // directories. Either half alone is insufficient — the flags could diverge while the config ignores
@@ -21,7 +21,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CONFIG = "../../tests/e2e/config/playwright.config.ts";
-const LANES = ["test:e2e:smoke", "test:e2e:smoke:firefox"];
+const LANES = ["test:e2e:smoke", "test:e2e:smoke:firefox", "test:e2e:smoke:webkit"];
 
 function scripts() {
   return JSON.parse(readFileSync(resolve(repoRoot, "package.json"), "utf8")).scripts;
@@ -29,6 +29,17 @@ function scripts() {
 
 function projectOf(command) {
   return /--project=(\S+)/u.exec(command)?.[1];
+}
+
+function configStateDir(config) {
+  const servers = config.webServer;
+  const last = Array.isArray(servers) ? servers.at(-1) : servers;
+  return last?.env?.KEIKO_STATE_DIR;
+}
+
+function restoreEnvironment(name, value) {
+  if (value === undefined) Reflect.deleteProperty(process.env, name);
+  else process.env[name] = value;
 }
 
 // Import the real config under a chosen `--project=` and report the state directory it hands the
@@ -43,6 +54,8 @@ async function stateDirFor(projectArgument, form = "equals") {
   vi.resetModules();
   const argv = process.argv;
   const override = process.env.KEIKO_E2E_STATE_DIR;
+  const validatedProject = process.env.KEIKO_E2E_VALIDATED_PROJECT;
+  const validatedStateId = process.env.KEIKO_E2E_VALIDATED_STATE_ID;
   process.argv =
     form === "space"
       ? [...argv.slice(0, 2), "--project", projectArgument]
@@ -50,28 +63,64 @@ async function stateDirFor(projectArgument, form = "equals") {
   delete process.env.KEIKO_E2E_STATE_DIR;
   try {
     const { default: config } = await import(CONFIG);
-    const servers = config.webServer;
-    const last = Array.isArray(servers) ? servers.at(-1) : servers;
-    return last?.env?.KEIKO_STATE_DIR;
+    return configStateDir(config);
   } finally {
     process.argv = argv;
-    if (override !== undefined) process.env.KEIKO_E2E_STATE_DIR = override;
+    restoreEnvironment("KEIKO_E2E_STATE_DIR", override);
+    restoreEnvironment("KEIKO_E2E_VALIDATED_PROJECT", validatedProject);
+    restoreEnvironment("KEIKO_E2E_VALIDATED_STATE_ID", validatedStateId);
   }
 }
 
-describe("the two release-smoke browser lanes cannot share durable state", () => {
+async function parentAndWorkerStateDirs(project) {
+  vi.resetModules();
+  const argv = process.argv;
+  const workerIndex = process.env.TEST_WORKER_INDEX;
+  const validatedProject = process.env.KEIKO_E2E_VALIDATED_PROJECT;
+  const validatedStateId = process.env.KEIKO_E2E_VALIDATED_STATE_ID;
+  delete process.env.TEST_WORKER_INDEX;
+  delete process.env.KEIKO_E2E_VALIDATED_PROJECT;
+  delete process.env.KEIKO_E2E_VALIDATED_STATE_ID;
+  try {
+    process.argv = [...argv.slice(0, 2), `--project=${project}`];
+    const { default: parentConfig } = await import(CONFIG);
+    process.argv = argv.slice(0, 2);
+    process.env.TEST_WORKER_INDEX = "0";
+    vi.resetModules();
+    const { default: workerConfig } = await import(CONFIG);
+    return [configStateDir(parentConfig), configStateDir(workerConfig)];
+  } finally {
+    process.argv = argv;
+    restoreEnvironment("TEST_WORKER_INDEX", workerIndex);
+    restoreEnvironment("KEIKO_E2E_VALIDATED_PROJECT", validatedProject);
+    restoreEnvironment("KEIKO_E2E_VALIDATED_STATE_ID", validatedStateId);
+  }
+}
+
+async function configImportWith(projectArguments) {
+  vi.resetModules();
+  const argv = process.argv;
+  process.argv = [...argv.slice(0, 2), ...projectArguments];
+  try {
+    return await import(CONFIG);
+  } finally {
+    process.argv = argv;
+  }
+}
+
+describe("the release-smoke browser lanes cannot share durable state", () => {
   beforeEach(() => {
     vi.resetModules();
   });
 
-  it("each smoke lane still pins a project, and the two differ", () => {
+  it("each smoke lane pins a distinct project", () => {
     const commands = LANES.map((lane) => scripts()[lane]);
     for (const [index, command] of commands.entries()) {
       expect(command, `${LANES[index]} is missing from package.json`).toBeDefined();
       expect(projectOf(command), `${LANES[index]} must pin --project=`).toBeDefined();
     }
     const projects = commands.map(projectOf);
-    expect(new Set(projects).size, `both lanes run --project=${projects[0]}`).toBe(2);
+    expect(new Set(projects).size, "two smoke lanes select the same project").toBe(LANES.length);
   });
 
   it("resolves a DIFFERENT state directory for each engine", async () => {
@@ -80,9 +129,10 @@ describe("the two release-smoke browser lanes cannot share durable state", () =>
     // first failed against a config that isolates correctly.
     const chromium = await stateDirFor("chromium");
     const firefox = await stateDirFor("firefox");
-    expect(chromium).toBeTruthy();
-    expect(firefox).toBeTruthy();
-    expect(firefox, "the two engines share one state directory").not.toBe(chromium);
+    const webkit = await stateDirFor("webkit");
+    const stateDirs = [chromium, firefox, webkit];
+    expect(stateDirs.every(Boolean)).toBe(true);
+    expect(new Set(stateDirs).size, "two engines share one state directory").toBe(stateDirs.length);
   });
 
   // Guards the half a shared-prefix check would miss: the engine must be in the identity, not merely
@@ -95,6 +145,12 @@ describe("the two release-smoke browser lanes cannot share durable state", () =>
     expect(first).toContain("firefox");
   });
 
+  it("reuses the validated parent state directory when Playwright reloads config in a worker", async () => {
+    const [parent, worker] = await parentAndWorkerStateDirs("firefox");
+    expect(parent).toBeTruthy();
+    expect(worker).toBe(parent);
+  });
+
   // Playwright's own CLI accepts `--project <name>` (two argv elements) as well as
   // `--project=<name>` (one). Before this pin the config only recognized the `=` form, so a
   // developer running the space form got a stateId with no project suffix — silently un-isolated
@@ -105,5 +161,15 @@ describe("the two release-smoke browser lanes cannot share durable state", () =>
     expect(spaceForm).toBeTruthy();
     expect(spaceForm).toContain("firefox");
     expect(spaceForm).toBe(equalsForm);
+  });
+
+  it.each([
+    ["an absent selector", []],
+    ["repeated selectors", ["--project=chromium", "--project=firefox"]],
+    ["multiple space-separated values", ["--project", "chromium", "firefox"]],
+  ])("fails closed for %s instead of sharing one server state", async (_label, projectArgs) => {
+    await expect(configImportWith(projectArgs)).rejects.toThrow(
+      "requires exactly one concrete --project",
+    );
   });
 });

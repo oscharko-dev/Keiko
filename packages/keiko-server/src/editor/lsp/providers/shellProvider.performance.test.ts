@@ -201,11 +201,9 @@ describe("Bash Language Server provider performance evidence (#2277)", () => {
     expect(firstController?.receivedMethods()).toContain("shutdown");
     expect(firstController?.receivedMethods()).toContain("exit");
     expect(firstController?.exitEmitted()).toBe(true);
-    // A well-behaved bash-language-server exits on the "exit" notification before the
-    // grace-period SIGKILL escalation fires: dispose() unconditionally sends SIGTERM as
-    // belt-and-suspenders, but must never need to escalate to SIGKILL here (that path is
-    // reserved for unresponsive servers).
-    expect(firstController?.killed()).not.toContain("SIGKILL");
+    // Immediate-child exit is not descendant proof. Disposal force-reaps the bounded tree while the
+    // generation handle is live, then releases runtime state only after that proof and root exit.
+    expect(firstController?.killed()).toContain("SIGKILL");
     expect(listHostLspHealthSnapshotsForRoot(root)).toHaveLength(0);
 
     await runOp(diagnosticsRequest("#!/usr/bin/env bash\n"), spawn);

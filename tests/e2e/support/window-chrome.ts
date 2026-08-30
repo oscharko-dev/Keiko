@@ -26,16 +26,22 @@ function desktopWindowFrame(windowRegion: Locator): Locator {
 
 async function activateFrame(frame: Locator): Promise<void> {
   await expect(frame).toHaveCount(1);
+  // WebKit can leave DOM focus on a window after a newer window has moved above it. Calling
+  // focus() on that already-focused section is then a no-op, so React receives no focus event and
+  // cannot raise it. Move focus through a real keyboard-reachable chrome control: this exercises
+  // the same onFocusCapture path as Tab navigation without clicking covered content or starting a
+  // drag gesture.
   await frame.focus();
+  await frame.locator(".win-traffic button").first().focus();
   await expect(frame).toHaveAttribute("data-top", "true");
 }
 
 /**
  * Brings `windowRegion` to the front and waits until the product has actually raised it.
  *
- * Focus, not a synthetic click: `WindowFrame` raises on `onFocusCapture`, and focusing the region
- * cannot select a tree row, start a drag, or trip a connect gesture the way a click somewhere in
- * the window body might.
+ * Focus, not a synthetic click: `WindowFrame` raises on `onFocusCapture`, and moving focus through
+ * its window chrome cannot select a tree row, start a drag, or trip a connect gesture the way a
+ * click somewhere in the window body might.
  */
 export async function activateWindow(windowRegion: Locator): Promise<void> {
   await activateFrame(desktopWindowFrame(windowRegion));

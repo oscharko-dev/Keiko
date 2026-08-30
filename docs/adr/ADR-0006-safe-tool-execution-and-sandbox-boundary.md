@@ -178,9 +178,9 @@ later wave flips to `"none"` when the container layer lands. Tool consumers depe
 On POSIX, the process is spawned `{ detached: true }` so `process.kill(-pid, sig)` kills the entire
 process group including grandchildren (`src/tools/exec.ts:56–69`). On Windows, `child.kill()` still
 terminates the immediate child, and `killGroup` additionally bounds the whole descendant tree via
-the authoritative `\\?\GLOBALROOT\SystemRoot\System32\taskkill.exe /PID <pid> /T /F` on every
+the conventional `<identity-approved SystemRoot>\System32\taskkill.exe /PID <pid> /T /F` on every
 SIGTERM/SIGKILL escalation step — an OS binary reached only after the environment-selected root's OS
-identity is verified, never through PATH or the mutable lexical candidate. This closes what issue
+identity is verified against `\\?\GLOBALROOT\SystemRoot`, never through PATH. This closes what issue
 #3350's `cmd.exe` wrapping turned into the
 guaranteed topology for every Windows `.cmd`/`.bat` invocation: the wrapper's immediate child is
 always `cmd.exe`, and the real work (e.g. `node.exe` running npm) is a grandchild that
@@ -196,25 +196,27 @@ asynchronous spawn would only SCHEDULE taskkill, and `child.kill()` would race i
 in keiko-server's `lspNodeAdapter.ts` holds the same ordering, and `exec.test.ts` pins the order
 directly rather than asserting only that the tree kill was called.
 
-**The bounded wait is per invocation; admission bounds the aggregate before a process exists.**
+**The bounded wait is per invocation; one shared rolling budget bounds the process-wide aggregate.**
 `spawnSync` blocks the ENTIRE Node event loop, not just the run being terminated, and `terminate()`
 executes on that loop. One Windows run can pay the 5 000 ms bound twice (SIGTERM and SIGKILL), so
 `WindowsTerminationCapacity` deliberately admits at most THREE live Windows commands process-wide.
-Each admitted command holds two tree-kill slots for its full child lifetime; a fourth command is
-denied with `CommandDeniedError` before ephemeral HOME creation or spawn. The resulting worst
-synchronous burst remains 3 x 2 x 5 000 ms = 30 000 ms, but an exhausted budget can no longer strand
-an already-launched `cmd.exe` grandchild outside the Authority Envelope. The slot is released only
-after confirmed `close` or a pre-spawn failure. Because an admission denial owns no child, it emits
-no fabricated termination line; the owning terminal, command-runner, verification, or tool-call
-surface records its ordinary body-free `denied` outcome and correlation.
+Each admitted command reserves two units from the same 30-second/60-second rolling budget used by
+direct LSP tree kills. A fourth concurrent command, or any command for which two units are not
+available, is denied with `CommandDeniedError` before ephemeral HOME creation or spawn. Held units
+remain charged across a window rollover; completed calls refund only their unused wait, and release
+returns only units the command never consumed. Releasing a concurrency slot therefore cannot reset
+the stall budget, and `runCommand` plus LSP termination together cannot stack past the process-wide
+ceiling. The concurrency slot and unused budget reservation are released only after confirmed
+`close` or a pre-spawn failure. Because an admission denial owns no child, it emits no fabricated
+termination line; the owning surface records its ordinary body-free `denied` outcome and
+correlation.
 
 Reservation also binds the trusted executable decision: admission copies only `SystemRoot` and
-`WINDIR`, verifies the OS identity and regular `taskkill.exe`, and caches the authoritative
-GLOBALROOT command. Later mutation of the caller's environment cannot redirect or refuse the kill
-for an already-admitted child. Direct consumers of exported `nodeWindowsTreeKill` that do not use
-`runCommand` retain the monotonic 30-second/60-second aggregate budget; exhaustion there reports
-`budget-exhausted` without launching taskkill. It is distinct from `unknown`, which means taskkill
-did launch but its bounded wait expired.
+`WINDIR`, verifies the OS identity and regular `taskkill.exe`, and caches the validated conventional
+command. Later mutation of the caller's environment cannot redirect or refuse the kill for an
+already-admitted child. Direct consumers of exported `nodeWindowsTreeKill` debit the same monotonic
+budget; exhaustion reports `budget-exhausted` without launching taskkill. It is distinct from
+`unknown`, which means taskkill did launch but its bounded wait expired.
 
 **Termination is single-flight.** Abort, timeout, the output cap, a failing `onSpawn` callback and a
 post-spawn child-process error can all reach `terminate()`; the FIRST one becomes the terminal cause,
@@ -226,8 +228,7 @@ reserved already released. The escalation is additionally guarded on the child s
 
 **The reported outcome is measured, not assumed.** `WindowsTreeKillDisposition` carries taskkill's
 own completed exit status (`succeeded`/`failed`), `unknown` only when the bounded wait expired,
-`budget-exhausted` only when a direct non-reserved consumer's monotonic aggregate budget refused to
-launch taskkill,
+`budget-exhausted` only when the shared monotonic aggregate budget refused to launch taskkill,
 `blocked-untrusted-system-root` when the trusted-System32 resolver refuses a malformed or hostile
 `SystemRoot`/`WINDIR` (kept distinct from `failed` because it is a security-relevant fact about the
 environment, not an operational hiccup), `refused-self-pid` when the pid handed to `killGroup` is
@@ -427,6 +428,12 @@ Tool consumers (`WorkspaceToolHost` callers) depend only on the `ToolPort` inter
   leave the working tree in a partially reverted state. There is no write-ahead log or journal. For
   the regulated environment, the mitigating control is that the developer reviews and commits:
   `git status` exposes any partial write, and the repository's VCS history is the recovery path.
+- **Windows termination safety deliberately caps concurrency.** At most three Windows
+  `runCommand` children may be live process-wide because each reserves both bounded tree-kill
+  escalations from the shared rolling stall budget. A fourth concurrent command is denied before
+  spawn with `CommandDeniedError`; it is not started with weaker descendant containment. This is
+  an intentional availability trade-off, and callers must surface the ordinary correlated denied
+  outcome rather than retrying in an unbounded loop.
 - **Windows grandchild orphaning is bounded, not architecturally eliminated.** `child.kill()`
   terminates the immediate child only; `killGroup` additionally runs
   `taskkill.exe /PID <pid> /T /F` to bound the whole descendant tree (e.g. a test runner that
@@ -584,15 +591,18 @@ mappings, and the workspace. On win32 the resolver therefore:
 2. resolves it and requires case-insensitive realpath-text equality, rejecting a symlink or junction
    at the final component or any ancestor;
 3. compares its BigInt filesystem device/file identity with `\\?\GLOBALROOT\SystemRoot`; and
-4. checks the requested regular System32 binary, then returns the authoritative
-   `\\?\GLOBALROOT\SystemRoot\System32\...` path for executable traversal — never the mutable
-   candidate path.
+4. checks the requested regular System32 binary, then returns the validated conventional drive path
+   for execution. `\\?\GLOBALROOT\SystemRoot` remains the identity oracle only: Node's
+   `CreateProcessW` bridge rejects that object-manager spelling as an image path with `EINVAL`.
 
 An unreadable identity, zero/unsupported identity fields, a missing root, a fabricated directory,
 or a reparse-point candidate all fail closed as `WindowsSystemDirectoryError`. Comparing identity,
-not path text, supports a genuine non-`C:` Windows installation without trusting its environment
-string. The production check performs no verifier spawn and emits no path or environment value in
-its error; callers retain their existing body-free security/termination evidence.
+not path text, supports a genuine non-`C:` Windows installation without trusting an arbitrary
+environment path. The returned candidate has already passed the canonical-shape, no-reparse, and
+OS-identity checks; this retains the documented lexical-path TOCTOU residual while keeping the
+command executable by the platform. The production check performs no verifier spawn and emits no
+path or environment value in its error; callers retain their existing body-free
+security/termination evidence.
 
 This is a whole-class executable contract, not only the command sandbox's rule. CLI launcher
 generation, lifecycle browser opening, portable legacy-launcher cleanup and native failure alerts,

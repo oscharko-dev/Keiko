@@ -128,6 +128,24 @@ function lastActivityLogEvent(sink: BufferedServerLogSink): ServerLogEvent {
   return line;
 }
 
+function expectLoggedRejection(
+  sink: BufferedServerLogSink,
+  operation: "provision" | "activate",
+  errorKind: TaskWorkspaceErrorCode,
+  rawIdentitySeed: string,
+): void {
+  expect(sink.events).toHaveLength(1);
+  const line = lastActivityLogEvent(sink);
+  expect(line).toMatchObject({
+    op: "task-workspace.lifecycle",
+    category: "diagnostic",
+    errorKind,
+    extra: { operation },
+  });
+  expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[a-f0-9]{24}$/u);
+  expect(sink.lines().join("\n")).not.toContain(rawIdentitySeed);
+}
+
 function lastEventCorrelationId(): string {
   const last = evidence.at(-1);
   if (last === undefined) throw new Error("no evidence recorded");
@@ -333,7 +351,7 @@ describe("provision success (AC1, AC4)", () => {
     expect(extra.operation).toBe("provision");
     expect(extra.outcome).toBe("provisioned");
     expect(extra.workspaceId).toBe(result.instance.workspaceId);
-    expect(extra.taskId).toBe("t-activity-log");
+    expect(extra.taskId).toBeUndefined();
   });
 
   // A failure path carries a structured, closed-vocabulary `errorKind` — the TaskWorkspaceError code
@@ -355,6 +373,7 @@ describe("provision success (AC1, AC4)", () => {
     expect(line.level).toBe("warn");
     expect(line.errorKind).toBe("INVALID_BASE_BRANCH");
     expect(line.extra?.outcome).toBe("blocked");
+    expect(activityLog.events).toHaveLength(1);
   });
 
   it("establishes the managed workspace identity before every active exposure", async () => {
@@ -626,6 +645,99 @@ describe("pre-write rejections (AC2)", () => {
   });
 });
 
+describe("early rejection activity logging", () => {
+  it("logs an invalid provision request without exposing its free-form task identity", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(undefined, undefined, activityLog);
+    const taskId = `Patient-Jane-cancer${String.fromCodePoint(0x200b)}`;
+
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId,
+          baseBranch: "main",
+          requestedBy: "operator",
+          correlationId: "provision-invalid-request-1",
+        }),
+      "INVALID_REQUEST",
+    );
+
+    expectLoggedRejection(activityLog, "provision", "INVALID_REQUEST", taskId);
+    expect(lastActivityLogEvent(activityLog).correlationId).toBe("provision-invalid-request-1");
+  });
+
+  it("logs a missing repository before any managed-workspace row exists", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const taskId = "missing-repository-task";
+    const service = makeService(
+      (workspace): GitWorktreeAdapter => ({
+        ...realAdapter(workspace),
+        resolveRepositoryRoot: (): Promise<string | undefined> => Promise.resolve(undefined),
+      }),
+      undefined,
+      activityLog,
+    );
+
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId,
+          baseBranch: "main",
+          requestedBy: "operator",
+          correlationId: "provision-missing-repository-1",
+        }),
+      "MISSING_REPOSITORY",
+    );
+
+    expectLoggedRejection(activityLog, "provision", "MISSING_REPOSITORY", taskId);
+    expect(lastActivityLogEvent(activityLog).correlationId).toBe("provision-missing-repository-1");
+  });
+
+  it("logs an invalid activation before acquiring the workspace mutex", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const workspaceId = "ws_invalid_activation_private_seed";
+    const service = makeService(undefined, undefined, activityLog);
+
+    await rejectsWithCode(
+      () =>
+        service.activate({
+          workspaceId,
+          taskId: "task",
+          requestedBy: "",
+          acquireLock: false,
+          correlationId: "activate-invalid-request-1",
+        }),
+      "INVALID_REQUEST",
+    );
+
+    expectLoggedRejection(activityLog, "activate", "INVALID_REQUEST", workspaceId);
+    expect(lastActivityLogEvent(activityLog).correlationId).toBe("activate-invalid-request-1");
+  });
+
+  it("logs an unknown activation target without exposing the supplied workspace value", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const workspaceId = "Patient Jane cancer workspace";
+    const service = makeService(undefined, undefined, activityLog);
+
+    await rejectsWithCode(
+      () =>
+        service.activate({
+          workspaceId,
+          taskId: "task",
+          requestedBy: "operator",
+          acquireLock: false,
+          correlationId: "activate-missing-workspace-1",
+        }),
+      "WORKSPACE_NOT_FOUND",
+    );
+
+    expectLoggedRejection(activityLog, "activate", "WORKSPACE_NOT_FOUND", workspaceId);
+    expect(lastActivityLogEvent(activityLog).correlationId).toBe("activate-missing-workspace-1");
+  });
+});
+
 describe("drift + partial failure leave a visible classified state (SC4)", () => {
   it("rolls back and classifies a managed workspace identity failure", async () => {
     const identityFailure = new Error("identity store unavailable");
@@ -836,13 +948,15 @@ describe("activate", () => {
   });
 
   it("flags drift (recovery-required) when activating a workspace whose worktree vanished", async () => {
-    const service = makeService();
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(undefined, undefined, activityLog);
     const provisioned = await service.provision({
       repositoryRequestPath: repoRoot,
       taskId: "act-drift",
       baseBranch: "main",
       requestedBy: "u",
     });
+    activityLog.clear();
     rmSync(provisioned.instance.managedWorktreePath, { recursive: true, force: true });
     await rejectsWithCode(
       () =>
@@ -857,6 +971,11 @@ describe("activate", () => {
     const after = store.getById(provisioned.instance.workspaceId);
     expect(after?.lifecycleState).toBe("recovery-required");
     expect(after?.driftMarkers).toContain("worktree-missing");
+    expect(activityLog.events).toHaveLength(1);
+    expect(lastActivityLogEvent(activityLog)).toMatchObject({
+      errorKind: "POINTER_DRIFT",
+      extra: { operation: "activate", outcome: "retry-required" },
+    });
   });
 
   it("rejects activation of an unknown workspace", async () => {

@@ -77,6 +77,7 @@ import {
 import { sanitizeSemanticTokenResponse } from "./lspSemanticTokens.js";
 import { recordLspLifecycleEvent } from "./lspLifecycleLedger.js";
 import { managedLspWorkspaceFingerprint } from "./managedLspActivationStore.js";
+import { createLspRuntimeStatePort } from "./lspRuntimeStateStore.js";
 
 export interface HostLanguageOperationOptions {
   readonly workspace: WorkspaceInfo;
@@ -465,17 +466,7 @@ async function waitForReady(
   while (Date.now() <= deadline) {
     const status = manager.getLspProcessStatus();
     if (status === "READY") return true;
-    if (
-      status === "EXECUTABLE_NOT_FOUND" ||
-      status === "SPAWN_FAILED" ||
-      status === "INITIALIZE_TIMEOUT" ||
-      status === "RESTART_THROTTLED" ||
-      status === "CRASHED" ||
-      status === "SHUTDOWN" ||
-      status === "DISPOSED"
-    ) {
-      return false;
-    }
+    if (isTerminalLspStatus(status)) return false;
     await delay(20, signal);
   }
   return false;
@@ -1384,6 +1375,16 @@ function createPooledEntry(
     onLifecycleEvent: (event) => {
       recordLspLifecycleEvent(event, partitionKey);
     },
+    ...(options.privateRuntimeStateRoot === undefined
+      ? {}
+      : {
+          runtimeState: createLspRuntimeStatePort({
+            stateDir: options.privateRuntimeStateRoot,
+            workspaceRoot: options.workspace.root,
+            managerId: spec.id,
+            configurationRevision: options.protocolConfiguration?.revision ?? 0,
+          }),
+        }),
     ...managerOverrides(spec, options),
   });
   return {
@@ -1477,14 +1478,14 @@ function matchesPooledConfiguration(
   );
 }
 
-function isStickyTerminalEntry(
+function isRestartThrottledEntry(
   entry: PooledLspEntry | undefined,
   options: HostLanguageOperationOptions,
 ): entry is PooledLspEntry {
   if (entry === undefined || entry.disposed) return false;
   return (
     matchesPooledConfiguration(entry, options) &&
-    isTerminalLspStatus(entry.manager.getLspProcessStatus())
+    entry.manager.getLspProcessStatus() === "RESTART_THROTTLED"
   );
 }
 
@@ -1544,7 +1545,10 @@ async function acquirePooledEntryLocked(
   const existing = LSP_PROCESS_POOL.get(key);
   if (existing !== undefined && hasRetainedOwnership(existing)) return reusePooledEntry(existing);
   if (canReusePooledEntry(existing, options)) return reusePooledEntry(existing);
-  if (isStickyTerminalEntry(existing, options)) return reusePooledEntry(existing);
+  // Preserve the manager-owned restart window for the same configuration. Every other settled
+  // terminal state is retired below so a transient spawn/configuration failure cannot poison the
+  // pool forever; retained ownership was already handled fail-closed above.
+  if (isRestartThrottledEntry(existing, options)) return reusePooledEntry(existing);
   const retained = await retireExistingEntry(key, existing);
   if (retained !== undefined) return retained;
   // Creation and map publication are synchronous under the per-key acquisition queue, after the

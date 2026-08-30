@@ -1294,16 +1294,10 @@ async function measureTerminalFlood(
   };
 }
 
-async function closeDebugAndMeasureResidual(
-  page: Page,
-  panel: Locator,
-  heapClient: CDPSession,
-  baselineHeap: number,
-): Promise<number> {
+async function closeDebugPanel(page: Page, panel: Locator): Promise<void> {
   await clickWindowChromeButton(panel, "Close Debug window");
   await expect(panel).toBeHidden();
   await awaitNextPaint(page);
-  return Math.max(0, (await readHeap(heapClient)) - baselineHeap);
 }
 
 function expectOutputFloodEvidence(evidence: OutputFloodEvidence): void {
@@ -1344,17 +1338,18 @@ async function measureOutputFloodEvidence(
   panel: Locator,
   heapClient: CDPSession,
 ): Promise<OutputFloodEvidence> {
+  // Forced CDP collection is measurement instrumentation, not product work. Establish the heap
+  // baseline before opening the long-task window, then read long tasks after the complete product
+  // teardown but before the second forced collection used only for residual-memory evidence.
   const baselineHeap = await readHeap(heapClient);
+  await awaitNextPaint(page);
+  await resetLongTasks(page);
   const stopSamples = await collectStopSamples(page, panel);
   const terminal = await measureTerminalFlood(page, panel);
   expect(terminal.limitMarkers).toBe(1);
-  const residualHeapBytes = await closeDebugAndMeasureResidual(
-    page,
-    panel,
-    heapClient,
-    baselineHeap,
-  );
+  await closeDebugPanel(page, panel);
   const observedLongTasks = await longTasks(page);
+  const residualHeapBytes = Math.max(0, (await readHeap(heapClient)) - baselineHeap);
   expect(observedLongTasks.installed).toBe(true);
   const maxLongTaskMs = Math.max(0, ...observedLongTasks.samples);
   return {
@@ -1600,7 +1595,6 @@ test("#2348 D12 composes the real output limit with bounded browser state and te
   test.setTimeout(300_000);
   capProvenance = resolveCapProvenance(browser);
   const { panel } = await prepareCapDebugging(page, CAP_OUTPUT);
-  await resetLongTasks(page);
   const heapClient = await page.context().newCDPSession(page);
   try {
     outputFloodEvidence = await measureOutputFloodEvidence(page, panel, heapClient);

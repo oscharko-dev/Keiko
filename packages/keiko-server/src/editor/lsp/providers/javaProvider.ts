@@ -1,4 +1,3 @@
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -10,6 +9,7 @@ import {
   rmSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { performance } from "node:perf_hooks";
 
 import type {
   LanguageServiceOperation,
@@ -18,19 +18,25 @@ import type {
 import type { BackendAvailability } from "@oscharko-dev/keiko-sandbox";
 import { currentPlatform, planIsolatedRun, probeBackends } from "@oscharko-dev/keiko-sandbox";
 import {
-  buildSandboxEnv,
-  buildWindowsShellInvocation,
-  isWindowsCommandScript,
-  type WindowsShellInvocation,
-  type WindowsShellInvocationOptions,
+  CommandCancelledError,
+  CommandDeniedError,
+  CommandTimeoutError,
+  DEFAULT_SANDBOX_POLICY,
+  runCommand,
+  type CommandResult,
+  type ExecutableResolver,
+  type HomeProvider,
+  type RunCommandDeps,
+  type SpawnFn,
 } from "@oscharko-dev/keiko-tools";
+import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 
 import type { HostLanguageProviderSpec } from "../hostLanguageProviders.js";
 import { resolveExecutableOutsideWorkspace } from "../lspNodeAdapter.js";
 import type { LspSpawnPreparation, LspSpawnPreparationInput } from "../lspProcessManager.js";
 import { UNKNOWN_CORRELATION_ID } from "../../../correlation.js";
-import { processServerLogSink } from "../../../process-log-sink.js";
 import { errorKindOf, startLogTimer } from "../../../observability/index.js";
+import { logCommandTermination, processServerLogSink } from "../../../process-log-sink.js";
 
 const JAVA_OPERATIONS: readonly LanguageServiceOperation[] = Object.freeze([
   "diagnostics",
@@ -54,7 +60,8 @@ const JAVA_ENV_ALLOWLIST = Object.freeze(["LANG", "LC_ALL", "TMPDIR", "TEMP", "T
 const MAX_RUNTIME_FILES = 50_000;
 const MAX_RUNTIME_BYTES = 512 * 1024 * 1024;
 const SUPPORTED_JDT_LS_VERSION = "1.60.0";
-const MINIMUM_JDK_MAJOR_VERSION = 21;
+const JAVA_VERSION_PROBE_TIMEOUT_MS = 5_000;
+const JAVA_VERSION_PROBE_OUTPUT_BYTES = 16_384;
 const FORBIDDEN_PROJECT_ENTRIES = new Set([
   ".classpath",
   ".factorypath",
@@ -71,12 +78,6 @@ const FORBIDDEN_PROJECT_ENTRIES = new Set([
   "settings.gradle.kts",
 ]);
 
-// `python3` is required and approved solely because the operator-provisioned `jdtls` launcher
-// command is commonly shipped as a Python interpreter-shebang script that resolves the
-// platform-specific JDT LS classpath/args before it execs `java` — it never runs arbitrary
-// operator or workspace scripts. That interpreter step happens under the same enforced
-// no-network, no-arbitrary-argument isolation boundary as `java`; it is not a general-purpose
-// script-execution grant and must not be widened to cover other interpreters or scripts.
 export const JAVA_PROVIDER_SPEC: HostLanguageProviderSpec = Object.freeze({
   id: "java-lsp",
   label: "Eclipse JDT LS",
@@ -242,9 +243,41 @@ function createJavaRuntimeRoot(input: LspSpawnPreparationInput): {
   }
 }
 
-function nativeBackends(input: LspSpawnPreparationInput): ReturnType<typeof probeBackends> {
-  const probed = probeBackends(input.processEnv, currentPlatform());
+function nativeBackends(
+  input: LspSpawnPreparationInput,
+  platform: NodeJS.Platform,
+): ReturnType<typeof probeBackends> {
+  const probed = probeBackends(input.processEnv, platform);
   return { ...probed, docker: false, podman: false };
+}
+
+interface ProjectDirectoryScan {
+  readonly forbidden: boolean;
+  readonly subdirectories: readonly string[];
+  readonly visitedCount: number;
+}
+
+function scanProjectDirectory(directory: string, remainingVisits: number): ProjectDirectoryScan {
+  const subdirectories: string[] = [];
+  let visitedCount = 0;
+  for (const entry of readdirSync(directory)) {
+    visitedCount += 1;
+    if (visitedCount > remainingVisits) {
+      return { forbidden: true, subdirectories, visitedCount };
+    }
+    if (FORBIDDEN_PROJECT_ENTRIES.has(entry) || entry === ".settings") {
+      return { forbidden: true, subdirectories, visitedCount };
+    }
+    const path = join(directory, entry);
+    const stat = lstatSync(path);
+    // Workspace-controlled links are not traversed: following them would escape the bounded scan,
+    // while ignoring them lets a linked project root hide build/import metadata.
+    if (stat.isSymbolicLink()) {
+      return { forbidden: true, subdirectories, visitedCount };
+    }
+    if (stat.isDirectory()) subdirectories.push(path);
+  }
+  return { forbidden: false, subdirectories, visitedCount };
 }
 
 function containsForbiddenProjectMetadata(root: string): boolean {
@@ -253,14 +286,10 @@ function containsForbiddenProjectMetadata(root: string): boolean {
   while (pending.length > 0) {
     const directory = pending.pop();
     if (directory === undefined) break;
-    for (const entry of readdirSync(directory)) {
-      visited += 1;
-      if (visited > MAX_RUNTIME_FILES) return true;
-      if (FORBIDDEN_PROJECT_ENTRIES.has(entry) || entry === ".settings") return true;
-      const path = join(directory, entry);
-      const stat = lstatSync(path);
-      if (stat.isDirectory()) pending.push(path);
-    }
+    const scan = scanProjectDirectory(directory, MAX_RUNTIME_FILES - visited);
+    visited += scan.visitedCount;
+    if (scan.forbidden) return true;
+    pending.push(...scan.subdirectories);
   }
   return false;
 }
@@ -272,10 +301,92 @@ export interface JavaSpawnSecurityDeps {
   readonly resolveJava?: typeof resolveExecutableOutsideWorkspace | undefined;
   readonly validateLayout?:
     ((executable: string, platform: NodeJS.Platform) => boolean) | undefined;
-  readonly validateJavaVersion?: ((executable: string) => boolean) | undefined;
-  // Test seam for the real spawnSync timeout path. Production omits it and always uses the 5 s
-  // bound; injected values may only shorten that bound, never lengthen it.
-  readonly javaVersionProbeTimeoutMs?: number | undefined;
+  readonly runProbe?: typeof runCommand | undefined;
+  readonly probeSpawn?: SpawnFn | undefined;
+  readonly probeHome?: HomeProvider | undefined;
+  readonly probeNow?: (() => number) | undefined;
+}
+
+type JavaVersionValidationOutcome =
+  | "supported"
+  | "unsupported-version"
+  | "malformed-output"
+  | "nonzero-exit"
+  | "output-cap"
+  | "timeout"
+  | "spawn-error"
+  | "invocation-failed"
+  | "cancelled";
+
+class JavaVersionProbeError extends Error {
+  public readonly code: string;
+
+  public constructor(code: string) {
+    super(code);
+    this.name = "JavaVersionProbeError";
+    this.code = code;
+  }
+}
+
+function logJavaVersionValidation(
+  platform: NodeJS.Platform,
+  outcome: JavaVersionValidationOutcome,
+  durationMs: number,
+  error?: unknown,
+  status?: number,
+): void {
+  processServerLogSink().write({
+    category: "diagnostic",
+    op: "lsp.java.version-probe.completed",
+    correlationId: UNKNOWN_CORRELATION_ID,
+    durationMs,
+    ...(status === undefined ? {} : { status }),
+    ...(error === undefined ? {} : { errorKind: errorKindOf(error) }),
+    extra: {
+      executionBoundary: "governed-pre-spawn",
+      outcome,
+      platform,
+    },
+  });
+}
+
+function failJavaVersionValidation(
+  error: Error,
+  platform: NodeJS.Platform,
+  outcome: Exclude<JavaVersionValidationOutcome, "supported">,
+  elapsed: () => number,
+): never {
+  logJavaVersionValidation(platform, outcome, elapsed(), error);
+  throw error;
+}
+
+function javaMajorVersion(output: string): number | undefined {
+  const match = /version\s+"(?<major>\d+)/u.exec(output);
+  const major = Number(match?.groups?.major);
+  return Number.isSafeInteger(major) ? major : undefined;
+}
+
+function classifyProbeResult(result: CommandResult): JavaVersionValidationOutcome {
+  if (result.truncated) return "output-cap";
+  if (result.exitCode !== 0) return "nonzero-exit";
+  const major = javaMajorVersion(`${result.stdout}${result.stderr}`);
+  if (major === undefined) return "malformed-output";
+  return major >= 21 ? "supported" : "unsupported-version";
+}
+
+function probeFailureCode(outcome: Exclude<JavaVersionValidationOutcome, "supported">): string {
+  if (outcome === "unsupported-version") return "JAVA_VERSION_UNSUPPORTED";
+  if (outcome === "malformed-output") return "JAVA_VERSION_MALFORMED_OUTPUT";
+  if (outcome === "nonzero-exit") return "JAVA_VERSION_NONZERO_EXIT";
+  if (outcome === "output-cap") return "JAVA_VERSION_OUTPUT_CAP";
+  return "JAVA_VERSION_PROBE_FAILED";
+}
+
+function rejectedProbeOutcome(error: unknown): JavaVersionValidationOutcome {
+  if (error instanceof CommandCancelledError) return "cancelled";
+  if (error instanceof CommandTimeoutError) return "timeout";
+  if (error instanceof CommandDeniedError) return "invocation-failed";
+  return "spawn-error";
 }
 
 function jdtPlatformConfiguration(platform: NodeJS.Platform): string | undefined {
@@ -296,194 +407,125 @@ function validJdtlsLayout(executable: string, platform: NodeJS.Platform): boolea
   );
 }
 
-function javaMajorVersion(output: string): number {
-  const match = /version "(?<major>\d+)/u.exec(output);
-  return Number(match?.groups?.major ?? 0);
+function exactJavaProbeResolver(
+  java: string,
+  input: LspSpawnPreparationInput,
+  platform: NodeJS.Platform,
+  securityDeps: JavaSpawnSecurityDeps,
+): ExecutableResolver {
+  return (command): string => {
+    if (command === "java") return java;
+    return (securityDeps.resolveExecutable ?? resolveExecutableOutsideWorkspace)(
+      command,
+      input.workspace,
+      input.processEnv,
+      platform,
+    );
+  };
 }
 
-const JAVA_VERSION_PROBE_TIMEOUT_MS = 5_000;
-
-function boundedJavaVersionProbeTimeoutMs(requested: number | undefined): number {
-  if (requested === undefined || !Number.isSafeInteger(requested) || requested < 1) {
-    return JAVA_VERSION_PROBE_TIMEOUT_MS;
-  }
-  return Math.min(requested, JAVA_VERSION_PROBE_TIMEOUT_MS);
-}
-
-// A synchronous probe cannot safely clean up a cmd.exe wrapper after spawnSync returns: the wrapper
-// has already exited, its raw pid is reusable, and taskkill cannot verify process identity. Refuse
-// `.cmd`/`.bat` Java probes before any spawn or cmd.exe resolution; native images remain unchanged.
-export class JavaVersionProbeWrapperError extends Error {
-  public readonly code = "JAVA_VERSION_PROBE_WRAPPER_REFUSED" as const;
-
-  public constructor() {
-    super("Windows command-script Java version probes are refused");
-    this.name = "JavaVersionProbeWrapperError";
-  }
-}
-
-export function buildJavaVersionProbeInvocation(
-  executable: string,
-  opts?: WindowsShellInvocationOptions,
-): WindowsShellInvocation {
-  const platform = opts?.platform ?? process.platform;
-  if (platform === "win32" && isWindowsCommandScript(executable)) {
-    throw new JavaVersionProbeWrapperError();
-  }
-  return buildWindowsShellInvocation(executable, ["-version"], opts);
-}
-
-// The closed set of outcomes the probe can reach (PR #3355 review IDX63): `validVersion: false`
-// alone made an unsupported JDK indistinguishable from a timeout, a missing/unreadable executable,
-// a nonzero exit, or output that never parsed as a version string — four different facts about the
-// machine collapsed into one boolean, none of them visible to a support bundle. Each member below
-// is a distinct, content-free fact; `spawn-error` carries its specific `errorKind` (ETIMEDOUT,
-// ENOENT, EACCES, …) read straight off `SpawnSyncReturns.error.code`, so the SAME outcome value
-// still lets an operator tell a timeout from a missing binary via the paired field.
-type JavaVersionProbeOutcome =
-  | "supported"
-  | "unsupported-version"
-  | "malformed-output"
-  | "nonzero-exit"
-  | "spawn-error"
-  | "wrapper-refused"
-  | "invocation-failed";
-
-interface JavaVersionProbeEvidence {
-  readonly windowsWrapperEngaged: boolean;
-  readonly outcome: JavaVersionProbeOutcome;
-  readonly durationMs: number;
-  readonly status?: number | undefined;
-  readonly errorKind?: string | undefined;
-}
-
-// Body-free evidence for the branch above (AGENTS.md §8 Rule 1): a support bundle must be able to
-// tell whether a Windows command-script probe was refused before spawning — and exactly WHICH way
-// every accepted native probe finished — without ever recording the resolved executable path or
-// the probe's stdout/stderr. Mirrors
-// lspNodeAdapter.ts's `logLspSpawnCompleted` for the LSP server's own spawn; this probe is a
-// separate, directly-issued `spawnSync` call that issue #3350's fix never covered because it never
-// runs through that adapter. No request-scoped correlation id is available this deep in spawn
-// preparation, so the line carries UNKNOWN_CORRELATION_ID, exactly like its sibling. Called on
-// EVERY exit from the probe, including a policy refusal or another pre-spawn invocation-build
-// failure; those paths used to leave no evidence at all.
-function logJavaVersionProbeCompleted(evidence: JavaVersionProbeEvidence): void {
-  processServerLogSink().write({
-    category: "diagnostic",
-    op: "lsp.java.version-probe.completed",
-    correlationId: UNKNOWN_CORRELATION_ID,
-    durationMs: evidence.durationMs,
-    ...(evidence.status === undefined ? {} : { status: evidence.status }),
-    ...(evidence.errorKind === undefined ? {} : { errorKind: evidence.errorKind }),
-    extra: {
-      windowsWrapperEngaged: evidence.windowsWrapperEngaged,
-      outcome: evidence.outcome,
-      platform: process.platform,
+function javaProbeRunDeps(
+  java: string,
+  input: LspSpawnPreparationInput,
+  platform: NodeJS.Platform,
+  availability: BackendAvailability,
+  securityDeps: JavaSpawnSecurityDeps,
+): RunCommandDeps {
+  return {
+    workspace: input.workspace,
+    policy: {
+      ...DEFAULT_SANDBOX_POLICY,
+      envAllowlist: JAVA_ENV_ALLOWLIST,
+      pinnedEnv: { ...input.env },
+      homeIsolation: "ephemeral",
+      network: "none",
+      maxOutputBytes: JAVA_VERSION_PROBE_OUTPUT_BYTES,
+      defaultTimeoutMs: JAVA_VERSION_PROBE_TIMEOUT_MS,
     },
-  });
+    commandRules: [{ executable: "java", requiredLeadingFlags: ["-version"] }],
+    spawn: securityDeps.probeSpawn ?? nodeSpawnFn,
+    resolveExecutable: exactJavaProbeResolver(java, input, platform, securityDeps),
+    processEnv: { ...input.processEnv },
+    now: securityDeps.probeNow ?? ((): number => performance.now()),
+    sandboxAvailability: { ...availability },
+    platform,
+    ...(securityDeps.probeHome === undefined ? {} : { home: securityDeps.probeHome }),
+  };
 }
 
-// The probe runs an executable resolved from the WORKSPACE's environment, so it is untrusted input
-// however ordinary `java -version` looks. It inherited this process's FULL environment — every API
-// key, token and provider credential the server holds — for a call whose entire output is a version
-// string. A planted or shimmed `java` on PATH could read all of it.
-//
-// Narrowed to the variables a JVM genuinely needs to start: the loader path, the Windows system
-// root (DLL resolution), and the temp/home locations a JVM writes to. `buildSandboxEnv` is the same
-// allowlist primitive the governed spawn boundary uses, so this is not a second mechanism.
-export const JAVA_PROBE_ENV_ALLOWLIST: readonly string[] = [
-  "PATH",
-  "SystemRoot",
-  "windir",
-  "SystemDrive",
-  "TEMP",
-  "TMP",
-  "TMPDIR",
-  "HOME",
-  "USERPROFILE",
-  "JAVA_HOME",
-  "LANG",
-  "LC_ALL",
-];
+function completeJavaVersionProbe(
+  result: CommandResult,
+  platform: NodeJS.Platform,
+  elapsed: () => number,
+): void {
+  if (result.attestation?.networkEnforced !== true) {
+    failJavaVersionValidation(
+      new JavaVersionProbeError("JAVA_VERSION_ISOLATION_UNAVAILABLE"),
+      platform,
+      "invocation-failed",
+      elapsed,
+    );
+  }
+  const outcome = classifyProbeResult(result);
+  const status = result.exitCode ?? undefined;
+  if (outcome === "supported") {
+    logJavaVersionValidation(platform, outcome, elapsed(), undefined, status);
+    return;
+  }
+  const error = new JavaVersionProbeError(probeFailureCode(outcome));
+  logJavaVersionValidation(platform, outcome, elapsed(), error, status);
+  throw error;
+}
 
-// Isolates the invocation-build throwing step (IDX63). Logging here, right at the throw, makes a
-// command-script policy refusal or another build failure visible; `prepareJavaSpawn`'s own catch
-// below does cleanup and rethrows without logging, shared with every other precondition it guards.
-function buildInvocationOrLog(executable: string, elapsed: () => number): WindowsShellInvocation {
+async function runJavaVersionProbe(
+  java: string,
+  input: LspSpawnPreparationInput,
+  platform: NodeJS.Platform,
+  availability: BackendAvailability,
+  securityDeps: JavaSpawnSecurityDeps,
+  signal: AbortSignal,
+): Promise<void> {
+  const elapsed = startLogTimer();
+  let result: CommandResult;
   try {
-    return buildJavaVersionProbeInvocation(executable);
+    result = await (securityDeps.runProbe ?? runCommand)(
+      {
+        command: "java",
+        args: ["-version"],
+        cwd: undefined,
+        timeoutMs: JAVA_VERSION_PROBE_TIMEOUT_MS,
+        signal,
+        onTerminated: (evidence) => {
+          logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
+        },
+      },
+      javaProbeRunDeps(java, input, platform, availability, securityDeps),
+    );
   } catch (error) {
-    logJavaVersionProbeCompleted({
-      windowsWrapperEngaged: false,
-      outcome:
-        error instanceof JavaVersionProbeWrapperError ? "wrapper-refused" : "invocation-failed",
-      durationMs: elapsed(),
-      errorKind: errorKindOf(error),
-    });
+    const outcome = rejectedProbeOutcome(error);
+    logJavaVersionValidation(platform, outcome, elapsed(), error);
     throw error;
   }
+  completeJavaVersionProbe(result, platform, elapsed);
 }
 
-// The closed classification (IDX63): an unsupported JDK, a nonzero exit, and output that never
-// parsed as a version string are now three distinct, distinguishable facts instead of one boolean.
-function classifyJavaVersionProbeOutcome(
-  probe: SpawnSyncReturns<string>,
-  majorVersion: number,
-): { readonly outcome: JavaVersionProbeOutcome; readonly status?: number | undefined } {
-  if (probe.error !== undefined) return { outcome: "spawn-error" };
-  const status = probe.status ?? undefined;
-  if (status !== 0) return { outcome: "nonzero-exit", status };
-  if (majorVersion === 0) return { outcome: "malformed-output", status };
-  if (majorVersion < MINIMUM_JDK_MAJOR_VERSION) return { outcome: "unsupported-version", status };
-  return { outcome: "supported", status };
+function snapshotSpawnInput(input: LspSpawnPreparationInput): LspSpawnPreparationInput {
+  return {
+    ...input,
+    args: [...input.args],
+    env: { ...input.env },
+    processEnv: { ...input.processEnv },
+  };
 }
 
-function defaultJavaVersionValid(executable: string, requestedTimeoutMs?: number): boolean {
-  const elapsed = startLogTimer();
-  const invocation = buildInvocationOrLog(executable, elapsed);
-  const windowsWrapperEngaged = invocation.windowsVerbatimArguments;
-  const childEnv = buildSandboxEnv(process.env, JAVA_PROBE_ENV_ALLOWLIST);
-  const probe = spawnSync(invocation.command, invocation.args, {
-    encoding: "utf8",
-    timeout: boundedJavaVersionProbeTimeoutMs(requestedTimeoutMs),
-    killSignal: "SIGKILL",
-    // No shell, ever: the executable path comes from workspace-influenced resolution.
-    shell: false,
-    // Without this a console window flashes on every Windows probe — the only spawn in this file
-    // that lacked it.
-    windowsHide: true,
-    env: childEnv,
-    ...(windowsWrapperEngaged ? { windowsVerbatimArguments: true } : {}),
-  });
-  const majorVersion = javaMajorVersion(`${probe.stdout}${probe.stderr}`);
-  const classified = classifyJavaVersionProbeOutcome(probe, majorVersion);
-  logJavaVersionProbeCompleted({
-    windowsWrapperEngaged,
-    outcome: classified.outcome,
-    durationMs: elapsed(),
-    status: classified.status,
-    ...(probe.error === undefined ? {} : { errorKind: errorKindOf(probe.error) }),
-  });
-  return classified.outcome === "supported";
-}
-
-function isolatedJavaCommand(
+function governedJavaCommand(
   input: LspSpawnPreparationInput,
   runtime: ReturnType<typeof createJavaRuntimeRoot>,
   securityDeps: JavaSpawnSecurityDeps,
+  platform: NodeJS.Platform,
+  java: string,
+  availability: BackendAvailability,
 ): { readonly executable: string; readonly args: readonly string[] } {
-  const platform = securityDeps.platform ?? currentPlatform();
-  const java = (securityDeps.resolveJava ?? resolveExecutableOutsideWorkspace)(
-    "java",
-    input.workspace,
-    { PATH: input.env.PATH, PATHEXT: input.processEnv.PATHEXT },
-  );
-  const validJavaVersion =
-    securityDeps.validateJavaVersion?.(java) ??
-    defaultJavaVersionValid(java, securityDeps.javaVersionProbeTimeoutMs);
-  if (!validJavaVersion) {
-    throw new Error("Java runtime does not meet the minimum supported JDK version");
-  }
   const args = [
     ...input.args,
     "--validate-java-version",
@@ -495,7 +537,7 @@ function isolatedJavaCommand(
   ];
   const decision = planIsolatedRun(
     { command: input.executable, args, cwd: input.workspace.root, network: "none" },
-    securityDeps.availability ?? nativeBackends(input),
+    availability,
     platform,
   );
   if (decision.kind !== "wrapped" || !decision.attestation.networkEnforced) {
@@ -511,23 +553,68 @@ function isolatedJavaCommand(
   };
 }
 
+function assertJavaPlatformSupported(platform: NodeJS.Platform): void {
+  if (platform !== "win32") return;
+  failJavaVersionValidation(
+    new Error("Java LSP egress isolation unavailable on Windows"),
+    platform,
+    "invocation-failed",
+    startLogTimer(),
+  );
+}
+
+function isolatedJavaCommand(
+  input: LspSpawnPreparationInput,
+  runtime: ReturnType<typeof createJavaRuntimeRoot>,
+  securityDeps: JavaSpawnSecurityDeps,
+  platform: NodeJS.Platform,
+): LspSpawnPreparation {
+  const elapsed = startLogTimer();
+  try {
+    const java = (securityDeps.resolveJava ?? resolveExecutableOutsideWorkspace)(
+      "java",
+      input.workspace,
+      { PATH: input.env.PATH, PATHEXT: input.processEnv.PATHEXT },
+    );
+    const discovered = securityDeps.availability ?? nativeBackends(input, platform);
+    const availability = { ...discovered, docker: false, podman: false };
+    const command = governedJavaCommand(input, runtime, securityDeps, platform, java, availability);
+    return {
+      ...command,
+      env: input.env,
+      beforeSpawn: (signal) =>
+        runJavaVersionProbe(java, input, platform, availability, securityDeps, signal),
+    };
+  } catch (error) {
+    return failJavaVersionValidation(
+      error instanceof Error ? error : new Error("Java LSP launcher preparation failed"),
+      platform,
+      "invocation-failed",
+      elapsed,
+    );
+  }
+}
+
 export function prepareJavaSpawn(
   input: LspSpawnPreparationInput,
   securityDeps: JavaSpawnSecurityDeps = {},
 ): LspSpawnPreparation {
+  const platform = securityDeps.platform ?? currentPlatform();
+  // The generic container fallback is Linux and cannot execute a host java.exe/.cmd/.bat, read the
+  // host JDT LS distribution, or preserve Windows document URIs. Refuse every Windows shape before
+  // resolution, layout inspection, runtime-state creation, probe, or isolation planning.
+  assertJavaPlatformSupported(platform);
   const runtime = createJavaRuntimeRoot(input);
   try {
     if (containsForbiddenProjectMetadata(input.workspace.root)) {
       throw new Error("Java standalone mode rejects project import metadata");
     }
-    const platform = securityDeps.platform ?? currentPlatform();
     if (!(securityDeps.validateLayout ?? validJdtlsLayout)(input.executable, platform)) {
       throw new Error("Java LSP provisioning does not match the supported distribution");
     }
-    const command = isolatedJavaCommand(input, runtime, securityDeps);
+    const command = isolatedJavaCommand(snapshotSpawnInput(input), runtime, securityDeps, platform);
     return {
       ...command,
-      env: input.env,
       cleanup: (): void => {
         rmSync(runtime.root, { recursive: true, force: true });
       },

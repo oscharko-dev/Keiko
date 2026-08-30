@@ -61,6 +61,7 @@ workflow, validator, package command, or protected context.
   `npm run check:context-quality`, `npm run check:editor-bundle-size`,
   `npm run check:editor-release-evidence`, `npm run check:perf-evidence:editor`, and
   `npm run check:perf-evidence`. The exact pull-request E2E checks are `npm run test:e2e:smoke`,
+  `npm run test:e2e:smoke:firefox`, `npm run test:e2e:smoke:webkit`,
   `npm run test:e2e:editor-run-verification-2215`, `npm run test:e2e:editor-debugging-2348`, and
   `npm run test:e2e:editor-m11-closeout-2533`.
 - `check:external-quality-config` semantically validates CodeRabbit's no-write, every-update,

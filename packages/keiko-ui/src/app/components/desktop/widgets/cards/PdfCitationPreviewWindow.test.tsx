@@ -10,7 +10,7 @@ import {
   fetchPdfCitationPreviewDocument,
   openPdfCitationPreviewSession,
 } from "@/lib/api";
-import { getDocument } from "pdfjs-dist";
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import {
   clearPdfCitationPreviewWindowRegistryForTests,
   getPdfCitationPreviewBackToChatAvailability,
@@ -65,7 +65,7 @@ vi.mock("@/lib/api", () => ({
   ),
 }));
 
-vi.mock("pdfjs-dist", () => ({
+vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
   GlobalWorkerOptions: { workerSrc: "" },
   getDocument: vi.fn(() => loadingTask),
 }));

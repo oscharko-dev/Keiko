@@ -389,6 +389,29 @@ describe("release-stale-lock (clear stale lock)", () => {
     expect(extra.outcome).toBe("repaired");
     expect(extra.workspaceId).toBe(instance.workspaceId);
   });
+
+  it("logs a closed, correlated rejection when repair approval is missing", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const instance = await provisionTask("t-activity-log-rejection");
+    rmSync(instance.managedWorktreePath, { recursive: true, force: true });
+    await rejectsWithCode(
+      () =>
+        repairService(activityLog).repair({
+          workspaceId: instance.workspaceId,
+          strategy: "recreate-worktree",
+          operatorApproved: false,
+          requestedBy: "u",
+          correlationId: "req-corr-repair-rejection-1",
+        }),
+      "OPERATOR_APPROVAL_REQUIRED",
+    );
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.correlationId).toBe("req-corr-repair-rejection-1");
+    expect(line.errorKind).toBe("OPERATOR_APPROVAL_REQUIRED");
+    expect(line.extra?.operation).toBe("repair");
+    expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
+  });
 });
 
 describe("abandon-and-cleanup (mark abandoned)", () => {

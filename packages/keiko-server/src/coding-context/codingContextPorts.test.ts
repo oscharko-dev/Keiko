@@ -7,7 +7,7 @@ import {
   GitHubCodeContextPortError,
 } from "./githubCodeContextPort.js";
 import { createGovernedJiraCodeContextHttpPort } from "./jiraCodeContextPort.js";
-import { DEFAULT_SANDBOX_POLICY, type SpawnFn } from "@oscharko-dev/keiko-tools";
+import { GOVERNED_GIT_REMOTE_SANDBOX_POLICY, type SpawnFn } from "@oscharko-dev/keiko-tools";
 import type { AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 
@@ -77,7 +77,7 @@ describe("github code context port", () => {
   describe("output-cap classification", () => {
     // Derived from the policy the port actually runs under, never restated as a literal: if the cap
     // moves, these fixtures move with it instead of silently testing the wrong boundary.
-    const capBytes = DEFAULT_SANDBOX_POLICY.maxOutputBytes;
+    const capBytes = GOVERNED_GIT_REMOTE_SANDBOX_POLICY.maxOutputBytes;
 
     function jsonOfExactByteLength(totalBytes: number): string {
       const envelope = '{"a":""}';
@@ -148,10 +148,10 @@ function fakeGhChild(options: FakeGhChildOptions): unknown {
       listener: (code: number | null, signal: string | null) => void,
     ): unknown => {
       if (event === "close") closeListeners.push(listener);
-      if (event === "spawn")
-        queueMicrotask(() => {
-          (listener as () => void)();
-        });
+      return child;
+    },
+    once: (event: string, listener: () => void): unknown => {
+      if (event === "spawn") queueMicrotask(listener);
       return child;
     },
     kill: (): boolean => true,

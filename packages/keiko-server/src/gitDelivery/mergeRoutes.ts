@@ -253,10 +253,18 @@ export const createHandleMergeApprove = (
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { projectId, command } = prepared.value;
-    const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "merge", {
-      headBranchName: command.headBranchName,
-      baseBranchName: command.baseBranchName,
-    });
+    const authority = gitDeliveryAuthorityGate(
+      ctx,
+      deps,
+      projectId,
+      workspace,
+      "merge",
+      {
+        headBranchName: command.headBranchName,
+        baseBranchName: command.baseBranchName,
+      },
+      { logSink: seams.activityLog },
+    );
     if (!authority.allowed) return authority.result;
     const store = seams.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
     const issued = store.issue({
@@ -331,6 +339,7 @@ async function dispatchGovernedMerge(input: GovernedMergeDispatch): Promise<Rout
     admitted: authority,
     next: seams.beforeRemoteDispatch,
     denialCapture,
+    audit: { logSink: seams.activityLog },
   });
   try {
     const result = await executeGovernedMerge(
@@ -362,7 +371,9 @@ async function handleMergeExecute(
   const { workspace } = prepared;
   const { projectId, command, approval } = prepared.value;
   const target = mergeAuthorityTarget(command);
-  const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "merge", target);
+  const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "merge", target, {
+    logSink: seams.activityLog,
+  });
   if (!authority.allowed) return authority.result;
   const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
     store: seams.approvalStore,

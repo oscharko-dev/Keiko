@@ -1,6 +1,39 @@
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+function Get-ActiveNativeProducerSource {
+  param([Parameter(Mandatory = $true)][string] $FunctionSource)
+
+  $withoutBlockComments = [regex]::Replace($FunctionSource, '(?s)/\*.*?\*/', '')
+  return ($withoutBlockComments -split "`n" |
+    Where-Object { $_.Trim() -notmatch '^(//|/\*|\*)' }) -join "`n"
+}
+
+function Assert-NativeProducerLinkFlags {
+  param(
+    [Parameter(Mandatory = $true)][string] $Source,
+    [Parameter(Mandatory = $true)][string] $FunctionName,
+    [Parameter(Mandatory = $true)][string] $EndMarker,
+    [Parameter(Mandatory = $true)][string] $ProducerPath,
+    [Parameter(Mandatory = $true)][string[]] $RequiredFlagLiterals
+  )
+
+  $functionStart = $Source.IndexOf("function $FunctionName(")
+  $functionEnd = $Source.IndexOf($EndMarker)
+  if ($functionStart -lt 0 -or $functionEnd -lt 0 -or $functionEnd -le $functionStart) {
+    throw "could not locate $FunctionName() in $ProducerPath to derive the production link flags"
+  }
+  $functionSource = $Source.Substring($functionStart, $functionEnd - $functionStart)
+  $activeSource = Get-ActiveNativeProducerSource -FunctionSource $functionSource
+  foreach ($requiredFlagLiteral in $RequiredFlagLiterals) {
+    if (-not $activeSource.Contains($requiredFlagLiteral)) {
+      throw ("$ProducerPath $FunctionName() no longer contains the hardened flag " +
+        "$requiredFlagLiteral -- update this gate deliberately if the hardening posture " +
+        "changed, do not let it silently keep proving a configuration the product no longer ships")
+    }
+  }
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 $scratch = Join-Path $env:RUNNER_TEMP ("keiko-native-quality-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $scratch | Out-Null
@@ -41,62 +74,23 @@ try {
   $productionScriptSource = Get-Content -LiteralPath $productionScriptPath -Raw
   $setupBuildScriptPath = Join-Path $PSScriptRoot "build-windows-portable-setup.mjs"
   $setupBuildScriptSource = Get-Content -LiteralPath $setupBuildScriptPath -Raw
-  $launcherFunctionStart = $productionScriptSource.IndexOf("function compileWindowsLauncher(")
-  $launcherFunctionEnd = $productionScriptSource.IndexOf("function requireWindowsLauncherIconSource(")
-  if ($launcherFunctionStart -lt 0 -or $launcherFunctionEnd -lt 0 -or
-      $launcherFunctionEnd -le $launcherFunctionStart) {
-    throw "could not locate compileWindowsLauncher() in stage-portable-runtime.mjs to derive the production link flags"
-  }
-  $launcherFunctionSource = $productionScriptSource.Substring(
-    $launcherFunctionStart, $launcherFunctionEnd - $launcherFunctionStart
-  )
-  # Comments and dead code are STRIPPED before the search. A plain `Contains` would be satisfied by
-  # the flag appearing in a `//` comment or a commented-out argument list, so the gate could keep
-  # proving a hardening posture the shipped command no longer has -- exactly the stale-evidence case
-  # this check exists to prevent (PR #3355 review).
-  $activeLauncherSource = ($launcherFunctionSource -split "`n" |
-    Where-Object { $_.Trim() -notmatch '^(//|/\*|\*)' }) -join "`n"
-  foreach ($requiredFlagLiteral in @('"/MT"', '"/DEPENDENTLOADFLAG:0x800"')) {
-    if (-not $activeLauncherSource.Contains($requiredFlagLiteral)) {
-      throw ("scripts/stage-portable-runtime.mjs compileWindowsLauncher() no longer contains " +
-        "the hardened flag $requiredFlagLiteral -- update this gate deliberately if the " +
-        "hardening posture changed, do not let it silently keep proving a configuration the " +
-        "product no longer ships")
-    }
-  }
+  # Comments and dead code are stripped by the shared assertion before either producer is checked.
+  # A plain `Contains` on the unfiltered function would accept a flag surviving only in a comment.
+  $requiredNativeLinkFlagLiterals = @('"/MT"', '"/DEPENDENTLOADFLAG:0x800"')
+  Assert-NativeProducerLinkFlags -Source $productionScriptSource `
+    -FunctionName "compileWindowsLauncher" `
+    -EndMarker "function requireWindowsLauncherIconSource(" `
+    -ProducerPath "scripts/stage-portable-runtime.mjs" `
+    -RequiredFlagLiterals $requiredNativeLinkFlagLiterals
+  Assert-NativeProducerLinkFlags -Source $setupBuildScriptSource `
+    -FunctionName "compileSetupBootstrap" `
+    -EndMarker "function fsyncFile(" `
+    -ProducerPath "scripts/build-windows-portable-setup.mjs" `
+    -RequiredFlagLiterals $requiredNativeLinkFlagLiterals
+
   # Proven present above, byte-for-byte, in the production entry point -- not an independent guess.
   $productionMTFlag = "/MT"
   $productionLinkFlags = @("/DEPENDENTLOADFLAG:0x800")
-
-  # SECOND producer, same treatment: compileSetupBootstrap() lives in a different file
-  # (build-windows-portable-setup.mjs) and is derived independently of the launcher above, so
-  # dropping either flag from ONLY this function -- while the launcher keeps both -- still fails
-  # closed instead of riding on the launcher's proof.
-  $setupBootstrapFunctionStart = $setupBuildScriptSource.IndexOf("function compileSetupBootstrap(")
-  $setupBootstrapFunctionEnd = $setupBuildScriptSource.IndexOf("function fsyncFile(")
-  if ($setupBootstrapFunctionStart -lt 0 -or $setupBootstrapFunctionEnd -lt 0 -or
-      $setupBootstrapFunctionEnd -le $setupBootstrapFunctionStart) {
-    throw ("could not locate compileSetupBootstrap() in build-windows-portable-setup.mjs to " +
-      "derive the production setup-bootstrap link flags")
-  }
-  $setupBootstrapFunctionSource = $setupBuildScriptSource.Substring(
-    $setupBootstrapFunctionStart, $setupBootstrapFunctionEnd - $setupBootstrapFunctionStart
-  )
-  # Same comment-stripping rationale as the launcher above: a flag that survives only in a `//`
-  # comment or a commented-out argument list must not keep this gate green.
-  $activeSetupBootstrapSource = ($setupBootstrapFunctionSource -split "`n" |
-    Where-Object { $_.Trim() -notmatch '^(//|/\*|\*)' }) -join "`n"
-  foreach ($requiredFlagLiteral in @('"/MT"', '"/DEPENDENTLOADFLAG:0x800"')) {
-    if (-not $activeSetupBootstrapSource.Contains($requiredFlagLiteral)) {
-      throw ("scripts/build-windows-portable-setup.mjs compileSetupBootstrap() no longer " +
-        "contains the hardened flag $requiredFlagLiteral -- update this gate deliberately if " +
-        "the hardening posture changed, do not let it silently keep proving a configuration " +
-        "the product no longer ships")
-    }
-  }
-  # Proven present above, byte-for-byte, in the production entry point -- not an independent guess.
-  $setupBootstrapMTFlag = "/MT"
-  $setupBootstrapLinkFlags = @("/DEPENDENTLOADFLAG:0x800")
 
   $launcher = Join-Path $root "native/portable-launcher/keiko-portable-launcher.c"
   $launcherOut = Join-Path $scratch "keiko-launcher.exe"
@@ -126,8 +120,8 @@ try {
   $setupBootstrap = Join-Path $root "native/setup-bootstrap/keiko-setup-bootstrap.c"
   $setupBootstrapOut = Join-Path $scratch "keiko-setup-bootstrap.exe"
   $setupBootstrapObject = Join-Path $scratch "keiko-setup-bootstrap.obj"
-  & cl.exe @nativeFlags $setupBootstrapMTFlag @setupDefines "/Fo:$setupBootstrapObject" `
-    "/Fe:$setupBootstrapOut" $setupBootstrap /link @setupBootstrapLinkFlags
+  & cl.exe @nativeFlags $productionMTFlag @setupDefines "/Fo:$setupBootstrapObject" `
+    "/Fe:$setupBootstrapOut" $setupBootstrap /link @productionLinkFlags
   if ($LASTEXITCODE -ne 0) { throw "MSVC setup-bootstrap quality analysis failed" }
 
   $setupBootstrapTest = Join-Path $root "native/setup-bootstrap/keiko-setup-bootstrap.windows.test.c"

@@ -419,6 +419,27 @@ describe("governed cleanup happy path (AC4)", () => {
     expect(line.extra?.outcome).toBe("cleanup-refused");
   });
 
+  it("logs a closed, correlated rejection when cleanup approval is missing", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const instance = await provisionTask("t-activity-log-rejection");
+    setState(instance, "archived");
+    await expect(
+      cleanup(store, realAdapter, undefined, activityLog).cleanup({
+        workspaceId: instance.workspaceId,
+        requestedBy: "u",
+        operatorApproved: false,
+        mode: "request",
+        correlationId: "req-corr-cleanup-rejection-1",
+      }),
+    ).rejects.toMatchObject({ code: "OPERATOR_APPROVAL_REQUIRED" });
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.correlationId).toBe("req-corr-cleanup-rejection-1");
+    expect(line.errorKind).toBe("OPERATOR_APPROVAL_REQUIRED");
+    expect(line.extra?.operation).toBe("cleanup");
+    expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
+  });
+
   it("is idempotent on a second request (already cleanup-pending)", async () => {
     const instance = await provisionTask("t-idem");
     setState(instance, "cleanup-pending");
@@ -858,9 +879,19 @@ describe("orphan cleanup", () => {
   });
 
   it("rejects orphan cleanup without operator approval", async () => {
+    const activityLog = createBufferedServerLogSink();
     await expect(
-      cleanup().cleanupOrphans({ requestedBy: "u", operatorApproved: false }),
+      cleanup(store, realAdapter, undefined, activityLog).cleanupOrphans({
+        requestedBy: "u",
+        operatorApproved: false,
+        correlationId: "req-corr-orphan-cleanup-rejection-1",
+      }),
     ).rejects.toMatchObject({ code: "OPERATOR_APPROVAL_REQUIRED" });
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.correlationId).toBe("req-corr-orphan-cleanup-rejection-1");
+    expect(line.errorKind).toBe("OPERATOR_APPROVAL_REQUIRED");
+    expect(line.extra?.operation).toBe("cleanup");
+    expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
   });
 
   // GEN-TEST-FLAKE-006: the invariant this test pins is a CALL-COUNT bound (listAll() runs at most once

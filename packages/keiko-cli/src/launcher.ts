@@ -42,13 +42,7 @@ import {
 import { homedir as defaultHomedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import {
-  emitSecurityLogEvent,
-  resolveWindowsSystemExecutable,
-  securityErrorKind,
-  WindowsSystemBinaryMissingError,
-  WindowsSystemDirectoryError,
-} from "@oscharko-dev/keiko-security";
+import { resolveWindowsPowerShellExecutable } from "@oscharko-dev/keiko-security";
 import type { CliIo } from "./runner.js";
 import {
   LauncherError,
@@ -71,7 +65,11 @@ import {
 } from "./launcher-state.js";
 import { resolveKeikoBinary } from "./install-layout.js";
 import { resolveContainedStateDir } from "./state-paths.js";
-import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
+import {
+  createCliSecurityLogSink,
+  emitCliWindowsSystemFailure,
+  type CliSecurityLogSinkFactory,
+} from "./security-log.js";
 
 type LauncherSubcommand = "install" | "remove" | "status";
 
@@ -567,10 +565,7 @@ interface ResolvedDeps {
 }
 
 function defaultResolveWindowsPowerShell(env: EnvSource): string {
-  return resolveWindowsSystemExecutable(
-    ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"],
-    env,
-  );
+  return resolveWindowsPowerShellExecutable(env);
 }
 
 function resolveDeps(env: EnvSource, deps: LauncherCliDeps): ResolvedDeps {
@@ -591,30 +586,8 @@ function windowsSystemFailureExit(
   stateDir: string | undefined,
   factory: CliSecurityLogSinkFactory | undefined,
 ): number | undefined {
-  if (
-    !(error instanceof WindowsSystemDirectoryError) &&
-    !(error instanceof WindowsSystemBinaryMissingError)
-  ) {
-    return undefined;
-  }
   const sink = stateDir === undefined ? undefined : createCliSecurityLogSink(stateDir, factory);
-  if (error instanceof WindowsSystemDirectoryError) {
-    emitSecurityLogEvent(sink, {
-      level: "warn",
-      category: "security",
-      op: "security.windows-launcher.system-root-refused",
-      errorKind: securityErrorKind(error),
-      extra: { surface: "launcher-install" },
-    });
-  } else {
-    emitSecurityLogEvent(sink, {
-      level: "error",
-      category: "diagnostic",
-      op: "security.windows-launcher.system-binary-missing",
-      errorKind: securityErrorKind(error),
-      extra: { surface: "launcher-install" },
-    });
-  }
+  if (!emitCliWindowsSystemFailure(error, sink, "launcher-install")) return undefined;
   io.err("keiko launcher: trusted Windows launch helper is unavailable.\n");
   return 1;
 }

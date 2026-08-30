@@ -1,8 +1,9 @@
 // Governed LSP process manager (Issue #1381, Epic #1491, ADR-0069 D2/D4/D5). A long-lived supervisor
 // for one external language-server child over stdio JSON-RPC: it runs the deny-by-default preflight,
 // spawns through the injected `LspSpawnFn`, drives the `initialize` handshake under a timeout, serves
-// requests under a per-request deadline plus AbortSignal cancellation, restarts on crash within a
-// rolling throttle window, and shuts the process down gracefully on dispose. Every state transition
+// requests under a per-request deadline plus AbortSignal cancellation, restarts only after a
+// requested termination has confirmed root exit and bounded-tree containment, and shuts the process
+// down gracefully on dispose. Every state transition
 // emits a content-free `LspLifecycleEvent` (ADR-0069 I4/D6); no source text, paths, or method names
 // ever cross the audit boundary.
 
@@ -32,6 +33,11 @@ import {
 } from "./lspNodeAdapter.js";
 import type { LspProcessKillResult, LspSpawnFn, LspTreeContainment } from "./lspNodeAdapter.js";
 import { createLspRestartThrottle } from "./lspRestartThrottle.js";
+import type {
+  LspRuntimeLeaseReason,
+  LspRuntimeStateLoadResult,
+  LspRuntimeStatePort,
+} from "./lspRuntimeStateStore.js";
 import {
   LspRpcCancelledError,
   LspRpcDisposedError,
@@ -75,6 +81,8 @@ export interface LspSpawnPreparation {
   readonly executable: string;
   readonly args: readonly string[];
   readonly env: Record<string, string>;
+  /** Governed, abortable prerequisite executed only after this generation owns its durable lease. */
+  readonly beforeSpawn?: ((signal: AbortSignal) => Promise<void>) | undefined;
   readonly cleanup?: (() => void) | undefined;
   readonly resourceBudgetSatisfied?: (() => boolean) | undefined;
   readonly backgroundResourceBudgetSatisfied?: (() => boolean) | undefined;
@@ -94,6 +102,8 @@ export interface LspProcessManagerDeps {
   readonly onLifecycleEvent?: ((event: LspLifecycleEvent) => void) | undefined;
   readonly protocol?: LspProcessProtocolConfig | undefined;
   readonly prepareSpawn?: LspSpawnPrepareFn | undefined;
+  /** Durable lease/throttle state; an active restored lease remains quarantined, never reconciled. */
+  readonly runtimeState?: LspRuntimeStatePort | undefined;
 }
 
 export interface LspProcessManager {
@@ -119,7 +129,13 @@ export interface LspProcessManager {
 type SpawnHandle = ReturnType<LspSpawnFn>;
 type Transition = (status: LspProcessStatus, code?: LspProcessErrorCode) => void;
 type TreeContainmentState = "not-required" | LspTreeContainment;
-type OwnershipRetentionReason = "exit-unconfirmed" | "tree-unconfirmed";
+type OwnershipRetentionReason =
+  | "exit-unconfirmed"
+  | "tree-unconfirmed"
+  | "resource-cleanup-failed"
+  | "durable-quarantine"
+  | "runtime-state-unavailable";
+type OwnershipSettlement = "released" | "retained" | "cleanup-failed";
 
 interface CrashTransition {
   readonly status: "CRASHED" | "INITIALIZE_TIMEOUT";
@@ -151,6 +167,8 @@ interface RuntimeState {
   // child (a late `exit`/`error` arriving after a restart) and is discarded (ADR-0069 D4 — no spurious
   // CRASHED transition or throttle debit on a stale child event).
   childGeneration: number;
+  startAttempt: number;
+  preSpawnAttempt: PreSpawnAttempt | undefined;
   protocol: LspProtocolSession | undefined;
   lastTransitionTimestampMs: number;
   requestCount: number;
@@ -165,6 +183,18 @@ interface RuntimeState {
   resourceBudgetSatisfied: (() => boolean) | undefined;
   backgroundResourceBudgetSatisfied: (() => boolean) | undefined;
   resourceBudgetTimer: ReturnType<typeof setInterval> | undefined;
+  durableState: LspRuntimeStatePort | undefined;
+  durableLeaseActive: boolean;
+  durableLeaseOrphaned: boolean;
+  durableStateUnavailable: boolean;
+  crashTimestampsMs: number[];
+}
+
+interface PreSpawnAttempt {
+  readonly attempt: number;
+  readonly generation: number;
+  readonly controller: AbortController;
+  settled: Promise<void>;
 }
 
 interface ManagerRuntime {
@@ -217,7 +247,9 @@ function handleObservedChildExit(ctx: SupervisorContext): void {
     return;
   }
   if (ctx.state.disposed || ctx.state.terminationRequested) {
-    if (ctx.state.terminalTransitionRecorded) settleChildOwnership(ctx.state);
+    if (ctx.state.terminalTransitionRecorded) {
+      settlementReleased(settleChildOwnership(ctx.state), ctx.state, ctx.transition);
+    }
     return;
   }
   handleUnsolicitedChildExit(ctx);
@@ -228,22 +260,27 @@ function handleUnsolicitedChildExit(ctx: SupervisorContext): void {
   // prove that descendants are gone (a detached POSIX child or a Windows cmd.exe wrapper can leave
   // one behind), and signalling its raw pid after this observation risks hitting a recycled pid.
   // Retain the generation and suppress replacement unless containment had already been confirmed.
+  stopResourceBudgetMonitor(ctx.state);
   const treeWasConfirmed = ctx.state.treeContainment === "confirmed";
   if (!treeWasConfirmed) markTreeContainmentUnconfirmed(ctx.state);
-  const cleanupSucceeded = cleanupSpawnResources(ctx.state);
-  ctx.transition("CRASHED", cleanupSucceeded ? "CRASHED" : "RUNTIME_STATE_CLEANUP_FAILED");
+  ctx.transition("CRASHED", "CRASHED");
   ctx.state.terminalTransitionRecorded = true;
-  if (!settleChildOwnership(ctx.state)) return;
+  if (!settlementReleased(settleChildOwnership(ctx.state), ctx.state, ctx.transition)) return;
   restartAfterCrash(ctx);
 }
 
 function restartAfterCrash(ctx: SupervisorContext): void {
-  if (ctx.throttle.recordCrashAndMayRestart(ctx.now())) {
-    ctx.state.restartCount = ctx.throttle.restartCount();
-    supervisorStart(ctx);
-  } else {
-    ctx.transition("RESTART_THROTTLED", "RESTART_THROTTLED");
+  const nowMs = ctx.now();
+  const restartAllowed = ctx.throttle.recordCrashAndMayRestart(nowMs);
+  ctx.state.restartCount = ctx.throttle.restartCount();
+  ctx.state.crashTimestampsMs = [...ctx.throttle.crashTimestamps(nowMs)];
+  if (!persistDurableRuntime(ctx.state, nowMs, "released")) {
+    retainChildOwnership(ctx.state, "runtime-state-unavailable");
+    ctx.transition("CRASHED", "RUNTIME_STATE_CLEANUP_FAILED");
+    return;
   }
+  if (restartAllowed) supervisorStart(ctx);
+  else ctx.transition("RESTART_THROTTLED", "RESTART_THROTTLED");
 }
 
 function requestCrashTermination(ctx: SupervisorContext, crashTransition: CrashTransition): void {
@@ -251,24 +288,28 @@ function requestCrashTermination(ctx: SupervisorContext, crashTransition: CrashT
   ctx.state.terminationRequested = true;
   ctx.state.restartPendingAfterExit = true;
   ctx.state.terminalTransitionRecorded = false;
+  stopResourceBudgetMonitor(ctx.state);
   ctx.state.transport?.dispose();
   // Node's asynchronous ENOENT/EACCES spawn failure has no pid and does not promise a later `exit`
   // event. No OS process was acquired, so this is an observed not-spawned terminal state rather than
   // an unconfirmed kill; waiting for an exit here would retain the handle and suppress restart
   // forever. A post-spawn error has a pid and still follows the retained-until-exit path below.
-  if (ctx.state.child?.pid === undefined) ctx.state.exited = true;
-  else terminateProcessTree(ctx.state);
-  const cleanupSucceeded = cleanupSpawnResources(ctx.state);
-  ctx.transition(
-    crashTransition.status,
-    cleanupSucceeded ? crashTransition.code : "RUNTIME_STATE_CLEANUP_FAILED",
-  );
-  completeTerminalTermination(ctx.state);
+  if (ctx.state.child?.pid === undefined) {
+    ctx.state.exited = true;
+    ctx.state.treeContainment = "confirmed";
+  } else terminateProcessTree(ctx.state);
+  ctx.transition(crashTransition.status, crashTransition.code);
+  completeTerminalTermination(ctx.state, ctx.transition);
   if (ctx.state.exited) restartConfirmedCrash(ctx);
 }
 
 function restartConfirmedCrash(ctx: SupervisorContext): void {
-  if (!ctx.state.restartPendingAfterExit || !settleChildOwnership(ctx.state)) return;
+  if (
+    !ctx.state.restartPendingAfterExit ||
+    !settlementReleased(settleChildOwnership(ctx.state), ctx.state, ctx.transition)
+  ) {
+    return;
+  }
   ctx.state.restartPendingAfterExit = false;
   ctx.state.terminationRequested = false;
   ctx.state.terminalTransitionRecorded = false;
@@ -301,26 +342,104 @@ function recordTreeKillResult(state: RuntimeState, result: LspProcessKillResult 
 }
 
 function logChildOwnership(
-  action: "retained-unconfirmed" | "released-after-exit",
+  action:
+    | "retained-unconfirmed"
+    | "released-after-exit"
+    | "durable-lease-acquired"
+    | "durable-lease-released"
+    | "durable-lease-restored"
+    | "durable-state-unavailable",
   childPid: number | undefined,
-  reason: OwnershipRetentionReason,
+  reason: OwnershipRetentionReason | LspRuntimeLeaseReason,
+  generation?: number,
 ): void {
   processServerLogSink().write({
     category: "diagnostic",
     op: "lsp.process.ownership.changed",
     correlationId: UNKNOWN_CORRELATION_ID,
-    extra: { action, reason, ...(childPid === undefined ? {} : { childPid }) },
+    extra: {
+      action,
+      reason,
+      ...(generation === undefined ? {} : { generation }),
+      ...(childPid === undefined ? {} : { childPid }),
+    },
   });
 }
 
-function settleChildOwnership(state: RuntimeState): boolean {
+function durableLeaseReason(reason: OwnershipRetentionReason): LspRuntimeLeaseReason {
+  if (reason === "exit-unconfirmed") return "exit-unconfirmed";
+  if (reason === "tree-unconfirmed") return "tree-unconfirmed";
+  if (reason === "resource-cleanup-failed") return "resource-cleanup-failed";
+  return "process-live";
+}
+
+function persistDurableRuntime(
+  state: RuntimeState,
+  nowMs: number,
+  leaseState: "active" | "released",
+  reason: LspRuntimeLeaseReason = "process-live",
+): boolean {
+  if (state.durableState === undefined) {
+    state.durableLeaseActive = false;
+    return true;
+  }
+  try {
+    state.durableState.save({
+      generation: state.childGeneration,
+      leaseState,
+      ...(leaseState === "active" ? { leaseReason: reason } : {}),
+      crashTimestampsMs: state.crashTimestampsMs,
+      restartCount: state.restartCount,
+      updatedAtMs: nowMs,
+    });
+    state.durableLeaseActive = leaseState === "active";
+    state.durableStateUnavailable = false;
+    logChildOwnership(
+      leaseState === "active" ? "durable-lease-acquired" : "durable-lease-released",
+      undefined,
+      leaseState === "active" ? reason : (state.ownershipRetentionReason ?? "process-live"),
+      state.childGeneration,
+    );
+    return true;
+  } catch {
+    state.durableStateUnavailable = true;
+    logChildOwnership(
+      "durable-state-unavailable",
+      undefined,
+      "runtime-state-unavailable",
+      state.childGeneration,
+    );
+    return false;
+  }
+}
+
+function retainChildOwnership(state: RuntimeState, reason: OwnershipRetentionReason): void {
+  if (state.ownershipRetentionReason === reason) return;
+  logChildOwnership("retained-unconfirmed", state.child?.pid, reason);
+  state.ownershipRetentionReason = reason;
+  if (state.durableLeaseActive) {
+    persistDurableRuntime(
+      state,
+      state.lastTransitionTimestampMs,
+      "active",
+      durableLeaseReason(reason),
+    );
+  }
+}
+
+function settleChildOwnership(state: RuntimeState): OwnershipSettlement {
   const retentionReason = childRetentionReason(state);
   if (retentionReason !== undefined) {
-    if (state.ownershipRetentionReason !== retentionReason) {
-      logChildOwnership("retained-unconfirmed", state.child?.pid, retentionReason);
-      state.ownershipRetentionReason = retentionReason;
-    }
-    return false;
+    retainChildOwnership(state, retentionReason);
+    return "retained";
+  }
+  if (!cleanupSpawnResources(state)) {
+    retainChildOwnership(state, "resource-cleanup-failed");
+    return "cleanup-failed";
+  }
+  if (!persistDurableRuntime(state, state.lastTransitionTimestampMs, "released")) {
+    retainChildOwnership(state, "runtime-state-unavailable");
+    return "cleanup-failed";
   }
   const childPid = state.child?.pid;
   state.child = undefined;
@@ -328,13 +447,27 @@ function settleChildOwnership(state: RuntimeState): boolean {
     logChildOwnership("released-after-exit", childPid, state.ownershipRetentionReason);
     state.ownershipRetentionReason = undefined;
   }
-  return true;
+  return "released";
+}
+
+function settlementReleased(
+  settlement: OwnershipSettlement,
+  state: RuntimeState,
+  transition: Transition,
+  cleanupFailureStatus: LspProcessStatus = state.status,
+): boolean {
+  if (settlement === "cleanup-failed") {
+    transition(cleanupFailureStatus, "RUNTIME_STATE_CLEANUP_FAILED");
+  }
+  return settlement === "released";
 }
 
 function childRetentionReason(state: RuntimeState): OwnershipRetentionReason | undefined {
+  if (state.durableStateUnavailable) return "runtime-state-unavailable";
+  if (state.durableLeaseOrphaned) return "durable-quarantine";
   if (state.child === undefined) return undefined;
   if (!state.exited) return "exit-unconfirmed";
-  return state.treeContainment === "unconfirmed" ? "tree-unconfirmed" : undefined;
+  return state.treeContainment === "confirmed" ? undefined : "tree-unconfirmed";
 }
 
 function hasRetainedProcessOwnership(state: RuntimeState): boolean {
@@ -345,24 +478,25 @@ function hasRetainedProcessOwnership(state: RuntimeState): boolean {
 }
 
 function beginTerminalTermination(state: RuntimeState): void {
+  stopResourceBudgetMonitor(state);
   state.terminationRequested = true;
   state.restartPendingAfterExit = false;
   state.terminalTransitionRecorded = false;
 }
 
-function completeTerminalTermination(state: RuntimeState): void {
+function completeTerminalTermination(
+  state: RuntimeState,
+  transition: Transition,
+  cleanupFailureStatus?: LspProcessStatus,
+): boolean {
   state.terminalTransitionRecorded = true;
-  settleChildOwnership(state);
+  return settlementReleased(settleChildOwnership(state), state, transition, cleanupFailureStatus);
 }
 
 function supervisorStart(ctx: SupervisorContext): void {
-  if (ctx.state.disposed) {
-    return;
-  }
+  if (ctx.state.disposed) return;
   const preflight = preflightOrFail(ctx.deps, ctx.transition);
-  if (preflight === undefined) {
-    return;
-  }
+  if (preflight === undefined) return;
   const executable = resolveOrFail(ctx.deps, ctx.transition);
   if (executable === undefined) {
     if (!safeCleanup(preflight.cleanup)) {
@@ -381,6 +515,7 @@ function supervisorStart(ctx: SupervisorContext): void {
     executable: prepared.executable,
     args: prepared.args,
     env: prepared.env,
+    beforeSpawn: prepared.beforeSpawn,
     spawnResourceCleanup: prepared.cleanup,
     resourceBudgetSatisfied: prepared.resourceBudgetSatisfied,
     backgroundResourceBudgetSatisfied: prepared.backgroundResourceBudgetSatisfied,
@@ -392,7 +527,8 @@ function supervisorStart(ctx: SupervisorContext): void {
 
 function createManagerRuntime(deps: LspProcessManagerDeps): ManagerRuntime {
   const now = deps.now ?? Date.now;
-  const state = initialRuntimeState(now());
+  const loaded = loadDurableRuntimeState(deps.runtimeState);
+  const state = initialRuntimeState(now(), deps.runtimeState, loaded);
   const transition: Transition = (status, code) => {
     state.status = status;
     state.lastTransitionTimestampMs = now();
@@ -400,24 +536,101 @@ function createManagerRuntime(deps: LspProcessManagerDeps): ManagerRuntime {
       buildLifecycleEvent(deps.config.managerId, state, state.lastTransitionTimestampMs, code),
     );
   };
+  const throttle = createLspRestartThrottle(
+    deps.config.restartWindowMs,
+    deps.config.maxRestartsInWindow,
+    {
+      crashTimestampsMs: state.crashTimestampsMs,
+      restartCount: state.restartCount,
+    },
+  );
   const ctx: SupervisorContext = {
     deps,
     state,
     now,
     spawn: deps.spawn ?? defaultLspSpawnFn,
-    throttle: createLspRestartThrottle(
-      deps.config.restartWindowMs,
-      deps.config.maxRestartsInWindow,
-    ),
+    throttle,
     transition,
   };
 
   transition("STARTING");
-  supervisorStart(ctx);
+  state.crashTimestampsMs = [...throttle.crashTimestamps(now())];
+  if (state.durableStateUnavailable) {
+    retainChildOwnership(state, "runtime-state-unavailable");
+    transition("SPAWN_FAILED", "RUNTIME_STATE_CLEANUP_FAILED");
+  } else if (state.durableLeaseOrphaned) {
+    logChildOwnership(
+      "durable-lease-restored",
+      undefined,
+      "durable-quarantine",
+      state.childGeneration,
+    );
+    retainChildOwnership(state, "durable-quarantine");
+    transition("CRASHED", "CRASHED");
+  } else if (throttle.isThrottled(now())) {
+    transition("RESTART_THROTTLED", "RESTART_THROTTLED");
+  } else {
+    supervisorStart(ctx);
+  }
   return { state, now, transition };
 }
 
-function initialRuntimeState(timestampMs: number): RuntimeState {
+function loadDurableRuntimeState(port: LspRuntimeStatePort | undefined): LspRuntimeStateLoadResult {
+  if (port === undefined) return { state: "absent" };
+  try {
+    return port.load();
+  } catch {
+    return { state: "unavailable" };
+  }
+}
+
+interface DurableInitialState {
+  readonly ownershipRetentionReason: OwnershipRetentionReason | undefined;
+  readonly restartCount: number;
+  readonly childGeneration: number;
+  readonly leaseActive: boolean;
+  readonly stateUnavailable: boolean;
+  readonly crashTimestampsMs: readonly number[];
+}
+
+function durableInitialState(loaded: LspRuntimeStateLoadResult): DurableInitialState {
+  if (loaded.state === "unavailable") {
+    return {
+      ownershipRetentionReason: "runtime-state-unavailable",
+      restartCount: 0,
+      childGeneration: 0,
+      leaseActive: false,
+      stateUnavailable: true,
+      crashTimestampsMs: [],
+    };
+  }
+  if (loaded.state === "absent") {
+    return {
+      ownershipRetentionReason: undefined,
+      restartCount: 0,
+      childGeneration: 0,
+      leaseActive: false,
+      stateUnavailable: false,
+      crashTimestampsMs: [],
+    };
+  }
+  const active = loaded.snapshot.leaseState === "active";
+  return {
+    ownershipRetentionReason: active ? "durable-quarantine" : undefined,
+    restartCount: loaded.snapshot.restartCount,
+    childGeneration: loaded.snapshot.generation,
+    leaseActive: active,
+    stateUnavailable: false,
+    crashTimestampsMs: loaded.snapshot.crashTimestampsMs,
+  };
+}
+
+function initialRuntimeState(
+  timestampMs: number,
+  durableState: LspRuntimeStatePort | undefined,
+  loaded: LspRuntimeStateLoadResult,
+): RuntimeState {
+  const durable = durableInitialState(loaded);
   return {
     status: "STARTING",
     transport: undefined,
@@ -427,10 +640,12 @@ function initialRuntimeState(timestampMs: number): RuntimeState {
     treeContainment: "not-required",
     restartPendingAfterExit: false,
     terminalTransitionRecorded: false,
-    ownershipRetentionReason: undefined,
-    restartCount: 0,
+    ownershipRetentionReason: durable.ownershipRetentionReason,
+    restartCount: durable.restartCount,
     disposed: false,
-    childGeneration: 0,
+    childGeneration: durable.childGeneration,
+    startAttempt: 0,
+    preSpawnAttempt: undefined,
     protocol: undefined,
     lastTransitionTimestampMs: timestampMs,
     requestCount: 0,
@@ -445,6 +660,11 @@ function initialRuntimeState(timestampMs: number): RuntimeState {
     resourceBudgetSatisfied: undefined,
     backgroundResourceBudgetSatisfied: undefined,
     resourceBudgetTimer: undefined,
+    durableState,
+    durableLeaseActive: durable.leaseActive,
+    durableLeaseOrphaned: durable.leaseActive,
+    durableStateUnavailable: durable.stateUnavailable,
+    crashTimestampsMs: [...durable.crashTimestampsMs],
   };
 }
 
@@ -540,6 +760,7 @@ interface SpawnAndInitializeInput {
   readonly executable: string;
   readonly args: readonly string[];
   readonly env: Record<string, string>;
+  readonly beforeSpawn: ((signal: AbortSignal) => Promise<void>) | undefined;
   readonly spawnResourceCleanup: (() => void) | undefined;
   readonly resourceBudgetSatisfied: (() => boolean) | undefined;
   readonly backgroundResourceBudgetSatisfied: (() => boolean) | undefined;
@@ -551,25 +772,34 @@ interface SpawnAndInitializeInput {
 }
 
 function spawnAndInitialize(input: SpawnAndInitializeInput): void {
-  const {
-    state,
-    deps,
-    spawn,
-    now,
-    transition,
-    executable,
-    args,
-    env,
-    spawnResourceCleanup,
-    resourceBudgetSatisfied,
-    backgroundResourceBudgetSatisfied,
-    onCrash,
-  } = input;
-  const generation = beginSpawnGeneration(state, spawnResourceCleanup, transition);
+  const generation = beginSpawnGeneration(
+    input.state,
+    input.spawnResourceCleanup,
+    input.transition,
+  );
   if (generation === undefined) return;
+  input.state.startAttempt += 1;
+  const attempt = input.state.startAttempt;
+  if (input.beforeSpawn === undefined) {
+    spawnPreparedGeneration(input, generation, attempt);
+    return;
+  }
+  startBeforeSpawn(input, generation, attempt, input.beforeSpawn);
+}
+
+function spawnPreparedGeneration(
+  input: SpawnAndInitializeInput,
+  generation: number,
+  attempt: number,
+): void {
+  const { state, deps, spawn, now, transition, executable, args, env, onCrash } = input;
+  if (!maySpawnPreparedGeneration(state, generation, attempt)) return;
   const child = trySpawn(spawn, executable, args, env, deps, transition);
   if (child === undefined) {
-    safeCleanup(spawnResourceCleanup);
+    if (!cleanupSpawnResources(state)) retainChildOwnership(state, "resource-cleanup-failed");
+    else if (!persistDurableRuntime(state, state.lastTransitionTimestampMs, "released")) {
+      retainChildOwnership(state, "runtime-state-unavailable");
+    }
     return;
   }
   installSpawnedChild({
@@ -579,9 +809,8 @@ function spawnAndInitialize(input: SpawnAndInitializeInput): void {
     generation,
     onCrash,
     transition,
-    spawnResourceCleanup,
-    resourceBudgetSatisfied,
-    backgroundResourceBudgetSatisfied,
+    resourceBudgetSatisfied: input.resourceBudgetSatisfied,
+    backgroundResourceBudgetSatisfied: input.backgroundResourceBudgetSatisfied,
   });
   child.onExit(() => {
     onCrash(generation, false);
@@ -591,6 +820,75 @@ function spawnAndInitialize(input: SpawnAndInitializeInput): void {
   });
   transition("INITIALIZING");
   void runInitialize(state, deps, now, transition, generation, onCrash);
+}
+
+function maySpawnPreparedGeneration(
+  state: RuntimeState,
+  generation: number,
+  attempt: number,
+): boolean {
+  return (
+    !state.disposed &&
+    !state.terminationRequested &&
+    state.childGeneration === generation &&
+    state.startAttempt === attempt
+  );
+}
+
+function startBeforeSpawn(
+  input: SpawnAndInitializeInput,
+  generation: number,
+  attempt: number,
+  beforeSpawn: (signal: AbortSignal) => Promise<void>,
+): void {
+  const record: PreSpawnAttempt = {
+    attempt,
+    generation,
+    controller: new AbortController(),
+    settled: Promise.resolve(),
+  };
+  input.state.preSpawnAttempt = record;
+  record.settled = Promise.resolve()
+    .then(() => beforeSpawn(record.controller.signal))
+    .then(
+      () => {
+        completeBeforeSpawn(input, record);
+      },
+      () => {
+        failBeforeSpawn(input, record);
+      },
+    )
+    .finally(() => {
+      if (input.state.preSpawnAttempt === record) input.state.preSpawnAttempt = undefined;
+    });
+}
+
+function currentBeforeSpawn(state: RuntimeState, record: PreSpawnAttempt): boolean {
+  return (
+    state.preSpawnAttempt === record &&
+    maySpawnPreparedGeneration(state, record.generation, record.attempt)
+  );
+}
+
+function completeBeforeSpawn(input: SpawnAndInitializeInput, record: PreSpawnAttempt): void {
+  if (!currentBeforeSpawn(input.state, record) || record.controller.signal.aborted) return;
+  spawnPreparedGeneration(input, record.generation, record.attempt);
+}
+
+function failBeforeSpawn(input: SpawnAndInitializeInput, record: PreSpawnAttempt): void {
+  const { state, transition } = input;
+  if (!currentBeforeSpawn(state, record) || record.controller.signal.aborted) return;
+  if (!cleanupSpawnResources(state)) {
+    retainChildOwnership(state, "resource-cleanup-failed");
+    transition("SPAWN_FAILED", "RUNTIME_STATE_CLEANUP_FAILED");
+    return;
+  }
+  if (!persistDurableRuntime(state, state.lastTransitionTimestampMs, "released")) {
+    retainChildOwnership(state, "runtime-state-unavailable");
+    transition("SPAWN_FAILED", "RUNTIME_STATE_CLEANUP_FAILED");
+    return;
+  }
+  transition("SPAWN_FAILED", "SPAWN_FAILED");
 }
 
 function beginSpawnGeneration(
@@ -606,12 +904,19 @@ function beginSpawnGeneration(
     return undefined;
   }
   state.childGeneration += 1;
+  if (!persistDurableRuntime(state, state.lastTransitionTimestampMs, "active")) {
+    safeCleanup(nextCleanup);
+    transition("SPAWN_FAILED", "RUNTIME_STATE_CLEANUP_FAILED");
+    return undefined;
+  }
+  state.spawnResourceCleanup = nextCleanup;
   state.exited = false;
   state.terminationRequested = false;
   state.treeContainment = "not-required";
   state.restartPendingAfterExit = false;
   state.terminalTransitionRecorded = false;
   state.ownershipRetentionReason = undefined;
+  state.durableLeaseOrphaned = false;
   return state.childGeneration;
 }
 
@@ -626,18 +931,21 @@ interface SpawnInstallation {
     crashTransition?: CrashTransition,
   ) => void;
   readonly transition: Transition;
-  readonly spawnResourceCleanup: (() => void) | undefined;
   readonly resourceBudgetSatisfied: (() => boolean) | undefined;
   readonly backgroundResourceBudgetSatisfied: (() => boolean) | undefined;
 }
 
 function installSpawnedChild(input: SpawnInstallation): void {
   const { state, deps } = input;
-  state.spawnResourceCleanup = input.spawnResourceCleanup;
+  state.spawnResourceCleanup = combineCleanup(
+    state.spawnResourceCleanup,
+    runtimeResourceCleanup(input.child),
+  );
   state.resourceBudgetSatisfied = input.resourceBudgetSatisfied;
   state.backgroundResourceBudgetSatisfied = input.backgroundResourceBudgetSatisfied;
   startResourceBudgetMonitor(state, input.transition);
   state.child = input.child;
+  if (input.child.treeLifetimeBoundary === "os-owned") state.treeContainment = "confirmed";
   state.transport = createLspTransport(input.child, deps.config.maxFrameBytes, {
     onReaderError: () => {
       input.onCrash(input.generation, true);
@@ -651,6 +959,13 @@ function installSpawnedChild(input: SpawnInstallation): void {
   state.transport.client.onNotification((method, params) => {
     state.protocol?.handleServerNotification(method, params);
   });
+}
+
+function runtimeResourceCleanup(child: SpawnHandle): (() => void) | undefined {
+  if (child.releaseRuntimeResources === undefined) return undefined;
+  return (): void => {
+    child.releaseRuntimeResources?.();
+  };
 }
 
 function preflightOrFail(
@@ -688,14 +1003,18 @@ function preflightOrFail(
   }
 }
 
-function cleanupSpawnResources(state: RuntimeState): boolean {
+function stopResourceBudgetMonitor(state: RuntimeState): void {
   if (state.resourceBudgetTimer !== undefined) clearInterval(state.resourceBudgetTimer);
   state.resourceBudgetTimer = undefined;
-  const succeeded = safeCleanup(state.spawnResourceCleanup);
+}
+
+function cleanupSpawnResources(state: RuntimeState): boolean {
+  stopResourceBudgetMonitor(state);
+  if (!safeCleanup(state.spawnResourceCleanup)) return false;
   state.spawnResourceCleanup = undefined;
   state.resourceBudgetSatisfied = undefined;
   state.backgroundResourceBudgetSatisfied = undefined;
-  return succeeded;
+  return true;
 }
 
 function safeCleanup(cleanup: (() => void) | undefined): boolean {
@@ -729,10 +1048,14 @@ function combineCleanup(
 ): (() => void) | undefined {
   if (first === undefined) return second;
   if (second === undefined) return first;
+  let firstPending: (() => void) | undefined = first;
+  let secondPending: (() => void) | undefined = second;
   return (): void => {
-    const secondSucceeded = safeCleanup(second);
-    const firstSucceeded = safeCleanup(first);
-    if (!secondSucceeded || !firstSucceeded) throw new Error("LSP resource cleanup failed");
+    if (safeCleanup(secondPending)) secondPending = undefined;
+    if (safeCleanup(firstPending)) firstPending = undefined;
+    if (secondPending !== undefined || firstPending !== undefined) {
+      throw new Error("LSP resource cleanup failed");
+    }
   };
 }
 
@@ -934,10 +1257,8 @@ function failResourceBudget(state: RuntimeState, transition: Transition): void {
   beginTerminalTermination(state);
   state.transport?.dispose();
   terminateProcessTree(state);
-  const cleanupSucceeded = cleanupSpawnResources(state);
   transition("CRASHED", "RESOURCE_BUDGET_EXCEEDED");
-  completeTerminalTermination(state);
-  if (!cleanupSucceeded) transition("CRASHED", "RUNTIME_STATE_CLEANUP_FAILED");
+  completeTerminalTermination(state, transition);
 }
 
 function recordRequestFailure(state: RuntimeState, error: LspProcessError): void {
@@ -993,45 +1314,54 @@ async function disposeManager(
   transition: Transition,
 ): Promise<void> {
   if (state.disposed) {
+    await cancelAndWaitForBeforeSpawn(state);
+    settlementReleased(settleChildOwnership(state), state, transition);
     return;
   }
   state.disposed = true;
   beginTerminalTermination(state);
   transition("SHUTDOWN");
+  await cancelAndWaitForBeforeSpawn(state);
   const shutdownGeneration = state.childGeneration;
   const transport = state.transport;
   await requestGracefulShutdown(transport, deps, now);
-  // Let the exit notification written above cross the stdio/ChildProcess boundary before deciding
-  // whether escalation is still needed. If no exit arrives in this turn, ownership is still live
-  // and signalling remains appropriate.
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  transport?.dispose();
-  // The shutdown request/exit notification is asynchronous. Re-read ownership after that await:
-  // the originally captured handle may already have exited and relinquished its pid. Only the same
-  // still-current generation may receive the SIGTERM/SIGKILL escalation.
   const child =
     !state.exited && state.childGeneration === shutdownGeneration ? state.child : undefined;
+  transport?.client.notify("exit", null);
   if (child !== undefined) {
     markTreeTerminationRequested(state);
-    const killResult = await escalateKill(
-      child,
-      deps.config.shutdownTimeoutMs,
-      () => state.exited,
-      undefined,
-      (onExit) => {
-        child.onExit(onExit);
-      },
-    );
-    recordTreeKillResult(state, killResult);
+    if (child.treeLifetimeBoundary === "os-owned") {
+      const killResult = await escalateKill(
+        child,
+        deps.config.shutdownTimeoutMs,
+        () => state.exited,
+        undefined,
+        (onExit) => {
+          child.onExit(onExit);
+        },
+      );
+      recordTreeKillResult(state, killResult);
+    } else {
+      // A protocol-level `exit` only speaks for the immediate process. Force the already-bounded
+      // process group/tree while its handle is still live so cleanup never relies on
+      // `treeContainment: not-required` and never signals a possibly recycled pid later.
+      terminateProcessTree(state);
+    }
   }
-  const cleanupSucceeded = cleanupSpawnResources(state);
-  if (!cleanupSucceeded) transition("CRASHED", "RUNTIME_STATE_CLEANUP_FAILED");
-  // `escalateKill` resolves when SIGKILL is requested at the deadline, not only after exit. Keep the
-  // child handle as a background reaper when exit is still unconfirmed. A later exit releases only
-  // when tree containment is confirmed; a failed tree kill remains retained fail-closed. The
-  // DISPOSED lifecycle event deliberately retains childPid in either unconfirmed case.
-  completeTerminalTermination(state);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  transport?.dispose();
+  // A kill request is not exit confirmation. Keep the handle as a background reaper while exit is
+  // unconfirmed; a failed tree kill also remains retained fail-closed. DISPOSED deliberately keeps
+  // childPid in either unconfirmed case.
+  completeTerminalTermination(state, transition, "CRASHED");
   transition("DISPOSED", "DISPOSED");
+}
+
+async function cancelAndWaitForBeforeSpawn(state: RuntimeState): Promise<void> {
+  const pending = state.preSpawnAttempt;
+  if (pending === undefined) return;
+  pending.controller.abort();
+  await pending.settled;
 }
 
 async function requestGracefulShutdown(
@@ -1046,7 +1376,6 @@ async function requestGracefulShutdown(
   try {
     await client.request("shutdown", null, { deadlineMs: deps.config.shutdownTimeoutMs, now });
   } catch {
-    // A server that never answers shutdown is forced down by escalateKill (ADR-0069 D4).
+    // A server that never answers shutdown is forced down by the verified tree-reap path above.
   }
-  client.notify("exit", null);
 }

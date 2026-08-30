@@ -11,6 +11,11 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { createLspProcessManager } from "./lspProcessManager.js";
 import type { LspProcessManagerDeps } from "./lspProcessManager.js";
 import type { LspSpawnFn } from "./lspNodeAdapter.js";
+import type {
+  LspRuntimeStateLoadResult,
+  LspRuntimeStatePort,
+  LspRuntimeStateSnapshot,
+} from "./lspRuntimeStateStore.js";
 import { createLspFrameReader, writeLspFrame } from "./lspFrameCodec.js";
 import { createFakeLspProcess } from "./testing/fakeLspProcess.js";
 import type { FakeLspBehavior, FakeLspController } from "./testing/fakeLspProcess.js";
@@ -199,6 +204,30 @@ function makeDeps(
   };
 }
 
+function memoryRuntimeStatePort(
+  initial: LspRuntimeStateLoadResult = { state: "absent" },
+): LspRuntimeStatePort & { snapshot(): LspRuntimeStateSnapshot | undefined } {
+  let loaded = initial;
+  let snapshot: LspRuntimeStateSnapshot | undefined =
+    initial.state === "ready" ? initial.snapshot : undefined;
+  return {
+    load: (): LspRuntimeStateLoadResult => loaded,
+    save: (next): void => {
+      snapshot = next;
+      loaded = { state: "ready", snapshot: next };
+    },
+    snapshot: (): LspRuntimeStateSnapshot | undefined => snapshot,
+  };
+}
+
+function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
+  let settle = (): void => undefined;
+  const promise = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  return { promise, resolve: settle };
+}
+
 describe("createLspProcessManager", () => {
   it("uses the prepared executable and arguments and cleans generation resources on dispose", async () => {
     const controller = createFakeLspProcess();
@@ -217,6 +246,8 @@ describe("createLspProcessManager", () => {
         cleanup,
       }),
     });
+    // The optional beforeSpawn seam must not make the ordinary path asynchronous.
+    expect(received).toBeDefined();
     await settle();
 
     expect(received).toEqual({
@@ -225,6 +256,127 @@ describe("createLspProcessManager", () => {
     });
     await manager.dispose();
     expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("acquires the durable lease before awaiting beforeSpawn and spawns only after success", async () => {
+    const gate = deferred();
+    const runtimeState = memoryRuntimeStatePort();
+    const cleanup = vi.fn();
+    const harness = fakeSpawnHarness(["normal"]);
+    const manager = createLspProcessManager({
+      ...makeDeps(harness.spawn, makeConfig()),
+      runtimeState,
+      prepareSpawn: (input) => ({
+        ...input,
+        beforeSpawn: (): Promise<void> => gate.promise,
+        cleanup,
+      }),
+    });
+
+    expect(harness.spawnCount()).toBe(0);
+    expect(runtimeState.snapshot()).toMatchObject({ generation: 1, leaseState: "active" });
+    expect(cleanup).not.toHaveBeenCalled();
+
+    gate.resolve();
+    await settle();
+
+    expect(harness.spawnCount()).toBe(1);
+    expect(manager.getLspProcessStatus()).toBe("READY");
+    await manager.dispose();
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("releases the lease and cleanup once when beforeSpawn fails without spawning", async () => {
+    const runtimeState = memoryRuntimeStatePort();
+    const cleanup = vi.fn();
+    const harness = fakeSpawnHarness(["normal"]);
+    const manager = createLspProcessManager({
+      ...makeDeps(harness.spawn, makeConfig()),
+      runtimeState,
+      prepareSpawn: (input) => ({
+        ...input,
+        beforeSpawn: (): Promise<void> => Promise.reject(new Error("probe failed")),
+        cleanup,
+      }),
+    });
+
+    await settle();
+
+    expect(harness.spawnCount()).toBe(0);
+    expect(manager.getLspProcessStatus()).toBe("SPAWN_FAILED");
+    expect(runtimeState.snapshot()).toMatchObject({ generation: 1, leaseState: "released" });
+    expect(cleanup).toHaveBeenCalledOnce();
+    await manager.dispose();
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("aborts and awaits a pending beforeSpawn so late success cannot spawn", async () => {
+    const gate = deferred();
+    const cleanup = vi.fn();
+    let probeSignal: AbortSignal | undefined;
+    const harness = fakeSpawnHarness(["normal"]);
+    const manager = createLspProcessManager({
+      ...makeDeps(harness.spawn, makeConfig()),
+      prepareSpawn: (input) => ({
+        ...input,
+        beforeSpawn: (signal): Promise<void> => {
+          probeSignal = signal;
+          return gate.promise;
+        },
+        cleanup,
+      }),
+    });
+    await settle();
+
+    let disposed = false;
+    const disposal = manager.dispose().then(() => {
+      disposed = true;
+    });
+    await settle();
+
+    expect(probeSignal?.aborted).toBe(true);
+    expect(disposed).toBe(false);
+    expect(harness.spawnCount()).toBe(0);
+    expect(cleanup).not.toHaveBeenCalled();
+
+    gate.resolve();
+    await disposal;
+
+    expect(harness.spawnCount()).toBe(0);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(manager.getLspProcessStatus()).toBe("DISPOSED");
+  });
+
+  it("restores a pending probe lease as quarantine in a second supervisor", async () => {
+    const gate = deferred();
+    const runtimeState = memoryRuntimeStatePort();
+    const firstSpawn = vi.fn<LspSpawnFn>();
+    const first = createLspProcessManager({
+      ...makeDeps(firstSpawn, makeConfig()),
+      runtimeState,
+      prepareSpawn: (input) => ({
+        ...input,
+        beforeSpawn: (): Promise<void> => gate.promise,
+      }),
+    });
+    await settle();
+    expect(runtimeState.snapshot()).toMatchObject({ leaseState: "active" });
+
+    const replacementSpawn = vi.fn<LspSpawnFn>();
+    const replacement = createLspProcessManager({
+      ...makeDeps(replacementSpawn, makeConfig()),
+      runtimeState,
+    });
+
+    expect(replacement.getLspProcessStatus()).toBe("CRASHED");
+    expect(replacement.hasRetainedProcessOwnership()).toBe(true);
+    expect(replacementSpawn).not.toHaveBeenCalled();
+
+    const disposal = first.dispose();
+    gate.resolve();
+    await disposal;
+    expect(firstSpawn).not.toHaveBeenCalled();
+    await replacement.dispose();
   });
 
   it("kills the process and fails closed when its runtime-state budget is exceeded", async () => {
@@ -329,10 +481,38 @@ describe("createLspProcessManager", () => {
     await manager.dispose();
   });
 
-  it("continues lifecycle teardown when one prepared resource cleanup throws", async () => {
+  it("retains generation resources until exit and tree containment are both confirmed", async () => {
+    const cleanup = vi.fn();
+    const controller = createFakeLspProcess({
+      behavior: "unresponsive",
+      killConfirmsExit: false,
+    });
+    const manager = createLspProcessManager({
+      ...makeDeps(() => controller.handle, makeConfig({ shutdownTimeoutMs: 5 })),
+      prepareSpawn: (input) => ({ ...input, cleanup }),
+    });
+    await settle();
+
+    await manager.dispose();
+
+    expect(controller.killed()).toEqual(["SIGKILL"]);
+    expect(controller.exitEmitted()).toBe(false);
+    expect(manager.hasRetainedProcessOwnership()).toBe(true);
+    expect(cleanup).not.toHaveBeenCalled();
+
+    controller.confirmExit();
+    await settle();
+
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(manager.hasRetainedProcessOwnership()).toBe(false);
+  });
+
+  it("retains and retries a prepared resource cleanup that initially throws", async () => {
     const controller = createFakeLspProcess();
+    let cleanupAttempts = 0;
     const cleanup = vi.fn((): void => {
-      throw new Error("cleanup sentinel");
+      cleanupAttempts += 1;
+      if (cleanupAttempts === 1) throw new Error("cleanup sentinel");
     });
     const manager = createLspProcessManager({
       ...makeDeps(() => controller.handle, makeConfig()),
@@ -345,6 +525,11 @@ describe("createLspProcessManager", () => {
     await expect(manager.dispose()).resolves.toBeUndefined();
     expect(cleanup).toHaveBeenCalledOnce();
     expect(manager.getLspProcessStatus()).toBe("DISPOSED");
+    expect(manager.hasRetainedProcessOwnership()).toBe(true);
+
+    await expect(manager.dispose()).resolves.toBeUndefined();
+    expect(cleanup).toHaveBeenCalledTimes(2);
+    expect(manager.hasRetainedProcessOwnership()).toBe(false);
   });
 
   it("retains an empty negotiated snapshot when a server advertises no capabilities", async () => {
@@ -1042,7 +1227,7 @@ describe("createLspProcessManager", () => {
     await manager.dispose();
 
     expect(controller.exitEmitted()).toBe(true);
-    expect(controller.killed()).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(controller.killed()).toEqual(["SIGKILL"]);
     expect(events.filter((event) => event.status === "DISPOSED")).toContainEqual(
       expect.objectContaining({ childPid: 4242 }),
     );
@@ -1054,7 +1239,7 @@ describe("createLspProcessManager", () => {
     ).toBeDefined();
   });
 
-  it("does not wait the full grace window when the child exits promptly during dispose", async () => {
+  it("does not wait the full grace window and still proves tree teardown during dispose", async () => {
     // FIX 2: a well-behaved server answers `shutdown` (so requestGracefulShutdown returns fast) and
     // exits on `exit`. escalateKill's stop-predicate (`() => state.exited`) must observe the exit set
     // BEFORE the disposed early-return in supervisorOnCrash and resolve WITHOUT the SIGKILL fallback,
@@ -1074,10 +1259,9 @@ describe("createLspProcessManager", () => {
     expect(manager.getLspProcessStatus()).toBe("DISPOSED");
     // Resolved well before the 5 s grace window — proves escalateKill saw the prompt exit (FIX 2).
     expect(elapsedMs).toBeLessThan(2_000);
-    // Exit was observed while graceful shutdown was in flight. Re-reading the generation-owned
-    // handle after that await must skip escalation entirely — even SIGTERM against this raw pid is
-    // already too late and could target a reused Windows pid.
-    expect(controllers[0]?.killed()).toEqual([]);
+    // Protocol shutdown is followed immediately by a whole-tree SIGKILL while the generation-owned
+    // handle is still live; cleanup never relies on the immediate root's graceful exit alone.
+    expect(controllers[0]?.killed()).toEqual(["SIGKILL"]);
   });
 
   it("throws DISPOSED for calls made after dispose", async () => {
@@ -1368,5 +1552,144 @@ describe("createLspProcessManager", () => {
 
     expect(manager.getLspProcessStatus()).toBe("READY");
     await manager.dispose();
+  });
+
+  it("persists an identity-safe active lease before spawn and releases it only after proven teardown", async () => {
+    const port = memoryRuntimeStatePort();
+    const controller = createFakeLspProcess();
+    let snapshotAtSpawn: LspRuntimeStateSnapshot | undefined;
+    const manager = createLspProcessManager({
+      ...makeDeps(() => {
+        snapshotAtSpawn = port.snapshot();
+        return controller.handle;
+      }, makeConfig()),
+      runtimeState: port,
+    });
+    await settle();
+
+    expect(snapshotAtSpawn).toMatchObject({
+      generation: 1,
+      leaseState: "active",
+      leaseReason: "process-live",
+    });
+    await manager.dispose();
+    expect(port.snapshot()).toMatchObject({ generation: 1, leaseState: "released" });
+  });
+
+  it("restores an active lease as a durable quarantine without spawning a replacement", () => {
+    const port = memoryRuntimeStatePort({
+      state: "ready",
+      snapshot: {
+        generation: 3,
+        leaseState: "active",
+        leaseReason: "tree-unconfirmed",
+        crashTimestampsMs: [100],
+        restartCount: 1,
+        updatedAtMs: 200,
+      },
+    });
+    const spawn = vi.fn<LspSpawnFn>();
+    const manager = createLspProcessManager({
+      ...makeDeps(spawn, makeConfig()),
+      runtimeState: port,
+    });
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(manager.getChildGeneration()).toBe(3);
+    expect(manager.getLspProcessStatus()).toBe("CRASHED");
+    expect(manager.hasRetainedProcessOwnership()).toBe(true);
+  });
+
+  it("restores a saturated restart window and does not spend a replacement spawn", () => {
+    const port = memoryRuntimeStatePort({
+      state: "ready",
+      snapshot: {
+        generation: 2,
+        leaseState: "released",
+        crashTimestampsMs: [900, 950],
+        restartCount: 1,
+        updatedAtMs: 950,
+      },
+    });
+    const spawn = vi.fn<LspSpawnFn>();
+    const manager = createLspProcessManager({
+      ...makeDeps(spawn, makeConfig({ maxRestartsInWindow: 1, restartWindowMs: 1_000 })),
+      now: () => 1_000,
+      runtimeState: port,
+    });
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(manager.getLspProcessStatus()).toBe("RESTART_THROTTLED");
+  });
+
+  it("restarts an unsolicited root exit only when an OS-owned lifetime boundary proves containment", async () => {
+    const port = memoryRuntimeStatePort();
+    const controllers: FakeLspController[] = [];
+    const spawn: LspSpawnFn = () => {
+      const controller = createFakeLspProcess({ treeLifetimeBoundary: "os-owned" });
+      controllers.push(controller);
+      return controller.handle;
+    };
+    const manager = createLspProcessManager({
+      ...makeDeps(spawn, makeConfig()),
+      runtimeState: port,
+    });
+    await settle();
+
+    controllers[0]?.crash();
+    await settle();
+
+    expect(controllers).toHaveLength(2);
+    expect(manager.getLspProcessStatus()).toBe("READY");
+    expect(port.snapshot()).toMatchObject({ generation: 2, leaseState: "active" });
+    await manager.dispose();
+  });
+
+  it("persists an unsolicited uncontained root exit and blocks a post-restart manager", async () => {
+    const port = memoryRuntimeStatePort();
+    const firstController = createFakeLspProcess();
+    const first = createLspProcessManager({
+      ...makeDeps(() => firstController.handle, makeConfig()),
+      runtimeState: port,
+    });
+    await settle();
+
+    firstController.crash();
+    await settle();
+    expect(first.getLspProcessStatus()).toBe("CRASHED");
+    expect(first.hasRetainedProcessOwnership()).toBe(true);
+    expect(port.snapshot()).toMatchObject({
+      generation: 1,
+      leaseState: "active",
+      leaseReason: "tree-unconfirmed",
+    });
+
+    const replacementSpawn = vi.fn<LspSpawnFn>();
+    const afterRestart = createLspProcessManager({
+      ...makeDeps(replacementSpawn, makeConfig()),
+      runtimeState: port,
+    });
+    expect(replacementSpawn).not.toHaveBeenCalled();
+    expect(afterRestart.hasRetainedProcessOwnership()).toBe(true);
+  });
+
+  it("retains adapter HOME/runtime cleanup when disposal lacks descendant proof", async () => {
+    const releaseRuntimeResources = vi.fn();
+    const controller = createFakeLspProcess({
+      killConfirmsExit: false,
+      killResult: { treeContainment: "unconfirmed", windowsTreeKill: "failed" },
+      releaseRuntimeResources,
+    });
+    const manager = createLspProcessManager(
+      makeDeps(() => controller.handle, makeConfig({ shutdownTimeoutMs: 5 })),
+    );
+    await settle();
+
+    await manager.dispose();
+    controller.confirmExit();
+    await settle();
+
+    expect(manager.hasRetainedProcessOwnership()).toBe(true);
+    expect(releaseRuntimeResources).not.toHaveBeenCalled();
   });
 });

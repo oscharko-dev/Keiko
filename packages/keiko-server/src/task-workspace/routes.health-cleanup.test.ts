@@ -24,6 +24,12 @@ import { createRunRegistry } from "../runs.js";
 import { UI_HOST } from "../server.js";
 import { runMigrations } from "../store/schema.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "../observability/index.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
 import { buildActiveWorkspacePointerStoreOverDatabase } from "./active-store.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";
@@ -165,6 +171,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await closeServer();
+  resetServerLogger();
   db.close();
   await rm(staticRoot, { recursive: true, force: true });
   rmSync(repoRoot, { recursive: true, force: true });
@@ -238,12 +245,27 @@ describe("POST /api/task-workspaces/:workspaceId/cleanup", () => {
 
   it("rejects an invalid mode (400)", async () => {
     const instance = await provision("t1");
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    const mode = "Patient Jane private mode";
+    const correlationId = "route-cleanup-invalid-1";
     const res = await fetch(`${baseUrl()}/api/task-workspaces/${instance.workspaceId}/cleanup`, {
       method: "POST",
-      headers: csrfHeaders(),
-      body: JSON.stringify({ requestedBy: "u", operatorApproved: true, mode: "nope" }),
+      headers: {
+        ...csrfHeaders(),
+        "X-Keiko-Correlation-Id": correlationId,
+      },
+      body: JSON.stringify({ requestedBy: "u", operatorApproved: true, mode }),
     });
     expect(res.status).toBe(400);
+    const events = activityLog.events.filter((event) => event.op === "task-workspace.lifecycle");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      correlationId,
+      errorKind: "INVALID_REQUEST",
+      extra: { operation: "cleanup" },
+    });
+    expect(activityLog.lines().join("\n")).not.toContain(mode);
   });
 
   it("returns 503 when cleanup is not configured", async () => {
@@ -274,14 +296,29 @@ describe("POST /api/task-workspaces/cleanup/orphans", () => {
   });
 
   it("rejects a malformed present optional root instead of sweeping every repository", async () => {
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    const root = `Patient Jane private root${String.fromCodePoint(0x200b)}`;
+    const correlationId = "route-orphan-cleanup-invalid-1";
     const res = await fetch(`${baseUrl()}/api/task-workspaces/cleanup/orphans`, {
       method: "POST",
-      headers: csrfHeaders(),
-      body: JSON.stringify({ root: 42, requestedBy: "u", operatorApproved: true }),
+      headers: {
+        ...csrfHeaders(),
+        "X-Keiko-Correlation-Id": correlationId,
+      },
+      body: JSON.stringify({ root, requestedBy: "u", operatorApproved: true }),
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("INVALID_REQUEST");
+    const events = activityLog.events.filter((event) => event.op === "task-workspace.lifecycle");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      correlationId,
+      errorKind: "INVALID_REQUEST",
+      extra: { operation: "cleanup" },
+    });
+    expect(activityLog.lines().join("\n")).not.toContain(root);
   });
 
   it("returns 503 when cleanup is not configured", async () => {

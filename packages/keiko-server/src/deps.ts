@@ -57,6 +57,7 @@ import type {
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimeEvidenceClass,
   CodingWorkbenchRuntimeUnavailableReason,
+  CommandTerminationEvidence,
   DebugDeploymentPolicy,
   DebugProductSupport,
   DebugProvisioning,
@@ -145,11 +146,7 @@ import {
   createContainerRunnerManager,
   type ContainerRunnerManager,
 } from "./runtime/containerRunner.js";
-import {
-  createBrowserSessionManager,
-  type BrowserSessionManager,
-  type CommandTerminationEvidence,
-} from "@oscharko-dev/keiko-tools";
+import { createBrowserSessionManager, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
 import { type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { CapturePolicyOptions } from "@oscharko-dev/keiko-memory-capture";
 import type {
@@ -186,10 +183,23 @@ import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal
 // surrounding workspace events of the same operation carried the real one — §8's "every line of one
 // logical operation carries that operation's correlationId", broken by construction, in exactly the
 // lanes whose timeline this evidence exists to complete (PR #3355 review, P2).
-function logWorktreeTermination(correlationId: string) {
+function logWorktreeTermination(
+  correlationId: string,
+): (evidence: CommandTerminationEvidence) => void {
   return (evidence: CommandTerminationEvidence): void => {
     logCommandTermination(processServerLogSink(), correlationId, evidence);
   };
+}
+
+function createGitWorktreeAdapterFactory(
+  processEnv: NodeJS.ProcessEnv | undefined,
+): WorkspaceProvisioningServiceDeps["createAdapter"] {
+  return (workspace, correlationId) =>
+    createNodeGitWorktreeAdapter({
+      workspace,
+      processEnv,
+      onTerminated: logWorktreeTermination(correlationId),
+    });
 }
 
 import {
@@ -215,6 +225,7 @@ import type {
   WorkspaceHealthService,
   WorkspaceLifecycleService,
   WorkspaceProvisioningService,
+  WorkspaceProvisioningServiceDeps,
   WorkspaceReconciliationService,
   WorkspaceRepairService,
 } from "./task-workspace/types.js";
@@ -2092,12 +2103,7 @@ function buildWorkspaceProvisioning(
     store: instanceStore,
     evidenceStore: args.evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
-    createAdapter: (workspace, correlationId) =>
-      createNodeGitWorktreeAdapter({
-        workspace,
-        processEnv: options.env,
-        onTerminated: logWorktreeTermination(correlationId),
-      }),
+    createAdapter: createGitWorktreeAdapterFactory(options.env),
     redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,
@@ -2172,12 +2178,7 @@ function buildWorkspaceReconciliation(
     activePointerStore,
     evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
-    createAdapter: (workspace, correlationId) =>
-      createNodeGitWorktreeAdapter({
-        workspace,
-        processEnv: options.env,
-        onTerminated: logWorktreeTermination(correlationId),
-      }),
+    createAdapter: createGitWorktreeAdapterFactory(options.env),
     redactString,
     now: () => Date.now(),
     newId: randomUUID,
@@ -2213,12 +2214,7 @@ function buildWorkspaceRepair(args: BuildWorkspaceRepairArgs): WorkspaceRepairSe
     evidenceStore: args.evidenceStore,
     provisioning: args.provisioning,
     managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
-    createAdapter: (workspace, correlationId) =>
-      createNodeGitWorktreeAdapter({
-        workspace,
-        processEnv: args.options.env,
-        onTerminated: logWorktreeTermination(correlationId),
-      }),
+    createAdapter: createGitWorktreeAdapterFactory(args.options.env),
     redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,
@@ -2246,12 +2242,7 @@ function buildWorkspaceHealth(
     activePointerStore,
     evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
-    createAdapter: (workspace, correlationId) =>
-      createNodeGitWorktreeAdapter({
-        workspace,
-        processEnv: options.env,
-        onTerminated: logWorktreeTermination(correlationId),
-      }),
+    createAdapter: createGitWorktreeAdapterFactory(options.env),
     redactString,
     now: () => Date.now(),
     newId: randomUUID,
@@ -2283,12 +2274,7 @@ function buildWorkspaceCleanup(
     activePointerStore: args.activePointerStore,
     evidenceStore: args.evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
-    createAdapter: (workspace, correlationId) =>
-      createNodeGitWorktreeAdapter({
-        workspace,
-        processEnv: args.options.env,
-        onTerminated: logWorktreeTermination(correlationId),
-      }),
+    createAdapter: createGitWorktreeAdapterFactory(args.options.env),
     redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,

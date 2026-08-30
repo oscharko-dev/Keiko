@@ -1,4 +1,3 @@
-import { buildSandboxEnv } from "@oscharko-dev/keiko-tools";
 import {
   chmodSync,
   existsSync,
@@ -14,20 +13,22 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ManagedLspJavaConfiguration, WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import type { BackendAvailability } from "@oscharko-dev/keiko-sandbox";
+import {
+  CommandCancelledError,
+  CommandDeniedError,
+  CommandTimeoutError,
+  type CommandResult,
+  type HomeProvider,
+  type SpawnFn,
+} from "@oscharko-dev/keiko-tools";
+import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 
 import type { LspSpawnPreparationInput } from "../lspProcessManager.js";
-import {
-  JAVA_PROBE_ENV_ALLOWLIST,
-  JAVA_PROVIDER_SPEC,
-  JavaVersionProbeWrapperError,
-  buildJavaVersionProbeInvocation,
-  javaProtocolConfiguration,
-  prepareJavaSpawn,
-} from "./javaProvider.js";
+import { JAVA_PROVIDER_SPEC, javaProtocolConfiguration, prepareJavaSpawn } from "./javaProvider.js";
 import { UNKNOWN_CORRELATION_ID } from "../../../correlation.js";
 import { redactLogFields } from "../../../observability/log-redaction.js";
 import type { ServerLogEvent } from "../../../observability/server-log.js";
@@ -56,9 +57,6 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
   rmSync(runtimeStateRoot, { recursive: true, force: true });
-  // The activity-log evidence tests below install a capturing ServerLogger via the process-wide
-  // test seam (setServerLogger); resetting unconditionally is a harmless no-op for every other
-  // test in this file and prevents leaking a captured sink into an unrelated later suite.
   resetServerLogger();
 });
 
@@ -117,6 +115,108 @@ function spawnInput(overrides: Partial<LspSpawnPreparationInput> = {}): LspSpawn
   };
 }
 
+function captureLog(): ServerLogEvent[] {
+  const events: ServerLogEvent[] = [];
+  setServerLogger(
+    createServerLogger({ sink: { write: (event) => events.push(event) }, level: "debug" }),
+  );
+  return events;
+}
+
+function probeResult(overrides: Partial<CommandResult> = {}): CommandResult {
+  return {
+    command: "java",
+    args: ["-version"],
+    exitCode: 0,
+    signal: null,
+    stdout: "",
+    stderr: 'openjdk version "21.0.1" 2024-01-16',
+    durationMs: 1,
+    timedOut: false,
+    truncated: false,
+    attestation: {
+      backend: "bubblewrap",
+      networkEnforced: true,
+      filesystemEnforced: false,
+      platform: "linux",
+    },
+    ...overrides,
+  };
+}
+
+function probeSecurity(overrides: JavaProbeOverrides = {}): JavaProbeOverrides {
+  return {
+    availability: NATIVE,
+    platform: "linux",
+    resolveExecutable: () => "/usr/bin/bwrap",
+    resolveJava: () => "/opt/jdk/bin/java",
+    validateLayout: () => true,
+    ...overrides,
+  };
+}
+
+type JavaProbeOverrides = NonNullable<Parameters<typeof prepareJavaSpawn>[1]>;
+
+async function executeProbe(
+  security: JavaProbeOverrides,
+  input: LspSpawnPreparationInput = spawnInput(),
+): Promise<void> {
+  const prepared = prepareJavaSpawn(input, security);
+  try {
+    const beforeSpawn = prepared.beforeSpawn;
+    if (beforeSpawn === undefined) throw new TypeError("Java beforeSpawn probe missing");
+    await beforeSpawn(new AbortController().signal);
+  } finally {
+    prepared.cleanup?.();
+  }
+}
+
+interface GovernedProbeExpectation {
+  readonly spawned:
+    | {
+        readonly command: string;
+        readonly args: readonly string[];
+        readonly env: Record<string, string>;
+      }
+    | undefined;
+  readonly privatePath: string;
+  readonly javaPath: string;
+  readonly madeHomes: readonly string[];
+  readonly cleanedHomes: readonly string[];
+  readonly events: readonly ServerLogEvent[];
+}
+
+function expectGovernedProbeEvidence(input: GovernedProbeExpectation): void {
+  const { spawned, privatePath, javaPath, madeHomes, cleanedHomes, events } = input;
+  if (spawned === undefined) throw new Error("Expected the governed Java probe to spawn");
+  expect(spawned.command).toBe("/usr/bin/bwrap");
+  expect(spawned.args).toContain(javaPath);
+  expect(spawned.env).toMatchObject({
+    PATH: privatePath,
+    HOME: madeHomes[0],
+    USERPROFILE: madeHomes[0],
+  });
+  expect(spawned.env).not.toHaveProperty("HOSTILE_JAVA_PROBE_SECRET");
+  expect(cleanedHomes).toEqual(madeHomes);
+
+  const validation = events.find((event) => event.op === "lsp.java.version-probe.completed");
+  if (validation === undefined) throw new Error("Expected Java probe activity evidence");
+  expect(validation).toMatchObject({
+    category: "diagnostic",
+    correlationId: UNKNOWN_CORRELATION_ID,
+    status: 0,
+    extra: {
+      executionBoundary: "governed-pre-spawn",
+      outcome: "supported",
+      platform: "linux",
+    },
+  });
+  expect(validation.errorKind).toBeUndefined();
+  expect(redactLogFields(validation.extra ?? {})).toEqual(validation.extra);
+  expect(JSON.stringify(validation)).not.toContain(javaPath);
+  expect(JSON.stringify(validation)).not.toContain("must-not-reach-probe");
+}
+
 describe("managed Eclipse JDT LS provider", () => {
   it("advertises the negotiated analysis surface under enforced no-egress policy", () => {
     expect(JAVA_PROVIDER_SPEC).toMatchObject({
@@ -130,21 +230,21 @@ describe("managed Eclipse JDT LS provider", () => {
     expect(JAVA_PROVIDER_SPEC.operations).toHaveLength(15);
   });
 
-  it("documents why python3 is an approved descendant of the java/jdtls launcher", () => {
+  it("keeps JDK validation inside the governed no-egress launcher boundary", () => {
     const source = readFileSync(new URL("./javaProvider.ts", import.meta.url), "utf8");
-    const specSource = source.slice(0, source.indexOf("export const JAVA_PROVIDER_SPEC"));
-    expect(specSource).toMatch(/python3.+jdtls`? launcher/is);
-    expect(specSource).toMatch(/general-purpose[\s\S]*?script-execution grant/i);
+    expect(source).not.toContain("spawnSync");
+    expect(source).toContain('"--validate-java-version"');
+    expect(JAVA_PROVIDER_SPEC.requiredExecutables).toContain("python3");
   });
 
-  it("surfaces the python3 descendant-executable rationale in the operator troubleshooting doc", () => {
+  it("documents the in-boundary launcher probe and honest Windows posture", () => {
     const docUrl = new URL(
       "../../../../../../docs/troubleshooting/managed-java-language-provider.md",
       import.meta.url,
     );
     const doc = readFileSync(docUrl, "utf8");
-    expect(doc).toMatch(/python3.+jdtls`? launcher/is);
-    expect(doc).toMatch(/general-purpose[\s\S]*?script-execution grant/i);
+    expect(doc).toMatch(/validate-java-version/is);
+    expect(doc).toMatch(/Windows.+unavailable/is);
   });
 
   it("projects every active JDT import and command default into a closed safe profile", () => {
@@ -185,7 +285,6 @@ describe("managed Eclipse JDT LS provider", () => {
       resolveExecutable: () => "/usr/bin/bwrap",
       resolveJava: () => javaPath,
       validateLayout: () => true,
-      validateJavaVersion: () => true,
     });
     const configurationIndex = prepared.args.indexOf("-configuration");
     const dataIndex = prepared.args.indexOf("-data");
@@ -203,6 +302,7 @@ describe("managed Eclipse JDT LS provider", () => {
     expect(statSync(configurationPath).mode & 0o777).toBe(0o700);
     expect(statSync(dataPath).mode & 0o777).toBe(0o700);
     expect(prepared.resourceBudgetSatisfied?.()).toBe(true);
+    expect(prepared.beforeSpawn).toBeTypeOf("function");
     writeFileSync(join(configurationPath, "config-state"), "state", "utf8");
     writeFileSync(join(dataPath, "workspace-state"), "state", "utf8");
     prepared.cleanup?.();
@@ -233,7 +333,6 @@ describe("managed Eclipse JDT LS provider", () => {
         resolveExecutable: () => "/usr/bin/bwrap",
         resolveJava: () => "/opt/jdk-21/bin/java",
         validateLayout: () => true,
-        validateJavaVersion: () => true,
       },
     );
     try {
@@ -255,7 +354,6 @@ describe("managed Eclipse JDT LS provider", () => {
       resolveExecutable: () => "/usr/bin/bwrap",
       resolveJava: () => "/opt/jdk-21/bin/java",
       validateLayout: () => true,
-      validateJavaVersion: () => true,
     });
     const second = prepareJavaSpawn(spawnInput(), {
       availability: NATIVE,
@@ -263,7 +361,6 @@ describe("managed Eclipse JDT LS provider", () => {
       resolveExecutable: () => "/usr/bin/bwrap",
       resolveJava: () => "/opt/jdk-21/bin/java",
       validateLayout: () => true,
-      validateJavaVersion: () => true,
     });
     try {
       const firstPath = first.args[first.args.indexOf("-configuration") + 1] ?? "";
@@ -285,7 +382,6 @@ describe("managed Eclipse JDT LS provider", () => {
         resolveExecutable: () => "/usr/bin/bwrap",
         resolveJava: () => "/opt/jdk-21/bin/java",
         validateLayout: () => true,
-        validateJavaVersion: () => true,
       }),
     ).toThrow("private runtime-state root is unavailable");
   });
@@ -300,7 +396,6 @@ describe("managed Eclipse JDT LS provider", () => {
         resolveExecutable: () => "/usr/bin/bwrap",
         resolveJava: () => "/opt/jdk-21/bin/java",
         validateLayout: () => true,
-        validateJavaVersion: () => true,
       }),
     ).toThrow("overlaps the workspace");
     expect(readdirSync(workspaceState)).toEqual([]);
@@ -316,7 +411,6 @@ describe("managed Eclipse JDT LS provider", () => {
         resolveExecutable: () => "/usr/bin/bwrap",
         resolveJava: () => "/opt/jdk-21/bin/java",
         validateLayout: () => true,
-        validateJavaVersion: () => true,
       }),
     ).toThrow("overlaps the workspace");
   });
@@ -333,7 +427,6 @@ describe("managed Eclipse JDT LS provider", () => {
           resolveExecutable: () => "/usr/bin/bwrap",
           resolveJava: () => "/opt/jdk-21/bin/java",
           validateLayout: () => true,
-          validateJavaVersion: () => true,
         }),
       ).toThrow();
       expect(readFileSync(path, "utf8")).toBe("hostile");
@@ -350,13 +443,33 @@ describe("managed Eclipse JDT LS provider", () => {
         resolveExecutable: () => "/usr/bin/bwrap",
         resolveJava: () => "/opt/jdk-21/bin/java",
         validateLayout: () => true,
-        validateJavaVersion: () => true,
       }),
     ).toThrow();
     expect(statSync(settings).isDirectory()).toBe(true);
   });
 
+  it("fails closed when a workspace symlink could hide project-import metadata", () => {
+    const linkedProject = realpathSync(mkdtempSync(join(tmpdir(), "keiko-java-linked-project-")));
+    try {
+      writeFileSync(join(linkedProject, "pom.xml"), "<project />", "utf8");
+      symlinkSync(linkedProject, join(root, "linked-project"), "dir");
+
+      expect(() =>
+        prepareJavaSpawn(spawnInput(), {
+          availability: NATIVE,
+          platform: "linux",
+          resolveExecutable: () => "/usr/bin/bwrap",
+          resolveJava: () => "/opt/jdk-21/bin/java",
+          validateLayout: () => true,
+        }),
+      ).toThrow("project import metadata");
+    } finally {
+      rmSync(linkedProject, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed when no native egress boundary is available", () => {
+    const events = captureLog();
     expect(() =>
       prepareJavaSpawn(spawnInput(), {
         availability: { ...NATIVE, bubblewrap: false },
@@ -364,9 +477,16 @@ describe("managed Eclipse JDT LS provider", () => {
         resolveExecutable: () => "/usr/bin/bwrap",
         resolveJava: () => "/opt/jdk-21/bin/java",
         validateLayout: () => true,
-        validateJavaVersion: () => true,
       }),
     ).toThrow();
+    expect(events.find((event) => event.op === "lsp.java.version-probe.completed")).toMatchObject({
+      errorKind: "Error",
+      extra: {
+        executionBoundary: "governed-pre-spawn",
+        outcome: "invocation-failed",
+        platform: "linux",
+      },
+    });
   });
 
   it("fails closed when the provisioned JDT LS layout is not the pinned release", () => {
@@ -382,341 +502,234 @@ describe("managed Eclipse JDT LS provider", () => {
     expect(readdirSync(runtimeStateRoot)).toEqual([]);
   });
 
-  it("fails closed when the resolved JDK does not meet the minimum supported version", () => {
-    expect(() =>
-      prepareJavaSpawn(spawnInput(), {
-        availability: NATIVE,
-        platform: "linux",
-        resolveExecutable: () => "/usr/bin/bwrap",
-        resolveJava: () => "/opt/jdk-17/bin/java",
-        validateLayout: () => true,
-        validateJavaVersion: () => false,
-      }),
-    ).toThrow("minimum supported JDK version");
-  });
-
-  it("bounds the real java -version probe with a timeout instead of stalling indefinitely", () => {
-    const hungJava = join(root, "java");
-    writeFileSync(hungJava, "#!/bin/sh\nsleep 30\n", "utf8");
-    chmodSync(hungJava, 0o755);
-    const startedAt = Date.now();
-
-    expect(() =>
-      prepareJavaSpawn(spawnInput(), {
-        availability: NATIVE,
-        platform: "linux",
-        resolveExecutable: () => "/usr/bin/bwrap",
-        resolveJava: () => hungJava,
-        validateLayout: () => true,
-        javaVersionProbeTimeoutMs: 25,
-        // validateJavaVersion intentionally not overridden: exercises the real
-        // defaultJavaVersionValid probe with a shortened test-only bound. Production still uses
-        // the fixed 5 s maximum.
-      }),
-    ).toThrow("minimum supported JDK version");
-
-    // The short injected bound keeps this production-path proof deterministic under Vitest's own
-    // 5 s test deadline while still proving the 30 s fixture is terminated.
-    expect(Date.now() - startedAt).toBeLessThan(2_000);
-  });
-
-  it("accepts a real java executable whose reported version meets the minimum", () => {
-    const realJava = join(root, "java");
+  it("does not execute the resolved Java runtime before the isolated launcher starts", () => {
+    const resolvedJava = join(root, "java");
+    const hostExecutionMarker = join(root, "host-java-executed");
     writeFileSync(
-      realJava,
-      "#!/bin/sh\necho 'openjdk version \"21.0.1\" 2024-01-16' 1>&2\nexit 0\n",
+      resolvedJava,
+      `#!/bin/sh\n/usr/bin/touch "${hostExecutionMarker}"\necho 'openjdk version "21.0.1" 2024-01-16' 1>&2\nexit 0\n`,
       "utf8",
     );
-    chmodSync(realJava, 0o755);
+    chmodSync(resolvedJava, 0o755);
 
-    expect(() =>
-      prepareJavaSpawn(spawnInput(), {
-        availability: NATIVE,
-        platform: "linux",
-        resolveExecutable: () => "/usr/bin/bwrap",
-        resolveJava: () => realJava,
-        validateLayout: () => true,
-        // validateJavaVersion intentionally not overridden: exercises the real
-        // defaultJavaVersionValid probe's success path parsing a real -version reply.
-      }),
-    ).not.toThrow();
+    const prepared = prepareJavaSpawn(spawnInput(), {
+      availability: NATIVE,
+      platform: "linux",
+      resolveExecutable: () => "/usr/bin/bwrap",
+      resolveJava: () => resolvedJava,
+      validateLayout: () => true,
+    });
+
+    expect(existsSync(hostExecutionMarker)).toBe(false);
+    expect(prepared.args).toContain(`--java-executable=${resolvedJava}`);
+    expect(prepared.args.indexOf("--validate-java-version")).toBeGreaterThan(
+      prepared.args.indexOf("--unshare-net"),
+    );
+    prepared.cleanup?.();
   });
-});
 
-// A post-spawnSync raw pid has no stable identity: once the wrapper exits, Windows may already have
-// reused it. Command-script probes are therefore refused before spawn; native images are unchanged.
-describe("buildJavaVersionProbeInvocation", () => {
-  it.each(["java.cmd", "java.BAT"])(
-    "refuses a resolved %s before cmd.exe resolution or spawn on win32",
-    (name) => {
-      expect(() =>
-        buildJavaVersionProbeInvocation(`${String.raw`C:\jdk\bin`}\\${name}`, {
-          platform: "win32",
-          // Deliberately hostile: wrapper refusal must happen before the SystemRoot resolver too.
-          env: { SystemRoot: String.raw`\\attacker\share` },
-        }),
-      ).toThrow(JavaVersionProbeWrapperError);
+  it("runs the real governed probe with exact resolution, copy-only env, and ephemeral HOME", async () => {
+    const events = captureLog();
+    const madeHomes: string[] = [];
+    const cleanedHomes: string[] = [];
+    const home: HomeProvider = {
+      make: () => {
+        const path = mkdtempSync(join(tmpdir(), "keiko-java-probe-home-"));
+        madeHomes.push(path);
+        return path;
+      },
+      cleanup: (path) => {
+        cleanedHomes.push(path);
+        rmSync(path, { recursive: true, force: true });
+      },
+    };
+    let spawned:
+      | {
+          readonly command: string;
+          readonly args: readonly string[];
+          readonly env: Record<string, string>;
+        }
+      | undefined;
+    const probeSpawn: SpawnFn = (command, args, options) => {
+      spawned = { command, args, env: options.env };
+      return nodeSpawnFn(
+        process.execPath,
+        ["-e", "process.stderr.write('openjdk version \"21.0.1\" 2024-01-16')"],
+        options,
+      );
+    };
+    const privatePath = "/operator-approved/private-path";
+    const javaPath = "/opt/jdk-21/bin/java";
+    await executeProbe(
+      probeSecurity({ probeSpawn, probeHome: home, resolveJava: () => javaPath }),
+      spawnInput({
+        env: { LANG: "C", PATH: privatePath },
+        processEnv: {
+          PATH: "/host/path",
+          HOSTILE_JAVA_PROBE_SECRET: "must-not-reach-probe",
+        },
+      }),
+    );
+
+    expectGovernedProbeEvidence({
+      spawned,
+      privatePath,
+      javaPath,
+      madeHomes,
+      cleanedHomes,
+      events,
+    });
+  });
+
+  it.each([
+    [
+      "JDK 17",
+      probeResult({ stderr: 'openjdk version "17.0.12"', stdout: "" }),
+      "unsupported-version",
+      "JAVA_VERSION_UNSUPPORTED",
+    ],
+    [
+      "malformed output",
+      probeResult({ stderr: "not a java version", stdout: "" }),
+      "malformed-output",
+      "JAVA_VERSION_MALFORMED_OUTPUT",
+    ],
+    [
+      "nonzero exit",
+      probeResult({ exitCode: 2, stderr: "failure", stdout: "" }),
+      "nonzero-exit",
+      "JAVA_VERSION_NONZERO_EXIT",
+    ],
+    [
+      "output cap",
+      probeResult({ exitCode: null, truncated: true, stderr: "[output truncated]" }),
+      "output-cap",
+      "JAVA_VERSION_OUTPUT_CAP",
+    ],
+  ] as const)(
+    "fails closed and logs the distinct %s probe outcome",
+    async (_name, result, outcome, errorKind) => {
+      const events = captureLog();
+      await expect(
+        executeProbe(probeSecurity({ runProbe: () => Promise.resolve(result) })),
+      ).rejects.toMatchObject({ code: errorKind });
+
+      const validation = events.find((event) => event.op === "lsp.java.version-probe.completed");
+      expect(validation).toMatchObject({
+        errorKind,
+        extra: { executionBoundary: "governed-pre-spawn", outcome, platform: "linux" },
+      });
+      expect(typeof validation?.durationMs).toBe("number");
+      expect(JSON.stringify(validation)).not.toContain(result.stderr);
     },
   );
 
-  it("passes a resolved java.exe through unchanged on win32", () => {
-    const invocation = buildJavaVersionProbeInvocation(String.raw`C:\jdk\bin\java.exe`, {
-      platform: "win32",
-      env: { SystemRoot: String.raw`C:\Windows` },
+  it.each([
+    ["timeout", new CommandTimeoutError("timed out", 5_000), "TOOL_COMMAND_TIMEOUT"],
+    ["spawn-error", Object.assign(new Error("missing"), { code: "ENOENT" }), "ENOENT"],
+    [
+      "invocation-failed",
+      new CommandDeniedError("isolation unavailable", "java"),
+      "TOOL_COMMAND_DENIED",
+    ],
+    ["cancelled", new CommandCancelledError("cancelled"), "TOOL_COMMAND_CANCELLED"],
+  ] as const)(
+    "logs the distinct %s rejection with errorKind",
+    async (outcome, error, errorKind) => {
+      const events = captureLog();
+      await expect(
+        executeProbe(
+          probeSecurity({
+            runProbe: () => Promise.reject(error),
+          }),
+        ),
+      ).rejects.toBe(error);
+
+      expect(events.find((event) => event.op === "lsp.java.version-probe.completed")).toMatchObject(
+        {
+          errorKind,
+          extra: { executionBoundary: "governed-pre-spawn", outcome, platform: "linux" },
+        },
+      );
+    },
+  );
+
+  it("pins the exact bounded runCommand probe contract and enforced attestation", async () => {
+    const runProbe = vi.fn<NonNullable<JavaProbeOverrides["runProbe"]>>((input, deps) => {
+      expect(input).toMatchObject({
+        command: "java",
+        args: ["-version"],
+        timeoutMs: 5_000,
+      });
+      expect(deps.policy).toMatchObject({
+        network: "none",
+        homeIsolation: "ephemeral",
+        maxOutputBytes: 16_384,
+      });
+      expect(deps.policy.envAllowlist).not.toContain("PATH");
+      expect(deps.commandRules).toEqual([
+        { executable: "java", requiredLeadingFlags: ["-version"] },
+      ]);
+      expect(deps.sandboxAvailability).toMatchObject({ docker: false, podman: false });
+      return Promise.resolve(probeResult());
     });
 
-    expect(invocation.command).toBe(String.raw`C:\jdk\bin\java.exe`);
-    expect(invocation.args).toEqual(["-version"]);
-    expect(invocation.windowsVerbatimArguments).toBe(false);
+    await executeProbe(probeSecurity({ runProbe }));
+    expect(runProbe).toHaveBeenCalledOnce();
+
+    await expect(
+      executeProbe(
+        probeSecurity({
+          runProbe: () =>
+            Promise.resolve(
+              probeResult({
+                attestation: {
+                  backend: "none",
+                  networkEnforced: false,
+                  filesystemEnforced: false,
+                  platform: "linux",
+                },
+              }),
+            ),
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "JAVA_VERSION_ISOLATION_UNAVAILABLE" });
   });
 
-  it("leaves a POSIX java executable unwrapped", () => {
-    const invocation = buildJavaVersionProbeInvocation("/opt/jdk-21/bin/java", {
-      platform: "linux",
-    });
+  it.each(["java.exe", "java.cmd", "java.bat"])(
+    "uniformly refuses Windows Java runtime %s when no compatible no-egress backend exists",
+    (name) => {
+      const events = captureLog();
+      const resolveJava = vi.fn(() => `${String.raw`C:\ProgramData\jdk\bin`}\\${name}`);
+      const resolveExecutable = vi.fn(() => String.raw`C:\Program Files\Docker\docker.exe`);
+      const validateLayout = vi.fn(() => true);
+      const runProbe = vi.fn<NonNullable<JavaProbeOverrides["runProbe"]>>();
 
-    expect(invocation.command).toBe("/opt/jdk-21/bin/java");
-    expect(invocation.args).toEqual(["-version"]);
-    expect(invocation.windowsVerbatimArguments).toBe(false);
-  });
-});
-
-// A PR reviewer finding shape (AGENTS.md §8 Rule 1): the win32 wrapper-engagement decision above
-// must leave activity-log evidence, exactly like lspNodeAdapter.ts's own `lsp.spawn.completed`.
-// defaultJavaVersionValid has no injected log port — it reaches processServerLogSink() directly —
-// so this test installs a capturing ServerLogger via the process-wide test seam
-// (setServerLogger/resetServerLogger) rather than a constructor-injected fake.
-describe("defaultJavaVersionValid — activity-log evidence (AGENTS.md §8 Rule 1)", () => {
-  function captureLog(): ServerLogEvent[] {
-    const events: ServerLogEvent[] = [];
-    setServerLogger(
-      createServerLogger({ sink: { write: (event) => events.push(event) }, level: "debug" }),
-    );
-    return events;
-  }
-
-  it("logs lsp.java.version-probe.completed with the wrapper-engagement decision and outcome", () => {
-    const events = captureLog();
-    const realJava = join(root, "java");
-    writeFileSync(
-      realJava,
-      "#!/bin/sh\necho 'openjdk version \"21.0.1\" 2024-01-16' 1>&2\nexit 0\n",
-      "utf8",
-    );
-    chmodSync(realJava, 0o755);
-
-    expect(() =>
-      prepareJavaSpawn(spawnInput(), {
-        availability: NATIVE,
-        platform: "linux",
-        resolveExecutable: () => "/usr/bin/bwrap",
-        resolveJava: () => realJava,
-        validateLayout: () => true,
-        // validateJavaVersion intentionally not overridden: exercises the real
-        // defaultJavaVersionValid probe and its logging end to end.
-      }),
-    ).not.toThrow();
-
-    const probed = events.find((event) => event.op === "lsp.java.version-probe.completed");
-    expect(probed).toBeDefined();
-    expect(probed?.category).toBe("diagnostic");
-    expect(probed?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
-    expect(typeof probed?.durationMs).toBe("number");
-    expect(probed?.status).toBe(0);
-    expect(probed?.errorKind).toBeUndefined();
-    const extra = probed?.extra ?? {};
-    // This test host is never win32: the hardened cmd.exe wrapper never engages, so the tree-kill
-    // defense in depth is never attempted and carries no field at all (asserted below via the exact
-    // key set — a fabricated "not-attempted" value on POSIX would be just as wrong as a missing one
-    // would be on win32).
-    expect(extra.windowsWrapperEngaged).toBe(false);
-    expect(extra.outcome).toBe("supported");
-    expect(extra.platform).toBe(process.platform);
-    // Body-free: never the resolved java path or the probe's stdout/stderr on the evidence line.
-    expect(Object.keys(extra).sort()).toEqual(["outcome", "platform", "windowsWrapperEngaged"]);
-    // Through the REAL redactor: every evidence field here must survive redaction unchanged.
-    const redacted = redactLogFields(extra) ?? {};
-    expect(Object.keys(redacted).sort()).toEqual(Object.keys(extra).sort());
-  });
-
-  it("refuses a Windows command-script probe before spawn and emits body-free evidence", () => {
-    const events = captureLog();
-    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-    if (platformDescriptor === undefined)
-      throw new TypeError("process.platform descriptor unavailable");
-    const pathMarker = "profile-path-must-not-be-logged";
-    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
-    try {
       expect(() =>
         prepareJavaSpawn(spawnInput(), {
-          availability: NATIVE,
+          availability: { ...NATIVE, bubblewrap: false, docker: true },
           platform: "win32",
-          resolveExecutable: () => String.raw`C:\Windows\System32\bwrap.exe`,
-          resolveJava: () => String.raw`C:\Users\profile-path-must-not-be-logged\java.cmd`,
-          validateLayout: () => true,
+          resolveExecutable,
+          resolveJava,
+          validateLayout,
+          runProbe,
         }),
-      ).toThrow(JavaVersionProbeWrapperError);
-    } finally {
-      Object.defineProperty(process, "platform", platformDescriptor);
-    }
-
-    const probed = events.find((event) => event.op === "lsp.java.version-probe.completed");
-    expect(probed?.errorKind).toBe("JAVA_VERSION_PROBE_WRAPPER_REFUSED");
-    expect(probed?.extra).toEqual({
-      windowsWrapperEngaged: false,
-      outcome: "wrapper-refused",
-      platform: "win32",
-    });
-    expect(JSON.stringify(probed)).not.toContain(pathMarker);
-
-    // Whole-class pin: no post-return raw-pid reaper remains anywhere in the sync probe body.
-    const source = readFileSync(new URL("./javaProvider.ts", import.meta.url), "utf8");
-    expect(source).not.toContain("probe.pid");
-    expect(source).not.toContain("reapWindowsProbeDescendant");
-    expect(source).not.toContain("nodeWindowsTreeKill");
-  });
-
-  // IDX63: "validVersion: false" alone made a timeout indistinguishable from every other failure.
-  // Reuses the same real-spawnSync-path pattern as the pre-existing "bounds the real java -version
-  // probe with a timeout" test above (validateJavaVersion NOT overridden), but now inspects the
-  // evidence line instead of only the thrown error and elapsed wall time.
-  it("logs a distinct timeout outcome with the ETIMEDOUT errorKind, not a bare unsupported-version", () => {
-    const events = captureLog();
-    const hungJava = join(root, "java");
-    writeFileSync(hungJava, "#!/bin/sh\nsleep 30\n", "utf8");
-    chmodSync(hungJava, 0o755);
-
-    expect(() =>
-      prepareJavaSpawn(spawnInput(), {
-        availability: NATIVE,
-        platform: "linux",
-        resolveExecutable: () => "/usr/bin/bwrap",
-        resolveJava: () => hungJava,
-        validateLayout: () => true,
-        javaVersionProbeTimeoutMs: 25,
-        // validateJavaVersion intentionally not overridden: exercises the real bounded-timeout
-        // spawnSync path and its logging end to end without racing Vitest's 5 s test deadline.
-      }),
-    ).toThrow("minimum supported JDK version");
-
-    const probed = events.find((event) => event.op === "lsp.java.version-probe.completed");
-    expect(probed).toBeDefined();
-    expect(probed?.errorKind).toBe("ETIMEDOUT");
-    expect(probed?.extra?.outcome).toBe("spawn-error");
-    // Distinguishable from an actually-ran-but-unsupported JDK (IDX63's core complaint): a timeout
-    // never reaches version parsing, so it can never collapse into "unsupported-version".
-    expect(probed?.extra?.outcome).not.toBe("unsupported-version");
-  });
-
-  // IDX63's second required distinction: a launch failure (the resolved path does not exist) must
-  // be its own outcome/errorKind pair too, not merged into the timeout case above or into a bare
-  // "false".
-  it("logs a distinct launch-failure outcome with the ENOENT errorKind", () => {
-    const events = captureLog();
-    const missingJava = join(root, "no-such-java-binary");
-
-    expect(() =>
-      prepareJavaSpawn(spawnInput(), {
-        availability: NATIVE,
-        platform: "linux",
-        resolveExecutable: () => "/usr/bin/bwrap",
-        resolveJava: () => missingJava,
-        validateLayout: () => true,
-        // validateJavaVersion intentionally not overridden: the resolved path does not exist, so
-        // the REAL spawnSync call reports ENOENT rather than a version mismatch.
-      }),
-    ).toThrow("minimum supported JDK version");
-
-    const probed = events.find((event) => event.op === "lsp.java.version-probe.completed");
-    expect(probed).toBeDefined();
-    expect(probed?.errorKind).toBe("ENOENT");
-    expect(probed?.extra?.outcome).toBe("spawn-error");
-    expect(probed?.status).toBeUndefined();
-  });
-});
-
-// The probe runs a workspace-influenced executable, so it is untrusted input however ordinary
-// `java -version` looks — and it used to inherit this process's FULL environment for a call whose
-// entire output is a version string. Every provider credential the server holds was readable by a
-// planted or shimmed `java` on PATH (PR #3355 review P1).
-describe("JAVA_PROBE_ENV_ALLOWLIST", () => {
-  it("carries only what a JVM needs to start, and no credential-shaped names", () => {
-    // Loader path, Windows DLL resolution and the locations a JVM writes to — nothing else.
-    expect(JAVA_PROBE_ENV_ALLOWLIST).toContain("PATH");
-    expect(JAVA_PROBE_ENV_ALLOWLIST).toContain("SystemRoot");
-    expect(JAVA_PROBE_ENV_ALLOWLIST).toContain("JAVA_HOME");
-
-    // The point of the list: a name that could carry a secret must never be on it. Matched by
-    // SHAPE rather than by a fixed deny-list, so a credential variable invented later is caught too.
-    const secretShaped = /(?:key|token|secret|password|credential|auth|session|cookie)/iu;
-    expect(JAVA_PROBE_ENV_ALLOWLIST.filter((name) => secretShaped.test(name))).toEqual([]);
-  });
-
-  // PR #3355 review IDX50/IDX64: this test calls `buildSandboxEnv` directly with literal inputs, so
-  // it is fully decoupled from the real call site — if `defaultJavaVersionValid`'s
-  // `env: buildSandboxEnv(...)` were reverted to `env: process.env` (the exact leak this file's
-  // history fixes), this test would still pass unchanged. It stays because it pins the allowlist's
-  // OWN shape cheaply; the coupled proof is the describe block immediately below, which drives the
-  // REAL probe through `prepareJavaSpawn` instead.
-  it("passes nothing outside the allowlist through to the probe", () => {
-    const built = buildSandboxEnv(
-      {
-        PATH: "/usr/bin",
-        ANTHROPIC_API_KEY: "sk-must-not-leak",
-        GITHUB_TOKEN: "ghp-must-not-leak",
-      },
-      JAVA_PROBE_ENV_ALLOWLIST,
-    );
-    expect(built).toEqual({ PATH: "/usr/bin" });
-    expect(JSON.stringify(built)).not.toContain("must-not-leak");
-  });
-});
-
-// PR #3355 review IDX50/IDX64: "if env: buildSandboxEnv(...) were reverted to env: process.env —
-// the exact secret-leak this PR claims to close — this test would still pass unchanged, because
-// it's fully decoupled from the call site it's meant to pin." This block drives the REAL probe
-// through its provider seam (prepareJavaSpawn -> defaultJavaVersionValid -> spawnSync) with a
-// hostile credential-shaped var actually set on process.env — which is what defaultJavaVersionValid
-// reads from — and an injected fake `java` script that captures the env it was ACTUALLY started
-// with, per the pattern the pre-existing real-spawnSync timeout test above already uses for driving
-// this same call site. Reverting the fix makes this test fail; the unit test above would not.
-describe("defaultJavaVersionValid — the REAL probe subprocess never observes a hostile process.env credential", () => {
-  it("keeps a hostile process.env var out of what the spawned child actually receives", () => {
-    const capture = join(root, "java");
-    const capturedEnvPath = join(root, "captured-probe-env.txt");
-    writeFileSync(
-      capture,
-      `#!/bin/sh\nenv > "${capturedEnvPath}"\necho 'openjdk version "21.0.1" 2024-01-16' 1>&2\nexit 0\n`,
-      "utf8",
-    );
-    chmodSync(capture, 0o755);
-
-    const sentinelName = "KEIKO_TEST_HOSTILE_PROBE_SECRET";
-    const sentinelValue = "sk-must-not-reach-child-probe";
-    const previous = process.env[sentinelName];
-    process.env[sentinelName] = sentinelValue;
-    try {
-      expect(() =>
-        prepareJavaSpawn(spawnInput(), {
-          availability: NATIVE,
-          platform: "linux",
-          resolveExecutable: () => "/usr/bin/bwrap",
-          resolveJava: () => capture,
-          validateLayout: () => true,
-          // validateJavaVersion intentionally not overridden: this MUST drive the real
-          // defaultJavaVersionValid probe, the one call site this whole test exists to pin.
-        }),
-      ).not.toThrow();
-    } finally {
-      if (previous === undefined) Reflect.deleteProperty(process.env, sentinelName);
-      else process.env[sentinelName] = previous;
-    }
-
-    const capturedEnv = readFileSync(capturedEnvPath, "utf8");
-    expect(capturedEnv).not.toContain(sentinelName);
-    expect(capturedEnv).not.toContain(sentinelValue);
-    // Sanity: the fixture genuinely ran and its capture is non-trivial, not an empty/broken probe
-    // that would vacuously "pass" by never observing any env at all.
-    expect(capturedEnv).toContain("PATH=");
-  });
+      ).toThrow("egress isolation unavailable on Windows");
+      expect(resolveJava).not.toHaveBeenCalled();
+      expect(resolveExecutable).not.toHaveBeenCalled();
+      expect(validateLayout).not.toHaveBeenCalled();
+      expect(runProbe).not.toHaveBeenCalled();
+      expect(readdirSync(runtimeStateRoot)).toEqual([]);
+      expect(events.find((event) => event.op === "lsp.java.version-probe.completed")).toMatchObject(
+        {
+          errorKind: "Error",
+          extra: {
+            executionBoundary: "governed-pre-spawn",
+            outcome: "invocation-failed",
+            platform: "win32",
+          },
+        },
+      );
+    },
+  );
 });

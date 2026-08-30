@@ -372,10 +372,21 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
   it("opens a permitted PR, returns the provider PR number, and records content-free evidence (AC5)", async () => {
     const adapter = recordingPrAdapter();
     const cap = capturingEvidenceStore();
+    const activity: ServerLogEvent[] = [];
     const handler = createHandlePrExecute({
-      execution: seams({ prAdapterFactory: () => adapter.adapter }),
+      execution: seams({
+        prAdapterFactory: () => adapter.adapter,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
     });
-    const res = await handler(ctxFor(EXECUTE, createBody()), deps({ evidenceStore: cap.store }));
+    const res = await handler(
+      { ...ctxFor(EXECUTE, createBody()), correlationId: "request-correlation-pr-success" },
+      deps({ evidenceStore: cap.store }),
+    );
     const body = res.body as GitDeliveryPrExecuteResponseBody;
     expect(body.status).toBe("succeeded");
     expect(body.createdPrExternalId).toBe("1499");
@@ -384,6 +395,9 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     // Content-free: the PR title/body strings never enter the evidence ledger.
     expect(cap.raw()).not.toContain("governed pull request command center");
     expect(cap.raw()).not.toContain("Implements the #477");
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({ correlationId: "request-correlation-pr-success" });
+    expect(completed?.extra).toMatchObject({ actionKind: "pr-create", status: "succeeded" });
   });
 
   // The continuity guard re-checks authority right before remote dispatch (a TOCTOU gap: policy/preflight
@@ -397,6 +411,7 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
   it("returns the SAME 403 authority-denied response the up-front gate returns, not a misleading internal failure (#3350)", async () => {
     const adapter = recordingPrAdapter();
     const cap = capturingEvidenceStore();
+    const activity: ServerLogEvent[] = [];
     const baseAuthority = permittedGitDeliveryAuthority(
       () => projectId,
       () => projectId,
@@ -418,23 +433,56 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
       },
     };
     const handler = createHandlePrExecute({
-      execution: seams({ prAdapterFactory: () => adapter.adapter }),
+      execution: seams({
+        prAdapterFactory: () => adapter.adapter,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
     });
 
     const res = await handler(
-      ctxFor(EXECUTE, createBody()),
+      {
+        ...ctxFor(EXECUTE, createBody()),
+        correlationId: "request-correlation-pr-continuity",
+      },
       deps({ gitDeliveryAuthority: authority, evidenceStore: cap.store }),
     );
 
     // HTTP contract: the SAME 403 envelope the up-front admission gate returns — never a 200 claiming an
     // internal, retryable failure for a request that was refused before anything was dispatched.
     expect(res.status).toBe(403);
-    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+    expect(res.body).toEqual({
+      error: {
+        code: "GIT_DELIVERY_AUTHORITY_DENIED",
+        message: "The accepted runtime authority does not admit this Git delivery operation.",
+        correlationId: "request-correlation-pr-continuity",
+      },
+    });
+    expect(res.headers).toEqual({
+      "X-Keiko-Correlation-Id": "request-correlation-pr-continuity",
+    });
     expect(reads).toBe(2);
     expect(adapter.creates()).toBe(0);
-    // Evidence contract: no misleading "failed"/retryable record for an attempt the client is never told
-    // happened — consistent with the up-front denial, which also records nothing to the evidence ledger.
-    expect(cap.count()).toBe(0);
+    expect(cap.count()).toBe(1);
+    expect(cap.raw()).toContain('"outcomeClass":"blocked"');
+    expect(cap.raw()).toContain('"blockReason":"authority-denied"');
+    expect(cap.raw()).toContain('"disposition":"policy-forbidden"');
+    expect(cap.raw()).not.toContain('"execution":');
+    expect(
+      activity
+        .filter((event) => event.op.startsWith("git.delivery.authority."))
+        .map((event) => event.extra?.phase),
+    ).toEqual(["admission", "continuity"]);
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({ correlationId: "request-correlation-pr-continuity" });
+    expect(completed?.extra).toMatchObject({
+      status: "blocked",
+      phaseReached: "execute",
+      blockReason: "authority-denied",
+    });
   });
 
   it("denies a base outside the active authority envelope before execution", async () => {
@@ -462,19 +510,38 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
       rejectionReason: "validation-error",
     });
     const cap = capturingEvidenceStore();
+    const activity: ServerLogEvent[] = [];
     const handler = createHandlePrExecute({
-      execution: seams({ prAdapterFactory: () => adapter.adapter }),
+      execution: seams({
+        prAdapterFactory: () => adapter.adapter,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
     });
-    const res = await handler(ctxFor(EXECUTE, createBody()), deps({ evidenceStore: cap.store }));
+    const res = await handler(
+      { ...ctxFor(EXECUTE, createBody()), correlationId: "request-correlation-pr-rejected" },
+      deps({ evidenceStore: cap.store }),
+    );
     const body = res.body as GitDeliveryPrExecuteResponseBody;
     expect(body.status).toBe("failed");
     expect(body.prRejectionReason).toBe("validation-error");
     expect(body.recoveryDisposition).toBe("user-fixable");
     expect(cap.count()).toBe(1);
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({
+      level: "warn",
+      correlationId: "request-correlation-pr-rejected",
+      errorKind: "provider-rejected",
+    });
+    expect(completed?.extra).toMatchObject({ status: "failed" });
   });
 
   it("holds for approval under an approval-gated override pack, executing nothing", async () => {
     const adapter = recordingPrAdapter();
+    const activity: ServerLogEvent[] = [];
     const handler = createHandlePrExecute({
       execution: seams({
         prAdapterFactory: () => adapter.adapter,
@@ -488,13 +555,53 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
             defaultRule: { decision: "blocked" },
           },
         },
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
       }),
     });
-    const res = await handler(ctxFor(EXECUTE, createBody()), deps());
+    const res = await handler(
+      { ...ctxFor(EXECUTE, createBody()), correlationId: "request-correlation-pr-held" },
+      deps(),
+    );
     const body = res.body as GitDeliveryPrExecuteResponseBody;
     expect(body.status).toBe("approval-required");
     expect(body.requiredApprovers).toContain("lead");
     expect(adapter.creates()).toBe(0);
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({ correlationId: "request-correlation-pr-held" });
+    expect(completed?.extra).toMatchObject({ status: "approval-required" });
+  });
+
+  it("logs a snapshot precondition throw with the request correlation id", async () => {
+    const activity: ServerLogEvent[] = [];
+    const handler = createHandlePrExecute({
+      execution: seams({
+        snapshotReader: () => Promise.reject(new Error("host path must stay private")),
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
+    });
+
+    const res = await handler(
+      { ...ctxFor(EXECUTE, createBody()), correlationId: "request-correlation-pr-snapshot" },
+      deps(),
+    );
+
+    expect(res.status).toBe(409);
+    const failed = activity.find((event) => event.op === "git.delivery.mutation.failed");
+    expect(failed).toMatchObject({
+      level: "error",
+      correlationId: "request-correlation-pr-snapshot",
+    });
+    expect(typeof failed?.errorKind).toBe("string");
+    expect(failed?.extra).toEqual({ actionKind: "pr-create", phaseReached: "snapshot" });
+    expect(JSON.stringify(activity)).not.toContain("host path must stay private");
   });
 
   it("rejects a forged browser-supplied approval object before creating a PR", async () => {
@@ -619,10 +726,15 @@ describe("executeGovernedPullRequest — default PR-adapter termination wiring (
     const onTerminated = createNodeGitPullRequestAdapterCalls[0]?.onTerminated;
     expect(onTerminated).toBeTypeOf("function");
     onTerminated?.({ reason: "abort", childPid: 5678, windowsTreeKill: "not-attempted" });
-    expect(activity).toHaveLength(1);
-    expect(activity[0]?.op).toBe("command.terminated");
-    expect(activity[0]?.correlationId).toBe("request-correlation-pr-wiring");
-    expect(activity[0]?.extra?.childPid).toBe(5678);
+    const termination = activity.find((event) => event.op === "command.terminated");
+    expect(termination?.correlationId).toBe("request-correlation-pr-wiring");
+    expect(activity).toContainEqual(
+      expect.objectContaining({
+        op: "git.delivery.mutation.completed",
+        correlationId: "request-correlation-pr-wiring",
+      }),
+    );
+    expect(termination?.extra?.childPid).toBe(5678);
   });
 });
 
@@ -674,6 +786,7 @@ describe("executeGovernedPullRequest — no-spawn refusal is marked, never reach
     const marker = activity.find((event) => event.op === "git.delivery.dispatch.no-spawn");
     expect(marker).toBeDefined();
     expect(marker?.correlationId).toBe("request-correlation-pr-no-spawn");
-    expect(marker?.extra?.actionKind).toBe("pr-create");
+    expect(marker?.extra?.operation).toBe("pr-create");
+    expect(marker?.status).toBe(403);
   });
 });

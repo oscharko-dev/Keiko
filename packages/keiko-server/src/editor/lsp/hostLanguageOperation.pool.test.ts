@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LanguageServiceRequest } from "@oscharko-dev/keiko-contracts";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
@@ -143,6 +143,12 @@ function runAuthorizedAt(
     activationAuthorized: true,
     activationStillAuthorized: (): boolean => true,
   });
+}
+
+async function settlePool(turns = 8): Promise<void> {
+  for (let index = 0; index < turns; index += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 }
 
 function runAtRevision(
@@ -328,7 +334,7 @@ describe("runHostLanguageOperation pooling (GEN-PERF-EDITOR-007)", () => {
     await shutdownHostLspPool();
     expect(await initializeAt(3)).toMatchObject({ status: "DISPOSED", configurationRevision: 1 });
     expect(controllers).toHaveLength(1);
-    expect(controllers[0]?.killed()).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(controllers[0]?.killed()).toEqual(["SIGKILL"]);
   });
 
   it("opens the document on the replacement child after confirmed crash termination", async () => {
@@ -348,6 +354,23 @@ describe("runHostLanguageOperation pooling (GEN-PERF-EDITOR-007)", () => {
     expect(replacementMethods.indexOf("textDocument/didOpen")).toBeLessThan(
       replacementMethods.indexOf("textDocument/diagnostic"),
     );
+  });
+
+  it("replaces a settled spawn-failed manager on the next acquisition", async () => {
+    makeExecutable("gopls");
+    let attempts = 0;
+    const spawn: LspSpawnFn = () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("spawn fixture failure");
+      return createFakeLspProcess({ results: DIAGNOSTIC_RESULTS }).handle;
+    };
+
+    const first = await runAt(workspaceRoot, spawn);
+    const second = await runAt(workspaceRoot, spawn);
+
+    expect(first).toMatchObject({ kind: "error", code: "TIMED_OUT" });
+    expect(second).toMatchObject({ kind: "diagnostics" });
+    expect(attempts).toBe(2);
   });
 
   it("quarantines an unsolicited exit across retry and explicit pool invalidation", async () => {
@@ -447,6 +470,43 @@ describe("runHostLanguageOperation pooling (GEN-PERF-EDITOR-007)", () => {
 // the same runHostLanguageOperation entry point every other test in this file uses, actually
 // reaches the ledger under the same opaque per-workspace partition key
 // managedLspActivationStore already uses for its own on-disk record.
+describe("durable pooled LSP quarantine", () => {
+  it("blocks a post-server-restart spawn after an uncontained root exit", async () => {
+    makeExecutable("gopls");
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-host-lsp-runtime-state-"));
+    const first = createFakeLspProcess({ results: DIAGNOSTIC_RESULTS });
+    const firstOptions: HostLanguageOperationOptions = {
+      workspace: workspaceAt(workspaceRoot),
+      processEnv: { PATH: binDir, KEIKO_EDITOR_LSP_GO: "1" },
+      commandRules: [{ executable: "gopls" }],
+      overlayAbsolutePath: join(workspaceRoot, "main.go"),
+      signal: new AbortController().signal,
+      spawn: () => first.handle,
+      privateRuntimeStateRoot: stateDir,
+    };
+    try {
+      await runHostLanguageOperation(diagnosticsRequest(workspaceRoot), firstOptions);
+      first.crash();
+      await settlePool();
+
+      // This module-memory reset complements lspDurableRestart.integration.test.ts's actual two-
+      // process supervisor proof. The identity-safe file lease remains authoritative here too.
+      _resetHostLspPoolForTests();
+      const replacementSpawn = vi.fn<LspSpawnFn>();
+      const outcome = await runHostLanguageOperation(diagnosticsRequest(workspaceRoot), {
+        ...firstOptions,
+        spawn: replacementSpawn,
+      });
+
+      expect(replacementSpawn).not.toHaveBeenCalled();
+      expect(outcome).toMatchObject({ kind: "error", code: "TIMED_OUT" });
+    } finally {
+      _resetHostLspPoolForTests();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("pooled LSP manager lifecycle events reach the content-free ledger (round-3 KEIKO-0556-r3)", () => {
   beforeEach(() => {
     _resetLspLifecycleLedgerForTests();

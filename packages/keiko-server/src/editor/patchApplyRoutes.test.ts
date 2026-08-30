@@ -315,6 +315,24 @@ describe("POST /api/editor/patch-apply — explicit decision (AC1)", () => {
     expect(diagnostics[0]?.correlationId).toBe("req-patch-apply-thread-01");
   });
 
+  it("threads the request correlation id into post-apply verification", async () => {
+    let verificationCorrelationId: string | undefined;
+    const verification: PostApplyVerificationPort = (args) => {
+      verificationCorrelationId = args.correlationId;
+      return Promise.resolve({ summary: summary(), command: "npx vitest run" });
+    };
+    const ctx = { ...postContext(body()), correlationId: "req-patch-apply-verify-01" };
+
+    const result = await handleEditorPatchApply(ctx, deps({ env: ENABLED }), {
+      verification,
+      verificationPreflight: passingPreflight,
+      now: () => 1_000,
+    });
+
+    expect(wire(result).status).toBe("applied");
+    expect(verificationCorrelationId).toBe("req-patch-apply-verify-01");
+  });
+
   it("records a reject decision and mutates nothing", async () => {
     const result = await handleEditorPatchApply(
       postContext(body({ decision: "reject" })),

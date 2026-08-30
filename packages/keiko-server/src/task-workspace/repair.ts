@@ -40,9 +40,11 @@ import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import { reconcileSingleInstance } from "./reconciliation.js";
 import { correlationIdOrUnknown } from "../correlation.js";
-import { logWorkspaceLifecycle } from "./activity-log.js";
 import {
-  appendWorkspaceLifecycleEvidence,
+  recordWorkspaceLifecycle,
+  runWithWorkspaceLifecycleFailureLogging,
+} from "./activity-log.js";
+import {
   buildWorkspaceEvent,
   WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
   type WorkspaceLifecycleOutcome,
@@ -144,9 +146,9 @@ function emitRepair(
     health: instance.health,
     ...(instance.driftMarkers.length > 0 ? { driftMarkers: instance.driftMarkers } : {}),
   });
-  appendWorkspaceLifecycleEvidence(
-    ctx.deps.evidenceStore,
-    {
+  recordWorkspaceLifecycle(ctx.deps, {
+    evidenceStore: ctx.deps.evidenceStore,
+    record: {
       kind: WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
       schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
       recordedAt: nowMs,
@@ -157,18 +159,7 @@ function emitRepair(
       worktreeCount: 0,
       event,
     },
-    ctx.deps.redactString,
-  );
-  // Same operation, SAME correlationId, into the server activity log (AGENTS.md §8).
-  logWorkspaceLifecycle(ctx.deps, {
-    operation: "repair",
-    outcome,
-    workspaceId: instance.workspaceId,
-    taskId: instance.taskId,
-    correlationId: resolvedCorrelationId,
-    attempt: 1,
-    durationMs: 0,
-    worktreeCount: 0,
+    redactString: ctx.deps.redactString,
   });
 }
 
@@ -499,9 +490,18 @@ export function createWorkspaceRepairService(
   // service-lifetime ctx is exactly what forced the previous UNKNOWN_CORRELATION_ID here.
   return {
     repair: (request: WorkspaceRepairRequest): Promise<WorkspaceRepairResult> =>
-      repairImpl(
-        { deps, lockTtlMs, correlationId: correlationIdOrUnknown(request.correlationId) },
-        request,
+      runWithWorkspaceLifecycleFailureLogging(
+        deps,
+        {
+          operation: "repair",
+          workspaceIdentitySeed: request.workspaceId,
+          correlationId: request.correlationId,
+        },
+        () =>
+          repairImpl(
+            { deps, lockTtlMs, correlationId: correlationIdOrUnknown(request.correlationId) },
+            request,
+          ),
       ),
   };
 }

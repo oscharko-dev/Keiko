@@ -295,9 +295,7 @@ describe("runDetachedWindowsAlert", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.[0]).toBe(
-      process.platform === "win32"
-        ? String.raw`\\?\GLOBALROOT\SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe`
-        : String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+      String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
     );
     expect(calls[0]?.[1]).toEqual([
       "-NoLogo",

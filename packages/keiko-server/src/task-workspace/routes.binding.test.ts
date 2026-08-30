@@ -24,6 +24,12 @@ import { createRunRegistry } from "../runs.js";
 import { UI_HOST } from "../server.js";
 import { runMigrations } from "../store/schema.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "../observability/index.js";
 import { buildWorkspaceInstanceStoreOverDatabase } from "./store.js";
 import { buildActiveWorkspacePointerStoreOverDatabase } from "./active-store.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";
@@ -194,6 +200,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await closeServer();
+  resetServerLogger();
   db.close();
   await rm(staticRoot, { recursive: true, force: true });
   rmSync(repoRoot, { recursive: true, force: true });
@@ -264,6 +271,86 @@ describe("active binding lifecycle over HTTP", () => {
     const res = await setActive(instance.workspaceId, { "Content-Type": "application/json" });
     expect(res.status).toBe(403);
   });
+
+  it("logs an unsafe active-switch body once before lifecycle dispatch", async () => {
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    const workspaceId = "Patient Jane private workspace";
+    const requestedBy = `operator${String.fromCodePoint(0x200b)}private`;
+    const correlationId = "route-activate-invalid-1";
+    const res = await fetch(`${baseUrl()}/api/task-workspaces/active`, {
+      method: "POST",
+      headers: {
+        ...csrfHeaders(),
+        "X-Keiko-Correlation-Id": correlationId,
+      },
+      body: JSON.stringify({ workspaceId, requestedBy }),
+    });
+
+    expect(res.status).toBe(400);
+    const events = activityLog.events.filter((event) => event.op === "task-workspace.lifecycle");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      correlationId,
+      errorKind: "INVALID_REQUEST",
+      extra: { operation: "activate" },
+    });
+    const formatted = activityLog.lines().join("\n");
+    expect(formatted).not.toContain(workspaceId);
+    expect(formatted).not.toContain(requestedBy);
+  });
+
+  it("does not duplicate a missing-workspace rejection across all activation boundaries", async () => {
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    const correlationId = "route-activate-service-rejection-1";
+    const workspaceId = "Patient Jane missing workspace";
+    const res = await setActive(workspaceId, {
+      ...csrfHeaders(),
+      "X-Keiko-Correlation-Id": correlationId,
+    });
+
+    expect(res.status).toBe(404);
+    const events = activityLog.events.filter((event) => event.op === "task-workspace.lifecycle");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      correlationId,
+      errorKind: "WORKSPACE_NOT_FOUND",
+      extra: { operation: "activate" },
+    });
+    expect(activityLog.lines().join("\n")).not.toContain(workspaceId);
+  });
+
+  it.each(["pause", "resume", "handoff"] as const)(
+    "logs an invalid %s body once before lifecycle dispatch",
+    async (operation) => {
+      const activityLog = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+      const workspaceId = "Patient Jane private workspace";
+      const correlationId = `route-${operation}-invalid-1`;
+      const res = await fetch(
+        `${baseUrl()}/api/task-workspaces/${encodeURIComponent(workspaceId)}/${operation}`,
+        {
+          method: "POST",
+          headers: {
+            ...csrfHeaders(),
+            "X-Keiko-Correlation-Id": correlationId,
+          },
+          body: JSON.stringify({ requestedBy: "" }),
+        },
+      );
+
+      expect(res.status).toBe(400);
+      const events = activityLog.events.filter((event) => event.op === "task-workspace.lifecycle");
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        correlationId,
+        errorKind: "INVALID_REQUEST",
+        extra: { operation },
+      });
+      expect(activityLog.lines().join("\n")).not.toContain(workspaceId);
+    },
+  );
 
   it("returns 503 when the lifecycle service is not configured", async () => {
     await rebuild({ workspaceLifecycle: undefined });

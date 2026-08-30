@@ -5,6 +5,7 @@
 // classification it feeds is pure.
 
 import { redact } from "@oscharko-dev/keiko-security";
+import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_COMMAND_RULES,
   DEFAULT_SANDBOX_POLICY,
@@ -13,7 +14,6 @@ import {
   type CommandResult,
   type NetworkPolicy,
   type RunCommandDeps,
-  type CommandTerminationEvidence,
   type SandboxPolicy,
   type SpawnFn,
 } from "@oscharko-dev/keiko-tools";

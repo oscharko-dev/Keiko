@@ -27,6 +27,8 @@ export type FakeLspBehavior =
 interface FakeLspSpawnHandle extends LspSpawnHandle {
   kill(signal: NodeJS.Signals): void;
   lastKillResult(): LspProcessKillResult | undefined;
+  releaseRuntimeResources?(): void;
+  treeLifetimeBoundary?: "os-owned" | undefined;
   onExit(callback: (code: number | null, signal: NodeJS.Signals | null) => void): void;
   onError(callback: (error: Error) => void): void;
 }
@@ -54,6 +56,8 @@ export interface FakeLspOptions {
   readonly results?: Readonly<Record<string, unknown>>;
   readonly initializeResult?: unknown;
   readonly onMessage?: ((method: string, params: unknown) => void) | undefined;
+  readonly releaseRuntimeResources?: (() => void) | undefined;
+  readonly treeLifetimeBoundary?: "os-owned" | undefined;
 }
 
 interface JsonRpcMessage {
@@ -117,6 +121,8 @@ export function createFakeLspProcess(options: FakeLspOptions = {}): FakeLspContr
     options.killConfirmsExit ?? true,
     options.killResult,
     options.pid === null ? undefined : (options.pid ?? 4242),
+    options.releaseRuntimeResources,
+    options.treeLifetimeBoundary,
   );
 
   return fakeController(handle, stderr, exitCallbacks, errorCallbacks, emitExit, {
@@ -172,6 +178,8 @@ function fakeSpawnHandle(
   killConfirmsExit: boolean,
   killResult: LspProcessKillResult | undefined,
   pid: number | undefined,
+  releaseRuntimeResources: (() => void) | undefined,
+  treeLifetimeBoundary: "os-owned" | undefined,
 ): FakeLspSpawnHandle {
   let latestKillResult: LspProcessKillResult | undefined;
   return {
@@ -189,6 +197,8 @@ function fakeSpawnHandle(
       if (signal === "SIGKILL" && killConfirmsExit) emitExit(null, "SIGKILL");
     },
     lastKillResult: (): LspProcessKillResult | undefined => latestKillResult,
+    ...(releaseRuntimeResources === undefined ? {} : { releaseRuntimeResources }),
+    ...(treeLifetimeBoundary === undefined ? {} : { treeLifetimeBoundary }),
     onExit: (callback): void => {
       exitCallbacks.push(callback);
     },

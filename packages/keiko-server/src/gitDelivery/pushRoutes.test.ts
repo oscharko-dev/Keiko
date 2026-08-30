@@ -98,7 +98,11 @@ function recordingPublishAdapter(result?: GitPublishExecResult): RecordingPublis
   };
 }
 
-function capturingEvidenceStore(): { store: EvidenceStore; count: () => number } {
+function capturingEvidenceStore(): {
+  store: EvidenceStore;
+  count: () => number;
+  raw: () => string;
+} {
   const docs = new Map<string, string>();
   return {
     store: {
@@ -118,6 +122,7 @@ function capturingEvidenceStore(): { store: EvidenceStore; count: () => number }
       }
       return n;
     },
+    raw: (): string => [...docs.values()].join("\n"),
   };
 }
 
@@ -410,25 +415,53 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
     });
 
     const res = await handler(
-      ctxFor(EXECUTE, pushBody()),
+      {
+        ...ctxFor(EXECUTE, pushBody()),
+        correlationId: "request-correlation-push-continuity",
+      },
       deps({ gitDeliveryAuthority: authority, evidenceStore: cap.store }),
     );
 
     // HTTP contract: the SAME 403 envelope the up-front admission gate returns — never a 200 claiming an
     // internal, retryable failure for a request that was refused before anything was dispatched.
     expect(res.status).toBe(403);
-    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+    expect(res.body).toEqual({
+      error: {
+        code: "GIT_DELIVERY_AUTHORITY_DENIED",
+        message: "The accepted runtime authority does not admit this Git delivery operation.",
+        correlationId: "request-correlation-push-continuity",
+      },
+    });
+    expect(res.headers).toEqual({
+      "X-Keiko-Correlation-Id": "request-correlation-push-continuity",
+    });
     expect(reads).toBe(2);
     expect(adapter.calls()).toBe(0);
-    // Evidence contract: no misleading "failed"/retryable record for an attempt the client is never told
-    // happened — consistent with the up-front denial, which also records nothing to the evidence ledger.
-    expect(cap.count()).toBe(0);
+    // Audit contract: the synthetic adapter failure is replaced by one typed policy-forbidden block.
+    expect(cap.count()).toBe(1);
+    expect(cap.raw()).toContain('"outcomeClass":"blocked"');
+    expect(cap.raw()).toContain('"blockReason":"authority-denied"');
+    expect(cap.raw()).toContain('"disposition":"policy-forbidden"');
+    expect(cap.raw()).not.toContain('"execution":');
     expect(
       activity.events.filter((event) => event.op === "git.delivery.dispatch.no-spawn"),
     ).toHaveLength(1);
+    const completed = activity.events.find(
+      (event) => event.op === "git.delivery.mutation.completed",
+    );
+    expect(completed).toMatchObject({
+      correlationId: "request-correlation-push-continuity",
+    });
+    expect(completed?.extra).toMatchObject({
+      status: "blocked",
+      phaseReached: "execute",
+      blockReason: "authority-denied",
+    });
     expect(
-      activity.events.filter((event) => event.op === "git.delivery.mutation.completed"),
-    ).toHaveLength(0);
+      activity.events
+        .filter((event) => event.op.startsWith("git.delivery.authority."))
+        .map((event) => event.extra?.phase),
+    ).toEqual(["admission", "continuity"]);
   });
 
   it("denies a protected target outside the active authority envelope", async () => {
@@ -681,7 +714,8 @@ describe("executeGovernedPublish — no-spawn refusal is marked, never reaches t
     const marker = activity.find((event) => event.op === "git.delivery.dispatch.no-spawn");
     expect(marker).toBeDefined();
     expect(marker?.correlationId).toBe("request-correlation-push-no-spawn");
-    expect(marker?.extra?.actionKind).toBe("push");
+    expect(marker?.extra?.operation).toBe("push");
+    expect(marker?.status).toBe(403);
   });
 });
 

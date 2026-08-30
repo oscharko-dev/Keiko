@@ -11,9 +11,9 @@
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { GitRepositoryAgentOperationKind } from "@oscharko-dev/keiko-contracts";
-import type { RouteContext, RouteResult } from "../routes.js";
+import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { CORRELATION_RESPONSE_HEADER, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/index.js";
 import { resolveProjectWorkspace } from "./execution.js";
@@ -48,7 +48,10 @@ export interface GitDeliveryAuthorityAuditSeams {
   readonly nowIso?: string | undefined;
   readonly logSink?: ServerLogSink | undefined;
   readonly expectedAuthority?: GitDeliveryAuthorityIdentity | undefined;
+  readonly phase?: GitDeliveryAuthorityPhase | undefined;
 }
+
+export type GitDeliveryAuthorityPhase = "admission" | "continuity";
 
 export interface GitDeliveryAuthorityIdentity {
   readonly runId: string;
@@ -57,7 +60,11 @@ export interface GitDeliveryAuthorityIdentity {
 
 export type GitDeliveryAuthorityGate =
   | ({ readonly allowed: true } & GitDeliveryAuthorityIdentity)
-  | { readonly allowed: false; readonly result: RouteResult };
+  | {
+      readonly allowed: false;
+      readonly reason: GitDeliveryAuthorityDenial | "authority-changed";
+      readonly result: RouteResult;
+    };
 
 interface GitDeliveryAuthorityContinuityInput {
   readonly ctx: RouteContext;
@@ -68,6 +75,7 @@ interface GitDeliveryAuthorityContinuityInput {
   readonly target?: GitDeliveryAuthorityTarget | undefined;
   readonly admitted: GitDeliveryAuthorityIdentity;
   readonly next?: (() => boolean) | undefined;
+  readonly audit?: Pick<GitDeliveryAuthorityAuditSeams, "nowIso" | "logSink"> | undefined;
   // Optional out-parameter: when the continuity re-check denies (the admitted authority changed or
   // was revoked between admission and remote dispatch), the denial's 403 RouteResult is written here
   // — see GitDeliveryAuthorityContinuityDenialCapture for why the caller needs it.
@@ -88,18 +96,27 @@ interface GitDeliveryAuthorityContinuityInput {
 // body instead of projecting the misleading synthetic result.
 export interface GitDeliveryAuthorityContinuityDenialCapture {
   result?: RouteResult;
+  reason?: GitDeliveryAuthorityDenial | "authority-changed";
+  phase?: "continuity";
 }
 
-function deniedAuthorityGate(): GitDeliveryAuthorityGate {
+function deniedAuthorityGate(
+  ctx: RouteContext,
+  reason: GitDeliveryAuthorityDenial | "authority-changed",
+): GitDeliveryAuthorityGate {
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
   return {
     allowed: false,
+    reason,
     result: {
       status: 403,
-      body: {
-        error: {
-          code: "GIT_DELIVERY_AUTHORITY_DENIED",
-          message: "The accepted runtime authority does not admit this Git delivery operation.",
-        },
+      body: errorBody(
+        "GIT_DELIVERY_AUTHORITY_DENIED",
+        "The accepted runtime authority does not admit this Git delivery operation.",
+        correlationId,
+      ),
+      headers: {
+        [CORRELATION_RESPONSE_HEADER]: correlationId,
       },
     },
   };
@@ -119,6 +136,7 @@ export function logGitDeliveryAuthorityDenial(
   ctx: RouteContext,
   operation: GitRepositoryAgentOperationKind,
   reason: GitDeliveryAuthorityDenial | "authority-changed" | "workspace-unresolvable",
+  phase: GitDeliveryAuthorityPhase = "admission",
   logSink: ServerLogSink = processServerLogSink(),
 ): void {
   logSink.write({
@@ -126,8 +144,35 @@ export function logGitDeliveryAuthorityDenial(
     op: "git.delivery.authority.denied",
     correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
     status: 403,
-    extra: { operation, reason },
+    extra: { operation, phase, reason },
   });
+}
+
+function authorityPhaseFor(audit: GitDeliveryAuthorityAuditSeams): GitDeliveryAuthorityPhase {
+  if (audit.phase !== undefined) return audit.phase;
+  return audit.expectedAuthority === undefined ? "admission" : "continuity";
+}
+
+function admittedAuthorityGate(
+  ctx: RouteContext,
+  operation: GitRepositoryAgentOperationKind,
+  decision: GitDeliveryAuthorityIdentity,
+  audit: GitDeliveryAuthorityAuditSeams,
+  phase: GitDeliveryAuthorityPhase,
+  logSink: ServerLogSink,
+): GitDeliveryAuthorityGate {
+  if (authorityIdentityChanged(decision, audit.expectedAuthority)) {
+    logGitDeliveryAuthorityDenial(ctx, operation, "authority-changed", phase, logSink);
+    return deniedAuthorityGate(ctx, "authority-changed");
+  }
+  logSink.write({
+    category: "security",
+    op: "git.delivery.authority.admitted",
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    status: 200,
+    extra: { operation, phase, runId: decision.runId },
+  });
+  return { allowed: true, runId: decision.runId, envelopeDigest: decision.envelopeDigest };
 }
 
 /**
@@ -150,22 +195,12 @@ export function gitDeliveryAuthorityGate(
     audit.nowIso ?? new Date().toISOString(),
   );
   const logSink = audit.logSink ?? processServerLogSink();
-  if (decision.allowed && authorityIdentityChanged(decision, audit.expectedAuthority)) {
-    logGitDeliveryAuthorityDenial(ctx, operation, "authority-changed", logSink);
-    return deniedAuthorityGate();
-  }
+  const phase = authorityPhaseFor(audit);
   if (decision.allowed) {
-    logSink.write({
-      category: "security",
-      op: "git.delivery.authority.admitted",
-      correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-      status: 200,
-      extra: { operation, runId: decision.runId },
-    });
-    return decision;
+    return admittedAuthorityGate(ctx, operation, decision, audit, phase, logSink);
   }
-  logGitDeliveryAuthorityDenial(ctx, operation, decision.reason, logSink);
-  return deniedAuthorityGate();
+  logGitDeliveryAuthorityDenial(ctx, operation, decision.reason, phase, logSink);
+  return deniedAuthorityGate(ctx, decision.reason);
 }
 
 export function gitDeliveryAuthorityContinuityGuard(
@@ -179,10 +214,18 @@ export function gitDeliveryAuthorityContinuityGuard(
       input.workspace,
       input.operation,
       input.target,
-      { expectedAuthority: input.admitted },
+      {
+        ...input.audit,
+        expectedAuthority: input.admitted,
+        phase: "continuity",
+      },
     );
     if (!latest.allowed) {
-      if (input.denialCapture !== undefined) input.denialCapture.result = latest.result;
+      if (input.denialCapture !== undefined) {
+        input.denialCapture.result = latest.result;
+        input.denialCapture.reason = latest.reason;
+        input.denialCapture.phase = "continuity";
+      }
       return false;
     }
     return input.next?.() ?? true;

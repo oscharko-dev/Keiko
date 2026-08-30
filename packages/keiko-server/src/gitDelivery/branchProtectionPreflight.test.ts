@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-tools";
+import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
 import type {
   NodeGitMergeAdapterDeps,
   NodeGitWorktreeReaderDeps,

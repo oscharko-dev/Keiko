@@ -1186,19 +1186,17 @@ jobs:
       # 88-strict release target that `check:coverage:quality` still evaluates on every pull request.
       - name: Install Playwright browser
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        # chromium is the reference browser for the smoke + perf-evidence suites. The
-        # workspace-performance webkit project is a local-only cross-browser aid: headless WebKit on CI
-        # software-renders and mis-batches events, so both its timing and write-coalescing budgets are
-        # environment artifacts (all CI perf-evidence runs are scoped to --project=chromium).
-        # firefox: the second real engine behind the browserslist support claim. Edge and Chrome
-        # are both Chromium, so without Gecko nothing ever exercised a non-Chromium browser.
+        # Chromium remains the reference browser for perf evidence. Firefox and WebKit run the same
+        # required functional @smoke journeys: Gecko covers a real second engine and Playwright's
+        # patched Linux WebKit is the executable Safari proxy. It is not byte-identical to Safari on
+        # Apple platforms, so this lane makes no Safari-only OS/media integration claim.
         # The LOCKFILE-resolved CLI, not `npx playwright@<version>`: a pinned version literal here is
         # a second source of truth that silently drifts from `package-lock.json` (it already said
         # 1.62.0 while the lockfile resolved 1.62.1). Browser revisions are chosen by the Playwright
         # version, so a mismatch installs browsers the runner's own test library never asked for and
         # decouples the CI evidence from the dependency graph the tests actually execute against.
         # `npm ci` above already installed this binary at the locked version.
-        run: ./node_modules/.bin/playwright install --with-deps chromium firefox
+        run: ./node_modules/.bin/playwright install --with-deps chromium firefox webkit
       - name: Release smoke E2E
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:smoke
@@ -1208,6 +1206,12 @@ jobs:
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         timeout-minutes: 20
         run: npm run test:e2e:smoke:firefox
+      # Same functional @smoke journeys on WebKit. This is a Safari engine proxy, not evidence for
+      # Apple-platform integration that Playwright's patched Linux runtime cannot reproduce.
+      - name: Release smoke E2E (WebKit Safari proxy)
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        timeout-minutes: 20
+        run: npm run test:e2e:smoke:webkit
       - name: Editor run, verify, problems E2E (#2215)
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:editor-run-verification-2215

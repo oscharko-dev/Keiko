@@ -246,6 +246,8 @@ const RECOVERY_DISPOSITION_BY_BLOCK_REASON: Readonly<
 > = {
   // A policy pack denied the action: forbidden until the policy changes.
   "policy-pack-blocked": "policy-forbidden",
+  // The accepted run's Authority Envelope was revoked, replaced, or no longer admitted the action.
+  "authority-denied": "policy-forbidden",
   // The branch is protected: forbidden under current governance.
   "protected-branch": "policy-forbidden",
   // A required provider capability is absent: forbidden under the active environment.

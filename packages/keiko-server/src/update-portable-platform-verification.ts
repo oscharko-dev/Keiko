@@ -6,6 +6,8 @@ import {
 } from "./update-portable-staging-shared.js";
 import {
   resolveWindowsAuthenticodeSystem,
+  type WindowsAuthenticodeSystem,
+  type WindowsAuthenticodeSystemOptions,
   windowsAuthenticodeIdentityScript,
 } from "./coding-runtime/windowsPortableAuthenticode.js";
 
@@ -22,6 +24,7 @@ type PlatformCommandRunner = (
 export interface PortablePlatformVerifierOptions {
   readonly hostPlatform?: NodeJS.Platform | undefined;
   readonly runCommand?: PlatformCommandRunner | undefined;
+  readonly windowsSystem?: WindowsAuthenticodeSystemOptions | undefined;
 }
 
 function targetHostPlatform(target: UpdatePortableTarget): NodeJS.Platform {
@@ -139,8 +142,8 @@ async function verifyWindowsPath(
   path: string,
   signal: AbortSignal | undefined,
   commandRunner: PlatformCommandRunner,
+  system: WindowsAuthenticodeSystem,
 ): Promise<string> {
-  const system = resolveWindowsAuthenticodeSystem();
   const output = await commandRunner(
     system.command,
     [
@@ -160,12 +163,15 @@ async function verifyWindowsPath(
 async function verifyWindows(
   input: PortablePlatformVerificationInput,
   commandRunner: PlatformCommandRunner,
+  systemOptions: WindowsAuthenticodeSystemOptions | undefined,
 ): Promise<void> {
-  const staged = await verifyWindowsPath(input.launcherPath, input.signal, commandRunner);
+  const system = resolveWindowsAuthenticodeSystem(systemOptions);
+  const staged = await verifyWindowsPath(input.launcherPath, input.signal, commandRunner, system);
   const current = await verifyWindowsPath(
     requireCurrentPath(input.currentLauncherPath),
     input.signal,
     commandRunner,
+    system,
   );
   assertSameSignerIdentity(staged, current);
 }
@@ -210,7 +216,7 @@ export function createPortablePlatformVerifier(
       throw verifierUnavailable("local platform verifier does not match the portable target");
     }
     if (input.target === "windows-x64") {
-      await verifyWindows(input, commandRunner);
+      await verifyWindows(input, commandRunner, options.windowsSystem);
       return;
     }
     await verifyMacos(input, commandRunner);

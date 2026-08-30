@@ -22,6 +22,11 @@ import { runAuditCli } from "./audit.js";
 import { runSupportCli } from "./support.js";
 import { loadServer } from "./lazy-modules.js";
 import type { CliSecurityLogSinkFactory } from "./security-log.js";
+import {
+  securityErrorKind,
+  type SecurityLogEvent,
+  type SecurityLogSink,
+} from "@oscharko-dev/keiko-security";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 // The version constant comes from the contracts LEAF, not the keiko-sdk barrel:
 // the sdk package eagerly re-exports harness/workflows/evidence/gateway/
@@ -84,24 +89,91 @@ type CommandHandler = (
   env: EnvSource,
 ) => number | Promise<number>;
 
-async function productionSecurityLogSinkFactory(): Promise<CliSecurityLogSinkFactory | undefined> {
-  if (process.platform !== "win32") return undefined;
+interface DeferredSecurityLogCollector {
+  readonly factory: CliSecurityLogSinkFactory;
+  readonly flush: () => Promise<void>;
+}
+
+interface PendingSecurityLogEvent {
+  readonly stateDir: string;
+  readonly event: SecurityLogEvent;
+}
+
+function deferredSecurityLogCollector(): DeferredSecurityLogCollector {
+  const pending: PendingSecurityLogEvent[] = [];
+  const sinks = new Map<string, SecurityLogSink>();
+  let active = false;
+  let drainPromise: Promise<void> | undefined;
+  let fileSinkFactory: CliSecurityLogSinkFactory | undefined;
+
+  const drain = async (): Promise<void> => {
+    if (pending.length === 0) return;
+    try {
+      fileSinkFactory ??= (await loadServer()).createFileServerLogSink;
+      while (pending.length > 0) {
+        const next = pending.shift();
+        if (next === undefined) continue;
+        let sink = sinks.get(next.stateDir);
+        if (sink === undefined) {
+          sink = fileSinkFactory(next.stateDir);
+          sinks.set(next.stateDir, sink);
+        }
+        sink.write(next.event);
+      }
+    } catch (cause) {
+      pending.splice(0);
+      warnSecurityLogSinkUnavailable(cause);
+    }
+  };
+
+  const startDrain = (): Promise<void> => {
+    if (drainPromise !== undefined) return drainPromise;
+    drainPromise = drain().finally(() => {
+      drainPromise = undefined;
+      if (active && pending.length > 0) void startDrain();
+    });
+    return drainPromise;
+  };
+
+  return {
+    factory: (stateDir): SecurityLogSink => ({
+      write: (event): void => {
+        pending.push({ stateDir, event });
+        if (active) void startDrain();
+      },
+    }),
+    flush: async (): Promise<void> => {
+      active = true;
+      while (pending.length > 0 || drainPromise !== undefined) {
+        await (drainPromise ?? startDrain());
+      }
+    },
+  };
+}
+
+async function runWithDeferredSecurityLog(
+  run: (factory: CliSecurityLogSinkFactory) => number | Promise<number>,
+): Promise<number> {
+  const collector = deferredSecurityLogCollector();
   try {
-    const server = await loadServer();
-    return server.createFileServerLogSink;
-  } catch {
-    warnSecurityLogSinkUnavailable();
-    return undefined;
+    return await run(collector.factory);
+  } finally {
+    // Activating the collector drains events already emitted without loading the server graph for
+    // eventless commands. Detached helpers retain their sink after settlement; any later child
+    // error therefore starts another serialized drain instead of being stranded in this queue.
+    await collector.flush();
   }
 }
 
-function warnSecurityLogSinkUnavailable(): void {
+function warnSecurityLogSinkUnavailable(cause: unknown): void {
+  const errorKind = securityErrorKind(cause);
   try {
     process.emitWarning(
       "Keiko CLI security activity-log evidence may be incomplete because the sink is unavailable.",
       {
         type: "KeikoActivityLog",
         code: "KEIKO_CLI_SECURITY_LOG_SINK_UNAVAILABLE",
+        detail: `errorKind=${errorKind}`,
       },
     );
   } catch {
@@ -120,7 +192,7 @@ function runRepairCommand(
   if (process.platform !== "win32" || rest[0] === "--help" || rest[0] === "-h") {
     return runRepairCli(rest, io, env);
   }
-  return productionSecurityLogSinkFactory().then((securityLogSinkFactory) =>
+  return runWithDeferredSecurityLog((securityLogSinkFactory) =>
     runRepairCli(rest, io, env, { securityLogSinkFactory }),
   );
 }
@@ -133,7 +205,7 @@ function runLauncherCommand(
   const command = rest[0];
   const needsWindowsHelper = process.platform === "win32" && command === "install";
   if (!needsWindowsHelper) return runLauncherCli(rest, io, env);
-  return productionSecurityLogSinkFactory().then((securityLogSinkFactory) =>
+  return runWithDeferredSecurityLog((securityLogSinkFactory) =>
     runLauncherCli(rest, io, env, { securityLogSinkFactory }),
   );
 }
@@ -146,35 +218,35 @@ function runLifecycleCommand(
 ): number | Promise<number> {
   const needsWindowsOpener = process.platform === "win32" && rest.includes("--open");
   if (!needsWindowsOpener) return runLifecycleCli(command, rest, io, env);
-  return productionSecurityLogSinkFactory().then((securityLogSinkFactory) =>
+  return runWithDeferredSecurityLog((securityLogSinkFactory) =>
     runLifecycleCli(command, rest, io, env, { securityLogSinkFactory }),
   );
 }
 
-async function runUninstallCommand(
+function runUninstallCommand(
   rest: readonly string[],
   io: CliIo,
   env: EnvSource,
-): Promise<number> {
+): number | Promise<number> {
   const help = rest[0] === "--help" || rest[0] === "-h";
-  return runUninstallCli(rest, io, env, {
-    securityLogSinkFactory: help ? undefined : await productionSecurityLogSinkFactory(),
-  });
+  if (process.platform !== "win32" || help) return runUninstallCli(rest, io, env);
+  return runWithDeferredSecurityLog((securityLogSinkFactory) =>
+    runUninstallCli(rest, io, env, { securityLogSinkFactory }),
+  );
 }
 
-async function runPortableCommand(
+function runPortableCommand(
   rest: readonly string[],
   io: CliIo,
   env: EnvSource,
-): Promise<number> {
+): number | Promise<number> {
   const command = rest[0];
   const noShortcutOperation =
     command === undefined || command === "--help" || command === "-h" || command === "status";
-  return runPortableCli(rest, io, env, {
-    securityLogSinkFactory: noShortcutOperation
-      ? undefined
-      : await productionSecurityLogSinkFactory(),
-  });
+  if (process.platform !== "win32" || noShortcutOperation) return runPortableCli(rest, io, env);
+  return runWithDeferredSecurityLog((securityLogSinkFactory) =>
+    runPortableCli(rest, io, env, { securityLogSinkFactory }),
+  );
 }
 
 // A Map has no prototype-chain lookup surface — `.get("toString")` etc. return undefined instead
@@ -241,7 +313,7 @@ function handleMetaCommand(first: string | undefined, io: CliIo): number | undef
 }
 
 // Returns a number for synchronous commands; the async `run` command returns a Promise.
-// The process shim in index.ts awaits the union before calling process.exit.
+// The process shim in index.ts awaits the union before assigning process.exitCode.
 export function runCli(
   args: readonly string[],
   io: CliIo,

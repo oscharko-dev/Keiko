@@ -26,12 +26,11 @@ const failures = [];
 const APPROVED_ROOT_SRC_FILES = ["src/cli/index.ts", "src/index.ts"];
 const APPROVED_ROOT_SRC_SHA256 = new Map([
   ["src/index.ts", "751c1c0fae45a8bf68ba099ecd0706a74d64661f8fc1b9bd7f05d4abd1beb20b"],
-  // KEIKO-0230: the bin facade gained a third installation-dependent path
-  // (KEIKO_LOCAL_STATE_AUDITOR, beside KEIKO_CLI_BIN_PATH and KEIKO_UI_STATIC_ROOT) so
-  // `keiko audit local-state` can reach the packaged auditor without the cli package having to
-  // know its own installation layout — which is the facade's stated job. The hash is re-pinned
-  // to the reviewed content, not relaxed: this gate still fails on the next unreviewed edit.
-  ["src/cli/index.ts", "2918be552be1ca414f2e021a6f521f82c64863d6cec1099e6ff07c37626764de"],
+  // The bin facade owns installation-dependent paths and the final process disposition. Its
+  // natural exit now lets late detached-helper security events finish their lazy activity-log
+  // drain; a hard process.exit truncated that evidence. The hash is re-pinned to this reviewed
+  // content, not relaxed: this gate still fails on the next unreviewed edit.
+  ["src/cli/index.ts", "005b306e202b5b56dd30ccaa3f07ac280b7ab6f189af14c88c9dd3555b2d3a04"],
 ]);
 
 function listFilesRecursively(rootDir, prefix = "") {

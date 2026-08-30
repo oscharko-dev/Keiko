@@ -53,12 +53,8 @@ import { deriveRepositoryId } from "./naming.js";
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import { correlationIdOrUnknown } from "../correlation.js";
-import { logWorkspaceLifecycle } from "./activity-log.js";
-import {
-  appendWorkspaceLifecycleEvidence,
-  buildWorkspaceEvent,
-  WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
-} from "./evidence.js";
+import { recordWorkspaceLifecycle } from "./activity-log.js";
+import { buildWorkspaceEvent, WORKSPACE_LIFECYCLE_EVIDENCE_KIND } from "./evidence.js";
 import type {
   WorkspaceReconciliationService,
   WorkspaceReconciliationServiceDeps,
@@ -274,9 +270,9 @@ function emitReconcileEvidence(
     health: instance.health,
     ...(outcome.driftMarkers.length > 0 ? { driftMarkers: outcome.driftMarkers } : {}),
   });
-  appendWorkspaceLifecycleEvidence(
-    ctx.deps.evidenceStore,
-    {
+  recordWorkspaceLifecycle(ctx.deps, {
+    evidenceStore: ctx.deps.evidenceStore,
+    record: {
       kind: WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
       schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
       recordedAt: nowMs,
@@ -287,22 +283,7 @@ function emitReconcileEvidence(
       worktreeCount: 0,
       event,
     },
-    ctx.deps.redactString,
-  );
-  // Same operation, SAME correlationId, into the server activity log (AGENTS.md §8). The evidence
-  // `outcome` is always the fixed "reconciled" (this pass always completes), so the classification an
-  // agent actually needs — was the workspace found healthy, drifted, missing, locked... — rides in
-  // `errorCode` as the live `WorkspaceReconciliationStatus` instead, the same closed vocabulary
-  // `WorkspaceHealthReport`/the reconciliation route already surface.
-  logWorkspaceLifecycle(ctx.deps, {
-    operation: "reconcile",
-    outcome: "reconciled",
-    workspaceId: instance.workspaceId,
-    taskId: instance.taskId,
-    correlationId: resolvedCorrelationId,
-    attempt: 1,
-    durationMs: 0,
-    worktreeCount: 0,
+    redactString: ctx.deps.redactString,
     errorCode: outcome.status === "healthy" ? undefined : outcome.status,
   });
 }

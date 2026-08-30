@@ -17,7 +17,7 @@ import {
   type VerificationPlan,
   type VerificationReport,
 } from "@oscharko-dev/keiko-verification";
-import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-tools";
+import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";

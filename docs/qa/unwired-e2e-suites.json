@@ -63,6 +63,7 @@
     "test:e2e:profile-portability-2529": "scheduled-nonblocking",
     "test:e2e:smoke": "runs-per-pr",
     "test:e2e:smoke:firefox": "runs-per-pr",
+    "test:e2e:smoke:webkit": "runs-per-pr",
     "test:e2e:task-binding-446": "unwired",
     "test:e2e:update-ui-1696": "unwired",
     "test:e2e:workspace-perf": "push-nonblocking",

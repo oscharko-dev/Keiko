@@ -24,6 +24,12 @@ import { createRunRegistry } from "../runs.js";
 import { UI_HOST } from "../server.js";
 import { runMigrations } from "../store/schema.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "../observability/index.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
 import { buildActiveWorkspacePointerStoreOverDatabase } from "./active-store.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";
@@ -169,6 +175,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await closeServer();
+  resetServerLogger();
   db.close();
   await rm(staticRoot, { recursive: true, force: true });
   rmSync(repoRoot, { recursive: true, force: true });
@@ -219,14 +226,29 @@ describe("POST /api/task-workspaces/reconciliation", () => {
   });
 
   it("rejects a malformed present optional root instead of reconciling every repository", async () => {
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    const root = `Patient Jane private root${String.fromCodePoint(0x200b)}`;
+    const correlationId = "route-reconcile-invalid-1";
     const res = await fetch(`${baseUrl()}/api/task-workspaces/reconciliation`, {
       method: "POST",
-      headers: csrfHeaders(),
-      body: JSON.stringify({ root: 42 }),
+      headers: {
+        ...csrfHeaders(),
+        "X-Keiko-Correlation-Id": correlationId,
+      },
+      body: JSON.stringify({ root }),
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("INVALID_REQUEST");
+    const events = activityLog.events.filter((event) => event.op === "task-workspace.lifecycle");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      correlationId,
+      errorKind: "INVALID_REQUEST",
+      extra: { operation: "reconcile" },
+    });
+    expect(activityLog.lines().join("\n")).not.toContain(root);
   });
 });
 
@@ -278,6 +300,34 @@ describe("POST /api/task-workspaces/:workspaceId/repair", () => {
       }),
     });
     expect(res.status).toBe(403);
+  });
+
+  it("logs an invalid repair body once before service dispatch", async () => {
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    const workspaceId = "Patient Jane private workspace";
+    const correlationId = "route-repair-invalid-1";
+    const res = await fetch(
+      `${baseUrl()}/api/task-workspaces/${encodeURIComponent(workspaceId)}/repair`,
+      {
+        method: "POST",
+        headers: {
+          ...csrfHeaders(),
+          "X-Keiko-Correlation-Id": correlationId,
+        },
+        body: JSON.stringify({ strategy: "recreate-worktree", operatorApproved: true }),
+      },
+    );
+
+    expect(res.status).toBe(400);
+    const events = activityLog.events.filter((event) => event.op === "task-workspace.lifecycle");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      correlationId,
+      errorKind: "INVALID_REQUEST",
+      extra: { operation: "repair" },
+    });
+    expect(activityLog.lines().join("\n")).not.toContain(workspaceId);
   });
 
   it("returns 503 when repair is not configured", async () => {

@@ -242,7 +242,11 @@ async function exerciseFailedForget(
     });
   });
   const forget = row.getByRole("button", { name: "Forget" });
-  await forget.click();
+  // Safari/WebKit intentionally does not focus a button merely because a pointer clicked it.
+  // Exercise the keyboard path so the focus-retention assertion is portable and still proves
+  // that the failed operation leaves the initiating control active and reusable.
+  await forget.focus();
+  await forget.press("Enter");
   await expect(memoryWindow.getByRole("alert")).toContainText("could not be forgotten");
   await expect(row).toBeVisible();
   await expect(forget).toBeFocused();

@@ -45,9 +45,8 @@ import {
   gitDeliveryMutationResponse,
   gitDeliveryTerminationHandler,
   logGitDeliveryNoSpawnRefusal,
-  logGitDeliveryMutation,
   logGitDeliveryPreconditionFailure,
-  persistGitDeliveryEvidence,
+  recordGitDeliveryLifecycle,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
 } from "./execution.js";
@@ -120,9 +119,9 @@ export interface GitDeliveryPublishSeams {
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
   readonly beforeRemoteDispatch?: (() => boolean) | undefined;
-  // Set by the route alongside `beforeRemoteDispatch` when that guard is the continuity re-check (see
-  // GitDeliveryAuthorityContinuityDenialCapture). When present, a continuity denial suppresses both
-  // evidence persistence and the mutation-completed log for this synthetic, never-executed attempt.
+  // Set by the route alongside `beforeRemoteDispatch` when that guard is the continuity re-check. A
+  // denial replaces the adapter's synthetic failure with a typed blocked authority-denied ledger/log
+  // outcome; it never suppresses the terminal audit record.
   readonly authorityDenialCapture?: GitDeliveryAuthorityContinuityDenialCapture | undefined;
 }
 
@@ -219,14 +218,19 @@ export async function executeGovernedPublish(
       newActionId,
     },
   );
-  // A continuity denial (caught by authorityGuardedPublishAdapter above) means the adapter never
-  // dispatched — `result` is the synthetic no-spawn stand-in, not a real attempt. The route returns the
-  // captured 403 instead of this result, so recording either evidence or a mutation-completed line
-  // would claim an attempt the client is never told happened. See GitDeliveryAuthorityContinuityDenialCapture.
-  if (seams.authorityDenialCapture?.result === undefined) {
-    persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
-    logGitDeliveryMutation(activityLog, result.lifecycle, correlationId);
-  }
+  // Replace the adapter's synthetic aborted result with the true terminal governance outcome when
+  // continuity refused dispatch. The client receives the captured 403; the ledger retains the matching
+  // blocked / authority-denied / policy-forbidden fact.
+  recordGitDeliveryLifecycle({
+    deps,
+    result: result.lifecycle,
+    snapshot,
+    repoId: workspace.root,
+    now,
+    activityLog,
+    correlationId,
+    authorityDenied: seams.authorityDenialCapture?.result !== undefined,
+  });
   return result;
 }
 

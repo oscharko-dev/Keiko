@@ -50,7 +50,8 @@ import {
   gitDeliveryMutationResponse,
   gitDeliveryTerminationHandler,
   logGitDeliveryNoSpawnRefusal,
-  persistGitDeliveryEvidence,
+  logGitDeliveryPreconditionFailure,
+  recordGitDeliveryLifecycle,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
 } from "./execution.js";
@@ -100,9 +101,8 @@ export interface GitDeliveryPullRequestSeams {
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
   readonly beforeRemoteDispatch?: (() => boolean) | undefined;
-  // Set by the route alongside `beforeRemoteDispatch` when that guard is the continuity re-check (see
-  // GitDeliveryAuthorityContinuityDenialCapture). When present, a continuity denial suppresses evidence
-  // persistence for this synthetic, never-executed attempt instead of recording it as a failure.
+  // Set by the route alongside `beforeRemoteDispatch` when that guard is the continuity re-check. A
+  // denial replaces the adapter's synthetic failure with a typed blocked authority-denied record.
   readonly authorityDenialCapture?: GitDeliveryAuthorityContinuityDenialCapture | undefined;
 }
 
@@ -158,7 +158,13 @@ export async function executeGovernedPullRequest(
 ): Promise<GitPullRequestLifecycleResult> {
   const now = seams.now ?? Date.now;
   const activityLog = seams.activityLog ?? processServerLogSink();
-  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
+  let snapshot: GitWorktreeSnapshot;
+  try {
+    snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
+  } catch (error) {
+    logGitDeliveryPreconditionFailure(activityLog, command.kind, error, correlationId);
+    throw error;
+  }
   const adapter = authorityGuardedPrAdapter(
     prAdapterFor(workspace, seams, now, correlationId),
     seams.beforeRemoteDispatch,
@@ -179,13 +185,19 @@ export async function executeGovernedPullRequest(
       newActionId,
     },
   );
-  // A continuity denial (caught by authorityGuardedPrAdapter above) means the adapter never dispatched —
-  // `result` is the synthetic no-spawn stand-in, not a real attempt. The route returns the captured 403
-  // instead of this result, so recording it here would leave a "failed"/retryable evidence entry for an
-  // attempt the client is never told happened. See GitDeliveryAuthorityContinuityDenialCapture.
-  if (seams.authorityDenialCapture?.result === undefined) {
-    persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
-  }
+  // Replace the adapter's synthetic aborted result with the true terminal governance outcome when
+  // continuity refused dispatch. The client receives the captured 403; the ledger retains the matching
+  // blocked / authority-denied / policy-forbidden fact.
+  recordGitDeliveryLifecycle({
+    deps,
+    result: result.lifecycle,
+    snapshot,
+    repoId: workspace.root,
+    now,
+    activityLog,
+    correlationId,
+    authorityDenied: seams.authorityDenialCapture?.result !== undefined,
+  });
   return result;
 }
 

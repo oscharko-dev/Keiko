@@ -77,14 +77,17 @@ function report(kinds: readonly VerificationKind[]): VerificationReport {
 
 interface FakePort {
   readonly port: VerificationExecutePort;
+  readonly correlationIds: (string | undefined)[];
   calls: number;
 }
 
 function fakePort(rep: VerificationReport, waitForAbort = false): FakePort {
   const state: FakePort = {
     calls: 0,
+    correlationIds: [],
     port: async (args): Promise<ExecuteVerificationResult> => {
       state.calls += 1;
+      state.correlationIds.push(args.correlationId);
       if (waitForAbort && !args.signal.aborted) {
         await new Promise<void>((resolve) => {
           args.signal.addEventListener(
@@ -172,9 +175,10 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
       isWorkspaceTrustedForPackageScripts: () => true,
     });
     const { done } = collect(manager);
-    manager.execute(input({ kinds: ["typecheck"] }));
+    manager.execute(input({ kinds: ["typecheck"], correlationId: "verification-route-1" }));
     await done;
     expect(port.calls).toBe(1);
+    expect(port.correlationIds).toEqual(["verification-route-1"]);
   });
 
   it("revalidates workspace trust after plan derivation and denies drift before a human run", () => {

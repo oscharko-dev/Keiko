@@ -14,7 +14,12 @@ import {
   setServerLogger,
 } from "../observability/index.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { logWorkspaceLifecycle, type WorkspaceLifecycleLogInput } from "./activity-log.js";
+import {
+  logWorkspaceLifecycle,
+  runWithWorkspaceLifecycleFailureLogging,
+  type WorkspaceLifecycleLogInput,
+} from "./activity-log.js";
+import { TaskWorkspaceError } from "./errors.js";
 
 afterEach(() => {
   resetServerLogger();
@@ -46,11 +51,26 @@ describe("logWorkspaceLifecycle", () => {
       operation: "provision",
       outcome: "provisioned",
       workspaceId: "ws_test",
-      taskId: "task_test",
       attempt: 1,
       worktreeCount: 0,
     });
   });
+
+  it.each([
+    ["prose", "Patient Jane cancer follow-up"],
+    ["secret", "sk-proj-super-secret-value"],
+    ["PII", "jane.patient@example.test"],
+  ])(
+    "omits a %s-shaped free-form taskId from the formatted activity-log line",
+    (_label, taskId) => {
+      const activityLog = createBufferedServerLogSink();
+      logWorkspaceLifecycle({ activityLog }, { ...BASE, taskId });
+      const [line] = activityLog.lines();
+      expect(line).toBeDefined();
+      expect(line).not.toContain(taskId);
+      expect(JSON.parse(line ?? "{}")).not.toHaveProperty("taskId");
+    },
+  );
 
   it("raises level to warn and sets errorKind to the outcome itself for a failure-classified outcome with no explicit code", () => {
     const activityLog = createBufferedServerLogSink();
@@ -115,6 +135,39 @@ describe("logWorkspaceLifecycle", () => {
     logWorkspaceLifecycle({ activityLog }, { ...BASE, correlationId: "req-corr-abc123" });
     const [line] = activityLog.events;
     expect(line?.correlationId).toBe("req-corr-abc123");
+  });
+
+  it("does not duplicate a classified failure when the same rejection crosses nested service boundaries", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const rejection = new TaskWorkspaceError("ILLEGAL_TRANSITION", "hostile body");
+    const workspaceIdentitySeed = "Patient Jane private workspace";
+    const failureInput = {
+      operation: "activate" as const,
+      workspaceIdentitySeed: "",
+      correlationId: BASE.correlationId,
+    };
+    logWorkspaceLifecycle(
+      { activityLog },
+      { ...BASE, operation: "activate", outcome: "blocked", errorCode: rejection.code },
+    );
+
+    await expect(
+      runWithWorkspaceLifecycleFailureLogging({ activityLog }, failureInput, () =>
+        runWithWorkspaceLifecycleFailureLogging(
+          { activityLog },
+          {
+            ...failureInput,
+            workspaceIdentitySeed,
+            failureOutcomeAlreadyRecorded: () => true,
+          },
+          () => Promise.reject(rejection),
+        ),
+      ),
+    ).rejects.toBe(rejection);
+
+    expect(activityLog.events).toHaveLength(1);
+    expect(activityLog.lines().join("\n")).not.toContain(workspaceIdentitySeed);
+    expect(activityLog.lines().join("\n")).not.toContain("hostile body");
   });
 
   it.each([

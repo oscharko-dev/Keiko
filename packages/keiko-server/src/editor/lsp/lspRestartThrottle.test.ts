@@ -82,4 +82,30 @@ describe("createLspRestartThrottle", () => {
     expect(throttle.recordCrashAndMayRestart(windowMs)).toBe(false);
     expect(throttle.restartCount()).toBe(2);
   });
+
+  it("restores a throttled rolling window across a supervisor restart", () => {
+    const beforeRestart = createLspRestartThrottle(1_000, 2);
+    expect(beforeRestart.recordCrashAndMayRestart(10)).toBe(true);
+    expect(beforeRestart.recordCrashAndMayRestart(20)).toBe(true);
+    expect(beforeRestart.recordCrashAndMayRestart(30)).toBe(false);
+
+    const afterRestart = createLspRestartThrottle(1_000, 2, {
+      crashTimestampsMs: beforeRestart.crashTimestamps(40),
+      restartCount: beforeRestart.restartCount(),
+    });
+    expect(afterRestart.isThrottled(40)).toBe(true);
+    expect(afterRestart.restartCount()).toBe(2);
+    expect(afterRestart.crashTimestamps(40)).toEqual([10, 20, 30]);
+  });
+
+  it("expires restored throttle history only at the governed rolling-window boundary", () => {
+    const restored = createLspRestartThrottle(1_000, 1, {
+      crashTimestampsMs: [10, 20],
+      restartCount: 1,
+    });
+
+    expect(restored.isThrottled(1_009)).toBe(true);
+    expect(restored.isThrottled(1_020)).toBe(false);
+    expect(restored.crashTimestamps(1_020)).toEqual([]);
+  });
 });

@@ -16,11 +16,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
-  WindowsSystemBinaryMissingError,
-  WindowsSystemDirectoryError,
-  emitSecurityLogEvent,
-  resolveWindowsSystemExecutable,
-  securityErrorKind,
+  resolveWindowsPowerShellExecutable,
   type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
 // From the contracts leaf, NOT keiko-server or the keiko-sdk fat barrel: pulling the server
@@ -38,7 +34,11 @@ import { absoluteExistingPath, resolvePreferredInstallLayout } from "./install-l
 import { LauncherError } from "./launcher-platforms.js";
 import { resolveLoopbackEndpoint } from "./loopback-endpoint.js";
 import type { CliIo } from "./runner.js";
-import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
+import {
+  createCliSecurityLogSink,
+  emitCliWindowsSystemFailure,
+  type CliSecurityLogSinkFactory,
+} from "./security-log.js";
 import {
   assertNotSymlink,
   assertRegularSingleLinkFile,
@@ -496,10 +496,7 @@ export function resolveExternalOpener(
   if (platform === "win32") {
     const command = `Start-Process '${url.replaceAll("'", "''")}'`;
     return {
-      command: resolveWindowsSystemExecutable(
-        ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"],
-        env,
-      ),
+      command: resolveWindowsPowerShellExecutable(env),
       args: [
         "-NoProfile",
         "-NonInteractive",
@@ -520,26 +517,6 @@ function defaultOpenExternal(url: string, platform: NodeJS.Platform, env: EnvSou
   child.unref();
 }
 
-function logWindowsOpenerFailure(error: unknown, sink: SecurityLogSink | undefined): void {
-  if (error instanceof WindowsSystemDirectoryError) {
-    emitSecurityLogEvent(sink, {
-      level: "warn",
-      category: "security",
-      op: "security.windows-lifecycle-opener.system-root-refused",
-      errorKind: securityErrorKind(error),
-      extra: { surface: "start-open-browser" },
-    });
-  } else if (error instanceof WindowsSystemBinaryMissingError) {
-    emitSecurityLogEvent(sink, {
-      level: "error",
-      category: "diagnostic",
-      op: "security.windows-lifecycle-opener.system-binary-missing",
-      errorKind: securityErrorKind(error),
-      extra: { surface: "start-open-browser" },
-    });
-  }
-}
-
 async function maybeOpenBrowser(
   options: LifecycleOptions,
   io: CliIo,
@@ -554,7 +531,7 @@ async function maybeOpenBrowser(
       pairingSecret === undefined ? baseUrl : await pairedOpenUrl(baseUrl, pairingSecret);
     openExternal(target);
   } catch (error) {
-    logWindowsOpenerFailure(error, securityLogSink);
+    emitCliWindowsSystemFailure(error, securityLogSink, "start-open-browser");
     io.err(`keiko start: failed to open ${baseUrl} in the default browser.\n`);
   }
 }

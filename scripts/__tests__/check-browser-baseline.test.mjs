@@ -1,12 +1,15 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   GUARDED_APIS,
+  dependencyClosureForSources,
   main,
   parseDeclaredFloors,
+  providedRuntimeApis,
+  runtimeSpecifiers,
   transpileFloorViolations,
   violationsFor,
 } from "../check-browser-baseline.mjs";
@@ -183,6 +186,13 @@ describe("GUARDED_APIS", () => {
       "AbortSignal.any": "AbortSignal.any([a, b])",
       structuredClone: "structuredClone(value)",
       "Object.hasOwn": "Object.hasOwn(o, k)",
+      "Array.prototype.toSorted": "items.toSorted()",
+      "Array.prototype.findLast": "items.findLast((item) => item.ready)",
+      "HTMLElement.showPopover": "element.showPopover()",
+      "Intl.Segmenter": "new Intl.Segmenter()",
+      "Promise.try": "Promise.try(load)",
+      "Promise.withResolvers": "Promise.withResolvers()",
+      "URL.parse": "URL.parse('/x', location.href)",
     };
     for (const [name, sample] of Object.entries(samples)) {
       const api = GUARDED_APIS.find((entry) => entry.name === name);
@@ -292,22 +302,28 @@ describe("main", () => {
     expect(result.errors.join("\n")).toContain("Array.prototype.at needs chrome >= 92");
   });
 
+  it.each([
+    ["Array.prototype.toSorted", "chrome >= 80", "items.toSorted()", "chrome >= 110"],
+    [
+      "Array.prototype.findLast",
+      "chrome >= 80",
+      "items.findLast((item) => item.ready)",
+      "chrome >= 97",
+    ],
+    ["HTMLElement.showPopover", "chrome >= 80", "element.showPopover()", "chrome >= 114"],
+    ["Intl.Segmenter", "firefox >= 100", "new Intl.Segmenter()", "firefox >= 125"],
+  ])("fails end to end for the %s guard", (_name, floor, source, required) => {
+    const result = run(fixture({ browserslist: [floor], source }));
+    expect(result.exitCode).toBe(1);
+    expect(result.errors.join("\n")).toContain(required);
+  });
+
   // F3 finding: end-to-end proof that the gate catches a POSITIVE-literal/variable `.at(` call too,
   // not only the negative-literal shape — `entries.at(0)` is the identical gated method as
   // `entries.at(-1)` and must fail the same way when the declared floor cannot reach it.
   it("fails for a positive-literal or variable .at( index too, not only the negative-literal form", () => {
     const result = run(
       fixture({ browserslist: ["chrome >= 80"], source: "const first = items.at(0);\n" }),
-    );
-    expect(result.exitCode).toBe(1);
-    expect(result.errors.join("\n")).toContain("Array.prototype.at needs chrome >= 92");
-  });
-
-  // IDX56 finding, end-to-end: a call written with whitespace before the opening paren
-  // (`items.at (0)`) is the identical gated method as `items.at(0)` and must fail the same way.
-  it("fails for a .at( call with whitespace before the opening paren too", () => {
-    const result = run(
-      fixture({ browserslist: ["chrome >= 80"], source: "const first = items.at (0);\n" }),
     );
     expect(result.exitCode).toBe(1);
     expect(result.errors.join("\n")).toContain("Array.prototype.at needs chrome >= 92");
@@ -392,80 +408,234 @@ describe("main", () => {
     expect(errors).not.toContain("Array.prototype.at needs");
   });
 
-  // IDX58 finding: SOURCE_ROOTS stops at first-party source, so a guarded API called only from
-  // inside a bundled DEPENDENCY_FILES entry (pdfjs-dist in production; a synthetic vendor file
-  // here, for a hermetic fixture) was invisible to this gate. This block pins that DEPENDENCY_FILES
-  // is actually scanned, and only the files it names.
-  describe("DEPENDENCY_FILES scanning", () => {
+  // The production gate derives a complete browser dependency graph. These fixtures exercise the
+  // graph rules rather than naming a second production allowlist in the test.
+  describe("bundled dependency closure", () => {
     const depRoots = [];
 
     afterEach(() => {
       for (const root of depRoots.splice(0)) rmSync(root, { force: true, recursive: true });
     });
 
-    function dependencyFile(content) {
+    function dependencyFixture(files, entry = "entry.mjs") {
       const root = mkdtempSync(join(tmpdir(), "keiko-browser-baseline-dep-"));
       depRoots.push(root);
-      const file = join(root, "vendor.mjs");
-      writeFileSync(file, content, "utf8");
-      return file;
+      for (const [name, content] of Object.entries(files)) {
+        const path = join(root, name);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, content, "utf8");
+      }
+      return join(root, entry);
     }
 
-    it("reports a guarded API found only in a listed dependency file, not first-party source", () => {
+    function resolveProviderFixtureOptions(options = {}) {
+      return {
+        providerBinding: options.providerBinding ?? "var $ = __webpack_require__(2);",
+        providerCall:
+          options.providerCall ??
+          "$({ target: 'Promise', stat: true }, " +
+            "{ withResolvers: function withResolvers() {} });",
+        providerImportFirst: options.providerImportFirst ?? true,
+        rootImport: options.rootImport ?? "var es_promise_with_resolvers = __webpack_require__(1);",
+        rootImportFirst: options.rootImportFirst ?? true,
+      };
+    }
+
+    function ordered(first, second, firstBeforeSecond) {
+      return firstBeforeSecond ? [first, second] : [second, first];
+    }
+
+    function webpackProviderFixture(options = {}) {
+      const resolved = resolveProviderFixtureOptions(options);
+      const applicationCall = "export const value = Promise.withResolvers();";
+      const providerStatements = ordered(
+        resolved.providerBinding,
+        resolved.providerCall,
+        resolved.providerImportFirst,
+      );
+      const rootStatements = ordered(
+        resolved.rootImport,
+        applicationCall,
+        resolved.rootImportFirst,
+      );
+      return dependencyFixture({
+        "entry.mjs": `
+          var __webpack_modules__ = ({
+            1(module, unused, __webpack_require__) {
+              ${providerStatements.join("\n")}
+            },
+            2(module, unused, __webpack_require__) {
+              var defineBuiltIn = __webpack_require__(3);
+              module.exports = function(options, source) {
+                var targetName = options.target;
+                var stat = options.stat;
+                var target = globalThis[targetName];
+                if (stat && target) for (var key in source) {
+                  defineBuiltIn(target, key, source[key], options);
+                }
+              };
+            },
+            3(module) {
+              module.exports = function(target, key, value) { target[key] = value; };
+            },
+            4(module) { module.exports = function() {}; }
+          });
+          function __webpack_require__(moduleId) {
+            var module = { exports: {} };
+            __webpack_modules__[moduleId](module, module.exports, __webpack_require__);
+            return module.exports;
+          }
+          ${rootStatements.join("\n")}
+        `,
+      });
+    }
+
+    it("follows a transitive JS import and reports its guarded API", () => {
       const fx = fixture({ browserslist: ["chrome >= 100"] });
-      const dep = dependencyFile("export function load() { return Promise.withResolvers(); }\n");
+      const dep = dependencyFixture({
+        "entry.mjs": 'export { load } from "./nested/vendor.js";\n',
+        "nested/vendor.js": "export function load() { return Promise.withResolvers(); }\n",
+      });
       const result = run({ ...fx, dependencyFiles: [dep] });
       expect(result.exitCode).toBe(1);
       expect(result.errors.join("\n")).toContain("Promise.withResolvers needs chrome >= 119");
     });
 
-    it("reports guarded CSS injected from a listed .mjs dependency", () => {
+    it("reports guarded CSS embedded in transitive plain .js", () => {
       const fx = fixture({ browserslist: ["firefox >= 100"] });
-      const dep = dependencyFile(
-        "export const popupStyle = `.popup { background: color-mix(in srgb, red 30%, white); }`;\n",
-      );
+      const dep = dependencyFixture({
+        "entry.mjs": 'import "./style.js";\n',
+        "style.js":
+          "export const popupStyle = `.popup { background: color-mix(in srgb, red 30%, white); }`;\n",
+      });
       const result = run({ ...fx, dependencyFiles: [dep] });
       expect(result.exitCode).toBe(1);
       expect(result.errors.join("\n")).toContain("CSS color-mix() needs firefox >= 113");
     });
 
-    it("scans the listed dependency file but not another dependency file left unlisted", () => {
-      const fx = fixture({ browserslist: ["chrome >= 100"], source: "export const v = 1;\n" });
-      const listed = dependencyFile(
-        "export function listed() { return Promise.withResolvers(); }\n",
-      );
-      dependencyFile("export function unlisted() { return URL.parse('/x', location.href); }\n");
-      const result = run({ ...fx, dependencyFiles: [listed] });
-      const errors = result.errors.join("\n");
-      expect(result.exitCode).toBe(1);
-      expect(errors).toContain("Promise.withResolvers needs chrome >= 119");
-      expect(errors).not.toContain("URL.parse needs chrome >= 126");
+    it("recognizes the imported and reachable core-js providers in both real PDF.js realms", () => {
+      for (const file of ["pdf.mjs", "pdf.worker.mjs"]) {
+        const path = resolve("node_modules", "pdfjs-dist", "legacy", "build", file);
+        const provided = providedRuntimeApis(path);
+        for (const api of ["Promise.try", "Promise.withResolvers", "URL.parse"]) {
+          expect(provided, `${file} does not execute the core-js provider for ${api}`).toContain(
+            api,
+          );
+        }
+      }
     });
 
-    it("diagnoses a missing dependency and still scans the remaining readable entries", () => {
-      const fx = fixture({ browserslist: ["chrome >= 100"], source: "export const v = 1;\n" });
-      const readable = dependencyFile(
-        "export function load() { return Promise.withResolvers(); }\n",
+    it("does not accept a comment, string, or similarly-shaped arbitrary call as a provider", () => {
+      const fx = fixture({ browserslist: ["chrome >= 100"] });
+      const claim = dependencyFixture({
+        "entry.mjs":
+          "// $({ target: 'Promise', stat: true }, { withResolvers: function() {} });\n" +
+          'export const claim = "target: Promise, withResolvers: function";\n' +
+          "export const value = Promise.withResolvers();\n",
+      });
+      const result = run({ ...fx, dependencyFiles: [claim] });
+      expect(result.exitCode).toBe(1);
+      expect(result.errors.join("\n")).toContain("Promise.withResolvers needs chrome >= 119");
+
+      const arbitraryCall = dependencyFixture({
+        "entry.mjs":
+          "register({ target: 'Promise', stat: true }, " +
+          "{ withResolvers: function withResolvers() {} });\n" +
+          "export const value = Promise.withResolvers();\n",
+      });
+      const arbitraryResult = run({ ...fx, dependencyFiles: [arbitraryCall] });
+      expect(arbitraryResult.exitCode).toBe(1);
+      expect(arbitraryResult.errors.join("\n")).toContain(
+        "Promise.withResolvers needs chrome >= 119",
       );
-      const missing = join(tmpdir(), "keiko-browser-baseline-missing-dependency.mjs");
-      rmSync(missing, { force: true });
-      const result = run({ ...fx, dependencyFiles: [missing, readable] });
+    });
+
+    it.each([
+      [
+        "a dead conditional provider call",
+        {
+          providerCall:
+            "if (false) { $({ target: 'Promise', stat: true }, " +
+            "{ withResolvers: function withResolvers() {} }); }",
+        },
+      ],
+      [
+        "a local dollar function",
+        {
+          providerBinding: "var $ = function() {};",
+        },
+      ],
+      [
+        "an import of a non-exporter module",
+        {
+          providerBinding: "var $ = __webpack_require__(4);",
+        },
+      ],
+      [
+        "a provider call that precedes its import",
+        {
+          providerImportFirst: false,
+        },
+      ],
+      [
+        "a conditionally reached polyfill module",
+        {
+          rootImport: "if (false) { __webpack_require__(1); }",
+        },
+      ],
+    ])("fails closed for %s", (_label, options) => {
+      const fx = fixture({ browserslist: ["chrome >= 100"] });
+      const result = run({ ...fx, dependencyFiles: [webpackProviderFixture(options)] });
+      expect(result.exitCode).toBe(1);
+      expect(result.errors.join("\n")).toContain("Promise.withResolvers needs chrome >= 119");
+    });
+
+    it("fails closed when the API call executes before its bundled implementation", () => {
+      const fx = fixture({ browserslist: ["chrome >= 100"] });
+      const entry = webpackProviderFixture({ rootImportFirst: false });
+      const result = run({ ...fx, dependencyFiles: [entry] });
+      expect(result.exitCode).toBe(1);
+      expect(result.errors.join("\n")).toContain("Promise.withResolvers needs chrome >= 119");
+    });
+
+    it("fails closed when a transitive dependency edge cannot be resolved", () => {
+      const fx = fixture({ browserslist: ["chrome >= 120"], source: "export const v = 1;\n" });
+      const entry = dependencyFixture({ "entry.mjs": 'import "./missing.js";\n' });
+      const result = run({ ...fx, dependencyFiles: [entry] });
       const errors = result.errors.join("\n");
       expect(result.exitCode).toBe(1);
-      expect(errors).toContain(`bundled dependency file is missing or unreadable: ${missing}`);
-      expect(errors).toContain("Promise.withResolvers needs chrome >= 119");
+      expect(errors).toContain("bundled dependency closure could not be derived");
+      expect(errors).toContain('cannot resolve "./missing.js"');
     });
   });
 
-  // Real production proof for IDX58: `main()` with EVERY default — the shipped package.json, the
-  // shipped SOURCE_ROOTS, and the shipped DEPENDENCY_FILES (the installed pdfjs-dist main-thread
-  // module and its worker). This is the exact gate the CLI runs; before this change it failed here
-  // with "Promise.withResolvers needs chrome >= 119 but browserslist declares chrome >= 111" (and
-  // the equivalent for URL.parse), because pdfjs-dist calls both unconditionally and neither was
-  // reachable from SOURCE_ROOTS nor guarded against the declared floor.
-  it("passes end-to-end against the REAL shipped declaration, sources, and dependency files", () => {
+  it("derives the real Monaco and legacy PDF.js main/worker closure", () => {
+    const paths = dependencyClosureForSources();
+    expect(paths.some((path) => path.endsWith("/monaco-editor/esm/vs/editor/editor.api.js"))).toBe(
+      true,
+    );
+    expect(
+      paths.some((path) => path.endsWith("/monaco-editor/esm/vs/editor/editor.worker.js")),
+    ).toBe(true);
+    expect(paths.some((path) => path.endsWith("/pdfjs-dist/legacy/build/pdf.mjs"))).toBe(true);
+    expect(paths.some((path) => path.endsWith("/pdfjs-dist/legacy/build/pdf.worker.mjs"))).toBe(
+      true,
+    );
+    expect(paths.filter((path) => path.includes("/monaco-editor/")).length).toBeGreaterThan(500);
+  });
+
+  it("extracts value imports and worker URLs but excludes type-only imports", () => {
+    const source =
+      'import type { Hidden } from "hidden";\n' +
+      'import { shown } from "shown";\n' +
+      'const worker = new Worker(new URL("worker/entry.js", import.meta.url));\n';
+    expect(runtimeSpecifiers("fixture.ts", source)).toEqual(["shown", "worker/entry.js"]);
+  });
+
+  it("passes end to end against the real shipped declaration and derived closure", () => {
     const result = run({});
     expect(result.exitCode).toBeUndefined();
     expect(result.logs.join("\n")).toContain("browser-baseline: PASS");
+    expect(result.logs.join("\n")).toMatch(/1\d{3} bundled dependency source files/u);
   });
 });

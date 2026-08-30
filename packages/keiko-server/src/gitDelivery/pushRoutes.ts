@@ -260,6 +260,7 @@ async function runPushMutation(input: PushMutationInput): Promise<RouteResult> {
     admitted: authority,
     next: seams.beforeRemoteDispatch,
     denialCapture,
+    audit: { logSink: seams.activityLog },
   });
   try {
     const result = await executeGovernedPublish(
@@ -295,7 +296,9 @@ export const createHandlePushExecute = (
       headBranchName: command.sourceBranchName,
       remoteBranchName: command.remoteBranchName,
     };
-    const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "push", target);
+    const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "push", target, {
+      logSink: seams.activityLog,
+    });
     if (!authority.allowed) return authority.result;
     return runPushMutation({
       ctx,

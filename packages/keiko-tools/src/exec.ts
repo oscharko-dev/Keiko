@@ -236,38 +236,116 @@ export interface WindowsTaskkillBudget {
   readonly refund: (unusedMs: number) => void;
 }
 
+interface WindowsTaskkillBudgetReservation extends WindowsTaskkillBudget {
+  readonly release: () => void;
+}
+
+interface WindowsTaskkillBudgetPool extends WindowsTaskkillBudget {
+  readonly reserve: (slots: number) => WindowsTaskkillBudgetReservation | undefined;
+}
+
+interface WindowsTaskkillBudgetState {
+  remainingMs: number;
+  heldMs: number;
+  directOutstanding: number;
+  windowResetAt: number;
+}
+
+function refreshTaskkillBudgetWindow(state: WindowsTaskkillBudgetState, currentTime: number): void {
+  if (currentTime < state.windowResetAt) return;
+  const heldAndRunningMs = state.heldMs + state.directOutstanding * TASKKILL_WAIT_MS;
+  state.remainingMs = Math.max(0, WINDOWS_TASKKILL_BUDGET_MS - heldAndRunningMs);
+  state.windowResetAt = currentTime + WINDOWS_TASKKILL_BUDGET_WINDOW_MS;
+}
+
+function refundTaskkillBudgetToWindow(
+  state: WindowsTaskkillBudgetState,
+  currentTime: number,
+  unusedMs: number,
+): void {
+  refreshTaskkillBudgetWindow(state, currentTime);
+  const boundedRefund = Number.isFinite(unusedMs)
+    ? Math.min(TASKKILL_WAIT_MS, Math.max(0, unusedMs))
+    : 0;
+  state.remainingMs = Math.min(
+    WINDOWS_TASKKILL_BUDGET_MS - state.heldMs,
+    state.remainingMs + boundedRefund,
+  );
+}
+
+function reserveTaskkillBudget(
+  state: WindowsTaskkillBudgetState,
+  now: () => number,
+  slots: number,
+): WindowsTaskkillBudgetReservation | undefined {
+  refreshTaskkillBudgetWindow(state, now());
+  const reservedMs = slots * TASKKILL_WAIT_MS;
+  if (!Number.isSafeInteger(slots) || slots <= 0 || state.remainingMs < reservedMs)
+    return undefined;
+  state.remainingMs -= reservedMs;
+  state.heldMs += reservedMs;
+  let availableSlots = slots;
+  let inFlightSlots = 0;
+  let released = false;
+  return {
+    tryConsume: (): boolean => {
+      if (released || availableSlots <= 0) return false;
+      availableSlots -= 1;
+      inFlightSlots += 1;
+      return true;
+    },
+    refund: (unusedMs): void => {
+      if (inFlightSlots <= 0) return;
+      refreshTaskkillBudgetWindow(state, now());
+      inFlightSlots -= 1;
+      state.heldMs -= TASKKILL_WAIT_MS;
+      refundTaskkillBudgetToWindow(state, now(), unusedMs);
+    },
+    release: (): void => {
+      if (released) return;
+      released = true;
+      while (availableSlots > 0) {
+        refreshTaskkillBudgetWindow(state, now());
+        availableSlots -= 1;
+        state.heldMs -= TASKKILL_WAIT_MS;
+        refundTaskkillBudgetToWindow(state, now(), TASKKILL_WAIT_MS);
+      }
+    },
+  };
+}
+
 // `now` is injected — production uses the monotonic performance clock, tests move time without a
 // real 60s wait — and
 // each call to this factory returns a budget with its OWN private counter, never a shared module
 // singleton. `nodeWindowsTreeKillWith` relies on exactly that: its own `budget` parameter defaults to
-// a FRESH `createWindowsTaskkillBudget()` per factory call, so the one production `nodeWindowsTreeKill`
-// export below gets a single process-lifetime budget (created once, at module load) while every test
-// that calls `nodeWindowsTreeKillWith(...)` directly gets an isolated budget of its own — no shared
-// mutable state bleeding between unrelated test cases (AGENTS.md §7).
+// a FRESH `createWindowsTaskkillBudget()` per factory call, so every test that calls
+// `nodeWindowsTreeKillWith(...)` directly gets an isolated budget of its own — no shared mutable
+// state bleeding between unrelated test cases (AGENTS.md §7). Production explicitly passes one
+// process-lifetime instance to BOTH direct LSP kills and reserved runCommand kills below.
 export function createWindowsTaskkillBudget(
   now: () => number = () => performance.now(),
-): WindowsTaskkillBudget {
-  let remainingMs = WINDOWS_TASKKILL_BUDGET_MS;
-  let windowResetAt = now() + WINDOWS_TASKKILL_BUDGET_WINDOW_MS;
+): WindowsTaskkillBudgetPool {
+  const state: WindowsTaskkillBudgetState = {
+    remainingMs: WINDOWS_TASKKILL_BUDGET_MS,
+    heldMs: 0,
+    directOutstanding: 0,
+    windowResetAt: now() + WINDOWS_TASKKILL_BUDGET_WINDOW_MS,
+  };
   return {
     tryConsume: (): boolean => {
-      const currentTime = now();
-      if (currentTime >= windowResetAt) {
-        remainingMs = WINDOWS_TASKKILL_BUDGET_MS;
-        windowResetAt = currentTime + WINDOWS_TASKKILL_BUDGET_WINDOW_MS;
-      }
-      if (remainingMs < TASKKILL_WAIT_MS) {
-        return false;
-      }
-      remainingMs -= TASKKILL_WAIT_MS;
+      refreshTaskkillBudgetWindow(state, now());
+      if (state.remainingMs < TASKKILL_WAIT_MS) return false;
+      state.remainingMs -= TASKKILL_WAIT_MS;
+      state.directOutstanding += 1;
       return true;
     },
     refund: (unusedMs): void => {
-      const boundedRefund = Number.isFinite(unusedMs)
-        ? Math.min(TASKKILL_WAIT_MS, Math.max(0, unusedMs))
-        : 0;
-      remainingMs = Math.min(WINDOWS_TASKKILL_BUDGET_MS, remainingMs + boundedRefund);
+      if (state.directOutstanding <= 0) return;
+      refreshTaskkillBudgetWindow(state, now());
+      state.directOutstanding -= 1;
+      refundTaskkillBudgetToWindow(state, now(), unusedMs);
     },
+    reserve: (slots) => reserveTaskkillBudget(state, now, slots),
   };
 }
 
@@ -303,6 +381,7 @@ type TaskkillRunner = (
 
 type TaskkillCompletion = ReturnType<TaskkillRunner>;
 export type WindowsTaskkillInvocationResolver = typeof windowsTaskkillInvocation;
+type WindowsTaskkillInvocation = ReturnType<WindowsTaskkillInvocationResolver>;
 
 const defaultTaskkillRunner: TaskkillRunner = (command, args) => {
   const completed = nodeSpawnSync(command, [...args], {
@@ -353,12 +432,27 @@ function runWindowsTreeKillUnbudgeted(
   runTaskkill: TaskkillRunner,
   resolveInvocation: WindowsTaskkillInvocationResolver,
 ): WindowsTreeKillResult {
-  if (isSelfOrParentPid(pid)) return "refused-self-pid";
   try {
     const { command, args } = resolveInvocation(pid, processEnv);
     return taskkillCompletionDisposition(runTaskkill(command, args));
   } catch (error) {
     return taskkillThrownDisposition(error);
+  }
+}
+
+function runWithinTaskkillBudget(
+  pid: number,
+  budget: WindowsTaskkillBudget,
+  elapsedNow: () => number,
+  kill: () => WindowsTreeKillResult,
+): WindowsTreeKillResult {
+  if (isSelfOrParentPid(pid)) return "refused-self-pid";
+  if (!budget.tryConsume()) return "budget-exhausted";
+  const startedAt = elapsedNow();
+  try {
+    return kill();
+  } finally {
+    refundTaskkillReservation(budget, startedAt, elapsedNow);
   }
 }
 
@@ -369,25 +463,15 @@ export const nodeWindowsTreeKillWith =
     elapsedNow: () => number = () => performance.now(),
     resolveInvocation: WindowsTaskkillInvocationResolver = windowsTaskkillInvocation,
   ): WindowsTreeKill =>
-  (pid, processEnv) => {
-    if (isSelfOrParentPid(pid)) {
-      return "refused-self-pid";
-    }
+  (pid, processEnv) =>
     // The AGGREGATE bound: once this window's budget is spent, report "budget-exhausted" — the
     // accurate evidence for "we chose not to pay another blocking wait", never a guessed
     // "succeeded"/"failed" or a false claim that a launched taskkill timed out
     // — WITHOUT spawning taskkill at all, so a burst of concurrent terminations cannot serialise the
     // event loop past the budgeted ceiling.
-    if (!budget.tryConsume()) {
-      return "budget-exhausted";
-    }
-    const startedAt = elapsedNow();
-    try {
-      return runWindowsTreeKillUnbudgeted(pid, processEnv, runTaskkill, resolveInvocation);
-    } finally {
-      refundTaskkillReservation(budget, startedAt, elapsedNow);
-    }
-  };
+    runWithinTaskkillBudget(pid, budget, elapsedNow, () =>
+      runWindowsTreeKillUnbudgeted(pid, processEnv, runTaskkill, resolveInvocation),
+    );
 
 const productionWindowsTaskkillBudget = createWindowsTaskkillBudget();
 export const nodeWindowsTreeKill: WindowsTreeKill = nodeWindowsTreeKillWith(
@@ -407,15 +491,58 @@ export interface WindowsTerminationCapacity {
 const MAX_CONCURRENT_WINDOWS_COMMANDS = 3;
 const TREE_KILLS_PER_RUN = 2;
 
+function createBoundReservationKill(
+  validatedInvocation: WindowsTaskkillInvocation | undefined,
+  killWindowsTree: WindowsTreeKill | undefined,
+  boundSystemEnv: NodeJS.ProcessEnv,
+  runTaskkill: TaskkillRunner,
+  budget: WindowsTaskkillBudget,
+  elapsedNow: () => number,
+): WindowsTreeKill {
+  return (pid) =>
+    runWithinTaskkillBudget(pid, budget, elapsedNow, () => {
+      if (killWindowsTree !== undefined) {
+        try {
+          return killWindowsTree(pid, { ...boundSystemEnv });
+        } catch {
+          return "failed";
+        }
+      }
+      if (validatedInvocation === undefined) return "failed";
+      return taskkillCompletionDisposition(
+        runTaskkill(validatedInvocation.command, ["/PID", String(pid), "/T", "/F"]),
+      );
+    });
+}
+
+function createTerminationReservation(
+  killWindowsTree: WindowsTreeKill,
+  releaseSlot: () => void,
+): WindowsTerminationReservation {
+  let released = false;
+  return {
+    kill: (pid, processEnv): WindowsTreeKillResult => {
+      if (released) return "budget-exhausted";
+      return killWindowsTree(pid, processEnv);
+    },
+    release: (): void => {
+      if (released) return;
+      released = true;
+      releaseSlot();
+    },
+  };
+}
+
 // One Windows command can need taskkill twice (SIGTERM, then SIGKILL). Holding one of three slots
-// for the full child lifetime caps the worst synchronous burst at the existing 30-second aggregate
-// ceiling, while making capacity a PRE-spawn decision. Discovering exhaustion only after cmd.exe
-// launches deterministically strands its grandchild outside the Authority Envelope.
+// for the full child lifetime makes capacity a PRE-spawn decision. The separate process-wide
+// rolling budget below is shared with LSP termination and bounds the actual synchronous stall.
 export function createWindowsTerminationCapacity(
   maxConcurrent: number = MAX_CONCURRENT_WINDOWS_COMMANDS,
   killWindowsTree?: WindowsTreeKill,
   resolveInvocation?: WindowsTaskkillInvocationResolver,
   runTaskkill: TaskkillRunner = defaultTaskkillRunner,
+  budget: WindowsTaskkillBudgetPool = createWindowsTaskkillBudget(),
+  elapsedNow: () => number = () => performance.now(),
 ): WindowsTerminationCapacity {
   let available = maxConcurrent;
   return {
@@ -425,41 +552,40 @@ export function createWindowsTerminationCapacity(
         ...(processEnv.SystemRoot === undefined ? {} : { SystemRoot: processEnv.SystemRoot }),
         ...(processEnv.WINDIR === undefined ? {} : { WINDIR: processEnv.WINDIR }),
       };
-      // Authenticate the root and prove taskkill is a regular OS binary before admitting a child.
-      // The returned command IS the authoritative GLOBALROOT path and is bound to this reservation;
-      // it never traverses a mutable lexical candidate again. Only the resolver inputs are copied:
-      // later mutation of deps.env cannot turn an admitted child's kill path into a hostile-root
-      // refusal. PID-specific args are rebuilt only when the reservation is consumed.
+      // Authenticate the root against GLOBALROOT and prove taskkill is a regular OS binary before
+      // admitting a child. The resulting conventional CreateProcess-compatible path is bound to
+      // this reservation. Only the resolver inputs are copied: later mutation of deps.env cannot
+      // turn an admitted child's kill path into a hostile-root refusal. PID-specific args are
+      // rebuilt only when the reservation is consumed.
       const validatedInvocation =
         resolveInvocation?.(1, boundSystemEnv) ??
         (killWindowsTree === undefined ? windowsTaskkillInvocation(1, boundSystemEnv) : undefined);
+      const killBudget = budget.reserve(TREE_KILLS_PER_RUN);
+      if (killBudget === undefined) return undefined;
+      const boundKill = createBoundReservationKill(
+        validatedInvocation,
+        killWindowsTree,
+        boundSystemEnv,
+        runTaskkill,
+        killBudget,
+        elapsedNow,
+      );
       available -= 1;
-      let released = false;
-      let remainingKills = TREE_KILLS_PER_RUN;
-      return {
-        kill: (pid): WindowsTreeKillResult => {
-          if (released || remainingKills <= 0) return "budget-exhausted";
-          remainingKills -= 1;
-          if (killWindowsTree !== undefined) {
-            return killWindowsTree(pid, { ...boundSystemEnv });
-          }
-          if (validatedInvocation === undefined) return "failed";
-          if (isSelfOrParentPid(pid)) return "refused-self-pid";
-          return taskkillCompletionDisposition(
-            runTaskkill(validatedInvocation.command, ["/PID", String(pid), "/T", "/F"]),
-          );
-        },
-        release: (): void => {
-          if (released) return;
-          released = true;
-          available += 1;
-        },
-      };
+      return createTerminationReservation(boundKill, () => {
+        killBudget.release();
+        available += 1;
+      });
     },
   };
 }
 
-const productionWindowsTerminationCapacity = createWindowsTerminationCapacity();
+const productionWindowsTerminationCapacity = createWindowsTerminationCapacity(
+  MAX_CONCURRENT_WINDOWS_COMMANDS,
+  undefined,
+  undefined,
+  defaultTaskkillRunner,
+  productionWindowsTaskkillBudget,
+);
 
 interface KillGroupDeps {
   readonly platform: NodeJS.Platform;

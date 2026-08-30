@@ -43,9 +43,11 @@ import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import { TaskWorkspaceError } from "./errors.js";
 import { correlationIdOrUnknown } from "../correlation.js";
-import { logWorkspaceLifecycle } from "./activity-log.js";
 import {
-  appendWorkspaceLifecycleEvidence,
+  recordWorkspaceLifecycle,
+  runWithWorkspaceLifecycleFailureLogging,
+} from "./activity-log.js";
+import {
   buildWorkspaceEvent,
   WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
   type WorkspaceLifecycleOutcome,
@@ -131,26 +133,6 @@ interface EmitCleanupInput {
   readonly errorCode?: string | undefined;
 }
 
-// Same operation, SAME correlationId, into the server activity log (AGENTS.md §8). Split out of
-// `emit` so that function stays under the repo's per-function line budget (AGENTS.md §6).
-function emitCleanupActivityLog(
-  ctx: CleanupCtx,
-  input: EmitCleanupInput,
-  correlationId: string,
-): void {
-  logWorkspaceLifecycle(ctx.deps, {
-    operation: "cleanup",
-    outcome: input.outcome,
-    workspaceId: input.workspaceId,
-    taskId: input.taskId,
-    correlationId,
-    attempt: 1,
-    durationMs: 0,
-    worktreeCount: 0,
-    errorCode: input.errorCode,
-  });
-}
-
 function emit(ctx: CleanupCtx, input: EmitCleanupInput): void {
   const correlationId = correlationIdOrUnknown(input.correlationId);
   const event = buildWorkspaceEvent({
@@ -163,9 +145,9 @@ function emit(ctx: CleanupCtx, input: EmitCleanupInput): void {
     ...(input.fromState !== undefined ? { fromState: input.fromState } : {}),
     ...(input.toState !== undefined ? { toState: input.toState } : {}),
   });
-  appendWorkspaceLifecycleEvidence(
-    ctx.deps.evidenceStore,
-    {
+  recordWorkspaceLifecycle(ctx.deps, {
+    evidenceStore: ctx.deps.evidenceStore,
+    record: {
       kind: WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
       schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
       recordedAt: input.nowMs,
@@ -176,9 +158,9 @@ function emit(ctx: CleanupCtx, input: EmitCleanupInput): void {
       worktreeCount: 0,
       event,
     },
-    ctx.deps.redactString,
-  );
-  emitCleanupActivityLog(ctx, input, correlationId);
+    redactString: ctx.deps.redactString,
+    errorCode: input.errorCode,
+  });
 }
 
 function loadInstance(ctx: CleanupCtx, workspaceId: string): WorkspaceInstance {
@@ -656,15 +638,32 @@ export function createWorkspaceCleanupService(
     // concurrent activate/pause/repair of the same workspace. `runExclusive` also turns a synchronous
     // validation throw from requestCleanupImpl into a rejected promise (the consistent async contract).
     cleanup: (request: WorkspaceCleanupRequest): Promise<WorkspaceCleanupResult> =>
-      deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () => {
-        const ctx = ctxFor(request.correlationId);
-        return request.mode === "request"
-          ? requestCleanupImpl(ctx, request)
-          : completeCleanupImpl(ctx, request);
-      }),
+      runWithWorkspaceLifecycleFailureLogging(
+        deps,
+        {
+          operation: "cleanup",
+          workspaceIdentitySeed: request.workspaceId,
+          correlationId: request.correlationId,
+        },
+        () =>
+          deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () => {
+            const ctx = ctxFor(request.correlationId);
+            return request.mode === "request"
+              ? requestCleanupImpl(ctx, request)
+              : completeCleanupImpl(ctx, request);
+          }),
+      ),
     cleanupOrphans: (
       request: WorkspaceOrphanCleanupRequest,
     ): Promise<WorkspaceOrphanCleanupResult> =>
-      cleanupOrphansImpl(ctxFor(request.correlationId), request),
+      runWithWorkspaceLifecycleFailureLogging(
+        deps,
+        {
+          operation: "cleanup",
+          workspaceIdentitySeed: request.repositoryRoot ?? "all-managed-task-workspaces",
+          correlationId: request.correlationId,
+        },
+        () => cleanupOrphansImpl(ctxFor(request.correlationId), request),
+      ),
   };
 }
