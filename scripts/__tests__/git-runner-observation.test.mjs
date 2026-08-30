@@ -58,35 +58,149 @@ function productionSources(dir) {
 
 // Lines mentioning a raw runner as a VALUE — not a comment, not an `import type` / `export type`,
 // and not the plain import or re-export that merely NAMES it for a composition root or a test.
+// A line that only NAMES a raw runner for a composition root or a test — a comment, a type-only
+// import, or any line inside an import/export block — is not a call site and is not scanned.
+function isNonCodeLine(line, inImportOrExportBlock) {
+  return (
+    /^\s*(?:\/\/|\*|\/\*)/u.test(line) ||
+    /\b(?:import|export)\s+type\b/u.test(line) ||
+    /^\s*(?:import|export)\b/u.test(line) ||
+    inImportOrExportBlock
+  );
+}
+
 function rawRunnerValueLines(source) {
   const lines = source.split("\n");
   const hits = [];
   let inImportOrExportBlock = false;
+  let lineStart = 0;
   for (const [index, line] of lines.entries()) {
     if (/^\s*(?:import|export)\s*\{/u.test(line)) inImportOrExportBlock = true;
     const isBlockEnd = inImportOrExportBlock && /\}\s*(?:from\s*"[^"]*"\s*)?;?\s*$/u.test(line);
-    const skip =
-      /^\s*(?:\/\/|\*|\/\*)/u.test(line) ||
-      /\b(?:import|export)\s+type\b/u.test(line) ||
-      /^\s*(?:import|export)\b/u.test(line) ||
-      inImportOrExportBlock;
+    const skip = isNonCodeLine(line, inImportOrExportBlock);
     if (isBlockEnd) inImportOrExportBlock = false;
-    if (skip) continue;
-    if (RAW_RUNNERS.some((runner) => line.includes(runner))) hits.push({ index, line });
+    if (skip) {
+      lineStart += line.length + 1;
+      continue;
+    }
+    // Each occurrence is recorded by its CHARACTER offset, not merely its line, so it can be
+    // tested against `observedGitRunner(...)` argument spans rather than against line proximity.
+    for (const runner of RAW_RUNNERS) {
+      let at = line.indexOf(runner);
+      while (at !== -1) {
+        hits.push({ index, line, offset: lineStart + at });
+        at = line.indexOf(runner, at + runner.length);
+      }
+    }
+    lineStart += line.length + 1;
   }
   return { hits, lines };
 }
 
-// A mention is observed when `observedGitRunner` appears within a small window around it, which is
-// what a multi-line `observedGitRunner(\n  x ?? defaultGitProcessRunner,\n  …)` call looks like.
-const OBSERVER_WINDOW = 4;
+// Character spans covering the ARGUMENTS of every `observedGitRunner(...)` call, found by matching
+// parentheses from each call's opening bracket. A proximity window was tried first and was
+// bypassable: `const raw = defaultGitProcessRunner; observedGitRunner(other, sink, id); await
+// raw(...)` put an unrelated wrapper call within the window, so the guard passed while git ran
+// unobserved. Nearness is not the property that matters — being an ARGUMENT is — so that is what
+// this measures. A gate must fail closed, and a bypassable gate is worse than none because it
+// reads as coverage.
+function observedArgumentSpans(source) {
+  const spans = [];
+  const marker = "observedGitRunner(";
+  let from = 0;
+  for (;;) {
+    const call = source.indexOf(marker, from);
+    if (call === -1) return spans;
+    let depth = 0;
+    let end = -1;
+    for (let i = call + marker.length - 1; i < source.length; i += 1) {
+      const ch = source[i];
+      if (ch === "(") depth += 1;
+      else if (ch === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+    // An unbalanced call (truncated file) is treated as covering nothing rather than everything.
+    if (end === -1) return spans;
+    spans.push({ start: call + marker.length, end });
+    from = end;
+  }
+}
+
+// Every identifier that DEMONSTRABLY reaches `observedGitRunner`: named directly as one of its
+// arguments, or naming a local helper whose own body calls it (`syncExecution.ts`'s `observe`).
+// Requiring a raw runner to be a literal argument would reject those legitimate shapes; accepting
+// mere proximity accepts the bypass. Binding to this set is the property in between.
+function observedIdentifiers(source) {
+  const identifiers = new Set();
+  for (const span of observedArgumentSpans(source)) {
+    for (const name of source.slice(span.start, span.end).matchAll(/[A-Za-z_$][\w$]*/gu)) {
+      identifiers.add(name[0]);
+    }
+  }
+  // A local helper that forwards into `observedGitRunner` counts as observed, so the runner it is
+  // handed is observed too. Matched on the declaration line, which is where such a helper is bound.
+  // `[^;]*?` deliberately stops at the first statement terminator: without that bound the scan ran
+  // past the declaration into the NEXT statement, so `const sneaky = createGitProcessRunner(x);`
+  // followed anywhere by an unrelated `observedGitRunner(...)` marked `sneaky` as observed — the
+  // same bypass one level up.
+  for (const decl of source.matchAll(
+    /(?:const|let|function)\s+([A-Za-z_$][\w$]*)\s*(?:=|\()[^;]*?observedGitRunner\(/gu,
+  )) {
+    identifiers.add(decl[1]);
+  }
+  return identifiers;
+}
+
+// The span of a call to any observed identifier — `observe(seams.runner ?? defaultGitProcessRunner)`
+// — so a raw runner handed to a forwarding helper is covered without loosening the rule to nearness.
+function observedCallSpans(source, identifiers) {
+  const spans = [];
+  for (const name of identifiers) {
+    let from = 0;
+    const marker = `${name}(`;
+    for (;;) {
+      const call = source.indexOf(marker, from);
+      if (call === -1) break;
+      let depth = 0;
+      let end = -1;
+      for (let i = call + marker.length - 1; i < source.length; i += 1) {
+        const ch = source[i];
+        if (ch === "(") depth += 1;
+        else if (ch === ")") {
+          depth -= 1;
+          if (depth === 0) {
+            end = i;
+            break;
+          }
+        }
+      }
+      if (end === -1) break;
+      spans.push({ start: call + marker.length, end });
+      from = end;
+    }
+  }
+  return spans;
+}
+
+// The identifier a raw runner is bound to on its own line, if any: `const runner = x ?? raw;`.
+// That binding is observed only when the identifier itself reaches `observedGitRunner`.
+function boundIdentifier(line) {
+  return /^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*[:=]/u.exec(line)?.[1];
+}
 
 function unobservedRawRunnerLines(source) {
-  const { hits, lines } = rawRunnerValueLines(source);
-  return hits.filter(({ index }) => {
-    const from = Math.max(0, index - OBSERVER_WINDOW);
-    const to = Math.min(lines.length, index + OBSERVER_WINDOW + 1);
-    return !lines.slice(from, to).some((line) => line.includes("observedGitRunner"));
+  const { hits } = rawRunnerValueLines(source);
+  const identifiers = observedIdentifiers(source);
+  const spans = [...observedArgumentSpans(source), ...observedCallSpans(source, identifiers)];
+  return hits.filter(({ offset, line }) => {
+    if (spans.some((span) => offset >= span.start && offset < span.end)) return false;
+    const bound = boundIdentifier(line);
+    return bound === undefined || !identifiers.has(bound);
   });
 }
 
@@ -102,6 +216,62 @@ describe("git runner observation", () => {
       );
 
     expect(offenders).toEqual([]);
+  });
+
+  // Synthetic sources, not the repository: a gate that only ever sees compliant input cannot show
+  // it would reject anything. `fail closed` has to be demonstrated on the shapes it must refuse.
+  it.each([
+    {
+      label: "a raw runner merely NEAR an unrelated wrapper call",
+      source: [
+        "const raw = defaultGitProcessRunner;",
+        "const other = makeRunner();",
+        "const observed = observedGitRunner(other, sink, id);",
+        "await raw(args, options);",
+      ].join("\n"),
+    },
+    {
+      label: "a raw runner called directly with no wrapper anywhere",
+      source: "await defaultGitNetworkProcessRunner(args, options);",
+    },
+    {
+      label: "a raw runner bound to an identifier that never reaches the wrapper",
+      source: [
+        "const sneaky = createGitProcessRunner(envFactory);",
+        "const wrapped = observedGitRunner(somethingElse, sink, id);",
+        "await sneaky(args, options);",
+      ].join("\n"),
+    },
+  ])("rejects $label", ({ source }) => {
+    // The proximity window this guard originally used passed the first case: an unrelated
+    // `observedGitRunner` call inside the window made an unwrapped runner look observed, so git
+    // could run with no activity-log evidence while the gate stayed green.
+    expect(unobservedRawRunnerLines(source)).not.toHaveLength(0);
+  });
+
+  it.each([
+    {
+      label: "a raw runner passed straight into the wrapper",
+      source: "const r = observedGitRunner(inputs.runner ?? defaultGitProcessRunner, sink, id);",
+    },
+    {
+      label: "a raw runner bound first, then wrapped",
+      source: [
+        "const runner = options?.runner ?? defaultGitProcessRunner;",
+        "return { runner: observedGitRunner(runner, sink, correlationId) };",
+      ].join("\n"),
+    },
+    {
+      label: "a raw runner handed to a local forwarding helper",
+      source: [
+        "const observe = (runner) => observedGitRunner(runner, sink, id);",
+        "readRunner: observe(seams.runner ?? defaultGitProcessRunner),",
+      ].join("\n"),
+    },
+  ])("accepts $label", ({ source }) => {
+    // The complement: a rule strict enough to demand a literal argument would reject these real,
+    // correct shapes and push authors to weaken the gate instead of using it.
+    expect(unobservedRawRunnerLines(source)).toEqual([]);
   });
 
   it("actually inspects the files it claims to — the guard is not vacuous", () => {
