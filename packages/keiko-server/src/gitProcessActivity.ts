@@ -44,14 +44,16 @@
 
 import {
   classifyGitFailure,
+  classifyGitRemoteFailure,
   gitSubcommand,
+  type GitProcessOptions,
   type GitProcessResult,
   type GitProcessRunner,
   type GitRefusalClass,
 } from "@oscharko-dev/keiko-git";
 
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
-import type { ServerLogLevel, ServerLogSink } from "./observability/index.js";
+import { startLogTimer, type ServerLogLevel, type ServerLogSink } from "./observability/index.js";
 
 // `gitSubcommand` returns `undefined` for an argv with no subcommand token, and for a token whose
 // shape is not a plausible subcommand name (its guard is what keeps this field body-free). Both
@@ -85,19 +87,38 @@ const TIMEOUT_ERROR_KIND = "timeout";
 /** `errorKind` for a run Keiko's byte cap cut. Not a git failure either — Keiko stopped reading. */
 const TRUNCATED_ERROR_KIND = "output-truncated";
 
+// Subcommands that talk to a remote. Their failures belong to a taxonomy `classifyGitFailure`
+// cannot express — authentication, permission, untrusted host key, missing repository, unreachable
+// host — and it would fold every one of them into the generic `git-error`. Since the raw output is
+// deliberately absent from the log, that would leave an operator with no way to tell a wrong
+// credential from a down network on the one surface where the difference decides what to do next.
+const REMOTE_FACING_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "clone",
+  "fetch",
+  "pull",
+  "push",
+  "ls-remote",
+]);
+
 // Precedence, and it is load-bearing. `classifyGitRemoteFailure` (keiko-git's classify.ts) documents
 // the same ordering and the incident behind it: `truncated` and the exit code are set
 // INDEPENDENTLY, so a run the cap cut while git was already finishing closes with exit 0, and
 // ranking success first reported it as a clean run over output that was never fully read (#2869).
 // The deadline outranks the cap for the same reason it does there, and the caller's own
 // cancellation outranks both because it is the first cause.
-function gitFailureErrorKind(result: GitProcessResult): string {
+//
+// The cap is checked on `truncated`, NOT on `exitCode === 0`: the ordinary byte-cap stop kills a
+// still-running child, so it lands with `exitCode: null` and a signal, and only the rarer race
+// closes with 0. Testing the exit code caught the race and let the common case fall through to
+// `git-error` while `extra.truncated` said otherwise — the line contradicting itself.
+function gitFailureErrorKind(result: GitProcessResult, subcommand: string): string {
   if (result.refusal !== undefined) return REFUSAL_ERROR_KIND[result.refusal];
   if (result.aborted === true) return CANCELLED_ERROR_KIND;
   if (result.timedOut === true) return TIMEOUT_ERROR_KIND;
-  // Only reachable for a truncated run — a clean exit never gets this far (see the emit guard).
-  if (result.exitCode === 0) return TRUNCATED_ERROR_KIND;
-  return classifyGitFailure(result);
+  if (result.truncated) return TRUNCATED_ERROR_KIND;
+  return REMOTE_FACING_SUBCOMMANDS.has(subcommand)
+    ? classifyGitRemoteFailure(result)
+    : classifyGitFailure(result);
 }
 
 // A cancelled run is the caller hanging up (a UI that abandoned a diff it no longer needs), not a
@@ -116,7 +137,11 @@ function gitFailureLevel(result: GitProcessResult): ServerLogLevel {
 // and its absence still means something exact. `unknown` is unreachable through the real runner
 // (every settle path sets one or the other) and exists so a fake that sets neither is reported
 // honestly rather than mislabelled as a clean exit.
-function gitTermination(result: GitProcessResult): "exit" | "signal" | "unknown" {
+function gitTermination(result: GitProcessResult): "not-started" | "exit" | "signal" | "unknown" {
+  // A refused invocation never launched a child: keiko-git synthesises exit 128 so existing
+  // consumers keep the shape they always had, but reporting that as `endedBy: "exit"` would state
+  // that a process ran and exited, which is the opposite of what happened.
+  if (result.refusal !== undefined) return "not-started";
   if (result.exitCode !== null) return "exit";
   return result.signal === null ? "unknown" : "signal";
 }
@@ -126,12 +151,9 @@ function gitTermination(result: GitProcessResult): "exit" | "signal" | "unknown"
 // values, branch names and remote URLs to both, and `refusal`'s own raw token carries a
 // caller-chosen segment for the config-override family (see `GitRefusalClass` in keiko-git). The
 // CLASS is the body-free half of that fact, which is why keiko-git reports it structurally.
-function gitOutcomeFields(
-  args: readonly string[],
-  result: GitProcessResult,
-): Record<string, unknown> {
+function gitOutcomeFields(subcommand: string, result: GitProcessResult): Record<string, unknown> {
   return {
-    subcommand: gitSubcommand(args) ?? UNNAMED_SUBCOMMAND,
+    subcommand,
     endedBy: gitTermination(result),
     ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
     // Which signal ended the child, when one did. Separates the runner's own SIGTERM timeout kill
@@ -142,6 +164,27 @@ function gitOutcomeFields(
     timedOut: result.timedOut === true,
     aborted: result.aborted === true,
   };
+}
+
+// NOT a bare `exitCode === 0`. Two things make that wrong:
+//
+//   * Keiko's byte cap sets `truncated` and terminates the child independently of the exit status,
+//     so a read cut off while git was already finishing closes with 0 — a DEGRADED read the route
+//     reports to its caller as `truncated: true`. `classifyGitRemoteFailure` was hardened against
+//     that exact shape after it made the sync executor call such a run "succeeded" (#2869).
+//   * Some call sites treat a non-zero status as their normal successful outcome. `git diff
+//     --no-index` exits 1 to mean "the files differ" and the route normalizes it to 0; `git log`
+//     on a repository with no commits exits non-zero for an empty history. Reporting those as
+//     failures would put a `warn` line under every healthy untracked-file diff and make the log
+//     contradict the response it exists to explain. Only the call site knows this, so it says so
+//     through `expectedExitCodes` rather than the observer guessing.
+function isSuccessfulGitOutcome(
+  result: GitProcessResult,
+  expectedExitCodes: readonly number[] | undefined,
+): boolean {
+  if (result.truncated) return false;
+  if (result.exitCode === 0) return true;
+  return result.exitCode !== null && (expectedExitCodes?.includes(result.exitCode) ?? false);
 }
 
 /**
@@ -156,24 +199,19 @@ export function logGitProcessOutcome(
   args: readonly string[],
   result: GitProcessResult,
   durationMs: number,
+  expectedExitCodes?: readonly number[],
 ): void {
-  // NOT a bare `exitCode === 0`. Keiko's byte cap sets `truncated` and terminates the child
-  // independently of the exit status, so a read cut off while git was already finishing closes
-  // with 0 — a DEGRADED read the route's own response reports as `truncated: true` while the log
-  // would have shown nothing at all. `classifyGitRemoteFailure` was hardened against this exact
-  // shape after it made the sync executor call such a run "succeeded" (#2869); the same ranking
-  // mistake must not be reintroduced here. `timedOut`/`aborted` imply `truncated` at the runner,
-  // so this one condition covers every Keiko-side stop.
-  if (result.exitCode === 0 && !result.truncated) return;
+  if (isSuccessfulGitOutcome(result, expectedExitCodes)) return;
   const id = correlationId ?? UNKNOWN_CORRELATION_ID;
-  const fields = gitOutcomeFields(args, result);
+  const subcommand = gitSubcommand(args) ?? UNNAMED_SUBCOMMAND;
+  const fields = gitOutcomeFields(subcommand, result);
   if (result.refusal !== undefined) {
     log.write({
       level: "error",
       category: "security",
       op: "git.process.refused",
       correlationId: id,
-      errorKind: gitFailureErrorKind(result),
+      errorKind: gitFailureErrorKind(result, subcommand),
       durationMs,
       extra: { ...fields, refusal: result.refusal },
     });
@@ -184,7 +222,7 @@ export function logGitProcessOutcome(
     category: "diagnostic",
     op: "git.process.failed",
     correlationId: id,
-    errorKind: gitFailureErrorKind(result),
+    errorKind: gitFailureErrorKind(result, subcommand),
     durationMs,
     extra: fields,
   });
@@ -213,10 +251,13 @@ export function observedGitRunner(
   log: ServerLogSink,
   correlationId: string | undefined,
 ): GitProcessRunner {
-  return async (args, options): Promise<GitProcessResult> => {
-    const startedAt = Date.now();
+  return async (args, options: GitProcessOptions): Promise<GitProcessResult> => {
+    // `startLogTimer` reads `performance.now()`. Subtracting two `Date.now()` samples across a
+    // system-clock adjustment can emit a negative or wildly inflated `durationMs` and corrupt the
+    // very reconstruction evidence this line exists to provide.
+    const elapsed = startLogTimer();
     const result = await runner(args, options);
-    logGitProcessOutcome(log, correlationId, args, result, Date.now() - startedAt);
+    logGitProcessOutcome(log, correlationId, args, result, elapsed(), options.expectedExitCodes);
     return result;
   };
 }

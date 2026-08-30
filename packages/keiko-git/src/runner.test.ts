@@ -816,6 +816,9 @@ describe("refusal classification (AGENTS.md §8 Rule 1 evidence)", () => {
     });
     expect(result.exitCode).toBe(128);
     expect(result.refusal).toBe(expected);
+    // types.ts states the real runner always sets `aborted`; the preflight path is a real-runner
+    // terminal result, so a consumer must not have to read "absent" as a third state here.
+    expect(result.aborted).toBe(false);
   });
 
   it.each([
@@ -866,29 +869,36 @@ describe("refusal classification (AGENTS.md §8 Rule 1 evidence)", () => {
     expect(result.refusal).toBe("remote-command-option");
   });
 
-  it("names the untrusted-executable refusal, which exits 127 like a missing git", async () => {
-    // KEIKO-0263's planted-binary indicator. Both this and a genuinely absent git exit 127 and both
-    // classify as `git-missing`, so the ONLY thing separating them used to be the stderr text —
-    // which is not body-free and can never reach an activity log or an evidence manifest.
-    const bin = mkdtempSync(join(tmpdir(), "keiko-git-untrusted-"));
-    const fakeGit = join(bin, "git");
-    writeFileSync(fakeGit, "#!/bin/sh\nexit 0\n");
-    chmodSync(fakeGit, 0o755);
-    // World-writable directory: exactly the "must not trust this location" condition.
-    chmodSync(bin, 0o777);
-    const runner = createGitProcessRunner(() => ({ PATH: bin }));
-    try {
-      const result = await runner([...GIT_BASE_ARGS, "--version"], {
-        cwd: root,
-        maxBytes: 1024,
-        timeoutMs: 10_000,
-      });
-      expect(result.exitCode).toBe(127);
-      expect(result.refusal).toBe("untrusted-executable");
-    } finally {
-      rmSync(bin, { force: true, recursive: true });
-    }
-  });
+  // `resolveGitExecutable` performs the writable-location check only when `platform !== "win32"`,
+  // so this POSIX mode-bit fixture is not structurally untrusted on Windows: the candidate is
+  // accepted there and `refusal` stays absent. Skipped rather than weakened, matching the
+  // neighbouring resolver tests.
+  it.skipIf(process.platform === "win32")(
+    "names the untrusted-executable refusal, which exits 127 like a missing git",
+    async () => {
+      // KEIKO-0263's planted-binary indicator. Both this and a genuinely absent git exit 127 and both
+      // classify as `git-missing`, so the ONLY thing separating them used to be the stderr text —
+      // which is not body-free and can never reach an activity log or an evidence manifest.
+      const bin = mkdtempSync(join(tmpdir(), "keiko-git-untrusted-"));
+      const fakeGit = join(bin, "git");
+      writeFileSync(fakeGit, "#!/bin/sh\nexit 0\n");
+      chmodSync(fakeGit, 0o755);
+      // World-writable directory: exactly the "must not trust this location" condition.
+      chmodSync(bin, 0o777);
+      const runner = createGitProcessRunner(() => ({ PATH: bin }));
+      try {
+        const result = await runner([...GIT_BASE_ARGS, "--version"], {
+          cwd: root,
+          maxBytes: 1024,
+          timeoutMs: 10_000,
+        });
+        expect(result.exitCode).toBe(127);
+        expect(result.refusal).toBe("untrusted-executable");
+      } finally {
+        rmSync(bin, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("leaves `refusal` absent on every result that reached a real git process", async () => {
     // The discriminator a consumer relies on: `refusal !== undefined` must mean "Keiko refused

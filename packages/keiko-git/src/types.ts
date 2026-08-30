@@ -71,6 +71,19 @@ export interface GitProcessOptions {
   readonly timeoutMs: number;
   /** Cancels an admitted process when the originating bounded request disconnects. */
   readonly abortSignal?: AbortSignal | undefined;
+  /**
+   * Non-zero exit codes THIS call site treats as a successful domain outcome, so an observer must
+   * not report them as failures. `git diff --no-index` exits 1 to mean "the files differ" — the
+   * whole point of that call — and `git log` in a repository with no commits exits non-zero for an
+   * empty history. Both are normalized to a successful route response, so without this a healthy
+   * untracked-file diff would write a `warn` line claiming a git command failed, and the log would
+   * contradict the very response it is supposed to explain.
+   *
+   * The runner itself does not read this: it changes no process behaviour and no result field. It
+   * travels with the invocation because "is exit 1 a failure here?" is knowledge only the caller
+   * has, and it must reach the observation layer without every call site re-implementing logging.
+   */
+  readonly expectedExitCodes?: readonly number[] | undefined;
 }
 
 export type GitProcessRunner = (

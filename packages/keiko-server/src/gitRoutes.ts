@@ -1054,6 +1054,11 @@ async function runSnapshotDiff(
         maxBytes,
         timeoutMs: options.timeoutMs,
         ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
+        // `git diff --no-index` exits 1 to say "the files differ" — the successful outcome this
+        // call exists to produce, which `normalizeNoIndexDiff` below turns back into exit 0.
+        // Without declaring it, the observation layer would write a `warn` line under every
+        // healthy untracked-file diff and the log would contradict the 200 the route returns.
+        expectedExitCodes: [1],
       },
     );
     return normalizeNoIndexDiff(result, snapshot.truncated, options.abortSignal);

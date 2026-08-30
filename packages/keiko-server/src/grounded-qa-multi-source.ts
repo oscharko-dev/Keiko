@@ -521,7 +521,11 @@ export type GroundedRetriever = (input: OrchestratorInput) => Promise<RetrievalO
 
 // Production retriever: retrieval-only orchestrator pass with a per-scope micro-index cache. No
 // modelId is needed — retrieval performs no model call.
-export function defaultRetriever(signal: AbortSignal, deps?: UiHandlerDeps): GroundedRetriever {
+export function defaultRetriever(
+  signal: AbortSignal,
+  deps?: UiHandlerDeps,
+  correlationId?: string,
+): GroundedRetriever {
   return (input: OrchestratorInput): Promise<RetrievalOnlyOutput> => {
     const nowMs = Date.now;
     const semanticLease =
@@ -533,6 +537,10 @@ export function defaultRetriever(signal: AbortSignal, deps?: UiHandlerDeps): Gro
       nowMs,
       signal,
       microIndex: microIndexForGroundedScope(input.scope, nowMs),
+      // ADR-0173 D5. A multi-folder or hybrid ask retrieves through THIS path, not through the
+      // single-folder one, so without the id every git-history read failure on the plural-source
+      // routes lands under UNKNOWN_CORRELATION_ID and cannot be joined to the ask that degraded.
+      correlationId,
       ...(deps?.workspaceIndexForRoot === undefined
         ? {}
         : { workspaceIndexForRoot: deps.workspaceIndexForRoot }),

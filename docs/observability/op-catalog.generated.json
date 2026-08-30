@@ -887,13 +887,13 @@
     {
       "op": "git.process.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitProcessActivity.ts:185",
+      "site": "packages/keiko-server/src/gitProcessActivity.ts:223",
       "package": "keiko-server"
     },
     {
       "op": "git.process.refused",
       "category": "security",
-      "site": "packages/keiko-server/src/gitProcessActivity.ts:174",
+      "site": "packages/keiko-server/src/gitProcessActivity.ts:212",
       "package": "keiko-server"
     },
     {

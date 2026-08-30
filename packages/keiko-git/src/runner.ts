@@ -452,6 +452,10 @@ function refusedOptionResult(forbidden: string, refusal: GitRefusalClass): GitPr
     stderr: `refused git option: ${forbidden.split("=")[0] ?? forbidden}`,
     truncated: false,
     timedOut: false,
+    // `aborted` is optional only so pre-existing fake literals stay assignable; types.ts states the
+    // real runner always sets it, and this is a real-runner terminal result. Setting it explicitly
+    // means a consumer never has to read "absent" as a third state on this path.
+    aborted: false,
     refusal,
   };
 }

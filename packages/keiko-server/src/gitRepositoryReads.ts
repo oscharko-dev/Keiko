@@ -89,6 +89,15 @@ function gitSummaryCacheKey(
   });
 }
 
+// A cache hit runs no git, so it writes no `git.process.*` line — and must not. Those lines report
+// a PROCESS outcome, and the route tests pin that a request which never reaches the runner leaves
+// none; synthesising one for a replayed answer would say a git command failed when none ran.
+//
+// The consequence is a stated limit rather than a defect: within the 2s TTL, a second request that
+// receives a cached UNAVAILABLE projection has no failure line of its own — the cause is on the
+// first request's timeline, under the first request's correlation id. Both requests are still
+// reconstructible (each has its own `http`/`request` line), and the git failure is recorded exactly
+// once, where it actually happened.
 function cachedGitSummary(deps: UiHandlerDeps, key: string): GitSummaryCacheEntry | undefined {
   const byKey = gitSummaryCache.get(deps);
   const cached = byKey?.get(key);

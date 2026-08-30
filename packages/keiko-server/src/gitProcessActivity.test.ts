@@ -162,6 +162,94 @@ describe("logGitProcessOutcome", () => {
     },
   );
 
+  it("classifies the ORDINARY byte-cap stop, not just the exit-0 race", () => {
+    // The cap kills a still-running child, so the common shape is `exitCode: null` plus a signal —
+    // the exit-0 close is the rarer race. Testing the exit code caught only the race and let this
+    // case fall through to `git-error` while `extra.truncated` said otherwise, so the line
+    // contradicted itself.
+    const log = captureActivityLog();
+
+    logGitProcessOutcome(
+      log.sink,
+      "corr-cap-normal-001",
+      STATUS_ARGS,
+      result({ exitCode: null, signal: "SIGTERM", truncated: true }),
+      11,
+    );
+
+    expect(onlyEvent(log.events)).toMatchObject({
+      errorKind: "output-truncated",
+      extra: { endedBy: "signal", signal: "SIGTERM", truncated: true },
+    });
+  });
+
+  it.each([
+    {
+      label: "a rejected credential",
+      subcommand: "fetch",
+      stderr: "fatal: Authentication failed for 'https://example.invalid/r.git'",
+      kind: "auth-failed",
+    },
+    {
+      label: "an unreachable host",
+      subcommand: "clone",
+      stderr: "fatal: unable to access: Could not resolve host: example.invalid",
+      kind: "remote-unavailable",
+    },
+    {
+      label: "an untrusted host key",
+      subcommand: "pull",
+      stderr: "Host key verification failed.",
+      kind: "untrusted-host-key",
+    },
+  ])("keeps the remote taxonomy for $label on a $subcommand", ({ subcommand, stderr, kind }) => {
+    // The local classifier has no member for any of these and folds them all into `git-error`.
+    // Because the raw output is deliberately absent from the log, that would leave an operator
+    // unable to tell a wrong credential from a down network — on the one surface where the
+    // difference decides what to do next.
+    const log = captureActivityLog();
+
+    logGitProcessOutcome(
+      log.sink,
+      "corr-remote-00001",
+      ["--no-pager", subcommand],
+      result({ exitCode: 128, stderr }),
+      20,
+    );
+
+    expect(onlyEvent(log.events).errorKind).toBe(kind);
+  });
+
+  it("stays silent for a non-zero exit the call site declared successful", () => {
+    // `git diff --no-index` exits 1 to mean "the files differ" — the outcome that call exists to
+    // produce. Only the call site knows this, so it declares it rather than the observer guessing.
+    const log = captureActivityLog();
+    const differs = result({ exitCode: 1, stdout: "diff --git a/x b/x" });
+
+    logGitProcessOutcome(log.sink, "corr-expected-00001", ["--no-pager", "diff"], differs, 3, [1]);
+    expect(log.events).toEqual([]);
+
+    // The declaration is narrow: a different non-zero code is still a failure, and a truncated run
+    // is reported even when its code was declared expected.
+    logGitProcessOutcome(
+      log.sink,
+      "corr-expected-00002",
+      ["--no-pager", "diff"],
+      result({ exitCode: 2 }),
+      3,
+      [1],
+    );
+    logGitProcessOutcome(
+      log.sink,
+      "corr-expected-00003",
+      ["--no-pager", "diff"],
+      result({ exitCode: 1, truncated: true }),
+      3,
+      [1],
+    );
+    expect(log.events.map((event) => event.errorKind)).toEqual(["git-error", "output-truncated"]);
+  });
+
   it("reports a byte-cap truncation even though the run exited 0", () => {
     // Keiko's byte cap sets `truncated` and terminates the child INDEPENDENTLY of the exit status,
     // so a read cut off while git was already finishing closes with 0. A bare `exitCode === 0`
@@ -503,7 +591,9 @@ describe("the line that actually reaches disk", () => {
       errorKind: "git-option-refused",
       refusal: "config-override",
       subcommand: "diff",
-      endedBy: "exit",
+      // Not "exit": keiko-git synthesises exit 128 so existing consumers keep the shape they had,
+      // but no child ever launched. Reporting it as an exit would state the opposite.
+      endedBy: "not-started",
       exitCode: 128,
     });
   });

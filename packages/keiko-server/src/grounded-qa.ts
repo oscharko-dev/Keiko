@@ -1592,7 +1592,7 @@ function resolveMultiSourceSeam(
     deps,
   );
   return {
-    retriever: defaultRetriever(signal, deps),
+    retriever: defaultRetriever(signal, deps, correlationId),
     answerer: createMultiSourceAnswerer(model, modelId, deps.redactor, signal, correlationId),
   };
 }
