@@ -226,12 +226,16 @@ a run no earlier cause explains.
   matters when reading a log, so it is stated rather than blurred:
   - **Through the `GitProcessRunner` boundary** (the read routes, the clone route, and the
     fetch/pull sync executor — both its local read runner and its credential-capable network
-    runner): every run goes through `observedGitRunner` (`gitProcessActivity.ts`), so a non-zero
-    outcome — and a run the byte cap cut, which can still close with exit 0 — writes one body-free
-    line per subprocess: `git.process.failed`, or `git.process.refused` on the `security` category
-    when keiko-git's spawn boundary rejected the invocation (a forbidden option, a denied `-c`
-    config key, or a `git` resolved in an untrusted location). Each line carries the subcommand,
-    how the child ended, the refusal class and the request's own correlation id.
+    runner): every run goes through `observedGitRunner` (`gitProcessActivity.ts`), so an
+    UNDECLARED non-zero outcome — and a run the byte cap cut, which can still close with exit 0 —
+    writes one body-free line per subprocess: `git.process.failed`, or `git.process.refused` on the
+    `security` category when keiko-git's spawn boundary rejected the invocation (a forbidden
+    option, a denied `-c` config key, or a `git` resolved in an untrusted location). "Undeclared"
+    is the call site's own statement, never the observer's guess: `git diff --no-index` exits 1 to
+    say "the files differ", so that route declares `expectedExitCodes: [1]` and a healthy untracked
+    diff stays OFF the log instead of writing a `warn` under the 200 the route returns. Every line
+    carries the subcommand, how the child ended and the request's own correlation id; the refusal
+    class is carried by `git.process.refused` alone, because only a spawn-boundary refusal has one.
   - **Through the keiko-tools `runCommand` boundary** (the governed publish/push path,
     ADR-0085): this does NOT use `GitProcessRunner`, so `observedGitRunner` cannot reach it. It
     reports at the ACTION grain instead — `logGitDeliveryMutation` writes one line per governed

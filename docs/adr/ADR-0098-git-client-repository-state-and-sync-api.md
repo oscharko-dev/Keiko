@@ -121,8 +121,11 @@ types in the type block). The exports are additive; `KEIKO_CONTRACTS_VERSION` is
   `GIT_PAGER=cat`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, no system/global
   config), with spawn-error → exit code 127 and a byte-cap/timeout truncation flag. Since the
   activity-log wiring (AGENTS.md §8 Rule 1), `options.runner` is the supplied runner (defaulting to
-  `defaultGitProcessRunner`) wrapped by `observedGitRunner`, so a non-zero outcome — including the
-  spawn-boundary refusal — leaves one body-free line under the request's correlation id. The
+  `defaultGitProcessRunner`) wrapped by `observedGitRunner`, so an UNDECLARED non-zero outcome —
+  including the spawn-boundary refusal — leaves one body-free line under the request's correlation
+  id. A call site may declare an expected non-zero exit through `expectedExitCodes` (`git diff
+  --no-index` exits 1 to say "the files differ"), and a declared one is a success that stays off
+  the log rather than a `warn` contradicting the 200 the route returns. The
   process effect is unchanged: the wrapper returns the underlying result untouched. The
   UNOBSERVED runner remains reachable as `options.runnerIdentity` for one purpose only, the
   git-summary cache's runner partition, because `runner` is now a fresh per-request closure.
