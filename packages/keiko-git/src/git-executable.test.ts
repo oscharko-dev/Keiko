@@ -173,4 +173,74 @@ describe.skipIf(process.platform === "win32")("resolveGitExecutable", () => {
       reason: "untrusted-location",
     });
   });
+
+  // T23 (PR #3355 review): the candidate list used to probe a bare, extensionless `git` FIRST on
+  // win32, even though only `.com`/`.exe` images are ever trusted — `fs.constants.X_OK` behaves
+  // like a plain existence check on real Windows, so a decoy sharing the bare name would win before
+  // `git.exe` was ever tried.
+  describe("Windows image-only candidate filtering (simulated Windows)", () => {
+    it("skips an executable, extensionless 'git' decoy and resolves git.exe placed alongside it", () => {
+      const bin = temporary("keiko-git-executable-bin-");
+      // A regular file, no extension, executable — exactly the shape X_OK cannot tell apart from a
+      // real image on Windows. Content proves it is never the one spawned: only the PATH matters to
+      // the assertion below, but a real decoy would run arbitrary code if ever returned.
+      writeFileSync(join(bin, "git"), "#!/bin/sh\necho pwned\n", { mode: 0o755 });
+      const executable = join(bin, "git.exe");
+      writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      chmodSync(bin, 0o777);
+      expect(resolveGitExecutable({ PATH: bin, PATHEXT: ".COM;.EXE" }, workspace, "win32")).toEqual(
+        { ok: true, path: executable },
+      );
+    });
+
+    it("skips a directory decoy named 'git' and resolves git.exe placed alongside it", () => {
+      const bin = temporary("keiko-git-executable-bin-");
+      mkdirSync(join(bin, "git"));
+      const executable = join(bin, "git.exe");
+      writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      chmodSync(bin, 0o777);
+      expect(resolveGitExecutable({ PATH: bin, PATHEXT: ".COM;.EXE" }, workspace, "win32")).toEqual(
+        { ok: true, path: executable },
+      );
+    });
+
+    it("rejects a git.exe reparse point whose resolved target is not a trusted image extension", () => {
+      const bin = temporary("keiko-git-executable-bin-");
+      const evilTarget = join(bin, "evil.bat");
+      writeFileSync(evilTarget, "@echo off\r\n", { mode: 0o755 });
+      symlinkSync(evilTarget, join(bin, "git.exe"));
+      chmodSync(bin, 0o777);
+      expect(resolveGitExecutable({ PATH: bin, PATHEXT: ".COM;.EXE" }, workspace, "win32")).toEqual(
+        { ok: false, reason: "untrusted-location" },
+      );
+    });
+  });
+
+  // T43 (PR #3355 review, diagnostic fidelity): filtering `.cmd`/`.bat` out of the trusted candidate
+  // names must never silently downgrade a planted script's location signal from
+  // "untrusted-location" to a bare "not-found" — the discriminated union exists (KEIKO-0263) so an
+  // operator can tell "PATH has been salted" apart from "git is not installed". A script is still
+  // NEVER returned as `ok: true` either way — security is unaffected; only the reported reason is.
+  describe("Windows excluded-extension diagnostic fidelity (simulated Windows)", () => {
+    it("surfaces untrusted-location for a workspace-contained git.bat when no trusted image exists anywhere", () => {
+      const bin = join(workspace, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(bin, "git.bat"), "@echo off\r\n", { mode: 0o755 });
+      expect(
+        resolveGitExecutable({ PATH: bin, PATHEXT: ".COM;.EXE;.BAT;.CMD" }, workspace, "win32"),
+      ).toEqual({ ok: false, reason: "untrusted-location" });
+    });
+
+    it("still reports not-found for a git.cmd in a trusted (non-workspace) location with no image present", () => {
+      // Pins the existing ".each refuses a %s git..." contract from the other side: a script that
+      // is NOT workspace-contained is not itself suspicious (a legitimate wrapper unrelated to this
+      // resolver, or simply not evidence of tampering) and must stay silent, not manufacture a false
+      // "untrusted-location" the operator would have no location to act on.
+      const bin = temporary("keiko-git-executable-bin-");
+      writeFileSync(join(bin, "git.cmd"), "@echo off\r\n", { mode: 0o755 });
+      expect(
+        resolveGitExecutable({ PATH: bin, PATHEXT: ".COM;.EXE;.BAT;.CMD" }, workspace, "win32"),
+      ).toEqual({ ok: false, reason: "not-found" });
+    });
+  });
 });
