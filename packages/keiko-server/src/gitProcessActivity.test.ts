@@ -278,6 +278,18 @@ describe("logGitProcessOutcome", () => {
     expect(event.extra).not.toHaveProperty("signal");
   });
 
+  it("survives an empty argv and still names the subcommand honestly", () => {
+    // `gitSubcommand([])` has no token to read. The emitter must report `unknown` rather than throw
+    // inside the logging path — a log line can never become a new failure mode for the operation
+    // being logged.
+    const log = captureActivityLog();
+
+    expect(() => {
+      logGitProcessOutcome(log.sink, "corr-empty-argv-01", [], result({ exitCode: 1 }), 0);
+    }).not.toThrow();
+    expect(onlyEvent(log.events).extra).toMatchObject({ subcommand: "unknown" });
+  });
+
   it("falls back to the sanctioned unknown correlation id rather than inventing one", () => {
     const log = captureActivityLog();
 

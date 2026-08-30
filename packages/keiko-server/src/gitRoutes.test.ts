@@ -1892,6 +1892,35 @@ describe("git route activity log (AGENTS.md §8 Rule 1)", () => {
     },
   );
 
+  it.each([
+    { label: "a scope this route does not accept", run: handleGitDiff, query: "&scope=unstaged" },
+    {
+      label: "an option-like path",
+      run: handleGitBlame,
+      query: "&path=-x.ts&startLine=1&maxLines=1",
+    },
+    {
+      label: "no path for a structured diff",
+      run: handleGitStructuredDiff,
+      query: "&scope=unstaged",
+    },
+  ])("writes no process line for $label, because no git run failed", async ({ run, query }) => {
+    // The complement of every test above. `git.process.*` reports a git PROCESS outcome, so the
+    // line count is tied to what the runner actually did — never to the HTTP status. Here every
+    // admitted run succeeds, so whether the route answers 400 (input rejected before the spawn)
+    // or 200 (a content-free projection), the log must stay empty: a line would tell an operator
+    // a git command failed when none did.
+    const activity = captureActivity();
+    const runner = vi.fn<GitProcessRunner>().mockResolvedValue(ok(`${root}\n`));
+
+    await run(
+      ctx(`/api/git/x?root=${encodeURIComponent(root)}${query}`, "corr-rejected-0001"),
+      activityDeps(runner, activity.sink),
+    );
+
+    expect(activity.events.filter((event) => event.op.startsWith("git.process."))).toEqual([]);
+  });
+
   it("writes nothing when every git run succeeds", async () => {
     const activity = captureActivity();
     const runner = vi

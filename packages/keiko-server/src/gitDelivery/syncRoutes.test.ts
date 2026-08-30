@@ -768,6 +768,37 @@ describe("sync route activity log (AGENTS.md §8 Rule 1)", () => {
     expect(JSON.stringify(failures[0])).not.toContain("not a git repository");
   });
 
+  it("observes the NETWORK runner, not only the local reads", async () => {
+    // normalizeSeams wraps two runners: the config-isolated local reads and the credential-capable
+    // fetch/pull command. Wrapping only the first would leave the actual remote dispatch — the one
+    // that can fail on auth, host keys or a non-fast-forward — unobserved, and a preview-only test
+    // could not tell the difference.
+    const activity = captureActivity();
+    const handler = createHandleSyncExecute("fetch", {
+      execution: {
+        ...seams({
+          status: ok(porcelain({ ahead: 0, behind: 0, upstream: "origin/main" })),
+          remote: ok("origin\n"),
+          fetch: fail("fatal: Authentication failed for 'https://example.invalid/r.git'", 128),
+        }),
+        activityLog: activity.sink,
+      },
+    });
+
+    await handler(ctxWithCorrelation(FETCH_EXECUTE, syncBody(), "corr-sync-network-1"), deps());
+
+    const failures = activity.events.filter((event) => event.op === "git.process.failed");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      correlationId: "corr-sync-network-1",
+      extra: { subcommand: "fetch" },
+    });
+    // The remote URL and git's auth message are in the runner's own output; neither may appear.
+    const serialized = JSON.stringify(failures[0]);
+    expect(serialized).not.toContain("example.invalid");
+    expect(serialized).not.toContain("Authentication failed");
+  });
+
   it("threads the correlation id on the execute route too, not only preview", async () => {
     const activity = captureActivity();
     const handler = createHandleSyncExecute("fetch", {

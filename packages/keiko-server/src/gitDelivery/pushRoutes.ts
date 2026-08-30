@@ -15,6 +15,7 @@
 
 import type { GitPushCommand } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { GitDeliveryApprovalRequirement } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
@@ -242,19 +243,44 @@ export const createHandlePushExecute = (
       admitted: authority,
       next: seams.beforeRemoteDispatch,
     });
-    let result;
-    try {
-      result = await executeGovernedPublish(command, verifiedApproval, workspace, deps, {
-        ...seams,
-        beforeRemoteDispatch,
-      });
-    } catch {
-      // Only the read-only snapshot step can throw (not a git repository); the gateway never throws.
-      return errResult(409, "GIT_DELIVERY_PUSH_WORKTREE_UNAVAILABLE");
-    }
-    return { status: 200, body: deps.redactor(gitDeliveryPublishExecuteResponse(result)) };
+    return runGovernedPublish(ctx, deps, {
+      command,
+      approval: verifiedApproval,
+      workspace,
+      seams: { ...seams, beforeRemoteDispatch },
+    });
   };
 };
+
+interface GovernedPublishRequest {
+  readonly command: GitPushCommand;
+  readonly approval: GitDeliveryApprovalRequirement;
+  readonly workspace: WorkspaceInfo;
+  readonly seams: GitDeliveryPublishSeams;
+}
+
+// Split out of the handler so its closure stays inside the line budget after the correlation id
+// joined the call. Owns exactly the execute-and-project step; every admission decision stays above.
+async function runGovernedPublish(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  request: GovernedPublishRequest,
+): Promise<RouteResult> {
+  try {
+    const result = await executeGovernedPublish(
+      request.command,
+      request.approval,
+      request.workspace,
+      deps,
+      request.seams,
+      ctx.correlationId,
+    );
+    return { status: 200, body: deps.redactor(gitDeliveryPublishExecuteResponse(result)) };
+  } catch {
+    // Only the read-only snapshot step can throw (not a git repository); the gateway never throws.
+    return errResult(409, "GIT_DELIVERY_PUSH_WORKTREE_UNAVAILABLE");
+  }
+}
 
 // ─── Route group ───────────────────────────────────────────────────────────────────────────────
 

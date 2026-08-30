@@ -41,10 +41,13 @@ import type {
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
+  logGitDeliveryMutation,
   persistGitDeliveryEvidence,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
 } from "./execution.js";
+import type { ServerLogSink } from "../observability/index.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 
 // The shared/protected remote branches a governed push may never target directly. This is the
@@ -108,6 +111,13 @@ export interface GitDeliveryPublishSeams {
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
   readonly beforeRemoteDispatch?: (() => boolean) | undefined;
+  /**
+   * Activity-log sink, defaulting to the shared process log. A governed push answers every outcome
+   * with a content-free typed body, so without the line below a rejected policy decision, a failed
+   * remote dispatch or an authority-guard abort left no trace in `server.log` at all — the same gap
+   * the local mutation path closed with `logGitDeliveryMutation` (AGENTS.md §8 Rule 1).
+   */
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 function authorityGuardedPublishAdapter(
@@ -155,6 +165,7 @@ export async function executeGovernedPublish(
   workspace: WorkspaceInfo,
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   seams: GitDeliveryPublishSeams,
+  correlationId?: string,
 ): Promise<GitPublishLifecycleResult> {
   const now = seams.now ?? Date.now;
   const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
@@ -177,6 +188,14 @@ export async function executeGovernedPublish(
     },
   );
   persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
+  // Same logger the local mutation path uses: the lifecycle shape is identical and `actionKind`
+  // (`push`) is what separates the two in the log, so this reuses that vocabulary rather than
+  // minting a parallel one.
+  logGitDeliveryMutation(
+    seams.activityLog ?? processServerLogSink(),
+    result.lifecycle,
+    correlationId,
+  );
   return result;
 }
 

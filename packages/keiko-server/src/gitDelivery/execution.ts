@@ -225,7 +225,13 @@ export async function executeGovernedMutation(
   return result;
 }
 
-function logGitDeliveryMutation(
+/**
+ * One body-free line per finished governed action. Exported because the REMOTE publish path
+ * (`pushExecution.ts`) produces the same `GitMutationLifecycleResult` and must report it the same
+ * way — `envelope.kind` already distinguishes a `push` from a local mutation, so a second op and a
+ * second formatter would split one vocabulary in two for no gain (AGENTS.md §5).
+ */
+export function logGitDeliveryMutation(
   log: ServerLogSink,
   result: GitMutationLifecycleResult,
   correlationId: string | undefined,

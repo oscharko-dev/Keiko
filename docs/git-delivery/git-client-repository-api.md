@@ -215,7 +215,8 @@ never mislabeled.
   `gitRoutes.ts` (those five symbols were made `export` behavior-preservingly), plus the shared
   `parsePorcelainV2Branch` from `gitPorcelainStatus.ts` consumed identically by the sync preview.
 - **A failed git run is on the activity log, and the response body still is not.** Every git run the
-  read routes, the clone route and the fetch/pull sync executor make goes through
+  read routes, the clone route, the fetch/pull sync executor and the governed publish path make
+  goes through
   `observedGitRunner` (`gitProcessActivity.ts`), so a non-zero outcome — and a run the byte cap cut,
   which can still close with exit 0 — writes one body-free line: `git.process.failed`, or
   `git.process.refused` on the `security` category when keiko-git's spawn boundary rejected the

@@ -818,6 +818,41 @@ describe("refusal classification (AGENTS.md §8 Rule 1 evidence)", () => {
     expect(result.refusal).toBe(expected);
   });
 
+  it.each([
+    { label: "two-token", flag: ["--config-env", "safe.key=ENVVAR"] },
+    { label: "joined", flag: ["--config-env=safe.key=ENVVAR"] },
+  ])(
+    "still neutralizes the diff family when a $label --config-env precedes the subcommand",
+    async ({ flag }) => {
+      // The security half of the subcommand-detection defect. `--config-env` with a key the
+      // deny-list does not name is permitted (that is the point of key-level, not flag-level,
+      // denial), but it used to stop subcommand detection dead — so `withDiffFamilyNeutralized`
+      // saw no diff command and `--no-ext-diff --no-textconv` were never injected. A
+      // repository-local `diff.external` or `textconv` would then run, which is exactly what
+      // #3348 closed. Asserted at the SPAWN, against the argv git actually receives, because the
+      // unit-level `gitSubcommand` check alone cannot prove the injection happened.
+      const bin = mkdtempSync(join(tmpdir(), "keiko-git-configenv-"));
+      const capture = join(bin, "argv.txt");
+      const fakeGit = join(bin, "git");
+      writeFileSync(fakeGit, `#!/bin/sh\nprintf '%s\\n' "$@" > '${capture}'\nexit 0\n`);
+      chmodSync(fakeGit, 0o755);
+      chmodSync(bin, 0o700);
+      const runner = createGitProcessRunner(() => ({ PATH: bin }));
+      try {
+        await runner([...GIT_BASE_ARGS, ...flag, "diff"], {
+          cwd: root,
+          maxBytes: 4096,
+          timeoutMs: 10_000,
+        });
+        const argv = readFileSync(capture, "utf8").trim().split("\n");
+        expect(argv).toContain("--no-ext-diff");
+        expect(argv).toContain("--no-textconv");
+      } finally {
+        rmSync(bin, { force: true, recursive: true });
+      }
+    },
+  );
+
   it("keeps the refusal order when one argv trips two preflight families at once", async () => {
     // Every case above trips exactly one family, so reordering REFUSAL_CHECKS would not change any
     // of their answers. This argv trips the remote-command check AND the config-override check;
@@ -901,6 +936,33 @@ describe("gitSubcommand", () => {
   });
 
   it.each([
+    {
+      label: "two-token --config-env",
+      args: [...GIT_BASE_ARGS, "--config-env", "safe.key=ENVVAR", "diff"],
+      expected: "diff",
+    },
+    {
+      label: "joined --config-env=<name>=<envvar>",
+      args: [...GIT_BASE_ARGS, "--config-env=safe.key=ENVVAR", "show"],
+      expected: "show",
+    },
+  ])("resolves the subcommand past a $label", ({ args, expected }) => {
+    // `--config-env` is a flag this module already KNOWS — `forbiddenTwoTokenConfigOverride`
+    // handles it by name — but the pre-subcommand table did not list it, so detection stopped at
+    // the flag and reported no subcommand. That silently disabled the diff-family neutralization
+    // for every argv carrying it (see the spawn-level regression below).
+    expect(gitSubcommand(args)).toBe(expected);
+  });
+
+  it("accepts a token at the inclusive maximum length and rejects one past it", () => {
+    // The guard is /^[a-z][a-z0-9-]{0,31}$/ — 32 characters inclusive. Without the accepting half,
+    // tightening the quantifier to {0,30} would keep the 33-character rejection green.
+    expect(gitSubcommand([...GIT_BASE_ARGS, "a".repeat(32)])).toBe("a".repeat(32));
+    expect(gitSubcommand([...GIT_BASE_ARGS, "a".repeat(33)])).toBeUndefined();
+  });
+
+  it.each([
+    { label: "an empty argv", args: [] },
     { label: "no subcommand at all", args: [...GIT_BASE_ARGS] },
     { label: "only a global flag", args: ["--version"] },
     { label: "a dangling -C with no value", args: ["-C"] },

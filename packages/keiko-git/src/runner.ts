@@ -120,7 +120,23 @@ const PRE_SUBCOMMAND_FLAG_NO_VALUE: ReadonlySet<string> = new Set([
   "--no-pager",
   "--no-optional-locks",
 ]);
-const PRE_SUBCOMMAND_FLAG_ONE_VALUE: ReadonlySet<string> = new Set(["-C", "-c"]);
+
+// The config-override flags, named ONCE. `forbiddenTwoTokenConfigOverride` below reads this set to
+// decide which flags carry a config key, and `PRE_SUBCOMMAND_FLAG_ONE_VALUE` reads it to decide
+// which flags consume the token after them. Those two lived as independent literals, and they
+// disagreed: the override check knew `--config-env`, the subcommand scan did not. So
+// `git --config-env <key>=<envvar> diff` resolved to NO subcommand, `withDiffFamilyNeutralized`
+// treated it as a non-diff command, and the invocation reached git without
+// `--no-ext-diff --no-textconv` — silently reopening the repository-local `diff.external` /
+// `textconv` path that #3348 closed, for any key the deny-list does not name. One set now, so a
+// flag added to the grammar cannot be known to one half of it and invisible to the other.
+const CONFIG_OVERRIDE_FLAGS: ReadonlySet<string> = new Set(["-c", "--config-env"]);
+const CONFIG_ENV_JOINED_PREFIX = "--config-env=";
+
+const PRE_SUBCOMMAND_FLAG_ONE_VALUE: ReadonlySet<string> = new Set([
+  "-C",
+  ...CONFIG_OVERRIDE_FLAGS,
+]);
 
 function findSubcommandIndex(args: readonly string[]): number | undefined {
   let index = 0;
@@ -130,7 +146,12 @@ function findSubcommandIndex(args: readonly string[]): number | undefined {
       index += 2;
       continue;
     }
-    if (arg !== undefined && PRE_SUBCOMMAND_FLAG_NO_VALUE.has(arg)) {
+    // `--config-env=<name>=<envvar>` carries its value in the same token, so it consumes one slot,
+    // not two. Its documented single-token form is why this is a prefix test and not a set lookup.
+    if (
+      arg !== undefined &&
+      (PRE_SUBCOMMAND_FLAG_NO_VALUE.has(arg) || arg.startsWith(CONFIG_ENV_JOINED_PREFIX))
+    ) {
       index += 1;
       continue;
     }
@@ -251,7 +272,7 @@ function preSubcommandRegion(args: readonly string[]): readonly string[] {
 function forbiddenTwoTokenConfigOverride(region: readonly string[]): string | undefined {
   for (let index = 0; index < region.length; index += 1) {
     const arg = region[index];
-    if (arg !== "-c" && arg !== "--config-env") continue;
+    if (arg === undefined || !CONFIG_OVERRIDE_FLAGS.has(arg)) continue;
     const value = region[index + 1];
     if (value === undefined) return arg;
     const key = configKeyFromSpec(value);
@@ -264,8 +285,8 @@ function forbiddenTwoTokenConfigOverride(region: readonly string[]): string | un
 // --config-env's documented single-token form: `--config-env=<name>=<envvar>`.
 function forbiddenConfigEnvJoinedOverride(region: readonly string[]): string | undefined {
   for (const arg of region) {
-    if (!arg.startsWith("--config-env=")) continue;
-    const key = configKeyFromSpec(arg.slice("--config-env=".length));
+    if (!arg.startsWith(CONFIG_ENV_JOINED_PREFIX)) continue;
+    const key = configKeyFromSpec(arg.slice(CONFIG_ENV_JOINED_PREFIX.length));
     if (isDangerousConfigKey(key)) return `--config-env ${key}`;
   }
   return undefined;

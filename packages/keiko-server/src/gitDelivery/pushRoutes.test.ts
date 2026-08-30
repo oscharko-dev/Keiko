@@ -31,6 +31,7 @@ import type {
   GitDeliveryPublishSeams,
 } from "./pushExecution.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
+import type { ServerLogEvent, ServerLogSink } from "../observability/index.js";
 
 const PREVIEW = "/api/git-delivery/push/preview";
 const EXECUTE = "/api/git-delivery/push/execute";
@@ -498,5 +499,60 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
     expect(body.publishRejectionReason).toBe("permission-denied");
     expect(body.recoveryDisposition).toBe("user-fixable");
     expect(cap.count()).toBe(1);
+  });
+});
+
+describe("push execute activity log (AGENTS.md §8 Rule 1)", () => {
+  // A governed push answers every outcome with a content-free typed body, so before this wiring a
+  // completed push, a policy rejection and an authority-guard abort were indistinguishable in
+  // `server.log` — the remote half of the gap `logGitDeliveryMutation` already closed for local
+  // mutations. Reuses that same logger: `actionKind: "push"` is what separates the two.
+
+  function captureActivity(): { readonly events: ServerLogEvent[]; readonly sink: ServerLogSink } {
+    const events: ServerLogEvent[] = [];
+    return {
+      events,
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    };
+  }
+
+  function ctxWithCorrelation(path: string, body: unknown, correlationId: string): RouteContext {
+    return { ...ctxFor(path, body), correlationId };
+  }
+
+  it("reports a governed push under the request's correlation id, marked as a push", async () => {
+    const adapter = recordingPublishAdapter();
+    const activity = captureActivity();
+    const handler = createHandlePushExecute({
+      execution: seams({
+        publishAdapterFactory: () => adapter.adapter,
+        activityLog: activity.sink,
+      }),
+    });
+
+    const res = await handler(
+      ctxWithCorrelation(EXECUTE, pushBody({ setUpstreamTracking: true }), "corr-push-000001"),
+      deps(),
+    );
+
+    expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
+    const events = activity.events.filter(
+      (event) => event.op === "git.delivery.mutation.completed",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      category: "diagnostic",
+      correlationId: "corr-push-000001",
+      // `actionKind` is the leg that separates a remote push from a local mutation in one
+      // vocabulary — without it this line would be indistinguishable from a branch-create.
+      extra: { actionKind: "push", status: "succeeded" },
+    });
+    // Body-free: no branch name, no remote alias, no repository path on the line.
+    expect(JSON.stringify(events[0])).not.toContain("feat/x");
+    expect(JSON.stringify(events[0])).not.toContain("origin");
   });
 });
