@@ -20,7 +20,15 @@
 // hiccup. Collapsed into one value, an operator reading a customer's activity log could not tell a
 // stripped-down Windows image apart from a tampered environment variable.
 export type WindowsTreeKillResult =
-  "succeeded" | "failed" | "unknown" | "blocked-untrusted-system-root";
+  | "succeeded"
+  | "failed"
+  | "unknown"
+  | "blocked-untrusted-system-root"
+  // The pid handed in was this process or its parent, so nothing was signalled. Distinct from every
+  // other member because it is not an environment fact at all — it means a stale or recycled pid
+  // reached the kill path, and signalling it would have been suicide (`taskkill /T` takes the whole
+  // tree). Recorded so the near-miss is visible in a customer's log instead of silent.
+  | "refused-self-pid";
 
 // Everything a termination line can truthfully say about the tree-kill step: the four verified
 // results above, or "not-attempted" (POSIX, no pid to signal, or a child already known to have

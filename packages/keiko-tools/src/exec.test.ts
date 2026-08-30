@@ -31,7 +31,7 @@ import {
   type CommandRule,
   type SandboxPolicy,
 } from "./types.js";
-import { makeWorkspace, recordingSpawn } from "./_support.js";
+import { makeFakeChild, makeWorkspace, recordingSpawn } from "./_support.js";
 
 let root: string;
 let info: WorkspaceInfo;
@@ -420,6 +420,53 @@ describe("runCommand — timeout & cancellation (fake child)", () => {
     );
     spawn.child.emit("close", null, "SIGTERM");
     await expect(promise).rejects.toBeInstanceOf(CommandCancelledError);
+  });
+});
+
+// Reported from a customer's Windows machine: Keiko starts, prints "listening on 127.0.0.1:1983",
+// dies with NO error in the log, and a fresh pid repeats the cycle. With the process guards
+// installed, a silent death is not an exception — it is an external kill, and taskkill is the one
+// the product issues. Windows recycles pids aggressively, so a `taskkill /PID <pid> /T /F` aimed at
+// an already-exited child can land on whatever now holds that number, and `/T` takes the whole TREE.
+// If that number has come back around to this server or its launcher, the product kills itself, and
+// the loop looks exactly like the report.
+describe("runCommand — never signals its own or its parent's pid (customer crash loop)", () => {
+  it.each([
+    ["its own pid", (): number => process.pid],
+    ["its parent's pid", (): number => process.ppid],
+  ])("refuses to signal %s, and records the near-miss", async (_label, pidOf) => {
+    const kills = captureKills();
+    const spawn = recordingSpawn(makeFakeChild(pidOf()));
+    const evidence: CommandTerminationEvidence[] = [];
+    try {
+      const promise = runCommand(
+        {
+          command: "node",
+          args: ["-e", "flood"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+          onTerminated: (line) => evidence.push(line),
+        },
+        {
+          ...fakeDeps(spawn.fn),
+          policy: { ...DEFAULT_SANDBOX_POLICY, maxOutputBytes: 4 },
+        },
+      );
+      spawn.child.stdout.emit("data", Buffer.from("0123456789", "utf8"));
+
+      // Nothing signalled, by any route: not the POSIX group kill, not the immediate child.
+      expect(kills.groupSignals).toEqual([]);
+      expect(spawn.child.killed).toEqual([]);
+      // The near-miss is RECORDED rather than silent — a stale pid reaching the kill path is a fact
+      // an operator needs, and it is the one disposition that is not an environment property.
+      expect(evidence[0]?.windowsTreeKill).toBe("refused-self-pid");
+
+      spawn.child.emit("close", 0, null);
+      await expect(promise).resolves.toMatchObject({ truncated: true });
+    } finally {
+      kills.restore();
+    }
   });
 });
 

@@ -20,7 +20,22 @@
 // `focusMonacoInput` below: the EditContext-vs-textarea input surface.
 import { expect, type Locator, type Page } from "@playwright/test";
 
-/** "Meta" when the BROWSER reports a Macintosh user agent, "Control" otherwise. */
+/**
+ * MONACO CHORDS ONLY. Do not use this for a Keiko product shortcut — they resolve differently, and
+ * the two disagree under Playwright's device presets:
+ *
+ *   Monaco            reads `navigator.userAgent` (`isMacintosh = userAgent.indexOf('Macintosh')`),
+ *                     which the presets FORCE to Windows on every host -> it waits for Ctrl.
+ *   Keiko's shortcuts read `navigator.platform` (useKeyboardShortcuts' detectPlatform), which the
+ *                     presets do NOT override -> on a Mac it still reads "MacIntel" and waits for
+ *                     metaKey.
+ *
+ * So for a PRODUCT shortcut (command palette, workspace search, canvas copy/paste) Playwright's own
+ * host-derived "ControlOrMeta" is correct, and this helper is wrong: it would send Control to a
+ * product listening for Meta, failing on every real Mac in BOTH engines. Measured both ways.
+ *
+ * "Meta" when the BROWSER reports a Macintosh user agent, "Control" otherwise.
+ */
 export async function editorModifier(page: Page): Promise<"Meta" | "Control"> {
   const browserIsMac = await page.evaluate(() => navigator.userAgent.includes("Macintosh"));
   return browserIsMac ? "Meta" : "Control";

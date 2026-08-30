@@ -256,6 +256,26 @@ interface KillGroupDeps {
 // Both branches are best-effort and swallow their own failures: termination must stay idempotent
 // and must never throw, including when an injected `killWindowsTree` misbehaves. Returns the
 // verified tree-kill disposition for the evidence line.
+// A pid this process must NEVER signal, whatever a caller believes it holds.
+//
+// Reported from a customer's Windows machine: the UI starts, prints "listening on 127.0.0.1:1983",
+// dies with NO error in the log, and a fresh pid repeats the cycle. A silent death with the process
+// guards installed is not an exception — it is an external kill, and this is the one place the
+// product issues one. Windows recycles pids aggressively, so a `taskkill /PID <pid> /T /F` aimed at
+// a child that has already exited can land on whatever now holds that number — and `/T` takes the
+// whole TREE, which on a recycled pid can include this server or its launcher. The crash loop then
+// looks exactly like the report: no stack, no errorKind, just a new pid listening again.
+//
+// The `childExited` guards above make that window much narrower; this makes the worst outcome
+// impossible rather than unlikely. Cheap, and it can only ever reject a signal that would have been
+// suicide: a legitimate child is never this process, and never its parent.
+function isSelfOrParentPid(pid: number): boolean {
+  if (pid === process.pid) return true;
+  // `process.ppid` exists on every supported platform; guarded anyway so a stripped runtime cannot
+  // turn a missing field into `undefined === pid`.
+  return typeof process.ppid === "number" && pid === process.ppid;
+}
+
 function killGroup(
   child: ChildProcess,
   sig: NodeJS.Signals,
@@ -264,6 +284,9 @@ function killGroup(
   const pid = child.pid;
   if (pid === undefined) {
     return "not-attempted";
+  }
+  if (isSelfOrParentPid(pid)) {
+    return "refused-self-pid";
   }
   const posix = deps.platform !== "win32";
   if (posix) {

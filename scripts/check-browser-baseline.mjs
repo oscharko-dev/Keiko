@@ -55,6 +55,21 @@ const GUARDED_CSS = [
     pattern: /:is\(/u,
     minimum: { chrome: 88, edge: 88, firefox: 78, safari: 14 },
   },
+  // Colour FUNCTIONS, and they belong here for the same reason as the selectors above rather than
+  // with the gracefully-degrading declarations: an engine that cannot parse the value drops the
+  // whole declaration, so the element falls back to an inherited or initial colour. For a theme
+  // built almost entirely on them that is not "slightly off" — it is potentially unreadable text on
+  // an unreadable background, with nothing in the console.
+  {
+    name: "CSS oklch()",
+    pattern: /\boklch\(/u,
+    minimum: { chrome: 111, edge: 111, firefox: 113, safari: 15.4 },
+  },
+  {
+    name: "CSS color-mix()",
+    pattern: /\bcolor-mix\(/u,
+    minimum: { chrome: 111, edge: 111, firefox: 113, safari: 16.2 },
+  },
 ];
 
 // pattern: matched against production source (tests excluded — they run in Node, not a browser).

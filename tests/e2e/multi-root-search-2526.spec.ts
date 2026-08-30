@@ -10,7 +10,6 @@ import {
   revokeEditorWorkspaceTrust,
 } from "./support/editorWorkspace.js";
 import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
-import { editorModifier } from "./support/editor-chord.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const WORKSPACE_KEY = "keiko.workspace.v4";
@@ -151,7 +150,13 @@ async function verifyDiscovery(
   page: Page,
   testInfo: TestInfo,
 ): Promise<{ readonly search: Locator; readonly editor: Locator }> {
-  await page.keyboard.press(`${await editorModifier(page)}+Shift+KeyF`);
+  // "ControlOrMeta", NOT `editorModifier`: this is a PRODUCT shortcut, and the product decides
+  // the modifier from `navigator.platform` (useKeyboardShortcuts' detectPlatform), which
+  // Playwright's device presets do NOT override — it still reports "MacIntel" on a Mac. The
+  // host-derived shorthand therefore agrees with the product on every host. `editorModifier`
+  // reads `navigator.userAgent`, which the presets DO force to Windows, so it would send Control
+  // to a product waiting for Meta. See support/editor-chord.ts's header for the split.
+  await page.keyboard.press("ControlOrMeta+Shift+KeyF");
   const search = page.locator('[data-window-id="search"]');
   const searchStartedAt = Date.now();
   await search.getByRole("searchbox", { name: "Search files and symbols" }).fill("needle");

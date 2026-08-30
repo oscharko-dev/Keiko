@@ -13,7 +13,6 @@ import {
 } from "./support/editorWorkspace.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
 import { expectViewportModal } from "./support/modal.js";
-import { editorModifier } from "./support/editor-chord.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const SOURCE = "src/index.ts";
@@ -30,7 +29,13 @@ const PACKAGE_JSON = JSON.stringify(
 );
 
 async function runPaletteCommand(page: Page, title: string): Promise<void> {
-  await page.keyboard.press(`${await editorModifier(page)}+Shift+KeyP`);
+  // "ControlOrMeta", NOT `editorModifier`: this is a PRODUCT shortcut, and the product decides
+  // the modifier from `navigator.platform` (useKeyboardShortcuts' detectPlatform), which
+  // Playwright's device presets do NOT override — it still reports "MacIntel" on a Mac. The
+  // host-derived shorthand therefore agrees with the product on every host. `editorModifier`
+  // reads `navigator.userAgent`, which the presets DO force to Windows, so it would send Control
+  // to a product waiting for Meta. See support/editor-chord.ts's header for the split.
+  await page.keyboard.press("ControlOrMeta+Shift+KeyP");
   const query = page.getByRole("combobox", { name: "Command query" });
   await expect(query).toBeVisible();
   await query.fill(`>${title}`);
@@ -40,7 +45,13 @@ async function runPaletteCommand(page: Page, title: string): Promise<void> {
 }
 
 async function expectNoPaletteCommand(page: Page, title: string): Promise<void> {
-  await page.keyboard.press(`${await editorModifier(page)}+Shift+KeyP`);
+  // "ControlOrMeta", NOT `editorModifier`: this is a PRODUCT shortcut, and the product decides
+  // the modifier from `navigator.platform` (useKeyboardShortcuts' detectPlatform), which
+  // Playwright's device presets do NOT override — it still reports "MacIntel" on a Mac. The
+  // host-derived shorthand therefore agrees with the product on every host. `editorModifier`
+  // reads `navigator.userAgent`, which the presets DO force to Windows, so it would send Control
+  // to a product waiting for Meta. See support/editor-chord.ts's header for the split.
+  await page.keyboard.press("ControlOrMeta+Shift+KeyP");
   const query = page.getByRole("combobox", { name: "Command query" });
   await query.fill(`>${title}`);
   await expect(page.getByRole("option").filter({ hasText: title })).toHaveCount(0);
@@ -48,7 +59,13 @@ async function expectNoPaletteCommand(page: Page, title: string): Promise<void> 
 }
 
 async function expectPaletteCommand(page: Page, title: string): Promise<void> {
-  await page.keyboard.press(`${await editorModifier(page)}+Shift+KeyP`);
+  // "ControlOrMeta", NOT `editorModifier`: this is a PRODUCT shortcut, and the product decides
+  // the modifier from `navigator.platform` (useKeyboardShortcuts' detectPlatform), which
+  // Playwright's device presets do NOT override — it still reports "MacIntel" on a Mac. The
+  // host-derived shorthand therefore agrees with the product on every host. `editorModifier`
+  // reads `navigator.userAgent`, which the presets DO force to Windows, so it would send Control
+  // to a product waiting for Meta. See support/editor-chord.ts's header for the split.
+  await page.keyboard.press("ControlOrMeta+Shift+KeyP");
   const query = page.getByRole("combobox", { name: "Command query" });
   await query.fill(`>${title}`);
   await expect(page.getByRole("option").filter({ hasText: title }).first()).toBeVisible();

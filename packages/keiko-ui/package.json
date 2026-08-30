@@ -26,11 +26,14 @@
     "These floors correspond to the Baseline 'widely available' set and cover every JS API the UI",
     "Enterprise Windows fleets run evergreen Edge/Chrome, so this is not a reachability change for",
     "them; it makes the declaration true. check:browser-baseline enforces it against the source.",
-    "Firefox is 121 rather than 111 because 32 shipped :has() rules across 6 stylesheets DEFINE",
     "custom properties that later declarations consume: on Firefox 111-120 the selector never",
-    "matches, so those properties are absent rather than merely unstyled. check:browser-baseline",
-    "now scans CSS for selector features that do NOT degrade gracefully; declarations an old engine",
-    "simply drops (text-wrap: balance) are progressive enhancement and are deliberately not gated."
+    "Firefox is 121, not 111, because of CSS the gate now scans: 32 :has() rules across 6 stylesheets",
+    "DEFINE custom properties that later declarations consume (absent, not merely unstyled, below 121),",
+    "and globals.css uses oklch() 190x and color-mix() 590x (Firefox 113) with no @supports fallback \u2014",
+    "an engine that cannot parse a colour value drops the whole declaration, which for a theme built on",
+    "them means unreadable text, not a cosmetic shift. Declarations that DO degrade gracefully",
+    "(text-wrap: balance) are deliberately not gated: listing them would manufacture pressure to raise",
+    "a support floor for a nicety."
   ],
   "browserslist": [
     "chrome >= 111",
