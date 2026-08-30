@@ -10,6 +10,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
+import { resolveWindowsSystemBinary } from "../../packages/keiko-security/src/windows-system-directory.ts";
+
 function locateVisualStudioInstallation(baseEnv) {
   const configuredProgramFiles = baseEnv["ProgramFiles(x86)"];
   const programFiles =
@@ -47,9 +49,13 @@ function locateVisualStudioInstallation(baseEnv) {
 
 function importVcvarsEnvironment(baseEnv, installationPath) {
   const vcvars = join(installationPath, "VC", "Auxiliary", "Build", "vcvars64.bat");
-  const systemRoot = baseEnv.SystemRoot ?? baseEnv.WINDIR ?? String.raw`C:\Windows`;
+  // IDX55 follow-up (PR #3355 review): this used to read SystemRoot/WINDIR raw and join it onto
+  // System32/cmd.exe unvalidated — the exact banned pattern trusted-system-root-usage.test.mjs
+  // exists to catch, missed there only because that pin scans packages/*/src, not scripts/. Route
+  // through the ONE trusted decision so a hostile SystemRoot fails closed here too, the same as
+  // every in-package resolution.
   const dump = spawnSync(
-    join(systemRoot, "System32", "cmd.exe"),
+    resolveWindowsSystemBinary("cmd.exe", baseEnv),
     // chcp 65001 before `set`: cmd's internal commands emit the OEM code page into a pipe,
     // which corrupts non-ASCII PATH/INCLUDE/LIB values under the UTF-8 decode below.
     ["/d", "/s", "/c", `""${vcvars}" >nul && chcp 65001 >nul && set"`],
