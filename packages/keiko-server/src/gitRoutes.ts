@@ -37,6 +37,9 @@ import {
 } from "@oscharko-dev/keiko-git";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { observedGitRunner } from "./gitProcessActivity.js";
+import type { ServerLogSink } from "./observability/index.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -83,10 +86,31 @@ export interface GitRouteOptions {
   readonly abortSignal?: AbortSignal | undefined;
   /** Optional deterministic observation seam for concurrent snapshot-read verification. */
   readonly snapshotReadObserver?: (() => Promise<void> | void) | undefined;
+  /**
+   * Activity-log sink for the git process boundary (AGENTS.md §8 Rule 1). Production leaves this
+   * undefined so `optionsWithDefaults` binds the shared process log; tests inject a recording sink
+   * to assert the emitted lines. Not a second logging mechanism — `processServerLogSink()` is the
+   * same adapter every other BFF composition site hands to a domain package.
+   */
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 export interface NormalizedGitRouteOptions {
+  /**
+   * The OBSERVED runner. Every git invocation on a route goes through this one, so a failed run —
+   * including the spawn-boundary security refusal — leaves a body-free line in the activity log
+   * without any call site opting in. See `gitProcessActivity.ts` for why the observation lives
+   * here rather than at each route.
+   */
   readonly runner: GitProcessRunner;
+  /**
+   * The UNOBSERVED runner exactly as supplied (or the module default). Its identity is the only
+   * thing this field is for: `gitRepositoryReads.ts` partitions the git-summary cache by runner so
+   * two tests with different fake runners cannot share an entry, and `runner` above is a fresh
+   * closure per request — keying the cache on it would give every request a unique key and
+   * silently retire the cache. Never call this: a call through it is an unlogged git run.
+   */
+  readonly runnerIdentity: GitProcessRunner;
   readonly maxStatusBytes: number;
   readonly maxDiffBytes: number;
   readonly maxChanges: number;
@@ -151,12 +175,29 @@ export function classifyFailure(result: GitProcessResult): GitRepositoryStatusRe
   return reason === "timeout" ? "git-error" : reason;
 }
 
+/**
+ * Normalizes the route seams and binds the activity log to `correlationId`, so every git run a
+ * handler makes reports under the same id as the request line `server.ts` writes for it.
+ *
+ * `correlationId` is REQUIRED rather than optional-with-a-default: a handler that forgot to thread
+ * it would otherwise log a whole request's git failures under `UNKNOWN_CORRELATION_ID` and break
+ * the join an operator reconstructs the defect with — silently, and only visibly in production.
+ * `RouteContext.correlationId` is itself optional (test fixtures omit it), so `undefined` is
+ * accepted and falls back at the emitting site; what cannot happen is a call site not passing it.
+ */
 // eslint-disable-next-line complexity
 export function optionsWithDefaults(
   options: GitRouteOptions | undefined,
+  correlationId: string | undefined,
 ): NormalizedGitRouteOptions {
+  const runner = options?.runner ?? defaultGitProcessRunner;
   return {
-    runner: options?.runner ?? defaultGitProcessRunner,
+    runner: observedGitRunner(
+      runner,
+      options?.activityLog ?? processServerLogSink(),
+      correlationId,
+    ),
+    runnerIdentity: runner,
     maxStatusBytes: options?.maxStatusBytes ?? DEFAULT_STATUS_MAX_BYTES,
     maxDiffBytes: options?.maxDiffBytes ?? DEFAULT_DIFF_MAX_BYTES,
     maxChanges: options?.maxChanges ?? DEFAULT_MAX_CHANGES,
@@ -685,7 +726,7 @@ export async function handleGitBranches(
   rawOptions?: GitRouteOptions,
 ): Promise<RouteResult> {
   return runFilesHandler(async () => {
-    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
+    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions, ctx.correlationId);
     const repo = await resolveRepository(ctx, deps, options);
     if ("available" in repo) {
       return { status: 200, body: redacted(deps, unavailableBranchList(repo)) };
@@ -1097,7 +1138,7 @@ export async function handleGitStatus(
   return runFilesHandler(
     // eslint-disable-next-line max-lines-per-function
     async () => {
-      const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
+      const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions, ctx.correlationId);
       const includeIgnored = parseBooleanOption(
         ctx.url.searchParams.get("includeIgnored"),
         "includeIgnored",
@@ -1167,7 +1208,7 @@ export async function handleGitDiff(
     deps,
     // eslint-disable-next-line max-lines-per-function
     async () => {
-      const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
+      const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions, ctx.correlationId);
       const scope = parseScope(ctx.url.searchParams.get("scope"));
       const path = validatePath(ctx.url.searchParams.get("path"));
       const repo = await resolveRepository(ctx, deps, options);
@@ -1397,7 +1438,7 @@ export async function handleGitStructuredDiff(
     ctx,
     deps,
     async () => {
-      const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
+      const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions, ctx.correlationId);
       const scope = parseStructuredScope(ctx.url.searchParams.get("scope"));
       const path = validatePath(ctx.url.searchParams.get("path"));
       const repo = await resolveRepository(ctx, deps, options);
@@ -1502,7 +1543,7 @@ export async function handleGitBlame(
   rawOptions?: GitRouteOptions,
 ): Promise<RouteResult> {
   return runFilesHandler(async () => {
-    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
+    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions, ctx.correlationId);
     const request = parseBlameRequest(ctx);
     const repo = await resolveRepository(ctx, deps, options);
     if ("available" in repo) {

@@ -22,6 +22,7 @@ import {
   createGitProcessRunner,
   defaultGitNetworkProcessRunner,
   defaultGitProcessRunner,
+  gitSubcommand,
   GIT_BASE_ARGS,
 } from "./runner.js";
 
@@ -763,5 +764,161 @@ describe("createGitProcessRunner", () => {
         }
       },
     );
+  });
+});
+
+describe("refusal classification (AGENTS.md §8 Rule 1 evidence)", () => {
+  // The refusal MESSAGE is not body-free: for the config-override family the token carries a
+  // caller-chosen segment (`-c alias.<name>`, `-c pager.<cmd>`). `refusal` is the half a consumer
+  // may log, so it is produced here rather than parsed out of `stderr` downstream.
+  it.each([
+    {
+      label: "--upload-pack",
+      args: ["clone", "--upload-pack=/bin/sh"],
+      expected: "remote-command-option",
+    },
+    {
+      label: "--receive-pack",
+      args: ["push", "--receive-pack=/bin/sh"],
+      expected: "remote-command-option",
+    },
+    { label: "--exec", args: ["send-pack", "--exec=/bin/sh"], expected: "remote-command-option" },
+    {
+      label: "--ext-diff",
+      args: [...GIT_BASE_ARGS, "diff", "--ext-diff"],
+      expected: "diff-enabling-flag",
+    },
+    {
+      label: "--textconv",
+      args: [...GIT_BASE_ARGS, "show", "--textconv", "HEAD:f"],
+      expected: "diff-enabling-flag",
+    },
+    {
+      label: "-c diff.external",
+      args: [...GIT_BASE_ARGS, "-c", "diff.external=/bin/true", "diff"],
+      expected: "config-override",
+    },
+    {
+      label: "--config-env credential.helper",
+      args: [...GIT_BASE_ARGS, "--config-env=credential.helper=EVIL", "fetch"],
+      expected: "config-override",
+    },
+    {
+      label: "-c alias.<caller-chosen>",
+      args: [...GIT_BASE_ARGS, "-c", "alias.co=!sh", "status"],
+      expected: "config-override",
+    },
+  ])("names the $label refusal class on the result", async ({ args, expected }) => {
+    const result = await defaultGitProcessRunner(args, {
+      cwd: root,
+      maxBytes: 1024,
+      timeoutMs: 10_000,
+    });
+    expect(result.exitCode).toBe(128);
+    expect(result.refusal).toBe(expected);
+  });
+
+  it("keeps the refusal order when one argv trips two preflight families at once", async () => {
+    // Every case above trips exactly one family, so reordering REFUSAL_CHECKS would not change any
+    // of their answers. This argv trips the remote-command check AND the config-override check;
+    // only the table's order decides which class is reported, so this is the case that pins it.
+    const result = await defaultGitProcessRunner(
+      [...GIT_BASE_ARGS, "-c", "diff.external=/bin/true", "clone", "--upload-pack=/bin/sh"],
+      { cwd: root, maxBytes: 1024, timeoutMs: 10_000 },
+    );
+
+    expect(result.exitCode).toBe(128);
+    expect(result.refusal).toBe("remote-command-option");
+  });
+
+  it("names the untrusted-executable refusal, which exits 127 like a missing git", async () => {
+    // KEIKO-0263's planted-binary indicator. Both this and a genuinely absent git exit 127 and both
+    // classify as `git-missing`, so the ONLY thing separating them used to be the stderr text —
+    // which is not body-free and can never reach an activity log or an evidence manifest.
+    const bin = mkdtempSync(join(tmpdir(), "keiko-git-untrusted-"));
+    const fakeGit = join(bin, "git");
+    writeFileSync(fakeGit, "#!/bin/sh\nexit 0\n");
+    chmodSync(fakeGit, 0o755);
+    // World-writable directory: exactly the "must not trust this location" condition.
+    chmodSync(bin, 0o777);
+    const runner = createGitProcessRunner(() => ({ PATH: bin }));
+    try {
+      const result = await runner([...GIT_BASE_ARGS, "--version"], {
+        cwd: root,
+        maxBytes: 1024,
+        timeoutMs: 10_000,
+      });
+      expect(result.exitCode).toBe(127);
+      expect(result.refusal).toBe("untrusted-executable");
+    } finally {
+      rmSync(bin, { force: true, recursive: true });
+    }
+  });
+
+  it("leaves `refusal` absent on every result that reached a real git process", async () => {
+    // The discriminator a consumer relies on: `refusal !== undefined` must mean "Keiko refused
+    // this", never "git failed". Both a success and an ordinary git failure are checked, because a
+    // field set unconditionally would still pass a success-only assertion.
+    const succeeded = await defaultGitProcessRunner([...GIT_BASE_ARGS, "--version"], {
+      cwd: root,
+      maxBytes: 4096,
+      timeoutMs: 10_000,
+    });
+    // `root` is a real repository (see beforeEach), so a genuine git failure needs a request git
+    // itself rejects: resolving a ref that was never created exits 128 — the SAME exit code the
+    // refusal uses, which is exactly why `refusal` and not `exitCode` is the discriminator.
+    const failed = await defaultGitProcessRunner(
+      [...GIT_BASE_ARGS, "-C", root, "rev-parse", "--verify", "refs/heads/never-created"],
+      { cwd: root, maxBytes: 4096, timeoutMs: 10_000 },
+    );
+    expect(succeeded.exitCode).toBe(0);
+    expect(succeeded.refusal).toBeUndefined();
+    expect(failed.exitCode).toBe(128);
+    expect(failed.refusal).toBeUndefined();
+  });
+});
+
+describe("gitSubcommand", () => {
+  // The pre-subcommand argv grammar lives in ONE place (findSubcommandIndex). These cases pin that
+  // a consumer reading the subcommand through this export gets the same answer the diff-family
+  // neutralization does — a second copy of the grammar in a consumer would name the wrong token
+  // the moment a caller adds a global flag.
+  it.each([
+    { label: "bare subcommand", args: ["status"], expected: "status" },
+    { label: "after GIT_BASE_ARGS", args: [...GIT_BASE_ARGS, "diff"], expected: "diff" },
+    {
+      label: "after -C <path>",
+      args: [...GIT_BASE_ARGS, "-C", "/tmp/x", "for-each-ref"],
+      expected: "for-each-ref",
+    },
+    {
+      label: "after -c <key>=<value>",
+      args: [...GIT_BASE_ARGS, "-c", "core.quotepath=false", "log"],
+      expected: "log",
+    },
+  ])("resolves the subcommand $label", ({ args, expected }) => {
+    expect(gitSubcommand(args)).toBe(expected);
+  });
+
+  it.each([
+    { label: "no subcommand at all", args: [...GIT_BASE_ARGS] },
+    { label: "only a global flag", args: ["--version"] },
+    { label: "a dangling -C with no value", args: ["-C"] },
+  ])("returns undefined when there is no subcommand token ($label)", ({ args }) => {
+    expect(gitSubcommand(args)).toBeUndefined();
+  });
+
+  it.each([
+    { label: "an absolute path", token: "/etc/passwd" },
+    { label: "a windows path", token: "C:\\Users\\me\\secret" },
+    { label: "a config value", token: "diff.external=/bin/sh" },
+    { label: "text with whitespace", token: "not a subcommand" },
+    { label: "an over-long token", token: "a".repeat(33) },
+    { label: "an upper-case token", token: "STATUS" },
+  ])("refuses to name $label as a subcommand", ({ token }) => {
+    // This is what makes the value safe to put in an activity log: every Keiko call site passes a
+    // literal, but this function reads whatever sits at the subcommand position, so anything that
+    // is not a plausible subcommand name must come back as `undefined` rather than be copied out.
+    expect(gitSubcommand([...GIT_BASE_ARGS, token])).toBeUndefined();
   });
 });

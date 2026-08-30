@@ -127,6 +127,16 @@ this runner is a lower, shared boundary that a real production caller needs `-c`
 safe key. Rejection reuses the existing `refusedOptionResult` shape (exit 128, redacted
 `stderr`) rather than a new error channel.
 
+That shape has since gained one structured field, `refusal: GitRefusalClass` — a closed union
+naming WHICH preflight fired (`remote-command-option`, `diff-enabling-flag`, `config-override`,
+`untrusted-executable`) and nothing about the value that tripped it. The redacted `stderr` stays
+the operator-facing message, but it is not body-free — the config-override family's token carries
+a caller-chosen segment (`-c alias.<name>`, `-c pager.<cmd>`) — so it can never reach an activity
+log. Reporting the class here, at the layer that makes the decision, is what lets the BFF emit a
+body-free `git.process.refused` line without any consumer parsing `stderr` (AGENTS.md §8 Rule 1).
+The same field marks the executable-trust rejection, which exits 127 and would otherwise be
+indistinguishable from a machine with no git installed.
+
 ### D2 - Two rendering engines behind one contract and visual language
 
 Keiko retains a justified two-engine split:

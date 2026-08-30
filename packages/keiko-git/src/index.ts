@@ -12,8 +12,14 @@ export {
   createGitProcessRunner,
   defaultGitProcessRunner,
   defaultGitNetworkProcessRunner,
+  gitSubcommand,
 } from "./runner.js";
-export type { GitProcessOptions, GitProcessResult, GitProcessRunner } from "./types.js";
+export type {
+  GitProcessOptions,
+  GitProcessResult,
+  GitProcessRunner,
+  GitRefusalClass,
+} from "./types.js";
 export {
   comparablePath,
   containsPath,

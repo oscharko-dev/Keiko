@@ -214,11 +214,22 @@ never mislabeled.
   `optionsWithDefaults`, `classifyFailure`, `defaultGitProcessRunner`, and `deps.redactor` from
   `gitRoutes.ts` (those five symbols were made `export` behavior-preservingly), plus the shared
   `parsePorcelainV2Branch` from `gitPorcelainStatus.ts` consumed identically by the sync preview.
+- **A failed git run is on the activity log, and the response body still is not.** Every git run the
+  read routes, the clone route and the fetch/pull sync executor make goes through
+  `observedGitRunner` (`gitProcessActivity.ts`), so a non-zero outcome — and a run the byte cap cut,
+  which can still close with exit 0 — writes one body-free line: `git.process.failed`, or
+  `git.process.refused` on the `security` category when keiko-git's spawn boundary rejected the
+  invocation (a forbidden option, a denied `-c` config key, or a `git` resolved in an untrusted
+  location). Each line carries the subcommand, how the child ended, the refusal class and the
+  request's own correlation id. The redacted response projections are unchanged; the log is where
+  the reason lives.
 - **Fetch/pull do NOT enter the governed mutation taxonomy.** `GitDeliveryActionKind` carries no
   fetch/pull, and the sync executor (`syncExecution.ts`) does not import `runGitMutation`, the policy
-  packs, or the approval-token gate. It reuses only the hardened runner with fixed argv. The rationale
-  (a fetch writes only remote-tracking refs; a fast-forward-only pull advances by replay) and the
-  reuse-vs-new decision are recorded in
+  packs, or the approval-token gate. It reuses only the hardened runner with fixed argv — observed,
+  like every other git run above: `normalizeSeams` wraps both the local read runner and the
+  credential-capable network runner, so a sync failure is logged even though it never enters the
+  kernel. The rationale (a fetch writes only remote-tracking refs; a fast-forward-only pull advances
+  by replay) and the reuse-vs-new decision are recorded in
   [ADR-0098](../adr/ADR-0098-git-client-repository-state-and-sync-api.md) D4.
 - **Sync evidence is a sibling ledger.** `syncEvidence.ts` mirrors `mutationEvidenceLedger.ts`: one
   UTC date-bucketed document (run id `git-sync-evidence-YYYY-MM-DD`), `EvidenceStore.update ?? get+put`,

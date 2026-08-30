@@ -21,6 +21,7 @@ import type {
 } from "@oscharko-dev/keiko-workspace";
 import type { GitProcessResult, GitProcessRunner } from "./gitRoutes.js";
 import { defaultGitFileHistoryEvidenceProvider } from "./grounded-git-history-evidence.js";
+import type { ServerLogEvent, ServerLogSink } from "./observability/index.js";
 
 const NOW = 1_700_000_000_000;
 const RECORD_SEP = "\x1e";
@@ -29,6 +30,22 @@ let ROOT = "";
 
 function ok(stdout: string): GitProcessResult {
   return { exitCode: 0, signal: null, stdout, stderr: "", truncated: false };
+}
+
+function fail(stderr: string, exitCode = 128): GitProcessResult {
+  return { exitCode, signal: null, stdout: "", stderr, truncated: false };
+}
+
+function captureActivity(): { readonly events: ServerLogEvent[]; readonly sink: ServerLogSink } {
+  const events: ServerLogEvent[] = [];
+  return {
+    events,
+    sink: {
+      write: (event): void => {
+        events.push(event);
+      },
+    },
+  };
 }
 
 function nodeFs(): WorkspaceFs {
@@ -217,5 +234,154 @@ describe("defaultGitFileHistoryEvidenceProvider", () => {
     });
 
     expect(atoms.map((atom) => atom.scopePath)).toEqual(["src/stale.ts"]);
+  });
+});
+
+describe("git-history evidence activity log (AGENTS.md §8 Rule 1)", () => {
+  // Both git reads in this provider answer a failure with "no evidence". That is the right answer
+  // — a grounded pack degrades rather than fails — but it used to leave the log with no way to
+  // tell an ask whose history ring silently emptied from one where the repository genuinely had
+  // no matching history. These pin that the difference is now recorded, and joinable to the ask.
+
+  it("reports a failed history read under the ask's own correlation id", async () => {
+    const activity = captureActivity();
+    const runner: GitProcessRunner = (args) =>
+      Promise.resolve(
+        args.includes("rev-parse") ? ok(`${ROOT}\n`) : fail("fatal: bad revision 'HEAD'"),
+      );
+
+    const atoms = await defaultGitFileHistoryEvidenceProvider({
+      searchScope: scope(),
+      query: query(),
+      fs: nodeFs(),
+      nowMs: () => NOW,
+      runner,
+      maxFiles: 10,
+      correlationId: "corr-grounded-ask-01",
+      activityLog: activity.sink,
+    });
+
+    // The degraded ANSWER is unchanged: an empty ring, never a thrown ask.
+    expect(atoms).toEqual([]);
+    expect(activity.events).toHaveLength(1);
+    expect(activity.events[0]).toMatchObject({
+      level: "warn",
+      category: "diagnostic",
+      op: "git.process.failed",
+      correlationId: "corr-grounded-ask-01",
+      errorKind: "git-error",
+      extra: { subcommand: "log", exitCode: 128 },
+    });
+  });
+
+  it("reports a failed MEMBERSHIP read, which never reaches the history read at all", async () => {
+    // `resolveGitRepositoryForHistory` returns early on a failed rev-parse, so this outcome never
+    // passes the provider's own history branch. It is observed because the observation is on the
+    // runner both reads share — the same reason the routes' membership failure is observed.
+    const activity = captureActivity();
+    const runner: GitProcessRunner = () =>
+      Promise.resolve(fail("fatal: not a git repository (or any of the parent directories)"));
+
+    const atoms = await defaultGitFileHistoryEvidenceProvider({
+      searchScope: scope(),
+      query: query(),
+      fs: nodeFs(),
+      nowMs: () => NOW,
+      runner,
+      maxFiles: 10,
+      correlationId: "corr-grounded-ask-02",
+      activityLog: activity.sink,
+    });
+
+    expect(atoms).toEqual([]);
+    expect(activity.events).toHaveLength(1);
+    expect(activity.events[0]).toMatchObject({
+      op: "git.process.failed",
+      correlationId: "corr-grounded-ask-02",
+      errorKind: "not-a-repository",
+      extra: { subcommand: "rev-parse" },
+    });
+  });
+
+  it("reports a spawn-boundary refusal on the retrieval path as a security event", async () => {
+    const activity = captureActivity();
+    const runner: GitProcessRunner = (args) =>
+      Promise.resolve(
+        args.includes("rev-parse")
+          ? ok(`${ROOT}\n`)
+          : {
+              ...fail("refused git option: --ext-diff"),
+              refusal: "diff-enabling-flag" as const,
+            },
+      );
+
+    await defaultGitFileHistoryEvidenceProvider({
+      searchScope: scope(),
+      query: query(),
+      fs: nodeFs(),
+      nowMs: () => NOW,
+      runner,
+      maxFiles: 10,
+      correlationId: "corr-grounded-ask-03",
+      activityLog: activity.sink,
+    });
+
+    expect(activity.events).toHaveLength(1);
+    expect(activity.events[0]).toMatchObject({
+      level: "error",
+      category: "security",
+      op: "git.process.refused",
+      correlationId: "corr-grounded-ask-03",
+      extra: { refusal: "diff-enabling-flag" },
+    });
+  });
+
+  it("writes nothing when the history read succeeds", async () => {
+    const activity = captureActivity();
+    const runner: GitProcessRunner = (args) =>
+      Promise.resolve(
+        args.includes("rev-parse")
+          ? ok(`${ROOT}\n`)
+          : ok([`${RECORD_SEP}1700000000`, "src/recent.ts", ""].join("\n")),
+      );
+
+    const atoms = await defaultGitFileHistoryEvidenceProvider({
+      searchScope: scope(),
+      query: query(),
+      fs: nodeFs(),
+      nowMs: () => NOW,
+      runner,
+      maxFiles: 10,
+      correlationId: "corr-grounded-ask-04",
+      activityLog: activity.sink,
+    });
+
+    expect(atoms.map((atom) => atom.scopePath)).toEqual(["src/recent.ts"]);
+    expect(activity.events).toEqual([]);
+  });
+
+  it("carries no repository path or git output into the line", async () => {
+    const activity = captureActivity();
+    const runner: GitProcessRunner = (args) =>
+      Promise.resolve(
+        args.includes("rev-parse")
+          ? ok(`${ROOT}\n`)
+          : fail(`fatal: unable to read ${ROOT}/.git/objects/ab/cdef`),
+      );
+
+    await defaultGitFileHistoryEvidenceProvider({
+      searchScope: scope(),
+      query: query(),
+      fs: nodeFs(),
+      nowMs: () => NOW,
+      runner,
+      maxFiles: 10,
+      correlationId: "corr-grounded-ask-05",
+      activityLog: activity.sink,
+    });
+
+    const serialized = JSON.stringify(activity.events);
+    expect(serialized).not.toContain(ROOT);
+    expect(serialized).not.toContain(".git/objects");
   });
 });

@@ -26,6 +26,9 @@ import {
   resolveGitMembership,
   type GitProcessRunner,
 } from "@oscharko-dev/keiko-git";
+import { observedGitRunner } from "./gitProcessActivity.js";
+import type { ServerLogSink } from "./observability/index.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 const GIT_HISTORY_RECORD_SEP = "\x1e";
 const GIT_HISTORY_COMMIT_LIMIT = 200;
@@ -44,6 +47,19 @@ export interface GitFileHistoryEvidenceInputs {
   readonly signal?: AbortSignal | undefined;
   readonly runner?: GitProcessRunner | undefined;
   readonly maxFiles?: number | undefined;
+  /**
+   * The grounded ask's own correlation id, threaded from `RouteContext.correlationId` through
+   * `OrchestratorDeps` and `SearchInputs` (ADR-0173 D5). Required for the activity-log lines below
+   * to be worth anything: a git failure recorded here belongs to ONE ask, and a line stamped with
+   * the `UNKNOWN_CORRELATION_ID` fallback could not be joined back to the answer it degraded —
+   * which is the only question an operator asks of it.
+   */
+  readonly correlationId?: string | undefined;
+  /**
+   * Activity-log sink, defaulting to the shared process log. A test seam in exactly the same sense
+   * as `runner` above; production omits it.
+   */
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 export type GitFileHistoryEvidenceProvider = (
@@ -363,7 +379,18 @@ function historyAtom(
 export const defaultGitFileHistoryEvidenceProvider: GitFileHistoryEvidenceProvider = async (
   inputs,
 ) => {
-  const runner = inputs.runner ?? defaultGitProcessRunner;
+  // Both git reads below — the membership resolution inside `resolveGitRepositoryForHistory` and
+  // the history read itself — answer a failure by returning no evidence. That is the right ANSWER
+  // (a grounded pack degrades rather than fails), but on its own it left no trace at all: an ask
+  // whose git-history ring silently went empty was indistinguishable in the log from one where the
+  // repository simply had no matching history. Observing the runner reports both without either
+  // call site opting in, and reuses the routes' own helper rather than growing a second mechanism
+  // (AGENTS.md §5, §8 Rule 1).
+  const runner = observedGitRunner(
+    inputs.runner ?? defaultGitProcessRunner,
+    inputs.activityLog ?? processServerLogSink(),
+    inputs.correlationId,
+  );
   throwIfCancelled(inputs.signal);
   const repo = await resolveGitRepositoryForHistory(inputs, runner);
   if (repo === undefined) {

@@ -127,8 +127,11 @@ export const createHandleSyncPreview = (
   operation: GitSyncOperation,
   options: GitDeliverySyncRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
-  const seams = options.execution ?? {};
+  const baseSeams = options.execution ?? {};
   return async (ctx, deps): Promise<RouteResult> => {
+    // Per request, not per route: the correlation id is what ties this sync's git failures to the
+    // request line `server.ts` writes for it (AGENTS.md §8 Rule 1).
+    const seams = { ...baseSeams, correlationId: ctx.correlationId };
     const prepared = await prepareGitDeliveryRequest(ctx, deps, SYNC_REQUEST_ERRORS, validate);
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
@@ -268,8 +271,12 @@ export const createHandleSyncExecute = (
   operation: GitSyncOperation,
   options: GitDeliverySyncRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
-  const seams = options.execution ?? {};
-  return (ctx, deps) => handleSyncExecute(ctx, deps, operation, seams);
+  const baseSeams = options.execution ?? {};
+  return (ctx, deps) =>
+    handleSyncExecute(ctx, deps, operation, {
+      ...baseSeams,
+      correlationId: ctx.correlationId,
+    });
 };
 
 // ─── Route group ───────────────────────────────────────────────────────────────────────────────

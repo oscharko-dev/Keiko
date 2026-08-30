@@ -8,7 +8,12 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { gitEnv, networkGitEnv } from "./env.js";
 import { resolveGitExecutable } from "./git-executable.js";
-import type { GitProcessOptions, GitProcessResult, GitProcessRunner } from "./types.js";
+import type {
+  GitProcessOptions,
+  GitProcessResult,
+  GitProcessRunner,
+  GitRefusalClass,
+} from "./types.js";
 
 // Grace period between SIGTERM and SIGKILL: a git process that ignores SIGTERM (stuck on a dead
 // filesystem, wedged hook) must never wedge the caller for longer than the timeout plus this.
@@ -132,6 +137,29 @@ function findSubcommandIndex(args: readonly string[]): number | undefined {
     return arg !== undefined && !arg.startsWith("-") ? index : undefined;
   }
   return undefined;
+}
+
+// git subcommand names are lower-case ASCII words (`status`, `for-each-ref`, `rev-parse`). The
+// shape guard is what makes the answer safe to LOG: every Keiko call site passes a literal here,
+// but this function reads whatever token sits at the subcommand position, so a value that is not a
+// plausible subcommand name is reported as `undefined` rather than copied into an activity log.
+// Bounded alphabet, bounded length, no separators, no whitespace — a token that passes cannot
+// carry a path, a config value, or a secret.
+const GIT_SUBCOMMAND_SHAPE = /^[a-z][a-z0-9-]{0,31}$/u;
+
+/**
+ * The git subcommand `args` resolves to (`status`, `diff`, `for-each-ref`, …), or `undefined` when
+ * the array has no subcommand token or the token is not a plausible subcommand name.
+ *
+ * Exported because a consumer that wants to name the failing command must not restate this
+ * module's pre-subcommand argv grammar (`-C`/`-c` take a value, `--no-pager` does not): a second
+ * copy of that table drifts silently the moment a caller adds a global flag, and the copy would
+ * then name the wrong token. One grammar, one reader.
+ */
+export function gitSubcommand(args: readonly string[]): string | undefined {
+  const index = findSubcommandIndex(args);
+  const token = index === undefined ? undefined : args[index];
+  return token !== undefined && GIT_SUBCOMMAND_SHAPE.test(token) ? token : undefined;
 }
 
 function withDiffFamilyNeutralized(args: readonly string[]): readonly string[] {
@@ -388,9 +416,14 @@ const SPAWN_UNTRUSTED_RESULT: Omit<GitProcessResult, "truncated" | "timedOut" | 
   signal: null,
   stdout: "",
   stderr: "git executable in untrusted location refused",
+  // The structured half of the same fact. The stderr above already names the class, but stderr is
+  // not body-free and never reaches an activity log, so without this field a planted-binary
+  // indicator and a plain "git is not installed" are the same exit-127 `git-missing` to every
+  // consumer that cannot read the message (AGENTS.md §8 Rule 1).
+  refusal: "untrusted-executable",
 };
 
-function refusedOptionResult(forbidden: string): GitProcessResult {
+function refusedOptionResult(forbidden: string, refusal: GitRefusalClass): GitProcessResult {
   return {
     exitCode: 128,
     signal: null,
@@ -398,6 +431,7 @@ function refusedOptionResult(forbidden: string): GitProcessResult {
     stderr: `refused git option: ${forbidden.split("=")[0] ?? forbidden}`,
     truncated: false,
     timedOut: false,
+    refusal,
   };
 }
 
@@ -417,6 +451,32 @@ function signalIsAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 
+interface GitRefusal {
+  readonly forbidden: string;
+  readonly refusal: GitRefusalClass;
+}
+
+// One ordered table instead of a `??` chain of three differently-shaped calls: the class travels
+// WITH the predicate that decides it, so a fourth preflight cannot be added without naming what it
+// refuses. The predicates, and the order they run in, are unchanged from the chain this replaces —
+// first match wins, exactly as `??` short-circuited.
+const REFUSAL_CHECKS: readonly (readonly [
+  GitRefusalClass,
+  (args: readonly string[]) => string | undefined,
+])[] = [
+  ["remote-command-option", forbiddenGitOption],
+  ["diff-enabling-flag", forbiddenDiffEnablingFlag],
+  ["config-override", forbiddenConfigOverride],
+];
+
+function firstRefusal(args: readonly string[]): GitRefusal | undefined {
+  for (const [refusal, check] of REFUSAL_CHECKS) {
+    const forbidden = check(args);
+    if (forbidden !== undefined) return { forbidden, refusal };
+  }
+  return undefined;
+}
+
 function gitSpawnPreflight(
   args: readonly string[],
   options: GitProcessOptions,
@@ -424,9 +484,10 @@ function gitSpawnPreflight(
   // Fail closed before the spawn: a remote-command option, an external-diff/textconv enabling
   // flag, or a `-c`/`--config-env` override of a dangerous config key is refused here so none of
   // them can ever reach the child process — however they got into `args` (audit finding #3348).
-  const forbidden =
-    forbiddenGitOption(args) ?? forbiddenDiffEnablingFlag(args) ?? forbiddenConfigOverride(args);
-  if (forbidden !== undefined) return refusedOptionResult(forbidden);
+  // Each check names its own `GitRefusalClass` so the refusal stays a structured fact a consumer
+  // can log body-free (AGENTS.md §8 Rule 1); the raw token stays in `stderr` and goes no further.
+  const refused = firstRefusal(args);
+  if (refused !== undefined) return refusedOptionResult(refused.forbidden, refused.refusal);
   return signalIsAborted(options.abortSignal) ? abortedProcessResult() : undefined;
 }
 

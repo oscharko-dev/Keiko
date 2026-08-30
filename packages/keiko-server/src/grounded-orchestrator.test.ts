@@ -1841,6 +1841,36 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("threads the ask's correlation id into the git-history evidence provider", async () => {
+    // The provider logs a failed git read on the shared activity log (AGENTS.md §8 Rule 1), and a
+    // line stamped with the UNKNOWN_CORRELATION_ID fallback could not be joined back to the ask
+    // whose history ring it degraded — which is the only question that line answers. This pins the
+    // hop the provider cannot check for itself: OrchestratorDeps -> SearchInputs -> provider input.
+    writeFileSync(join(ROOT, "src/recent.ts"), "export const recentlyChanged = true;\n");
+    const seen: (string | undefined)[] = [];
+    const gitFileHistoryEvidence: GitFileHistoryEvidenceProvider = ({ nowMs, correlationId }) => {
+      seen.push(correlationId);
+      return Promise.resolve([gitHistoryAtom("src/recent.ts", nowMs())]);
+    };
+
+    await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+        query: happyQuery({ text: "Investigate src/foo.ts and src/recent.ts recent git history" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        gitFileHistoryEvidence,
+        correlationId: "corr-orchestrated-01",
+      },
+    );
+
+    expect(seen).not.toHaveLength(0);
+    expect(seen.every((id) => id === "corr-orchestrated-01")).toBe(true);
+  });
+
   it("uses the budget governor to stop before an over-budget retrieval ring", async () => {
     const out = await runGroundedExploration(
       input({

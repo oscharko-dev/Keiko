@@ -885,6 +885,18 @@
       "package": "keiko-server"
     },
     {
+      "op": "git.process.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitProcessActivity.ts:185",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.process.refused",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitProcessActivity.ts:174",
+      "package": "keiko-server"
+    },
+    {
       "op": "harness.context.compacted",
       "category": "process",
       "site": "packages/keiko-server/src/harness-context-compactor.ts:250",

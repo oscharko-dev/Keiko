@@ -35,6 +35,9 @@ import {
   type GitProcessRunner,
 } from "../gitRoutes.js";
 import { parsePorcelainV2Branch, type PorcelainV2Status } from "../gitPorcelainStatus.js";
+import { observedGitRunner } from "../gitProcessActivity.js";
+import type { ServerLogSink } from "../observability/index.js";
+import { processServerLogSink } from "../process-log-sink.js";
 
 const DEFAULT_SYNC_MAX_BYTES = 128 * 1024;
 const DEFAULT_SYNC_TIMEOUT_MS = 30_000;
@@ -45,6 +48,16 @@ export interface GitDeliverySyncSeams {
   readonly maxBytes?: number | undefined;
   readonly timeoutMs?: number | undefined;
   readonly beforeRemoteDispatch?: (() => boolean) | undefined;
+  /**
+   * The request's correlation id, supplied per request by the route handlers (AGENTS.md §8 Rule 1).
+   * Unlike the other members this is not a test seam: a fetch/pull answers a failure with a
+   * content-free typed code, so without the activity-log lines below an auth failure, an
+   * unreachable remote, a non-fast-forward or a spawn-boundary refusal on this path left no trace
+   * at all — and a line that cannot be joined to the request that caused it answers nothing.
+   */
+  readonly correlationId?: string | undefined;
+  /** Activity-log sink, defaulting to the shared process log. A test seam like `runner`. */
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 interface NormalizedSyncSeams {
@@ -60,9 +73,15 @@ interface NormalizedSyncSeams {
 // local reads use the hardened `defaultGitProcessRunner` while the fetch/pull command uses the
 // credential-capable `defaultGitNetworkProcessRunner` (see networkGitEnv in gitRoutes.ts).
 function normalizeSeams(seams: GitDeliverySyncSeams): NormalizedSyncSeams {
+  // Both runners are observed here, at the one place they are resolved, so every git run this
+  // module makes — the local status/remote reads AND the credential-capable fetch/pull — reports
+  // its own failure without any of the four call sites below opting in. Same helper the read-only
+  // git routes use; this is not a second logging mechanism (AGENTS.md §5).
+  const observe = (runner: GitProcessRunner): GitProcessRunner =>
+    observedGitRunner(runner, seams.activityLog ?? processServerLogSink(), seams.correlationId);
   return {
-    readRunner: seams.runner ?? defaultGitProcessRunner,
-    networkRunner: seams.runner ?? defaultGitNetworkProcessRunner,
+    readRunner: observe(seams.runner ?? defaultGitProcessRunner),
+    networkRunner: observe(seams.runner ?? defaultGitNetworkProcessRunner),
     maxBytes: seams.maxBytes ?? DEFAULT_SYNC_MAX_BYTES,
     timeoutMs: seams.timeoutMs ?? DEFAULT_SYNC_TIMEOUT_MS,
   };

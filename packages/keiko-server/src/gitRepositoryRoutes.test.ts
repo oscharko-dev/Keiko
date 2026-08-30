@@ -5,8 +5,13 @@ import { delimiter, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitProcessResult } from "@oscharko-dev/keiko-git";
-import { classifyCloneOutcome, createCloneRepositoryHandler } from "./gitRepositoryRoutes.js";
+import {
+  classifyCloneOutcome,
+  createCloneRepositoryHandler,
+  type CloneRepositoryRunner,
+} from "./gitRepositoryRoutes.js";
 import type { RouteContext } from "./routes.js";
+import type { ServerLogEvent, ServerLogSink } from "./observability/index.js";
 import { createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, UiStoreError, type UiStore } from "./store/index.js";
 import { writeNodeExecutableFixture } from "./editor/lsp/testing/executableFixture.js";
@@ -81,7 +86,13 @@ describe("git repository routes", () => {
         workspaceAvailable: true,
       },
     });
-    expect(cloneRunner).toHaveBeenCalledWith("https://github.com/acme/app.git", destination);
+    expect(cloneRunner).toHaveBeenCalledWith(
+      "https://github.com/acme/app.git",
+      destination,
+      // The handler now hands the clone the OBSERVED network runner, so a failed clone
+      // reports itself on the activity log under this request's correlation id.
+      expect.any(Function),
+    );
     expect(store.listProjects()).toContainEqual(
       expect.objectContaining({ path: destination, name: "Customer App" }),
     );
@@ -108,7 +119,13 @@ describe("git repository routes", () => {
     );
 
     expect(result.status).toBe(201);
-    expect(cloneRunner).toHaveBeenCalledWith("https://github.com/acme/app-😀.git", destination);
+    expect(cloneRunner).toHaveBeenCalledWith(
+      "https://github.com/acme/app-😀.git",
+      destination,
+      // The handler now hands the clone the OBSERVED network runner, so a failed clone
+      // reports itself on the activity log under this request's correlation id.
+      expect.any(Function),
+    );
   });
 
   it("uses the shared hardened network git env for the clone spawn boundary", async () => {
@@ -457,5 +474,68 @@ describe("classifyCloneOutcome", () => {
     const outcome = classifyCloneOutcome(cloneResult({ truncated: true, aborted: true }));
     expect(outcome?.status).toBe(499);
     expect(cloneCode(cloneResult({ truncated: true, aborted: true }))).toBe("GIT_CLONE_CANCELLED");
+  });
+});
+
+describe("clone route activity log (AGENTS.md §8 Rule 1)", () => {
+  // A failed clone answers with a content-free typed message (CLONE_FAILURE) and nothing else: the
+  // git output that says WHY stays at the spawn boundary by design. Without a log line the
+  // operator's whole record of a failed clone was one `http`/`request` line and a status code.
+
+  function captureActivity(): { readonly events: ServerLogEvent[]; readonly sink: ServerLogSink } {
+    const events: ServerLogEvent[] = [];
+    return {
+      events,
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    };
+  }
+
+  function ctxWithCorrelation(body: unknown, correlationId: string): RouteContext {
+    return { ...ctx(body), correlationId };
+  }
+
+  it("reports a failed clone under the request's correlation id, with no git output in the line", async () => {
+    const activity = captureActivity();
+    // Hermetic on purpose: cloning a local path that does not exist fails inside git in
+    // milliseconds with no DNS lookup and no socket. A remote URL — even a reserved `.invalid`
+    // one — would put a real name resolution in the test's path.
+    const missingSource = join(tmp, "no-such-source");
+    const cloneRunner: CloneRepositoryRunner = async (_repositoryUrl, destinationPath, runner) => {
+      // Drives the OBSERVED runner the handler built, exactly as the production clone does — the
+      // wiring is what is under test, so the test must not re-implement it.
+      await runner(["clone", "--", missingSource, destinationPath], {
+        cwd: tmp,
+        maxBytes: 4096,
+        timeoutMs: 30_000,
+      });
+      return null;
+    };
+    const handler = createCloneRepositoryHandler(cloneRunner, activity.sink);
+
+    await handler(
+      ctxWithCorrelation(
+        {
+          repositoryUrl: "https://github.com/acme/app.git",
+          destinationPath: join(tmp, "clone-target"),
+        },
+        "corr-clone-000001",
+      ),
+      deps(),
+    );
+
+    const failures = activity.events.filter((event) => event.op === "git.process.failed");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      category: "diagnostic",
+      correlationId: "corr-clone-000001",
+      extra: { subcommand: "clone" },
+    });
+    // The source path is in the argv the observed runner was handed and in git's own stderr; the
+    // line records the subcommand and the exit status, and neither of those.
+    expect(JSON.stringify(failures[0])).not.toContain("no-such-source");
   });
 });

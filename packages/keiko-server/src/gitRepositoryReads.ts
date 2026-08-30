@@ -78,7 +78,11 @@ function gitSummaryCacheKey(
   const session = resolveAppSessionReadAuthority(deps, ctx.req);
   return JSON.stringify({
     root: ctx.url.searchParams.get("root") ?? "",
-    runner: gitRunnerCacheId(options.runner),
+    // `runnerIdentity`, never `runner`: the normalized `runner` is a per-request observation
+    // wrapper (see NormalizedGitRouteOptions), so keying on it would mint a fresh cache key for
+    // every request and turn this cache into a permanent miss. The identity that must partition
+    // the cache is the UNDERLYING runner — which is what two tests with different fakes differ in.
+    runner: gitRunnerCacheId(options.runnerIdentity),
     maxStatusBytes: options.maxStatusBytes,
     timeoutMs: options.timeoutMs,
     sessionId: session?.sessionId ?? "",
@@ -310,7 +314,7 @@ export async function handleGitSummary(
   rawOptions?: GitRouteOptions,
 ): Promise<RouteResult> {
   return runFilesHandler(async () => {
-    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
+    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions, ctx.correlationId);
     const cacheKey = gitSummaryCacheKey(ctx, deps, options);
     const cached = cachedGitSummary(deps, cacheKey);
     if (cached !== undefined) return cached.value;
@@ -357,7 +361,7 @@ export async function handleGitRemotes(
   rawOptions?: GitRouteOptions,
 ): Promise<RouteResult> {
   return runFilesHandler(async () => {
-    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
+    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions, ctx.correlationId);
     const repo = await resolveRepository(ctx, deps, options);
     if (isUnavailable(repo)) {
       const body = unavailableRemotes(repo.root, repo.repositoryRoot, repo.reason);
@@ -513,7 +517,7 @@ export async function handleGitHistory(
   rawOptions?: GitRouteOptions,
 ): Promise<RouteResult> {
   return runFilesHandler(async () => {
-    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
+    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions, ctx.correlationId);
     const limit = parseInteger(
       ctx.url.searchParams.get("limit"),
       HISTORY_LIMIT_DEFAULT,

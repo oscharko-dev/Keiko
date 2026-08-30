@@ -20,6 +20,7 @@ import type { RouteContext } from "../routes.js";
 import type { GitProcessResult, GitProcessRunner } from "../gitRoutes.js";
 import { createHandleSyncExecute, createHandleSyncPreview } from "./syncRoutes.js";
 import type { GitDeliverySyncSeams } from "./syncExecution.js";
+import type { ServerLogEvent, ServerLogSink } from "../observability/index.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
 const FETCH_PREVIEW = "/api/git-delivery/fetch/preview";
@@ -719,5 +720,65 @@ describe("evidence — content-free recording", () => {
     expect(records).toHaveLength(1);
     expect(records[0]?.outcome).toBe("auth-failed");
     expect(records[0]?.operation).toBe("pull");
+  });
+});
+
+describe("sync route activity log (AGENTS.md §8 Rule 1)", () => {
+  // A fetch/pull answers every failure with a content-free typed code (GIT_DELIVERY_SYNC_*), by
+  // design. Before this wiring that meant an auth failure, an unreachable remote, a
+  // non-fast-forward or a spawn-boundary refusal on the sync path left NOTHING in `server.log` —
+  // the operator's whole record of a failed sync was one `http`/`request` line and a status code.
+
+  function captureActivity(): { readonly events: ServerLogEvent[]; readonly sink: ServerLogSink } {
+    const events: ServerLogEvent[] = [];
+    return {
+      events,
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    };
+  }
+
+  function ctxWithCorrelation(path: string, body: unknown, correlationId: string): RouteContext {
+    return { ...ctxFor(path, body), correlationId };
+  }
+
+  it("reports a failed sync read under the request's correlation id", async () => {
+    const activity = captureActivity();
+    const handler = createHandleSyncPreview("fetch", {
+      execution: {
+        ...seams({ status: fail("fatal: not a git repository", 128) }),
+        activityLog: activity.sink,
+      },
+    });
+
+    await handler(ctxWithCorrelation(FETCH_PREVIEW, syncBody(), "corr-sync-000001"), deps());
+
+    const failures = activity.events.filter((event) => event.op === "git.process.failed");
+    expect(failures).not.toHaveLength(0);
+    expect(failures[0]).toMatchObject({
+      category: "diagnostic",
+      correlationId: "corr-sync-000001",
+      errorKind: "not-a-repository",
+      extra: { subcommand: "status" },
+    });
+    // The response stays content-free; the log is where the reason lives.
+    expect(JSON.stringify(failures[0])).not.toContain("not a git repository");
+  });
+
+  it("threads the correlation id on the execute route too, not only preview", async () => {
+    const activity = captureActivity();
+    const handler = createHandleSyncExecute("fetch", {
+      execution: {
+        ...seams({ status: fail("fatal: not a git repository", 128) }),
+        activityLog: activity.sink,
+      },
+    });
+
+    await handler(ctxWithCorrelation(FETCH_EXECUTE, syncBody(), "corr-sync-000002"), deps());
+
+    expect(activity.events.map((event) => event.correlationId)).toContain("corr-sync-000002");
   });
 });
