@@ -68,11 +68,13 @@ export function githubOwnerAndRepoFromRemoteUrl(remoteUrl: string): string | und
 // gitDeliveryTerminationHandler). Without an onTerminated, a timed-out or output-capped read here
 // is a git/gh subprocess whose termination never reaches the activity log at all: this was the
 // ONLY default reader in the area that dropped the callback entirely rather than merely
-// downgrading its correlationId. `readTrustedGitDeliveryBranchProtection` below is the zero-arg
-// convenience default for callers with no evidence port to inject (kept for backward
-// compatibility with existing seam/test usage); a request-scoped caller should prefer
-// `createTrustedGitDeliveryBranchProtectionReader(gitDeliveryTerminationHandler(seams,
-// correlationId))` instead.
+// downgrading its correlationId. Every caller is request-scoped and passes
+// `gitDeliveryTerminationHandler(seams, correlationId)`; the factory's parameter stays optional only
+// so a test can assert the no-callback shape, which is what the `terminationDeps` spread below
+// encodes (PR #3355 review, P3: a zero-arg `readTrustedGitDeliveryBranchProtection` const used to
+// sit here as a "backward compatible" default, but the only usage it was compatible WITH was
+// created by this same PR — §6 prefers deletion, so it is gone and its test folded onto the
+// factory).
 export function createTrustedGitDeliveryBranchProtectionReader(
   onTerminated?: (evidence: CommandTerminationEvidence) => void,
 ): GitDeliveryBranchProtectionReader {
@@ -94,9 +96,6 @@ export function createTrustedGitDeliveryBranchProtectionReader(
     }
   };
 }
-
-export const readTrustedGitDeliveryBranchProtection: GitDeliveryBranchProtectionReader =
-  createTrustedGitDeliveryBranchProtectionReader();
 
 export function signatureRequirementOf(
   preflight: GitDeliveryBranchProtectionPreflight,

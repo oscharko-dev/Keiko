@@ -36,7 +36,6 @@ vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal
 import {
   createTrustedGitDeliveryBranchProtectionReader,
   githubOwnerAndRepoFromRemoteUrl,
-  readTrustedGitDeliveryBranchProtection,
   signatureRequirementOf,
 } from "./branchProtectionPreflight.js";
 
@@ -113,10 +112,14 @@ describe("createTrustedGitDeliveryBranchProtectionReader — runCommand terminat
     expect(readNodeGitBranchProtectionCalls[0]?.onTerminated).toBeUndefined();
   });
 
-  it("readTrustedGitDeliveryBranchProtection is the zero-arg convenience default (same behavior, no callback)", async () => {
+  // Folded onto the factory (PR #3355 review, P3): the zero-arg `readTrustedGitDeliveryBranchProtection`
+  // const this used to exercise was deleted, since the only "backward compatible" usage it had was
+  // this test itself. Calling the factory with no argument proves the same thing — a reader built
+  // without an evidence port passes no `onTerminated` down — without keeping an export alive for it.
+  it("the factory called with no argument passes no onTerminated down", async () => {
     readGitRemoteUrlCalls.length = 0;
     readNodeGitBranchProtectionCalls.length = 0;
-    const result = await readTrustedGitDeliveryBranchProtection(
+    const result = await createTrustedGitDeliveryBranchProtectionReader()(
       testWorkspace("/nonexistent/keiko-gd-branch-protection"),
       "origin",
       "dev",
