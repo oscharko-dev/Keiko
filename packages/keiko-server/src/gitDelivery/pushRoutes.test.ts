@@ -9,6 +9,7 @@
 //   * AC5 — push execution cannot bypass the gateway: blocked attempts execute nothing yet still record
 //           content-free evidence for allowed AND blocked outcomes.
 
+import { captureActivityLog } from "../activityLogCapture.test-support.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,7 +32,6 @@ import type {
   GitDeliveryPublishSeams,
 } from "./pushExecution.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
-import type { ServerLogEvent, ServerLogSink } from "../observability/index.js";
 
 const PREVIEW = "/api/git-delivery/push/preview";
 const EXECUTE = "/api/git-delivery/push/execute";
@@ -508,25 +508,13 @@ describe("push execute activity log (AGENTS.md §8 Rule 1)", () => {
   // `server.log` — the remote half of the gap `logGitDeliveryMutation` already closed for local
   // mutations. Reuses that same logger: `actionKind: "push"` is what separates the two.
 
-  function captureActivity(): { readonly events: ServerLogEvent[]; readonly sink: ServerLogSink } {
-    const events: ServerLogEvent[] = [];
-    return {
-      events,
-      sink: {
-        write: (event): void => {
-          events.push(event);
-        },
-      },
-    };
-  }
-
   function ctxWithCorrelation(path: string, body: unknown, correlationId: string): RouteContext {
     return { ...ctxFor(path, body), correlationId };
   }
 
   it("reports a governed push under the request's correlation id, marked as a push", async () => {
     const adapter = recordingPublishAdapter();
-    const activity = captureActivity();
+    const activity = captureActivityLog();
     const handler = createHandlePushExecute({
       execution: seams({
         publishAdapterFactory: () => adapter.adapter,

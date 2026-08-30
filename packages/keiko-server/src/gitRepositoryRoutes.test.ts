@@ -1,3 +1,4 @@
+import { captureActivityLog } from "./activityLogCapture.test-support.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -11,7 +12,6 @@ import {
   type CloneRepositoryRunner,
 } from "./gitRepositoryRoutes.js";
 import type { RouteContext } from "./routes.js";
-import type { ServerLogEvent, ServerLogSink } from "./observability/index.js";
 import { createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, UiStoreError, type UiStore } from "./store/index.js";
 import { writeNodeExecutableFixture } from "./editor/lsp/testing/executableFixture.js";
@@ -482,24 +482,12 @@ describe("clone route activity log (AGENTS.md §8 Rule 1)", () => {
   // git output that says WHY stays at the spawn boundary by design. Without a log line the
   // operator's whole record of a failed clone was one `http`/`request` line and a status code.
 
-  function captureActivity(): { readonly events: ServerLogEvent[]; readonly sink: ServerLogSink } {
-    const events: ServerLogEvent[] = [];
-    return {
-      events,
-      sink: {
-        write: (event): void => {
-          events.push(event);
-        },
-      },
-    };
-  }
-
   function ctxWithCorrelation(body: unknown, correlationId: string): RouteContext {
     return { ...ctx(body), correlationId };
   }
 
   it("reports a failed clone under the request's correlation id, with no git output in the line", async () => {
-    const activity = captureActivity();
+    const activity = captureActivityLog();
     // Hermetic on purpose: cloning a local path that does not exist fails inside git in
     // milliseconds with no DNS lookup and no socket. A remote URL — even a reserved `.invalid`
     // one — would put a real name resolution in the test's path.

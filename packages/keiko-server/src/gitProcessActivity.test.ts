@@ -1,3 +1,4 @@
+import { captureActivityLog } from "./activityLogCapture.test-support.js";
 import { describe, expect, it, vi } from "vitest";
 import type { GitProcessResult, GitProcessRunner } from "@oscharko-dev/keiko-git";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
@@ -7,21 +8,6 @@ import {
   type ServerLogEvent,
   type ServerLogSink,
 } from "./observability/index.js";
-
-function captureActivityLog(): {
-  readonly events: ServerLogEvent[];
-  readonly sink: ServerLogSink;
-} {
-  const events: ServerLogEvent[] = [];
-  return {
-    events,
-    sink: {
-      write: (event): void => {
-        events.push(event);
-      },
-    },
-  };
-}
 
 function result(overrides: Partial<GitProcessResult> = {}): GitProcessResult {
   return {

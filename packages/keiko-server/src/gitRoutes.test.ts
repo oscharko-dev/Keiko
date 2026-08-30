@@ -1,3 +1,4 @@
+import { captureActivityLog } from "./activityLogCapture.test-support.js";
 import { Buffer } from "node:buffer";
 import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -20,7 +21,7 @@ import {
 } from "./index.js";
 import { matchRoute, type RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
-import type { ServerLogEvent, ServerLogSink } from "./observability/index.js";
+import type { ServerLogSink } from "./observability/index.js";
 import type { UiStore } from "./store/index.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import {
@@ -1773,18 +1774,6 @@ describe("git route activity log (AGENTS.md §8 Rule 1)", () => {
     };
   }
 
-  function captureActivity(): { readonly events: ServerLogEvent[]; readonly sink: ServerLogSink } {
-    const events: ServerLogEvent[] = [];
-    return {
-      events,
-      sink: {
-        write: (event): void => {
-          events.push(event);
-        },
-      },
-    };
-  }
-
   const refused = (
     option: string,
     refusal: GitRefusalClass,
@@ -1801,7 +1790,7 @@ describe("git route activity log (AGENTS.md §8 Rule 1)", () => {
     // `resolveRepository` runs `rev-parse` through keiko-git's own resolveGitMembership, so this
     // most common failure of all never passes through a route handler's own body. It is observed
     // because the OBSERVATION SITS ON THE RUNNER, and this test is what pins that placement.
-    const activity = captureActivity();
+    const activity = captureActivityLog();
     const runner = vi
       .fn<GitProcessRunner>()
       .mockResolvedValue(fail("fatal: not a git repository (or any of the parent directories)"));
@@ -1829,7 +1818,7 @@ describe("git route activity log (AGENTS.md §8 Rule 1)", () => {
     // rejections reuse the same GitProcessResult shape as the pre-existing `--upload-pack` refusal,
     // so "a caller tried to override diff.external through a git route" was swallowed into a
     // redacted 200 body with no trace anywhere.
-    const activity = captureActivity();
+    const activity = captureActivityLog();
     const runner = vi
       .fn<GitProcessRunner>()
       .mockResolvedValueOnce(ok(`${root}\n`))
@@ -1874,7 +1863,7 @@ describe("git route activity log (AGENTS.md §8 Rule 1)", () => {
     async ({ label, run, query }) => {
       // The reason the wrapper lives in optionsWithDefaults: a route added tomorrow is observed
       // without its author opting in. Each of these reaches the runner through its own handler.
-      const activity = captureActivity();
+      const activity = captureActivityLog();
       const correlationId = `corr-route-${label}-01`;
       const runner = vi
         .fn<GitProcessRunner>()
@@ -1910,7 +1899,7 @@ describe("git route activity log (AGENTS.md §8 Rule 1)", () => {
     // admitted run succeeds, so whether the route answers 400 (input rejected before the spawn)
     // or 200 (a content-free projection), the log must stay empty: a line would tell an operator
     // a git command failed when none did.
-    const activity = captureActivity();
+    const activity = captureActivityLog();
     const runner = vi.fn<GitProcessRunner>().mockResolvedValue(ok(`${root}\n`));
 
     await run(
@@ -1922,7 +1911,7 @@ describe("git route activity log (AGENTS.md §8 Rule 1)", () => {
   });
 
   it("writes nothing when every git run succeeds", async () => {
-    const activity = captureActivity();
+    const activity = captureActivityLog();
     const runner = vi
       .fn<GitProcessRunner>()
       .mockResolvedValueOnce(ok(`${root}\n`))

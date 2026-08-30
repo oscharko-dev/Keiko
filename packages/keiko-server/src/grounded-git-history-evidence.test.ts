@@ -1,3 +1,4 @@
+import { captureActivityLog } from "./activityLogCapture.test-support.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   mkdirSync,
@@ -21,7 +22,6 @@ import type {
 } from "@oscharko-dev/keiko-workspace";
 import type { GitProcessResult, GitProcessRunner } from "./gitRoutes.js";
 import { defaultGitFileHistoryEvidenceProvider } from "./grounded-git-history-evidence.js";
-import type { ServerLogEvent, ServerLogSink } from "./observability/index.js";
 
 const NOW = 1_700_000_000_000;
 const RECORD_SEP = "\x1e";
@@ -34,18 +34,6 @@ function ok(stdout: string): GitProcessResult {
 
 function fail(stderr: string, exitCode = 128): GitProcessResult {
   return { exitCode, signal: null, stdout: "", stderr, truncated: false };
-}
-
-function captureActivity(): { readonly events: ServerLogEvent[]; readonly sink: ServerLogSink } {
-  const events: ServerLogEvent[] = [];
-  return {
-    events,
-    sink: {
-      write: (event): void => {
-        events.push(event);
-      },
-    },
-  };
 }
 
 function nodeFs(): WorkspaceFs {
@@ -244,7 +232,7 @@ describe("git-history evidence activity log (AGENTS.md §8 Rule 1)", () => {
   // no matching history. These pin that the difference is now recorded, and joinable to the ask.
 
   it("reports a failed history read under the ask's own correlation id", async () => {
-    const activity = captureActivity();
+    const activity = captureActivityLog();
     const runner: GitProcessRunner = (args) =>
       Promise.resolve(
         args.includes("rev-parse") ? ok(`${ROOT}\n`) : fail("fatal: bad revision 'HEAD'"),
@@ -278,7 +266,7 @@ describe("git-history evidence activity log (AGENTS.md §8 Rule 1)", () => {
     // `resolveGitRepositoryForHistory` returns early on a failed rev-parse, so this outcome never
     // passes the provider's own history branch. It is observed because the observation is on the
     // runner both reads share — the same reason the routes' membership failure is observed.
-    const activity = captureActivity();
+    const activity = captureActivityLog();
     const runner: GitProcessRunner = () =>
       Promise.resolve(fail("fatal: not a git repository (or any of the parent directories)"));
 
@@ -304,7 +292,7 @@ describe("git-history evidence activity log (AGENTS.md §8 Rule 1)", () => {
   });
 
   it("reports a spawn-boundary refusal on the retrieval path as a security event", async () => {
-    const activity = captureActivity();
+    const activity = captureActivityLog();
     const runner: GitProcessRunner = (args) =>
       Promise.resolve(
         args.includes("rev-parse")
@@ -337,7 +325,7 @@ describe("git-history evidence activity log (AGENTS.md §8 Rule 1)", () => {
   });
 
   it("writes nothing when the history read succeeds", async () => {
-    const activity = captureActivity();
+    const activity = captureActivityLog();
     const runner: GitProcessRunner = (args) =>
       Promise.resolve(
         args.includes("rev-parse")
@@ -361,7 +349,7 @@ describe("git-history evidence activity log (AGENTS.md §8 Rule 1)", () => {
   });
 
   it("carries no repository path or git output into the line", async () => {
-    const activity = captureActivity();
+    const activity = captureActivityLog();
     const runner: GitProcessRunner = (args) =>
       Promise.resolve(
         args.includes("rev-parse")

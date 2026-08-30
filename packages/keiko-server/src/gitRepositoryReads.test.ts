@@ -1,3 +1,4 @@
+import { captureActivityLog } from "./activityLogCapture.test-support.js";
 import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
@@ -29,7 +30,6 @@ import {
   type GitProcessRunner,
 } from "./gitRoutes.js";
 import { writeNodeExecutableFixture } from "./editor/lsp/testing/executableFixture.js";
-import type { ServerLogEvent, ServerLogSink } from "./observability/index.js";
 
 let root: string;
 let store: UiStore;
@@ -1119,6 +1119,38 @@ describe("git summary response cache partitioning", () => {
     });
   }
 
+  it("does not replay an unavailable summary to a later request", async () => {
+    // The cache stores failure bodies too. Replaying one would hand a later request a projection
+    // whose cause sits on an earlier request's timeline under an earlier correlation id — nothing
+    // in that request's own log would explain it. The entry is dropped as soon as it resolves
+    // unavailable, so the next request recomputes and records its own failure.
+    const activity = captureActivityLog();
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValue(fail("fatal: not a git repository (or any of the parent directories)"));
+    const dependencies = deps(runner);
+    const path = `/api/git/summary?root=${encodeURIComponent(root)}`;
+    const options = { runner, activityLog: activity.sink, maxStatusBytes: 4096, timeoutMs: 5_000 };
+
+    const first = await handleGitSummary(
+      { ...ctx(path), correlationId: "corr-cache-first-01" },
+      dependencies,
+      options,
+    );
+    const callsAfterFirst = runner.mock.calls.length;
+    const second = await handleGitSummary(
+      { ...ctx(path), correlationId: "corr-cache-second-1" },
+      dependencies,
+      options,
+    );
+
+    expect(first.body).toMatchObject({ available: false });
+    expect(second.body).toMatchObject({ available: false });
+    // Recomputed, not replayed — and the second request has its own failure line under its own id.
+    expect(runner.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+    expect(activity.events.map((event) => event.correlationId)).toContain("corr-cache-second-1");
+  });
+
   it("still partitions the cache by runner, so two fake runners never share an entry", async () => {
     const path = `/api/git/summary?root=${encodeURIComponent(root)}`;
     const first = summaryRunner();
@@ -1157,18 +1189,6 @@ describe("repository read activity log (AGENTS.md §8 Rule 1)", () => {
   // `UNKNOWN_CORRELATION_ID` — a line no operator can join back to the request that caused it.
   // Covered per route rather than by sampling one, because the three call sites are independent.
 
-  function captureActivity(): { readonly events: ServerLogEvent[]; readonly sink: ServerLogSink } {
-    const events: ServerLogEvent[] = [];
-    return {
-      events,
-      sink: {
-        write: (event): void => {
-          events.push(event);
-        },
-      },
-    };
-  }
-
   const READ_HANDLERS = [
     { label: "summary", run: handleGitSummary, path: "/api/git/summary" },
     { label: "remotes", run: handleGitRemotes, path: "/api/git/remotes" },
@@ -1178,7 +1198,7 @@ describe("repository read activity log (AGENTS.md §8 Rule 1)", () => {
   it.each(READ_HANDLERS)(
     "reports the $label route's git failure under that request's correlation id",
     async ({ label, run, path }) => {
-      const activity = captureActivity();
+      const activity = captureActivityLog();
       const correlationId = `corr-reads-${label}-01`;
       const runner = vi
         .fn<GitProcessRunner>()

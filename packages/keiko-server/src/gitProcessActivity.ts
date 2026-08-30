@@ -113,6 +113,13 @@ const REMOTE_FACING_SUBCOMMANDS: ReadonlySet<string> = new Set([
 // `git-error` while `extra.truncated` said otherwise — the line contradicting itself.
 function gitFailureErrorKind(result: GitProcessResult, subcommand: string): string {
   if (result.refusal !== undefined) return REFUSAL_ERROR_KIND[result.refusal];
+  // Exit 127 first, matching `classifyGitFailure` and `classifyGitRemoteFailure`, which both rank
+  // it above every Keiko-side stop. The runner's `child.on("error")` handler builds its 127 result
+  // from the LIVE abort/timeout flags, so a caller disconnecting while the OS fails to launch git
+  // produces `{exitCode: 127, aborted: true}`. Ranking the abort first reported that as a routine
+  // `info` cancellation while the very same request's HTTP body said `git-missing` — the log and
+  // the response disagreeing about the same event.
+  if (result.exitCode === 127) return classifyGitFailure(result);
   if (result.aborted === true) return CANCELLED_ERROR_KIND;
   if (result.timedOut === true) return TIMEOUT_ERROR_KIND;
   if (result.truncated) return TRUNCATED_ERROR_KIND;

@@ -89,15 +89,15 @@ function gitSummaryCacheKey(
   });
 }
 
-// A cache hit runs no git, so it writes no `git.process.*` line — and must not. Those lines report
+// A cache hit runs no git, so it writes no `git.process.*` line — and must not: those lines report
 // a PROCESS outcome, and the route tests pin that a request which never reaches the runner leaves
-// none; synthesising one for a replayed answer would say a git command failed when none ran.
+// none. Synthesising one for a replayed answer would say a git command failed when none ran.
 //
-// The consequence is a stated limit rather than a defect: within the 2s TTL, a second request that
-// receives a cached UNAVAILABLE projection has no failure line of its own — the cause is on the
-// first request's timeline, under the first request's correlation id. Both requests are still
-// reconstructible (each has its own `http`/`request` line), and the git failure is recorded exactly
-// once, where it actually happened.
+// That would have left a real gap, because the cache stores FAILURE bodies too: a second request
+// receiving a replayed `available: false` projection would have had no joinable cause anywhere in
+// its own timeline. Rather than fake a line, `storeGitSummary` below drops an unavailable entry as
+// soon as it resolves, so the next request recomputes and records its own failure under its own
+// correlation id. The cache keeps doing its job for the healthy, high-frequency case it exists for.
 function cachedGitSummary(deps: UiHandlerDeps, key: string): GitSummaryCacheEntry | undefined {
   const byKey = gitSummaryCache.get(deps);
   const cached = byKey?.get(key);
@@ -120,6 +120,28 @@ function storeGitSummary(deps: UiHandlerDeps, key: string, value: Promise<RouteR
   }
   byKey.set(key, { expiresAt: now + GIT_SUMMARY_CACHE_TTL_MS, value });
   gitSummaryCache.set(deps, byKey);
+  // An UNAVAILABLE answer is evicted the moment it resolves. Replaying one would serve a later
+  // request a failure projection whose cause lives on an earlier request's timeline, under an
+  // earlier correlation id — unreconstructible from that request's own line (AGENTS.md §8 Rule 1).
+  // Recomputing instead costs one bounded git read on a repository that is already failing, and
+  // only for the request that actually asks; the healthy path this cache exists for is untouched.
+  // Best-effort: a rejected promise is left to the existing catch in `handleGitSummary`.
+  void value
+    .then((result) => {
+      if (!isUnavailableSummaryBody(result.body)) return;
+      if (gitSummaryCache.get(deps)?.get(key)?.value === value) byKey.delete(key);
+    })
+    .catch(() => undefined);
+}
+
+// The content-free unavailable projection every failing read path in this module returns.
+function isUnavailableSummaryBody(body: unknown): boolean {
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    "available" in body &&
+    (body as { readonly available?: unknown }).available === false
+  );
 }
 
 function redacted<T>(deps: UiHandlerDeps, value: T): T {

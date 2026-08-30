@@ -481,24 +481,20 @@ interface GitRefusal {
   readonly refusal: GitRefusalClass;
 }
 
-// One ordered table instead of a `??` chain of three differently-shaped calls: the class travels
-// WITH the predicate that decides it, so a fourth preflight cannot be added without naming what it
-// refuses. The predicates, and the order they run in, are unchanged from the chain this replaces —
-// first match wins, exactly as `??` short-circuited.
-const REFUSAL_CHECKS: readonly (readonly [
-  GitRefusalClass,
-  (args: readonly string[]) => string | undefined,
-])[] = [
-  ["remote-command-option", forbiddenGitOption],
-  ["diff-enabling-flag", forbiddenDiffEnablingFlag],
-  ["config-override", forbiddenConfigOverride],
-];
-
+// Three fixed checks, first match wins — the same predicates and the same order as the `??` chain
+// this replaces. Each `if` tags its own class on the return line, so the class still travels with
+// the predicate that decides it, without a tuple-typed table and a loop earning their keep on
+// three non-configurable entries.
 function firstRefusal(args: readonly string[]): GitRefusal | undefined {
-  for (const [refusal, check] of REFUSAL_CHECKS) {
-    const forbidden = check(args);
-    if (forbidden !== undefined) return { forbidden, refusal };
+  const remoteCommand = forbiddenGitOption(args);
+  if (remoteCommand !== undefined) {
+    return { forbidden: remoteCommand, refusal: "remote-command-option" };
   }
+  const diffEnabling = forbiddenDiffEnablingFlag(args);
+  if (diffEnabling !== undefined) return { forbidden: diffEnabling, refusal: "diff-enabling-flag" };
+  const configOverride = forbiddenConfigOverride(args);
+  if (configOverride !== undefined)
+    return { forbidden: configOverride, refusal: "config-override" };
   return undefined;
 }
 

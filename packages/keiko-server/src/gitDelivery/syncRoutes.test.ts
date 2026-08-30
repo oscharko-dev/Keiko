@@ -6,6 +6,7 @@
 //   * request hardening (404 unknown project, 400 bad/forbidden/extra-key/unsafe-ref, 413 oversize).
 //   * a content-free sync evidence record lands after execute (no URLs / secrets).
 
+import { captureActivityLog } from "../activityLogCapture.test-support.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +21,6 @@ import type { RouteContext } from "../routes.js";
 import type { GitProcessResult, GitProcessRunner } from "../gitRoutes.js";
 import { createHandleSyncExecute, createHandleSyncPreview } from "./syncRoutes.js";
 import type { GitDeliverySyncSeams } from "./syncExecution.js";
-import type { ServerLogEvent, ServerLogSink } from "../observability/index.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
 const FETCH_PREVIEW = "/api/git-delivery/fetch/preview";
@@ -729,24 +729,12 @@ describe("sync route activity log (AGENTS.md §8 Rule 1)", () => {
   // non-fast-forward or a spawn-boundary refusal on the sync path left NOTHING in `server.log` —
   // the operator's whole record of a failed sync was one `http`/`request` line and a status code.
 
-  function captureActivity(): { readonly events: ServerLogEvent[]; readonly sink: ServerLogSink } {
-    const events: ServerLogEvent[] = [];
-    return {
-      events,
-      sink: {
-        write: (event): void => {
-          events.push(event);
-        },
-      },
-    };
-  }
-
   function ctxWithCorrelation(path: string, body: unknown, correlationId: string): RouteContext {
     return { ...ctxFor(path, body), correlationId };
   }
 
   it("reports a failed sync read under the request's correlation id", async () => {
-    const activity = captureActivity();
+    const activity = captureActivityLog();
     const handler = createHandleSyncPreview("fetch", {
       execution: {
         ...seams({ status: fail("fatal: not a git repository", 128) }),
@@ -773,7 +761,7 @@ describe("sync route activity log (AGENTS.md §8 Rule 1)", () => {
     // fetch/pull command. Wrapping only the first would leave the actual remote dispatch — the one
     // that can fail on auth, host keys or a non-fast-forward — unobserved, and a preview-only test
     // could not tell the difference.
-    const activity = captureActivity();
+    const activity = captureActivityLog();
     const handler = createHandleSyncExecute("fetch", {
       execution: {
         ...seams({
@@ -800,7 +788,7 @@ describe("sync route activity log (AGENTS.md §8 Rule 1)", () => {
   });
 
   it("threads the correlation id on the execute route too, not only preview", async () => {
-    const activity = captureActivity();
+    const activity = captureActivityLog();
     const handler = createHandleSyncExecute("fetch", {
       execution: {
         ...seams({ status: fail("fatal: not a git repository", 128) }),

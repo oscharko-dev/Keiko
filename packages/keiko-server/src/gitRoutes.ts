@@ -59,6 +59,17 @@ import { parseGitEditorUnifiedDiff } from "./gitDiffParser.js";
 
 // The git core moved to @oscharko-dev/keiko-git (shared with keiko-tools). Route modules and
 // their tests keep importing the process surface from here so the BFF has one seam for it.
+//
+// THESE RE-EXPORTS ARE UNOBSERVED. Calling one directly spawns git without the activity-log
+// evidence AGENTS.md §8 Rule 1 requires — no `git.process.failed`, no `git.process.refused`, no
+// correlation id. A route must reach git through `optionsWithDefaults(...).runner`, which wraps
+// whichever runner it resolves; a non-route caller that legitimately owns its own runner (the sync
+// executor, the clone route, the grounded evidence provider) wraps it itself with
+// `observedGitRunner`. They are re-exported only because composition roots and tests need to NAME
+// the underlying runner — to inject a fake, or to hand one to `observedGitRunner`. Nothing in the
+// type system enforces that, which is why it is stated here rather than left to be inferred:
+// `scripts/__tests__/git-runner-observation.test.mjs` fails if a production module under
+// `packages/keiko-server/src` calls one of these without wrapping it.
 export {
   createGitProcessRunner,
   defaultGitNetworkProcessRunner,
