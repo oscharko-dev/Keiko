@@ -26,6 +26,7 @@ import {
   buildJavaVersionProbeInvocation,
   javaProtocolConfiguration,
   prepareJavaSpawn,
+  shouldAttemptWindowsProbeTreeKill,
 } from "./javaProvider.js";
 import { UNKNOWN_CORRELATION_ID } from "../../../correlation.js";
 import { redactLogFields } from "../../../observability/log-redaction.js";
@@ -491,6 +492,27 @@ describe("buildJavaVersionProbeInvocation", () => {
   });
 });
 
+// PR #3355 review T20/IDX64: the win32 tree-kill defense in depth must never fire for a POSIX probe,
+// and must never fire on a pid that could be this server or its own parent — a reused pid plus
+// `taskkill /T` would take the wrong tree. Pure and exported, so every branch is pinned on any host.
+describe("shouldAttemptWindowsProbeTreeKill", () => {
+  it.each([
+    ["the cmd.exe wrapper never engaged", false, "win32", 4242],
+    ["the platform is not win32", true, "linux", 4242],
+    ["no pid was observed", true, "win32", undefined],
+    ["the pid is this process's own", true, "win32", process.pid],
+    ["the pid is this process's parent", true, "win32", process.ppid],
+  ])("refuses when %s", (_label, windowsWrapperEngaged, platform, pid) => {
+    expect(
+      shouldAttemptWindowsProbeTreeKill(windowsWrapperEngaged, platform as NodeJS.Platform, pid),
+    ).toBe(false);
+  });
+
+  it("attempts the tree-kill only for a wrapped win32 probe with an unrelated pid", () => {
+    expect(shouldAttemptWindowsProbeTreeKill(true, "win32", 4242)).toBe(true);
+  });
+});
+
 // A PR reviewer finding shape (AGENTS.md §8 Rule 1): the win32 wrapper-engagement decision above
 // must leave activity-log evidence, exactly like lspNodeAdapter.ts's own `lsp.spawn.completed`.
 // defaultJavaVersionValid has no injected log port — it reaches processServerLogSink() directly —
@@ -531,20 +553,79 @@ describe("defaultJavaVersionValid — activity-log evidence (AGENTS.md §8 Rule 
     expect(probed).toBeDefined();
     expect(probed?.category).toBe("diagnostic");
     expect(probed?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(typeof probed?.durationMs).toBe("number");
+    expect(probed?.status).toBe(0);
+    expect(probed?.errorKind).toBeUndefined();
     const extra = probed?.extra ?? {};
-    // This test host is never win32: the hardened cmd.exe wrapper never engages.
+    // This test host is never win32: the hardened cmd.exe wrapper never engages, so the tree-kill
+    // defense in depth is never attempted and carries no field at all (asserted below via the exact
+    // key set — a fabricated "not-attempted" value on POSIX would be just as wrong as a missing one
+    // would be on win32).
     expect(extra.windowsWrapperEngaged).toBe(false);
-    expect(extra.validVersion).toBe(true);
+    expect(extra.outcome).toBe("supported");
     expect(extra.platform).toBe(process.platform);
     // Body-free: never the resolved java path or the probe's stdout/stderr on the evidence line.
-    expect(Object.keys(extra).sort()).toEqual([
-      "platform",
-      "validVersion",
-      "windowsWrapperEngaged",
-    ]);
+    expect(Object.keys(extra).sort()).toEqual(["outcome", "platform", "windowsWrapperEngaged"]);
     // Through the REAL redactor: every evidence field here must survive redaction unchanged.
     const redacted = redactLogFields(extra) ?? {};
     expect(Object.keys(redacted).sort()).toEqual(Object.keys(extra).sort());
+  });
+
+  // IDX63: "validVersion: false" alone made a timeout indistinguishable from every other failure.
+  // Reuses the same real-spawnSync-path pattern as the pre-existing "bounds the real java -version
+  // probe with a timeout" test above (validateJavaVersion NOT overridden), but now inspects the
+  // evidence line instead of only the thrown error and elapsed wall time.
+  it("logs a distinct timeout outcome with the ETIMEDOUT errorKind, not a bare unsupported-version", () => {
+    const events = captureLog();
+    const hungJava = join(root, "java");
+    writeFileSync(hungJava, "#!/bin/sh\nsleep 30\n", "utf8");
+    chmodSync(hungJava, 0o755);
+
+    expect(() =>
+      prepareJavaSpawn(spawnInput(), {
+        availability: NATIVE,
+        platform: "linux",
+        resolveExecutable: () => "/usr/bin/bwrap",
+        resolveJava: () => hungJava,
+        validateLayout: () => true,
+        // validateJavaVersion intentionally not overridden: exercises the real bounded-timeout
+        // spawnSync path and its logging end to end.
+      }),
+    ).toThrow("minimum supported JDK version");
+
+    const probed = events.find((event) => event.op === "lsp.java.version-probe.completed");
+    expect(probed).toBeDefined();
+    expect(probed?.errorKind).toBe("ETIMEDOUT");
+    expect(probed?.extra?.outcome).toBe("spawn-error");
+    // Distinguishable from an actually-ran-but-unsupported JDK (IDX63's core complaint): a timeout
+    // never reaches version parsing, so it can never collapse into "unsupported-version".
+    expect(probed?.extra?.outcome).not.toBe("unsupported-version");
+  });
+
+  // IDX63's second required distinction: a launch failure (the resolved path does not exist) must
+  // be its own outcome/errorKind pair too, not merged into the timeout case above or into a bare
+  // "false".
+  it("logs a distinct launch-failure outcome with the ENOENT errorKind", () => {
+    const events = captureLog();
+    const missingJava = join(root, "no-such-java-binary");
+
+    expect(() =>
+      prepareJavaSpawn(spawnInput(), {
+        availability: NATIVE,
+        platform: "linux",
+        resolveExecutable: () => "/usr/bin/bwrap",
+        resolveJava: () => missingJava,
+        validateLayout: () => true,
+        // validateJavaVersion intentionally not overridden: the resolved path does not exist, so
+        // the REAL spawnSync call reports ENOENT rather than a version mismatch.
+      }),
+    ).toThrow("minimum supported JDK version");
+
+    const probed = events.find((event) => event.op === "lsp.java.version-probe.completed");
+    expect(probed).toBeDefined();
+    expect(probed?.errorKind).toBe("ENOENT");
+    expect(probed?.extra?.outcome).toBe("spawn-error");
+    expect(probed?.status).toBeUndefined();
   });
 });
 
@@ -565,6 +646,12 @@ describe("JAVA_PROBE_ENV_ALLOWLIST", () => {
     expect(JAVA_PROBE_ENV_ALLOWLIST.filter((name) => secretShaped.test(name))).toEqual([]);
   });
 
+  // PR #3355 review IDX50/IDX64: this test calls `buildSandboxEnv` directly with literal inputs, so
+  // it is fully decoupled from the real call site — if `defaultJavaVersionValid`'s
+  // `env: buildSandboxEnv(...)` were reverted to `env: process.env` (the exact leak this file's
+  // history fixes), this test would still pass unchanged. It stays because it pins the allowlist's
+  // OWN shape cheaply; the coupled proof is the describe block immediately below, which drives the
+  // REAL probe through `prepareJavaSpawn` instead.
   it("passes nothing outside the allowlist through to the probe", () => {
     const built = buildSandboxEnv(
       {
@@ -576,5 +663,54 @@ describe("JAVA_PROBE_ENV_ALLOWLIST", () => {
     );
     expect(built).toEqual({ PATH: "/usr/bin" });
     expect(JSON.stringify(built)).not.toContain("must-not-leak");
+  });
+});
+
+// PR #3355 review IDX50/IDX64: "if env: buildSandboxEnv(...) were reverted to env: process.env —
+// the exact secret-leak this PR claims to close — this test would still pass unchanged, because
+// it's fully decoupled from the call site it's meant to pin." This block drives the REAL probe
+// through its provider seam (prepareJavaSpawn -> defaultJavaVersionValid -> spawnSync) with a
+// hostile credential-shaped var actually set on process.env — which is what defaultJavaVersionValid
+// reads from — and an injected fake `java` script that captures the env it was ACTUALLY started
+// with, per the pattern the pre-existing real-spawnSync timeout test above already uses for driving
+// this same call site. Reverting the fix makes this test fail; the unit test above would not.
+describe("defaultJavaVersionValid — the REAL probe subprocess never observes a hostile process.env credential", () => {
+  it("keeps a hostile process.env var out of what the spawned child actually receives", () => {
+    const capture = join(root, "java");
+    const capturedEnvPath = join(root, "captured-probe-env.txt");
+    writeFileSync(
+      capture,
+      `#!/bin/sh\nenv > "${capturedEnvPath}"\necho 'openjdk version "21.0.1" 2024-01-16' 1>&2\nexit 0\n`,
+      "utf8",
+    );
+    chmodSync(capture, 0o755);
+
+    const sentinelName = "KEIKO_TEST_HOSTILE_PROBE_SECRET";
+    const sentinelValue = "sk-must-not-reach-child-probe";
+    const previous = process.env[sentinelName];
+    process.env[sentinelName] = sentinelValue;
+    try {
+      expect(() =>
+        prepareJavaSpawn(spawnInput(), {
+          availability: NATIVE,
+          platform: "linux",
+          resolveExecutable: () => "/usr/bin/bwrap",
+          resolveJava: () => capture,
+          validateLayout: () => true,
+          // validateJavaVersion intentionally not overridden: this MUST drive the real
+          // defaultJavaVersionValid probe, the one call site this whole test exists to pin.
+        }),
+      ).not.toThrow();
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, sentinelName);
+      else process.env[sentinelName] = previous;
+    }
+
+    const capturedEnv = readFileSync(capturedEnvPath, "utf8");
+    expect(capturedEnv).not.toContain(sentinelName);
+    expect(capturedEnv).not.toContain(sentinelValue);
+    // Sanity: the fixture genuinely ran and its capture is non-trivial, not an empty/broken probe
+    // that would vacuously "pass" by never observing any env at all.
+    expect(capturedEnv).toContain("PATH=");
   });
 });

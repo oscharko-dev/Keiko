@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -20,8 +20,10 @@ import { currentPlatform, planIsolatedRun, probeBackends } from "@oscharko-dev/k
 import {
   buildSandboxEnv,
   buildWindowsShellInvocation,
+  nodeWindowsTreeKill,
   type WindowsShellInvocation,
   type WindowsShellInvocationOptions,
+  type WindowsTreeKillDisposition,
 } from "@oscharko-dev/keiko-tools";
 
 import type { HostLanguageProviderSpec } from "../hostLanguageProviders.js";
@@ -29,6 +31,7 @@ import { resolveExecutableOutsideWorkspace } from "../lspNodeAdapter.js";
 import type { LspSpawnPreparation, LspSpawnPreparationInput } from "../lspProcessManager.js";
 import { UNKNOWN_CORRELATION_ID } from "../../../correlation.js";
 import { processServerLogSink } from "../../../process-log-sink.js";
+import { errorKindOf, startLogTimer } from "../../../observability/index.js";
 
 const JAVA_OPERATIONS: readonly LanguageServiceOperation[] = Object.freeze([
   "diagnostics",
@@ -314,20 +317,75 @@ export function buildJavaVersionProbeInvocation(
   return buildWindowsShellInvocation(executable, ["-version"], opts);
 }
 
+// The closed set of outcomes the probe can reach (PR #3355 review IDX63): `validVersion: false`
+// alone made an unsupported JDK indistinguishable from a timeout, a missing/unreadable executable,
+// a nonzero exit, or output that never parsed as a version string — four different facts about the
+// machine collapsed into one boolean, none of them visible to a support bundle. Each member below
+// is a distinct, content-free fact; `spawn-error` carries its specific `errorKind` (ETIMEDOUT,
+// ENOENT, EACCES, …) read straight off `SpawnSyncReturns.error.code`, so the SAME outcome value
+// still lets an operator tell a timeout from a missing binary via the paired field.
+type JavaVersionProbeOutcome =
+  | "supported"
+  | "unsupported-version"
+  | "malformed-output"
+  | "nonzero-exit"
+  | "spawn-error"
+  | "invocation-failed";
+
+interface JavaVersionProbeEvidence {
+  readonly windowsWrapperEngaged: boolean;
+  readonly outcome: JavaVersionProbeOutcome;
+  readonly durationMs: number;
+  readonly status?: number | undefined;
+  readonly errorKind?: string | undefined;
+  readonly windowsTreeKill?: WindowsTreeKillDisposition | undefined;
+}
+
 // Body-free evidence for the branch above (AGENTS.md §8 Rule 1): a support bundle must be able to
-// tell whether a hung or failed Windows java probe took the hardened cmd.exe wrapper path, without
-// ever recording the resolved executable path or the probe's stdout/stderr. Mirrors
+// tell whether a hung or failed Windows java probe took the hardened cmd.exe wrapper path — and,
+// now, exactly WHICH way it failed and whether a cmd.exe-spawned descendant had to be reaped —
+// without ever recording the resolved executable path or the probe's stdout/stderr. Mirrors
 // lspNodeAdapter.ts's `logLspSpawnCompleted` for the LSP server's own spawn; this probe is a
 // separate, directly-issued `spawnSync` call that issue #3350's fix never covered because it never
 // runs through that adapter. No request-scoped correlation id is available this deep in spawn
-// preparation, so the line carries UNKNOWN_CORRELATION_ID, exactly like its sibling.
-function logJavaVersionProbeCompleted(windowsWrapperEngaged: boolean, validVersion: boolean): void {
+// preparation, so the line carries UNKNOWN_CORRELATION_ID, exactly like its sibling. Called on
+// EVERY exit from the probe, including a pre-spawn invocation-build failure (IDX63): a hostile or
+// malformed SystemRoot/WINDIR makes `buildWindowsShellInvocation` throw before `spawnSync` ever
+// runs, and that used to leave no evidence at all.
+function logJavaVersionProbeCompleted(evidence: JavaVersionProbeEvidence): void {
   processServerLogSink().write({
     category: "diagnostic",
     op: "lsp.java.version-probe.completed",
     correlationId: UNKNOWN_CORRELATION_ID,
-    extra: { windowsWrapperEngaged, validVersion, platform: process.platform },
+    durationMs: evidence.durationMs,
+    ...(evidence.status === undefined ? {} : { status: evidence.status }),
+    ...(evidence.errorKind === undefined ? {} : { errorKind: evidence.errorKind }),
+    extra: {
+      windowsWrapperEngaged: evidence.windowsWrapperEngaged,
+      outcome: evidence.outcome,
+      platform: process.platform,
+      ...(evidence.windowsTreeKill === undefined
+        ? {}
+        : { windowsTreeKill: evidence.windowsTreeKill }),
+    },
   });
+}
+
+// Never signal this process or its own parent (PR #3355 review T20/IDX64): a probe child that has
+// already fully exited can leave its pid free for an unrelated process to reuse before this runs,
+// and `taskkill /PID <pid> /T /F` takes the WHOLE tree rooted at it — on a reused pid that tree can
+// be this server or its launcher. Same guard, same reasoning, as keiko-tools exec.ts's
+// `isSelfOrParentPid` (not exported — that module owns the async runCommand termination path, this
+// is a separate, directly-issued spawnSync probe with no shared state to synchronise). Exported so
+// the platform-gating and self/parent-pid refusal are pinned by a test on any host, mirroring
+// `buildJavaVersionProbeInvocation`'s existing testable-pure-function shape in this same file.
+export function shouldAttemptWindowsProbeTreeKill(
+  windowsWrapperEngaged: boolean,
+  platform: NodeJS.Platform,
+  pid: number | undefined,
+): boolean {
+  if (!windowsWrapperEngaged || platform !== "win32" || pid === undefined) return false;
+  return pid !== process.pid && pid !== process.ppid;
 }
 
 // The probe runs an executable resolved from the WORKSPACE's environment, so it is untrusted input
@@ -353,8 +411,57 @@ export const JAVA_PROBE_ENV_ALLOWLIST: readonly string[] = [
   "LC_ALL",
 ];
 
+// Isolates the ONE throwing step (IDX63): a hostile or malformed SystemRoot/WINDIR makes
+// `buildWindowsShellInvocation` throw before any process is spawned. Logging here, right at the
+// throw, is what makes that failure visible at all — `prepareJavaSpawn`'s own catch (below) does
+// cleanup and rethrows without logging, by design shared with every other precondition it guards.
+function buildInvocationOrLog(executable: string, elapsed: () => number): WindowsShellInvocation {
+  try {
+    return buildJavaVersionProbeInvocation(executable);
+  } catch (error) {
+    logJavaVersionProbeCompleted({
+      windowsWrapperEngaged: false,
+      outcome: "invocation-failed",
+      durationMs: elapsed(),
+      errorKind: errorKindOf(error),
+    });
+    throw error;
+  }
+}
+
+// Best-effort win32 defense in depth (T20/IDX64) — see the caller for what this does and does not
+// close. `pid` narrows to `number` from the guard alone so callers never need their own check.
+function reapWindowsProbeDescendant(
+  windowsWrapperEngaged: boolean,
+  pid: number | undefined,
+  processEnv: NodeJS.ProcessEnv,
+): WindowsTreeKillDisposition | undefined {
+  if (pid === undefined) return undefined;
+  if (!shouldAttemptWindowsProbeTreeKill(windowsWrapperEngaged, process.platform, pid)) {
+    return undefined;
+  }
+  return nodeWindowsTreeKill(pid, processEnv);
+}
+
+// The closed classification (IDX63): an unsupported JDK, a nonzero exit, and output that never
+// parsed as a version string are now three distinct, distinguishable facts instead of one boolean.
+function classifyJavaVersionProbeOutcome(
+  probe: SpawnSyncReturns<string>,
+  majorVersion: number,
+): { readonly outcome: JavaVersionProbeOutcome; readonly status?: number | undefined } {
+  if (probe.error !== undefined) return { outcome: "spawn-error" };
+  const status = probe.status ?? undefined;
+  if (status !== 0) return { outcome: "nonzero-exit", status };
+  if (majorVersion === 0) return { outcome: "malformed-output", status };
+  if (majorVersion < MINIMUM_JDK_MAJOR_VERSION) return { outcome: "unsupported-version", status };
+  return { outcome: "supported", status };
+}
+
 function defaultJavaVersionValid(executable: string): boolean {
-  const invocation = buildJavaVersionProbeInvocation(executable);
+  const elapsed = startLogTimer();
+  const invocation = buildInvocationOrLog(executable, elapsed);
+  const windowsWrapperEngaged = invocation.windowsVerbatimArguments;
+  const childEnv = buildSandboxEnv(process.env, JAVA_PROBE_ENV_ALLOWLIST);
   const probe = spawnSync(invocation.command, invocation.args, {
     encoding: "utf8",
     timeout: JAVA_VERSION_PROBE_TIMEOUT_MS,
@@ -364,15 +471,25 @@ function defaultJavaVersionValid(executable: string): boolean {
     // Without this a console window flashes on every Windows probe — the only spawn in this file
     // that lacked it.
     windowsHide: true,
-    env: buildSandboxEnv(process.env, JAVA_PROBE_ENV_ALLOWLIST),
-    ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+    env: childEnv,
+    ...(windowsWrapperEngaged ? { windowsVerbatimArguments: true } : {}),
   });
-  const validVersion =
-    probe.error === undefined &&
-    probe.status === 0 &&
-    javaMajorVersion(`${probe.stdout}${probe.stderr}`) >= MINIMUM_JDK_MAJOR_VERSION;
-  logJavaVersionProbeCompleted(invocation.windowsVerbatimArguments, validVersion);
-  return validVersion;
+  // See `reapWindowsProbeDescendant` and `shouldAttemptWindowsProbeTreeKill` above: bounds the
+  // TREE a cmd.exe-wrapped shim may have left running, but cannot bound how long the `spawnSync`
+  // call above itself blocked — that half needs the async spawn+timer shape `runCommand` uses,
+  // which is out of this provider's reach (see the file-level note near those two functions).
+  const windowsTreeKill = reapWindowsProbeDescendant(windowsWrapperEngaged, probe.pid, childEnv);
+  const majorVersion = javaMajorVersion(`${probe.stdout}${probe.stderr}`);
+  const classified = classifyJavaVersionProbeOutcome(probe, majorVersion);
+  logJavaVersionProbeCompleted({
+    windowsWrapperEngaged,
+    outcome: classified.outcome,
+    durationMs: elapsed(),
+    status: classified.status,
+    ...(probe.error === undefined ? {} : { errorKind: errorKindOf(probe.error) }),
+    ...(windowsTreeKill === undefined ? {} : { windowsTreeKill }),
+  });
+  return classified.outcome === "supported";
 }
 
 function isolatedJavaCommand(

@@ -977,7 +977,7 @@
     {
       "op": "lsp.java.version-probe.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/providers/javaProvider.ts:327",
+      "site": "packages/keiko-server/src/editor/lsp/providers/javaProvider.ts:358",
       "package": "keiko-server"
     },
     {
