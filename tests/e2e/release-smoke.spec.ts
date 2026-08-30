@@ -464,8 +464,8 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   // corruption surface later as an unrelated strict-mode violation.
   // The PRODUCT is not implicated: its own platform detection reads `navigator.platform` from the
   // page and accepts `metaKey || ctrlKey`. What is unproven on Gecko is this buffer-replacement
-  // TEST GESTURE, not the editor. Everything else in this smoke — 68 of 71 journeys — runs on
-  // Firefox, and all 71 run on Chromium (Edge/Chrome, the fleet browsers).
+  // TEST GESTURE, not the editor. Everything else in this smoke — 69 of 72 journeys — runs on
+  // Firefox, and all 72 run on Chromium (Edge/Chrome, the fleet browsers).
   test.skip(
     browserName === "firefox",
     "Monaco select-all does not reach the EditContext fallback surface on Gecko; the buffer-replacement gesture is unproven there (the rest of this smoke runs on Firefox)",
@@ -639,8 +639,8 @@ test("editor surfaces diagnostics and hover from the governed language service @
   // corruption surface later as an unrelated strict-mode violation.
   // The PRODUCT is not implicated: its own platform detection reads `navigator.platform` from the
   // page and accepts `metaKey || ctrlKey`. What is unproven on Gecko is this buffer-replacement
-  // TEST GESTURE, not the editor. Everything else in this smoke — 68 of 71 journeys — runs on
-  // Firefox, and all 71 run on Chromium (Edge/Chrome, the fleet browsers).
+  // TEST GESTURE, not the editor. Everything else in this smoke — 69 of 72 journeys — runs on
+  // Firefox, and all 72 run on Chromium (Edge/Chrome, the fleet browsers).
   test.skip(
     browserName === "firefox",
     "Monaco select-all does not reach the EditContext fallback surface on Gecko; the buffer-replacement gesture is unproven there (the rest of this smoke runs on Firefox)",
@@ -726,8 +726,8 @@ test("editor inline ghost text renders and Tab accepts it @smoke", async ({
   // corruption surface later as an unrelated strict-mode violation.
   // The PRODUCT is not implicated: its own platform detection reads `navigator.platform` from the
   // page and accepts `metaKey || ctrlKey`. What is unproven on Gecko is this buffer-replacement
-  // TEST GESTURE, not the editor. Everything else in this smoke — 68 of 71 journeys — runs on
-  // Firefox, and all 71 run on Chromium (Edge/Chrome, the fleet browsers).
+  // TEST GESTURE, not the editor. Everything else in this smoke — 69 of 72 journeys — runs on
+  // Firefox, and all 72 run on Chromium (Edge/Chrome, the fleet browsers).
   test.skip(
     browserName === "firefox",
     "Monaco select-all does not reach the EditContext fallback surface on Gecko; the buffer-replacement gesture is unproven there (the rest of this smoke runs on Firefox)",
