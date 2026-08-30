@@ -33,6 +33,7 @@ import { join } from "node:path";
 // producer instead of restating its formula (AGENTS.md §7).
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
+import { editorModifier } from "./support/editor-chord.js";
 import {
   EDITOR_SELECTORS,
   cleanupEditorWorkspaces,
@@ -532,12 +533,12 @@ test("round-trips browser undo/redo across an agent-applied edit (#1394 pin)", a
 
   // One browser undo must restore the exact pre-agent buffer. Keyboard input goes wherever the
   // focus is, so the test focuses Monaco's own input surface first (Monaco 0.55 receives keys on
-  // its EditContext surface). The undo chord follows the BROWSER'S platform, derived from the
-  // same signal Monaco derives its keybindings from (a "Macintosh" user agent): Playwright's
-  // ControlOrMeta follows the host OS instead, and headless Chromium does not advertise
-  // Macintosh — on a mac host that would press Meta+Z while Monaco only binds Ctrl+Z.
-  const browserIsMac = await page.evaluate(() => navigator.userAgent.includes("Macintosh"));
-  const undoModifier = browserIsMac ? "Meta" : "Control";
+  // its EditContext surface). The undo chord follows the BROWSER'S platform, derived by the
+  // shared `editorModifier` helper from the same signal Monaco derives its keybindings from (a
+  // "Macintosh" user agent): Playwright's ControlOrMeta follows the host OS instead, and headless
+  // Chromium does not advertise Macintosh — on a mac host that would press Meta+Z while Monaco
+  // only binds Ctrl+Z.
+  const undoModifier = await editorModifier(page);
   const editorInput = editorWindow.locator(".monaco-editor .native-edit-context").first();
   await editorWindow
     .locator(".monaco-editor .view-line")

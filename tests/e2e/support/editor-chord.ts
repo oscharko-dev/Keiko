@@ -51,8 +51,14 @@ export async function selectAllInEditor(page: Page): Promise<void> {
 
 async function pressChord(page: Page, modifier: "Meta" | "Control"): Promise<void> {
   await page.keyboard.down(modifier);
-  await page.keyboard.press("KeyA");
-  await page.keyboard.up(modifier);
+  try {
+    await page.keyboard.press("KeyA");
+  } finally {
+    // A throw between down() and up() (e.g. KeyA timing out) must never leave the modifier
+    // physically held down for the rest of the test run — every subsequent keypress in the same
+    // browser context would then arrive chorded (PR #3355 review, IDX45).
+    await page.keyboard.up(modifier);
+  }
 }
 
 /**

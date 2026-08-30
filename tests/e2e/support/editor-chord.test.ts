@@ -2,12 +2,50 @@
 // guards runs only inside Playwright, so the decision itself was extracted into a pure function —
 // otherwise the two corruptions below are only ever exercised against a live editor, which is
 // exactly why they went unnoticed: both PASSED the old check.
-import { describe, expect, it } from "vitest";
+import type { Page } from "@playwright/test";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { replacementViolations } from "./editor-chord.js";
+import { editorModifier, replacementViolations } from "./editor-chord.js";
 
 const NEW = ['export const value = "new";'];
 const OLD = ['export const value = "old";'];
+
+// `editorModifier`'s "Meta" branch is dead under every currently-wired device profile — both the
+// chromium and firefox projects in playwright.config.ts force a Windows user agent, so nothing in
+// the live suite ever exercises it, and a typo in the callback ("macOS" instead of "Macintosh")
+// would pass every real run silently (PR #3355 review, IDX45). This exercises both branches
+// directly against a fake `Page` whose `evaluate()` runs editorModifier's REAL browser-side
+// callback against a stubbed global `navigator`, rather than re-deriving the substring check here
+// — a re-derived fixture could not catch a typo in the production callback because both sides
+// would drift together (AGENTS.md §7).
+function fakePageWithUserAgent(userAgent: string): Page {
+  return {
+    evaluate: <T>(pageFunction: () => T) => {
+      vi.stubGlobal("navigator", { userAgent });
+      return Promise.resolve(pageFunction());
+    },
+  } as unknown as Page;
+}
+
+describe("editorModifier", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('resolves "Meta" when the browser reports a Macintosh user agent', async () => {
+    const page = fakePageWithUserAgent(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+    );
+    await expect(editorModifier(page)).resolves.toBe("Meta");
+  });
+
+  it('resolves "Control" for a non-Macintosh user agent (this suite\'s forced Windows UA)', async () => {
+    const page = fakePageWithUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    );
+    await expect(editorModifier(page)).resolves.toBe("Control");
+  });
+});
 
 describe("replacementViolations", () => {
   it("accepts a clean replacement", () => {
