@@ -8,7 +8,7 @@ const SCHEMA_VERSION = "1" as const;
 const MAX_RECORD_BYTES = 16_384;
 const MAX_CRASH_TIMESTAMPS = 256;
 
-export type LspRuntimeLeaseState = "active" | "released";
+type LspRuntimeLeaseState = "active" | "released";
 export type LspRuntimeLeaseReason =
   "process-live" | "exit-unconfirmed" | "tree-unconfirmed" | "resource-cleanup-failed";
 
