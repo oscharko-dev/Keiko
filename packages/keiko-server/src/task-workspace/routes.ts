@@ -512,7 +512,9 @@ export async function handleGetTaskWorkspaceHealth(
   if (isRouteResult(guard)) return guard;
   return runHandler(deps, async () => {
     const root = await resolveOptionalRoot(deps, ctx.url.searchParams.get("root"));
-    const report = await guard.report(root);
+    // The route's own correlation id, so the health probe's git spawns and any termination
+    // evidence they emit land on this request's timeline (AGENTS.md §8).
+    const report = await guard.report(root, ctx.correlationId);
     return { status: 200, body: redacted(deps, { report }) };
   });
 }

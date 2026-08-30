@@ -64,6 +64,11 @@ const MAX_FIELD_LENGTH = 512;
 interface CleanupCtx {
   readonly deps: WorkspaceCleanupServiceDeps;
   readonly lockTtlMs: number;
+  // The triggering operation's correlation id, so the worktree adapter's termination evidence joins
+  // the same timeline as every other line of that operation (AGENTS.md §8). It lives on the CTX, not
+  // in each helper's signature: the ctx is already threaded everywhere the adapter is built, so this
+  // needed no new parameter on any private function (PR #3355 review, P2).
+  readonly correlationId: string;
 }
 
 interface OrphanCleanupOutcome {
@@ -265,7 +270,9 @@ async function probeCleanupDirty(
   probeable: boolean,
 ): Promise<boolean> {
   if (!probeable) return false;
-  const status = await ctx.deps.createAdapter(detectWorkspaceAt(worktreePath)).worktreeStatus();
+  const status = await ctx.deps
+    .createAdapter(detectWorkspaceAt(worktreePath), ctx.correlationId)
+    .worktreeStatus();
   return !status.ok || status.dirty;
 }
 
@@ -273,7 +280,10 @@ async function evaluateLiveCleanupSafety(
   ctx: CleanupCtx,
   instance: WorkspaceInstance,
 ): Promise<{ readonly allowed: boolean; readonly refusalReason?: WorkspaceCleanupRefusalReason }> {
-  const adapter = ctx.deps.createAdapter(detectWorkspaceAt(instance.repositoryRoot));
+  const adapter = ctx.deps.createAdapter(
+    detectWorkspaceAt(instance.repositoryRoot),
+    ctx.correlationId,
+  );
   const worktrees = await adapter.listWorktrees();
   const { facts } = await gatherInstanceReconciliationFacts(
     ctx.deps,
@@ -307,7 +317,7 @@ async function removeManagedWorktree(
   worktreePath: string,
 ): Promise<RemovalOutcome> {
   try {
-    const adapter = ctx.deps.createAdapter(detectWorkspaceAt(repositoryRoot));
+    const adapter = ctx.deps.createAdapter(detectWorkspaceAt(repositoryRoot), ctx.correlationId);
     const removal = await adapter.removeWorktree({ worktreePath, force: true });
     await adapter.pruneWorktrees();
     if (existsSync(worktreePath)) {
@@ -606,19 +616,28 @@ function managedRepoDirs(ctx: CleanupCtx): readonly string[] {
 export function createWorkspaceCleanupService(
   deps: WorkspaceCleanupServiceDeps,
 ): WorkspaceCleanupService {
-  const ctx: CleanupCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
+  const lockTtlMs = resolveLockTtl(deps.lockTtlMs);
+  // Built PER OPERATION, not once per service: the correlation id belongs to the request, and a
+  // service-lifetime ctx is exactly what forced the previous UNKNOWN_CORRELATION_ID here.
+  const ctxFor = (correlationId: string | undefined): CleanupCtx => ({
+    deps,
+    lockTtlMs,
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+  });
   return {
     // Serialized under the workspace's `ws:` key (#449, ADR-0093 D1) so a governed removal cannot race a
     // concurrent activate/pause/repair of the same workspace. `runExclusive` also turns a synchronous
     // validation throw from requestCleanupImpl into a rejected promise (the consistent async contract).
     cleanup: (request: WorkspaceCleanupRequest): Promise<WorkspaceCleanupResult> =>
-      ctx.deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () =>
-        request.mode === "request"
+      deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () => {
+        const ctx = ctxFor(request.correlationId);
+        return request.mode === "request"
           ? requestCleanupImpl(ctx, request)
-          : completeCleanupImpl(ctx, request),
-      ),
+          : completeCleanupImpl(ctx, request);
+      }),
     cleanupOrphans: (
       request: WorkspaceOrphanCleanupRequest,
-    ): Promise<WorkspaceOrphanCleanupResult> => cleanupOrphansImpl(ctx, request),
+    ): Promise<WorkspaceOrphanCleanupResult> =>
+      cleanupOrphansImpl(ctxFor(request.correlationId), request),
   };
 }

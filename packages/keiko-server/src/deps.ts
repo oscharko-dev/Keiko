@@ -178,10 +178,18 @@ import {
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 // Deps-level termination-evidence port for every managed-worktree git lane composed here
 // (PR #3354 review, comment 3887021650): a worktree operation that times out or is aborted leaves
-// its verified Windows tree-kill disposition in the activity log. No per-run correlation exists at
-// this composition point.
-function logWorktreeTermination(evidence: CommandTerminationEvidence): void {
-  logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
+// its verified Windows tree-kill disposition in the activity log.
+//
+// Curried on the correlation id rather than closing over UNKNOWN_CORRELATION_ID, which is what this
+// did before: the id is a property of the OPERATION, not of this composition point, so binding it
+// here meant every one of these five lanes logged `command.terminated` under UNKNOWN while the
+// surrounding workspace events of the same operation carried the real one — §8's "every line of one
+// logical operation carries that operation's correlationId", broken by construction, in exactly the
+// lanes whose timeline this evidence exists to complete (PR #3355 review, P2).
+function logWorktreeTermination(correlationId: string) {
+  return (evidence: CommandTerminationEvidence): void => {
+    logCommandTermination(processServerLogSink(), correlationId, evidence);
+  };
 }
 
 import {
@@ -2083,11 +2091,11 @@ function buildWorkspaceProvisioning(
     store: instanceStore,
     evidenceStore: args.evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
-    createAdapter: (workspace) =>
+    createAdapter: (workspace, correlationId) =>
       createNodeGitWorktreeAdapter({
         workspace,
         processEnv: options.env,
-        onTerminated: logWorktreeTermination,
+        onTerminated: logWorktreeTermination(correlationId),
       }),
     redactString: args.redactString,
     now: () => Date.now(),
@@ -2163,11 +2171,11 @@ function buildWorkspaceReconciliation(
     activePointerStore,
     evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
-    createAdapter: (workspace) =>
+    createAdapter: (workspace, correlationId) =>
       createNodeGitWorktreeAdapter({
         workspace,
         processEnv: options.env,
-        onTerminated: logWorktreeTermination,
+        onTerminated: logWorktreeTermination(correlationId),
       }),
     redactString,
     now: () => Date.now(),
@@ -2204,11 +2212,11 @@ function buildWorkspaceRepair(args: BuildWorkspaceRepairArgs): WorkspaceRepairSe
     evidenceStore: args.evidenceStore,
     provisioning: args.provisioning,
     managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
-    createAdapter: (workspace) =>
+    createAdapter: (workspace, correlationId) =>
       createNodeGitWorktreeAdapter({
         workspace,
         processEnv: args.options.env,
-        onTerminated: logWorktreeTermination,
+        onTerminated: logWorktreeTermination(correlationId),
       }),
     redactString: args.redactString,
     now: () => Date.now(),
@@ -2237,11 +2245,11 @@ function buildWorkspaceHealth(
     activePointerStore,
     evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
-    createAdapter: (workspace) =>
+    createAdapter: (workspace, correlationId) =>
       createNodeGitWorktreeAdapter({
         workspace,
         processEnv: options.env,
-        onTerminated: logWorktreeTermination,
+        onTerminated: logWorktreeTermination(correlationId),
       }),
     redactString,
     now: () => Date.now(),
@@ -2274,11 +2282,11 @@ function buildWorkspaceCleanup(
     activePointerStore: args.activePointerStore,
     evidenceStore: args.evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
-    createAdapter: (workspace) =>
+    createAdapter: (workspace, correlationId) =>
       createNodeGitWorktreeAdapter({
         workspace,
         processEnv: args.options.env,
-        onTerminated: logWorktreeTermination,
+        onTerminated: logWorktreeTermination(correlationId),
       }),
     redactString: args.redactString,
     now: () => Date.now(),

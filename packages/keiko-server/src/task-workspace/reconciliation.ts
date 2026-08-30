@@ -66,6 +66,11 @@ import type {
 interface ReconcileCtx {
   readonly deps: WorkspaceReconciliationServiceDeps;
   readonly lockTtlMs: number;
+  // The triggering operation's correlation id, so the worktree adapter's termination evidence joins
+  // the same timeline as every other line of that operation (AGENTS.md §8). It lives on the CTX, not
+  // in each helper's signature: the ctx is already threaded everywhere the adapter is built, so this
+  // needed no new parameter on any private function (PR #3355 review, P2).
+  readonly correlationId: string;
 }
 
 // The result of reconciling a single instance: the freshly persisted record plus the pure outcome.
@@ -359,8 +364,13 @@ export function gatherInstanceReconciliationFacts(
   instance: WorkspaceInstance,
   nowMs: number,
   actor?: string,
+  correlationId?: string,
 ): Promise<FactsAndHead> {
-  const ctx: ReconcileCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
+  const ctx: ReconcileCtx = {
+    deps,
+    lockTtlMs: resolveLockTtl(deps.lockTtlMs),
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+  };
   return gatherFacts(ctx, adapter, worktrees, instance, nowMs, actor);
 }
 
@@ -373,8 +383,12 @@ export async function reconcileSingleInstance(
   actor?: string,
   correlationId?: string,
 ): Promise<ReconcileInstanceResult> {
-  const ctx: ReconcileCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
-  const adapter = deps.createAdapter(detectWorkspaceAt(instance.repositoryRoot));
+  const ctx: ReconcileCtx = {
+    deps,
+    lockTtlMs: resolveLockTtl(deps.lockTtlMs),
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+  };
+  const adapter = deps.createAdapter(detectWorkspaceAt(instance.repositoryRoot), ctx.correlationId);
   const worktrees = await adapter.listWorktrees();
   const { facts, observedHead } = await gatherFacts(
     ctx,
@@ -448,7 +462,7 @@ async function reconcileImpl(
   }
   const reconciled: WorkspaceInstance[] = [];
   for (const [root, group] of byRepo) {
-    const adapter = ctx.deps.createAdapter(detectWorkspaceAt(root));
+    const adapter = ctx.deps.createAdapter(detectWorkspaceAt(root), ctx.correlationId);
     for (const instance of group) {
       // Serialize the WHOLE per-instance critical section — re-read, fact-gathering, classification, and
       // the persisted write — under the SAME `ws:<workspaceId>` key every other mutating workspace flow
@@ -499,13 +513,22 @@ async function reconcileImpl(
 export function createWorkspaceReconciliationService(
   deps: WorkspaceReconciliationServiceDeps,
 ): WorkspaceReconciliationService {
-  const ctx: ReconcileCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
+  const lockTtlMs = resolveLockTtl(deps.lockTtlMs);
+  // Built PER OPERATION, not once per service: the correlation id belongs to the request, and a
+  // service-lifetime ctx is exactly what forced the previous UNKNOWN_CORRELATION_ID here.
+  const ctxFor = (correlationId: string | undefined): ReconcileCtx => ({
+    deps,
+    lockTtlMs,
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+  });
   return {
+    // Pure read over persisted rows — no child process, so no termination evidence to join.
     report: (repositoryRoot?: string): WorkspaceReconciliationReport =>
-      buildReport(ctx, instancesFor(deps, repositoryRoot), deps.now(), false),
+      buildReport(ctxFor(undefined), instancesFor(deps, repositoryRoot), deps.now(), false),
     reconcile: (
       repositoryRoot?: string,
       correlationId?: string,
-    ): Promise<WorkspaceReconciliationReport> => reconcileImpl(ctx, repositoryRoot, correlationId),
+    ): Promise<WorkspaceReconciliationReport> =>
+      reconcileImpl(ctxFor(correlationId), repositoryRoot, correlationId),
   };
 }

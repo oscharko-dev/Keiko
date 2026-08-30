@@ -164,6 +164,39 @@ describe("healthy reconciliation (AC4)", () => {
     expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
   });
 
+  // The other half of that join, and the one that was broken (PR #3355 review, P2). The evidence
+  // above is emitted by this module; the git process's TERMINATION evidence is emitted by the
+  // adapter, which deps.ts composed with a hardcoded UNKNOWN_CORRELATION_ID because the port took
+  // only a workspace. So a worktree git process killed during a reconcile logged `command.terminated`
+  // under UNKNOWN while every surrounding line of the SAME operation carried the real id.
+  //
+  // Asserted at the port rather than at the log line, because the port is where the id was lost: a
+  // spying factory records what the service actually hands it. Before the fix this receives one
+  // argument and `received[0]` is undefined.
+  it("hands the caller's correlationId to createAdapter, so termination evidence joins the same timeline", async () => {
+    const received: (string | undefined)[] = [];
+    const service = createWorkspaceReconciliationService({
+      store,
+      activePointerStore: pointerStore,
+      evidenceStore: capturingEvidence(),
+      managedRoot,
+      createAdapter: (workspace, correlationId): GitWorktreeAdapter => {
+        received.push(correlationId);
+        return realAdapter(workspace);
+      },
+      redactString: (value: string): string => value,
+      now: (): number => nowMs,
+      newId: (): string => `id-${String(idCounter++)}`,
+      mutex: __twMutex,
+    });
+    await provisionTask("t-adapter-corr");
+    await service.reconcile(undefined, "req-corr-adapter-1");
+    expect(received.length).toBeGreaterThan(0);
+    expect(received).not.toContain(undefined);
+    expect(new Set(received)).toEqual(new Set(["req-corr-adapter-1"]));
+    expect(received).not.toContain(UNKNOWN_CORRELATION_ID);
+  });
+
   // The startup reconciliation pass has no HTTP request behind it at all: no correlationId is
   // reachable, so this is the one genuinely correlation-free call site in the module.
   it("falls back to UNKNOWN_CORRELATION_ID (never the auditCorrelationId) when no request scope exists", async () => {

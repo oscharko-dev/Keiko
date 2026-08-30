@@ -80,6 +80,11 @@ const COMPLETABLE_STATES: ReadonlySet<TaskWorkspaceLifecycleState> = new Set([
 interface ProvisioningCtx {
   readonly deps: WorkspaceProvisioningServiceDeps;
   readonly lockTtlMs: number;
+  // The triggering operation's correlation id, so the worktree adapter's termination evidence joins
+  // the same timeline as every other line of that operation (AGENTS.md §8). It lives on the CTX, not
+  // in each helper's signature: the ctx is already threaded everywhere the adapter is built, so this
+  // needed no new parameter on any private function (PR #3355 review, P2).
+  readonly correlationId: string;
 }
 
 interface RepositoryContext {
@@ -271,7 +276,9 @@ async function resolveRepositoryContext(
   request: WorkspaceProvisionRequest,
 ): Promise<RepositoryContext> {
   const requestWorkspace = detectWorkspaceAt(request.repositoryRequestPath);
-  const repositoryRoot = await ctx.deps.createAdapter(requestWorkspace).resolveRepositoryRoot();
+  const repositoryRoot = await ctx.deps
+    .createAdapter(requestWorkspace, ctx.correlationId)
+    .resolveRepositoryRoot();
   if (repositoryRoot === undefined) {
     throw new TaskWorkspaceError("MISSING_REPOSITORY", "path is not inside a git repository");
   }
@@ -289,7 +296,7 @@ async function resolveRepositoryContext(
       repositoryId,
       workspaceId,
     }),
-    adapter: ctx.deps.createAdapter(repoWorkspace),
+    adapter: ctx.deps.createAdapter(repoWorkspace, ctx.correlationId),
   };
 }
 
@@ -816,16 +823,26 @@ function activateImpl(
 export function createWorkspaceProvisioningService(
   deps: WorkspaceProvisioningServiceDeps,
 ): WorkspaceProvisioningService {
-  const ctx: ProvisioningCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
+  const lockTtlMs = resolveLockTtl(deps.lockTtlMs);
+  // Built PER OPERATION, not once per service: the correlation id belongs to the request, and a
+  // service-lifetime ctx is exactly what forced the previous UNKNOWN_CORRELATION_ID here.
+  const ctxFor = (correlationId: string | undefined): ProvisioningCtx => ({
+    deps,
+    lockTtlMs,
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+  });
   return {
     provision: (request: WorkspaceProvisionRequest): Promise<WorkspaceProvisionResult> =>
-      provisionImpl(ctx, request),
+      provisionImpl(ctxFor(request.correlationId), request),
     activate: (request: WorkspaceActivateRequest): Promise<WorkspaceActivateResult> =>
-      activateImpl(ctx, request),
+      activateImpl(ctxFor(request.correlationId), request),
     getInstance: (workspaceId: string): WorkspaceInstance | undefined =>
       deps.store.getById(workspaceId),
+    // No request, so no operation id to join to: `ensureIdentity` is a synchronous store write with
+    // no child process and therefore emits no termination evidence. UNKNOWN is honest here, and it
+    // is the sanctioned fallback rather than an ad-hoc string.
     ensureIdentity: (instance: WorkspaceInstance): void => {
-      ensureManagedWorkspaceIdentity(ctx, instance, false);
+      ensureManagedWorkspaceIdentity(ctxFor(undefined), instance, false);
     },
   };
 }

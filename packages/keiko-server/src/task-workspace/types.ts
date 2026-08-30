@@ -76,7 +76,16 @@ export interface WorkspaceProvisioningServiceDeps {
   // writing any worktree under it.
   readonly managedRoot: string;
   // Builds a narrow worktree adapter bound to a repository root. Injected so tests can supply a fake.
-  readonly createAdapter: (workspace: WorkspaceInfo) => GitWorktreeAdapter;
+  //
+  // `correlationId` is part of the signature, not of the composition, because the adapter emits
+  // termination evidence and that evidence must join the operation that caused it (AGENTS.md §8).
+  // The port used to take only the workspace, so `deps.ts` had no id to give and stamped every one
+  // of the five managed-worktree lanes with UNKNOWN_CORRELATION_ID — while the surrounding
+  // workspace events on the SAME operation carried the real one, which is precisely the timeline
+  // join this evidence exists to enable (PR #3355 review, P2). Callers pass the id they already
+  // hold; `UNKNOWN_CORRELATION_ID` remains the sanctioned fallback where an operation genuinely
+  // has none, never an ad-hoc string.
+  readonly createAdapter: (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
   readonly redactString: (input: string) => string;
   // Clock + id generator, injected for deterministic tests. `now` is epoch ms.
   readonly now: () => number;
@@ -204,7 +213,7 @@ export interface WorkspaceReconciliationServiceDeps {
   // The Keiko-owned managed worktree root (absolute) — every persisted path is realpath-checked for
   // containment inside it before it is trusted (SC).
   readonly managedRoot: string;
-  readonly createAdapter: (workspace: WorkspaceInfo) => GitWorktreeAdapter;
+  readonly createAdapter: (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
   readonly redactString: (input: string) => string;
   readonly now: () => number;
   readonly newId: () => string;
@@ -252,7 +261,7 @@ export interface WorkspaceRepairServiceDeps {
   // Reused #445 service: worktree-recreating repairs delegate the re-materialization walk to it.
   readonly provisioning: WorkspaceProvisioningService;
   readonly managedRoot: string;
-  readonly createAdapter: (workspace: WorkspaceInfo) => GitWorktreeAdapter;
+  readonly createAdapter: (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
   readonly redactString: (input: string) => string;
   readonly now: () => number;
   readonly newId: () => string;
@@ -290,7 +299,10 @@ export interface WorkspaceCleanupServiceDeps extends WorkspaceReconciliationServ
 export interface WorkspaceHealthService {
   // Live: classify every persisted instance for a repository root (or all repositories) plus any
   // orphaned managed worktrees, and return the content-free report. Read-only — no persistence.
-  readonly report: (repositoryRoot?: string) => Promise<WorkspaceHealthReport>;
+  readonly report: (
+    repositoryRoot?: string,
+    correlationId?: string,
+  ) => Promise<WorkspaceHealthReport>;
 }
 
 export interface WorkspaceCleanupRequest {

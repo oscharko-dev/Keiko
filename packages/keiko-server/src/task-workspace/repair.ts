@@ -59,6 +59,11 @@ const MAX_FIELD_LENGTH = 512;
 interface RepairCtx {
   readonly deps: WorkspaceRepairServiceDeps;
   readonly lockTtlMs: number;
+  // The triggering operation's correlation id, so the worktree adapter's termination evidence joins
+  // the same timeline as every other line of that operation (AGENTS.md §8). It lives on the CTX, not
+  // in each helper's signature: the ctx is already threaded everywhere the adapter is built, so this
+  // needed no new parameter on any private function (PR #3355 review, P2).
+  readonly correlationId: string;
 }
 
 function isBoundedNonEmpty(value: unknown): value is string {
@@ -253,7 +258,9 @@ async function applyProvisioningRepair(
   requestedBy: string,
   correlationId: string | undefined,
 ): Promise<WorkspaceInstance> {
-  await ctx.deps.createAdapter(detectWorkspaceAt(instance.repositoryRoot)).pruneWorktrees();
+  await ctx.deps
+    .createAdapter(detectWorkspaceAt(instance.repositoryRoot), ctx.correlationId)
+    .pruneWorktrees();
   const result = await ctx.deps.provisioning.provision({
     repositoryRequestPath: instance.repositoryRoot,
     taskId: instance.taskId,
@@ -474,9 +481,14 @@ function repairImpl(
 export function createWorkspaceRepairService(
   deps: WorkspaceRepairServiceDeps,
 ): WorkspaceRepairService {
-  const ctx: RepairCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
+  const lockTtlMs = resolveLockTtl(deps.lockTtlMs);
+  // Built PER OPERATION, not once per service: the correlation id belongs to the request, and a
+  // service-lifetime ctx is exactly what forced the previous UNKNOWN_CORRELATION_ID here.
   return {
     repair: (request: WorkspaceRepairRequest): Promise<WorkspaceRepairResult> =>
-      repairImpl(ctx, request),
+      repairImpl(
+        { deps, lockTtlMs, correlationId: request.correlationId ?? UNKNOWN_CORRELATION_ID },
+        request,
+      ),
   };
 }
