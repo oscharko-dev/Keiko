@@ -17,13 +17,20 @@ const modelBaseUrl = `http://127.0.0.1:${String(modelPort)}/v1`;
 // ("disabled capture stays empty") then reads the previous engine's leftovers and fails for a
 // reason that has nothing to do with the engine under test.
 //
-// Derived from `--project=` on the command line rather than a new env var each script must remember
+// Derived from `--project` on the command line rather than a new env var each script must remember
 // to set: the flag is already how the lanes differ, so isolation cannot be forgotten. Falls back to
 // the plain id when no project is pinned (a local full run), which is a single invocation and so
-// needs no split.
-const projectArgument = process.argv
-  .find((argument) => argument.startsWith("--project="))
-  ?.slice("--project=".length);
+// needs no split. Playwright's CLI accepts BOTH `--project=<name>` and the space-separated
+// `--project <name>` form; recognizing only the first left the second silently un-isolated
+// (PR #3355 review, IDX57).
+const equalsFormIndex = process.argv.findIndex((argument) => argument.startsWith("--project="));
+const spaceFormIndex = process.argv.indexOf("--project");
+const projectArgument =
+  equalsFormIndex >= 0
+    ? process.argv[equalsFormIndex]?.slice("--project=".length)
+    : spaceFormIndex >= 0
+      ? process.argv[spaceFormIndex + 1]
+      : undefined;
 const stateId = `${process.env.GITHUB_RUN_ID ?? String(process.pid)}${
   projectArgument === undefined || projectArgument.length === 0 ? "" : `-${projectArgument}`
 }`;

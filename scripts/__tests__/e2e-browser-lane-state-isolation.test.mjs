@@ -34,11 +34,19 @@ function projectOf(command) {
 // Import the real config under a chosen `--project=` and report the state directory it hands the
 // product. `KEIKO_STATE_DIR` on the last web server is the value every store in the run is keyed on,
 // so comparing it compares the actual isolation rather than a re-derivation of the formula.
-async function stateDirFor(projectArgument) {
+//
+// `form` selects which of Playwright's two equivalent CLI spellings to simulate: the `equals` form
+// (`--project=firefox`, one argv element) that every script in this repo uses today, and the `space`
+// form (`--project firefox`, two argv elements) that a developer invoking `playwright test` by hand
+// is just as entitled to use. Both must resolve to the same isolated state directory.
+async function stateDirFor(projectArgument, form = "equals") {
   vi.resetModules();
   const argv = process.argv;
   const override = process.env.KEIKO_E2E_STATE_DIR;
-  process.argv = [...argv.slice(0, 2), `--project=${projectArgument}`];
+  process.argv =
+    form === "space"
+      ? [...argv.slice(0, 2), "--project", projectArgument]
+      : [...argv.slice(0, 2), `--project=${projectArgument}`];
   delete process.env.KEIKO_E2E_STATE_DIR;
   try {
     const { default: config } = await import(CONFIG);
@@ -85,5 +93,17 @@ describe("the two release-smoke browser lanes cannot share durable state", () =>
     const second = await stateDirFor("firefox");
     expect(second).toBe(first);
     expect(first).toContain("firefox");
+  });
+
+  // Playwright's own CLI accepts `--project <name>` (two argv elements) as well as
+  // `--project=<name>` (one). Before this pin the config only recognized the `=` form, so a
+  // developer running the space form got a stateId with no project suffix — silently un-isolated
+  // (PR #3355 review, IDX57).
+  it("resolves the SAME state directory for the space-separated --project form as for --project=", async () => {
+    const equalsForm = await stateDirFor("firefox", "equals");
+    const spaceForm = await stateDirFor("firefox", "space");
+    expect(spaceForm).toBeTruthy();
+    expect(spaceForm).toContain("firefox");
+    expect(spaceForm).toBe(equalsForm);
   });
 });
