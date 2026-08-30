@@ -84,6 +84,7 @@ function makeRawReq(raw: string): IncomingMessage {
 
 function ctx(runId: string, req: IncomingMessage): RouteContext {
   return {
+    correlationId: undefined,
     req,
     res: {} as RouteContext["res"],
     params: { id: runId },
@@ -158,6 +159,7 @@ afterEach(() => {
 describe("handleQiEditCandidate — missing id", () => {
   it("returns 400 QI_BAD_REQUEST when id param is absent", async () => {
     const c: RouteContext = {
+      correlationId: undefined,
       req: makeReq({ candidateId: "tc-1", edited: { title: "x" } }),
       res: {} as RouteContext["res"],
       params: {},
@@ -691,6 +693,7 @@ describe("handleQiEditCandidate — review-state preservation + observability", 
 // A GET run-detail context. The handler reads no body; a drained empty stream stands in for `req`.
 function getCtx(runId: string): RouteContext {
   return {
+    correlationId: undefined,
     req: makeRawReq(""),
     res: {} as RouteContext["res"],
     params: { id: runId },

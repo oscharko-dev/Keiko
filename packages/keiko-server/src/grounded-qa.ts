@@ -973,6 +973,9 @@ function runDefaultGroundedExploration(
     ),
     nowMs,
     signal,
+    // ADR-0173 D5: the same id the Gateway answerer above already carries, so a git-history read
+    // that failed during THIS ask is joinable to it in `server.log`.
+    correlationId: runnerCtx.correlationId,
     microIndex: microIndexForGroundedScope(budgetedInput.scope, nowMs),
     workspaceIndexForRoot: deps.workspaceIndexForRoot,
     ...(contextPackReranker === undefined ? {} : { contextPackReranker }),
@@ -1589,7 +1592,7 @@ function resolveMultiSourceSeam(
     deps,
   );
   return {
-    retriever: defaultRetriever(signal, deps),
+    retriever: defaultRetriever(signal, deps, correlationId),
     answerer: createMultiSourceAnswerer(model, modelId, deps.redactor, signal, correlationId),
   };
 }

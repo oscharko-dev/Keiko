@@ -98,6 +98,7 @@ function makeRawReq(raw: string): IncomingMessage {
 
 function ctx(runId: string, req: IncomingMessage): RouteContext {
   return {
+    correlationId: undefined,
     req,
     res: {} as RouteContext["res"],
     params: { id: runId },
@@ -107,6 +108,7 @@ function ctx(runId: string, req: IncomingMessage): RouteContext {
 
 function ctxNoId(req: IncomingMessage): RouteContext {
   return {
+    correlationId: undefined,
     req,
     res: {} as RouteContext["res"],
     params: {},
@@ -305,6 +307,7 @@ describe("handleQiReview — missing id param", () => {
   it("returns 400 when id param is an empty string", async () => {
     const req = makeReq({ action: "approve" });
     const c: RouteContext = {
+      correlationId: undefined,
       req,
       res: {} as RouteContext["res"],
       params: { id: "" },
@@ -321,6 +324,7 @@ describe("handleQiReview — missing id param", () => {
   it("returns 400 when id param is only whitespace", async () => {
     const req = makeReq({ action: "approve" });
     const c: RouteContext = {
+      correlationId: undefined,
       req,
       res: {} as RouteContext["res"],
       params: { id: "   " },

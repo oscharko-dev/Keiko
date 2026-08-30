@@ -129,6 +129,7 @@ function jsonRequest(body: Record<string, unknown>, method: string): IncomingMes
 
 function ctx(method: string, body: Record<string, unknown> = {}): RouteContext {
   return {
+    correlationId: undefined,
     req: jsonRequest(body, method),
     res: {} as never,
     params: {},

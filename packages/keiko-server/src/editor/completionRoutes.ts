@@ -164,6 +164,7 @@ interface ElectedModelContext {
   readonly config: GatewayConfig;
   readonly tokenBudget: EditorModelTokenBudget;
   readonly nowMs: number;
+  readonly correlationId: string | undefined;
 }
 
 const DETERMINISTIC_OUTCOME = (
@@ -378,6 +379,9 @@ async function runElectedModel(ctx: ElectedModelContext): Promise<ModelTierOutco
     signal: ctx.signal,
     nowMs: ctx.nowMs,
     budgetBytes: effectiveContextBudgetBytes(ctx.request),
+    // The git context calls the git routes in-process; without the id their failure lines are
+    // orphaned under UNKNOWN_CORRELATION_ID (AGENTS.md §8 Rule 1).
+    correlationId: ctx.correlationId,
   });
   recordCodingContextEvidence(
     ctx.deps.evidenceStore,
@@ -412,15 +416,22 @@ async function runElectedModel(ctx: ElectedModelContext): Promise<ModelTierOutco
 
 // Decides whether the gated model tier runs for this request and, if so, runs it. The cost ceiling
 // (#1206) and the aligned-FIM guardrail (#1210) are enforced by `selectCompletionModel`.
-async function runModelTier(
-  request: EditorCompletionWireRequest,
-  realRoot: string,
-  signal: AbortSignal,
-  deps: UiHandlerDeps,
-  chatFactory: CompletionChatFactory,
-  tokenBudget: EditorModelTokenBudget,
-  now: () => number,
-): Promise<ModelTierOutcome> {
+// One options object rather than a positional list: the correlation id the git context needs is an
+// eighth input, and eight positionals both trip Sonar's parameter ceiling and make the call site
+// unreadable at a glance.
+interface ModelTierInputs {
+  readonly request: EditorCompletionWireRequest;
+  readonly realRoot: string;
+  readonly signal: AbortSignal;
+  readonly deps: UiHandlerDeps;
+  readonly chatFactory: CompletionChatFactory;
+  readonly tokenBudget: EditorModelTokenBudget;
+  readonly now: () => number;
+  readonly correlationId: string | undefined;
+}
+
+async function runModelTier(inputs: ModelTierInputs): Promise<ModelTierOutcome> {
+  const { request, realRoot, signal, deps, chatFactory, tokenBudget, now } = inputs;
   const config = currentGatewayConfig(deps);
   if (config === undefined) {
     return DETERMINISTIC_OUTCOME("deterministic", "no-infilling-model", undefined, undefined);
@@ -452,6 +463,7 @@ async function runModelTier(
       config,
       tokenBudget,
       nowMs: now(),
+      correlationId: inputs.correlationId,
     });
     return outcome;
   } catch {
@@ -654,15 +666,16 @@ export async function handleEditorCompletion(
     }
 
     // Tier 2: gated model-assisted completion.
-    const model = await runModelTier(
-      sanitizedRequest,
-      root.realRoot,
+    const model = await runModelTier({
+      request: sanitizedRequest,
+      realRoot: root.realRoot,
       signal,
       deps,
-      options.chatFactory ?? defaultChatFactoryFor(deps, ctx.correlationId),
-      options.tokenBudget ?? sharedEditorModelTokenBudget,
-      options.now ?? Date.now,
-    );
+      chatFactory: options.chatFactory ?? defaultChatFactoryFor(deps, ctx.correlationId),
+      tokenBudget: options.tokenBudget ?? sharedEditorModelTokenBudget,
+      now: options.now ?? Date.now,
+      correlationId: ctx.correlationId,
+    });
 
     return { status: 200, body: deps.redactor(buildWireResponse(deterministic, model)) };
   });

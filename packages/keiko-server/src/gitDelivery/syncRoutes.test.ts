@@ -6,6 +6,7 @@
 //   * request hardening (404 unknown project, 400 bad/forbidden/extra-key/unsafe-ref, 413 oversize).
 //   * a content-free sync evidence record lands after execute (no URLs / secrets).
 
+import { captureActivityLog } from "../activityLogCapture.test-support.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -180,7 +181,13 @@ function ctxFor(path: string, body: unknown): RouteContext {
   const req = Readable.from([Buffer.from(raw, "utf8")]) as IncomingMessage;
   req.method = "POST";
   req.headers = { "content-type": "application/json", "x-keiko-csrf": "1" };
-  return { req, res: {} as ServerResponse, params: {}, url: new URL(`http://127.0.0.1${path}`) };
+  return {
+    correlationId: undefined,
+    req,
+    res: {} as ServerResponse,
+    params: {},
+    url: new URL(`http://127.0.0.1${path}`),
+  };
 }
 
 function syncBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -719,5 +726,135 @@ describe("evidence — content-free recording", () => {
     expect(records).toHaveLength(1);
     expect(records[0]?.outcome).toBe("auth-failed");
     expect(records[0]?.operation).toBe("pull");
+  });
+});
+
+describe("sync route activity log (AGENTS.md §8 Rule 1)", () => {
+  // A fetch/pull answers every failure with a content-free typed code (GIT_DELIVERY_SYNC_*), by
+  // design. Before this wiring that meant an auth failure, an unreachable remote, a
+  // non-fast-forward or a spawn-boundary refusal on the sync path left NOTHING in `server.log` —
+  // the operator's whole record of a failed sync was one `http`/`request` line and a status code.
+
+  function ctxWithCorrelation(path: string, body: unknown, correlationId: string): RouteContext {
+    return { ...ctxFor(path, body), correlationId };
+  }
+
+  it("reports a failed sync read under the request's correlation id", async () => {
+    const activity = captureActivityLog();
+    const handler = createHandleSyncPreview("fetch", {
+      execution: {
+        ...seams({ status: fail("fatal: not a git repository", 128) }),
+        activityLog: activity.sink,
+      },
+    });
+
+    await handler(ctxWithCorrelation(FETCH_PREVIEW, syncBody(), "corr-sync-000001"), deps());
+
+    const failures = activity.events.filter((event) => event.op === "git.process.failed");
+    expect(failures).not.toHaveLength(0);
+    expect(failures[0]).toMatchObject({
+      category: "diagnostic",
+      correlationId: "corr-sync-000001",
+      errorKind: "not-a-repository",
+      extra: { subcommand: "status" },
+    });
+    // The response stays content-free; the log is where the reason lives.
+    expect(JSON.stringify(failures[0])).not.toContain("not a git repository");
+  });
+
+  it("observes the NETWORK runner, not only the local reads", async () => {
+    // normalizeSeams wraps two runners: the config-isolated local reads and the credential-capable
+    // fetch/pull command. Wrapping only the first would leave the actual remote dispatch — the one
+    // that can fail on auth, host keys or a non-fast-forward — unobserved, and a preview-only test
+    // could not tell the difference.
+    const activity = captureActivityLog();
+    const handler = createHandleSyncExecute("fetch", {
+      execution: {
+        ...seams({
+          status: ok(porcelain({ ahead: 0, behind: 0, upstream: "origin/main" })),
+          remote: ok("origin\n"),
+          fetch: fail("fatal: Authentication failed for 'https://example.invalid/r.git'", 128),
+        }),
+        activityLog: activity.sink,
+      },
+    });
+
+    await handler(ctxWithCorrelation(FETCH_EXECUTE, syncBody(), "corr-sync-network-1"), deps());
+
+    const failures = activity.events.filter((event) => event.op === "git.process.failed");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      correlationId: "corr-sync-network-1",
+      extra: { subcommand: "fetch" },
+    });
+    // The remote URL and git's auth message are in the runner's own output; neither may appear.
+    const serialized = JSON.stringify(failures[0]);
+    expect(serialized).not.toContain("example.invalid");
+    expect(serialized).not.toContain("Authentication failed");
+  });
+
+  it.each([
+    {
+      label: "a non-fast-forward pull",
+      stderr: "fatal: Not possible to fast-forward, aborting.",
+      kind: "not-fast-forward",
+    },
+    {
+      label: "a dirty worktree",
+      stderr: "error: Your local changes would be overwritten by merge.",
+      kind: "dirty-worktree",
+    },
+    {
+      label: "a missing upstream",
+      stderr: "There is no tracking information for the current branch.",
+      kind: "no-upstream",
+    },
+  ])(
+    "names $label in the log with the same outcome the response reports",
+    async ({ stderr, kind }) => {
+      // `classifyGitRemoteFailure` has no member for any of these — they are Keiko-side sync
+      // vocabulary derived from git's stderr, not remote-facing phrases — so the observer would
+      // report the generic remote kind while the response and the evidence ledger already named the
+      // specific outcome. The call site threads its OWN classifier through `classifyFailure` so all
+      // three artifacts agree about one event.
+      const activity = captureActivityLog();
+      const handler = createHandleSyncExecute("pull", {
+        execution: {
+          ...seams({
+            status: ok(porcelain({ ahead: 0, behind: 2, upstream: "origin/main" })),
+            remote: ok("origin\n"),
+            pull: fail(stderr, 1),
+          }),
+          activityLog: activity.sink,
+        },
+      });
+
+      await handler(ctxWithCorrelation(PULL_EXECUTE, syncBody(), "corr-sync-pullkind"), deps());
+
+      const failures = activity.events.filter((event) => event.op === "git.process.failed");
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({ correlationId: "corr-sync-pullkind", errorKind: kind });
+      // Still body-free. The closed-vocabulary KIND (`not-fast-forward`) is the point of the line;
+      // what must never appear is git's own prose, which is what the classifier read to derive it.
+      const serialized = JSON.stringify(failures[0]);
+      expect(serialized).not.toContain("aborting");
+      expect(serialized).not.toContain("would be overwritten");
+      expect(serialized).not.toContain("tracking information");
+      expect(serialized).not.toContain("Your local changes");
+    },
+  );
+
+  it("threads the correlation id on the execute route too, not only preview", async () => {
+    const activity = captureActivityLog();
+    const handler = createHandleSyncExecute("fetch", {
+      execution: {
+        ...seams({ status: fail("fatal: not a git repository", 128) }),
+        activityLog: activity.sink,
+      },
+    });
+
+    await handler(ctxWithCorrelation(FETCH_EXECUTE, syncBody(), "corr-sync-000002"), deps());
+
+    expect(activity.events.map((event) => event.correlationId)).toContain("corr-sync-000002");
   });
 });

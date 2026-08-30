@@ -107,6 +107,7 @@ function postEditorContext(body: unknown): RouteContext {
   const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]);
   (req as { method?: string }).method = "POST";
   return {
+    correlationId: undefined,
     req: req as unknown as IncomingMessage,
     res: {} as ServerResponse,
     params: {},

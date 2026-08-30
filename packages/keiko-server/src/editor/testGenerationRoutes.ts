@@ -245,6 +245,7 @@ async function assembleDiscoveryContext(
   signal: AbortSignal,
   nowMs: number,
   allowEmbeddingProviders: boolean,
+  correlationId: string | undefined,
 ): Promise<{ readonly pack: CodingContextPack; readonly wire: CodingContextWirePack }> {
   const pack = await assembleCodingContext(buildDiscoveryRequest(request), {
     deps,
@@ -253,6 +254,9 @@ async function assembleDiscoveryContext(
     nowMs,
     budgetBytes: contextBudgetBytes(request),
     allowEmbeddingProviders,
+    // The git context calls the git routes in-process; without the id their failure lines are
+    // orphaned under UNKNOWN_CORRELATION_ID (AGENTS.md §8 Rule 1).
+    correlationId,
   });
   const wire = toCodingContextWirePack(pack);
   recordCodingContextEvidence(deps.evidenceStore, deps.redactor, wire, nowMs);
@@ -403,6 +407,7 @@ export async function handleEditorTestGeneration(
       signal,
       nowMs,
       executionEnabled,
+      ctx.correlationId,
     );
     const outcome = await produceOutcome(
       outcomeContext(ctx, deps, options, { request, realRoot: root.realRoot, signal, nowMs }),

@@ -110,6 +110,7 @@ function ctx(body: unknown): RouteContext {
 
 function rawCtx(body: string): RouteContext {
   return {
+    correlationId: undefined,
     req: Readable.from([Buffer.from(body, "utf8")]) as IncomingMessage,
     res: {} as RouteContext["res"],
     params: {},

@@ -596,6 +596,7 @@ async function serveGatewayRequest(
   try {
     const result = await handleCodingSidecarGatewayChatCompletions(
       {
+        correlationId: undefined,
         req,
         res,
         params: {},

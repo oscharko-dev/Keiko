@@ -947,13 +947,25 @@
     {
       "op": "git.delivery.mutation.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:324",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:347",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:353",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:377",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.process.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitProcessActivity.ts:250",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.process.refused",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitProcessActivity.ts:239",
       "package": "keiko-server"
     },
     {

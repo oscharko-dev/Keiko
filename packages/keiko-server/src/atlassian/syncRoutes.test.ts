@@ -161,6 +161,7 @@ function ctxFor(
   body?: Record<string, unknown>,
 ): RouteContext {
   return {
+    correlationId: undefined,
     req: jsonRequest(body, method),
     res: {} as never,
     params,

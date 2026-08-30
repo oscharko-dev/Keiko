@@ -71,6 +71,7 @@ function patchContentContext(body: unknown): RouteContext {
   ]) as unknown as IncomingMessage;
   (req as { method?: string }).method = "PATCH";
   return {
+    correlationId: undefined,
     req,
     res: {} as unknown as ServerResponse,
     params: {},

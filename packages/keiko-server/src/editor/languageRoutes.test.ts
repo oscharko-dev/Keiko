@@ -83,6 +83,7 @@ function rawPostContext(raw: string): RouteContext {
   const req = Readable.from([Buffer.from(raw, "utf8")]) as unknown as IncomingMessage;
   (req as { method?: string }).method = "POST";
   return {
+    correlationId: undefined,
     req,
     res: {} as unknown as ServerResponse,
     params: {},
@@ -96,6 +97,7 @@ function postContext(body: unknown): RouteContext {
 
 function getContext(path: string): RouteContext {
   return {
+    correlationId: undefined,
     req: Readable.from([]) as unknown as IncomingMessage,
     res: {} as unknown as ServerResponse,
     params: {},

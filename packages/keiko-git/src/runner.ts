@@ -8,7 +8,12 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { gitEnv, networkGitEnv } from "./env.js";
 import { resolveGitExecutable } from "./git-executable.js";
-import type { GitProcessOptions, GitProcessResult, GitProcessRunner } from "./types.js";
+import type {
+  GitProcessOptions,
+  GitProcessResult,
+  GitProcessRunner,
+  GitRefusalClass,
+} from "./types.js";
 
 // Grace period between SIGTERM and SIGKILL: a git process that ignores SIGTERM (stuck on a dead
 // filesystem, wedged hook) must never wedge the caller for longer than the timeout plus this.
@@ -115,7 +120,23 @@ const PRE_SUBCOMMAND_FLAG_NO_VALUE: ReadonlySet<string> = new Set([
   "--no-pager",
   "--no-optional-locks",
 ]);
-const PRE_SUBCOMMAND_FLAG_ONE_VALUE: ReadonlySet<string> = new Set(["-C", "-c"]);
+
+// The config-override flags, named ONCE. `forbiddenTwoTokenConfigOverride` below reads this set to
+// decide which flags carry a config key, and `PRE_SUBCOMMAND_FLAG_ONE_VALUE` reads it to decide
+// which flags consume the token after them. Those two lived as independent literals, and they
+// disagreed: the override check knew `--config-env`, the subcommand scan did not. So
+// `git --config-env <key>=<envvar> diff` resolved to NO subcommand, `withDiffFamilyNeutralized`
+// treated it as a non-diff command, and the invocation reached git without
+// `--no-ext-diff --no-textconv` — silently reopening the repository-local `diff.external` /
+// `textconv` path that #3348 closed, for any key the deny-list does not name. One set now, so a
+// flag added to the grammar cannot be known to one half of it and invisible to the other.
+const CONFIG_OVERRIDE_FLAGS: ReadonlySet<string> = new Set(["-c", "--config-env"]);
+const CONFIG_ENV_JOINED_PREFIX = "--config-env=";
+
+const PRE_SUBCOMMAND_FLAG_ONE_VALUE: ReadonlySet<string> = new Set([
+  "-C",
+  ...CONFIG_OVERRIDE_FLAGS,
+]);
 
 function findSubcommandIndex(args: readonly string[]): number | undefined {
   let index = 0;
@@ -125,13 +146,41 @@ function findSubcommandIndex(args: readonly string[]): number | undefined {
       index += 2;
       continue;
     }
-    if (arg !== undefined && PRE_SUBCOMMAND_FLAG_NO_VALUE.has(arg)) {
+    // `--config-env=<name>=<envvar>` carries its value in the same token, so it consumes one slot,
+    // not two. Its documented single-token form is why this is a prefix test and not a set lookup.
+    if (
+      arg !== undefined &&
+      (PRE_SUBCOMMAND_FLAG_NO_VALUE.has(arg) || arg.startsWith(CONFIG_ENV_JOINED_PREFIX))
+    ) {
       index += 1;
       continue;
     }
     return arg !== undefined && !arg.startsWith("-") ? index : undefined;
   }
   return undefined;
+}
+
+// git subcommand names are lower-case ASCII words (`status`, `for-each-ref`, `rev-parse`). The
+// shape guard is what makes the answer safe to LOG: every Keiko call site passes a literal here,
+// but this function reads whatever token sits at the subcommand position, so a value that is not a
+// plausible subcommand name is reported as `undefined` rather than copied into an activity log.
+// Bounded alphabet, bounded length, no separators, no whitespace — a token that passes cannot
+// carry a path, a config value, or a secret.
+const GIT_SUBCOMMAND_SHAPE = /^[a-z][a-z0-9-]{0,31}$/u;
+
+/**
+ * The git subcommand `args` resolves to (`status`, `diff`, `for-each-ref`, …), or `undefined` when
+ * the array has no subcommand token or the token is not a plausible subcommand name.
+ *
+ * Exported because a consumer that wants to name the failing command must not restate this
+ * module's pre-subcommand argv grammar (`-C`/`-c` take a value, `--no-pager` does not): a second
+ * copy of that table drifts silently the moment a caller adds a global flag, and the copy would
+ * then name the wrong token. One grammar, one reader.
+ */
+export function gitSubcommand(args: readonly string[]): string | undefined {
+  const index = findSubcommandIndex(args);
+  const token = index === undefined ? undefined : args[index];
+  return token !== undefined && GIT_SUBCOMMAND_SHAPE.test(token) ? token : undefined;
 }
 
 function withDiffFamilyNeutralized(args: readonly string[]): readonly string[] {
@@ -223,7 +272,7 @@ function preSubcommandRegion(args: readonly string[]): readonly string[] {
 function forbiddenTwoTokenConfigOverride(region: readonly string[]): string | undefined {
   for (let index = 0; index < region.length; index += 1) {
     const arg = region[index];
-    if (arg !== "-c" && arg !== "--config-env") continue;
+    if (arg === undefined || !CONFIG_OVERRIDE_FLAGS.has(arg)) continue;
     const value = region[index + 1];
     if (value === undefined) return arg;
     const key = configKeyFromSpec(value);
@@ -236,8 +285,8 @@ function forbiddenTwoTokenConfigOverride(region: readonly string[]): string | un
 // --config-env's documented single-token form: `--config-env=<name>=<envvar>`.
 function forbiddenConfigEnvJoinedOverride(region: readonly string[]): string | undefined {
   for (const arg of region) {
-    if (!arg.startsWith("--config-env=")) continue;
-    const key = configKeyFromSpec(arg.slice("--config-env=".length));
+    if (!arg.startsWith(CONFIG_ENV_JOINED_PREFIX)) continue;
+    const key = configKeyFromSpec(arg.slice(CONFIG_ENV_JOINED_PREFIX.length));
     if (isDangerousConfigKey(key)) return `--config-env ${key}`;
   }
   return undefined;
@@ -388,9 +437,14 @@ const SPAWN_UNTRUSTED_RESULT: Omit<GitProcessResult, "truncated" | "timedOut" | 
   signal: null,
   stdout: "",
   stderr: "git executable in untrusted location refused",
+  // The structured half of the same fact. The stderr above already names the class, but stderr is
+  // not body-free and never reaches an activity log, so without this field a planted-binary
+  // indicator and a plain "git is not installed" are the same exit-127 `git-missing` to every
+  // consumer that cannot read the message (AGENTS.md §8 Rule 1).
+  refusal: "untrusted-executable",
 };
 
-function refusedOptionResult(forbidden: string): GitProcessResult {
+function refusedOptionResult(forbidden: string, refusal: GitRefusalClass): GitProcessResult {
   return {
     exitCode: 128,
     signal: null,
@@ -398,6 +452,11 @@ function refusedOptionResult(forbidden: string): GitProcessResult {
     stderr: `refused git option: ${forbidden.split("=")[0] ?? forbidden}`,
     truncated: false,
     timedOut: false,
+    // `aborted` is optional only so pre-existing fake literals stay assignable; types.ts states the
+    // real runner always sets it, and this is a real-runner terminal result. Setting it explicitly
+    // means a consumer never has to read "absent" as a third state on this path.
+    aborted: false,
+    refusal,
   };
 }
 
@@ -417,6 +476,28 @@ function signalIsAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 
+interface GitRefusal {
+  readonly forbidden: string;
+  readonly refusal: GitRefusalClass;
+}
+
+// Three fixed checks, first match wins — the same predicates and the same order as the `??` chain
+// this replaces. Each `if` tags its own class on the return line, so the class still travels with
+// the predicate that decides it, without a tuple-typed table and a loop earning their keep on
+// three non-configurable entries.
+function firstRefusal(args: readonly string[]): GitRefusal | undefined {
+  const remoteCommand = forbiddenGitOption(args);
+  if (remoteCommand !== undefined) {
+    return { forbidden: remoteCommand, refusal: "remote-command-option" };
+  }
+  const diffEnabling = forbiddenDiffEnablingFlag(args);
+  if (diffEnabling !== undefined) return { forbidden: diffEnabling, refusal: "diff-enabling-flag" };
+  const configOverride = forbiddenConfigOverride(args);
+  if (configOverride !== undefined)
+    return { forbidden: configOverride, refusal: "config-override" };
+  return undefined;
+}
+
 function gitSpawnPreflight(
   args: readonly string[],
   options: GitProcessOptions,
@@ -424,9 +505,10 @@ function gitSpawnPreflight(
   // Fail closed before the spawn: a remote-command option, an external-diff/textconv enabling
   // flag, or a `-c`/`--config-env` override of a dangerous config key is refused here so none of
   // them can ever reach the child process — however they got into `args` (audit finding #3348).
-  const forbidden =
-    forbiddenGitOption(args) ?? forbiddenDiffEnablingFlag(args) ?? forbiddenConfigOverride(args);
-  if (forbidden !== undefined) return refusedOptionResult(forbidden);
+  // Each check names its own `GitRefusalClass` so the refusal stays a structured fact a consumer
+  // can log body-free (AGENTS.md §8 Rule 1); the raw token stays in `stderr` and goes no further.
+  const refused = firstRefusal(args);
+  if (refused !== undefined) return refusedOptionResult(refused.forbidden, refused.refusal);
   return signalIsAborted(options.abortSignal) ? abortedProcessResult() : undefined;
 }
 

@@ -47,6 +47,7 @@ function makeReq(payload: unknown): IncomingMessage {
 function makeCtx(payload: unknown): RouteContext {
   const socket = new Socket();
   return {
+    correlationId: undefined,
     req: makeReq(payload),
     res: { socket } as unknown as RouteContext["res"],
     params: {},
@@ -918,6 +919,7 @@ describe("handleMemoryCaptureFromConversation", () => {
     function acceptCtx(id: string, payload: unknown = {}): RouteContext {
       const socket = new Socket();
       return {
+        correlationId: undefined,
         req: makeReq(payload),
         res: { socket } as unknown as RouteContext["res"],
         params: { id },

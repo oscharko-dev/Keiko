@@ -34,6 +34,7 @@ let dependencies: UiHandlerDeps;
 
 function route(path: string, cookie?: string): RouteContext {
   return {
+    correlationId: undefined,
     req: mockRequest({ headers: cookie === undefined ? {} : { cookie } }),
     res: mockResponse().res,
     params: {},

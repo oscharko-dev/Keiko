@@ -126,6 +126,7 @@ function postContext(url: string, body: string): RouteContext {
   const req = Readable.from([Buffer.from(body, "utf8")]) as unknown as IncomingMessage;
   req.method = "POST";
   return {
+    correlationId: undefined,
     req,
     res: {} as unknown as ServerResponse,
     params: {},
@@ -191,6 +192,7 @@ function connectBridge(bridgeDecisionCapability: string): CapturedBridge {
     bridgeDecisionCapability,
   }).toString();
   const outcome = handleEditorAgentEvents({
+    correlationId: undefined,
     req,
     res,
     params: {},

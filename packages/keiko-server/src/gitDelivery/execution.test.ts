@@ -205,6 +205,7 @@ describe("executeGovernedMutation — real git through the default seams", () =>
       ws,
       deps,
       REAL_SEAMS,
+      undefined,
     );
     expect(switched.outcome.status).toBe("succeeded");
     expect(git(["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("feature/y");
@@ -216,6 +217,7 @@ describe("executeGovernedMutation — real git through the default seams", () =>
       ws,
       deps,
       REAL_SEAMS,
+      undefined,
     );
     expect(staged.outcome.status).toBe("succeeded");
 
@@ -225,6 +227,7 @@ describe("executeGovernedMutation — real git through the default seams", () =>
       ws,
       deps,
       REAL_SEAMS,
+      undefined,
     );
     expect(committed.outcome.status).toBe("succeeded");
     expect(git(["log", "--oneline"])).toContain("feat: add b");
@@ -240,6 +243,7 @@ describe("executeGovernedMutation — real git through the default seams", () =>
       workspaceInfo(root),
       deps,
       REAL_SEAMS,
+      undefined,
     );
     expect(result.outcome.status).toBe("blocked");
     expect(gitDeliveryMutationResponse(result).preflightFindingCodes).toContain(
@@ -262,6 +266,7 @@ describe("executeGovernedMutation — real git through the default seams", () =>
       workspaceInfo(root),
       deps,
       {},
+      undefined,
     );
     expect(result.outcome.status).toBe("succeeded");
     expect(KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK.defaultRule?.decision).toBe("constrained");

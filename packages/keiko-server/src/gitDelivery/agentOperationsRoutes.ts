@@ -211,7 +211,7 @@ function postContext(ctx: RouteContext, pattern: string, body: unknown): RouteCo
     res: ctx.res,
     params: {},
     url: new URL(`http://127.0.0.1${pattern}`),
-    ...(ctx.correlationId !== undefined ? { correlationId: ctx.correlationId } : {}),
+    correlationId: ctx.correlationId,
   };
 }
 
@@ -221,7 +221,7 @@ function readContext(ctx: RouteContext, path: string): RouteContext {
     res: ctx.res,
     params: {},
     url: new URL(`http://127.0.0.1${path}`),
-    ...(ctx.correlationId !== undefined ? { correlationId: ctx.correlationId } : {}),
+    correlationId: ctx.correlationId,
   };
 }
 

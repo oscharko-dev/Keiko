@@ -242,6 +242,7 @@ function routeContext(body: Record<string, unknown>): RouteContext {
     destroyed: false,
   }) as unknown as ServerResponse;
   return {
+    correlationId: undefined,
     req: fakeReq(body),
     res,
     params: {},

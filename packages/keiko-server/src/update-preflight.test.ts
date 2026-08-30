@@ -422,6 +422,7 @@ function portableManifest(
 }
 
 const ctx: RouteContext = {
+  correlationId: undefined,
   req: {} as IncomingMessage,
   res: {} as RouteContext["res"],
   params: {},

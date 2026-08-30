@@ -209,7 +209,13 @@ function ctxFor(path: string, body: unknown): RouteContext {
   const req = Readable.from([Buffer.from(raw, "utf8")]) as IncomingMessage;
   req.method = "POST";
   req.headers = { "content-type": "application/json", "x-keiko-csrf": "1" };
-  return { req, res: {} as ServerResponse, params: {}, url: new URL(`http://127.0.0.1${path}`) };
+  return {
+    correlationId: undefined,
+    req,
+    res: {} as ServerResponse,
+    params: {},
+    url: new URL(`http://127.0.0.1${path}`),
+  };
 }
 
 function seams(overrides: Partial<GitDeliveryExecutionSeams> = {}): GitDeliveryExecutionSeams {

@@ -45,6 +45,8 @@ import {
   gitDeliveryMutationResponse,
   gitDeliveryTerminationHandler,
   logGitDeliveryNoSpawnRefusal,
+  logGitDeliveryMutation,
+  logGitDeliveryPreconditionFailure,
   persistGitDeliveryEvidence,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
@@ -119,8 +121,8 @@ export interface GitDeliveryPublishSeams {
   readonly newActionId?: (() => string) | undefined;
   readonly beforeRemoteDispatch?: (() => boolean) | undefined;
   // Set by the route alongside `beforeRemoteDispatch` when that guard is the continuity re-check (see
-  // GitDeliveryAuthorityContinuityDenialCapture). When present, a continuity denial suppresses evidence
-  // persistence for this synthetic, never-executed attempt instead of recording it as a failure.
+  // GitDeliveryAuthorityContinuityDenialCapture). When present, a continuity denial suppresses both
+  // evidence persistence and the mutation-completed log for this synthetic, never-executed attempt.
   readonly authorityDenialCapture?: GitDeliveryAuthorityContinuityDenialCapture | undefined;
 }
 
@@ -180,11 +182,23 @@ export async function executeGovernedPublish(
   workspace: WorkspaceInfo,
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   seams: GitDeliveryPublishSeams,
-  correlationId?: string,
+  correlationId: string | undefined,
 ): Promise<GitPublishLifecycleResult> {
   const now = seams.now ?? Date.now;
   const activityLog = seams.activityLog ?? processServerLogSink();
-  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
+  let snapshot: GitWorktreeSnapshot;
+  try {
+    snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
+  } catch (error) {
+    // Mirrors executeGovernedMutation's precondition line: the read-only snapshot step is the
+    // only thing that can throw here (the gateway never does), and it used to throw uncaught,
+    // leaving a failed push with NO activity-log evidence at all — the route's own `catch {}`
+    // (pushRoutes.ts) swallowed it into a content-free 409 with nothing in server.log to explain
+    // it. Reuses the local mutation path's logger rather than minting a second one; `actionKind`
+    // (`push`) is what tells the two apart in one vocabulary.
+    logGitDeliveryPreconditionFailure(activityLog, "push", error, correlationId);
+    throw error;
+  }
   const adapter = authorityGuardedPublishAdapter(
     publishAdapterFor(workspace, seams, now, correlationId),
     seams.beforeRemoteDispatch,
@@ -207,10 +221,11 @@ export async function executeGovernedPublish(
   );
   // A continuity denial (caught by authorityGuardedPublishAdapter above) means the adapter never
   // dispatched — `result` is the synthetic no-spawn stand-in, not a real attempt. The route returns the
-  // captured 403 instead of this result, so recording it here would leave a "failed"/retryable evidence
-  // entry for an attempt the client is never told happened. See GitDeliveryAuthorityContinuityDenialCapture.
+  // captured 403 instead of this result, so recording either evidence or a mutation-completed line
+  // would claim an attempt the client is never told happened. See GitDeliveryAuthorityContinuityDenialCapture.
   if (seams.authorityDenialCapture?.result === undefined) {
     persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
+    logGitDeliveryMutation(activityLog, result.lifecycle, correlationId);
   }
   return result;
 }

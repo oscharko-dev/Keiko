@@ -47,6 +47,7 @@ const { handleListQiRuns, handleGetQiRun, QI_RUN_LIST_DEFAULT_LIMIT, QI_RUN_LIST
 
 function ctx(path: string, params: Record<string, string> = {}): RouteContext {
   return {
+    correlationId: undefined,
     req: {} as RouteContext["req"],
     res: {} as RouteContext["res"],
     params,

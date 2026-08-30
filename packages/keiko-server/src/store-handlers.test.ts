@@ -148,7 +148,13 @@ function directRouteContext(
   const res = new EventEmitter() as RouteContext["res"] & { writableEnded: boolean };
   res.writableEnded = false;
   return {
-    ctx: { req, res, params: {}, url: new URL(`http://localhost${path}`) },
+    ctx: {
+      correlationId: undefined,
+      req,
+      res,
+      params: {},
+      url: new URL(`http://localhost${path}`),
+    },
     req,
     res,
   };

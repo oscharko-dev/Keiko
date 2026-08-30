@@ -243,16 +243,20 @@ describe("mutating route groups wire their fallback default through defaultMinta
       snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(SNAPSHOT),
       adapterFactory: (): GitLocalMutationAdapter => ({}) as unknown as GitLocalMutationAdapter,
     };
-    await executeGovernedMutation(command, NOT_REQUIRED, WORKSPACE, DEPS, seams).catch(
+    await executeGovernedMutation(command, NOT_REQUIRED, WORKSPACE, DEPS, seams, undefined).catch(
       () => undefined,
     );
     expect(defaultMintableRepoPackCalls).toEqual([KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK]);
 
     defaultMintableRepoPackCalls.length = 0;
-    await executeGovernedMutation(command, NOT_REQUIRED, WORKSPACE, DEPS, {
-      ...seams,
-      policyPacks: { repoPack: unmintablePack("commit") },
-    }).catch(() => undefined);
+    await executeGovernedMutation(
+      command,
+      NOT_REQUIRED,
+      WORKSPACE,
+      DEPS,
+      { ...seams, policyPacks: { repoPack: unmintablePack("commit") } },
+      undefined,
+    ).catch(() => undefined);
     expect(defaultMintableRepoPackCalls).toEqual([]);
   });
 
@@ -299,16 +303,20 @@ describe("mutating route groups wire their fallback default through defaultMinta
       publishAdapterFactory: (): GitRemotePublishAdapter =>
         ({}) as unknown as GitRemotePublishAdapter,
     };
-    await executeGovernedPublish(command, NOT_REQUIRED, WORKSPACE, DEPS, seams).catch(
+    await executeGovernedPublish(command, NOT_REQUIRED, WORKSPACE, DEPS, seams, undefined).catch(
       () => undefined,
     );
     expect(defaultMintableRepoPackCalls).toEqual([KEIKO_DEFAULT_PUBLISH_POLICY_PACK]);
 
     defaultMintableRepoPackCalls.length = 0;
-    await executeGovernedPublish(command, NOT_REQUIRED, WORKSPACE, DEPS, {
-      ...seams,
-      policyPacks: { repoPack: unmintablePack("push") },
-    }).catch(() => undefined);
+    await executeGovernedPublish(
+      command,
+      NOT_REQUIRED,
+      WORKSPACE,
+      DEPS,
+      { ...seams, policyPacks: { repoPack: unmintablePack("push") } },
+      undefined,
+    ).catch(() => undefined);
     expect(defaultMintableRepoPackCalls).toEqual([]);
   });
 });

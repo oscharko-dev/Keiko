@@ -282,7 +282,7 @@ export async function executeGovernedMutation(
   workspace: WorkspaceInfo,
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   seams: GitDeliveryExecutionSeams,
-  correlationId?: string,
+  correlationId: string | undefined,
 ): Promise<GitMutationLifecycleResult> {
   const now = seams.now ?? Date.now;
   const activityLog = seams.activityLog ?? processServerLogSink();
@@ -313,16 +313,43 @@ export async function executeGovernedMutation(
   return result;
 }
 
-function logGitDeliveryMutation(
+/**
+ * One body-free line per finished governed action. Exported because the REMOTE publish path
+ * (`pushExecution.ts`) produces the same `GitMutationLifecycleResult` and must report it the same
+ * way — `envelope.kind` already distinguishes a `push` from a local mutation, so a second op and a
+ * second formatter would split one vocabulary in two for no gain (AGENTS.md §5).
+ */
+// A terminal status that did not do what the caller asked. `blocked`/`approval-required` are
+// GOVERNANCE outcomes — the gate working as designed, not a fault — so they stay informational;
+// `failed`/`recovery-required` are the ones an operator has to act on.
+const UNSUCCESSFUL_MUTATION_STATUSES: ReadonlySet<string> = new Set([
+  "failed",
+  "recovery-required",
+]);
+
+export function logGitDeliveryMutation(
   log: ServerLogSink,
   result: GitMutationLifecycleResult,
   correlationId: string | undefined,
 ): void {
   const { outcome, envelope, phaseReached, preflight } = result;
+  const unsuccessful = UNSUCCESSFUL_MUTATION_STATUSES.has(outcome.status);
+  const executionErrorCode =
+    outcome.status === "failed" || outcome.status === "recovery-required"
+      ? (outcome.executionResult.errorCode ?? "internal-error")
+      : undefined;
   log.write({
+    // Without an explicit level this line defaulted to `info`, so a FAILED governed mutation or
+    // push was filtered out entirely under `KEIKO_LOG_LEVEL=warn` — the threshold an operator
+    // investigating a failed delivery would actually be running at (AGENTS.md §8 Rule 1).
+    level: unsuccessful ? "warn" : "info",
     category: "diagnostic",
     op: "git.delivery.mutation.completed",
     correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    // Promoted out of `extra` onto the envelope: `errorKind` is the field an operator greps and
+    // `keiko support analyze` clusters on, and it was previously reachable only by digging into
+    // `extra.executionErrorCode`.
+    ...(executionErrorCode === undefined ? {} : { errorKind: executionErrorCode }),
     extra: {
       actionId: envelope.actionId,
       actionKind: envelope.kind,
@@ -333,15 +360,12 @@ function logGitDeliveryMutation(
       preflightBlockingCount: preflight.blocking.length,
       requiredApproverCount:
         outcome.status === "approval-required" ? outcome.requiredApprovers.length : 0,
-      executionErrorCode:
-        outcome.status === "failed" || outcome.status === "recovery-required"
-          ? (outcome.executionResult.errorCode ?? "internal-error")
-          : undefined,
+      executionErrorCode,
     },
   });
 }
 
-function logGitDeliveryPreconditionFailure(
+export function logGitDeliveryPreconditionFailure(
   log: ServerLogSink,
   actionKind: GitDeliveryActionKind,
   error: unknown,

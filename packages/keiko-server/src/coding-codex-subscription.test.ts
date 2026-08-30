@@ -87,6 +87,7 @@ function req(body: unknown): RouteContext["req"] {
 
 function ctx(body: unknown = {}): RouteContext {
   return {
+    correlationId: undefined,
     req: req(body),
     res: {} as RouteContext["res"],
     params: {},

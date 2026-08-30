@@ -358,6 +358,7 @@ function recordingMicroIndex(): { index: MicroIndex; gets: () => number; sets: (
 describe("runGroundedExploration", () => {
   it("composes plan → search → rank → excerpts → assemble → answer deterministically", async () => {
     const out = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
@@ -394,6 +395,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Investigate src/foo.ts and src/bar.ts MyClass" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -425,6 +427,7 @@ describe("runGroundedExploration", () => {
     };
 
     const out = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
@@ -442,6 +445,7 @@ describe("runGroundedExploration", () => {
         scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -466,6 +470,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Investigate src/root.ts data flow" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -488,6 +493,7 @@ describe("runGroundedExploration", () => {
     adapter.isAvailable = (): Promise<boolean> => Promise.resolve(false);
     try {
       const out = await retrieveConnectedContextPack(input(), {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -514,6 +520,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Investigate HugeGraphOnly data flow" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -534,6 +541,7 @@ describe("runGroundedExploration", () => {
   it("records the exploration plan before workspace detection or repository exploration", async () => {
     const events: string[] = [];
     const out = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs: () => NOW,
       recordPlan: (plan) => {
@@ -562,6 +570,7 @@ describe("runGroundedExploration", () => {
       },
     };
     const out = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: recordingAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
@@ -586,6 +595,7 @@ describe("runGroundedExploration", () => {
           "User question:\nInvestigate src/foo.ts\n\nIncluded memory context:\nPrefer concise answers.",
       },
       {
+        correlationId: undefined,
         answerer: {
           answer: (question) => {
             observedQuestion = question;
@@ -607,6 +617,7 @@ describe("runGroundedExploration", () => {
     const out = await retrieveConnectedContextPack(
       issue672Input("Where is handleGroundedAsk defined? Cite the exact file."),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => issue672Workspace(),
@@ -626,6 +637,7 @@ describe("runGroundedExploration", () => {
         "Which file implements the POST /api/chats/messages/grounded route? Answer briefly and cite evidence.",
       ),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => issue672Workspace(),
@@ -659,6 +671,7 @@ describe("runGroundedExploration", () => {
         }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -700,6 +713,7 @@ describe("runGroundedExploration", () => {
           }),
         }),
         {
+          correlationId: undefined,
           answerer: echoAnswerer,
           nowMs: () => NOW,
           detectWorkspace: () => fakeWorkspace(),
@@ -744,6 +758,7 @@ describe("runGroundedExploration", () => {
             }),
           }),
           {
+            correlationId: undefined,
             answerer: echoAnswerer,
             nowMs: () => NOW,
             detectWorkspace: () => fakeWorkspace(),
@@ -781,6 +796,7 @@ describe("runGroundedExploration", () => {
         }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -814,6 +830,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Where is the source implementation for PaymentServiceTest?" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -843,6 +860,7 @@ describe("runGroundedExploration", () => {
         }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -891,6 +909,7 @@ describe("runGroundedExploration", () => {
         }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -925,6 +944,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Which Java version does the payments service use?" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -954,7 +974,12 @@ describe("runGroundedExploration", () => {
         scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
         query: happyQuery({ text: "what is the exact packageManager value in package.json?" }),
       }),
-      { answerer: echoAnswerer, nowMs: () => NOW, detectWorkspace: () => fakeWorkspace() },
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
     );
     expect(Date.now() - start).toBeLessThan(2000);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
@@ -970,7 +995,12 @@ describe("runGroundedExploration", () => {
         scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
         query: happyQuery({ text: "Which Java version does this project use?" }),
       }),
-      { answerer: echoAnswerer, nowMs: () => NOW, detectWorkspace: () => fakeWorkspace() },
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
     );
     const ranked = out.pack.diagnostics?.rankedCandidates ?? [];
     const pom = ranked.find((entry) => entry.scopePath === "pom.xml");
@@ -991,7 +1021,12 @@ describe("runGroundedExploration", () => {
         scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
         query: happyQuery({ text: "Investigate DepthProbe repository coverage" }),
       }),
-      { answerer: echoAnswerer, nowMs: () => NOW, detectWorkspace: () => fakeWorkspace() },
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
     );
 
     const coverage = out.pack.diagnostics?.coverage;
@@ -1019,6 +1054,7 @@ describe("runGroundedExploration", () => {
         }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => ({ ...fakeWorkspace(), ignoreLines: ["ignored/"] }),
@@ -1048,6 +1084,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Find oversizedNeedle" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         fs: counted.fs,
@@ -1076,6 +1113,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Where is GeneratedNeedle defined?" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1100,7 +1138,12 @@ describe("runGroundedExploration", () => {
         scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
         query: happyQuery({ text: "Which .NET target framework does this project use?" }),
       }),
-      { answerer: echoAnswerer, nowMs: () => NOW, detectWorkspace: () => fakeWorkspace() },
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
     );
     expect(out.pack.files.map((file) => file.scopePath)).toContain("Service.csproj");
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
@@ -1133,6 +1176,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Wo ist WindowFrame implementiert?" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1177,6 +1221,7 @@ describe("runGroundedExploration", () => {
           }),
         }),
         {
+          correlationId: undefined,
           answerer: echoAnswerer,
           nowMs: () => NOW,
           detectWorkspace: () => fakeWorkspace(),
@@ -1213,6 +1258,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Trace settlePayment through packages" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1257,6 +1303,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Which frontend client calls the OrderDto API route?" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1298,6 +1345,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Investigate CheckoutMismatch purchase sum" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1334,6 +1382,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Trace OverflowProbe implementations" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1362,6 +1411,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Welcher Package Manager wird verwendet?" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1389,6 +1439,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Inspect the needle handling in LargeTrace" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1441,6 +1492,7 @@ describe("runGroundedExploration", () => {
         }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1474,6 +1526,7 @@ describe("runGroundedExploration", () => {
         }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1498,6 +1551,7 @@ describe("runGroundedExploration", () => {
         }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1542,6 +1596,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Kannst du diesen Code optimieren?" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1567,6 +1622,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Investigate `CompletelyMissingSymbol`" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1593,6 +1649,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Investigate `CompletelyMissingSymbol`" }),
       }),
       {
+        correlationId: undefined,
         answerer: trackingAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1615,6 +1672,7 @@ describe("runGroundedExploration", () => {
         answerOnlyContextAvailable: true,
       }),
       {
+        correlationId: undefined,
         answerer: {
           answer: (question) => {
             receivedQuestion = question;
@@ -1646,6 +1704,7 @@ describe("runGroundedExploration", () => {
       },
     };
     const out = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: fabricatingAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
@@ -1664,6 +1723,7 @@ describe("runGroundedExploration", () => {
       },
     };
     const out = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: faithfulAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
@@ -1673,6 +1733,7 @@ describe("runGroundedExploration", () => {
 
   it("flags a source-backed answer that omits citations entirely", async () => {
     const out = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: { answer: () => Promise.resolve("A confident answer without source markers.") },
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
@@ -1699,6 +1760,7 @@ describe("runGroundedExploration", () => {
         }),
     };
     const out = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: truncatedAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
@@ -1713,6 +1775,7 @@ describe("runGroundedExploration", () => {
     const tooGeneric = happyQuery({ text: "help" });
     await expect(
       runGroundedExploration(input({ query: tooGeneric }), {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1730,6 +1793,7 @@ describe("runGroundedExploration", () => {
     };
     await expect(
       runGroundedExploration(input({ query: happyQuery({ text: "help" }) }), {
+        correlationId: undefined,
         answerer: tracking,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1775,6 +1839,7 @@ describe("runGroundedExploration", () => {
           query: happyQuery({ text: "Investigate src/foo.ts and tests/foo.test.ts" }),
         }),
         {
+          correlationId: undefined,
           answerer: echoAnswerer,
           nowMs: () => NOW,
           detectWorkspace: () => fakeWorkspace(),
@@ -1803,6 +1868,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Investigate src/foo.ts and recent git history" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1823,6 +1889,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Investigate src/foo.ts and src/recent.ts recent git history" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1841,6 +1908,36 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("threads the ask's correlation id into the git-history evidence provider", async () => {
+    // The provider logs a failed git read on the shared activity log (AGENTS.md §8 Rule 1), and a
+    // line stamped with the UNKNOWN_CORRELATION_ID fallback could not be joined back to the ask
+    // whose history ring it degraded — which is the only question that line answers. This pins the
+    // hop the provider cannot check for itself: OrchestratorDeps -> SearchInputs -> provider input.
+    writeFileSync(join(ROOT, "src/recent.ts"), "export const recentlyChanged = true;\n");
+    const seen: (string | undefined)[] = [];
+    const gitFileHistoryEvidence: GitFileHistoryEvidenceProvider = ({ nowMs, correlationId }) => {
+      seen.push(correlationId);
+      return Promise.resolve([gitHistoryAtom("src/recent.ts", nowMs())]);
+    };
+
+    await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+        query: happyQuery({ text: "Investigate src/foo.ts and src/recent.ts recent git history" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        gitFileHistoryEvidence,
+        correlationId: "corr-orchestrated-01",
+      },
+    );
+
+    expect(seen).not.toHaveLength(0);
+    expect(seen.every((id) => id === "corr-orchestrated-01")).toBe(true);
+  });
+
   it("uses the budget governor to stop before an over-budget retrieval ring", async () => {
     const out = await runGroundedExploration(
       input({
@@ -1849,6 +1946,7 @@ describe("runGroundedExploration", () => {
         budget: { ...DEFAULT_EXPLORATION_BUDGET, searchCallsMax: 1 },
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -1886,6 +1984,7 @@ describe("runGroundedExploration", () => {
           budget: { ...DEFAULT_EXPLORATION_BUDGET, searchCallsMax: 2 },
         }),
         {
+          correlationId: undefined,
           answerer: echoAnswerer,
           nowMs: () => NOW,
           detectWorkspace: () => fakeWorkspace(),
@@ -1920,6 +2019,7 @@ describe("runGroundedExploration", () => {
       },
     };
     const out = await runGroundedExploration(input({ budget }), {
+      correlationId: undefined,
       answerer,
       nowMs: () => now,
       detectWorkspace: () => fakeWorkspace(),
@@ -1937,6 +2037,7 @@ describe("runGroundedExploration", () => {
   it("preserves repository-search omission reasons in the context pack", async () => {
     writeFileSync(join(ROOT, "src/asset.png"), "\x89PNG\r\n\x1a\n\0binary");
     const out = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
@@ -1958,6 +2059,7 @@ describe("runGroundedExploration", () => {
     const out = await runGroundedExploration(
       input({ query: happyQuery({ text: "Investigate src/late.ts MyClass late target" }) }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -2014,6 +2116,7 @@ describe("runGroundedExploration", () => {
           },
         }),
         {
+          correlationId: undefined,
           answerer: echoAnswerer,
           nowMs: () => NOW,
           detectWorkspace: () => fakeWorkspace(),
@@ -2046,6 +2149,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Which three autonomy modes are defined in ADR-0129?" }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -2075,6 +2179,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: "Summarize ADR-0129 precisely." }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -2124,6 +2229,7 @@ describe("runGroundedExploration", () => {
           query: happyQuery({ text: "Investigate src/repeated.ts MyClass repeated target" }),
         }),
         {
+          correlationId: undefined,
           answerer: echoAnswerer,
           nowMs: () => NOW,
           detectWorkspace: () => fakeWorkspace(),
@@ -2156,12 +2262,14 @@ describe("runGroundedExploration", () => {
   it("reuses an injected micro-index for repeated context-pack assembly", async () => {
     const microIndex = recordingMicroIndex();
     const first = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
       microIndex: microIndex.index,
     });
     const second = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs: () => NOW + 1_000,
       detectWorkspace: () => fakeWorkspace(),
@@ -2187,6 +2295,7 @@ describe("runGroundedExploration", () => {
     };
 
     const first = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs,
       fs: counted.fs,
@@ -2196,6 +2305,7 @@ describe("runGroundedExploration", () => {
     expect(microIndex.gets()).toBe(2);
 
     const second = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs,
       fs: counted.fs,
@@ -2214,11 +2324,7 @@ describe("runGroundedExploration", () => {
       input({
         budget: { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 0, excerptBytesMax: 0 },
       }),
-      {
-        answerer: echoAnswerer,
-        nowMs: () => NOW,
-        fs: throwingReadFs(),
-      },
+      { correlationId: undefined, answerer: echoAnswerer, nowMs: () => NOW, fs: throwingReadFs() },
     );
     expect(out.pack.files).toEqual([]);
     expect(out.pack.usage.filesRead).toBe(0);
@@ -2240,6 +2346,7 @@ describe("runGroundedExploration", () => {
     };
     await expect(
       runGroundedExploration(input(), {
+        correlationId: undefined,
         answerer: trackingAnswerer,
         signal: controller.signal,
         nowMs: () => NOW,
@@ -2266,6 +2373,7 @@ describe("runGroundedExploration", () => {
 
     await expect(
       retrieveConnectedContextPack(input(), {
+        correlationId: undefined,
         answerer: echoAnswerer,
         signal: controller.signal,
         fs,
@@ -2281,6 +2389,7 @@ describe("runGroundedExploration", () => {
 describe("runGroundedExploration — context diagnostics observer (PR4-W1)", () => {
   it("noProfileUnchanged: omits diagnostics.contextBudget when no profile is threaded", async () => {
     const out = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
@@ -2290,6 +2399,7 @@ describe("runGroundedExploration — context diagnostics observer (PR4-W1)", () 
 
   it("diagnosticsPresent: populates a valid ContextBudget when a profile is threaded", async () => {
     const out = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
@@ -2304,11 +2414,13 @@ describe("runGroundedExploration — context diagnostics observer (PR4-W1)", () 
 
   it("noProfileUnchanged: pack is otherwise byte-identical with vs without the profile", async () => {
     const withoutProfile = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
     });
     const withProfile = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
@@ -2323,11 +2435,13 @@ describe("runGroundedExploration — context diagnostics observer (PR4-W1)", () 
 
   it("firstRingPreserved: rankedCandidates survives the observer when the lexical ring populated it", async () => {
     const withoutProfile = await retrieveConnectedContextPack(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
     });
     const withProfile = await retrieveConnectedContextPack(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
@@ -2421,11 +2535,13 @@ describe("echoAnswerer", () => {
 describe("retrieveConnectedContextPack (Epic #532 M1)", () => {
   it("produces the same pack runGroundedExploration produces for the same input+deps", async () => {
     const retrieved = await retrieveConnectedContextPack(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
     });
     const explored = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
@@ -2449,6 +2565,7 @@ describe("retrieveConnectedContextPack (Epic #532 M1)", () => {
       },
     };
     await retrieveConnectedContextPack(input(), {
+      correlationId: undefined,
       answerer: countingAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
@@ -2460,11 +2577,13 @@ describe("retrieveConnectedContextPack (Epic #532 M1)", () => {
     // Two independent runs over the same deterministic fixture must agree byte-for-byte on the
     // wire-observable fields, proving the retrieval/answer split did not perturb the single path.
     const first = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
     });
     const second = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: echoAnswerer,
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
@@ -2486,6 +2605,7 @@ describe("retrieveConnectedContextPack (Epic #532 M1)", () => {
     };
     await expect(
       retrieveConnectedContextPack(input(), {
+        correlationId: undefined,
         answerer: countingAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),

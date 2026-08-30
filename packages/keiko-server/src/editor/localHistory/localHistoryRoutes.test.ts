@@ -59,6 +59,7 @@ function context(
   (req as { method?: string }).method = method;
   req.headers = withSession ? { cookie: sessionCookie } : {};
   return {
+    correlationId: undefined,
     req,
     res: {} as unknown as ServerResponse,
     params,

@@ -447,6 +447,7 @@ describe("GET /api/runs/events resume cursors — PR #3305 review findings", () 
     const deps = minimalDeps(registry);
     const { res, frames, fireClose } = recordingFakeRes();
     const ctx: RouteContext = {
+      correlationId: undefined,
       req: fakeReq(),
       res,
       params: {},

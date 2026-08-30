@@ -35,6 +35,7 @@ const makeReq = (body: Record<string, unknown> | null): IncomingMessage => {
 };
 
 const ctx = (id: string, req: IncomingMessage): RouteContext => ({
+  correlationId: undefined,
   req,
   res: {} as RouteContext["res"],
   params: { id },

@@ -79,7 +79,13 @@ function captureRes(): { res: ServerResponse; writes: string[] } {
 }
 
 function routeContext(req: IncomingMessage, res: ServerResponse): RouteContext {
-  return { req, res, params: {}, url: new URL("http://127.0.0.1/api/desktop/chat") };
+  return {
+    correlationId: undefined,
+    req,
+    res,
+    params: {},
+    url: new URL("http://127.0.0.1/api/desktop/chat"),
+  };
 }
 
 function normalizedResponse(content: string): NormalizedResponse {

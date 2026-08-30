@@ -105,7 +105,7 @@ function ctx(body: unknown, correlationId?: string): RouteContext {
     res: {} as RouteContext["res"],
     params: {},
     url: new URL("http://127.0.0.1/api/gateway/setup"),
-    ...(correlationId === undefined ? {} : { correlationId }),
+    correlationId,
   };
 }
 

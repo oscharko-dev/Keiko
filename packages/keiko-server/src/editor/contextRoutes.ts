@@ -185,6 +185,9 @@ export async function handleEditorContext(
       realRoot: root.realRoot,
       signal: clientAbortSignal(ctx),
       nowMs,
+      // The git context is assembled by calling the git routes in-process; without this their
+      // failure lines would be orphaned under UNKNOWN_CORRELATION_ID (AGENTS.md §8 Rule 1).
+      correlationId: ctx.correlationId,
     });
     const wire = toCodingContextWirePack(pack);
     const evidenceRunId = recordCodingContextEvidence(

@@ -118,6 +118,7 @@ function ctx(
     signal,
     nowMs,
     currentTimeMs: () => nowMs,
+    correlationId: undefined,
     ...overrides,
   };
 }

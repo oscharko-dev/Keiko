@@ -9,6 +9,8 @@
 //   * AC5 — push execution cannot bypass the gateway: blocked attempts execute nothing yet still record
 //           content-free evidence for allowed AND blocked outcomes.
 
+import { captureActivityLog } from "../activityLogCapture.test-support.js";
+import type { ServerLogEvent, ServerLogSink } from "../observability/index.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,7 +29,6 @@ import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
 
 // Spies on the default remote publish-adapter factory the F1 fix threads runCommand
@@ -156,7 +157,13 @@ function ctxFor(path: string, body: unknown): RouteContext {
   const req = Readable.from([Buffer.from(raw, "utf8")]) as IncomingMessage;
   req.method = "POST";
   req.headers = { "content-type": "application/json", "x-keiko-csrf": "1" };
-  return { req, res: {} as ServerResponse, params: {}, url: new URL(`http://127.0.0.1${path}`) };
+  return {
+    correlationId: undefined,
+    req,
+    res: {} as ServerResponse,
+    params: {},
+    url: new URL(`http://127.0.0.1${path}`),
+  };
 }
 
 // No policyPacks override → the route applies KEIKO_DEFAULT_PUBLISH_POLICY_PACK (the AC2 default).
@@ -374,6 +381,7 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
   it("returns the SAME 403 authority-denied response the up-front gate returns, not a misleading internal failure (#3350)", async () => {
     const adapter = recordingPublishAdapter();
     const cap = capturingEvidenceStore();
+    const activity = captureActivityLog();
     const baseAuthority = permittedGitDeliveryAuthority(
       () => projectId,
       () => projectId,
@@ -395,7 +403,10 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
       },
     };
     const handler = createHandlePushExecute({
-      execution: seams({ publishAdapterFactory: () => adapter.adapter }),
+      execution: seams({
+        publishAdapterFactory: () => adapter.adapter,
+        activityLog: activity.sink,
+      }),
     });
 
     const res = await handler(
@@ -412,6 +423,12 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
     // Evidence contract: no misleading "failed"/retryable record for an attempt the client is never told
     // happened — consistent with the up-front denial, which also records nothing to the evidence ledger.
     expect(cap.count()).toBe(0);
+    expect(
+      activity.events.filter((event) => event.op === "git.delivery.dispatch.no-spawn"),
+    ).toHaveLength(1);
+    expect(
+      activity.events.filter((event) => event.op === "git.delivery.mutation.completed"),
+    ).toHaveLength(0);
   });
 
   it("denies a protected target outside the active authority envelope", async () => {
@@ -613,10 +630,10 @@ describe("executeGovernedPublish — default publish-adapter termination wiring 
     const onTerminated = createNodeGitPublishAdapterCalls[0]?.onTerminated;
     expect(onTerminated).toBeTypeOf("function");
     onTerminated?.({ reason: "timeout", childPid: 4321, windowsTreeKill: "not-attempted" });
-    expect(activity).toHaveLength(1);
-    expect(activity[0]?.op).toBe("command.terminated");
-    expect(activity[0]?.correlationId).toBe("request-correlation-push-wiring");
-    expect(activity[0]?.extra?.childPid).toBe(4321);
+    const terminationEvents = activity.filter((event) => event.op === "command.terminated");
+    expect(terminationEvents).toHaveLength(1);
+    expect(terminationEvents[0]?.correlationId).toBe("request-correlation-push-wiring");
+    expect(terminationEvents[0]?.extra?.childPid).toBe(4321);
   });
 });
 
@@ -665,5 +682,91 @@ describe("executeGovernedPublish — no-spawn refusal is marked, never reaches t
     expect(marker).toBeDefined();
     expect(marker?.correlationId).toBe("request-correlation-push-no-spawn");
     expect(marker?.extra?.actionKind).toBe("push");
+  });
+});
+
+describe("push execute activity log (AGENTS.md §8 Rule 1)", () => {
+  // A governed push answers every outcome with a content-free typed body, so before this wiring a
+  // completed push, a policy rejection and an authority-guard abort were indistinguishable in
+  // `server.log` — the remote half of the gap `logGitDeliveryMutation` already closed for local
+  // mutations. Reuses that same logger: `actionKind: "push"` is what separates the two.
+
+  function ctxWithCorrelation(path: string, body: unknown, correlationId: string): RouteContext {
+    return { ...ctxFor(path, body), correlationId };
+  }
+
+  it("emits a FAILED push at warn with a top-level errorKind, so a warn threshold keeps it", async () => {
+    // Without an explicit level this line defaulted to `info` and was filtered out entirely under
+    // `KEIKO_LOG_LEVEL=warn` — the threshold an operator investigating a failed delivery runs at.
+    // Asserted through a THRESHOLDING sink, not just the raw event, so the filter is what decides.
+    const activity = captureActivityLog();
+    const warnOnly: ServerLogSink = {
+      write: (event: ServerLogEvent): void => {
+        if (event.level === "warn" || event.level === "error") activity.sink.write(event);
+      },
+    };
+    const adapter = recordingPublishAdapter({
+      schemaVersion: "1",
+      outcome: "failed",
+      durationMs: 7,
+      errorCode: "provider-rejected",
+      rejectionReason: "permission-denied",
+    });
+    const handler = createHandlePushExecute({
+      execution: {
+        ...seams({ publishAdapterFactory: () => adapter.adapter }),
+        activityLog: warnOnly,
+      },
+    });
+
+    await handler(
+      ctxWithCorrelation(EXECUTE, pushBody({ setUpstreamTracking: true }), "corr-push-failed-1"),
+      deps(),
+    );
+
+    const events = activity.events.filter(
+      (event) => event.op === "git.delivery.mutation.completed",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      level: "warn",
+      correlationId: "corr-push-failed-1",
+      extra: { actionKind: "push" },
+    });
+    // `errorKind` on the envelope, not buried in `extra` — it is what an operator greps and what
+    // `keiko support analyze` clusters on.
+    expect(events[0]?.errorKind).toBeDefined();
+  });
+
+  it("reports a governed push under the request's correlation id, marked as a push", async () => {
+    const adapter = recordingPublishAdapter();
+    const activity = captureActivityLog();
+    const handler = createHandlePushExecute({
+      execution: seams({
+        publishAdapterFactory: () => adapter.adapter,
+        activityLog: activity.sink,
+      }),
+    });
+
+    const res = await handler(
+      ctxWithCorrelation(EXECUTE, pushBody({ setUpstreamTracking: true }), "corr-push-000001"),
+      deps(),
+    );
+
+    expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
+    const events = activity.events.filter(
+      (event) => event.op === "git.delivery.mutation.completed",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      category: "diagnostic",
+      correlationId: "corr-push-000001",
+      // `actionKind` is the leg that separates a remote push from a local mutation in one
+      // vocabulary — without it this line would be indistinguishable from a branch-create.
+      extra: { actionKind: "push", status: "succeeded" },
+    });
+    // Body-free: no branch name, no remote alias, no repository path on the line.
+    expect(JSON.stringify(events[0])).not.toContain("feat/x");
+    expect(JSON.stringify(events[0])).not.toContain("origin");
   });
 });

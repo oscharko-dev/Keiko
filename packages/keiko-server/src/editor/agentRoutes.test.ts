@@ -251,6 +251,7 @@ function context(body: unknown = {}, path = "/api/editor/agent/actions"): RouteC
   ]) as unknown as IncomingMessage;
   (req as { method?: string }).method = "POST";
   return {
+    correlationId: undefined,
     req,
     res: Object.assign(new EventEmitter(), { writableEnded: false }) as unknown as ServerResponse,
     params: {},
@@ -367,12 +368,7 @@ function connectBridge(
   const query = queryParts.length === 0 ? "" : `?${queryParts.join("&")}`;
   (req as { url?: string }).url = `/api/editor/agent/events${query}`;
   const url = new URL(`http://localhost/api/editor/agent/events${query}`);
-  const outcome = handleEditorAgentEvents({
-    req,
-    res,
-    params: {},
-    url,
-  });
+  const outcome = handleEditorAgentEvents({ correlationId: undefined, req, res, params: {}, url });
   return {
     frames: (): string => writes.join(""),
     outcome,
@@ -1992,6 +1988,7 @@ describe("editor agent routes", () => {
       on: vi.fn(),
     } as unknown as IncomingMessage;
     const result = handleEditorAgentEvents({
+      correlationId: undefined,
       req,
       res,
       params: {},
@@ -2692,6 +2689,7 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
       const capability = bridgeDecisionCapabilities.get("session-1");
       if (capability === undefined) throw new Error("expected bridge capability");
       handleEditorAgentEvents({
+        correlationId: undefined,
         req: fakeReq,
         res: fakeRes,
         params: {},
@@ -2889,6 +2887,7 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
       } as unknown as ServerResponse;
       const fakeReq = { on: vi.fn() } as unknown as IncomingMessage;
       handleEditorAgentEvents({
+        correlationId: undefined,
         req: fakeReq,
         res: fakeRes,
         params: {},
@@ -3577,6 +3576,7 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
 
 function auditRecords(sessionId = "session-1"): readonly EditorAgentActionAuditRecord[] {
   const result = handleEditorAgentAudit({
+    correlationId: undefined,
     req: {} as unknown as IncomingMessage,
     res: {} as unknown as ServerResponse,
     params: {},

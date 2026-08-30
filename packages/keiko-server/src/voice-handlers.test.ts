@@ -128,7 +128,7 @@ function voiceContext(
       res: response as unknown as RouteContext["res"],
       params: {},
       url: new URL("http://127.0.0.1/api/voice/transcribe"),
-      ...(correlationId !== undefined ? { correlationId } : {}),
+      correlationId,
     },
   };
 }
@@ -520,6 +520,7 @@ describe("POST /api/voice/transcribe — request validation (D3/D5)", () => {
     const req = Readable.from(chunks) as IncomingMessage;
     const result = await handleVoiceTranscribe(
       {
+        correlationId: undefined,
         req,
         res: {} as RouteContext["res"],
         params: {},
@@ -667,6 +668,7 @@ describe("POST /api/voice/transcribe — request validation (D3/D5)", () => {
     const req = Readable.from([Buffer.from("not json", "utf8")]) as IncomingMessage;
     const result = await handleVoiceTranscribe(
       {
+        correlationId: undefined,
         req,
         res: {} as RouteContext["res"],
         params: {},

@@ -402,6 +402,7 @@ const ROUTE_APP_SESSION_COOKIE = `${APP_SESSION_COOKIE_NAME}=${ROUTE_APP_SESSION
 
 function routeCtx(body: string, cookie: string | null = ROUTE_APP_SESSION_COOKIE): RouteContext {
   return {
+    correlationId: undefined,
     req: fakeReq(body, cookie ?? undefined),
     res: fakeRes(),
     params: {},
