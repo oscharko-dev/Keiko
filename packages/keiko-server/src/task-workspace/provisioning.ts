@@ -48,6 +48,7 @@ import {
   managedTargetExists,
 } from "./managed-root.js";
 import { TaskWorkspaceError, type WorkspaceFailureOutcome } from "./errors.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   appendWorkspaceLifecycleEvidence,
   buildWorkspaceEvent,
@@ -97,6 +98,11 @@ interface EmitInput {
   readonly workspaceId: string;
   readonly taskId: string;
   readonly nowMs: number;
+  // The triggering request's own correlation id, threaded from WorkspaceProvisionRequest /
+  // WorkspaceActivateRequest. Falls back to UNKNOWN_CORRELATION_ID (never the workspace's own
+  // identity) when the caller genuinely has no request scope, so the evidence honestly reports
+  // "no correlation id was known" instead of a value that only LOOKS like one (AGENTS.md §8).
+  readonly correlationId?: string | undefined;
   readonly fromState?: TaskWorkspaceLifecycleState | undefined;
   readonly toState?: TaskWorkspaceLifecycleState | undefined;
   readonly lockId?: string | undefined;
@@ -198,7 +204,7 @@ function emit(ctx: ProvisioningCtx, input: EmitInput): void {
     taskId: input.taskId,
     type: input.type,
     at: isoFrom(input.nowMs),
-    correlationId: input.workspaceId,
+    correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
     ...(input.fromState !== undefined ? { fromState: input.fromState } : {}),
     ...(input.toState !== undefined ? { toState: input.toState } : {}),
     ...(input.lockId !== undefined ? { lockId: input.lockId } : {}),
@@ -227,8 +233,17 @@ function emitOutcomeForCode(
   workspaceId: string,
   taskId: string,
   nowMs: number,
+  correlationId: string | undefined,
 ): void {
-  emit(ctx, { operation, outcome, type: "transition-rejected", workspaceId, taskId, nowMs });
+  emit(ctx, {
+    operation,
+    outcome,
+    type: "transition-rejected",
+    workspaceId,
+    taskId,
+    nowMs,
+    correlationId,
+  });
 }
 
 // ─── repository resolution ─────────────────────────────────────────────────────────────────────
@@ -436,6 +451,7 @@ async function failProvisioning(
   provisioning: WorkspaceInstance,
   error: TaskWorkspaceError,
   nowMs: number,
+  correlationId: string | undefined,
 ): Promise<never> {
   const target: TaskWorkspaceLifecycleState =
     error.outcome === "retry-required" ? "recovery-required" : "failed";
@@ -460,6 +476,7 @@ async function failProvisioning(
     workspaceId: provisioning.workspaceId,
     taskId: provisioning.taskId,
     nowMs,
+    correlationId,
     fromState: "provisioning",
     toState: target,
   });
@@ -473,6 +490,7 @@ function resumeExisting(
   repo: RepositoryContext,
   existing: WorkspaceInstance,
   nowMs: number,
+  correlationId: string | undefined,
 ): WorkspaceProvisionResult {
   assertPersistedManagedPath(ctx, existing);
   const identity = gitdirIdentity(repo.worktreePath);
@@ -491,6 +509,7 @@ function resumeExisting(
     workspaceId: refreshed.workspaceId,
     taskId: refreshed.taskId,
     nowMs,
+    correlationId,
     toState: refreshed.lifecycleState,
   });
   return { instance: refreshed, binding: buildBinding(refreshed), created: false };
@@ -503,6 +522,7 @@ function flagResumableDrift(
   ctx: ProvisioningCtx,
   existing: WorkspaceInstance,
   nowMs: number,
+  correlationId: string | undefined,
 ): never {
   const drifted = ctx.deps.store.upsert({
     ...existing,
@@ -519,6 +539,7 @@ function flagResumableDrift(
     workspaceId: drifted.workspaceId,
     taskId: drifted.taskId,
     nowMs,
+    correlationId,
     fromState: existing.lifecycleState,
     toState: "recovery-required",
   });
@@ -530,12 +551,13 @@ function reuseExistingOrUndefined(
   repo: RepositoryContext,
   existing: WorkspaceInstance | undefined,
   nowMs: number,
+  correlationId: string | undefined,
 ): WorkspaceProvisionResult | undefined {
   if (existing === undefined) return undefined;
   if (RESUMABLE_STATES.has(existing.lifecycleState)) {
     return managedTargetExists(repo.worktreePath)
-      ? resumeExisting(ctx, repo, existing, nowMs)
-      : flagResumableDrift(ctx, existing, nowMs);
+      ? resumeExisting(ctx, repo, existing, nowMs, correlationId)
+      : flagResumableDrift(ctx, existing, nowMs, correlationId);
   }
   if (!COMPLETABLE_STATES.has(existing.lifecycleState)) {
     // Terminal state (archived/merged/abandoned/cleanup-pending): idempotent no-op, return as-is.
@@ -564,7 +586,7 @@ async function runWorktreeMutation(
       error instanceof TaskWorkspaceError
         ? error
         : new TaskWorkspaceError("PROVISIONING_FAILED", "unexpected provisioning failure");
-    return failProvisioning(repo, ctx, provisioning, failure, ctx.deps.now());
+    return failProvisioning(repo, ctx, provisioning, failure, ctx.deps.now(), request.correlationId);
   }
   const active = finalizeActive(ctx, provisioning, identity, ctx.deps.now());
   emit(ctx, {
@@ -574,6 +596,7 @@ async function runWorktreeMutation(
     workspaceId: active.workspaceId,
     taskId: active.taskId,
     nowMs: ctx.deps.now(),
+    correlationId: request.correlationId,
     fromState: "provisioning",
     toState: "active",
   });
@@ -596,14 +619,22 @@ async function provisionLocked(
 
   const nowMs = ctx.deps.now();
   const existing = ctx.deps.store.findByRepositoryAndTask(repo.repositoryId, request.taskId);
-  const reused = reuseExistingOrUndefined(ctx, repo, existing, nowMs);
+  const reused = reuseExistingOrUndefined(ctx, repo, existing, nowMs, request.correlationId);
   if (reused !== undefined) return reused;
 
   try {
     await assertProvisionable(ctx, repo, request, existing, nowMs);
   } catch (error) {
     if (error instanceof TaskWorkspaceError) {
-      emitOutcomeForCode(ctx, "provision", error.outcome, repo.workspaceId, request.taskId, nowMs);
+      emitOutcomeForCode(
+        ctx,
+        "provision",
+        error.outcome,
+        repo.workspaceId,
+        request.taskId,
+        nowMs,
+        request.correlationId,
+      );
     }
     throw error;
   }
@@ -691,6 +722,7 @@ function flagActivateDrift(
   ctx: ProvisioningCtx,
   instance: WorkspaceInstance,
   nowMs: number,
+  correlationId: string | undefined,
 ): never {
   const drifted = ctx.deps.store.upsert({
     ...instance,
@@ -707,6 +739,7 @@ function flagActivateDrift(
     workspaceId: drifted.workspaceId,
     taskId: drifted.taskId,
     nowMs,
+    correlationId,
     fromState: instance.lifecycleState,
     toState: "recovery-required",
   });
@@ -728,7 +761,7 @@ function activateLocked(
   assertActivatable(ctx, instance, request, nowMs);
   assertPersistedManagedPath(ctx, instance);
   if (!managedTargetExists(instance.managedWorktreePath)) {
-    flagActivateDrift(ctx, instance, nowMs);
+    flagActivateDrift(ctx, instance, nowMs, request.correlationId);
   }
   ensureManagedWorkspaceIdentity(ctx, instance, false);
   const { next, type } = activateActiveOrResume(instance);
@@ -747,6 +780,7 @@ function activateLocked(
     workspaceId: persisted.workspaceId,
     taskId: persisted.taskId,
     nowMs,
+    correlationId: request.correlationId,
     ...(type === "resumed" ? { fromState: instance.lifecycleState } : {}),
     toState: "active",
     ...(lock !== null ? { lockId: lock.lockId } : {}),

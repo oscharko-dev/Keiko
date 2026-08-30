@@ -77,7 +77,16 @@ const GUARDED_CSS = [
 export const GUARDED_APIS = [
   {
     name: "Array.prototype.at",
-    pattern: /\.at\(\s*-/,
+    // Was `/\.at\(\s*-/`, which only matched a negative LITERAL immediately after the paren.
+    // `Array.prototype.at` (and the identically-gated `String.prototype.at` /
+    // `TypedArray.prototype.at`) is the same method call regardless of what index it is called
+    // with: `items.at(items.length - 1)`, `items.at(i)` and `items.at(0)` all invoke it and all
+    // need the same floors, but only the literal-negative form used to match. The dot-then-"at("
+    // shape already excludes a longer identifier that merely contains "at" (`.rotate(`, `.format(`)
+    // and a bare property read with no call (`.at` alone) — narrowing was never the safety
+    // property here, so widening to any argument shape adds coverage without adding a new class of
+    // false positive.
+    pattern: /\.at\(/,
     minimum: { chrome: 92, edge: 92, firefox: 90, safari: 15.4 },
   },
   {

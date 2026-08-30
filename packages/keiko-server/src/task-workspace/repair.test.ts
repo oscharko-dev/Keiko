@@ -30,6 +30,7 @@ import { createWorkspaceRepairService } from "./repair.js";
 import { TaskWorkspaceError, type TaskWorkspaceErrorCode } from "./errors.js";
 import type { WorkspaceProvisioningService, WorkspaceRepairService } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -107,8 +108,22 @@ function repair(
   strategy: WorkspaceRecoveryStrategy,
   operatorApproved: boolean,
   requestedBy = "u",
+  correlationId?: string,
 ): Promise<ReturnType<WorkspaceRepairService["repair"]> extends Promise<infer R> ? R : never> {
-  return repairService().repair({ workspaceId, requestedBy, strategy, operatorApproved });
+  return repairService().repair({
+    workspaceId,
+    requestedBy,
+    strategy,
+    operatorApproved,
+    correlationId,
+  });
+}
+
+function lastEventCorrelationId(): string {
+  const last = evidence.at(-1);
+  if (last === undefined) throw new Error("no evidence recorded");
+  const parsed = JSON.parse(last.json) as { readonly event: { readonly correlationId: string } };
+  return parsed.event.correlationId;
 }
 
 beforeEach(() => {
@@ -194,6 +209,44 @@ describe("release-stale-lock (clear stale lock)", () => {
     expect(result.status).toBe("healthy");
     expect(store.getById(instance.workspaceId)?.lock).toBeNull();
     expect(store.getById(instance.workspaceId)?.driftMarkers).not.toContain("lock-stale");
+  });
+
+  // F1: the evidence's correlationId must be the triggering request's own id, not the workspace's own
+  // persisted auditCorrelationId reused for every operation across the workspace's whole life — reuse
+  // would make every distinct HTTP repair request's evidence collapse onto ONE correlationId, breaking
+  // the join back to the specific request that produced each line (AGENTS.md §8).
+  it("threads the request's own correlationId into repair evidence, not the auditCorrelationId", async () => {
+    const instance = await provisionTask("t-corr");
+    store.upsert({
+      ...instance,
+      lock: {
+        lockId: "stale",
+        owner: "u",
+        reason: "mutation",
+        acquiredAt: new Date(nowMs - 3_600_000).toISOString(),
+        expiresAt: new Date(nowMs - 1_800_000).toISOString(),
+      },
+    });
+    await repair(instance.workspaceId, "release-stale-lock", true, "u", "req-corr-repair-1");
+    expect(lastEventCorrelationId()).toBe("req-corr-repair-1");
+    expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID (never the auditCorrelationId) when no request scope exists", async () => {
+    const instance = await provisionTask("t-nocorr");
+    store.upsert({
+      ...instance,
+      lock: {
+        lockId: "stale",
+        owner: "u",
+        reason: "mutation",
+        acquiredAt: new Date(nowMs - 3_600_000).toISOString(),
+        expiresAt: new Date(nowMs - 1_800_000).toISOString(),
+      },
+    });
+    await repair(instance.workspaceId, "release-stale-lock", true);
+    expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
   });
 });
 

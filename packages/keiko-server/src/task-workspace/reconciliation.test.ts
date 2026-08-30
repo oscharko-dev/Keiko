@@ -32,6 +32,7 @@ import { createWorkspaceProvisioningService } from "./provisioning.js";
 import { createWorkspaceReconciliationService } from "./reconciliation.js";
 import type { WorkspaceProvisioningService, WorkspaceReconciliationService } from "./types.js";
 import { createWorkspaceMutexRegistry, workspaceKey } from "./mutex.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -58,6 +59,13 @@ function capturingEvidence(): EvidenceStore {
     get: (): string | undefined => undefined,
     delete: (): void => undefined,
   };
+}
+
+function lastEventCorrelationId(): string {
+  const last = evidence.at(-1);
+  if (last === undefined) throw new Error("no evidence recorded");
+  const parsed = JSON.parse(last.json) as { readonly event: { readonly correlationId: string } };
+  return parsed.event.correlationId;
 }
 
 function realAdapter(workspace: WorkspaceInfo): GitWorktreeAdapter {
@@ -142,6 +150,27 @@ describe("healthy reconciliation (AC4)", () => {
     expect(persisted?.lastVerifiedHead).toBeDefined();
     // content-free report: no path/branch leaks into entries
     expect(JSON.stringify(report)).not.toContain(managedRoot);
+  });
+
+  // F1: a live reconcile driven by the explicit-refresh route has a real request-scoped correlation id
+  // in scope (RouteContext.correlationId) and must thread it into the evidence — reusing the
+  // workspace's own persisted auditCorrelationId instead would make every reconcile pass against this
+  // workspace collapse onto ONE correlationId, breaking the join back to the specific request that
+  // produced each line (AGENTS.md §8).
+  it("threads the caller's own correlationId into reconcile evidence, not the auditCorrelationId", async () => {
+    const instance = await provisionTask("t-corr");
+    await reconciliation().reconcile(undefined, "req-corr-reconcile-1");
+    expect(lastEventCorrelationId()).toBe("req-corr-reconcile-1");
+    expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
+  });
+
+  // The startup reconciliation pass has no HTTP request behind it at all: no correlationId is
+  // reachable, so this is the one genuinely correlation-free call site in the module.
+  it("falls back to UNKNOWN_CORRELATION_ID (never the auditCorrelationId) when no request scope exists", async () => {
+    const instance = await provisionTask("t-nocorr");
+    await reconciliation().reconcile();
+    expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
   });
 });
 

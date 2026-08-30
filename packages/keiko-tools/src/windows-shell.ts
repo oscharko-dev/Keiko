@@ -18,22 +18,33 @@
 //
 // Escaping the characters cmd.exe treats specially is not sufficient by itself: `cross-spawn`'s
 // metachar class omits CR and LF (moxystudio/node-cross-spawn#179), and cmd.exe treats a bare CR
-// or LF as a command boundary that no amount of caret-escaping closes. `assertNoControlCharacters`
-// below therefore fails closed on CR/LF — and, defensively, the full C0 control range — in the
-// resolved command path and every argument BEFORE either is joined into the string cmd.exe parses.
+// or LF as a command boundary that no amount of caret-escaping closes. `assertSafelyTransportable`
+// below therefore fails closed on NUL, CR and LF in the resolved command path and every argument,
+// BEFORE either is joined into the string cmd.exe parses — but deliberately NOT the rest of the C0
+// control range: TAB is a literal for both cmd.exe's own parse and the child's CRT inside the
+// double-quoted argument this module always produces, and rejecting it broke an allowlisted
+// `npm`/`.cmd` run on a TSV/JSON/diff argument that passes untouched on every other platform
+// (review 5058571583 finding 4). The same function also fails closed on a second, unrelated
+// hazard under the same name: a `%` anywhere in the resolved command path or an argument, because
+// cmd.exe expands `%NAME%` against the child's environment in an earlier parse phase that no
+// caret-escaping this module emits can reach (review 5058544058 P1 3887021639).
 //
 // The `cmd.exe` binary itself is resolved through `resolveSystemBinaryPath` (below), NEVER from
 // PATH — a workspace- or PATH-planted `cmd.exe` must never be the one an allowlisted command is
 // routed through. `%SystemRoot%`/`%WINDIR%` are mutable, inherited environment text, not a trusted
-// value by themselves: an override is validated for canonical SHAPE (drive-absolute, no `..`
-// segment, no UNC/device prefix, no quote, cmd metacharacter, or control character) and REJECTED —
-// never silently replaced with the default — when it fails that check. The pattern mirrors
-// `windowsSystemRoot` in `@oscharko-dev/keiko-security`'s `windows-shortcuts.ts` (the equivalent
-// trust boundary for the cscript/PowerShell helpers), hardened further here to also reject the
-// UNC and device-path overrides that an `isAbsolute`-only check would accept. Node has no binding
-// to `GetSystemDirectoryW` — the only OS-authoritative source — so this validates SHAPE, never the
-// live identity of the directory; `resolveSystemBinaryPath` is exported for every caller in this
-// package that needs the same trusted-System32 resolution (e.g. `exec.ts`'s `taskkill.exe` lookup).
+// value by themselves. The validation itself — canonical SHAPE (drive-absolute, no `..` segment,
+// no UNC/device prefix, no quote, cmd metacharacter, or control character), REJECTED rather than
+// silently replaced with the default when it fails — is NOT implemented in this module: it lives in
+// `@oscharko-dev/keiko-security` (`windows-system-directory.ts`: `resolveWindowsSystemBinary` and
+// `resolveWindowsSystemDirectory`), the single shared implementation this module and
+// keiko-security's own cscript/PowerShell helpers (`windows-shortcuts.ts`) both call. PR #3354's
+// review found two independently hand-written copies of this check had drifted — the other side's
+// `isAbsolute`-only check accepted UNC/device/root-relative shapes this one rejected — so
+// `resolveSystemBinaryPath` here is a thin wrapper over the shared function, not a parallel
+// implementation to keep in sync by hand. Node has no binding to `GetSystemDirectoryW` — the only
+// OS-authoritative source — so the shared check validates SHAPE, never the live identity of the
+// directory; `resolveSystemBinaryPath` is exported for every caller in this package that needs the
+// same trusted-System32 resolution (e.g. `exec.ts`'s `taskkill.exe` lookup).
 //
 // Pure and side-effect-free: callers may inject `env`/`platform` for deterministic tests; the
 // defaults read `process.env`/`process.platform` only for production callers' convenience.

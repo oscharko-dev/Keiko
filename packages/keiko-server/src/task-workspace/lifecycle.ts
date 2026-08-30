@@ -35,6 +35,7 @@ import { isManagedTargetContained, managedTargetExists } from "./managed-root.js
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { activePointerKey, workspaceKey } from "./mutex.js";
 import { TaskWorkspaceError } from "./errors.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   appendWorkspaceLifecycleEvidence,
   buildWorkspaceEvent,
@@ -85,6 +86,10 @@ function emit(
     readonly instance: WorkspaceInstance;
     readonly fromState: TaskWorkspaceLifecycleState;
     readonly nowMs: number;
+    // The triggering request's own correlation id (WorkspaceLifecycleActionRequest.correlationId).
+    // Falls back to UNKNOWN_CORRELATION_ID — never the workspace's own identity, which would make
+    // every event across this workspace's whole life look like the SAME operation (AGENTS.md §8).
+    readonly correlationId?: string | undefined;
   },
 ): void {
   const event = buildWorkspaceEvent({
@@ -93,7 +98,7 @@ function emit(
     taskId: input.instance.taskId,
     type: input.type,
     at: isoFrom(input.nowMs),
-    correlationId: input.instance.workspaceId,
+    correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
     fromState: input.fromState,
     toState: input.instance.lifecycleState,
   });
@@ -234,6 +239,7 @@ function runDirectTransition(
     instance: persisted,
     fromState,
     nowMs,
+    correlationId: request.correlationId,
   });
   return { instance: persisted, binding: buildBinding(persisted) };
 }
@@ -260,6 +266,7 @@ async function setActiveImpl(
     taskId: "",
     requestedBy: request.requestedBy,
     acquireLock: request.acquireLock,
+    correlationId: request.correlationId,
   });
   // The pointer flip is serialized per repository under the `active:` key so two concurrent switches in
   // the same repository cannot tear the singleton pointer write. Sequenced AFTER activate (whose `ws:`
@@ -329,6 +336,7 @@ async function resumeImpl(
     workspaceId: request.workspaceId,
     requestedBy: request.requestedBy,
     acquireLock: false,
+    correlationId: request.correlationId,
   });
   return { instance: view.instance, binding: view.binding };
 }

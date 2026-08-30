@@ -52,6 +52,7 @@ import {
 import { deriveRepositoryId } from "./naming.js";
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   appendWorkspaceLifecycleEvidence,
   buildWorkspaceEvent,
@@ -248,6 +249,11 @@ function emitReconcileEvidence(
   outcome: WorkspaceReconciliationOutcome,
   flaggedRecovery: boolean,
   nowMs: number,
+  // The triggering request's own correlation id: the explicit-refresh route's ctx.correlationId, or
+  // undefined for the startup reconciliation pass, which has no HTTP request behind it at all — that
+  // is the one genuinely correlation-free call site in this module, so it alone falls back to
+  // UNKNOWN_CORRELATION_ID rather than the workspace's own persisted identity (AGENTS.md §8).
+  correlationId: string | undefined,
 ): void {
   const event = buildWorkspaceEvent({
     eventId: ctx.deps.newId(),
@@ -255,7 +261,7 @@ function emitReconcileEvidence(
     taskId: instance.taskId,
     type: reconcileEventType(outcome, flaggedRecovery),
     at: isoFrom(nowMs),
-    correlationId: instance.auditCorrelationId,
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
     fromState,
     toState: instance.lifecycleState,
     health: instance.health,
@@ -287,6 +293,7 @@ function reconcileWithContext(
   observedHead: string | undefined,
   instance: WorkspaceInstance,
   nowMs: number,
+  correlationId: string | undefined,
 ): ReconcileInstanceResult {
   const outcome = classifyWorkspaceReconciliation(facts);
   const health = reconciliationHealth(outcome.status);
@@ -320,7 +327,15 @@ function reconcileWithContext(
       ? { lastVerifiedHead: observedHead }
       : {}),
   });
-  emitReconcileEvidence(ctx, persisted, fromState, outcome, targetState !== fromState, nowMs);
+  emitReconcileEvidence(
+    ctx,
+    persisted,
+    fromState,
+    outcome,
+    targetState !== fromState,
+    nowMs,
+    correlationId,
+  );
   return { instance: persisted, outcome };
 }
 
@@ -347,6 +362,7 @@ export async function reconcileSingleInstance(
   instance: WorkspaceInstance,
   nowMs: number,
   actor?: string,
+  correlationId?: string,
 ): Promise<ReconcileInstanceResult> {
   const ctx: ReconcileCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
   const adapter = deps.createAdapter(detectWorkspaceAt(instance.repositoryRoot));
@@ -359,7 +375,7 @@ export async function reconcileSingleInstance(
     nowMs,
     actor,
   );
-  return reconcileWithContext(ctx, facts, observedHead, instance, nowMs);
+  return reconcileWithContext(ctx, facts, observedHead, instance, nowMs, correlationId);
 }
 
 function entryFromInstance(instance: WorkspaceInstance): WorkspaceReconciliationEntry {
@@ -412,6 +428,7 @@ function instancesFor(
 async function reconcileImpl(
   ctx: ReconcileCtx,
   repositoryRoot: string | undefined,
+  correlationId: string | undefined,
 ): Promise<WorkspaceReconciliationReport> {
   const instances = instancesFor(ctx.deps, repositoryRoot);
   const byRepo = new Map<string, WorkspaceInstance[]>();
@@ -461,7 +478,7 @@ async function reconcileImpl(
             nowMs,
             undefined,
           );
-          return reconcileWithContext(ctx, facts, observedHead, fresh, nowMs);
+          return reconcileWithContext(ctx, facts, observedHead, fresh, nowMs, correlationId);
         },
       );
       if (result !== undefined) reconciled.push(result.instance);
@@ -477,7 +494,9 @@ export function createWorkspaceReconciliationService(
   return {
     report: (repositoryRoot?: string): WorkspaceReconciliationReport =>
       buildReport(ctx, instancesFor(deps, repositoryRoot), deps.now(), false),
-    reconcile: (repositoryRoot?: string): Promise<WorkspaceReconciliationReport> =>
-      reconcileImpl(ctx, repositoryRoot),
+    reconcile: (
+      repositoryRoot?: string,
+      correlationId?: string,
+    ): Promise<WorkspaceReconciliationReport> => reconcileImpl(ctx, repositoryRoot, correlationId),
   };
 }

@@ -37,6 +37,7 @@ import {
   deriveWorkspaceId,
 } from "./naming.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -83,6 +84,16 @@ function makeService(
     ...(ensureManagedWorkspaceIdentity === undefined ? {} : { ensureManagedWorkspaceIdentity }),
     mutex: __twMutex,
   });
+}
+
+// The last-appended evidence record's WorkspaceEvent.correlationId — the join key an operator's
+// `keiko support analyze` uses to tie this lifecycle line back to the HTTP request that produced it
+// (AGENTS.md §8). Parses the SAME persisted JSON `evidence.ts` writes, never a re-derived shape.
+function lastEventCorrelationId(): string {
+  const last = evidence.at(-1);
+  if (last === undefined) throw new Error("no evidence recorded");
+  const parsed = JSON.parse(last.json) as { readonly event: { readonly correlationId: string } };
+  return parsed.event.correlationId;
 }
 
 async function rejectsWithCode(
@@ -176,6 +187,36 @@ describe("provision success (AC1, AC4)", () => {
     expect(result.binding.gitDeliveryRoot).toBe(result.binding.activeRoot);
     expect(result.binding.editorProjectRoot).toBe(result.binding.activeRoot);
     expect(evidence.length).toBeGreaterThan(0);
+  });
+
+  // F1: the evidence's correlationId must be the triggering request's own id, not the workspace's own
+  // persisted identity (workspaceId) reused for every operation across the workspace's whole life.
+  // Reusing the workspace identity collapses every distinct HTTP request's evidence onto ONE
+  // correlationId, so the timeline can no longer be joined back to the specific request that produced
+  // it (AGENTS.md §8) — the exact failure this pin proves fixed.
+  it("threads the request's own correlationId into provision evidence, not the workspaceId", async () => {
+    const service = makeService();
+    const result = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-corr",
+      baseBranch: "main",
+      requestedBy: "u",
+      correlationId: "req-corr-abc123",
+    });
+    expect(lastEventCorrelationId()).toBe("req-corr-abc123");
+    expect(lastEventCorrelationId()).not.toBe(result.instance.workspaceId);
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID (never the workspaceId) when no request scope exists", async () => {
+    const service = makeService();
+    const result = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-nocorr",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    expect(lastEventCorrelationId()).not.toBe(result.instance.workspaceId);
   });
 
   it("establishes the managed workspace identity before every active exposure", async () => {

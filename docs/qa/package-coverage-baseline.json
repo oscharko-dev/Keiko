@@ -251,7 +251,7 @@
       "uncoveredLines": 276,
       "totalLines": 3309,
       "coverage": {
-        "lines": 91.53,
+        "lines": 91.66,
         "statements": 90.15,
         "branches": 83,
         "functions": 94.25

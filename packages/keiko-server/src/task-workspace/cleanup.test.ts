@@ -45,6 +45,7 @@ import { createWorkspaceCleanupService, safelyRemoveManagedPath } from "./cleanu
 import { TaskWorkspaceError } from "./errors.js";
 import type { WorkspaceCleanupService, WorkspaceProvisioningService } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -65,6 +66,13 @@ function git(args: readonly string[], cwd = repoRoot): string {
 
 function parseEvent(json: string): { operation?: string; outcome?: string } {
   return JSON.parse(json) as { operation?: string; outcome?: string };
+}
+
+function lastEventCorrelationId(): string {
+  const last = evidence.at(-1);
+  if (last === undefined) throw new Error("no evidence recorded");
+  const parsed = JSON.parse(last.json) as { readonly event: { readonly correlationId: string } };
+  return parsed.event.correlationId;
 }
 
 function capturingEvidence(): EvidenceStore {
@@ -233,6 +241,37 @@ describe("governed cleanup happy path (AC4)", () => {
       expect(e.json).not.toContain(managedRoot);
       expect(e.json).not.toContain(repoRoot);
     }
+  });
+
+  // F1: the evidence's correlationId must be the triggering request's own id, not the workspace's own
+  // persisted auditCorrelationId reused for every operation across the workspace's whole life — reuse
+  // would make every distinct HTTP request's evidence collapse onto ONE correlationId, breaking the
+  // join back to the specific request that produced each line (AGENTS.md §8).
+  it("threads the request's own correlationId into cleanup evidence, not the auditCorrelationId", async () => {
+    const instance = await provisionTask("t-corr");
+    setState(instance, "archived");
+    await cleanup().cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "request",
+      correlationId: "req-corr-cleanup-1",
+    });
+    expect(lastEventCorrelationId()).toBe("req-corr-cleanup-1");
+    expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID (never the auditCorrelationId) when no request scope exists", async () => {
+    const instance = await provisionTask("t-nocorr");
+    setState(instance, "archived");
+    await cleanup().cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "request",
+    });
+    expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
   });
 
   it("is idempotent on a second request (already cleanup-pending)", async () => {

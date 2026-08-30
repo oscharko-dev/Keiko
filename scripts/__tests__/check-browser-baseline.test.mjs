@@ -192,6 +192,43 @@ describe("GUARDED_APIS", () => {
   });
 });
 
+// F3 finding: the shipped pattern was `/\.at\(\s*-/`, which requires a negative literal to sit
+// IMMEDIATELY after the opening paren. `Array.prototype.at` is gated on the same browser floors
+// regardless of what index it is called with — `items.at(items.length - 1)`, `items.at(i)` and
+// `items.at(0)` are the identical ES2022 method, just called with an expression, a variable and a
+// positive literal instead of a negative literal — and every one of those shapes escaped the gate
+// entirely. `String.prototype.at` and `TypedArray.prototype.at` share the exact same baseline, so
+// matching those receivers too is correct, not a false positive; the only real false-positive risk
+// widening this way could introduce is matching a DIFFERENT `.at(` on some unrelated receiver, so
+// that is pinned as a negative case below rather than assumed away.
+describe("Array.prototype.at pattern (widened index-shape coverage)", () => {
+  const atApi = GUARDED_APIS.find((entry) => entry.name === "Array.prototype.at");
+
+  it("is still registered", () => {
+    expect(atApi).toBeDefined();
+  });
+
+  it.each([
+    ["a negative literal index", "items.at(-1)"],
+    ["a positive literal index", "items.at(0)"],
+    ["a bare variable index", "items.at(i)"],
+    ["an arithmetic expression index", "items.at(items.length - 1)"],
+    ["no argument at all", "items.at()"],
+    ["a String.prototype.at call (same baseline, correct to match)", 'label.at(-1) === "x"'],
+    ["optional chaining before the call", "items?.at(-1)"],
+  ])("matches Array/String/TypedArray .at( called with %s", (_label, sample) => {
+    expect(atApi.pattern.test(sample)).toBe(true);
+  });
+
+  it.each([
+    ['a longer identifier that merely contains "at"', "shape.rotate(90)"],
+    ["a differently-named formatter call", "value.format(x)"],
+    ["a bare property read with no call at all", "row.at"],
+  ])("does not match %s", (_label, sample) => {
+    expect(atApi.pattern.test(sample)).toBe(false);
+  });
+});
+
 // `main()` is the orchestration: which check runs, in what order, and what stops the run. Left
 // untested it is the largest untested block in the gate, and a wrong branch there shows up as a
 // confusing PASS rather than a failure — the exact way a gate quietly stops guarding.
@@ -243,6 +280,17 @@ describe("main", () => {
   it("fails when a used API needs a higher floor than the declaration", () => {
     const result = run(
       fixture({ browserslist: ["chrome >= 80"], source: "const last = items.at(-1);\n" }),
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.errors.join("\n")).toContain("Array.prototype.at needs chrome >= 92");
+  });
+
+  // F3 finding: end-to-end proof that the gate catches a POSITIVE-literal/variable `.at(` call too,
+  // not only the negative-literal shape — `entries.at(0)` is the identical gated method as
+  // `entries.at(-1)` and must fail the same way when the declared floor cannot reach it.
+  it("fails for a positive-literal or variable .at( index too, not only the negative-literal form", () => {
+    const result = run(
+      fixture({ browserslist: ["chrome >= 80"], source: "const first = items.at(0);\n" }),
     );
     expect(result.exitCode).toBe(1);
     expect(result.errors.join("\n")).toContain("Array.prototype.at needs chrome >= 92");

@@ -203,27 +203,46 @@ tracked timer handle, so `cleanup()` cleared only the last one and the orphaned 
 reserved already released. The escalation is additionally guarded on the child still being alive.
 
 **The reported outcome is measured, not assumed.** `WindowsTreeKillDisposition` carries taskkill's
-own completed exit status (`succeeded`/`failed`), `unknown` only when the bounded wait expired, and
-`not-attempted` on POSIX. The previous boolean was a production tautology — the default
-implementation could not throw, so a genuine failure on an image without `taskkill.exe` was logged
-as success, which is worse than not logging it.
+own completed exit status (`succeeded`/`failed`), `unknown` only when the bounded wait expired,
+`blocked-untrusted-system-root` when the trusted-System32 resolver refuses a malformed or hostile
+`SystemRoot`/`WINDIR` (kept distinct from `failed` because it is a security-relevant fact about the
+environment, not an operational hiccup), `refused-self-pid` when the pid handed to `killGroup` is
+this process or its own parent (see the residual below), and `not-attempted` on POSIX, when there is
+no pid to signal, or when the child is already verifiably exited before a signal would have been
+sent. The previous boolean was a production tautology — the default implementation could not throw,
+so a genuine failure on an image without `taskkill.exe` was logged as success, which is worse than
+not logging it.
 
 Two residuals, both narrower than the general `taskkill` caveat:
 
 - **A `taskkill.exe` failure** (missing on a stripped-down Windows image, or refusing) no longer
   reports as success — it surfaces as `windowsTreeKill: "failed"` in the termination evidence — but
   the descendants it could not reach do survive, so orphaning is not architecturally impossible.
-- **PID reuse is not reachable on this path**, though it is a real hazard for `taskkill` in general:
-  `taskkill` validates no process identity, so a stale pid can hit an unrelated process. Here the pid
-  cannot go stale while it is in use — Node holds an open Win32 handle to the child for the lifetime
-  of the `ChildProcess` object, and Windows does not recycle a PID until every handle to the process
-  object is closed. `killGroup` invokes taskkill from `terminate()` with that handle still open, and
-  now before `child.kill()` rather than after, which is the earliest point at which it can run. A
-  Job Object would bind termination to process identity outright and is the stronger mechanism, but
-  Node exposes no Job Object API: it needs native code, which is a runtime dependency ADR-0001
-  forbids. The existing Job Object implementation in keiko-server's
-  `nativeRuntimeProcessBackend.ts` drives a separate compiled helper over a control pipe and cannot
-  be reached from `keiko-tools` without inverting the ADR-0019 dependency direction.
+- **PID reuse WAS reachable on this path, and a customer hit it.** `taskkill` validates no process
+  identity, so a stale pid can hit an unrelated process, and `/T` takes the whole tree — which, on a
+  recycled pid, can include this server or its own launcher. The original argument for why that
+  could not happen here — Node holds an open Win32 handle to the child for the lifetime of the
+  `ChildProcess` object, and Windows does not recycle a PID until every handle to the process object
+  is closed — assumed the handle was still open at the moment `killGroup` signals. It is not,
+  reliably: `state.settled` is set on `'close'`, Node releases the child's handle on `'exit'`, and
+  `'data'` events (an output-cap trigger, for one) keep arriving in the window between the two, so a
+  termination reaching `killGroup` in that window could signal a pid Node no longer held reserved. A
+  customer's Windows machine reproduced exactly the failure this predicts — the UI process died with
+  no error in the log and a fresh pid repeated the cycle, consistent with a reused pid landing on the
+  server or its launcher. Two guards close it now: `childExited()` runs immediately before every
+  `killGroup` call — the initial SIGTERM step and the SIGKILL escalation alike — and reports
+  `not-attempted` instead of signalling once the child is verifiably gone (`state.settled`, or an
+  observed `exitCode`/`signalCode`); and `killGroup` itself refuses to signal a pid equal to
+  `process.pid` or `process.ppid`, reporting `refused-self-pid`, regardless of what the caller
+  believes it holds. Together they narrow the window sharply and make the worst outcome — this
+  process or its launcher taking a `/T` tree-kill meant for a child — impossible rather than merely
+  unlikely. What is not proven impossible: that same narrow window landing a recycled pid on some
+  OTHER, unrelated process that is neither this one nor its parent. A Job Object would bind
+  termination to process identity outright and close that too, but Node exposes no Job Object API:
+  it needs native code, which is a runtime dependency ADR-0001 forbids. The existing Job Object
+  implementation in keiko-server's `nativeRuntimeProcessBackend.ts` drives a separate compiled
+  helper over a control pipe and cannot be reached from `keiko-tools` without inverting the
+  ADR-0019 dependency direction.
 
 The `runCommand` promise rejects with `CommandCancelledError` on abort and `CommandTimeoutError` on
 timeout — both caught from the `close` event after cleanup (`src/tools/exec.ts:194–202`). The

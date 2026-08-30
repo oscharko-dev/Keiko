@@ -178,6 +178,13 @@ function supervisorOnCrash(
     return;
   }
   ctx.transition("CRASHED", cleanupSucceeded ? "CRASHED" : "RUNTIME_STATE_CLEANUP_FAILED");
+  // The child is confirmed gone from this point on: it either just exited on its own (this callback IS
+  // that exit) or terminateProcessTree above just killed it. The CRASHED transition just above still
+  // carries its pid (join key to the adapter's per-kill `lsp.process.terminated` line, Review C2), but
+  // every event from here on must not — clearing it here, at the layer that owns RuntimeState, is what
+  // stops a LATER dispose() from calling kill() on a handle whose OS pid Windows may already have
+  // recycled to an unrelated process tree (the CRASH-path twin of the DISPOSED-path fix, F1).
+  ctx.state.child = undefined;
   if (ctx.throttle.recordCrashAndMayRestart(ctx.now())) {
     ctx.state.restartCount = ctx.throttle.restartCount();
     supervisorStart(ctx);
@@ -425,7 +432,7 @@ function spawnAndInitialize(input: SpawnAndInitializeInput): void {
     onCrash(generation, true);
   });
   transition("INITIALIZING");
-  void runInitialize(state, deps, now, transition);
+  void runInitialize(state, deps, now, transition, generation);
 }
 
 interface SpawnInstallation {
@@ -606,6 +613,7 @@ async function runInitialize(
   deps: LspProcessManagerDeps,
   now: () => number,
   transition: Transition,
+  generation: number,
 ): Promise<void> {
   const client = state.transport?.client;
   if (client === undefined) {
@@ -621,7 +629,7 @@ async function runInitialize(
         now,
       },
     );
-    if (state.status === "INITIALIZING") {
+    if (isCurrentInitialization(state, generation)) {
       if (resourceBudgetSatisfied(state)) {
         completeInitialization(state, deps, client, result, transition);
       } else {
@@ -629,10 +637,22 @@ async function runInitialize(
       }
     }
   } catch (error) {
-    if (state.status === "INITIALIZING") {
+    if (isCurrentInitialization(state, generation)) {
       failInitialization(state, transition, classifyInitFailure(error));
     }
   }
+}
+
+// A crash DURING initialize disposes the transport, which rejects THIS call's pending request — but
+// the rejection settles on a later microtask, by which point a restart may already have spawned and
+// begun initializing the NEXT generation (`state.status` reads "INITIALIZING" again, just not for this
+// call). Acting on status alone let a stale initialize outcome act on whatever child is current when it
+// finally runs, not the one it was started for — deterministically killing a healthy restart mid
+// handshake and stranding the manager. `state.childGeneration` is the same generation concept the
+// crash/escalation path already tracks (FIX 4); guarding on it too makes a superseded call a no-op,
+// symmetrically for both the success and the failure branch.
+function isCurrentInitialization(state: RuntimeState, generation: number): boolean {
+  return state.status === "INITIALIZING" && state.childGeneration === generation;
 }
 
 function failInitialization(
@@ -739,6 +759,12 @@ function failResourceBudget(state: RuntimeState, transition: Transition): void {
   terminateProcessTree(state);
   const cleanupSucceeded = cleanupSpawnResources(state);
   transition("CRASHED", "RESOURCE_BUDGET_EXCEEDED");
+  // Marking `exited` true above (synchronously, before the OS confirms the SIGKILL) permanently
+  // disables supervisorOnCrash's own clearing for this generation: its guard treats the eventual real
+  // exit event as already handled and returns early without ever reaching its own `state.child`
+  // clear. Nothing else runs on this path, so it must clear here or a later dispose() calls kill() on
+  // the dead handle (same class of defect as the crash-path fix, just triggered by a different guard).
+  state.child = undefined;
   if (!cleanupSucceeded) transition("CRASHED", "RUNTIME_STATE_CLEANUP_FAILED");
 }
 

@@ -311,6 +311,43 @@ describe("check-package-coverage", () => {
 // silently dropped keiko-sandbox — a measured package protected by no floor. This reality guard fails
 // the instant the baseline and the real workspace drift, so exclusions must be explicit and reviewed
 // rather than accreting silently behind a green gate.
+// Returns a mismatch row, or undefined when the entry is consistent (or carries no comparable
+// numbers). Extracted so the test body stays under the complexity bar rather than raising it.
+function lineConsistencyOf(name, entry) {
+  if (typeof entry !== "object" || entry === null) return undefined;
+  const { totalLines, uncoveredLines, coverage } = entry;
+  const recorded = coverage?.lines;
+  const comparable =
+    typeof totalLines === "number" &&
+    totalLines > 0 &&
+    typeof uncoveredLines === "number" &&
+    typeof recorded === "number";
+  if (!comparable) return undefined;
+  const computed = Math.round(((totalLines - uncoveredLines) / totalLines) * 10_000) / 100;
+  // The writer rounds to 2dp, so anything beyond half a hundredth is real drift, not rounding.
+  if (Math.abs(computed - recorded) <= 0.005) return undefined;
+  return { package: name, recorded, computed, totalLines, uncoveredLines };
+}
+
+// A baseline entry carries BOTH the raw counts and the rounded percentage, and the writer derives
+// all of them from one measurement — so they can only disagree if the file was edited by hand or
+// written in two passes. Nothing checked that, and keiko-tools drifted: it recorded 91.53% while its
+// own totalLines/uncoveredLines computed 91.66%, and a reviewer had to report it TWICE across two
+// rounds because there was no gate to catch it the first time.
+//
+// The percentage is what a human reads in a review; the counts are what the ratchet compares. When
+// they disagree, one of them is lying and nothing says which.
+describe("coverage baseline internal consistency", () => {
+  it("records a line percentage that matches its own totalLines and uncoveredLines", () => {
+    const baseline = JSON.parse(readFileSync("docs/qa/package-coverage-baseline.json", "utf8"));
+    const packages = baseline.packages ?? baseline;
+    const mismatches = Object.entries(packages)
+      .map(([name, entry]) => lineConsistencyOf(name, entry))
+      .filter((row) => row !== undefined);
+    expect(mismatches).toEqual([]);
+  });
+});
+
 describe("coverage baseline reality guard", () => {
   // Packages intentionally NOT gated by the package-coverage baseline, each with a recorded reason.
   // A package may be added here ONLY with a justification — never to hide a coverage gap.

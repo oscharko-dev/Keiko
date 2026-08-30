@@ -42,6 +42,7 @@ import { gatherInstanceReconciliationFacts } from "./reconciliation.js";
 import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import { TaskWorkspaceError } from "./errors.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   appendWorkspaceLifecycleEvidence,
   buildWorkspaceEvent,
@@ -112,7 +113,11 @@ function emit(
     readonly type: WorkspaceEventType;
     readonly workspaceId: string;
     readonly taskId: string;
-    readonly correlationId: string;
+    // The triggering request's own correlation id (WorkspaceCleanupRequest /
+    // WorkspaceOrphanCleanupRequest .correlationId). Falls back to UNKNOWN_CORRELATION_ID — never the
+    // workspace's own persisted identity, which would make every cleanup event look like the same
+    // operation regardless of which HTTP request actually triggered it (AGENTS.md §8).
+    readonly correlationId: string | undefined;
     readonly fromState?: TaskWorkspaceLifecycleState | undefined;
     readonly toState?: TaskWorkspaceLifecycleState | undefined;
     readonly nowMs: number;
@@ -124,7 +129,7 @@ function emit(
     taskId: input.taskId,
     type: input.type,
     at: isoFrom(input.nowMs),
-    correlationId: input.correlationId,
+    correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
     ...(input.fromState !== undefined ? { fromState: input.fromState } : {}),
     ...(input.toState !== undefined ? { toState: input.toState } : {}),
   });
@@ -237,7 +242,7 @@ function requestCleanupImpl(
     type: "cleanup-requested",
     workspaceId: persisted.workspaceId,
     taskId: persisted.taskId,
-    correlationId: persisted.auditCorrelationId,
+    correlationId: request.correlationId,
     fromState,
     toState: persisted.lifecycleState,
     nowMs,
@@ -334,13 +339,14 @@ function refuseCleanup(
   ctx: CleanupCtx,
   instance: WorkspaceInstance,
   refusalReason: WorkspaceCleanupRefusalReason | undefined,
+  correlationId: string | undefined,
 ): WorkspaceCleanupResult {
   emit(ctx, {
     outcome: "cleanup-refused",
     type: "transition-rejected",
     workspaceId: instance.workspaceId,
     taskId: instance.taskId,
-    correlationId: instance.auditCorrelationId,
+    correlationId,
     fromState: instance.lifecycleState,
     nowMs: ctx.deps.now(),
   });
@@ -359,6 +365,7 @@ async function finalizeCleanup(
   instance: WorkspaceInstance,
   requestedBy: string,
   nowMs: number,
+  correlationId: string | undefined,
 ): Promise<WorkspaceCleanupResult> {
   const locked = ctx.deps.store.upsert({
     ...instance,
@@ -376,7 +383,7 @@ async function finalizeCleanup(
       lock: null,
       updatedAt: isoFrom(ctx.deps.now()),
     });
-    return refuseCleanup(ctx, unlocked, removal.refusalReason);
+    return refuseCleanup(ctx, unlocked, removal.refusalReason, correlationId);
   }
   if (ctx.deps.activePointerStore.get()?.workspaceId === locked.workspaceId) {
     ctx.deps.activePointerStore.clear();
@@ -397,7 +404,7 @@ async function finalizeCleanup(
     type: "cleanup-completed",
     workspaceId: locked.workspaceId,
     taskId: locked.taskId,
-    correlationId: locked.auditCorrelationId,
+    correlationId,
     fromState: "cleanup-pending",
     nowMs: ctx.deps.now(),
   });
@@ -446,8 +453,10 @@ async function completeCleanupImpl(
   const nowMs = ctx.deps.now();
   assertCompleteCleanupAllowed(ctx, request, instance, nowMs);
   const safety = await evaluateLiveCleanupSafety(ctx, instance);
-  if (!safety.allowed) return refuseCleanup(ctx, instance, safety.refusalReason);
-  return finalizeCleanup(ctx, instance, request.requestedBy, nowMs);
+  if (!safety.allowed) {
+    return refuseCleanup(ctx, instance, safety.refusalReason, request.correlationId);
+  }
+  return finalizeCleanup(ctx, instance, request.requestedBy, nowMs, request.correlationId);
 }
 
 // Governed removal of orphaned managed worktrees: directories under the managed root with no persisted
@@ -459,6 +468,7 @@ async function cleanupOneOrphan(
   leaf: string,
   ownershipProven: boolean,
   knownPaths: ReadonlySet<string>,
+  correlationId: string | undefined,
 ): Promise<OrphanCleanupOutcome> {
   const orphanId = deriveOrphanId(repositoryId, leaf);
   const candidate = join(ctx.deps.managedRoot, repositoryId, leaf);
@@ -496,7 +506,7 @@ async function cleanupOneOrphan(
     type: "cleanup-completed",
     workspaceId: orphanId,
     taskId: orphanId,
-    correlationId: orphanId,
+    correlationId,
     nowMs: ctx.deps.now(),
   });
   return { removed: true };
@@ -573,7 +583,7 @@ async function cleanupOrphansImpl(
       // Serialize each candidate leaf and re-check persisted liveness inside the critical section. The
       // initial known-path snapshot may be stale if a provision finishes while a sweep is walking disk.
       const outcome = await ctx.deps.mutex.runExclusive([workspaceKey(leaf)], () =>
-        cleanupOneOrphan(ctx, repositoryId, leaf, ownershipProven, known),
+        cleanupOneOrphan(ctx, repositoryId, leaf, ownershipProven, known, request.correlationId),
       );
       if (outcome.removed) removed += 1;
       if (outcome.refusal !== undefined) refused.push(outcome.refusal);

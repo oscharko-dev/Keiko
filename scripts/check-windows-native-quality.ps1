@@ -21,15 +21,26 @@ try {
   # Compiling with the same flags here proves the toolchain accepts the exact production line on
   # every pull request.
   #
-  # A SECOND, independently hand-typed copy of those flags would defeat the point: if
-  # compileWindowsLauncher() in the producer ever dropped /MT or /DEPENDENTLOADFLAG:0x800, a
-  # retyped copy here would keep compiling the OLD hardened command and keep reporting PASS --
-  # proving a configuration the product no longer ships. So this gate does not retype them: it
-  # reads compileWindowsLauncher() out of the producer itself (AGENTS.md §7 -- a fixture must
+  # There are TWO independently hardened native producers, not one: compileWindowsLauncher() in
+  # stage-portable-runtime.mjs (the portable launcher) and compileSetupBootstrap() in
+  # build-windows-portable-setup.mjs (the setup companion that replaced IExpress, issue #2992).
+  # Both link /MT and /DEPENDENTLOADFLAG:0x800 for the same DLL-plant/no-redistributable-dependency
+  # reasons -- see each producer's own comments. A gate that proved only the launcher would leave
+  # the setup-bootstrap binary's hardening droppable with this gate still green, so both are
+  # derived and proven below, independently.
+  #
+  # A SECOND, independently hand-typed copy of either producer's flags would defeat the point: if
+  # compileWindowsLauncher() or compileSetupBootstrap() ever dropped /MT or
+  # /DEPENDENTLOADFLAG:0x800, a retyped copy here would keep compiling the OLD hardened command and
+  # keep reporting PASS -- proving a configuration the product no longer ships. So this gate does
+  # not retype them: it reads each function out of its own producer (AGENTS.md §7 -- a fixture must
   # never restate a formula the code under test owns, derive it from the production entry point)
-  # and fails closed, before compiling anything, the moment either literal is no longer there.
+  # and fails closed, before compiling anything, the moment either literal is no longer there in
+  # either producer.
   $productionScriptPath = Join-Path $PSScriptRoot "stage-portable-runtime.mjs"
   $productionScriptSource = Get-Content -LiteralPath $productionScriptPath -Raw
+  $setupBuildScriptPath = Join-Path $PSScriptRoot "build-windows-portable-setup.mjs"
+  $setupBuildScriptSource = Get-Content -LiteralPath $setupBuildScriptPath -Raw
   $launcherFunctionStart = $productionScriptSource.IndexOf("function compileWindowsLauncher(")
   $launcherFunctionEnd = $productionScriptSource.IndexOf("function requireWindowsLauncherIconSource(")
   if ($launcherFunctionStart -lt 0 -or $launcherFunctionEnd -lt 0 -or
@@ -56,6 +67,36 @@ try {
   # Proven present above, byte-for-byte, in the production entry point -- not an independent guess.
   $productionMTFlag = "/MT"
   $productionLinkFlags = @("/DEPENDENTLOADFLAG:0x800")
+
+  # SECOND producer, same treatment: compileSetupBootstrap() lives in a different file
+  # (build-windows-portable-setup.mjs) and is derived independently of the launcher above, so
+  # dropping either flag from ONLY this function -- while the launcher keeps both -- still fails
+  # closed instead of riding on the launcher's proof.
+  $setupBootstrapFunctionStart = $setupBuildScriptSource.IndexOf("function compileSetupBootstrap(")
+  $setupBootstrapFunctionEnd = $setupBuildScriptSource.IndexOf("function fsyncFile(")
+  if ($setupBootstrapFunctionStart -lt 0 -or $setupBootstrapFunctionEnd -lt 0 -or
+      $setupBootstrapFunctionEnd -le $setupBootstrapFunctionStart) {
+    throw ("could not locate compileSetupBootstrap() in build-windows-portable-setup.mjs to " +
+      "derive the production setup-bootstrap link flags")
+  }
+  $setupBootstrapFunctionSource = $setupBuildScriptSource.Substring(
+    $setupBootstrapFunctionStart, $setupBootstrapFunctionEnd - $setupBootstrapFunctionStart
+  )
+  # Same comment-stripping rationale as the launcher above: a flag that survives only in a `//`
+  # comment or a commented-out argument list must not keep this gate green.
+  $activeSetupBootstrapSource = ($setupBootstrapFunctionSource -split "`n" |
+    Where-Object { $_.Trim() -notmatch '^(//|/\*|\*)' }) -join "`n"
+  foreach ($requiredFlagLiteral in @('"/MT"', '"/DEPENDENTLOADFLAG:0x800"')) {
+    if (-not $activeSetupBootstrapSource.Contains($requiredFlagLiteral)) {
+      throw ("scripts/build-windows-portable-setup.mjs compileSetupBootstrap() no longer " +
+        "contains the hardened flag $requiredFlagLiteral -- update this gate deliberately if " +
+        "the hardening posture changed, do not let it silently keep proving a configuration " +
+        "the product no longer ships")
+    }
+  }
+  # Proven present above, byte-for-byte, in the production entry point -- not an independent guess.
+  $setupBootstrapMTFlag = "/MT"
+  $setupBootstrapLinkFlags = @("/DEPENDENTLOADFLAG:0x800")
 
   $launcher = Join-Path $root "native/portable-launcher/keiko-portable-launcher.c"
   $launcherOut = Join-Path $scratch "keiko-launcher.exe"
@@ -85,8 +126,8 @@ try {
   $setupBootstrap = Join-Path $root "native/setup-bootstrap/keiko-setup-bootstrap.c"
   $setupBootstrapOut = Join-Path $scratch "keiko-setup-bootstrap.exe"
   $setupBootstrapObject = Join-Path $scratch "keiko-setup-bootstrap.obj"
-  & cl.exe @nativeFlags $productionMTFlag @setupDefines "/Fo:$setupBootstrapObject" `
-    "/Fe:$setupBootstrapOut" $setupBootstrap /link @productionLinkFlags
+  & cl.exe @nativeFlags $setupBootstrapMTFlag @setupDefines "/Fo:$setupBootstrapObject" `
+    "/Fe:$setupBootstrapOut" $setupBootstrap /link @setupBootstrapLinkFlags
   if ($LASTEXITCODE -ne 0) { throw "MSVC setup-bootstrap quality analysis failed" }
 
   $setupBootstrapTest = Join-Path $root "native/setup-bootstrap/keiko-setup-bootstrap.windows.test.c"

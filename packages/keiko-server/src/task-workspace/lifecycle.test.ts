@@ -27,6 +27,7 @@ import type {
   WorkspaceProvisioningService,
 } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -115,6 +116,13 @@ function lifecycleWith(provisioning: WorkspaceProvisioningService): WorkspaceLif
     newId: (): string => `id-${String(idCounter++)}`,
     mutex: __twMutex,
   });
+}
+
+function lastEventCorrelationId(): string {
+  const last = evidence.at(-1);
+  if (last === undefined) throw new Error("no evidence recorded");
+  const parsed = JSON.parse(last.json) as { readonly event: { readonly correlationId: string } };
+  return parsed.event.correlationId;
 }
 
 async function rejectsWithCode(
@@ -299,6 +307,28 @@ describe("pause", () => {
     expect(result.instance.lifecycleState).toBe("paused");
     expect(pointerStore.get()).toBeUndefined();
     expect(evidence.some((e) => e.json.includes('"paused"'))).toBe(true);
+  });
+
+  // F1: the evidence's correlationId must be the triggering request's own id, not the workspace's own
+  // persisted identity reused for every operation across the workspace's whole life — reusing it would
+  // make every distinct HTTP request against this workspace collapse onto ONE correlationId, breaking
+  // the join back to the specific request that produced each line (AGENTS.md §8).
+  it("threads the request's own correlationId into pause evidence, not the workspaceId", async () => {
+    const inst = store.upsert(instance("corr"));
+    await service.pause({
+      workspaceId: inst.workspaceId,
+      requestedBy: "op",
+      correlationId: "req-corr-pause-1",
+    });
+    expect(lastEventCorrelationId()).toBe("req-corr-pause-1");
+    expect(lastEventCorrelationId()).not.toBe(inst.workspaceId);
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID (never the workspaceId) when no request scope exists", async () => {
+    const inst = store.upsert(instance("nocorr"));
+    await service.pause({ workspaceId: inst.workspaceId, requestedBy: "op" });
+    expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    expect(lastEventCorrelationId()).not.toBe(inst.workspaceId);
   });
 
   it("leaves the active pointer untouched when pausing a DIFFERENT (non-active) workspace", async () => {

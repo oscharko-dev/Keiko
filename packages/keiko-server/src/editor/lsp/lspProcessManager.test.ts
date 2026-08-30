@@ -287,6 +287,40 @@ describe("createLspProcessManager", () => {
     await manager.dispose();
   });
 
+  // P1-A (failResourceBudget twin): this path sets `state.exited = true` SYNCHRONOUSLY, before the OS
+  // confirms the SIGKILL. That permanently disables supervisorOnCrash's own clearing for this
+  // generation — its guard treats the eventual real exit as already handled and returns early — so
+  // failResourceBudget is the ONLY place left that can clear state.child. Without its own clear, a
+  // later dispose() calls kill() on the already-dead handle a second time.
+  it("clears state.child after a resource-budget kill so a later dispose never re-signals it (P1-A)", async () => {
+    const controller = createFakeLspProcess({ results: { "textDocument/hover": null } });
+    let budgetSatisfied = true;
+    const manager = createLspProcessManager({
+      ...makeDeps(() => controller.handle, makeConfig()),
+      prepareSpawn: (input) => ({
+        executable: input.executable,
+        args: input.args,
+        env: input.env,
+        resourceBudgetSatisfied: (): boolean => budgetSatisfied,
+      }),
+    });
+    await settle();
+    expect(manager.getLspProcessStatus()).toBe("READY");
+
+    budgetSatisfied = false;
+    await expect(
+      manager.sendRequest("textDocument/hover", {}, new AbortController().signal),
+    ).rejects.toMatchObject({ code: "RESOURCE_BUDGET_EXCEEDED" });
+    expect(manager.getLspProcessStatus()).toBe("CRASHED");
+    const signalsBeforeDispose = [...controller.killed()];
+    expect(signalsBeforeDispose).toContain("SIGKILL");
+
+    await manager.dispose();
+
+    // dispose() must not add a further signal against the already-dead handle.
+    expect(controller.killed()).toEqual(signalsBeforeDispose);
+  });
+
   it("continues lifecycle teardown when one prepared resource cleanup throws", async () => {
     const controller = createFakeLspProcess();
     const cleanup = vi.fn((): void => {
@@ -581,6 +615,79 @@ describe("createLspProcessManager", () => {
     }
 
     expect(manager.getLspProcessStatus()).toBe("RESTART_THROTTLED");
+    await manager.dispose();
+  });
+
+  // P1-A: before this fix, supervisorOnCrash never cleared state.child on the CRASH path — only
+  // disposeManager's NORMAL-disposal path did (F1). Once the restart budget is exhausted the manager
+  // is left holding a reference to an already-dead child, and a later dispose() called kill() on that
+  // stale handle: on Windows, nodeGroupKill's first act is `taskkill /PID <pid> /T /F`, and Windows
+  // recycles pids aggressively, so that call can tear down an unrelated process tree on the customer's
+  // machine. The assertion below is on the SIGNAL itself (kill() calls observed on the dead handle),
+  // not on an evidence field: a vacuous variant of this class of test asserted only an event value that
+  // reads the same with and without the fix on POSIX and passed with the guard removed.
+  it("clears state.child after a CRASH so a later dispose never re-signals the dead handle (P1-A)", async () => {
+    const { spawn, controllers } = fakeSpawnHarness(["normal"]);
+    const config = makeConfig({ maxRestartsInWindow: 1, restartWindowMs: 60_000 });
+    const events: LspLifecycleEvent[] = [];
+    const manager = createLspProcessManager(makeDeps(spawn, config, (event) => events.push(event)));
+    await settle();
+    expect(manager.getLspProcessStatus()).toBe("READY");
+
+    // First crash restarts (budget = 1 within the frozen-clock window); the second is throttled and
+    // leaves that generation's child as the manager's last-known (now dead) child.
+    for (let i = 0; i < 4; i += 1) {
+      controllers[controllers.length - 1]?.crash(1);
+      await settle();
+    }
+    expect(manager.getLspProcessStatus()).toBe("RESTART_THROTTLED");
+
+    const deadController = controllers[controllers.length - 1];
+    expect(deadController).toBeDefined();
+    if (deadController === undefined) throw new Error("controller missing");
+    // Sanity: a natural exit (onExit, terminateProcess=false) never itself calls kill() — proves any
+    // signal observed below can only have come from dispose(), not from the crash handling itself.
+    expect(deadController.killed()).toEqual([]);
+    // The contract on LspLifecycleEvent.childPid ("present only for a current running child... absent
+    // after cleanup") applies here too: once the manager gives up restarting, there is no current
+    // child, so RESTART_THROTTLED must not carry the dead child's pid either.
+    const throttled = events.find((event) => event.status === "RESTART_THROTTLED");
+    expect(throttled).toBeDefined();
+    if (throttled === undefined) throw new Error("RESTART_THROTTLED event missing");
+    expect(Object.hasOwn(throttled, "childPid")).toBe(false);
+
+    await manager.dispose();
+
+    // The manager must never signal an already-dead child a second time.
+    expect(deadController.killed()).toEqual([]);
+  });
+
+  // P1-B: runInitialize had no generation guard, only a `state.status === "INITIALIZING"` check. A
+  // crash DURING initialize disposes the transport, which rejects that generation's pending initialize
+  // request — but the rejection settles on a LATER microtask, by which point a restart may already have
+  // spawned and begun initializing the NEXT generation (status reads "INITIALIZING" again, just not for
+  // the stale call). The stale failure handler then acted on whatever child was current when it finally
+  // ran, killing a healthy restart mid-handshake and stranding the manager in INITIALIZE_TIMEOUT with no
+  // further restart attempted.
+  it("does not let a stale initialize failure from a superseded generation kill the new child (P1-B)", async () => {
+    // Generation 1 ("slow") never answers `initialize`, so its request stays pending until crashed.
+    // Generation 2 ("normal") answers immediately and should reach READY untouched.
+    const { spawn, controllers } = fakeSpawnHarness(["slow", "normal"]);
+    const config = makeConfig({ initializeTimeoutMs: 30_000 });
+    const manager = createLspProcessManager(makeDeps(spawn, config));
+    await settle();
+    expect(manager.getLspProcessStatus()).toBe("INITIALIZING");
+    expect(manager.getChildGeneration()).toBe(1);
+
+    // Crashing generation 1 synchronously drives supervisorStart → spawnAndInitialize for generation 2,
+    // which disposes generation 1's transport (rejecting its pending initialize call) and transitions to
+    // INITIALIZING for generation 2 — all before generation 1's rejection is even observed.
+    controllers[0]?.crash(1);
+    await settle();
+
+    expect(manager.getChildGeneration()).toBe(2);
+    expect(manager.getLspProcessStatus()).toBe("READY");
+    expect(controllers[1]?.killed() ?? []).not.toContain("SIGKILL");
     await manager.dispose();
   });
 

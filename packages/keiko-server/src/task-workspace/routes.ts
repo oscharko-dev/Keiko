@@ -260,6 +260,7 @@ export async function handleProvisionTaskWorkspace(
       taskId: parsed.taskId,
       baseBranch: parsed.baseBranch,
       requestedBy: parsed.requestedBy,
+      correlationId: ctx.correlationId,
     };
     const result = await guard.provision(request);
     return {
@@ -293,9 +294,10 @@ export function handleGetTaskWorkspace(ctx: RouteContext, deps: UiHandlerDeps): 
 function parseLifecycleActionBody(
   workspaceId: string,
   body: Record<string, unknown>,
+  correlationId: string | undefined,
 ): WorkspaceLifecycleActionRequest {
   const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
-  return { workspaceId, requestedBy };
+  return { workspaceId, requestedBy, correlationId };
 }
 
 // GET /api/task-workspaces?root=<repoRoot> — list the persisted instances for a repository root.
@@ -343,6 +345,7 @@ export async function handleSetActiveTaskWorkspace(
       workspaceId,
       requestedBy,
       acquireLock: body.acquireLock === true,
+      correlationId: ctx.correlationId,
     });
     return {
       status: 200,
@@ -376,7 +379,7 @@ async function runLifecycleAction(
   return runHandler(deps, async () => {
     const workspaceId = ctx.params.workspaceId ?? "";
     const body = await readJsonObject(ctx.req);
-    const request = parseLifecycleActionBody(workspaceId, body);
+    const request = parseLifecycleActionBody(workspaceId, body, ctx.correlationId);
     const result = await pick(guard)(request);
     return {
       status: 200,
@@ -448,7 +451,7 @@ export async function handleReconcileTaskWorkspaces(
   return runHandler(deps, async () => {
     const body = await readJsonObject(ctx.req);
     const root = await resolveOptionalRoot(deps, optionalSafeField(body.root, "root"));
-    const report = await guard.reconcile(root);
+    const report = await guard.reconcile(root, ctx.correlationId);
     return { status: 200, body: redacted(deps, { report }) };
   });
 }
@@ -476,6 +479,7 @@ export async function handleRepairTaskWorkspace(
       requestedBy,
       strategy: parseRepairStrategy(body.strategy),
       operatorApproved: body.operatorApproved === true,
+      correlationId: ctx.correlationId,
     });
     return {
       status: 200,
@@ -538,6 +542,7 @@ export async function handleCleanupTaskWorkspace(
       requestedBy,
       operatorApproved: body.operatorApproved === true,
       mode: parseCleanupMode(body.mode),
+      correlationId: ctx.correlationId,
     });
     return {
       status: 200,
@@ -567,6 +572,7 @@ export async function handleCleanupOrphanTaskWorkspaces(
       ...(root !== undefined ? { repositoryRoot: root } : {}),
       requestedBy,
       operatorApproved: body.operatorApproved === true,
+      correlationId: ctx.correlationId,
     });
     return {
       status: 200,

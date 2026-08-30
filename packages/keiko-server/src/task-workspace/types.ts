@@ -320,6 +320,8 @@ export interface WorkspaceOrphanCleanupRequest {
   readonly repositoryRoot?: string | undefined;
   readonly requestedBy: string;
   readonly operatorApproved: boolean;
+  // See WorkspaceProvisionRequest.correlationId.
+  readonly correlationId?: string | undefined;
 }
 
 export interface WorkspaceOrphanRefusal {

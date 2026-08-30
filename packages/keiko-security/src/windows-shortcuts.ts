@@ -14,9 +14,11 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 as win32Path } from "node:path";
+import { emitSecurityLogEvent, securityErrorKind, type SecurityLogSink } from "./log-port.js";
 import {
   resolveWindowsSystemBinary,
   resolveWindowsSystemDirectory,
+  WindowsSystemDirectoryError,
 } from "./windows-system-directory.js";
 
 export interface WindowsShortcutDefinition {
@@ -209,12 +211,23 @@ const EMPTY_DEFINITION: WindowsShortcutDefinition = {
   iconPath: "",
 };
 
-/** Read a shortcut's fields; undefined on any refusal (fail-closed read). */
+/**
+ * Read a shortcut's fields; `undefined` when cscript ran but the shortcut could not be read (a
+ * fail-closed READ of the TARGET — missing file, malformed output, a nonzero cscript exit).
+ *
+ * A refusal of the trust boundary itself — a hostile or malformed `SystemRoot`/`WINDIR`
+ * (`WindowsSystemDirectoryError`, thrown before cscript ever runs) — is a DIFFERENT failure class
+ * and is never folded into that same "absent" signal: a poisoned environment must not be mistaken
+ * for "no shortcut installed" by a caller that then treats absence as an invitation to (re)create
+ * one. It is logged through `sink` (when wired; a no-op otherwise, same convention as
+ * `readMacosKeychainSecret`'s `options.sink`) and RE-THROWN.
+ */
 export function readWindowsShortcutDefinition(
   path: string,
   env: ShortcutEnvSource,
   failurePrefix: string,
   spawnFn: WindowsShortcutSpawnFn = spawnSync,
+  sink?: SecurityLogSink,
 ): WindowsShortcutDefinition | undefined {
   if (process.platform !== "win32") return parseWindowsShortcutFallback(path);
   try {
@@ -231,7 +244,16 @@ export function readWindowsShortcutDefinition(
       return undefined;
     }
     return { targetPath, workingDirectory, iconPath };
-  } catch {
+  } catch (error) {
+    if (error instanceof WindowsSystemDirectoryError) {
+      emitSecurityLogEvent(sink, {
+        level: "warn",
+        category: "security",
+        op: "security.windows-shortcut.system-root-refused",
+        errorKind: securityErrorKind(error),
+      });
+      throw error;
+    }
     return undefined;
   }
 }

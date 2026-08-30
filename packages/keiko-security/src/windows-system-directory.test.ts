@@ -8,7 +8,7 @@
 // says it matters: "an exported function whose stated purpose is containment must not depend on
 // its callers staying literal to be safe."
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_WINDOWS_SYSTEM_ROOT,
   WindowsSystemDirectoryError,
@@ -26,6 +26,11 @@ const HOSTILE_SYSTEM_ROOT_VECTORS: readonly [label: string, value: string][] = [
   ["drive-absolute with an embedded quote", 'C:\\Windows"Sneaky'],
   ["drive-absolute with a path-traversal segment", String.raw`C:\Windows\..\Windows`],
   ["drive-absolute with an embedded control character", "C:\\Windows\r\nEvil"],
+  // Finding 3 (PR #3354 review round 2): NTFS alternate-data-stream syntax. Neither the
+  // drive-absolute regex (prefix-only, no `$` terminator) nor the cmd-metacharacter class (no `:`
+  // member) rejected a colon appearing AFTER the mandatory one at index 1.
+  ["a colon after the drive letter (NTFS alternate data stream)", String.raw`C:\Windows:evil`],
+  ["a colon introducing a trailing $DATA stream marker", String.raw`C:\Windows\System32:$DATA`],
 ];
 
 describe("resolveWindowsSystemDirectory", () => {
@@ -64,6 +69,16 @@ describe("resolveWindowsSystemDirectory", () => {
       );
     },
   );
+
+  // Be precise (finding 3): the ADS rejection above must not become an over-broad "no colon
+  // anywhere" ban — the drive letter's OWN colon at index 1 is mandatory and legitimate, and every
+  // valid override in this file carries exactly one. Pinned explicitly, not left to be inferred
+  // from the other passing tests in this describe block.
+  it("still accepts the mandatory drive-letter colon at index 1", () => {
+    expect(resolveWindowsSystemDirectory({ SystemRoot: String.raw`C:\Windows` })).toBe(
+      String.raw`C:\Windows`,
+    );
+  });
 
   it("falls back to process.env when env is omitted, without throwing", () => {
     expect(() => resolveWindowsSystemDirectory()).not.toThrow();
