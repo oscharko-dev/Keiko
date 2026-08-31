@@ -428,7 +428,7 @@ async function verifyAndCommitPromotion(
   await verifyRelaunch(context.options, context.request);
   writePortableActivationRecovery({
     stateDir: context.stateDir,
-    recovery: recoveryRecord(context, "verified"),
+    recovery: recoveryRecord(context, "verified", process.pid),
   });
   progress.recoveryPhase = "verified";
   const outcome = commitPortableActivationCleanup({

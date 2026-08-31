@@ -801,6 +801,44 @@ describe("portable update activation", () => {
     );
   });
 
+  it("keeps Windows backup when retrying a verified recovery that recorded updaterPid", async () => {
+    const install = await makeInstall();
+    const request = {
+      sessionId: "session-verified-pid-retry",
+      targetVersion: TARGET_VERSION,
+      stage: stageSummary(),
+      runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+    };
+    const activator = createPortableUpdateActivator({
+      env: { KEIKO_STATE_DIR: install.stateDir },
+      homedir: () => install.home,
+      platform: "win32",
+      execPath: process.execPath,
+      spawnFn: () => childProcess(),
+      versionVerifier: () => Promise.resolve(true),
+    });
+    await expect(activator.activate(request)).resolves.toMatchObject({ status: "activated" });
+    const pending = readPortableActivationRecovery(install.stateDir);
+    expect(pending).toMatchObject({ phase: "cleanup-pending", updaterPid: process.pid });
+    if (pending === undefined) {
+      throw new TypeError("expected cleanup-pending recovery");
+    }
+    writePortableActivationRecovery({
+      stateDir: install.stateDir,
+      recovery: { ...pending, phase: "verified" },
+    });
+    await expect(activator.activate(request)).rejects.toMatchObject({
+      reason: "portable-activation-failed",
+    });
+    expect(
+      existsSync(join(dirname(install.managedRoot), `.keiko-previous-${activationIdFor(request)}`)),
+    ).toBe(true);
+    expect(readPortableActivationRecovery(install.stateDir)).toMatchObject({
+      phase: "cleanup-pending",
+      updaterPid: process.pid,
+    });
+  });
+
   it("lets a later process finish deferred Windows backup cleanup before promoting", async () => {
     const install = await makeInstall();
     const firstRequest = {
@@ -1029,6 +1067,7 @@ describe("commitPortableActivationCleanup", () => {
       stageId: "stage-1",
       target: TARGET,
       phase: "verified",
+      updaterPid: process.pid,
     };
     writePortableActivationRecovery({ stateDir, recovery });
     return {
