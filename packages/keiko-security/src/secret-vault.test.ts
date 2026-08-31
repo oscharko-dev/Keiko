@@ -1168,6 +1168,33 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
     expect(vault.get("cred:b")).toBeUndefined();
   });
 
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "keeps an unreadable existing shard when a later setMany write fails",
+    () => {
+      const storeDir = join(dir, "sharded-snapshot-eacces");
+      const vault = shardedVaultAt(storeDir);
+      vault.set("cred:a", "original-a");
+      const pathA = join(storeDir, `entry-${Buffer.from("cred:a", "utf8").toString("hex")}.sealed`);
+      const original = readFileSync(pathA);
+      mkdirSync(join(storeDir, `entry-${Buffer.from("cred:b", "utf8").toString("hex")}.sealed`));
+      chmodSync(pathA, 0o000);
+      try {
+        expect(() => {
+          vault.setMany(
+            new Map([
+              ["cred:a", "updated-a"],
+              ["cred:b", "never-stored"],
+            ]),
+          );
+        }).toThrow();
+      } finally {
+        chmodSync(pathA, 0o600);
+      }
+      expect(readFileSync(pathA)).toEqual(original);
+      expect(vault.get("cred:a")).toBe("original-a");
+    },
+  );
+
   it("writes one 0600 file per entry into a 0700 directory and never plaintext", () => {
     const storeDir = join(dir, "sharded");
     const vault = shardedVaultAt(storeDir);

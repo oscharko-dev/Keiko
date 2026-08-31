@@ -78,11 +78,12 @@ function packageReferences(csproj) {
     const include = /\bInclude\s*=\s*["']([^"']+)["']/u.exec(block)?.[1];
     const versionAttr = /\bVersion\s*=\s*["']([^"']+)["']/u.exec(block)?.[1];
     const versionChild = /<Version>\s*([^<]+)\s*<\/Version>/u.exec(block)?.[1]?.trim();
-    const version = versionAttr ?? versionChild;
+    const version = (versionAttr ?? versionChild)?.trim();
     expect(include, `unrecognized PackageReference ${block}`).toEqual(expect.any(String));
-    expect(version, `PackageReference ${include ?? "unknown"} has no Version`).toEqual(
-      expect.any(String),
-    );
+    expect(
+      version !== undefined && version.length > 0,
+      `PackageReference ${include ?? "unknown"} has no Version`,
+    ).toBe(true);
     return { id: include, version };
   });
 }
@@ -151,6 +152,21 @@ describe("RFC3161 NuGet lock contract (KEIKO-0899)", () => {
       '<Project><PackageReference Version="1.2.3" Include="Example.Package"></PackageReference></Project>',
     );
     expect(parsed).toEqual([{ id: "Example.Package", version: "1.2.3" }]);
+  });
+
+  it("reads Version from a child element body", () => {
+    const parsed = packageReferences(
+      '<Project><PackageReference Include="Example.Package"><Version>1.2.3</Version></PackageReference></Project>',
+    );
+    expect(parsed).toEqual([{ id: "Example.Package", version: "1.2.3" }]);
+  });
+
+  it("rejects a PackageReference whose Version child is empty", () => {
+    expect(() =>
+      packageReferences(
+        '<Project><PackageReference Include="Example.Package"><Version>  </Version></PackageReference></Project>',
+      ),
+    ).toThrow();
   });
 
   it("fails closed when the gate build drops RestoreLockedMode", () => {

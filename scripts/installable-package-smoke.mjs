@@ -2936,10 +2936,15 @@ function assertLifecycleRestart(runLifecycle) {
 const GRACEFUL_PROCESS_EXIT_REASONS = new Set(["shutdown-request", "sigterm"]);
 
 function gracefulExitReason(event) {
+  if (event === null || typeof event !== "object") return undefined;
   if (event.op !== "process.exiting") return undefined;
   if (typeof event.reason === "string") return event.reason;
   if (typeof event.extra?.reason === "string") return event.extra.reason;
   return undefined;
+}
+
+export function readLogSuffix(logPath, offset) {
+  return readFileSync(logPath).subarray(offset).toString("utf8");
 }
 
 export function logHasGracefulProcessExit(logText) {
@@ -2976,7 +2981,7 @@ function assertLifecycleStop(runLifecycle, stateDir) {
   if (!existsSync(logPath)) {
     fail("keiko stop left no activity log to prove process.exiting");
   }
-  const appended = readFileSync(logPath, "utf8").slice(offset);
+  const appended = readLogSuffix(logPath, offset);
   if (!logHasGracefulProcessExit(appended)) {
     fail("keiko stop did not record process.exiting with a graceful drain reason");
   }

@@ -705,8 +705,8 @@ function deleteStoreEntries(
   writeStore(storePath, next, sink);
 }
 
-function deleteStoreEntry(storePath: string, reference: string): void {
-  deleteStoreEntries(storePath, [reference]);
+function deleteStoreEntry(storePath: string, reference: string, sink?: SecurityLogSink): void {
+  deleteStoreEntries(storePath, [reference], sink);
 }
 
 // ENOENT is the ORDINARY case — no such shard file, no such store directory yet, exactly what
@@ -806,8 +806,14 @@ function rollbackCommittedShards(
     if (item === undefined) continue;
     try {
       restorePreparedShard(storeDir, item, sink);
-    } catch {
-      // Best-effort rollback; the original write failure is rethrown by the caller.
+    } catch (cause) {
+      emitSecurityLogEvent(sink, {
+        level: "error",
+        category: "security",
+        op: "security.vault.entries-rollback-failed",
+        errorKind: securityErrorKind(cause),
+        extra: { count: 1 },
+      });
     }
   }
 }
@@ -968,7 +974,7 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
       replaceStoreEntries(resolvedStorePath, key, next, sink);
     },
     delete: (reference): void => {
-      deleteStoreEntry(resolvedStorePath, reference);
+      deleteStoreEntry(resolvedStorePath, reference, sink);
     },
     deleteMany: (references): void => {
       deleteManyWithLog(sink, references, () => {

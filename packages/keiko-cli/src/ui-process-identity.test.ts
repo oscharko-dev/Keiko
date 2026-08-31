@@ -17,6 +17,23 @@ describe("liveIdentityTextHasLaunchId", () => {
     expect(liveIdentityTextHasLaunchId(`${UI_LAUNCH_ID_FLAG}\0${LAUNCH_ID}`, LAUNCH_ID)).toBe(true);
     expect(liveIdentityTextHasLaunchId(`${UI_LAUNCH_ID_FLAG} ${LAUNCH_ID}`, LAUNCH_ID)).toBe(true);
     expect(liveIdentityTextHasLaunchId(`node ui --port 1983`, LAUNCH_ID)).toBe(false);
+    expect(liveIdentityTextHasLaunchId(`${KEIKO_UI_LAUNCH_ID_ENV}=${LAUNCH_ID}0`, LAUNCH_ID)).toBe(
+      false,
+    );
+    expect(liveIdentityTextHasLaunchId(`x${KEIKO_UI_LAUNCH_ID_ENV}=${LAUNCH_ID}`, LAUNCH_ID)).toBe(
+      false,
+    );
+    expect(liveIdentityTextHasLaunchId(`${UI_LAUNCH_ID_FLAG} ${LAUNCH_ID}0`, LAUNCH_ID)).toBe(
+      false,
+    );
+    expect(liveIdentityTextHasLaunchId("", LAUNCH_ID)).toBe(false);
+    expect(liveIdentityTextHasLaunchId(`${KEIKO_UI_LAUNCH_ID_ENV}=${LAUNCH_ID}`, "")).toBe(false);
+    expect(
+      liveIdentityTextHasLaunchId(
+        `${KEIKO_UI_LAUNCH_ID_ENV}=\n${UI_LAUNCH_ID_FLAG} --help`,
+        LAUNCH_ID,
+      ),
+    ).toBe(false);
   });
 });
 

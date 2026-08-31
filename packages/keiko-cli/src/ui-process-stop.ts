@@ -242,9 +242,8 @@ function isForbiddenTarget(input: TerminateUiProcessInput): boolean {
 function targetIdentityVerified(input: TerminateUiProcessInput): boolean {
   const record = readPidRecord(join(input.stateDir, UI_PID_FILE));
   if (record?.pid !== input.pid) return false;
-  const launchId = resolveLaunchId(input) ?? record.launchId;
+  const launchId = input.launchId ?? record.launchId;
   if (launchId === undefined) return false;
-  if (record.launchId !== undefined && record.launchId !== launchId) return false;
   return verifyLiveLaunchId(input, launchId);
 }
 

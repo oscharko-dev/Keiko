@@ -614,6 +614,7 @@ describe("runUninstallCli — running server guard", () => {
     const stateDir = seedState(root, "555");
     const seen: string[] = [];
     const pidPath = join(stateDir, "ui.pid");
+    const killProcess = vi.fn();
     const deps: UninstallCliDeps = {
       cwd: root,
       homedir: () => root,
@@ -622,9 +623,7 @@ describe("runUninstallCli — running server guard", () => {
         writeFileSync(pidPath, `555\n${"cd".repeat(16)}\n`, "utf8");
         return true;
       },
-      killProcess: () => {
-        /* identity refusal must happen first */
-      },
+      killProcess,
       verifyLaunchIdentity: (_pid, launchId) => {
         seen.push(launchId);
         return false;
@@ -633,8 +632,8 @@ describe("runUninstallCli — running server guard", () => {
     };
     const c = makeIo();
     await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(1);
-    expect(seen).not.toContain("cd".repeat(16));
-    expect(seen.every((id) => id === STOP_LAUNCH_ID)).toBe(true);
+    expect(seen).toEqual([STOP_LAUNCH_ID]);
+    expect(killProcess).not.toHaveBeenCalled();
   });
 
   it("with --force on Windows writes ui.shutdown instead of SIGTERM", async () => {

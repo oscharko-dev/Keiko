@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { logHasGracefulProcessExit } from "../installable-package-smoke.mjs";
+import { logHasGracefulProcessExit, readLogSuffix } from "../installable-package-smoke.mjs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 function line(event) {
   return `${JSON.stringify(event)}\n`;
@@ -44,5 +47,29 @@ describe("logHasGracefulProcessExit", () => {
     expect(
       logHasGracefulProcessExit(line({ op: "process.exiting", extra: { reason: "forced" } })),
     ).toBe(false);
+  });
+
+  it("rejects null, empty, malformed, and near-miss records", () => {
+    expect(logHasGracefulProcessExit("null\n")).toBe(false);
+    expect(logHasGracefulProcessExit("\n")).toBe(false);
+    expect(logHasGracefulProcessExit("{not-json}\n")).toBe(false);
+    expect(logHasGracefulProcessExit(line({ op: "process.heartbeat", reason: "sigterm" }))).toBe(
+      false,
+    );
+  });
+
+  it("reads the log suffix as bytes so a multibyte prefix cannot hide the appended exit", () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-smoke-log-"));
+    const logPath = join(dir, "server.log");
+    try {
+      const prefix = '{"message":"é"}\n';
+      const suffix = line({ op: "process.exiting", reason: "sigterm" });
+      writeFileSync(logPath, prefix + suffix);
+      const offset = Buffer.byteLength(prefix);
+      expect(logHasGracefulProcessExit(readLogSuffix(logPath, offset))).toBe(true);
+      expect(logHasGracefulProcessExit(readLogSuffix(logPath, 0).slice(offset))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -17,13 +17,13 @@
     {
       "op": "cli.lifecycle.stop-escalation-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui-process-stop.ts:282",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:281",
       "package": "keiko-cli"
     },
     {
       "op": "cli.lifecycle.stop-request-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui-process-stop.ts:273",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:272",
       "package": "keiko-cli"
     },
     {
@@ -810,6 +810,12 @@
       "op": "security.vault.entries-merged",
       "category": "security",
       "site": "packages/keiko-security/src/secret-vault.ts:582",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.vault.entries-rollback-failed",
+      "category": "security",
+      "site": "packages/keiko-security/src/secret-vault.ts:813",
       "package": "keiko-security"
     },
     {

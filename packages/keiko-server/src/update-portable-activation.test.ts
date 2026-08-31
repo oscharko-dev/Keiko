@@ -723,6 +723,35 @@ describe("portable update activation", () => {
     expect(readFileSync(registrationPath, "utf8")).toBe(oldRegistration);
   });
 
+  it("records a failed activation when recovery metadata is malformed", async () => {
+    const install = await makeInstall();
+    const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
+    mkdirSync(join(install.stateDir, "updates"), { recursive: true });
+    writeFileSync(
+      join(install.stateDir, "updates", "portable-activation-recovery.json"),
+      "{not-json",
+      "utf8",
+    );
+    const activator = createPortableUpdateActivator({
+      env: { KEIKO_STATE_DIR: install.stateDir },
+      homedir: () => install.home,
+      localState,
+      spawnFn: () => childProcess(),
+      versionVerifier: () => Promise.resolve(true),
+    });
+    await expect(
+      activator.activate({
+        sessionId: "session-malformed-recovery",
+        targetVersion: TARGET_VERSION,
+        stage: stageSummary(),
+        runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+      }),
+    ).rejects.toMatchObject({ reason: "portable-activation-failed" });
+    const audit = readFileSync(join(install.stateDir, "updates", "update-audit.jsonl"), "utf8");
+    expect(audit).toContain("portable-activation-result");
+    expect(audit).toContain('"status":"failed"');
+  });
+
   it("keeps Windows cleanup-pending recovery when the same updater starts another activate", async () => {
     const install = await makeInstall();
     const request = {

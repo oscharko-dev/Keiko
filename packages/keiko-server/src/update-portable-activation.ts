@@ -447,11 +447,17 @@ function isCommittedActivationPhase(
   return phase === "verified" || phase === "cleanup-pending";
 }
 
+function committedActivationOnDisk(stateDir: string): boolean {
+  try {
+    return isCommittedActivationPhase(readPortableActivationRecovery(stateDir)?.phase);
+  } catch {
+    return false;
+  }
+}
+
 function restoreFailedPromotion(context: ActivationContext, progress: ActivationProgress): void {
   if (isCommittedActivationPhase(progress.recoveryPhase)) return;
-  if (isCommittedActivationPhase(readPortableActivationRecovery(context.stateDir)?.phase)) {
-    return;
-  }
+  if (committedActivationOnDisk(context.stateDir)) return;
   if (progress.recoveryPhase === undefined) return;
   try {
     // KEIKO-0493: terminate a relaunch that was already spawned before reverting the layout it

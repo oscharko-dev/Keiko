@@ -247,6 +247,19 @@ describe("scripts/keiko.sh", () => {
         ui.kill("SIGKILL");
       }
     });
+
+    it.each(["", "12 3", "0123", "not-a-pid", "1;echo pwned"])(
+      "rejects a malformed pid-file first line %j without coercing a pid",
+      (firstLine) => {
+        mkdirSync(stateDir, { recursive: true });
+        writeFileSync(join(stateDir, "ui.pid"), `${firstLine}\n${"a".repeat(32)}\n`);
+        const status = run(["status"], { KEIKO_STATE_DIR: stateDir });
+        expect(status.status).toBe(0);
+        expect(status.stdout).toContain("not running");
+        expect(status.stdout).not.toMatch(/\bpid\s+\d+/u);
+        expect(existsSync(join(stateDir, "ui.pid"))).toBe(true);
+      },
+    );
   });
 
   describe("build-asset guard", () => {

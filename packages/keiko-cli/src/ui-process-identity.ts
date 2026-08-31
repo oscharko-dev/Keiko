@@ -8,11 +8,30 @@ export interface LiveLaunchIdentityReaders {
   readonly readCommandLine?: (pid: number) => string | undefined;
 }
 
+function isIdentityFieldBoundary(ch: string | undefined): boolean {
+  return ch === undefined || ch === "\0" || /\s/u.test(ch);
+}
+
+function containsExactIdentityToken(text: string, token: string): boolean {
+  if (token.length === 0) return false;
+  let from = 0;
+  while (from <= text.length) {
+    const index = text.indexOf(token, from);
+    if (index === -1) return false;
+    const before = index === 0 ? undefined : text[index - 1];
+    const after = text[index + token.length];
+    if (isIdentityFieldBoundary(before) && isIdentityFieldBoundary(after)) return true;
+    from = index + 1;
+  }
+  return false;
+}
+
 export function liveIdentityTextHasLaunchId(text: string, launchId: string): boolean {
+  if (launchId.length === 0) return false;
   return (
-    text.includes(`${KEIKO_UI_LAUNCH_ID_ENV}=${launchId}`) ||
-    text.includes(`${UI_LAUNCH_ID_FLAG}\0${launchId}`) ||
-    text.includes(`${UI_LAUNCH_ID_FLAG} ${launchId}`)
+    containsExactIdentityToken(text, `${KEIKO_UI_LAUNCH_ID_ENV}=${launchId}`) ||
+    containsExactIdentityToken(text, `${UI_LAUNCH_ID_FLAG}\0${launchId}`) ||
+    containsExactIdentityToken(text, `${UI_LAUNCH_ID_FLAG} ${launchId}`)
   );
 }
 

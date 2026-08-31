@@ -93,7 +93,7 @@ describe("atomicPublishRename", () => {
         },
         backoffMs: [],
       });
-    }).toThrow(TypeError);
+    }).toThrow("atomic publish rename backoffMs must not be empty");
   });
 
   it("retries EPERM on win32 and succeeds without logging a path", () => {

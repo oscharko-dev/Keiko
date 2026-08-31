@@ -37,8 +37,12 @@ async function runLifecycle(
   ...args: Parameters<typeof runLifecycleCli>
 ): ReturnType<typeof runLifecycleCli> {
   const deps = args[4] ?? {};
+  const syntheticIdentity =
+    deps.killProcess === undefined || deps.verifyLaunchIdentity !== undefined
+      ? {}
+      : { verifyLaunchIdentity: (): boolean => true };
   return runLifecycleCli(args[0], args[1], args[2], args[3], {
-    verifyLaunchIdentity: () => true,
+    ...syntheticIdentity,
     ...deps,
   });
 }
@@ -282,6 +286,30 @@ describe("runLifecycleCli", () => {
     expect(code).toBe(0);
     expect(c.out()).toContain("not running");
     expect(c.err()).toBe("");
+  });
+
+  it("refuses stop when launch-identity verification rejects the pid record", async () => {
+    const root = makeRoot();
+    mkdirSync(join(root, ".keiko"), { recursive: true });
+    writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
+    const c = makeIo();
+    const killProcess = vi.fn();
+    const code = await runLifecycle(
+      "stop",
+      [],
+      c.io,
+      {},
+      {
+        cwd: root,
+        isProcessAlive: () => true,
+        killProcess,
+        verifyLaunchIdentity: () => false,
+        sleep: () => Promise.resolve(),
+      },
+    );
+    expect(code).toBe(1);
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(existsSync(join(root, ".keiko", "ui.pid"))).toBe(true);
   });
 
   it("refuses to start when a stale ui.shutdown path is a directory", async () => {
