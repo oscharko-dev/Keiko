@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { logHasGracefulProcessExit, readLogSuffix } from "../installable-package-smoke.mjs";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { Buffer } from "node:buffer";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { logHasGracefulProcessExit, readLogSuffix } from "../installable-package-smoke.mjs";
 
 function line(event) {
   return `${JSON.stringify(event)}\n`;
