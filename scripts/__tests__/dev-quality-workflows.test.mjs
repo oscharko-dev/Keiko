@@ -379,6 +379,24 @@ describe("dev quality workflows", () => {
     );
   });
 
+  it("runs the Git executable reparse regression on the required Windows host", () => {
+    const steps = ciWorkflow.jobs["cross-platform-smoke"].steps;
+    const buildIndex = steps.findIndex(
+      (step) => step.name === "Build packages for the Windows smokes",
+    );
+    const regressionIndex = steps.findIndex(
+      (step) => step.name === "Verify Git executable Windows reparse containment",
+    );
+    const regression = steps[regressionIndex];
+
+    expect(regression, "Windows Git reparse regression step must exist").toBeDefined();
+    expect(regression.if).toBe("runner.os == 'Windows'");
+    expect(regression.run).toBe("node scripts/__tests__/windows-git-reparse-smoke.mjs");
+    expect(regression["continue-on-error"]).toBeUndefined();
+    expect(buildIndex).toBeGreaterThanOrEqual(0);
+    expect(regressionIndex).toBeGreaterThan(buildIndex);
+  });
+
   it("contains no privileged pull-request trigger", () => {
     expect(mutation).not.toContain("pull_request_target");
     expect(mutation).not.toContain("workflow_run");

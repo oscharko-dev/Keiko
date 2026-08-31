@@ -1061,6 +1061,12 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 20
         run: npm run build:packages
+      - name: Verify Git executable Windows reparse containment
+        # Direct execution is deliberate: Vitest exits zero when every selected test is skipped.
+        # This smoke asserts the real host is Win32, creates a genuine directory junction, and calls
+        # the production resolver, so the required Windows lane cannot pass without executing it.
+        if: runner.os == 'Windows'
+        run: node scripts/__tests__/windows-git-reparse-smoke.mjs
       - name: Smoke the Windows command spawn wrapper
         # #3350: on modern Node a `.cmd`/`.bat` target spawned with shell:false raises EINVAL, so
         # every agent `npm`/`npx` call would fail. This exercises the real cmd.exe wrapper against
