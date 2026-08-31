@@ -1498,6 +1498,26 @@ describe("waitForShutdown", () => {
       });
     });
 
+    it("reports reason 'shutdown-request' and drains the same way as SIGTERM", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const { server } = fakeClosingServer();
+        const sink = createRecordingSink();
+        const onShutdown = vi.fn();
+        const promise = waitForShutdown(server, 3_000, {
+          activityLog: sink,
+          startedAt: Date.now(),
+          onShutdown,
+          peekShutdownRequest: () => true,
+        });
+        await expect(promise).resolves.toBeUndefined();
+        expect(onShutdown).toHaveBeenCalledTimes(1);
+        const exiting = sink.events.find((event) => event.op === "process.exiting");
+        expect(extraOf(exiting).reason).toBe("shutdown-request");
+        expect(server.closeIdleConnections).toHaveBeenCalledTimes(1);
+        expect(sink.closeCallCount).toBe(1);
+      });
+    });
+
     it("reports reason 'server-close' when the server closes without a prior signal", async () => {
       await withIsolatedSignalListeners(async () => {
         const emitter = new EventEmitter();

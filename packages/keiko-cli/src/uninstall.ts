@@ -64,6 +64,7 @@ import {
   type StateRootInspection,
 } from "./state-paths.js";
 import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
+import { terminateUiProcess, type WindowsTreeKill } from "./ui-process-stop.js";
 
 const USAGE = `Usage:
   keiko uninstall [--state] [--launchers] [--scripts] [--state-dir PATH]
@@ -109,8 +110,11 @@ export interface UninstallCliDeps {
   readonly homedir?: () => string;
   readonly isProcessAlive?: (pid: number) => boolean;
   readonly killProcess?: (pid: number, signal?: NodeJS.Signals | 0) => void;
-  // #KEIKO-0422: injected so tests can drive the post-SIGTERM wait deterministically.
+  // #KEIKO-0422: injected so tests can drive the post-stop wait deterministically.
   readonly sleep?: (ms: number) => Promise<void>;
+  readonly platform?: (() => NodeJS.Platform) | undefined;
+  readonly killWindowsTree?: WindowsTreeKill | undefined;
+  readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
 }
 
@@ -206,6 +210,9 @@ interface ResolvedDeps {
   readonly isProcessAlive: (pid: number) => boolean;
   readonly killProcess: (pid: number, signal?: NodeJS.Signals | 0) => void;
   readonly sleep: (ms: number) => Promise<void>;
+  readonly platform: NodeJS.Platform;
+  readonly killWindowsTree?: WindowsTreeKill | undefined;
+  readonly processEnv?: NodeJS.ProcessEnv | undefined;
 }
 
 function defaultSleep(ms: number): Promise<void> {
@@ -219,42 +226,28 @@ function resolveDeps(deps: UninstallCliDeps): ResolvedDeps {
     isProcessAlive: deps.isProcessAlive ?? defaultIsProcessAlive,
     killProcess: deps.killProcess ?? process.kill.bind(process),
     sleep: deps.sleep ?? defaultSleep,
+    platform: deps.platform?.() ?? process.platform,
+    killWindowsTree: deps.killWindowsTree,
+    processEnv: deps.processEnv,
   };
 }
 
-const SERVER_STOP_POLL_INTERVAL_MS = 100;
 const SERVER_STOP_BUDGET_MS = 10_000;
-
-// #KEIKO-0422: poll `deps.isProcessAlive` on a bounded schedule (100ms interval, 10s
-// budget) so state removal never races with a still-shutting-down UI. Returns whether
-// the process is confirmed dead. `deps.sleep` yields to the event loop so tests can
-// control timing without a busy-wait.
-async function waitForProcessExit(
-  pid: number,
-  deps: Pick<ResolvedDeps, "isProcessAlive" | "sleep">,
-): Promise<boolean> {
-  // PR-review follow-up (Codex thread 3771128746): monotonic performance.now() so a
-  // wall-clock adjustment during shutdown does not extend the wait (backward jump) or
-  // refuse state removal immediately (forward jump). Mirrors lifecycle.terminateAndConfirm.
-  const start = performance.now();
-  while (deps.isProcessAlive(pid)) {
-    if (performance.now() - start >= SERVER_STOP_BUDGET_MS) return false;
-    await deps.sleep(SERVER_STOP_POLL_INTERVAL_MS);
-  }
-  return true;
-}
 
 // Returns "ok" to proceed, or "refused" when state removal is requested while the UI is
 // running and `--force` was not given (removing live state would orphan the process).
-// #KEIKO-0422: after SIGTERM, wait (bounded) for the process to exit before returning
-// "ok" — a signalled UI still checkpointing SQLite WAL / rewriting ui.log/ui.pid while
-// the uninstaller unlinks would leave a half-removed install and trigger ENOTEMPTY at
-// rmdirSync.
+// #KEIKO-0422 / #3351: after a graceful stop request (sentinel + SIGTERM on POSIX; sentinel
+// only on Windows), wait (bounded) for the process to exit before returning "ok" — a UI
+// still checkpointing SQLite WAL / rewriting ui.log/ui.pid while the uninstaller unlinks
+// would leave a half-removed install and trigger ENOTEMPTY at rmdirSync. Windows `--force`
+// escalates with the shared tree-kill helper; POSIX still refuses after the budget rather
+// than SIGKILL, matching the pre-#3351 uninstall contract.
 async function ensureServerStoppable(
   opts: UninstallOptions,
   io: CliIo,
   deps: ResolvedDeps,
   stateDir: string,
+  securityLogSink: SecurityLogSink | undefined,
 ): Promise<"ok" | "refused"> {
   if (!opts.scopes.state) return "ok";
   const probe = classifyPid(join(stateDir, "ui.pid"), deps.isProcessAlive);
@@ -270,13 +263,20 @@ async function ensureServerStoppable(
     return "ok";
   }
   io.out(`Stopping Keiko UI (pid ${String(probe.pid)}) ...\n`);
-  try {
-    deps.killProcess(probe.pid, "SIGTERM");
-  } catch {
-    // Process already exited between the probe and the signal — nothing to stop.
-  }
-  const exited = await waitForProcessExit(probe.pid, deps);
-  if (!exited) {
+  const outcome = await terminateUiProcess({
+    pid: probe.pid,
+    stateDir,
+    stopTimeoutMs: SERVER_STOP_BUDGET_MS,
+    platform: deps.platform,
+    sleep: deps.sleep,
+    isProcessAlive: deps.isProcessAlive,
+    killProcess: deps.killProcess,
+    killWindowsTree: deps.killWindowsTree,
+    processEnv: deps.processEnv,
+    securityLogSink,
+    escalate: deps.platform === "win32",
+  });
+  if (!outcome.confirmed) {
     io.err(
       `keiko uninstall: Keiko UI (pid ${String(probe.pid)}) did not stop within the wait budget; state was not removed.\n`,
     );
@@ -608,7 +608,11 @@ export async function runUninstallCli(
     // #KEIKO-0422: ensureServerStoppable is now async — it waits (bounded) for the
     // signalled UI to exit before returning "ok", so state removal never races with a
     // still-shutting-down process.
-    if ((await ensureServerStoppable(opts, io, resolved, stateDir)) === "refused") return 1;
+    if (
+      (await ensureServerStoppable(opts, io, resolved, stateDir, securityLogSink)) === "refused"
+    ) {
+      return 1;
+    }
     const launcherRefused = removeLaunchersStep(opts, io, resolved, stateDir);
     removeScriptsStep(opts, io);
     removePortableManagedStep(opts, io, env, stateDir, resolved.homedir(), securityLogSink);

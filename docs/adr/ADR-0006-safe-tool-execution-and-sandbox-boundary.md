@@ -196,6 +196,13 @@ asynchronous spawn would only SCHEDULE taskkill, and `child.kill()` would race i
 in keiko-server's `lspNodeAdapter.ts` holds the same ordering, and `exec.test.ts` pins the order
 directly rather than asserting only that the tree kill was called.
 
+**Lifecycle stop reuses this helper (issue #3351).** Cross-process `process.kill(pid, "SIGTERM")` is
+`TerminateProcess` on Windows and never delivers the in-process `waitForShutdown` handler, so
+`keiko stop` / `restart` / unhealthy-start and `keiko uninstall --force` request drain through
+the pid-bound `<stateDir>/ui.shutdown` sentinel first. Windows escalation then calls
+`nodeWindowsTreeKill` to completion before `SIGKILL`, instead of growing a second taskkill
+wrapper. POSIX still sends `SIGTERM` in addition to the sentinel.
+
 **The bounded wait is per invocation; one shared rolling budget bounds the process-wide aggregate.**
 `spawnSync` blocks the ENTIRE Node event loop, not just the run being terminated, and `terminate()`
 executes on that loop. One Windows run can pay the 5 000 ms bound twice (SIGTERM and SIGKILL), so

@@ -6,13 +6,18 @@ import {
   ATLASSIAN_CREDENTIAL_ARTIFACTS,
   DEFAULT_STATE_DIR_NAME,
   KEIKO_STATE_FILES,
+  UI_SHUTDOWN_REQUEST_FILE,
   classifyPid,
+  clearShutdownRequest,
   defaultUiDataDir,
   defaultIsProcessAlive,
   isInsidePath,
+  peekShutdownRequest,
   readPidFile,
   resolveStateDir,
   scanRuntimeState,
+  writeExclusivePidFile,
+  writeShutdownRequest,
   type RuntimeStateCategory,
 } from "./state-paths.js";
 
@@ -134,8 +139,34 @@ describe("KEIKO_STATE_FILES", () => {
   it("enumerates the lifecycle and launcher state files", () => {
     expect(KEIKO_STATE_FILES).toContain("ui.pid");
     expect(KEIKO_STATE_FILES).toContain("ui.log");
+    expect(KEIKO_STATE_FILES).toContain(UI_SHUTDOWN_REQUEST_FILE);
     expect(KEIKO_STATE_FILES).toContain("launcher-state.json");
     expect(KEIKO_STATE_FILES).toContain("portable-install-state.json");
+  });
+});
+
+describe("ui.shutdown request", () => {
+  it("is pid-bound: peek is true only for the written pid", () => {
+    const stateDir = makeRoot();
+    writeShutdownRequest(stateDir, 4242);
+    expect(peekShutdownRequest(stateDir, 4242)).toBe(true);
+    expect(peekShutdownRequest(stateDir, 1)).toBe(false);
+    clearShutdownRequest(stateDir);
+    expect(peekShutdownRequest(stateDir, 4242)).toBe(false);
+  });
+
+  it("refuses a symlinked shutdown request the same way ui.pid does", () => {
+    const root = makeRoot();
+    const target = join(root, "decoy");
+    writeFileSync(target, "999\n", "utf8");
+    symlinkSync(target, join(root, UI_SHUTDOWN_REQUEST_FILE));
+    expect(peekShutdownRequest(root, 999)).toBe(false);
+  });
+
+  it("writeExclusivePidFile creates a regular single-link pid file", () => {
+    const path = join(makeRoot(), "ui.pid");
+    writeExclusivePidFile(path, 17);
+    expect(readPidFile(path)).toBe(17);
   });
 });
 
@@ -160,6 +191,7 @@ function seedRuntimeState(root: string): string {
   mkdirSync(join(stateDir, "logs"), { recursive: true });
   touch(join(stateDir, "ui.pid"));
   touch(join(stateDir, "ui.log"));
+  touch(join(stateDir, UI_SHUTDOWN_REQUEST_FILE));
   touch(join(stateDir, "launcher-state.json"));
   touch(join(stateDir, "portable-install-state.json"));
   touch(join(stateDir, "keiko-ui.db"));
@@ -267,6 +299,7 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     const scan = scanRuntimeState(stateDir);
     expect(scan.present).toBe(true);
     expect(categoryOf(scan, "ui.pid")).toBe("lifecycle");
+    expect(categoryOf(scan, UI_SHUTDOWN_REQUEST_FILE)).toBe("lifecycle");
     expect(categoryOf(scan, "launcher-state.json")).toBe("launcher");
     expect(categoryOf(scan, "portable-install-state.json")).toBe("launcher");
     expect(categoryOf(scan, "keiko-ui.db")).toBe("ui-database");

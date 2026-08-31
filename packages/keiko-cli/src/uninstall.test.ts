@@ -15,7 +15,7 @@ import {
 import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runUninstallCli, type UninstallCliDeps } from "./uninstall.js";
 import { runLauncherCli } from "./launcher.js";
 import { runPortableCli } from "./portable.js";
@@ -597,6 +597,37 @@ describe("runUninstallCli — running server guard", () => {
     const c = makeIo();
     await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(0);
     expect(killed).toEqual([[555, "SIGTERM"]]);
+    expect(existsSync(stateDir)).toBe(false);
+  });
+
+  it("with --force on Windows writes ui.shutdown instead of SIGTERM", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root, "555");
+    const killed: (readonly [number, NodeJS.Signals | 0 | undefined])[] = [];
+    const killWindowsTree = vi.fn(() => "succeeded" as const);
+    let probe = true;
+    const deps: UninstallCliDeps = {
+      cwd: root,
+      homedir: () => root,
+      platform: () => "win32",
+      isProcessAlive: () => {
+        if (probe) {
+          probe = false;
+          return true;
+        }
+        expect(readFileSync(join(stateDir, "ui.shutdown"), "utf8")).toBe("555\n");
+        return false;
+      },
+      killProcess: (pid, signal) => {
+        killed.push([pid, signal]);
+      },
+      killWindowsTree,
+      sleep: () => Promise.resolve(),
+    };
+    const c = makeIo();
+    await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(0);
+    expect(killed).toEqual([]);
+    expect(killWindowsTree).not.toHaveBeenCalled();
     expect(existsSync(stateDir)).toBe(false);
   });
 

@@ -9,6 +9,24 @@
       "package": "keiko-cli"
     },
     {
+      "op": "cli.lifecycle.stop-escalated",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:151",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.lifecycle.stop-request-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:137",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.lifecycle.stop-requested",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:113",
+      "package": "keiko-cli"
+    },
+    {
       "op": "portable.windows-alert.spawn-failed",
       "category": "diagnostic",
       "site": "packages/keiko-cli/src/portable-launch-notifier.ts:205",
@@ -17,7 +35,7 @@
     {
       "op": "process.exiting",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:566",
+      "site": "packages/keiko-cli/src/ui.ts:673",
       "package": "keiko-cli"
     },
     {
@@ -35,13 +53,13 @@
     {
       "op": "process.heartbeat",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:819",
+      "site": "packages/keiko-cli/src/ui.ts:877",
       "package": "keiko-cli"
     },
     {
       "op": "process.started",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:934",
+      "site": "packages/keiko-cli/src/ui.ts:992",
       "package": "keiko-cli"
     },
     {

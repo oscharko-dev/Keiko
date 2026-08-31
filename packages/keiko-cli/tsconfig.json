@@ -18,6 +18,7 @@
     { "path": "../keiko-security/tsconfig.json" },
     { "path": "../keiko-model-gateway/tsconfig.json" },
     { "path": "../keiko-workspace/tsconfig.json" },
+    { "path": "../keiko-tools/tsconfig.json" },
     { "path": "../keiko-evaluations/tsconfig.json" },
     { "path": "../keiko-evidence/tsconfig.json" },
     { "path": "../keiko-verification/tsconfig.json" },

@@ -1347,6 +1347,82 @@ describe("runLifecycleCli", () => {
       nowSpy.mockRestore();
     }
   });
+
+  it("on Windows stop writes ui.shutdown and never SIGTERMs when the process exits", async () => {
+    const root = makeRoot();
+    mkdirSync(join(root, ".keiko"), { recursive: true });
+    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    const c = makeIo();
+    const killProcess = vi.fn();
+    const killWindowsTree = vi.fn(() => "succeeded" as const);
+    let probe = true;
+    const code = await runLifecycleCli(
+      "stop",
+      ["--stop-timeout", "10"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        platform: () => "win32",
+        isProcessAlive: () => {
+          if (probe) {
+            probe = false;
+            return true;
+          }
+          expect(readFileSync(join(root, ".keiko", "ui.shutdown"), "utf8")).toBe("12345\n");
+          return false;
+        },
+        killProcess,
+        killWindowsTree,
+        sleep: () => Promise.resolve(),
+      },
+    );
+    expect(code).toBe(0);
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(killWindowsTree).not.toHaveBeenCalled();
+    expect(existsSync(join(root, ".keiko", "ui.pid"))).toBe(false);
+    expect(existsSync(join(root, ".keiko", "ui.shutdown"))).toBe(false);
+    expect(c.out()).toContain("Keiko UI stopped");
+    expect(c.out()).not.toContain("forced");
+  });
+
+  it("on Windows stop escalates with tree-kill before SIGKILL", async () => {
+    const root = makeRoot();
+    mkdirSync(join(root, ".keiko"), { recursive: true });
+    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    const c = makeIo();
+    const killProcess = vi.fn();
+    const killWindowsTree = vi.fn(() => "succeeded" as const);
+    const nowSpy = vi.spyOn(performance, "now");
+    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
+    try {
+      const code = await runLifecycleCli(
+        "stop",
+        ["--stop-timeout", "1"],
+        c.io,
+        {},
+        {
+          cwd: root,
+          platform: () => "win32",
+          isProcessAlive: vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false),
+          killProcess,
+          killWindowsTree,
+          sleep: () => Promise.resolve(),
+        },
+      );
+      expect(code).toBe(0);
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(killProcess).not.toHaveBeenCalledWith(12345, "SIGTERM");
+    expect(killWindowsTree).toHaveBeenCalledWith(12345, expect.any(Object));
+    expect(killProcess).toHaveBeenCalledWith(12345, "SIGKILL");
+    expect(killWindowsTree.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
+      killProcess.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(c.err()).toContain("terminating the process tree");
+    expect(c.out()).toContain("stopped (forced)");
+  });
 });
 
 describe("safeKillProcess (ESRCH-safe default killer)", () => {

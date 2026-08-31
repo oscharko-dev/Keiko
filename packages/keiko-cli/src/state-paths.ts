@@ -20,6 +20,8 @@ import {
   openSync,
   readdirSync,
   readSync,
+  rmSync,
+  writeSync,
 } from "node:fs";
 import { Buffer } from "node:buffer";
 import { isAbsolute, join, resolve, sep } from "node:path";
@@ -47,12 +49,16 @@ const ATLASSIAN_CREDENTIAL_ARTIFACT_SET: ReadonlySet<string> = new Set(
   ATLASSIAN_CREDENTIAL_ARTIFACTS,
 );
 
-// Runtime files Keiko writes under the state dir. `ui.pid`/`ui.log` come from
-// `lifecycle.ts`; `launcher-state.json` from `launcher-state.ts`; portable
+// Runtime files Keiko writes under the state dir. `ui.pid`/`ui.log`/`ui.shutdown`
+// come from `lifecycle.ts` (the shutdown request is the Windows-safe graceful
+// channel — issue #3351); `launcher-state.json` from `launcher-state.ts`; portable
 // install attestation from `portable.ts`.
+export const UI_SHUTDOWN_REQUEST_FILE = "ui.shutdown";
+
 export const KEIKO_STATE_FILES = [
   "ui.pid",
   "ui.log",
+  UI_SHUTDOWN_REQUEST_FILE,
   "launcher-state.json",
   "portable-install-state.json",
 ] as const;
@@ -173,6 +179,52 @@ export function assertRegularSingleLinkFile(fd: number, path: string): void {
   }
 }
 
+function isFsCode(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === code;
+}
+
+// Exclusive create of a pid-shaped regular single-link file. Shared by `ui.pid` (lifecycle
+// start) and `ui.shutdown` (graceful stop request, issue #3351): both are a decimal pid plus
+// a newline, both must refuse a symlink/hard-link/FIFO, and neither may truncate an existing
+// inode. On EEXIST the NAME is unlinked (never a hard-linked target's content) and exclusive
+// create is retried once; a second collision fails closed.
+function createExclusivePidFileSlot(path: string): number {
+  const exclusive = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL;
+  try {
+    return openPidFileNoFollow(path, exclusive);
+  } catch (error) {
+    if (!isFsCode(error, "EEXIST")) throw error;
+  }
+  rmSync(path, { force: true });
+  return openPidFileNoFollow(path, exclusive);
+}
+
+export function writeExclusivePidFile(path: string, pid: number): void {
+  const fd = createExclusivePidFileSlot(path);
+  try {
+    assertRegularSingleLinkFile(fd, path);
+    writeSync(fd, `${String(pid)}\n`, null, "utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function shutdownRequestPath(stateDir: string): string {
+  return join(stateDir, UI_SHUTDOWN_REQUEST_FILE);
+}
+
+export function writeShutdownRequest(stateDir: string, pid: number): void {
+  writeExclusivePidFile(shutdownRequestPath(stateDir), pid);
+}
+
+export function peekShutdownRequest(stateDir: string, pid: number): boolean {
+  return readPidFile(shutdownRequestPath(stateDir)) === pid;
+}
+
+export function clearShutdownRequest(stateDir: string): void {
+  rmSync(shutdownRequestPath(stateDir), { force: true });
+}
+
 // Small bound on <stateDir>/ui.pid: it holds one decimal pid plus a newline, never more.
 const MAX_PID_FILE_BYTES = 64;
 
@@ -241,7 +293,7 @@ export function classifyPid(
 // writes:
 //
 //   <stateDir>/
-//     ui.pid, ui.log                        lifecycle.ts
+//     ui.pid, ui.log, ui.shutdown           lifecycle.ts
 //     launcher-state.json                   launcher-state.ts
 //     portable-install-state.json           portable.ts
 //     .launcher-state-*/                    launcher-state.ts atomic-save temp dirs
@@ -614,7 +666,9 @@ const logsSubtree: OwnedSubtree = {
 };
 
 function topLevelFileCategory(name: string): RuntimeStateCategory | undefined {
-  if (name === "ui.pid" || name === "ui.log") return "lifecycle";
+  if (name === "ui.pid" || name === "ui.log" || name === UI_SHUTDOWN_REQUEST_FILE) {
+    return "lifecycle";
+  }
   if (name === "launcher-state.json" || name === "portable-install-state.json") {
     return "launcher";
   }
