@@ -410,6 +410,79 @@ describe("createLocalSecretVault — replaceAll", () => {
   });
 });
 
+describe("createLocalSecretVault — setMany", () => {
+  it("merges new refs in one call and leaves untouched refs in place", () => {
+    const vault = vaultAt(join(dir, "vault.enc.json"));
+    vault.set("cred:keep", "keep-secret");
+
+    vault.setMany(
+      new Map([
+        ["cred:a", "secret-A"],
+        ["cred:b", "secret-B"],
+      ]),
+    );
+
+    expect(vault.get("cred:keep")).toBe("keep-secret");
+    expect(vault.get("cred:a")).toBe("secret-A");
+    expect(vault.get("cred:b")).toBe("secret-B");
+  });
+
+  it("replaces overlapping refs and does not wipe the store on an empty map", () => {
+    const storePath = join(dir, "vault.enc.json");
+    const vault = vaultAt(storePath);
+    vault.set("cred:a", "first");
+    vault.set("cred:keep", "keep-secret");
+
+    vault.setMany(new Map([["cred:a", "second"]]));
+    expect(vault.get("cred:a")).toBe("second");
+    expect(vault.get("cred:keep")).toBe("keep-secret");
+
+    vault.setMany(new Map());
+    expect(existsSync(storePath)).toBe(true);
+    expect(vault.get("cred:a")).toBe("second");
+  });
+
+  it("emits one entries-merged event with the sealed count, never a reference or secret", () => {
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath: join(dir, "vault.enc.json"),
+      sink: { write: (event): void => void events.push(event) },
+    });
+
+    vault.setMany(
+      new Map([
+        ["cred:a", "SUPERSECRET"],
+        ["cred:b", "ALSOSECRET"],
+      ]),
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      category: "security",
+      op: "security.vault.entries-merged",
+      extra: { count: 2 },
+    });
+    expect(typeof events[0]?.durationMs).toBe("number");
+    expect(JSON.stringify(events)).not.toContain("SUPERSECRET");
+    expect(JSON.stringify(events)).not.toContain("cred:a");
+  });
+
+  it("does not emit entries-merged for a single set()", () => {
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath: join(dir, "vault.enc.json"),
+      sink: { write: (event): void => void events.push(event) },
+    });
+
+    vault.set("cred:a", "SUPERSECRET");
+
+    expect(events).toEqual([]);
+    expect(vault.get("cred:a")).toBe("SUPERSECRET");
+  });
+});
+
 describe("createLocalSecretVault — delete", () => {
   it("deletes one ref, the other remains intact", () => {
     const storePath = join(dir, "vault.enc.json");
@@ -937,6 +1010,20 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
     vault.replaceAll(new Map([["cred:kept", "kept-value"]]));
     expect([...vault.list()].sort()).toEqual(["cred:kept"]);
     expect(vault.get("cred:kept")).toBe("kept-value");
+  });
+
+  it("setMany merges without dropping siblings", () => {
+    const vault = shardedVaultAt(join(dir, "sharded-merge"));
+    vault.set("cred:keep", "keep-secret");
+    vault.setMany(
+      new Map([
+        ["cred:a", "secret-A"],
+        ["cred:keep", "keep-updated"],
+      ]),
+    );
+    expect(vault.get("cred:keep")).toBe("keep-updated");
+    expect(vault.get("cred:a")).toBe("secret-A");
+    expect([...vault.list()].sort()).toEqual(["cred:a", "cred:keep"]);
   });
 
   it("writes one 0600 file per entry into a 0700 directory and never plaintext", () => {

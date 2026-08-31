@@ -49,8 +49,9 @@ export {
 } from "./sqlite-corruption.js";
 
 // Content-free activity-log seam for this package (ADR-0019, w4a-security-log-port) — independent
-// of `keiko-local-knowledge`'s `KnowledgeLogSink`. Wired into `readMacosKeychainSecret` and
-// `createShardedLocalSecretVault`'s shard reads; the composition root supplies the real sink.
+// of `keiko-local-knowledge`'s `KnowledgeLogSink`. Wired into `readMacosKeychainSecret`,
+// `createShardedLocalSecretVault`'s shard reads, and `LocalSecretVault.setMany`. The composition
+// root supplies the real sink.
 export type { SecurityLogEvent, SecurityLogSink } from "./log-port.js";
 export { emitSecurityLogEvent, nullSecurityLogSink, securityErrorKind } from "./log-port.js";
 

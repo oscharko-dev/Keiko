@@ -1123,6 +1123,9 @@ describe("desktop files browser", () => {
       set: (): never => {
         throw new Error(secret);
       },
+      setMany: (): never => {
+        throw new Error(secret);
+      },
       replaceAll: () => undefined,
       delete: () => undefined,
       has: () => false,
@@ -1183,6 +1186,9 @@ describe("desktop files browser", () => {
     const failingVault: LocalSecretVault = {
       get: () => undefined,
       set: (): never => {
+        throw new Error("capture-secret-marker-2");
+      },
+      setMany: (): never => {
         throw new Error("capture-secret-marker-2");
       },
       replaceAll: () => undefined,

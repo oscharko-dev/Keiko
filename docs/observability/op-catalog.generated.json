@@ -753,15 +753,21 @@
       "package": "keiko-security"
     },
     {
+      "op": "security.vault.entries-merged",
+      "category": "security",
+      "site": "packages/keiko-security/src/secret-vault.ts:563",
+      "package": "keiko-security"
+    },
+    {
       "op": "security.vault.key-resolved",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:275",
+      "site": "packages/keiko-security/src/secret-vault.ts:286",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.shard-unreadable",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:540",
+      "site": "packages/keiko-security/src/secret-vault.ts:647",
       "package": "keiko-security"
     },
     {

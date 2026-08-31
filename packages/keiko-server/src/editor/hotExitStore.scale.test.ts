@@ -49,6 +49,9 @@ function countingVault(stateDir: string): CountingVault {
     set: (reference, secret) => {
       inner.set(reference, secret);
     },
+    setMany: (batch: ReadonlyMap<string, string>): void => {
+      inner.setMany(batch);
+    },
     replaceAll: (next) => {
       inner.replaceAll(next);
     },

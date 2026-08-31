@@ -28,6 +28,9 @@ function memoryVault(): {
     set: (reference, secret): void => {
       entries.set(reference, secret);
     },
+    setMany: (batch: ReadonlyMap<string, string>): void => {
+      for (const [reference, secret] of batch) entries.set(reference, secret);
+    },
     replaceAll: (replacement): void => {
       entries.clear();
       for (const [reference, secret] of replacement) entries.set(reference, secret);
