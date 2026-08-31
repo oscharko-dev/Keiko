@@ -13,6 +13,10 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
+  atomicPublishRename,
+  WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+} from "@oscharko-dev/keiko-security/fs-atomic-rename";
+import {
   REGISTRATION_FILE,
   defaultManagedRoot,
   isPortableTarget,
@@ -186,7 +190,10 @@ function writeRegistration(stateDir: string, registration: PortableInstallRegist
       encoding: "utf8",
       mode: 0o600,
     });
-    renameSync(tmpFile, path);
+    atomicPublishRename(tmpFile, path, {
+      rename: renameSync,
+      backoffMs: WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+    });
   } finally {
     // PR-review follow-up (Codex thread 3771256638): rmSync failure MUST NOT masquerade as
     // a failed atomic rewrite. If renameSync succeeded, the registration is already

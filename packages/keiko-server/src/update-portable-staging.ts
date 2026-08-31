@@ -194,6 +194,7 @@ async function stagePortableUpdate(
     ...(options.platformVerifier === undefined
       ? {}
       : { platformVerifier: options.platformVerifier }),
+    ...(options.securityLogSink === undefined ? {} : { securityLogSink: options.securityLogSink }),
   });
   const summary = portableStageSummary({
     stageId,

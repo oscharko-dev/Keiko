@@ -1123,8 +1123,12 @@ describe("desktop files browser", () => {
       set: (): never => {
         throw new Error(secret);
       },
+      setMany: (): never => {
+        throw new Error(secret);
+      },
       replaceAll: () => undefined,
       delete: () => undefined,
+      deleteMany: () => undefined,
       has: () => false,
       list: () => [],
     };
@@ -1185,8 +1189,12 @@ describe("desktop files browser", () => {
       set: (): never => {
         throw new Error("capture-secret-marker-2");
       },
+      setMany: (): never => {
+        throw new Error("capture-secret-marker-2");
+      },
       replaceAll: () => undefined,
       delete: () => undefined,
+      deleteMany: () => undefined,
       has: () => false,
       list: () => [],
     };

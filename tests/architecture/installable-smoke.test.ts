@@ -30,6 +30,7 @@ describe("installable-package-smoke script", () => {
     expect(source).toContain("export function npmInstallTimeoutMs");
     expect(source).toContain("export function parseArgs");
     expect(source).toContain("export function parsePositiveTimeoutEnv");
+    expect(source).toContain("export function logHasGracefulProcessExit");
     expect(source).toContain("await main()");
     expect(source).toContain("pathToFileURL(process.argv[1]).href");
     expect(source).not.toMatch(/^export\s+default\b/m);

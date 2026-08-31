@@ -1,11 +1,4 @@
-import {
-  closeSync,
-  constants as fsConstants,
-  mkdirSync,
-  openSync,
-  rmSync,
-  writeSync,
-} from "node:fs";
+import { closeSync, constants as fsConstants, mkdirSync, openSync, rmSync } from "node:fs";
 import { Buffer } from "node:buffer";
 import { spawn, type ChildProcess, type SpawnOptions, type StdioOptions } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -42,10 +35,15 @@ import {
 import {
   assertNotSymlink,
   assertRegularSingleLinkFile,
-  openPidFileNoFollow,
-  readPidFile,
+  KEIKO_UI_LAUNCH_ID_ENV,
+  UI_LAUNCH_ID_FLAG,
+  readPidRecord,
+  removeStaleShutdownRequest,
+  removePidFileIfMatches,
   resolveContainedStateDir,
+  writeExclusivePidFile,
 } from "./state-paths.js";
+import { terminateUiProcess, type WindowsTreeKill } from "./ui-process-stop.js";
 
 type LifecycleCommand = "start" | "stop" | "status" | "restart";
 type SpawnFn = (command: string, args: readonly string[], opts: SpawnOptions) => ChildProcess;
@@ -114,8 +112,11 @@ export interface LifecycleCliDeps {
   readonly isPortAvailable?: PortAvailabilityFn | undefined;
   readonly openExternal?: ((url: string) => void) | undefined;
   readonly platform?: (() => NodeJS.Platform) | undefined;
+  readonly killWindowsTree?: WindowsTreeKill | undefined;
+  readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly securityLogSink?: SecurityLogSink | undefined;
   readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
+  readonly verifyLaunchIdentity?: ((pid: number, launchId: string) => boolean) | undefined;
 }
 
 interface LifecycleRuntimeDeps {
@@ -126,7 +127,11 @@ interface LifecycleRuntimeDeps {
   readonly killProcess: ProcessKiller;
   readonly isPortAvailable: PortAvailabilityFn;
   readonly openExternal: (url: string) => void;
+  readonly platform: NodeJS.Platform;
+  readonly killWindowsTree?: WindowsTreeKill | undefined;
+  readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly securityLogSink?: SecurityLogSink | undefined;
+  readonly verifyLaunchIdentity?: ((pid: number, launchId: string) => boolean) | undefined;
 }
 
 interface HealthProbeResult {
@@ -312,46 +317,9 @@ async function fetchHealthProbe(url: string, fetchImpl: FetchFn): Promise<Health
 // followed plain `existsSync`/`readFileSync`. A symlinked `ui.pid` could steer THOSE commands at
 // an unrelated process even though `start`/`stop`/`status`/`restart` here were already hardened.
 // `readPid` is gone; every reader in this file and every other consumer now goes through the
-// ONE shared `readPidFile`. `openPidFileNoFollow` / `assertRegularSingleLinkFile` are imported
-// from the same module because the WRITE path below (`createPidFileSlot`/`writePid`) still needs
-// them — `keiko start` is the only writer, so writing stays here, but it reuses the same
-// primitives rather than keeping a second copy.
-
-function isEexist(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
-}
-
-// #2906 review (comment 3865159294): publishing a pid now NEVER opens an existing inode for
-// writing. The initial attempt is O_CREAT|O_EXCL, which can only ever succeed by creating a
-// brand-new, empty inode at this name. On EEXIST (a stale pid file left by an unclean exit, or a
-// hostile pre-planted node of any kind -- symlink, hard link, FIFO) the stale directory entry is
-// unlinked -- removing only the NAME, never touching a hard-linked target's content -- and the
-// exclusive create is retried exactly once. If the slot is still occupied after that (an actor
-// recreating the name faster than this loop can), the write fails closed instead of retrying
-// forever or ever falling back to a truncating open.
-function createPidFileSlot(path: string): number {
-  const exclusive = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL;
-  try {
-    return openPidFileNoFollow(path, exclusive);
-  } catch (error) {
-    if (!isEexist(error)) throw error;
-  }
-  rmSync(path, { force: true });
-  return openPidFileNoFollow(path, exclusive);
-}
-
-// Companion write path for the same descriptor-based invariant `readPid` uses: stages the write
-// behind the identical O_NOFOLLOW-at-open / regular-single-link-file guard, so neither direction
-// of the pid file's lifecycle ever completes a check separately from the use it protects.
-function writePid(path: string, pid: number): void {
-  const fd = createPidFileSlot(path);
-  try {
-    assertRegularSingleLinkFile(fd, path);
-    writeSync(fd, `${String(pid)}\n`, null, "utf8");
-  } finally {
-    closeSync(fd);
-  }
-}
+// ONE shared `readPidFile`. The write path uses `writeExclusivePidFile` from the same module
+// (`ui.pid` here, `ui.shutdown` from `terminateUiProcess`) so both pid-shaped artifacts share
+// the O_NOFOLLOW / regular-single-link exclusive-create guards.
 
 function defaultIsProcessAlive(pid: number): boolean {
   try {
@@ -404,21 +372,28 @@ function defaultIsPortAvailable(host: string, port: number): Promise<boolean> {
   });
 }
 
+function runningPidRecord(
+  options: LifecycleOptions,
+  isAlive: (pid: number) => boolean,
+): ReturnType<typeof readPidRecord> {
+  const path = pidFile(options);
+  const record = readPidRecord(path);
+  if (record === undefined) {
+    rmSync(path, { force: true });
+    return undefined;
+  }
+  if (!isAlive(record.pid)) {
+    rmSync(path, { force: true });
+    return undefined;
+  }
+  return record;
+}
+
 function runningPid(
   options: LifecycleOptions,
   isAlive: (pid: number) => boolean,
 ): number | undefined {
-  const path = pidFile(options);
-  const pid = readPidFile(path);
-  if (pid === undefined) {
-    rmSync(path, { force: true });
-    return undefined;
-  }
-  if (!isAlive(pid)) {
-    rmSync(path, { force: true });
-    return undefined;
-  }
-  return pid;
+  return runningPidRecord(options, isAlive)?.pid;
 }
 
 // #2478 (ADR-0141 W1.5): `keiko start` is the trusted launcher of the UI process. It provisions a
@@ -612,12 +587,14 @@ function spawnUiProcess(
   deps: Pick<LifecycleRuntimeDeps, "spawnFn">,
   cwd: string,
   pairingSecret: string,
+  launchId: string,
 ): { readonly child: ChildProcess; readonly logPath: string } {
   const logStdio = openUiLogStdio(options);
   const preferredLayout = resolvePreferredInstallLayout(cwd);
   const uiEnv = childEnv({
     ...env,
     KEIKO_STATE_DIR: options.stateDir,
+    [KEIKO_UI_LAUNCH_ID_ENV]: launchId,
     // ADR-0141 D2 / #2478: the launcher-provisioned pairing secret travels only through the
     // inherited environment of the spawned BFF.
     [CODING_APP_SESSION_LAUNCHER_SECRET_ENV]: pairingSecret,
@@ -632,7 +609,16 @@ function spawnUiProcess(
     return {
       child: deps.spawnFn(
         process.execPath,
-        [cliEntryPath(cwd, env), "ui", "--port", String(options.port), "--host", options.host],
+        [
+          cliEntryPath(cwd, env),
+          "ui",
+          "--port",
+          String(options.port),
+          "--host",
+          options.host,
+          UI_LAUNCH_ID_FLAG,
+          launchId,
+        ],
         {
           argv0: KEIKO_PROCESS_TITLE,
           cwd,
@@ -721,24 +707,25 @@ async function reportUnhealthyStart(
   deps: LifecycleRuntimeDeps,
   pid: number,
   logPath: string,
+  launchId: string,
 ): Promise<number> {
-  // #KEIKO-0437: escalate SIGTERM -> SIGKILL and only remove the pid file once the
-  // process is confirmed gone. If it survives SIGKILL, KEEP the pid file so `keiko
+  // #KEIKO-0437: escalate graceful stop -> forced stop and only remove the pid file once the
+  // process is confirmed gone. If it survives forced termination, KEEP the pid file so `keiko
   // stop` can still find and finish the orphan (never orphan the port silently).
-  const outcome = await terminateAndConfirm(pid, options, deps);
+  const outcome = await terminateAndConfirm(pid, options, deps, undefined, launchId);
   if (outcome.confirmed) {
-    rmSync(pidFile(options), { force: true });
+    removePidFileIfMatches(pidFile(options), pid, launchId);
     io.err(`keiko start: UI did not become healthy. Logs: ${logPath}\n`);
   } else {
     io.err(
-      `keiko start: UI did not become healthy and did not exit under SIGKILL (pid ${String(pid)} kept in ${pidFile(options)}). Logs: ${logPath}\n`,
+      `keiko start: UI did not become healthy and did not exit under ${forcedStopLabel(deps.platform)} (pid ${String(pid)} kept in ${pidFile(options)}). Logs: ${logPath}\n`,
     );
   }
   return 1;
 }
 
 // #2906 review (comment 3865159294): terminates the just-spawned child if pid publication fails,
-// so a hostile state-dir actor who wins the exclusive-create race in `createPidFileSlot` (or any
+// so a hostile state-dir actor who wins the exclusive-create race in `writeExclusivePidFile` (or any
 // other publish failure) can never leave an unmanaged, unkillable-by-`keiko stop` child running.
 // SIGKILL immediately rather than the graceful SIGTERM-then-escalate `terminateAndConfirm` uses
 // elsewhere: the child was spawned moments ago and has not yet published a health endpoint, so
@@ -749,15 +736,26 @@ function publishPidOrKillChild(
   io: CliIo,
   deps: Pick<LifecycleRuntimeDeps, "killProcess">,
   pid: number,
+  launchId: string,
 ): boolean {
   try {
-    writePid(pidFile(options), pid);
+    writeExclusivePidFile(pidFile(options), pid, launchId);
     return true;
   } catch (error) {
     deps.killProcess(pid, "SIGKILL");
     io.err(
       `keiko start: failed to publish the UI process pid (${error instanceof Error ? error.message : String(error)}).\n`,
     );
+    return false;
+  }
+}
+
+function clearStaleShutdownRequest(stateDir: string, io: CliIo): boolean {
+  try {
+    removeStaleShutdownRequest(stateDir);
+    return true;
+  } catch {
+    io.err("keiko start: failed to clear a stale shutdown request.\n");
     return false;
   }
 }
@@ -776,11 +774,13 @@ async function cmdStart(
   }
 
   if (!(await ensureStartPortAvailable(options, io, deps))) return 1;
+  if (!clearStaleShutdownRequest(options.stateDir, io)) return 1;
 
   const pairingSecret = resolveLauncherPairingSecret(env);
+  const launchId = randomBytes(16).toString("hex");
   let spawned: { readonly child: ChildProcess; readonly logPath: string };
   try {
-    spawned = spawnUiProcess(options, env, deps, cwd, pairingSecret);
+    spawned = spawnUiProcess(options, env, deps, cwd, pairingSecret, launchId);
   } catch {
     io.err("keiko start: failed to spawn the UI process.\n");
     return 1;
@@ -803,11 +803,11 @@ async function cmdStart(
   // KEIKO-0886 / #2906 review (comment 3863185744, then comment 3865159294): refuse to write to a
   // symlinked/hard-linked/FIFO <stateDir>/ui.pid so a hostile state-dir actor cannot re-point the
   // pid file (which process.kill reads) at any user-writable path outside home, or corrupt one.
-  // writePid's exclusive-create pid slot can still fail closed (e.g. an actor winning every
+  // writeExclusivePidFile's exclusive-create slot can still fail closed (e.g. an actor winning every
   // create-retry race) -- a spawned-but-unpublished child must never be left running headless
   // with no pid file `keiko stop` can find it by, so a publish failure kills the child immediately
   // and fails the command closed instead of leaking an unmanaged process.
-  if (!publishPidOrKillChild(options, io, deps, child.pid)) return 1;
+  if (!publishPidOrKillChild(options, io, deps, child.pid, launchId)) return 1;
   io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
 
   const healthy = await waitForHealth(options, child.pid, deps);
@@ -823,7 +823,7 @@ async function cmdStart(
     );
   }
 
-  return reportUnhealthyStart(options, io, deps, child.pid, logPath);
+  return reportUnhealthyStart(options, io, deps, child.pid, logPath, launchId);
 }
 
 interface TerminateAndConfirmResult {
@@ -831,65 +831,73 @@ interface TerminateAndConfirmResult {
   readonly escalated: boolean;
 }
 
-// Shared teardown used by both cmdStop and the cmdStart unhealthy branch (#KEIKO-0437).
-// Sends SIGTERM, polls isProcessAlive up to options.stopTimeoutMs, escalates to SIGKILL
+function forcedStopLabel(platform: NodeJS.Platform): string {
+  return platform === "win32" ? "process-tree termination" : "SIGKILL";
+}
+
+// Shared teardown used by both cmdStop and the cmdStart unhealthy branch (#KEIKO-0437, #3351).
+// Requests graceful drain via `<stateDir>/ui.shutdown` (and SIGTERM on POSIX), polls
+// isProcessAlive up to options.stopTimeoutMs, escalates to Windows tree-kill then SIGKILL
 // if still alive, then re-polls a short bounded window. The pid-file lifecycle is
 // intentionally NOT touched here — the caller decides based on `confirmed`: remove the
 // pid file only when the process is confirmed gone, keep it otherwise so `keiko stop`
 // can still find and finish the orphan. `escalated` tells the caller whether the
-// graceful window expired so cmdStop can emit its "sending SIGKILL" line at the same
-// moment the SIGKILL is actually sent.
+// graceful window expired so cmdStop can emit its forced-stop line at the same
+// moment the escalation is actually sent.
 async function terminateAndConfirm(
   pid: number,
   options: LifecycleOptions,
-  deps: Pick<LifecycleRuntimeDeps, "sleep" | "isProcessAlive" | "killProcess">,
+  deps: LifecycleRuntimeDeps,
   onEscalate?: () => void,
+  launchId?: string,
 ): Promise<TerminateAndConfirmResult> {
-  deps.killProcess(pid, "SIGTERM");
-  // PR-review follow-up (Codex thread 3771011316): measure elapsed shutdown time with the
-  // monotonic performance.now() clock instead of Date.now(). A wall-clock adjustment
-  // during shutdown (manual change, NTP correction) would otherwise extend the wait on a
-  // backward jump and send SIGKILL prematurely on a forward jump — both independent of
-  // the child process actually terminating.
-  const gracefulStart = performance.now();
-  while (performance.now() - gracefulStart <= options.stopTimeoutMs) {
-    if (!deps.isProcessAlive(pid)) return { confirmed: true, escalated: false };
-    await deps.sleep(500);
-  }
-  onEscalate?.();
-  deps.killProcess(pid, "SIGKILL");
-  // PR-review follow-up on KEIKO-0437: give SIGKILL its OWN bounded polling window instead of
-  // whatever budget the graceful sleep left behind. Process termination + reap after SIGKILL
-  // are asynchronous, and process.kill(pid, 0) can still succeed briefly; a zero-budget
-  // remainder made the caller falsely conclude SIGKILL failed and retain ui.pid even when
-  // the process exited moments later.
-  const killStart = performance.now();
-  while (performance.now() - killStart <= 2_000) {
-    if (!deps.isProcessAlive(pid)) return { confirmed: true, escalated: true };
-    await deps.sleep(100);
-  }
-  return { confirmed: !deps.isProcessAlive(pid), escalated: true };
+  return terminateUiProcess({
+    pid,
+    stateDir: options.stateDir,
+    stopTimeoutMs: options.stopTimeoutMs,
+    platform: deps.platform,
+    sleep: deps.sleep,
+    isProcessAlive: deps.isProcessAlive,
+    killProcess: deps.killProcess,
+    killWindowsTree: deps.killWindowsTree,
+    processEnv: deps.processEnv,
+    securityLogSink: deps.securityLogSink,
+    escalate: true,
+    onEscalate,
+    launchId,
+    verifyLaunchIdentity: deps.verifyLaunchIdentity,
+  });
 }
 
 async function cmdStop(
   options: LifecycleOptions,
   io: CliIo,
-  deps: Pick<LifecycleRuntimeDeps, "sleep" | "isProcessAlive" | "killProcess">,
+  deps: LifecycleRuntimeDeps,
 ): Promise<number> {
-  const pid = runningPid(options, deps.isProcessAlive);
-  if (pid === undefined) {
+  const record = runningPidRecord(options, deps.isProcessAlive);
+  if (record === undefined) {
     io.out("Keiko UI is not running.\n");
     return 0;
   }
-  io.out(`Stopping Keiko UI (pid ${String(pid)}) ...\n`);
-  const outcome = await terminateAndConfirm(pid, options, deps, () => {
-    io.err("keiko stop: UI did not exit gracefully; sending SIGKILL.\n");
-  });
+  io.out(`Stopping Keiko UI (pid ${String(record.pid)}) ...\n`);
+  const outcome = await terminateAndConfirm(
+    record.pid,
+    options,
+    deps,
+    () => {
+      io.err(
+        deps.platform === "win32"
+          ? "keiko stop: UI did not exit gracefully; terminating the process tree.\n"
+          : "keiko stop: UI did not exit gracefully; sending SIGKILL.\n",
+      );
+    },
+    record.launchId,
+  );
   if (!outcome.confirmed) {
-    io.err(`keiko stop: failed to stop pid ${String(pid)}.\n`);
+    io.err(`keiko stop: failed to stop pid ${String(record.pid)}.\n`);
     return 1;
   }
-  rmSync(pidFile(options), { force: true });
+  removePidFileIfMatches(pidFile(options), record.pid, record.launchId);
   io.out(outcome.escalated ? "Keiko UI stopped (forced).\n" : "Keiko UI stopped.\n");
   return 0;
 }
@@ -944,7 +952,11 @@ function runtimeDeps(
       ((url: string): void => {
         defaultOpenExternal(url, platform, env);
       }),
+    platform,
+    killWindowsTree: deps.killWindowsTree,
+    processEnv: deps.processEnv,
     securityLogSink,
+    verifyLaunchIdentity: deps.verifyLaunchIdentity,
   };
 }
 

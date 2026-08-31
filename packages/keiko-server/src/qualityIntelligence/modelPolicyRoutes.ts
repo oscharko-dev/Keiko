@@ -33,6 +33,7 @@ import type {
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { currentGateway, currentGatewayConfig } from "../deps.js";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import { readBoundedRequestBody, RequestBodyTooLargeError } from "../bounded-request-body.js";
 import {
   normaliseQiModelPolicy,
@@ -213,7 +214,7 @@ function savePolicy(evidenceDir: string, policy: QualityIntelligenceModelPolicy)
     if (tempStats.isSymbolicLink() || !tempStats.isFile()) {
       throw policyStorageError();
     }
-    renameSync(temp, location.target);
+    atomicPublishRename(temp, location.target, { rename: renameSync });
   } catch (error) {
     rmSync(temp, { force: true });
     throw error;

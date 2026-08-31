@@ -6,13 +6,21 @@ import {
   ATLASSIAN_CREDENTIAL_ARTIFACTS,
   DEFAULT_STATE_DIR_NAME,
   KEIKO_STATE_FILES,
+  UI_SHUTDOWN_REQUEST_FILE,
   classifyPid,
+  clearShutdownRequest,
   defaultUiDataDir,
   defaultIsProcessAlive,
   isInsidePath,
+  peekShutdownRequest,
   readPidFile,
+  readPidRecord,
+  removePidFileIfMatches,
+  removeStaleShutdownRequest,
   resolveStateDir,
   scanRuntimeState,
+  writeExclusivePidFile,
+  writeShutdownRequest,
   type RuntimeStateCategory,
 } from "./state-paths.js";
 
@@ -92,6 +100,15 @@ describe("readPidFile", () => {
     writeFileSync(path, "  4242 \n", "utf8");
     expect(readPidFile(path)).toBe(4242);
   });
+
+  it("parses an optional launch id on the second line", () => {
+    const root = makeRoot();
+    const path = join(root, "ui.pid");
+    const launchId = "ab".repeat(16);
+    writeExclusivePidFile(path, 4242, launchId);
+    expect(readPidRecord(path)).toEqual({ pid: 4242, launchId });
+    expect(readPidFile(path)).toBe(4242);
+  });
 });
 
 describe("defaultIsProcessAlive", () => {
@@ -128,14 +145,94 @@ describe("classifyPid", () => {
     expect(result.state).toBe("running");
     expect(result.pid).toBe(1234);
   });
+
+  it("returns the launch id from the same pid record as the pid", () => {
+    const root = makeRoot();
+    const path = join(root, "ui.pid");
+    const launchId = "ab".repeat(16);
+    writeExclusivePidFile(path, 1234, launchId);
+    const result = classifyPid(path, () => true);
+    expect(result).toEqual({ state: "running", pid: 1234, launchId });
+  });
 });
 
 describe("KEIKO_STATE_FILES", () => {
   it("enumerates the lifecycle and launcher state files", () => {
     expect(KEIKO_STATE_FILES).toContain("ui.pid");
     expect(KEIKO_STATE_FILES).toContain("ui.log");
+    expect(KEIKO_STATE_FILES).toContain(UI_SHUTDOWN_REQUEST_FILE);
     expect(KEIKO_STATE_FILES).toContain("launcher-state.json");
     expect(KEIKO_STATE_FILES).toContain("portable-install-state.json");
+  });
+});
+
+describe("ui.shutdown request", () => {
+  it("is pid-bound: peek is true only for the written pid", () => {
+    const stateDir = makeRoot();
+    writeShutdownRequest(stateDir, 4242);
+    expect(peekShutdownRequest(stateDir, 4242)).toBe(true);
+    expect(peekShutdownRequest(stateDir, 1)).toBe(false);
+    clearShutdownRequest(stateDir);
+    expect(peekShutdownRequest(stateDir, 4242)).toBe(false);
+  });
+
+  it("does not throw when the sentinel path is a directory", () => {
+    const stateDir = makeRoot();
+    mkdirSync(join(stateDir, UI_SHUTDOWN_REQUEST_FILE));
+    expect(() => {
+      clearShutdownRequest(stateDir);
+    }).not.toThrow();
+  });
+
+  it("fails closed when a stale sentinel path is a directory", () => {
+    const stateDir = makeRoot();
+    mkdirSync(join(stateDir, UI_SHUTDOWN_REQUEST_FILE));
+    expect(() => {
+      removeStaleShutdownRequest(stateDir);
+    }).toThrow();
+  });
+
+  it("matches a launch id across a re-exec pid change", () => {
+    const stateDir = makeRoot();
+    const launchId = "cd".repeat(16);
+    writeShutdownRequest(stateDir, 100, launchId);
+    expect(peekShutdownRequest(stateDir, 999, launchId)).toBe(true);
+    expect(peekShutdownRequest(stateDir, 999, "ef".repeat(16))).toBe(false);
+  });
+
+  it("returns false for empty, malformed, and oversized requests", () => {
+    const stateDir = makeRoot();
+    const path = join(stateDir, UI_SHUTDOWN_REQUEST_FILE);
+    writeFileSync(path, "", "utf8");
+    expect(peekShutdownRequest(stateDir, 1)).toBe(false);
+    writeFileSync(path, "not-a-pid\n", "utf8");
+    expect(peekShutdownRequest(stateDir, 1)).toBe(false);
+    writeFileSync(path, "9".repeat(64), "utf8");
+    expect(peekShutdownRequest(stateDir, 1)).toBe(false);
+  });
+
+  it("refuses a symlinked shutdown request the same way ui.pid does", () => {
+    const root = makeRoot();
+    const target = join(root, "decoy");
+    writeFileSync(target, "999\n", "utf8");
+    symlinkSync(target, join(root, UI_SHUTDOWN_REQUEST_FILE));
+    expect(peekShutdownRequest(root, 999)).toBe(false);
+  });
+
+  it("writeExclusivePidFile creates a regular single-link pid file", () => {
+    const path = join(makeRoot(), "ui.pid");
+    writeExclusivePidFile(path, 17);
+    expect(readPidFile(path)).toBe(17);
+  });
+
+  it("removePidFileIfMatches unlinks only the pid this stop owns", () => {
+    const root = makeRoot();
+    const path = join(root, "ui.pid");
+    writeExclusivePidFile(path, 17, "ab".repeat(16));
+    expect(removePidFileIfMatches(path, 99)).toBe(false);
+    expect(readPidFile(path)).toBe(17);
+    expect(removePidFileIfMatches(path, 17, "ab".repeat(16))).toBe(true);
+    expect(readPidFile(path)).toBeUndefined();
   });
 });
 
@@ -160,6 +257,7 @@ function seedRuntimeState(root: string): string {
   mkdirSync(join(stateDir, "logs"), { recursive: true });
   touch(join(stateDir, "ui.pid"));
   touch(join(stateDir, "ui.log"));
+  touch(join(stateDir, UI_SHUTDOWN_REQUEST_FILE));
   touch(join(stateDir, "launcher-state.json"));
   touch(join(stateDir, "portable-install-state.json"));
   touch(join(stateDir, "keiko-ui.db"));
@@ -267,6 +365,7 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     const scan = scanRuntimeState(stateDir);
     expect(scan.present).toBe(true);
     expect(categoryOf(scan, "ui.pid")).toBe("lifecycle");
+    expect(categoryOf(scan, UI_SHUTDOWN_REQUEST_FILE)).toBe("lifecycle");
     expect(categoryOf(scan, "launcher-state.json")).toBe("launcher");
     expect(categoryOf(scan, "portable-install-state.json")).toBe("launcher");
     expect(categoryOf(scan, "keiko-ui.db")).toBe("ui-database");

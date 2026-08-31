@@ -49,11 +49,17 @@ function countingVault(stateDir: string): CountingVault {
     set: (reference, secret) => {
       inner.set(reference, secret);
     },
+    setMany: (batch: ReadonlyMap<string, string>): void => {
+      inner.setMany(batch);
+    },
     replaceAll: (next) => {
       inner.replaceAll(next);
     },
     delete: (reference) => {
       inner.delete(reference);
+    },
+    deleteMany: (references) => {
+      inner.deleteMany(references);
     },
     has: (reference) => inner.has(reference),
     list: () => inner.list(),

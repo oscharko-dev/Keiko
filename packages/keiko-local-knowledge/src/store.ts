@@ -29,6 +29,7 @@ import {
   ensureDirHardened,
   FILE_MODE,
 } from "@oscharko-dev/keiko-security/fs-hardening";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 // Shared SQLite corruption classifier [GEN-DUP-SEMANTIC-019]: the pure classification vocabulary. The
 // KnowledgeStoreError-unwrap hook (see unwrapKnowledgeStoreError) resolves the sealed cause underneath.
 import {
@@ -365,13 +366,13 @@ function quarantineFile(target: string, cause?: unknown): void {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
   const quarantinedPath = `${target}.corrupt.${ts}`;
   if (existsSync(target)) {
-    renameSync(target, quarantinedPath);
+    atomicPublishRename(target, quarantinedPath, { rename: renameSync });
   }
   const sidecarQuarantinePaths: string[] = [];
   for (const sidecar of [`${target}-wal`, `${target}-shm`]) {
     if (existsSync(sidecar)) {
       const sidecarQuarantinePath = `${sidecar}.corrupt.${ts}`;
-      renameSync(sidecar, sidecarQuarantinePath);
+      atomicPublishRename(sidecar, sidecarQuarantinePath, { rename: renameSync });
       sidecarQuarantinePaths.push(sidecarQuarantinePath);
     }
   }

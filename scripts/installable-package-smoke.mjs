@@ -2933,13 +2933,57 @@ function assertLifecycleRestart(runLifecycle) {
   }
 }
 
-function assertLifecycleStop(runLifecycle) {
+const GRACEFUL_PROCESS_EXIT_REASONS = new Set(["shutdown-request", "sigterm"]);
+
+function gracefulExitReason(event) {
+  if (event === null || typeof event !== "object") return undefined;
+  if (event.op !== "process.exiting") return undefined;
+  if (typeof event.reason === "string") return event.reason;
+  if (typeof event.extra?.reason === "string") return event.extra.reason;
+  return undefined;
+}
+
+export function readLogSuffix(logPath, offset) {
+  return readFileSync(logPath).subarray(offset).toString("utf8");
+}
+
+export function logHasGracefulProcessExit(logText) {
+  for (const line of logText.split("\n")) {
+    if (line.length === 0) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const reason = gracefulExitReason(event);
+    if (reason !== undefined && GRACEFUL_PROCESS_EXIT_REASONS.has(reason)) return true;
+  }
+  return false;
+}
+
+function assertLifecycleStop(runLifecycle, stateDir) {
+  const logPath = join(stateDir, "logs", "server.log");
+  const offset = existsSync(logPath) ? statSync(logPath).size : 0;
   const stopResult = runLifecycle("stop");
-  if (stopResult.status !== 0 || !stopResult.stdout.includes("Keiko UI stopped")) {
+  if (stopResult.status !== 0) {
     fail(
       `keiko stop did not stop the packaged UI ` +
         `(status=${String(stopResult.status)}): ${stopResult.stdout}${stopResult.stderr}`,
     );
+  }
+  if (stopResult.stdout.includes("stopped (forced)")) {
+    fail(`keiko stop used forced termination; graceful drain is required: ${stopResult.stdout}`);
+  }
+  if (!stopResult.stdout.includes("Keiko UI stopped")) {
+    fail(`keiko stop did not report a graceful stop: ${stopResult.stdout}${stopResult.stderr}`);
+  }
+  if (!existsSync(logPath)) {
+    fail("keiko stop left no activity log to prove process.exiting");
+  }
+  const appended = readLogSuffix(logPath, offset);
+  if (!logHasGracefulProcessExit(appended)) {
+    fail("keiko stop did not record process.exiting with a graceful drain reason");
   }
 }
 
@@ -2969,7 +3013,7 @@ async function assertPackagedLifecycleCommands(tmp) {
     started = true;
     assertLifecycleStatusRunning(lifecycleRun);
     assertLifecycleRestart(lifecycleRun);
-    assertLifecycleStop(lifecycleRun);
+    assertLifecycleStop(lifecycleRun, stateDir);
     started = false;
     assertLifecycleStatusStopped(lifecycleRun);
   } finally {

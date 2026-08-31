@@ -7,6 +7,7 @@ import {
   type UpdatePortableTarget,
   type UpdateSessionFailureReason,
 } from "@oscharko-dev/keiko-contracts";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { isRecord } from "./update-preflight-registry.js";
 import type { UpdateRuntimeFacts } from "./update-install-mode.js";
 import type { UpdateLocalStateManager } from "./update-local-state.js";
@@ -76,6 +77,7 @@ export interface PortableUpdateStagerOptions {
   readonly fetchImpl?: typeof fetch | undefined;
   readonly egress?: (() => GatewayEgressConfig | undefined) | undefined;
   readonly platformVerifier?: PortablePlatformVerifier | undefined;
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export class PortableUpdateStagingError extends Error {

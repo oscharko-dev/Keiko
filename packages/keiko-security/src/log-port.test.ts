@@ -11,6 +11,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  bindSecurityLogCorrelation,
   emitSecurityLogEvent,
   nullSecurityLogSink,
   securityErrorKind,
@@ -35,6 +36,47 @@ describe("nullSecurityLogSink", () => {
       sink.write({ category: "security", op: "test.op" });
     }).not.toThrow();
     expect(nullSecurityLogSink()).toBe(sink);
+  });
+});
+
+describe("bindSecurityLogCorrelation", () => {
+  it("stamps every write with the bound correlation id", () => {
+    const events: SecurityLogEvent[] = [];
+    const bound = bindSecurityLogCorrelation(
+      { write: (event): void => void events.push(event) },
+      "corr-1",
+    );
+    bound?.write({ category: "security", op: "security.vault.entries-merged" });
+    expect(events).toEqual([
+      expect.objectContaining({
+        op: "security.vault.entries-merged",
+        correlationId: "corr-1",
+      }),
+    ]);
+  });
+
+  it("returns undefined when no sink is wired", () => {
+    expect(bindSecurityLogCorrelation(undefined, "corr-1")).toBeUndefined();
+  });
+
+  it("deduplicates sink-failed reports across correlation wrappers of the same sink", () => {
+    const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const events: SecurityLogEvent[] = [];
+    const flaky: SecurityLogSink = {
+      write: (event): void => {
+        if (event.op === "security.log.sink-failed") {
+          events.push(event);
+          return;
+        }
+        throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      },
+    };
+    const first = bindSecurityLogCorrelation(flaky, "corr-1");
+    const second = bindSecurityLogCorrelation(flaky, "corr-2");
+    emitSecurityLogEvent(first, { category: "security", op: "security.vault.entries-merged" });
+    emitSecurityLogEvent(second, { category: "security", op: "security.vault.shard-unreadable" });
+    expect(events).toHaveLength(1);
+    expect(warn).not.toHaveBeenCalled();
   });
 });
 

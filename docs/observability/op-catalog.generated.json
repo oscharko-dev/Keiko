@@ -9,6 +9,30 @@
       "package": "keiko-cli"
     },
     {
+      "op": "cli.lifecycle.stop-escalated",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:198",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.lifecycle.stop-escalation-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:281",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.lifecycle.stop-request-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:272",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.lifecycle.stop-requested",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:146",
+      "package": "keiko-cli"
+    },
+    {
       "op": "portable.windows-alert.spawn-failed",
       "category": "diagnostic",
       "site": "packages/keiko-cli/src/portable-launch-notifier.ts:205",
@@ -17,7 +41,7 @@
     {
       "op": "process.exiting",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:566",
+      "site": "packages/keiko-cli/src/ui.ts:686",
       "package": "keiko-cli"
     },
     {
@@ -29,19 +53,19 @@
     {
       "op": "process.fatal",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:413",
+      "site": "packages/keiko-cli/src/ui.ts:426",
       "package": "keiko-cli"
     },
     {
       "op": "process.heartbeat",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:819",
+      "site": "packages/keiko-cli/src/ui.ts:890",
       "package": "keiko-cli"
     },
     {
       "op": "process.started",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:934",
+      "site": "packages/keiko-cli/src/ui.ts:1005",
       "package": "keiko-cli"
     },
     {
@@ -359,13 +383,13 @@
     {
       "op": "knowledge.store.encryption-rejected",
       "category": "diagnostic",
-      "site": "packages/keiko-local-knowledge/src/store.ts:515",
+      "site": "packages/keiko-local-knowledge/src/store.ts:516",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "knowledge.store.quarantined",
       "category": "diagnostic",
-      "site": "packages/keiko-local-knowledge/src/store.ts:478",
+      "site": "packages/keiko-local-knowledge/src/store.ts:479",
       "package": "keiko-local-knowledge"
     },
     {
@@ -425,7 +449,7 @@
     {
       "op": "memory-vault.store.quarantined",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/db.ts:127",
+      "site": "packages/keiko-memory-vault/src/db.ts:128",
       "package": "keiko-memory-vault"
     },
     {
@@ -741,6 +765,18 @@
       "package": "keiko-model-gateway"
     },
     {
+      "op": "security.fs.atomic-rename-failed",
+      "category": "security",
+      "site": "packages/keiko-security/src/fs-atomic-rename.ts:116",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.fs.atomic-rename-retried",
+      "category": "security",
+      "site": "packages/keiko-security/src/fs-atomic-rename.ts:102",
+      "package": "keiko-security"
+    },
+    {
       "op": "security.keychain.fallback",
       "category": "security",
       "site": "packages/keiko-security/src/macos-keychain.ts:151",
@@ -749,19 +785,49 @@
     {
       "op": "security.log.sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-security/src/log-port.ts:138",
+      "site": "packages/keiko-security/src/log-port.ts:158",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.vault.entries-delete-failed",
+      "category": "security",
+      "site": "packages/keiko-security/src/secret-vault.ts:614",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.vault.entries-deleted",
+      "category": "security",
+      "site": "packages/keiko-security/src/secret-vault.ts:595",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.vault.entries-merge-failed",
+      "category": "security",
+      "site": "packages/keiko-security/src/secret-vault.ts:637",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.vault.entries-merged",
+      "category": "security",
+      "site": "packages/keiko-security/src/secret-vault.ts:582",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.vault.entries-rollback-failed",
+      "category": "security",
+      "site": "packages/keiko-security/src/secret-vault.ts:813",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.key-resolved",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:275",
+      "site": "packages/keiko-security/src/secret-vault.ts:291",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.shard-unreadable",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:540",
+      "site": "packages/keiko-security/src/secret-vault.ts:729",
       "package": "keiko-security"
     },
     {
@@ -785,7 +851,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:738",
+      "site": "packages/keiko-server/src/observability/server-log.ts:739",
       "package": "keiko-server"
     },
     {
@@ -917,7 +983,7 @@
     {
       "op": "gateway.tool-calling.verification",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-setup.ts:6342",
+      "site": "packages/keiko-server/src/gateway-setup.ts:6356",
       "package": "keiko-server"
     },
     {
@@ -1085,7 +1151,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:1844",
+      "site": "packages/keiko-server/src/deps.ts:1846",
       "package": "keiko-server"
     },
     {
@@ -1161,15 +1227,21 @@
       "package": "keiko-server"
     },
     {
-      "op": "server-log.write-failed",
-      "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:330",
+      "op": "security.fs.portable-backup-cleanup",
+      "category": "security",
+      "site": "packages/keiko-server/src/update-portable-activation-files.ts:811",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:356",
+      "site": "packages/keiko-server/src/observability/server-log.ts:331",
+      "package": "keiko-server"
+    },
+    {
+      "op": "server-log.write-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/server-log.ts:357",
       "package": "keiko-server"
     },
     {
@@ -1187,7 +1259,7 @@
     {
       "op": "store.opened",
       "category": "setup",
-      "site": "packages/keiko-server/src/store/db.ts:929",
+      "site": "packages/keiko-server/src/store/db.ts:930",
       "package": "keiko-server"
     },
     {

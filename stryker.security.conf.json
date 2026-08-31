@@ -19,7 +19,7 @@
     "packages/keiko-sandbox/src/probe.test.ts",
     "packages/keiko-sandbox/src/select.test.ts",
     "packages/keiko-workflows/src/**/*.test.ts",
-    "packages/keiko-server/src/coding-runtime/**/*.test.ts",
+    "packages/keiko-server/src/coding-runtime/**/!(*.functional).test.ts",
     "packages/keiko-server/src/qualityIntelligence/**/*.test.ts",
     "packages/keiko-server/src/editor/dap/**/*.test.ts",
     "packages/keiko-server/src/editor/lsp/lspFrameCodec.test.ts",

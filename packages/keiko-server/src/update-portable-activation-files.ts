@@ -12,7 +12,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, win32 as win32Path } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep, win32 as win32Path } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   WINDOWS_SHORTCUT_MAX_BYTES,
@@ -22,6 +22,11 @@ import {
   type SecurityLogSink,
   type WindowsShortcutDefinition,
 } from "@oscharko-dev/keiko-security";
+import {
+  atomicPublishRename,
+  atomicPublishTreeSwap,
+  withCwdOutsideTree,
+} from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import type {
   UpdatePortableStagingSummary,
   UpdatePortableTarget,
@@ -69,7 +74,8 @@ export interface PortableActivationRecovery {
   readonly activationId: string;
   readonly stageId: string;
   readonly target: UpdatePortableTarget;
-  readonly phase: "prepared" | "promoted" | "registered" | "verified";
+  readonly phase: "prepared" | "promoted" | "registered" | "verified" | "cleanup-pending";
+  readonly updaterPid?: number | undefined;
 }
 
 const REGISTRATION_FILE = "portable-install-state.json";
@@ -274,34 +280,62 @@ function activationPaths(
   );
 }
 
-function restoreManagedRoot(paths: PortableActivationPaths): void {
-  if (!existsSync(paths.backupRoot)) return;
-  if (existsSync(paths.managedRoot)) {
-    if (existsSync(paths.candidateRoot)) {
-      throw activationFailed("portable activation recovery is incomplete");
+function treeSwapOptions(
+  securityLogSink: SecurityLogSink | undefined,
+):
+  | { readonly rename: typeof renameSync }
+  | { readonly rename: typeof renameSync; readonly securityLogSink: SecurityLogSink } {
+  if (securityLogSink === undefined) return { rename: renameSync };
+  return { rename: renameSync, securityLogSink };
+}
+
+function restoreManagedRoot(
+  paths: PortableActivationPaths,
+  securityLogSink?: SecurityLogSink,
+): void {
+  const rename = treeSwapOptions(securityLogSink);
+  withCwdOutsideTree(paths.managedRoot, () => {
+    if (!existsSync(paths.backupRoot)) return;
+    if (existsSync(paths.managedRoot)) {
+      if (existsSync(paths.candidateRoot)) {
+        throw activationFailed("portable activation recovery is incomplete");
+      }
+      atomicPublishTreeSwap(paths.managedRoot, paths.candidateRoot, rename);
     }
-    renameSync(paths.managedRoot, paths.candidateRoot);
-  }
-  renameSync(paths.backupRoot, paths.managedRoot);
+    atomicPublishTreeSwap(paths.backupRoot, paths.managedRoot, rename);
+  });
 }
 
 function promote(
   paths: PortableActivationPaths,
   target: UpdatePortableTarget,
   targetVersion: string,
+  securityLogSink?: SecurityLogSink,
 ): PortableActivationLayout {
   if (existsSync(paths.backupRoot)) {
     throw activationFailed("portable activation backup path is occupied");
   }
   validateLayout(target, paths.candidateRoot, targetVersion);
+  return withCwdOutsideTree(paths.managedRoot, () =>
+    swapManagedRoot(paths, target, targetVersion, securityLogSink),
+  );
+}
+
+function swapManagedRoot(
+  paths: PortableActivationPaths,
+  target: UpdatePortableTarget,
+  targetVersion: string,
+  securityLogSink?: SecurityLogSink,
+): PortableActivationLayout {
+  const rename = treeSwapOptions(securityLogSink);
   let moved = false;
   try {
-    renameSync(paths.managedRoot, paths.backupRoot);
+    atomicPublishTreeSwap(paths.managedRoot, paths.backupRoot, rename);
     moved = true;
-    renameSync(paths.candidateRoot, paths.managedRoot);
+    atomicPublishTreeSwap(paths.candidateRoot, paths.managedRoot, rename);
     return validateLayout(target, paths.managedRoot, targetVersion);
   } catch (error) {
-    if (moved) restoreManagedRoot(paths);
+    if (moved) restoreManagedRoot(paths, securityLogSink);
     if (error instanceof PortableUpdateActivationError) throw error;
     throw activationFailed("portable activation swap failed");
   }
@@ -332,11 +366,12 @@ function managedRootLocator(
 export function promotePortableInstall(
   input: PortableActivationFileInput,
   activationId: string,
+  securityLogSink?: SecurityLogSink,
 ): PortablePromotionResult {
   const paths = activationPaths(input, activationId);
   return {
     paths,
-    layout: promote(paths, input.stage.target, input.targetVersion),
+    layout: promote(paths, input.stage.target, input.targetVersion, securityLogSink),
   };
 }
 
@@ -407,7 +442,7 @@ export function restorePortableRegistration(input: {
   }
   const temporary = `${registration}.${String(process.pid)}.restore`;
   writeExclusiveFile(temporary, readFileSync(snapshot.content));
-  renameSync(temporary, registration);
+  atomicPublishRename(temporary, registration, { rename: renameSync });
 }
 
 export function cleanupPortableRegistrationSnapshot(input: {
@@ -425,7 +460,11 @@ function isRecoveryTarget(value: unknown): value is UpdatePortableTarget {
 
 function isRecoveryPhase(value: unknown): value is PortableActivationRecovery["phase"] {
   return (
-    value === "prepared" || value === "promoted" || value === "registered" || value === "verified"
+    value === "prepared" ||
+    value === "promoted" ||
+    value === "registered" ||
+    value === "verified" ||
+    value === "cleanup-pending"
   );
 }
 
@@ -439,24 +478,31 @@ function isSafeStageId(value: unknown): value is string {
   );
 }
 
-function hasExactRecoveryKeys(record: Record<string, unknown>): boolean {
+function hasAllowedRecoveryKeys(record: Record<string, unknown>): boolean {
+  const allowed = new Set(["activationId", "stageId", "target", "phase", "updaterPid"]);
   const keys = Object.keys(record);
   return (
-    keys.length === 4 &&
-    keys.every((key) => ["activationId", "stageId", "target", "phase"].includes(key))
+    ["activationId", "stageId", "target", "phase"].every((key) => keys.includes(key)) &&
+    keys.every((key) => allowed.has(key))
   );
+}
+
+function isUpdaterPid(value: unknown): value is number | undefined {
+  if (value === undefined) return true;
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 function isPortableActivationRecovery(value: unknown): value is PortableActivationRecovery {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  return !hasExactRecoveryKeys(record)
+  return !hasAllowedRecoveryKeys(record)
     ? false
     : typeof record.activationId === "string" &&
         /^[a-f0-9]{32}$/u.test(record.activationId) &&
         isSafeStageId(record.stageId) &&
         isRecoveryTarget(record.target) &&
-        isRecoveryPhase(record.phase);
+        isRecoveryPhase(record.phase) &&
+        isUpdaterPid(record.updaterPid);
 }
 
 function assertRecovery(value: unknown): PortableActivationRecovery {
@@ -497,7 +543,7 @@ export function writePortableActivationRecovery(input: {
     mode: 0o600,
     flag: "wx",
   });
-  renameSync(temporaryPath, path);
+  atomicPublishRename(temporaryPath, path, { rename: renameSync });
 }
 
 export function beginPortableActivationRecovery(input: {
@@ -581,7 +627,7 @@ export function refreshPortableRegistration(input: {
   };
   const temporaryPath = `${path}.${String(process.pid)}.tmp`;
   writeExclusiveFile(temporaryPath, `${JSON.stringify(registration, null, 2)}\n`);
-  renameSync(temporaryPath, path);
+  atomicPublishRename(temporaryPath, path, { rename: renameSync });
   try {
     chmodSync(path, 0o600);
   } catch {
@@ -718,11 +764,115 @@ function lstatEntryOrUndefined(path: string): ReturnType<typeof lstatSync> | und
   }
 }
 
-export function cleanupPortableActivation(paths: PortableActivationPaths): void {
-  rmSync(paths.backupRoot, { recursive: true, force: true });
-  rmSync(paths.stageRoot, { recursive: true, force: true });
+export interface PortableActivationCleanupOptions {
+  readonly platform?: NodeJS.Platform;
+  readonly execPath?: string;
+  readonly updaterPid?: number;
 }
 
-export function restorePortableActivation(paths: PortableActivationPaths): void {
-  restoreManagedRoot(paths);
+export interface PortableActivationCleanupResult {
+  readonly backupDeleteDeferred: boolean;
+}
+
+export function cleanupPortableActivation(
+  paths: PortableActivationPaths,
+  options: PortableActivationCleanupOptions = {},
+): PortableActivationCleanupResult {
+  const platform = options.platform ?? process.platform;
+  const execPath = options.execPath ?? process.execPath;
+  const backupDeleteDeferred = shouldDeferBackupDelete(
+    paths.backupRoot,
+    platform,
+    execPath,
+    options.updaterPid,
+  );
+  if (!backupDeleteDeferred) {
+    rmSync(paths.backupRoot, { recursive: true, force: true });
+  }
+  rmSync(paths.stageRoot, { recursive: true, force: true });
+  return { backupDeleteDeferred };
+}
+
+function deferredCleanupUpdaterPid(
+  recovery: PortableActivationRecovery,
+  updaterPid: number | undefined,
+): Pick<PortableActivationRecovery, "updaterPid"> | Record<string, never> {
+  const pid = updaterPid ?? recovery.updaterPid;
+  return pid === undefined ? {} : { updaterPid: pid };
+}
+
+function emitPortableBackupCleanup(
+  sink: SecurityLogSink | undefined,
+  correlationId: string,
+  outcome: "deferred" | "removed",
+): void {
+  sink?.write({
+    category: "security",
+    op: "security.fs.portable-backup-cleanup",
+    correlationId,
+    extra: { outcome },
+  });
+}
+
+export function commitPortableActivationCleanup(input: {
+  readonly stateDir: string;
+  readonly paths: PortableActivationPaths;
+  readonly recovery: PortableActivationRecovery;
+  readonly cleanup?: PortableActivationCleanupOptions;
+  readonly securityLogSink?: SecurityLogSink;
+}): "deferred" | "removed" {
+  const cleanup = input.cleanup ?? {};
+  const result = cleanupPortableActivation(input.paths, cleanup);
+  cleanupPortableRegistrationSnapshot({
+    stateDir: input.stateDir,
+    activationId: input.recovery.activationId,
+  });
+  if (result.backupDeleteDeferred) {
+    writePortableActivationRecovery({
+      stateDir: input.stateDir,
+      recovery: {
+        activationId: input.recovery.activationId,
+        stageId: input.recovery.stageId,
+        target: input.recovery.target,
+        phase: "cleanup-pending",
+        ...deferredCleanupUpdaterPid(input.recovery, cleanup.updaterPid),
+      },
+    });
+    emitPortableBackupCleanup(input.securityLogSink, input.recovery.activationId, "deferred");
+    return "deferred";
+  }
+  clearPortableActivationRecovery(input.stateDir);
+  emitPortableBackupCleanup(input.securityLogSink, input.recovery.activationId, "removed");
+  return "removed";
+}
+
+function shouldDeferBackupDelete(
+  backupRoot: string,
+  platform: NodeJS.Platform,
+  execPath: string,
+  updaterPid: number | undefined,
+): boolean {
+  if (platform !== "win32") return false;
+  if (updaterPid === process.pid) return true;
+  return execPathMapsBackup(backupRoot, execPath);
+}
+
+function resolvedOrLiteral(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+function execPathMapsBackup(backupRoot: string, execPath: string): boolean {
+  const rel = relative(resolvedOrLiteral(backupRoot), resolvedOrLiteral(execPath));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+export function restorePortableActivation(
+  paths: PortableActivationPaths,
+  securityLogSink?: SecurityLogSink,
+): void {
+  restoreManagedRoot(paths, securityLogSink);
 }

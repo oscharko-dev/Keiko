@@ -142,16 +142,22 @@ describe("gateway-setup.ts — provider-credential vault wires resolveLocalVault
       expect(matching.length).toBeGreaterThan(1);
       expect(matching.every((c) => c.sink !== undefined)).toBe(true);
 
-      // Prove the captured sink is not merely present but IS the process-wide activity log.
-      matching[0]?.sink?.write({
-        level: "info",
-        category: "security",
-        op: "security.vault.key-resolved",
-        extra: { source: "env" },
-      });
       expect(sink.events).toContainEqual(
-        expect.objectContaining({ category: "security", op: "security.vault.key-resolved" }),
+        expect.objectContaining({
+          category: "security",
+          op: "security.vault.entries-merged",
+          correlationId: "corr-gw-vaultkey-1",
+        }),
       );
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "security",
+          op: "security.vault.key-resolved",
+          correlationId: "corr-gw-vaultkey-1",
+          extra: { source: "env" },
+        }),
+      );
+      expect(JSON.stringify(sink.events)).not.toContain("plaintext-wiring-secret");
     } finally {
       deps.store.close();
       deps.memoryVault?.close();

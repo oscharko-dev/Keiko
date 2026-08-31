@@ -959,16 +959,13 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
-  // Regression coverage for the S8786 rewrite of the internal `normalizeWorkspacePattern` trailing-
-  // slash trim: the former `/\/+$/u` is unanchored at the start, so a `package.json` "workspaces"
-  // entry with a long run of "/" that never reaches the string's true end drove O(n²) backtracking
-  // (empirically ~400ms at 32,000 slashes pre-fix on this machine). The manual scan is linear.
-  it("stays fast when a workspaces pattern carries an adversarial run of trailing slashes", async () => {
+  // Behavioral coverage for a workspaces entry with a long trailing-slash run: the S8786 linearity
+  // pin lives on `stripTrailingSlashes` / `normalizeWorkspacePattern` (#3347), not on this pipeline.
+  it("still retrieves a valid pack when a workspaces pattern carries a long trailing-slash run", async () => {
     writeFileSync(
       join(ROOT, "package.json"),
       JSON.stringify({ workspaces: [`packages/pkg${"/".repeat(20_000)}`] }),
     );
-    const start = Date.now();
     const out = await retrieveConnectedContextPack(
       input({
         scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
@@ -981,7 +978,6 @@ describe("runGroundedExploration", () => {
         detectWorkspace: () => fakeWorkspace(),
       },
     );
-    expect(Date.now() - start).toBeLessThan(2000);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 

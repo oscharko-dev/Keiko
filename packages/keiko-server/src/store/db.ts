@@ -18,6 +18,7 @@ import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
 // dependency direction — there is no boundary here to protect, and a third near-duplicate
 // interface in the same package would be pure duplication (AGENTS.md §5).
 import type { ServerLogEvent, ServerLogSink } from "../observability/index.js";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
 import {
   chmodIfPresent,
@@ -765,12 +766,12 @@ function assertQuickCheckOk(db: DatabaseSync): void {
 function quarantineCorruptDb(target: string, cause?: unknown): void {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
   const quarantinedPath = `${target}.corrupt.${ts}`;
-  renameSync(target, quarantinedPath);
+  atomicPublishRename(target, quarantinedPath, { rename: renameSync });
   const sidecarQuarantinePaths: string[] = [];
   for (const sidecar of [`${target}-wal`, `${target}-shm`]) {
     if (existsSync(sidecar)) {
       const sidecarQuarantinePath = `${sidecar}.corrupt.${ts}`;
-      renameSync(sidecar, sidecarQuarantinePath);
+      atomicPublishRename(sidecar, sidecarQuarantinePath, { rename: renameSync });
       sidecarQuarantinePaths.push(sidecarQuarantinePath);
     }
   }

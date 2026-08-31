@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import {
   RERANKER_SECRET_REF,
   createProviderSecretResolver,
@@ -273,6 +274,56 @@ describe("sealProviderApiKeys", () => {
     });
     expect(openProviderCredentialVault({ configPath, env }).get("cred:m1")).toBe("k1");
     expect(openProviderCredentialVault({ configPath, env }).get("cred:m2")).toBe("k2");
+  });
+
+  it("seals N new credentials in one persist without dropping an existing entry (#3346)", () => {
+    const configPath = tempConfigPath();
+    const env = envWith(KEY1);
+    openProviderCredentialVault({ configPath, env }).set("cred:keep", "keep-secret");
+    const providers = Array.from({ length: 20 }, (_unused, index) => ({
+      modelId: `m${String(index)}`,
+      baseUrl: "https://gw",
+      apiKey: `k${String(index)}`,
+    }));
+
+    const sealed = sealProviderApiKeys({ raw: { providers }, env, configPath });
+    const vault = openProviderCredentialVault({ configPath, env });
+
+    expect(sealed).toHaveLength(20);
+    expect(vault.get("cred:keep")).toBe("keep-secret");
+    expect(vault.get("cred:m0")).toBe("k0");
+    expect(vault.get("cred:m19")).toBe("k19");
+    expect(vault.list()).toHaveLength(21);
+  });
+
+  it("emits one entries-merged line with the sealed count when a sink is wired (#3346)", () => {
+    const configPath = tempConfigPath();
+    const env = envWith(KEY1);
+    const events: SecurityLogEvent[] = [];
+    sealProviderApiKeys({
+      raw: {
+        providers: [
+          { modelId: "m0", baseUrl: "https://gw", apiKey: "k0" },
+          { modelId: "m1", baseUrl: "https://gw", apiKey: "k1" },
+        ],
+      },
+      env,
+      configPath,
+      securityLogSink: { write: (event): void => void events.push(event) },
+    });
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        category: "security",
+        op: "security.vault.entries-merged",
+        extra: { count: 2 },
+      }),
+    );
+    expect(JSON.stringify(events)).not.toContain("k0");
+    expect(JSON.stringify(events)).not.toContain("k1");
+    expect(JSON.stringify(events)).not.toContain("cred:m0");
+    expect(JSON.stringify(events)).not.toContain("cred:m1");
+    expect(events.filter((event) => event.op === "security.vault.entries-merged")).toHaveLength(1);
   });
 
   it("refuses to re-seal over an unreadable existing vault index", () => {

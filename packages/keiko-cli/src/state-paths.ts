@@ -20,6 +20,8 @@ import {
   openSync,
   readdirSync,
   readSync,
+  rmSync,
+  writeSync,
 } from "node:fs";
 import { Buffer } from "node:buffer";
 import { isAbsolute, join, resolve, sep } from "node:path";
@@ -47,12 +49,16 @@ const ATLASSIAN_CREDENTIAL_ARTIFACT_SET: ReadonlySet<string> = new Set(
   ATLASSIAN_CREDENTIAL_ARTIFACTS,
 );
 
-// Runtime files Keiko writes under the state dir. `ui.pid`/`ui.log` come from
-// `lifecycle.ts`; `launcher-state.json` from `launcher-state.ts`; portable
+// Runtime files Keiko writes under the state dir. `ui.pid`/`ui.log`/`ui.shutdown`
+// come from `lifecycle.ts` (the shutdown request is the Windows-safe graceful
+// channel — issue #3351); `launcher-state.json` from `launcher-state.ts`; portable
 // install attestation from `portable.ts`.
+export const UI_SHUTDOWN_REQUEST_FILE = "ui.shutdown";
+
 export const KEIKO_STATE_FILES = [
   "ui.pid",
   "ui.log",
+  UI_SHUTDOWN_REQUEST_FILE,
   "launcher-state.json",
   "portable-install-state.json",
 ] as const;
@@ -173,13 +179,124 @@ export function assertRegularSingleLinkFile(fd: number, path: string): void {
   }
 }
 
-// Small bound on <stateDir>/ui.pid: it holds one decimal pid plus a newline, never more.
+function isFsCode(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === code;
+}
+
+// Exclusive create of a pid-shaped regular single-link file. Shared by `ui.pid` (lifecycle
+// start) and `ui.shutdown` (graceful stop request, issue #3351): both are a decimal pid plus
+// a newline, both must refuse a symlink/hard-link/FIFO, and neither may truncate an existing
+// inode. On EEXIST the NAME is unlinked (never a hard-linked target's content) and exclusive
+// create is retried once; a second collision fails closed.
+function createExclusivePidFileSlot(path: string): number {
+  const exclusive = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL;
+  try {
+    return openPidFileNoFollow(path, exclusive);
+  } catch (error) {
+    if (!isFsCode(error, "EEXIST")) throw error;
+  }
+  rmSync(path, { force: true });
+  return openPidFileNoFollow(path, exclusive);
+}
+
+export const KEIKO_UI_LAUNCH_ID_ENV = "KEIKO_UI_LAUNCH_ID";
+export const UI_LAUNCH_ID_FLAG = "--launch-id";
+const UI_LAUNCH_ID_PATTERN = /^[0-9a-f]{32}$/;
+
+export function isKeikoUiLaunchId(value: string): boolean {
+  return UI_LAUNCH_ID_PATTERN.test(value);
+}
+
+export interface PidRecord {
+  readonly pid: number;
+  readonly launchId?: string | undefined;
+}
+
+export function writeExclusivePidFile(path: string, pid: number, launchId?: string): void {
+  const fd = createExclusivePidFileSlot(path);
+  try {
+    assertRegularSingleLinkFile(fd, path);
+    writeSync(fd, encodePidFile(pid, launchId), null, "utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function encodePidFile(pid: number, launchId: string | undefined): string {
+  if (launchId === undefined) return `${String(pid)}\n`;
+  return `${String(pid)}\n${launchId}\n`;
+}
+
+export function shutdownRequestPath(stateDir: string): string {
+  return join(stateDir, UI_SHUTDOWN_REQUEST_FILE);
+}
+
+export function writeShutdownRequest(stateDir: string, pid: number, launchId?: string): void {
+  writeExclusivePidFile(shutdownRequestPath(stateDir), pid, launchId);
+}
+
+export function peekShutdownRequest(stateDir: string, pid: number, launchId?: string): boolean {
+  const record = readPidRecord(shutdownRequestPath(stateDir));
+  if (record === undefined) return false;
+  if (launchId !== undefined && launchId.length > 0 && record.launchId !== undefined) {
+    return record.launchId === launchId;
+  }
+  return record.pid === pid;
+}
+
+export function clearShutdownRequest(stateDir: string): void {
+  unlinkOwnedPidShapedName(shutdownRequestPath(stateDir), true);
+}
+
+export function removeStaleShutdownRequest(stateDir: string): void {
+  unlinkOwnedPidShapedName(shutdownRequestPath(stateDir), false);
+}
+
+function unlinkOwnedPidShapedName(path: string, ignoreDirectory: boolean): void {
+  try {
+    rmSync(path, { force: true });
+  } catch (error) {
+    // Node 24 reports a directory unlink as ERR_FS_EISDIR (legacy EISDIR is kept).
+    if (ignoreDirectory && (isFsCode(error, "EISDIR") || isFsCode(error, "ERR_FS_EISDIR"))) {
+      return;
+    }
+    throw error;
+  }
+}
+
+export function removePidFileIfMatches(path: string, pid: number, launchId?: string): boolean {
+  const record = readPidRecord(path);
+  if (!pidRecordMatches(record, pid, launchId)) return false;
+  rmSync(path, { force: true });
+  return true;
+}
+
+function pidRecordMatches(
+  record: PidRecord | undefined,
+  pid: number,
+  launchId: string | undefined,
+): boolean {
+  if (record === undefined) return false;
+  if (record.pid !== pid) return false;
+  if (launchId === undefined || record.launchId === undefined) return true;
+  return record.launchId === launchId;
+}
+
+// Small bound on <stateDir>/ui.pid: decimal pid, optional 32-hex launch id, newlines.
 const MAX_PID_FILE_BYTES = 64;
 
-// Reads a pid file written by `lifecycle.ts`. Returns the integer pid, or undefined when the
-// file is absent, unsafe (symlink / hard-link / FIFO / device), or does not contain a positive
-// integer — see the invariant comment above.
-export function readPidFile(path: string): number | undefined {
+function parsePidRecord(raw: string): PidRecord | undefined {
+  const lines = raw.split("\n");
+  const pidLine = lines[0]?.trim();
+  if (pidLine === undefined || !/^[1-9]\d*$/.test(pidLine)) return undefined;
+  const launchLine = lines[1]?.trim();
+  if (launchLine !== undefined && isKeikoUiLaunchId(launchLine)) {
+    return { pid: Number(pidLine), launchId: launchLine };
+  }
+  return { pid: Number(pidLine) };
+}
+
+export function readPidRecord(path: string): PidRecord | undefined {
   let fd: number;
   try {
     fd = openPidFileNoFollow(path, fsConstants.O_RDONLY);
@@ -190,14 +307,20 @@ export function readPidFile(path: string): number | undefined {
     assertRegularSingleLinkFile(fd, path);
     const buffer = Buffer.alloc(MAX_PID_FILE_BYTES);
     const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
-    const raw = buffer.subarray(0, bytesRead).toString("utf8").trim();
-    if (!/^[1-9]\d*$/.test(raw)) return undefined;
-    return Number(raw);
+    if (bytesRead === 0 || bytesRead === MAX_PID_FILE_BYTES) return undefined;
+    return parsePidRecord(buffer.subarray(0, bytesRead).toString("utf8"));
   } catch {
     return undefined;
   } finally {
     closeSync(fd);
   }
+}
+
+// Reads a pid file written by `lifecycle.ts`. Returns the integer pid, or undefined when the
+// file is absent, unsafe (symlink / hard-link / FIFO / device), or does not contain a positive
+// integer — see the invariant comment above.
+export function readPidFile(path: string): number | undefined {
+  return readPidRecord(path)?.pid;
 }
 
 // Liveness probe identical in semantics to the lifecycle handler: a successful
@@ -218,17 +341,22 @@ export type PidState = "absent" | "stale" | "running";
 export interface PidClassification {
   readonly state: PidState;
   readonly pid: number | undefined;
+  readonly launchId?: string | undefined;
 }
 
 // Classifies the UI pid file: `absent` (missing or malformed), `stale` (a pid is
-// recorded but the process is gone), or `running` (recorded and alive).
+// recorded but the process is gone), or `running` (recorded and alive). Reads the
+// pid and launch id from one record so stop/uninstall cannot pair a stale pid with
+// a replacement launch id.
 export function classifyPid(
   pidFilePath: string,
   isAlive: (pid: number) => boolean,
 ): PidClassification {
-  const pid = readPidFile(pidFilePath);
-  if (pid === undefined) return { state: "absent", pid: undefined };
-  return isAlive(pid) ? { state: "running", pid } : { state: "stale", pid };
+  const record = readPidRecord(pidFilePath);
+  if (record === undefined) return { state: "absent", pid: undefined };
+  const state: PidState = isAlive(record.pid) ? "running" : "stale";
+  if (record.launchId === undefined) return { state, pid: record.pid };
+  return { state, pid: record.pid, launchId: record.launchId };
 }
 
 // ── Runtime-state confidentiality manifest (Issue #1321) ──────────────────────
@@ -241,7 +369,7 @@ export function classifyPid(
 // writes:
 //
 //   <stateDir>/
-//     ui.pid, ui.log                        lifecycle.ts
+//     ui.pid, ui.log, ui.shutdown           lifecycle.ts
 //     launcher-state.json                   launcher-state.ts
 //     portable-install-state.json           portable.ts
 //     .launcher-state-*/                    launcher-state.ts atomic-save temp dirs
@@ -614,7 +742,9 @@ const logsSubtree: OwnedSubtree = {
 };
 
 function topLevelFileCategory(name: string): RuntimeStateCategory | undefined {
-  if (name === "ui.pid" || name === "ui.log") return "lifecycle";
+  if (name === "ui.pid" || name === "ui.log" || name === UI_SHUTDOWN_REQUEST_FILE) {
+    return "lifecycle";
+  }
   if (name === "launcher-state.json" || name === "portable-install-state.json") {
     return "launcher";
   }

@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import { existsSync, readFileSync, renameSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, join, resolve } from "node:path";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { savePrivateJson } from "./private-json.js";
@@ -146,7 +147,7 @@ function parseWorkspaceStateEnvelope(raw: unknown): WorkspaceStateSnapshot | nul
 function quarantineWorkspaceStateFile(path: string, cause: unknown): void {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const quarantinePath = `${path}.corrupt.${stamp}`;
-  renameSync(path, quarantinePath);
+  atomicPublishRename(path, quarantinePath, { rename: renameSync });
   savePrivateJson(`${quarantinePath}.diagnostic.json`, {
     incidentId: randomUUID(),
     store: "workspace-state",

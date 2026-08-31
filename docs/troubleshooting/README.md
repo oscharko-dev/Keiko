@@ -64,6 +64,7 @@ levels.
 | `.keiko/logs/server.log` | Redacted server activity log (JSON Lines), day-rotated with 7-day retention. See [Observability: the server activity log](../observability/README.md) for the field reference, `KEIKO_LOG_LEVEL`, and `keiko support export`/`keiko support analyze`. |
 | `.keiko/ui.log`          | Local UI process log. Written by `keiko start` for the background UI process.                                                                                                                                                                         |
 | `.keiko/ui.pid`          | Background UI process id. Removed by `keiko stop` and by `keiko start` when the pid is not alive.                                                                                                                                                     |
+| `.keiko/ui.shutdown`     | Pid-bound graceful-stop request written by `keiko stop` / `restart` / `uninstall --force`. The UI drains when it sees its own pid here; Windows cannot deliver cross-process `SIGTERM`. Removed once the process is confirmed gone.                   |
 | `.keiko/evidence/`       | Redacted evidence written by surfaces that persist a manifest (for example `keiko verify`).                                                                                                                                                           |
 | `~/.keiko/keiko-ui.db`   | Local UI state database. User-scoped, not project-scoped.                                                                                                                                                                                             |
 
@@ -184,7 +185,7 @@ lsof -nP -iTCP:1983 -sTCP:LISTEN
 Get-NetTCPConnection -LocalPort 1983 -State Listen
 
 # Confirm Keiko's own pid file, if any, no longer points at a live process.
-cat .keiko/ui.pid 2>/dev/null && ps -p "$(cat .keiko/ui.pid)" || echo "no live keiko pid"
+cat .keiko/ui.pid 2>/dev/null && ps -p "$(head -n 1 .keiko/ui.pid 2>/dev/null | tr -d ' \t\r')" || echo "no live keiko pid"
 ```
 
 **Resolution**

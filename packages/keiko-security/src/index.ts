@@ -28,6 +28,22 @@ export { sealString, openString, sealBytes, openBytes, isSealed } from "./secret
 // packages that previously each carried a private copy [GEN-MAINT-COUPLING-005].
 export { DIR_MODE, FILE_MODE, ensureDirHardened, chmodIfPresent } from "./fs-hardening.js";
 
+// Shared Windows-gated atomic-publish rename [issue #3352]. Same owner as fs-hardening so CLI,
+// server, vault, and evidence cannot drift onto a private retry loop.
+export type {
+  AtomicPublishRenameFn,
+  AtomicPublishRenameOptions,
+  CwdOutsideTreeOptions,
+} from "./fs-atomic-rename.js";
+export {
+  WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+  WINDOWS_ATOMIC_RENAME_RETRY_CODES,
+  WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS,
+  atomicPublishRename,
+  atomicPublishTreeSwap,
+  withCwdOutsideTree,
+} from "./fs-atomic-rename.js";
+
 // Shared, bounded macOS Keychain key tier — one owner for the vault surfaces that previously each
 // carried a private copy of the same unbounded `security` spawn [GEN-MAINT-COUPLING-006].
 export type { MacosKeychainOptions, MacosKeychainRead } from "./macos-keychain.js";
@@ -49,10 +65,16 @@ export {
 } from "./sqlite-corruption.js";
 
 // Content-free activity-log seam for this package (ADR-0019, w4a-security-log-port) — independent
-// of `keiko-local-knowledge`'s `KnowledgeLogSink`. Wired into `readMacosKeychainSecret` and
-// `createShardedLocalSecretVault`'s shard reads; the composition root supplies the real sink.
+// of `keiko-local-knowledge`'s `KnowledgeLogSink`. Wired into `readMacosKeychainSecret`,
+// `createShardedLocalSecretVault`'s shard reads, and `LocalSecretVault.setMany`. The composition
+// root supplies the real sink.
 export type { SecurityLogEvent, SecurityLogSink } from "./log-port.js";
-export { emitSecurityLogEvent, nullSecurityLogSink, securityErrorKind } from "./log-port.js";
+export {
+  emitSecurityLogEvent,
+  bindSecurityLogCorrelation,
+  nullSecurityLogSink,
+  securityErrorKind,
+} from "./log-port.js";
 
 // Prompt Enhancer authoritative injection / unsafe-content detector (#1313, ADR-0044 §1/§5).
 export type {

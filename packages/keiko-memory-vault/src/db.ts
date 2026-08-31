@@ -14,6 +14,7 @@ import {
   ensureDirHardened,
   FILE_MODE,
 } from "@oscharko-dev/keiko-security/fs-hardening";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 // Shared SQLite corruption classifier [GEN-DUP-SEMANTIC-019]. The pure classification vocabulary is
 // owned by keiko-security; the fs-bound recovery machinery (quarantine, quick_check, open) stays here.
 import {
@@ -71,7 +72,7 @@ function assertQuickCheckOk(db: DatabaseSync): void {
 // file was found corrupt. Returns silently when there's nothing to rotate.
 function rotateSidecar(sourcePath: string, stampedPath: string, hadAtSnapshot: boolean): void {
   if (existsSync(sourcePath)) {
-    renameSync(sourcePath, stampedPath);
+    atomicPublishRename(sourcePath, stampedPath, { rename: renameSync });
     return;
   }
   if (hadAtSnapshot && !existsSync(stampedPath)) {

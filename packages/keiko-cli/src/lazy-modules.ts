@@ -26,3 +26,4 @@ export const loadServer = memo(() => import("@oscharko-dev/keiko-server"));
 export const loadCredentialVault = memo(
   () => import("@oscharko-dev/keiko-server/credential-vault"),
 );
+export const loadTools = memo(() => import("@oscharko-dev/keiko-tools"));

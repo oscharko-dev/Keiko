@@ -1701,10 +1701,12 @@ function buildUpdateSession(options: {
     processEnv: options.env,
     lock: createStateDirUpdateSessionLock(resolveUpdateStateDir(options.env), {
       diagnostics: options.diagnostics,
+      securityLogSink: processServerLogSink(),
     }),
     portableStager: createPortableUpdateStager({
       env: options.env,
       localState: options.updateLocalState,
+      securityLogSink: processServerLogSink(),
       egress: () =>
         options.runtimeConfig.current()?.egress ??
         resolveOutboundHttpEgressConfig(undefined, options.env),

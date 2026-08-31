@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import type {
   ReleaseImpactRemediation,
   UpdateCompatibilityScan,
@@ -384,7 +385,7 @@ function discardRemediationLease(
 ): boolean {
   const claimedPath = `${path}.reclaim.${randomUUID()}`;
   try {
-    renameSync(path, claimedPath);
+    atomicPublishRename(path, claimedPath, { rename: renameSync });
   } catch {
     return false;
   }
@@ -402,7 +403,7 @@ function discardRemediationLease(
   try {
     if (expected === undefined) {
       const suffix = new Date(now()).toISOString().replace(/[:.]/g, "-");
-      renameSync(claimedPath, `${path}.corrupt.${suffix}`);
+      atomicPublishRename(claimedPath, `${path}.corrupt.${suffix}`, { rename: renameSync });
     } else {
       unlinkSync(claimedPath);
     }
@@ -419,7 +420,7 @@ function releaseRemediationLease(path: string, token: string): void {
   if (readRemediationLease(path)?.token !== token) return;
   const claimedPath = `${path}.release.${token}`;
   try {
-    renameSync(path, claimedPath);
+    atomicPublishRename(path, claimedPath, { rename: renameSync });
   } catch {
     return;
   }

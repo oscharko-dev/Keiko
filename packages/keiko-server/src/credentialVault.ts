@@ -84,7 +84,11 @@ export function openProviderCredentialVault(options: OpenCredentialVaultOptions)
     ...(options.keychainAccess !== undefined ? { keychainAccess: options.keychainAccess } : {}),
     sink: options.securityLogSink,
   });
-  return createLocalSecretVault({ key, storePath: credentialStorePath(options.configPath) });
+  return createLocalSecretVault({
+    key,
+    storePath: credentialStorePath(options.configPath),
+    ...(options.securityLogSink !== undefined ? { sink: options.securityLogSink } : {}),
+  });
 }
 
 // A crypto-free resolver for the gateway/CLI: maps `cred:<modelId>` to its plaintext secret. It is
@@ -370,10 +374,9 @@ function persistVaultEntries(
   entries: ReadonlyMap<string, string>,
 ): void {
   if (entries.size === 0) return;
-  const vault = openProviderCredentialVault(options);
-  for (const [reference, secret] of entries) {
-    vault.set(reference, secret);
-  }
+  // Merge, never replaceAll: untouched vault entries must survive an unrelated re-seal. One
+  // setMany commit, not a set() per credential — each set() rewrites the whole vault file (#3346).
+  openProviderCredentialVault(options).setMany(entries);
 }
 
 export function pruneProviderCredentialVault(
@@ -384,11 +387,7 @@ export function pruneProviderCredentialVault(
   if (!existsSync(storePath)) return;
   const active = new Set(activeSecretRefs);
   const vault = openProviderCredentialVault(options);
-  for (const reference of vault.list()) {
-    if (!active.has(reference)) {
-      vault.delete(reference);
-    }
-  }
+  vault.deleteMany(vault.list().filter((reference) => !active.has(reference)));
 }
 
 export function sealProviderApiKeys(options: SealProviderApiKeysOptions): readonly unknown[] {

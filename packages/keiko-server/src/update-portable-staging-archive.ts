@@ -18,6 +18,8 @@ import { basename, dirname, join, posix, relative, resolve, sep } from "node:pat
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
+import { bindSecurityLogCorrelation, type SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { atomicPublishTreeSwap } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import yauzl from "yauzl";
 import {
   MAX_ARCHIVE_ENTRIES,
@@ -465,6 +467,10 @@ export async function stageArchiveBytes(input: {
   readonly stageId: string;
   readonly sidecars: readonly PortableSidecarRuntimeVerification[];
   readonly platformVerifier?: PortablePlatformVerifier | undefined;
+  readonly securityLogSink?: SecurityLogSink | undefined;
+  readonly rename?: typeof renameSync | undefined;
+  readonly platform?: NodeJS.Platform | undefined;
+  readonly sleep?: ((ms: number) => void) | undefined;
 }): Promise<void> {
   const finalRoot = stagingRoot(input.session, input.target, input.stageId);
   const workRoot = mkdtempSync(join(dirname(finalRoot), `${input.stageId}.tmp-`));
@@ -484,9 +490,36 @@ export async function stageArchiveBytes(input: {
       sidecars: input.sidecars,
     });
     rmSync(finalRoot, { recursive: true, force: true });
-    renameSync(workRoot, finalRoot);
+    publishStagedArchiveTree(workRoot, finalRoot, input);
   } catch (error) {
     rmSync(workRoot, { recursive: true, force: true });
     throw error;
   }
+}
+
+export function publishStagedArchiveTree(
+  workRoot: string,
+  finalRoot: string,
+  input: {
+    readonly stageId: string;
+    readonly securityLogSink?: SecurityLogSink | undefined;
+    readonly rename?: typeof renameSync | undefined;
+    readonly platform?: NodeJS.Platform | undefined;
+    readonly sleep?: ((ms: number) => void) | undefined;
+  },
+): void {
+  atomicPublishTreeSwap(workRoot, finalRoot, {
+    rename: input.rename ?? renameSync,
+    ...(input.platform === undefined ? {} : { platform: input.platform }),
+    ...(input.sleep === undefined ? {} : { sleep: input.sleep }),
+    ...boundRenameSink(input.securityLogSink, input.stageId),
+  });
+}
+
+function boundRenameSink(
+  sink: SecurityLogSink | undefined,
+  correlationId: string,
+): { readonly securityLogSink: SecurityLogSink } | Record<string, never> {
+  const bound = bindSecurityLogCorrelation(sink, correlationId);
+  return bound === undefined ? {} : { securityLogSink: bound };
 }

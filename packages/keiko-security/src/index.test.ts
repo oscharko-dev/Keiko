@@ -39,6 +39,13 @@ import {
   FILE_MODE,
   ensureDirHardened,
   chmodIfPresent,
+  bindSecurityLogCorrelation,
+  WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+  WINDOWS_ATOMIC_RENAME_RETRY_CODES,
+  WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS,
+  atomicPublishRename,
+  atomicPublishTreeSwap,
+  withCwdOutsideTree,
   SqliteQuickCheckError,
   sqliteErrorLike,
   sqliteErrorText,
@@ -130,6 +137,16 @@ describe("keiko-security package surface", () => {
     expect(FILE_MODE).toBe(0o600);
     expect(typeof ensureDirHardened).toBe("function");
     expect(typeof chmodIfPresent).toBe("function");
+  });
+
+  it("exposes the shared atomic-publish rename primitives", () => {
+    expect(typeof atomicPublishRename).toBe("function");
+    expect(typeof atomicPublishTreeSwap).toBe("function");
+    expect(typeof withCwdOutsideTree).toBe("function");
+    expect([...WINDOWS_ATOMIC_RENAME_RETRY_CODES]).toEqual(["EBUSY", "EPERM"]);
+    expect([...WINDOWS_ATOMIC_RENAME_BACKOFF_MS]).toEqual([0, 20, 40, 80, 160, 320]);
+    expect([...WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS]).toEqual([0, 20, 40]);
+    expect(typeof bindSecurityLogCorrelation).toBe("function");
   });
 
   it("exposes the shared SQLite corruption classifier", () => {

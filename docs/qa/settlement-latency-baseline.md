@@ -14,15 +14,17 @@ name or an author.
 
 ## Definitions
 
-| Column                | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `settlement`          | From the **first** instant every required check was green to `merged_at`. This is the span Issue #2708's founding 108–122 minute measurements describe. It is reported whenever the change was green at some point before the merge, **independent of the outcome column** — an administrative merge that landed while a later head was still finishing still had a first green head, and that span is a fact worth keeping. |
-| `final gap`           | From the **last** head turning green to `merged_at`. This is auto-merge's own latency. Reported **only** for `measured`: for any other outcome the final head was not green at the merge, so there is no gap to state.                                                                                                                                                                                                       |
-| `repair rounds`       | Heads CI actually observed, minus one. A commit pushed inside a batch behind a later commit was never a head and is not counted.                                                                                                                                                                                                                                                                                             |
-| `reactions`           | Per repair round: from the earliest finding published while the previous head was live, to the moment CI started on the repair.                                                                                                                                                                                                                                                                                              |
-| `never-fully-green`   | The final head never had enough required checks green — an administrative merge, or a required set that predates the current vocabulary.                                                                                                                                                                                                                                                                                     |
-| `merged-before-green` | A required check was still completing when the merge landed. Such a row has no `final gap` by definition, but it does carry a `settlement` span whenever an earlier head had already been green.                                                                                                                                                                                                                             |
-| `truncated`           | GitHub returned a truncated commit, thread or check-context list, so no duration can be trusted for that pull request.                                                                                                                                                                                                                                                                                                       |
+| Column                        | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `settlement`                  | From the **first** instant every required check was green to `merged_at`. This is the span Issue #2708's founding 108–122 minute measurements describe. It is reported whenever the change was green at some point before the merge, **independent of the outcome column** — an administrative merge that landed while a later head was still finishing still had a first green head, and that span is a fact worth keeping. |
+| `final gap`                   | From the **last** head turning green to `merged_at`. This is auto-merge's own latency. Reported **only** for `measured`: for any other outcome the final head was not green at the merge, so there is no gap to state.                                                                                                                                                                                                       |
+| `repair rounds`               | Heads CI actually observed, minus one. A commit pushed inside a batch behind a later commit was never a head and is not counted.                                                                                                                                                                                                                                                                                             |
+| `reactions`                   | Per repair round: from the earliest finding published while the previous head was live, to the moment CI started on the repair.                                                                                                                                                                                                                                                                                              |
+| `never-fully-green`           | The final head never had enough required checks green — an administrative merge, or a required set that predates the current vocabulary.                                                                                                                                                                                                                                                                                     |
+| `merged-before-green`         | A required check was still completing when the merge landed. Such a row has no `final gap` by definition, but it does carry a `settlement` span whenever an earlier head had already been green.                                                                                                                                                                                                                             |
+| `truncated`                   | GitHub returned a truncated commit, thread or check-context list, so no duration can be trusted for that pull request.                                                                                                                                                                                                                                                                                                       |
+| `in-SLO`                      | Cohort count of measured reactions whose duration is **≤10 minutes**, written `within/samples`. Produced by the reporter; never hand-restated.                                                                                                                                                                                                                                                                               |
+| `10-30` / `30-60` / `>60 min` | Over-SLO duration bands for the same measured reactions. Counts only. Used to separate monitoring lag from session gaps.                                                                                                                                                                                                                                                                                                     |
 
 ## What the numbers say
 
@@ -149,7 +151,102 @@ and reaction time remain the operative cost. No review conversation was bulk-res
 or otherwise automated to create this report; the observation does not change ADR-0135 settlement
 semantics.
 
-The regression is tracked in [#3342](https://github.com/oscharko-dev/Keiko/issues/3342). After the
-next 10 finding-bearing pull requests merge to `dev`, rerun the same body-free report and compare
-the 10-minute-SLO share and median reaction against both cohorts above. The investigation must not
-weaken review, conversation-resolution, required-check, or merge controls.
+The regression is tracked in [#3342](https://github.com/oscharko-dev/Keiko/issues/3342). The follow-up
+cohort, comparison, operational causes, and bounded remediation are recorded below. The investigation
+does not weaken review, conversation-resolution, required-check, or merge controls.
+
+## Follow-up observation (#3342)
+
+Generated on 2026-08-31 with `npm run report:settlement-latency -- --count 10`. Issue #3342 asked to
+rerun `--count 11` after the next 10 finding-bearing pull requests merged to `dev`. The 10 most
+recently merged pull requests on that date were all finding-bearing, so `--count 10` is the matching
+window; `--count 11` would have overlapped `#3305` from the 2026-08-28 observation and mixed the two
+cohorts. The report is read-only and reports only durations, counts, pull-request numbers, and the
+allowlisted categorical labels.
+
+| PR   | cohort          | outcome             | heads | repair rounds | findings | settlement (min) | final gap (min) | reactions (min)                       |
+| ---- | --------------- | ------------------- | ----: | ------------: | -------: | ---------------: | --------------: | ------------------------------------- |
+| 3355 | finding-bearing | truncated           |    27 |            26 |      100 |                - |               - | 46.6, 29, 8.1, 148.8, 9.3, 19.9, 96.8 |
+| 3356 | finding-bearing | measured            |     8 |             7 |       37 |             83.4 |             0.1 | 49.6, 46.8, 89.7, 103.2               |
+| 3354 | finding-bearing | measured            |     5 |             4 |       79 |             33.3 |             1.7 | 11.6, 89.2, 18.2                      |
+| 3348 | finding-bearing | measured            |     7 |             6 |       19 |            278.2 |             0.7 | 8, 158.5                              |
+| 3343 | finding-bearing | measured            |     5 |             4 |        7 |            255.1 |             0.1 | 39.9, 34.4                            |
+| 3345 | finding-bearing | measured            |     3 |             2 |        3 |              2.9 |             2.9 | 29.3, 10.1                            |
+| 3308 | finding-bearing | measured            |    10 |             9 |       18 |             22.9 |             2.7 | 12.5, 23.4, 6.1                       |
+| 3307 | finding-bearing | measured            |    16 |            15 |       26 |            437.4 |             0.4 | 13, 17.2, 12.3, 26.4, 6.2, 15.4       |
+| 3306 | finding-bearing | measured            |    19 |            18 |       40 |            301.1 |             0.2 | 41.6, 17.2, 2.4, 2.2, 3.1             |
+| 3341 | finding-bearing | merged-before-green |     1 |             0 |        4 |                - |               - | -                                     |
+
+| cohort          | PRs | measured | median settlement | max settlement | median final gap | median rounds | median reaction |
+| --------------- | --: | -------: | ----------------: | -------------: | ---------------: | ------------: | --------------: |
+| finding-bearing |  10 |        8 |             169.3 |          437.4 |              0.6 |           6.5 |            17.2 |
+| clean           |   0 |        0 |                 - |              - |                - |             - |               - |
+
+| cohort          | reactions | in-SLO | 10-30 min | 30-60 min | >60 min | median reaction |
+| --------------- | --------: | ------ | --------: | --------: | ------: | --------------: |
+| finding-bearing |        27 | 6/27   |        12 |         5 |       4 |            17.2 |
+| clean           |         0 | 0/0    |         0 |         0 |       0 |               - |
+
+The ten finding-bearing pull requests were `#3355`, `#3356`, `#3354`, `#3348`, `#3343`, `#3345`,
+`#3308`, `#3307`, `#3306`, and `#3341`. After omitting the truncated `#3355` row, they contain 27
+measured reactions; 6 were within the 10-minute SLO (**22.2%**) and the median reaction was
+**17.2 minutes**. Against the 2026-07-26 baseline
+(50 of 119, **42%**, median **11.4 minutes**) this remains a regression. Against the 2026-08-28
+post-adoption cohort (7 of 30, **23.3%**, median **22.5 minutes**) the share is unchanged and the
+median is slightly faster; the SLO miss did not recover.
+
+`#3306` is the in-SLO reaction to monitor: three of its five measured reactions were **2.2**,
+**2.4**, and **3.1 minutes**. `#3348` shows the same pull request can land both an in-SLO reaction
+(**8 minutes**) and a session-gap reaction (**158.5 minutes**), so the tail is not a CI floor.
+
+`#3355` is `truncated`: the collector's `reviewThreads(first: 100)` cap was hit (100 findings on 27
+heads). Its observed reactions are reported on the pull-request row rather than dropped, but they
+are omitted from cohort SLO reaction aggregates because the duration set is incomplete.
+
+The original diagnosis remains true: the median final checks-green-to-merged gap is **0.6 minutes**,
+well inside the 30-minute target, while repair rounds (median **6.5**, baseline **3**) and reaction
+time remain the operative cost. No review conversation was bulk-resolved, timer-resolved, or
+otherwise automated to create this report; the observation does not change ADR-0135 settlement
+semantics.
+
+### Operational causes
+
+Body-free only: durations, counts, pull-request numbers, and closed outcome labels.
+
+1. **Waiting for unpublished producers, not auto-merge (hypothesis).** Auto-merge still closes in under a minute
+   once the last required check is green. **12 of 27** reactions sit in the 10–30 minute band — a
+   shape consistent with starting a repair only after CI or another reviewer has settled, even though
+   findings arrive while CI is still running.
+2. **An operating-rule contradiction (hypothesis).** [`review-settlement.md`](review-settlement.md) stated both
+   "push one repair within 10 minutes of appearance" and "wait for all producers to settle" before
+   composing a head. The second instruction produces the first band. The harvest window below
+   replaces that wait.
+3. **Session gaps, not a tooling minimum (hypothesis).** **4 of 27** reactions exceed 60 minutes (89.2 to 158.5).
+   `#3348` carried both **8** and **158.5** minutes; `#3306` carried both **2.2–3.1** and **41.6**.
+   In-SLO reaction is already achieved on the same pull requests that also carry the tail, so the
+   miss is operator/session continuity rather than a reviewer or CI lower bound.
+4. **Elevated repair-round volume.** Median **6.5** rounds against the baseline **3**. More rounds
+   produce more reaction samples; each slow reaction adds wall-clock because the round no longer
+   overlaps CI.
+5. **Large-PR measurement hole.** `#3355` truncated at 100 review threads. That is a collector cap,
+   not a reason to reduce review volume.
+
+### Bounded operational remediation
+
+Owner of execution: the **delivering agent** on each pull request. Owner of the written rule: the
+repository maintainer, via [`AGENTS.md`](../../AGENTS.md) §11 and
+[`review-settlement.md`](review-settlement.md).
+
+- **Harvest window (immediate).** From the first finding published on a head, the delivering agent
+  has 10 minutes to push one repair that includes every finding already published by every producer
+  (failing jobs, Sonar issues, unresolved threads). It does not wait for CI to turn green, for a
+  reviewer that has not yet spoken, or for the ADR-0170 D5 interlock. That interlock gates
+  auto-merge arming, not repair.
+- **Handoff.** If the same session cannot push the repair within 10 minutes, the next agent that
+  touches the pull request starts from CI logs, Sonar issues, and unresolved threads immediately.
+- **Not pulled.** No automation, bulk action, timer, or dismissal resolves a review conversation.
+  Required checks are unchanged. Merge-queue activation remains an owner decision
+  ([`review-settlement.md`](review-settlement.md)).
+
+The in-SLO share is now a produced column of `npm run report:settlement-latency` (counts, not a
+hand-restated percentage) so the next regeneration cannot silently drift from the formula.

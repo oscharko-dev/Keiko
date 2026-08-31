@@ -33,7 +33,12 @@ import { resolvePreferredInstallLayout } from "./install-layout.js";
 // Only type imports may reference the package at module scope here.
 import { loadServer as loadServerModule } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
-import { defaultUiDataDir } from "./state-paths.js";
+import {
+  defaultUiDataDir,
+  isKeikoUiLaunchId,
+  KEIKO_UI_LAUNCH_ID_ENV,
+  peekShutdownRequest,
+} from "./state-paths.js";
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
 const KEIKO_PROCESS_TITLE = "Keiko";
@@ -46,7 +51,7 @@ const LOCAL_DOTENV_ENV_NAME_ALLOWLIST: ReadonlySet<string> = new Set(["FIGMA_ACC
 const DEFAULT_STATE_DIR = ".keiko";
 
 const USAGE = `Usage:
-  keiko ui [--port PORT] [--host 127.0.0.1|localhost] [--evidence-dir PATH] [--config PATH] [--ui-db PATH]
+  keiko ui [--port PORT] [--host 127.0.0.1|localhost] [--evidence-dir PATH] [--config PATH] [--ui-db PATH] [--launch-id ID]
 
 Launches the local Keiko UI on the loopback interface and prints its URL. The server
 binds 127.0.0.1 only and serves the packaged UI assets (built with \`npm run build:ui\`).
@@ -60,7 +65,7 @@ export interface UiCliArgs {
 }
 
 type UiParseResult = UiCliArgs | "help" | null;
-type UiFlag = "--port" | "--host" | "--evidence-dir" | "--config" | "--ui-db";
+type UiFlag = "--port" | "--host" | "--evidence-dir" | "--config" | "--ui-db" | "--launch-id";
 
 interface RawUiOptions {
   portRaw?: string | undefined;
@@ -68,6 +73,7 @@ interface RawUiOptions {
   evidenceRaw?: string | undefined;
   configRaw?: string | undefined;
   uiDbRaw?: string | undefined;
+  launchIdRaw?: string | undefined;
 }
 
 // Test seam: inject a server factory and the resolved asset paths so unit tests never bind a real
@@ -186,7 +192,8 @@ function isUiFlag(arg: string): arg is UiFlag {
     arg === "--host" ||
     arg === "--evidence-dir" ||
     arg === "--config" ||
-    arg === "--ui-db"
+    arg === "--ui-db" ||
+    arg === "--launch-id"
   );
 }
 
@@ -206,6 +213,9 @@ function setRawUiOption(raw: RawUiOptions, flag: UiFlag, value: string): void {
       return;
     case "--ui-db":
       raw.uiDbRaw = value;
+      return;
+    case "--launch-id":
+      raw.launchIdRaw = value;
       return;
   }
 }
@@ -230,8 +240,11 @@ function collectUiOptions(args: readonly string[]): RawUiOptions | "help" | null
 export function parseUiArgs(args: readonly string[]): UiParseResult {
   const raw = collectUiOptions(args);
   if (raw === "help" || raw === null) return raw;
-  const { portRaw, hostRaw, evidenceRaw, configRaw, uiDbRaw } = raw;
+  const { portRaw, hostRaw, evidenceRaw, configRaw, uiDbRaw, launchIdRaw } = raw;
   if (hostRaw !== undefined && !ALLOWED_HOSTS.has(hostRaw)) {
+    return null;
+  }
+  if (launchIdRaw !== undefined && !isKeikoUiLaunchId(launchIdRaw)) {
     return null;
   }
   const port = portRaw === undefined ? DEFAULT_UI_PORT : parsePort(portRaw);
@@ -497,12 +510,114 @@ export function attachDurableServerErrorListener(
 // force-terminated once a bounded grace window has passed, so shutdown always
 // completes; their `close` handlers still run, releasing subscriptions.
 const SHUTDOWN_FORCE_CLOSE_GRACE_MS = 3_000;
+const SHUTDOWN_REQUEST_POLL_MS = 250;
 
-// The reason label `process.exiting` carries. `waitForShutdown`'s own handlers only ever produce
-// the first three; `fatal-exception` is reserved for a future top-level uncaught-exception/
-// unhandled-rejection handler outside this work item's scope, kept here so that producer can reuse
-// the same closed vocabulary instead of inventing a second one.
-export type ProcessExitReason = "sigint" | "sigterm" | "server-close" | "fatal-exception";
+function watchShutdownRequest(
+  peek: () => boolean,
+  beginDrain: () => void,
+): ReturnType<typeof setInterval> | null {
+  if (peek()) {
+    beginDrain();
+    return null;
+  }
+  const pollTimer = setInterval(() => {
+    if (peek()) beginDrain();
+  }, SHUTDOWN_REQUEST_POLL_MS);
+  pollTimer.unref();
+  return pollTimer;
+}
+
+class ShutdownSession {
+  private begun = false;
+  private forceTimer: ReturnType<typeof setTimeout> | null = null;
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly handleSigint = (): void => {
+    this.beginDrain("sigint");
+  };
+  private readonly handleSigterm = (): void => {
+    this.beginDrain("sigterm");
+  };
+  private readonly onClose = (): void => {
+    if (this.begun) return;
+    this.begun = true;
+    writeProcessExiting(this.activity, "server-close");
+    this.detachSignals();
+    this.settle();
+  };
+
+  public constructor(
+    private readonly server: Server,
+    private readonly activity: WaitForShutdownActivity,
+    private readonly forceCloseGraceMs: number,
+    private readonly resolvePromise: () => void,
+  ) {}
+
+  public arm(): void {
+    this.server.once("close", this.onClose);
+    process.once("SIGINT", this.handleSigint);
+    process.once("SIGTERM", this.handleSigterm);
+  }
+
+  public watchRequest(peek: () => boolean): void {
+    this.pollTimer = watchShutdownRequest(peek, () => {
+      this.beginDrain("shutdown-request");
+    });
+  }
+
+  public beginDrain(reason: ProcessExitReason): void {
+    if (this.begun) return;
+    this.begun = true;
+    writeProcessExiting(this.activity, reason);
+    this.detachSignals();
+    this.server.removeListener("close", this.onClose);
+    this.server.closeIdleConnections();
+    this.forceTimer = setTimeout(() => {
+      this.server.closeAllConnections();
+    }, this.forceCloseGraceMs);
+    this.forceTimer.unref();
+    this.server.close(() => {
+      this.settle();
+    });
+  }
+
+  private detachSignals(): void {
+    process.removeListener("SIGINT", this.handleSigint);
+    process.removeListener("SIGTERM", this.handleSigterm);
+  }
+
+  private settle(): void {
+    if (this.forceTimer !== null) clearTimeout(this.forceTimer);
+    if (this.pollTimer !== null) clearInterval(this.pollTimer);
+    this.forceTimer = null;
+    this.pollTimer = null;
+    this.resolvePromise();
+  }
+}
+
+// Keeps the real-CLI process alive until a shutdown signal, shutdown-request sentinel, or server
+// close. Resolves cleanly so the caller can return 0. Registered listeners are removed on resolve
+// to prevent leaks.
+export function waitForShutdown(
+  server: Server,
+  forceCloseGraceMs = SHUTDOWN_FORCE_CLOSE_GRACE_MS,
+  activity: WaitForShutdownActivity = {},
+): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const session = new ShutdownSession(server, activity, forceCloseGraceMs, resolve);
+    session.arm();
+    const peek = activity.peekShutdownRequest;
+    if (peek !== undefined) session.watchRequest(peek);
+  });
+}
+
+// The reason label `process.exiting` carries. `waitForShutdown`'s own handlers produce
+// sigint/sigterm (in-process signals), shutdown-request (the pid-bound `<stateDir>/ui.shutdown`
+// sentinel `keiko stop` writes — the Windows-safe channel, issue #3351), and server-close.
+// `fatal-exception` is reserved for a future top-level uncaught-exception/unhandled-rejection
+// handler outside this work item's scope, kept here so that producer can reuse the same closed
+// vocabulary instead of inventing a second one.
+export type ProcessExitReason =
+  "sigint" | "sigterm" | "server-close" | "shutdown-request" | "fatal-exception";
 
 // What `waitForShutdown` needs to report the process-lifecycle exit line and release the
 // heartbeat resources `startUiServer` scheduled. All optional: the injected-server test path
@@ -521,6 +636,11 @@ export interface WaitForShutdownActivity {
   // `waitForShutdown`), which never loads the real server module; `writeProcessExiting` falls back
   // to `activityLog.close?.()` in that case, since both close the same resource.
   readonly closeActivityLog?: (() => void) | undefined;
+  // Issue #3351: `keiko stop` cannot deliver POSIX SIGTERM to another process on Windows
+  // (`process.kill` is TerminateProcess). The parent writes `<stateDir>/ui.shutdown` bound to
+  // this pid; this peek is how the child observes that request. Optional so injected-server
+  // tests of `waitForShutdown` keep the signal-only contract.
+  readonly peekShutdownRequest?: (() => boolean) | undefined;
 }
 
 // The independent-channel idiom `knowledge-log.ts`'s `warnFailedKnowledgeLogSink` uses: when the
@@ -575,55 +695,6 @@ function writeProcessExiting(activity: WaitForShutdownActivity, reason: ProcessE
   } else {
     activityLog.close?.();
   }
-}
-
-// Keeps the real-CLI process alive until a shutdown signal or server close. Resolves cleanly so
-// the caller can return 0. Registered listeners are removed on resolve to prevent leaks.
-export function waitForShutdown(
-  server: Server,
-  forceCloseGraceMs = SHUTDOWN_FORCE_CLOSE_GRACE_MS,
-  activity: WaitForShutdownActivity = {},
-): Promise<void> {
-  return new Promise<void>((resolve) => {
-    let forceTimer: ReturnType<typeof setTimeout> | null = null;
-    const settle = (): void => {
-      if (forceTimer !== null) {
-        clearTimeout(forceTimer);
-        forceTimer = null;
-      }
-      resolve();
-    };
-    const onClose = (): void => {
-      writeProcessExiting(activity, "server-close");
-      process.removeListener("SIGINT", handleSigint);
-      process.removeListener("SIGTERM", handleSigterm);
-      settle();
-    };
-    const onSignal = (reason: "sigint" | "sigterm"): void => {
-      writeProcessExiting(activity, reason);
-      process.removeListener("SIGINT", handleSigint);
-      process.removeListener("SIGTERM", handleSigterm);
-      server.removeListener("close", onClose);
-      server.closeIdleConnections();
-      forceTimer = setTimeout(() => {
-        server.closeAllConnections();
-      }, forceCloseGraceMs);
-      // The grace timer must never be what keeps the process alive.
-      forceTimer.unref();
-      server.close(() => {
-        settle();
-      });
-    };
-    const handleSigint = (): void => {
-      onSignal("sigint");
-    };
-    const handleSigterm = (): void => {
-      onSignal("sigterm");
-    };
-    server.once("close", onClose);
-    process.once("SIGINT", handleSigint);
-    process.once("SIGTERM", handleSigterm);
-  });
 }
 
 // Default probe: try to require node:sqlite. Any failure (ERR_UNKNOWN_BUILTIN_MODULE on early
@@ -1021,6 +1092,8 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
     startedAt,
     onShutdown: stopHeartbeat,
     closeActivityLog,
+    peekShutdownRequest: () =>
+      peekShutdownRequest(stateDir, process.pid, process.env[KEIKO_UI_LAUNCH_ID_ENV]),
   });
 }
 

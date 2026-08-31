@@ -17,12 +17,14 @@
 // Windows-only and stays CI's job; these tests cover the flag-derivation half, which is where the
 // drift risk lives.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const GATE = "scripts/check-windows-native-quality.ps1";
+const RFC3161_PROJECT = "scripts/native-quality/windows-rfc3161-quality.csproj";
+const RFC3161_LOCK = "scripts/native-quality/packages.lock.json";
 const PRODUCTION_LAUNCHER = "scripts/stage-portable-runtime.mjs";
 const PRODUCTION_SETUP_BOOTSTRAP = "scripts/build-windows-portable-setup.mjs";
 
@@ -67,6 +69,128 @@ function derivationAccepts({
 
   return execFileSync("pwsh", ["-NoProfile", "-Command", script], { encoding: "utf8" });
 }
+
+function packageReferences(csproj) {
+  const blocks = [...csproj.matchAll(/<PackageReference\b[\s\S]*?(?:\/>|<\/PackageReference>)/gu)];
+  expect(blocks.length, `${RFC3161_PROJECT} has no PackageReference`).toBeGreaterThan(0);
+  return blocks.map((match) => {
+    const block = match[0];
+    const include = /\bInclude\s*=\s*["']([^"']+)["']/u.exec(block)?.[1];
+    const versionAttr = /\bVersion\s*=\s*["']([^"']+)["']/u.exec(block)?.[1];
+    const versionChild = /<Version>\s*([^<]+)\s*<\/Version>/u.exec(block)?.[1]?.trim();
+    const version = (versionAttr ?? versionChild)?.trim();
+    expect(include, `unrecognized PackageReference ${block}`).toEqual(expect.any(String));
+    expect(
+      version !== undefined && version.length > 0,
+      `PackageReference ${include ?? "unknown"} has no Version`,
+    ).toBe(true);
+    return { id: include, version };
+  });
+}
+
+function stripLineComments(source) {
+  return source
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("#"))
+    .join("\n");
+}
+
+function invocationHasLockedRestore(invocation) {
+  return stripLineComments(invocation).includes('"-p:RestoreLockedMode=true"');
+}
+
+function productionDotnetBuildInvocation(gateSource) {
+  const start = gateSource.indexOf("dotnet build $project");
+  expect(start, "RFC3161 `dotnet build` invocation missing from the gate").toBeGreaterThan(-1);
+  const failure = gateSource.indexOf('throw ".NET analyzer quality build failed"', start);
+  expect(failure, "RFC3161 build failure throw missing from the gate").toBeGreaterThan(start);
+  return gateSource.slice(start, failure);
+}
+
+function lockResolvedVersion(lock, packageId) {
+  expect(lock).toEqual(expect.objectContaining({ dependencies: expect.any(Object) }));
+  const graphs = Object.values(lock.dependencies);
+  expect(graphs.length, "NuGet lock has no target-framework graphs").toBeGreaterThan(0);
+  const versions = graphs.map((graph) => {
+    expect(graph).toEqual(
+      expect.objectContaining({
+        [packageId]: expect.objectContaining({
+          type: "Direct",
+          resolved: expect.any(String),
+        }),
+      }),
+    );
+    return graph[packageId].resolved;
+  });
+  expect(new Set(versions).size, `${packageId} resolved versions disagree across TFMs`).toBe(1);
+  const [resolved] = versions;
+  expect(typeof resolved).toBe("string");
+  return resolved;
+}
+
+// Always-on: these pins must not hide behind `pwsh`. The Windows compile half of the gate stays
+// CI-only; the lock contract is a committed artifact and can be checked on every host.
+describe("RFC3161 NuGet lock contract (KEIKO-0899)", () => {
+  it("commits packages.lock.json beside the analyzer csproj", () => {
+    expect(existsSync(RFC3161_LOCK), `${RFC3161_LOCK} must be committed`).toBe(true);
+  });
+
+  it("keeps RestorePackagesWithLockFile on the csproj and locked mode on the gate build", () => {
+    const csproj = readFileSync(RFC3161_PROJECT, "utf8");
+    expect(csproj).toMatch(/<RestorePackagesWithLockFile>true<\/RestorePackagesWithLockFile>/u);
+    expect(csproj).not.toMatch(/<RestoreLockedMode>\s*true\s*<\/RestoreLockedMode>/u);
+    const invocation = productionDotnetBuildInvocation(readFileSync(GATE, "utf8"));
+    expect(invocationHasLockedRestore(invocation)).toBe(true);
+  });
+
+  it("rejects a PackageReference the parser cannot recognize", () => {
+    expect(() => packageReferences("<Project><PackageReference /></Project>")).toThrow();
+  });
+
+  it("reads Version from a child element and reordered attributes", () => {
+    const parsed = packageReferences(
+      '<Project><PackageReference Version="1.2.3" Include="Example.Package"></PackageReference></Project>',
+    );
+    expect(parsed).toEqual([{ id: "Example.Package", version: "1.2.3" }]);
+  });
+
+  it("reads Version from a child element body", () => {
+    const parsed = packageReferences(
+      '<Project><PackageReference Include="Example.Package"><Version>1.2.3</Version></PackageReference></Project>',
+    );
+    expect(parsed).toEqual([{ id: "Example.Package", version: "1.2.3" }]);
+  });
+
+  it("rejects a PackageReference whose Version child is empty", () => {
+    expect(() =>
+      packageReferences(
+        '<Project><PackageReference Include="Example.Package"><Version>  </Version></PackageReference></Project>',
+      ),
+    ).toThrow();
+  });
+
+  it("fails closed when the gate build drops RestoreLockedMode", () => {
+    const invocation = productionDotnetBuildInvocation(readFileSync(GATE, "utf8")).replace(
+      '"-p:RestoreLockedMode=true"',
+      '"-p:RestoreLockedMode=false"',
+    );
+    expect(invocationHasLockedRestore(invocation)).toBe(false);
+  });
+
+  it("does not treat a commented RestoreLockedMode flag as active", () => {
+    expect(invocationHasLockedRestore('# "-p:RestoreLockedMode=true"\ndotnet build $project')).toBe(
+      false,
+    );
+  });
+
+  it("pins every csproj PackageReference to the same resolved version in the lock", () => {
+    const csproj = readFileSync(RFC3161_PROJECT, "utf8");
+    const lock = JSON.parse(readFileSync(RFC3161_LOCK, "utf8"));
+    for (const reference of packageReferences(csproj)) {
+      expect(lockResolvedVersion(lock, reference.id)).toBe(reference.version);
+    }
+  });
+});
 
 describe.skipIf(!hasPwsh())("check-windows-native-quality flag derivation", () => {
   const scratch = [];

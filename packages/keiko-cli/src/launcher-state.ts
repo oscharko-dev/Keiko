@@ -11,8 +11,8 @@
 // SAFETY CONTRACT (spec §"Filesystem safety contract"):
 //   - State file is opened with `O_NOFOLLOW` on POSIX; symlinks at the state path are
 //     refused. On Windows the equivalent is to refuse if `lstat` reports a symlink.
-//   - All writes are atomic via mkdtemp → write → rename (atomic on POSIX; on Windows we
-//     accept the standard rename semantics; the file lives under the user's `.keiko/`).
+//   - All writes are atomic via mkdtemp → write → atomicPublishRename (POSIX first-try;
+//     Windows retries EPERM/EBUSY). The file lives under the user's `.keiko/`.
 //   - The state dir itself is created with mode 0o700.
 //   - `loadState` returns an empty state when the file is missing OR malformed; we never
 //     throw on a missing/corrupt state file at read-time, but we DO refuse to write into
@@ -33,6 +33,10 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import {
+  atomicPublishRename,
+  WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+} from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import { LauncherError, launcherFor, type Platform } from "./launcher-platforms.js";
 import { isRealpathContained } from "./launcher-paths.js";
 import { STAGING_OWNERSHIP_MARKER } from "./state-paths.js";
@@ -267,7 +271,10 @@ export function saveState(stateDir: string, state: LauncherState): void {
       encoding: "utf8",
       mode: 0o600,
     });
-    renameSync(tmpFile, file);
+    atomicPublishRename(tmpFile, file, {
+      rename: renameSync,
+      backoffMs: WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+    });
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

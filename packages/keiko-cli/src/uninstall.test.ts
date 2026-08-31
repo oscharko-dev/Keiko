@@ -15,7 +15,7 @@ import {
 import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runUninstallCli, type UninstallCliDeps } from "./uninstall.js";
 import { runLauncherCli } from "./launcher.js";
 import { runPortableCli } from "./portable.js";
@@ -67,12 +67,20 @@ afterEach(() => {
   }
 });
 
+const STOP_LAUNCH_ID = "ab".repeat(16);
+
 function seedState(root: string, pid = "2147483646"): string {
   const stateDir = join(root, ".keiko");
   mkdirSync(stateDir, { recursive: true });
-  writeFileSync(join(stateDir, "ui.pid"), `${pid}\n`, "utf8");
+  writeFileSync(join(stateDir, "ui.pid"), `${pid}\n${STOP_LAUNCH_ID}\n`, "utf8");
   writeFileSync(join(stateDir, "ui.log"), "log line\n", "utf8");
   return stateDir;
+}
+
+function verifiedStopIdentity(): {
+  readonly verifyLaunchIdentity: (pid: number, launchId: string) => boolean;
+} {
+  return { verifyLaunchIdentity: () => true };
 }
 
 function seedPackageJson(root: string, extra: Record<string, string> = {}): string {
@@ -593,11 +601,106 @@ describe("runUninstallCli — running server guard", () => {
         killed.push([pid, signal]);
       },
       sleep: () => Promise.resolve(),
+      ...verifiedStopIdentity(),
     };
     const c = makeIo();
     await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(0);
     expect(killed).toEqual([[555, "SIGTERM"]]);
     expect(existsSync(stateDir)).toBe(false);
+  });
+
+  it("binds launchId from the same pid record classifyPid read", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root, "555");
+    const seen: string[] = [];
+    const pidPath = join(stateDir, "ui.pid");
+    const killProcess = vi.fn();
+    const deps: UninstallCliDeps = {
+      cwd: root,
+      homedir: () => root,
+      isProcessAlive: () => {
+        rmSync(pidPath, { force: true });
+        writeFileSync(pidPath, `555\n${"cd".repeat(16)}\n`, "utf8");
+        return true;
+      },
+      killProcess,
+      verifyLaunchIdentity: (_pid, launchId) => {
+        seen.push(launchId);
+        return false;
+      },
+      sleep: () => Promise.resolve(),
+    };
+    const c = makeIo();
+    await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(1);
+    expect(seen).toEqual([STOP_LAUNCH_ID]);
+    expect(killProcess).not.toHaveBeenCalled();
+  });
+
+  it("with --force on Windows writes ui.shutdown instead of SIGTERM", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root, "555");
+    const killed: (readonly [number, NodeJS.Signals | 0 | undefined])[] = [];
+    const killWindowsTree = vi.fn(() => "succeeded" as const);
+    let probe = true;
+    const deps: UninstallCliDeps = {
+      cwd: root,
+      homedir: () => root,
+      platform: () => "win32",
+      isProcessAlive: () => {
+        if (probe) {
+          probe = false;
+          return true;
+        }
+        expect(readFileSync(join(stateDir, "ui.shutdown"), "utf8")).toBe(
+          `555\n${STOP_LAUNCH_ID}\n`,
+        );
+        return false;
+      },
+      killProcess: (pid, signal) => {
+        killed.push([pid, signal]);
+      },
+      killWindowsTree,
+      sleep: () => Promise.resolve(),
+    };
+    const c = makeIo();
+    await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(0);
+    expect(killed).toEqual([]);
+    expect(killWindowsTree).not.toHaveBeenCalled();
+    expect(existsSync(stateDir)).toBe(false);
+  });
+
+  it("with --force on Windows escalates to tree-kill when the process survives the grace window", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root, "555");
+    const killed: (readonly [number, NodeJS.Signals | 0 | undefined])[] = [];
+    const killWindowsTree = vi.fn(() => "failed" as const);
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => {
+      now += 500;
+      return now;
+    });
+    const deps: UninstallCliDeps = {
+      cwd: root,
+      homedir: () => root,
+      platform: () => "win32",
+      isProcessAlive: () => true,
+      killProcess: (pid, signal) => {
+        killed.push([pid, signal]);
+      },
+      killWindowsTree,
+      sleep: () => Promise.resolve(),
+      ...verifiedStopIdentity(),
+    };
+    const c = makeIo();
+    try {
+      await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(killWindowsTree).toHaveBeenCalledTimes(1);
+    expect(killed).toEqual([[555, "SIGKILL"]]);
+    expect(existsSync(stateDir)).toBe(true);
+    expect(c.err()).toContain("did not stop within the wait budget");
   });
 
   it("with --force --dry-run reports would-stop and does not kill", async () => {
@@ -638,6 +741,7 @@ describe("runUninstallCli — running server guard", () => {
         throw new Error("ESRCH");
       },
       sleep: () => Promise.resolve(),
+      ...verifiedStopIdentity(),
     };
     const c = makeIo();
     await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(0);
@@ -669,6 +773,7 @@ describe("runUninstallCli — running server guard", () => {
         killCount += 1;
       },
       sleep: () => Promise.resolve(),
+      ...verifiedStopIdentity(),
     };
     const c = makeIo();
     let now = 0;

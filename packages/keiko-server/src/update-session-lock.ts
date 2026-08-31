@@ -11,6 +11,11 @@ import {
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
+import { bindSecurityLogCorrelation, type SecurityLogSink } from "@oscharko-dev/keiko-security";
+import {
+  atomicPublishRename,
+  type AtomicPublishRenameFn,
+} from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { emitServerDiagnostic, type ServerDiagnosticSink } from "./diagnostics-log.js";
 import { publishFileWithoutReplacement } from "./publish-file-without-replacement.js";
@@ -56,6 +61,10 @@ export interface FileUpdateSessionLockOptions {
   // bounded removal/failure evidence. Absent means the prune stays silent on success exactly as
   // before (most callers, including tests, never wire this) -- see emitQuarantinePruneDiagnostic.
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly securityLogSink?: SecurityLogSink | undefined;
+  readonly rename?: AtomicPublishRenameFn | undefined;
+  readonly platform?: NodeJS.Platform | undefined;
+  readonly sleep?: ((ms: number) => void) | undefined;
 }
 
 interface ResolvedFileUpdateSessionLockOptions {
@@ -64,6 +73,10 @@ interface ResolvedFileUpdateSessionLockOptions {
   readonly pidAlive: (pid: number) => boolean;
   readonly processIdentity: string;
   readonly diagnostics: ServerDiagnosticSink | undefined;
+  readonly securityLogSink: SecurityLogSink | undefined;
+  readonly rename: AtomicPublishRenameFn | undefined;
+  readonly platform: NodeJS.Platform | undefined;
+  readonly sleep: ((ms: number) => void) | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -246,14 +259,41 @@ function writeLock(lockPath: string, record: UpdateSessionLockRecord): void {
   }
 }
 
-function replaceJsonFile(path: string, value: unknown): void {
+function publishLockRename(
+  from: string,
+  to: string,
+  options: ResolvedFileUpdateSessionLockOptions,
+  correlationId: string,
+): void {
+  atomicPublishRename(from, to, {
+    rename: options.rename ?? renameSync,
+    ...(options.platform === undefined ? {} : { platform: options.platform }),
+    ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+    ...boundLockRenameSink(options.securityLogSink, correlationId),
+  });
+}
+
+function boundLockRenameSink(
+  sink: SecurityLogSink | undefined,
+  correlationId: string,
+): { readonly securityLogSink: SecurityLogSink } | Record<string, never> {
+  const bound = bindSecurityLogCorrelation(sink, correlationId);
+  return bound === undefined ? {} : { securityLogSink: bound };
+}
+
+function replaceJsonFile(
+  path: string,
+  value: unknown,
+  options: ResolvedFileUpdateSessionLockOptions,
+  correlationId: string,
+): void {
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
   writeFileSync(temporaryPath, `${JSON.stringify(value)}\n`, {
     flag: "wx",
     mode: LOCK_FILE_MODE,
   });
   try {
-    renameSync(temporaryPath, path);
+    publishLockRename(temporaryPath, path, options, correlationId);
   } catch (error) {
     try {
       unlinkSync(temporaryPath);
@@ -340,7 +380,7 @@ function retireClaimedLock(
   lockPath: string,
   claimedPath: string,
   inspection: LockInspection,
-  now: () => number,
+  options: ResolvedFileUpdateSessionLockOptions,
 ): boolean {
   try {
     unlinkSync(lockPath);
@@ -350,9 +390,15 @@ function retireClaimedLock(
   }
   if (inspection.status === "corrupt") {
     try {
-      renameSync(claimedPath, corruptQuarantinePath(lockPath, now));
+      publishLockRename(
+        claimedPath,
+        corruptQuarantinePath(lockPath, options.now),
+        options,
+        UNKNOWN_CORRELATION_ID,
+      );
     } catch {
       // Preserve the verified corrupt claim for diagnosis if quarantine publication fails.
+      // The rename helper still emits `security.fs.atomic-rename-failed` when a sink is wired.
     }
     return true;
   }
@@ -370,10 +416,10 @@ function retireClaimedLock(
 function claimReclaimableLock(
   lockPath: string,
   inspection: LockInspection,
-  now: () => number,
+  options: ResolvedFileUpdateSessionLockOptions,
 ): boolean {
   const claimedPath = claimInspectedLock(lockPath, inspection);
-  return claimedPath !== undefined && retireClaimedLock(lockPath, claimedPath, inspection, now);
+  return claimedPath !== undefined && retireClaimedLock(lockPath, claimedPath, inspection, options);
 }
 
 function removeChildPid(lockPath: string, sessionId: string): void {
@@ -393,6 +439,10 @@ function resolveLockOptions(
     pidAlive: input.pidAlive ?? defaultPidAlive,
     processIdentity: input.processIdentity ?? PROCESS_START_IDENTITY,
     diagnostics: input.diagnostics,
+    securityLogSink: input.securityLogSink,
+    rename: input.rename,
+    platform: input.platform,
+    sleep: input.sleep,
   };
 }
 
@@ -417,7 +467,7 @@ function acquireFileLock(
     try {
       const inspection = inspectLock(lockPath);
       if (!reclaimable(inspection, options)) return false;
-      if (!claimReclaimableLock(lockPath, inspection, options.now)) return false;
+      if (!claimReclaimableLock(lockPath, inspection, options)) return false;
       writeLock(lockPath, record);
     } catch {
       return false;
@@ -432,17 +482,27 @@ function acquireFileLock(
   }
 }
 
-function updateFileLockChildPid(lockPath: string, sessionId: string, childPid: number): boolean {
+function updateFileLockChildPid(
+  lockPath: string,
+  sessionId: string,
+  childPid: number,
+  options: ResolvedFileUpdateSessionLockOptions,
+): boolean {
   if (!isPositivePid(childPid)) return false;
   try {
     const record = readLock(lockPath);
     if (record?.sessionId !== sessionId) return false;
     const identity = lockIdentity(record);
-    replaceJsonFile(childPidPath(lockPath, sessionId), {
+    replaceJsonFile(
+      childPidPath(lockPath, sessionId),
+      {
+        sessionId,
+        lockIdentity: identity,
+        childPid,
+      },
+      options,
       sessionId,
-      lockIdentity: identity,
-      childPid,
-    });
+    );
     const current = readLock(lockPath);
     if (current?.sessionId === sessionId && lockIdentity(current) === identity) return true;
     const sidecarPath = childPidPath(lockPath, sessionId);
@@ -592,7 +652,8 @@ export function createFileUpdateSessionLock(
         options,
       );
     },
-    updateChildPid: (sessionId, childPid) => updateFileLockChildPid(lockPath, sessionId, childPid),
+    updateChildPid: (sessionId, childPid) =>
+      updateFileLockChildPid(lockPath, sessionId, childPid, options),
     release: (sessionId): void => {
       releaseFileLock(lockPath, sessionId);
     },
