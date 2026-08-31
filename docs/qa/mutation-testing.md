@@ -61,6 +61,15 @@ expected `BLOCKED`/`TIMEOUT` marker inside Stryker worker sandboxes. Excluding i
 testing does not weaken the runtime gate; the normal `@oscharko-dev/keiko-sandbox` test job still
 executes the live proof.
 
+The same class applies to
+`packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional.test.ts`. That file
+drives a scripted OpenCode child, a loopback BFF, and a model-gateway round-trip. Nested process
+isolation inside Stryker workers fails closed (`functional-scenario-failed`) before the dry-run can
+score mutants (#3349). Stryker's `testFiles` matcher has no `!`-prefix negation, and
+`ignorePatterns` with a `**` glob hangs the full-tree crawl, so the coding-runtime glob is
+`**/!(*.functional).test.ts`: hermetic unit tests stay in the matrix and the functional pipeline
+never enters the dry-run. The ordinary vitest job still executes the functional proof.
+
 ## Thresholds
 
 | Level           | Score |

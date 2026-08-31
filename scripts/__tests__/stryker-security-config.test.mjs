@@ -1,6 +1,10 @@
+import { globSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
+
+const OPENCODE_FUNCTIONAL_TEST =
+  "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional.test.ts";
 
 async function loadSecurityMutationConfig() {
   return JSON.parse(await readFile("stryker.security.conf.json", "utf8"));
@@ -24,11 +28,29 @@ describe("security mutation Stryker configuration", () => {
         "packages/keiko-sandbox/src/plan.test.ts",
         "packages/keiko-sandbox/src/probe.test.ts",
         "packages/keiko-sandbox/src/select.test.ts",
+        "packages/keiko-server/src/coding-runtime/**/!(*.functional).test.ts",
         "packages/keiko-server/src/qualityIntelligence/**/*.test.ts",
         "packages/keiko-workflows/src/**/*.test.ts",
       ]),
     );
     expect(config.testFiles).not.toContain("packages/keiko-sandbox/src/egress.test.ts");
     expect(config.concurrency).toBe(16);
+  });
+
+  it("keeps the OpenCode functional pipeline out of the mutation dry-run", async () => {
+    const config = await loadSecurityMutationConfig();
+    const codingRuntimePattern =
+      "packages/keiko-server/src/coding-runtime/**/!(*.functional).test.ts";
+
+    expect(globSync(OPENCODE_FUNCTIONAL_TEST)).toEqual([OPENCODE_FUNCTIONAL_TEST]);
+    expect(config.ignorePatterns).toBeUndefined();
+    expect(config.testFiles).toContain(codingRuntimePattern);
+    expect(globSync("packages/keiko-server/src/coding-runtime/**/*.test.ts")).toContain(
+      OPENCODE_FUNCTIONAL_TEST,
+    );
+    expect(globSync(codingRuntimePattern)).not.toContain(OPENCODE_FUNCTIONAL_TEST);
+    expect(config.testFiles.flatMap((pattern) => globSync(pattern))).not.toContain(
+      OPENCODE_FUNCTIONAL_TEST,
+    );
   });
 });
