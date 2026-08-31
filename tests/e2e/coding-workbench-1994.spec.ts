@@ -1,11 +1,33 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { installLiveCodingWorkbenchRuntime } from "./support/coding-workbench-live-runtime.js";
+
+async function dropFirstWorkbenchLauncherClick(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const dropFirstClick = (event: MouseEvent): void => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest('button[aria-label="Coding Workbench"]') === null) return;
+      document.removeEventListener("click", dropFirstClick, true);
+      document.documentElement.dataset.e2eDroppedWorkbenchLauncherClick = "true";
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    document.addEventListener("click", dropFirstClick, true);
+  });
+}
 
 test("stop, recovery acknowledgement, and fresh retry follow server lifecycle truth @smoke", async ({
   page,
 }) => {
+  // Run 33404765910 observed a completed cold WebKit click with the toggle still closed. Drop that
+  // first action deterministically so this journey proves the shared opener retries conditionally.
+  await dropFirstWorkbenchLauncherClick(page);
   const fixture = await installLiveCodingWorkbenchRuntime(page, { initialState: "running" });
   await fixture.open();
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-e2e-dropped-workbench-launcher-click",
+    "true",
+  );
 
   await page.getByRole("button", { name: "Stop run" }).click();
   await expect(fixture.workbench).toHaveAttribute("data-state", "recovery-required");
