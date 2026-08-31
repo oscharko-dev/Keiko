@@ -540,13 +540,18 @@ export function collectMergedPullRequests(count, io = {}) {
 }
 
 /** An absent value reads the same in both tables: a dash, never the literal string "null". */
-function cell(value) {
+function cell(value, fractionDigits = 1) {
   if (value === null) return "-";
   if (typeof value === "number") {
     if (!Number.isFinite(value)) return "-";
-    return String(Math.round(value * 10) / 10);
+    const factor = 10 ** fractionDigits;
+    return String(Math.round(value * factor) / factor);
   }
   return String(value);
+}
+
+function reactionCell(value) {
+  return cell(value, 2);
 }
 
 function renderPullRequestRow(report) {
@@ -555,18 +560,18 @@ function renderPullRequestRow(report) {
   const reactions =
     report.reactionMinutes
       .filter((minutes) => Number.isFinite(minutes))
-      .map((minutes) => cell(minutes))
+      .map((minutes) => reactionCell(minutes))
       .join(", ") || "-";
   return `| ${String(report.number)} | ${report.cohort} | ${report.outcome} | ${String(report.headCount)} | ${String(report.repairRounds)} | ${String(report.findingCount)} | ${settlement} | ${gap} | ${reactions} |`;
 }
 
 function renderLatencyCohortRow(cohort) {
-  return `| ${cohort.cohort} | ${String(cohort.pullRequests)} | ${String(cohort.measured)} | ${cell(cohort.medianSettlementMinutes)} | ${cell(cohort.maxSettlementMinutes)} | ${cell(cohort.medianGapMinutes)} | ${cell(cohort.medianRepairRounds)} | ${cell(cohort.medianReactionMinutes)} |`;
+  return `| ${cohort.cohort} | ${String(cohort.pullRequests)} | ${String(cohort.measured)} | ${cell(cohort.medianSettlementMinutes)} | ${cell(cohort.maxSettlementMinutes)} | ${cell(cohort.medianGapMinutes)} | ${cell(cohort.medianRepairRounds)} | ${reactionCell(cohort.medianReactionMinutes)} |`;
 }
 
 function renderReactionSloRow(cohort) {
   const inSlo = `${String(cohort.reactionsWithinSlo)}/${String(cohort.reactionSamples)}`;
-  return `| ${cohort.cohort} | ${String(cohort.reactionSamples)} | ${inSlo} | ${String(cohort.reactionsBetween10And30)} | ${String(cohort.reactionsBetween30And60)} | ${String(cohort.reactionsOver60)} | ${cell(cohort.medianReactionMinutes)} |`;
+  return `| ${cohort.cohort} | ${String(cohort.reactionSamples)} | ${inSlo} | ${String(cohort.reactionsBetween10And30)} | ${String(cohort.reactionsBetween30And60)} | ${String(cohort.reactionsOver60)} | ${reactionCell(cohort.medianReactionMinutes)} |`;
 }
 
 export function renderReport(reports, cohorts) {

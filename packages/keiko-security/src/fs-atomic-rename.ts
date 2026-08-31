@@ -20,7 +20,7 @@ import { emitSecurityLogEvent, securityErrorKind, type SecurityLogSink } from ".
 export const WINDOWS_ATOMIC_RENAME_BACKOFF_MS = [0, 20, 40, 80, 160, 320] as const;
 
 // Default for state-file publishes (vault, JSON, sidecars): three immediate retries, no sleep.
-export const WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS = [0, 0, 0] as const;
+export const WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS = [0, 20, 40] as const;
 
 export const WINDOWS_ATOMIC_RENAME_RETRY_CODES = ["EBUSY", "EPERM"] as const;
 

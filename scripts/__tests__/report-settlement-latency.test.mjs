@@ -425,6 +425,23 @@ describe("reaction SLO buckets", () => {
     expect(reactionSloStats([Number.NaN, Number.POSITIVE_INFINITY]).reactionSamples).toBe(0);
     expect(reactionSloStats([REACTION_SLO_MINUTES + 2 / 60]).reactionsWithinSlo).toBe(0);
   });
+
+  it("renders a 10-minute-and-2-second reaction as over-SLO, not as the integer 10", () => {
+    const minutes = REACTION_SLO_MINUTES + 2 / 60;
+    const report = summarizePullRequest({
+      number: 3362,
+      mergedAt: "2026-08-31T12:20:02Z",
+      heads: [
+        head("2026-08-31T11:50:00Z", "2026-08-31T11:59:00Z"),
+        head("2026-08-31T12:10:02Z", "2026-08-31T12:15:00Z"),
+      ],
+      findings: ["2026-08-31T12:00:00Z"],
+    });
+    expect(report.reactionMinutes).toEqual([minutes]);
+    const rendered = renderReport([report], summarizeCohorts([report]));
+    expect(rendered).toContain("10.03");
+    expect(rendered).not.toMatch(/\| 3362 \|[^|]*\| 10 \|/u);
+  });
 });
 
 describe("redaction is structural", () => {

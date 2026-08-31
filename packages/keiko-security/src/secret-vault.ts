@@ -421,7 +421,11 @@ function fsyncDirectory(dir: string): void {
 
 // Atomic, crash-safe write: a fresh temp file in the same directory is written with 0600 and renamed
 // over the target so a reader never observes a partially written store. Mirrors savePrivateJson.
-function writeStore(storePath: string, entries: Record<string, string>): void {
+function writeStore(
+  storePath: string,
+  entries: Record<string, string>,
+  sink?: SecurityLogSink,
+): void {
   const resolvedPath = resolve(storePath);
   const dir = dirname(resolvedPath);
   // Check both before and after directory creation (mirrors private-json.ts): the first guards an
@@ -438,7 +442,10 @@ function writeStore(storePath: string, entries: Record<string, string>): void {
   try {
     writeDurableTextFile(tempPath, `${JSON.stringify(payload, null, 2)}\n`, FILE_MODE);
     chmodIfPresent(tempPath, FILE_MODE);
-    atomicPublishRename(tempPath, resolvedPath, { rename: renameSync });
+    atomicPublishRename(tempPath, resolvedPath, {
+      rename: renameSync,
+      ...(sink === undefined ? {} : { securityLogSink: sink }),
+    });
     chmodIfPresent(resolvedPath, FILE_MODE);
     fsyncDirectory(dir);
   } finally {
@@ -533,7 +540,7 @@ function shardReference(fileName: string): string | undefined {
 
 // Atomic, crash-safe single-entry write. Mirrors writeStore's temp-then-rename discipline; the
 // difference is that the temp file holds ONE envelope, so the cost does not grow with the vault.
-function writeShard(dir: string, filePath: string, envelope: string): void {
+function writeShard(dir: string, filePath: string, envelope: string, sink?: SecurityLogSink): void {
   // Checked twice on purpose, exactly as writeStore does: the first call guards an already
   // symlinked path, the second narrows the window where a parent could be swapped between
   // directory creation and the rename. The atomic temp-then-rename below remains the real
@@ -548,7 +555,10 @@ function writeShard(dir: string, filePath: string, envelope: string): void {
   try {
     writeDurableTextFile(tempPath, envelope, FILE_MODE);
     chmodIfPresent(tempPath, FILE_MODE);
-    atomicPublishRename(tempPath, filePath, { rename: renameSync });
+    atomicPublishRename(tempPath, filePath, {
+      rename: renameSync,
+      ...(sink === undefined ? {} : { securityLogSink: sink }),
+    });
     chmodIfPresent(filePath, FILE_MODE);
     fsyncDirectory(dir);
   } finally {
@@ -573,6 +583,42 @@ function emitEntriesMerged(
     durationMs: elapsedMs(),
     extra: { count },
   });
+}
+
+function emitEntriesDeleted(
+  sink: SecurityLogSink | undefined,
+  count: number,
+  elapsedMs: () => number,
+): void {
+  emitSecurityLogEvent(sink, {
+    category: "security",
+    op: "security.vault.entries-deleted",
+    durationMs: elapsedMs(),
+    extra: { count },
+  });
+}
+
+function deleteManyWithLog(
+  sink: SecurityLogSink | undefined,
+  references: readonly string[],
+  run: () => void,
+): void {
+  if (references.length === 0) return;
+  const elapsedMs = startSecurityLogTimer();
+  try {
+    run();
+  } catch (error) {
+    emitSecurityLogEvent(sink, {
+      level: "error",
+      category: "security",
+      op: "security.vault.entries-delete-failed",
+      errorKind: securityErrorKind(error),
+      durationMs: elapsedMs(),
+      extra: { count: references.length },
+    });
+    throw error;
+  }
+  emitEntriesDeleted(sink, references.length, elapsedMs);
 }
 
 function setManyWithLog(
@@ -602,19 +648,21 @@ function mergeStoreEntries(
   storePath: string,
   key: Buffer,
   next: ReadonlyMap<string, string>,
+  sink?: SecurityLogSink,
 ): void {
   if (next.size === 0) return;
   const entries = readStore(storePath);
   for (const [reference, secret] of next) {
     entries[reference] = sealString(key, secret);
   }
-  writeStore(storePath, entries);
+  writeStore(storePath, entries, sink);
 }
 
 function replaceStoreEntries(
   storePath: string,
   key: Buffer,
   next: ReadonlyMap<string, string>,
+  sink?: SecurityLogSink,
 ): void {
   if (existsSync(storePath)) {
     readStore(storePath);
@@ -628,10 +676,14 @@ function replaceStoreEntries(
     rmSync(storePath, { force: true });
     return;
   }
-  writeStore(storePath, entries);
+  writeStore(storePath, entries, sink);
 }
 
-function deleteStoreEntries(storePath: string, references: readonly string[]): void {
+function deleteStoreEntries(
+  storePath: string,
+  references: readonly string[],
+  sink?: SecurityLogSink,
+): void {
   if (references.length === 0) return;
   const drop = new Set(references);
   const entries = readStore(storePath);
@@ -650,7 +702,7 @@ function deleteStoreEntries(storePath: string, references: readonly string[]): v
     rmSync(storePath, { force: true });
     return;
   }
-  writeStore(storePath, next);
+  writeStore(storePath, next, sink);
 }
 
 function deleteStoreEntry(storePath: string, reference: string): void {
@@ -723,42 +775,56 @@ interface PreparedShardWrite {
 }
 
 function snapshotShardEnvelope(filePath: string): string | undefined {
+  assertNoSymlinkedPathSegments(filePath);
   try {
     return readFileSync(filePath, "utf8");
-  } catch {
-    return undefined;
+  } catch (cause) {
+    if (isEnoent(cause)) return undefined;
+    throw cause;
   }
 }
 
-function restorePreparedShard(storeDir: string, item: PreparedShardWrite): void {
+function restorePreparedShard(
+  storeDir: string,
+  item: PreparedShardWrite,
+  sink?: SecurityLogSink,
+): void {
   if (item.previous === undefined) {
     rmSync(item.path, { force: true });
     return;
   }
-  writeShard(storeDir, item.path, item.previous);
+  writeShard(storeDir, item.path, item.previous, sink);
 }
 
-function rollbackCommittedShards(storeDir: string, committed: readonly PreparedShardWrite[]): void {
+function rollbackCommittedShards(
+  storeDir: string,
+  committed: readonly PreparedShardWrite[],
+  sink?: SecurityLogSink,
+): void {
   for (let index = committed.length - 1; index >= 0; index -= 1) {
     const item = committed[index];
     if (item === undefined) continue;
     try {
-      restorePreparedShard(storeDir, item);
+      restorePreparedShard(storeDir, item, sink);
     } catch {
       // Best-effort rollback; the original write failure is rethrown by the caller.
     }
   }
 }
 
-function commitShardWrites(storeDir: string, prepared: readonly PreparedShardWrite[]): void {
+function commitShardWrites(
+  storeDir: string,
+  prepared: readonly PreparedShardWrite[],
+  sink?: SecurityLogSink,
+): void {
   const committed: PreparedShardWrite[] = [];
   try {
     for (const item of prepared) {
-      writeShard(storeDir, item.path, item.envelope);
+      writeShard(storeDir, item.path, item.envelope, sink);
       committed.push(item);
     }
   } catch (error) {
-    rollbackCommittedShards(storeDir, committed);
+    rollbackCommittedShards(storeDir, committed, sink);
     throw error;
   }
 }
@@ -768,6 +834,7 @@ function mergeShardEntries(
   writePath: (reference: string) => string,
   key: Buffer,
   next: ReadonlyMap<string, string>,
+  sink?: SecurityLogSink,
 ): void {
   const prepared: PreparedShardWrite[] = [];
   for (const [reference, secret] of next) {
@@ -778,7 +845,7 @@ function mergeShardEntries(
       previous: snapshotShardEnvelope(path),
     });
   }
-  commitShardWrites(storeDir, prepared);
+  commitShardWrites(storeDir, prepared, sink);
 }
 
 function deleteShardEntries(storeDir: string, references: readonly string[]): void {
@@ -795,8 +862,19 @@ function deleteShardEntries(storeDir: string, references: readonly string[]): vo
   }
 }
 
-function replaceAllShards(storeDir: string, key: Buffer, next: ReadonlyMap<string, string>): void {
-  mergeShardEntries(storeDir, (reference) => requiredShardPath(storeDir, reference), key, next);
+function replaceAllShards(
+  storeDir: string,
+  key: Buffer,
+  next: ReadonlyMap<string, string>,
+  sink?: SecurityLogSink,
+): void {
+  mergeShardEntries(
+    storeDir,
+    (reference) => requiredShardPath(storeDir, reference),
+    key,
+    next,
+    sink,
+  );
   for (const reference of listShardReferences(storeDir)) {
     if (!next.has(reference)) removeShard(storeDir, reference);
   }
@@ -839,7 +917,7 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
       return envelope === undefined ? undefined : openString(key, envelope);
     },
     set: (reference, secret): void => {
-      writeShard(storeDir, requiredShardPath(storeDir, reference), sealString(key, secret));
+      writeShard(storeDir, requiredShardPath(storeDir, reference), sealString(key, secret), sink);
     },
     setMany: (next): void => {
       setManyWithLog(sink, next, (entries) => {
@@ -848,17 +926,20 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
           (reference) => requiredShardPath(storeDir, reference),
           key,
           entries,
+          sink,
         );
       });
     },
     replaceAll: (next): void => {
-      replaceAllShards(storeDir, key, next);
+      replaceAllShards(storeDir, key, next, sink);
     },
     delete: (reference): void => {
       removeShard(storeDir, reference);
     },
     deleteMany: (references): void => {
-      deleteShardEntries(storeDir, references);
+      deleteManyWithLog(sink, references, () => {
+        deleteShardEntries(storeDir, references);
+      });
     },
     has: (reference): boolean => envelopeFor(reference) !== undefined,
     list: (): readonly string[] => listShardReferences(storeDir),
@@ -876,21 +957,23 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
       return openString(key, envelope);
     },
     set: (reference, secret): void => {
-      mergeStoreEntries(resolvedStorePath, key, new Map([[reference, secret]]));
+      mergeStoreEntries(resolvedStorePath, key, new Map([[reference, secret]]), sink);
     },
     setMany: (next): void => {
       setManyWithLog(sink, next, (entries) => {
-        mergeStoreEntries(resolvedStorePath, key, entries);
+        mergeStoreEntries(resolvedStorePath, key, entries, sink);
       });
     },
     replaceAll: (next): void => {
-      replaceStoreEntries(resolvedStorePath, key, next);
+      replaceStoreEntries(resolvedStorePath, key, next, sink);
     },
     delete: (reference): void => {
       deleteStoreEntry(resolvedStorePath, reference);
     },
     deleteMany: (references): void => {
-      deleteStoreEntries(resolvedStorePath, references);
+      deleteManyWithLog(sink, references, () => {
+        deleteStoreEntries(resolvedStorePath, references, sink);
+      });
     },
     has: (reference): boolean => reference in readStore(resolvedStorePath),
     list: (): readonly string[] => Object.keys(readStore(resolvedStorePath)),

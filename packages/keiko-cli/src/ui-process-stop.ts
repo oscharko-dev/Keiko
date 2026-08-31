@@ -6,21 +6,19 @@
 // additionally sends SIGTERM. Escalation reuses `nodeWindowsTreeKill` (ADR-0006 D5) rather
 // than a second taskkill wrapper, and runs that tree kill TO COMPLETION before SIGKILL.
 
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { WindowsTreeKillResult } from "@oscharko-dev/keiko-contracts";
+import type {
+  WindowsTreeKillDisposition,
+  WindowsTreeKillResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   emitSecurityLogEvent,
   securityErrorKind,
   type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
 import { loadTools } from "./lazy-modules.js";
-import {
-  KEIKO_UI_LAUNCH_ID_ENV,
-  clearShutdownRequest,
-  readPidRecord,
-  writeShutdownRequest,
-} from "./state-paths.js";
+import { liveProcessHasLaunchId, type LiveLaunchIdentityReaders } from "./ui-process-identity.js";
+import { clearShutdownRequest, readPidRecord, writeShutdownRequest } from "./state-paths.js";
 
 export type WindowsTreeKill = (pid: number, processEnv: NodeJS.ProcessEnv) => WindowsTreeKillResult;
 
@@ -46,6 +44,8 @@ export interface TerminateUiProcessInput {
   readonly parentPid?: number | undefined;
   readonly launchId?: string | undefined;
   readonly verifyLaunchIdentity?: ((pid: number, launchId: string) => boolean) | undefined;
+  readonly readProcessEnviron?: LiveLaunchIdentityReaders["readEnviron"];
+  readonly readProcessCommandLine?: LiveLaunchIdentityReaders["readCommandLine"];
 }
 
 export interface TerminateUiProcessResult {
@@ -73,7 +73,7 @@ export async function terminateUiProcess(
   input: TerminateUiProcessInput,
 ): Promise<TerminateUiProcessResult> {
   if (isForbiddenTarget(input)) {
-    emitLifecycleFailure(input, "cli.lifecycle.stop-request-failed", "refused-self-pid");
+    emitStopRequestFailed(input, "refused-self-pid");
     return { confirmed: false, escalated: false };
   }
   const windowsChannelReady = requestGracefulStop(input);
@@ -88,7 +88,7 @@ export async function terminateUiProcess(
     return finishWithoutEscalation(input);
   }
   if (!targetIdentityVerified(input)) {
-    emitLifecycleFailure(input, "cli.lifecycle.stop-request-failed", "unverified-pid");
+    emitStopRequestFailed(input, "unverified-pid");
     return { confirmed: false, escalated: false };
   }
   return forceStopAfterGrace(input);
@@ -154,7 +154,7 @@ function signalPosixTerm(input: TerminateUiProcessInput): boolean {
     return true;
   } catch (error) {
     if (errorCode(error) === "ESRCH") return true;
-    emitLifecycleFailure(input, "cli.lifecycle.stop-request-failed", securityErrorKind(error));
+    emitStopRequestFailed(input, securityErrorKind(error));
     return false;
   }
 }
@@ -164,7 +164,7 @@ function tryWriteShutdownRequest(input: TerminateUiProcessInput): boolean {
     writeShutdownRequest(input.stateDir, input.pid, resolveLaunchId(input));
     return true;
   } catch (error) {
-    emitLifecycleFailure(input, "cli.lifecycle.stop-request-failed", securityErrorKind(error));
+    emitStopRequestFailed(input, securityErrorKind(error));
     return false;
   }
 }
@@ -200,8 +200,8 @@ async function escalateForcedStop(input: TerminateUiProcessInput): Promise<void>
   });
 }
 
-function shouldSignalAfterTreeKill(result: WindowsTreeKillResult | "not-attempted"): boolean {
-  return result !== "succeeded" && result !== "refused-self-pid";
+function shouldSignalAfterTreeKill(result: WindowsTreeKillDisposition): boolean {
+  return result !== "succeeded" && result !== "refused-self-pid" && result !== "root-not-found";
 }
 
 function signalForcedKill(input: TerminateUiProcessInput): void {
@@ -209,16 +209,18 @@ function signalForcedKill(input: TerminateUiProcessInput): void {
     input.killProcess(input.pid, "SIGKILL");
   } catch (error) {
     if (errorCode(error) === "ESRCH") return;
-    emitLifecycleFailure(input, "cli.lifecycle.stop-escalation-failed", securityErrorKind(error));
+    emitStopEscalationFailed(input, securityErrorKind(error));
   }
 }
 
-async function runWindowsTreeKill(input: TerminateUiProcessInput): Promise<WindowsTreeKillResult> {
+async function runWindowsTreeKill(
+  input: TerminateUiProcessInput,
+): Promise<WindowsTreeKillDisposition> {
   try {
     const kill = await resolveWindowsTreeKill(input.killWindowsTree);
     return kill(input.pid, input.processEnv ?? process.env);
   } catch (error) {
-    emitLifecycleFailure(input, "cli.lifecycle.stop-escalation-failed", securityErrorKind(error));
+    emitStopEscalationFailed(input, securityErrorKind(error));
     return "failed";
   }
 }
@@ -250,16 +252,13 @@ function verifyLiveLaunchId(input: TerminateUiProcessInput, launchId: string): b
   if (input.verifyLaunchIdentity !== undefined) {
     return input.verifyLaunchIdentity(input.pid, launchId);
   }
-  return input.platform === "linux" && linuxEnvironHasLaunchId(input.pid, launchId);
-}
-
-function linuxEnvironHasLaunchId(pid: number, launchId: string): boolean {
-  try {
-    const environ = readFileSync(`/proc/${String(pid)}/environ`, "utf8");
-    return environ.split("\0").includes(`${KEIKO_UI_LAUNCH_ID_ENV}=${launchId}`);
-  } catch {
-    return false;
-  }
+  return liveProcessHasLaunchId(input.pid, launchId, {
+    platform: input.platform,
+    ...(input.readProcessEnviron === undefined ? {} : { readEnviron: input.readProcessEnviron }),
+    ...(input.readProcessCommandLine === undefined
+      ? {}
+      : { readCommandLine: input.readProcessCommandLine }),
+  });
 }
 
 function resolveLaunchId(input: TerminateUiProcessInput): string | undefined {
@@ -267,15 +266,20 @@ function resolveLaunchId(input: TerminateUiProcessInput): string | undefined {
   return readPidRecord(join(input.stateDir, UI_PID_FILE))?.launchId;
 }
 
-function emitLifecycleFailure(
-  input: TerminateUiProcessInput,
-  op: "cli.lifecycle.stop-request-failed" | "cli.lifecycle.stop-escalation-failed",
-  errorKind: string,
-): void {
+function emitStopRequestFailed(input: TerminateUiProcessInput, errorKind: string): void {
   emitSecurityLogEvent(input.securityLogSink, {
     level: "warn",
     category: "diagnostic",
-    op,
+    op: "cli.lifecycle.stop-request-failed",
+    errorKind,
+  });
+}
+
+function emitStopEscalationFailed(input: TerminateUiProcessInput, errorKind: string): void {
+  emitSecurityLogEvent(input.securityLogSink, {
+    level: "warn",
+    category: "diagnostic",
+    op: "cli.lifecycle.stop-escalation-failed",
     errorKind,
   });
 }

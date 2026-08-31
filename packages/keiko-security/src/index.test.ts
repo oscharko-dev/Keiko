@@ -145,7 +145,7 @@ describe("keiko-security package surface", () => {
     expect(typeof withCwdOutsideTree).toBe("function");
     expect([...WINDOWS_ATOMIC_RENAME_RETRY_CODES]).toEqual(["EBUSY", "EPERM"]);
     expect([...WINDOWS_ATOMIC_RENAME_BACKOFF_MS]).toEqual([0, 20, 40, 80, 160, 320]);
-    expect([...WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS]).toEqual([0, 0, 0]);
+    expect([...WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS]).toEqual([0, 20, 40]);
     expect(typeof bindSecurityLogCorrelation).toBe("function");
   });
 

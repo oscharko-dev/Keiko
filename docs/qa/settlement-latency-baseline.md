@@ -242,7 +242,7 @@ repository maintainer, via [`AGENTS.md`](../../AGENTS.md) §11 and
   (failing jobs, Sonar issues, unresolved threads). It does not wait for CI to turn green, for a
   reviewer that has not yet spoken, or for the ADR-0170 D5 interlock. That interlock gates
   auto-merge arming, not repair.
-- **Handoff.** If the same session cannot begin the repair within 10 minutes, the next agent that
+- **Handoff.** If the same session cannot push the repair within 10 minutes, the next agent that
   touches the pull request starts from CI logs, Sonar issues, and unresolved threads immediately.
 - **Not pulled.** No automation, bulk action, timer, or dismissal resolves a review conversation.
   Required checks are unchanged. Merge-queue activation remains an owner decision

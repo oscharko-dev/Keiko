@@ -6,7 +6,6 @@ import type {
   UpdatePortableActivationSummary,
   UpdatePortableStagingSummary,
 } from "@oscharko-dev/keiko-contracts";
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { UpdateRuntimeFacts } from "./update-install-mode.js";
 import type { UpdateLocalStateManager } from "./update-local-state.js";
 import {
@@ -230,16 +229,21 @@ function settleInterruptedActivation(input: {
 }): void {
   const recovery = readPortableActivationRecovery(input.stateDir);
   if (recovery === undefined) return;
+  const securityLogSink = activationLogSinkFromRaw(input.securityLogSink, recovery.activationId);
   const paths = recoveryPaths({
     target: recovery.target,
     stageId: recovery.stageId,
     runtimeFacts: input.request.runtimeFacts,
     activationId: recovery.activationId,
   });
-  if (recovery.phase === "verified") cleanupPortableActivation(paths);
-  else {
+  if (recovery.phase === "verified" || recovery.phase === "cleanup-pending") {
+    cleanupPortableActivation(
+      paths,
+      recovery.updaterPid === undefined ? {} : { updaterPid: recovery.updaterPid },
+    );
+  } else {
     restorePortableRegistration({ stateDir: input.stateDir, activationId: recovery.activationId });
-    restorePortableActivation(paths, input.securityLogSink);
+    restorePortableActivation(paths, securityLogSink);
   }
   cleanupPortableRegistrationSnapshot({
     stateDir: input.stateDir,
@@ -254,6 +258,13 @@ function prepareActivation(input: {
   readonly securityLogSink?: SecurityLogSink | undefined;
 }): PortablePromotionResult {
   return promotePortableInstall(input.request, input.activationId, input.securityLogSink);
+}
+
+function activationLogSinkFromRaw(
+  sink: SecurityLogSink | undefined,
+  correlationId: string,
+): SecurityLogSink | undefined {
+  return bindSecurityLogCorrelation(sink, correlationId);
 }
 
 function activationLogSink(
@@ -308,12 +319,14 @@ interface ActivationProgress {
 function recoveryRecord(
   context: ActivationContext,
   phase: PortableActivationRecovery["phase"],
+  updaterPid?: number,
 ): PortableActivationRecovery {
   return {
     activationId: context.activationId,
     stageId: context.request.stage.stageId,
     target: context.request.stage.target,
     phase,
+    ...(updaterPid === undefined ? {} : { updaterPid }),
   };
 }
 
@@ -329,7 +342,7 @@ function preparePortablePromotion(
   settleInterruptedActivation({
     stateDir: context.stateDir,
     request: context.request,
-    securityLogSink: activationLogSink(context.options, UNKNOWN_CORRELATION_ID),
+    securityLogSink: context.options.securityLogSink,
   });
   beginPortableActivationRecovery({
     stateDir: context.stateDir,
@@ -379,17 +392,31 @@ async function verifyAndCommitPromotion(
     recovery: recoveryRecord(context, "verified"),
   });
   progress.recoveryPhase = "verified";
-  cleanupPortableActivation(prepared.promotion.paths);
+  cleanupPortableActivation(prepared.promotion.paths, { updaterPid: process.pid });
   cleanupPortableRegistrationSnapshot({
     stateDir: context.stateDir,
     activationId: context.activationId,
   });
+  if (process.platform === "win32") {
+    writePortableActivationRecovery({
+      stateDir: context.stateDir,
+      recovery: recoveryRecord(context, "cleanup-pending", process.pid),
+    });
+    progress.recoveryPhase = "cleanup-pending";
+    return;
+  }
   clearPortableActivationRecovery(context.stateDir);
   progress.recoveryPhase = undefined;
 }
 
 function restoreFailedPromotion(context: ActivationContext, progress: ActivationProgress): void {
-  if (progress.recoveryPhase === undefined || progress.recoveryPhase === "verified") return;
+  if (
+    progress.recoveryPhase === undefined ||
+    progress.recoveryPhase === "verified" ||
+    progress.recoveryPhase === "cleanup-pending"
+  ) {
+    return;
+  }
   try {
     // KEIKO-0493: terminate a relaunch that was already spawned before reverting the layout it
     // was launched against, so a cancelled activation cannot leave a live process running on

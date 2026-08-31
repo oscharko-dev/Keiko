@@ -384,6 +384,8 @@ describe("runLifecycleCli", () => {
     expect(spawn.opts.argv0).toBe("Keiko");
     const pidFileText = readFileSync(join(root, ".keiko-test", "ui.pid"), "utf8");
     expect(pidFileText).toMatch(/^12345\n[0-9a-f]{32}\n$/);
+    const launchId = pidFileText.split("\n")[1];
+    expect(spawn.args).toEqual(expect.arrayContaining(["--launch-id", launchId]));
     expect(spawn.opts.env).toMatchObject({
       KEIKO_STATE_DIR: join(root, ".keiko-test"),
       KEIKO_UI_LAUNCH_ID: pidFileText.split("\n")[1],

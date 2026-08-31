@@ -221,12 +221,17 @@ describe("atomicPublishRename", () => {
     }
   });
 
-  it("retries win32 EPERM immediately by default so HTTP vault writes do not sleep", () => {
-    const { rename, calls } = failingThenSucceeding([eperm(), eperm()]);
-    const sleep = vi.fn();
+  it("retries win32 EPERM with a short default backoff so a transient lock can clear", () => {
+    let locked = true;
+    const sleep = vi.fn((ms: number): void => {
+      if (ms >= 20) locked = false;
+    });
+    const rename = vi.fn((): void => {
+      if (locked) throw eperm();
+    });
     atomicPublishRename("from", "to", { platform: "win32", rename, sleep });
-    expect(calls).toHaveLength(WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS.length);
-    expect(sleep).not.toHaveBeenCalled();
+    expect(rename.mock.calls.length).toBeGreaterThan(1);
+    expect(sleep).toHaveBeenCalledWith(20);
   });
 
   it("logs a terminal POSIX rename failure without retrying", () => {
@@ -263,8 +268,8 @@ describe("atomicPublishRename", () => {
 });
 
 describe("WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS", () => {
-  it("is three immediate attempts with no wait", () => {
-    expect([...WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS]).toEqual([0, 0, 0]);
+  it("is three attempts with a short recovery window", () => {
+    expect([...WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS]).toEqual([0, 20, 40]);
   });
 });
 
@@ -386,23 +391,20 @@ describe("withCwdOutsideTree", () => {
 
   it("treats a realpath-equivalent cwd as inside the tree", () => {
     const dir = mkdtempSync(join(tmpdir(), "keiko-cwd-tree-"));
-    const previous = process.cwd();
     const destinations: string[] = [];
-    const realChdir = process.chdir.bind(process);
-    realChdir(dir);
-    const spy = vi.spyOn(process, "chdir").mockImplementation((next: string): void => {
-      destinations.push(next);
-      realChdir(next);
-    });
     try {
-      withCwdOutsideTree(dir, (): void => undefined);
+      withCwdOutsideTree(dir, (): void => undefined, {
+        cwd: (): string => dir,
+        chdir: (next: string): void => {
+          destinations.push(next);
+        },
+        resolvePath: (path: string): string => realpathSync(path),
+      });
       const first = destinations[0];
       expect(first).toEqual(expect.any(String));
       if (typeof first !== "string") return;
       expect(realpathSync(first)).toBe(realpathSync(dirname(dir)));
     } finally {
-      spy.mockRestore();
-      realChdir(previous);
       rmSync(dir, { recursive: true, force: true });
     }
   });

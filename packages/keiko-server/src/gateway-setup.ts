@@ -5594,6 +5594,7 @@ function durableStoredGatewayConfig(
   current: GatewayConfig | undefined,
   storagePath: string,
   deps: UiHandlerDeps,
+  correlationId: string | undefined,
 ): GatewayConfig | undefined {
   if (current === undefined || !existsSync(storagePath)) return current;
   try {
@@ -5602,7 +5603,10 @@ function durableStoredGatewayConfig(
       secretResolver: createProviderSecretResolver({
         configPath: storagePath,
         env: deps.env,
-        securityLogSink: processServerLogSink(),
+        securityLogSink: bindSecurityLogCorrelation(
+          processServerLogSink(),
+          correlationId ?? UNKNOWN_CORRELATION_ID,
+        ),
       }),
     });
     // Inside the success path on purpose: on a fall-back the returned config is the RUNTIME one,
@@ -5976,7 +5980,12 @@ export async function handleGatewaySetup(
   }
   const { gatewayConfig } = deps;
   const current = currentGatewayConfig(deps);
-  const stored = durableStoredGatewayConfig(current, gatewayConfig.storagePath, deps);
+  const stored = durableStoredGatewayConfig(
+    current,
+    gatewayConfig.storagePath,
+    deps,
+    ctx.correlationId,
+  );
   const bodyResult = await readJsonSetupBody(ctx);
   if ("status" in bodyResult) {
     return bodyResult;
@@ -6194,10 +6203,11 @@ function persistVerifiedCapabilityUpdate(
   generation: number,
   updated: GatewayConfig,
   consumeObservation = true,
+  correlationId: string | undefined = UNKNOWN_CORRELATION_ID,
 ): RouteResult {
   const raw = rawConfigForVerifiedCapabilityUpdate(updated, gatewayConfig.storagePath, deps);
   try {
-    persistGatewayConfig(raw, gatewayConfig.storagePath, deps);
+    persistGatewayConfig(raw, gatewayConfig.storagePath, deps, correlationId);
   } catch (error) {
     // A live negative tool verdict must take effect even if its durable evidence cannot be saved.
     // Continuing to route tool calls on the old in-memory proof would widen authority exactly when
@@ -6314,6 +6324,7 @@ export function reconcileGatewayToolCallingReadiness(
     reconciliation.gatewayConfig.generation(),
     updated,
     false,
+    correlationId,
   );
 }
 
@@ -6383,5 +6394,13 @@ export async function handleApplyGatewayVerifiedCapabilities(
   if (!capabilityObservationMatches(gatewayConfig, modelId, request.fields, generation, current)) {
     return staleCapabilityObservationResult();
   }
-  return persistVerifiedCapabilityUpdate(gatewayConfig, deps, modelId, generation, updated);
+  return persistVerifiedCapabilityUpdate(
+    gatewayConfig,
+    deps,
+    modelId,
+    generation,
+    updated,
+    true,
+    ctx.correlationId,
+  );
 }

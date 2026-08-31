@@ -185,7 +185,7 @@ lsof -nP -iTCP:1983 -sTCP:LISTEN
 Get-NetTCPConnection -LocalPort 1983 -State Listen
 
 # Confirm Keiko's own pid file, if any, no longer points at a live process.
-cat .keiko/ui.pid 2>/dev/null && ps -p "$(cat .keiko/ui.pid)" || echo "no live keiko pid"
+cat .keiko/ui.pid 2>/dev/null && ps -p "$(head -n 1 .keiko/ui.pid 2>/dev/null | tr -d ' \t\r')" || echo "no live keiko pid"
 ```
 
 **Resolution**

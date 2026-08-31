@@ -74,7 +74,8 @@ export interface PortableActivationRecovery {
   readonly activationId: string;
   readonly stageId: string;
   readonly target: UpdatePortableTarget;
-  readonly phase: "prepared" | "promoted" | "registered" | "verified";
+  readonly phase: "prepared" | "promoted" | "registered" | "verified" | "cleanup-pending";
+  readonly updaterPid?: number | undefined;
 }
 
 const REGISTRATION_FILE = "portable-install-state.json";
@@ -459,7 +460,11 @@ function isRecoveryTarget(value: unknown): value is UpdatePortableTarget {
 
 function isRecoveryPhase(value: unknown): value is PortableActivationRecovery["phase"] {
   return (
-    value === "prepared" || value === "promoted" || value === "registered" || value === "verified"
+    value === "prepared" ||
+    value === "promoted" ||
+    value === "registered" ||
+    value === "verified" ||
+    value === "cleanup-pending"
   );
 }
 
@@ -473,24 +478,31 @@ function isSafeStageId(value: unknown): value is string {
   );
 }
 
-function hasExactRecoveryKeys(record: Record<string, unknown>): boolean {
+function hasAllowedRecoveryKeys(record: Record<string, unknown>): boolean {
+  const allowed = new Set(["activationId", "stageId", "target", "phase", "updaterPid"]);
   const keys = Object.keys(record);
   return (
-    keys.length === 4 &&
-    keys.every((key) => ["activationId", "stageId", "target", "phase"].includes(key))
+    ["activationId", "stageId", "target", "phase"].every((key) => keys.includes(key)) &&
+    keys.every((key) => allowed.has(key))
   );
+}
+
+function isUpdaterPid(value: unknown): value is number | undefined {
+  if (value === undefined) return true;
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 function isPortableActivationRecovery(value: unknown): value is PortableActivationRecovery {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  return !hasExactRecoveryKeys(record)
+  return !hasAllowedRecoveryKeys(record)
     ? false
     : typeof record.activationId === "string" &&
         /^[a-f0-9]{32}$/u.test(record.activationId) &&
         isSafeStageId(record.stageId) &&
         isRecoveryTarget(record.target) &&
-        isRecoveryPhase(record.phase);
+        isRecoveryPhase(record.phase) &&
+        isUpdaterPid(record.updaterPid);
 }
 
 function assertRecovery(value: unknown): PortableActivationRecovery {
@@ -754,23 +766,41 @@ function lstatEntryOrUndefined(path: string): ReturnType<typeof lstatSync> | und
 
 export function cleanupPortableActivation(
   paths: PortableActivationPaths,
-  options: { readonly platform?: NodeJS.Platform; readonly execPath?: string } = {},
+  options: {
+    readonly platform?: NodeJS.Platform;
+    readonly execPath?: string;
+    readonly updaterPid?: number;
+  } = {},
 ): void {
   const platform = options.platform ?? process.platform;
   const execPath = options.execPath ?? process.execPath;
-  if (!execPathMapsBackup(paths.backupRoot, platform, execPath)) {
+  if (!shouldDeferBackupDelete(paths.backupRoot, platform, execPath, options.updaterPid)) {
     rmSync(paths.backupRoot, { recursive: true, force: true });
   }
   rmSync(paths.stageRoot, { recursive: true, force: true });
 }
 
-function execPathMapsBackup(
+function shouldDeferBackupDelete(
   backupRoot: string,
   platform: NodeJS.Platform,
   execPath: string,
+  updaterPid: number | undefined,
 ): boolean {
   if (platform !== "win32") return false;
-  const rel = relative(resolve(backupRoot), resolve(execPath));
+  if (updaterPid === process.pid) return true;
+  return execPathMapsBackup(backupRoot, execPath);
+}
+
+function resolvedOrLiteral(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+function execPathMapsBackup(backupRoot: string, execPath: string): boolean {
+  const rel = relative(resolvedOrLiteral(backupRoot), resolvedOrLiteral(execPath));
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 

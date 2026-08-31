@@ -469,4 +469,75 @@ describe("terminateUiProcess", () => {
     expect(killWindowsTree).not.toHaveBeenCalled();
     expect(killProcess).not.toHaveBeenCalled();
   });
+
+  it("SIGTERMs when live environ proves the pid-file launch id without a verify mock", async () => {
+    const stateDir = makeStateDir();
+    writeOwnedPid(stateDir, 42);
+    const killed: (readonly [number, NodeJS.Signals | 0 | undefined])[] = [];
+    const outcome = await terminateUiProcess({
+      pid: 42,
+      stateDir,
+      stopTimeoutMs: 10_000,
+      platform: "darwin",
+      sleep: () => Promise.resolve(),
+      isProcessAlive: () => false,
+      killProcess: (pid, signal) => {
+        killed.push([pid, signal]);
+      },
+      escalate: true,
+      launchId: TEST_LAUNCH_ID,
+      readProcessEnviron: () => `KEIKO_UI_LAUNCH_ID=${TEST_LAUNCH_ID}`,
+    });
+    expect(outcome).toEqual({ confirmed: true, escalated: false });
+    expect(killed).toEqual([[42, "SIGTERM"]]);
+  });
+
+  it("refuses to signal the parent pid even when identity would otherwise match", async () => {
+    const stateDir = makeStateDir();
+    writeOwnedPid(stateDir, 7);
+    const killProcess = vi.fn();
+    const outcome = await terminateUiProcess({
+      pid: 7,
+      stateDir,
+      stopTimeoutMs: 10_000,
+      platform: "linux",
+      sleep: () => Promise.resolve(),
+      isProcessAlive: () => true,
+      killProcess,
+      escalate: true,
+      currentPid: 99,
+      parentPid: 7,
+      launchId: TEST_LAUNCH_ID,
+      readProcessEnviron: () => `KEIKO_UI_LAUNCH_ID=${TEST_LAUNCH_ID}`,
+    });
+    expect(outcome).toEqual({ confirmed: false, escalated: false });
+    expect(killProcess).not.toHaveBeenCalled();
+  });
+
+  it("does not SIGKILL when Windows tree-kill reports root-not-found", async () => {
+    const stateDir = makeStateDir();
+    writeOwnedPid(stateDir, 12);
+    const killProcess = vi.fn();
+    const killWindowsTree = vi.fn(() => "root-not-found" as const);
+    const nowSpy = vi.spyOn(performance, "now");
+    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
+    try {
+      await terminateUiProcess({
+        pid: 12,
+        stateDir,
+        stopTimeoutMs: 1,
+        platform: "win32",
+        sleep: () => Promise.resolve(),
+        isProcessAlive: () => true,
+        killProcess,
+        killWindowsTree,
+        escalate: true,
+        ...verifiedIdentity(),
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(killWindowsTree).toHaveBeenCalledTimes(1);
+    expect(killProcess).not.toHaveBeenCalled();
+  });
 });

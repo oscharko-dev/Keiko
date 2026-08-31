@@ -14,10 +14,23 @@ describe("logHasGracefulProcessExit", () => {
     ).toBe(true);
   });
 
-  it("accepts process.exiting with sigterm on the same record", () => {
+  it("accepts process.exiting with extra.reason sigterm", () => {
     expect(
       logHasGracefulProcessExit(line({ op: "process.exiting", extra: { reason: "sigterm" } })),
     ).toBe(true);
+  });
+
+  it("accepts the on-disk v2 envelope with flattened reason", () => {
+    expect(
+      logHasGracefulProcessExit(line({ op: "process.exiting", reason: "sigterm", uptimeMs: 12 })),
+    ).toBe(true);
+  });
+
+  it("ignores a prior restart event when only the suffix is inspected", () => {
+    const prior = line({ op: "process.exiting", reason: "sigterm" });
+    const suffix = line({ op: "process.heartbeat", extra: { rssBytes: 1 } });
+    expect(logHasGracefulProcessExit(prior + suffix)).toBe(true);
+    expect(logHasGracefulProcessExit(suffix)).toBe(false);
   });
 
   it("rejects split records that only together mention both fields", () => {

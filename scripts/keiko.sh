@@ -84,7 +84,7 @@ is_keiko_ui() {
 # Clears a stale/invalid pid file as a side effect.
 running_pid() {
   [[ -f "$PID_FILE" ]] || return 1
-  pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+  pid="$(head -n 1 "$PID_FILE" 2>/dev/null | tr -d ' \t\r' || true)"
   if is_keiko_ui "$pid"; then
     echo "$pid"
     return 0

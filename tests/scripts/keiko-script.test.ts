@@ -223,6 +223,30 @@ describe("scripts/keiko.sh", () => {
         decoy.kill("SIGKILL");
       }
     });
+
+    it("parses a Node-CLI two-line pid file and reports the numeric pid only", async () => {
+      const fixtureDir = join(stateDir, "dist", "cli");
+      mkdirSync(fixtureDir, { recursive: true });
+      const fixtureEntry = join(fixtureDir, "index.js");
+      writeFileSync(fixtureEntry, "setInterval(() => undefined, 60000);\n");
+      const ui = spawn(process.execPath, [fixtureEntry], { stdio: "ignore" });
+      await new Promise<void>((res, rej) => {
+        ui.once("spawn", res);
+        ui.once("error", rej);
+      });
+      const uiPid = ui.pid;
+      expect(uiPid).toBeTypeOf("number");
+      if (uiPid === undefined) throw new Error("fixture UI process did not report a pid");
+      try {
+        writeFileSync(join(stateDir, "ui.pid"), `${String(uiPid)}\n${"a".repeat(32)}\n`);
+        const status = run(["status"], { KEIKO_STATE_DIR: stateDir });
+        expect(status.status).toBe(0);
+        expect(status.stdout).toContain(`pid ${String(uiPid)}`);
+        expect(status.stdout).not.toContain("a".repeat(32));
+      } finally {
+        ui.kill("SIGKILL");
+      }
+    });
   });
 
   describe("build-asset guard", () => {

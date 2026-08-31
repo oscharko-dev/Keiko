@@ -33,7 +33,12 @@ import { resolvePreferredInstallLayout } from "./install-layout.js";
 // Only type imports may reference the package at module scope here.
 import { loadServer as loadServerModule } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
-import { defaultUiDataDir, KEIKO_UI_LAUNCH_ID_ENV, peekShutdownRequest } from "./state-paths.js";
+import {
+  defaultUiDataDir,
+  isKeikoUiLaunchId,
+  KEIKO_UI_LAUNCH_ID_ENV,
+  peekShutdownRequest,
+} from "./state-paths.js";
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
 const KEIKO_PROCESS_TITLE = "Keiko";
@@ -46,7 +51,7 @@ const LOCAL_DOTENV_ENV_NAME_ALLOWLIST: ReadonlySet<string> = new Set(["FIGMA_ACC
 const DEFAULT_STATE_DIR = ".keiko";
 
 const USAGE = `Usage:
-  keiko ui [--port PORT] [--host 127.0.0.1|localhost] [--evidence-dir PATH] [--config PATH] [--ui-db PATH]
+  keiko ui [--port PORT] [--host 127.0.0.1|localhost] [--evidence-dir PATH] [--config PATH] [--ui-db PATH] [--launch-id ID]
 
 Launches the local Keiko UI on the loopback interface and prints its URL. The server
 binds 127.0.0.1 only and serves the packaged UI assets (built with \`npm run build:ui\`).
@@ -60,7 +65,7 @@ export interface UiCliArgs {
 }
 
 type UiParseResult = UiCliArgs | "help" | null;
-type UiFlag = "--port" | "--host" | "--evidence-dir" | "--config" | "--ui-db";
+type UiFlag = "--port" | "--host" | "--evidence-dir" | "--config" | "--ui-db" | "--launch-id";
 
 interface RawUiOptions {
   portRaw?: string | undefined;
@@ -68,6 +73,7 @@ interface RawUiOptions {
   evidenceRaw?: string | undefined;
   configRaw?: string | undefined;
   uiDbRaw?: string | undefined;
+  launchIdRaw?: string | undefined;
 }
 
 // Test seam: inject a server factory and the resolved asset paths so unit tests never bind a real
@@ -186,7 +192,8 @@ function isUiFlag(arg: string): arg is UiFlag {
     arg === "--host" ||
     arg === "--evidence-dir" ||
     arg === "--config" ||
-    arg === "--ui-db"
+    arg === "--ui-db" ||
+    arg === "--launch-id"
   );
 }
 
@@ -206,6 +213,9 @@ function setRawUiOption(raw: RawUiOptions, flag: UiFlag, value: string): void {
       return;
     case "--ui-db":
       raw.uiDbRaw = value;
+      return;
+    case "--launch-id":
+      raw.launchIdRaw = value;
       return;
   }
 }
@@ -230,8 +240,11 @@ function collectUiOptions(args: readonly string[]): RawUiOptions | "help" | null
 export function parseUiArgs(args: readonly string[]): UiParseResult {
   const raw = collectUiOptions(args);
   if (raw === "help" || raw === null) return raw;
-  const { portRaw, hostRaw, evidenceRaw, configRaw, uiDbRaw } = raw;
+  const { portRaw, hostRaw, evidenceRaw, configRaw, uiDbRaw, launchIdRaw } = raw;
   if (hostRaw !== undefined && !ALLOWED_HOSTS.has(hostRaw)) {
+    return null;
+  }
+  if (launchIdRaw !== undefined && !isKeikoUiLaunchId(launchIdRaw)) {
     return null;
   }
   const port = portRaw === undefined ? DEFAULT_UI_PORT : parsePort(portRaw);

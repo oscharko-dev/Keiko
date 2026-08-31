@@ -2935,6 +2935,13 @@ function assertLifecycleRestart(runLifecycle) {
 
 const GRACEFUL_PROCESS_EXIT_REASONS = new Set(["shutdown-request", "sigterm"]);
 
+function gracefulExitReason(event) {
+  if (event.op !== "process.exiting") return undefined;
+  if (typeof event.reason === "string") return event.reason;
+  if (typeof event.extra?.reason === "string") return event.extra.reason;
+  return undefined;
+}
+
 export function logHasGracefulProcessExit(logText) {
   for (const line of logText.split("\n")) {
     if (line.length === 0) continue;
@@ -2944,14 +2951,15 @@ export function logHasGracefulProcessExit(logText) {
     } catch {
       continue;
     }
-    if (event.op !== "process.exiting") continue;
-    const reason = event.extra?.reason;
-    if (typeof reason === "string" && GRACEFUL_PROCESS_EXIT_REASONS.has(reason)) return true;
+    const reason = gracefulExitReason(event);
+    if (reason !== undefined && GRACEFUL_PROCESS_EXIT_REASONS.has(reason)) return true;
   }
   return false;
 }
 
 function assertLifecycleStop(runLifecycle, stateDir) {
+  const logPath = join(stateDir, "logs", "server.log");
+  const offset = existsSync(logPath) ? statSync(logPath).size : 0;
   const stopResult = runLifecycle("stop");
   if (stopResult.status !== 0) {
     fail(
@@ -2965,12 +2973,11 @@ function assertLifecycleStop(runLifecycle, stateDir) {
   if (!stopResult.stdout.includes("Keiko UI stopped")) {
     fail(`keiko stop did not report a graceful stop: ${stopResult.stdout}${stopResult.stderr}`);
   }
-  const logPath = join(stateDir, "logs", "server.log");
   if (!existsSync(logPath)) {
     fail("keiko stop left no activity log to prove process.exiting");
   }
-  const logText = readFileSync(logPath, "utf8");
-  if (!logHasGracefulProcessExit(logText)) {
+  const appended = readFileSync(logPath, "utf8").slice(offset);
+  if (!logHasGracefulProcessExit(appended)) {
     fail("keiko stop did not record process.exiting with a graceful drain reason");
   }
 }

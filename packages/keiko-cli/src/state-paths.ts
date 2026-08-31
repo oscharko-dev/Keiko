@@ -200,7 +200,12 @@ function createExclusivePidFileSlot(path: string): number {
 }
 
 export const KEIKO_UI_LAUNCH_ID_ENV = "KEIKO_UI_LAUNCH_ID";
+export const UI_LAUNCH_ID_FLAG = "--launch-id";
 const UI_LAUNCH_ID_PATTERN = /^[0-9a-f]{32}$/;
+
+export function isKeikoUiLaunchId(value: string): boolean {
+  return UI_LAUNCH_ID_PATTERN.test(value);
+}
 
 export interface PidRecord {
   readonly pid: number;
@@ -285,7 +290,7 @@ function parsePidRecord(raw: string): PidRecord | undefined {
   const pidLine = lines[0]?.trim();
   if (pidLine === undefined || !/^[1-9]\d*$/.test(pidLine)) return undefined;
   const launchLine = lines[1]?.trim();
-  if (launchLine !== undefined && UI_LAUNCH_ID_PATTERN.test(launchLine)) {
+  if (launchLine !== undefined && isKeikoUiLaunchId(launchLine)) {
     return { pid: Number(pidLine), launchId: launchLine };
   }
   return { pid: Number(pidLine) };

@@ -33,7 +33,10 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
+import {
+  atomicPublishRename,
+  WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+} from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import { LauncherError, launcherFor, type Platform } from "./launcher-platforms.js";
 import { isRealpathContained } from "./launcher-paths.js";
 import { STAGING_OWNERSHIP_MARKER } from "./state-paths.js";
@@ -268,7 +271,10 @@ export function saveState(stateDir: string, state: LauncherState): void {
       encoding: "utf8",
       mode: 0o600,
     });
-    atomicPublishRename(tmpFile, file, { rename: renameSync });
+    atomicPublishRename(tmpFile, file, {
+      rename: renameSync,
+      backoffMs: WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+    });
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

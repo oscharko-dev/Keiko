@@ -565,6 +565,31 @@ describe("createLocalSecretVault — delete", () => {
     expect(vault.list()).toEqual(["cred:keep"]);
   });
 
+  it("deleteMany emits one entries-deleted line with the requested count", () => {
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath: join(dir, "vault-delete-many-log.enc.json"),
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+    vault.set("cred:a", "secret-A");
+    vault.set("cred:b", "secret-B");
+    vault.set("cred:keep", "keep-secret");
+    events.length = 0;
+    vault.deleteMany(["cred:a", "cred:b"]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        category: "security",
+        op: "security.vault.entries-deleted",
+        extra: { count: 2 },
+      }),
+    ]);
+  });
+
   it("deleteMany of an empty list does not read an unreadable store", () => {
     const storePath = join(dir, "vault-unreadable.enc.json");
     mkdirSync(storePath);
@@ -1122,6 +1147,24 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
       );
     }).toThrow();
     expect(vault.get("cred:a")).toBe("original-a");
+    expect(vault.get("cred:b")).toBeUndefined();
+  });
+
+  it("treats a non-ENOENT snapshot of an existing shard as a hard failure, not as absent", () => {
+    const storeDir = join(dir, "sharded-snapshot-eisdir");
+    const vault = shardedVaultAt(storeDir);
+    vault.set("cred:a", "original-a");
+    const [name] = readdirSync(storeDir);
+    rmSync(join(storeDir, name ?? "missing"));
+    mkdirSync(join(storeDir, name ?? "missing"), { recursive: true });
+    expect(() => {
+      vault.setMany(
+        new Map([
+          ["cred:a", "updated-a"],
+          ["cred:b", "never-stored"],
+        ]),
+      );
+    }).toThrow();
     expect(vault.get("cred:b")).toBeUndefined();
   });
 

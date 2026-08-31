@@ -50,4 +50,24 @@ describe("createLocalSecretVault — setMany write cost (#3346)", () => {
     expect(vault.get("cred:m0")).toBe("secret-0");
     expect(vault.get("cred:m19")).toBe("secret-19");
   });
+
+  it("commits the store file once when deleteMany drops N entries", () => {
+    const dir = realpathSync(mkdtempSync(join(REAL_TMPDIR, "secret-vault-delete-many-io-")));
+    dirs.push(dir);
+    const storePath = resolve(join(dir, "vault.enc.json"));
+    const vault = createLocalSecretVault({ key: KEY, storePath });
+    vault.setMany(
+      new Map([
+        ["cred:a", "secret-a"],
+        ["cred:b", "secret-b"],
+        ["cred:keep", "secret-keep"],
+      ]),
+    );
+
+    renameDestinations.length = 0;
+    vault.deleteMany(["cred:a", "cred:b"]);
+
+    expect(renameDestinations.filter((path) => path === storePath)).toHaveLength(1);
+    expect(vault.list()).toEqual(["cred:keep"]);
+  });
 });

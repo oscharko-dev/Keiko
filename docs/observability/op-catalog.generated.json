@@ -11,13 +11,25 @@
     {
       "op": "cli.lifecycle.stop-escalated",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui-process-stop.ts:181",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:198",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.lifecycle.stop-escalation-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:282",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.lifecycle.stop-request-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:273",
       "package": "keiko-cli"
     },
     {
       "op": "cli.lifecycle.stop-requested",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui-process-stop.ts:126",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:146",
       "package": "keiko-cli"
     },
     {
@@ -29,7 +41,7 @@
     {
       "op": "process.exiting",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:673",
+      "site": "packages/keiko-cli/src/ui.ts:686",
       "package": "keiko-cli"
     },
     {
@@ -41,19 +53,19 @@
     {
       "op": "process.fatal",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:413",
+      "site": "packages/keiko-cli/src/ui.ts:426",
       "package": "keiko-cli"
     },
     {
       "op": "process.heartbeat",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:877",
+      "site": "packages/keiko-cli/src/ui.ts:890",
       "package": "keiko-cli"
     },
     {
       "op": "process.started",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:992",
+      "site": "packages/keiko-cli/src/ui.ts:1005",
       "package": "keiko-cli"
     },
     {
@@ -755,13 +767,13 @@
     {
       "op": "security.fs.atomic-rename-failed",
       "category": "security",
-      "site": "packages/keiko-security/src/fs-atomic-rename.ts:112",
+      "site": "packages/keiko-security/src/fs-atomic-rename.ts:116",
       "package": "keiko-security"
     },
     {
       "op": "security.fs.atomic-rename-retried",
       "category": "security",
-      "site": "packages/keiko-security/src/fs-atomic-rename.ts:98",
+      "site": "packages/keiko-security/src/fs-atomic-rename.ts:102",
       "package": "keiko-security"
     },
     {
@@ -773,31 +785,43 @@
     {
       "op": "security.log.sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-security/src/log-port.ts:150",
+      "site": "packages/keiko-security/src/log-port.ts:158",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.vault.entries-delete-failed",
+      "category": "security",
+      "site": "packages/keiko-security/src/secret-vault.ts:614",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.vault.entries-deleted",
+      "category": "security",
+      "site": "packages/keiko-security/src/secret-vault.ts:595",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.entries-merge-failed",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:590",
+      "site": "packages/keiko-security/src/secret-vault.ts:637",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.entries-merged",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:571",
+      "site": "packages/keiko-security/src/secret-vault.ts:582",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.key-resolved",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:290",
+      "site": "packages/keiko-security/src/secret-vault.ts:291",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.shard-unreadable",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:676",
+      "site": "packages/keiko-security/src/secret-vault.ts:729",
       "package": "keiko-security"
     },
     {
@@ -953,7 +977,7 @@
     {
       "op": "gateway.tool-calling.verification",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-setup.ts:6345",
+      "site": "packages/keiko-server/src/gateway-setup.ts:6356",
       "package": "keiko-server"
     },
     {
@@ -1121,7 +1145,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:1844",
+      "site": "packages/keiko-server/src/deps.ts:1846",
       "package": "keiko-server"
     },
     {

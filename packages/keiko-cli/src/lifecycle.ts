@@ -33,9 +33,10 @@ import {
   type CliSecurityLogSinkFactory,
 } from "./security-log.js";
 import {
-  KEIKO_UI_LAUNCH_ID_ENV,
   assertNotSymlink,
   assertRegularSingleLinkFile,
+  KEIKO_UI_LAUNCH_ID_ENV,
+  UI_LAUNCH_ID_FLAG,
   readPidRecord,
   removeStaleShutdownRequest,
   removePidFileIfMatches,
@@ -608,7 +609,16 @@ function spawnUiProcess(
     return {
       child: deps.spawnFn(
         process.execPath,
-        [cliEntryPath(cwd, env), "ui", "--port", String(options.port), "--host", options.host],
+        [
+          cliEntryPath(cwd, env),
+          "ui",
+          "--port",
+          String(options.port),
+          "--host",
+          options.host,
+          UI_LAUNCH_ID_FLAG,
+          launchId,
+        ],
         {
           argv0: KEIKO_PROCESS_TITLE,
           cwd,
