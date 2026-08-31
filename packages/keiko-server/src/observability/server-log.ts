@@ -35,11 +35,11 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
-  renameSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 
 import { classifyErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
@@ -581,7 +581,7 @@ function archiveCurrentDay(active: ActiveLog): boolean {
 function archiveWithoutHardLinks(active: ActiveLog, rolled: string): boolean {
   if (existsSync(rolled) || !existsSync(active.currentPath)) return false;
   try {
-    renameSync(active.currentPath, rolled);
+    atomicPublishRename(active.currentPath, rolled);
     return true;
   } catch {
     // Windows file-busy and friends: keep appending to the current file — rotation is a

@@ -7,7 +7,6 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -22,6 +21,10 @@ import {
   type SecurityLogSink,
   type WindowsShortcutDefinition,
 } from "@oscharko-dev/keiko-security";
+import {
+  atomicPublishRename,
+  withCwdOutsideTree,
+} from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import type {
   UpdatePortableStagingSummary,
   UpdatePortableTarget,
@@ -275,14 +278,16 @@ function activationPaths(
 }
 
 function restoreManagedRoot(paths: PortableActivationPaths): void {
-  if (!existsSync(paths.backupRoot)) return;
-  if (existsSync(paths.managedRoot)) {
-    if (existsSync(paths.candidateRoot)) {
-      throw activationFailed("portable activation recovery is incomplete");
+  withCwdOutsideTree(paths.managedRoot, () => {
+    if (!existsSync(paths.backupRoot)) return;
+    if (existsSync(paths.managedRoot)) {
+      if (existsSync(paths.candidateRoot)) {
+        throw activationFailed("portable activation recovery is incomplete");
+      }
+      atomicPublishRename(paths.managedRoot, paths.candidateRoot);
     }
-    renameSync(paths.managedRoot, paths.candidateRoot);
-  }
-  renameSync(paths.backupRoot, paths.managedRoot);
+    atomicPublishRename(paths.backupRoot, paths.managedRoot);
+  });
 }
 
 function promote(
@@ -294,11 +299,19 @@ function promote(
     throw activationFailed("portable activation backup path is occupied");
   }
   validateLayout(target, paths.candidateRoot, targetVersion);
+  return withCwdOutsideTree(paths.managedRoot, () => swapManagedRoot(paths, target, targetVersion));
+}
+
+function swapManagedRoot(
+  paths: PortableActivationPaths,
+  target: UpdatePortableTarget,
+  targetVersion: string,
+): PortableActivationLayout {
   let moved = false;
   try {
-    renameSync(paths.managedRoot, paths.backupRoot);
+    atomicPublishRename(paths.managedRoot, paths.backupRoot);
     moved = true;
-    renameSync(paths.candidateRoot, paths.managedRoot);
+    atomicPublishRename(paths.candidateRoot, paths.managedRoot);
     return validateLayout(target, paths.managedRoot, targetVersion);
   } catch (error) {
     if (moved) restoreManagedRoot(paths);
@@ -407,7 +420,7 @@ export function restorePortableRegistration(input: {
   }
   const temporary = `${registration}.${String(process.pid)}.restore`;
   writeExclusiveFile(temporary, readFileSync(snapshot.content));
-  renameSync(temporary, registration);
+  atomicPublishRename(temporary, registration);
 }
 
 export function cleanupPortableRegistrationSnapshot(input: {
@@ -497,7 +510,7 @@ export function writePortableActivationRecovery(input: {
     mode: 0o600,
     flag: "wx",
   });
-  renameSync(temporaryPath, path);
+  atomicPublishRename(temporaryPath, path);
 }
 
 export function beginPortableActivationRecovery(input: {
@@ -581,7 +594,7 @@ export function refreshPortableRegistration(input: {
   };
   const temporaryPath = `${path}.${String(process.pid)}.tmp`;
   writeExclusiveFile(temporaryPath, `${JSON.stringify(registration, null, 2)}\n`);
-  renameSync(temporaryPath, path);
+  atomicPublishRename(temporaryPath, path);
   try {
     chmodSync(path, 0o600);
   } catch {

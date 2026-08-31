@@ -7,11 +7,11 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
-  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import {
   REGISTRATION_FILE,
   defaultManagedRoot,
@@ -186,7 +186,7 @@ function writeRegistration(stateDir: string, registration: PortableInstallRegist
       encoding: "utf8",
       mode: 0o600,
     });
-    renameSync(tmpFile, path);
+    atomicPublishRename(tmpFile, path);
   } finally {
     // PR-review follow-up (Codex thread 3771256638): rmSync failure MUST NOT masquerade as
     // a failed atomic rewrite. If renameSync succeeded, the registration is already

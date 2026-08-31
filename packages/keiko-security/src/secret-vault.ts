@@ -30,7 +30,6 @@ import {
   openSync,
   readFileSync,
   readdirSync,
-  renameSync,
   rmSync,
   unlinkSync,
   writeSync,
@@ -39,6 +38,7 @@ import { randomBytes } from "node:crypto";
 import { userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { isSealed, openString, sealString } from "./secretbox.js";
+import { atomicPublishRename } from "./fs-atomic-rename.js";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: this package now owns the 0o700/0o600 hardening
 // pair; import it from the sibling module (relative — we ARE keiko-security).
 import { chmodIfPresent, ensureDirHardened, FILE_MODE } from "./fs-hardening.js";
@@ -429,7 +429,7 @@ function writeStore(storePath: string, entries: Record<string, string>): void {
   try {
     writeDurableTextFile(tempPath, `${JSON.stringify(payload, null, 2)}\n`, FILE_MODE);
     chmodIfPresent(tempPath, FILE_MODE);
-    renameSync(tempPath, resolvedPath);
+    atomicPublishRename(tempPath, resolvedPath);
     chmodIfPresent(resolvedPath, FILE_MODE);
     fsyncDirectory(dir);
   } finally {
@@ -539,7 +539,7 @@ function writeShard(dir: string, filePath: string, envelope: string): void {
   try {
     writeDurableTextFile(tempPath, envelope, FILE_MODE);
     chmodIfPresent(tempPath, FILE_MODE);
-    renameSync(tempPath, filePath);
+    atomicPublishRename(tempPath, filePath);
     chmodIfPresent(filePath, FILE_MODE);
     fsyncDirectory(dir);
   } finally {

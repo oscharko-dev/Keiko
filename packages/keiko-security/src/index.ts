@@ -28,6 +28,20 @@ export { sealString, openString, sealBytes, openBytes, isSealed } from "./secret
 // packages that previously each carried a private copy [GEN-MAINT-COUPLING-005].
 export { DIR_MODE, FILE_MODE, ensureDirHardened, chmodIfPresent } from "./fs-hardening.js";
 
+// Shared Windows-gated atomic-publish rename [issue #3352]. Same owner as fs-hardening so CLI,
+// server, vault, and evidence cannot drift onto a private retry loop.
+export type {
+  AtomicPublishRenameFn,
+  AtomicPublishRenameOptions,
+  CwdOutsideTreeOptions,
+} from "./fs-atomic-rename.js";
+export {
+  WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+  WINDOWS_ATOMIC_RENAME_RETRY_CODES,
+  atomicPublishRename,
+  withCwdOutsideTree,
+} from "./fs-atomic-rename.js";
+
 // Shared, bounded macOS Keychain key tier — one owner for the vault surfaces that previously each
 // carried a private copy of the same unbounded `security` spawn [GEN-MAINT-COUPLING-006].
 export type { MacosKeychainOptions, MacosKeychainRead } from "./macos-keychain.js";

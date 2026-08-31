@@ -139,6 +139,52 @@ troubleshooting entries.
 
 ---
 
+## Windows update leaves `Keiko.exe` missing next to a `.keiko-previous-*` folder
+
+| Field             | Value                                                                 |
+| ----------------- | --------------------------------------------------------------------- |
+| Severity          | Blocker                                                               |
+| Surface           | Portable install, in-app auto-update                                  |
+| Stable identifier | `portable Windows atomic rename EPERM/EBUSY during managed-root swap` |
+
+**Symptom**
+
+After a Windows install, upgrade, or in-app update, `Keiko.exe` is missing from the managed root
+and a sibling folder named `.keiko-previous-*` is present. The previous version may still be
+inside that sibling. First-run setup may also fail with a rename error even though the payload
+extracted cleanly.
+
+**Root Cause**
+
+Windows `MoveFileEx` fails with `EPERM` or `EBUSY` while any handle is open on a file in the tree.
+A transient antivirus or EDR scan of a just-extracted `.exe`/`.dll`, the search indexer, or an
+Explorer preview is enough. POSIX `rename(2)` does not fail for an open destination, so the same
+swap succeeds on macOS and Linux. Keiko retries those two codes with bounded backoff and
+`chdir`s out of the managed tree before renaming it. Copy+delete is not used — it would lose the
+crash-safe atomic swap. `chdir` does not unmap `node.exe` loaded from the tree; a lock that
+outlasts the retry still fails closed.
+
+**Diagnostic Steps**
+
+- Confirm a `.keiko-previous-*` sibling exists next to the managed root (typically under
+  `%LOCALAPPDATA%\Programs\`).
+- Check `<stateDir>/logs/server.log` for `security.fs.atomic-rename-retried` or
+  `security.fs.atomic-rename-exhausted` (`extra.attempts` and `errorKind` only; no paths).
+- See also [Windows portable first-launch](./windows-portable-first-launch.md) when Defender
+  quarantined extracted files rather than locking them during the swap.
+
+**Resolution**
+
+- Re-run the same stable installer or in-app update; the retry is usually enough once the scan
+  finishes.
+- If the managed root is empty and `.keiko-previous-*` still holds the previous tree, restore is
+  `keiko portable repair` / reinstall — do not ask users to rename folders by hand as the normal
+  fix.
+- Do not tell users to disable antivirus as the normal fix. An organization allowlist for the
+  managed Keiko directory is the durable IT control when scanners hold extracted PEs for seconds.
+
+---
+
 ## Keiko starts but the browser cannot reach the local app
 
 | Field             | Value                               |

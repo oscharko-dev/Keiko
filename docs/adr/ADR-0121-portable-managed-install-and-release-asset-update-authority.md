@@ -198,6 +198,14 @@ atomic rename semantics, or an equally reviewed platform primitive with the same
 property. If the detected filesystem or layout cannot provide crash-safe promotion, one-click
 portable update is rejected as manual-only.
 
+On Windows, `MoveFileEx` fails with `EPERM`/`EBUSY` while any handle is open on a file in the
+tree (a transient antivirus scan of a just-extracted PE, the indexer, or an Explorer preview).
+POSIX `rename(2)` does not fail for an open destination. Atomic-publish swaps therefore retry
+those two codes with bounded backoff via the shared `atomicPublishRename` helper; they do not
+fall back to copy+delete. The promoting process also `chdir`s out of the managed tree before
+renaming it. `chdir` does not unmap `node.exe` loaded from that tree — the retry covers that
+residual lock.
+
 Supported v1 behavior excludes:
 
 - rollback,

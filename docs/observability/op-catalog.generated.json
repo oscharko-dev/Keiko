@@ -759,6 +759,18 @@
       "package": "keiko-model-gateway"
     },
     {
+      "op": "security.fs.atomic-rename-exhausted",
+      "category": "security",
+      "site": "packages/keiko-security/src/fs-atomic-rename.ts:86",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.fs.atomic-rename-retried",
+      "category": "security",
+      "site": "packages/keiko-security/src/fs-atomic-rename.ts:86",
+      "package": "keiko-security"
+    },
+    {
       "op": "security.keychain.fallback",
       "category": "security",
       "site": "packages/keiko-security/src/macos-keychain.ts:151",
@@ -1211,7 +1223,7 @@
     {
       "op": "store.opened",
       "category": "setup",
-      "site": "packages/keiko-server/src/store/db.ts:929",
+      "site": "packages/keiko-server/src/store/db.ts:930",
       "package": "keiko-server"
     },
     {

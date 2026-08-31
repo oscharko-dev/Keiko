@@ -9,7 +9,6 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
-  renameSync,
   rmdirSync,
   rmSync,
   statSync,
@@ -56,6 +55,10 @@ import {
 } from "./portable-shared.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import {
+  atomicPublishRename,
+  withCwdOutsideTree,
+} from "@oscharko-dev/keiko-security/fs-atomic-rename";
 
 export interface ValidatedPortableRoot {
   readonly layout: PortableLayout;
@@ -428,7 +431,7 @@ function promoteToManaged(
   const stagedTarget = join(stagingRoot, basename(managedRoot));
   try {
     copyTreeSafe(source.installRoot, stagedTarget);
-    renameSync(stagedTarget, managedRoot);
+    atomicPublishRename(stagedTarget, managedRoot);
     return layoutFor(target, managedRoot);
   } finally {
     rmSync(stagingRoot, { recursive: true, force: true });
@@ -468,10 +471,17 @@ function restoreManagedUpgrade(
   paths: PortableUpgradePaths,
   promoted: boolean,
 ): { readonly restored: true } | { readonly restored: false; readonly cause: unknown } {
+  return withCwdOutsideTree(paths.managedRoot, () => restoreManagedUpgradeInside(paths, promoted));
+}
+
+function restoreManagedUpgradeInside(
+  paths: PortableUpgradePaths,
+  promoted: boolean,
+): { readonly restored: true } | { readonly restored: false; readonly cause: unknown } {
   try {
     if (promoted) rmSync(paths.managedRoot, { recursive: true, force: true });
     if (existsSync(paths.backupTarget) && !existsSync(paths.managedRoot)) {
-      renameSync(paths.backupTarget, paths.managedRoot);
+      atomicPublishRename(paths.backupTarget, paths.managedRoot);
     }
     if (!existsSync(paths.managedRoot) || existsSync(paths.backupTarget)) {
       return { restored: false, cause: new Error("portable rollback could not be verified") };
@@ -493,13 +503,24 @@ function promoteStagedUpgrade(
   paths: PortableUpgradePaths,
   verifyCurrent?: () => void,
 ): PortableLayout {
+  return withCwdOutsideTree(paths.managedRoot, () =>
+    swapStagedUpgrade(input, stagedSource, paths, verifyCurrent),
+  );
+}
+
+function swapStagedUpgrade(
+  input: PortableManagedReplacementInput,
+  stagedSource: ValidatedPortableRoot,
+  paths: PortableUpgradePaths,
+  verifyCurrent?: () => void,
+): PortableLayout {
   let moved = false;
   let promoted = false;
   try {
     if (verifyCurrent !== undefined) verifyCurrent();
-    renameSync(paths.managedRoot, paths.backupTarget);
+    atomicPublishRename(paths.managedRoot, paths.backupTarget);
     moved = true;
-    renameSync(paths.stagedTarget, paths.managedRoot);
+    atomicPublishRename(paths.stagedTarget, paths.managedRoot);
     promoted = true;
     const layout = layoutFor(input.target, paths.managedRoot);
     finalizeManagedSetup(
@@ -941,7 +962,7 @@ function samePortableSetupLock(
 
 function restoreClaimedPortableSetupLock(claimedPath: string, path: string): void {
   try {
-    renameSync(claimedPath, path);
+    atomicPublishRename(claimedPath, path);
   } catch {
     // Preserve the claimed directory when the canonical path was concurrently recreated.
   }
@@ -954,7 +975,7 @@ function reclaimPortableSetupLock(path: string): boolean {
     const inspected = stalePortableSetupLock(path);
     if (inspected === undefined) return false;
     stale = inspected;
-    renameSync(path, claimedPath);
+    atomicPublishRename(path, claimedPath);
   } catch {
     return false;
   }

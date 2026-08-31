@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -20,6 +21,7 @@ import { createPortableUpdateActivator } from "./update-portable-activation.js";
 import {
   activationIdFor,
   capturePortableRegistration,
+  promotePortableInstall,
   readPortableActivationRecovery,
   readWindowsPortableShortcutTarget,
   refreshPortableShortcut,
@@ -266,6 +268,36 @@ describe("portable update activation", () => {
     expect(existsSync(join(install.stateDir, "updates", "portable-activation-recovery.json"))).toBe(
       false,
     );
+  });
+
+  it("leaves the managed install tree before the atomic rename swap", async () => {
+    const install = await makeInstall();
+    const previous = process.cwd();
+    const parent = dirname(install.managedRoot);
+    const destinations: string[] = [];
+    const realChdir = process.chdir.bind(process);
+    const spy = vi.spyOn(process, "chdir").mockImplementation((next: string): void => {
+      destinations.push(next);
+      realChdir(next);
+    });
+    realChdir(install.managedRoot);
+    try {
+      const input = {
+        sessionId: "cwd-swap",
+        targetVersion: TARGET_VERSION,
+        stage: stageSummary(),
+        runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+      };
+      promotePortableInstall(input, activationIdFor(input));
+      const parentReal = realpathSync(parent);
+      expect(destinations.some((path) => realpathSync(path) === parentReal)).toBe(true);
+      expect(readFileSync(join(install.managedRoot, "app", "package.json"), "utf8")).toContain(
+        TARGET_VERSION,
+      );
+    } finally {
+      spy.mockRestore();
+      process.chdir(previous);
+    }
   });
 
   // KEIKO-0493: a cancellation landing between requestRelaunch() and the relaunch's own
