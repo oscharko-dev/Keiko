@@ -28,6 +28,7 @@ import {
   readWindowsPortableShortcutTarget,
   refreshPortableShortcut,
   writePortableActivationRecovery,
+  type PortableActivationRecovery,
 } from "./update-portable-activation-files.js";
 import type { SecurityLogEvent, SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
@@ -37,7 +38,7 @@ import {
 
 const TARGET_VERSION = "0.2.12";
 const OLD_VERSION = "0.2.11";
-const TARGET = "windows-x64";
+const TARGET = "windows-x64" as const;
 const tempRoots: string[] = [];
 
 function setupManifest(version: string): string {
@@ -1007,12 +1008,7 @@ describe("commitPortableActivationCleanup", () => {
   function fixture(label: string): {
     readonly root: string;
     readonly stateDir: string;
-    readonly recovery: {
-      readonly activationId: string;
-      readonly stageId: string;
-      readonly target: typeof TARGET;
-      readonly phase: "verified";
-    };
+    readonly recovery: PortableActivationRecovery;
     readonly paths: {
       readonly managedRoot: string;
       readonly stageRoot: string;
@@ -1028,11 +1024,11 @@ describe("commitPortableActivationCleanup", () => {
     mkdirSync(stageRoot, { recursive: true });
     writeFileSync(join(backupRoot, "marker"), "old");
     writeFileSync(join(stageRoot, "leftover"), "x");
-    const recovery = {
+    const recovery: PortableActivationRecovery = {
       activationId: "a".repeat(32),
       stageId: "stage-1",
       target: TARGET,
-      phase: "verified" as const,
+      phase: "verified",
     };
     writePortableActivationRecovery({ stateDir, recovery });
     return {
