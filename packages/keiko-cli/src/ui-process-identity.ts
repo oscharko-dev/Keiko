@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { resolveWindowsPowerShellExecutable } from "@oscharko-dev/keiko-security";
 import { KEIKO_UI_LAUNCH_ID_ENV, UI_LAUNCH_ID_FLAG } from "./state-paths.js";
 
 export interface LiveLaunchIdentityReaders {
@@ -43,26 +44,36 @@ function readProcFile(pid: number, name: "environ" | "cmdline"): string | undefi
   }
 }
 
+// Spawn only `/bin/ps` or `/usr/bin/ps`. A PATH `ps` can spoof launch-id identity (S4036).
 function runPs(args: readonly string[]): string | undefined {
+  const argv = [...args];
+  const options = { encoding: "utf8" as const, timeout: 2_000, shell: false as const };
   try {
-    const result = spawnSync("ps", [...args], { encoding: "utf8", timeout: 2_000 });
-    return result.status === 0 ? result.stdout : undefined;
+    if (existsSync("/bin/ps")) {
+      const result = spawnSync("/bin/ps", argv, options);
+      return result.status === 0 ? result.stdout : undefined;
+    }
+    if (existsSync("/usr/bin/ps")) {
+      const result = spawnSync("/usr/bin/ps", argv, options);
+      return result.status === 0 ? result.stdout : undefined;
+    }
   } catch {
     return undefined;
   }
+  return undefined;
 }
 
 function readWindowsCommandLine(pid: number): string | undefined {
   try {
     const result = spawnSync(
-      "powershell.exe",
+      resolveWindowsPowerShellExecutable(),
       [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
         `(Get-CimInstance Win32_Process -Filter 'ProcessId=${String(pid)}').CommandLine`,
       ],
-      { encoding: "utf8", timeout: 3_000, windowsHide: true },
+      { encoding: "utf8", timeout: 3_000, windowsHide: true, shell: false },
     );
     return result.status === 0 ? result.stdout : undefined;
   } catch {

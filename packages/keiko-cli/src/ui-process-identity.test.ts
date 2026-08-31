@@ -1,3 +1,7 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   defaultReadProcessCommandLine,
@@ -77,4 +81,40 @@ describe("default live identity readers", () => {
     expect(defaultReadProcessEnviron(missing, "linux")).toBeUndefined();
     expect(defaultReadProcessCommandLine(missing, "linux")).toBeUndefined();
   });
+
+  it("spawns ps and PowerShell by absolute path, never a PATH basename", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./ui-process-identity.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(source).not.toMatch(/spawnSync\(\s*"(?:ps|powershell\.exe)"/u);
+    expect(source).toContain('"/bin/ps"');
+    expect(source).toContain("resolveWindowsPowerShellExecutable");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not execute a PATH-shadowed ps when reading Darwin identity",
+    () => {
+      const dir = mkdtempSync(join(tmpdir(), "keiko-identity-ps-"));
+      const marker = join(dir, "used");
+      const previousPath = process.env.PATH;
+      writeFileSync(
+        join(dir, "ps"),
+        `#!${process.execPath}\nrequire("node:fs").writeFileSync(${JSON.stringify(marker)}, "shadowed");\n`,
+        { mode: 0o755 },
+      );
+      process.env.PATH = `${dir}${delimiter}${previousPath ?? ""}`;
+      try {
+        defaultReadProcessCommandLine(process.pid, "darwin");
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        if (previousPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = previousPath;
+        }
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });
