@@ -183,8 +183,12 @@ static const size_t KEIKO_RUNTIME_ATTESTATION_LENGTH = 20u;
   $project = Join-Path $PSScriptRoot "native-quality/windows-rfc3161-quality.csproj"
   $intermediate = Join-Path $scratch "obj/"
   $output = Join-Path $scratch "bin/"
+  # KEIKO-0899: fail closed against scripts/native-quality/packages.lock.json.
+  # RestoreLockedMode stays on this invocation, not in the csproj, so a PackageReference
+  # bump can still regenerate the lock with an unlocked restore.
   dotnet build $project --configuration Release --nologo `
-    "-p:BaseIntermediateOutputPath=$intermediate" "-p:OutputPath=$output"
+    "-p:BaseIntermediateOutputPath=$intermediate" "-p:OutputPath=$output" `
+    "-p:RestoreLockedMode=true"
   if ($LASTEXITCODE -ne 0) { throw ".NET analyzer quality build failed" }
 
   & pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot "__tests__/windows-rfc3161-fixtures.ps1")

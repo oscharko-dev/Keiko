@@ -208,5 +208,10 @@ tests/memory-eval/scorecard.json
 # (scripts test:coverage:packages:shard / :merge). Intermediate measurement evidence, never committed.
 .vitest-reports/
 
+# .NET restore/build scratch for the Windows RFC3161 analyzer project. The committed
+# packages.lock.json beside the csproj is the pin; obj/ and bin/ are generated.
+/scripts/native-quality/obj/
+/scripts/native-quality/bin/
+
 # E2E runtime artifacts: the credential-vault store the journey server writes locally
 tests/e2e/fixtures/credentials/

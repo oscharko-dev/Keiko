@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -234,6 +234,14 @@ describe("CI test/gate wiring guard", () => {
     expect(windowsRfc3161QualityProject).toContain(
       '<PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.9" />',
     );
+  });
+
+  it("commits the RFC3161 NuGet lock the analyzer restore is required to honor", () => {
+    expect(existsSync(resolve(repoRoot, "scripts/native-quality/packages.lock.json"))).toBe(true);
+    expect(windowsRfc3161QualityProject).toContain(
+      "<RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>",
+    );
+    expect(windowsNativeQuality).toContain('"-p:RestoreLockedMode=true"');
   });
 
   it("keeps the Windows RFC3161 boundary namespaced and P/Invoke resolution constrained", () => {
