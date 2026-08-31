@@ -33,7 +33,7 @@ import { resolvePreferredInstallLayout } from "./install-layout.js";
 // Only type imports may reference the package at module scope here.
 import { loadServer as loadServerModule } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
-import { defaultUiDataDir, peekShutdownRequest } from "./state-paths.js";
+import { defaultUiDataDir, KEIKO_UI_LAUNCH_ID_ENV, peekShutdownRequest } from "./state-paths.js";
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
 const KEIKO_PROCESS_TITLE = "Keiko";
@@ -1079,7 +1079,8 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
     startedAt,
     onShutdown: stopHeartbeat,
     closeActivityLog,
-    peekShutdownRequest: () => peekShutdownRequest(stateDir, process.pid),
+    peekShutdownRequest: () =>
+      peekShutdownRequest(stateDir, process.pid, process.env[KEIKO_UI_LAUNCH_ID_ENV]),
   });
 }
 

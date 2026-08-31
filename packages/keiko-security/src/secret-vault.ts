@@ -30,6 +30,7 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   unlinkSync,
   writeSync,
@@ -128,9 +129,9 @@ export interface LocalSecretVault {
   // Seals `secret` under `reference`, replacing any existing entry. Atomic and crash-safe.
   readonly set: (reference: string, secret: string) => void;
   // Seals each entry, replacing any existing value for the same reference and leaving every other
-  // stored reference untouched. An empty map is a no-op (unlike replaceAll, which would wipe the
-  // store). The single-file layout commits the whole file once; the sharded layout writes one file
-  // per supplied reference and does not delete siblings.
+  // stored reference untouched. Empty maps are a no-op (unlike replaceAll, which would wipe the
+  // store). Atomic and crash-safe. The single-file layout commits the whole file once; the sharded
+  // layout writes one file per supplied reference and does not delete siblings.
   readonly setMany: (entries: ReadonlyMap<string, string>) => void;
   // Replaces the ENTIRE entry set with the supplied references, sealing each value. Removes any
   // reference not present in `entries`. Atomic and crash-safe. Callers that must add or overwrite a
@@ -138,6 +139,9 @@ export interface LocalSecretVault {
   readonly replaceAll: (entries: ReadonlyMap<string, string>) => void;
   // Removes the entry for `reference` if present. Atomic and crash-safe.
   readonly delete: (reference: string) => void;
+  // Removes every named reference in one read-merge-write (single-file) or after preflighting
+  // every shard path (sharded). Empty lists are a no-op.
+  readonly deleteMany: (references: readonly string[]) => void;
   readonly has: (reference: string) => boolean;
   // Lists the stored references (NON-SECRET identifiers only; never decrypts).
   readonly list: () => readonly string[];
@@ -326,6 +330,10 @@ interface StoreFile {
   readonly entries: Record<string, string>;
 }
 
+function emptyVaultEntries(): Record<string, string> {
+  return Object.create(null) as Record<string, string>;
+}
+
 function isStoreFile(value: unknown): value is StoreFile {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -355,7 +363,7 @@ function storeUnreadableError(
 function readStore(storePath: string): Record<string, string> {
   const resolvedPath = resolve(storePath);
   assertNoSymlinkedPathSegments(resolvedPath);
-  if (!existsSync(resolvedPath)) return {};
+  if (!existsSync(resolvedPath)) return emptyVaultEntries();
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(resolvedPath, "utf8"));
@@ -365,7 +373,7 @@ function readStore(storePath: string): Record<string, string> {
   if (!isStoreFile(parsed)) {
     throw storeUnreadableError("SECRET_VAULT_STORE_INVALID_SCHEMA", resolvedPath);
   }
-  return { ...parsed.entries };
+  return Object.assign(emptyVaultEntries(), parsed.entries);
 }
 
 // Lists the references held in a sealed store WITHOUT resolving a vault key — a pure read over the
@@ -429,7 +437,7 @@ function writeStore(storePath: string, entries: Record<string, string>): void {
   try {
     writeDurableTextFile(tempPath, `${JSON.stringify(payload, null, 2)}\n`, FILE_MODE);
     chmodIfPresent(tempPath, FILE_MODE);
-    atomicPublishRename(tempPath, resolvedPath);
+    atomicPublishRename(tempPath, resolvedPath, { rename: renameSync });
     chmodIfPresent(resolvedPath, FILE_MODE);
     fsyncDirectory(dir);
   } finally {
@@ -539,7 +547,7 @@ function writeShard(dir: string, filePath: string, envelope: string): void {
   try {
     writeDurableTextFile(tempPath, envelope, FILE_MODE);
     chmodIfPresent(tempPath, FILE_MODE);
-    atomicPublishRename(tempPath, filePath);
+    atomicPublishRename(tempPath, filePath, { rename: renameSync });
     chmodIfPresent(filePath, FILE_MODE);
     fsyncDirectory(dir);
   } finally {
@@ -573,7 +581,19 @@ function setManyWithLog(
 ): void {
   if (next.size === 0) return;
   const elapsedMs = startSecurityLogTimer();
-  merge(next);
+  try {
+    merge(next);
+  } catch (error) {
+    emitSecurityLogEvent(sink, {
+      level: "error",
+      category: "security",
+      op: "security.vault.entries-merge-failed",
+      errorKind: securityErrorKind(error),
+      durationMs: elapsedMs(),
+      extra: { count: next.size },
+    });
+    throw error;
+  }
   emitEntriesMerged(sink, next.size, elapsedMs);
 }
 
@@ -598,7 +618,7 @@ function replaceStoreEntries(
   if (existsSync(storePath)) {
     readStore(storePath);
   }
-  const entries: Record<string, string> = {};
+  const entries = emptyVaultEntries();
   for (const [reference, secret] of next) {
     entries[reference] = sealString(key, secret);
   }
@@ -610,21 +630,30 @@ function replaceStoreEntries(
   writeStore(storePath, entries);
 }
 
-function deleteStoreEntry(storePath: string, reference: string): void {
+function deleteStoreEntries(storePath: string, references: readonly string[]): void {
+  if (references.length === 0) return;
+  const drop = new Set(references);
   const entries = readStore(storePath);
-  if (!(reference in entries)) return;
-  const next: Record<string, string> = {};
+  let changed = false;
+  const next = emptyVaultEntries();
   for (const [storedRef, sealed] of Object.entries(entries)) {
-    if (storedRef !== reference) {
-      next[storedRef] = sealed;
+    if (drop.has(storedRef)) {
+      changed = true;
+      continue;
     }
+    next[storedRef] = sealed;
   }
+  if (!changed) return;
   if (Object.keys(next).length === 0) {
     assertNoSymlinkedPathSegments(storePath);
     rmSync(storePath, { force: true });
     return;
   }
   writeStore(storePath, next);
+}
+
+function deleteStoreEntry(storePath: string, reference: string): void {
+  deleteStoreEntries(storePath, [reference]);
 }
 
 // ENOENT is the ORDINARY case — no such shard file, no such store directory yet, exactly what
@@ -692,8 +721,26 @@ function mergeShardEntries(
   key: Buffer,
   next: ReadonlyMap<string, string>,
 ): void {
+  const prepared: { readonly path: string; readonly envelope: string }[] = [];
   for (const [reference, secret] of next) {
-    writeShard(storeDir, writePath(reference), sealString(key, secret));
+    prepared.push({ path: writePath(reference), envelope: sealString(key, secret) });
+  }
+  for (const item of prepared) {
+    writeShard(storeDir, item.path, item.envelope);
+  }
+}
+
+function deleteShardEntries(storeDir: string, references: readonly string[]): void {
+  const prepared: string[] = [];
+  for (const reference of references) {
+    const filePath = optionalShardPath(storeDir, reference);
+    if (filePath !== undefined) prepared.push(filePath);
+  }
+  for (const filePath of prepared) {
+    assertNoSymlinkedPathSegments(filePath);
+  }
+  for (const filePath of prepared) {
+    rmSync(filePath, { force: true });
   }
 }
 
@@ -759,6 +806,9 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
     delete: (reference): void => {
       removeShard(storeDir, reference);
     },
+    deleteMany: (references): void => {
+      deleteShardEntries(storeDir, references);
+    },
     has: (reference): boolean => envelopeFor(reference) !== undefined,
     list: (): readonly string[] => listShardReferences(storeDir),
   };
@@ -787,6 +837,9 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
     },
     delete: (reference): void => {
       deleteStoreEntry(resolvedStorePath, reference);
+    },
+    deleteMany: (references): void => {
+      deleteStoreEntries(resolvedStorePath, references);
     },
     has: (reference): boolean => reference in readStore(resolvedStorePath),
     list: (): readonly string[] => Object.keys(readStore(resolvedStorePath)),

@@ -57,6 +57,7 @@ import {
   defaultIsProcessAlive,
   inspectStateRoot,
   isInsidePath,
+  readPidRecord,
   resolveStateDir,
   scanRuntimeState,
   type RetainedNode,
@@ -275,6 +276,7 @@ async function ensureServerStoppable(
     processEnv: deps.processEnv,
     securityLogSink,
     escalate: deps.platform === "win32",
+    launchId: readPidRecord(join(stateDir, "ui.pid"))?.launchId,
   });
   if (!outcome.confirmed) {
     io.err(

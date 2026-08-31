@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -186,7 +187,7 @@ function writeRegistration(stateDir: string, registration: PortableInstallRegist
       encoding: "utf8",
       mode: 0o600,
     });
-    atomicPublishRename(tmpFile, path);
+    atomicPublishRename(tmpFile, path, { rename: renameSync });
   } finally {
     // PR-review follow-up (Codex thread 3771256638): rmSync failure MUST NOT masquerade as
     // a failed atomic rewrite. If renameSync succeeded, the registration is already

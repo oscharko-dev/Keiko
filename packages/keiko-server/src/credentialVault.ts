@@ -387,11 +387,7 @@ export function pruneProviderCredentialVault(
   if (!existsSync(storePath)) return;
   const active = new Set(activeSecretRefs);
   const vault = openProviderCredentialVault(options);
-  for (const reference of vault.list()) {
-    if (!active.has(reference)) {
-      vault.delete(reference);
-    }
-  }
+  vault.deleteMany(vault.list().filter((reference) => !active.has(reference)));
 }
 
 export function sealProviderApiKeys(options: SealProviderApiKeysOptions): readonly unknown[] {

@@ -16,6 +16,7 @@ import { lstatSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { removeOwnedRunDirectory } from "../fs-safety.js";
 import { CANDIDATES_SUFFIX } from "./candidatesArtifact.js";
@@ -466,7 +467,7 @@ export function quarantineCorruptQualityIntelligenceManifest(
   }
   const ts = safeTimestamp(options.now?.() ?? Date.now());
   const quarantinedPath = `${originalPath}.corrupt.${ts}`;
-  renameSync(originalPath, quarantinedPath);
+  atomicPublishRename(originalPath, quarantinedPath, { rename: renameSync });
   return { originalPath, quarantinedPath, status: "quarantined" };
 }
 

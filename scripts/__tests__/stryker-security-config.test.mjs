@@ -49,6 +49,16 @@ describe("security mutation Stryker configuration", () => {
       OPENCODE_FUNCTIONAL_TEST,
     );
     expect(globSync(codingRuntimePattern)).not.toContain(OPENCODE_FUNCTIONAL_TEST);
+    const codingRuntimeTests = globSync("packages/keiko-server/src/coding-runtime/**/*.test.ts");
+    const selectedCodingRuntime = globSync(codingRuntimePattern);
+    expect(selectedCodingRuntime.length).toBeGreaterThan(0);
+    for (const file of codingRuntimeTests) {
+      if (file.endsWith(".functional.test.ts")) {
+        expect(selectedCodingRuntime).not.toContain(file);
+      } else {
+        expect(selectedCodingRuntime).toContain(file);
+      }
+    }
     expect(config.testFiles.flatMap((pattern) => globSync(pattern))).not.toContain(
       OPENCODE_FUNCTIONAL_TEST,
     );

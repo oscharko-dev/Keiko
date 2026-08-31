@@ -199,39 +199,93 @@ function createExclusivePidFileSlot(path: string): number {
   return openPidFileNoFollow(path, exclusive);
 }
 
-export function writeExclusivePidFile(path: string, pid: number): void {
+export const KEIKO_UI_LAUNCH_ID_ENV = "KEIKO_UI_LAUNCH_ID";
+const UI_LAUNCH_ID_PATTERN = /^[0-9a-f]{32}$/;
+
+export interface PidRecord {
+  readonly pid: number;
+  readonly launchId?: string | undefined;
+}
+
+export function writeExclusivePidFile(path: string, pid: number, launchId?: string): void {
   const fd = createExclusivePidFileSlot(path);
   try {
     assertRegularSingleLinkFile(fd, path);
-    writeSync(fd, `${String(pid)}\n`, null, "utf8");
+    writeSync(fd, encodePidFile(pid, launchId), null, "utf8");
   } finally {
     closeSync(fd);
   }
+}
+
+function encodePidFile(pid: number, launchId: string | undefined): string {
+  if (launchId === undefined) return `${String(pid)}\n`;
+  return `${String(pid)}\n${launchId}\n`;
 }
 
 export function shutdownRequestPath(stateDir: string): string {
   return join(stateDir, UI_SHUTDOWN_REQUEST_FILE);
 }
 
-export function writeShutdownRequest(stateDir: string, pid: number): void {
-  writeExclusivePidFile(shutdownRequestPath(stateDir), pid);
+export function writeShutdownRequest(stateDir: string, pid: number, launchId?: string): void {
+  writeExclusivePidFile(shutdownRequestPath(stateDir), pid, launchId);
 }
 
-export function peekShutdownRequest(stateDir: string, pid: number): boolean {
-  return readPidFile(shutdownRequestPath(stateDir)) === pid;
+export function peekShutdownRequest(stateDir: string, pid: number, launchId?: string): boolean {
+  const record = readPidRecord(shutdownRequestPath(stateDir));
+  if (record === undefined) return false;
+  if (launchId !== undefined && launchId.length > 0 && record.launchId !== undefined) {
+    return record.launchId === launchId;
+  }
+  return record.pid === pid;
 }
 
 export function clearShutdownRequest(stateDir: string): void {
-  rmSync(shutdownRequestPath(stateDir), { force: true });
+  unlinkOwnedPidShapedName(shutdownRequestPath(stateDir));
 }
 
-// Small bound on <stateDir>/ui.pid: it holds one decimal pid plus a newline, never more.
+function unlinkOwnedPidShapedName(path: string): void {
+  try {
+    rmSync(path, { force: true });
+  } catch (error) {
+    // Node 24 reports a directory unlink as ERR_FS_EISDIR (legacy EISDIR is kept).
+    if (isFsCode(error, "EISDIR") || isFsCode(error, "ERR_FS_EISDIR")) return;
+    throw error;
+  }
+}
+
+export function removePidFileIfMatches(path: string, pid: number, launchId?: string): boolean {
+  const record = readPidRecord(path);
+  if (!pidRecordMatches(record, pid, launchId)) return false;
+  rmSync(path, { force: true });
+  return true;
+}
+
+function pidRecordMatches(
+  record: PidRecord | undefined,
+  pid: number,
+  launchId: string | undefined,
+): boolean {
+  if (record === undefined) return false;
+  if (record.pid !== pid) return false;
+  if (launchId === undefined || record.launchId === undefined) return true;
+  return record.launchId === launchId;
+}
+
+// Small bound on <stateDir>/ui.pid: decimal pid, optional 32-hex launch id, newlines.
 const MAX_PID_FILE_BYTES = 64;
 
-// Reads a pid file written by `lifecycle.ts`. Returns the integer pid, or undefined when the
-// file is absent, unsafe (symlink / hard-link / FIFO / device), or does not contain a positive
-// integer — see the invariant comment above.
-export function readPidFile(path: string): number | undefined {
+function parsePidRecord(raw: string): PidRecord | undefined {
+  const lines = raw.split("\n");
+  const pidLine = lines[0]?.trim();
+  if (pidLine === undefined || !/^[1-9]\d*$/.test(pidLine)) return undefined;
+  const launchLine = lines[1]?.trim();
+  if (launchLine !== undefined && UI_LAUNCH_ID_PATTERN.test(launchLine)) {
+    return { pid: Number(pidLine), launchId: launchLine };
+  }
+  return { pid: Number(pidLine) };
+}
+
+export function readPidRecord(path: string): PidRecord | undefined {
   let fd: number;
   try {
     fd = openPidFileNoFollow(path, fsConstants.O_RDONLY);
@@ -242,14 +296,20 @@ export function readPidFile(path: string): number | undefined {
     assertRegularSingleLinkFile(fd, path);
     const buffer = Buffer.alloc(MAX_PID_FILE_BYTES);
     const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
-    const raw = buffer.subarray(0, bytesRead).toString("utf8").trim();
-    if (!/^[1-9]\d*$/.test(raw)) return undefined;
-    return Number(raw);
+    if (bytesRead === 0 || bytesRead === MAX_PID_FILE_BYTES) return undefined;
+    return parsePidRecord(buffer.subarray(0, bytesRead).toString("utf8"));
   } catch {
     return undefined;
   } finally {
     closeSync(fd);
   }
+}
+
+// Reads a pid file written by `lifecycle.ts`. Returns the integer pid, or undefined when the
+// file is absent, unsafe (symlink / hard-link / FIFO / device), or does not contain a positive
+// integer — see the invariant comment above.
+export function readPidFile(path: string): number | undefined {
+  return readPidRecord(path)?.pid;
 }
 
 // Liveness probe identical in semantics to the lifecycle handler: a successful

@@ -11,19 +11,13 @@
     {
       "op": "cli.lifecycle.stop-escalated",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui-process-stop.ts:151",
-      "package": "keiko-cli"
-    },
-    {
-      "op": "cli.lifecycle.stop-request-failed",
-      "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui-process-stop.ts:137",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:181",
       "package": "keiko-cli"
     },
     {
       "op": "cli.lifecycle.stop-requested",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui-process-stop.ts:113",
+      "site": "packages/keiko-cli/src/ui-process-stop.ts:126",
       "package": "keiko-cli"
     },
     {
@@ -377,13 +371,13 @@
     {
       "op": "knowledge.store.encryption-rejected",
       "category": "diagnostic",
-      "site": "packages/keiko-local-knowledge/src/store.ts:515",
+      "site": "packages/keiko-local-knowledge/src/store.ts:516",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "knowledge.store.quarantined",
       "category": "diagnostic",
-      "site": "packages/keiko-local-knowledge/src/store.ts:478",
+      "site": "packages/keiko-local-knowledge/src/store.ts:479",
       "package": "keiko-local-knowledge"
     },
     {
@@ -443,7 +437,7 @@
     {
       "op": "memory-vault.store.quarantined",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/db.ts:127",
+      "site": "packages/keiko-memory-vault/src/db.ts:128",
       "package": "keiko-memory-vault"
     },
     {
@@ -759,15 +753,15 @@
       "package": "keiko-model-gateway"
     },
     {
-      "op": "security.fs.atomic-rename-exhausted",
+      "op": "security.fs.atomic-rename-failed",
       "category": "security",
-      "site": "packages/keiko-security/src/fs-atomic-rename.ts:86",
+      "site": "packages/keiko-security/src/fs-atomic-rename.ts:112",
       "package": "keiko-security"
     },
     {
       "op": "security.fs.atomic-rename-retried",
       "category": "security",
-      "site": "packages/keiko-security/src/fs-atomic-rename.ts:86",
+      "site": "packages/keiko-security/src/fs-atomic-rename.ts:98",
       "package": "keiko-security"
     },
     {
@@ -779,25 +773,31 @@
     {
       "op": "security.log.sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-security/src/log-port.ts:138",
+      "site": "packages/keiko-security/src/log-port.ts:150",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.vault.entries-merge-failed",
+      "category": "security",
+      "site": "packages/keiko-security/src/secret-vault.ts:590",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.entries-merged",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:563",
+      "site": "packages/keiko-security/src/secret-vault.ts:571",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.key-resolved",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:286",
+      "site": "packages/keiko-security/src/secret-vault.ts:290",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.shard-unreadable",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:647",
+      "site": "packages/keiko-security/src/secret-vault.ts:676",
       "package": "keiko-security"
     },
     {
@@ -821,7 +821,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:738",
+      "site": "packages/keiko-server/src/observability/server-log.ts:739",
       "package": "keiko-server"
     },
     {
@@ -953,7 +953,7 @@
     {
       "op": "gateway.tool-calling.verification",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-setup.ts:6342",
+      "site": "packages/keiko-server/src/gateway-setup.ts:6345",
       "package": "keiko-server"
     },
     {
@@ -1199,13 +1199,13 @@
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:330",
+      "site": "packages/keiko-server/src/observability/server-log.ts:331",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:356",
+      "site": "packages/keiko-server/src/observability/server-log.ts:357",
       "package": "keiko-server"
     },
     {

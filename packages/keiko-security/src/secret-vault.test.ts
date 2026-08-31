@@ -465,6 +465,44 @@ describe("createLocalSecretVault — setMany", () => {
     });
     expect(typeof events[0]?.durationMs).toBe("number");
     expect(JSON.stringify(events)).not.toContain("SUPERSECRET");
+    expect(JSON.stringify(events)).not.toContain("ALSOSECRET");
+    expect(JSON.stringify(events)).not.toContain("cred:a");
+    expect(JSON.stringify(events)).not.toContain("cred:b");
+    expect(events.filter((event) => event.op === "security.vault.entries-merged")).toHaveLength(1);
+  });
+
+  it("stores __proto__ as a real key without polluting Object.prototype", () => {
+    const storePath = join(dir, "proto.enc.json");
+    const vault = vaultAt(storePath);
+    vault.setMany(new Map([["__proto__", "proto-secret"]]));
+    vault.set("sibling", "keep-secret");
+    expect(vault.get("__proto__")).toBe("proto-secret");
+    expect(vault.has("__proto__")).toBe(true);
+    vault.delete("__proto__");
+    expect(vault.get("__proto__")).toBeUndefined();
+    expect(vault.get("sibling")).toBe("keep-secret");
+    expect(Object.prototype).not.toHaveProperty("proto-secret");
+  });
+
+  it("emits entries-merge-failed and rethrows when the commit rename fails", () => {
+    const storePath = join(dir, "merge-fail.enc.json");
+    mkdirSync(storePath);
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath,
+      sink: { write: (event): void => void events.push(event) },
+    });
+    expect(() => {
+      vault.setMany(new Map([["cred:a", "SUPERSECRET"]]));
+    }).toThrow();
+    expect(events.filter((event) => event.op === "security.vault.entries-merge-failed")).toEqual([
+      expect.objectContaining({
+        level: "error",
+        extra: { count: 1 },
+      }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain("SUPERSECRET");
     expect(JSON.stringify(events)).not.toContain("cred:a");
   });
 
@@ -514,6 +552,17 @@ describe("createLocalSecretVault — delete", () => {
     vault.delete("cred:never-existed");
 
     expect(vault.get("cred:a")).toBe("secret-A");
+  });
+
+  it("deleteMany drops several refs in one commit and keeps siblings", () => {
+    const storePath = join(dir, "vault.enc.json");
+    const vault = vaultAt(storePath);
+    vault.set("cred:a", "secret-A");
+    vault.set("cred:b", "secret-B");
+    vault.set("cred:keep", "keep-secret");
+    vault.deleteMany(["cred:a", "cred:b"]);
+    expect(vault.get("cred:keep")).toBe("keep-secret");
+    expect(vault.list()).toEqual(["cred:keep"]);
   });
 });
 
@@ -1024,6 +1073,30 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
     expect(vault.get("cred:keep")).toBe("keep-updated");
     expect(vault.get("cred:a")).toBe("secret-A");
     expect([...vault.list()].sort()).toEqual(["cred:a", "cred:keep"]);
+  });
+
+  it("deleteMany drops several shards and keeps siblings", () => {
+    const vault = shardedVaultAt(join(dir, "sharded-delete-many"));
+    vault.set("cred:a", "secret-A");
+    vault.set("cred:b", "secret-B");
+    vault.set("cred:keep", "keep-secret");
+    vault.deleteMany(["cred:a", "cred:b", "cred:missing"]);
+    expect(vault.get("cred:keep")).toBe("keep-secret");
+    expect(vault.list()).toEqual(["cred:keep"]);
+  });
+
+  it("preflights every shard path before writing so a later invalid ref leaves earlier refs absent", () => {
+    const vault = shardedVaultAt(join(dir, "sharded-preflight"));
+    expect(() => {
+      vault.setMany(
+        new Map([
+          ["cred:ok", "ok-secret"],
+          ["x".repeat(97), "never-stored"],
+        ]),
+      );
+    }).toThrow(/cannot be stored as a sharded entry/u);
+    expect(vault.get("cred:ok")).toBeUndefined();
+    expect(vault.list()).toEqual([]);
   });
 
   it("writes one 0600 file per entry into a 0700 directory and never plaintext", () => {

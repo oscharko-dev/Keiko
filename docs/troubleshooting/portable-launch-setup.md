@@ -169,7 +169,7 @@ outlasts the retry still fails closed.
 - Confirm a `.keiko-previous-*` sibling exists next to the managed root (typically under
   `%LOCALAPPDATA%\Programs\`).
 - Check `<stateDir>/logs/server.log` for `security.fs.atomic-rename-retried` or
-  `security.fs.atomic-rename-exhausted` (`extra.attempts` and `errorKind` only; no paths).
+  `security.fs.atomic-rename-failed` (`extra.attempts` and `errorKind` only; no paths).
 - See also [Windows portable first-launch](./windows-portable-first-launch.md) when Defender
   quarantined extracted files rather than locking them during the swap.
 

@@ -33,10 +33,13 @@ import {
   type CliSecurityLogSinkFactory,
 } from "./security-log.js";
 import {
+  KEIKO_UI_LAUNCH_ID_ENV,
   assertNotSymlink,
   assertRegularSingleLinkFile,
   clearShutdownRequest,
   readPidFile,
+  readPidRecord,
+  removePidFileIfMatches,
   resolveContainedStateDir,
   writeExclusivePidFile,
 } from "./state-paths.js";
@@ -575,12 +578,14 @@ function spawnUiProcess(
   deps: Pick<LifecycleRuntimeDeps, "spawnFn">,
   cwd: string,
   pairingSecret: string,
+  launchId: string,
 ): { readonly child: ChildProcess; readonly logPath: string } {
   const logStdio = openUiLogStdio(options);
   const preferredLayout = resolvePreferredInstallLayout(cwd);
   const uiEnv = childEnv({
     ...env,
     KEIKO_STATE_DIR: options.stateDir,
+    [KEIKO_UI_LAUNCH_ID_ENV]: launchId,
     // ADR-0141 D2 / #2478: the launcher-provisioned pairing secret travels only through the
     // inherited environment of the spawned BFF.
     [CODING_APP_SESSION_LAUNCHER_SECRET_ENV]: pairingSecret,
@@ -690,7 +695,7 @@ async function reportUnhealthyStart(
   // stop` can still find and finish the orphan (never orphan the port silently).
   const outcome = await terminateAndConfirm(pid, options, deps);
   if (outcome.confirmed) {
-    rmSync(pidFile(options), { force: true });
+    removePidFileIfMatches(pidFile(options), pid);
     io.err(`keiko start: UI did not become healthy. Logs: ${logPath}\n`);
   } else {
     io.err(
@@ -712,9 +717,10 @@ function publishPidOrKillChild(
   io: CliIo,
   deps: Pick<LifecycleRuntimeDeps, "killProcess">,
   pid: number,
+  launchId: string,
 ): boolean {
   try {
-    writeExclusivePidFile(pidFile(options), pid);
+    writeExclusivePidFile(pidFile(options), pid, launchId);
     return true;
   } catch (error) {
     deps.killProcess(pid, "SIGKILL");
@@ -752,9 +758,10 @@ async function cmdStart(
   if (!clearStaleShutdownRequest(options.stateDir, io)) return 1;
 
   const pairingSecret = resolveLauncherPairingSecret(env);
+  const launchId = randomBytes(16).toString("hex");
   let spawned: { readonly child: ChildProcess; readonly logPath: string };
   try {
-    spawned = spawnUiProcess(options, env, deps, cwd, pairingSecret);
+    spawned = spawnUiProcess(options, env, deps, cwd, pairingSecret, launchId);
   } catch {
     io.err("keiko start: failed to spawn the UI process.\n");
     return 1;
@@ -781,7 +788,7 @@ async function cmdStart(
   // create-retry race) -- a spawned-but-unpublished child must never be left running headless
   // with no pid file `keiko stop` can find it by, so a publish failure kills the child immediately
   // and fails the command closed instead of leaking an unmanaged process.
-  if (!publishPidOrKillChild(options, io, deps, child.pid)) return 1;
+  if (!publishPidOrKillChild(options, io, deps, child.pid, launchId)) return 1;
   io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
 
   const healthy = await waitForHealth(options, child.pid, deps);
@@ -837,6 +844,7 @@ async function terminateAndConfirm(
     securityLogSink: deps.securityLogSink,
     escalate: true,
     onEscalate,
+    launchId: readPidRecord(pidFile(options))?.launchId,
   });
 }
 
@@ -862,7 +870,7 @@ async function cmdStop(
     io.err(`keiko stop: failed to stop pid ${String(pid)}.\n`);
     return 1;
   }
-  rmSync(pidFile(options), { force: true });
+  removePidFileIfMatches(pidFile(options), pid);
   io.out(outcome.escalated ? "Keiko UI stopped (forced).\n" : "Keiko UI stopped.\n");
   return 0;
 }

@@ -422,6 +422,8 @@ describe("reaction SLO buckets", () => {
       reactionsBetween30And60: 2,
       reactionsOver60: 1,
     });
+    expect(reactionSloStats([Number.NaN, Number.POSITIVE_INFINITY]).reactionSamples).toBe(0);
+    expect(reactionSloStats([REACTION_SLO_MINUTES + 2 / 60]).reactionsWithinSlo).toBe(0);
   });
 });
 
@@ -573,6 +575,37 @@ describe("collection", () => {
     expect(report.outcome).toBe("truncated");
     expect(report.checksGreenToMergedMinutes).toBeNull();
     expect(report.firstGreenToMergedMinutes).toBeNull();
+  });
+
+  it("omits truncated pull requests from cohort reaction SLO aggregates", () => {
+    const truncated = summarizePullRequest({
+      number: 3355,
+      mergedAt: "2026-08-28T12:00:00Z",
+      truncated: true,
+      heads: [
+        head("2026-08-28T10:00:00Z", "2026-08-28T10:10:00Z"),
+        head("2026-08-28T11:00:00Z", "2026-08-28T11:10:00Z"),
+      ],
+      findings: ["2026-08-28T10:05:00Z"],
+    });
+    const measured = summarizePullRequest({
+      number: 1,
+      mergedAt: "2026-08-28T12:00:00Z",
+      heads: [
+        head("2026-08-28T10:00:00Z", "2026-08-28T10:10:00Z"),
+        head("2026-08-28T10:15:00Z", "2026-08-28T11:50:00Z"),
+      ],
+      findings: ["2026-08-28T10:01:00Z"],
+    });
+    expect(truncated.outcome).toBe("truncated");
+    expect(truncated.reactionMinutes.length).toBeGreaterThan(0);
+    const findingBearing = summarizeCohorts([truncated, measured]).find(
+      (cohort) => cohort.cohort === "finding-bearing",
+    );
+    expect(findingBearing?.reactionSamples).toBe(measured.reactionMinutes.length);
+    expect(findingBearing?.reactionSamples).not.toBe(
+      truncated.reactionMinutes.length + measured.reactionMinutes.length,
+    );
   });
 
   it("cannot establish greenness from a truncated context list", () => {

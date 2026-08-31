@@ -1446,14 +1446,16 @@ describe("waitForShutdown", () => {
     function fakeClosingServer(): {
       readonly server: Server;
       readonly emitter: EventEmitter;
+      readonly closeIdleConnections: ReturnType<typeof vi.fn>;
     } {
       const emitter = new EventEmitter();
+      const closeIdleConnections = vi.fn();
       const server = Object.assign(emitter, {
         close: vi.fn((cb?: () => void) => cb?.()),
-        closeIdleConnections: vi.fn(),
+        closeIdleConnections,
         closeAllConnections: vi.fn(),
       }) as unknown as Server;
-      return { server, emitter };
+      return { server, emitter, closeIdleConnections };
     }
 
     it("reports reason 'sigint', stops the heartbeat, and closes the sink", async () => {
@@ -1500,7 +1502,7 @@ describe("waitForShutdown", () => {
 
     it("reports reason 'shutdown-request' and drains the same way as SIGTERM", async () => {
       await withIsolatedSignalListeners(async () => {
-        const { server } = fakeClosingServer();
+        const { server, closeIdleConnections } = fakeClosingServer();
         const sink = createRecordingSink();
         const onShutdown = vi.fn();
         const promise = waitForShutdown(server, 3_000, {
@@ -1513,8 +1515,32 @@ describe("waitForShutdown", () => {
         expect(onShutdown).toHaveBeenCalledTimes(1);
         const exiting = sink.events.find((event) => event.op === "process.exiting");
         expect(extraOf(exiting).reason).toBe("shutdown-request");
-        expect(server.closeIdleConnections).toHaveBeenCalledTimes(1);
+        expect(closeIdleConnections).toHaveBeenCalledTimes(1);
         expect(sink.closeCallCount).toBe(1);
+      });
+    });
+
+    it("begins drain on the next sentinel poll once peek flips true", async () => {
+      await withIsolatedSignalListeners(async () => {
+        vi.useFakeTimers();
+        try {
+          const { server, closeIdleConnections } = fakeClosingServer();
+          const sink = createRecordingSink();
+          let peek = false;
+          const promise = waitForShutdown(server, 3_000, {
+            activityLog: sink,
+            startedAt: Date.now(),
+            peekShutdownRequest: () => peek,
+          });
+          peek = true;
+          await vi.advanceTimersByTimeAsync(250);
+          await promise;
+          expect(closeIdleConnections).toHaveBeenCalledTimes(1);
+          const exiting = sink.events.find((event) => event.op === "process.exiting");
+          expect(extraOf(exiting).reason).toBe("shutdown-request");
+        } finally {
+          vi.useRealTimers();
+        }
       });
     });
 

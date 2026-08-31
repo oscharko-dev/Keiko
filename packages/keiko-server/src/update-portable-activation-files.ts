@@ -7,11 +7,12 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, win32 as win32Path } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep, win32 as win32Path } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   WINDOWS_SHORTCUT_MAX_BYTES,
@@ -23,6 +24,7 @@ import {
 } from "@oscharko-dev/keiko-security";
 import {
   atomicPublishRename,
+  atomicPublishTreeSwap,
   withCwdOutsideTree,
 } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import type {
@@ -284,9 +286,9 @@ function restoreManagedRoot(paths: PortableActivationPaths): void {
       if (existsSync(paths.candidateRoot)) {
         throw activationFailed("portable activation recovery is incomplete");
       }
-      atomicPublishRename(paths.managedRoot, paths.candidateRoot);
+      atomicPublishTreeSwap(paths.managedRoot, paths.candidateRoot, { rename: renameSync });
     }
-    atomicPublishRename(paths.backupRoot, paths.managedRoot);
+    atomicPublishTreeSwap(paths.backupRoot, paths.managedRoot, { rename: renameSync });
   });
 }
 
@@ -309,9 +311,9 @@ function swapManagedRoot(
 ): PortableActivationLayout {
   let moved = false;
   try {
-    atomicPublishRename(paths.managedRoot, paths.backupRoot);
+    atomicPublishTreeSwap(paths.managedRoot, paths.backupRoot, { rename: renameSync });
     moved = true;
-    atomicPublishRename(paths.candidateRoot, paths.managedRoot);
+    atomicPublishTreeSwap(paths.candidateRoot, paths.managedRoot, { rename: renameSync });
     return validateLayout(target, paths.managedRoot, targetVersion);
   } catch (error) {
     if (moved) restoreManagedRoot(paths);
@@ -420,7 +422,7 @@ export function restorePortableRegistration(input: {
   }
   const temporary = `${registration}.${String(process.pid)}.restore`;
   writeExclusiveFile(temporary, readFileSync(snapshot.content));
-  atomicPublishRename(temporary, registration);
+  atomicPublishRename(temporary, registration, { rename: renameSync });
 }
 
 export function cleanupPortableRegistrationSnapshot(input: {
@@ -510,7 +512,7 @@ export function writePortableActivationRecovery(input: {
     mode: 0o600,
     flag: "wx",
   });
-  atomicPublishRename(temporaryPath, path);
+  atomicPublishRename(temporaryPath, path, { rename: renameSync });
 }
 
 export function beginPortableActivationRecovery(input: {
@@ -594,7 +596,7 @@ export function refreshPortableRegistration(input: {
   };
   const temporaryPath = `${path}.${String(process.pid)}.tmp`;
   writeExclusiveFile(temporaryPath, `${JSON.stringify(registration, null, 2)}\n`);
-  atomicPublishRename(temporaryPath, path);
+  atomicPublishRename(temporaryPath, path, { rename: renameSync });
   try {
     chmodSync(path, 0o600);
   } catch {
@@ -731,9 +733,26 @@ function lstatEntryOrUndefined(path: string): ReturnType<typeof lstatSync> | und
   }
 }
 
-export function cleanupPortableActivation(paths: PortableActivationPaths): void {
-  rmSync(paths.backupRoot, { recursive: true, force: true });
+export function cleanupPortableActivation(
+  paths: PortableActivationPaths,
+  options: { readonly platform?: NodeJS.Platform; readonly execPath?: string } = {},
+): void {
+  const platform = options.platform ?? process.platform;
+  const execPath = options.execPath ?? process.execPath;
+  if (!execPathMapsBackup(paths.backupRoot, platform, execPath)) {
+    rmSync(paths.backupRoot, { recursive: true, force: true });
+  }
   rmSync(paths.stageRoot, { recursive: true, force: true });
+}
+
+function execPathMapsBackup(
+  backupRoot: string,
+  platform: NodeJS.Platform,
+  execPath: string,
+): boolean {
+  if (platform !== "win32") return false;
+  const rel = relative(resolve(backupRoot), resolve(execPath));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 export function restorePortableActivation(paths: PortableActivationPaths): void {

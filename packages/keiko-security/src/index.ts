@@ -38,7 +38,9 @@ export type {
 export {
   WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
   WINDOWS_ATOMIC_RENAME_RETRY_CODES,
+  WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS,
   atomicPublishRename,
+  atomicPublishTreeSwap,
   withCwdOutsideTree,
 } from "./fs-atomic-rename.js";
 
@@ -67,7 +69,12 @@ export {
 // `createShardedLocalSecretVault`'s shard reads, and `LocalSecretVault.setMany`. The composition
 // root supplies the real sink.
 export type { SecurityLogEvent, SecurityLogSink } from "./log-port.js";
-export { emitSecurityLogEvent, nullSecurityLogSink, securityErrorKind } from "./log-port.js";
+export {
+  emitSecurityLogEvent,
+  bindSecurityLogCorrelation,
+  nullSecurityLogSink,
+  securityErrorKind,
+} from "./log-port.js";
 
 // Prompt Enhancer authoritative injection / unsafe-content detector (#1313, ADR-0044 §1/§5).
 export type {

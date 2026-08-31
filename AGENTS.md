@@ -531,7 +531,7 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   gates plus settled review threads ARE the merge decision; there is no human review step and no
   waiting for a person.
 - **Agent reaction SLO.** When a review finding is published on the current head, the delivering
-  agent begins repairing it within 10 minutes of its appearance. In that window, harvest every
+  agent pushes one repair within 10 minutes of its appearance. In that window, harvest every
   already-published finding from every producer into one head. Do not wait for CI to turn green,
   for a reviewer that has not yet spoken, or for the ADR-0170 D5 interlock — that interlock gates
   auto-merge arming, not repair. Measurement and the harvest rule:

@@ -123,6 +123,18 @@ export function emitSecurityLogEvent(
   }
 }
 
+export function bindSecurityLogCorrelation(
+  sink: SecurityLogSink | undefined,
+  correlationId: string,
+): SecurityLogSink | undefined {
+  if (sink === undefined) return undefined;
+  return {
+    write(event): void {
+      sink.write({ ...event, correlationId });
+    },
+  };
+}
+
 function reportFailedSecurityLogSink(
   sink: SecurityLogSink,
   droppedOp: string,

@@ -2,6 +2,7 @@
 // The former pin wrapped a full `retrieveConnectedContextPack` call in a 2000ms wall-clock
 // budget, so it measured whole-pipeline latency rather than `stripTrailingSlashes` /
 // `normalizeWorkspacePattern`. Those helpers are the rewrite that replaced `/\/+$/u`.
+// Required-path tests stay behavioral (ADR-0139 D1): they do not assert wall-clock.
 
 import { describe, expect, it } from "vitest";
 import { normalizeWorkspacePattern, stripTrailingSlashes } from "./grounded-orchestrator.js";
@@ -18,13 +19,10 @@ describe("stripTrailingSlashes", () => {
   // The adversarial shape for the OLD `/\/+$/u` regex is a long run of "/" blocked from the
   // true end by one non-"/" character. A backtracking engine retries at every position in the
   // run; a trailing-slash-only string is the happy path for that regex and would not catch a
-  // regression. Relocated from the 2000ms pipeline pin (#3347); budget unchanged.
-  it("stays within 2000ms for a long slash run blocked by a trailing character", () => {
+  // regression.
+  it("returns a slash run that is blocked from the true end unchanged", () => {
     const adversarial = `${"/".repeat(100_000)}!`;
-    const start = Date.now();
-    const result = stripTrailingSlashes(adversarial);
-    expect(Date.now() - start).toBeLessThan(2000);
-    expect(result).toBe(adversarial);
+    expect(stripTrailingSlashes(adversarial)).toBe(adversarial);
   });
 });
 
@@ -39,10 +37,8 @@ describe("normalizeWorkspacePattern", () => {
     expect(normalizeWorkspacePattern("   ")).toBeUndefined();
   });
 
-  it("strips an adversarial trailing-slash run without wrapping the retrieval pipeline", () => {
-    const pattern = `packages/pkg${"/".repeat(20_000)}`;
-    const start = Date.now();
-    expect(normalizeWorkspacePattern(pattern)).toBe("packages/pkg");
-    expect(Date.now() - start).toBeLessThan(2000);
+  it("runs the blocked slash-run shape through the product normalizer", () => {
+    const pattern = `${"/".repeat(100_000)}!`;
+    expect(normalizeWorkspacePattern(pattern)).toBe(pattern);
   });
 });

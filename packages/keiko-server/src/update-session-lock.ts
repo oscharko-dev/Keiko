@@ -12,6 +12,7 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import { emitServerDiagnostic, type ServerDiagnosticSink } from "./diagnostics-log.js";
 import { publishFileWithoutReplacement } from "./publish-file-without-replacement.js";
 import {
@@ -253,7 +254,7 @@ function replaceJsonFile(path: string, value: unknown): void {
     mode: LOCK_FILE_MODE,
   });
   try {
-    renameSync(temporaryPath, path);
+    atomicPublishRename(temporaryPath, path, { rename: renameSync });
   } catch (error) {
     try {
       unlinkSync(temporaryPath);
@@ -350,7 +351,9 @@ function retireClaimedLock(
   }
   if (inspection.status === "corrupt") {
     try {
-      renameSync(claimedPath, corruptQuarantinePath(lockPath, now));
+      atomicPublishRename(claimedPath, corruptQuarantinePath(lockPath, now), {
+        rename: renameSync,
+      });
     } catch {
       // Preserve the verified corrupt claim for diagnosis if quarantine publication fails.
     }

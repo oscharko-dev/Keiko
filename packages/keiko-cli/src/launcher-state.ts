@@ -27,6 +27,7 @@ import {
   mkdtempSync,
   openSync,
   readSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -267,7 +268,7 @@ export function saveState(stateDir: string, state: LauncherState): void {
       encoding: "utf8",
       mode: 0o600,
     });
-    atomicPublishRename(tmpFile, file);
+    atomicPublishRename(tmpFile, file, { rename: renameSync });
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

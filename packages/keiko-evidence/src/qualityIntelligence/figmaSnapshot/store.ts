@@ -44,6 +44,7 @@ import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparator
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import {
   fsyncDirectoryContaining,
   PostRenameFsyncError,
@@ -990,7 +991,7 @@ function publishStagedSideFiles(
     return;
   }
   rmSync(sideFileDir, { recursive: true, force: true });
-  renameSync(stagedRunDir, sideFileDir);
+  atomicPublishRename(stagedRunDir, sideFileDir, { rename: renameSync });
   // Matches atomicWriteOnce's own durability discipline (durable-write.ts): a rename's directory
   // entry is not guaranteed durable until the containing directory is fsynced, so without this a
   // crash right after renameSync returns can lose the entry while the JSON record — already

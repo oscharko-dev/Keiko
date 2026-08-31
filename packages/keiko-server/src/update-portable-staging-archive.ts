@@ -18,6 +18,7 @@ import { basename, dirname, join, posix, relative, resolve, sep } from "node:pat
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
+import { atomicPublishTreeSwap } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import yauzl from "yauzl";
 import {
   MAX_ARCHIVE_ENTRIES,
@@ -484,7 +485,7 @@ export async function stageArchiveBytes(input: {
       sidecars: input.sidecars,
     });
     rmSync(finalRoot, { recursive: true, force: true });
-    renameSync(workRoot, finalRoot);
+    atomicPublishTreeSwap(workRoot, finalRoot, { rename: renameSync });
   } catch (error) {
     rmSync(workRoot, { recursive: true, force: true });
     throw error;

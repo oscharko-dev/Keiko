@@ -107,6 +107,7 @@ import {
   tryParseJudgeVerdict,
 } from "./qualityIntelligence/judgePort.js";
 import { persistSealedGatewayConfig } from "./credentialPersistence.js";
+import { bindSecurityLogCorrelation } from "@oscharko-dev/keiko-security";
 import { probeGatewayToolCalling } from "./gateway-tool-calling-probe.js";
 
 const MODEL_REASONING_EFFORT_SET: ReadonlySet<string> = new Set(MODEL_REASONING_EFFORTS);
@@ -2028,6 +2029,7 @@ function persistGatewayConfig(
   raw: Record<string, unknown>,
   storagePath: string,
   deps: UiHandlerDeps,
+  correlationId: string | undefined = UNKNOWN_CORRELATION_ID,
 ): void {
   persistSealedGatewayConfig(
     { ...raw, schemaVersion: GATEWAY_CONFIG_SCHEMA_VERSION },
@@ -2035,7 +2037,7 @@ function persistGatewayConfig(
       env: deps.env,
       storagePath,
       evidenceDir: resolveEvidenceDir(deps.evidenceDir, deps.env),
-      securityLogSink: processServerLogSink(),
+      securityLogSink: bindSecurityLogCorrelation(processServerLogSink(), correlationId),
     },
   );
 }
@@ -5451,6 +5453,7 @@ function finalizeVerifiedCandidate(
     ),
     gatewayConfig.storagePath,
     deps,
+    request.correlationId,
   );
   gatewayConfig.set(verified.config, true);
   recordGatewaySetupAudit(deps, request, verified.config, "candidate-accepted");
@@ -5798,7 +5801,7 @@ function saveExistingConfigUpdate(
     deps.env,
     linkLocalGatewayOverrideOptions(deps.env),
   );
-  persistGatewayConfig(persistedRawConfig, gatewayConfig.storagePath, deps);
+  persistGatewayConfig(persistedRawConfig, gatewayConfig.storagePath, deps, request.correlationId);
   gatewayConfig.set(config, true);
   recordGatewaySetupAudit(deps, request, config, "existing-config-updated");
   return setupSuccessResult(

@@ -58,6 +58,9 @@ function countingVault(stateDir: string): CountingVault {
     delete: (reference) => {
       inner.delete(reference);
     },
+    deleteMany: (references) => {
+      inner.deleteMany(references);
+    },
     has: (reference) => inner.has(reference),
     list: () => inner.list(),
   };

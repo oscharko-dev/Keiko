@@ -320,7 +320,10 @@ describe("sealProviderApiKeys", () => {
       }),
     );
     expect(JSON.stringify(events)).not.toContain("k0");
+    expect(JSON.stringify(events)).not.toContain("k1");
     expect(JSON.stringify(events)).not.toContain("cred:m0");
+    expect(JSON.stringify(events)).not.toContain("cred:m1");
+    expect(events.filter((event) => event.op === "security.vault.entries-merged")).toHaveLength(1);
   });
 
   it("refuses to re-seal over an unreadable existing vault index", () => {

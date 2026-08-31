@@ -38,6 +38,9 @@ function memoryVault(): {
     delete: (reference): void => {
       entries.delete(reference);
     },
+    deleteMany: (references): void => {
+      for (const reference of references) entries.delete(reference);
+    },
     has: (reference): boolean => entries.has(reference),
     list: (): readonly string[] => [...entries.keys()],
   };

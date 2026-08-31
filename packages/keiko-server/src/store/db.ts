@@ -3,7 +3,7 @@
 // 0o700/0o600 permission hardening (Unix), and reopen-safe migrations.
 
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -766,12 +766,12 @@ function assertQuickCheckOk(db: DatabaseSync): void {
 function quarantineCorruptDb(target: string, cause?: unknown): void {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
   const quarantinedPath = `${target}.corrupt.${ts}`;
-  atomicPublishRename(target, quarantinedPath);
+  atomicPublishRename(target, quarantinedPath, { rename: renameSync });
   const sidecarQuarantinePaths: string[] = [];
   for (const sidecar of [`${target}-wal`, `${target}-shm`]) {
     if (existsSync(sidecar)) {
       const sidecarQuarantinePath = `${sidecar}.corrupt.${ts}`;
-      atomicPublishRename(sidecar, sidecarQuarantinePath);
+      atomicPublishRename(sidecar, sidecarQuarantinePath, { rename: renameSync });
       sidecarQuarantinePaths.push(sidecarQuarantinePath);
     }
   }

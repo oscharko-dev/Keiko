@@ -1,8 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SecurityLogEvent, SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { writeExclusivePidFile } from "./state-paths.js";
 import { terminateUiProcess } from "./ui-process-stop.js";
 
 const tempRoots: string[] = [];
@@ -31,6 +32,14 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+function writeOwnedPid(stateDir: string, pid: number): void {
+  writeExclusivePidFile(join(stateDir, "ui.pid"), pid);
+}
+
+function eperm(message = "operation not permitted"): NodeJS.ErrnoException {
+  return Object.assign(new Error(message), { code: "EPERM" });
+}
 
 describe("terminateUiProcess", () => {
   it("on POSIX writes the shutdown sentinel, sends SIGTERM, and does not SIGKILL when the pid dies", async () => {
@@ -86,12 +95,15 @@ describe("terminateUiProcess", () => {
     expect(events[0]?.extra).toEqual({ channel: "shutdown-request" });
   });
 
-  it("on Windows escalates with tree-kill before SIGKILL and never sends SIGTERM", async () => {
+  it("on Windows escalates with tree-kill and does not SIGKILL after a successful tree-kill", async () => {
     const stateDir = makeStateDir();
+    writeOwnedPid(stateDir, 77);
     const { sink, events } = recordingSink();
     const treeEnv: NodeJS.ProcessEnv = { SystemRoot: String.raw`C:\Windows` };
     const killProcess = vi.fn();
+    let alive = true;
     const killWindowsTree = vi.fn(() => {
+      alive = false;
       return "succeeded" as const;
     });
     const nowSpy = vi.spyOn(performance, "now");
@@ -103,7 +115,7 @@ describe("terminateUiProcess", () => {
         stopTimeoutMs: 1,
         platform: "win32",
         sleep: () => Promise.resolve(),
-        isProcessAlive: () => killProcess.mock.calls.length === 0,
+        isProcessAlive: () => alive,
         killProcess,
         killWindowsTree,
         processEnv: treeEnv,
@@ -116,19 +128,40 @@ describe("terminateUiProcess", () => {
       nowSpy.mockRestore();
     }
     expect(killWindowsTree).toHaveBeenCalledWith(77, treeEnv);
-    expect(killProcess).toHaveBeenCalledTimes(1);
-    expect(killProcess).toHaveBeenCalledWith(77, "SIGKILL");
-    const treeOrder = killWindowsTree.mock.invocationCallOrder[0];
-    const killOrder = killProcess.mock.invocationCallOrder[0];
-    expect(treeOrder).toBeDefined();
-    expect(killOrder).toBeDefined();
-    expect(treeOrder ?? 0).toBeLessThan(killOrder ?? 0);
+    expect(killProcess).not.toHaveBeenCalled();
     const escalated = events.find((event) => event.op === "cli.lifecycle.stop-escalated");
     expect(escalated?.extra).toEqual({ windowsTreeKill: "succeeded" });
   });
 
+  it("on Windows does not SIGKILL when tree-kill refuses the current pid", async () => {
+    const stateDir = makeStateDir();
+    writeOwnedPid(stateDir, 77);
+    const killProcess = vi.fn();
+    const killWindowsTree = vi.fn(() => "refused-self-pid" as const);
+    const nowSpy = vi.spyOn(performance, "now");
+    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
+    try {
+      await terminateUiProcess({
+        pid: 77,
+        stateDir,
+        stopTimeoutMs: 1,
+        platform: "win32",
+        sleep: () => Promise.resolve(),
+        isProcessAlive: () => true,
+        killProcess,
+        killWindowsTree,
+        escalate: true,
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(killWindowsTree).toHaveBeenCalledTimes(1);
+    expect(killProcess).not.toHaveBeenCalled();
+  });
+
   it("on POSIX escalates to SIGKILL without calling the Windows tree-kill helper", async () => {
     const stateDir = makeStateDir();
+    writeOwnedPid(stateDir, 12);
     const killed: (readonly [number, NodeJS.Signals | 0 | undefined])[] = [];
     const killWindowsTree = vi.fn(() => "succeeded" as const);
     let alive = true;
@@ -162,12 +195,12 @@ describe("terminateUiProcess", () => {
     expect(killWindowsTree).not.toHaveBeenCalled();
   });
 
-  it("skips the graceful wait on Windows when the sentinel cannot be written and escalate is on", async () => {
+  it("confirms a dead Windows pid without tree-kill when the sentinel cannot be written", async () => {
     const stateDir = join(makeStateDir(), "missing");
     const { sink, events } = recordingSink();
     const killWindowsTree = vi.fn(() => "failed" as const);
     let escalated = false;
-    await terminateUiProcess({
+    const outcome = await terminateUiProcess({
       pid: 5,
       stateDir,
       stopTimeoutMs: 10_000,
@@ -175,7 +208,7 @@ describe("terminateUiProcess", () => {
       sleep: () => Promise.resolve(),
       isProcessAlive: () => false,
       killProcess: () => {
-        /* SIGKILL after tree kill */
+        /* must not run */
       },
       killWindowsTree,
       securityLogSink: sink,
@@ -184,9 +217,164 @@ describe("terminateUiProcess", () => {
         escalated = true;
       },
     });
-    expect(escalated).toBe(true);
-    expect(killWindowsTree).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({ confirmed: true, escalated: false });
+    expect(escalated).toBe(false);
+    expect(killWindowsTree).not.toHaveBeenCalled();
     expect(events.some((event) => event.op === "cli.lifecycle.stop-request-failed")).toBe(true);
+  });
+
+  it("skips the graceful wait on Windows for a live owned pid when the sentinel cannot be written", async () => {
+    const stateDir = makeStateDir();
+    writeOwnedPid(stateDir, 5);
+    mkdirSync(join(stateDir, "ui.shutdown"));
+    const killWindowsTree = vi.fn(() => {
+      return "failed" as const;
+    });
+    const killProcess = vi.fn();
+    let alive = true;
+    const nowSpy = vi.spyOn(performance, "now");
+    nowSpy.mockReturnValue(0);
+    try {
+      await terminateUiProcess({
+        pid: 5,
+        stateDir,
+        stopTimeoutMs: 10_000,
+        platform: "win32",
+        sleep: () => Promise.resolve(),
+        isProcessAlive: () => {
+          if (killProcess.mock.calls.length > 0) alive = false;
+          return alive;
+        },
+        killProcess,
+        killWindowsTree,
+        escalate: true,
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(killWindowsTree).toHaveBeenCalledTimes(1);
+    expect(killProcess).toHaveBeenCalledWith(5, "SIGKILL");
+  });
+
+  it("refuses forced stop when the pid file does not prove ownership", async () => {
+    const stateDir = makeStateDir();
+    const killWindowsTree = vi.fn(() => "succeeded" as const);
+    const outcome = await terminateUiProcess({
+      pid: 5,
+      stateDir,
+      stopTimeoutMs: 1,
+      platform: "win32",
+      sleep: () => Promise.resolve(),
+      isProcessAlive: () => true,
+      killProcess: () => {
+        /* must not run */
+      },
+      killWindowsTree,
+      escalate: true,
+    });
+    expect(outcome).toEqual({ confirmed: false, escalated: false });
+    expect(killWindowsTree).not.toHaveBeenCalled();
+  });
+
+  it("refuses to signal the current process", async () => {
+    const stateDir = makeStateDir();
+    writeOwnedPid(stateDir, process.pid);
+    const killed: (readonly [number, NodeJS.Signals | 0 | undefined])[] = [];
+    const outcome = await terminateUiProcess({
+      pid: process.pid,
+      stateDir,
+      stopTimeoutMs: 1,
+      platform: "darwin",
+      sleep: () => Promise.resolve(),
+      isProcessAlive: () => true,
+      killProcess: (pid, signal) => {
+        killed.push([pid, signal]);
+      },
+      escalate: true,
+    });
+    expect(outcome).toEqual({ confirmed: false, escalated: false });
+    expect(killed).toEqual([]);
+  });
+
+  it("does not emit stop-requested when POSIX SIGTERM fails with EPERM", async () => {
+    const stateDir = makeStateDir();
+    writeOwnedPid(stateDir, 42);
+    const { sink, events } = recordingSink();
+    await terminateUiProcess({
+      pid: 42,
+      stateDir,
+      stopTimeoutMs: 10_000,
+      platform: "darwin",
+      sleep: () => Promise.resolve(),
+      isProcessAlive: () => false,
+      killProcess: () => {
+        throw eperm();
+      },
+      securityLogSink: sink,
+      escalate: true,
+    });
+    expect(events.map((event) => event.op)).toEqual(["cli.lifecycle.stop-request-failed"]);
+    expect(events[0]?.errorKind).toBe("EPERM");
+  });
+
+  it("emits stop-escalation-failed when Windows tree-kill throws and still SIGKILLs", async () => {
+    const stateDir = makeStateDir();
+    writeOwnedPid(stateDir, 77);
+    const { sink, events } = recordingSink();
+    const killProcess = vi.fn();
+    let alive = true;
+    const nowSpy = vi.spyOn(performance, "now");
+    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
+    try {
+      await terminateUiProcess({
+        pid: 77,
+        stateDir,
+        stopTimeoutMs: 1,
+        platform: "win32",
+        sleep: () => Promise.resolve(),
+        isProcessAlive: () => {
+          if (killProcess.mock.calls.length > 0) alive = false;
+          return alive;
+        },
+        killProcess,
+        killWindowsTree: (): never => {
+          throw new Error("taskkill failed");
+        },
+        securityLogSink: sink,
+        escalate: true,
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(events.some((event) => event.op === "cli.lifecycle.stop-escalation-failed")).toBe(true);
+    expect(killProcess).toHaveBeenCalledWith(77, "SIGKILL");
+  });
+
+  it("on Linux refuses forced stop when launch identity cannot be proven", async () => {
+    const stateDir = makeStateDir();
+    writeExclusivePidFile(join(stateDir, "ui.pid"), 12, "a".repeat(32));
+    const killProcess = vi.fn();
+    const nowSpy = vi.spyOn(performance, "now");
+    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
+    try {
+      const outcome = await terminateUiProcess({
+        pid: 12,
+        stateDir,
+        stopTimeoutMs: 1,
+        platform: "linux",
+        sleep: () => Promise.resolve(),
+        isProcessAlive: () => true,
+        killProcess,
+        escalate: true,
+        launchId: "a".repeat(32),
+        verifyLaunchIdentity: () => false,
+      });
+      expect(outcome).toEqual({ confirmed: false, escalated: false });
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(killProcess).toHaveBeenCalledWith(12, "SIGTERM");
+    expect(killProcess).not.toHaveBeenCalledWith(12, "SIGKILL");
   });
 
   it("without escalate leaves a live POSIX pid running after SIGTERM and does not SIGKILL", async () => {

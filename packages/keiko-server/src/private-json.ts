@@ -14,6 +14,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  renameSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
@@ -68,7 +69,7 @@ export function savePrivateJson(path: string, raw: Record<string, unknown>): voi
     if (process.platform !== "win32") {
       chmodSync(tempPath, 0o600);
     }
-    atomicPublishRename(tempPath, resolvedPath);
+    atomicPublishRename(tempPath, resolvedPath, { rename: renameSync });
     fsyncDirectory(dir);
   } finally {
     if (existsSync(tempPath)) {

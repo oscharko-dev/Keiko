@@ -631,6 +631,39 @@ describe("runUninstallCli — running server guard", () => {
     expect(existsSync(stateDir)).toBe(false);
   });
 
+  it("with --force on Windows escalates to tree-kill when the process survives the grace window", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root, "555");
+    const killed: (readonly [number, NodeJS.Signals | 0 | undefined])[] = [];
+    const killWindowsTree = vi.fn(() => "failed" as const);
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => {
+      now += 500;
+      return now;
+    });
+    const deps: UninstallCliDeps = {
+      cwd: root,
+      homedir: () => root,
+      platform: () => "win32",
+      isProcessAlive: () => true,
+      killProcess: (pid, signal) => {
+        killed.push([pid, signal]);
+      },
+      killWindowsTree,
+      sleep: () => Promise.resolve(),
+    };
+    const c = makeIo();
+    try {
+      await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(killWindowsTree).toHaveBeenCalledTimes(1);
+    expect(killed).toEqual([[555, "SIGKILL"]]);
+    expect(existsSync(stateDir)).toBe(true);
+    expect(c.err()).toContain("did not stop within the wait budget");
+  });
+
   it("with --force --dry-run reports would-stop and does not kill", async () => {
     const root = makeRoot();
     seedState(root, "555");

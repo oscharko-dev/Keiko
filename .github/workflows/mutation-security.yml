@@ -52,7 +52,7 @@ jobs:
           marker="<!-- mutation-security:${GITHUB_REF_NAME} -->"
           existing=$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "\"${marker}\" in:body" --json number --jq '.[0].number // empty')
           # shellcheck disable=SC2016
-          body=$(printf '%s\n\nThe scheduled full security mutation regression suite (`npm run test:mutation:security`) failed on `%s`. The mutation score has regressed or the suite crashed; both are release-blocking on the security-critical modules the suite covers (ADR-0148).\n\nRun: %s\n\nInvestigate locally with the same command, and land the repair before the next scheduled run. If the regression is intentional (e.g. a covered module was removed), update the mutation manifest in the same PR.' "${marker}" "${GITHUB_REF_NAME}" "${RUN_URL}")
+          body=$(printf '%s\n\nThe scheduled full security mutation regression suite (`npm run test:mutation:security`) failed on `%s`. The mutation score has regressed or the suite crashed; both are release-blocking on the security-critical modules the suite covers (ADR-0167).\n\nRun: %s\n\nInvestigate locally with the same command, and land the repair before the next scheduled run. If the regression is intentional (e.g. a covered module was removed), update the mutation manifest in the same PR.' "${marker}" "${GITHUB_REF_NAME}" "${RUN_URL}")
           if [ -n "${existing}" ]; then
             gh issue comment "${existing}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
           else

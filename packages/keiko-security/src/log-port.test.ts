@@ -11,6 +11,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  bindSecurityLogCorrelation,
   emitSecurityLogEvent,
   nullSecurityLogSink,
   securityErrorKind,
@@ -35,6 +36,27 @@ describe("nullSecurityLogSink", () => {
       sink.write({ category: "security", op: "test.op" });
     }).not.toThrow();
     expect(nullSecurityLogSink()).toBe(sink);
+  });
+});
+
+describe("bindSecurityLogCorrelation", () => {
+  it("stamps every write with the bound correlation id", () => {
+    const events: SecurityLogEvent[] = [];
+    const bound = bindSecurityLogCorrelation(
+      { write: (event): void => void events.push(event) },
+      "corr-1",
+    );
+    bound?.write({ category: "security", op: "security.vault.entries-merged" });
+    expect(events).toEqual([
+      expect.objectContaining({
+        op: "security.vault.entries-merged",
+        correlationId: "corr-1",
+      }),
+    ]);
+  });
+
+  it("returns undefined when no sink is wired", () => {
+    expect(bindSecurityLogCorrelation(undefined, "corr-1")).toBeUndefined();
   });
 });
 

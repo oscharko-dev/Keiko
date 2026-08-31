@@ -35,6 +35,7 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
+  renameSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
@@ -581,7 +582,7 @@ function archiveCurrentDay(active: ActiveLog): boolean {
 function archiveWithoutHardLinks(active: ActiveLog, rolled: string): boolean {
   if (existsSync(rolled) || !existsSync(active.currentPath)) return false;
   try {
-    atomicPublishRename(active.currentPath, rolled);
+    atomicPublishRename(active.currentPath, rolled, { rename: renameSync });
     return true;
   } catch {
     // Windows file-busy and friends: keep appending to the current file — rotation is a

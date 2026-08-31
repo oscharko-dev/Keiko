@@ -1128,6 +1128,7 @@ describe("desktop files browser", () => {
       },
       replaceAll: () => undefined,
       delete: () => undefined,
+      deleteMany: () => undefined,
       has: () => false,
       list: () => [],
     };
@@ -1193,6 +1194,7 @@ describe("desktop files browser", () => {
       },
       replaceAll: () => undefined,
       delete: () => undefined,
+      deleteMany: () => undefined,
       has: () => false,
       list: () => [],
     };

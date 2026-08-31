@@ -14,9 +14,13 @@ import { realpathSync, renameSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { emitSecurityLogEvent, securityErrorKind, type SecurityLogSink } from "./log-port.js";
 
-// Immediate first try, then exponential backoff. Six attempts, 620 ms worst-case wait — long enough
-// for a typical AV scan of a just-written PE, short enough that install/upgrade cannot hang.
+// Tree-swap / PE-install policy: immediate first try, then exponential backoff. Six attempts,
+// 620 ms worst-case wait. Passed explicitly by install and activation callers — it is NOT the
+// default, because vault and JSON publishes run on HTTP request threads.
 export const WINDOWS_ATOMIC_RENAME_BACKOFF_MS = [0, 20, 40, 80, 160, 320] as const;
+
+// Default for state-file publishes (vault, JSON, sidecars): three immediate retries, no sleep.
+export const WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS = [0, 0, 0] as const;
 
 export const WINDOWS_ATOMIC_RENAME_RETRY_CODES = ["EBUSY", "EPERM"] as const;
 
@@ -29,6 +33,7 @@ export interface AtomicPublishRenameOptions {
   readonly rename?: AtomicPublishRenameFn;
   readonly sleep?: (ms: number) => void;
   readonly securityLogSink?: SecurityLogSink;
+  readonly backoffMs?: readonly number[] | undefined;
 }
 
 export interface CwdOutsideTreeOptions {
@@ -69,8 +74,16 @@ function throwCaughtRenameError(error: unknown): never {
   throw new TypeError("atomic publish rename failed");
 }
 
-function sleepBeforeAttempt(sleep: (ms: number) => void, attempt: number): void {
-  const delay = WINDOWS_ATOMIC_RENAME_BACKOFF_MS[attempt];
+function renameBackoff(options: AtomicPublishRenameOptions): readonly number[] {
+  return options.backoffMs ?? WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS;
+}
+
+function sleepBeforeAttempt(
+  sleep: (ms: number) => void,
+  attempt: number,
+  backoff: readonly number[],
+): void {
+  const delay = backoff[attempt];
   if (delay !== undefined && delay > 0) sleep(delay);
 }
 
@@ -78,12 +91,25 @@ function emitRenameRetry(
   sink: SecurityLogSink | undefined,
   attempts: number,
   error: unknown,
-  exhausted: boolean,
 ): void {
   emitSecurityLogEvent(sink, {
-    level: exhausted ? "warn" : "info",
+    level: "info",
     category: "security",
-    op: exhausted ? "security.fs.atomic-rename-exhausted" : "security.fs.atomic-rename-retried",
+    op: "security.fs.atomic-rename-retried",
+    errorKind: securityErrorKind(error),
+    extra: { attempts },
+  });
+}
+
+function emitRenameFailed(
+  sink: SecurityLogSink | undefined,
+  attempts: number,
+  error: unknown,
+): void {
+  emitSecurityLogEvent(sink, {
+    level: "error",
+    category: "security",
+    op: "security.fs.atomic-rename-failed",
     errorKind: securityErrorKind(error),
     extra: { attempts },
   });
@@ -96,23 +122,22 @@ function retryWindowsPublishRename(
   options: AtomicPublishRenameOptions,
 ): void {
   const sleep = options.sleep ?? sleepSync;
+  const backoff = renameBackoff(options);
   let lastError: unknown;
-  for (let attempt = 0; attempt < WINDOWS_ATOMIC_RENAME_BACKOFF_MS.length; attempt += 1) {
-    sleepBeforeAttempt(sleep, attempt);
+  for (let attempt = 0; attempt < backoff.length; attempt += 1) {
+    sleepBeforeAttempt(sleep, attempt, backoff);
     const result = invokeRename(rename, from, to);
     if (result.ok) {
-      if (attempt > 0) emitRenameRetry(options.securityLogSink, attempt + 1, lastError, false);
+      if (attempt > 0) emitRenameRetry(options.securityLogSink, attempt + 1, lastError);
       return;
     }
     lastError = result.error;
-    if (!isWindowsTransientRenameError(result.error)) throwCaughtRenameError(result.error);
+    if (!isWindowsTransientRenameError(result.error)) {
+      emitRenameFailed(options.securityLogSink, attempt + 1, result.error);
+      throwCaughtRenameError(result.error);
+    }
   }
-  emitRenameRetry(
-    options.securityLogSink,
-    WINDOWS_ATOMIC_RENAME_BACKOFF_MS.length,
-    lastError,
-    true,
-  );
+  emitRenameFailed(options.securityLogSink, backoff.length, lastError);
   throwCaughtRenameError(lastError);
 }
 
@@ -123,10 +148,26 @@ export function atomicPublishRename(
 ): void {
   const rename = options.rename ?? renameSync;
   if ((options.platform ?? process.platform) !== "win32") {
-    rename(from, to);
+    try {
+      rename(from, to);
+    } catch (error) {
+      emitRenameFailed(options.securityLogSink, 1, error);
+      throwCaughtRenameError(error);
+    }
     return;
   }
   retryWindowsPublishRename(from, to, rename, options);
+}
+
+export function atomicPublishTreeSwap(
+  from: string,
+  to: string,
+  options: Omit<AtomicPublishRenameOptions, "backoffMs"> = {},
+): void {
+  atomicPublishRename(from, to, {
+    ...options,
+    backoffMs: WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+  });
 }
 
 function pathIsInside(
@@ -154,6 +195,15 @@ function restoreCwd(previous: string, fallback: string, chdir: (path: string) =>
   }
 }
 
+function isPromiseLike(value: unknown): value is Promise<unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "then" in value &&
+    typeof value.then === "function"
+  );
+}
+
 // Self-update (and any other in-tree process) must not keep cwd inside a directory it is about to
 // rename. Windows treats the cwd handle as a lock; POSIX usually does not. chdir does not unmap
 // `node.exe` loaded from the tree — the retry above still covers that residual.
@@ -174,7 +224,11 @@ export function withCwdOutsideTree<T>(
   const leftTree = pathIsInside(previous, treeRoot, resolvePath);
   if (leftTree) chdir(parent);
   try {
-    return run();
+    const result = run();
+    if (isPromiseLike(result)) {
+      throw new TypeError("withCwdOutsideTree run() must complete synchronously");
+    }
+    return result;
   } finally {
     if (leftTree) restoreCwd(previous, parent, chdir);
   }

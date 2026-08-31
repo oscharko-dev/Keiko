@@ -14,6 +14,8 @@ import {
   isInsidePath,
   peekShutdownRequest,
   readPidFile,
+  readPidRecord,
+  removePidFileIfMatches,
   resolveStateDir,
   scanRuntimeState,
   writeExclusivePidFile,
@@ -97,6 +99,15 @@ describe("readPidFile", () => {
     writeFileSync(path, "  4242 \n", "utf8");
     expect(readPidFile(path)).toBe(4242);
   });
+
+  it("parses an optional launch id on the second line", () => {
+    const root = makeRoot();
+    const path = join(root, "ui.pid");
+    const launchId = "ab".repeat(16);
+    writeExclusivePidFile(path, 4242, launchId);
+    expect(readPidRecord(path)).toEqual({ pid: 4242, launchId });
+    expect(readPidFile(path)).toBe(4242);
+  });
 });
 
 describe("defaultIsProcessAlive", () => {
@@ -155,6 +166,33 @@ describe("ui.shutdown request", () => {
     expect(peekShutdownRequest(stateDir, 4242)).toBe(false);
   });
 
+  it("does not throw when the sentinel path is a directory", () => {
+    const stateDir = makeRoot();
+    mkdirSync(join(stateDir, UI_SHUTDOWN_REQUEST_FILE));
+    expect(() => {
+      clearShutdownRequest(stateDir);
+    }).not.toThrow();
+  });
+
+  it("matches a launch id across a re-exec pid change", () => {
+    const stateDir = makeRoot();
+    const launchId = "cd".repeat(16);
+    writeShutdownRequest(stateDir, 100, launchId);
+    expect(peekShutdownRequest(stateDir, 999, launchId)).toBe(true);
+    expect(peekShutdownRequest(stateDir, 999, "ef".repeat(16))).toBe(false);
+  });
+
+  it("returns false for empty, malformed, and oversized requests", () => {
+    const stateDir = makeRoot();
+    const path = join(stateDir, UI_SHUTDOWN_REQUEST_FILE);
+    writeFileSync(path, "", "utf8");
+    expect(peekShutdownRequest(stateDir, 1)).toBe(false);
+    writeFileSync(path, "not-a-pid\n", "utf8");
+    expect(peekShutdownRequest(stateDir, 1)).toBe(false);
+    writeFileSync(path, "9".repeat(64), "utf8");
+    expect(peekShutdownRequest(stateDir, 1)).toBe(false);
+  });
+
   it("refuses a symlinked shutdown request the same way ui.pid does", () => {
     const root = makeRoot();
     const target = join(root, "decoy");
@@ -167,6 +205,16 @@ describe("ui.shutdown request", () => {
     const path = join(makeRoot(), "ui.pid");
     writeExclusivePidFile(path, 17);
     expect(readPidFile(path)).toBe(17);
+  });
+
+  it("removePidFileIfMatches unlinks only the pid this stop owns", () => {
+    const root = makeRoot();
+    const path = join(root, "ui.pid");
+    writeExclusivePidFile(path, 17, "ab".repeat(16));
+    expect(removePidFileIfMatches(path, 99)).toBe(false);
+    expect(readPidFile(path)).toBe(17);
+    expect(removePidFileIfMatches(path, 17, "ab".repeat(16))).toBe(true);
+    expect(readPidFile(path)).toBeUndefined();
   });
 });
 

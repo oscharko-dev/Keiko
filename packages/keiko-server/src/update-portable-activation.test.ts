@@ -21,6 +21,7 @@ import { createPortableUpdateActivator } from "./update-portable-activation.js";
 import {
   activationIdFor,
   capturePortableRegistration,
+  cleanupPortableActivation,
   promotePortableInstall,
   readPortableActivationRecovery,
   readWindowsPortableShortcutTarget,
@@ -674,6 +675,34 @@ describe("portable update activation", () => {
     });
     expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
     expect(readFileSync(registrationPath, "utf8")).toBe(oldRegistration);
+  });
+});
+
+describe("cleanupPortableActivation", () => {
+  it("leaves the Windows backup tree when this process still maps node.exe from it", () => {
+    const root = join(tmpdir(), `keiko-activation-cleanup-${String(process.pid)}`);
+    const backupRoot = join(root, "Keiko-old");
+    const stageRoot = join(root, "stage");
+    const mappedExe = join(backupRoot, "runtime", "node", "node.exe");
+    mkdirSync(dirname(mappedExe), { recursive: true });
+    mkdirSync(stageRoot, { recursive: true });
+    writeFileSync(mappedExe, "exe");
+    writeFileSync(join(stageRoot, "leftover"), "x");
+    try {
+      cleanupPortableActivation(
+        {
+          managedRoot: join(root, "Keiko"),
+          stageRoot,
+          candidateRoot: join(root, "candidate"),
+          backupRoot,
+        },
+        { platform: "win32", execPath: mappedExe },
+      );
+      expect(existsSync(mappedExe)).toBe(true);
+      expect(existsSync(stageRoot)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

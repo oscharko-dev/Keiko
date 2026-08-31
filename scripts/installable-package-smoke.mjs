@@ -2933,13 +2933,27 @@ function assertLifecycleRestart(runLifecycle) {
   }
 }
 
-function assertLifecycleStop(runLifecycle) {
+function assertLifecycleStop(runLifecycle, stateDir) {
   const stopResult = runLifecycle("stop");
-  if (stopResult.status !== 0 || !stopResult.stdout.includes("Keiko UI stopped")) {
+  if (stopResult.status !== 0) {
     fail(
       `keiko stop did not stop the packaged UI ` +
         `(status=${String(stopResult.status)}): ${stopResult.stdout}${stopResult.stderr}`,
     );
+  }
+  if (stopResult.stdout.includes("stopped (forced)")) {
+    fail(`keiko stop used forced termination; graceful drain is required: ${stopResult.stdout}`);
+  }
+  if (!stopResult.stdout.includes("Keiko UI stopped")) {
+    fail(`keiko stop did not report a graceful stop: ${stopResult.stdout}${stopResult.stderr}`);
+  }
+  const logPath = join(stateDir, "logs", "server.log");
+  if (!existsSync(logPath)) {
+    fail("keiko stop left no activity log to prove process.exiting");
+  }
+  const logText = readFileSync(logPath, "utf8");
+  if (!logText.includes('"op":"process.exiting"') || !logText.includes("shutdown-request")) {
+    fail("keiko stop did not record process.exiting with reason shutdown-request");
   }
 }
 
@@ -2969,7 +2983,7 @@ async function assertPackagedLifecycleCommands(tmp) {
     started = true;
     assertLifecycleStatusRunning(lifecycleRun);
     assertLifecycleRestart(lifecycleRun);
-    assertLifecycleStop(lifecycleRun);
+    assertLifecycleStop(lifecycleRun, stateDir);
     started = false;
     assertLifecycleStatusStopped(lifecycleRun);
   } finally {

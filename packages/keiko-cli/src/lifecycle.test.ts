@@ -349,14 +349,16 @@ describe("runLifecycleCli", () => {
       expect.arrayContaining(["ui", "--port", "4321", "--host", "127.0.0.1"]),
     );
     expect(spawn.opts.argv0).toBe("Keiko");
+    const pidFileText = readFileSync(join(root, ".keiko-test", "ui.pid"), "utf8");
+    expect(pidFileText).toMatch(/^12345\n[0-9a-f]{32}\n$/);
     expect(spawn.opts.env).toMatchObject({
       KEIKO_STATE_DIR: join(root, ".keiko-test"),
+      KEIKO_UI_LAUNCH_ID: pidFileText.split("\n")[1],
     });
     const logFds = childLogFds(spawn.opts);
     expect(logFds.stdoutFd).not.toBe(logFds.stderrFd);
     expect(() => fstatSync(logFds.stdoutFd)).toThrow();
     expect(() => fstatSync(logFds.stderrFd)).toThrow();
-    expect(readFileSync(join(root, ".keiko-test", "ui.pid"), "utf8")).toBe("12345\n");
     expect(existsSync(join(root, ".keiko-test", "ui.log"))).toBe(true);
     expect(c.out()).toContain("Keiko UI running");
   });
@@ -832,7 +834,7 @@ describe("runLifecycleCli", () => {
     expect(c.out()).toContain("stale");
     expect(killProcess).toHaveBeenCalledWith(12345, "SIGTERM");
     expect(spawned).toHaveLength(1);
-    expect(readFileSync(join(root, ".keiko", "ui.pid"), "utf8")).toBe("67890\n");
+    expect(readFileSync(join(root, ".keiko", "ui.pid"), "utf8")).toMatch(/^67890\n[0-9a-f]{32}\n$/);
   });
 
   it("restarts an existing process when health is reachable but does not expose a version", async () => {
@@ -878,7 +880,7 @@ describe("runLifecycleCli", () => {
     expect(code).toBe(0);
     expect(c.out()).toContain("health check did not return the current Keiko version");
     expect(killProcess).toHaveBeenCalledWith(12345, "SIGTERM");
-    expect(readFileSync(join(root, ".keiko", "ui.pid"), "utf8")).toBe("67890\n");
+    expect(readFileSync(join(root, ".keiko", "ui.pid"), "utf8")).toMatch(/^67890\n[0-9a-f]{32}\n$/);
   });
 
   it("restarts an existing process when its health endpoint is unreachable", async () => {
@@ -1230,7 +1232,10 @@ describe("runLifecycleCli", () => {
     mkdirSync(join(root, ".keiko"), { recursive: true });
     writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
     const c = makeIo();
-    const killProcess = vi.fn();
+    let alive = true;
+    const killProcess = vi.fn((_pid: number, signal?: NodeJS.Signals | 0) => {
+      if (signal === "SIGKILL") alive = false;
+    });
     // terminateAndConfirm uses performance.now for a monotonic deadline (Codex thread
     // 3771011316); mock it so the graceful loop expires after one iteration.
     const nowSpy = vi.spyOn(performance, "now");
@@ -1244,7 +1249,7 @@ describe("runLifecycleCli", () => {
         {},
         {
           cwd: root,
-          isProcessAlive: vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false),
+          isProcessAlive: () => alive,
           killProcess,
           sleep: () => Promise.resolve(),
         },
@@ -1386,13 +1391,17 @@ describe("runLifecycleCli", () => {
     expect(c.out()).not.toContain("forced");
   });
 
-  it("on Windows stop escalates with tree-kill before SIGKILL", async () => {
+  it("on Windows stop escalates with tree-kill and does not SIGKILL after success", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
     writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
     const c = makeIo();
+    let alive = true;
     const killProcess = vi.fn();
-    const killWindowsTree = vi.fn(() => "succeeded" as const);
+    const killWindowsTree = vi.fn(() => {
+      alive = false;
+      return "succeeded" as const;
+    });
     const nowSpy = vi.spyOn(performance, "now");
     nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
     try {
@@ -1404,7 +1413,7 @@ describe("runLifecycleCli", () => {
         {
           cwd: root,
           platform: () => "win32",
-          isProcessAlive: vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false),
+          isProcessAlive: () => alive,
           killProcess,
           killWindowsTree,
           sleep: () => Promise.resolve(),
@@ -1414,12 +1423,8 @@ describe("runLifecycleCli", () => {
     } finally {
       nowSpy.mockRestore();
     }
-    expect(killProcess).not.toHaveBeenCalledWith(12345, "SIGTERM");
+    expect(killProcess).not.toHaveBeenCalled();
     expect(killWindowsTree).toHaveBeenCalledWith(12345, expect.any(Object));
-    expect(killProcess).toHaveBeenCalledWith(12345, "SIGKILL");
-    expect(killWindowsTree.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
-      killProcess.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
     expect(c.err()).toContain("terminating the process tree");
     expect(c.out()).toContain("stopped (forced)");
   });
@@ -1596,7 +1601,7 @@ describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () 
     // hostile name and creates a brand-new, single-link inode there instead of refusing outright,
     // so the command still succeeds and the real pid is published safely.
     expect(code).toBe(0);
-    expect(readFileSync(join(stateDir, "ui.pid"), "utf8")).toBe("12345\n");
+    expect(readFileSync(join(stateDir, "ui.pid"), "utf8")).toMatch(/^12345\n[0-9a-f]{32}\n$/);
     expect(lstatSync(join(stateDir, "ui.pid")).nlink).toBe(1);
   });
 });

@@ -97,8 +97,12 @@ function instant(value, what) {
   return parsed;
 }
 
+function elapsedMinutes(fromMs, toMs) {
+  return (toMs - fromMs) / MILLISECONDS_PER_MINUTE;
+}
+
 function minutesBetween(fromMs, toMs) {
-  return Math.round(((toMs - fromMs) / MILLISECONDS_PER_MINUTE) * 10) / 10;
+  return Math.round(elapsedMinutes(fromMs, toMs) * 10) / 10;
 }
 
 /**
@@ -180,7 +184,7 @@ function reactionMinutes(heads, findingsMs) {
     const from = heads[index - 1].startedAt;
     const to = heads[index].startedAt;
     const responded = findingsMs.filter((at) => at >= from && at < to);
-    if (responded.length > 0) reactions.push(minutesBetween(Math.min(...responded), to));
+    if (responded.length > 0) reactions.push(elapsedMinutes(Math.min(...responded), to));
   }
   return reactions;
 }
@@ -277,6 +281,7 @@ export function reactionSloStats(reactions) {
   let reactionsBetween30And60 = 0;
   let reactionsOver60 = 0;
   for (const minutes of reactions) {
+    if (!Number.isFinite(minutes)) continue;
     if (minutes <= REACTION_SLO_MINUTES) {
       reactionsWithinSlo += 1;
     } else if (minutes <= REACTION_BUCKET_30_MINUTES) {
@@ -288,7 +293,7 @@ export function reactionSloStats(reactions) {
     }
   }
   return {
-    reactionSamples: reactions.length,
+    reactionSamples: reactions.filter((minutes) => Number.isFinite(minutes)).length,
     reactionsWithinSlo,
     reactionsBetween10And30,
     reactionsBetween30And60,
@@ -298,8 +303,11 @@ export function reactionSloStats(reactions) {
 
 function cohortSummary(reports, cohort) {
   const inCohort = reports.filter((report) => report.cohort === cohort);
+  const sloEligible = inCohort.filter((report) => report.outcome !== TRUNCATED);
   const measured = inCohort.filter((report) => report.outcome === MEASURED);
-  const reactions = inCohort.flatMap((report) => report.reactionMinutes);
+  const reactions = sloEligible
+    .flatMap((report) => report.reactionMinutes)
+    .filter((minutes) => Number.isFinite(minutes));
   const settlements = inCohort
     .map((report) => report.firstGreenToMergedMinutes)
     .filter((value) => value !== null);
@@ -310,7 +318,7 @@ function cohortSummary(reports, cohort) {
     medianGapMinutes: median(measured.map((report) => report.checksGreenToMergedMinutes)),
     medianSettlementMinutes: median(settlements),
     maxSettlementMinutes: maxOf(settlements),
-    medianRepairRounds: median(inCohort.map((report) => report.repairRounds)),
+    medianRepairRounds: median(sloEligible.map((report) => report.repairRounds)),
     medianReactionMinutes: median(reactions),
     ...reactionSloStats(reactions),
   };
@@ -533,13 +541,22 @@ export function collectMergedPullRequests(count, io = {}) {
 
 /** An absent value reads the same in both tables: a dash, never the literal string "null". */
 function cell(value) {
-  return value === null ? "-" : String(value);
+  if (value === null) return "-";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return "-";
+    return String(Math.round(value * 10) / 10);
+  }
+  return String(value);
 }
 
 function renderPullRequestRow(report) {
   const gap = cell(report.checksGreenToMergedMinutes);
   const settlement = cell(report.firstGreenToMergedMinutes);
-  const reactions = report.reactionMinutes.join(", ") || "-";
+  const reactions =
+    report.reactionMinutes
+      .filter((minutes) => Number.isFinite(minutes))
+      .map((minutes) => cell(minutes))
+      .join(", ") || "-";
   return `| ${String(report.number)} | ${report.cohort} | ${report.outcome} | ${String(report.headCount)} | ${String(report.repairRounds)} | ${String(report.findingCount)} | ${settlement} | ${gap} | ${reactions} |`;
 }
 

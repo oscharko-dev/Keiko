@@ -55,7 +55,7 @@ waiting for unpublished producers costs.
 
 ## Agent reaction SLO
 
-**When a review finding is published on the current head, the delivering agent begins repairing it
+**When a review finding is published on the current head, the delivering agent pushes one repair
 within 10 minutes of its appearance.** Auto-merge arming is not a prerequisite for that clock.
 
 This formalizes the proactive-monitoring practice that already exists as an operating habit. It is an
@@ -70,7 +70,7 @@ pull request and in the cohort median over the rounds that did answer something.
 Baseline adherence (2026-07-26) is **42%** (50 of 119 reactions within 10 minutes), median 11.4
 minutes. The 2026-08-28 post-adoption cohort was **23.3%** (7 of 30), median 22.5 minutes. The
 2026-08-31 follow-up in [#3342](https://github.com/oscharko-dev/Keiko/issues/3342) was **23.5%**
-(8 of 34), median 19 minutes — still a regression against baseline. That share is the honest
+(8 of 34), median 19.1 minutes — still a regression against baseline. That share is the honest
 substitute for Issue #2708's stated "median checks-green-to-merged gap ≤30 minutes" target, which
 the same measurement shows is already met (follow-up median final gap 0.6 minutes) and would pass
 without anything improving.
@@ -86,7 +86,7 @@ producer into that one head. It does not wait for CI to turn green, for a review
 spoken, or for the ADR-0170 D5 interlock — that interlock gates auto-merge arming, not repair. A
 finding that appears after the head is pushed starts a new 10-minute window on the new head.
 
-If the same session cannot begin the repair within 10 minutes, the next agent that touches the pull
+If the same session cannot push the repair within 10 minutes, the next agent that touches the pull
 request starts from the unresolved-thread list immediately.
 
 ## The remaining lever, reserved to the owner
