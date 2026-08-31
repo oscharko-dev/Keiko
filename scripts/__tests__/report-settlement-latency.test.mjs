@@ -9,12 +9,14 @@ import {
   MERGED_PULL_REQUESTS_QUERY,
   MERGE_ORDER_OVERSAMPLE,
   OUTCOMES,
+  REACTION_SLO_MINUTES,
   collectMergedPullRequests,
   earliestStart,
   executeSettlementCli,
   ghGraphql,
   ghGraphqlWithRetry,
   median,
+  reactionSloStats,
   renderReport,
   requiredChecksFromContributing,
   requiredGreenAt,
@@ -364,7 +366,17 @@ describe("cohort aggregation", () => {
       medianGapMinutes: null,
       medianSettlementMinutes: null,
       maxSettlementMinutes: null,
+      reactionSamples: 0,
+      reactionsWithinSlo: 0,
     });
+  });
+
+  it("counts the 10-minute SLO from the producer, not from a restated formula", () => {
+    const [findingBearing] = summarizeCohorts(reports);
+
+    expect(findingBearing.reactionSamples).toBe(1);
+    expect(findingBearing.reactionsWithinSlo).toBe(0);
+    expect(findingBearing.reactionsBetween10And30).toBe(1);
   });
 
   it("computes a median for both odd and even sample counts", () => {
@@ -380,6 +392,7 @@ describe("cohort aggregation", () => {
     expect(rendered).toContain("| 1 | clean | measured |");
     expect(rendered).toContain("| 2 | finding-bearing | measured |");
     expect(rendered).toContain("median settlement");
+    expect(rendered).toContain("| finding-bearing | 1 | 0/1 |");
   });
 
   it("renders an absent value as a dash in both tables, never as the string null", () => {
@@ -387,6 +400,28 @@ describe("cohort aggregation", () => {
 
     expect(rendered).not.toContain("null");
     expect(rendered).toContain("| finding-bearing | 0 | 0 | - | - | - | - | - |");
+    expect(rendered).toContain("| finding-bearing | 0 | 0/0 | 0 | 0 | 0 | - |");
+  });
+});
+
+describe("reaction SLO buckets", () => {
+  it("treats the SLO bound as inclusive and splits the over-SLO tail by duration", () => {
+    expect(reactionSloStats([])).toEqual({
+      reactionSamples: 0,
+      reactionsWithinSlo: 0,
+      reactionsBetween10And30: 0,
+      reactionsBetween30And60: 0,
+      reactionsOver60: 0,
+    });
+    expect(
+      reactionSloStats([REACTION_SLO_MINUTES, REACTION_SLO_MINUTES + 0.1, 30, 30.1, 60, 60.1]),
+    ).toEqual({
+      reactionSamples: 6,
+      reactionsWithinSlo: 1,
+      reactionsBetween10And30: 2,
+      reactionsBetween30And60: 2,
+      reactionsOver60: 1,
+    });
   });
 });
 

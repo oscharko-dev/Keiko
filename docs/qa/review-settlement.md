@@ -47,35 +47,47 @@ the wall clock.
   thread. Arming interlock and cancellation are ADR-0170 D5.
 
 The expensive mistake this table exists to prevent is discovering findings one CI round at a time.
-Enumerate **every** finding from **every** active producer above in one pass — failing job logs, the Sonar
-issues API, every unresolved thread — and then work the whole list into a single new head. The
-baseline's 15-, 17- and 19-round pull requests are what round-at-a-time costs.
+Enumerate **every already-published** finding from **every** active producer above in one pass —
+failing job logs, the Sonar issues API, every unresolved thread — and then work that list into a
+single new head. Do not wait for a producer that has not yet spoken. The baseline's 15-, 17- and
+19-round pull requests are what round-at-a-time costs; the 10–30 minute band in issue #3342 is what
+waiting for unpublished producers costs.
 
 ## Agent reaction SLO
 
-**After arming auto-merge, the delivering agent monitors the pull request and begins repairing a new
-finding within 10 minutes of its appearance.**
+**When a review finding is published on the current head, the delivering agent begins repairing it
+within 10 minutes of its appearance.** Auto-merge arming is not a prerequisite for that clock.
 
 This formalizes the proactive-monitoring practice that already exists as an operating habit. It is an
 SLO, not a gate: nothing fails a check because a reaction was slow. Its measurement hook is the
-`reactions (min)` column of `npm run report:settlement-latency`. A repair round yields a sample only
-when a finding was actually published while the previous head was live — a round pushed for any other
-reason (a rebase, a merge from `dev`, an author-initiated change) answered no finding and is
-deliberately left unmeasured, so the reaction figures are never diluted by rounds that had nothing to
-react to. Adherence is therefore visible per pull request and in the cohort median over the rounds
-that did answer something.
+`in-SLO` column of `npm run report:settlement-latency` (counts produced by the reporter, never a
+hand-restated percentage). A repair round yields a sample only when a finding was actually published
+while the previous head was live — a round pushed for any other reason (a rebase, a merge from `dev`,
+an author-initiated change) answered no finding and is deliberately left unmeasured, so the reaction
+figures are never diluted by rounds that had nothing to react to. Adherence is therefore visible per
+pull request and in the cohort median over the rounds that did answer something.
 
-Baseline adherence is **42%** (50 of 119 reactions within 10 minutes), median 11.4 minutes. That is
-the number the post-adoption report tracks, and it is the honest substitute for Issue #2708's stated
-"median checks-green-to-merged gap ≤30 minutes" target, which the same measurement shows is already
-met at 0.1 minutes and would pass without anything improving.
+Baseline adherence (2026-07-26) is **42%** (50 of 119 reactions within 10 minutes), median 11.4
+minutes. The 2026-08-28 post-adoption cohort was **23.3%** (7 of 30), median 22.5 minutes. The
+2026-08-31 follow-up in [#3342](https://github.com/oscharko-dev/Keiko/issues/3342) was **23.5%**
+(8 of 34), median 19 minutes — still a regression against baseline. That share is the honest
+substitute for Issue #2708's stated "median checks-green-to-merged gap ≤30 minutes" target, which
+the same measurement shows is already met (follow-up median final gap 0.6 minutes) and would pass
+without anything improving.
 
 ## Current-head cadence
 
 Every enabled reviewer is configured to re-run on each ready pull-request update. A prior green
-review does not bind a new SHA. The delivering agent waits for all producers to settle, enumerates
-all new findings together, and repairs the complete set in one head instead of cycling one producer
-at a time.
+review does not bind a new SHA.
+
+**Harvest window.** From the first finding published on a head, the delivering agent has 10 minutes
+to push one repair. During that window it enumerates every finding already published by every
+producer into that one head. It does not wait for CI to turn green, for a reviewer that has not yet
+spoken, or for the ADR-0170 D5 interlock — that interlock gates auto-merge arming, not repair. A
+finding that appears after the head is pushed starts a new 10-minute window on the new head.
+
+If the same session cannot begin the repair within 10 minutes, the next agent that touches the pull
+request starts from the unresolved-thread list immediately.
 
 ## The remaining lever, reserved to the owner
 
@@ -94,4 +106,5 @@ GITHUB_REPOSITORY=oscharko-dev/Keiko npm run report:settlement-latency -- --coun
 
 The report reads merged pull requests targeting `dev` through the GitHub GraphQL API, pages them
 below the node-cost limit, and retries a transient 5xx with bounded backoff in the ADR-0139 D6 idiom.
-It writes nothing and requires no permission beyond reading the repository.
+It writes nothing and requires no permission beyond reading the repository. The `in-SLO` column is
+produced by the reporter from `REACTION_SLO_MINUTES`; do not recompute the share by hand.
