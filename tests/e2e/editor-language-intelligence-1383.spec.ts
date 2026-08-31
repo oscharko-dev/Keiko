@@ -9,6 +9,7 @@ import {
   openTreeFile,
   seedEditorWindow,
 } from "./support/editorWorkspace.js";
+import { editorModifier, focusMonacoInput } from "./support/editor-chord.js";
 
 const TAG = "@language-intelligence-1383";
 const TS_FILE = "app.ts";
@@ -145,14 +146,21 @@ async function attachShot(testInfo: TestInfo, page: Page, name: string): Promise
   await testInfo.attach(name, { body: await page.screenshot(), contentType: "image/png" });
 }
 
+// F6: a plain `.click()` on the Monaco root can leave Firefox's fallback `textarea.inputarea`
+// unfocused (support/editor-chord.ts `focusMonacoInput`'s doc comment), so the select-all below
+// reaches nothing and `insertText` APPENDS instead of replacing. `focusMonacoInput` focuses
+// whichever real input surface this engine created instead of re-deriving a weaker click-only
+// version of that logic here.
 async function replaceMonacoText(page: Page, workspace: Locator, text: string): Promise<void> {
-  const editor = workspace.locator(EDITOR_SELECTORS.monaco).first();
-  await expect(editor).toBeVisible();
-  await editor.click();
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  await focusMonacoInput(workspace);
+  const modifier = await editorModifier(page);
   await page.keyboard.down(modifier);
   await page.keyboard.press("KeyA");
   await page.keyboard.up(modifier);
+  // Delete the selection with a REAL key event first. `insertText` bypasses key events, and
+  // whether it replaces a selection is engine-dependent: Chromium replaces, Firefox inserts at
+  // the caret and leaves the selected text behind — appending instead of replacing.
+  await page.keyboard.press("Backspace");
   await page.keyboard.insertText(text);
 }
 
@@ -253,7 +261,7 @@ async function hoverOnGreeting(page: Page, workspace: Locator): Promise<void> {
 
 async function triggerSymbols(page: Page, workspace: Locator): Promise<void> {
   await workspace.locator(EDITOR_SELECTORS.monaco).first().click();
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  const modifier = await editorModifier(page);
   await page.keyboard.press(`${modifier}+Shift+KeyO`);
 }
 

@@ -40,6 +40,9 @@ export interface PostApplyVerificationArgs {
   // Workspace-relative paths of the applied test files to re-confirm (deleted paths excluded).
   readonly appliedTestFiles: readonly string[];
   readonly signal: AbortSignal;
+  // The patch-apply request correlation id. This keeps termination evidence emitted by the
+  // verification subprocess on the same reconstructable activity-log timeline as the apply.
+  readonly correlationId?: string | undefined;
 }
 
 export interface PostApplyVerificationResult {
@@ -231,6 +234,7 @@ export const defaultPostApplyVerification: PostApplyVerificationPort = async (ar
     workspace,
     signal: args.signal,
     probeCwd: args.realRoot,
+    correlationId: args.correlationId,
   });
   return { summary: toSummary(report, probe), command: verificationCommand(workspace) };
 };

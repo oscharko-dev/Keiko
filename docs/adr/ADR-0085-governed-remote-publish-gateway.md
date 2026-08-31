@@ -81,6 +81,12 @@ Raw stderr never leaves the executor. Only the typed reason, the error code, and
 
 `executeGovernedPublish` (server) mirrors `executeGovernedMutation`: resolve and authorise the project workspace, read a trustworthy snapshot, run `runGitPublish`, append a content-free evidence record via the existing `recordGitDeliveryMutationEvidence` and `buildGitDeliveryEvidenceRecord` (which already projects push `remoteRefHash`), and — since the git activity-log wiring (AGENTS.md §8 Rule 1) — write one body-free activity-log line through the SAME `logGitDeliveryMutation` the local mutation path uses. The lifecycle shape is identical and `actionKind: "push"` is what separates the two in the log, so this reuses that vocabulary rather than minting a parallel op. Note the distinction the evidence ledger does not cover: the ledger is the audit artifact, the activity log is the operator's reconstruction record, and a publish used to appear in the first and not the second. Evidence is recorded for the permitted-and-executed path and for every blocked/held path before the route responds. The push preview route is read-only — snapshot, preflight, policy projection, no execution, no evidence — exactly the action-sheet/commit-preview pattern (ADR-0082 D2 / ADR-0084 D2).
 
+The accepted Authority Envelope is re-checked immediately before remote dispatch. If continuity is
+lost after admission, no process is spawned, the route returns the correlated 403 authority-denial
+contract, and the existing mutation ledger records one `blocked` / `authority-denied` /
+`policy-forbidden` terminal outcome rather than either dropping the attempt or persisting the
+adapter's synthetic internal failure.
+
 ## Consequences
 
 ### Positive

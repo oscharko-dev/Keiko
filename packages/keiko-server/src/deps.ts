@@ -57,6 +57,7 @@ import type {
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimeEvidenceClass,
   CodingWorkbenchRuntimeUnavailableReason,
+  CommandTerminationEvidence,
   DebugDeploymentPolicy,
   DebugProductSupport,
   DebugProvisioning,
@@ -101,7 +102,7 @@ import {
   type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
-import { processServerLogSink } from "./process-log-sink.js";
+import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
   assertUiDbOutsideProject,
@@ -172,6 +173,35 @@ import {
   type RelationshipHandlerDeps,
 } from "./relationship-handlers.js";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+// Deps-level termination-evidence port for every managed-worktree git lane composed here
+// (PR #3354 review, comment 3887021650): a worktree operation that times out or is aborted leaves
+// its verified Windows tree-kill disposition in the activity log.
+//
+// Curried on the correlation id rather than closing over UNKNOWN_CORRELATION_ID, which is what this
+// did before: the id is a property of the OPERATION, not of this composition point, so binding it
+// here meant every one of these five lanes logged `command.terminated` under UNKNOWN while the
+// surrounding workspace events of the same operation carried the real one — §8's "every line of one
+// logical operation carries that operation's correlationId", broken by construction, in exactly the
+// lanes whose timeline this evidence exists to complete (PR #3355 review, P2).
+function logWorktreeTermination(
+  correlationId: string,
+): (evidence: CommandTerminationEvidence) => void {
+  return (evidence: CommandTerminationEvidence): void => {
+    logCommandTermination(processServerLogSink(), correlationId, evidence);
+  };
+}
+
+function createGitWorktreeAdapterFactory(
+  processEnv: NodeJS.ProcessEnv | undefined,
+): WorkspaceProvisioningServiceDeps["createAdapter"] {
+  return (workspace, correlationId) =>
+    createNodeGitWorktreeAdapter({
+      workspace,
+      processEnv,
+      onTerminated: logWorktreeTermination(correlationId),
+    });
+}
+
 import {
   buildWorkspaceInstanceStoreOverDatabase,
   type WorkspaceInstanceStore,
@@ -195,6 +225,7 @@ import type {
   WorkspaceHealthService,
   WorkspaceLifecycleService,
   WorkspaceProvisioningService,
+  WorkspaceProvisioningServiceDeps,
   WorkspaceReconciliationService,
   WorkspaceRepairService,
 } from "./task-workspace/types.js";
@@ -1681,6 +1712,7 @@ function buildUpdateSession(options: {
     portableActivator: createPortableUpdateActivator({
       env: options.env,
       localState: options.updateLocalState,
+      securityLogSink: processServerLogSink(),
     }),
     portableCompletionGate: portableCompletionGate(options.updateRemediation),
     redactor: (value: string): string => {
@@ -2071,8 +2103,7 @@ function buildWorkspaceProvisioning(
     store: instanceStore,
     evidenceStore: args.evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
-    createAdapter: (workspace) =>
-      createNodeGitWorktreeAdapter({ workspace, processEnv: options.env }),
+    createAdapter: createGitWorktreeAdapterFactory(options.env),
     redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,
@@ -2147,8 +2178,7 @@ function buildWorkspaceReconciliation(
     activePointerStore,
     evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
-    createAdapter: (workspace) =>
-      createNodeGitWorktreeAdapter({ workspace, processEnv: options.env }),
+    createAdapter: createGitWorktreeAdapterFactory(options.env),
     redactString,
     now: () => Date.now(),
     newId: randomUUID,
@@ -2184,8 +2214,7 @@ function buildWorkspaceRepair(args: BuildWorkspaceRepairArgs): WorkspaceRepairSe
     evidenceStore: args.evidenceStore,
     provisioning: args.provisioning,
     managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
-    createAdapter: (workspace) =>
-      createNodeGitWorktreeAdapter({ workspace, processEnv: args.options.env }),
+    createAdapter: createGitWorktreeAdapterFactory(args.options.env),
     redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,
@@ -2213,8 +2242,7 @@ function buildWorkspaceHealth(
     activePointerStore,
     evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
-    createAdapter: (workspace) =>
-      createNodeGitWorktreeAdapter({ workspace, processEnv: options.env }),
+    createAdapter: createGitWorktreeAdapterFactory(options.env),
     redactString,
     now: () => Date.now(),
     newId: randomUUID,
@@ -2246,8 +2274,7 @@ function buildWorkspaceCleanup(
     activePointerStore: args.activePointerStore,
     evidenceStore: args.evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
-    createAdapter: (workspace) =>
-      createNodeGitWorktreeAdapter({ workspace, processEnv: args.options.env }),
+    createAdapter: createGitWorktreeAdapterFactory(args.options.env),
     redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,
@@ -2262,16 +2289,16 @@ function buildWorkspaceCleanup(
   });
 }
 
-// Best-effort startup reconciliation (Issue #447): mirror the QI-retention startup pass — run once at
-// bootstrap, never throw into construction, and never block server start (the reconcile IO is detached
-// and self-contained). A failure simply leaves the persisted classification untouched until the next
-// pass or an explicit refresh.
+// Best-effort startup reconciliation (Issue #447): run once at bootstrap, never throw into
+// construction, and never block server start. A failure leaves persisted classification untouched,
+// but it is not silent: the detached path emits a body-free structured diagnostic.
 /** @internal Exported only for deterministic server tests. */
 export function reconcileTaskWorkspacesAtStartup(
   service: WorkspaceReconciliationService | undefined,
+  diagnostics?: ServerDiagnosticSink,
 ): void {
   if (service === undefined) return;
-  // Construction must never fail because of reconciliation, so both failure modes are swallowed.
+  // Construction must never fail because of reconciliation, so both failure modes are detached.
   // Invoking inside `.then` rather than a `try` is what makes that possible with a single handler:
   // a synchronous throw from the call itself (property lookup + invocation), which a non-conforming
   // implementation such as a test double can still raise even though `reconcile()` is typed as
@@ -2280,7 +2307,19 @@ export function reconcileTaskWorkspacesAtStartup(
   // with a `.catch` it asks for the `try` to go, without one it asks for the `.catch`.
   void Promise.resolve()
     .then(() => service.reconcile())
-    .catch(() => undefined);
+    .catch((error: unknown) => {
+      emitServerDiagnostic(
+        diagnostics,
+        serverDiagnosticFromError({
+          correlationId: UNKNOWN_CORRELATION_ID,
+          operation: "task-workspace.reconcile.startup",
+          source: "task-workspace.bootstrap",
+          error,
+          summary: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+          redact: (message): string => message,
+        }),
+      );
+    });
 }
 
 function seedInitialProject(
@@ -3219,7 +3258,7 @@ function reconcileNodeStoreAtStartup(
   bundle: PersistenceBundle,
 ): void {
   if (options.store !== undefined) return;
-  reconcileTaskWorkspacesAtStartup(bundle.workspaceReconciliation);
+  reconcileTaskWorkspacesAtStartup(bundle.workspaceReconciliation, options.diagnostics);
 }
 
 function gatewayConfigFields(

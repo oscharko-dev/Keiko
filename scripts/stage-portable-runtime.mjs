@@ -1866,6 +1866,9 @@ function compileWindowsLauncher(target, destination) {
   const tempRoot = mkdtempSync(join(tmpdir(), "keiko-windows-launcher-resource-"));
   try {
     const resourcePath = join(tempRoot, "keiko-portable-launcher.res");
+    // /Fo keeps the intermediate object out of the checkout (same fix as compileSetupBootstrap in
+    // build-windows-portable-setup.mjs, review 3887051433).
+    const objectPath = join(tempRoot, "keiko-portable-launcher.obj");
     run(
       windowsToolFromPath(env.PATH, "rc.exe"),
       ["/nologo", `/fo${resourcePath}`, windowsLauncherResourceSource()],
@@ -1882,6 +1885,7 @@ function compileWindowsLauncher(target, destination) {
         "/DUNICODE",
         "/D_UNICODE",
         `/D${nativeLauncherTargetDefine(target)}`,
+        `/Fo:${objectPath}`,
         `/Fe:${destination}`,
         nativeLauncherSource(),
         resourcePath,

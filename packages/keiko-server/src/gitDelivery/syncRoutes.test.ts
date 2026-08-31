@@ -347,8 +347,10 @@ describe("fetch execute — outcomes", () => {
     expect(body.operation).toBe("fetch");
   });
 
-  it("does not fetch when another allowed authority replaces the admitted run", async () => {
+  it("does not fetch and records authority denial when admitted authority is replaced", async () => {
     const scripted = scriptedRunner({ fetch: ok("") });
+    const evidence = capturingEvidenceStore();
+    const activity = captureActivityLog();
     const baseAuthority = permittedGitDeliveryAuthority(() => projectId);
     let reads = 0;
     const authority = {
@@ -360,17 +362,53 @@ describe("fetch execute — outcomes", () => {
       },
     };
     const handler = createHandleSyncExecute("fetch", {
-      execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+      execution: {
+        runner: scripted.runner,
+        now: () => 1_700_000_000_000,
+        activityLog: activity.sink,
+      },
     });
 
     const res = await handler(
-      ctxFor(FETCH_EXECUTE, syncBody()),
-      deps({ gitDeliveryAuthority: authority }),
+      {
+        ...ctxFor(FETCH_EXECUTE, syncBody()),
+        correlationId: "request-correlation-fetch-continuity",
+      },
+      deps({ gitDeliveryAuthority: authority, evidenceStore: evidence.store }),
     );
 
-    expect((res.body as GitSyncExecuteResponse).status).toBe("git-error");
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: {
+        code: "GIT_DELIVERY_AUTHORITY_DENIED",
+        message: "The accepted runtime authority does not admit this Git delivery operation.",
+        correlationId: "request-correlation-fetch-continuity",
+      },
+    });
+    expect(res.headers).toEqual({
+      "X-Keiko-Correlation-Id": "request-correlation-fetch-continuity",
+    });
     expect(reads).toBe(2);
     expect(scripted.calls()).toEqual(["status", "remote"]);
+    expect(evidence.records()).toHaveLength(1);
+    expect(evidence.records()[0]).toMatchObject({
+      operation: "fetch",
+      outcome: "authority-denied",
+      recordedAtMs: 1_700_000_000_000,
+    });
+    expect(activity.events).toContainEqual(
+      expect.objectContaining({
+        op: "git.delivery.dispatch.no-spawn",
+        status: 403,
+        correlationId: "request-correlation-fetch-continuity",
+        extra: { operation: "fetch" },
+      }),
+    );
+    expect(
+      activity.events
+        .filter((event) => event.op.startsWith("git.delivery.authority."))
+        .map((event) => event.extra?.phase),
+    ).toEqual(["admission", "continuity"]);
   });
 
   it("does not fetch when the live branch is outside the active branch envelope", async () => {
@@ -384,7 +422,8 @@ describe("fetch execute — outcomes", () => {
 
     const res = await handler(ctxFor(FETCH_EXECUTE, syncBody()), deps());
 
-    expect((res.body as GitSyncExecuteResponse).status).toBe("git-error");
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
     expect(scripted.calls()).toEqual(["status", "remote"]);
   });
 
@@ -530,6 +569,42 @@ describe("pull execute — outcomes", () => {
     });
     expect(body.status).toBe("succeeded");
     expect(body.behind).toBe(0);
+  });
+
+  it("returns 403 and records authority denial when continuity authority changes", async () => {
+    const scripted = scriptedRunner({
+      status: ok(porcelain({ upstream: "origin/main", behind: 1 })),
+      pull: ok("Updating a1b2..c3d4\nFast-forward\n"),
+    });
+    const evidence = capturingEvidenceStore();
+    const baseAuthority = permittedGitDeliveryAuthority(() => projectId);
+    let reads = 0;
+    const authority = {
+      current: (nowIso: string): ReturnType<typeof baseAuthority.current> => {
+        reads += 1;
+        const active = baseAuthority.current(nowIso);
+        if (active === undefined || reads === 1) return active;
+        return { ...active, runId: "replacement-run", envelopeDigest: "d".repeat(64) };
+      },
+    };
+    const handler = createHandleSyncExecute("pull", {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+    });
+
+    const res = await handler(
+      ctxFor(PULL_EXECUTE, syncBody()),
+      deps({ gitDeliveryAuthority: authority, evidenceStore: evidence.store }),
+    );
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+    expect(scripted.calls()).toEqual(["status", "remote"]);
+    expect(evidence.records()).toHaveLength(1);
+    expect(evidence.records()[0]).toMatchObject({
+      operation: "pull",
+      outcome: "authority-denied",
+      recordedAtMs: 1_700_000_000_000,
+    });
   });
 
   it("reports up-to-date when already up to date", async () => {

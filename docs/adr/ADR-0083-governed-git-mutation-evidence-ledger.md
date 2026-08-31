@@ -85,6 +85,10 @@ evidence schema the other two layers consume. It exports:
   `GitMutationLifecyclePhase` (`resolve` | `preflight` | `preview` | `policy` | `execute` |
   `result`). Self-contained by design: the leaf cannot import `keiko-tools`, so it must own this
   vocabulary; the builder enforces correspondence via an exhaustive switch (see D5).
+- `authority-denied` is a closed `GitDeliveryBlockReason` for the case where an admitted governed
+  lifecycle is refused by the server-owned Authority Envelope continuity check immediately before
+  dispatch. The record is `blocked`, maps to `policy-forbidden`, and is distinct from both a
+  repository policy-pack block and the adapter's internal no-spawn stand-in.
 - `GitDeliveryRecoveryDisposition` — a four-member retrospective classification: `retryable` |
   `user-fixable` | `policy-forbidden` | `none`. The existing `GitDeliveryRemediationClass`
   (`user-actionable` | `internal`, #473) is prospective and two-way; it is reused within recovery

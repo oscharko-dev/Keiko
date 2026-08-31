@@ -35,22 +35,29 @@ import {
   runGitMerge,
   type GitMergeAdapter,
   type GitMergeCommand,
+  type GitMergeExecResult,
   type GitMergeLifecycleResult,
   type GitMergeProviderReadiness,
   type GitWorktreeSnapshot,
 } from "@oscharko-dev/keiko-tools";
 import { createNodeGitMergeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
-  persistGitDeliveryEvidence,
+  gitDeliveryTerminationHandler,
+  logGitDeliveryNoSpawnRefusal,
+  logGitDeliveryPreconditionFailure,
+  recordGitDeliveryLifecycle,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
 } from "./execution.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import type { GitDeliveryAuthorityContinuityDenialCapture } from "./requestPreparation.js";
 
 // Default trusted merge policy: merge is APPROVAL-GATED — the explicit final, high-risk confirmation a
 // merge requires (AC1). No approval token ⇒ approval-required; every other action kind is fail-closed via
@@ -72,22 +79,34 @@ export interface GitDeliveryMergeSeams {
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
   readonly strategyPolicy?: GitMergeStrategyPolicy | undefined;
+  // The request's own activity-log sink, so the default merge adapter's runCommand
+  // termination-evidence callback (see mergeAdapterFor) writes through the SAME sink the caller
+  // logs everything else through, instead of an uninjectable `processServerLogSink()`.
+  readonly activityLog?: ServerLogSink | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
   readonly beforeRemoteDispatch?: (() => boolean) | undefined;
+  // Set by the route alongside `beforeRemoteDispatch` when that guard is the continuity re-check. A
+  // denial replaces the adapter's synthetic failure with a typed blocked authority-denied record.
+  readonly authorityDenialCapture?: GitDeliveryAuthorityContinuityDenialCapture | undefined;
 }
 
 function authorityGuardedMergeAdapter(
   adapter: GitMergeAdapter,
   beforeRemoteDispatch: (() => boolean) | undefined,
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
 ): GitMergeAdapter {
   if (beforeRemoteDispatch === undefined) return adapter;
   return {
     readMergeReadiness: (request) => adapter.readMergeReadiness(request),
-    mergePullRequest: (request) =>
-      beforeRemoteDispatch()
-        ? adapter.mergePullRequest(request)
-        : Promise.resolve({ schemaVersion: "1", outcome: "aborted", durationMs: 0 }),
+    mergePullRequest: (request): Promise<GitMergeExecResult> => {
+      if (beforeRemoteDispatch()) return adapter.mergePullRequest(request);
+      // F4: no process is spawned for this attempt — mark it explicitly before returning the
+      // synthetic result (see logGitDeliveryNoSpawnRefusal in execution.ts).
+      logGitDeliveryNoSpawnRefusal(activityLog, "merge", correlationId);
+      return Promise.resolve({ schemaVersion: "1", outcome: "aborted", durationMs: 0 });
+    },
   };
 }
 
@@ -95,9 +114,15 @@ function mergeAdapterFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryMergeSeams,
   now: () => number,
+  correlationId: string | undefined,
 ): GitMergeAdapter {
   if (seams.mergeAdapterFactory !== undefined) return seams.mergeAdapterFactory(workspace);
-  return createNodeGitMergeAdapter({ workspace, processEnv: process.env, now });
+  return createNodeGitMergeAdapter({
+    workspace,
+    processEnv: process.env,
+    now,
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
+  });
 }
 
 // Reads the provider's content-free merge-readiness facts. Never throws: a thrown read becomes a
@@ -107,8 +132,9 @@ export async function readMergeProviderReadiness(
   workspace: WorkspaceInfo,
   seams: GitDeliveryMergeSeams,
   now: () => number,
+  correlationId?: string,
 ): Promise<GitMergeProviderReadiness> {
-  const adapter = mergeAdapterFor(workspace, seams, now);
+  const adapter = mergeAdapterFor(workspace, seams, now, correlationId);
   try {
     return await adapter.readMergeReadiness({
       ownerAndRepo: command.ownerAndRepo,
@@ -132,12 +158,22 @@ export async function executeGovernedMerge(
   workspace: WorkspaceInfo,
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   seams: GitDeliveryMergeSeams,
+  correlationId?: string,
 ): Promise<GitMergeLifecycleResult> {
   const now = seams.now ?? Date.now;
-  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
+  const activityLog = seams.activityLog ?? processServerLogSink();
+  let snapshot: GitWorktreeSnapshot;
+  try {
+    snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
+  } catch (error) {
+    logGitDeliveryPreconditionFailure(activityLog, "merge", error, correlationId);
+    throw error;
+  }
   const adapter = authorityGuardedMergeAdapter(
-    mergeAdapterFor(workspace, seams, now),
+    mergeAdapterFor(workspace, seams, now, correlationId),
     seams.beforeRemoteDispatch,
+    activityLog,
+    correlationId,
   );
   const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_MERGE_POLICY_PACK);
   const newActionId =
@@ -154,7 +190,19 @@ export async function executeGovernedMerge(
       newActionId,
     },
   );
-  persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
+  // Replace the adapter's synthetic aborted result with the true terminal governance outcome when
+  // continuity refused dispatch. The client receives the captured 403; the ledger retains the matching
+  // blocked / authority-denied / policy-forbidden fact.
+  recordGitDeliveryLifecycle({
+    deps,
+    result: result.lifecycle,
+    snapshot,
+    repoId: workspace.root,
+    now,
+    activityLog,
+    correlationId,
+    authorityDenied: seams.authorityDenialCapture?.result !== undefined,
+  });
   return result;
 }
 

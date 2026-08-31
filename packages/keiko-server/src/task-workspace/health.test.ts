@@ -21,6 +21,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { validateWorkspaceHealthReport } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { runMigrations } from "../store/schema.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
 import {
   buildActiveWorkspacePointerStoreOverDatabase,
@@ -40,6 +41,8 @@ let store: WorkspaceInstanceStore;
 let pointerStore: ActiveWorkspacePointerStore;
 let idCounter: number;
 let nowMs: number;
+
+type AdapterFactory = (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
 
 function git(args: readonly string[], cwd = repoRoot): string {
   return execFileSync("git", [...args], { cwd, encoding: "utf8" });
@@ -71,13 +74,13 @@ function provisioning(): WorkspaceProvisioningService {
   });
 }
 
-function health(): WorkspaceHealthService {
+function health(adapterFactory: AdapterFactory = realAdapter): WorkspaceHealthService {
   return createWorkspaceHealthService({
     store,
     activePointerStore: pointerStore,
     evidenceStore: noopEvidence(),
     managedRoot,
-    createAdapter: realAdapter,
+    createAdapter: adapterFactory,
     redactString: (s: string): string => s,
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
@@ -134,6 +137,18 @@ function entryFor(
 }
 
 describe("operational health classification (AC1)", () => {
+  it("normalizes a malformed correlationId before every health adapter call", async () => {
+    await provisionTask("t-correlation-boundary");
+    const received: string[] = [];
+    const adapterFactory: AdapterFactory = (workspace, correlationId) => {
+      received.push(correlationId);
+      return realAdapter(workspace);
+    };
+    await health(adapterFactory).report(repoRoot, "req corr\ncontrol");
+    expect(received.length).toBeGreaterThan(0);
+    expect(new Set(received)).toEqual(new Set([UNKNOWN_CORRELATION_ID]));
+  });
+
   it("classifies a clean active workspace healthy and not cleanup-eligible", async () => {
     const instance = await provisionTask("t-healthy");
     const report = await health().report(repoRoot);

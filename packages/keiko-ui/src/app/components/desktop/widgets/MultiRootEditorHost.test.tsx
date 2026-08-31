@@ -21,14 +21,22 @@ vi.mock("@oscharko-dev/keiko-editor", () => ({
 
 // Issue #2619 — every mounted editor instance records the root identity it was handed, so a test can
 // prove the host binds each root explicitly instead of leaning on the focused one.
-const mountedBindings: { root: string | undefined; rootRef: string | undefined }[] = [];
+const mountedBindings: {
+  root: string | undefined;
+  rootRef: string | undefined;
+  windowId: string | undefined;
+}[] = [];
 
 vi.mock("next/dynamic", () => ({
   default: () => {
     function EditorProbe(props: EditorWidgetProps): ReactNode {
       const [dirty, setDirty] = useState(false);
       const { layoutJson, onWorkspaceChange, root, sessionActive } = props;
-      mountedBindings.push({ root, rootRef: props.agentRootBinding?.rootRef });
+      mountedBindings.push({
+        root,
+        rootRef: props.agentRootBinding?.rootRef,
+        windowId: props.windowId,
+      });
       useEffect(() => {
         if (sessionActive === false) return;
         onWorkspaceChange?.({
@@ -178,6 +186,12 @@ describe("MultiRootEditorHost focused-root exception (#2619)", () => {
     // Both roots are mounted, each carrying its OWN identity — never the focused root's.
     expect(bindings.get("/repo-a")).toBe("root-a");
     expect(bindings.get("/repo-b")).toBe("root-b");
+    expect(mountedBindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ root: "/repo-a", windowId: "editor-window-root-a" }),
+        expect.objectContaining({ root: "/repo-b", windowId: "editor-window-root-b" }),
+      ]),
+    );
     // Nothing mounted without a root, and nothing inherited another root's binding.
     for (const entry of mountedBindings) {
       expect(entry.root).toBeDefined();

@@ -13,9 +13,12 @@
 // Content-free in evidence: title/body strings flow to the provider but only their byte lengths enter
 // the ledger. CSRF + JSON content type are enforced centrally by server.ts.
 
+import type { GitDeliveryApprovalRequirement } from "@oscharko-dev/keiko-contracts";
 import type { GitPullRequestCommand } from "@oscharko-dev/keiko-tools";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   parseGitDeliveryApprovalRequest,
   resolveGitDeliveryApprovalRequirement,
@@ -43,6 +46,7 @@ import {
   gitDeliveryAuthorityContinuityGuard,
   gitDeliveryAuthorityGate,
   prepareGitDeliveryRequest,
+  type GitDeliveryAuthorityContinuityDenialCapture,
   type GitDeliveryAuthorityIdentity,
   type GitDeliveryRequestErrors,
 } from "./requestPreparation.js";
@@ -240,13 +244,14 @@ export const createHandlePrPreview = (
   const seams = options.execution ?? {};
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
     const prepared = await prepareGitDeliveryRequest(ctx, deps, PR_REQUEST_ERRORS, validate);
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { command } = prepared.value;
     const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PR_POLICY_PACK);
     try {
-      const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
+      const snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
       return {
         status: 200,
         body: deps.redactor(buildGitDeliveryPrPreview(command, snapshot, packs)),
@@ -280,11 +285,76 @@ function prApprovalBinding(
   };
 }
 
+type PrAuthorityTarget = ReturnType<typeof prAuthorityTarget>;
+
+interface GovernedPrDispatch {
+  readonly ctx: RouteContext;
+  readonly deps: UiHandlerDeps;
+  readonly seams: GitDeliveryPullRequestSeams;
+  readonly command: GitPullRequestCommand;
+  readonly verifiedApproval: GitDeliveryApprovalRequirement;
+  readonly workspace: WorkspaceInfo;
+  readonly projectId: string;
+  readonly target: PrAuthorityTarget;
+  readonly authority: GitDeliveryAuthorityIdentity;
+  readonly correlationId: string;
+}
+
+// Runs the continuity-guarded dispatch: builds the guard (capturing a mid-flight denial's 403), calls
+// the PR gateway, and — when the guard denied — returns that SAME 403 instead of projecting the
+// gateway's synthetic no-spawn result as a misleading 200 internal failure. Split out of the handler
+// purely to keep the handler under the repo's max-lines-per-function bar.
+async function dispatchGovernedPr(input: GovernedPrDispatch): Promise<RouteResult> {
+  const {
+    ctx,
+    deps,
+    seams,
+    command,
+    verifiedApproval,
+    workspace,
+    projectId,
+    target,
+    authority,
+    correlationId,
+  } = input;
+  const denialCapture: GitDeliveryAuthorityContinuityDenialCapture = {};
+  const beforeRemoteDispatch = gitDeliveryAuthorityContinuityGuard({
+    ctx,
+    deps,
+    projectId,
+    workspace,
+    operation: "pull-request",
+    target,
+    admitted: authority,
+    next: seams.beforeRemoteDispatch,
+    denialCapture,
+    audit: { logSink: seams.activityLog },
+  });
+  try {
+    const result = await executeGovernedPullRequest(
+      command,
+      verifiedApproval,
+      workspace,
+      deps,
+      { ...seams, beforeRemoteDispatch, authorityDenialCapture: denialCapture },
+      correlationId,
+    );
+    // The continuity guard denied mid-flight (revoked/replaced authority): nothing was dispatched, and
+    // `result` is the gateway's synthetic no-spawn stand-in. Return the SAME 403 the up-front admission
+    // gate would have returned, not a 200 that projects the stand-in as a retryable internal failure.
+    if (denialCapture.result !== undefined) return denialCapture.result;
+    return { status: 200, body: deps.redactor(gitDeliveryPrExecuteResponse(result)) };
+  } catch {
+    return errResult(409, "GIT_DELIVERY_PR_WORKTREE_UNAVAILABLE");
+  }
+}
+
 async function handlePrExecute(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   seams: GitDeliveryPullRequestSeams,
 ): Promise<RouteResult> {
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
   const prepared = await prepareGitDeliveryRequest(ctx, deps, PR_REQUEST_ERRORS, validate);
   if (!prepared.ok) return prepared.result;
   const { workspace } = prepared;
@@ -297,6 +367,7 @@ async function handlePrExecute(
     workspace,
     "pull-request",
     target,
+    { logSink: seams.activityLog },
   );
   if (!authority.allowed) return authority.result;
   const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
@@ -305,25 +376,18 @@ async function handlePrExecute(
     nowMs: (seams.now ?? Date.now)(),
   });
   if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_PR_BAD_REQUEST");
-  const beforeRemoteDispatch = gitDeliveryAuthorityContinuityGuard({
+  return dispatchGovernedPr({
     ctx,
     deps,
-    projectId,
+    seams,
+    command,
+    verifiedApproval,
     workspace,
-    operation: "pull-request",
+    projectId,
     target,
-    admitted: authority,
-    next: seams.beforeRemoteDispatch,
+    authority,
+    correlationId,
   });
-  try {
-    const result = await executeGovernedPullRequest(command, verifiedApproval, workspace, deps, {
-      ...seams,
-      beforeRemoteDispatch,
-    });
-    return { status: 200, body: deps.redactor(gitDeliveryPrExecuteResponse(result)) };
-  } catch {
-    return errResult(409, "GIT_DELIVERY_PR_WORKTREE_UNAVAILABLE");
-  }
 }
 
 export const createHandlePrExecute = (

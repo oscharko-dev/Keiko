@@ -18,22 +18,33 @@
 //
 // Escaping the characters cmd.exe treats specially is not sufficient by itself: `cross-spawn`'s
 // metachar class omits CR and LF (moxystudio/node-cross-spawn#179), and cmd.exe treats a bare CR
-// or LF as a command boundary that no amount of caret-escaping closes. `assertNoControlCharacters`
-// below therefore fails closed on CR/LF — and, defensively, the full C0 control range — in the
-// resolved command path and every argument BEFORE either is joined into the string cmd.exe parses.
+// or LF as a command boundary that no amount of caret-escaping closes. `assertSafelyTransportable`
+// below therefore fails closed on NUL, CR and LF in the resolved command path and every argument,
+// BEFORE either is joined into the string cmd.exe parses — but deliberately NOT the rest of the C0
+// control range: TAB is a literal for both cmd.exe's own parse and the child's CRT inside the
+// double-quoted argument this module always produces, and rejecting it broke an allowlisted
+// `npm`/`.cmd` run on a TSV/JSON/diff argument that passes untouched on every other platform
+// (review 5058571583 finding 4). The same function also fails closed on a second, unrelated
+// hazard under the same name: a `%` anywhere in the resolved command path or an argument, because
+// cmd.exe expands `%NAME%` against the child's environment in an earlier parse phase that no
+// caret-escaping this module emits can reach (review 5058544058 P1 3887021639).
 //
 // The `cmd.exe` binary itself is resolved through `resolveSystemBinaryPath` (below), NEVER from
 // PATH — a workspace- or PATH-planted `cmd.exe` must never be the one an allowlisted command is
 // routed through. `%SystemRoot%`/`%WINDIR%` are mutable, inherited environment text, not a trusted
-// value by themselves: an override is validated for canonical SHAPE (drive-absolute, no `..`
-// segment, no UNC/device prefix, no quote, cmd metacharacter, or control character) and REJECTED —
-// never silently replaced with the default — when it fails that check. The pattern mirrors
-// `windowsSystemRoot` in `@oscharko-dev/keiko-security`'s `windows-shortcuts.ts` (the equivalent
-// trust boundary for the cscript/PowerShell helpers), hardened further here to also reject the
-// UNC and device-path overrides that an `isAbsolute`-only check would accept. Node has no binding
-// to `GetSystemDirectoryW` — the only OS-authoritative source — so this validates SHAPE, never the
-// live identity of the directory; `resolveSystemBinaryPath` is exported for every caller in this
-// package that needs the same trusted-System32 resolution (e.g. `exec.ts`'s `taskkill.exe` lookup).
+// value by themselves. The validation itself — canonical SHAPE (drive-absolute, no `..` segment,
+// no UNC/device prefix, no quote, cmd metacharacter, or control character), REJECTED rather than
+// silently replaced with the default when it fails — is NOT implemented in this module: it lives in
+// `@oscharko-dev/keiko-security` (`windows-system-directory.ts`: `resolveWindowsSystemBinary` and
+// `resolveWindowsSystemDirectory`), the single shared implementation this module and
+// keiko-security's own cscript/PowerShell helpers (`windows-shortcuts.ts`) both call. PR #3354's
+// review found two independently hand-written copies of this check had drifted — the other side's
+// `isAbsolute`-only check accepted UNC/device/root-relative shapes this one rejected — so
+// `resolveSystemBinaryPath` here is a thin wrapper over the shared function, not a parallel
+// implementation to keep in sync by hand. On Windows the shared resolver binds the shaped
+// candidate to the OS-owned `\\?\GLOBALROOT\SystemRoot` filesystem identity before use;
+// `resolveSystemBinaryPath` is exported for every caller in this package that needs the same
+// trusted-System32 resolution (e.g. `exec.ts`'s `taskkill.exe` lookup).
 //
 // Pure and side-effect-free: callers may inject `env`/`platform` for deterministic tests; the
 // defaults read `process.env`/`process.platform` only for production callers' convenience.
@@ -64,6 +75,12 @@
 // https://github.com/moxystudio/node-cross-spawn
 
 import { win32 } from "node:path";
+import {
+  resolveWindowsSystemBinary,
+  WINDOWS_CMD_METACHARACTER_SOURCE,
+  type WindowsBinaryExistsCheck,
+  type WindowsSystemDirectoryIdentityCheck,
+} from "@oscharko-dev/keiko-security";
 
 // cross-spawn's metachar class, reproduced verbatim: each of these characters is meaningful to
 // cmd.exe's own parser and must be caret-escaped wherever it appears in the assembled command
@@ -80,7 +97,7 @@ import { win32 } from "node:path";
 // caret-escaping neutralises. No current caller pairs a `.cmd` target with a credential-bearing
 // environment policy, but `buildWindowsShellInvocation` is a public export: a future caller that
 // does should not have to rediscover this by reading cmd.exe's own parsing order first.
-const CMD_METACHARACTERS = /([()\][%!^"`<>&|;, *?])/g;
+const CMD_METACHARACTERS = new RegExp(`(${WINDOWS_CMD_METACHARACTER_SOURCE})`, "gu");
 
 // The wrap trigger: exactly `.cmd`/`.bat`. cross-spawn's own condition is broader — it wraps
 // everything that is NOT a recognised native image (`needsShell = !/\.(?:com|exe)$/i.test(...)`
@@ -103,13 +120,23 @@ const CMD_SHIM_EXTENSION = /\.(cmd|bat)$/i;
 // cross-spawn 7.0.6 (moxystudio/node-cross-spawn PR #160), with the literal dot escaped.
 const CMD_SHIM_PATH = /node_modules[\\/]\.bin[\\/][^\\/]+\.cmd$/i;
 
-// NUL plus the full C0 control range plus DEL. cmd.exe treats a bare CR or LF as a command
-// boundary that no caret-escaping neutralises (moxystudio/node-cross-spawn#179, the exact gap
-// cross-spawn's own metachar class leaves open); the rest of the C0 range has no legitimate reason
-// to appear in a resolved executable path or a shell-bound argument either, so the whole range
-// fails closed together rather than special-casing CR/LF alone.
+// Exactly NUL, LF and CR — the three characters that genuinely BREAK a cmd.exe command line: NUL
+// terminates the native string, and a bare CR or LF ends the command (moxystudio/node-cross-spawn
+// #179, the gap cross-spawn's own metachar class leaves open; no caret-escaping neutralises them).
+// Deliberately NOT the whole C0 range: TAB (U+0009) inside the double-quoted argument is a literal
+// for both the outer cmd.exe parse and the child's CRT — cross-spawn escapes it correctly, and
+// rejecting it made an allowlisted `npm`/`.cmd` run fail on Windows for a TSV/JSON/diff argument
+// that passes untouched on every other platform (review 5058571583 finding 4).
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
-const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
+const LINE_BREAKING_CHARACTER = /[\u0000\n\r]/;
+
+// cmd.exe performs %NAME% environment expansion in an EARLY parse phase, before caret processing —
+// so no escaping this module can emit keeps a percent-carrying argument literal on the wrapped
+// path. `^%` survives only into phases the expansion has already left, and the batch-file `%%`
+// doubling does not apply to a `cmd /c` command line. An expanded value draws from the child's
+// (sanitized) environment and can itself contain quotes or separators that were never escaped as
+// part of the original input — so the wrapped path fails CLOSED on `%` instead of silently
+// transporting a different argv than the caller passed (review 5058544058 P1 3887021639).
 
 /** Thrown when the resolved command path or an argument cannot be safely wrapped for cmd.exe. */
 export class WindowsShellInvocationError extends Error {
@@ -120,17 +147,25 @@ export class WindowsShellInvocationError extends Error {
 }
 
 // Fails closed BEFORE any value is joined into the cmd.exe command-line string built below. Never
-// echoes the rejected value: a raw control character has no place in a thrown message either (some
-// are terminal control codes in their own right), and the value may carry sensitive content.
-function assertNoControlCharacters(value: string, label: string): void {
-  if (CONTROL_CHARACTER.test(value)) {
-    throw new WindowsShellInvocationError(`${label} must not contain a control character`);
+// echoes the rejected value: a raw control character has no place in a thrown message either, and
+// the value may carry sensitive content.
+function assertSafelyTransportable(value: string, label: string): void {
+  if (LINE_BREAKING_CHARACTER.test(value)) {
+    throw new WindowsShellInvocationError(`${label} must not contain NUL, CR, or LF`);
+  }
+  if (value.includes("%")) {
+    throw new WindowsShellInvocationError(
+      `${label} must not contain '%' — cmd.exe expands %NAME% before any escaping applies, so a ` +
+        "percent-carrying value cannot be transported literally through the cmd.exe wrapper",
+    );
   }
 }
 
 export interface WindowsShellInvocationOptions {
   readonly env?: NodeJS.ProcessEnv | undefined;
   readonly platform?: NodeJS.Platform | undefined;
+  readonly existsAsFile?: WindowsBinaryExistsCheck | undefined;
+  readonly systemDirectoryIdentity?: WindowsSystemDirectoryIdentityCheck | undefined;
 }
 
 // `windowsVerbatimArguments` is always present (never optional) so a caller can branch on it
@@ -170,105 +205,45 @@ function isCmdShim(resolvedCommandPath: string): boolean {
   return CMD_SHIM_PATH.test(resolvedCommandPath);
 }
 
-function needsCmdWrapping(resolvedCommandPath: string): boolean {
+export function isWindowsCommandScript(resolvedCommandPath: string): boolean {
   return CMD_SHIM_EXTENSION.test(resolvedCommandPath);
 }
 
-/** Thrown when a `SystemRoot`/`WINDIR` override — or a `binaryName` — fails canonical validation. */
-export class WindowsSystemDirectoryError extends Error {
-  public constructor(message: string) {
-    super(message);
-    this.name = "WindowsSystemDirectoryError";
-  }
-}
+// The trusted-System32 decision is NOT re-implemented here. It lives in keiko-security
+// (windows-system-directory.ts) so this module and keiko-security's own cscript/powershell helpers
+// share ONE implementation — PR #3354's review found the two had drifted, with an `isAbsolute`-only
+// check on the other side accepting the exact UNC/device/root-relative shapes this one rejects.
+// Re-exported under the historical names so existing importers (exec.ts's taskkill.exe lookup, the
+// package barrel) keep working against the single source of truth.
+export {
+  resolveWindowsSystemDirectory,
+  WINDOWS_CMD_METACHARACTER_SOURCE,
+  WindowsSystemBinaryMissingError,
+  WindowsSystemDirectoryError,
+} from "@oscharko-dev/keiko-security";
+export type {
+  WindowsBinaryExistsCheck,
+  WindowsSystemDirectoryIdentityCheck,
+} from "@oscharko-dev/keiko-security";
 
-const DEFAULT_WINDOWS_SYSTEM_ROOT = String.raw`C:\Windows`;
-
-// Drive-absolute only (`C:\...`). Deliberately excludes every other Windows path SHAPE that
-// resolves against something other than one fixed drive letter: UNC (`\\server\share\...`) and
-// device paths (`\\?\...`) resolve against a remote or reparsed namespace, root-relative
-// (`\Windows`) resolves against the CURRENT drive, and bare-relative (`Windows`) resolves against
-// the process cwd — the workspace, for every caller of this module. Each of those ambiguities is
-// exactly the substitution this validation exists to reject.
-const DRIVE_ABSOLUTE_WINDOWS_PATH = /^[A-Za-z]:\\/;
-
-// Same character class as CMD_METACHARACTERS, without its `g` flag: `RegExp#test` on a global
-// pattern mutates `lastIndex` across calls, and this runs for the life of the process, so a shared
-// global instance would silently stop matching after its first hit. Deriving `.source` keeps the
-// two definitions of "cmd metacharacter" from drifting apart instead of hand-duplicating the class.
-const CMD_METACHARACTER_MEMBER = new RegExp(CMD_METACHARACTERS.source);
-
-function hasPathTraversalSegment(candidate: string): boolean {
-  return candidate.split(/[\\/]/).includes("..");
-}
-
-// Pure syntactic validation of a Windows system-directory OVERRIDE (`SystemRoot`/`WINDIR` from the
-// environment). Node has no binding to `GetSystemDirectoryW` — the only OS-authoritative source —
-// so this cannot confirm the returned directory truly IS the live system directory, only that its
-// SHAPE is unambiguous enough that a binary resolved under it can never land on a workspace- or
-// PATH-adjacent file. Throws rather than falling back to the next candidate or the default: an
-// invalid override is a signal the environment is misconfigured or hostile, and silently
-// substituting a "safe" value would let that same environment defeat this check on a machine where
-// the default itself has been tampered with.
-function assertCanonicalSystemRoot(candidate: string): void {
-  if (CONTROL_CHARACTER.test(candidate)) {
-    throw new WindowsSystemDirectoryError(
-      "Windows system directory override must not contain a control character",
-    );
-  }
-  if (!DRIVE_ABSOLUTE_WINDOWS_PATH.test(candidate)) {
-    throw new WindowsSystemDirectoryError(
-      String.raw`Windows system directory override must be a drive-absolute path, e.g. C:\Windows`,
-    );
-  }
-  if (hasPathTraversalSegment(candidate)) {
-    throw new WindowsSystemDirectoryError(
-      'Windows system directory override must not contain a ".." path segment',
-    );
-  }
-  if (CMD_METACHARACTER_MEMBER.test(candidate)) {
-    throw new WindowsSystemDirectoryError(
-      "Windows system directory override must not contain a quote or cmd.exe metacharacter",
-    );
-  }
-}
-
-/**
- * The trusted Windows system directory: `SystemRoot`, then `WINDIR`, then the hard-coded default —
- * validated for canonical shape in every case (see `assertCanonicalSystemRoot`). Every trusted
- * Windows system-binary resolution in this package should go through this function or
- * `resolveSystemBinaryPath` below rather than re-deriving the environment fallback chain.
- */
-export function resolveWindowsSystemDirectory(env: NodeJS.ProcessEnv = process.env): string {
-  const candidate = env.SystemRoot ?? env.WINDIR ?? DEFAULT_WINDOWS_SYSTEM_ROOT;
-  assertCanonicalSystemRoot(candidate);
-  return candidate;
-}
-
-/**
- * A named binary under the validated Windows system directory's `System32`, NEVER from PATH — the
- * one path `cmd.exe` resolution below and callers such as `exec.ts`'s `taskkill.exe` lookup share.
- */
 export function resolveSystemBinaryPath(
   binaryName: string,
   env: NodeJS.ProcessEnv = process.env,
+  existsAsFile?: WindowsBinaryExistsCheck,
+  identityCheck?: WindowsSystemDirectoryIdentityCheck,
 ): string {
-  if (binaryName.length === 0 || /[\\/]/.test(binaryName) || binaryName === "..") {
-    throw new WindowsSystemDirectoryError(
-      "binaryName must be a bare System32 file name, not a path",
-    );
-  }
-  return win32.join(resolveWindowsSystemDirectory(env), "System32", binaryName);
+  return resolveWindowsSystemBinary(binaryName, env, existsAsFile, identityCheck);
 }
 
 function buildWrappedInvocation(
   resolvedCommandPath: string,
   args: readonly string[],
-  env: NodeJS.ProcessEnv,
+  options: WindowsShellInvocationOptions,
 ): WindowsShellInvocation {
-  assertNoControlCharacters(resolvedCommandPath, "resolved command path");
+  const env = options.env ?? process.env;
+  assertSafelyTransportable(resolvedCommandPath, "resolved command path");
   for (const [index, arg] of args.entries()) {
-    assertNoControlCharacters(arg, `argument ${String(index)}`);
+    assertSafelyTransportable(arg, `argument ${String(index)}`);
   }
   const doubleEscapeMetaChars = isCmdShim(resolvedCommandPath);
   const normalizedCommand = win32.normalize(resolvedCommandPath);
@@ -278,7 +253,12 @@ function buildWrappedInvocation(
   ];
   const commandLine = '"' + escapedParts.join(" ") + '"';
   return {
-    command: resolveSystemBinaryPath("cmd.exe", env),
+    command: resolveSystemBinaryPath(
+      "cmd.exe",
+      env,
+      options.existsAsFile,
+      options.systemDirectoryIdentity,
+    ),
     args: ["/d", "/s", "/c", commandLine],
     windowsVerbatimArguments: true,
   };
@@ -297,9 +277,8 @@ export function buildWindowsShellInvocation(
   opts?: WindowsShellInvocationOptions,
 ): WindowsShellInvocation {
   const platform = opts?.platform ?? process.platform;
-  if (platform !== "win32" || !needsCmdWrapping(resolvedCommandPath)) {
+  if (platform !== "win32" || !isWindowsCommandScript(resolvedCommandPath)) {
     return { command: resolvedCommandPath, args, windowsVerbatimArguments: false };
   }
-  const env = opts?.env ?? process.env;
-  return buildWrappedInvocation(resolvedCommandPath, args, env);
+  return buildWrappedInvocation(resolvedCommandPath, args, opts ?? {});
 }

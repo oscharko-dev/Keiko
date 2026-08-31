@@ -10,6 +10,7 @@
 // re-activation), so this smoke asserts only what the browser can actually observe today.
 
 import { expect, test, type Page } from "@playwright/test";
+import { fakeDictationMediaInit } from "./support/dictation-media.js";
 
 const REALTIME_CAPABILITY = {
   voice: {
@@ -106,6 +107,7 @@ test("voice recap @smoke — playback-only deployment has no recap control (AC1)
 test("voice recap @smoke — STT deployment keeps recap control absent; dictation remains separate (AC1)", async ({
   page,
 }) => {
+  await page.addInitScript(fakeDictationMediaInit("grant"));
   await noRecapControlFlow(page, STT_CAPABILITY, "typing with an STT deployment");
   await expect(page.getByRole("button", { name: "Dictate a message" })).toBeVisible();
 });

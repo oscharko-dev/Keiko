@@ -114,6 +114,7 @@ describe("isGitSyncOutcome", () => {
       "detached-head": true,
       "dirty-worktree": true,
       "not-fast-forward": true,
+      "authority-denied": true,
       "auth-failed": true,
       "untrusted-host-key": true,
       "remote-unavailable": true,

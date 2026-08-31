@@ -30,6 +30,13 @@ import { createWorkspaceRepairService } from "./repair.js";
 import { TaskWorkspaceError, type TaskWorkspaceErrorCode } from "./errors.js";
 import type { WorkspaceProvisioningService, WorkspaceRepairService } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/index.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -42,6 +49,8 @@ let evidence: { id: string; json: string }[];
 let idCounter: number;
 let nowMs: number;
 let provisioning: WorkspaceProvisioningService;
+
+type AdapterFactory = (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
 
 function git(args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd: repoRoot, encoding: "utf8" });
@@ -63,18 +72,41 @@ function realAdapter(workspace: WorkspaceInfo): GitWorktreeAdapter {
   return createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } });
 }
 
-function repairService(): WorkspaceRepairService {
+function capturingAdapterFactory(received: string[]): AdapterFactory {
+  return (workspace, correlationId): GitWorktreeAdapter => {
+    received.push(correlationId);
+    return realAdapter(workspace);
+  };
+}
+
+function rejectingAdapterFactory(received: string[]): AdapterFactory {
+  return (_workspace, correlationId): GitWorktreeAdapter => {
+    received.push(correlationId);
+    throw new Error("captured adapter correlation");
+  };
+}
+
+function expectOnlyAdapterCorrelation(received: readonly string[], expected: string): void {
+  expect(received.length).toBeGreaterThan(0);
+  expect(new Set(received)).toEqual(new Set([expected]));
+}
+
+function repairService(
+  activityLog?: ServerLogSink,
+  adapterFactory: AdapterFactory = realAdapter,
+): WorkspaceRepairService {
   return createWorkspaceRepairService({
     store,
     activePointerStore: pointerStore,
     evidenceStore: capturingEvidence(),
     provisioning,
     managedRoot,
-    createAdapter: realAdapter,
+    createAdapter: adapterFactory,
     redactString: (s: string): string => s,
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
     mutex: __twMutex,
+    ...(activityLog === undefined ? {} : { activityLog }),
   });
 }
 
@@ -107,8 +139,32 @@ function repair(
   strategy: WorkspaceRecoveryStrategy,
   operatorApproved: boolean,
   requestedBy = "u",
+  correlationId?: string,
+  activityLog?: ServerLogSink,
 ): Promise<ReturnType<WorkspaceRepairService["repair"]> extends Promise<infer R> ? R : never> {
-  return repairService().repair({ workspaceId, requestedBy, strategy, operatorApproved });
+  return repairService(activityLog).repair({
+    workspaceId,
+    requestedBy,
+    strategy,
+    operatorApproved,
+    correlationId,
+  });
+}
+
+// Single narrowing point for a captured activity-log line, so a chain of `expect(line?.field)`
+// assertions (each `?.` its own branch to ESLint's `complexity` rule) does not push an otherwise
+// linear assertion test over the repo's complexity ceiling (AGENTS.md §6).
+function lastActivityLogEvent(sink: BufferedServerLogSink): ServerLogEvent {
+  const line = sink.events.at(-1);
+  if (line === undefined) throw new Error("no activity-log event recorded");
+  return line;
+}
+
+function lastEventCorrelationId(): string {
+  const last = evidence.at(-1);
+  if (last === undefined) throw new Error("no evidence recorded");
+  const parsed = JSON.parse(last.json) as { readonly event: { readonly correlationId: string } };
+  return parsed.event.correlationId;
 }
 
 beforeEach(() => {
@@ -194,6 +250,167 @@ describe("release-stale-lock (clear stale lock)", () => {
     expect(result.status).toBe("healthy");
     expect(store.getById(instance.workspaceId)?.lock).toBeNull();
     expect(store.getById(instance.workspaceId)?.driftMarkers).not.toContain("lock-stale");
+  });
+
+  // F1: the evidence's correlationId must be the triggering request's own id, not the workspace's own
+  // persisted auditCorrelationId reused for every operation across the workspace's whole life — reuse
+  // would make every distinct HTTP repair request's evidence collapse onto ONE correlationId, breaking
+  // the join back to the specific request that produced each line (AGENTS.md §8).
+  it("threads the request's own correlationId into repair evidence, not the auditCorrelationId", async () => {
+    const instance = await provisionTask("t-corr");
+    store.upsert({
+      ...instance,
+      lock: {
+        lockId: "stale",
+        owner: "u",
+        reason: "mutation",
+        acquiredAt: new Date(nowMs - 3_600_000).toISOString(),
+        expiresAt: new Date(nowMs - 1_800_000).toISOString(),
+      },
+    });
+    await repair(instance.workspaceId, "release-stale-lock", true, "u", "req-corr-repair-1");
+    expect(lastEventCorrelationId()).toBe("req-corr-repair-1");
+    expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID (never the auditCorrelationId) when no request scope exists", async () => {
+    const received: string[] = [];
+    const instance = await provisionTask("t-nocorr");
+    store.upsert({
+      ...instance,
+      lock: {
+        lockId: "stale",
+        owner: "u",
+        reason: "mutation",
+        acquiredAt: new Date(nowMs - 3_600_000).toISOString(),
+        expiresAt: new Date(nowMs - 1_800_000).toISOString(),
+      },
+    });
+    await repairService(undefined, capturingAdapterFactory(received)).repair({
+      workspaceId: instance.workspaceId,
+      strategy: "release-stale-lock",
+      operatorApproved: true,
+      requestedBy: "u",
+    });
+    expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
+    expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
+  });
+
+  describe("adapter correlation-ID boundary", () => {
+    it.each([
+      ["empty", ""],
+      ["malformed", "req corr\ncontrol"],
+      ["hostile", `req-corr-${"a".repeat(4000)}`],
+      ["below the HTTP boundary", "x"],
+    ] as const)(
+      "normalizes a supplied %s ID before adapter construction",
+      async (_label, input) => {
+        const received: string[] = [];
+        const instance = await provisionTask(`t-adapter-${_label.replaceAll(" ", "-")}`);
+        await expect(
+          repairService(undefined, rejectingAdapterFactory(received)).repair({
+            workspaceId: instance.workspaceId,
+            strategy: "release-stale-lock",
+            operatorApproved: true,
+            requestedBy: "u",
+            correlationId: input,
+          }),
+        ).rejects.toThrow("captured adapter correlation");
+        expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
+      },
+    );
+  });
+
+  // IDX51: the same normalization that protects adapter termination evidence also protects lifecycle
+  // evidence. A supplied value outside SAFE_CORRELATION_ID joins the explicit omitted-id fallback.
+  describe("correlation-ID normalization", () => {
+    function lockedInstance(taskId: string): Promise<WorkspaceInstance> {
+      return provisionTask(taskId).then((instance) => {
+        store.upsert({
+          ...instance,
+          lock: {
+            lockId: "stale",
+            owner: "u",
+            reason: "mutation",
+            acquiredAt: new Date(nowMs - 3_600_000).toISOString(),
+            expiresAt: new Date(nowMs - 1_800_000).toISOString(),
+          },
+        });
+        return instance;
+      });
+    }
+
+    it.each([
+      ["empty", ""],
+      ["malformed", "req\u0000corr\ncontrol"],
+      ["hostile", `req-corr-${"a".repeat(4000)}`],
+      ["below the HTTP boundary", "x"],
+    ] as const)("normalizes a supplied %s ID in lifecycle evidence", async (_label, input) => {
+      const instance = await lockedInstance(`t-corr-${_label.replaceAll(" ", "-")}`);
+      await repair(instance.workspaceId, "release-stale-lock", true, "u", input);
+      expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    });
+  });
+
+  // IDX61: the EvidenceStore ledger above is a SEPARATE audit surface from `<stateDir>/logs/
+  // server.log` — this proves the SAME repair outcome also reaches the server activity log
+  // (AGENTS.md §8), carrying the SAME correlationId the evidence assertions above just proved.
+  it("emits a task-workspace.lifecycle activity-log line alongside the evidence, same correlationId", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const received: string[] = [];
+    const instance = await provisionTask("t-activity-log");
+    store.upsert({
+      ...instance,
+      lock: {
+        lockId: "stale",
+        owner: "u",
+        reason: "mutation",
+        acquiredAt: new Date(nowMs - 3_600_000).toISOString(),
+        expiresAt: new Date(nowMs - 1_800_000).toISOString(),
+      },
+    });
+    await repairService(activityLog, capturingAdapterFactory(received)).repair({
+      workspaceId: instance.workspaceId,
+      strategy: "release-stale-lock",
+      operatorApproved: true,
+      requestedBy: "u",
+      correlationId: "req-corr-repair-activity-1",
+    });
+    expectOnlyAdapterCorrelation(received, "req-corr-repair-activity-1");
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.category).toBe("diagnostic");
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.correlationId).toBe("req-corr-repair-activity-1");
+    expect(line.level).toBe("info");
+    expect(line.errorKind).toBeUndefined();
+    const extra = line.extra ?? {};
+    expect(extra.operation).toBe("repair");
+    expect(extra.outcome).toBe("repaired");
+    expect(extra.workspaceId).toBe(instance.workspaceId);
+  });
+
+  it("logs a closed, correlated rejection when repair approval is missing", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const instance = await provisionTask("t-activity-log-rejection");
+    rmSync(instance.managedWorktreePath, { recursive: true, force: true });
+    await rejectsWithCode(
+      () =>
+        repairService(activityLog).repair({
+          workspaceId: instance.workspaceId,
+          strategy: "recreate-worktree",
+          operatorApproved: false,
+          requestedBy: "u",
+          correlationId: "req-corr-repair-rejection-1",
+        }),
+      "OPERATOR_APPROVAL_REQUIRED",
+    );
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.correlationId).toBe("req-corr-repair-rejection-1");
+    expect(line.errorKind).toBe("OPERATOR_APPROVAL_REQUIRED");
+    expect(line.extra?.operation).toBe("repair");
+    expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
   });
 });
 

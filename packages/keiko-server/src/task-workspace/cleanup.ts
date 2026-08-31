@@ -42,8 +42,12 @@ import { gatherInstanceReconciliationFacts } from "./reconciliation.js";
 import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import { TaskWorkspaceError } from "./errors.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import {
-  appendWorkspaceLifecycleEvidence,
+  recordWorkspaceLifecycle,
+  runWithWorkspaceLifecycleFailureLogging,
+} from "./activity-log.js";
+import {
   buildWorkspaceEvent,
   WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
   type WorkspaceLifecycleOutcome,
@@ -63,6 +67,11 @@ const MAX_FIELD_LENGTH = 512;
 interface CleanupCtx {
   readonly deps: WorkspaceCleanupServiceDeps;
   readonly lockTtlMs: number;
+  // The triggering operation's correlation id, so the worktree adapter's termination evidence joins
+  // the same timeline as every other line of that operation (AGENTS.md §8). It lives on the CTX, not
+  // in each helper's signature: the ctx is already threaded everywhere the adapter is built, so this
+  // needed no new parameter on any private function (PR #3355 review, P2).
+  readonly correlationId: string;
 }
 
 interface OrphanCleanupOutcome {
@@ -105,32 +114,40 @@ export function safelyRemoveManagedPath(managedRoot: string, target: string): vo
   rmSync(targetReal, { recursive: true, force: false });
 }
 
-function emit(
-  ctx: CleanupCtx,
-  input: {
-    readonly outcome: WorkspaceLifecycleOutcome;
-    readonly type: WorkspaceEventType;
-    readonly workspaceId: string;
-    readonly taskId: string;
-    readonly correlationId: string;
-    readonly fromState?: TaskWorkspaceLifecycleState | undefined;
-    readonly toState?: TaskWorkspaceLifecycleState | undefined;
-    readonly nowMs: number;
-  },
-): void {
+interface EmitCleanupInput {
+  readonly outcome: WorkspaceLifecycleOutcome;
+  readonly type: WorkspaceEventType;
+  readonly workspaceId: string;
+  readonly taskId: string;
+  // The triggering request's own correlation id (WorkspaceCleanupRequest /
+  // WorkspaceOrphanCleanupRequest .correlationId). Falls back to UNKNOWN_CORRELATION_ID — never the
+  // workspace's own persisted identity, which would make every cleanup event look like the same
+  // operation regardless of which HTTP request actually triggered it (AGENTS.md §8).
+  readonly correlationId: string | undefined;
+  readonly fromState?: TaskWorkspaceLifecycleState | undefined;
+  readonly toState?: TaskWorkspaceLifecycleState | undefined;
+  readonly nowMs: number;
+  // The live safety gate's own refusal reason (WorkspaceCleanupRefusalReason), when this line is a
+  // `cleanup-refused` outcome — carried into the activity-log line's `errorKind` so an agent can tell
+  // WHY a removal was refused, not merely that it was.
+  readonly errorCode?: string | undefined;
+}
+
+function emit(ctx: CleanupCtx, input: EmitCleanupInput): void {
+  const correlationId = correlationIdOrUnknown(input.correlationId);
   const event = buildWorkspaceEvent({
     eventId: ctx.deps.newId(),
     workspaceId: input.workspaceId,
     taskId: input.taskId,
     type: input.type,
     at: isoFrom(input.nowMs),
-    correlationId: input.correlationId,
+    correlationId,
     ...(input.fromState !== undefined ? { fromState: input.fromState } : {}),
     ...(input.toState !== undefined ? { toState: input.toState } : {}),
   });
-  appendWorkspaceLifecycleEvidence(
-    ctx.deps.evidenceStore,
-    {
+  recordWorkspaceLifecycle(ctx.deps, {
+    evidenceStore: ctx.deps.evidenceStore,
+    record: {
       kind: WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
       schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
       recordedAt: input.nowMs,
@@ -141,8 +158,9 @@ function emit(
       worktreeCount: 0,
       event,
     },
-    ctx.deps.redactString,
-  );
+    redactString: ctx.deps.redactString,
+    errorCode: input.errorCode,
+  });
 }
 
 function loadInstance(ctx: CleanupCtx, workspaceId: string): WorkspaceInstance {
@@ -237,7 +255,7 @@ function requestCleanupImpl(
     type: "cleanup-requested",
     workspaceId: persisted.workspaceId,
     taskId: persisted.taskId,
-    correlationId: persisted.auditCorrelationId,
+    correlationId: request.correlationId,
     fromState,
     toState: persisted.lifecycleState,
     nowMs,
@@ -260,7 +278,9 @@ async function probeCleanupDirty(
   probeable: boolean,
 ): Promise<boolean> {
   if (!probeable) return false;
-  const status = await ctx.deps.createAdapter(detectWorkspaceAt(worktreePath)).worktreeStatus();
+  const status = await ctx.deps
+    .createAdapter(detectWorkspaceAt(worktreePath), ctx.correlationId)
+    .worktreeStatus();
   return !status.ok || status.dirty;
 }
 
@@ -268,7 +288,10 @@ async function evaluateLiveCleanupSafety(
   ctx: CleanupCtx,
   instance: WorkspaceInstance,
 ): Promise<{ readonly allowed: boolean; readonly refusalReason?: WorkspaceCleanupRefusalReason }> {
-  const adapter = ctx.deps.createAdapter(detectWorkspaceAt(instance.repositoryRoot));
+  const adapter = ctx.deps.createAdapter(
+    detectWorkspaceAt(instance.repositoryRoot),
+    ctx.correlationId,
+  );
   const worktrees = await adapter.listWorktrees();
   const { facts } = await gatherInstanceReconciliationFacts(
     ctx.deps,
@@ -302,7 +325,7 @@ async function removeManagedWorktree(
   worktreePath: string,
 ): Promise<RemovalOutcome> {
   try {
-    const adapter = ctx.deps.createAdapter(detectWorkspaceAt(repositoryRoot));
+    const adapter = ctx.deps.createAdapter(detectWorkspaceAt(repositoryRoot), ctx.correlationId);
     const removal = await adapter.removeWorktree({ worktreePath, force: true });
     await adapter.pruneWorktrees();
     if (existsSync(worktreePath)) {
@@ -334,15 +357,17 @@ function refuseCleanup(
   ctx: CleanupCtx,
   instance: WorkspaceInstance,
   refusalReason: WorkspaceCleanupRefusalReason | undefined,
+  correlationId: string | undefined,
 ): WorkspaceCleanupResult {
   emit(ctx, {
     outcome: "cleanup-refused",
     type: "transition-rejected",
     workspaceId: instance.workspaceId,
     taskId: instance.taskId,
-    correlationId: instance.auditCorrelationId,
+    correlationId,
     fromState: instance.lifecycleState,
     nowMs: ctx.deps.now(),
+    errorCode: refusalReason,
   });
   return {
     outcome: "refused",
@@ -359,6 +384,7 @@ async function finalizeCleanup(
   instance: WorkspaceInstance,
   requestedBy: string,
   nowMs: number,
+  correlationId: string | undefined,
 ): Promise<WorkspaceCleanupResult> {
   const locked = ctx.deps.store.upsert({
     ...instance,
@@ -376,7 +402,7 @@ async function finalizeCleanup(
       lock: null,
       updatedAt: isoFrom(ctx.deps.now()),
     });
-    return refuseCleanup(ctx, unlocked, removal.refusalReason);
+    return refuseCleanup(ctx, unlocked, removal.refusalReason, correlationId);
   }
   if (ctx.deps.activePointerStore.get()?.workspaceId === locked.workspaceId) {
     ctx.deps.activePointerStore.clear();
@@ -397,7 +423,7 @@ async function finalizeCleanup(
     type: "cleanup-completed",
     workspaceId: locked.workspaceId,
     taskId: locked.taskId,
-    correlationId: locked.auditCorrelationId,
+    correlationId,
     fromState: "cleanup-pending",
     nowMs: ctx.deps.now(),
   });
@@ -446,8 +472,10 @@ async function completeCleanupImpl(
   const nowMs = ctx.deps.now();
   assertCompleteCleanupAllowed(ctx, request, instance, nowMs);
   const safety = await evaluateLiveCleanupSafety(ctx, instance);
-  if (!safety.allowed) return refuseCleanup(ctx, instance, safety.refusalReason);
-  return finalizeCleanup(ctx, instance, request.requestedBy, nowMs);
+  if (!safety.allowed) {
+    return refuseCleanup(ctx, instance, safety.refusalReason, request.correlationId);
+  }
+  return finalizeCleanup(ctx, instance, request.requestedBy, nowMs, request.correlationId);
 }
 
 // Governed removal of orphaned managed worktrees: directories under the managed root with no persisted
@@ -459,6 +487,7 @@ async function cleanupOneOrphan(
   leaf: string,
   ownershipProven: boolean,
   knownPaths: ReadonlySet<string>,
+  correlationId: string | undefined,
 ): Promise<OrphanCleanupOutcome> {
   const orphanId = deriveOrphanId(repositoryId, leaf);
   const candidate = join(ctx.deps.managedRoot, repositoryId, leaf);
@@ -496,7 +525,7 @@ async function cleanupOneOrphan(
     type: "cleanup-completed",
     workspaceId: orphanId,
     taskId: orphanId,
-    correlationId: orphanId,
+    correlationId,
     nowMs: ctx.deps.now(),
   });
   return { removed: true };
@@ -573,7 +602,7 @@ async function cleanupOrphansImpl(
       // Serialize each candidate leaf and re-check persisted liveness inside the critical section. The
       // initial known-path snapshot may be stale if a provision finishes while a sweep is walking disk.
       const outcome = await ctx.deps.mutex.runExclusive([workspaceKey(leaf)], () =>
-        cleanupOneOrphan(ctx, repositoryId, leaf, ownershipProven, known),
+        cleanupOneOrphan(ctx, repositoryId, leaf, ownershipProven, known, request.correlationId),
       );
       if (outcome.removed) removed += 1;
       if (outcome.refusal !== undefined) refused.push(outcome.refusal);
@@ -596,19 +625,45 @@ function managedRepoDirs(ctx: CleanupCtx): readonly string[] {
 export function createWorkspaceCleanupService(
   deps: WorkspaceCleanupServiceDeps,
 ): WorkspaceCleanupService {
-  const ctx: CleanupCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
+  const lockTtlMs = resolveLockTtl(deps.lockTtlMs);
+  // Built PER OPERATION, not once per service: the correlation id belongs to the request, and a
+  // service-lifetime ctx is exactly what forced the previous UNKNOWN_CORRELATION_ID here.
+  const ctxFor = (correlationId: string | undefined): CleanupCtx => ({
+    deps,
+    lockTtlMs,
+    correlationId: correlationIdOrUnknown(correlationId),
+  });
   return {
     // Serialized under the workspace's `ws:` key (#449, ADR-0093 D1) so a governed removal cannot race a
     // concurrent activate/pause/repair of the same workspace. `runExclusive` also turns a synchronous
     // validation throw from requestCleanupImpl into a rejected promise (the consistent async contract).
     cleanup: (request: WorkspaceCleanupRequest): Promise<WorkspaceCleanupResult> =>
-      ctx.deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () =>
-        request.mode === "request"
-          ? requestCleanupImpl(ctx, request)
-          : completeCleanupImpl(ctx, request),
+      runWithWorkspaceLifecycleFailureLogging(
+        deps,
+        {
+          operation: "cleanup",
+          workspaceIdentitySeed: request.workspaceId,
+          correlationId: request.correlationId,
+        },
+        () =>
+          deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () => {
+            const ctx = ctxFor(request.correlationId);
+            return request.mode === "request"
+              ? requestCleanupImpl(ctx, request)
+              : completeCleanupImpl(ctx, request);
+          }),
       ),
     cleanupOrphans: (
       request: WorkspaceOrphanCleanupRequest,
-    ): Promise<WorkspaceOrphanCleanupResult> => cleanupOrphansImpl(ctx, request),
+    ): Promise<WorkspaceOrphanCleanupResult> =>
+      runWithWorkspaceLifecycleFailureLogging(
+        deps,
+        {
+          operation: "cleanup",
+          workspaceIdentitySeed: request.repositoryRoot ?? "all-managed-task-workspaces",
+          correlationId: request.correlationId,
+        },
+        () => cleanupOrphansImpl(ctxFor(request.correlationId), request),
+      ),
   };
 }

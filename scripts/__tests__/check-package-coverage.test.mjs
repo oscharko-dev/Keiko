@@ -311,6 +311,96 @@ describe("check-package-coverage", () => {
 // silently dropped keiko-sandbox — a measured package protected by no floor. This reality guard fails
 // the instant the baseline and the real workspace drift, so exclusions must be explicit and reviewed
 // rather than accreting silently behind a green gate.
+// Returns a mismatch row, or undefined when the entry is consistent (or carries no comparable
+// numbers). Extracted so the test body stays under the complexity bar rather than raising it.
+function lineConsistencyOf(name, entry) {
+  if (typeof entry !== "object" || entry === null) return undefined;
+  const { totalLines, uncoveredLines, coverage } = entry;
+  const recorded = coverage?.lines;
+  const comparable =
+    typeof totalLines === "number" &&
+    totalLines > 0 &&
+    typeof uncoveredLines === "number" &&
+    typeof recorded === "number";
+  if (!comparable) return undefined;
+  const computed = Math.round(((totalLines - uncoveredLines) / totalLines) * 10_000) / 100;
+  // The writer rounds to 2dp, so anything beyond half a hundredth is real drift, not rounding.
+  if (Math.abs(computed - recorded) <= 0.005) return undefined;
+  return { package: name, recorded, computed, totalLines, uncoveredLines };
+}
+
+// A baseline entry carries BOTH the raw counts and the rounded percentage, and the writer derives
+// all of them from one measurement — so they can only disagree if the file was edited by hand or
+// written in two passes. Nothing checked that, and keiko-tools drifted: it recorded 91.53% while its
+// own totalLines/uncoveredLines computed 91.66%, and a reviewer had to report it TWICE across two
+// rounds because there was no gate to catch it the first time.
+//
+// The percentage is what a human reads in a review; the counts are what the ratchet compares. When
+// they disagree, one of them is lying and nothing says which.
+describe("coverage baseline internal consistency", () => {
+  it("records a line percentage that matches its own totalLines and uncoveredLines", () => {
+    const baseline = JSON.parse(readFileSync("docs/qa/package-coverage-baseline.json", "utf8"));
+    const packages = baseline.packages ?? baseline;
+    const mismatches = Object.entries(packages)
+      .map(([name, entry]) => lineConsistencyOf(name, entry))
+      .filter((row) => row !== undefined);
+    expect(mismatches).toEqual([]);
+  });
+
+  // The committed baseline is consistent today, so the assertion above passes even if
+  // `lineConsistencyOf` returned `undefined` unconditionally — it would prove nothing about the
+  // detector (PR #3355 review, P2). These fixtures exercise the detector directly, with literal
+  // values and no re-derivation of the production formula: every expected number is written out.
+  it.each([
+    // 100 lines, 10 uncovered -> 90.00, recorded as 85.00: real, reviewable drift.
+    [
+      "a mismatched recorded percentage",
+      { totalLines: 100, uncoveredLines: 10, coverage: { lines: 85 } },
+    ],
+    // The production shape this gate was written for: keiko-tools recorded 91.53 while its own
+    // counts computed 91.66.
+    [
+      "the keiko-tools drift this gate exists for",
+      { totalLines: 10_000, uncoveredLines: 834, coverage: { lines: 91.53 } },
+    ],
+  ])("rejects %s", (_label, entry) => {
+    const row = lineConsistencyOf("fixture", entry);
+    expect(row).not.toBeUndefined();
+    expect(row?.package).toBe("fixture");
+  });
+
+  // The other direction, because a detector that flagged everything would make the suite above
+  // vacuous the moment the baseline moved.
+  it.each([
+    [
+      "an exactly consistent entry",
+      { totalLines: 100, uncoveredLines: 10, coverage: { lines: 90 } },
+    ],
+    // 3 of 7 uncovered -> 57.142857…%, which the writer rounds to 57.14: inside the half-hundredth
+    // tolerance, so NOT drift.
+    [
+      "a rounding-boundary entry the writer rounds the same way",
+      { totalLines: 7, uncoveredLines: 3, coverage: { lines: 57.14 } },
+    ],
+    ["an entry carrying no counts", { coverage: { lines: 90 } }],
+    ["an entry carrying no recorded percentage", { totalLines: 100, uncoveredLines: 10 }],
+    ["an empty entry", {}],
+    // totalLines 0 would divide by zero; the guard must decline rather than emit NaN.
+    ["a zero-total entry", { totalLines: 0, uncoveredLines: 0, coverage: { lines: 100 } }],
+  ])("accepts %s", (_label, entry) => {
+    expect(lineConsistencyOf("fixture", entry)).toBeUndefined();
+  });
+
+  // Malformed input must not throw: a gate that crashes on a hand-edited baseline stops reporting.
+  it.each([
+    ["null", null],
+    ["a string", "not-an-object"],
+    ["a number", 42],
+  ])("declines %s without throwing", (_label, entry) => {
+    expect(() => lineConsistencyOf("fixture", entry)).not.toThrow();
+    expect(lineConsistencyOf("fixture", entry)).toBeUndefined();
+  });
+});
 describe("coverage baseline reality guard", () => {
   // Packages intentionally NOT gated by the package-coverage baseline, each with a recorded reason.
   // A package may be added here ONLY with a justification — never to hide a coverage gap.

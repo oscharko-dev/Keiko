@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { homedir } from "node:os";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type {
   UpdatePortableActivationSummary,
   UpdatePortableStagingSummary,
@@ -56,6 +57,10 @@ export interface PortableUpdateActivatorOptions {
   readonly homedir?: (() => string) | undefined;
   readonly versionVerifier?: VersionVerifier | undefined;
   readonly relaunchTimeoutMs?: number | undefined;
+  // Forwarded to `refreshPortableShortcut` (update-portable-activation-files.js): a hostile or
+  // malformed SystemRoot/WINDIR encountered while creating or verifying the Windows Start Menu
+  // shortcut is logged through this sink instead of only degrading to `shortcutRefreshed: false`.
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export { PortableUpdateActivationError } from "./update-portable-activation-files.js";
@@ -248,10 +253,23 @@ function prepareActivation(input: {
   return promotePortableInstall(input.request, input.activationId);
 }
 
+function correlatedSecurityLogSink(
+  sink: SecurityLogSink | undefined,
+  correlationId: string,
+): SecurityLogSink | undefined {
+  if (sink === undefined) return undefined;
+  return {
+    write(event): void {
+      sink.write({ ...event, correlationId });
+    },
+  };
+}
+
 function finishPreparedActivation(
   input: {
     readonly options: PortableUpdateActivatorOptions;
     readonly request: PortableUpdateActivateInput;
+    readonly correlationId: string;
   },
   promoted: PortablePromotionResult,
 ): { readonly shortcutRefreshed: boolean; readonly layout: PortableActivationLayout } {
@@ -269,6 +287,7 @@ function finishPreparedActivation(
     layout: promoted.layout,
     env: input.options.env,
     home,
+    securityLogSink: correlatedSecurityLogSink(input.options.securityLogSink, input.correlationId),
   });
   return { shortcutRefreshed, layout: promoted.layout };
 }
@@ -327,7 +346,11 @@ function preparePortablePromotion(
   progress.recoveryPhase = "promoted";
   capturePortableRegistration({ stateDir: context.stateDir, activationId: context.activationId });
   const prepared = finishPreparedActivation(
-    { options: context.options, request: context.request },
+    {
+      options: context.options,
+      request: context.request,
+      correlationId: context.activationId,
+    },
     promoted,
   );
   writePortableActivationRecovery({

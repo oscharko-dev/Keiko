@@ -39,8 +39,12 @@ import { assertSafeFieldValue } from "./field-safety.js";
 import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import { reconcileSingleInstance } from "./reconciliation.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import {
-  appendWorkspaceLifecycleEvidence,
+  recordWorkspaceLifecycle,
+  runWithWorkspaceLifecycleFailureLogging,
+} from "./activity-log.js";
+import {
   buildWorkspaceEvent,
   WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
   type WorkspaceLifecycleOutcome,
@@ -58,6 +62,11 @@ const MAX_FIELD_LENGTH = 512;
 interface RepairCtx {
   readonly deps: WorkspaceRepairServiceDeps;
   readonly lockTtlMs: number;
+  // The triggering operation's correlation id, so the worktree adapter's termination evidence joins
+  // the same timeline as every other line of that operation (AGENTS.md §8). It lives on the CTX, not
+  // in each helper's signature: the ctx is already threaded everywhere the adapter is built, so this
+  // needed no new parameter on any private function (PR #3355 review, P2).
+  readonly correlationId: string;
 }
 
 function isBoundedNonEmpty(value: unknown): value is string {
@@ -120,22 +129,26 @@ function emitRepair(
   outcome: WorkspaceLifecycleOutcome,
   type: WorkspaceEventType,
   nowMs: number,
+  // The triggering request's own correlation id (WorkspaceRepairRequest.correlationId). Falls back to
+  // UNKNOWN_CORRELATION_ID — never the workspace's own persisted identity (AGENTS.md §8).
+  correlationId: string | undefined,
 ): void {
+  const resolvedCorrelationId = correlationIdOrUnknown(correlationId);
   const event = buildWorkspaceEvent({
     eventId: ctx.deps.newId(),
     workspaceId: instance.workspaceId,
     taskId: instance.taskId,
     type,
     at: isoFrom(nowMs),
-    correlationId: instance.auditCorrelationId,
+    correlationId: resolvedCorrelationId,
     fromState,
     toState: instance.lifecycleState,
     health: instance.health,
     ...(instance.driftMarkers.length > 0 ? { driftMarkers: instance.driftMarkers } : {}),
   });
-  appendWorkspaceLifecycleEvidence(
-    ctx.deps.evidenceStore,
-    {
+  recordWorkspaceLifecycle(ctx.deps, {
+    evidenceStore: ctx.deps.evidenceStore,
+    record: {
       kind: WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
       schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
       recordedAt: nowMs,
@@ -146,8 +159,8 @@ function emitRepair(
       worktreeCount: 0,
       event,
     },
-    ctx.deps.redactString,
-  );
+    redactString: ctx.deps.redactString,
+  });
 }
 
 function resultFor(
@@ -179,6 +192,7 @@ async function applyReleaseStaleLock(
   instance: WorkspaceInstance,
   requestedBy: string,
   nowMs: number,
+  correlationId: string | undefined,
 ): Promise<WorkspaceInstance> {
   const cleared = ctx.deps.store.upsert({ ...instance, lock: null, updatedAt: isoFrom(nowMs) });
   const reconciled = await reconcileSingleInstance(
@@ -186,6 +200,7 @@ async function applyReleaseStaleLock(
     cleared,
     ctx.deps.now(),
     requestedBy,
+    correlationId,
   );
   return reconciled.instance;
 }
@@ -245,13 +260,17 @@ async function applyProvisioningRepair(
   ctx: RepairCtx,
   instance: WorkspaceInstance,
   requestedBy: string,
+  correlationId: string | undefined,
 ): Promise<WorkspaceInstance> {
-  await ctx.deps.createAdapter(detectWorkspaceAt(instance.repositoryRoot)).pruneWorktrees();
+  await ctx.deps
+    .createAdapter(detectWorkspaceAt(instance.repositoryRoot), ctx.correlationId)
+    .pruneWorktrees();
   const result = await ctx.deps.provisioning.provision({
     repositoryRequestPath: instance.repositoryRoot,
     taskId: instance.taskId,
     baseBranch: instance.baseBranch,
     requestedBy,
+    correlationId,
   });
   return result.instance;
 }
@@ -262,13 +281,14 @@ async function executeStrategy(
   strategy: WorkspaceRecoveryStrategy,
   requestedBy: string,
   nowMs: number,
+  correlationId: string | undefined,
 ): Promise<WorkspaceInstance> {
   switch (strategy) {
     case "recreate-worktree":
     case "reconcile-pointer":
-      return applyProvisioningRepair(ctx, instance, requestedBy);
+      return applyProvisioningRepair(ctx, instance, requestedBy, correlationId);
     case "release-stale-lock":
-      return applyReleaseStaleLock(ctx, instance, requestedBy, nowMs);
+      return applyReleaseStaleLock(ctx, instance, requestedBy, nowMs, correlationId);
     case "abandon-and-cleanup":
       return applyAbandon(ctx, instance, nowMs);
     default:
@@ -317,6 +337,7 @@ function reportOperatorRequired(
   ctx: RepairCtx,
   reconciled: WorkspaceInstance,
   strategy: WorkspaceRecoveryStrategy,
+  correlationId: string | undefined,
 ): WorkspaceRepairResult {
   emitRepair(
     ctx,
@@ -325,6 +346,7 @@ function reportOperatorRequired(
     "operator-required",
     "transition-rejected",
     ctx.deps.now(),
+    correlationId,
   );
   return resultFor(reconciled, strategy, false);
 }
@@ -365,6 +387,44 @@ function assertRepairAuthorized(
   }
 }
 
+// Executes the chosen strategy under the already-acquired repair lock, persists the success evidence,
+// and reads back the authoritative post-repair instance. The `finally` releases the repair lock
+// whether the strategy succeeded or threw, so an error mid-repair never leaves the workspace locked.
+// Extracted from repairLocked to stay under the repo's per-function line budget (AGENTS.md §6).
+async function executeRepairAndFinalize(
+  ctx: RepairCtx,
+  request: WorkspaceRepairRequest,
+  locked: WorkspaceInstance,
+  fromState: TaskWorkspaceLifecycleState,
+  strategy: WorkspaceRecoveryStrategy,
+  nowMs: number,
+): Promise<WorkspaceRepairResult> {
+  try {
+    const repaired = await executeStrategy(
+      ctx,
+      locked,
+      strategy,
+      request.requestedBy,
+      nowMs,
+      request.correlationId,
+    );
+    // Read back the authoritative post-repair instance (the provisioning path persists its own state).
+    const finalInstance = ctx.deps.store.getById(repaired.workspaceId) ?? repaired;
+    emitRepair(
+      ctx,
+      finalInstance,
+      fromState,
+      "repaired",
+      "repaired",
+      ctx.deps.now(),
+      request.correlationId,
+    );
+    return resultFor(finalInstance, strategy, true);
+  } finally {
+    releaseRepairLock(ctx, request.workspaceId, request.requestedBy);
+  }
+}
+
 async function repairLocked(
   ctx: RepairCtx,
   request: WorkspaceRepairRequest,
@@ -389,33 +449,25 @@ async function repairLocked(
     existing,
     nowMs,
     request.requestedBy,
+    request.correlationId,
   );
 
   // No automatic mutation is safe: report the operator requirement without touching Git/filesystem.
   if (needsOperator(outcome, strategy)) {
-    return reportOperatorRequired(ctx, reconciled, strategy);
+    return reportOperatorRequired(ctx, reconciled, strategy, request.correlationId);
   }
   assertRepairAuthorized(request, reconciled, outcome, strategy);
 
   // Acquire the workspace lock for the requesting actor before mutating (the #444 `repair` operation is
-  // requiresLock:true). executeStrategy persists its own terminal lock state (provision clears it,
-  // release-stale-lock/abandon set it null); the finally releases the repair lock only if it is still
-  // ours — so an error mid-repair never leaves the workspace locked.
+  // requiresLock:true). executeRepairAndFinalize persists its own terminal lock state and releases the
+  // repair lock in a finally.
   const fromState = reconciled.lifecycleState;
   const locked = ctx.deps.store.upsert({
     ...reconciled,
     lock: makeRepairLock(ctx, request.requestedBy, nowMs),
     updatedAt: isoFrom(nowMs),
   });
-  try {
-    const repaired = await executeStrategy(ctx, locked, strategy, request.requestedBy, nowMs);
-    // Read back the authoritative post-repair instance (the provisioning path persists its own state).
-    const finalInstance = ctx.deps.store.getById(repaired.workspaceId) ?? repaired;
-    emitRepair(ctx, finalInstance, fromState, "repaired", "repaired", ctx.deps.now());
-    return resultFor(finalInstance, strategy, true);
-  } finally {
-    releaseRepairLock(ctx, request.workspaceId, request.requestedBy);
-  }
+  return executeRepairAndFinalize(ctx, request, locked, fromState, strategy, nowMs);
 }
 
 // Serializes the whole repair (advisory check → live reconcile → lock acquire → strategy mutation) under
@@ -433,9 +485,23 @@ function repairImpl(
 export function createWorkspaceRepairService(
   deps: WorkspaceRepairServiceDeps,
 ): WorkspaceRepairService {
-  const ctx: RepairCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
+  const lockTtlMs = resolveLockTtl(deps.lockTtlMs);
+  // Built PER OPERATION, not once per service: the correlation id belongs to the request, and a
+  // service-lifetime ctx is exactly what forced the previous UNKNOWN_CORRELATION_ID here.
   return {
     repair: (request: WorkspaceRepairRequest): Promise<WorkspaceRepairResult> =>
-      repairImpl(ctx, request),
+      runWithWorkspaceLifecycleFailureLogging(
+        deps,
+        {
+          operation: "repair",
+          workspaceIdentitySeed: request.workspaceId,
+          correlationId: request.correlationId,
+        },
+        () =>
+          repairImpl(
+            { deps, lockTtlMs, correlationId: correlationIdOrUnknown(request.correlationId) },
+            request,
+          ),
+      ),
   };
 }

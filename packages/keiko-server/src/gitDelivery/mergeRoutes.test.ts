@@ -15,16 +15,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GitMergeCommand, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type {
   GitMergeAdapter,
-  GitMergeCommand,
   GitMergeExecRequest,
   GitMergeExecResult,
   GitMergeProviderReadiness,
   GitMergeReadinessRequest,
 } from "@oscharko-dev/keiko-tools";
+import type { NodeGitMergeAdapterDeps } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type {
   GitDeliveryApprovalClaim,
@@ -36,16 +37,38 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.j
 import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
+
+// Spies on the default merge-adapter factory the F1 fix threads runCommand termination-evidence
+// through (readMergeProviderReadiness / executeGovernedMerge's shared `mergeAdapterFor`, exercised
+// below via a direct call to readMergeProviderReadiness). Delegates to the REAL implementation so
+// the adapter this test file's OTHER suites inject via `mergeAdapterFactory` seams stays entirely
+// unaffected. Mirrors the importOriginal-plus-delegating-wrapper pattern
+// defaultPolicyPacks.test.ts and execution.test.ts already use for this exact module graph.
+const createNodeGitMergeAdapterCalls: NodeGitMergeAdapterDeps[] = [];
+vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@oscharko-dev/keiko-tools/internal/git-mutation")>();
+  return {
+    ...actual,
+    createNodeGitMergeAdapter: (deps: NodeGitMergeAdapterDeps): GitMergeAdapter => {
+      createNodeGitMergeAdapterCalls.push(deps);
+      return actual.createNodeGitMergeAdapter(deps);
+    },
+  };
+});
+
 import {
   createHandleMergeApprove,
   createHandleMergeExecute,
   createHandleMergePreview,
 } from "./mergeRoutes.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
-import type {
-  GitDeliveryMergeExecuteResponseBody,
-  GitDeliveryMergePreviewBody,
-  GitDeliveryMergeSeams,
+import {
+  readMergeProviderReadiness,
+  type GitDeliveryMergeExecuteResponseBody,
+  type GitDeliveryMergePreviewBody,
+  type GitDeliveryMergeSeams,
 } from "./mergeExecution.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
@@ -369,17 +392,31 @@ describe("merge execute (governed)", () => {
   it("returns approval-required and executes NOTHING without an approval token, still recording evidence (AC1/AC4)", async () => {
     const adapter = recordingMergeAdapter(READY_PROVIDER);
     const evidence = capturingEvidenceStore();
+    const activity: ServerLogEvent[] = [];
     const handler = createHandleMergeExecute({
-      execution: seams({ mergeAdapterFactory: () => adapter.adapter }),
+      execution: seams({
+        mergeAdapterFactory: () => adapter.adapter,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
     });
     const res = await handler(
-      ctxFor(EXECUTE, mergeBody()),
+      {
+        ...ctxFor(EXECUTE, mergeBody()),
+        correlationId: "request-correlation-merge-approval-held",
+      },
       deps({ evidenceStore: evidence.store }),
     );
     const body = res.body as GitDeliveryMergeExecuteResponseBody;
     expect(body.status).toBe("approval-required");
     expect(adapter.merges()).toBe(0);
     expect(evidence.count()).toBeGreaterThan(0);
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({ correlationId: "request-correlation-merge-approval-held" });
+    expect(completed?.extra).toMatchObject({ status: "approval-required" });
   });
 
   it("rejects a forged browser-supplied approval object before merge execution", async () => {
@@ -430,13 +467,25 @@ describe("merge execute (governed)", () => {
       providerCapableStrategies: ["squash"],
     });
     const evidence = capturingEvidenceStore();
+    const activity: ServerLogEvent[] = [];
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const approval = issueMergeApproval(approvalStore);
     const handler = createHandleMergeExecute({
-      execution: seams({ mergeAdapterFactory: () => adapter.adapter, approvalStore }),
+      execution: seams({
+        mergeAdapterFactory: () => adapter.adapter,
+        approvalStore,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
     });
     const res = await handler(
-      ctxFor(EXECUTE, mergeBody({ approval })),
+      {
+        ...ctxFor(EXECUTE, mergeBody({ approval })),
+        correlationId: "request-correlation-merge-blocked",
+      },
       deps({ evidenceStore: evidence.store }),
     );
     const body = res.body as GitDeliveryMergeExecuteResponseBody;
@@ -444,23 +493,133 @@ describe("merge execute (governed)", () => {
     expect((body.readinessBlockers ?? []).map((b) => b.code)).toContain("conflicts");
     expect(adapter.merges()).toBe(0);
     expect(evidence.count()).toBeGreaterThan(0);
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({ correlationId: "request-correlation-merge-blocked" });
+    expect(completed?.extra).toMatchObject({ status: "blocked" });
   });
 
   it("executes the merge when policy, approval, and readiness all pass (AC1)", async () => {
     const adapter = recordingMergeAdapter(READY_PROVIDER);
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const approval = issueMergeApproval(approvalStore);
+    const activity: ServerLogEvent[] = [];
     const handler = createHandleMergeExecute({
-      execution: seams({ mergeAdapterFactory: () => adapter.adapter, approvalStore }),
+      execution: seams({
+        mergeAdapterFactory: () => adapter.adapter,
+        approvalStore,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
     });
-    const res = await handler(ctxFor(EXECUTE, mergeBody({ approval })), deps());
+    const res = await handler(
+      {
+        ...ctxFor(EXECUTE, mergeBody({ approval })),
+        correlationId: "request-correlation-merge-success",
+      },
+      deps(),
+    );
     const body = res.body as GitDeliveryMergeExecuteResponseBody;
     expect(body.status).toBe("succeeded");
     expect(body.merged).toBe(true);
     expect(adapter.merges()).toBe(1);
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({ correlationId: "request-correlation-merge-success" });
+    expect(completed?.extra).toMatchObject({ actionKind: "merge", status: "succeeded" });
   });
 
-  it("aborts merge when another allowed authority replaces the approval-bound run", async () => {
+  // The continuity guard re-checks authority right before remote dispatch (a TOCTOU gap: policy/preflight
+  // evaluation takes time, and the admitted authority can change or be revoked while that runs). Before
+  // this fix, a denial here fell through to a misleading 200 body — `status: "failed"`,
+  // `executionErrorCode: "internal-error"` — telling the client an internal fault happened and is safe to
+  // retry, and persisted the SAME misleading record to the evidence ledger, even though the F4 no-spawn
+  // marker (git.delivery.dispatch.no-spawn, proven in the next test) and the authority-denial security
+  // line had already correctly recorded a refusal. Proven red against the pre-fix code: this test
+  // asserted `status).toBe("failed")` and passed with no HTTP-status or evidence assertion at all.
+  it("returns the SAME 403 authority-denied response the up-front gate returns, not a misleading internal failure (#3350)", async () => {
+    const adapter = recordingMergeAdapter(READY_PROVIDER);
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issueMergeApproval(approvalStore);
+    const evidence = capturingEvidenceStore();
+    const activity: ServerLogEvent[] = [];
+    const baseAuthority = permittedGitDeliveryAuthority(
+      () => projectId,
+      () => projectId,
+      "autonomous-delivery",
+      { headRef: "feat/x", baseRef: "main", allowDetachedHead: false, allowedPrefixes: ["feat/"] },
+    );
+    let reads = 0;
+    const authority = {
+      current: (nowIso: string): ReturnType<typeof baseAuthority.current> => {
+        reads += 1;
+        const active = baseAuthority.current(nowIso);
+        if (active === undefined || reads === 1) return active;
+        return { ...active, runId: "replacement-run", envelopeDigest: "d".repeat(64) };
+      },
+    };
+    const handler = createHandleMergeExecute({
+      execution: seams({
+        mergeAdapterFactory: () => adapter.adapter,
+        approvalStore,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
+    });
+
+    const res = await handler(
+      {
+        ...ctxFor(EXECUTE, mergeBody({ approval })),
+        correlationId: "request-correlation-merge-continuity",
+      },
+      deps({ gitDeliveryAuthority: authority, evidenceStore: evidence.store }),
+    );
+
+    // HTTP contract: the SAME 403 envelope the up-front admission gate returns — never a 200 claiming an
+    // internal, retryable failure for a request that was refused before anything was dispatched.
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: {
+        code: "GIT_DELIVERY_AUTHORITY_DENIED",
+        message: "The accepted runtime authority does not admit this Git delivery operation.",
+        correlationId: "request-correlation-merge-continuity",
+      },
+    });
+    expect(res.headers).toEqual({
+      "X-Keiko-Correlation-Id": "request-correlation-merge-continuity",
+    });
+    expect(reads).toBe(2);
+    expect(adapter.merges()).toBe(0);
+    expect(evidence.count()).toBe(1);
+    expect(evidence.raw()).toContain('"outcomeClass":"blocked"');
+    expect(evidence.raw()).toContain('"blockReason":"authority-denied"');
+    expect(evidence.raw()).toContain('"disposition":"policy-forbidden"');
+    expect(evidence.raw()).not.toContain('"execution":');
+    expect(
+      activity
+        .filter((event) => event.op.startsWith("git.delivery.authority."))
+        .map((event) => event.extra?.phase),
+    ).toEqual(["admission", "continuity"]);
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({ correlationId: "request-correlation-merge-continuity" });
+    expect(completed?.extra).toMatchObject({
+      status: "blocked",
+      phaseReached: "execute",
+      blockReason: "authority-denied",
+    });
+  });
+
+  // F4: the SAME mid-flight authority-replacement scenario as the previous test, but asserting the
+  // activity-log shape rather than just the response status. The continuity guard's refusal never
+  // reaches the real merge adapter (adapter.merges() stays 0, proven above) — the kernel still gets
+  // SOME result back from the adapter wrapper (a synthetic { outcome: "aborted" }), and without an
+  // explicit marker that synthetic, never-spawned result is indistinguishable in the evidence stream
+  // from a genuine `gh api` merge call that was itself cancelled mid-flight. This line is that marker.
+  it("logs git.delivery.dispatch.no-spawn when authority replacement stops the merge before dispatch", async () => {
     const adapter = recordingMergeAdapter(READY_PROVIDER);
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const approval = issueMergeApproval(approvalStore);
@@ -479,18 +638,37 @@ describe("merge execute (governed)", () => {
         return { ...active, runId: "replacement-run", envelopeDigest: "d".repeat(64) };
       },
     };
+    const activity: ServerLogEvent[] = [];
     const handler = createHandleMergeExecute({
-      execution: seams({ mergeAdapterFactory: () => adapter.adapter, approvalStore }),
+      execution: seams({
+        mergeAdapterFactory: () => adapter.adapter,
+        approvalStore,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
     });
 
     const res = await handler(
-      ctxFor(EXECUTE, mergeBody({ approval })),
+      {
+        ...ctxFor(EXECUTE, mergeBody({ approval })),
+        correlationId: "request-correlation-merge-no-spawn",
+      },
       deps({ gitDeliveryAuthority: authority }),
     );
 
-    expect((res.body as GitDeliveryMergeExecuteResponseBody).status).toBe("failed");
-    expect(reads).toBe(2);
+    // The route now answers this refusal with the SAME 403 the up-front admission gate returns (see the
+    // previous test); the F4 marker below is logged on the SAME path regardless, since it fires inside
+    // the adapter wrapper before the route ever sees a result to project.
+    expect(res.status).toBe(403);
     expect(adapter.merges()).toBe(0);
+    const marker = activity.find((event) => event.op === "git.delivery.dispatch.no-spawn");
+    expect(marker).toBeDefined();
+    expect(marker?.correlationId).toBe("request-correlation-merge-no-spawn");
+    expect(marker?.extra?.operation).toBe("merge");
+    expect(marker?.status).toBe(403);
   });
 
   it("normalizes a provider rejection into a typed reason + recovery disposition (AC3/AC4)", async () => {
@@ -503,14 +681,71 @@ describe("merge execute (governed)", () => {
     });
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const approval = issueMergeApproval(approvalStore);
+    const activity: ServerLogEvent[] = [];
     const handler = createHandleMergeExecute({
-      execution: seams({ mergeAdapterFactory: () => adapter.adapter, approvalStore }),
+      execution: seams({
+        mergeAdapterFactory: () => adapter.adapter,
+        approvalStore,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
     });
-    const res = await handler(ctxFor(EXECUTE, mergeBody({ approval })), deps());
+    const res = await handler(
+      {
+        ...ctxFor(EXECUTE, mergeBody({ approval })),
+        correlationId: "request-correlation-merge-rejected",
+      },
+      deps(),
+    );
     const body = res.body as GitDeliveryMergeExecuteResponseBody;
     expect(body.mergeRejectionReason).toBe("conflict");
     expect(body.recoveryDisposition).toBe("user-fixable");
     expect(body.recoveryActionHint).toBe("resolve-conflicts");
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({
+      level: "warn",
+      correlationId: "request-correlation-merge-rejected",
+      errorKind: "conflict",
+    });
+    expect(completed?.extra).toMatchObject({ status: "recovery-required" });
+  });
+
+  it("logs a snapshot precondition throw with the request correlation id", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issueMergeApproval(approvalStore);
+    const activity: ServerLogEvent[] = [];
+    const handler = createHandleMergeExecute({
+      execution: seams({
+        approvalStore,
+        snapshotReader: () => Promise.reject(new Error("host path must stay private")),
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
+    });
+
+    const res = await handler(
+      {
+        ...ctxFor(EXECUTE, mergeBody({ approval })),
+        correlationId: "request-correlation-merge-snapshot",
+      },
+      deps(),
+    );
+
+    expect(res.status).toBe(409);
+    const failed = activity.find((event) => event.op === "git.delivery.mutation.failed");
+    expect(failed).toMatchObject({
+      level: "error",
+      correlationId: "request-correlation-merge-snapshot",
+    });
+    expect(typeof failed?.errorKind).toBe("string");
+    expect(failed?.extra).toEqual({ actionKind: "merge", phaseReached: "snapshot" });
+    expect(JSON.stringify(activity)).not.toContain("host path must stay private");
   });
 });
 
@@ -648,5 +883,71 @@ describe("merge request validation", () => {
     const handler = createHandleMergePreview({ execution: seams() });
     const res = await handler(ctxFor(PREVIEW, mergeBody({ projectId: "/nope" })), deps());
     expect(res.status).toBe(404);
+  });
+});
+
+// ─── F1: the default merge adapter (no mergeAdapterFactory seam) — audit finding: this branch
+// previously hard-coded UNKNOWN_CORRELATION_ID and an uninjectable processServerLogSink(),
+// silently dropping BOTH the caller's real correlationId and its activityLog seam. Exercises
+// readMergeProviderReadiness directly (bypassing HTTP): it wraps the adapter's real
+// `.readMergeReadiness()` call in its own try/catch and reports a provider-error readiness on any
+// failure, so no policy-block trick is needed here — the only fact under test is what deps object
+// the default factory receives. ─────────────────────────────────────────────────────────────
+
+function testWorkspace(root: string): WorkspaceInfo {
+  return {
+    root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
+}
+
+const WIRING_COMMAND: GitMergeCommand = {
+  kind: "merge",
+  ownerAndRepo: "oscharko-dev/Keiko",
+  prExternalId: "42",
+  baseBranchName: "dev",
+  headBranchName: "feat/x",
+  mergeStrategy: "squash",
+  deleteBranchAfterMerge: false,
+};
+
+describe("readMergeProviderReadiness — default merge-adapter termination wiring (F1)", () => {
+  beforeEach(() => {
+    createNodeGitMergeAdapterCalls.length = 0;
+  });
+
+  it("wires the caller's activityLog + correlationId into the default createNodeGitMergeAdapter call", async () => {
+    const activity: ServerLogEvent[] = [];
+    await readMergeProviderReadiness(
+      WIRING_COMMAND,
+      testWorkspace("/nonexistent/keiko-gd-merge-wiring"),
+      {
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      },
+      () => 1,
+      "request-correlation-merge-wiring",
+    );
+    expect(createNodeGitMergeAdapterCalls).toHaveLength(1);
+    const onTerminated = createNodeGitMergeAdapterCalls[0]?.onTerminated;
+    expect(onTerminated).toBeTypeOf("function");
+    onTerminated?.({
+      reason: "spawn-callback-error",
+      childPid: 9012,
+      windowsTreeKill: "not-attempted",
+    });
+    expect(activity).toHaveLength(1);
+    expect(activity[0]?.op).toBe("command.terminated");
+    expect(activity[0]?.correlationId).toBe("request-correlation-merge-wiring");
+    expect(activity[0]?.extra?.childPid).toBe(9012);
   });
 });

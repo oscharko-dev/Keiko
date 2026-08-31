@@ -23,6 +23,12 @@ import { createRunRegistry } from "../runs.js";
 import { UI_HOST } from "../server.js";
 import { runMigrations } from "../store/schema.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "../observability/index.js";
 import { buildWorkspaceInstanceStoreOverDatabase } from "./store.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";
 import type { WorkspaceProvisioningService } from "./types.js";
@@ -134,6 +140,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await closeServer();
+  resetServerLogger();
   db.close();
   await rm(staticRoot, { recursive: true, force: true });
   rmSync(repoRoot, { recursive: true, force: true });
@@ -146,10 +153,17 @@ interface ProvisionBody {
   readonly created: boolean;
 }
 
-async function provision(taskId: string, baseBranch = "main"): Promise<Response> {
+async function provision(
+  taskId: string,
+  baseBranch = "main",
+  correlationId?: string,
+): Promise<Response> {
   return fetch(`${baseUrl()}/api/task-workspaces`, {
     method: "POST",
-    headers: csrfHeaders(),
+    headers: {
+      ...csrfHeaders(),
+      ...(correlationId === undefined ? {} : { "X-Keiko-Correlation-Id": correlationId }),
+    },
     body: JSON.stringify({ root: repoRoot, taskId, baseBranch, requestedBy: "u" }),
   });
 }
@@ -182,20 +196,67 @@ describe("POST /api/task-workspaces", () => {
     expect(res.status).toBe(400);
   });
 
+  it("logs malformed JSON before provisioning dispatch without retaining its body", async () => {
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    const correlationId = "route-provision-malformed-json-1";
+    const hostileBody = '{"taskId":"Patient Jane private';
+    const res = await fetch(`${baseUrl()}/api/task-workspaces`, {
+      method: "POST",
+      headers: {
+        ...csrfHeaders(),
+        "X-Keiko-Correlation-Id": correlationId,
+      },
+      body: hostileBody,
+    });
+
+    expect(res.status).toBe(400);
+    const events = activityLog.events.filter((event) => event.op === "task-workspace.lifecycle");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      correlationId,
+      errorKind: "INVALID_REQUEST",
+      extra: { operation: "provision" },
+    });
+    expect(activityLog.lines().join("\n")).not.toContain(hostileBody);
+  });
+
   it("maps an invalid base branch to 400 INVALID_BASE_BRANCH", async () => {
-    const res = await provision("t1", "does-not-exist");
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    const correlationId = "route-provision-service-rejection-1";
+    const res = await provision("t1", "does-not-exist", correlationId);
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("INVALID_BASE_BRANCH");
+    const events = activityLog.events.filter((event) => event.op === "task-workspace.lifecycle");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      correlationId,
+      errorKind: "INVALID_BASE_BRANCH",
+      extra: { operation: "provision" },
+    });
   });
 
   // #449/#1587 follow-up: the route boundary rejects control/zero-width/bidi code points in the
   // free-form identity fields before they can reach the lock owner / pointer / evidence.
   it("rejects a taskId carrying a bidi-override character (400 INVALID_REQUEST)", async () => {
-    const res = await provision(`t${String.fromCodePoint(0x202e)}1`);
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    const taskId = `t${String.fromCodePoint(0x202e)}1`;
+    const correlationId = "route-provision-invalid-1";
+    const res = await provision(taskId, "main", correlationId);
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("INVALID_REQUEST");
+    const events = activityLog.events.filter((event) => event.op === "task-workspace.lifecycle");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      correlationId,
+      errorKind: "INVALID_REQUEST",
+      extra: { operation: "provision" },
+    });
+    expect(activityLog.lines().join("\n")).not.toContain(taskId);
   });
 
   it("rejects a requestedBy carrying a zero-width character (400 INVALID_REQUEST)", async () => {

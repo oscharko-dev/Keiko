@@ -9,6 +9,12 @@
       "package": "keiko-cli"
     },
     {
+      "op": "portable.windows-alert.spawn-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/portable-launch-notifier.ts:205",
+      "package": "keiko-cli"
+    },
+    {
       "op": "process.exiting",
       "category": "process",
       "site": "packages/keiko-cli/src/ui.ts:566",
@@ -36,6 +42,54 @@
       "op": "process.started",
       "category": "process",
       "site": "packages/keiko-cli/src/ui.ts:934",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "security.windows-launcher.system-binary-missing",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/security-log.ts:80",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "security.windows-launcher.system-root-refused",
+      "category": "security",
+      "site": "packages/keiko-cli/src/security-log.ts:35",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "security.windows-lifecycle-opener.system-binary-missing",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/security-log.ts:104",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "security.windows-lifecycle-opener.system-root-refused",
+      "category": "security",
+      "site": "packages/keiko-cli/src/security-log.ts:59",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "security.windows-portable-alert.system-binary-missing",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/security-log.ts:96",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "security.windows-portable-alert.system-root-refused",
+      "category": "security",
+      "site": "packages/keiko-cli/src/security-log.ts:51",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "security.windows-portable-legacy-launcher.system-binary-missing",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/security-log.ts:88",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "security.windows-portable-legacy-launcher.system-root-refused",
+      "category": "security",
+      "site": "packages/keiko-cli/src/security-log.ts:43",
       "package": "keiko-cli"
     },
     {
@@ -711,6 +765,18 @@
       "package": "keiko-security"
     },
     {
+      "op": "security.windows-shortcut.system-binary-missing",
+      "category": "diagnostic",
+      "site": "packages/keiko-security/src/windows-shortcuts.ts:181",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.windows-shortcut.system-root-refused",
+      "category": "security",
+      "site": "packages/keiko-security/src/windows-shortcuts.ts:172",
+      "package": "keiko-security"
+    },
+    {
       "op": "<dynamic>",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/diagnostics-log.ts:316",
@@ -785,7 +851,7 @@
     {
       "op": "command.terminated",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/process-log-sink.ts:107",
+      "site": "packages/keiko-server/src/process-log-sink.ts:110",
       "package": "keiko-server"
     },
     {
@@ -857,31 +923,37 @@
     {
       "op": "git.commit.preview.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:425",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:426",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.authority.admitted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:140",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:170",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.authority.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:106",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:144",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.dispatch.no-spawn",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:153",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:259",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:396",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:289",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:427",
       "package": "keiko-server"
     },
     {
@@ -975,27 +1047,45 @@
       "package": "keiko-server"
     },
     {
+      "op": "lsp.java.version-probe.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/lsp/providers/javaProvider.ts:340",
+      "package": "keiko-server"
+    },
+    {
+      "op": "lsp.process.ownership.changed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/lsp/lspProcessManager.ts:358",
+      "package": "keiko-server"
+    },
+    {
+      "op": "lsp.process.runtime-error",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:127",
+      "package": "keiko-server"
+    },
+    {
       "op": "lsp.process.terminated",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:82",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:154",
       "package": "keiko-server"
     },
     {
       "op": "lsp.spawn.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:57",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:74",
       "package": "keiko-server"
     },
     {
       "op": "lsp.spawn.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:67",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:109",
       "package": "keiko-server"
     },
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:1812",
+      "site": "packages/keiko-server/src/deps.ts:1844",
       "package": "keiko-server"
     },
     {
@@ -1038,6 +1128,18 @@
       "op": "native-file-dialog.selection.projected",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/native-file-dialog/route.ts:172",
+      "package": "keiko-server"
+    },
+    {
+      "op": "portable.windows-authenticode.system-binary-refused",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-runtime/windowsPortableAuthenticode.ts:63",
+      "package": "keiko-server"
+    },
+    {
+      "op": "portable.windows-authenticode.system-binary-refused",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/windowsPortableAuthenticode.ts:71",
       "package": "keiko-server"
     },
     {
@@ -1086,6 +1188,12 @@
       "op": "store.opened",
       "category": "setup",
       "site": "packages/keiko-server/src/store/db.ts:929",
+      "package": "keiko-server"
+    },
+    {
+      "op": "task-workspace.lifecycle",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/task-workspace/activity-log.ts:139",
       "package": "keiko-server"
     },
     {

@@ -24,6 +24,7 @@ import {
   readWindowsPortableShortcutTarget,
   refreshPortableShortcut,
 } from "./update-portable-activation-files.js";
+import type { SecurityLogEvent, SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   parseWindowsShortcutFallback,
   windowsShortcutFallbackContent,
@@ -641,5 +642,192 @@ describe("portable update activation", () => {
     });
     expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
     expect(readFileSync(registrationPath, "utf8")).toBe(oldRegistration);
+  });
+});
+
+// PR #3355 review (IDX62): a hostile/malformed SystemRoot/WINDIR must reach the activity log
+// through the PRODUCTION refreshPortableShortcut call path, not only keiko-security's own unit
+// suite. `readWindowsShortcutDefinition`/`writeWindowsShortcutDefinition` only take the win32
+// (cscript) route when `process.platform === "win32"`, so this block stubs the platform exactly
+// like windows-shortcuts.test.ts does to exercise that route hermetically (the resolver throws
+// strictly before any spawn is attempted — real Windows is never required).
+describe("refreshPortableShortcut logs a trust-boundary refusal (win32 route)", () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+
+  afterEach(() => {
+    if (platform !== undefined) Object.defineProperty(process, "platform", platform);
+  });
+
+  function stubWin32(): void {
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+  }
+
+  const HOSTILE_ENV = { SystemRoot: String.raw`\\attacker\share` };
+
+  it.each([
+    ["absent", "create"],
+    ["existing", "read"],
+  ] as const)(
+    "activation correlates the %s-shortcut refusal to its request",
+    async (shortcutState, mode) => {
+      stubWin32();
+      const install = await makeInstall();
+      const appData = join(install.home, "AppData", "Roaming");
+      const shortcutPath = join(
+        appData,
+        "Microsoft",
+        "Windows",
+        "Start Menu",
+        "Programs",
+        "Keiko.lnk",
+      );
+      if (shortcutState === "existing") {
+        mkdirSync(dirname(shortcutPath), { recursive: true });
+        writeFileSync(shortcutPath, "placeholder-shortcut-bytes", "utf8");
+      }
+      const events: SecurityLogEvent[] = [];
+      const request = {
+        sessionId: `session-correlated-${shortcutState}`,
+        targetVersion: TARGET_VERSION,
+        stage: stageSummary(),
+        runtimeFacts: {
+          packageRoot: install.packageRoot,
+          portableStateDir: install.stateDir,
+        },
+      } as const;
+      const correlationId = activationIdFor(request);
+      const activator = createPortableUpdateActivator({
+        env: {
+          ...HOSTILE_ENV,
+          APPDATA: appData,
+          KEIKO_STATE_DIR: install.stateDir,
+          LOCALAPPDATA: join(install.home, "AppData", "Local"),
+        },
+        homedir: () => install.home,
+        securityLogSink: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        spawnFn: () => childProcess(),
+        versionVerifier: () => Promise.resolve(true),
+      });
+
+      await expect(activator.activate(request)).resolves.toMatchObject({
+        shortcutRefreshed: false,
+      });
+      expect(events).toEqual([
+        expect.objectContaining({
+          correlationId,
+          op: "security.windows-shortcut.system-root-refused",
+          extra: { mode },
+        }),
+      ]);
+      expect(JSON.stringify(events)).not.toContain("attacker");
+    },
+  );
+
+  function layoutFor(installRoot: string): {
+    readonly installRoot: string;
+    readonly appRoot: string;
+    readonly packageJsonPath: string;
+    readonly setupManifestPath: string;
+    readonly launcherPath: string;
+  } {
+    return {
+      installRoot,
+      appRoot: join(installRoot, "app"),
+      packageJsonPath: join(installRoot, "app", "package.json"),
+      setupManifestPath: join(installRoot, "app", "keiko-setup-manifest.json"),
+      launcherPath: join(installRoot, "Keiko.exe"),
+    };
+  }
+
+  it("first-install branch: no prior shortcut, refuses the write and still logs the refusal", async () => {
+    stubWin32();
+    const base = await mkdtemp(join(tmpdir(), "keiko-shortcut-root-refused-absent-"));
+    tempRoots.push(base);
+    const home = join(base, "home");
+    const layout = layoutFor(join(home, "AppData", "Local", "Programs", "Keiko"));
+    const write = vi.fn<SecurityLogSink["write"]>();
+    const sink: SecurityLogSink = { write };
+
+    // Absent case: nothing under Start Menu\Programs yet, so refreshPortableShortcut takes the
+    // CREATE branch straight into writeShortcut/writeWindowsShortcutDefinition.
+    expect(
+      refreshPortableShortcut({
+        target: "windows-x64",
+        layout,
+        env: HOSTILE_ENV,
+        home,
+        securityLogSink: sink,
+      }),
+    ).toBe(false);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        category: "security",
+        op: "security.windows-shortcut.system-root-refused",
+        extra: { mode: "create" },
+      }),
+    );
+  });
+
+  it("existing-shortcut branch: a prior shortcut on disk refuses the read and still logs the refusal", async () => {
+    stubWin32();
+    const base = await mkdtemp(join(tmpdir(), "keiko-shortcut-root-refused-existing-"));
+    tempRoots.push(base);
+    const home = join(base, "home");
+    const layout = layoutFor(join(home, "AppData", "Local", "Programs", "Keiko"));
+    const shortcutPath = join(
+      home,
+      "AppData",
+      "Roaming",
+      "Microsoft",
+      "Windows",
+      "Start Menu",
+      "Programs",
+      "Keiko.lnk",
+    );
+    mkdirSync(dirname(shortcutPath), { recursive: true });
+    // Any non-empty regular file stands in for a prior shortcut here: refreshPortableShortcut's
+    // overwrite guard must resolve SystemRoot to attempt the READ before it can decide whether to
+    // rewrite, and that resolution — never cscript, which is stubbed win32 never actually reaches
+    // here — is exactly what the hostile env refuses. The content is never parsed.
+    writeFileSync(shortcutPath, "placeholder-shortcut-bytes", "utf8");
+    const write = vi.fn<SecurityLogSink["write"]>();
+    const sink: SecurityLogSink = { write };
+
+    expect(
+      refreshPortableShortcut({
+        target: "windows-x64",
+        layout,
+        env: HOSTILE_ENV,
+        home,
+        securityLogSink: sink,
+      }),
+    ).toBe(false);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        category: "security",
+        op: "security.windows-shortcut.system-root-refused",
+        extra: { mode: "read" },
+      }),
+    );
+  });
+
+  it("stays a silent no-op boolean when no sink is wired, matching every pre-existing caller", async () => {
+    stubWin32();
+    const base = await mkdtemp(join(tmpdir(), "keiko-shortcut-root-refused-no-sink-"));
+    tempRoots.push(base);
+    const home = join(base, "home");
+    const layout = layoutFor(join(home, "AppData", "Local", "Programs", "Keiko"));
+
+    expect(refreshPortableShortcut({ target: "windows-x64", layout, env: HOSTILE_ENV, home })).toBe(
+      false,
+    );
   });
 });

@@ -26,13 +26,15 @@ Every process generation uses unique, private `-configuration` and `-data` direc
 reuses the operator home, the JDT LS distribution configuration, or another workspace's data.
 Failure to create, restrict, account for, or clean these directories fails closed.
 
-The approved descendant executables for the Java process tree are only `java` and `python3`.
-`python3` is required because the operator-provisioned `jdtls` launcher command is commonly
-shipped as a Python interpreter-shebang script that resolves the platform-specific JDT LS
-classpath/args before it execs `java`; it never runs arbitrary operator or workspace scripts, and
-it runs under the same enforced no-network, no-arbitrary-argument isolation boundary as `java`.
-This is not a general-purpose script-execution grant and must not be widened to cover other
-interpreters or scripts.
+The approved descendant executables are `java` and `python3`. After a durable generation lease is
+written, Keiko first runs a bounded, abortable `java -version` prerequisite through the shared
+`runCommand` boundary with exact executable resolution, copy-only environment, ephemeral HOME,
+5-second deadline, 16-KiB output cap, and native `network:none` enforcement. Only a supported JDK can
+proceed. The pinned JDT LS v1.60 launcher then repeats validation with
+`--validate-java-version` inside the final long-lived governed tree. On Windows no compatible native
+no-egress backend currently exists: the generic Linux Docker fallback cannot execute host
+`java.exe`, `.cmd`, or `.bat` runtimes or preserve Windows document paths, so Java activation is
+unavailable uniformly for every Windows Java executable shape rather than claiming false support.
 
 Java currently runs in standalone `safeOffline` mode. Maven and Gradle import, wrappers, plugins,
 init scripts, annotation processing, automatic build-configuration updates, artifact/source
@@ -45,6 +47,9 @@ when JDT LS is healthy. Keiko does not silently enable unsafe import to improve 
 1. Inspect Java in Settings > Languages. Confirm the approved runtime and JDK identities,
    source/target levels, standalone import mode, configuration source, restart state, negotiated
    capabilities, and content-free health/cache counters.
+   In `server.log`, `lsp.java.version-probe.completed` distinguishes unsupported or malformed Java,
+   nonzero exit, output cap, timeout, spawn/invocation failure, and cancellation without recording
+   the executable path or version output.
 2. Confirm the operator-provisioned JDK and JDT LS distribution are outside the workspace and match
    the approved versions. Use only operator diagnostics; do not paste local paths into workspace
    settings or evidence.
@@ -78,7 +83,7 @@ safe standalone analysis without a complete build-derived project model.
 
 **Resolution**
 
-1. Provision JDT LS `1.60.0`, an approved JDK 21+, and all required standalone classpath artifacts
+1. On Linux or macOS, provision JDT LS `1.60.0`, an approved JDK 21+, and all required standalone classpath artifacts
    offline and outside the workspace. Update only the trusted operator runtime mapping.
 2. Correct missing or escaping contained project roots, classpath entries, or configuration files.
    Keep the typed source/target levels and `safeOffline` import posture.

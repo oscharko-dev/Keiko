@@ -423,7 +423,6 @@ describe("resolveWindowsSpawnInvocation", () => {
     ["a pipe into another command", "| whoami"],
     ["a redirect", "> out.txt"],
     ["a caret", "^"],
-    ["a percent expansion", "%PATH%"],
     ["a long backslash run", "\\".repeat(64)],
   ])("keeps %s inert inside a single cmd.exe operand on win32", (_label, argument) => {
     const invocation = resolveWindowsSpawnInvocation(
@@ -453,6 +452,9 @@ describe("resolveWindowsSpawnInvocation", () => {
   it.each([
     ["a line feed", "first\nsecond"],
     ["a carriage return", "first\rsecond"],
+    // cmd.exe expands %NAME% before caret processing — no literal transport exists, so the wrapper
+    // fails closed instead of delivering a different argv (review 5058544058 P1).
+    ["a percent expansion", "%PATH%"],
   ])("refuses to wrap %s on win32", (_label, argument) => {
     expect(() =>
       resolveWindowsSpawnInvocation(

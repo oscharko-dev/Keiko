@@ -281,6 +281,7 @@ async function runVerificationPhase(
     realRoot: ctx.realRoot,
     appliedTestFiles: verifiableFiles(result),
     signal: ctx.signal,
+    correlationId: ctx.correlationId,
   });
 }
 

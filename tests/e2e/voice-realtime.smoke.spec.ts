@@ -16,6 +16,7 @@
 // (the gated WS upgrade integration test boots the real BFF and a real `ws` client).
 
 import { expect, test, type Page } from "@playwright/test";
+import { fakeDictationMediaInit } from "./support/dictation-media.js";
 import { evidenceScreenshotPath } from "./support/evidence.js";
 
 const FULL_REALTIME_CAPABILITY = {
@@ -179,6 +180,7 @@ async function noVoiceFlow(page: Page): Promise<void> {
 }
 
 async function sttOnlyFlow(page: Page): Promise<void> {
+  await page.addInitScript(fakeDictationMediaInit("grant"));
   await stubCapability(page, STT_CAPABILITY);
   await openComposer(page);
   // Dictation is offered for an STT-only deployment, but never the full realtime transport (AC4).

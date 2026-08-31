@@ -19,6 +19,7 @@ import type {
   WorkspaceRecoveryStrategy,
 } from "@oscharko-dev/keiko-contracts";
 import type { ActiveWorkspacePointer, ActiveWorkspacePointerStore } from "./active-store.js";
+import type { WorkspaceActivityLogSeam } from "./activity-log.js";
 import type { WorkspaceInstanceStore } from "./store.js";
 import type { WorkspaceMutexRegistry } from "./mutex.js";
 
@@ -29,6 +30,12 @@ export interface WorkspaceProvisionRequest {
   readonly taskId: string;
   readonly baseBranch: string;
   readonly requestedBy: string;
+  // The triggering HTTP request's own correlation id (RouteContext.correlationId), threaded into this
+  // operation's lifecycle evidence so the timeline it produces can be joined back to the request that
+  // caused it (AGENTS.md §8). Undefined only for a caller with genuinely no request scope (e.g. an
+  // internal repair re-materialization not driven by a fresh HTTP call) — the evidence layer falls
+  // back to UNKNOWN_CORRELATION_ID in that case, never a silently reused workspace identity.
+  readonly correlationId?: string | undefined;
 }
 
 export interface WorkspaceProvisionResult {
@@ -45,6 +52,8 @@ export interface WorkspaceActivateRequest {
   readonly requestedBy: string;
   readonly acquireLock: boolean;
   readonly expectedLifecycleState?: TaskWorkspaceLifecycleState | undefined;
+  // See WorkspaceProvisionRequest.correlationId.
+  readonly correlationId?: string | undefined;
 }
 
 export interface WorkspaceActivateResult {
@@ -61,14 +70,23 @@ export interface WorkspaceProvisioningService {
   readonly ensureIdentity?: ((instance: WorkspaceInstance) => void) | undefined;
 }
 
-export interface WorkspaceProvisioningServiceDeps {
+export interface WorkspaceProvisioningServiceDeps extends WorkspaceActivityLogSeam {
   readonly store: WorkspaceInstanceStore;
   readonly evidenceStore: EvidenceStore;
   // The Keiko-owned managed worktree root (absolute). Provisioning proves ownership of this before
   // writing any worktree under it.
   readonly managedRoot: string;
   // Builds a narrow worktree adapter bound to a repository root. Injected so tests can supply a fake.
-  readonly createAdapter: (workspace: WorkspaceInfo) => GitWorktreeAdapter;
+  //
+  // `correlationId` is part of the signature, not of the composition, because the adapter emits
+  // termination evidence and that evidence must join the operation that caused it (AGENTS.md §8).
+  // The port used to take only the workspace, so `deps.ts` had no id to give and stamped every one
+  // of the five managed-worktree lanes with UNKNOWN_CORRELATION_ID — while the surrounding
+  // workspace events on the SAME operation carried the real one, which is precisely the timeline
+  // join this evidence exists to enable (PR #3355 review, P2). Callers pass the id they already
+  // hold; `UNKNOWN_CORRELATION_ID` remains the sanctioned fallback where an operation genuinely
+  // has none, never an ad-hoc string.
+  readonly createAdapter: (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
   readonly redactString: (input: string) => string;
   // Clock + id generator, injected for deterministic tests. `now` is epoch ms.
   readonly now: () => number;
@@ -108,11 +126,15 @@ export interface SetActiveWorkspaceRequest {
   readonly requestedBy: string;
   // When true, the activation acquires the workspace lock for the actor (cross-actor exclusivity).
   readonly acquireLock: boolean;
+  // See WorkspaceProvisionRequest.correlationId.
+  readonly correlationId?: string | undefined;
 }
 
 export interface WorkspaceLifecycleActionRequest {
   readonly workspaceId: string;
   readonly requestedBy: string;
+  // See WorkspaceProvisionRequest.correlationId.
+  readonly correlationId?: string | undefined;
 }
 
 export interface WorkspaceLifecycleActionResult {
@@ -143,7 +165,7 @@ export interface WorkspaceLifecycleService {
   ) => Promise<WorkspaceLifecycleActionResult>;
 }
 
-export interface WorkspaceLifecycleServiceDeps {
+export interface WorkspaceLifecycleServiceDeps extends WorkspaceActivityLogSeam {
   readonly store: WorkspaceInstanceStore;
   readonly activePointerStore: ActiveWorkspacePointerStore;
   // The Keiko-owned managed worktree root. Active binding re-proves persisted paths are still
@@ -175,18 +197,24 @@ export interface WorkspaceReconciliationService {
   // Read-only: derive the report from the currently persisted instances (no filesystem/git IO).
   readonly report: (repositoryRoot?: string) => WorkspaceReconciliationReport;
   // Live: verify every (or one repository's) instance against disk + git, persist the classification,
-  // and return the fresh report. Used at startup and by the explicit refresh route.
-  readonly reconcile: (repositoryRoot?: string) => Promise<WorkspaceReconciliationReport>;
+  // and return the fresh report. Used at startup and by the explicit refresh route. `correlationId` is
+  // the triggering HTTP request's own id (see WorkspaceProvisionRequest.correlationId); the startup
+  // caller has no request scope and omits it, so evidence from that pass falls back to
+  // UNKNOWN_CORRELATION_ID — genuinely correct there, since no request produced it.
+  readonly reconcile: (
+    repositoryRoot?: string,
+    correlationId?: string,
+  ) => Promise<WorkspaceReconciliationReport>;
 }
 
-export interface WorkspaceReconciliationServiceDeps {
+export interface WorkspaceReconciliationServiceDeps extends WorkspaceActivityLogSeam {
   readonly store: WorkspaceInstanceStore;
   readonly activePointerStore: ActiveWorkspacePointerStore;
   readonly evidenceStore: EvidenceStore;
   // The Keiko-owned managed worktree root (absolute) — every persisted path is realpath-checked for
   // containment inside it before it is trusted (SC).
   readonly managedRoot: string;
-  readonly createAdapter: (workspace: WorkspaceInfo) => GitWorktreeAdapter;
+  readonly createAdapter: (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
   readonly redactString: (input: string) => string;
   readonly now: () => number;
   readonly newId: () => string;
@@ -207,6 +235,8 @@ export interface WorkspaceRepairRequest {
   // The #444 `repair` operation requires operator approval; an automatic repair refuses to mutate
   // without it.
   readonly operatorApproved: boolean;
+  // See WorkspaceProvisionRequest.correlationId.
+  readonly correlationId?: string | undefined;
 }
 
 export interface WorkspaceRepairResult {
@@ -225,14 +255,14 @@ export interface WorkspaceRepairService {
   readonly repair: (request: WorkspaceRepairRequest) => Promise<WorkspaceRepairResult>;
 }
 
-export interface WorkspaceRepairServiceDeps {
+export interface WorkspaceRepairServiceDeps extends WorkspaceActivityLogSeam {
   readonly store: WorkspaceInstanceStore;
   readonly activePointerStore: ActiveWorkspacePointerStore;
   readonly evidenceStore: EvidenceStore;
   // Reused #445 service: worktree-recreating repairs delegate the re-materialization walk to it.
   readonly provisioning: WorkspaceProvisioningService;
   readonly managedRoot: string;
-  readonly createAdapter: (workspace: WorkspaceInfo) => GitWorktreeAdapter;
+  readonly createAdapter: (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
   readonly redactString: (input: string) => string;
   readonly now: () => number;
   readonly newId: () => string;
@@ -270,7 +300,10 @@ export interface WorkspaceCleanupServiceDeps extends WorkspaceReconciliationServ
 export interface WorkspaceHealthService {
   // Live: classify every persisted instance for a repository root (or all repositories) plus any
   // orphaned managed worktrees, and return the content-free report. Read-only — no persistence.
-  readonly report: (repositoryRoot?: string) => Promise<WorkspaceHealthReport>;
+  readonly report: (
+    repositoryRoot?: string,
+    correlationId?: string,
+  ) => Promise<WorkspaceHealthReport>;
 }
 
 export interface WorkspaceCleanupRequest {
@@ -281,6 +314,8 @@ export interface WorkspaceCleanupRequest {
   // `request` transitions a settled instance to cleanup-pending; `complete` performs the live-verified
   // governed physical removal of a cleanup-pending instance.
   readonly mode: WorkspaceCleanupMode;
+  // See WorkspaceProvisionRequest.correlationId.
+  readonly correlationId?: string | undefined;
 }
 
 export type WorkspaceCleanupOutcome = "requested" | "completed" | "refused";
@@ -298,6 +333,8 @@ export interface WorkspaceOrphanCleanupRequest {
   readonly repositoryRoot?: string | undefined;
   readonly requestedBy: string;
   readonly operatorApproved: boolean;
+  // See WorkspaceProvisionRequest.correlationId.
+  readonly correlationId?: string | undefined;
 }
 
 export interface WorkspaceOrphanRefusal {

@@ -20,6 +20,10 @@ import type {
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { FilesError, resolveRoot } from "../files.js";
+import {
+  runWithWorkspaceLifecycleFailureLogging,
+  type WorkspaceLifecycleFailureInput,
+} from "./activity-log.js";
 import { TaskWorkspaceError } from "./errors.js";
 import { assertSafeFieldValue } from "./field-safety.js";
 import type {
@@ -208,6 +212,14 @@ async function runHandler(
   }
 }
 
+function runLoggedMutationHandler(
+  deps: UiHandlerDeps,
+  failureInput: WorkspaceLifecycleFailureInput,
+  work: () => Promise<RouteResult>,
+): Promise<RouteResult> {
+  return runHandler(deps, () => runWithWorkspaceLifecycleFailureLogging({}, failureInput, work));
+}
+
 function redacted<T>(deps: UiHandlerDeps, value: T): T {
   return deps.redactor(value) as T;
 }
@@ -251,26 +263,35 @@ export async function handleProvisionTaskWorkspace(
 ): Promise<RouteResult> {
   const guard = requireService(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(deps, async () => {
-    const body = await readJsonObject(ctx.req);
-    const parsed = parseProvisionBody(body);
-    const resolvedRoot = await resolveRoot(deps.store, parsed.root, deps.redactor);
-    const request: WorkspaceProvisionRequest = {
-      repositoryRequestPath: resolvedRoot.realRoot,
-      taskId: parsed.taskId,
-      baseBranch: parsed.baseBranch,
-      requestedBy: parsed.requestedBy,
-    };
-    const result = await guard.provision(request);
-    return {
-      status: result.created ? 201 : 200,
-      body: redacted(deps, {
-        instance: result.instance,
-        binding: result.binding,
-        created: result.created,
-      }),
-    };
-  });
+  return runLoggedMutationHandler(
+    deps,
+    {
+      operation: "provision",
+      workspaceIdentitySeed: "route-provision-request",
+      correlationId: ctx.correlationId,
+    },
+    async () => {
+      const body = await readJsonObject(ctx.req);
+      const parsed = parseProvisionBody(body);
+      const resolvedRoot = await resolveRoot(deps.store, parsed.root, deps.redactor);
+      const request: WorkspaceProvisionRequest = {
+        repositoryRequestPath: resolvedRoot.realRoot,
+        taskId: parsed.taskId,
+        baseBranch: parsed.baseBranch,
+        requestedBy: parsed.requestedBy,
+        correlationId: ctx.correlationId,
+      };
+      const result = await guard.provision(request);
+      return {
+        status: result.created ? 201 : 200,
+        body: redacted(deps, {
+          instance: result.instance,
+          binding: result.binding,
+          created: result.created,
+        }),
+      };
+    },
+  );
 }
 
 // GET /api/task-workspaces/:workspaceId — read one persisted WorkspaceInstance.
@@ -293,9 +314,10 @@ export function handleGetTaskWorkspace(ctx: RouteContext, deps: UiHandlerDeps): 
 function parseLifecycleActionBody(
   workspaceId: string,
   body: Record<string, unknown>,
+  correlationId: string | undefined,
 ): WorkspaceLifecycleActionRequest {
   const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
-  return { workspaceId, requestedBy };
+  return { workspaceId, requestedBy, correlationId };
 }
 
 // GET /api/task-workspaces?root=<repoRoot> — list the persisted instances for a repository root.
@@ -327,28 +349,37 @@ export async function handleSetActiveTaskWorkspace(
 ): Promise<RouteResult> {
   const guard = requireLifecycle(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(deps, async () => {
-    const body = await readJsonObject(ctx.req);
-    const workspaceId = boundedString(body.workspaceId);
-    const requestedBy = boundedString(body.requestedBy);
-    if (workspaceId === undefined || requestedBy === undefined) {
-      throw new TaskWorkspaceError(
-        "INVALID_REQUEST",
-        "missing or invalid fields: workspaceId, requestedBy",
-      );
-    }
-    // requestedBy is persisted as the active-pointer setBy — reject control/zero-width/bidi chars.
-    assertSafeFieldValue(requestedBy, "requestedBy");
-    const result = await guard.setActive({
-      workspaceId,
-      requestedBy,
-      acquireLock: body.acquireLock === true,
-    });
-    return {
-      status: 200,
-      body: redacted(deps, { instance: result.instance, binding: result.binding }),
-    };
-  });
+  return runLoggedMutationHandler(
+    deps,
+    {
+      operation: "activate",
+      workspaceIdentitySeed: "route-activation-request",
+      correlationId: ctx.correlationId,
+    },
+    async () => {
+      const body = await readJsonObject(ctx.req);
+      const workspaceId = boundedString(body.workspaceId);
+      const requestedBy = boundedString(body.requestedBy);
+      if (workspaceId === undefined || requestedBy === undefined) {
+        throw new TaskWorkspaceError(
+          "INVALID_REQUEST",
+          "missing or invalid fields: workspaceId, requestedBy",
+        );
+      }
+      // requestedBy is persisted as the active-pointer setBy — reject control/zero-width/bidi chars.
+      assertSafeFieldValue(requestedBy, "requestedBy");
+      const result = await guard.setActive({
+        workspaceId,
+        requestedBy,
+        acquireLock: body.acquireLock === true,
+        correlationId: ctx.correlationId,
+      });
+      return {
+        status: 200,
+        body: redacted(deps, { instance: result.instance, binding: result.binding }),
+      };
+    },
+  );
 }
 
 // DELETE /api/task-workspaces/active — clear the active pointer → unbound mode.
@@ -369,20 +400,29 @@ type LifecycleAction = (
 async function runLifecycleAction(
   ctx: RouteContext,
   deps: UiHandlerDeps,
+  operation: "pause" | "resume" | "handoff",
   pick: (lifecycle: WorkspaceLifecycleService) => LifecycleAction,
 ): Promise<RouteResult> {
   const guard = requireLifecycle(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(deps, async () => {
-    const workspaceId = ctx.params.workspaceId ?? "";
-    const body = await readJsonObject(ctx.req);
-    const request = parseLifecycleActionBody(workspaceId, body);
-    const result = await pick(guard)(request);
-    return {
-      status: 200,
-      body: redacted(deps, { instance: result.instance, binding: result.binding }),
-    };
-  });
+  const workspaceId = ctx.params.workspaceId ?? "";
+  return runLoggedMutationHandler(
+    deps,
+    {
+      operation,
+      workspaceIdentitySeed: workspaceId || `route-${operation}-request`,
+      correlationId: ctx.correlationId,
+    },
+    async () => {
+      const body = await readJsonObject(ctx.req);
+      const request = parseLifecycleActionBody(workspaceId, body, ctx.correlationId);
+      const result = await pick(guard)(request);
+      return {
+        status: 200,
+        body: redacted(deps, { instance: result.instance, binding: result.binding }),
+      };
+    },
+  );
 }
 
 // POST /api/task-workspaces/:workspaceId/pause — active → paused (clears the pointer if it was active).
@@ -390,7 +430,7 @@ export function handlePauseTaskWorkspace(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return runLifecycleAction(ctx, deps, (lifecycle) => lifecycle.pause);
+  return runLifecycleAction(ctx, deps, "pause", (lifecycle) => lifecycle.pause);
 }
 
 // POST /api/task-workspaces/:workspaceId/resume — paused → active (sets the pointer).
@@ -398,7 +438,7 @@ export function handleResumeTaskWorkspace(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return runLifecycleAction(ctx, deps, (lifecycle) => lifecycle.resume);
+  return runLifecycleAction(ctx, deps, "resume", (lifecycle) => lifecycle.resume);
 }
 
 // POST /api/task-workspaces/:workspaceId/handoff — active|paused → handoff-ready (requires clean worktree).
@@ -406,7 +446,7 @@ export function handleHandoffTaskWorkspace(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return runLifecycleAction(ctx, deps, (lifecycle) => lifecycle.prepareHandoff);
+  return runLifecycleAction(ctx, deps, "handoff", (lifecycle) => lifecycle.prepareHandoff);
 }
 
 // ─── #447 reconciliation + repair routes ───────────────────────────────────────────────────────
@@ -445,12 +485,20 @@ export async function handleReconcileTaskWorkspaces(
 ): Promise<RouteResult> {
   const guard = requireReconciliation(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(deps, async () => {
-    const body = await readJsonObject(ctx.req);
-    const root = await resolveOptionalRoot(deps, optionalSafeField(body.root, "root"));
-    const report = await guard.reconcile(root);
-    return { status: 200, body: redacted(deps, { report }) };
-  });
+  return runLoggedMutationHandler(
+    deps,
+    {
+      operation: "reconcile",
+      workspaceIdentitySeed: "route-reconciliation-request",
+      correlationId: ctx.correlationId,
+    },
+    async () => {
+      const body = await readJsonObject(ctx.req);
+      const root = await resolveOptionalRoot(deps, optionalSafeField(body.root, "root"));
+      const report = await guard.reconcile(root, ctx.correlationId);
+      return { status: 200, body: redacted(deps, { report }) };
+    },
+  );
 }
 
 function parseRepairStrategy(value: unknown): WorkspaceRecoveryStrategy {
@@ -467,30 +515,39 @@ export async function handleRepairTaskWorkspace(
 ): Promise<RouteResult> {
   const guard = requireRepair(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(deps, async () => {
-    const workspaceId = ctx.params.workspaceId ?? "";
-    const body = await readJsonObject(ctx.req);
-    const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
-    const result = await guard.repair({
-      workspaceId,
-      requestedBy,
-      strategy: parseRepairStrategy(body.strategy),
-      operatorApproved: body.operatorApproved === true,
-    });
-    return {
-      status: 200,
-      body: redacted(deps, {
-        instance: result.instance,
-        binding: result.binding,
-        strategy: result.strategy,
-        applied: result.applied,
-        outcome: result.outcome,
-        status: result.status,
-        driftMarkers: result.driftMarkers,
-        operatorActionRequired: result.operatorActionRequired,
-      }),
-    };
-  });
+  const workspaceId = ctx.params.workspaceId ?? "";
+  return runLoggedMutationHandler(
+    deps,
+    {
+      operation: "repair",
+      workspaceIdentitySeed: workspaceId || "route-repair-request",
+      correlationId: ctx.correlationId,
+    },
+    async () => {
+      const body = await readJsonObject(ctx.req);
+      const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
+      const result = await guard.repair({
+        workspaceId,
+        requestedBy,
+        strategy: parseRepairStrategy(body.strategy),
+        operatorApproved: body.operatorApproved === true,
+        correlationId: ctx.correlationId,
+      });
+      return {
+        status: 200,
+        body: redacted(deps, {
+          instance: result.instance,
+          binding: result.binding,
+          strategy: result.strategy,
+          applied: result.applied,
+          outcome: result.outcome,
+          status: result.status,
+          driftMarkers: result.driftMarkers,
+          operatorActionRequired: result.operatorActionRequired,
+        }),
+      };
+    },
+  );
 }
 
 // ─── #448 health + governed cleanup routes ──────────────────────────────────────────────────────
@@ -508,7 +565,9 @@ export async function handleGetTaskWorkspaceHealth(
   if (isRouteResult(guard)) return guard;
   return runHandler(deps, async () => {
     const root = await resolveOptionalRoot(deps, ctx.url.searchParams.get("root"));
-    const report = await guard.report(root);
+    // The route's own correlation id, so the health probe's git spawns and any termination
+    // evidence they emit land on this request's timeline (AGENTS.md §8).
+    const report = await guard.report(root, ctx.correlationId);
     return { status: 200, body: redacted(deps, { report }) };
   });
 }
@@ -529,26 +588,35 @@ export async function handleCleanupTaskWorkspace(
 ): Promise<RouteResult> {
   const guard = requireCleanup(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(deps, async () => {
-    const workspaceId = ctx.params.workspaceId ?? "";
-    const body = await readJsonObject(ctx.req);
-    const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
-    const result = await guard.cleanup({
-      workspaceId,
-      requestedBy,
-      operatorApproved: body.operatorApproved === true,
-      mode: parseCleanupMode(body.mode),
-    });
-    return {
-      status: 200,
-      body: redacted(deps, {
-        outcome: result.outcome,
-        workspaceId: result.workspaceId,
-        ...(result.instance !== undefined ? { instance: result.instance } : {}),
-        ...(result.refusalReason !== undefined ? { refusalReason: result.refusalReason } : {}),
-      }),
-    };
-  });
+  const workspaceId = ctx.params.workspaceId ?? "";
+  return runLoggedMutationHandler(
+    deps,
+    {
+      operation: "cleanup",
+      workspaceIdentitySeed: workspaceId || "route-cleanup-request",
+      correlationId: ctx.correlationId,
+    },
+    async () => {
+      const body = await readJsonObject(ctx.req);
+      const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
+      const result = await guard.cleanup({
+        workspaceId,
+        requestedBy,
+        operatorApproved: body.operatorApproved === true,
+        mode: parseCleanupMode(body.mode),
+        correlationId: ctx.correlationId,
+      });
+      return {
+        status: 200,
+        body: redacted(deps, {
+          outcome: result.outcome,
+          workspaceId: result.workspaceId,
+          ...(result.instance !== undefined ? { instance: result.instance } : {}),
+          ...(result.refusalReason !== undefined ? { refusalReason: result.refusalReason } : {}),
+        }),
+      };
+    },
+  );
 }
 
 // POST /api/task-workspaces/cleanup/orphans — governed removal of orphaned managed worktrees (on-disk
@@ -559,18 +627,27 @@ export async function handleCleanupOrphanTaskWorkspaces(
 ): Promise<RouteResult> {
   const guard = requireCleanup(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(deps, async () => {
-    const body = await readJsonObject(ctx.req);
-    const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
-    const root = await resolveOptionalRoot(deps, optionalSafeField(body.root, "root"));
-    const result = await guard.cleanupOrphans({
-      ...(root !== undefined ? { repositoryRoot: root } : {}),
-      requestedBy,
-      operatorApproved: body.operatorApproved === true,
-    });
-    return {
-      status: 200,
-      body: redacted(deps, { removed: result.removed, refused: result.refused }),
-    };
-  });
+  return runLoggedMutationHandler(
+    deps,
+    {
+      operation: "cleanup",
+      workspaceIdentitySeed: "route-orphan-cleanup-request",
+      correlationId: ctx.correlationId,
+    },
+    async () => {
+      const body = await readJsonObject(ctx.req);
+      const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
+      const root = await resolveOptionalRoot(deps, optionalSafeField(body.root, "root"));
+      const result = await guard.cleanupOrphans({
+        ...(root !== undefined ? { repositoryRoot: root } : {}),
+        requestedBy,
+        operatorApproved: body.operatorApproved === true,
+        correlationId: ctx.correlationId,
+      });
+      return {
+        status: 200,
+        body: redacted(deps, { removed: result.removed, refused: result.refused }),
+      };
+    },
+  );
 }

@@ -39,6 +39,14 @@ export function newCorrelationId(): string {
 // keeps its own distinct meaning.
 export const UNKNOWN_CORRELATION_ID = "unknown-correlation-id";
 
+// Service-layer fail-closed normalization for an optional correlation id. HTTP routes normally
+// supply a value that `resolveCorrelationId` already validated, but internal callers and background
+// entry points can invoke services directly. Never let an empty, oversized, or control-bearing value
+// reach an adapter's termination evidence or a persisted event merely because it was non-nullish.
+export function correlationIdOrUnknown(value: string | undefined): string {
+  return value !== undefined && isValidCorrelationId(value) ? value : UNKNOWN_CORRELATION_ID;
+}
+
 // Resolves the correlation id for a request: reuse a well-formed client-supplied id (UI -> server
 // continuity) or mint a fresh one. Never throws.
 export function resolveCorrelationId(req: IncomingMessage): string {

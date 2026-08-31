@@ -14,6 +14,15 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 as win32Path } from "node:path";
+import { emitSecurityLogEvent, securityErrorKind, type SecurityLogSink } from "./log-port.js";
+import {
+  resolveWindowsSystemBinary,
+  resolveWindowsSystemDirectory,
+  type WindowsBinaryExistsCheck,
+  type WindowsSystemDirectoryIdentityCheck,
+  WindowsSystemBinaryMissingError,
+  WindowsSystemDirectoryError,
+} from "./windows-system-directory.js";
 
 export interface WindowsShortcutDefinition {
   readonly targetPath: string;
@@ -27,7 +36,6 @@ export const WINDOWS_SHORTCUT_MAX_BYTES = 128 * 1024;
 // spawn error, which the caller already fails closed on.
 export const WINDOWS_SHORTCUT_TIMEOUT_MS = 30_000;
 const WINDOWS_SHORTCUT_FALLBACK_SCHEMA = "keiko-windows-shortcut-v1";
-const DEFAULT_WINDOWS_ROOT = String.raw`C:\Windows`;
 
 const WINDOWS_SHORTCUT_SCRIPT = [
   'var shell = WScript.CreateObject("WScript.Shell");',
@@ -68,28 +76,55 @@ export type WindowsShortcutSpawnFn = (
   readonly stderr: Buffer | null;
 };
 
-/**
- * The trusted Windows system root: an absolute SystemRoot/WINDIR from the environment, or the
- * platform default. The one shared trust decision every governed Windows child-process helper
- * (cscript, powershell) resolves its executable against.
- */
-export function windowsSystemRoot(env: ShortcutEnvSource): string {
-  const root = env.SystemRoot ?? env.WINDIR ?? DEFAULT_WINDOWS_ROOT;
-  return win32Path.isAbsolute(root) ? root : DEFAULT_WINDOWS_ROOT;
+/** Optional process/log/filesystem seams shared by the read, write, and command entry points. */
+export interface WindowsShortcutCommandOptions {
+  readonly spawnFn?: WindowsShortcutSpawnFn | undefined;
+  readonly sink?: SecurityLogSink | undefined;
+  readonly existsAsFile?: WindowsBinaryExistsCheck | undefined;
+  readonly systemDirectoryIdentity?: WindowsSystemDirectoryIdentityCheck | undefined;
 }
 
-function windowsCscriptExecutable(env: ShortcutEnvSource): string {
-  return win32Path.join(windowsSystemRoot(env), "System32", "cscript.exe");
+/**
+ * The trusted Windows system root: `SystemRoot`/`WINDIR` validated for canonical SHAPE, or the
+ * platform default. The one shared trust decision every governed Windows child-process helper
+ * (cscript, powershell) resolves its executable against — and, since PR #3354's review, the SAME
+ * decision keiko-tools' `cmd.exe`/`taskkill.exe` resolution uses, because both now delegate to
+ * `resolveWindowsSystemDirectory`.
+ *
+ * FAILS CLOSED (throws `WindowsSystemDirectoryError`) on a hostile or malformed override. The
+ * previous `isAbsolute`-only check silently fell back to the default while ACCEPTING
+ * `\\attacker\share`, `\\?\C:\Windows` and root-relative `\Windows` — a UNC or device-path
+ * override could therefore select the `cscript.exe` this helper spawns.
+ */
+export function windowsSystemRoot(
+  env: ShortcutEnvSource,
+  identityCheck?: WindowsSystemDirectoryIdentityCheck,
+): string {
+  return resolveWindowsSystemDirectory(env, identityCheck);
+}
+
+function windowsCscriptExecutable(
+  env: ShortcutEnvSource,
+  existsAsFile?: WindowsBinaryExistsCheck,
+  identityCheck?: WindowsSystemDirectoryIdentityCheck,
+): string {
+  return resolveWindowsSystemBinary("cscript.exe", env, existsAsFile, identityCheck);
 }
 
 // The script host gets ONLY the variables it needs to run — never the caller's process
 // environment, which in the server holds provider API keys and other secrets.
-function windowsShortcutEnv(env: ShortcutEnvSource): NodeJS.ProcessEnv {
-  const root = windowsSystemRoot(env);
+function windowsShortcutEnv(
+  env: ShortcutEnvSource,
+  existsAsFile?: WindowsBinaryExistsCheck,
+  identityCheck?: WindowsSystemDirectoryIdentityCheck,
+): NodeJS.ProcessEnv {
+  const root = windowsSystemRoot(env, identityCheck);
   return {
     SystemRoot: root,
     WINDIR: root,
-    ComSpec: win32Path.join(root, "System32", "cmd.exe"),
+    // Resolve ComSpec through the same System32 trust/existence boundary as cscript.exe. A manual
+    // join here would reintroduce a second, weaker answer for the same system directory.
+    ComSpec: resolveWindowsSystemBinary("cmd.exe", env, existsAsFile, identityCheck),
     ...(env.TEMP === undefined ? {} : { TEMP: env.TEMP }),
     ...(env.TMP === undefined ? {} : { TMP: env.TMP }),
   };
@@ -125,9 +160,40 @@ function shortcutFailure(failurePrefix: string, status: number | null, stderr: B
   return `${failurePrefix} (cscript exit ${String(status)}, stderr ${String(stderr.byteLength)} bytes)`;
 }
 
+function logShortcutHostFailure(
+  sink: SecurityLogSink | undefined,
+  mode: "create" | "read",
+  error: unknown,
+): void {
+  if (error instanceof WindowsSystemDirectoryError) {
+    emitSecurityLogEvent(sink, {
+      level: "warn",
+      category: "security",
+      op: "security.windows-shortcut.system-root-refused",
+      errorKind: securityErrorKind(error),
+      extra: { mode },
+    });
+  }
+  if (error instanceof WindowsSystemBinaryMissingError) {
+    emitSecurityLogEvent(sink, {
+      level: "error",
+      category: "diagnostic",
+      op: "security.windows-shortcut.system-binary-missing",
+      errorKind: securityErrorKind(error),
+      extra: { mode },
+    });
+  }
+}
+
 /**
  * Run the fixed shortcut JScript through cscript. Fails closed on spawn errors, nonzero exits,
  * and ANY stderr output; returns decoded stdout (three UTF-16LE lines in read mode).
+ *
+ * A refusal of the trust boundary itself (`WindowsSystemDirectoryError`, thrown by SystemRoot/
+ * WINDIR resolution before cscript ever runs) is logged through `options.sink` — when wired; a
+ * no-op otherwise, same convention as `readMacosKeychainSecret` — and RE-THROWN unchanged. A
+ * missing system binary is a separate operational failure and emits its own diagnostic event,
+ * never this tampering event.
  */
 export function runWindowsShortcutCommand(
   mode: "create" | "read",
@@ -135,17 +201,18 @@ export function runWindowsShortcutCommand(
   definition: WindowsShortcutDefinition,
   env: ShortcutEnvSource,
   failurePrefix: string,
-  spawnFn: WindowsShortcutSpawnFn = spawnSync,
+  options: WindowsShortcutCommandOptions = {},
 ): string {
+  const spawnFn = options.spawnFn ?? spawnSync;
   const scriptRoot = mkdtempSync(join(tmpdir(), "keiko-shortcut-"));
   const scriptPath = join(scriptRoot, "shortcut.js");
   try {
     writeFileSync(scriptPath, WINDOWS_SHORTCUT_SCRIPT, "utf8");
     const result = spawnFn(
-      windowsCscriptExecutable(env),
+      windowsCscriptExecutable(env, options.existsAsFile, options.systemDirectoryIdentity),
       windowsShortcutArgs(mode, scriptPath, path, definition),
       {
-        env: windowsShortcutEnv(env),
+        env: windowsShortcutEnv(env, options.existsAsFile, options.systemDirectoryIdentity),
         shell: false,
         stdio: "pipe",
         timeout: WINDOWS_SHORTCUT_TIMEOUT_MS,
@@ -158,6 +225,9 @@ export function runWindowsShortcutCommand(
       throw new Error(shortcutFailure(failurePrefix, result.status, stderr));
     }
     return (result.stdout ?? Buffer.alloc(0)).toString("utf16le");
+  } catch (error) {
+    logShortcutHostFailure(options.sink, mode, error);
+    throw error;
   } finally {
     rmSync(scriptRoot, { recursive: true, force: true });
   }
@@ -200,12 +270,23 @@ const EMPTY_DEFINITION: WindowsShortcutDefinition = {
   iconPath: "",
 };
 
-/** Read a shortcut's fields; undefined on any refusal (fail-closed read). */
+/**
+ * Read a shortcut's fields; `undefined` when cscript cannot read the shortcut (a fail-closed READ
+ * of the TARGET — missing file, malformed output, a nonzero cscript exit).
+ *
+ * A refusal of the trust boundary itself — a hostile or malformed `SystemRoot`/`WINDIR`
+ * (`WindowsSystemDirectoryError`, thrown before cscript ever runs) — is a DIFFERENT failure class
+ * and is never folded into that same "absent" signal: a poisoned environment must not be mistaken
+ * for "no shortcut installed" by a caller that then treats absence as an invitation to (re)create
+ * one. A missing System32 binary is likewise a typed operational failure, not shortcut absence.
+ * `runWindowsShortcutCommand` already logs both classes through `sink` (when wired; a no-op
+ * otherwise) before they reach this catch, so this only has to decide whether to RE-THROW them.
+ */
 export function readWindowsShortcutDefinition(
   path: string,
   env: ShortcutEnvSource,
   failurePrefix: string,
-  spawnFn: WindowsShortcutSpawnFn = spawnSync,
+  options: WindowsShortcutCommandOptions = {},
 ): WindowsShortcutDefinition | undefined {
   if (process.platform !== "win32") return parseWindowsShortcutFallback(path);
   try {
@@ -215,31 +296,42 @@ export function readWindowsShortcutDefinition(
       EMPTY_DEFINITION,
       env,
       failurePrefix,
-      spawnFn,
+      options,
     );
     const [targetPath, workingDirectory, iconPath] = output.split(/\r?\n/u);
     if (targetPath === undefined || workingDirectory === undefined || iconPath === undefined) {
       return undefined;
     }
     return { targetPath, workingDirectory, iconPath };
-  } catch {
+  } catch (error) {
+    if (
+      error instanceof WindowsSystemDirectoryError ||
+      error instanceof WindowsSystemBinaryMissingError
+    ) {
+      throw error;
+    }
     return undefined;
   }
 }
 
-/** Create/overwrite the shortcut (JSON fallback off Windows). Throws on failure. */
+/**
+ * Create/overwrite the shortcut (JSON fallback off Windows). Throws on failure — including a
+ * trust-boundary refusal (`WindowsSystemDirectoryError`), which `runWindowsShortcutCommand` logs
+ * through `options.sink` (when wired) before it propagates here unchanged. A missing cscript/cmd
+ * binary also propagates with its own diagnostic event, but is not logged as a security refusal.
+ */
 export function writeWindowsShortcutDefinition(
   path: string,
   definition: WindowsShortcutDefinition,
   env: ShortcutEnvSource,
   failurePrefix: string,
-  spawnFn: WindowsShortcutSpawnFn = spawnSync,
+  options: WindowsShortcutCommandOptions = {},
 ): void {
   if (process.platform !== "win32") {
     writeFileSync(path, windowsShortcutFallbackContent(definition), "utf8");
     return;
   }
-  runWindowsShortcutCommand("create", path, definition, env, failurePrefix, spawnFn);
+  runWindowsShortcutCommand("create", path, definition, env, failurePrefix, options);
 }
 
 /** Case- and separator-insensitive Windows path equivalence for shortcut field comparison. */

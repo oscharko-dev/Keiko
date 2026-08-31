@@ -293,6 +293,7 @@ jobs:
       # hide the same advisory once it reaches a dependency Keiko distributes.
       - run: npm run check:osv-waiver-scope
       - run: npm run check:knip
+      - run: npm run check:browser-baseline
       - run: npm run check:external-quality-config
       - run: npm run check:review-bot-suppression
       - run: npm run check:release-required-workflows
@@ -1050,6 +1051,22 @@ jobs:
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - run: npm ci --ignore-scripts
+      # The spawn smoke imports `packages/keiko-tools/src/windows-shell.ts` as SOURCE (Node type
+      # stripping) so the escaping it exercises cannot drift from what ships. That source now
+      # imports the shared trusted-System32 resolver from @oscharko-dev/keiko-security, which
+      # resolves through node_modules to that package's BUILT dist — absent after a bare
+      # `npm ci --ignore-scripts`. Building the packages first is what makes the source-import
+      # strategy hold; without it the smoke dies with ERR_MODULE_NOT_FOUND before testing anything.
+      - name: Build packages for the Windows smokes
+        if: runner.os == 'Windows'
+        timeout-minutes: 20
+        run: npm run build:packages
+      - name: Verify Git executable Windows reparse containment
+        # Direct execution is deliberate: Vitest exits zero when every selected test is skipped.
+        # This smoke asserts the real host is Win32, creates a genuine directory junction, and calls
+        # the production resolver, so the required Windows lane cannot pass without executing it.
+        if: runner.os == 'Windows'
+        run: node scripts/__tests__/windows-git-reparse-smoke.mjs
       - name: Smoke the Windows command spawn wrapper
         # #3350: on modern Node a `.cmd`/`.bat` target spawned with shell:false raises EINVAL, so
         # every agent `npm`/`npx` call would fail. This exercises the real cmd.exe wrapper against
@@ -1175,14 +1192,32 @@ jobs:
       # 88-strict release target that `check:coverage:quality` still evaluates on every pull request.
       - name: Install Playwright browser
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        # chromium is the reference browser for the smoke + perf-evidence suites. The
-        # workspace-performance webkit project is a local-only cross-browser aid: headless WebKit on CI
-        # software-renders and mis-batches events, so both its timing and write-coalescing budgets are
-        # environment artifacts (all CI perf-evidence runs are scoped to --project=chromium).
-        run: npx --ignore-scripts playwright@1.62.0 install --with-deps chromium
+        # Chromium remains the reference browser for perf evidence. Firefox and WebKit run the same
+        # required functional @smoke journeys: Gecko covers a real second engine and Playwright's
+        # patched Linux WebKit is the executable Safari proxy. It is not byte-identical to Safari on
+        # Apple platforms, so this lane makes no Safari-only OS/media integration claim.
+        # The LOCKFILE-resolved CLI, not `npx playwright@<version>`: a pinned version literal here is
+        # a second source of truth that silently drifts from `package-lock.json` (it already said
+        # 1.62.0 while the lockfile resolved 1.62.1). Browser revisions are chosen by the Playwright
+        # version, so a mismatch installs browsers the runner's own test library never asked for and
+        # decouples the CI evidence from the dependency graph the tests actually execute against.
+        # `npm ci` above already installed this binary at the locked version.
+        run: ./node_modules/.bin/playwright install --with-deps chromium firefox webkit
       - name: Release smoke E2E
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:smoke
+      # Same @smoke journeys on Gecko. Kept a SEPARATE step so a Firefox-only failure is
+      # attributable at a glance instead of hiding inside the Chromium run's report.
+      - name: Release smoke E2E (Firefox)
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        timeout-minutes: 20
+        run: npm run test:e2e:smoke:firefox
+      # Same functional @smoke journeys on WebKit. This is a Safari engine proxy, not evidence for
+      # Apple-platform integration that Playwright's patched Linux runtime cannot reproduce.
+      - name: Release smoke E2E (WebKit Safari proxy)
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        timeout-minutes: 20
+        run: npm run test:e2e:smoke:webkit
       - name: Editor run, verify, problems E2E (#2215)
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:editor-run-verification-2215

@@ -38,6 +38,7 @@ import {
 import { deriveRepositoryId } from "./naming.js";
 import { isManagedRootOwned, isManagedTargetContained } from "./managed-root.js";
 import { gatherInstanceReconciliationFacts } from "./reconciliation.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import type { WorkspaceHealthService, WorkspaceHealthServiceDeps } from "./types.js";
 
 const ORPHAN_ID_PREFIX = "orph_";
@@ -64,9 +65,10 @@ async function probeDirty(
   deps: WorkspaceHealthServiceDeps,
   worktreePath: string,
   probeable: boolean,
+  correlationId: string,
 ): Promise<boolean> {
   if (!probeable) return false;
-  const adapter = deps.createAdapter(detectWorkspaceAt(worktreePath));
+  const adapter = deps.createAdapter(detectWorkspaceAt(worktreePath), correlationId);
   const status = await adapter.worktreeStatus();
   return status.ok && status.dirty;
 }
@@ -81,6 +83,7 @@ async function evaluateInstance(
   instance: WorkspaceInstance,
   ownershipProven: boolean,
   nowMs: number,
+  correlationId: string,
 ): Promise<WorkspaceHealthEntry> {
   const { facts } = await gatherInstanceReconciliationFacts(
     deps,
@@ -88,11 +91,14 @@ async function evaluateInstance(
     worktrees,
     instance,
     nowMs,
+    undefined,
+    correlationId,
   );
   const worktreeDirty = await probeDirty(
     deps,
     instance.managedWorktreePath,
     facts.worktreeDirExists && facts.pathContained,
+    correlationId,
   );
   const evaluation = classifyWorkspaceHealth({
     reconciliation: facts,
@@ -117,6 +123,7 @@ async function detectOrphans(
   repositoryId: string,
   knownPaths: ReadonlySet<string>,
   ownershipProven: boolean,
+  correlationId: string,
 ): Promise<WorkspaceHealthEntry[]> {
   const repoDir = join(deps.managedRoot, repositoryId);
   if (!existsSync(repoDir)) return [];
@@ -144,7 +151,7 @@ async function detectOrphans(
       );
       continue;
     }
-    const worktreeDirty = await probeDirty(deps, candidate, true);
+    const worktreeDirty = await probeDirty(deps, candidate, true, correlationId);
     const decision = evaluateWorkspaceCleanupSafety({
       lifecycleState: "abandoned",
       hasRecord: false,
@@ -187,6 +194,9 @@ function instancesFor(
 async function reportImpl(
   deps: WorkspaceHealthServiceDeps,
   repositoryRoot: string | undefined,
+  // Threaded rather than defaulted inside: health is read-only but still SPAWNS git, so its
+  // termination evidence has an operation to join like every other lane (AGENTS.md §8).
+  correlationId: string,
 ): Promise<WorkspaceHealthReport> {
   const instances = instancesFor(deps, repositoryRoot);
   const ownershipProven = isManagedRootOwned(deps.managedRoot);
@@ -196,21 +206,33 @@ async function reportImpl(
   for (const [root, group] of byRepo) {
     const repositoryId = deriveRepositoryId(root);
     seenRepoIds.add(repositoryId);
-    const adapter = deps.createAdapter(detectWorkspaceAt(root));
+    const adapter = deps.createAdapter(detectWorkspaceAt(root), correlationId);
     const worktrees = await adapter.listWorktrees();
     const knownPaths = new Set(group.map((instance) => instance.managedWorktreePath));
     for (const instance of group) {
       entries.push(
-        await evaluateInstance(deps, adapter, worktrees, instance, ownershipProven, deps.now()),
+        await evaluateInstance(
+          deps,
+          adapter,
+          worktrees,
+          instance,
+          ownershipProven,
+          deps.now(),
+          correlationId,
+        ),
       );
     }
-    entries.push(...(await detectOrphans(deps, repositoryId, knownPaths, ownershipProven)));
+    entries.push(
+      ...(await detectOrphans(deps, repositoryId, knownPaths, ownershipProven, correlationId)),
+    );
   }
   // A scoped report whose repository has no persisted instances still surfaces its orphans.
   if (repositoryRoot !== undefined && repositoryRoot.length > 0) {
     const repositoryId = deriveRepositoryId(repositoryRoot);
     if (!seenRepoIds.has(repositoryId)) {
-      entries.push(...(await detectOrphans(deps, repositoryId, new Set(), ownershipProven)));
+      entries.push(
+        ...(await detectOrphans(deps, repositoryId, new Set(), ownershipProven, correlationId)),
+      );
     }
   }
   return {
@@ -224,7 +246,7 @@ export function createWorkspaceHealthService(
   deps: WorkspaceHealthServiceDeps,
 ): WorkspaceHealthService {
   return {
-    report: (repositoryRoot?: string): Promise<WorkspaceHealthReport> =>
-      reportImpl(deps, repositoryRoot),
+    report: (repositoryRoot?: string, correlationId?: string): Promise<WorkspaceHealthReport> =>
+      reportImpl(deps, repositoryRoot, correlationIdOrUnknown(correlationId)),
   };
 }

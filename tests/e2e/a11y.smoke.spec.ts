@@ -197,9 +197,35 @@ const openChatWindow: SurfaceOpener = async (page, request, theme) => {
 const openCommandPalette: SurfaceOpener = async (page, _request, theme) => {
   await shellReady(page, theme);
   // The product's own shortcut for `quick-access.commands` (CtrlOrMeta+Shift+P) — no test-only hook.
-  await page.keyboard.press("ControlOrMeta+Shift+P");
+  //
+  // "ControlOrMeta" is CORRECT here and must NOT be swapped for `editorModifier`, even though that
+  // helper is the right answer for Monaco chords elsewhere in this suite. The two read different
+  // sources, and Playwright's device presets make them disagree:
+  //   - Monaco derives its bindings from `navigator.userAgent`, which the presets FORCE to Windows
+  //     on every host — so Monaco listens for Ctrl, and `editorModifier` (userAgent-based) matches.
+  //   - Keiko's own `useKeyboardShortcuts` derives from `navigator.platform`, which the presets do
+  //     NOT override — it still reports "MacIntel" on a Mac (measured, both engines) — so the
+  //     product listens for metaKey there, and Playwright's host-derived "ControlOrMeta" sends
+  //     exactly that.
+  // Using `editorModifier` here sends Control to a product waiting for Meta: the palette never
+  // opens. Verified by running it both ways on this macOS host — shorthand passes, helper fails.
   const palette = page.getByRole("dialog", { name: "Quick access" });
-  await expect(palette).toBeVisible();
+  // Retried, because a chord is FIRE-AND-FORGET: `shellReady` proves the shell rendered, not that
+  // `useKeyboardShortcuts` has attached its window listener, and a keydown that arrives in that gap
+  // is silently discarded — there is nothing to await and nothing to fail on. One press then left
+  // the palette permanently closed and the surface timed out 15s later with "element(s) not found".
+  //
+  // Observed on the Gecko lane's FIRST palette journey (dark theme) while the identical light-theme
+  // journey, running seconds later on the same page, passed — a cold-start race, not a chord that
+  // does not work on this engine.
+  //
+  // The visibility check GATES the press, and that is not defensive dressing: this shortcut is a
+  // TOGGLE, so a blind re-press inside a retry loop would close a palette the previous attempt had
+  // already opened and turn a flaky test into a reliably failing one.
+  await expect(async () => {
+    if (!(await palette.isVisible())) await page.keyboard.press("ControlOrMeta+Shift+P");
+    await expect(palette).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
   await expect(palette.getByRole("combobox")).toBeFocused();
   // Scan a populated list, not the empty state: the command rows are what carries the palette's
   // label/shortcut/group contrast.

@@ -24,6 +24,7 @@ import {
   type HomeProvider,
   type RunCommandDeps,
   type SpawnFn,
+  type CommandTerminationEvidence,
 } from "./exec.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { isSafeGitRefName } from "./git-worktree-adapter.js";
@@ -69,6 +70,10 @@ export interface NodeGitWorktreeReaderDeps {
   readonly home?: HomeProvider | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly timeoutMs?: number | undefined;
+  // The termination-evidence port for every runCommand this lane performs (RunCommandDeps
+  // deps-level seam, exec.ts): production composition boundaries wire it once so no call on the
+  // lane is silently unobservable (PR #3354 review, comment 3887021650).
+  readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
 }
 
 interface ReadContext {
@@ -90,6 +95,7 @@ function buildReadContext(deps: NodeGitWorktreeReaderDeps): ReadContext {
         ? { resolveExecutable: deps.resolveExecutable }
         : {}),
       ...(deps.home !== undefined ? { home: deps.home } : {}),
+      ...(deps.onTerminated !== undefined ? { onTerminated: deps.onTerminated } : {}),
     },
     signal: deps.signal ?? new AbortController().signal,
     timeoutMs: deps.timeoutMs,
@@ -304,6 +310,22 @@ export async function readStagedConflictMarkerFileCount(
     );
   } catch {
     throw new GitWorktreeReadError("git diff --check failed to run");
+  }
+  // TRUNCATION FIRST, before the exit code is read — this reader FAILED OPEN without it, and it
+  // guards whether a commit may proceed.
+  //
+  // When the output cap trips, `runCommand` kills git and returns `stdout` replaced by the literal
+  // "[TRUNCATED OUTPUT REDACTED]". That placeholder is non-empty, so the emptiness check below lets
+  // it through, and it matches no `path:line: leftover conflict marker` line, so the count came back
+  // as 0 — indistinguishable from "this staged changeset is clean". `conflictMarkerBlockResult` then
+  // allowed the commit and baked the marker lines into history.
+  //
+  // Checked BEFORE `exitCode`, because a truncated run can also report 0: either way the output is
+  // incomplete, so no count can be derived from it and the only honest answer is to refuse.
+  if (result.truncated) {
+    throw new GitWorktreeReadError(
+      "git diff --check output was truncated; the conflict-marker count cannot be trusted",
+    );
   }
   if (result.exitCode === 0) return 0;
   // `--check` exits non-zero both when it reports a problem (its diagnostic lines go to stdout, e.g.

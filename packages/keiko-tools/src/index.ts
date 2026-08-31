@@ -65,11 +65,13 @@ export type { WorkspaceWriter } from "./writer.js";
 
 // ─── Command execution boundary ─────────────────────────────────────────────────────
 export {
+  createWindowsTerminationCapacity,
   runCommand,
   // Windows process-tree termination (issue #3350 / ADR-0006 D5): once a `.cmd` target is routed
   // through the hardened cmd.exe wrapper, the immediate child is cmd.exe and the real work is a
   // grandchild. Exported so every spawn boundary that adopted the wrapper terminates the same way
   // instead of growing its own tree-kill.
+  isSelfOrParentPid,
   nodeWindowsTreeKill,
   windowsTaskkillInvocation,
   type CommandTerminationEvidence,
@@ -82,6 +84,11 @@ export {
   type SpawnFn,
   type SpawnOptions,
   type WindowsTreeKill,
+  type WindowsTerminationCapacity,
+  type WindowsTerminationReservation,
+  type WindowsTaskkillInvocationResolver,
+  type WindowsTreeKillDisposition,
+  type WindowsTreeKillResult,
 } from "./exec.js";
 
 // ─── Hardened Windows cmd.exe shell invocation (issue #3350, Node CVE-2024-27980) ──
@@ -94,10 +101,15 @@ export {
 // `taskkill.exe` lookup is a second consumer of the identical trust boundary (PR #3354 finding 2).
 export {
   buildWindowsShellInvocation,
+  isWindowsCommandScript,
   resolveSystemBinaryPath,
   resolveWindowsSystemDirectory,
+  WINDOWS_CMD_METACHARACTER_SOURCE,
   WindowsShellInvocationError,
+  WindowsSystemBinaryMissingError,
   WindowsSystemDirectoryError,
+  type WindowsBinaryExistsCheck,
+  type WindowsSystemDirectoryIdentityCheck,
   type WindowsShellInvocation,
   type WindowsShellInvocationOptions,
 } from "./windows-shell.js";

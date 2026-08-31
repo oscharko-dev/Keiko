@@ -7,7 +7,7 @@ import type {
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { ServerLogEvent } from "../observability/index.js";
 import { describe, expect, it } from "vitest";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { CORRELATION_RESPONSE_HEADER, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { gitDeliveryAuthorityDenial, gitDeliveryAuthorityGate } from "./requestPreparation.js";
 import { authorizeGitDelivery } from "./runBoundAuthority.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
@@ -140,7 +140,7 @@ describe("authorizeGitDelivery", () => {
         op: "git.delivery.authority.admitted",
         correlationId: "correlation-1",
         status: 200,
-        extra: { operation: "push", runId: "test-run" },
+        extra: { operation: "push", phase: "admission", runId: "test-run" },
       }),
     ]);
     expect(JSON.stringify(events)).not.toContain(WORKSPACE_ROOT);
@@ -160,13 +160,27 @@ describe("authorizeGitDelivery", () => {
     );
 
     expect(result?.status).toBe(403);
+    expect(result?.body).toEqual({
+      error: {
+        code: "GIT_DELIVERY_AUTHORITY_DENIED",
+        message: "The accepted runtime authority does not admit this Git delivery operation.",
+        correlationId: UNKNOWN_CORRELATION_ID,
+      },
+    });
+    expect(result?.headers).toEqual({
+      [CORRELATION_RESPONSE_HEADER]: UNKNOWN_CORRELATION_ID,
+    });
     expect(events).toEqual([
       expect.objectContaining({
         category: "security",
         op: "git.delivery.authority.denied",
         correlationId: UNKNOWN_CORRELATION_ID,
         status: 403,
-        extra: { operation: "push", reason: "accepted-run-unavailable" },
+        extra: {
+          operation: "push",
+          phase: "admission",
+          reason: "accepted-run-unavailable",
+        },
       }),
     ]);
   });
@@ -199,7 +213,7 @@ describe("authorizeGitDelivery", () => {
         op: "git.delivery.authority.denied",
         correlationId: "correlation-2",
         status: 403,
-        extra: { operation: "push", reason: "authority-changed" },
+        extra: { operation: "push", phase: "continuity", reason: "authority-changed" },
       }),
     ]);
   });

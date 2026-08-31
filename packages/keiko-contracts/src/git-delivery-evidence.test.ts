@@ -107,6 +107,7 @@ describe("recovery-disposition derivations (AC3)", () => {
   it("classifies every block reason and never marks a policy denial retryable", () => {
     const expected: Record<string, GitDeliveryRecoveryDisposition> = {
       "policy-pack-blocked": "policy-forbidden",
+      "authority-denied": "policy-forbidden",
       "protected-branch": "policy-forbidden",
       "provider-capability-absent": "policy-forbidden",
       "approval-expired": "user-fixable",

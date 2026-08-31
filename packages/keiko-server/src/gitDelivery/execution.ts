@@ -9,9 +9,11 @@
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type {
+  CommandTerminationEvidence,
   GitDeliveryActionKind,
   GitDeliveryApprovalRequirement,
   GitDeliveryRepoPolicyPack,
+  GitSyncOperation,
 } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
@@ -39,7 +41,7 @@ import type { GitDeliveryBranchProtectionReader } from "./branchProtectionPrefli
 import { recordGitDeliveryMutationEvidence } from "./mutationEvidenceLedger.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
-import { processServerLogSink } from "../process-log-sink.js";
+import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 
 const KEIKO_DEFAULT_PROTECTED_BRANCH_PATTERNS = [
   { matchKind: "exact", value: "dev" },
@@ -95,22 +97,94 @@ export function resolveProjectWorkspace(
   return resolveRegisteredOrManagedWorkspaceRoot(deps, projectId);
 }
 
+// The minimal "does this seam bag carry the caller's chosen activity-log sink" contract every
+// termination-evidence composition point across git-delivery depends on. Deliberately narrower
+// than `GitDeliveryExecutionSeams` so `gitDeliveryTerminationHandler` is reusable by every sibling
+// execution module (pushExecution.ts, prExecution.ts, mergeExecution.ts) and by
+// branchProtectionPreflight.ts's default reader — none of which share the local-mutation-specific
+// seam shape (adapterFactory, stagedPathsReader, …) but all of which own an `activityLog` seam.
+export interface GitDeliveryTerminationLogSeam {
+  readonly activityLog?: ServerLogSink | undefined;
+}
+
+// Builds the runCommand termination-evidence callback for one git-delivery composition point.
+// Threads the caller's own request-scoped correlationId when the call frame has one in scope,
+// rather than downgrading to UNKNOWN_CORRELATION_ID while a real id sits one frame up (review
+// finding: `executeGovernedMutation` already receives and uses `correlationId` for its own
+// `git.delivery.mutation.*` lines, but its `readWorktreeSnapshotFor`/`adapterFor` calls dropped
+// it — and, per the follow-up audit, so did every sibling default reader/adapter across
+// pushExecution.ts, prExecution.ts, mergeExecution.ts, and branchProtectionPreflight.ts). Also
+// resolves the SAME `seams.activityLog` the rest of this file logs through — a hard-coded
+// `processServerLogSink()` at the call site would mean a test-injected sink never observed this
+// evidence line. Shared by every one of those composition points so the mapping from
+// "termination evidence" to "content-free activity-log line" is written exactly once.
+export function gitDeliveryTerminationHandler(
+  seams: GitDeliveryTerminationLogSeam,
+  correlationId: string | undefined,
+): (evidence: CommandTerminationEvidence) => void {
+  const activityLog = seams.activityLog ?? processServerLogSink();
+  return (evidence): void => {
+    logCommandTermination(activityLog, correlationId ?? UNKNOWN_CORRELATION_ID, evidence);
+  };
+}
+
+// F4: a run refused by the authority-continuity guard immediately before remote dispatch (the accepted
+// authority changed mid-flight, or the operator's runtime authority was revoked between admission and
+// this attempt) never reaches a real git/gh subprocess — pushExecution.ts / prExecution.ts /
+// mergeExecution.ts's `authorityGuarded*Adapter` wrappers return a SYNTHETIC
+// `{ outcome: "aborted", durationMs: 0 }` result instead of calling the real adapter. Left unmarked,
+// that synthetic result is INDISTINGUISHABLE in the evidence stream from a genuine dispatch that DID
+// reach a real subprocess and was then cancelled mid-flight (keiko-tools' CommandCancelledError path
+// also produces `{ outcome: "aborted", errorCode: undefined }`) — an operator (or `keiko support
+// analyze`) cannot tell "nothing ever ran" from "something ran and was terminated" from the evidence
+// record alone. The wire vocabulary (keiko-contracts' closed GitDeliveryExecutionErrorCode) has no
+// slot for "never spawned" that would not also misattribute a "user-fixable" git-state recovery hint
+// this refusal does not carry, so this body-free activity-log line is the explicit, LOCAL marker
+// instead: written the instant the guard refuses, strictly BEFORE the synthetic result is returned, so
+// its presence alone (never inferred from a zero duration or cross-referenced against a separate
+// authority-decision line) proves no process was spawned for this specific dispatch attempt.
+export function logGitDeliveryNoSpawnRefusal(
+  activityLog: ServerLogSink,
+  operation: GitDeliveryActionKind | GitSyncOperation,
+  correlationId: string | undefined,
+): void {
+  activityLog.write({
+    category: "security",
+    op: "git.delivery.dispatch.no-spawn",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    status: 403,
+    extra: { operation },
+  });
+}
+
 export function readWorktreeSnapshotFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,
   now: () => number,
+  correlationId?: string,
 ): Promise<GitWorktreeSnapshot> {
   if (seams.snapshotReader !== undefined) return seams.snapshotReader(workspace);
-  return readGitWorktreeSnapshot({ workspace, processEnv: process.env, now });
+  return readGitWorktreeSnapshot({
+    workspace,
+    processEnv: process.env,
+    now,
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
+  });
 }
 
 export function readStagedPathsFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,
   now: () => number,
+  correlationId?: string,
 ): Promise<readonly string[]> {
   if (seams.stagedPathsReader !== undefined) return seams.stagedPathsReader(workspace);
-  return readStagedPaths({ workspace, processEnv: process.env, now });
+  return readStagedPaths({
+    workspace,
+    processEnv: process.env,
+    now,
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
+  });
 }
 
 // Counts staged files that still contain an unresolved merge-conflict marker (`git diff --cached
@@ -124,18 +198,33 @@ export function readStagedConflictMarkerFileCountFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,
   now: () => number,
+  correlationId?: string,
 ): Promise<number> {
   if (seams.conflictMarkerReader !== undefined) return seams.conflictMarkerReader(workspace);
-  return readStagedConflictMarkerFileCount({ workspace, processEnv: process.env, now });
+  return readStagedConflictMarkerFileCount({
+    workspace,
+    processEnv: process.env,
+    now,
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
+  });
 }
 
 function adapterFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,
   now: () => number,
+  correlationId?: string,
 ): GitLocalMutationAdapter {
   if (seams.adapterFactory !== undefined) return seams.adapterFactory(workspace);
-  return createNodeGitMutationAdapter({ workspace, processEnv: process.env, now });
+  return createNodeGitMutationAdapter({
+    workspace,
+    processEnv: process.env,
+    now,
+    // Deps-level evidence port (PR #3354 review 3887021650): a governed git mutation that times
+    // out or is aborted must leave its Windows tree-kill disposition in the activity log, tagged
+    // with the SAME correlationId as this mutation's other log lines when the caller has one.
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
+  });
 }
 
 export function defaultGitDeliveryActionId(command: unknown, nowMs: number): string {
@@ -183,6 +272,50 @@ export function persistGitDeliveryEvidence(
   );
 }
 
+// The remote gateways need a synthetic adapter result when the last-moment Authority Envelope
+// continuity guard refuses dispatch. That transport stand-in is `aborted`, but the durable audit fact
+// is a governance block: the accepted run no longer admitted the operation and no process started.
+// Project it onto the existing lifecycle/evidence schema instead of persisting the misleading
+// retryable internal-error result or growing a second authority ledger.
+export function authorityDeniedGitDeliveryLifecycle(
+  result: GitMutationLifecycleResult,
+): GitMutationLifecycleResult {
+  return {
+    ...result,
+    envelope: {
+      ...result.envelope,
+      // The adapter result exists only to unwind the kernel without dispatching. Keeping it on the
+      // durable envelope would falsely claim that an execution was attempted.
+      executionResult: undefined,
+    },
+    outcome: {
+      status: "blocked",
+      category: "policy-block",
+      blockReason: "authority-denied",
+    },
+    phaseReached: "execute",
+  };
+}
+
+interface GitDeliveryLifecycleRecordInput {
+  readonly deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">;
+  readonly result: GitMutationLifecycleResult;
+  readonly snapshot: GitWorktreeSnapshot;
+  readonly repoId: string;
+  readonly now: () => number;
+  readonly activityLog: ServerLogSink;
+  readonly correlationId: string | undefined;
+  readonly authorityDenied: boolean;
+}
+
+export function recordGitDeliveryLifecycle(input: GitDeliveryLifecycleRecordInput): void {
+  const lifecycle = input.authorityDenied
+    ? authorityDeniedGitDeliveryLifecycle(input.result)
+    : input.result;
+  persistGitDeliveryEvidence(input.deps, lifecycle, input.snapshot, input.repoId, input.now);
+  logGitDeliveryMutation(input.activityLog, lifecycle, input.correlationId);
+}
+
 /**
  * Runs ONE governed local mutation end-to-end: live snapshot → kernel (preflight + policy + approval +
  * execute) → evidence. Returns the kernel lifecycle result; the caller projects it into a content-free
@@ -200,12 +333,12 @@ export async function executeGovernedMutation(
   const activityLog = seams.activityLog ?? processServerLogSink();
   let snapshot: GitWorktreeSnapshot;
   try {
-    snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
+    snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
   } catch (error) {
     logGitDeliveryPreconditionFailure(activityLog, command.kind, error, correlationId);
     throw error;
   }
-  const adapter = adapterFor(workspace, seams, now);
+  const adapter = adapterFor(workspace, seams, now, correlationId);
   const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK);
   const newActionId =
     seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));
@@ -250,6 +383,10 @@ export function logGitDeliveryMutation(
     outcome.status === "failed" || outcome.status === "recovery-required"
       ? (outcome.executionResult.errorCode ?? "internal-error")
       : undefined;
+  const blockReason =
+    outcome.status === "blocked" && outcome.category === "policy-block"
+      ? outcome.blockReason
+      : undefined;
   log.write({
     // Without an explicit level this line defaulted to `info`, so a FAILED governed mutation or
     // push was filtered out entirely under `KEIKO_LOG_LEVEL=warn` — the threshold an operator
@@ -272,6 +409,7 @@ export function logGitDeliveryMutation(
       preflightBlockingCount: preflight.blocking.length,
       requiredApproverCount:
         outcome.status === "approval-required" ? outcome.requiredApprovers.length : 0,
+      blockReason,
       executionErrorCode,
     },
   });

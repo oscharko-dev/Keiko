@@ -13,14 +13,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GitDeliveryRepoPolicyPack } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import type { GitPullRequestCommand, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type {
   GitPrCreateExecRequest,
   GitPrExecResult,
   GitPrUpdateExecRequest,
   GitPullRequestAdapter,
 } from "@oscharko-dev/keiko-tools";
+import type { NodeGitPullRequestAdapterDeps } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { UI_HOST } from "../server.js";
 import { buildCspHeader } from "../csp.js";
@@ -28,11 +32,35 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.j
 import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
+
+// Spies on the default PR-adapter factory the F1 fix threads runCommand termination-evidence
+// through (executeGovernedPullRequest's `prAdapterFor`, exercised below via direct calls to
+// executeGovernedPullRequest itself). Delegates to the REAL implementation so the adapter this
+// test file's OTHER suites inject via `prAdapterFactory` seams stays entirely unaffected. Mirrors
+// the importOriginal-plus-delegating-wrapper pattern defaultPolicyPacks.test.ts and
+// execution.test.ts already use for this exact module graph.
+const createNodeGitPullRequestAdapterCalls: NodeGitPullRequestAdapterDeps[] = [];
+vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@oscharko-dev/keiko-tools/internal/git-mutation")>();
+  return {
+    ...actual,
+    createNodeGitPullRequestAdapter: (
+      deps: NodeGitPullRequestAdapterDeps,
+    ): GitPullRequestAdapter => {
+      createNodeGitPullRequestAdapterCalls.push(deps);
+      return actual.createNodeGitPullRequestAdapter(deps);
+    },
+  };
+});
+
 import { createHandlePrExecute, createHandlePrPreview } from "./prRoutes.js";
-import type {
-  GitDeliveryPrExecuteResponseBody,
-  GitDeliveryPrPreviewBody,
-  GitDeliveryPullRequestSeams,
+import {
+  executeGovernedPullRequest,
+  type GitDeliveryPrExecuteResponseBody,
+  type GitDeliveryPrPreviewBody,
+  type GitDeliveryPullRequestSeams,
 } from "./prExecution.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
@@ -344,10 +372,21 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
   it("opens a permitted PR, returns the provider PR number, and records content-free evidence (AC5)", async () => {
     const adapter = recordingPrAdapter();
     const cap = capturingEvidenceStore();
+    const activity: ServerLogEvent[] = [];
     const handler = createHandlePrExecute({
-      execution: seams({ prAdapterFactory: () => adapter.adapter }),
+      execution: seams({
+        prAdapterFactory: () => adapter.adapter,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
     });
-    const res = await handler(ctxFor(EXECUTE, createBody()), deps({ evidenceStore: cap.store }));
+    const res = await handler(
+      { ...ctxFor(EXECUTE, createBody()), correlationId: "request-correlation-pr-success" },
+      deps({ evidenceStore: cap.store }),
+    );
     const body = res.body as GitDeliveryPrExecuteResponseBody;
     expect(body.status).toBe("succeeded");
     expect(body.createdPrExternalId).toBe("1499");
@@ -356,10 +395,23 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     // Content-free: the PR title/body strings never enter the evidence ledger.
     expect(cap.raw()).not.toContain("governed pull request command center");
     expect(cap.raw()).not.toContain("Implements the #477");
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({ correlationId: "request-correlation-pr-success" });
+    expect(completed?.extra).toMatchObject({ actionKind: "pr-create", status: "succeeded" });
   });
 
-  it("aborts PR dispatch when another allowed authority replaces the admitted run", async () => {
+  // The continuity guard re-checks authority right before remote dispatch (a TOCTOU gap: policy/preflight
+  // evaluation takes time, and the admitted authority can change or be revoked while that runs). Before
+  // this fix, a denial here fell through to a misleading 200 body — `status: "failed"`,
+  // `executionErrorCode: "internal-error"` — telling the client an internal fault happened and is safe to
+  // retry, and persisted the SAME misleading record to the evidence ledger, even though the F4 no-spawn
+  // marker (git.delivery.dispatch.no-spawn) and the authority-denial security line had already correctly
+  // recorded a refusal. Proven red against the pre-fix code: this test asserted `status).toBe("failed")`
+  // and passed with no HTTP-status or evidence assertion at all.
+  it("returns the SAME 403 authority-denied response the up-front gate returns, not a misleading internal failure (#3350)", async () => {
     const adapter = recordingPrAdapter();
+    const cap = capturingEvidenceStore();
+    const activity: ServerLogEvent[] = [];
     const baseAuthority = permittedGitDeliveryAuthority(
       () => projectId,
       () => projectId,
@@ -381,17 +433,56 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
       },
     };
     const handler = createHandlePrExecute({
-      execution: seams({ prAdapterFactory: () => adapter.adapter }),
+      execution: seams({
+        prAdapterFactory: () => adapter.adapter,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
     });
 
     const res = await handler(
-      ctxFor(EXECUTE, createBody()),
-      deps({ gitDeliveryAuthority: authority }),
+      {
+        ...ctxFor(EXECUTE, createBody()),
+        correlationId: "request-correlation-pr-continuity",
+      },
+      deps({ gitDeliveryAuthority: authority, evidenceStore: cap.store }),
     );
 
-    expect((res.body as GitDeliveryPrExecuteResponseBody).status).toBe("failed");
+    // HTTP contract: the SAME 403 envelope the up-front admission gate returns — never a 200 claiming an
+    // internal, retryable failure for a request that was refused before anything was dispatched.
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: {
+        code: "GIT_DELIVERY_AUTHORITY_DENIED",
+        message: "The accepted runtime authority does not admit this Git delivery operation.",
+        correlationId: "request-correlation-pr-continuity",
+      },
+    });
+    expect(res.headers).toEqual({
+      "X-Keiko-Correlation-Id": "request-correlation-pr-continuity",
+    });
     expect(reads).toBe(2);
     expect(adapter.creates()).toBe(0);
+    expect(cap.count()).toBe(1);
+    expect(cap.raw()).toContain('"outcomeClass":"blocked"');
+    expect(cap.raw()).toContain('"blockReason":"authority-denied"');
+    expect(cap.raw()).toContain('"disposition":"policy-forbidden"');
+    expect(cap.raw()).not.toContain('"execution":');
+    expect(
+      activity
+        .filter((event) => event.op.startsWith("git.delivery.authority."))
+        .map((event) => event.extra?.phase),
+    ).toEqual(["admission", "continuity"]);
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({ correlationId: "request-correlation-pr-continuity" });
+    expect(completed?.extra).toMatchObject({
+      status: "blocked",
+      phaseReached: "execute",
+      blockReason: "authority-denied",
+    });
   });
 
   it("denies a base outside the active authority envelope before execution", async () => {
@@ -419,19 +510,38 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
       rejectionReason: "validation-error",
     });
     const cap = capturingEvidenceStore();
+    const activity: ServerLogEvent[] = [];
     const handler = createHandlePrExecute({
-      execution: seams({ prAdapterFactory: () => adapter.adapter }),
+      execution: seams({
+        prAdapterFactory: () => adapter.adapter,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
     });
-    const res = await handler(ctxFor(EXECUTE, createBody()), deps({ evidenceStore: cap.store }));
+    const res = await handler(
+      { ...ctxFor(EXECUTE, createBody()), correlationId: "request-correlation-pr-rejected" },
+      deps({ evidenceStore: cap.store }),
+    );
     const body = res.body as GitDeliveryPrExecuteResponseBody;
     expect(body.status).toBe("failed");
     expect(body.prRejectionReason).toBe("validation-error");
     expect(body.recoveryDisposition).toBe("user-fixable");
     expect(cap.count()).toBe(1);
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({
+      level: "warn",
+      correlationId: "request-correlation-pr-rejected",
+      errorKind: "provider-rejected",
+    });
+    expect(completed?.extra).toMatchObject({ status: "failed" });
   });
 
   it("holds for approval under an approval-gated override pack, executing nothing", async () => {
     const adapter = recordingPrAdapter();
+    const activity: ServerLogEvent[] = [];
     const handler = createHandlePrExecute({
       execution: seams({
         prAdapterFactory: () => adapter.adapter,
@@ -445,13 +555,53 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
             defaultRule: { decision: "blocked" },
           },
         },
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
       }),
     });
-    const res = await handler(ctxFor(EXECUTE, createBody()), deps());
+    const res = await handler(
+      { ...ctxFor(EXECUTE, createBody()), correlationId: "request-correlation-pr-held" },
+      deps(),
+    );
     const body = res.body as GitDeliveryPrExecuteResponseBody;
     expect(body.status).toBe("approval-required");
     expect(body.requiredApprovers).toContain("lead");
     expect(adapter.creates()).toBe(0);
+    const completed = activity.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(completed).toMatchObject({ correlationId: "request-correlation-pr-held" });
+    expect(completed?.extra).toMatchObject({ status: "approval-required" });
+  });
+
+  it("logs a snapshot precondition throw with the request correlation id", async () => {
+    const activity: ServerLogEvent[] = [];
+    const handler = createHandlePrExecute({
+      execution: seams({
+        snapshotReader: () => Promise.reject(new Error("host path must stay private")),
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
+    });
+
+    const res = await handler(
+      { ...ctxFor(EXECUTE, createBody()), correlationId: "request-correlation-pr-snapshot" },
+      deps(),
+    );
+
+    expect(res.status).toBe(409);
+    const failed = activity.find((event) => event.op === "git.delivery.mutation.failed");
+    expect(failed).toMatchObject({
+      level: "error",
+      correlationId: "request-correlation-pr-snapshot",
+    });
+    expect(typeof failed?.errorKind).toBe("string");
+    expect(failed?.extra).toEqual({ actionKind: "pr-create", phaseReached: "snapshot" });
+    expect(JSON.stringify(activity)).not.toContain("host path must stay private");
   });
 
   it("rejects a forged browser-supplied approval object before creating a PR", async () => {
@@ -501,5 +651,142 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     expect(body.status).toBe("succeeded");
     expect(adapter.updates()).toBe(1);
     expect(adapter.creates()).toBe(0);
+  });
+});
+
+// ─── F1: the default PR adapter (no prAdapterFactory seam) — audit finding: this branch
+// previously hard-coded UNKNOWN_CORRELATION_ID and an uninjectable processServerLogSink(),
+// silently dropping BOTH the caller's real correlationId and its activityLog seam. Exercises
+// executeGovernedPullRequest directly (bypassing HTTP) with a policy pack that BLOCKS every
+// action, so the kernel never reaches the adapter's real `.createPullRequest()` — the only fact
+// under test is what deps object the default factory receives. ──────────────────────────────
+
+const BLOCK_ALL_PR_PACK: GitDeliveryRepoPolicyPack = {
+  schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+  repoId: "repo",
+  rules: [],
+  defaultRule: { decision: "blocked" },
+};
+
+function testWorkspace(root: string): WorkspaceInfo {
+  return {
+    root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
+}
+
+const WIRING_COMMAND: GitPullRequestCommand = {
+  kind: "pr-create",
+  ownerAndRepo: "oscharko-dev/Keiko",
+  headBranchName: "feat/x",
+  baseBranchName: "dev",
+  title: "wiring probe",
+  body: "",
+  isDraft: false,
+};
+
+describe("executeGovernedPullRequest — default PR-adapter termination wiring (F1)", () => {
+  beforeEach(() => {
+    createNodeGitPullRequestAdapterCalls.length = 0;
+  });
+
+  it("wires the caller's activityLog + correlationId into the default createNodeGitPullRequestAdapter call", async () => {
+    const activity: ServerLogEvent[] = [];
+    await executeGovernedPullRequest(
+      WIRING_COMMAND,
+      { required: false },
+      testWorkspace("/nonexistent/keiko-gd-pr-wiring"),
+      {
+        evidenceStore: {
+          put: () => "",
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
+        redactor: buildRedactor({}),
+      },
+      {
+        snapshotReader: () => Promise.resolve(SNAPSHOT),
+        policyPacks: { repoPack: BLOCK_ALL_PR_PACK },
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      },
+      "request-correlation-pr-wiring",
+    );
+    expect(createNodeGitPullRequestAdapterCalls).toHaveLength(1);
+    const onTerminated = createNodeGitPullRequestAdapterCalls[0]?.onTerminated;
+    expect(onTerminated).toBeTypeOf("function");
+    onTerminated?.({ reason: "abort", childPid: 5678, windowsTreeKill: "not-attempted" });
+    const termination = activity.find((event) => event.op === "command.terminated");
+    expect(termination?.correlationId).toBe("request-correlation-pr-wiring");
+    expect(activity).toContainEqual(
+      expect.objectContaining({
+        op: "git.delivery.mutation.completed",
+        correlationId: "request-correlation-pr-wiring",
+      }),
+    );
+    expect(termination?.extra?.childPid).toBe(5678);
+  });
+});
+
+// F4: a `beforeRemoteDispatch` refusal (the accepted authority changed mid-flight, between admission
+// and this attempt's actual dispatch) never reaches the real `gh api` adapter — the synthetic
+// `{ outcome: "aborted" }` result the adapter wrapper returns instead must be explicitly marked as a
+// no-spawn refusal, so it cannot be confused in the evidence stream with a genuine dispatch that DID
+// spawn `gh` and was then cancelled mid-flight (both would otherwise share the identical
+// `{ outcome: "aborted", errorCode: undefined }` shape).
+describe("executeGovernedPullRequest — no-spawn refusal is marked, never reaches the real adapter (F4)", () => {
+  it("logs git.delivery.dispatch.no-spawn and never calls the real gh adapter when beforeRemoteDispatch refuses", async () => {
+    const activity: ServerLogEvent[] = [];
+    let realAdapterCalls = 0;
+    await executeGovernedPullRequest(
+      WIRING_COMMAND,
+      { required: false },
+      testWorkspace("/nonexistent/keiko-gd-pr-no-spawn"),
+      {
+        evidenceStore: {
+          put: () => "",
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
+        redactor: buildRedactor({}),
+      },
+      {
+        snapshotReader: () => Promise.resolve(SNAPSHOT),
+        prAdapterFactory: (): GitPullRequestAdapter => ({
+          createPullRequest: (): Promise<GitPrExecResult> => {
+            realAdapterCalls += 1;
+            return Promise.resolve({ schemaVersion: "1", outcome: "succeeded", durationMs: 5 });
+          },
+          updatePullRequest: (): Promise<GitPrExecResult> => {
+            realAdapterCalls += 1;
+            return Promise.resolve({ schemaVersion: "1", outcome: "succeeded", durationMs: 5 });
+          },
+        }),
+        beforeRemoteDispatch: () => false,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      },
+      "request-correlation-pr-no-spawn",
+    );
+    expect(realAdapterCalls).toBe(0);
+    const marker = activity.find((event) => event.op === "git.delivery.dispatch.no-spawn");
+    expect(marker).toBeDefined();
+    expect(marker?.correlationId).toBe("request-correlation-pr-no-spawn");
+    expect(marker?.extra?.operation).toBe("pr-create");
+    expect(marker?.status).toBe(403);
   });
 });

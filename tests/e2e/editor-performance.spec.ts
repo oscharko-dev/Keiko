@@ -6,7 +6,9 @@ import { createRequire } from "node:module";
 import { arch, cpus, platform, release, tmpdir, totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { editorModifier } from "./support/editor-chord.js";
 import { writePaddedFixtureFiles } from "./support/editorWorkspace.js";
+import { clickWindowChromeButton } from "./support/window-chrome.js";
 
 // Number of cold-start samples: kept at 3 for the manual/release-evidence smoke, raised (>=10) in the
 // scheduled/CI perf job via KEIKO_PERF_RUNS so p50/p95 are stable rather than the max of 3 noisy
@@ -527,7 +529,7 @@ async function openEditorCard(page: Page): Promise<ReturnType<Page["getByRole"]>
   await filesWindow.getByRole("button", { name: "Open in editor" }).click();
   const editorWindow = page.getByRole("region", { name: /Editor.*run\.ts/u });
   await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
-  await filesWindow.getByRole("button", { name: "Close Files window" }).click();
+  await clickWindowChromeButton(filesWindow, "Close Files window");
   await expect(filesWindow).toBeHidden();
   return editorWindow;
 }
@@ -552,9 +554,9 @@ async function measureColdStarts(page: Page, warmups: number, runs: number): Pro
     if (run >= warmups) {
       samples.push(Date.now() - start);
     }
-    await filesWindow.getByRole("button", { name: "Close Files window" }).click();
+    await clickWindowChromeButton(filesWindow, "Close Files window");
     await expect(filesWindow).toBeHidden();
-    await editorWindow.getByRole("button", { name: "Close Editor window" }).click();
+    await clickWindowChromeButton(editorWindow, "Close Editor window");
     await expect(editorWindow).toBeHidden();
   }
   return samples;
@@ -676,8 +678,28 @@ async function replaceEditorText(
   await expect(editor).toBeVisible({ timeout: 10_000 });
   await editor.click({ timeout: 8_000 });
   const observerInstalled = await installPerfObservers(page);
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  // Monaco chord: the modifier comes from the BROWSER, never from this Node process. Under this
+  // config's `devices["Desktop Chrome"]` preset the page reports a Windows user agent on every
+  // host, so Monaco binds Ctrl — while `process.platform === "darwin"` sent Meta and the chord
+  // reached nothing on a macOS machine. See ./support/editor-chord.js for the full derivation.
+  const modifier = await editorModifier(page);
   await page.keyboard.press(`${modifier}+KeyA`);
+  // No `Backspace` between the select-all and the insert, deliberately — unlike
+  // `replaceEditorBuffer` in ./support/editor-chord.js, which needs one and says so.
+  //
+  // That helper adds it because Firefox's `insertText` inserts at the caret and leaves the
+  // selection in place, so the buffer doubles. This harness cannot reach that case: BOTH D12
+  // configs declare exactly one project, `chromium` (playwright.editor-performance.config.ts and
+  // playwright.issue-2348-editor-debugging.config.ts), and Chromium's `insertText` replaces the
+  // selection. The defect is structurally unreachable here, not merely unrun by an npm script.
+  //
+  // And the keystroke is not free. This file is a measuring INSTRUMENT: the D12 producer runs
+  // THIS harness against both the pinned baseline and the candidate, so an interaction added here
+  // changes how the BASELINE is measured too. Adding the Backspace was tried, twice, on clean
+  // scratch trees, and killed the regeneration outright:
+  //   Error: D12 performance comparison: repetition 1 baseline B6 requires at least 10 raw samples
+  // The Playwright run still PASSED; only the sample stream collapsed. A guard against an
+  // unreachable defect is not worth an instrument that can no longer produce evidence.
   const diagnosticsRecomputed = waitForFinalDiagnosticsRecompute(page).then(
     () => true,
     () => false,
@@ -1173,7 +1195,11 @@ async function measureD12BaselineWork(
   const editor = editorWindow.locator(".monaco-editor").first();
   await expect(editor).toBeVisible({ timeout: 10_000 });
   await editor.click({ timeout: 8_000 });
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  // Monaco chord: the modifier comes from the BROWSER, never from this Node process. Under this
+  // config's `devices["Desktop Chrome"]` preset the page reports a Windows user agent on every
+  // host, so Monaco binds Ctrl — while `process.platform === "darwin"` sent Meta and the chord
+  // reached nothing on a macOS machine. See ./support/editor-chord.js for the full derivation.
+  const modifier = await editorModifier(page);
   await page.keyboard.press(`${modifier}+KeyA`);
   expect(await installPerfObservers(page)).toBe(true);
   const measurements = await captureInputProcessingSamples(page, TYPING_CHUNKS);
@@ -1212,7 +1238,11 @@ async function measureIdleDebugTyping(
   await expect(editor).toBeVisible({ timeout: 10_000 });
   await editor.click({ timeout: 8_000 });
   await expect(editorWindow.getByRole("textbox", { name: /Editor:/u })).toBeFocused();
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  // Monaco chord: the modifier comes from the BROWSER, never from this Node process. Under this
+  // config's `devices["Desktop Chrome"]` preset the page reports a Windows user agent on every
+  // host, so Monaco binds Ctrl — while `process.platform === "darwin"` sent Meta and the chord
+  // reached nothing on a macOS machine. See ./support/editor-chord.js for the full derivation.
+  const modifier = await editorModifier(page);
   await page.keyboard.press(`${modifier}+KeyA`);
   const diagnosticsRecomputed = waitForFinalDiagnosticsRecompute(page).catch(() => undefined);
   let observerInstalled = false;
@@ -1269,7 +1299,7 @@ async function measureMemory(page: Page, cycles: number): Promise<MemoryMetrics>
       baseline = Math.max(baseline, await collectedHeapBytes(client));
       const card = await openEditorCard(page);
       peak = Math.max(peak, await collectedHeapBytes(client));
-      await card.getByRole("button", { name: "Close Editor window" }).click();
+      await clickWindowChromeButton(card, "Close Editor window");
       await expect(card).toBeHidden();
       residual = Math.max(residual, await collectedHeapBytes(client));
     }

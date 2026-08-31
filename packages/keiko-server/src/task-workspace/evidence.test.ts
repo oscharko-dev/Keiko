@@ -1,6 +1,6 @@
 // Coverage for content-free task-workspace lifecycle evidence (Issue #445, D4). Proves the event is
 // validated against the contract's content-free allowlist, redaction is applied before persistence,
-// and an evidence-store failure is swallowed (best-effort).
+// and an evidence-store failure is reported without breaking the lifecycle operation (best-effort).
 
 import { describe, expect, it } from "vitest";
 import { validateWorkspaceEvent } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
@@ -72,8 +72,11 @@ describe("buildWorkspaceEvent", () => {
 describe("appendWorkspaceLifecycleEvidence", () => {
   it("persists under the event id and applies the redactor before serializing", () => {
     const { store, puts } = capturingStore();
-    const location = appendWorkspaceLifecycleEvidence(store, record("SECRET"), (s) =>
-      s.replace("SECRET", "[R]"),
+    const location = appendWorkspaceLifecycleEvidence(
+      store,
+      record("SECRET"),
+      (s) => s.replace("SECRET", "[R]"),
+      () => undefined,
     );
     expect(location).toBe("/evidence/evt-1.json");
     expect(puts).toHaveLength(1);
@@ -91,6 +94,18 @@ describe("appendWorkspaceLifecycleEvidence", () => {
       get: (): string | undefined => undefined,
       delete: (): void => undefined,
     };
-    expect(appendWorkspaceLifecycleEvidence(failing, record("t1"), (s) => s)).toBeUndefined();
+    const failures: unknown[] = [];
+    expect(
+      appendWorkspaceLifecycleEvidence(
+        failing,
+        record("t1"),
+        (s) => s,
+        (error) => {
+          failures.push(error);
+        },
+      ),
+    ).toBeUndefined();
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toBeInstanceOf(Error);
   });
 });

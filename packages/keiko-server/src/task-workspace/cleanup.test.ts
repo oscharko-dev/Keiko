@@ -45,6 +45,13 @@ import { createWorkspaceCleanupService, safelyRemoveManagedPath } from "./cleanu
 import { TaskWorkspaceError } from "./errors.js";
 import type { WorkspaceCleanupService, WorkspaceProvisioningService } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/index.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -59,12 +66,30 @@ let evidence: { id: string; json: string }[];
 let idCounter: number;
 let nowMs: number;
 
+type AdapterFactory = (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
+
 function git(args: readonly string[], cwd = repoRoot): string {
   return execFileSync("git", [...args], { cwd, encoding: "utf8" });
 }
 
 function parseEvent(json: string): { operation?: string; outcome?: string } {
   return JSON.parse(json) as { operation?: string; outcome?: string };
+}
+
+// Single narrowing point for a captured activity-log line, so a chain of `expect(line?.field)`
+// assertions (each `?.` its own branch to ESLint's `complexity` rule) does not push an otherwise
+// linear assertion test over the repo's complexity ceiling (AGENTS.md §6).
+function lastActivityLogEvent(sink: BufferedServerLogSink): ServerLogEvent {
+  const line = sink.events.at(-1);
+  if (line === undefined) throw new Error("no activity-log event recorded");
+  return line;
+}
+
+function lastEventCorrelationId(): string {
+  const last = evidence.at(-1);
+  if (last === undefined) throw new Error("no evidence recorded");
+  const parsed = JSON.parse(last.json) as { readonly event: { readonly correlationId: string } };
+  return parsed.event.correlationId;
 }
 
 function capturingEvidence(): EvidenceStore {
@@ -83,6 +108,25 @@ function realAdapter(workspace: WorkspaceInfo): GitWorktreeAdapter {
   return createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } });
 }
 
+function capturingAdapterFactory(received: string[]): AdapterFactory {
+  return (workspace, correlationId): GitWorktreeAdapter => {
+    received.push(correlationId);
+    return realAdapter(workspace);
+  };
+}
+
+function rejectingAdapterFactory(received: string[]): AdapterFactory {
+  return (_workspace, correlationId): GitWorktreeAdapter => {
+    received.push(correlationId);
+    throw new Error("captured adapter correlation");
+  };
+}
+
+function expectOnlyAdapterCorrelation(received: readonly string[], expected: string): void {
+  expect(received.length).toBeGreaterThan(0);
+  expect(new Set(received)).toEqual(new Set([expected]));
+}
+
 function provisioning(): WorkspaceProvisioningService {
   return createWorkspaceProvisioningService({
     store,
@@ -98,8 +142,9 @@ function provisioning(): WorkspaceProvisioningService {
 
 function cleanup(
   instanceStore: WorkspaceInstanceStore = store,
-  adapterFactory: (workspace: WorkspaceInfo) => GitWorktreeAdapter = realAdapter,
+  adapterFactory: AdapterFactory = realAdapter,
   removeManagedWorkspaceIdentity?: (instance: WorkspaceInstance) => void,
+  activityLog?: ServerLogSink,
 ): WorkspaceCleanupService {
   return createWorkspaceCleanupService({
     store: instanceStore,
@@ -112,6 +157,7 @@ function cleanup(
     newId: (): string => `id-${String(idCounter++)}`,
     ...(removeManagedWorkspaceIdentity === undefined ? {} : { removeManagedWorkspaceIdentity }),
     mutex: __twMutex,
+    ...(activityLog === undefined ? {} : { activityLog }),
   });
 }
 
@@ -208,7 +254,8 @@ describe("governed cleanup happy path (AC4)", () => {
     expect(requested.outcome).toBe("requested");
     expect(store.getById(instance.workspaceId)?.lifecycleState).toBe("cleanup-pending");
 
-    const completed = await cleanup(undefined, undefined, (removed) => {
+    const received: string[] = [];
+    const completed = await cleanup(undefined, capturingAdapterFactory(received), (removed) => {
       removedIdentities.push(removed);
     }).cleanup({
       workspaceId: instance.workspaceId,
@@ -216,6 +263,7 @@ describe("governed cleanup happy path (AC4)", () => {
       operatorApproved: true,
       mode: "complete",
     });
+    expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
     expect(completed.outcome).toBe("completed");
     expect(existsSync(instance.managedWorktreePath)).toBe(false);
     expect(store.getById(instance.workspaceId)).toBeUndefined();
@@ -233,6 +281,163 @@ describe("governed cleanup happy path (AC4)", () => {
       expect(e.json).not.toContain(managedRoot);
       expect(e.json).not.toContain(repoRoot);
     }
+  });
+
+  // F1: the evidence's correlationId must be the triggering request's own id, not the workspace's own
+  // persisted auditCorrelationId reused for every operation across the workspace's whole life — reuse
+  // would make every distinct HTTP request's evidence collapse onto ONE correlationId, breaking the
+  // join back to the specific request that produced each line (AGENTS.md §8).
+  it("threads the request's own correlationId into cleanup evidence, not the auditCorrelationId", async () => {
+    const instance = await provisionTask("t-corr");
+    setState(instance, "archived");
+    await cleanup().cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "request",
+      correlationId: "req-corr-cleanup-1",
+    });
+    expect(lastEventCorrelationId()).toBe("req-corr-cleanup-1");
+    expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID (never the auditCorrelationId) when no request scope exists", async () => {
+    const instance = await provisionTask("t-nocorr");
+    setState(instance, "archived");
+    await cleanup().cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "request",
+    });
+    expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
+  });
+
+  describe("adapter correlation-ID boundary", () => {
+    it.each([
+      ["empty", ""],
+      ["malformed", "req corr\ncontrol"],
+      ["hostile", `req-corr-${"a".repeat(4000)}`],
+      ["below the HTTP boundary", "x"],
+    ] as const)(
+      "normalizes a supplied %s ID before adapter construction",
+      async (_label, input) => {
+        const received: string[] = [];
+        const instance = await provisionTask(`t-adapter-${_label.replaceAll(" ", "-")}`);
+        setState(instance, "cleanup-pending");
+        await expect(
+          cleanup(store, rejectingAdapterFactory(received)).cleanup({
+            workspaceId: instance.workspaceId,
+            requestedBy: "u",
+            operatorApproved: true,
+            mode: "complete",
+            correlationId: input,
+          }),
+        ).rejects.toThrow("captured adapter correlation");
+        expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
+      },
+    );
+  });
+
+  // IDX51: the same normalization that protects adapter termination evidence also protects lifecycle
+  // evidence. A supplied value outside SAFE_CORRELATION_ID joins the explicit omitted-id fallback.
+  describe("correlation-ID normalization", () => {
+    it.each([
+      ["empty", ""],
+      ["malformed", "req corr\ncontrol"],
+      ["hostile", `req-corr-${"a".repeat(4000)}`],
+      ["below the HTTP boundary", "x"],
+    ] as const)("normalizes a supplied %s ID in lifecycle evidence", async (_label, input) => {
+      const instance = await provisionTask(`t-corr-${_label.replaceAll(" ", "-")}`);
+      setState(instance, "archived");
+      await cleanup().cleanup({
+        workspaceId: instance.workspaceId,
+        requestedBy: "u",
+        operatorApproved: true,
+        mode: "request",
+        correlationId: input,
+      });
+      expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    });
+  });
+
+  // IDX61: the EvidenceStore ledger above is a SEPARATE audit surface from `<stateDir>/logs/
+  // server.log` — this proves the SAME cleanup outcome also reaches the server activity log
+  // (AGENTS.md §8), carrying the SAME correlationId the evidence assertions above just proved. A
+  // refusal (a first-class SUCCESSFUL safety outcome, never thrown — SC4) still carries a structured
+  // `errorKind`, its own `WorkspaceCleanupRefusalReason`, so an agent can tell WHY without opening
+  // the evidence ledger.
+  it("emits a task-workspace.lifecycle activity-log line alongside the evidence, same correlationId", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const received: string[] = [];
+    const instance = await provisionTask("t-activity-log");
+    setState(instance, "archived");
+    const service = cleanup(store, capturingAdapterFactory(received), undefined, activityLog);
+    await service.cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "request",
+      correlationId: "req-corr-cleanup-activity-1",
+    });
+    await service.cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+      correlationId: "req-corr-cleanup-activity-1",
+    });
+    expectOnlyAdapterCorrelation(received, "req-corr-cleanup-activity-1");
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.category).toBe("diagnostic");
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.correlationId).toBe("req-corr-cleanup-activity-1");
+    expect(line.level).toBe("info");
+    expect(line.errorKind).toBeUndefined();
+    const extra = line.extra ?? {};
+    expect(extra.operation).toBe("cleanup");
+    expect(extra.outcome).toBe("cleanup-completed");
+    expect(extra.workspaceId).toBe(instance.workspaceId);
+  });
+
+  it("carries the refusal reason as errorKind on a refused cleanup", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const instance = await provisionTask("t-activity-log-refused");
+    writeFileSync(join(instance.managedWorktreePath, "wip.txt"), "uncommitted\n");
+    setState(instance, "cleanup-pending");
+    await cleanup(store, realAdapter, undefined, activityLog).cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.level).toBe("warn");
+    expect(line.errorKind).toBe("worktree-dirty");
+    expect(line.extra?.outcome).toBe("cleanup-refused");
+  });
+
+  it("logs a closed, correlated rejection when cleanup approval is missing", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const instance = await provisionTask("t-activity-log-rejection");
+    setState(instance, "archived");
+    await expect(
+      cleanup(store, realAdapter, undefined, activityLog).cleanup({
+        workspaceId: instance.workspaceId,
+        requestedBy: "u",
+        operatorApproved: false,
+        mode: "request",
+        correlationId: "req-corr-cleanup-rejection-1",
+      }),
+    ).rejects.toMatchObject({ code: "OPERATOR_APPROVAL_REQUIRED" });
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.correlationId).toBe("req-corr-cleanup-rejection-1");
+    expect(line.errorKind).toBe("OPERATOR_APPROVAL_REQUIRED");
+    expect(line.extra?.operation).toBe("cleanup");
+    expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
   });
 
   it("is idempotent on a second request (already cleanup-pending)", async () => {
@@ -674,9 +879,19 @@ describe("orphan cleanup", () => {
   });
 
   it("rejects orphan cleanup without operator approval", async () => {
+    const activityLog = createBufferedServerLogSink();
     await expect(
-      cleanup().cleanupOrphans({ requestedBy: "u", operatorApproved: false }),
+      cleanup(store, realAdapter, undefined, activityLog).cleanupOrphans({
+        requestedBy: "u",
+        operatorApproved: false,
+        correlationId: "req-corr-orphan-cleanup-rejection-1",
+      }),
     ).rejects.toMatchObject({ code: "OPERATOR_APPROVAL_REQUIRED" });
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.correlationId).toBe("req-corr-orphan-cleanup-rejection-1");
+    expect(line.errorKind).toBe("OPERATOR_APPROVAL_REQUIRED");
+    expect(line.extra?.operation).toBe("cleanup");
+    expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
   });
 
   // GEN-TEST-FLAKE-006: the invariant this test pins is a CALL-COUNT bound (listAll() runs at most once

@@ -3,6 +3,8 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { clickWindowChromeButton } from "./support/window-chrome.js";
+import { editorModifier, focusMonacoInput } from "./support/editor-chord.js";
 
 const EVIDENCE_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -345,14 +347,21 @@ function createProjectFixture(): string {
   return root;
 }
 
+// F6: a plain `.click()` on `.monaco-editor` can leave Firefox's fallback `textarea.inputarea`
+// unfocused (support/editor-chord.ts `focusMonacoInput`'s doc comment), so the select-all below
+// reaches nothing and `insertText` APPENDS instead of replacing. `focusMonacoInput` focuses
+// whichever real input surface this engine created instead of re-deriving a weaker click-only
+// version of that logic here.
 async function replaceMonacoText(page: Page, editorWindow: Locator, text: string): Promise<void> {
-  const editor = editorWindow.locator(".monaco-editor").first();
-  await expect(editor).toBeVisible();
-  await editor.click();
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  await focusMonacoInput(editorWindow);
+  const modifier = await editorModifier(page);
   await page.keyboard.down(modifier);
   await page.keyboard.press("KeyA");
   await page.keyboard.up(modifier);
+  // Delete the selection with a REAL key event first. `insertText` bypasses key events, and
+  // whether it replaces a selection is engine-dependent: Chromium replaces, Firefox inserts at
+  // the caret and leaves the selected text behind — appending instead of replacing.
+  await page.keyboard.press("Backspace");
   await page.keyboard.insertText(text);
 }
 
@@ -484,7 +493,7 @@ async function openEditor(page: Page, projectPath: string, mode: ThemeMode): Pro
   await filesWindow.getByRole("button", { name: "Open in editor" }).click();
   const editorRegion = page.getByRole("region", { name: /Editor.*src\/App\.tsx/u });
   await expect(editorRegion).toBeVisible();
-  await filesWindow.getByRole("button", { name: "Close Files window" }).click();
+  await clickWindowChromeButton(filesWindow, "Close Files window");
   await expect(filesWindow).toBeHidden();
   const editorWindow = page
     .locator(".window[data-window-id]")
@@ -851,7 +860,7 @@ async function openDiagnosticHover(
   if (await diagnosticAction.isVisible({ timeout: 1_000 }).catch(() => false)) {
     await diagnosticAction.click({ force: true });
     await waitForAnimationFrames(page);
-    const modifier = process.platform === "darwin" ? "Meta" : "Control";
+    const modifier = await editorModifier(page);
     await page.keyboard.press(`${modifier}+K`);
     await page.keyboard.press(`${modifier}+I`);
     if (await hoverFrame.isVisible({ timeout: 2_000 }).catch(() => false)) return hoverFrame;

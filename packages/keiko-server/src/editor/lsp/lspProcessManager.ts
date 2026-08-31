@@ -1,8 +1,9 @@
 // Governed LSP process manager (Issue #1381, Epic #1491, ADR-0069 D2/D4/D5). A long-lived supervisor
 // for one external language-server child over stdio JSON-RPC: it runs the deny-by-default preflight,
 // spawns through the injected `LspSpawnFn`, drives the `initialize` handshake under a timeout, serves
-// requests under a per-request deadline plus AbortSignal cancellation, restarts on crash within a
-// rolling throttle window, and shuts the process down gracefully on dispose. Every state transition
+// requests under a per-request deadline plus AbortSignal cancellation, restarts only after a
+// requested termination has confirmed root exit and bounded-tree containment, and shuts the process
+// down gracefully on dispose. Every state transition
 // emits a content-free `LspLifecycleEvent` (ADR-0069 I4/D6); no source text, paths, or method names
 // ever cross the audit boundary.
 
@@ -30,8 +31,13 @@ import {
   preflightSpawnEnv,
   resolveExecutableOutsideWorkspace,
 } from "./lspNodeAdapter.js";
-import type { LspSpawnFn } from "./lspNodeAdapter.js";
+import type { LspProcessKillResult, LspSpawnFn, LspTreeContainment } from "./lspNodeAdapter.js";
 import { createLspRestartThrottle } from "./lspRestartThrottle.js";
+import type {
+  LspRuntimeLeaseReason,
+  LspRuntimeStateLoadResult,
+  LspRuntimeStatePort,
+} from "./lspRuntimeStateStore.js";
 import {
   LspRpcCancelledError,
   LspRpcDisposedError,
@@ -41,6 +47,8 @@ import { buildLanguageProvider } from "./lspLanguageProvider.js";
 import type { LspManagerLanguageProvider } from "./lspLanguageProvider.js";
 import { createLspProtocolSession, type LspProtocolSession } from "./lspProtocolSession.js";
 import type { LspSemanticTokenNegotiation } from "./lspSemanticTokens.js";
+import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
+import { processServerLogSink } from "../../process-log-sink.js";
 
 export interface LspProcessProtocolConfig {
   readonly language: ManagedLspLanguage;
@@ -73,6 +81,8 @@ export interface LspSpawnPreparation {
   readonly executable: string;
   readonly args: readonly string[];
   readonly env: Record<string, string>;
+  /** Governed, abortable prerequisite executed only after this generation owns its durable lease. */
+  readonly beforeSpawn?: ((signal: AbortSignal) => Promise<void>) | undefined;
   readonly cleanup?: (() => void) | undefined;
   readonly resourceBudgetSatisfied?: (() => boolean) | undefined;
   readonly backgroundResourceBudgetSatisfied?: (() => boolean) | undefined;
@@ -92,11 +102,17 @@ export interface LspProcessManagerDeps {
   readonly onLifecycleEvent?: ((event: LspLifecycleEvent) => void) | undefined;
   readonly protocol?: LspProcessProtocolConfig | undefined;
   readonly prepareSpawn?: LspSpawnPrepareFn | undefined;
+  /** Durable lease/throttle state; an active restored lease remains quarantined, never reconciled. */
+  readonly runtimeState?: LspRuntimeStatePort | undefined;
 }
 
 export interface LspProcessManager {
   getLspProcessStatus(): LspProcessStatus;
   getChildGeneration(): number;
+  // True once a terminal/termination path retains a generation whose immediate exit and bounded-
+  // tree containment have not both been confirmed. Callers must not replace such a manager: the old
+  // generation can still have live descendants even when its root process already emitted `exit`.
+  hasRetainedProcessOwnership(): boolean;
   getNegotiatedCapabilities(): ManagedLspNegotiatedCapabilitySnapshot | undefined;
   getHealthSnapshot(): ManagedLspProcessHealthSnapshot | undefined;
   getSemanticTokenNegotiation(): LspSemanticTokenNegotiation | undefined;
@@ -112,12 +128,38 @@ export interface LspProcessManager {
 
 type SpawnHandle = ReturnType<LspSpawnFn>;
 type Transition = (status: LspProcessStatus, code?: LspProcessErrorCode) => void;
+type TreeContainmentState = "not-required" | LspTreeContainment;
+type OwnershipRetentionReason =
+  | "exit-unconfirmed"
+  | "tree-unconfirmed"
+  | "resource-cleanup-failed"
+  | "durable-quarantine"
+  | "runtime-state-unavailable";
+type OwnershipSettlement = "released" | "retained" | "cleanup-failed";
+
+interface CrashTransition {
+  readonly status: "CRASHED" | "INITIALIZE_TIMEOUT";
+  readonly code: LspProcessErrorCode;
+}
+
+const DEFAULT_CRASH_TRANSITION: CrashTransition = Object.freeze({
+  status: "CRASHED",
+  code: "CRASHED",
+});
 
 interface RuntimeState {
   status: LspProcessStatus;
   transport: LspTransport | undefined;
   child: SpawnHandle | undefined;
   exited: boolean;
+  // A terminal path has requested process-tree termination. This is deliberately distinct from
+  // `exited`: requesting SIGKILL is not OS confirmation, and ownership must survive until an exit
+  // callback proves the handle is no longer live.
+  terminationRequested: boolean;
+  treeContainment: TreeContainmentState;
+  restartPendingAfterExit: boolean;
+  terminalTransitionRecorded: boolean;
+  ownershipRetentionReason: OwnershipRetentionReason | undefined;
   restartCount: number;
   disposed: boolean;
   // Monotonic counter incremented per spawned child. Each crash callback captures the generation it
@@ -125,6 +167,8 @@ interface RuntimeState {
   // child (a late `exit`/`error` arriving after a restart) and is discarded (ADR-0069 D4 — no spurious
   // CRASHED transition or throttle debit on a stale child event).
   childGeneration: number;
+  startAttempt: number;
+  preSpawnAttempt: PreSpawnAttempt | undefined;
   protocol: LspProtocolSession | undefined;
   lastTransitionTimestampMs: number;
   requestCount: number;
@@ -139,6 +183,18 @@ interface RuntimeState {
   resourceBudgetSatisfied: (() => boolean) | undefined;
   backgroundResourceBudgetSatisfied: (() => boolean) | undefined;
   resourceBudgetTimer: ReturnType<typeof setInterval> | undefined;
+  durableState: LspRuntimeStatePort | undefined;
+  durableLeaseActive: boolean;
+  durableLeaseOrphaned: boolean;
+  durableStateUnavailable: boolean;
+  crashTimestampsMs: number[];
+}
+
+interface PreSpawnAttempt {
+  readonly attempt: number;
+  readonly generation: number;
+  readonly controller: AbortController;
+  settled: Promise<void>;
 }
 
 interface ManagerRuntime {
@@ -160,6 +216,7 @@ function supervisorOnCrash(
   ctx: SupervisorContext,
   crashGeneration: number,
   terminateProcess: boolean,
+  crashTransition: CrashTransition = DEFAULT_CRASH_TRANSITION,
 ): void {
   // A late `exit`/`error` from a child already superseded by a restart carries a stale generation;
   // discard it so it cannot debit the throttle or re-enter CRASHED (FIX 4). The same-generation
@@ -168,40 +225,278 @@ function supervisorOnCrash(
   if (crashGeneration !== ctx.state.childGeneration || ctx.state.exited) {
     return;
   }
+  if (terminateProcess) {
+    requestCrashTermination(ctx, crashTransition);
+    return;
+  }
+  handleObservedChildExit(ctx);
+}
+
+function handleObservedChildExit(ctx: SupervisorContext): void {
   // Marking the child exited BEFORE the disposed early-return lets `escalateKill`'s stop-predicate
   // (`() => state.exited`) observe a prompt exit during dispose and resolve without waiting the full
   // grace window (FIX 2).
   ctx.state.exited = true;
-  if (terminateProcess) terminateProcessTree(ctx.state);
-  const cleanupSucceeded = cleanupSpawnResources(ctx.state);
-  if (ctx.state.disposed) {
+  // An observed exit closes the protocol channel for this generation immediately. Relying on
+  // `beginSpawnGeneration()` to dispose it is insufficient: when the restart throttle is exhausted
+  // there is no next generation, so pending requests and their deadline/abort handles would remain
+  // owned by a transport whose child is already dead.
+  ctx.state.transport?.dispose();
+  if (ctx.state.restartPendingAfterExit) {
+    if (ctx.state.terminalTransitionRecorded) restartConfirmedCrash(ctx);
     return;
   }
-  ctx.transition("CRASHED", cleanupSucceeded ? "CRASHED" : "RUNTIME_STATE_CLEANUP_FAILED");
-  if (ctx.throttle.recordCrashAndMayRestart(ctx.now())) {
-    ctx.state.restartCount = ctx.throttle.restartCount();
-    supervisorStart(ctx);
-  } else {
-    ctx.transition("RESTART_THROTTLED", "RESTART_THROTTLED");
+  if (ctx.state.disposed || ctx.state.terminationRequested) {
+    if (ctx.state.terminalTransitionRecorded) {
+      settlementReleased(settleChildOwnership(ctx.state), ctx.state, ctx.transition);
+    }
+    return;
   }
+  handleUnsolicitedChildExit(ctx);
+}
+
+function handleUnsolicitedChildExit(ctx: SupervisorContext): void {
+  // The immediate child is only the root of the bounded process tree. Its unsolicited exit cannot
+  // prove that descendants are gone (a detached POSIX child or a Windows cmd.exe wrapper can leave
+  // one behind), and signalling its raw pid after this observation risks hitting a recycled pid.
+  // Retain the generation and suppress replacement unless containment had already been confirmed.
+  stopResourceBudgetMonitor(ctx.state);
+  const treeWasConfirmed = ctx.state.treeContainment === "confirmed";
+  if (!treeWasConfirmed) markTreeContainmentUnconfirmed(ctx.state);
+  ctx.transition("CRASHED", "CRASHED");
+  ctx.state.terminalTransitionRecorded = true;
+  if (!settlementReleased(settleChildOwnership(ctx.state), ctx.state, ctx.transition)) return;
+  restartAfterCrash(ctx);
+}
+
+function restartAfterCrash(ctx: SupervisorContext): void {
+  const nowMs = ctx.now();
+  const restartAllowed = ctx.throttle.recordCrashAndMayRestart(nowMs);
+  ctx.state.restartCount = ctx.throttle.restartCount();
+  ctx.state.crashTimestampsMs = [...ctx.throttle.crashTimestamps(nowMs)];
+  if (!persistDurableRuntime(ctx.state, nowMs, "released")) {
+    retainChildOwnership(ctx.state, "runtime-state-unavailable");
+    ctx.transition("CRASHED", "RUNTIME_STATE_CLEANUP_FAILED");
+    return;
+  }
+  if (restartAllowed) supervisorStart(ctx);
+  else ctx.transition("RESTART_THROTTLED", "RESTART_THROTTLED");
+}
+
+function requestCrashTermination(ctx: SupervisorContext, crashTransition: CrashTransition): void {
+  if (ctx.state.terminationRequested) return;
+  ctx.state.terminationRequested = true;
+  ctx.state.restartPendingAfterExit = true;
+  ctx.state.terminalTransitionRecorded = false;
+  stopResourceBudgetMonitor(ctx.state);
+  ctx.state.transport?.dispose();
+  // Node's asynchronous ENOENT/EACCES spawn failure has no pid and does not promise a later `exit`
+  // event. No OS process was acquired, so this is an observed not-spawned terminal state rather than
+  // an unconfirmed kill; waiting for an exit here would retain the handle and suppress restart
+  // forever. A post-spawn error has a pid and still follows the retained-until-exit path below.
+  if (ctx.state.child?.pid === undefined) {
+    ctx.state.exited = true;
+    ctx.state.treeContainment = "confirmed";
+  } else terminateProcessTree(ctx.state);
+  ctx.transition(crashTransition.status, crashTransition.code);
+  completeTerminalTermination(ctx.state, ctx.transition);
+  if (ctx.state.exited) restartConfirmedCrash(ctx);
+}
+
+function restartConfirmedCrash(ctx: SupervisorContext): void {
+  if (
+    !ctx.state.restartPendingAfterExit ||
+    !settlementReleased(settleChildOwnership(ctx.state), ctx.state, ctx.transition)
+  ) {
+    return;
+  }
+  ctx.state.restartPendingAfterExit = false;
+  ctx.state.terminationRequested = false;
+  ctx.state.terminalTransitionRecorded = false;
+  restartAfterCrash(ctx);
 }
 
 function terminateProcessTree(state: RuntimeState): void {
+  markTreeTerminationRequested(state);
   try {
     state.child?.kill("SIGKILL");
+    recordTreeKillResult(state, state.child?.lastKillResult?.());
   } catch {
-    // The process group may already be gone; the state remains failed closed and is superseded.
+    // The process group may already be gone. Without a verified bounded-tree disposition the
+    // generation remains owned and no replacement may start.
   }
 }
 
+function markTreeTerminationRequested(state: RuntimeState): void {
+  markTreeContainmentUnconfirmed(state);
+}
+
+function markTreeContainmentUnconfirmed(state: RuntimeState): void {
+  if (state.child !== undefined && state.treeContainment !== "confirmed") {
+    state.treeContainment = "unconfirmed";
+  }
+}
+
+function recordTreeKillResult(state: RuntimeState, result: LspProcessKillResult | undefined): void {
+  if (result?.treeContainment === "confirmed") state.treeContainment = "confirmed";
+}
+
+function logChildOwnership(
+  action:
+    | "retained-unconfirmed"
+    | "released-after-exit"
+    | "durable-lease-acquired"
+    | "durable-lease-released"
+    | "durable-lease-restored"
+    | "durable-state-unavailable",
+  childPid: number | undefined,
+  reason: OwnershipRetentionReason | LspRuntimeLeaseReason,
+  generation?: number,
+): void {
+  processServerLogSink().write({
+    category: "diagnostic",
+    op: "lsp.process.ownership.changed",
+    correlationId: UNKNOWN_CORRELATION_ID,
+    extra: {
+      action,
+      reason,
+      ...(generation === undefined ? {} : { generation }),
+      ...(childPid === undefined ? {} : { childPid }),
+    },
+  });
+}
+
+function durableLeaseReason(reason: OwnershipRetentionReason): LspRuntimeLeaseReason {
+  if (reason === "exit-unconfirmed") return "exit-unconfirmed";
+  if (reason === "tree-unconfirmed") return "tree-unconfirmed";
+  if (reason === "resource-cleanup-failed") return "resource-cleanup-failed";
+  return "process-live";
+}
+
+function persistDurableRuntime(
+  state: RuntimeState,
+  nowMs: number,
+  leaseState: "active" | "released",
+  reason: LspRuntimeLeaseReason = "process-live",
+): boolean {
+  if (state.durableState === undefined) {
+    state.durableLeaseActive = false;
+    return true;
+  }
+  try {
+    state.durableState.save({
+      generation: state.childGeneration,
+      leaseState,
+      ...(leaseState === "active" ? { leaseReason: reason } : {}),
+      crashTimestampsMs: state.crashTimestampsMs,
+      restartCount: state.restartCount,
+      updatedAtMs: nowMs,
+    });
+    state.durableLeaseActive = leaseState === "active";
+    state.durableStateUnavailable = false;
+    logChildOwnership(
+      leaseState === "active" ? "durable-lease-acquired" : "durable-lease-released",
+      undefined,
+      leaseState === "active" ? reason : (state.ownershipRetentionReason ?? "process-live"),
+      state.childGeneration,
+    );
+    return true;
+  } catch {
+    state.durableStateUnavailable = true;
+    logChildOwnership(
+      "durable-state-unavailable",
+      undefined,
+      "runtime-state-unavailable",
+      state.childGeneration,
+    );
+    return false;
+  }
+}
+
+function retainChildOwnership(state: RuntimeState, reason: OwnershipRetentionReason): void {
+  if (state.ownershipRetentionReason === reason) return;
+  logChildOwnership("retained-unconfirmed", state.child?.pid, reason);
+  state.ownershipRetentionReason = reason;
+  if (state.durableLeaseActive) {
+    persistDurableRuntime(
+      state,
+      state.lastTransitionTimestampMs,
+      "active",
+      durableLeaseReason(reason),
+    );
+  }
+}
+
+function settleChildOwnership(state: RuntimeState): OwnershipSettlement {
+  const retentionReason = childRetentionReason(state);
+  if (retentionReason !== undefined) {
+    retainChildOwnership(state, retentionReason);
+    return "retained";
+  }
+  if (!cleanupSpawnResources(state)) {
+    retainChildOwnership(state, "resource-cleanup-failed");
+    return "cleanup-failed";
+  }
+  if (!persistDurableRuntime(state, state.lastTransitionTimestampMs, "released")) {
+    retainChildOwnership(state, "runtime-state-unavailable");
+    return "cleanup-failed";
+  }
+  const childPid = state.child?.pid;
+  state.child = undefined;
+  if (state.ownershipRetentionReason !== undefined) {
+    logChildOwnership("released-after-exit", childPid, state.ownershipRetentionReason);
+    state.ownershipRetentionReason = undefined;
+  }
+  return "released";
+}
+
+function settlementReleased(
+  settlement: OwnershipSettlement,
+  state: RuntimeState,
+  transition: Transition,
+  cleanupFailureStatus: LspProcessStatus = state.status,
+): boolean {
+  if (settlement === "cleanup-failed") {
+    transition(cleanupFailureStatus, "RUNTIME_STATE_CLEANUP_FAILED");
+  }
+  return settlement === "released";
+}
+
+function childRetentionReason(state: RuntimeState): OwnershipRetentionReason | undefined {
+  if (state.durableStateUnavailable) return "runtime-state-unavailable";
+  if (state.durableLeaseOrphaned) return "durable-quarantine";
+  if (state.child === undefined) return undefined;
+  if (!state.exited) return "exit-unconfirmed";
+  return state.treeContainment === "confirmed" ? undefined : "tree-unconfirmed";
+}
+
+function hasRetainedProcessOwnership(state: RuntimeState): boolean {
+  if (state.ownershipRetentionReason !== undefined) return true;
+  return (
+    (state.disposed || state.terminationRequested) && childRetentionReason(state) !== undefined
+  );
+}
+
+function beginTerminalTermination(state: RuntimeState): void {
+  stopResourceBudgetMonitor(state);
+  state.terminationRequested = true;
+  state.restartPendingAfterExit = false;
+  state.terminalTransitionRecorded = false;
+}
+
+function completeTerminalTermination(
+  state: RuntimeState,
+  transition: Transition,
+  cleanupFailureStatus?: LspProcessStatus,
+): boolean {
+  state.terminalTransitionRecorded = true;
+  return settlementReleased(settleChildOwnership(state), state, transition, cleanupFailureStatus);
+}
+
 function supervisorStart(ctx: SupervisorContext): void {
-  if (ctx.state.disposed) {
-    return;
-  }
+  if (ctx.state.disposed) return;
   const preflight = preflightOrFail(ctx.deps, ctx.transition);
-  if (preflight === undefined) {
-    return;
-  }
+  if (preflight === undefined) return;
   const executable = resolveOrFail(ctx.deps, ctx.transition);
   if (executable === undefined) {
     if (!safeCleanup(preflight.cleanup)) {
@@ -220,27 +515,139 @@ function supervisorStart(ctx: SupervisorContext): void {
     executable: prepared.executable,
     args: prepared.args,
     env: prepared.env,
+    beforeSpawn: prepared.beforeSpawn,
     spawnResourceCleanup: prepared.cleanup,
     resourceBudgetSatisfied: prepared.resourceBudgetSatisfied,
     backgroundResourceBudgetSatisfied: prepared.backgroundResourceBudgetSatisfied,
-    onCrash: (generation, terminateProcess) => {
-      supervisorOnCrash(ctx, generation, terminateProcess);
+    onCrash: (generation, terminateProcess, crashTransition) => {
+      supervisorOnCrash(ctx, generation, terminateProcess, crashTransition);
     },
   });
 }
 
 function createManagerRuntime(deps: LspProcessManagerDeps): ManagerRuntime {
   const now = deps.now ?? Date.now;
-  const state: RuntimeState = {
+  const loaded = loadDurableRuntimeState(deps.runtimeState);
+  const state = initialRuntimeState(now(), deps.runtimeState, loaded);
+  const transition: Transition = (status, code) => {
+    state.status = status;
+    state.lastTransitionTimestampMs = now();
+    deps.onLifecycleEvent?.(
+      buildLifecycleEvent(deps.config.managerId, state, state.lastTransitionTimestampMs, code),
+    );
+  };
+  const throttle = createLspRestartThrottle(
+    deps.config.restartWindowMs,
+    deps.config.maxRestartsInWindow,
+    {
+      crashTimestampsMs: state.crashTimestampsMs,
+      restartCount: state.restartCount,
+    },
+  );
+  const ctx: SupervisorContext = {
+    deps,
+    state,
+    now,
+    spawn: deps.spawn ?? defaultLspSpawnFn,
+    throttle,
+    transition,
+  };
+
+  transition("STARTING");
+  state.crashTimestampsMs = [...throttle.crashTimestamps(now())];
+  if (state.durableStateUnavailable) {
+    retainChildOwnership(state, "runtime-state-unavailable");
+    transition("SPAWN_FAILED", "RUNTIME_STATE_CLEANUP_FAILED");
+  } else if (state.durableLeaseOrphaned) {
+    logChildOwnership(
+      "durable-lease-restored",
+      undefined,
+      "durable-quarantine",
+      state.childGeneration,
+    );
+    retainChildOwnership(state, "durable-quarantine");
+    transition("CRASHED", "CRASHED");
+  } else if (throttle.isThrottled(now())) {
+    transition("RESTART_THROTTLED", "RESTART_THROTTLED");
+  } else {
+    supervisorStart(ctx);
+  }
+  return { state, now, transition };
+}
+
+function loadDurableRuntimeState(port: LspRuntimeStatePort | undefined): LspRuntimeStateLoadResult {
+  if (port === undefined) return { state: "absent" };
+  try {
+    return port.load();
+  } catch {
+    return { state: "unavailable" };
+  }
+}
+
+interface DurableInitialState {
+  readonly ownershipRetentionReason: OwnershipRetentionReason | undefined;
+  readonly restartCount: number;
+  readonly childGeneration: number;
+  readonly leaseActive: boolean;
+  readonly stateUnavailable: boolean;
+  readonly crashTimestampsMs: readonly number[];
+}
+
+function durableInitialState(loaded: LspRuntimeStateLoadResult): DurableInitialState {
+  if (loaded.state === "unavailable") {
+    return {
+      ownershipRetentionReason: "runtime-state-unavailable",
+      restartCount: 0,
+      childGeneration: 0,
+      leaseActive: false,
+      stateUnavailable: true,
+      crashTimestampsMs: [],
+    };
+  }
+  if (loaded.state === "absent") {
+    return {
+      ownershipRetentionReason: undefined,
+      restartCount: 0,
+      childGeneration: 0,
+      leaseActive: false,
+      stateUnavailable: false,
+      crashTimestampsMs: [],
+    };
+  }
+  const active = loaded.snapshot.leaseState === "active";
+  return {
+    ownershipRetentionReason: active ? "durable-quarantine" : undefined,
+    restartCount: loaded.snapshot.restartCount,
+    childGeneration: loaded.snapshot.generation,
+    leaseActive: active,
+    stateUnavailable: false,
+    crashTimestampsMs: loaded.snapshot.crashTimestampsMs,
+  };
+}
+
+function initialRuntimeState(
+  timestampMs: number,
+  durableState: LspRuntimeStatePort | undefined,
+  loaded: LspRuntimeStateLoadResult,
+): RuntimeState {
+  const durable = durableInitialState(loaded);
+  return {
     status: "STARTING",
     transport: undefined,
     child: undefined,
     exited: false,
-    restartCount: 0,
+    terminationRequested: false,
+    treeContainment: "not-required",
+    restartPendingAfterExit: false,
+    terminalTransitionRecorded: false,
+    ownershipRetentionReason: durable.ownershipRetentionReason,
+    restartCount: durable.restartCount,
     disposed: false,
-    childGeneration: 0,
+    childGeneration: durable.childGeneration,
+    startAttempt: 0,
+    preSpawnAttempt: undefined,
     protocol: undefined,
-    lastTransitionTimestampMs: now(),
+    lastTransitionTimestampMs: timestampMs,
     requestCount: 0,
     successCount: 0,
     timeoutCount: 0,
@@ -253,29 +660,12 @@ function createManagerRuntime(deps: LspProcessManagerDeps): ManagerRuntime {
     resourceBudgetSatisfied: undefined,
     backgroundResourceBudgetSatisfied: undefined,
     resourceBudgetTimer: undefined,
+    durableState,
+    durableLeaseActive: durable.leaseActive,
+    durableLeaseOrphaned: durable.leaseActive,
+    durableStateUnavailable: durable.stateUnavailable,
+    crashTimestampsMs: [...durable.crashTimestampsMs],
   };
-  const transition: Transition = (status, code) => {
-    state.status = status;
-    state.lastTransitionTimestampMs = now();
-    deps.onLifecycleEvent?.(
-      buildLifecycleEvent(deps.config.managerId, state, state.lastTransitionTimestampMs, code),
-    );
-  };
-  const ctx: SupervisorContext = {
-    deps,
-    state,
-    now,
-    spawn: deps.spawn ?? defaultLspSpawnFn,
-    throttle: createLspRestartThrottle(
-      deps.config.restartWindowMs,
-      deps.config.maxRestartsInWindow,
-    ),
-    transition,
-  };
-
-  transition("STARTING");
-  supervisorStart(ctx);
-  return { state, now, transition };
 }
 
 export function createLspProcessManager(deps: LspProcessManagerDeps): LspProcessManager {
@@ -284,6 +674,7 @@ export function createLspProcessManager(deps: LspProcessManagerDeps): LspProcess
   return {
     getLspProcessStatus: (): LspProcessStatus => state.status,
     getChildGeneration: (): number => state.childGeneration,
+    hasRetainedProcessOwnership: (): boolean => hasRetainedProcessOwnership(state),
     getNegotiatedCapabilities: (): ManagedLspNegotiatedCapabilitySnapshot | undefined =>
       state.protocol?.snapshot(),
     getHealthSnapshot: (): ManagedLspProcessHealthSnapshot | undefined =>
@@ -353,6 +744,10 @@ function buildLifecycleEvent(
     pendingRequestCount: state.transport?.client.pendingCount() ?? 0,
     restartCount: state.restartCount,
     stderrBytesSeen: state.transport?.stderrBytesSeen() ?? 0,
+    // The join key toward the spawn adapter's per-kill activity line (see the contract comment on
+    // LspLifecycleEvent.childPid): the transition carries the REASON, the adapter line carries the
+    // signal and the verified tree-kill disposition, and childPid ties them together.
+    ...(state.child?.pid !== undefined ? { childPid: state.child.pid } : {}),
   };
 }
 
@@ -365,42 +760,46 @@ interface SpawnAndInitializeInput {
   readonly executable: string;
   readonly args: readonly string[];
   readonly env: Record<string, string>;
+  readonly beforeSpawn: ((signal: AbortSignal) => Promise<void>) | undefined;
   readonly spawnResourceCleanup: (() => void) | undefined;
   readonly resourceBudgetSatisfied: (() => boolean) | undefined;
   readonly backgroundResourceBudgetSatisfied: (() => boolean) | undefined;
-  readonly onCrash: (generation: number, terminateProcess: boolean) => void;
+  readonly onCrash: (
+    generation: number,
+    terminateProcess: boolean,
+    crashTransition?: CrashTransition,
+  ) => void;
 }
 
 function spawnAndInitialize(input: SpawnAndInitializeInput): void {
-  const {
-    state,
-    deps,
-    spawn,
-    now,
-    transition,
-    executable,
-    args,
-    env,
-    spawnResourceCleanup,
-    resourceBudgetSatisfied,
-    backgroundResourceBudgetSatisfied,
-    onCrash,
-  } = input;
-  // On a restart, reject any request still pending against the dead transport IMMEDIATELY instead of
-  // letting it linger until requestTimeoutMs: dispose rejects pending with LspRpcDisposedError, which
-  // maps to DISPOSED (FIX 3). The new generation guards stale callbacks from the superseded child.
-  state.transport?.dispose();
-  if (!cleanupSpawnResources(state)) {
-    safeCleanup(spawnResourceCleanup);
-    transition("SPAWN_FAILED", "RUNTIME_STATE_CLEANUP_FAILED");
+  const generation = beginSpawnGeneration(
+    input.state,
+    input.spawnResourceCleanup,
+    input.transition,
+  );
+  if (generation === undefined) return;
+  input.state.startAttempt += 1;
+  const attempt = input.state.startAttempt;
+  if (input.beforeSpawn === undefined) {
+    spawnPreparedGeneration(input, generation, attempt);
     return;
   }
-  state.childGeneration += 1;
-  const generation = state.childGeneration;
-  state.exited = false;
+  startBeforeSpawn(input, generation, attempt, input.beforeSpawn);
+}
+
+function spawnPreparedGeneration(
+  input: SpawnAndInitializeInput,
+  generation: number,
+  attempt: number,
+): void {
+  const { state, deps, spawn, now, transition, executable, args, env, onCrash } = input;
+  if (!maySpawnPreparedGeneration(state, generation, attempt)) return;
   const child = trySpawn(spawn, executable, args, env, deps, transition);
   if (child === undefined) {
-    safeCleanup(spawnResourceCleanup);
+    if (!cleanupSpawnResources(state)) retainChildOwnership(state, "resource-cleanup-failed");
+    else if (!persistDurableRuntime(state, state.lastTransitionTimestampMs, "released")) {
+      retainChildOwnership(state, "runtime-state-unavailable");
+    }
     return;
   }
   installSpawnedChild({
@@ -410,9 +809,8 @@ function spawnAndInitialize(input: SpawnAndInitializeInput): void {
     generation,
     onCrash,
     transition,
-    spawnResourceCleanup,
-    resourceBudgetSatisfied,
-    backgroundResourceBudgetSatisfied,
+    resourceBudgetSatisfied: input.resourceBudgetSatisfied,
+    backgroundResourceBudgetSatisfied: input.backgroundResourceBudgetSatisfied,
   });
   child.onExit(() => {
     onCrash(generation, false);
@@ -421,7 +819,105 @@ function spawnAndInitialize(input: SpawnAndInitializeInput): void {
     onCrash(generation, true);
   });
   transition("INITIALIZING");
-  void runInitialize(state, deps, now, transition);
+  void runInitialize(state, deps, now, transition, generation, onCrash);
+}
+
+function maySpawnPreparedGeneration(
+  state: RuntimeState,
+  generation: number,
+  attempt: number,
+): boolean {
+  return (
+    !state.disposed &&
+    !state.terminationRequested &&
+    state.childGeneration === generation &&
+    state.startAttempt === attempt
+  );
+}
+
+function startBeforeSpawn(
+  input: SpawnAndInitializeInput,
+  generation: number,
+  attempt: number,
+  beforeSpawn: (signal: AbortSignal) => Promise<void>,
+): void {
+  const record: PreSpawnAttempt = {
+    attempt,
+    generation,
+    controller: new AbortController(),
+    settled: Promise.resolve(),
+  };
+  input.state.preSpawnAttempt = record;
+  record.settled = Promise.resolve()
+    .then(() => beforeSpawn(record.controller.signal))
+    .then(
+      () => {
+        completeBeforeSpawn(input, record);
+      },
+      () => {
+        failBeforeSpawn(input, record);
+      },
+    )
+    .finally(() => {
+      if (input.state.preSpawnAttempt === record) input.state.preSpawnAttempt = undefined;
+    });
+}
+
+function currentBeforeSpawn(state: RuntimeState, record: PreSpawnAttempt): boolean {
+  return (
+    state.preSpawnAttempt === record &&
+    maySpawnPreparedGeneration(state, record.generation, record.attempt)
+  );
+}
+
+function completeBeforeSpawn(input: SpawnAndInitializeInput, record: PreSpawnAttempt): void {
+  if (!currentBeforeSpawn(input.state, record) || record.controller.signal.aborted) return;
+  spawnPreparedGeneration(input, record.generation, record.attempt);
+}
+
+function failBeforeSpawn(input: SpawnAndInitializeInput, record: PreSpawnAttempt): void {
+  const { state, transition } = input;
+  if (!currentBeforeSpawn(state, record) || record.controller.signal.aborted) return;
+  if (!cleanupSpawnResources(state)) {
+    retainChildOwnership(state, "resource-cleanup-failed");
+    transition("SPAWN_FAILED", "RUNTIME_STATE_CLEANUP_FAILED");
+    return;
+  }
+  if (!persistDurableRuntime(state, state.lastTransitionTimestampMs, "released")) {
+    retainChildOwnership(state, "runtime-state-unavailable");
+    transition("SPAWN_FAILED", "RUNTIME_STATE_CLEANUP_FAILED");
+    return;
+  }
+  transition("SPAWN_FAILED", "SPAWN_FAILED");
+}
+
+function beginSpawnGeneration(
+  state: RuntimeState,
+  nextCleanup: (() => void) | undefined,
+  transition: Transition,
+): number | undefined {
+  // Reject old pending requests immediately; the new generation then guards stale callbacks.
+  state.transport?.dispose();
+  if (!cleanupSpawnResources(state)) {
+    safeCleanup(nextCleanup);
+    transition("SPAWN_FAILED", "RUNTIME_STATE_CLEANUP_FAILED");
+    return undefined;
+  }
+  state.childGeneration += 1;
+  if (!persistDurableRuntime(state, state.lastTransitionTimestampMs, "active")) {
+    safeCleanup(nextCleanup);
+    transition("SPAWN_FAILED", "RUNTIME_STATE_CLEANUP_FAILED");
+    return undefined;
+  }
+  state.spawnResourceCleanup = nextCleanup;
+  state.exited = false;
+  state.terminationRequested = false;
+  state.treeContainment = "not-required";
+  state.restartPendingAfterExit = false;
+  state.terminalTransitionRecorded = false;
+  state.ownershipRetentionReason = undefined;
+  state.durableLeaseOrphaned = false;
+  return state.childGeneration;
 }
 
 interface SpawnInstallation {
@@ -429,20 +925,27 @@ interface SpawnInstallation {
   readonly deps: LspProcessManagerDeps;
   readonly child: SpawnHandle;
   readonly generation: number;
-  readonly onCrash: (generation: number, terminateProcess: boolean) => void;
+  readonly onCrash: (
+    generation: number,
+    terminateProcess: boolean,
+    crashTransition?: CrashTransition,
+  ) => void;
   readonly transition: Transition;
-  readonly spawnResourceCleanup: (() => void) | undefined;
   readonly resourceBudgetSatisfied: (() => boolean) | undefined;
   readonly backgroundResourceBudgetSatisfied: (() => boolean) | undefined;
 }
 
 function installSpawnedChild(input: SpawnInstallation): void {
   const { state, deps } = input;
-  state.spawnResourceCleanup = input.spawnResourceCleanup;
+  state.spawnResourceCleanup = combineCleanup(
+    state.spawnResourceCleanup,
+    runtimeResourceCleanup(input.child),
+  );
   state.resourceBudgetSatisfied = input.resourceBudgetSatisfied;
   state.backgroundResourceBudgetSatisfied = input.backgroundResourceBudgetSatisfied;
   startResourceBudgetMonitor(state, input.transition);
   state.child = input.child;
+  if (input.child.treeLifetimeBoundary === "os-owned") state.treeContainment = "confirmed";
   state.transport = createLspTransport(input.child, deps.config.maxFrameBytes, {
     onReaderError: () => {
       input.onCrash(input.generation, true);
@@ -456,6 +959,13 @@ function installSpawnedChild(input: SpawnInstallation): void {
   state.transport.client.onNotification((method, params) => {
     state.protocol?.handleServerNotification(method, params);
   });
+}
+
+function runtimeResourceCleanup(child: SpawnHandle): (() => void) | undefined {
+  if (child.releaseRuntimeResources === undefined) return undefined;
+  return (): void => {
+    child.releaseRuntimeResources?.();
+  };
 }
 
 function preflightOrFail(
@@ -493,14 +1003,18 @@ function preflightOrFail(
   }
 }
 
-function cleanupSpawnResources(state: RuntimeState): boolean {
+function stopResourceBudgetMonitor(state: RuntimeState): void {
   if (state.resourceBudgetTimer !== undefined) clearInterval(state.resourceBudgetTimer);
   state.resourceBudgetTimer = undefined;
-  const succeeded = safeCleanup(state.spawnResourceCleanup);
+}
+
+function cleanupSpawnResources(state: RuntimeState): boolean {
+  stopResourceBudgetMonitor(state);
+  if (!safeCleanup(state.spawnResourceCleanup)) return false;
   state.spawnResourceCleanup = undefined;
   state.resourceBudgetSatisfied = undefined;
   state.backgroundResourceBudgetSatisfied = undefined;
-  return succeeded;
+  return true;
 }
 
 function safeCleanup(cleanup: (() => void) | undefined): boolean {
@@ -534,10 +1048,14 @@ function combineCleanup(
 ): (() => void) | undefined {
   if (first === undefined) return second;
   if (second === undefined) return first;
+  let firstPending: (() => void) | undefined = first;
+  let secondPending: (() => void) | undefined = second;
   return (): void => {
-    const secondSucceeded = safeCleanup(second);
-    const firstSucceeded = safeCleanup(first);
-    if (!secondSucceeded || !firstSucceeded) throw new Error("LSP resource cleanup failed");
+    if (safeCleanup(secondPending)) secondPending = undefined;
+    if (safeCleanup(firstPending)) firstPending = undefined;
+    if (secondPending !== undefined || firstPending !== undefined) {
+      throw new Error("LSP resource cleanup failed");
+    }
   };
 }
 
@@ -602,6 +1120,8 @@ async function runInitialize(
   deps: LspProcessManagerDeps,
   now: () => number,
   transition: Transition,
+  generation: number,
+  onCrash: SpawnAndInitializeInput["onCrash"],
 ): Promise<void> {
   const client = state.transport?.client;
   if (client === undefined) {
@@ -617,7 +1137,7 @@ async function runInitialize(
         now,
       },
     );
-    if (state.status === "INITIALIZING") {
+    if (isCurrentInitialization(state, generation)) {
       if (resourceBudgetSatisfied(state)) {
         completeInitialization(state, deps, client, result, transition);
       } else {
@@ -625,21 +1145,25 @@ async function runInitialize(
       }
     }
   } catch (error) {
-    if (state.status === "INITIALIZING") {
-      failInitialization(state, transition, classifyInitFailure(error));
+    if (isCurrentInitialization(state, generation)) {
+      onCrash(generation, true, {
+        status: "INITIALIZE_TIMEOUT",
+        code: classifyInitFailure(error),
+      });
     }
   }
 }
 
-function failInitialization(
-  state: RuntimeState,
-  transition: Transition,
-  code: LspProcessErrorCode,
-): void {
-  state.transport?.dispose();
-  terminateProcessTree(state);
-  const cleanupSucceeded = cleanupSpawnResources(state);
-  transition("INITIALIZE_TIMEOUT", cleanupSucceeded ? code : "RUNTIME_STATE_CLEANUP_FAILED");
+// A crash DURING initialize disposes the transport, which rejects THIS call's pending request — but
+// the rejection settles on a later microtask, by which point a restart may already have spawned and
+// begun initializing the NEXT generation (`state.status` reads "INITIALIZING" again, just not for this
+// call). Acting on status alone let a stale initialize outcome act on whatever child is current when it
+// finally runs, not the one it was started for — deterministically killing a healthy restart mid
+// handshake and stranding the manager. `state.childGeneration` is the same generation concept the
+// crash/escalation path already tracks (FIX 4); guarding on it too makes a superseded call a no-op,
+// symmetrically for both the success and the failure branch.
+function isCurrentInitialization(state: RuntimeState, generation: number): boolean {
+  return state.status === "INITIALIZING" && state.childGeneration === generation;
 }
 
 function initializeParams(state: RuntimeState, networkPolicy: LspNetworkPolicy): unknown {
@@ -730,12 +1254,11 @@ function resourceBudgetSatisfied(state: RuntimeState): boolean {
 
 function failResourceBudget(state: RuntimeState, transition: Transition): void {
   if (state.exited || state.status === "CRASHED") return;
-  state.exited = true;
+  beginTerminalTermination(state);
   state.transport?.dispose();
   terminateProcessTree(state);
-  const cleanupSucceeded = cleanupSpawnResources(state);
   transition("CRASHED", "RESOURCE_BUDGET_EXCEEDED");
-  if (!cleanupSucceeded) transition("CRASHED", "RUNTIME_STATE_CLEANUP_FAILED");
+  completeTerminalTermination(state, transition);
 }
 
 function recordRequestFailure(state: RuntimeState, error: LspProcessError): void {
@@ -791,28 +1314,54 @@ async function disposeManager(
   transition: Transition,
 ): Promise<void> {
   if (state.disposed) {
+    await cancelAndWaitForBeforeSpawn(state);
+    settlementReleased(settleChildOwnership(state), state, transition);
     return;
   }
   state.disposed = true;
+  beginTerminalTermination(state);
   transition("SHUTDOWN");
-  const child = state.child;
+  await cancelAndWaitForBeforeSpawn(state);
+  const shutdownGeneration = state.childGeneration;
   const transport = state.transport;
   await requestGracefulShutdown(transport, deps, now);
-  transport?.dispose();
+  const child =
+    !state.exited && state.childGeneration === shutdownGeneration ? state.child : undefined;
+  transport?.client.notify("exit", null);
   if (child !== undefined) {
-    await escalateKill(
-      child,
-      deps.config.shutdownTimeoutMs,
-      () => state.exited,
-      undefined,
-      (onExit) => {
-        child.onExit(onExit);
-      },
-    );
+    markTreeTerminationRequested(state);
+    if (child.treeLifetimeBoundary === "os-owned") {
+      const killResult = await escalateKill(
+        child,
+        deps.config.shutdownTimeoutMs,
+        () => state.exited,
+        undefined,
+        (onExit) => {
+          child.onExit(onExit);
+        },
+      );
+      recordTreeKillResult(state, killResult);
+    } else {
+      // A protocol-level `exit` only speaks for the immediate process. Force the already-bounded
+      // process group/tree while its handle is still live so cleanup never relies on
+      // `treeContainment: not-required` and never signals a possibly recycled pid later.
+      terminateProcessTree(state);
+    }
   }
-  const cleanupSucceeded = cleanupSpawnResources(state);
-  if (!cleanupSucceeded) transition("CRASHED", "RUNTIME_STATE_CLEANUP_FAILED");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  transport?.dispose();
+  // A kill request is not exit confirmation. Keep the handle as a background reaper while exit is
+  // unconfirmed; a failed tree kill also remains retained fail-closed. DISPOSED deliberately keeps
+  // childPid in either unconfirmed case.
+  completeTerminalTermination(state, transition, "CRASHED");
   transition("DISPOSED", "DISPOSED");
+}
+
+async function cancelAndWaitForBeforeSpawn(state: RuntimeState): Promise<void> {
+  const pending = state.preSpawnAttempt;
+  if (pending === undefined) return;
+  pending.controller.abort();
+  await pending.settled;
 }
 
 async function requestGracefulShutdown(
@@ -827,7 +1376,6 @@ async function requestGracefulShutdown(
   try {
     await client.request("shutdown", null, { deadlineMs: deps.config.shutdownTimeoutMs, now });
   } catch {
-    // A server that never answers shutdown is forced down by escalateKill (ADR-0069 D4).
+    // A server that never answers shutdown is forced down by the verified tree-reap path above.
   }
-  client.notify("exit", null);
 }

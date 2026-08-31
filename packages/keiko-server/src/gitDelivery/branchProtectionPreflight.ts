@@ -1,5 +1,8 @@
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import type { GitDeliveryBranchProtection } from "@oscharko-dev/keiko-contracts";
+import type {
+  CommandTerminationEvidence,
+  GitDeliveryBranchProtection,
+} from "@oscharko-dev/keiko-contracts";
 import {
   readGitRemoteUrl,
   readNodeGitBranchProtection,
@@ -60,23 +63,41 @@ export function githubOwnerAndRepoFromRemoteUrl(remoteUrl: string): string | und
   return ownerAndRepoFromPath(parsed.pathname);
 }
 
-export const readTrustedGitDeliveryBranchProtection: GitDeliveryBranchProtectionReader = async (
-  workspace,
-  remoteAlias,
-  branchName,
-) => {
-  try {
-    const remoteUrl = await readGitRemoteUrl({ workspace, processEnv: process.env }, remoteAlias);
-    const ownerAndRepo = githubOwnerAndRepoFromRemoteUrl(remoteUrl);
-    if (ownerAndRepo === undefined) return { outcome: "unavailable" };
-    return await readNodeGitBranchProtection(
-      { workspace, processEnv: process.env },
-      { ownerAndRepo, baseBranchName: branchName },
-    );
-  } catch {
-    return { outcome: "unavailable" };
-  }
-};
+// Builds the branch-protection reader with the caller's own runCommand termination-evidence
+// callback wired into BOTH git subprocesses it may run (`git remote get-url` via readGitRemoteUrl,
+// then `gh api` via readNodeGitBranchProtection) — the same evidence port every other default git
+// reader/adapter across gitDelivery composes through (see execution.ts's
+// gitDeliveryTerminationHandler). Without an onTerminated, a timed-out or output-capped read here
+// is a git/gh subprocess whose termination never reaches the activity log at all: this was the
+// ONLY default reader in the area that dropped the callback entirely rather than merely
+// downgrading its correlationId. Every caller is request-scoped and passes
+// `gitDeliveryTerminationHandler(seams, correlationId)`; the factory's parameter stays optional only
+// so a test can assert the no-callback shape, which is what the `terminationDeps` spread below
+// encodes (PR #3355 review, P3: a zero-arg `readTrustedGitDeliveryBranchProtection` const used to
+// sit here as a "backward compatible" default, but the only usage it was compatible WITH was
+// created by this same PR — §6 prefers deletion, so it is gone and its test folded onto the
+// factory).
+export function createTrustedGitDeliveryBranchProtectionReader(
+  onTerminated?: (evidence: CommandTerminationEvidence) => void,
+): GitDeliveryBranchProtectionReader {
+  const terminationDeps = onTerminated !== undefined ? { onTerminated } : {};
+  return async (workspace, remoteAlias, branchName) => {
+    try {
+      const remoteUrl = await readGitRemoteUrl(
+        { workspace, processEnv: process.env, ...terminationDeps },
+        remoteAlias,
+      );
+      const ownerAndRepo = githubOwnerAndRepoFromRemoteUrl(remoteUrl);
+      if (ownerAndRepo === undefined) return { outcome: "unavailable" };
+      return await readNodeGitBranchProtection(
+        { workspace, processEnv: process.env, ...terminationDeps },
+        { ownerAndRepo, baseBranchName: branchName },
+      );
+    } catch {
+      return { outcome: "unavailable" };
+    }
+  };
+}
 
 export function signatureRequirementOf(
   preflight: GitDeliveryBranchProtectionPreflight,

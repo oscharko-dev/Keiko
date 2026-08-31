@@ -16,9 +16,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GitDeliveryRepoPolicyPack } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import type { GitPushCommand, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type { GitPublishExecResult, GitRemotePublishAdapter } from "@oscharko-dev/keiko-tools";
+import type { NodeGitPublishAdapterDeps } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { UI_HOST } from "../server.js";
 import { buildCspHeader } from "../csp.js";
@@ -26,11 +30,32 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.j
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
+
+// Spies on the default remote publish-adapter factory the F1 fix threads runCommand
+// termination-evidence through (executeGovernedPublish's `publishAdapterFor`, exercised below via
+// direct calls to executeGovernedPublish itself). Delegates to the REAL implementation so the
+// adapter this test file's OTHER suites inject via `publishAdapterFactory` seams stays entirely
+// unaffected. Mirrors the importOriginal-plus-delegating-wrapper pattern
+// defaultPolicyPacks.test.ts and execution.test.ts already use for this exact module graph.
+const createNodeGitPublishAdapterCalls: NodeGitPublishAdapterDeps[] = [];
+vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@oscharko-dev/keiko-tools/internal/git-mutation")>();
+  return {
+    ...actual,
+    createNodeGitPublishAdapter: (deps: NodeGitPublishAdapterDeps): GitRemotePublishAdapter => {
+      createNodeGitPublishAdapterCalls.push(deps);
+      return actual.createNodeGitPublishAdapter(deps);
+    },
+  };
+});
+
 import { createHandlePushExecute, createHandlePushPreview } from "./pushRoutes.js";
-import type {
-  GitDeliveryPushExecuteResponseBody,
-  GitDeliveryPushPreviewBody,
-  GitDeliveryPublishSeams,
+import {
+  executeGovernedPublish,
+  type GitDeliveryPushExecuteResponseBody,
+  type GitDeliveryPushPreviewBody,
+  type GitDeliveryPublishSeams,
 } from "./pushExecution.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
@@ -73,7 +98,11 @@ function recordingPublishAdapter(result?: GitPublishExecResult): RecordingPublis
   };
 }
 
-function capturingEvidenceStore(): { store: EvidenceStore; count: () => number } {
+function capturingEvidenceStore(): {
+  store: EvidenceStore;
+  count: () => number;
+  raw: () => string;
+} {
   const docs = new Map<string, string>();
   return {
     store: {
@@ -93,6 +122,7 @@ function capturingEvidenceStore(): { store: EvidenceStore; count: () => number }
       }
       return n;
     },
+    raw: (): string => [...docs.values()].join("\n"),
   };
 }
 
@@ -345,8 +375,18 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
     expect(cap.count()).toBe(1);
   });
 
-  it("aborts dispatch when another allowed runtime authority replaces the admitted run", async () => {
+  // The continuity guard re-checks authority right before remote dispatch (a TOCTOU gap: policy/preflight
+  // evaluation takes time, and the admitted authority can change or be revoked while that runs). Before
+  // this fix, a denial here fell through to a misleading 200 body — `status: "failed"`,
+  // `executionErrorCode: "internal-error"` — telling the client an internal fault happened and is safe to
+  // retry, and persisted the SAME misleading record to the evidence ledger, even though the F4 no-spawn
+  // marker (git.delivery.dispatch.no-spawn) and the authority-denial security line had already correctly
+  // recorded a refusal. Proven red against the pre-fix code: this test asserted `status).toBe("failed")`
+  // and passed with no HTTP-status or evidence assertion at all.
+  it("returns the SAME 403 authority-denied response the up-front gate returns, not a misleading internal failure (#3350)", async () => {
     const adapter = recordingPublishAdapter();
+    const cap = capturingEvidenceStore();
+    const activity = captureActivityLog();
     const baseAuthority = permittedGitDeliveryAuthority(
       () => projectId,
       () => projectId,
@@ -368,17 +408,60 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
       },
     };
     const handler = createHandlePushExecute({
-      execution: seams({ publishAdapterFactory: () => adapter.adapter }),
+      execution: seams({
+        publishAdapterFactory: () => adapter.adapter,
+        activityLog: activity.sink,
+      }),
     });
 
     const res = await handler(
-      ctxFor(EXECUTE, pushBody()),
-      deps({ gitDeliveryAuthority: authority }),
+      {
+        ...ctxFor(EXECUTE, pushBody()),
+        correlationId: "request-correlation-push-continuity",
+      },
+      deps({ gitDeliveryAuthority: authority, evidenceStore: cap.store }),
     );
 
-    expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("failed");
+    // HTTP contract: the SAME 403 envelope the up-front admission gate returns — never a 200 claiming an
+    // internal, retryable failure for a request that was refused before anything was dispatched.
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: {
+        code: "GIT_DELIVERY_AUTHORITY_DENIED",
+        message: "The accepted runtime authority does not admit this Git delivery operation.",
+        correlationId: "request-correlation-push-continuity",
+      },
+    });
+    expect(res.headers).toEqual({
+      "X-Keiko-Correlation-Id": "request-correlation-push-continuity",
+    });
     expect(reads).toBe(2);
     expect(adapter.calls()).toBe(0);
+    // Audit contract: the synthetic adapter failure is replaced by one typed policy-forbidden block.
+    expect(cap.count()).toBe(1);
+    expect(cap.raw()).toContain('"outcomeClass":"blocked"');
+    expect(cap.raw()).toContain('"blockReason":"authority-denied"');
+    expect(cap.raw()).toContain('"disposition":"policy-forbidden"');
+    expect(cap.raw()).not.toContain('"execution":');
+    expect(
+      activity.events.filter((event) => event.op === "git.delivery.dispatch.no-spawn"),
+    ).toHaveLength(1);
+    const completed = activity.events.find(
+      (event) => event.op === "git.delivery.mutation.completed",
+    );
+    expect(completed).toMatchObject({
+      correlationId: "request-correlation-push-continuity",
+    });
+    expect(completed?.extra).toMatchObject({
+      status: "blocked",
+      phaseReached: "execute",
+      blockReason: "authority-denied",
+    });
+    expect(
+      activity.events
+        .filter((event) => event.op.startsWith("git.delivery.authority."))
+        .map((event) => event.extra?.phase),
+    ).toEqual(["admission", "continuity"]);
   });
 
   it("denies a protected target outside the active authority envelope", async () => {
@@ -506,6 +589,133 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
     expect(body.publishRejectionReason).toBe("permission-denied");
     expect(body.recoveryDisposition).toBe("user-fixable");
     expect(cap.count()).toBe(1);
+  });
+});
+
+// ─── F1: the default publish adapter (no publishAdapterFactory seam) — audit finding: this branch
+// previously hard-coded UNKNOWN_CORRELATION_ID and an uninjectable processServerLogSink(),
+// silently dropping BOTH the caller's real correlationId and its activityLog seam. Exercises
+// executeGovernedPublish directly (bypassing HTTP) with a policy pack that BLOCKS every action, so
+// the kernel never reaches the adapter's real `.publish()` — the only fact under test is what deps
+// object the default factory receives. ────────────────────────────────────────────────────────
+
+const BLOCK_ALL_PUBLISH_PACK: GitDeliveryRepoPolicyPack = {
+  schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+  repoId: "repo",
+  rules: [],
+  defaultRule: { decision: "blocked" },
+};
+
+function testWorkspace(root: string): WorkspaceInfo {
+  return {
+    root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
+}
+
+const WIRING_COMMAND: GitPushCommand = {
+  kind: "push",
+  sourceBranchName: "feat/x",
+  remoteAlias: "origin",
+  remoteBranchName: "feat/x",
+  forcePush: false,
+  setUpstreamTracking: false,
+};
+
+describe("executeGovernedPublish — default publish-adapter termination wiring (F1)", () => {
+  beforeEach(() => {
+    createNodeGitPublishAdapterCalls.length = 0;
+  });
+
+  it("wires the caller's activityLog + correlationId into the default createNodeGitPublishAdapter call", async () => {
+    const activity: ServerLogEvent[] = [];
+    await executeGovernedPublish(
+      WIRING_COMMAND,
+      { required: false },
+      testWorkspace("/nonexistent/keiko-gd-push-wiring"),
+      {
+        evidenceStore: {
+          put: () => "",
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
+        redactor: buildRedactor({}),
+      },
+      {
+        snapshotReader: () => Promise.resolve(SNAPSHOT),
+        policyPacks: { repoPack: BLOCK_ALL_PUBLISH_PACK },
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      },
+      "request-correlation-push-wiring",
+    );
+    expect(createNodeGitPublishAdapterCalls).toHaveLength(1);
+    const onTerminated = createNodeGitPublishAdapterCalls[0]?.onTerminated;
+    expect(onTerminated).toBeTypeOf("function");
+    onTerminated?.({ reason: "timeout", childPid: 4321, windowsTreeKill: "not-attempted" });
+    const terminationEvents = activity.filter((event) => event.op === "command.terminated");
+    expect(terminationEvents).toHaveLength(1);
+    expect(terminationEvents[0]?.correlationId).toBe("request-correlation-push-wiring");
+    expect(terminationEvents[0]?.extra?.childPid).toBe(4321);
+  });
+});
+
+// F4: a `beforeRemoteDispatch` refusal (the accepted authority changed mid-flight, between admission
+// and this attempt's actual dispatch) never reaches the real remote adapter — the synthetic
+// `{ outcome: "aborted" }` result the adapter wrapper returns instead must be explicitly marked as a
+// no-spawn refusal, so it cannot be confused in the evidence stream with a genuine dispatch that DID
+// spawn a push and was then cancelled mid-flight (both would otherwise share the identical
+// `{ outcome: "aborted", errorCode: undefined }` shape).
+describe("executeGovernedPublish — no-spawn refusal is marked, never reaches the real adapter (F4)", () => {
+  it("logs git.delivery.dispatch.no-spawn and never calls the real publish adapter when beforeRemoteDispatch refuses", async () => {
+    const activity: ServerLogEvent[] = [];
+    let realAdapterCalls = 0;
+    await executeGovernedPublish(
+      WIRING_COMMAND,
+      { required: false },
+      testWorkspace("/nonexistent/keiko-gd-push-no-spawn"),
+      {
+        evidenceStore: {
+          put: () => "",
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
+        redactor: buildRedactor({}),
+      },
+      {
+        snapshotReader: () => Promise.resolve(SNAPSHOT),
+        publishAdapterFactory: (): GitRemotePublishAdapter => ({
+          publish: (): Promise<GitPublishExecResult> => {
+            realAdapterCalls += 1;
+            return Promise.resolve({ schemaVersion: "1", outcome: "succeeded", durationMs: 5 });
+          },
+        }),
+        beforeRemoteDispatch: () => false,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      },
+      "request-correlation-push-no-spawn",
+    );
+    expect(realAdapterCalls).toBe(0);
+    const marker = activity.find((event) => event.op === "git.delivery.dispatch.no-spawn");
+    expect(marker).toBeDefined();
+    expect(marker?.correlationId).toBe("request-correlation-push-no-spawn");
+    expect(marker?.extra?.operation).toBe("push");
+    expect(marker?.status).toBe(403);
   });
 });
 

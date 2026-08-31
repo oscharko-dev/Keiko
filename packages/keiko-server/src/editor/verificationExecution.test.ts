@@ -17,9 +17,12 @@ import { describe, expect, it } from "vitest";
 import type { VerificationReport } from "@oscharko-dev/keiko-contracts";
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import { buildVerificationPlan, detectScripts } from "@oscharko-dev/keiko-verification";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
 import {
   executeVerificationEnforced,
   probeNetworkIsolation,
+  verificationTerminationHandler,
   type NetworkIsolationProbe,
 } from "./verificationExecution.js";
 
@@ -91,5 +94,37 @@ describe("executeVerificationEnforced — the real governed spawn boundary", () 
     expect(typeof probe.backend).toBe("string");
     expect(probe.backend.length).toBeGreaterThan(0);
     expect(typeof probe.available).toBe("boolean");
+  });
+});
+
+// Audit finding: VerificationRunnerManager already tracks a per-run correlationId at both of its
+// executePort call sites but never forwarded it into executeVerificationEnforced, so every
+// verification termination line was stamped UNKNOWN_CORRELATION_ID even when the run's real id was
+// sitting right there. Unit-tested directly (rather than through a real timeout/abort) because
+// forcing termination through the real spawn boundary is host-dependent: on a host with no
+// enforcing sandbox backend the run denies BEFORE spawning and onTerminated never fires at all.
+describe("verificationTerminationHandler — correlation-id wiring for the runCommand evidence seam", () => {
+  function captureLog(): {
+    events: ServerLogEvent[];
+    sink: { write: (e: ServerLogEvent) => void };
+  } {
+    const events: ServerLogEvent[] = [];
+    return { events, sink: { write: (event): void => void events.push(event) } };
+  }
+
+  it("carries the caller's own correlationId onto the emitted line instead of downgrading it", () => {
+    const log = captureLog();
+    const handler = verificationTerminationHandler(log.sink, "verify-run-correlation-9");
+    handler({ reason: "abort", childPid: 4242, windowsTreeKill: "not-attempted" });
+    expect(log.events).toHaveLength(1);
+    expect(log.events[0]?.op).toBe("command.terminated");
+    expect(log.events[0]?.correlationId).toBe("verify-run-correlation-9");
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID only when the caller genuinely has none in scope", () => {
+    const log = captureLog();
+    const handler = verificationTerminationHandler(log.sink, undefined);
+    handler({ reason: "timeout", childPid: 4242, windowsTreeKill: "not-attempted" });
+    expect(log.events[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
   });
 });

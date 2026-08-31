@@ -98,7 +98,9 @@ enum {
   KEIKO_MAX_TRAILING_PADDING = 7,    // signing may 8-byte-align the certificate table it appends
   KEIKO_CHILD_TIMEOUT_MS = 1200000,  // 20 min watchdog: far above any real step, bounds a hang
   KEIKO_DRAIN_POLL_MS = 50,          // slice the capture loop sleeps on the child handle per turn
-  KEIKO_CHILD_EXIT_GRACE_MS = 5000   // how long a child gets to exit once its stdout has closed
+  KEIKO_CHILD_EXIT_GRACE_MS = 5000,  // how long a child gets to exit once its stdout has closed
+  KEIKO_JOB_REAP_POLL_MS = 20,       // ActiveProcesses poll slice while a terminated job tears down
+  KEIKO_JOB_REAP_ATTEMPTS = 250      // bound: 250 * 20ms = 5s, matches KEIKO_CHILD_EXIT_GRACE_MS
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -456,6 +458,10 @@ typedef struct {
   wchar_t managed_root[KEIKO_PATH_CAP];
   wchar_t tar_path[KEIKO_PATH_CAP];
   wchar_t command[KEIKO_COMMAND_CAP];
+  // Monotonic lifetime latch: once watchdog termination cannot positively prove that its whole
+  // Job Object is empty, no code in this installer may delete staging. Leaving verified temporary
+  // files behind is recoverable; racing cleanup against a possibly-live descendant is not.
+  int staging_cleanup_permitted;
 } keiko_setup_buffers;
 
 static keiko_setup_buffers *keiko_allocate_buffers(void) {
@@ -463,7 +469,12 @@ static keiko_setup_buffers *keiko_allocate_buffers(void) {
   if (heap == NULL) {
     return NULL;
   }
-  return (keiko_setup_buffers *)HeapAlloc(heap, HEAP_ZERO_MEMORY, sizeof(keiko_setup_buffers));
+  keiko_setup_buffers *buffers =
+      (keiko_setup_buffers *)HeapAlloc(heap, HEAP_ZERO_MEMORY, sizeof(keiko_setup_buffers));
+  if (buffers != NULL) {
+    buffers->staging_cleanup_permitted = 1;
+  }
+  return buffers;
 }
 
 static void keiko_free_buffers(keiko_setup_buffers *buffers) {
@@ -492,18 +503,81 @@ static int keiko_read_exact(HANDLE file, unsigned char *buffer, DWORD length) {
   return 1;
 }
 
-// Deletes ONE directory entry without ever following a link. A junction or directory symlink is
-// reported as DIRECTORY | REPARSE_POINT; recursing into it would delete the TARGET's contents, which
-// is why a reparse point of either kind is treated as a leaf here and removed as the link it is
-// (RemoveDirectoryW on a directory reparse point unlinks the junction and leaves its target
-// untouched). The attributes come from the directory scan that produced this entry, so the
-// link/real-directory decision is made from the same observation that named the child.
+// Opens a directory as a NO-FOLLOW handle and proves — atomically, on the handle itself — that it
+// is a real directory and not a reparse point. This is the anchor that closes the cleanup TOCTOU
+// (review 3887021643): a name-based check (GetFileAttributesW) followed by a name-based descent
+// (FindFirstFileW) leaves a window in which a same-user racer swaps the checked directory for a
+// junction, and the descent then walks — and deletes under — the junction's TARGET.
+//
+// Two properties do the work:
+//   1. FILE_FLAG_OPEN_REPARSE_POINT opens the link ITSELF, never its target, so
+//      GetFileInformationByHandle reports what this handle actually is — no follow, no race.
+//   2. The share mode grants READ/WRITE but NOT DELETE: while the handle is held, no other process
+//      can delete or RENAME this directory (rename needs DELETE access), so the path underneath it
+//      cannot be re-pointed for as long as the caller keeps enumerating and deleting by name.
+// Returns INVALID_HANDLE_VALUE when the entry is missing, cannot be opened, or is not a plain
+// directory — the caller fails closed (leaks staging) rather than descending into ambiguity.
+static HANDLE keiko_open_plain_dir_no_follow(const wchar_t *path) {
+  HANDLE dir = CreateFileW(path, FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                           NULL);
+  if (dir == INVALID_HANDLE_VALUE) {
+    return INVALID_HANDLE_VALUE;
+  }
+  BY_HANDLE_FILE_INFORMATION info;
+  if (!GetFileInformationByHandle(dir, &info) ||
+      (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+      (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+    (void)CloseHandle(dir);
+    return INVALID_HANDLE_VALUE;
+  }
+  return dir;
+}
+
+// Clears attributes to FILE_ATTRIBUTE_NORMAL on `path` WITHOUT following a reparse point.
+//
+// The path-based SetFileAttributesW has no documented "operates on the link" exception the way
+// DeleteFileW / RemoveDirectoryW / GetFileAttributesW each do (their MSDN pages carry an explicit
+// "Symbolic link behavior—..." remark; SetFileAttributesW's page has none), so by CreateFile's own
+// documented default — "If FILE_FLAG_OPEN_REPARSE_POINT is not specified... the handle returned is a
+// handle to the target" — a bare SetFileAttributesW(child, ...) opens and mutates the TARGET of a
+// symlink/junction. A same-user racer's junction reaching into content outside the staging tree is
+// exactly the boundary keiko_open_plain_dir_no_follow exists to hold; clearing attributes through it
+// before delete would silently strip READONLY/HIDDEN/SYSTEM off whatever the racer points at. So this
+// mirrors that helper: FILE_FLAG_OPEN_REPARSE_POINT pins the handle to the entry itself, never its
+// target, and FileBasicInfo.FileAttributes writes are host-attribute-only when nonzero (the timestamp
+// fields stay zeroed, which SetFileInformationByHandle documents as "leave unchanged"). Best-effort —
+// the caller's own DeleteFileW/RemoveDirectoryW is what actually fails closed, not this — so a
+// failure here (including "no longer exists") is silently ignored rather than blocking the delete.
+static void keiko_clear_normal_no_follow(const wchar_t *path) {
+  HANDLE handle = CreateFileW(path, FILE_WRITE_ATTRIBUTES,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                              OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                              NULL);
+  if (handle == INVALID_HANDLE_VALUE) {
+    return;
+  }
+  FILE_BASIC_INFO info;
+  ZeroMemory(&info, sizeof(info));
+  info.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+  (void)SetFileInformationByHandle(handle, FileBasicInfo, &info, sizeof(info));
+  (void)CloseHandle(handle);
+}
+
+// Deletes ONE directory entry without ever following a link, based on the attributes the directory
+// scan reported. The scan data can be STALE — a racer may have swapped the entry since — but every
+// stale outcome fails CLOSED rather than following:
+//   - reported reparse, now a real populated directory  -> RemoveDirectoryW fails (not empty).
+//   - reported file, now a directory or junction        -> DeleteFileW fails (access denied).
+//   - reported real directory, now a junction           -> the recursion re-verifies on ITS OWN
+//     no-follow handle before enumerating and refuses to descend.
 static int keiko_remove_tree(const wchar_t *path);
 
 static int keiko_delete_entry(const wchar_t *child, DWORD attributes) {
   if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
-    (void)SetFileAttributesW(child, FILE_ATTRIBUTE_NORMAL);
+    keiko_clear_normal_no_follow(child);
     if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+      // Unlinks the junction/symlink itself; the target and its contents are untouched.
       return RemoveDirectoryW(child) != 0;
     }
     return DeleteFileW(child) != 0;
@@ -511,29 +585,26 @@ static int keiko_delete_entry(const wchar_t *child, DWORD attributes) {
   if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
     return keiko_remove_tree(child);
   }
-  (void)SetFileAttributesW(child, FILE_ATTRIBUTE_NORMAL);
+  keiko_clear_normal_no_follow(child);
   return DeleteFileW(child) != 0;
 }
 
-// Recursively deletes a directory tree the bootstrap created. Reparse points are never followed
-// (see keiko_delete_entry): the staging tree is observable by any process running as the same user
-// for the duration of a multi-step install, so a racer that swaps a child for a junction must not be
-// able to steer this cleanup outside the staging root. Each level allocates its OWN heap path
-// buffers, so the deeply nested extracted tree (node_modules) cannot overflow the stack the way
-// 32 KiB per-level stack buffers would, and the recursion never aliases a parent level's buffers.
-// A directory that cannot be ENUMERATED is a failure, never silently "already empty": FindFirstFileW
-// returning INVALID_HANDLE_VALUE is only success when it reports ERROR_FILE_NOT_FOUND (a genuinely
-// empty directory); every other cause (a long path, a permission error, an I/O fault) is reported so
-// the real reason surfaces instead of resurfacing later as an unexplained RemoveDirectoryW failure.
+// Recursively deletes a directory tree the bootstrap created, anchored on a held no-follow handle
+// per level (see keiko_open_plain_dir_no_follow): the staging tree is observable by any process
+// running as the same user for the duration of a multi-step install, and a racer that swaps a
+// directory for a junction must not be able to steer this cleanup outside the staging root — at
+// ANY level, not only the root. Each level allocates its OWN heap path buffers, so the deeply
+// nested extracted tree (node_modules) cannot overflow the stack the way 32 KiB per-level stack
+// buffers would. A directory that cannot be OPENED or ENUMERATED is a failure, never silently
+// "already empty" (except a genuinely empty listing, ERROR_FILE_NOT_FOUND): failing closed leaks
+// staging for the operator to see, which is strictly safer than deleting through ambiguity.
 static int keiko_remove_tree(const wchar_t *path) {
-  DWORD self_attributes = GetFileAttributesW(path);
-  if (self_attributes == INVALID_FILE_ATTRIBUTES) {
+  // The handle pins identity AND existence: verified a real directory (no reparse), and — because
+  // the share mode denies DELETE — it cannot be renamed or replaced while held, so the by-name
+  // enumeration and child deletes below run against exactly the directory that was verified.
+  HANDLE dir = keiko_open_plain_dir_no_follow(path);
+  if (dir == INVALID_HANDLE_VALUE) {
     return 0;
-  }
-  if ((self_attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
-    // The root handed to us is itself a link (it was swapped, or a caller passed one): unlink it
-    // and stop. Descending would delete a tree we never created.
-    return RemoveDirectoryW(path) != 0;
   }
   HANDLE heap = GetProcessHeap();
   wchar_t *pattern = (wchar_t *)HeapAlloc(heap, 0, KEIKO_PATH_CAP * sizeof(wchar_t));
@@ -568,35 +639,240 @@ static int keiko_remove_tree(const wchar_t *path) {
   if (child != NULL) {
     (void)HeapFree(heap, 0, child);
   }
+  // The handle must be released before the directory itself can be removed (our own open denies
+  // the DELETE that RemoveDirectoryW needs). The window between close and remove is benign: if a
+  // racer swaps the now-empty directory for a junction here, RemoveDirectoryW unlinks the junction
+  // itself — it never touches the target's contents.
+  (void)CloseHandle(dir);
   return ok && RemoveDirectoryW(path) != 0;
+}
+
+// One spawned child plus the Job Object that binds its whole descendant tree to a single
+// termination handle. Both governed runners below use it so a watchdog fire kills the WORK the
+// child started, not only the child (review 3887021654): `portable setup`/`launch` run a Node CLI
+// that spawns server/worker descendants, and TerminateProcess on the CLI alone left those running
+// while the bootstrap reported failure and cleaned up under them.
+typedef struct {
+  PROCESS_INFORMATION process;
+  // Non-NULL for every child a caller actually receives: keiko_spawn_in_job fails the WHOLE spawn
+  // (child torn down, *out zeroed, returns 0) rather than resuming a child it could not put in a
+  // job, so a caller that gets one back always has real containment. Kill-on-close is armed only
+  // by an UNCERTAIN watchdog reap: on the success path of the launch step, the started Keiko app
+  // must outlive this installer, so the ordinary job handle is simply closed.
+  HANDLE job;
+  // A watchdog path that could neither prove the job empty nor arm kill-on-close retains the
+  // handle until process exit. The setup-lifetime latch independently forbids staging cleanup, so
+  // this is containment defence in depth rather than the only response to an uncertain reap.
+  int retain_job_handle;
+} keiko_child;
+
+// Spawns suspended, assigns the process to a fresh Job Object, then resumes — the assign must win
+// the race against the child spawning its first descendant, which is exactly what the suspended
+// start guarantees. `inherit`/`startup` come from the caller (the capture runner passes a pipe).
+//
+// Job containment is not optional: a failure to create the job or to assign the child to it tears
+// the child down — still SUSPENDED, never resumed — and fails the whole spawn, rather than resuming
+// into single-process containment. Degrading silently would defeat the exact defence this type
+// exists to provide (review 3887021654): a watchdog fire on a job-less child can only
+// TerminateProcess the immediate CLI, leaving any server/worker descendants it already spawned
+// alive while the bootstrap reports failure and cleans up beneath them. Windows has supported
+// nested Job Objects with no opt-in since Windows 8 / Server 2012, so on a current desktop a real
+// failure here most likely means something is actively denying job assignment (security software,
+// an unusually restrictive outer job) rather than a benign platform gap — and
+// native/runtime-supervisor/windows/keiko_runtime_supervisor.c's launch_in_job already treats this
+// exact AssignProcessToJobObject failure as a launch failure for the same reason, so this brings
+// the two native launchers in this repo into agreement instead of leaving one of them permissive.
+static int keiko_spawn_in_job(const wchar_t *application, wchar_t *command_line,
+                              STARTUPINFOW *startup, BOOL inherit_handles, keiko_child *out) {
+  ZeroMemory(out, sizeof(*out));
+  if (!CreateProcessW(application, command_line, NULL, NULL, inherit_handles, CREATE_SUSPENDED,
+                      NULL, NULL, startup, &out->process)) {
+    return 0;
+  }
+  out->job = CreateJobObjectW(NULL, NULL);
+  if (out->job != NULL && !AssignProcessToJobObject(out->job, out->process.hProcess)) {
+    (void)CloseHandle(out->job);
+    out->job = NULL;
+  }
+  if (out->job == NULL || ResumeThread(out->process.hThread) == (DWORD)-1) {
+    // Either the child has no job to contain it, or it could not be resumed and will never exit on
+    // its own: tear it (and its job, if any) down now while it is still SUSPENDED, and fail the
+    // step. Nothing has run yet, so refusing to proceed leaks nothing.
+    if (out->job != NULL) {
+      (void)TerminateJobObject(out->job, 1);
+      (void)CloseHandle(out->job);
+    }
+    (void)TerminateProcess(out->process.hProcess, 1);
+    (void)CloseHandle(out->process.hThread);
+    (void)CloseHandle(out->process.hProcess);
+    ZeroMemory(out, sizeof(*out));
+    return 0;
+  }
+  return 1;
+}
+
+// Terminates the child's WHOLE tree (job-bound when available) and BLOCKS until the job itself
+// reports zero active processes (bounded), not merely until the one direct-child handle signals.
+//
+// TerminateProcess and TerminateJobObject are both documented ASYNCHRONOUS: each only requests
+// termination and can return before every associated process has actually exited
+// (learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminateprocess).
+// Waiting on just the direct child's handle could return while a descendant still holds staging
+// files. The bounded JobObjectBasicAccountingInformation poll below therefore distinguishes three
+// facts: positively empty, kill-on-close armed but not yet observed empty, and fully unconfirmed.
+// Only the first keeps destructive staging cleanup enabled. The latter two monotonically close the
+// setup-lifetime cleanup latch; a failed QueryInformationJobObject or SetInformationJobObject can
+// therefore leave recoverable temporary files, never race deletion against a possibly-live tree.
+typedef enum {
+  KEIKO_JOB_PROBE_FAILED = -1,
+  KEIKO_JOB_PROBE_ACTIVE = 0,
+  KEIKO_JOB_PROBE_EMPTY = 1
+} keiko_job_probe;
+
+typedef enum {
+  KEIKO_JOB_REAP_UNCONFIRMED = 0,
+  KEIKO_JOB_REAP_CONFIRMED = 1,
+  KEIKO_JOB_REAP_KILL_ON_CLOSE_ARMED = 2
+} keiko_job_reap_result;
+
+typedef struct {
+  int (*terminate_job)(HANDLE job);
+  keiko_job_probe (*probe_job)(HANDLE job);
+  int (*arm_kill_on_close)(HANDLE job);
+  void (*sleep_ms)(DWORD milliseconds);
+  void (*terminate_process)(HANDLE process);
+  void (*wait_process)(HANDLE process, DWORD milliseconds);
+} keiko_child_termination_ops;
+
+static keiko_job_probe keiko_probe_job(HANDLE job) {
+  JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
+  ZeroMemory(&accounting, sizeof(accounting));
+  if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting,
+                                 sizeof(accounting), NULL)) {
+    return KEIKO_JOB_PROBE_FAILED;
+  }
+  return accounting.ActiveProcesses == 0 ? KEIKO_JOB_PROBE_EMPTY : KEIKO_JOB_PROBE_ACTIVE;
+}
+
+static int keiko_arm_job_kill_on_close(HANDLE job) {
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+  ZeroMemory(&limits, sizeof(limits));
+  // This is a freshly-created Keiko-owned job with no other configured limits, so setting the one
+  // fail-closed flag cannot erase a caller-owned policy. Closing its final handle then terminates
+  // any descendant whose asynchronous TerminateJobObject request has not completed.
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  return SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
+}
+
+static int keiko_terminate_job(HANDLE job) {
+  return TerminateJobObject(job, 1) != 0;
+}
+
+static void keiko_sleep(DWORD milliseconds) {
+  Sleep(milliseconds);
+}
+
+static void keiko_terminate_process(HANDLE process) {
+  (void)TerminateProcess(process, 1);
+}
+
+static void keiko_wait_process(HANDLE process, DWORD milliseconds) {
+  (void)WaitForSingleObject(process, milliseconds);
+}
+
+static const keiko_child_termination_ops KEIKO_CHILD_TERMINATION_OPS = {
+    keiko_terminate_job, keiko_probe_job, keiko_arm_job_kill_on_close,
+    keiko_sleep, keiko_terminate_process, keiko_wait_process};
+
+static keiko_job_reap_result keiko_reap_job_with(
+    HANDLE job, const keiko_child_termination_ops *ops) {
+  if (job == NULL || !ops->terminate_job(job)) {
+    return job != NULL && ops->arm_kill_on_close(job) ? KEIKO_JOB_REAP_KILL_ON_CLOSE_ARMED
+                                                       : KEIKO_JOB_REAP_UNCONFIRMED;
+  }
+  for (int attempt = 0; attempt < KEIKO_JOB_REAP_ATTEMPTS; attempt++) {
+    keiko_job_probe probe = ops->probe_job(job);
+    if (probe == KEIKO_JOB_PROBE_EMPTY) {
+      return KEIKO_JOB_REAP_CONFIRMED;
+    }
+    // An observation error is never "empty". Stop spending the poll budget and move directly to
+    // the independent kill-on-close backstop; an ACTIVE observation may still settle on a retry.
+    if (probe == KEIKO_JOB_PROBE_FAILED) {
+      break;
+    }
+    ops->sleep_ms(KEIKO_JOB_REAP_POLL_MS);
+  }
+  return ops->arm_kill_on_close(job) ? KEIKO_JOB_REAP_KILL_ON_CLOSE_ARMED
+                                     : KEIKO_JOB_REAP_UNCONFIRMED;
+}
+
+static keiko_job_reap_result keiko_terminate_child_tree_with(
+    keiko_child *child, int *staging_cleanup_permitted,
+    const keiko_child_termination_ops *ops) {
+  keiko_job_reap_result reap = keiko_reap_job_with(child->job, ops);
+  if (reap != KEIKO_JOB_REAP_CONFIRMED) {
+    // Kill-on-close is a termination request, not an exit observation. Until ActiveProcesses == 0
+    // was positively observed, fail closed for the rest of this setup lifetime and retain staging.
+    *staging_cleanup_permitted = 0;
+  }
+  if (reap == KEIKO_JOB_REAP_UNCONFIRMED && child->job != NULL) {
+    child->retain_job_handle = 1;
+  }
+  // Best-effort backstop: harmless (and typically already a no-op, since the direct child is a
+  // member of the job) when the job wait settled it. It cannot upgrade an unconfirmed whole-tree
+  // result, so the lifetime latch above remains closed regardless of the direct child's exit.
+  ops->terminate_process(child->process.hProcess);
+  ops->wait_process(child->process.hProcess, KEIKO_CHILD_EXIT_GRACE_MS);
+  return reap;
+}
+
+static keiko_job_reap_result keiko_terminate_child_tree(keiko_child *child,
+                                                        int *staging_cleanup_permitted) {
+  return keiko_terminate_child_tree_with(child, staging_cleanup_permitted,
+                                         &KEIKO_CHILD_TERMINATION_OPS);
+}
+
+static void keiko_close_child(keiko_child *child) {
+  if (child->job != NULL && !child->retain_job_handle) {
+    (void)CloseHandle(child->job);
+  }
+  (void)CloseHandle(child->process.hThread);
+  (void)CloseHandle(child->process.hProcess);
+}
+
+// Waits up to `timeout_ms` for the child to exit; on expiry the whole tree is terminated and the
+// run reported failed. Split from keiko_run_and_wait so the behaviour test can drive it with a
+// short deadline against a real descendant-spawning child.
+static int keiko_wait_or_terminate(keiko_child *child, DWORD timeout_ms,
+                                   int *staging_cleanup_permitted) {
+  DWORD exit_code = 1;
+  if (WaitForSingleObject(child->process.hProcess, timeout_ms) != WAIT_OBJECT_0) {
+    (void)keiko_terminate_child_tree(child, staging_cleanup_permitted);
+  } else {
+    (void)GetExitCodeProcess(child->process.hProcess, &exit_code);
+  }
+  return exit_code == 0;
 }
 
 // Runs an application by absolute path, waits for it, and reports whether it exited with code 0.
 // The child inherits this process's console so its own output stays visible (no stdout capture).
 // The wait is bounded by a deliberately generous watchdog: no legitimate step (tar extraction of the
 // ~130 MB archive, the governed setup, or the launch health window) comes close to it, but a wedged
-// child is terminated and reported as a failure instead of hanging the installer forever.
-static int keiko_run_and_wait(const wchar_t *application, wchar_t *command_line) {
+// child — INCLUDING every descendant it started, via the Job Object — is terminated and reported as
+// a failure instead of hanging the installer forever.
+static int keiko_run_and_wait(const wchar_t *application, wchar_t *command_line,
+                              int *staging_cleanup_permitted) {
   STARTUPINFOW startup;
-  PROCESS_INFORMATION process;
+  keiko_child child;
   ZeroMemory(&startup, sizeof(startup));
-  ZeroMemory(&process, sizeof(process));
   startup.cb = sizeof(startup);
-  if (!CreateProcessW(application, command_line, NULL, NULL, FALSE, 0, NULL, NULL, &startup,
-                      &process)) {
+  if (!keiko_spawn_in_job(application, command_line, &startup, FALSE, &child)) {
     return 0;
   }
-  DWORD exit_code = 1;
-  if (WaitForSingleObject(process.hProcess, (DWORD)KEIKO_CHILD_TIMEOUT_MS) != WAIT_OBJECT_0) {
-    (void)TerminateProcess(process.hProcess, 1);
-    (void)WaitForSingleObject(process.hProcess, 5000);
-    exit_code = 1;
-  } else {
-    (void)GetExitCodeProcess(process.hProcess, &exit_code);
-  }
-  (void)CloseHandle(process.hThread);
-  (void)CloseHandle(process.hProcess);
-  return exit_code == 0;
+  int ok = keiko_wait_or_terminate(&child, (DWORD)KEIKO_CHILD_TIMEOUT_MS,
+                                   staging_cleanup_permitted);
+  keiko_close_child(&child);
+  return ok;
 }
 
 // Drains a child's stdout pipe WITHOUT ever blocking indefinitely, and returns the number of bytes
@@ -657,7 +933,7 @@ static int keiko_drain_pipe(HANDLE read_end, HANDLE child, char *out, int cap) {
 // Runs an application capturing up to KEIKO_RESOLVE_OUTPUT_CAP bytes of its stdout (stderr stays on
 // this process's console). Returns 1 with the captured length only when the child exits 0.
 static int keiko_run_capture(const wchar_t *application, wchar_t *command_line, char *out,
-                             int cap, int *out_len) {
+                             int cap, int *out_len, int *staging_cleanup_permitted) {
   SECURITY_ATTRIBUTES attributes;
   ZeroMemory(&attributes, sizeof(attributes));
   attributes.nLength = sizeof(attributes);
@@ -673,38 +949,32 @@ static int keiko_run_capture(const wchar_t *application, wchar_t *command_line, 
     return 0;
   }
   STARTUPINFOW startup;
-  PROCESS_INFORMATION process;
+  keiko_child child;
   ZeroMemory(&startup, sizeof(startup));
-  ZeroMemory(&process, sizeof(process));
   startup.cb = sizeof(startup);
   startup.dwFlags = STARTF_USESTDHANDLES;
   startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
   startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
   startup.hStdOutput = write_end;
-  if (!CreateProcessW(application, command_line, NULL, NULL, TRUE, 0, NULL, NULL, &startup,
-                      &process)) {
+  if (!keiko_spawn_in_job(application, command_line, &startup, TRUE, &child)) {
     (void)CloseHandle(read_end);
     (void)CloseHandle(write_end);
     return 0;
   }
   (void)CloseHandle(write_end);
-  int total = keiko_drain_pipe(read_end, process.hProcess, out, cap);
+  int total = keiko_drain_pipe(read_end, child.process.hProcess, out, cap);
   (void)CloseHandle(read_end);
-  DWORD exit_code = 1;
   // The drain loop above already observed the deadline, so this wait only collects a child that has
-  // finished (or is finishing) — it is not the watchdog. A child still alive here has blown the
-  // deadline or wedged after closing stdout, and is terminated rather than waited on for 20 minutes.
-  if (WaitForSingleObject(process.hProcess, KEIKO_CHILD_EXIT_GRACE_MS) != WAIT_OBJECT_0) {
-    (void)TerminateProcess(process.hProcess, 1);
-    (void)WaitForSingleObject(process.hProcess, KEIKO_CHILD_EXIT_GRACE_MS);
-  } else {
-    (void)GetExitCodeProcess(process.hProcess, &exit_code);
-  }
-  (void)CloseHandle(process.hThread);
-  (void)CloseHandle(process.hProcess);
+  // finished (or is finishing). Reuse the one lifetime/exit-code primitive used by the non-capture
+  // runner: a child still alive here has blown the deadline or wedged after closing stdout, and the
+  // shared path terminates its whole Job Object rather than duplicating a subtly different
+  // single-process fallback here.
+  int ok = keiko_wait_or_terminate(&child, KEIKO_CHILD_EXIT_GRACE_MS,
+                                   staging_cleanup_permitted);
+  keiko_close_child(&child);
   out[total] = '\0';
   *out_len = total;
-  return exit_code == 0;
+  return ok;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -802,7 +1072,13 @@ static int keiko_stage_verified_payload(HANDLE self, uint64_t payload_start, uin
       case KEIKO_STREAM_SOURCE_FAILED:
         result = KEIKO_EXIT_INTEGRITY;
         break;
-      default:
+      // Both remaining causes are LOCAL faults, not tampering: a full/blocked destination volume,
+      // or no memory / no crypto provider. Listed explicitly with NO `default:` label: this switch
+      // is exhaustive over keiko_stream_status, so -Wswitch (-Werror, part of -Wall) turns a future
+      // status added to keiko_stream_status without a case here into a BUILD FAILURE instead of a
+      // silent "staging" — a compile-time guarantee, not just a comment claiming one.
+      case KEIKO_STREAM_SINK_FAILED:
+      case KEIKO_STREAM_RESOURCE_FAILED:
         result = KEIKO_EXIT_STAGING;
         break;
     }
@@ -951,7 +1227,7 @@ static int keiko_extract_archive(keiko_setup_buffers *b) {
                    b->tar_path, b->zip_path, b->staging_dir) <= 0) {
     return 0;
   }
-  return keiko_run_and_wait(b->tar_path, b->command);
+  return keiko_run_and_wait(b->tar_path, b->command, &b->staging_cleanup_permitted);
 }
 
 static int keiko_payload_contents_present(const keiko_setup_buffers *b) {
@@ -981,7 +1257,7 @@ static int keiko_resolve_managed_root(keiko_setup_buffers *b) {
   }
   int output_len = 0;
   int ok = keiko_run_capture(b->node_path, b->command, output, KEIKO_RESOLVE_OUTPUT_CAP,
-                             &output_len) &&
+                             &output_len, &b->staging_cleanup_permitted) &&
            keiko_parse_managed_root(output, output_len, b->managed_root, KEIKO_PATH_CAP);
   (void)HeapFree(GetProcessHeap(), 0, output);
   return ok;
@@ -993,7 +1269,7 @@ static int keiko_run_setup_step(keiko_setup_buffers *b) {
                       L"--managed-root \"%ls\"",
                       b->node_path, b->cli_path, KEIKO_WIDEN(KEIKO_SETUP_TARGET), b->extract_dir,
                       b->managed_root) > 0 &&
-         keiko_run_and_wait(b->node_path, b->command);
+         keiko_run_and_wait(b->node_path, b->command, &b->staging_cleanup_permitted);
 }
 
 static int keiko_run_launch_step(keiko_setup_buffers *b) {
@@ -1013,7 +1289,7 @@ static int keiko_run_launch_step(keiko_setup_buffers *b) {
                       L"--managed-root \"%ls\"",
                       managed_node, managed_cli, KEIKO_WIDEN(KEIKO_SETUP_TARGET), b->managed_root,
                       b->managed_root) > 0 &&
-         keiko_run_and_wait(managed_node, b->command);
+         keiko_run_and_wait(managed_node, b->command, &b->staging_cleanup_permitted);
   }
   keiko_free_path(managed_node);
   keiko_free_path(managed_cli);
@@ -1037,9 +1313,24 @@ static int keiko_extended_path(const wchar_t *path, wchar_t *out, size_t cap) {
   return _snwprintf_s(out, cap, _TRUNCATE, L"\\\\?\\%ls", path) > 0;
 }
 
+// "Gone" means GONE, not "could not be looked at". GetFileAttributesW returns
+// INVALID_FILE_ATTRIBUTES for ERROR_ACCESS_DENIED, ERROR_INVALID_NAME, and every I/O fault too —
+// treating all of those as success made this cleanup fail OPEN (review 3887051414): the installer
+// printed [6/6] and exited 0 while the ~130 MB extracted tree stayed in %TEMP% with no diagnostic.
+// Only the two not-found codes prove the directory no longer exists; everything else is a failure
+// the caller reports as exit 19, matching keiko_remove_tree's own "a directory that cannot be
+// ENUMERATED is a failure" contract.
+static int keiko_staging_verifiably_gone(const wchar_t *staging) {
+  if (GetFileAttributesW(staging) != INVALID_FILE_ATTRIBUTES) {
+    return 0;
+  }
+  DWORD reason = GetLastError();
+  return reason == ERROR_FILE_NOT_FOUND || reason == ERROR_PATH_NOT_FOUND;
+}
+
 static int keiko_remove_staging_tree(const wchar_t *staging) {
   for (int attempt = 0; attempt < 10; attempt++) {
-    if (GetFileAttributesW(staging) == INVALID_FILE_ATTRIBUTES) {
+    if (keiko_staging_verifiably_gone(staging)) {
       return 1;
     }
     if (keiko_remove_tree(staging)) {
@@ -1047,10 +1338,13 @@ static int keiko_remove_staging_tree(const wchar_t *staging) {
     }
     Sleep(1000);
   }
-  return GetFileAttributesW(staging) == INVALID_FILE_ATTRIBUTES;
+  return keiko_staging_verifiably_gone(staging);
 }
 
 static int keiko_cleanup_staging(const keiko_setup_buffers *b) {
+  if (!b->staging_cleanup_permitted) {
+    return 0;
+  }
   wchar_t *staging = keiko_alloc_path();
   if (staging == NULL) {
     return 0;
@@ -1123,7 +1417,7 @@ static int keiko_run_setup(keiko_setup_buffers *b) {
   }
 
   fwprintf(stdout, L"[6/6] Removing temporary application files...\n");
-  if (!keiko_cleanup_staging(b)) {
+  if (!b->staging_cleanup_permitted || !keiko_cleanup_staging(b)) {
     fwprintf(stderr, L"Keiko is running, but its temporary files could not be removed.\n");
     return KEIKO_EXIT_CLEANUP;
   }
@@ -1187,7 +1481,13 @@ int wmain(int argc, wchar_t **argv) {
   }
   int exit_code = keiko_run_setup(buffers);
   if (exit_code != KEIKO_EXIT_OK) {
-    (void)keiko_cleanup_staging(buffers);
+    if (buffers->staging_cleanup_permitted) {
+      (void)keiko_cleanup_staging(buffers);
+    } else {
+      fwprintf(stderr,
+               L"Keiko setup retained its temporary files because child process-tree termination "
+               L"could not be confirmed.\n");
+    }
     // One consistent failure trailer after the specific step reason above, so a scripted (/quiet)
     // install and a human both get an unambiguous "setup failed" signal — the wording the retired
     // batch installer emitted, and the signal the Windows setup smoke asserts.

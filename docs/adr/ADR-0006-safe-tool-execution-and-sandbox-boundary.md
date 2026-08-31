@@ -178,37 +178,100 @@ later wave flips to `"none"` when the container layer lands. Tool consumers depe
 On POSIX, the process is spawned `{ detached: true }` so `process.kill(-pid, sig)` kills the entire
 process group including grandchildren (`src/tools/exec.ts:56–69`). On Windows, `child.kill()` still
 terminates the immediate child, and `killGroup` additionally bounds the whole descendant tree via
-`%SystemRoot%\System32\taskkill.exe /PID <pid> /T /F` on every SIGTERM/SIGKILL escalation step —
-an OS binary, resolved the same validated, never-PATH way `cmd.exe` is (`windows-shell.ts`), so no
-runtime dependency is needed. This closes what issue #3350's `cmd.exe` wrapping turned into the
+the conventional `<identity-approved SystemRoot>\System32\taskkill.exe /PID <pid> /T /F` on every
+SIGTERM/SIGKILL escalation step — an OS binary reached only after the environment-selected root's OS
+identity is verified against `\\?\GLOBALROOT\SystemRoot`, never through PATH. This closes what issue
+#3350's `cmd.exe` wrapping turned into the
 guaranteed topology for every Windows `.cmd`/`.bat` invocation: the wrapper's immediate child is
 always `cmd.exe`, and the real work (e.g. `node.exe` running npm) is a grandchild that
 `child.kill()` alone cannot reach.
 
-**The tree kill runs BEFORE the immediate child is signalled, and the order is load-bearing.**
-`child.kill()` is `TerminateProcess` and takes effect at once, whereas `taskkill /PID <pid> /T`
-resolves the descendant set from the live process table when it runs. Signalling `cmd.exe` first
-would leave taskkill with no such pid, terminating no descendant — and Windows does not reparent
-orphans, so the grandchild would survive exactly the path this exists to bound. `nodeGroupKill` in
-keiko-server's `lspNodeAdapter.ts` holds the same ordering, and `exec.test.ts` pins it directly
-rather than asserting only that the tree kill was called.
+**The tree kill runs BEFORE the immediate child is signalled, to COMPLETION, and both properties
+are load-bearing.** `child.kill()` is `TerminateProcess` and takes effect at once, whereas
+`taskkill /PID <pid> /T` resolves the descendant set from the live process table when it runs.
+Signalling `cmd.exe` first would leave taskkill with no such pid, terminating no descendant — and
+Windows does not reparent orphans, so the grandchild would survive exactly the path this exists to
+bound. `nodeWindowsTreeKill` is therefore SYNCHRONOUS (`spawnSync` with a bounded wait): an
+asynchronous spawn would only SCHEDULE taskkill, and `child.kill()` would race it. `nodeGroupKill`
+in keiko-server's `lspNodeAdapter.ts` holds the same ordering, and `exec.test.ts` pins the order
+directly rather than asserting only that the tree kill was called.
+
+**The bounded wait is per invocation; one shared rolling budget bounds the process-wide aggregate.**
+`spawnSync` blocks the ENTIRE Node event loop, not just the run being terminated, and `terminate()`
+executes on that loop. One Windows run can pay the 5 000 ms bound twice (SIGTERM and SIGKILL), so
+`WindowsTerminationCapacity` deliberately admits at most THREE live Windows commands process-wide.
+Each admitted command reserves two units from the same 30-second/60-second rolling budget used by
+direct LSP tree kills. A fourth concurrent command, or any command for which two units are not
+available, is denied with `CommandDeniedError` before ephemeral HOME creation or spawn. Held units
+remain charged across a window rollover; completed calls refund only their unused wait, and release
+returns only units the command never consumed. Releasing a concurrency slot therefore cannot reset
+the stall budget, and `runCommand` plus LSP termination together cannot stack past the process-wide
+ceiling. The concurrency slot and unused budget reservation are released only after confirmed
+`close` or a pre-spawn failure. Because an admission denial owns no child, it emits no fabricated
+termination line; the owning surface records its ordinary body-free `denied` outcome and
+correlation.
+
+Reservation also binds the trusted executable decision: admission copies only `SystemRoot` and
+`WINDIR`, verifies the OS identity and regular `taskkill.exe`, and caches the validated conventional
+command. Later mutation of the caller's environment cannot redirect or refuse the kill for an
+already-admitted child. Direct consumers of exported `nodeWindowsTreeKill` debit the same monotonic
+budget; exhaustion reports `budget-exhausted` without launching taskkill. It is distinct from
+`unknown`, which means taskkill did launch but its bounded wait expired.
+
+**Termination is single-flight.** Abort, timeout, the output cap, a failing `onSpawn` callback and a
+post-spawn child-process error can all reach `terminate()`; the FIRST one becomes the terminal cause,
+the others are disarmed, and
+exactly one grace timer is armed. Before this, each trigger re-signalled the tree and overwrote the
+tracked timer handle, so `cleanup()` cleared only the last one and the orphaned earlier timer fired
+`taskkill /T /F` against a raw pid AFTER the run had settled — with the handle that kept that pid
+reserved already released. The escalation is additionally guarded on the child still being alive.
+
+**The reported outcome is measured, not assumed.** `WindowsTreeKillDisposition` carries taskkill's
+own completed exit status (`succeeded`/`failed`), `unknown` only when the bounded wait expired,
+`budget-exhausted` only when the shared monotonic aggregate budget refused to launch taskkill,
+`blocked-untrusted-system-root` when the trusted-System32 resolver refuses a malformed or hostile
+`SystemRoot`/`WINDIR` (kept distinct from `failed` because it is a security-relevant fact about the
+environment, not an operational hiccup), `refused-self-pid` when the pid handed to `killGroup` is
+this process or its own parent (see the residual below), `root-not-found` when taskkill's own exit
+code is 128 — "the specified process was not found". That result proves only that the requested
+root was absent; it does not prove that every descendant is gone. It remains a different fact from
+`failed` and must not share its word — and `not-attempted` applies on POSIX, when there is no pid to
+signal, or when the child is already verifiably exited before a signal would have been sent. The
+previous boolean was a production tautology — the default implementation could not throw, so a
+genuine failure on an image without `taskkill.exe` was logged as success, which is worse than not
+logging it.
 
 Two residuals, both narrower than the general `taskkill` caveat:
 
-- **A `taskkill.exe` spawn failure** (missing on a stripped-down Windows image) is swallowed the
-  same way a POSIX `ESRCH` is, so termination stays idempotent but orphaning is not architecturally
-  impossible.
-- **PID reuse is not reachable on this path**, though it is a real hazard for `taskkill` in general:
-  `taskkill` validates no process identity, so a stale pid can hit an unrelated process. Here the pid
-  cannot go stale while it is in use — Node holds an open Win32 handle to the child for the lifetime
-  of the `ChildProcess` object, and Windows does not recycle a PID until every handle to the process
-  object is closed. `killGroup` invokes taskkill from `terminate()` with that handle still open, and
-  now before `child.kill()` rather than after, which is the earliest point at which it can run. A
-  Job Object would bind termination to process identity outright and is the stronger mechanism, but
-  Node exposes no Job Object API: it needs native code, which is a runtime dependency ADR-0001
-  forbids. The existing Job Object implementation in keiko-server's
-  `nativeRuntimeProcessBackend.ts` drives a separate compiled helper over a control pipe and cannot
-  be reached from `keiko-tools` without inverting the ADR-0019 dependency direction.
+- **A `taskkill.exe` failure** no longer reports as success. A missing binary or untrusted root
+  denies a `runCommand` Windows spawn before it owns a child. If the already-validated binary is
+  removed or taskkill later refuses, termination surfaces `windowsTreeKill: "failed"`; descendants
+  it could not reach can survive, so orphaning is not architecturally impossible.
+- **PID reuse WAS reachable on this path, and a customer hit it.** `taskkill` validates no process
+  identity, so a stale pid can hit an unrelated process, and `/T` takes the whole tree — which, on a
+  recycled pid, can include this server or its own launcher. The original argument for why that
+  could not happen here — Node holds an open Win32 handle to the child for the lifetime of the
+  `ChildProcess` object, and Windows does not recycle a PID until every handle to the process object
+  is closed — assumed the handle was still open at the moment `killGroup` signals. It is not,
+  reliably: `state.settled` is set on `'close'`, Node releases the child's handle on `'exit'`, and
+  `'data'` events (an output-cap trigger, for one) keep arriving in the window between the two, so a
+  termination reaching `killGroup` in that window could signal a pid Node no longer held reserved. A
+  customer's Windows machine reproduced exactly the failure this predicts — the UI process died with
+  no error in the log and a fresh pid repeated the cycle, consistent with a reused pid landing on the
+  server or its launcher. Two guards close it now: `childExited()` runs immediately before every
+  `killGroup` call — the initial SIGTERM step and the SIGKILL escalation alike — and reports
+  `not-attempted` instead of signalling once the child is verifiably gone (`state.settled`, or an
+  observed `exitCode`/`signalCode`); and `killGroup` itself refuses to signal a pid equal to
+  `process.pid` or `process.ppid`, reporting `refused-self-pid`, regardless of what the caller
+  believes it holds. Together they narrow the window sharply and make the worst outcome — this
+  process or its launcher taking a `/T` tree-kill meant for a child — impossible rather than merely
+  unlikely. What is not proven impossible: that same narrow window landing a recycled pid on some
+  OTHER, unrelated process that is neither this one nor its parent. A Job Object would bind
+  termination to process identity outright and close that too, but Node exposes no Job Object API:
+  it needs native code, which is a runtime dependency ADR-0001 forbids. The existing Job Object
+  implementation in keiko-server's `nativeRuntimeProcessBackend.ts` drives a separate compiled
+  helper over a control pipe and cannot be reached from `keiko-tools` without inverting the
+  ADR-0019 dependency direction.
 
 The `runCommand` promise rejects with `CommandCancelledError` on abort and `CommandTimeoutError` on
 timeout — both caught from the `close` event after cleanup (`src/tools/exec.ts:194–202`). The
@@ -365,16 +428,27 @@ Tool consumers (`WorkspaceToolHost` callers) depend only on the `ToolPort` inter
   leave the working tree in a partially reverted state. There is no write-ahead log or journal. For
   the regulated environment, the mitigating control is that the developer reviews and commits:
   `git status` exposes any partial write, and the repository's VCS history is the recovery path.
+- **Windows termination safety deliberately caps concurrency.** At most three Windows
+  `runCommand` children may be live process-wide because each reserves both bounded tree-kill
+  escalations from the shared rolling stall budget. A fourth concurrent command is denied before
+  spawn with `CommandDeniedError`; it is not started with weaker descendant containment. This is
+  an intentional availability trade-off, and callers must surface the ordinary correlated denied
+  outcome rather than retrying in an unbounded loop.
 - **Windows grandchild orphaning is bounded, not architecturally eliminated.** `child.kill()`
-  terminates the immediate child only; `killGroup` additionally spawns
+  terminates the immediate child only; `killGroup` additionally runs
   `taskkill.exe /PID <pid> /T /F` to bound the whole descendant tree (e.g. a test runner that
   forks workers, or — the guaranteed case since issue #3350's `cmd.exe` wrapping — `node.exe`
   running npm under a wrapped `.cmd` target's `cmd.exe`). `taskkill.exe` is an OS binary shipped
   with every supported Windows image, so the earlier justification (`tree-kill` needs a runtime
-  npm dependency forbidden by ADR-0001) no longer applies. What remains is narrower and
-  best-effort: a `taskkill.exe` spawn failure is swallowed (idempotent termination, not a formal
-  guarantee), so a stripped-down Windows image without `taskkill.exe`, or a grandchild spawned in
-  the brief window between signalling and taskkill's process-tree snapshot, can still orphan.
+  npm dependency forbidden by ADR-0001) no longer applies. taskkill now runs SYNCHRONOUSLY to
+  completion before the immediate child is signalled (Dimension 5 above), so the window this
+  bullet used to describe — a grandchild spawning between signalling and taskkill's snapshot —
+  cannot occur; a `taskkill.exe` failure is measured and surfaces as `windowsTreeKill: "failed"`
+  rather than being swallowed. `runCommand` validates taskkill and reserves termination capacity
+  before spawning, so a stripped image is denied before a tree exists. What remains, narrower than
+  that: an admitted taskkill can be removed/refuse later, and a grandchild that spawns AFTER
+  taskkill's snapshot but before it exits can still orphan — taskkill enumerates the tree once, it
+  does not repeat the scan. See Dimension 5 for the full, current residual list.
 - **Bounded unified-diff subset only.** The parser handles the common cases (create, modify,
   delete, standard hunks) but not rename detection, extended git-diff headers, or fuzzy matching.
   A diff produced by a non-standard tool may fail to parse or produce conflicts where a full
@@ -492,6 +566,62 @@ precondition for Wave 1, and block the issue until the operator infrastructure i
   layer arrives without a redesign. Blocking on infrastructure would make this ADR obsolete before
   it was accepted. The honest documentation of the Wave-1 limitation (D2, Dimension 4) is preferable
   to an overclaimed guarantee.
+
+### Alternative 6: OS-owned SystemRoot identity vs. trusting a shaped environment path (PR #3355 review, finding T19)
+
+The first trusted-System32 resolver accepted a drive-absolute `SystemRoot`/`WINDIR` once its shape
+was canonical and the requested binary existed. That is insufficient: an accepted task may control
+the process environment and create `C:\workspace\fake-windows\System32\cmd.exe`, or select a junction,
+without writing to the real Windows directory. Treating that capability as equivalent to already
+owning the host contradicted the workspace trust boundary and failed open.
+
+**Rejected — spawn PowerShell to call `GetSystemDirectoryW`.** The verifier binary must itself be
+located before the candidate is trusted, making the bootstrap circular. It also adds another process
+surface and a cold synchronous spawn to process-tree termination.
+
+**Rejected — hard-code `C:\Windows`.** This fails every genuine Windows installation whose OS root
+is on another drive.
+
+**Decision — compare filesystem object identity with the OS object-manager root.** Windows maintains
+the live OS-root symbolic link as `\SystemRoot` in the object-manager namespace. The Win32
+`\\?\GLOBALROOT` escape reaches that namespace independently of `SystemRoot`, `WINDIR`, PATH, drive
+mappings, and the workspace. On win32 the resolver therefore:
+
+1. validates the candidate's canonical drive-absolute shape;
+2. resolves it and requires case-insensitive realpath-text equality, rejecting a symlink or junction
+   at the final component or any ancestor;
+3. compares its BigInt filesystem device/file identity with `\\?\GLOBALROOT\SystemRoot`; and
+4. uses `lstat` plus native-realpath equality to require a regular System32 binary that is neither a
+   final symlink nor a redirect to another name, then returns the validated conventional drive path
+   for execution. `\\?\GLOBALROOT\SystemRoot` remains the identity oracle only: Node's
+   `CreateProcessW` bridge rejects that object-manager spelling as an image path with `EINVAL`.
+
+An unreadable identity, zero/unsupported identity fields, a missing root, a fabricated directory,
+or a symlink/junction redirect all fail closed as `WindowsSystemDirectoryError`. Comparing
+identity, not path text, supports a genuine non-`C:` Windows installation without trusting an
+arbitrary environment path. The returned candidate has already passed the canonical-shape,
+symlink/redirect, and OS-identity checks at verification time. The decision remains point-in-time:
+Node's spawn API takes an executable path and cannot bind `CreateProcessW` to the filesystem handle
+that was inspected.
+Repeating `realpath` after the identity match would still return a mutable string and must not be
+presented as closing that race. Immediate-spawn callers resolve at their execution boundary to
+minimize the window. Installed launchers that persist the identity-approved path cannot do that and
+retain the Windows ACL/replacement residual between installation and execution; the stored string
+is not a durable filesystem capability. Exploiting either residual requires the ability to replace
+the genuine identity-approved OS root or its System32 binary after verification. A workspace-only
+fake root or ancestor junction fails at the identity decision, and a final binary symlink or other
+redirect to another name fails at the binary check. Node does not expose the raw Windows reparse
+attribute through `Stats`, so this contract does not claim to classify a non-redirecting custom
+reparse tag. The production check performs no verifier spawn and emits no path or environment value
+in its error; callers retain their existing body-free security/termination evidence.
+
+This is a whole-class executable contract, not only the command sandbox's rule. CLI launcher
+generation, lifecycle browser opening, portable legacy-launcher cleanup and native failure alerts,
+server Authenticode probes, shortcut helpers, and Git/LSP runtime probes resolve known Windows
+system executables through the same authoritative helper. A fail-soft surface may keep its primary
+operation available, but it must emit a correlated, body-free event that distinguishes an untrusted
+root from an unavailable or unprovable system binary; it may not collapse either into a generic
+stderr-only notice.
 
 ## Related
 

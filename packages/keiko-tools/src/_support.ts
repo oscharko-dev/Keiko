@@ -33,6 +33,13 @@ export interface FakeChild extends EventEmitter {
   pid: number | undefined;
   kill: (signal?: NodeJS.Signals) => boolean;
   killed: NodeJS.Signals[];
+  // The two fields a real ChildProcess sets when the OS process leaves the table. Left UNSET by
+  // makeFakeChild on purpose: `childExited()` in exec.ts tests them with `!= null`, so an unset
+  // double reads as still-running, which is what almost every test here wants. A test that needs to
+  // model the window between 'exit' and 'close' — where Node has released the handle and the pid is
+  // no longer reserved — assigns one of them to reach that state.
+  exitCode?: number | null;
+  signalCode?: NodeJS.Signals | null;
 }
 
 export function makeFakeChild(pid = 4242): FakeChild {

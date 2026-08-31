@@ -59,6 +59,7 @@ import {
 import {
   executeGovernedMutation,
   gitDeliveryMutationResponse,
+  gitDeliveryTerminationHandler,
   KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK,
   readStagedConflictMarkerFileCountFor,
   readStagedPathsFor,
@@ -78,7 +79,7 @@ import {
 import { resolveGovernedCommitMessagePolicy } from "./commitPolicySettings.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
-  readTrustedGitDeliveryBranchProtection,
+  createTrustedGitDeliveryBranchProtectionReader,
   signatureRequirementOf,
   type GitDeliverySignatureRequirement,
 } from "./branchProtectionPreflight.js";
@@ -511,12 +512,17 @@ async function commitSignatureRequirement(
   workspace: WorkspaceInfo,
   snapshot: GitWorktreeSnapshot,
   seams: GitDeliveryExecutionSeams,
+  correlationId: string,
   reportFailure: (error: unknown) => void,
 ): Promise<GitDeliverySignatureRequirement> {
   const branchName = snapshot.currentBranchName;
   const remoteAlias = preferredRemoteAlias(snapshot);
   if (branchName === undefined || remoteAlias === undefined) return "unavailable";
-  const reader = seams.branchProtectionReader ?? readTrustedGitDeliveryBranchProtection;
+  const reader =
+    seams.branchProtectionReader ??
+    createTrustedGitDeliveryBranchProtectionReader(
+      gitDeliveryTerminationHandler(seams, correlationId),
+    );
   try {
     return signatureRequirementOf(await reader(workspace, remoteAlias, branchName));
   } catch (error) {
@@ -557,10 +563,11 @@ async function computePreview(
   policy: GitCommitMessagePolicy,
   seams: GitDeliveryExecutionSeams,
   now: () => number,
+  correlationId: string,
   reportFailure: (error: unknown) => void,
 ): Promise<GitDeliveryCommitPreviewBody> {
-  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
-  const stagedPaths = await readStagedPathsFor(workspace, seams, now);
+  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
+  const stagedPaths = await readStagedPathsFor(workspace, seams, now, correlationId);
   const summary = summarizeStagedChangeset(stagedPaths);
   const commitInputs: GitDeliveryResolvedInputs = {
     kind: "commit",
@@ -576,6 +583,7 @@ async function computePreview(
     workspace,
     snapshot,
     seams,
+    correlationId,
     reportFailure,
   );
   const effectivePolicy = previewEffectivePolicy(snapshot, commitInputs, seams);
@@ -598,8 +606,16 @@ async function computePreview(
 export const createHandleCommitPreview = (
   options: GitDeliveryCommitRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
-  const seams = options.execution ?? {};
-  const activityLog = options.activityLog ?? processServerLogSink();
+  // ONE resolved sink for both the preview line and the termination callbacks inside `seams`.
+  // They used to resolve separately: preview logging honoured `options.activityLog`, while the
+  // termination evidence read `seams.activityLog` and fell back to the global
+  // `processServerLogSink()`. A caller that set only `options.activityLog` — every test that
+  // injects a sink to observe this route — therefore saw its preview lines but never the
+  // termination evidence, which went somewhere it was not looking. The more specific
+  // `execution.activityLog` still wins when a caller sets both.
+  const activityLog =
+    options.execution?.activityLog ?? options.activityLog ?? processServerLogSink();
+  const seams = { ...options.execution, activityLog };
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
@@ -617,9 +633,17 @@ export const createHandleCommitPreview = (
     );
     let body: GitDeliveryCommitPreviewBody;
     try {
-      body = await computePreview(workspace, messageDraft, policy, seams, now, (error) => {
-        reportBranchProtectionFailure(deps, correlationId, error);
-      });
+      body = await computePreview(
+        workspace,
+        messageDraft,
+        policy,
+        seams,
+        now,
+        correlationId,
+        (error) => {
+          reportBranchProtectionFailure(deps, correlationId, error);
+        },
+      );
     } catch (error) {
       reportPreviewWorktreeFailure(deps, correlationId, error);
       return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
@@ -718,6 +742,7 @@ function messagePolicyBlockResult(
 async function conflictMarkerBlockResult(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,
+  correlationId: string,
   deps: Pick<UiHandlerDeps, "redactor">,
   reportFailure: (error: unknown) => void,
 ): Promise<RouteResult | undefined> {
@@ -727,6 +752,7 @@ async function conflictMarkerBlockResult(
       workspace,
       seams,
       seams.now ?? Date.now,
+      correlationId,
     );
   } catch (error) {
     reportFailure(error);
@@ -745,10 +771,48 @@ async function conflictMarkerBlockResult(
   };
 }
 
+// Builds the typed commit command, resolves the approval requirement, drives the kernel, and
+// projects the content-free response. Extracted from createHandleCommitExecute's returned handler
+// purely to stay under the function-length budget (AGENTS.md §6) — no behavioral seam of its own.
+async function runCommitMutation(
+  req: ExecuteRequest,
+  workspace: WorkspaceInfo,
+  seams: GitDeliveryExecutionSeams,
+  correlationId: string,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const command = { kind: "commit" as const, message: req.message, allowEmpty: req.allowEmpty };
+  const verifiedApproval = resolveGitDeliveryApprovalRequirement(req.approval, {
+    store: seams.approvalStore,
+    binding: { projectId: req.projectId, operation: "commit", command },
+    nowMs: (seams.now ?? Date.now)(),
+  });
+  if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST");
+  try {
+    const result = await executeGovernedMutation(
+      command,
+      verifiedApproval,
+      workspace,
+      deps,
+      seams,
+      correlationId,
+    );
+    return { status: 200, body: deps.redactor(gitDeliveryMutationResponse(result)) };
+  } catch (error) {
+    reportCommitMutationFailure(deps, correlationId, error);
+    return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
+  }
+}
+
 export const createHandleCommitExecute = (
   options: GitDeliveryCommitRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
-  const seams = options.execution ?? {};
+  // Same single resolution as the preview handler above, for the same reason: a caller that sets
+  // only `options.activityLog` must still see this route's termination evidence.
+  const seams = {
+    ...options.execution,
+    activityLog: options.execution?.activityLog ?? options.activityLog ?? processServerLogSink(),
+  };
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
     const prepared = await prepareCommitExecution(ctx, deps, options.messagePolicy);
@@ -766,33 +830,18 @@ export const createHandleCommitExecute = (
     const messageBlock = messagePolicyBlockResult(req.message, policy, deps);
     if (messageBlock !== undefined) return messageBlock;
 
-    const conflictBlock = await conflictMarkerBlockResult(workspace, seams, deps, (error) => {
-      reportConflictScanFailure(deps, correlationId, error);
-    });
+    const conflictBlock = await conflictMarkerBlockResult(
+      workspace,
+      seams,
+      correlationId,
+      deps,
+      (error) => {
+        reportConflictScanFailure(deps, correlationId, error);
+      },
+    );
     if (conflictBlock !== undefined) return conflictBlock;
 
-    const command = { kind: "commit" as const, message: req.message, allowEmpty: req.allowEmpty };
-    const verifiedApproval = resolveGitDeliveryApprovalRequirement(req.approval, {
-      store: seams.approvalStore,
-      binding: { projectId: req.projectId, operation: "commit", command },
-      nowMs: (seams.now ?? Date.now)(),
-    });
-    if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST");
-    let result;
-    try {
-      result = await executeGovernedMutation(
-        command,
-        verifiedApproval,
-        workspace,
-        deps,
-        seams,
-        correlationId,
-      );
-    } catch (error) {
-      reportCommitMutationFailure(deps, correlationId, error);
-      return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
-    }
-    return { status: 200, body: deps.redactor(gitDeliveryMutationResponse(result)) };
+    return runCommitMutation(req, workspace, seams, correlationId, deps);
   };
 };
 

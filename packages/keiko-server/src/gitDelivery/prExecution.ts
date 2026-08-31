@@ -41,16 +41,22 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { createNodeGitPullRequestAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
-  persistGitDeliveryEvidence,
+  gitDeliveryTerminationHandler,
+  logGitDeliveryNoSpawnRefusal,
+  logGitDeliveryPreconditionFailure,
+  recordGitDeliveryLifecycle,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
 } from "./execution.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import type { GitDeliveryAuthorityContinuityDenialCapture } from "./requestPreparation.js";
 
 // Default trusted PR policy: PERMIT `pr-create` / `pr-update` whose BASE is a legitimate integration
 // branch (dev, main, release/*, feat/*) and only within the protected-or-merge ceiling. A base outside
@@ -88,22 +94,37 @@ export interface GitDeliveryPullRequestSeams {
     ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>) | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
+  // The request's own activity-log sink, so the default PR adapter's runCommand
+  // termination-evidence callback (see prAdapterFor) writes through the SAME sink the caller logs
+  // everything else through, instead of an uninjectable `processServerLogSink()`.
+  readonly activityLog?: ServerLogSink | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
   readonly beforeRemoteDispatch?: (() => boolean) | undefined;
+  // Set by the route alongside `beforeRemoteDispatch` when that guard is the continuity re-check. A
+  // denial replaces the adapter's synthetic failure with a typed blocked authority-denied record.
+  readonly authorityDenialCapture?: GitDeliveryAuthorityContinuityDenialCapture | undefined;
 }
 
 function authorityGuardedPrAdapter(
   adapter: GitPullRequestAdapter,
   beforeRemoteDispatch: (() => boolean) | undefined,
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
 ): GitPullRequestAdapter {
   if (beforeRemoteDispatch === undefined) return adapter;
   const aborted = { schemaVersion: "1", outcome: "aborted", durationMs: 0 } as const;
+  // F4: no process is spawned for this attempt — mark it explicitly before returning the synthetic
+  // result (see logGitDeliveryNoSpawnRefusal in execution.ts).
+  const noSpawn = (actionKind: "pr-create" | "pr-update"): Promise<typeof aborted> => {
+    logGitDeliveryNoSpawnRefusal(activityLog, actionKind, correlationId);
+    return Promise.resolve(aborted);
+  };
   return {
     createPullRequest: (request) =>
-      beforeRemoteDispatch() ? adapter.createPullRequest(request) : Promise.resolve(aborted),
+      beforeRemoteDispatch() ? adapter.createPullRequest(request) : noSpawn("pr-create"),
     updatePullRequest: (request) =>
-      beforeRemoteDispatch() ? adapter.updatePullRequest(request) : Promise.resolve(aborted),
+      beforeRemoteDispatch() ? adapter.updatePullRequest(request) : noSpawn("pr-update"),
   };
 }
 
@@ -111,9 +132,15 @@ function prAdapterFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryPullRequestSeams,
   now: () => number,
+  correlationId: string | undefined,
 ): GitPullRequestAdapter {
   if (seams.prAdapterFactory !== undefined) return seams.prAdapterFactory(workspace);
-  return createNodeGitPullRequestAdapter({ workspace, processEnv: process.env, now });
+  return createNodeGitPullRequestAdapter({
+    workspace,
+    processEnv: process.env,
+    now,
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
+  });
 }
 
 /**
@@ -127,12 +154,22 @@ export async function executeGovernedPullRequest(
   workspace: WorkspaceInfo,
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   seams: GitDeliveryPullRequestSeams,
+  correlationId?: string,
 ): Promise<GitPullRequestLifecycleResult> {
   const now = seams.now ?? Date.now;
-  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
+  const activityLog = seams.activityLog ?? processServerLogSink();
+  let snapshot: GitWorktreeSnapshot;
+  try {
+    snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
+  } catch (error) {
+    logGitDeliveryPreconditionFailure(activityLog, command.kind, error, correlationId);
+    throw error;
+  }
   const adapter = authorityGuardedPrAdapter(
-    prAdapterFor(workspace, seams, now),
+    prAdapterFor(workspace, seams, now, correlationId),
     seams.beforeRemoteDispatch,
+    activityLog,
+    correlationId,
   );
   const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PR_POLICY_PACK);
   const newActionId =
@@ -148,7 +185,19 @@ export async function executeGovernedPullRequest(
       newActionId,
     },
   );
-  persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
+  // Replace the adapter's synthetic aborted result with the true terminal governance outcome when
+  // continuity refused dispatch. The client receives the captured 403; the ledger retains the matching
+  // blocked / authority-denied / policy-forbidden fact.
+  recordGitDeliveryLifecycle({
+    deps,
+    result: result.lifecycle,
+    snapshot,
+    repoId: workspace.root,
+    now,
+    activityLog,
+    correlationId,
+    authorityDenied: seams.authorityDenialCapture?.result !== undefined,
+  });
   return result;
 }
 

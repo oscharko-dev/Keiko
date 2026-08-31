@@ -25,6 +25,7 @@ import {
   evaluateGitPreflight,
   evaluateGitPublishEffectivePolicy,
   runGitPublish,
+  type GitPublishExecResult,
   type GitPublishLifecycleResult,
   type GitPushCommand,
   type GitRemotePublishAdapter,
@@ -32,6 +33,7 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { createNodeGitPublishAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import type {
@@ -41,15 +43,16 @@ import type {
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
-  logGitDeliveryMutation,
+  gitDeliveryTerminationHandler,
+  logGitDeliveryNoSpawnRefusal,
   logGitDeliveryPreconditionFailure,
-  persistGitDeliveryEvidence,
+  recordGitDeliveryLifecycle,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
 } from "./execution.js";
-import type { ServerLogSink } from "../observability/index.js";
-import { processServerLogSink } from "../process-log-sink.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import type { GitDeliveryAuthorityContinuityDenialCapture } from "./requestPreparation.js";
 
 // The shared/protected remote branches a governed push may never target directly. This is the
 // enforcement of the "no direct push to dev" hard denial (and its equivalents in a repository that
@@ -109,28 +112,34 @@ export interface GitDeliveryPublishSeams {
   readonly branchProtectionReader?: GitDeliveryBranchProtectionReader | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
+  // The request's own activity-log sink, so the default publish adapter's runCommand
+  // termination-evidence callback (see publishAdapterFor) writes through the SAME sink the caller
+  // logs everything else through, instead of an uninjectable `processServerLogSink()`.
+  readonly activityLog?: ServerLogSink | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
   readonly beforeRemoteDispatch?: (() => boolean) | undefined;
-  /**
-   * Activity-log sink, defaulting to the shared process log. A governed push answers every outcome
-   * with a content-free typed body, so without the line below a rejected policy decision, a failed
-   * remote dispatch or an authority-guard abort left no trace in `server.log` at all — the same gap
-   * the local mutation path closed with `logGitDeliveryMutation` (AGENTS.md §8 Rule 1).
-   */
-  readonly activityLog?: ServerLogSink | undefined;
+  // Set by the route alongside `beforeRemoteDispatch` when that guard is the continuity re-check. A
+  // denial replaces the adapter's synthetic failure with a typed blocked authority-denied ledger/log
+  // outcome; it never suppresses the terminal audit record.
+  readonly authorityDenialCapture?: GitDeliveryAuthorityContinuityDenialCapture | undefined;
 }
 
 function authorityGuardedPublishAdapter(
   adapter: GitRemotePublishAdapter,
   beforeRemoteDispatch: (() => boolean) | undefined,
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
 ): GitRemotePublishAdapter {
   if (beforeRemoteDispatch === undefined) return adapter;
   return {
-    publish: (request) =>
-      beforeRemoteDispatch()
-        ? adapter.publish(request)
-        : Promise.resolve({ schemaVersion: "1", outcome: "aborted", durationMs: 0 }),
+    publish: (request): Promise<GitPublishExecResult> => {
+      if (beforeRemoteDispatch()) return adapter.publish(request);
+      // F4: no process is spawned for this attempt — mark it explicitly before returning the
+      // synthetic result (see logGitDeliveryNoSpawnRefusal in execution.ts).
+      logGitDeliveryNoSpawnRefusal(activityLog, "push", correlationId);
+      return Promise.resolve({ schemaVersion: "1", outcome: "aborted", durationMs: 0 });
+    },
   };
 }
 
@@ -138,9 +147,15 @@ function publishAdapterFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryPublishSeams,
   now: () => number,
+  correlationId: string | undefined,
 ): GitRemotePublishAdapter {
   if (seams.publishAdapterFactory !== undefined) return seams.publishAdapterFactory(workspace);
-  return createNodeGitPublishAdapter({ workspace, processEnv: process.env, now });
+  return createNodeGitPublishAdapter({
+    workspace,
+    processEnv: process.env,
+    now,
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
+  });
 }
 
 function pushInputsOf(command: GitPushCommand): GitDeliveryPushInputs {
@@ -172,7 +187,7 @@ export async function executeGovernedPublish(
   const activityLog = seams.activityLog ?? processServerLogSink();
   let snapshot: GitWorktreeSnapshot;
   try {
-    snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
+    snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
   } catch (error) {
     // Mirrors executeGovernedMutation's precondition line: the read-only snapshot step is the
     // only thing that can throw here (the gateway never does), and it used to throw uncaught,
@@ -184,8 +199,10 @@ export async function executeGovernedPublish(
     throw error;
   }
   const adapter = authorityGuardedPublishAdapter(
-    publishAdapterFor(workspace, seams, now),
+    publishAdapterFor(workspace, seams, now, correlationId),
     seams.beforeRemoteDispatch,
+    activityLog,
+    correlationId,
   );
   const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PUBLISH_POLICY_PACK);
   const newActionId =
@@ -201,15 +218,19 @@ export async function executeGovernedPublish(
       newActionId,
     },
   );
-  persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
-  // Same logger the local mutation path uses: the lifecycle shape is identical and `actionKind`
-  // (`push`) is what separates the two in the log, so this reuses that vocabulary rather than
-  // minting a parallel one.
-  logGitDeliveryMutation(
-    seams.activityLog ?? processServerLogSink(),
-    result.lifecycle,
+  // Replace the adapter's synthetic aborted result with the true terminal governance outcome when
+  // continuity refused dispatch. The client receives the captured 403; the ledger retains the matching
+  // blocked / authority-denied / policy-forbidden fact.
+  recordGitDeliveryLifecycle({
+    deps,
+    result: result.lifecycle,
+    snapshot,
+    repoId: workspace.root,
+    now,
+    activityLog,
     correlationId,
-  );
+    authorityDenied: seams.authorityDenialCapture?.result !== undefined,
+  });
   return result;
 }
 

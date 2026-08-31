@@ -371,12 +371,13 @@ describe("ContainerRunnerManager — execution", () => {
     expect(terminated?.category).toBe("diagnostic");
     expect(terminated?.correlationId).toBe(runId);
     expect(terminated?.extra?.reason).toBe("timeout");
-    // Body-free: exactly the four evidence fields — never the image, engine argv, or task id.
+    // Body-free: exactly the three evidence fields — never the image, engine argv, or task id.
+    // `childPid` (not the reserved `pid`) so the child identity survives the real redactor —
+    // pinned against redactLogFields in command-runner.test.ts.
     expect(Object.keys(terminated?.extra ?? {}).sort()).toEqual([
-      "pid",
+      "childPid",
       "reason",
-      "windowsTreeKillAttempted",
-      "windowsTreeKillSucceeded",
+      "windowsTreeKill",
     ]);
   });
 

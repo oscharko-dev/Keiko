@@ -18,7 +18,19 @@ import {
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const DEFAULT_STATIC_ROOT = join(repoRoot, "dist", "ui", "static");
 
-const TARGETS = {
+// The SYNTAX floor Babel lowers the exported bundle to. Deliberately BELOW keiko-ui's
+// `browserslist` declaration, which is the floor at which the app actually WORKS: browserslist is
+// bounded by the runtime APIs the UI calls (`Array.prototype.at`, `crypto.randomUUID`,
+// `AbortSignal.timeout`, …) and this pass does not polyfill them — `useBuiltIns: false` below emits
+// no core-js imports, so it can only lower syntax, never add a missing builtin.
+//
+// Keeping this floor lower is therefore deliberate slack, not drift: transpiling further down than
+// the supported range costs a little bundle size and guarantees that a browser inside the declared
+// range can always PARSE the output. The dangerous direction is the opposite one — a floor ABOVE
+// the declaration would emit syntax a declared-supported browser cannot parse, which is a blank
+// page rather than a degraded feature. `npm run check:browser-baseline` enforces exactly that
+// direction, so these two numbers can never silently cross.
+export const TARGETS = {
   chrome: "79",
   edge: "79",
   firefox: "72",

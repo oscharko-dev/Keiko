@@ -88,6 +88,12 @@ The local kernel, the local adapter, the publish gateway, and the PR gateway are
 
 `KEIKO_DEFAULT_MERGE_POLICY_PACK` (server) authorises `merge` as `approval-gated` (`requiredApprovers: []` — at least one approver of any identity), with `defaultRule: { decision: "blocked" }` so every other action kind is fail-closed. This is the explicit final-approval gate AC1 requires. Base-branch namespace and risk-ceiling enforcement happen in the readiness layer (which is where merge prerequisites live); the policy pack governs *authorization* (may this action proceed, and does it need approval). Governed merge additionally requires a current server-owned runtime Authority Envelope; no environment switch grants delivery authority. A deployment may override with a stricter pack (e.g. naming specific `requiredApprovers`).
 
+The Authority Envelope is re-checked immediately before provider dispatch. If continuity is lost
+after admission, no process is spawned, the route returns the correlated 403 contract, and the shared
+mutation ledger retains a `blocked` / `authority-denied` / `policy-forbidden` terminal record. Merge
+success, readiness/policy blocks, provider rejection, and snapshot failures emit through the same
+body-free activity-log lifecycle as local mutations and publish.
+
 ### D7 — A new sibling card GovernedMergeCard.tsx, not an extension of GovernedGitFlowCard or GovernedPullRequestCard
 
 `GovernedMergeCard.tsx` is a new sibling card under a new `"governedMerge"` window kind. Rationale mirrors ADR-0086 D7: card scope/size (the merge surface — strategy selector, readiness/blocker panel, final high-risk approval affordance, rejection/recovery display — is independent of the PR metadata editor), lifecycle independence (merge is downstream of review-ready), and test separability. It is launched from the PR card's review-ready state. `globals.css` is **not** modified (ADR-0051 gate); all styling uses inline CSS custom properties.

@@ -19,6 +19,7 @@ import {
   type NodeGitWorktreeReaderDeps,
 } from "./git-worktree-snapshot-node.js";
 import { isCommandAllowed } from "./sandbox.js";
+import { DEFAULT_SANDBOX_POLICY } from "./types.js";
 
 let root: string;
 let info: WorkspaceInfo;
@@ -151,6 +152,32 @@ describe("readGitRemoteUrl", () => {
 });
 
 describe("readStagedConflictMarkerFileCount", () => {
+  // The gate FAILED OPEN here (PR #3355 review, P1). `git diff --cached --check` output is capped
+  // like any other command; when the cap trips, runCommand kills git and replaces stdout with the
+  // literal "[TRUNCATED OUTPUT REDACTED]". That placeholder is non-empty (so the emptiness guard let
+  // it through) and matches no `path:line: leftover conflict marker` line (so the count came back
+  // 0) — indistinguishable from a clean changeset. commitRoutes then permitted the commit and baked
+  // the marker lines into history, which is the exact outcome this reader exists to prevent.
+  //
+  // Driven by a REAL truncation — a 1-byte output cap against a genuinely conflicted staged file —
+  // rather than by a hand-built result object, so it stays true if the placeholder text ever changes.
+  it("refuses to report a count when the diagnostic output was truncated", async () => {
+    writeFileSync(join(root, "shared.txt"), "base\n", "utf8");
+    git(["add", "shared.txt"]);
+    git(["commit", "-m", "base"]);
+    // A staged file carrying literal conflict markers: `--check` reports it and exits non-zero.
+    writeFileSync(join(root, "shared.txt"), "<<<<<<< HEAD\na\n=======\nb\n>>>>>>> other\n", "utf8");
+    git(["add", "shared.txt"]);
+
+    const capped = {
+      ...deps(),
+      policy: { ...DEFAULT_SANDBOX_POLICY, maxOutputBytes: 1 },
+    };
+    await expect(readStagedConflictMarkerFileCount(capped)).rejects.toBeInstanceOf(
+      GitWorktreeReadError,
+    );
+  });
+
   it("returns 0 for an ordinary staged change with no conflict markers", async () => {
     writeFileSync(join(root, "a.txt"), "v1\n", "utf8");
     git(["add", "a.txt"]);

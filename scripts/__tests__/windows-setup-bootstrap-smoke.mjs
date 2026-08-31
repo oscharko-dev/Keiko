@@ -29,6 +29,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
+import { resolveWindowsPowerShellExecutable } from "@oscharko-dev/keiko-security";
 
 import { appendSetupOverlay, compileSetupBootstrap } from "../build-windows-portable-setup.mjs";
 import { parseSetupOverlay } from "../lib/portable-setup-overlay.mjs";
@@ -230,7 +231,11 @@ function assertNativeLauncherTransport(root) {
     'const { writeFileSync } = require("node:fs"); writeFileSync(process.env.KEIKO_LAUNCHER_SENTINEL, `${process.argv.slice(2).join(" ")}\\n`, "utf8");\n',
     "utf8",
   );
-  const launcherContent = windowsLauncher.generateContent({ exe: launcherExe, port: undefined });
+  const launcherContent = windowsLauncher.generateContent({
+    exe: launcherExe,
+    port: undefined,
+    windowsPowerShellPath: resolveWindowsPowerShellExecutable(process.env),
+  });
   assert.equal(
     Array.from(launcherContent).every((character) => character.charCodeAt(0) <= 0x7f),
     true,

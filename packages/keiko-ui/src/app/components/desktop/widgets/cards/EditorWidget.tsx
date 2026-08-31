@@ -46,6 +46,7 @@ import {
   type EditorDirtyByPane,
 } from "./editorDirtyState";
 import { deleteEditorHotExitSnapshot } from "./editorHotExitStore";
+import { editorPaneWindowId } from "./editorPaneWindowId";
 import editorWidgetStyles from "./EditorWidget.module.css";
 import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
@@ -1970,7 +1971,7 @@ export function EditorWidget({
       ...(pane.activeFile.length > 0 ? { file: pane.activeFile } : {}),
       openFiles: pane.openFiles,
       dirtyFiles: dirtyFileList,
-      windowId: `${windowId ?? "editor"}-${pane.id}`,
+      windowId: editorPaneWindowId(windowId, pane.id),
       paneId: pane.id,
       layoutPanes: layoutPaneSnapshots,
       activePaneId: layout.activePaneId,

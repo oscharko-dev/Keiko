@@ -34,6 +34,7 @@ import { existsSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type { CliIo } from "./runner.js";
 import { LauncherError } from "./launcher-platforms.js";
 import { removeLauncherShortcuts } from "./launcher.js";
@@ -62,6 +63,7 @@ import {
   type RuntimeStateScan,
   type StateRootInspection,
 } from "./state-paths.js";
+import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
 
 const USAGE = `Usage:
   keiko uninstall [--state] [--launchers] [--scripts] [--state-dir PATH]
@@ -109,6 +111,7 @@ export interface UninstallCliDeps {
   readonly killProcess?: (pid: number, signal?: NodeJS.Signals | 0) => void;
   // #KEIKO-0422: injected so tests can drive the post-SIGTERM wait deterministically.
   readonly sleep?: (ms: number) => Promise<void>;
+  readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
 }
 
 interface RawUninstallArgs {
@@ -454,9 +457,10 @@ function removePortableManagedStep(
   env: EnvSource,
   stateDir: string,
   homedir: string,
+  securityLogSink?: SecurityLogSink,
 ): void {
   if (!opts.scopes.state) return;
-  const record = attestedPortableInstallRecord(stateDir, env, homedir);
+  const record = attestedPortableInstallRecord(stateDir, env, homedir, { securityLogSink });
   if (record === undefined || record.registration.status === "setup-failed") return;
   if (record.layout === undefined || record.managedRoot === undefined) {
     throw new Error(
@@ -465,21 +469,22 @@ function removePortableManagedStep(
   }
   if (!opts.dryRun) {
     inspectPortableManagedInstallForRemoval(record.layout);
-    assertPortableRegistrationRemovable(record, env, homedir);
+    assertPortableRegistrationRemovable(record, env, homedir, securityLogSink);
     removePortableManagedInstall(record.layout, io, false);
   } else {
     removePortableManagedInstall(record.layout, io, true);
-    assertPortableRegistrationRemovable(record, env, homedir);
+    assertPortableRegistrationRemovable(record, env, homedir, securityLogSink);
   }
-  removePortableRegistrationArtifacts(
-    record.layout,
-    record.target,
-    record.managedRoot,
+  removePortableRegistrationArtifacts({
+    layout: record.layout,
+    target: record.target,
+    managedRoot: record.managedRoot,
     env,
-    homedir,
-    opts.dryRun,
+    home: homedir,
+    dryRun: opts.dryRun,
     io,
-  );
+    options: { securityLogSink },
+  });
 }
 
 function inspectPortableManagedInstallForRemoval(
@@ -496,17 +501,19 @@ function assertPortableRegistrationRemovable(
   record: Exclude<ReturnType<typeof attestedPortableInstallRecord>, undefined>,
   env: EnvSource,
   homedir: string,
+  securityLogSink?: SecurityLogSink,
 ): void {
   if (record.layout === undefined || record.managedRoot === undefined) return;
-  removePortableRegistrationArtifacts(
-    record.layout,
-    record.target,
-    record.managedRoot,
+  removePortableRegistrationArtifacts({
+    layout: record.layout,
+    target: record.target,
+    managedRoot: record.managedRoot,
     env,
-    homedir,
-    true,
-    { out: (_text: string): void => undefined, err: (_text: string): void => undefined },
-  );
+    home: homedir,
+    dryRun: true,
+    io: { out: (_text: string): void => undefined, err: (_text: string): void => undefined },
+    options: { securityLogSink },
+  });
 }
 
 function refuseUnsafeStateRoot(
@@ -591,6 +598,7 @@ export async function runUninstallCli(
     return 2;
   }
   const stateDir = resolveStateDir(resolved.cwd, env, opts.stateDirArg);
+  const securityLogSink = createCliSecurityLogSink(stateDir, deps.securityLogSinkFactory);
   try {
     // PR-review follow-up (Codex thread 3771600804): refuseEarly's guards can throw when
     // an lstat / read on the state directory or portable-install-state.json fails with
@@ -603,7 +611,7 @@ export async function runUninstallCli(
     if ((await ensureServerStoppable(opts, io, resolved, stateDir)) === "refused") return 1;
     const launcherRefused = removeLaunchersStep(opts, io, resolved, stateDir);
     removeScriptsStep(opts, io);
-    removePortableManagedStep(opts, io, env, stateDir, resolved.homedir());
+    removePortableManagedStep(opts, io, env, stateDir, resolved.homedir(), securityLogSink);
     removeStateStep(opts, io, stateDir);
     printPackageGuidance(io, resolved);
     return launcherRefused > 0 ? 1 : 0;

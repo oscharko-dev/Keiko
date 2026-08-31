@@ -117,6 +117,11 @@ The policy evaluator (`evaluateGitPolicy`) selects a rule by `actionKind`, then 
 
 The default pack is fail-closed: all action kinds not explicitly covered by a rule fall through to the `defaultRule: { decision: "blocked" }`. Governed PR delivery additionally requires a current server-owned runtime Authority Envelope; no environment switch grants delivery authority.
 
+That Authority Envelope is checked again immediately before provider dispatch. A continuity denial
+returns the correlated 403 contract without spawning and is retained in the shared mutation ledger as
+`blocked` / `authority-denied` / `policy-forbidden`; PR success, governance blocks, provider rejection,
+and snapshot failures also emit through the shared body-free activity-log lifecycle.
+
 Force-push for a PR update (e.g. force-updating the head branch after a rebase) is out of scope for this slice. The PR gateway has no force operand; any head-branch force push must use the ADR-0085 publish gateway with a future explicit policy path.
 
 ### D7 — A new sibling card GovernedPullRequestCard.tsx, not an extension of GovernedGitFlowCard

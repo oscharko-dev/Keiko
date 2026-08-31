@@ -8,8 +8,8 @@ import {
   EDITOR_SELECTORS,
   firstPane,
   revokeEditorWorkspaceTrust,
-  typeIntoActiveEditor,
 } from "./support/editorWorkspace.js";
+import { replaceEditorBuffer } from "./support/editor-chord.js";
 import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
 
@@ -219,7 +219,7 @@ test("two roots retain independent editor and trust state through focused-root c
   await expect(rootA.getByLabel("Trusted workspace")).toBeVisible();
 
   const editor = page.locator(`${EDITOR_SELECTORS.workspace}:visible`);
-  await typeIntoActiveEditor(page, firstPane(editor), "dirty root A\n");
+  await replaceEditorBuffer(page, firstPane(editor), "dirty root A\n", a.root);
   await expect(editor.locator(`${EDITOR_SELECTORS.tab}[data-dirty='true']`)).toHaveCount(1);
   await expect.poll(() => storedWorkspace(page)).toContain("rootSessionsJson");
   await expect.poll(() => storedWorkspace(page)).toContain("a.txt");

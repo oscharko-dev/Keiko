@@ -1,7 +1,7 @@
 // Issue #1381 (ADR-0069 D7) — optional real-subprocess protocol-fidelity test. Unlike the in-memory
 // fake harness (the coverage backbone), this spawns an ACTUAL Node child running fake-lsp-server.mjs
-// and drives a real `initialize` → request → `shutdown` cycle plus a crash, proving the in-house frame
-// codec and JSON-RPC client interoperate with a genuine stdio LSP server. It uses the default node
+// and drives a real `initialize` → request → `shutdown` cycle plus an unsolicited exit, proving the
+// in-house frame codec and JSON-RPC client interoperate with a genuine stdio LSP server. It uses the default node
 // spawn adapter, so `node` must resolve on PATH outside the workspace (it does in CI and locally).
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -96,11 +96,13 @@ describe("LSP protocol fidelity against a real subprocess", () => {
     expect(manager.getLspProcessStatus()).toBe("DISPOSED");
   });
 
-  it("detects a real child crash after initialize", async () => {
+  it("quarantines a real unsolicited child exit without starting a replacement", async () => {
     const manager = createLspProcessManager(makeDeps([FIXTURE, "--stdio", "--crash"]));
-    await waitForStatus(manager, "RESTART_THROTTLED");
+    await waitForStatus(manager, "CRASHED");
 
-    expect(["CRASHED", "RESTART_THROTTLED"]).toContain(manager.getLspProcessStatus());
+    expect(manager.getLspProcessStatus()).toBe("CRASHED");
+    expect(manager.getChildGeneration()).toBe(1);
+    expect(manager.hasRetainedProcessOwnership()).toBe(true);
     await manager.dispose();
   });
 });

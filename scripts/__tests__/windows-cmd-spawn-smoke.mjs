@@ -20,9 +20,18 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  mkdtempSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { resolveWindowsSystemBinary } from "@oscharko-dev/keiko-security";
 
 // Import the pure helper straight from its TypeScript source (Node's native type-stripping), the
 // same mechanism the sibling smoke scripts use to import a package's `src/*.ts` — no build step, no
@@ -35,6 +44,8 @@ assert.equal(
   "win32",
   "windows-cmd-spawn-smoke: this smoke must run on a Windows host",
 );
+const ACTUAL_SYSTEM_ROOT = process.env.SystemRoot ?? process.env.WINDIR;
+assert.notEqual(ACTUAL_SYSTEM_ROOT, undefined, "Windows did not expose its system root");
 
 // Records the argv the child actually received. Node parses its own command line with the CRT rules
 // CreateProcess feeds it, so this observation is not filtered through a second cmd.exe parse.
@@ -66,11 +77,10 @@ function commandResultSummary(result) {
   ].join(" ");
 }
 
-// Every argument must arrive at the child byte-for-byte. `%` is deliberately absent: caret escaping
-// does not neutralise cmd.exe's `%`-expansion inside a batch file, so a `%VAR%`-shaped argument is
-// expanded by the shim layer rather than mangled by the escaping. That is a documented property of
-// the algorithm this module reproduces (see windows-shell.ts), not a round-trip defect — `%` is still
-// carried through the parseability and injection vectors below, where its behaviour is well-defined.
+// Every argument must arrive at the child byte-for-byte. `%` is deliberately absent: the wrapper
+// REJECTS it fail-closed (windows-shell.ts — cmd.exe expands %NAME% before any escaping applies, so
+// no literal transport exists), which assertPercentRejected below pins against a live build. TAB is
+// present on purpose: only NUL/CR/LF break a cmd.exe line, and a TSV/JSON argument must round-trip.
 const ROUND_TRIP_ARGS = [
   "hello",
   "hello world",
@@ -87,11 +97,10 @@ const ROUND_TRIP_ARGS = [
   "trailing\\",
   'has"quote',
   "",
+  "a\tb",
 ];
 
-// The full battery, `%` included: each must be caret-escaped so cmd.exe parses the whole line as
-// literal arguments and the child runs. An under-escaped one makes cmd treat it as syntax instead.
-const METACHARACTER_ARGS = [...ROUND_TRIP_ARGS, "%"];
+const METACHARACTER_ARGS = [...ROUND_TRIP_ARGS];
 
 // Each entry tries to break out of the wrapper into a command that writes the injection marker. The
 // marker is a bare relative name (no spaces/quotes) resolved against the spawn cwd, so a real
@@ -113,9 +122,9 @@ function spawnThroughWrapper(shimPath, args, root, outPath) {
     "a resolved .cmd fixture path must take the hardened cmd.exe wrapper branch on win32",
   );
   assert.equal(
-    invocation.command.toLowerCase().endsWith(String.raw`\system32\cmd.exe`.toLowerCase()),
-    true,
-    `expected the wrapper to resolve System32\\cmd.exe, got: ${invocation.command}`,
+    invocation.command.toLowerCase(),
+    resolveWindowsSystemBinary("cmd.exe").toLowerCase(),
+    "the production wrapper must spawn the identity-approved conventional System32 command",
   );
   rmSync(outPath, { force: true });
   return spawnSync(invocation.command, invocation.args, {
@@ -197,9 +206,69 @@ function assertShimDoubleEscape() {
   );
 }
 
+// The percent fail-closed contract, against the LIVE wrapper build: a %NAME% argument must throw
+// before any cmd.exe line is assembled — never reach the child expanded (review 5058544058 P1).
+function assertPercentRejected(shimPath) {
+  for (const argument of ["%PATH%", "100%"]) {
+    assert.throws(
+      () => buildWindowsShellInvocation(shimPath, [argument]),
+      /must not contain '%'/,
+      `expected the wrapper to reject ${JSON.stringify(argument)} fail-closed`,
+    );
+  }
+}
+
 function writeFixture(path, contents) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, contents, "utf8");
+}
+
+function assertSystemRootRejectedBeforeSpawn(label, shimPath, systemRoot) {
+  let spawnReached = false;
+  assert.throws(
+    () => {
+      const invocation = buildWindowsShellInvocation(shimPath, [], {
+        platform: "win32",
+        env: { SystemRoot: systemRoot },
+      });
+      spawnReached = true;
+      spawnSync(invocation.command, invocation.args, {
+        shell: false,
+        windowsVerbatimArguments: true,
+      });
+    },
+    (error) => error?.name === "WindowsSystemDirectoryError",
+    `${label}: expected the untrusted SystemRoot to fail closed`,
+  );
+  assert.equal(spawnReached, false, `${label}: rejection happened only after the spawn boundary`);
+}
+
+function assertSystemBinaryRedirectRejectedBeforeSpawn(shimPath, root) {
+  const linkedSystemRoot = join(root, "binary-reparse-windows");
+  const linkedCmd = join(linkedSystemRoot, "System32", "cmd.exe");
+  mkdirSync(dirname(linkedCmd), { recursive: true });
+  symlinkSync(resolveWindowsSystemBinary("cmd.exe"), linkedCmd, "file");
+
+  let spawnReached = false;
+  assert.throws(
+    () => {
+      const invocation = buildWindowsShellInvocation(shimPath, [], {
+        platform: "win32",
+        env: { SystemRoot: linkedSystemRoot },
+        // Isolate the final-binary decision: the fake root is intentionally accepted here so the
+        // production exists check must inspect cmd.exe itself and refuse its symbolic redirect.
+        systemDirectoryIdentity: () => true,
+      });
+      spawnReached = true;
+      spawnSync(invocation.command, invocation.args, {
+        shell: false,
+        windowsVerbatimArguments: true,
+      });
+    },
+    (error) => error?.name === "WindowsSystemBinaryMissingError",
+    "a final System32\\cmd.exe symbolic redirect must fail closed before spawn",
+  );
+  assert.equal(spawnReached, false, "the binary redirect rejection happened only after spawn");
 }
 
 function runWindowsCmdSpawnSmoke() {
@@ -217,6 +286,23 @@ function runWindowsCmdSpawnSmoke() {
     writeFixture(ordinaryShim, shimScript(recorderPath));
     writeFixture(binShim, shimScript(recorderPath));
 
+    // Real Node 24 + NTFS proof for the shared trusted-System32 boundary. A workspace can contain a
+    // convincing System32/cmd.exe tree and can create a junction to the genuine Windows directory;
+    // neither environment-selected path may reach spawn. This runs in the existing windows-latest
+    // lane, so GLOBALROOT stat identity and junction lstat semantics are validated by Windows rather
+    // than inferred from POSIX unit seams.
+    const fakeSystemRoot = join(root, "fake-windows");
+    writeFixture(join(fakeSystemRoot, "System32", "cmd.exe"), "not an operating-system binary");
+    const junctionSystemRoot = join(root, "junction-windows");
+    symlinkSync(ACTUAL_SYSTEM_ROOT, junctionSystemRoot, "junction");
+    assertSystemRootRejectedBeforeSpawn("workspace fake root", ordinaryShim, fakeSystemRoot);
+    assertSystemRootRejectedBeforeSpawn(
+      "workspace junction root",
+      ordinaryShim,
+      junctionSystemRoot,
+    );
+    assertSystemBinaryRedirectRejectedBeforeSpawn(ordinaryShim, root);
+
     for (const [label, shimPath] of [
       ["ordinary .cmd", ordinaryShim],
       ["node_modules\\.bin shim", binShim],
@@ -226,6 +312,7 @@ function runWindowsCmdSpawnSmoke() {
       assertNoInjection(label, shimPath, root, outPath);
     }
     assertShimDoubleEscape();
+    assertPercentRejected(ordinaryShim);
   } catch (error) {
     failure = error;
   } finally {

@@ -52,11 +52,9 @@ import {
 import { deriveRepositoryId } from "./naming.js";
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
-import {
-  appendWorkspaceLifecycleEvidence,
-  buildWorkspaceEvent,
-  WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
-} from "./evidence.js";
+import { correlationIdOrUnknown } from "../correlation.js";
+import { recordWorkspaceLifecycle } from "./activity-log.js";
+import { buildWorkspaceEvent, WORKSPACE_LIFECYCLE_EVIDENCE_KIND } from "./evidence.js";
 import type {
   WorkspaceReconciliationService,
   WorkspaceReconciliationServiceDeps,
@@ -65,6 +63,11 @@ import type {
 interface ReconcileCtx {
   readonly deps: WorkspaceReconciliationServiceDeps;
   readonly lockTtlMs: number;
+  // The triggering operation's correlation id, so the worktree adapter's termination evidence joins
+  // the same timeline as every other line of that operation (AGENTS.md §8). It lives on the CTX, not
+  // in each helper's signature: the ctx is already threaded everywhere the adapter is built, so this
+  // needed no new parameter on any private function (PR #3355 review, P2).
+  readonly correlationId: string;
 }
 
 // The result of reconciling a single instance: the freshly persisted record plus the pure outcome.
@@ -248,22 +251,28 @@ function emitReconcileEvidence(
   outcome: WorkspaceReconciliationOutcome,
   flaggedRecovery: boolean,
   nowMs: number,
+  // The triggering request's own correlation id: the explicit-refresh route's ctx.correlationId, or
+  // undefined for the startup reconciliation pass, which has no HTTP request behind it at all — that
+  // is the one genuinely correlation-free call site in this module, so it alone falls back to
+  // UNKNOWN_CORRELATION_ID rather than the workspace's own persisted identity (AGENTS.md §8).
+  correlationId: string | undefined,
 ): void {
+  const resolvedCorrelationId = correlationIdOrUnknown(correlationId);
   const event = buildWorkspaceEvent({
     eventId: ctx.deps.newId(),
     workspaceId: instance.workspaceId,
     taskId: instance.taskId,
     type: reconcileEventType(outcome, flaggedRecovery),
     at: isoFrom(nowMs),
-    correlationId: instance.auditCorrelationId,
+    correlationId: resolvedCorrelationId,
     fromState,
     toState: instance.lifecycleState,
     health: instance.health,
     ...(outcome.driftMarkers.length > 0 ? { driftMarkers: outcome.driftMarkers } : {}),
   });
-  appendWorkspaceLifecycleEvidence(
-    ctx.deps.evidenceStore,
-    {
+  recordWorkspaceLifecycle(ctx.deps, {
+    evidenceStore: ctx.deps.evidenceStore,
+    record: {
       kind: WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
       schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
       recordedAt: nowMs,
@@ -274,8 +283,33 @@ function emitReconcileEvidence(
       worktreeCount: 0,
       event,
     },
-    ctx.deps.redactString,
-  );
+    redactString: ctx.deps.redactString,
+    errorCode: outcome.status === "healthy" ? undefined : outcome.status,
+  });
+}
+
+// Decides whether this pass must flag the instance into `recovery-required` — only when the contract's
+// own transition table permits the move; otherwise the lifecycle state is unchanged. Extracted from
+// reconcileWithContext to keep that function under the repo's per-function line budget (AGENTS.md §6).
+function resolveReconciledTargetState(
+  facts: WorkspaceReconciliationFacts,
+  outcome: WorkspaceReconciliationOutcome,
+  fromState: TaskWorkspaceLifecycleState,
+): TaskWorkspaceLifecycleState {
+  if (!reconciliationRequiresRecoveryFlag(outcome.status, fromState)) return fromState;
+  const transition = validateTaskWorkspaceTransition({
+    from: fromState,
+    to: "recovery-required",
+    context: {
+      lockHeldByActor: false,
+      pathContained: facts.pathContained,
+      worktreeClean: false,
+      branchReady: false,
+      providerReady: false,
+      operatorApproved: false,
+    },
+  });
+  return transition.ok ? "recovery-required" : fromState;
 }
 
 // Classifies one instance against pre-fetched git state, persists the classification within a legal
@@ -287,26 +321,12 @@ function reconcileWithContext(
   observedHead: string | undefined,
   instance: WorkspaceInstance,
   nowMs: number,
+  correlationId: string | undefined,
 ): ReconcileInstanceResult {
   const outcome = classifyWorkspaceReconciliation(facts);
   const health = reconciliationHealth(outcome.status);
   const fromState = instance.lifecycleState;
-  let targetState = fromState;
-  if (reconciliationRequiresRecoveryFlag(outcome.status, fromState)) {
-    const transition = validateTaskWorkspaceTransition({
-      from: fromState,
-      to: "recovery-required",
-      context: {
-        lockHeldByActor: false,
-        pathContained: facts.pathContained,
-        worktreeClean: false,
-        branchReady: false,
-        providerReady: false,
-        operatorApproved: false,
-      },
-    });
-    if (transition.ok) targetState = "recovery-required";
-  }
+  const targetState = resolveReconciledTargetState(facts, outcome, fromState);
   const iso = isoFrom(nowMs);
   const persisted = ctx.deps.store.upsert({
     ...instance,
@@ -320,7 +340,15 @@ function reconcileWithContext(
       ? { lastVerifiedHead: observedHead }
       : {}),
   });
-  emitReconcileEvidence(ctx, persisted, fromState, outcome, targetState !== fromState, nowMs);
+  emitReconcileEvidence(
+    ctx,
+    persisted,
+    fromState,
+    outcome,
+    targetState !== fromState,
+    nowMs,
+    correlationId,
+  );
   return { instance: persisted, outcome };
 }
 
@@ -335,8 +363,13 @@ export function gatherInstanceReconciliationFacts(
   instance: WorkspaceInstance,
   nowMs: number,
   actor?: string,
+  correlationId?: string,
 ): Promise<FactsAndHead> {
-  const ctx: ReconcileCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
+  const ctx: ReconcileCtx = {
+    deps,
+    lockTtlMs: resolveLockTtl(deps.lockTtlMs),
+    correlationId: correlationIdOrUnknown(correlationId),
+  };
   return gatherFacts(ctx, adapter, worktrees, instance, nowMs, actor);
 }
 
@@ -347,9 +380,14 @@ export async function reconcileSingleInstance(
   instance: WorkspaceInstance,
   nowMs: number,
   actor?: string,
+  correlationId?: string,
 ): Promise<ReconcileInstanceResult> {
-  const ctx: ReconcileCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
-  const adapter = deps.createAdapter(detectWorkspaceAt(instance.repositoryRoot));
+  const ctx: ReconcileCtx = {
+    deps,
+    lockTtlMs: resolveLockTtl(deps.lockTtlMs),
+    correlationId: correlationIdOrUnknown(correlationId),
+  };
+  const adapter = deps.createAdapter(detectWorkspaceAt(instance.repositoryRoot), ctx.correlationId);
   const worktrees = await adapter.listWorktrees();
   const { facts, observedHead } = await gatherFacts(
     ctx,
@@ -359,7 +397,7 @@ export async function reconcileSingleInstance(
     nowMs,
     actor,
   );
-  return reconcileWithContext(ctx, facts, observedHead, instance, nowMs);
+  return reconcileWithContext(ctx, facts, observedHead, instance, nowMs, correlationId);
 }
 
 function entryFromInstance(instance: WorkspaceInstance): WorkspaceReconciliationEntry {
@@ -412,6 +450,7 @@ function instancesFor(
 async function reconcileImpl(
   ctx: ReconcileCtx,
   repositoryRoot: string | undefined,
+  correlationId: string | undefined,
 ): Promise<WorkspaceReconciliationReport> {
   const instances = instancesFor(ctx.deps, repositoryRoot);
   const byRepo = new Map<string, WorkspaceInstance[]>();
@@ -422,7 +461,7 @@ async function reconcileImpl(
   }
   const reconciled: WorkspaceInstance[] = [];
   for (const [root, group] of byRepo) {
-    const adapter = ctx.deps.createAdapter(detectWorkspaceAt(root));
+    const adapter = ctx.deps.createAdapter(detectWorkspaceAt(root), ctx.correlationId);
     for (const instance of group) {
       // Serialize the WHOLE per-instance critical section — re-read, fact-gathering, classification, and
       // the persisted write — under the SAME `ws:<workspaceId>` key every other mutating workspace flow
@@ -461,7 +500,7 @@ async function reconcileImpl(
             nowMs,
             undefined,
           );
-          return reconcileWithContext(ctx, facts, observedHead, fresh, nowMs);
+          return reconcileWithContext(ctx, facts, observedHead, fresh, nowMs, correlationId);
         },
       );
       if (result !== undefined) reconciled.push(result.instance);
@@ -473,11 +512,22 @@ async function reconcileImpl(
 export function createWorkspaceReconciliationService(
   deps: WorkspaceReconciliationServiceDeps,
 ): WorkspaceReconciliationService {
-  const ctx: ReconcileCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
+  const lockTtlMs = resolveLockTtl(deps.lockTtlMs);
+  // Built PER OPERATION, not once per service: the correlation id belongs to the request, and a
+  // service-lifetime ctx is exactly what forced the previous UNKNOWN_CORRELATION_ID here.
+  const ctxFor = (correlationId: string | undefined): ReconcileCtx => ({
+    deps,
+    lockTtlMs,
+    correlationId: correlationIdOrUnknown(correlationId),
+  });
   return {
+    // Pure read over persisted rows — no child process, so no termination evidence to join.
     report: (repositoryRoot?: string): WorkspaceReconciliationReport =>
-      buildReport(ctx, instancesFor(deps, repositoryRoot), deps.now(), false),
-    reconcile: (repositoryRoot?: string): Promise<WorkspaceReconciliationReport> =>
-      reconcileImpl(ctx, repositoryRoot),
+      buildReport(ctxFor(undefined), instancesFor(deps, repositoryRoot), deps.now(), false),
+    reconcile: (
+      repositoryRoot?: string,
+      correlationId?: string,
+    ): Promise<WorkspaceReconciliationReport> =>
+      reconcileImpl(ctxFor(correlationId), repositoryRoot, correlationId),
   };
 }

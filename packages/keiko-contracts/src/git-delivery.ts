@@ -323,6 +323,11 @@ export type GitDeliveryNonEmptyConstraints = readonly [
 
 export type GitDeliveryBlockReason =
   | "policy-pack-blocked"
+  // The server-owned accepted-run Authority Envelope denied an operation after the governed
+  // lifecycle had already started (for example, continuity changed immediately before dispatch).
+  // This is distinct from a repository policy-pack denial: both are policy-forbidden retrospective
+  // outcomes, but only this code proves that no remote process was permitted to start.
+  | "authority-denied"
   | "protected-branch"
   | "provider-capability-absent"
   | "approval-expired"
@@ -339,6 +344,7 @@ export type GitDeliveryBlockReason =
 
 export const GIT_DELIVERY_BLOCK_REASONS: readonly GitDeliveryBlockReason[] = [
   "policy-pack-blocked",
+  "authority-denied",
   "protected-branch",
   "provider-capability-absent",
   "approval-expired",

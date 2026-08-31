@@ -12,7 +12,7 @@ import {
   resetServerLogger,
   setServerLogger,
 } from "./observability/index.js";
-import { processServerLogSink } from "./process-log-sink.js";
+import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
 
 afterEach(() => {
   resetServerLogger();
@@ -84,5 +84,52 @@ describe("processServerLogSink", () => {
     processServerLogSink().write({ level: "debug", category: "search", op: "search.noisy" });
 
     expect(sink.events).toEqual([]);
+  });
+});
+
+// A single termination can emit TWO lines: the SIGTERM step, and — only when the child ignored it —
+// the SIGKILL escalation. They must be distinguishable in the log, because the escalation is the
+// step where a failed tree-kill actually matters (AGENTS.md §8: reconstructible from the log alone).
+describe("logCommandTermination", () => {
+  function write(evidence: Parameters<typeof logCommandTermination>[2]): Record<string, unknown> {
+    const sink = createBufferedServerLogSink();
+    logCommandTermination(sink, "corr-1", evidence);
+    const event = sink.events[0];
+    expect(event?.op).toBe("command.terminated");
+    expect(event?.correlationId).toBe("corr-1");
+    return event?.extra ?? {};
+  }
+
+  it("omits the escalation key entirely on the SIGTERM line", () => {
+    const extra = write({ reason: "timeout", childPid: 4242, windowsTreeKill: "succeeded" });
+    expect(extra).toMatchObject({
+      reason: "timeout",
+      childPid: 4242,
+      windowsTreeKill: "succeeded",
+    });
+    // Absent, not undefined: a present-but-empty key reads as "escalation happened, outcome unknown".
+    expect(Object.hasOwn(extra, "escalation")).toBe(false);
+  });
+
+  it("carries the escalation's own disposition on the escalation line", () => {
+    const extra = write({
+      reason: "timeout",
+      childPid: 4242,
+      windowsTreeKill: "failed",
+      escalation: "failed",
+    });
+    expect(extra.escalation).toBe("failed");
+  });
+
+  it("keeps the two lines distinguishable when only the escalation failed", () => {
+    const first = write({ reason: "abort", childPid: 7, windowsTreeKill: "succeeded" });
+    const second = write({
+      reason: "abort",
+      childPid: 7,
+      windowsTreeKill: "failed",
+      escalation: "failed",
+    });
+    expect(Object.hasOwn(first, "escalation")).toBe(false);
+    expect(second.escalation).toBe("failed");
   });
 });

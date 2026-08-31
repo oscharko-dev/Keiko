@@ -26,6 +26,7 @@ import {
   usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
+import { resolveWindowsSystemDirectory } from "../packages/keiko-security/src/windows-system-directory.ts";
 import { sha256File } from "./lib/digest.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -34,13 +35,23 @@ const DOWNLOAD_CONNECT_TIMEOUT_SECONDS = 10;
 const DOWNLOAD_MAX_SECONDS = 300;
 const DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024;
 
-export function systemBinariesFor(hostPlatform, systemRoot) {
-  return hostPlatform === "win32"
-    ? {
-        curl: join(systemRoot ?? String.raw`C:\Windows`, "System32", "curl.exe"),
-        tar: join(systemRoot ?? String.raw`C:\Windows`, "System32", "tar.exe"),
-      }
-    : { curl: "/usr/bin/curl", tar: "/usr/bin/tar" };
+// IDX55 follow-up (PR #3355 review): this used to read SystemRoot raw (`systemRoot ?? "C:\Windows"`)
+// and join it straight onto System32/curl.exe and System32/tar.exe, unvalidated — the same banned
+// pattern windows-msvc.mjs carried, missed by trusted-system-root-usage.test.mjs only because that
+// pin scans packages/*/src, not scripts/. `resolveWindowsSystemDirectory` adds the canonical-shape
+// validation (throws on a hostile override); the existence check stays with `systemBinary()` below,
+// which already performs it and fails closed through this script's own `fail()`, not by throwing.
+export function systemBinariesFor(
+  hostPlatform,
+  systemRoot,
+  resolveSystemRoot = resolveWindowsSystemDirectory,
+) {
+  if (hostPlatform !== "win32") return { curl: "/usr/bin/curl", tar: "/usr/bin/tar" };
+  const trustedSystemRoot = resolveSystemRoot({ SystemRoot: systemRoot });
+  return {
+    curl: join(trustedSystemRoot, "System32", "curl.exe"),
+    tar: join(trustedSystemRoot, "System32", "tar.exe"),
+  };
 }
 
 const SYSTEM_BINARIES = systemBinariesFor(platform, env.SystemRoot);

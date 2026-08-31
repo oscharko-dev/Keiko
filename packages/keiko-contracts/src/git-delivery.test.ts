@@ -116,6 +116,7 @@ describe("git-delivery action-kind / risk-class guards", () => {
   it("isGitDeliveryBlockReason includes the fail-closed no-applicable-rule", () => {
     expect(isGitDeliveryBlockReason("no-applicable-rule")).toBe(true);
     expect(isGitDeliveryBlockReason("policy-pack-blocked")).toBe(true);
+    expect(isGitDeliveryBlockReason("authority-denied")).toBe(true);
     expect(isGitDeliveryBlockReason("vibes")).toBe(false);
   });
 

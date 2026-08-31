@@ -27,12 +27,14 @@ import { posix as posixPath, win32 as win32Path } from "node:path";
 // is rejected. The intent is defense-in-depth even though XDG `.desktop` and `.bat`
 // have their own quoting rules: no metacharacter ever reaches the file content.
 const EXEC_PATH_RE = /^[A-Za-z0-9_@\-./\\:]+$/;
-const WINDOWS_POWERSHELL_EXE = String.raw`@"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -EncodedCommand `;
+const WINDOWS_POWERSHELL_SUFFIX = " -NoLogo -NoProfile -NonInteractive -EncodedCommand ";
+const WINDOWS_POWERSHELL_PATH_END = String.raw`\System32\WindowsPowerShell\v1.0\powershell.exe`;
 const WINDOWS_POWERSHELL_SCRIPT =
   "$exe=[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($env:KEIKO_EXE_B64));$arguments=@('start','--open');if($env:KEIKO_PORT){$arguments+=@('--port',$env:KEIKO_PORT)};Start-Process -FilePath $exe -ArgumentList $arguments";
 const WINDOWS_POWERSHELL_COMMAND = Buffer.from(WINDOWS_POWERSHELL_SCRIPT, "utf16le").toString(
   "base64",
 );
+const PREVIOUSLY_SHIPPED_WINDOWS_POWERSHELL_COMMAND = `@powershell.exe${WINDOWS_POWERSHELL_SUFFIX}${WINDOWS_POWERSHELL_COMMAND}`;
 const WINDOWS_ENCODED_EXE_PREFIX = '@set "KEIKO_EXE_B64=';
 const WINDOWS_ENCODED_PORT_PREFIX = '@set "KEIKO_PORT=';
 const WINDOWS_LEGACY_REGISTRATION_RE =
@@ -87,6 +89,15 @@ export function validatePort(port: number): number {
 export interface LauncherContentInput {
   readonly exe: string;
   readonly port: number | undefined;
+  // Required only when the Windows executable needs the encoded transport. Production callers
+  // resolve this absolute path through keiko-security's OS-identity-checked SystemRoot boundary;
+  // keeping it explicit prevents a generated Start Menu BAT from deferring trust to a mutable
+  // `%SystemRoot%`/`%WINDIR%` expansion at click time.
+  readonly windowsPowerShellPath?: string | undefined;
+}
+
+export interface WindowsLauncherParseOptions {
+  readonly resolveTrustedWindowsPowerShell?: (() => string) | undefined;
 }
 
 export interface PlatformLauncher {
@@ -132,19 +143,59 @@ function requireWindowsLauncherExe(exe: string): string {
   return exe;
 }
 
-function windowsLauncherContent(exe: string, port: number | undefined): string {
-  const safeExe = requireWindowsLauncherExe(exe);
-  const flag = portFlag(port);
-  if (EXEC_PATH_RE.test(safeExe)) return `@start "" ${safeExe} start --open${flag}\r\n`;
+export function windowsLauncherNeedsPowerShell(exe: string): boolean {
+  return !EXEC_PATH_RE.test(requireWindowsLauncherExe(exe));
+}
+
+function requireWindowsPowerShellPath(path: string | undefined): string {
+  if (
+    path === undefined ||
+    !win32Path.isAbsolute(path) ||
+    !path.toLowerCase().endsWith(WINDOWS_POWERSHELL_PATH_END.toLowerCase()) ||
+    path.includes('"') ||
+    path.includes("%") ||
+    Array.from(path).some((character): boolean => (character.codePointAt(0) ?? 0) <= 0x1f)
+  ) {
+    throw new LauncherError(
+      "WINDOWS_POWERSHELL_UNTRUSTED",
+      "keiko launcher: encoded Windows launch requires an identity-validated absolute PowerShell path.",
+    );
+  }
+  return path;
+}
+
+function windowsPowerShellCommand(path: string): string {
+  return `@"${path}"${WINDOWS_POWERSHELL_SUFFIX}${WINDOWS_POWERSHELL_COMMAND}`;
+}
+
+function encodedWindowsLauncherContent(
+  safeExe: string,
+  port: number | undefined,
+  powerShellCommand: string,
+): string {
   const encodedExe = Buffer.from(safeExe, "utf8").toString("base64");
   return [
     "@setlocal DisableDelayedExpansion",
     `${WINDOWS_ENCODED_EXE_PREFIX}${encodedExe}"`,
     `${WINDOWS_ENCODED_PORT_PREFIX}${port === undefined ? "" : String(port)}"`,
-    `${WINDOWS_POWERSHELL_EXE}${WINDOWS_POWERSHELL_COMMAND}`,
+    powerShellCommand,
     "@endlocal",
     "",
   ].join("\r\n");
+}
+
+function windowsLauncherContent(
+  exe: string,
+  port: number | undefined,
+  powerShellPath?: string,
+): string {
+  const safeExe = requireWindowsLauncherExe(exe);
+  const flag = portFlag(port);
+  if (!windowsLauncherNeedsPowerShell(safeExe)) {
+    return `@start "" ${safeExe} start --open${flag}\r\n`;
+  }
+  const trustedPowerShell = requireWindowsPowerShellPath(powerShellPath);
+  return encodedWindowsLauncherContent(safeExe, port, windowsPowerShellCommand(trustedPowerShell));
 }
 
 function canonicalBase64Utf8(encoded: string): string | undefined {
@@ -152,30 +203,55 @@ function canonicalBase64Utf8(encoded: string): string | undefined {
   return Buffer.from(decoded, "utf8").toString("base64") === encoded ? decoded : undefined;
 }
 
-function parseLegacyWindowsLauncherContent(content: string): string | undefined {
+interface ParsedWindowsLauncherContent {
+  readonly executablePath: string;
+  readonly port: number | undefined;
+}
+
+function parseLegacyWindowsLauncherContent(
+  content: string,
+): ParsedWindowsLauncherContent | undefined {
   const legacy = WINDOWS_LEGACY_REGISTRATION_RE.exec(content);
   if (legacy === null) return undefined;
   const port = legacy[2] === undefined ? undefined : Number(legacy[2]);
   try {
-    return windowsLauncherContent(legacy[1] ?? "", port) === content ? legacy[1] : undefined;
+    const executablePath = legacy[1] ?? "";
+    return windowsLauncherContent(executablePath, port) === content
+      ? { executablePath, port }
+      : undefined;
   } catch {
     return undefined;
   }
 }
 
-function encodedRegistrationLines(content: string): readonly string[] {
+interface EncodedRegistration {
+  readonly lines: readonly string[];
+  readonly powerShellCommand: string;
+  // Undefined identifies the one frozen, previously shipped bare command. Current absolute
+  // commands always carry a candidate that must equal the trusted resolver result before use.
+  readonly powerShellPath: string | undefined;
+}
+
+function encodedPowerShellPath(command: string): string | undefined {
+  if (command === PREVIOUSLY_SHIPPED_WINDOWS_POWERSHELL_COMMAND) return undefined;
+  const commandEnd = `${WINDOWS_POWERSHELL_SUFFIX}${WINDOWS_POWERSHELL_COMMAND}`;
+  if (!command.startsWith('@"') || !command.endsWith(commandEnd)) {
+    throw new Error("unexpected Windows registration command");
+  }
+  return requireWindowsPowerShellPath(command.slice(2, -commandEnd.length - 1));
+}
+
+function encodedRegistrationLines(content: string): EncodedRegistration {
   const lines = content.split("\r\n");
   if (lines.length !== 6) throw new Error("unexpected Windows registration line count");
   if (lines[0] !== "@setlocal DisableDelayedExpansion") {
     throw new Error("unexpected Windows registration preamble");
   }
-  if (lines[3] !== `${WINDOWS_POWERSHELL_EXE}${WINDOWS_POWERSHELL_COMMAND}`) {
-    throw new Error("unexpected Windows registration command");
-  }
+  const command = lines[3] ?? "";
   if (lines[4] !== "@endlocal" || lines[5] !== "") {
     throw new Error("unexpected Windows registration terminator");
   }
-  return lines;
+  return { lines, powerShellCommand: command, powerShellPath: encodedPowerShellPath(command) };
 }
 
 function batchEnvironmentValue(line: string | undefined, prefix: string): string {
@@ -191,22 +267,76 @@ function decodedRegistrationPort(portText: string): number | undefined {
   return validatePort(Number(portText));
 }
 
-function parseEncodedWindowsLauncherContent(content: string): string | undefined {
+interface DecodedEncodedRegistration extends ParsedWindowsLauncherContent {
+  readonly powerShellCommand: string;
+  readonly powerShellPath: string | undefined;
+}
+
+function decodeEncodedWindowsLauncherContent(
+  content: string,
+): DecodedEncodedRegistration | undefined {
   try {
-    const lines = encodedRegistrationLines(content);
+    const { lines, powerShellCommand, powerShellPath } = encodedRegistrationLines(content);
     const encodedExe = batchEnvironmentValue(lines[1], WINDOWS_ENCODED_EXE_PREFIX);
     const decodedExe = canonicalBase64Utf8(encodedExe);
     if (decodedExe === undefined) return undefined;
     const portText = batchEnvironmentValue(lines[2], WINDOWS_ENCODED_PORT_PREFIX);
     const port = decodedRegistrationPort(portText);
-    return windowsLauncherContent(decodedExe, port) === content ? decodedExe : undefined;
+    const executablePath = requireWindowsLauncherExe(decodedExe);
+    if (!windowsLauncherNeedsPowerShell(executablePath)) return undefined;
+    return encodedWindowsLauncherContent(executablePath, port, powerShellCommand) === content
+      ? { executablePath, port, powerShellCommand, powerShellPath }
+      : undefined;
   } catch {
     return undefined;
   }
 }
 
-export function parseWindowsLauncherContent(content: string): string | undefined {
-  return parseLegacyWindowsLauncherContent(content) ?? parseEncodedWindowsLauncherContent(content);
+function acceptsEncodedPowerShell(
+  registration: DecodedEncodedRegistration,
+  options: WindowsLauncherParseOptions | undefined,
+): boolean {
+  if (registration.powerShellPath === undefined) return true;
+  const resolveTrusted = options?.resolveTrustedWindowsPowerShell;
+  if (resolveTrusted === undefined) return false;
+  const trustedPath = requireWindowsPowerShellPath(resolveTrusted());
+  return registration.powerShellCommand === windowsPowerShellCommand(trustedPath);
+}
+
+function parseEncodedWindowsLauncherContent(
+  content: string,
+  options: WindowsLauncherParseOptions | undefined,
+): ParsedWindowsLauncherContent | undefined {
+  const registration = decodeEncodedWindowsLauncherContent(content);
+  return registration !== undefined && acceptsEncodedPowerShell(registration, options)
+    ? registration
+    : undefined;
+}
+
+function parseWindowsLauncher(
+  content: string,
+  options: WindowsLauncherParseOptions | undefined,
+): ParsedWindowsLauncherContent | undefined {
+  return (
+    parseLegacyWindowsLauncherContent(content) ??
+    parseEncodedWindowsLauncherContent(content, options)
+  );
+}
+
+export function parseWindowsLauncherContent(
+  content: string,
+  options?: WindowsLauncherParseOptions,
+): string | undefined {
+  return parseWindowsLauncher(content, options)?.executablePath;
+}
+
+export function windowsLauncherContentMatches(
+  content: string,
+  expected: Pick<LauncherContentInput, "exe" | "port">,
+  options?: WindowsLauncherParseOptions,
+): boolean {
+  const parsed = parseWindowsLauncher(content, options);
+  return parsed?.executablePath === expected.exe && parsed.port === expected.port;
 }
 
 export const linuxLauncher: PlatformLauncher = {
@@ -260,7 +390,8 @@ export const windowsLauncher: PlatformLauncher = {
     win32Path.join(homedir, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs"),
   safeFileName: () => "Keiko.bat",
   fileMode: 0o644,
-  generateContent: ({ exe, port }) => windowsLauncherContent(exe, port),
+  generateContent: ({ exe, port, windowsPowerShellPath }) =>
+    windowsLauncherContent(exe, port, windowsPowerShellPath),
 };
 
 const REGISTRY: Readonly<Record<Platform, PlatformLauncher>> = {

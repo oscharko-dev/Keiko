@@ -18,8 +18,21 @@ import {
 const CMD_PATH = String.raw`C:\Users\test\AppData\Roaming\npm\npm.cmd`;
 const UNC_CMD_PATH = String.raw`\\build-server\share\tools\npm.cmd`;
 const SHIM_CMD_PATH = String.raw`C:\proj\node_modules\.bin\tsserver.cmd`;
-const CMD_EXE = String.raw`C:\Windows\System32\cmd.exe`;
-const WIN_ENV = { env: { SystemRoot: String.raw`C:\Windows` }, platform: "win32" as const };
+const TRUSTED_SYSTEM_ROOT = {
+  existsAsFile: (): boolean => true,
+  systemDirectoryIdentity: (): boolean => true,
+};
+const WIN_ENV = {
+  env: { SystemRoot: String.raw`C:\Windows` },
+  platform: "win32" as const,
+  ...TRUSTED_SYSTEM_ROOT,
+};
+
+function expectedSystemBinary(selectedRoot: string, binaryName: string): string {
+  return `${selectedRoot}\\System32\\${binaryName}`;
+}
+
+const CMD_EXE = expectedSystemBinary(String.raw`C:\Windows`, "cmd.exe");
 
 describe("buildWindowsShellInvocation — pass-through (no wrapping)", () => {
   it("returns the input unchanged on a non-win32 platform, even for a .cmd path", () => {
@@ -80,20 +93,26 @@ describe("buildWindowsShellInvocation — cmd.exe resolution (never PATH)", () =
     const result = buildWindowsShellInvocation(CMD_PATH, [], {
       platform: "win32",
       env: { SystemRoot: String.raw`D:\NonstandardWindows`, WINDIR: String.raw`C:\Windows` },
+      ...TRUSTED_SYSTEM_ROOT,
     });
-    expect(result.command).toBe(String.raw`D:\NonstandardWindows\System32\cmd.exe`);
+    expect(result.command).toBe(expectedSystemBinary(String.raw`D:\NonstandardWindows`, "cmd.exe"));
   });
 
   it("falls back to WINDIR when SystemRoot is absent", () => {
     const result = buildWindowsShellInvocation(CMD_PATH, [], {
       platform: "win32",
       env: { WINDIR: String.raw`E:\Win` },
+      ...TRUSTED_SYSTEM_ROOT,
     });
-    expect(result.command).toBe(String.raw`E:\Win\System32\cmd.exe`);
+    expect(result.command).toBe(expectedSystemBinary(String.raw`E:\Win`, "cmd.exe"));
   });
 
   it("falls back to the hard-coded default when neither SystemRoot nor WINDIR is set", () => {
-    const result = buildWindowsShellInvocation(CMD_PATH, [], { platform: "win32", env: {} });
+    const result = buildWindowsShellInvocation(CMD_PATH, [], {
+      platform: "win32",
+      env: {},
+      ...TRUSTED_SYSTEM_ROOT,
+    });
     expect(result.command).toBe(CMD_EXE);
   });
 });
@@ -155,11 +174,6 @@ const SINGLE_ARG_VECTORS: readonly [label: string, arg: string, expectedArgs: re
       '"',
       ["/d", "/s", "/c", '"C:\\Users\\test\\AppData\\Roaming\\npm\\npm.cmd ^"\\^"^""'],
     ],
-    [
-      "percent",
-      "%",
-      ["/d", "/s", "/c", '"C:\\Users\\test\\AppData\\Roaming\\npm\\npm.cmd ^"^%^""'],
-    ],
     ["bang", "!", ["/d", "/s", "/c", '"C:\\Users\\test\\AppData\\Roaming\\npm\\npm.cmd ^"^!^""']],
     [
       "open-paren",
@@ -175,6 +189,14 @@ const SINGLE_ARG_VECTORS: readonly [label: string, arg: string, expectedArgs: re
       "asterisk",
       "*",
       ["/d", "/s", "/c", '"C:\\Users\\test\\AppData\\Roaming\\npm\\npm.cmd ^"^*^""'],
+    ],
+    [
+      // Finding T46: TAB (U+0009) is C0, not a cmd.exe metachar — CMD_METACHARACTERS never
+      // touches it, so the only thing the metachar pass escapes here is the two quotes the
+      // wrapping step adds around it, exactly as for "plain word" above.
+      "tab",
+      "\t",
+      ["/d", "/s", "/c", '"C:\\Users\\test\\AppData\\Roaming\\npm\\npm.cmd ^"\t^""'],
     ],
     [
       "trailing-backslash",
@@ -340,10 +362,54 @@ describe("buildWindowsShellInvocation — CR/LF and C0 control-character rejecti
     ).toThrow(WindowsShellInvocationError);
   });
 
-  it("rejects a non-CR/LF C0 control character (the full range, not only CR/LF)", () => {
-    expect(() => buildWindowsShellInvocation(CMD_PATH, ["a\u0007b"], WIN_ENV)).toThrow(
+  it("accepts TAB inside an argument — cross-spawn escapes it correctly, only NUL/CR/LF break the line", () => {
+    // Review 5058571583 finding 4: rejecting TAB was a silent, platform-divergent capability loss
+    // (a TSV/JSON/diff argument failing on Windows only). Inside the double-quoted argument TAB is
+    // a literal for the outer cmd.exe parse and the child's CRT. Exact-match (finding T46): a bare
+    // `toContain` here could not catch a broken escaping pass that left this substring intact but
+    // corrupted the quoting around it.
+    const result = buildWindowsShellInvocation(CMD_PATH, ["a\tb"], WIN_ENV);
+    expect(result).toEqual({
+      command: CMD_EXE,
+      args: ["/d", "/s", "/c", '"C:\\Users\\test\\AppData\\Roaming\\npm\\npm.cmd ^"a\tb^""'],
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it.each([
+    ["NUL", "a\u0000b"],
+    ["LF", "a\nb"],
+    ["CR", "a\rb"],
+  ])(
+    "rejects %s — the characters that genuinely break a cmd.exe command line",
+    (_label, argument) => {
+      expect(() => buildWindowsShellInvocation(CMD_PATH, [argument], WIN_ENV)).toThrow(
+        WindowsShellInvocationError,
+      );
+    },
+  );
+
+  it("rejects '%' on the wrap path — cmd.exe expands %NAME% before any escaping applies", () => {
+    // Review 5058544058 P1 3887021639: there is no literal transport for a percent-carrying
+    // argument through `cmd /c` (caret does not survive the early expansion phase, and batch-file
+    // %%-doubling does not apply to a command line). Fail closed rather than deliver a different
+    // argv than the caller passed — e.g. `npm view %PATH%` reaching npm.cmd expanded.
+    expect(() => buildWindowsShellInvocation(CMD_PATH, ["%PATH%"], WIN_ENV)).toThrow(
       WindowsShellInvocationError,
     );
+    expect(() => buildWindowsShellInvocation(CMD_PATH, ["100%"], WIN_ENV)).toThrow(
+      WindowsShellInvocationError,
+    );
+  });
+
+  it("a '%' in a NON-wrapped invocation passes through untouched (pass-through path)", () => {
+    const result = buildWindowsShellInvocation(
+      String.raw`C:\tools\tsserver.exe`,
+      ["%PATH%"],
+      WIN_ENV,
+    );
+    expect(result.windowsVerbatimArguments).toBe(false);
+    expect(result.args).toEqual(["%PATH%"]);
   });
 
   it("rejects a control character in the resolved command path itself", () => {
@@ -375,6 +441,114 @@ describe("buildWindowsShellInvocation — CR/LF and C0 control-character rejecti
   });
 });
 
+// Finding T46 (PR #3355 review): the golden-vector battery above pins every printable cmd.exe
+// metacharacter this module accepts, and the describe block above pins the reject/accept boundary
+// for NUL/CR/LF/'%' — but nothing pinned the ESCAPING of the C0 control range and DEL this module
+// deliberately re-admitted as safe (TAB, and the rest of C0 minus NUL/CR/LF), and the golden-vector
+// battery itself is hand-transcribed against this SAME task's algorithm rather than diffed against
+// an independently sourced implementation. `crossSpawnEscapeCommand`/`crossSpawnEscapeArgument`
+// below are vendored VERBATIM from the actually-installed cross-spawn 7.0.6 package
+// (`node_modules/cross-spawn/lib/util/escape.js`, MIT licensed — see windows-shell.ts's file header
+// for the full license text; this is the same upstream source, copied a second time here as a
+// fixed, independent oracle). This copy must NEVER be edited to track a future change in
+// windows-shell.ts's own escaping — regressing it here to "fix" a failing sweep is exactly the
+// silent divergence this fixture exists to catch.
+// https://github.com/moxystudio/node-cross-spawn/blob/v7.0.6/lib/util/escape.js
+const CROSS_SPAWN_METACHARACTERS_VENDORED = /([()\][%!^"`<>&|;, *?])/g;
+
+function crossSpawnEscapeCommand(arg: string): string {
+  return arg.replace(CROSS_SPAWN_METACHARACTERS_VENDORED, "^$1");
+}
+
+function crossSpawnEscapeArgument(arg: string, doubleEscapeMetaChars: boolean): string {
+  let escaped = arg;
+  escaped = escaped.replace(/(?=(\\+?)?)\1"/g, String.raw`$1$1\"`);
+  escaped = escaped.replace(/(?=(\\+?)?)\1$/, "$1$1");
+  escaped = '"' + escaped + '"';
+  escaped = escaped.replace(CROSS_SPAWN_METACHARACTERS_VENDORED, "^$1");
+  if (doubleEscapeMetaChars) {
+    escaped = escaped.replace(CROSS_SPAWN_METACHARACTERS_VENDORED, "^$1");
+  }
+  return escaped;
+}
+
+describe("buildWindowsShellInvocation — differential parity against vendored cross-spawn 7.0.6 (finding T46)", () => {
+  // CMD_PATH contains no cmd.exe metacharacter, so cross-spawn's own escape.command is a no-op on
+  // it — asserted rather than assumed, so this constant is grounded in the vendored oracle too,
+  // not hand-copied from the golden-vector literals above.
+  const ESCAPED_COMMAND_PREFIX = crossSpawnEscapeCommand(CMD_PATH);
+
+  it("cross-spawn's own escape.command is a no-op on CMD_PATH (no metacharacters to escape)", () => {
+    expect(ESCAPED_COMMAND_PREFIX).toBe(CMD_PATH);
+  });
+
+  function expectedCommandLine(arg: string): string {
+    return `"${ESCAPED_COMMAND_PREFIX} ${crossSpawnEscapeArgument(arg, false)}"`;
+  }
+
+  // NUL (0x00), LF (0x0A) and CR (0x0D) are rejected outright (pinned above) and excluded here: the
+  // module's additional rejection of those three, plus '%', is a security FEATURE beyond
+  // cross-spawn's own behaviour, not a divergence this parity sweep exists to catch. Every other
+  // codepoint in the C0 control range, plus DEL (U+007F), must be ACCEPTED and must escape
+  // byte-identically to the vendored cross-spawn oracle.
+  const REJECTED_CODEPOINTS = new Set<number>([0x00, 0x0a, 0x0d]);
+  const ACCEPTED_C0_AND_DEL_CODEPOINTS: readonly (readonly [label: string, char: string])[] = [
+    ...Array.from({ length: 0x20 }, (_unused, codepoint) => codepoint),
+    0x7f,
+  ]
+    .filter((codepoint) => !REJECTED_CODEPOINTS.has(codepoint))
+    .map((codepoint) => [
+      `U+${codepoint.toString(16).padStart(4, "0").toUpperCase()}`,
+      String.fromCharCode(codepoint),
+    ]);
+
+  it.each(ACCEPTED_C0_AND_DEL_CODEPOINTS)(
+    "accepts C0/DEL codepoint %s and escapes it byte-identically to cross-spawn 7.0.6",
+    (_label, char) => {
+      const result = buildWindowsShellInvocation(CMD_PATH, [char], WIN_ENV);
+      expect(result).toEqual({
+        command: CMD_EXE,
+        args: ["/d", "/s", "/c", expectedCommandLine(char)],
+        windowsVerbatimArguments: true,
+      });
+    },
+  );
+
+  // Every character in this module's own CMD_METACHARACTERS class, except '%' (rejected outright,
+  // pinned above and excluded here for the same reason as NUL/CR/LF).
+  const ACCEPTED_METACHARACTERS: readonly string[] = [
+    "(",
+    ")",
+    "[",
+    "]",
+    "!",
+    "^",
+    '"',
+    "`",
+    "<",
+    ">",
+    "&",
+    "|",
+    ";",
+    ",",
+    " ",
+    "*",
+    "?",
+  ];
+
+  it.each(ACCEPTED_METACHARACTERS)(
+    "escapes cmd.exe metacharacter %j byte-identically to cross-spawn 7.0.6",
+    (char) => {
+      const result = buildWindowsShellInvocation(CMD_PATH, [char], WIN_ENV);
+      expect(result).toEqual({
+        command: CMD_EXE,
+        args: ["/d", "/s", "/c", expectedCommandLine(char)],
+        windowsVerbatimArguments: true,
+      });
+    },
+  );
+});
+
 // Finding 2 (PR #3354, P1/P2): `SystemRoot`/`WINDIR` are mutable, inherited environment text. An
 // empty or relative value previously produced a RELATIVE `System32\cmd.exe`, resolved against the
 // workspace cwd a caller spawns with; an absolute UNC or device-path value selected an arbitrary,
@@ -394,18 +568,22 @@ const HOSTILE_SYSTEM_ROOT_VECTORS: readonly [label: string, value: string][] = [
 ];
 
 describe("resolveWindowsSystemDirectory / resolveSystemBinaryPath — canonical validation (finding 2)", () => {
+  const TRUSTED_SYSTEM_ROOT = (): boolean => true;
+
   it("resolves the hard-coded default when no override is present", () => {
-    expect(resolveWindowsSystemDirectory({})).toBe(String.raw`C:\Windows`);
-    expect(resolveSystemBinaryPath("taskkill.exe", {})).toBe(
-      String.raw`C:\Windows\System32\taskkill.exe`,
+    expect(resolveWindowsSystemDirectory({}, TRUSTED_SYSTEM_ROOT)).toBe(String.raw`C:\Windows`);
+    expect(resolveSystemBinaryPath("taskkill.exe", {}, () => true, TRUSTED_SYSTEM_ROOT)).toBe(
+      expectedSystemBinary(String.raw`C:\Windows`, "taskkill.exe"),
     );
   });
 
   it("accepts a valid drive-absolute SystemRoot override", () => {
     const env = { SystemRoot: String.raw`D:\NonstandardWindows` };
-    expect(resolveWindowsSystemDirectory(env)).toBe(String.raw`D:\NonstandardWindows`);
-    expect(resolveSystemBinaryPath("cmd.exe", env)).toBe(
-      String.raw`D:\NonstandardWindows\System32\cmd.exe`,
+    expect(resolveWindowsSystemDirectory(env, TRUSTED_SYSTEM_ROOT)).toBe(
+      String.raw`D:\NonstandardWindows`,
+    );
+    expect(resolveSystemBinaryPath("cmd.exe", env, () => true, TRUSTED_SYSTEM_ROOT)).toBe(
+      expectedSystemBinary(String.raw`D:\NonstandardWindows`, "cmd.exe"),
     );
   });
 

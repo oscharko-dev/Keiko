@@ -12,7 +12,8 @@ were isolated in `git-client-desktop-reuse-contract.md` §3. Everything else the
 reused unchanged: the Changes list, per-file/scope diff, and branch list are the existing
 `/api/git/status` / `/api/git/diff` / `/api/git/branches` reads; the governed mutation/publish/PR/
 merge/evidence write surface is the existing `gitDelivery/*` routes and the `keiko-tools` gateways.
-This slice adds no mutation route and changes no existing route or contract.
+This slice adds no mutation route. Its only later contract extension is the additive
+`authority-denied` sync outcome used to reconstruct a mid-flight Authority Envelope refusal.
 
 ## 1. Common model
 
@@ -184,7 +185,7 @@ Settled network operations re-read branch/upstream/ahead/behind, build a redacte
 
 ### `GitSyncOutcome` taxonomy
 
-The evidence-friendly outcome union (`GIT_SYNC_OUTCOMES`, 15 members):
+The evidence-friendly outcome union (`GIT_SYNC_OUTCOMES`, 16 members):
 
 | Outcome              | Operation | Meaning                                                        |
 | -------------------- | --------- | -------------------------------------------------------------- |
@@ -195,6 +196,7 @@ The evidence-friendly outcome union (`GIT_SYNC_OUTCOMES`, 15 members):
 | `detached-head`      | pull      | Detached HEAD (surfaced as a preview block; pull cannot run).  |
 | `dirty-worktree`     | pull      | Local changes would be overwritten.                            |
 | `not-fast-forward`   | pull      | `--ff-only` refused a non-fast-forward.                        |
+| `authority-denied`   | both      | Accepted authority changed or narrowed before network Git.     |
 | `auth-failed`        | both      | Credentials/permission/terminal-prompt-disabled failure.       |
 | `untrusted-host-key` | both      | SSH refused an unknown or changed host key.                    |
 | `remote-unavailable` | both      | The remote host could not be reached (DNS, refused, no route). |
@@ -260,12 +262,16 @@ a run no earlier cause explains.
   (never throws into the caller). The record is content-free: operation, typed outcome,
   `repoIdHash = sha256Hex(workspace.root).slice(0, 24)`, branch/remote names, ahead/behind before and
   after, and an epoch-ms timestamp.
+- **Continuity denials remain reconstructable.** The execute route re-checks the accepted Authority
+  Envelope immediately before network Git. A denial returns the correlated 403/no-spawn response
+  and appends `authority-denied` to the same content-free sync ledger; it never fabricates a
+  `git-error` or claims that fetch/pull ran.
 - **Project authorization.** Sync routes resolve `projectId` (the workspace root path) through
   `resolveProjectWorkspace`; an unregistered path is rejected with 404, so a fetch or pull runs only
   inside a known project's worktree.
-- **No existing surface changed.** `/api/git/status|diff|branches`, `/api/projects`,
-  `/api/repositories/clone`, every `gitDelivery/*` route, and every existing contract are byte-for-byte
-  unchanged. All new exports are additive; no package version is bumped.
+- **No route surface changed.** `/api/git/status|diff|branches`, `/api/projects`,
+  `/api/repositories/clone`, and every `gitDelivery/*` endpoint envelope remain unchanged. The
+  `authority-denied` sync outcome is additive and no schema version is bumped.
 
 ## 5. Named limitations
 

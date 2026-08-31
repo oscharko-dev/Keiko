@@ -37,6 +37,13 @@ import {
   deriveWorkspaceId,
 } from "./naming.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/index.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -48,6 +55,8 @@ let db: DatabaseSync;
 let store: WorkspaceInstanceStore;
 let evidence: { id: string; json: string }[];
 let idCounter: number;
+
+type AdapterFactory = (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
 
 function git(args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd: repoRoot, encoding: "utf8" });
@@ -65,24 +74,83 @@ function capturingEvidence(): EvidenceStore {
   };
 }
 
+function realAdapter(workspace: WorkspaceInfo): GitWorktreeAdapter {
+  return createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } });
+}
+
+function capturingAdapterFactory(received: string[]): AdapterFactory {
+  return (workspace, correlationId): GitWorktreeAdapter => {
+    received.push(correlationId);
+    return realAdapter(workspace);
+  };
+}
+
+function rejectingAdapterFactory(received: string[]): AdapterFactory {
+  return (_workspace, correlationId): GitWorktreeAdapter => {
+    received.push(correlationId);
+    throw new Error("captured adapter correlation");
+  };
+}
+
+function expectOnlyAdapterCorrelation(received: readonly string[], expected: string): void {
+  expect(received.length).toBeGreaterThan(0);
+  expect(new Set(received)).toEqual(new Set([expected]));
+}
+
 function makeService(
-  adapterFactory?: (workspace: WorkspaceInfo) => GitWorktreeAdapter,
+  adapterFactory?: AdapterFactory,
   ensureManagedWorkspaceIdentity?: (instance: WorkspaceInstance, initializeTrust: boolean) => void,
+  activityLog?: ServerLogSink,
 ): WorkspaceProvisioningService {
   return createWorkspaceProvisioningService({
     store,
     evidenceStore: capturingEvidence(),
     managedRoot,
-    createAdapter:
-      adapterFactory ??
-      ((workspace: WorkspaceInfo): GitWorktreeAdapter =>
-        createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } })),
+    createAdapter: adapterFactory ?? realAdapter,
     redactString: (s: string): string => s,
     now: (): number => FIXED_NOW,
     newId: (): string => `id-${String(idCounter++)}`,
     ...(ensureManagedWorkspaceIdentity === undefined ? {} : { ensureManagedWorkspaceIdentity }),
     mutex: __twMutex,
+    ...(activityLog === undefined ? {} : { activityLog }),
   });
+}
+
+// The last-appended evidence record's WorkspaceEvent.correlationId — the join key an operator's
+// `keiko support analyze` uses to tie this lifecycle line back to the HTTP request that produced it
+// (AGENTS.md §8). Parses the SAME persisted JSON `evidence.ts` writes, never a re-derived shape.
+// Single narrowing point for a captured activity-log line, so a chain of `expect(line?.field)`
+// assertions (each `?.` its own branch to ESLint's `complexity` rule) does not push an otherwise
+// linear assertion test over the repo's complexity ceiling (AGENTS.md §6).
+function lastActivityLogEvent(sink: BufferedServerLogSink): ServerLogEvent {
+  const line = sink.events.at(-1);
+  if (line === undefined) throw new Error("no activity-log event recorded");
+  return line;
+}
+
+function expectLoggedRejection(
+  sink: BufferedServerLogSink,
+  operation: "provision" | "activate",
+  errorKind: TaskWorkspaceErrorCode,
+  rawIdentitySeed: string,
+): void {
+  expect(sink.events).toHaveLength(1);
+  const line = lastActivityLogEvent(sink);
+  expect(line).toMatchObject({
+    op: "task-workspace.lifecycle",
+    category: "diagnostic",
+    errorKind,
+    extra: { operation },
+  });
+  expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[a-f0-9]{24}$/u);
+  expect(sink.lines().join("\n")).not.toContain(rawIdentitySeed);
+}
+
+function lastEventCorrelationId(): string {
+  const last = evidence.at(-1);
+  if (last === undefined) throw new Error("no evidence recorded");
+  const parsed = JSON.parse(last.json) as { readonly event: { readonly correlationId: string } };
+  return parsed.event.correlationId;
 }
 
 async function rejectsWithCode(
@@ -176,6 +244,136 @@ describe("provision success (AC1, AC4)", () => {
     expect(result.binding.gitDeliveryRoot).toBe(result.binding.activeRoot);
     expect(result.binding.editorProjectRoot).toBe(result.binding.activeRoot);
     expect(evidence.length).toBeGreaterThan(0);
+  });
+
+  // F1: the evidence's correlationId must be the triggering request's own id, not the workspace's own
+  // persisted identity (workspaceId) reused for every operation across the workspace's whole life.
+  // Reusing the workspace identity collapses every distinct HTTP request's evidence onto ONE
+  // correlationId, so the timeline can no longer be joined back to the specific request that produced
+  // it (AGENTS.md §8) — the exact failure this pin proves fixed.
+  it("threads the request's own correlationId into provision evidence, not the workspaceId", async () => {
+    const service = makeService();
+    const result = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-corr",
+      baseBranch: "main",
+      requestedBy: "u",
+      correlationId: "req-corr-abc123",
+    });
+    expect(lastEventCorrelationId()).toBe("req-corr-abc123");
+    expect(lastEventCorrelationId()).not.toBe(result.instance.workspaceId);
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID (never the workspaceId) when no request scope exists", async () => {
+    const received: string[] = [];
+    const service = makeService(capturingAdapterFactory(received));
+    const result = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-nocorr",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
+    expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    expect(lastEventCorrelationId()).not.toBe(result.instance.workspaceId);
+  });
+
+  describe("adapter correlation-ID boundary", () => {
+    it.each([
+      ["empty", ""],
+      ["malformed", "req corr\ncontrol"],
+      ["hostile", `req-corr-${"a".repeat(4000)}`],
+      ["below the HTTP boundary", "x"],
+    ] as const)(
+      "normalizes a supplied %s ID before adapter construction",
+      async (_label, input) => {
+        const received: string[] = [];
+        const service = makeService(rejectingAdapterFactory(received));
+        await expect(
+          service.provision({
+            repositoryRequestPath: repoRoot,
+            taskId: `t-adapter-${_label.replaceAll(" ", "-")}`,
+            baseBranch: "main",
+            requestedBy: "u",
+            correlationId: input,
+          }),
+        ).rejects.toThrow("captured adapter correlation");
+        expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
+      },
+    );
+  });
+
+  // IDX51: the service owns one correlation-id normalization step before either the adapter's
+  // termination-evidence callback or the lifecycle EvidenceStore can observe the value. This is the
+  // same SAFE_CORRELATION_ID contract used by the HTTP boundary, imported by production rather than
+  // re-derived here; every unshaped supplied value joins the explicit omitted-id fallback.
+  describe("correlation-ID normalization", () => {
+    it.each([
+      ["empty", ""],
+      ["malformed", "req corr\ncontrol"],
+      ["hostile", `req-corr-${"a".repeat(4000)}`],
+      ["below the HTTP boundary", "x"],
+    ] as const)("normalizes a supplied %s ID in lifecycle evidence", async (_label, input) => {
+      const service = makeService();
+      await service.provision({
+        repositoryRequestPath: repoRoot,
+        taskId: `t-corr-${_label.replaceAll(" ", "-")}`,
+        baseBranch: "main",
+        requestedBy: "u",
+        correlationId: input,
+      });
+      expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    });
+  });
+
+  // IDX61: the EvidenceStore ledger above is a SEPARATE audit surface from `<stateDir>/logs/
+  // server.log` — this proves the SAME provision outcome also reaches the server activity log
+  // (AGENTS.md §8), carrying the SAME correlationId the evidence assertions above just proved.
+  it("emits a task-workspace.lifecycle activity-log line alongside the evidence, same correlationId", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const received: string[] = [];
+    const service = makeService(capturingAdapterFactory(received), undefined, activityLog);
+    const result = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-activity-log",
+      baseBranch: "main",
+      requestedBy: "u",
+      correlationId: "req-corr-activity-1",
+    });
+    expectOnlyAdapterCorrelation(received, "req-corr-activity-1");
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.category).toBe("diagnostic");
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.correlationId).toBe("req-corr-activity-1");
+    expect(line.level).toBe("info");
+    expect(line.errorKind).toBeUndefined();
+    const extra = line.extra ?? {};
+    expect(extra.operation).toBe("provision");
+    expect(extra.outcome).toBe("provisioned");
+    expect(extra.workspaceId).toBe(result.instance.workspaceId);
+    expect(extra.taskId).toBeUndefined();
+  });
+
+  // A failure path carries a structured, closed-vocabulary `errorKind` — the TaskWorkspaceError code
+  // — not merely the coarser evidence `outcome`, so an agent grepping the log can tell LOCK_CONTENTION
+  // from POINTER_DRIFT from a bare "blocked"/"retry-required".
+  it("carries the TaskWorkspaceError code as errorKind on a blocked provision", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(undefined, undefined, activityLog);
+    await expect(
+      service.provision({
+        repositoryRequestPath: repoRoot,
+        taskId: "t-activity-log-blocked",
+        baseBranch: "does-not-exist",
+        requestedBy: "u",
+      }),
+    ).rejects.toBeInstanceOf(TaskWorkspaceError);
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.level).toBe("warn");
+    expect(line.errorKind).toBe("INVALID_BASE_BRANCH");
+    expect(line.extra?.outcome).toBe("blocked");
+    expect(activityLog.events).toHaveLength(1);
   });
 
   it("establishes the managed workspace identity before every active exposure", async () => {
@@ -447,6 +645,99 @@ describe("pre-write rejections (AC2)", () => {
   });
 });
 
+describe("early rejection activity logging", () => {
+  it("logs an invalid provision request without exposing its free-form task identity", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(undefined, undefined, activityLog);
+    const taskId = `Patient-Jane-cancer${String.fromCodePoint(0x200b)}`;
+
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId,
+          baseBranch: "main",
+          requestedBy: "operator",
+          correlationId: "provision-invalid-request-1",
+        }),
+      "INVALID_REQUEST",
+    );
+
+    expectLoggedRejection(activityLog, "provision", "INVALID_REQUEST", taskId);
+    expect(lastActivityLogEvent(activityLog).correlationId).toBe("provision-invalid-request-1");
+  });
+
+  it("logs a missing repository before any managed-workspace row exists", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const taskId = "missing-repository-task";
+    const service = makeService(
+      (workspace): GitWorktreeAdapter => ({
+        ...realAdapter(workspace),
+        resolveRepositoryRoot: (): Promise<string | undefined> => Promise.resolve(undefined),
+      }),
+      undefined,
+      activityLog,
+    );
+
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId,
+          baseBranch: "main",
+          requestedBy: "operator",
+          correlationId: "provision-missing-repository-1",
+        }),
+      "MISSING_REPOSITORY",
+    );
+
+    expectLoggedRejection(activityLog, "provision", "MISSING_REPOSITORY", taskId);
+    expect(lastActivityLogEvent(activityLog).correlationId).toBe("provision-missing-repository-1");
+  });
+
+  it("logs an invalid activation before acquiring the workspace mutex", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const workspaceId = "ws_invalid_activation_private_seed";
+    const service = makeService(undefined, undefined, activityLog);
+
+    await rejectsWithCode(
+      () =>
+        service.activate({
+          workspaceId,
+          taskId: "task",
+          requestedBy: "",
+          acquireLock: false,
+          correlationId: "activate-invalid-request-1",
+        }),
+      "INVALID_REQUEST",
+    );
+
+    expectLoggedRejection(activityLog, "activate", "INVALID_REQUEST", workspaceId);
+    expect(lastActivityLogEvent(activityLog).correlationId).toBe("activate-invalid-request-1");
+  });
+
+  it("logs an unknown activation target without exposing the supplied workspace value", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const workspaceId = "Patient Jane cancer workspace";
+    const service = makeService(undefined, undefined, activityLog);
+
+    await rejectsWithCode(
+      () =>
+        service.activate({
+          workspaceId,
+          taskId: "task",
+          requestedBy: "operator",
+          acquireLock: false,
+          correlationId: "activate-missing-workspace-1",
+        }),
+      "WORKSPACE_NOT_FOUND",
+    );
+
+    expectLoggedRejection(activityLog, "activate", "WORKSPACE_NOT_FOUND", workspaceId);
+    expect(lastActivityLogEvent(activityLog).correlationId).toBe("activate-missing-workspace-1");
+  });
+});
+
 describe("drift + partial failure leave a visible classified state (SC4)", () => {
   it("rolls back and classifies a managed workspace identity failure", async () => {
     const identityFailure = new Error("identity store unavailable");
@@ -657,13 +948,15 @@ describe("activate", () => {
   });
 
   it("flags drift (recovery-required) when activating a workspace whose worktree vanished", async () => {
-    const service = makeService();
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(undefined, undefined, activityLog);
     const provisioned = await service.provision({
       repositoryRequestPath: repoRoot,
       taskId: "act-drift",
       baseBranch: "main",
       requestedBy: "u",
     });
+    activityLog.clear();
     rmSync(provisioned.instance.managedWorktreePath, { recursive: true, force: true });
     await rejectsWithCode(
       () =>
@@ -678,6 +971,11 @@ describe("activate", () => {
     const after = store.getById(provisioned.instance.workspaceId);
     expect(after?.lifecycleState).toBe("recovery-required");
     expect(after?.driftMarkers).toContain("worktree-missing");
+    expect(activityLog.events).toHaveLength(1);
+    expect(lastActivityLogEvent(activityLog)).toMatchObject({
+      errorKind: "POINTER_DRIFT",
+      extra: { operation: "activate", outcome: "retry-required" },
+    });
   });
 
   it("rejects activation of an unknown workspace", async () => {

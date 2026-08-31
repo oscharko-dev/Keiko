@@ -647,6 +647,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gitDelivery.blockerSeverity.advisory": "Advisory",
   "gitDelivery.remediation.user-actionable": "You can fix this",
   "gitDelivery.remediation.internal": "Handled internally",
+  "gitDelivery.blockReason.authority-denied": "Runtime authority no longer permits this action",
   "gitDelivery.blockReason.policy-pack-blocked": "Denied by the policy pack",
   "gitDelivery.blockReason.protected-branch": "Target is a protected branch",
   "gitDelivery.blockReason.provider-capability-absent": "Required provider capability is absent",

@@ -32,6 +32,13 @@ import { createWorkspaceProvisioningService } from "./provisioning.js";
 import { createWorkspaceReconciliationService } from "./reconciliation.js";
 import type { WorkspaceProvisioningService, WorkspaceReconciliationService } from "./types.js";
 import { createWorkspaceMutexRegistry, workspaceKey } from "./mutex.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/index.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -43,6 +50,8 @@ let pointerStore: ActiveWorkspacePointerStore;
 let evidence: { id: string; json: string }[];
 let idCounter: number;
 let nowMs: number;
+
+type AdapterFactory = (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
 
 function git(args: readonly string[], cwd = repoRoot): string {
   return execFileSync("git", [...args], { cwd, encoding: "utf8" });
@@ -60,8 +69,43 @@ function capturingEvidence(): EvidenceStore {
   };
 }
 
+// Single narrowing point for a captured activity-log line, so a chain of `expect(line?.field)`
+// assertions (each `?.` its own branch to ESLint's `complexity` rule) does not push an otherwise
+// linear assertion test over the repo's complexity ceiling (AGENTS.md §6).
+function lastActivityLogEvent(sink: BufferedServerLogSink): ServerLogEvent {
+  const line = sink.events.at(-1);
+  if (line === undefined) throw new Error("no activity-log event recorded");
+  return line;
+}
+
+function lastEventCorrelationId(): string {
+  const last = evidence.at(-1);
+  if (last === undefined) throw new Error("no evidence recorded");
+  const parsed = JSON.parse(last.json) as { readonly event: { readonly correlationId: string } };
+  return parsed.event.correlationId;
+}
+
 function realAdapter(workspace: WorkspaceInfo): GitWorktreeAdapter {
   return createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } });
+}
+
+function capturingAdapterFactory(received: string[]): AdapterFactory {
+  return (workspace, correlationId): GitWorktreeAdapter => {
+    received.push(correlationId);
+    return realAdapter(workspace);
+  };
+}
+
+function rejectingAdapterFactory(received: string[]): AdapterFactory {
+  return (_workspace, correlationId): GitWorktreeAdapter => {
+    received.push(correlationId);
+    throw new Error("captured adapter correlation");
+  };
+}
+
+function expectOnlyAdapterCorrelation(received: readonly string[], expected: string): void {
+  expect(received.length).toBeGreaterThan(0);
+  expect(new Set(received)).toEqual(new Set([expected]));
 }
 
 function provisioning(): WorkspaceProvisioningService {
@@ -77,17 +121,21 @@ function provisioning(): WorkspaceProvisioningService {
   });
 }
 
-function reconciliation(): WorkspaceReconciliationService {
+function reconciliation(
+  activityLog?: ServerLogSink,
+  adapterFactory: AdapterFactory = realAdapter,
+): WorkspaceReconciliationService {
   return createWorkspaceReconciliationService({
     store,
     activePointerStore: pointerStore,
     evidenceStore: capturingEvidence(),
     managedRoot,
-    createAdapter: realAdapter,
+    createAdapter: adapterFactory,
     redactString: (s: string): string => s,
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
     mutex: __twMutex,
+    ...(activityLog === undefined ? {} : { activityLog }),
   });
 }
 
@@ -142,6 +190,103 @@ describe("healthy reconciliation (AC4)", () => {
     expect(persisted?.lastVerifiedHead).toBeDefined();
     // content-free report: no path/branch leaks into entries
     expect(JSON.stringify(report)).not.toContain(managedRoot);
+  });
+
+  // F1: a live reconcile driven by the explicit-refresh route has a real request-scoped correlation id
+  // in scope (RouteContext.correlationId) and must thread it into the evidence — reusing the
+  // workspace's own persisted auditCorrelationId instead would make every reconcile pass against this
+  // workspace collapse onto ONE correlationId, breaking the join back to the specific request that
+  // produced each line (AGENTS.md §8).
+  it("threads the caller's own correlationId into reconcile evidence, not the auditCorrelationId", async () => {
+    const instance = await provisionTask("t-corr");
+    await reconciliation().reconcile(undefined, "req-corr-reconcile-1");
+    expect(lastEventCorrelationId()).toBe("req-corr-reconcile-1");
+    expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
+  });
+
+  // The other half of that join, and the one that was broken (PR #3355 review, P2). The evidence
+  // above is emitted by this module; the git process's TERMINATION evidence is emitted by the
+  // adapter, which deps.ts composed with a hardcoded UNKNOWN_CORRELATION_ID because the port took
+  // only a workspace. So a worktree git process killed during a reconcile logged `command.terminated`
+  // under UNKNOWN while every surrounding line of the SAME operation carried the real id.
+  //
+  // Asserted at the port rather than at the log line, because the port is where the id was lost: a
+  // spying factory records what the service actually hands it. Before the fix this receives one
+  // argument and `received[0]` is undefined.
+  it("hands the caller's correlationId to createAdapter, so termination evidence joins the same timeline", async () => {
+    const received: string[] = [];
+    const service = reconciliation(undefined, capturingAdapterFactory(received));
+    await provisionTask("t-adapter-corr");
+    await service.reconcile(undefined, "req-corr-adapter-1");
+    expectOnlyAdapterCorrelation(received, "req-corr-adapter-1");
+  });
+
+  // The startup reconciliation pass has no HTTP request behind it at all: no correlationId is
+  // reachable, so this is the one genuinely correlation-free call site in the module.
+  it("falls back to UNKNOWN_CORRELATION_ID (never the auditCorrelationId) when no request scope exists", async () => {
+    const received: string[] = [];
+    const instance = await provisionTask("t-nocorr");
+    await reconciliation(undefined, capturingAdapterFactory(received)).reconcile();
+    expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
+    expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
+  });
+
+  // The adapter's `onTerminated` callback writes directly to the activity log, so an unshaped id
+  // must be normalized before adapter construction. This capture-only adapter throws immediately:
+  // the assertion therefore observes the exact value at that boundary without pinning any later
+  // EvidenceStore behavior as part of the adapter contract.
+  describe("adapter correlation-ID boundary", () => {
+    it.each([
+      ["empty", ""],
+      ["malformed", "req corr\ncontrol"],
+      ["hostile", `req-corr-${"a".repeat(4000)}`],
+      ["below the HTTP boundary", "x"],
+    ] as const)(
+      "normalizes a supplied %s ID before adapter construction",
+      async (_label, input) => {
+        const received: string[] = [];
+        await provisionTask(`t-adapter-${_label.replaceAll(" ", "-")}`);
+        await expect(
+          reconciliation(undefined, rejectingAdapterFactory(received)).reconcile(undefined, input),
+        ).rejects.toThrow("captured adapter correlation");
+        expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
+      },
+    );
+  });
+
+  // IDX61: the EvidenceStore ledger above is a SEPARATE audit surface from `<stateDir>/logs/
+  // server.log` — this proves the SAME reconcile pass also reaches the server activity log
+  // (AGENTS.md §8), carrying the SAME correlationId. The evidence `outcome` is always the fixed
+  // "reconciled" (this pass always completes); the classification an agent actually needs — was the
+  // workspace found healthy or drifted — rides in `errorKind` as the live `WorkspaceReconciliationStatus`
+  // instead (see activity-log.ts).
+  it("emits a task-workspace.lifecycle activity-log line for a healthy reconcile, no errorKind", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const instance = await provisionTask("t-activity-healthy");
+    await reconciliation(activityLog).reconcile(undefined, "req-corr-reconcile-activity-1");
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.category).toBe("diagnostic");
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.correlationId).toBe("req-corr-reconcile-activity-1");
+    expect(line.level).toBe("info");
+    expect(line.errorKind).toBeUndefined();
+    const extra = line.extra ?? {};
+    expect(extra.operation).toBe("reconcile");
+    expect(extra.outcome).toBe("reconciled");
+    expect(extra.workspaceId).toBe(instance.workspaceId);
+  });
+
+  it("carries the live WorkspaceReconciliationStatus as errorKind for a drifted reconcile", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const instance = await provisionTask("t-activity-missing");
+    rmSync(instance.managedWorktreePath, { recursive: true, force: true });
+    await reconciliation(activityLog).reconcile();
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.level).toBe("warn");
+    expect(line.errorKind).toBe("missing");
+    expect(line.extra?.outcome).toBe("reconciled");
   });
 });
 

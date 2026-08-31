@@ -30,6 +30,7 @@ export type GitSyncOutcome =
   | "detached-head"
   | "dirty-worktree" // pull blocked: local changes would be overwritten
   | "not-fast-forward" // pull --ff-only refused
+  | "authority-denied" // admitted authority changed or narrowed before remote dispatch
   | "auth-failed"
   | "untrusted-host-key"
   | "remote-unavailable" // the host could not be reached at all (DNS / refused / network down)
@@ -47,6 +48,7 @@ export const GIT_SYNC_OUTCOMES: readonly GitSyncOutcome[] = Object.freeze([
   "detached-head",
   "dirty-worktree",
   "not-fast-forward",
+  "authority-denied",
   "auth-failed",
   "untrusted-host-key",
   "remote-unavailable",

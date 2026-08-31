@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   askGrounded,
   applyWorkspaceReplace,
@@ -2973,6 +2973,93 @@ describe("GEN-RES-FETCH-001 — default read deadline", () => {
     // The combined signal must follow the CALLER abort (deadline alone is not enough).
     caller.abort();
     expect(init.signal?.aborted).toBe(true);
+  });
+
+  // The fallback path, which no test environment reaches on its own: Node and every modern browser
+  // expose `AbortSignal.any`, so the manual combinator only ever runs on the OLDER browsers Keiko
+  // declares support for (Chrome 111-115, Firefox 111-123, Safari 16.4-17.3). That is precisely the
+  // code most likely to be wrong and least likely to be exercised, so these tests remove
+  // `AbortSignal.any` to force it.
+  describe("without AbortSignal.any (Chrome 111-115 / Firefox 111-123 / Safari 16.4-17.3)", () => {
+    let nativeAny: typeof AbortSignal.any | undefined;
+
+    beforeEach(() => {
+      nativeAny = AbortSignal.any;
+      // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- simulating an older engine
+      delete (AbortSignal as { any?: unknown }).any;
+    });
+
+    afterEach(() => {
+      if (nativeAny !== undefined) (AbortSignal as { any?: unknown }).any = nativeAny;
+    });
+
+    async function forwardedSignal(caller: AbortSignal): Promise<AbortSignal> {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(new Uint8Array([1]), {
+          status: 200,
+          headers: { "Content-Type": "application/pdf" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      await fetchPdfCitationPreviewDocument("session-1", caller);
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      const signal = init.signal;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      return signal as AbortSignal;
+    }
+
+    it("still follows a caller abort that arrives after the request", async () => {
+      const caller = new AbortController();
+      const signal = await forwardedSignal(caller.signal);
+      expect(signal.aborted).toBe(false);
+      caller.abort();
+      expect(signal.aborted).toBe(true);
+    });
+
+    it("propagates the caller's abort reason rather than a generic one", async () => {
+      const caller = new AbortController();
+      const signal = await forwardedSignal(caller.signal);
+      const reason = new Error("caller went away");
+      caller.abort(reason);
+      expect(signal.reason).toBe(reason);
+    });
+
+    // The early-exit branch: a signal that is ALREADY aborted when the request is made never fires
+    // an "abort" event, so a listener-only combinator would hand fetch a live signal and the request
+    // would proceed — the caller's cancellation silently lost.
+    it("starts aborted when the caller signal was already aborted", async () => {
+      const caller = new AbortController();
+      caller.abort();
+      const signal = await forwardedSignal(caller.signal);
+      expect(signal.aborted).toBe(true);
+    });
+
+    // The gap the three cases above leave open: they only ever abort the CALLER. A combinator that
+    // returned the caller's signal verbatim — ignoring the deadline entirely — would satisfy all of
+    // them, while silently removing the 15s read deadline for exactly the older browsers this
+    // fallback exists to serve. A stalled BFF would then hang the UI behind the browser's own
+    // minutes-long network timeout, the defect GEN-RES-FETCH-001 was written to prevent.
+    //
+    // Driven by STUBBING `AbortSignal.timeout` rather than by advancing timers: measured in this
+    // jsdom lane, `AbortSignal.timeout` does NOT observe vitest's fake clock (a 100ms signal is
+    // still unaborted after 200ms of fake time), so a timer-based version of this test would pass
+    // for the wrong reason. Handing back a controller we own makes the deadline leg deterministic.
+    it("aborts on the DEADLINE leg even when the caller never cancels", async () => {
+      const deadline = new AbortController();
+      const nativeTimeout = AbortSignal.timeout;
+      AbortSignal.timeout = (): AbortSignal => deadline.signal;
+      try {
+        const caller = new AbortController();
+        const signal = await forwardedSignal(caller.signal);
+        expect(signal.aborted).toBe(false);
+        const reason = new Error("read deadline elapsed");
+        deadline.abort(reason);
+        expect(signal.aborted).toBe(true);
+        expect(signal.reason).toBe(reason);
+      } finally {
+        AbortSignal.timeout = nativeTimeout;
+      }
+    });
   });
 });
 

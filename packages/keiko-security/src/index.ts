@@ -52,7 +52,7 @@ export {
 // of `keiko-local-knowledge`'s `KnowledgeLogSink`. Wired into `readMacosKeychainSecret` and
 // `createShardedLocalSecretVault`'s shard reads; the composition root supplies the real sink.
 export type { SecurityLogEvent, SecurityLogSink } from "./log-port.js";
-export { nullSecurityLogSink } from "./log-port.js";
+export { emitSecurityLogEvent, nullSecurityLogSink, securityErrorKind } from "./log-port.js";
 
 // Prompt Enhancer authoritative injection / unsafe-content detector (#1313, ADR-0044 §1/§5).
 export type {
@@ -68,7 +68,29 @@ export {
   hasCriticalInjectionSignal,
 } from "./promptInjection.js";
 
-export type { WindowsShortcutDefinition, WindowsShortcutSpawnFn } from "./windows-shortcuts.js";
+// The ONE trusted Windows system-directory decision, shared with keiko-tools (PR #3354 review):
+// keiko-tools depends on keiko-security, never the reverse, so this is the only layer both the
+// cscript/powershell helpers here and the cmd.exe/taskkill.exe resolution there can reach.
+export {
+  DEFAULT_WINDOWS_SYSTEM_ROOT,
+  WINDOWS_CMD_METACHARACTER_SOURCE,
+  resolveWindowsPowerShellExecutable,
+  resolveWindowsSystemBinary,
+  resolveWindowsSystemDirectory,
+  resolveWindowsSystemExecutable,
+  sameWindowsSystemDirectoryIdentity,
+  WindowsSystemBinaryMissingError,
+  WindowsSystemDirectoryError,
+} from "./windows-system-directory.js";
+export type {
+  WindowsBinaryExistsCheck,
+  WindowsSystemDirectoryIdentityCheck,
+} from "./windows-system-directory.js";
+export type {
+  WindowsShortcutCommandOptions,
+  WindowsShortcutDefinition,
+  WindowsShortcutSpawnFn,
+} from "./windows-shortcuts.js";
 export {
   WINDOWS_SHORTCUT_MAX_BYTES,
   WINDOWS_SHORTCUT_TIMEOUT_MS,

@@ -19,6 +19,7 @@ import {
   equivalentWindowsShortcutPath,
   readWindowsShortcutDefinition,
   writeWindowsShortcutDefinition,
+  type SecurityLogSink,
   type WindowsShortcutDefinition,
 } from "@oscharko-dev/keiko-security";
 import type {
@@ -592,11 +593,19 @@ const SHORTCUT_FAILURE_PREFIX = "portable activation shortcut command failed";
 
 type WindowsShortcutArtifact = WindowsShortcutDefinition;
 
-function readShortcut(path: string, env: EnvSource): WindowsShortcutArtifact | undefined {
-  return readWindowsShortcutDefinition(path, env, SHORTCUT_FAILURE_PREFIX);
+function readShortcut(
+  path: string,
+  env: EnvSource,
+  sink?: SecurityLogSink,
+): WindowsShortcutArtifact | undefined {
+  return readWindowsShortcutDefinition(path, env, SHORTCUT_FAILURE_PREFIX, { sink });
 }
 
-function readGuardedShortcut(path: string, env: EnvSource): WindowsShortcutArtifact | undefined {
+function readGuardedShortcut(
+  path: string,
+  env: EnvSource,
+  sink?: SecurityLogSink,
+): WindowsShortcutArtifact | undefined {
   // One lstat, no exists-then-stat window: a file removed between the two calls must read as
   // absent, not throw out of a read that callers treat as a plain lookup.
   const stat = lstatEntryOrUndefined(path);
@@ -604,7 +613,7 @@ function readGuardedShortcut(path: string, env: EnvSource): WindowsShortcutArtif
     return undefined;
   }
   if (stat.size <= 0 || stat.size > WINDOWS_SHORTCUT_MAX_BYTES) return undefined;
-  return readShortcut(path, env);
+  return readShortcut(path, env, sink);
 }
 
 export function readWindowsPortableShortcutTarget(
@@ -619,16 +628,26 @@ export function readWindowsPortableShortcutTarget(
 // managed field — a stale working directory is exactly what the rewrite repairs. Widening the
 // match to more fields would make the guard refuse the very artifacts the refresh exists to
 // heal; a target pointing anywhere else marks a foreign or user-edited file we never touch.
-function shortcutMatches(path: string, artifact: WindowsShortcutArtifact, env: EnvSource): boolean {
-  const shortcut = readGuardedShortcut(path, env);
+function shortcutMatches(
+  path: string,
+  artifact: WindowsShortcutArtifact,
+  env: EnvSource,
+  sink?: SecurityLogSink,
+): boolean {
+  const shortcut = readGuardedShortcut(path, env, sink);
   return (
     shortcut !== undefined &&
     equivalentWindowsShortcutPath(shortcut.targetPath, artifact.targetPath)
   );
 }
 
-function writeShortcut(path: string, artifact: WindowsShortcutArtifact, env: EnvSource): void {
-  writeWindowsShortcutDefinition(path, artifact, env, SHORTCUT_FAILURE_PREFIX);
+function writeShortcut(
+  path: string,
+  artifact: WindowsShortcutArtifact,
+  env: EnvSource,
+  sink?: SecurityLogSink,
+): void {
+  writeWindowsShortcutDefinition(path, artifact, env, SHORTCUT_FAILURE_PREFIX, { sink });
 }
 
 export function refreshPortableShortcut(input: {
@@ -636,6 +655,12 @@ export function refreshPortableShortcut(input: {
   readonly layout: PortableActivationLayout;
   readonly env: EnvSource;
   readonly home: string;
+  // Wired from the server composition root (`processServerLogSink()` in deps.ts). A hostile or
+  // malformed SystemRoot/WINDIR is logged through it — `security.windows-shortcut.system-root-
+  // refused`, emitted by the shared cscript invocation in windows-shortcuts.ts — BEFORE this
+  // function's own catch below discards the exception into the boolean contract. Omitted, every
+  // call stays exactly as silent as before this field existed.
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }): boolean {
   if (input.target !== "windows-x64") return true;
   if (!WINDOWS_SHORTCUT_SAFE_PATH.test(input.layout.launcherPath)) return false;
@@ -664,18 +689,23 @@ export function refreshPortableShortcut(input: {
       // user-edited, and activation must never destroy it (`shortcutRefreshed: false` reports
       // the refusal). An attributed shortcut passes and is fully rewritten below, which is how
       // a stale working directory or icon gets repaired.
-      if (entry.isFile() && !shortcutMatches(path, artifact, input.env)) return false;
+      if (entry.isFile() && !shortcutMatches(path, artifact, input.env, input.securityLogSink)) {
+        return false;
+      }
     }
     mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
-    writeShortcut(path, artifact, input.env);
+    writeShortcut(path, artifact, input.env, input.securityLogSink);
     return true;
   } catch {
     // Boolean contract: a shortcut-host failure degrades to shortcutRefreshed=false — it must
     // never abort an otherwise-completed activation. The redacted failure detail (exit status +
-    // stderr byte count) is intentionally not persisted here: this flow has no text sink, the
-    // API-visible signal is `shortcutRefreshed: false` in the activation summary, and the
-    // operator-diagnosable path for the same artifact is `keiko portable repair`, which checks
-    // and rewrites this registration with full CLI diagnostics.
+    // stderr byte count) is intentionally not persisted here in its own right: the API-visible
+    // signal is `shortcutRefreshed: false` in the activation summary, and the operator-diagnosable
+    // path for the same artifact is `keiko portable repair`, which checks and rewrites this
+    // registration with full CLI diagnostics. A trust-boundary refusal specifically (a hostile or
+    // malformed SystemRoot/WINDIR) is NOT silent even so: `shortcutMatches`/`writeShortcut` above
+    // already logged it through `input.securityLogSink`, when wired, before this catch ever runs —
+    // see the field's doc comment.
     return false;
   }
 }

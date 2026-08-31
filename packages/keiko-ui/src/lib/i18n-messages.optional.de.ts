@@ -676,6 +676,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitDelivery.blockerSeverity.advisory": "Hinweis",
   "gitDelivery.remediation.user-actionable": "Sie können dies beheben",
   "gitDelivery.remediation.internal": "Wird intern behandelt",
+  "gitDelivery.blockReason.authority-denied":
+    "Die Laufzeitberechtigung erlaubt diese Aktion nicht mehr",
   "gitDelivery.blockReason.policy-pack-blocked": "Durch das Richtlinienpaket abgelehnt",
   "gitDelivery.blockReason.protected-branch": "Ziel ist ein geschützter Branch",
   "gitDelivery.blockReason.provider-capability-absent": "Erforderliche Provider-Fähigkeit fehlt",

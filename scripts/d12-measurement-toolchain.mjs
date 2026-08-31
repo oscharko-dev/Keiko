@@ -12,10 +12,16 @@ export const D12_MEASUREMENT_TOOLCHAIN_PATHS = Object.freeze([
   "scripts/build-d12-bundle-input.mjs",
   "scripts/build-d12-perf-comparison.mjs",
   "scripts/check-perf-evidence.mjs",
+  "scripts/check-runtime-toolchain.mjs",
   "scripts/d12-measurement-toolchain.mjs",
   "scripts/d12-runtime-environment.mjs",
+  "scripts/editor-bundle-size.budget.json",
   "scripts/editor-bundle-size.mjs",
   "scripts/editor-release-evidence.mjs",
+  "scripts/lib/compare-strings.mjs",
+  "scripts/lib/git-changed-paths.mjs",
+  "scripts/lib/host-executable.mjs",
+  "scripts/lib/json.mjs",
   "scripts/run-d12-perf-comparison.mjs",
   "tests/e2e/config/playwright.editor-performance.config.ts",
   "tests/e2e/config/playwright.issue-2348-editor-debugging.config.ts",
@@ -27,7 +33,15 @@ export const D12_MEASUREMENT_TOOLCHAIN_PATHS = Object.freeze([
   "tests/e2e/fixtures/editor-debugging-2348/throws.ts",
   "tests/e2e/fixtures/keiko.e2e.config.json",
   "tests/e2e/support/dapOperatorProvisioning.ts",
+  // The support members below are imported BY the measuring specs and so shape measured actions,
+  // but were missing from this list (PR #3355 review, P1): changing any of them could move the
+  // numbers without moving measurementHarnessSha256, which is the one thing this digest prevents.
+  // `scripts/__tests__/d12-toolchain-closure.test.mjs` now derives the requirement instead of
+  // trusting this list to be maintained by hand.
+  "tests/e2e/support/debugSessionStartCapture.ts",
+  "tests/e2e/support/editor-chord.ts",
   "tests/e2e/support/editorWorkspace.ts",
+  "tests/e2e/support/window-chrome.ts",
 ]);
 
 function updateDigest(hash, path, contents) {

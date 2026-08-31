@@ -47,9 +47,13 @@ import {
   ensureManagedWorktreeParent,
   managedTargetExists,
 } from "./managed-root.js";
-import { TaskWorkspaceError, type WorkspaceFailureOutcome } from "./errors.js";
+import { TaskWorkspaceError } from "./errors.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import {
-  appendWorkspaceLifecycleEvidence,
+  recordWorkspaceLifecycle,
+  runWithWorkspaceLifecycleFailureLogging,
+} from "./activity-log.js";
+import {
   buildWorkspaceEvent,
   WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
   type WorkspaceLifecycleOperation,
@@ -79,6 +83,14 @@ const COMPLETABLE_STATES: ReadonlySet<TaskWorkspaceLifecycleState> = new Set([
 interface ProvisioningCtx {
   readonly deps: WorkspaceProvisioningServiceDeps;
   readonly lockTtlMs: number;
+  // The triggering operation's correlation id, so the worktree adapter's termination evidence joins
+  // the same timeline as every other line of that operation (AGENTS.md §8). It lives on the CTX, not
+  // in each helper's signature: the ctx is already threaded everywhere the adapter is built, so this
+  // needed no new parameter on any private function (PR #3355 review, P2).
+  readonly correlationId: string;
+  // Operation-local: an emitted classified failure must not be followed by a duplicate generic
+  // rejection line when the same TaskWorkspaceError crosses the public service boundary.
+  failureOutcomeRecorded: boolean;
 }
 
 interface RepositoryContext {
@@ -97,9 +109,18 @@ interface EmitInput {
   readonly workspaceId: string;
   readonly taskId: string;
   readonly nowMs: number;
+  // The triggering request's own correlation id, threaded from WorkspaceProvisionRequest /
+  // WorkspaceActivateRequest. Falls back to UNKNOWN_CORRELATION_ID (never the workspace's own
+  // identity) when the caller genuinely has no request scope, so the evidence honestly reports
+  // "no correlation id was known" instead of a value that only LOOKS like one (AGENTS.md §8).
+  readonly correlationId?: string | undefined;
   readonly fromState?: TaskWorkspaceLifecycleState | undefined;
   readonly toState?: TaskWorkspaceLifecycleState | undefined;
   readonly lockId?: string | undefined;
+  // A caught TaskWorkspaceError's own `.code`, when the caller has one in scope — carried into the
+  // activity-log line's `errorKind` (see activity-log.ts's `WorkspaceLifecycleLogInput.errorCode`).
+  // Ignored on a success outcome.
+  readonly errorCode?: string | undefined;
 }
 
 // ─── pure helpers ────────────────────────────────────────────────────────────────────────────────
@@ -192,20 +213,21 @@ function makeLock(
 // ─── evidence ───────────────────────────────────────────────────────────────────────────────────
 
 function emit(ctx: ProvisioningCtx, input: EmitInput): void {
+  const correlationId = correlationIdOrUnknown(input.correlationId);
   const event = buildWorkspaceEvent({
     eventId: ctx.deps.newId(),
     workspaceId: input.workspaceId,
     taskId: input.taskId,
     type: input.type,
     at: isoFrom(input.nowMs),
-    correlationId: input.workspaceId,
+    correlationId,
     ...(input.fromState !== undefined ? { fromState: input.fromState } : {}),
     ...(input.toState !== undefined ? { toState: input.toState } : {}),
     ...(input.lockId !== undefined ? { lockId: input.lockId } : {}),
   });
-  appendWorkspaceLifecycleEvidence(
-    ctx.deps.evidenceStore,
-    {
+  recordWorkspaceLifecycle(ctx.deps, {
+    evidenceStore: ctx.deps.evidenceStore,
+    record: {
       kind: WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
       schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
       recordedAt: input.nowMs,
@@ -216,19 +238,10 @@ function emit(ctx: ProvisioningCtx, input: EmitInput): void {
       worktreeCount: 0,
       event,
     },
-    ctx.deps.redactString,
-  );
-}
-
-function emitOutcomeForCode(
-  ctx: ProvisioningCtx,
-  operation: WorkspaceLifecycleOperation,
-  outcome: WorkspaceFailureOutcome,
-  workspaceId: string,
-  taskId: string,
-  nowMs: number,
-): void {
-  emit(ctx, { operation, outcome, type: "transition-rejected", workspaceId, taskId, nowMs });
+    redactString: ctx.deps.redactString,
+    errorCode: input.errorCode,
+  });
+  if (input.errorCode !== undefined) ctx.failureOutcomeRecorded = true;
 }
 
 // ─── repository resolution ─────────────────────────────────────────────────────────────────────
@@ -256,7 +269,9 @@ async function resolveRepositoryContext(
   request: WorkspaceProvisionRequest,
 ): Promise<RepositoryContext> {
   const requestWorkspace = detectWorkspaceAt(request.repositoryRequestPath);
-  const repositoryRoot = await ctx.deps.createAdapter(requestWorkspace).resolveRepositoryRoot();
+  const repositoryRoot = await ctx.deps
+    .createAdapter(requestWorkspace, ctx.correlationId)
+    .resolveRepositoryRoot();
   if (repositoryRoot === undefined) {
     throw new TaskWorkspaceError("MISSING_REPOSITORY", "path is not inside a git repository");
   }
@@ -274,7 +289,7 @@ async function resolveRepositoryContext(
       repositoryId,
       workspaceId,
     }),
-    adapter: ctx.deps.createAdapter(repoWorkspace),
+    adapter: ctx.deps.createAdapter(repoWorkspace, ctx.correlationId),
   };
 }
 
@@ -436,6 +451,7 @@ async function failProvisioning(
   provisioning: WorkspaceInstance,
   error: TaskWorkspaceError,
   nowMs: number,
+  correlationId: string | undefined,
 ): Promise<never> {
   const target: TaskWorkspaceLifecycleState =
     error.outcome === "retry-required" ? "recovery-required" : "failed";
@@ -460,8 +476,10 @@ async function failProvisioning(
     workspaceId: provisioning.workspaceId,
     taskId: provisioning.taskId,
     nowMs,
+    correlationId,
     fromState: "provisioning",
     toState: target,
+    errorCode: error.code,
   });
   throw error;
 }
@@ -473,6 +491,7 @@ function resumeExisting(
   repo: RepositoryContext,
   existing: WorkspaceInstance,
   nowMs: number,
+  correlationId: string | undefined,
 ): WorkspaceProvisionResult {
   assertPersistedManagedPath(ctx, existing);
   const identity = gitdirIdentity(repo.worktreePath);
@@ -491,6 +510,7 @@ function resumeExisting(
     workspaceId: refreshed.workspaceId,
     taskId: refreshed.taskId,
     nowMs,
+    correlationId,
     toState: refreshed.lifecycleState,
   });
   return { instance: refreshed, binding: buildBinding(refreshed), created: false };
@@ -503,6 +523,7 @@ function flagResumableDrift(
   ctx: ProvisioningCtx,
   existing: WorkspaceInstance,
   nowMs: number,
+  correlationId: string | undefined,
 ): never {
   const drifted = ctx.deps.store.upsert({
     ...existing,
@@ -519,8 +540,10 @@ function flagResumableDrift(
     workspaceId: drifted.workspaceId,
     taskId: drifted.taskId,
     nowMs,
+    correlationId,
     fromState: existing.lifecycleState,
     toState: "recovery-required",
+    errorCode: "POINTER_DRIFT",
   });
   throw new TaskWorkspaceError("POINTER_DRIFT", "managed worktree is missing");
 }
@@ -530,12 +553,13 @@ function reuseExistingOrUndefined(
   repo: RepositoryContext,
   existing: WorkspaceInstance | undefined,
   nowMs: number,
+  correlationId: string | undefined,
 ): WorkspaceProvisionResult | undefined {
   if (existing === undefined) return undefined;
   if (RESUMABLE_STATES.has(existing.lifecycleState)) {
     return managedTargetExists(repo.worktreePath)
-      ? resumeExisting(ctx, repo, existing, nowMs)
-      : flagResumableDrift(ctx, existing, nowMs);
+      ? resumeExisting(ctx, repo, existing, nowMs, correlationId)
+      : flagResumableDrift(ctx, existing, nowMs, correlationId);
   }
   if (!COMPLETABLE_STATES.has(existing.lifecycleState)) {
     // Terminal state (archived/merged/abandoned/cleanup-pending): idempotent no-op, return as-is.
@@ -564,7 +588,14 @@ async function runWorktreeMutation(
       error instanceof TaskWorkspaceError
         ? error
         : new TaskWorkspaceError("PROVISIONING_FAILED", "unexpected provisioning failure");
-    return failProvisioning(repo, ctx, provisioning, failure, ctx.deps.now());
+    return failProvisioning(
+      repo,
+      ctx,
+      provisioning,
+      failure,
+      ctx.deps.now(),
+      request.correlationId,
+    );
   }
   const active = finalizeActive(ctx, provisioning, identity, ctx.deps.now());
   emit(ctx, {
@@ -574,6 +605,7 @@ async function runWorktreeMutation(
     workspaceId: active.workspaceId,
     taskId: active.taskId,
     nowMs: ctx.deps.now(),
+    correlationId: request.correlationId,
     fromState: "provisioning",
     toState: "active",
   });
@@ -596,14 +628,23 @@ async function provisionLocked(
 
   const nowMs = ctx.deps.now();
   const existing = ctx.deps.store.findByRepositoryAndTask(repo.repositoryId, request.taskId);
-  const reused = reuseExistingOrUndefined(ctx, repo, existing, nowMs);
+  const reused = reuseExistingOrUndefined(ctx, repo, existing, nowMs, request.correlationId);
   if (reused !== undefined) return reused;
 
   try {
     await assertProvisionable(ctx, repo, request, existing, nowMs);
   } catch (error) {
     if (error instanceof TaskWorkspaceError) {
-      emitOutcomeForCode(ctx, "provision", error.outcome, repo.workspaceId, request.taskId, nowMs);
+      emit(ctx, {
+        operation: "provision",
+        outcome: error.outcome,
+        type: "transition-rejected",
+        workspaceId: repo.workspaceId,
+        taskId: request.taskId,
+        nowMs,
+        correlationId: request.correlationId,
+        errorCode: error.code,
+      });
     }
     throw error;
   }
@@ -691,6 +732,7 @@ function flagActivateDrift(
   ctx: ProvisioningCtx,
   instance: WorkspaceInstance,
   nowMs: number,
+  correlationId: string | undefined,
 ): never {
   const drifted = ctx.deps.store.upsert({
     ...instance,
@@ -707,8 +749,10 @@ function flagActivateDrift(
     workspaceId: drifted.workspaceId,
     taskId: drifted.taskId,
     nowMs,
+    correlationId,
     fromState: instance.lifecycleState,
     toState: "recovery-required",
+    errorCode: "POINTER_DRIFT",
   });
   throw new TaskWorkspaceError("POINTER_DRIFT", "managed worktree is missing");
 }
@@ -728,7 +772,7 @@ function activateLocked(
   assertActivatable(ctx, instance, request, nowMs);
   assertPersistedManagedPath(ctx, instance);
   if (!managedTargetExists(instance.managedWorktreePath)) {
-    flagActivateDrift(ctx, instance, nowMs);
+    flagActivateDrift(ctx, instance, nowMs, request.correlationId);
   }
   ensureManagedWorkspaceIdentity(ctx, instance, false);
   const { next, type } = activateActiveOrResume(instance);
@@ -747,6 +791,7 @@ function activateLocked(
     workspaceId: persisted.workspaceId,
     taskId: persisted.taskId,
     nowMs,
+    correlationId: request.correlationId,
     ...(type === "resumed" ? { fromState: instance.lifecycleState } : {}),
     toState: "active",
     ...(lock !== null ? { lockId: lock.lockId } : {}),
@@ -772,19 +817,64 @@ function activateImpl(
 
 // ─── factory ─────────────────────────────────────────────────────────────────────────────────────
 
+function runLoggedProvision(
+  ctx: ProvisioningCtx,
+  request: WorkspaceProvisionRequest,
+): Promise<WorkspaceProvisionResult> {
+  return runWithWorkspaceLifecycleFailureLogging(
+    ctx.deps,
+    {
+      operation: "provision",
+      // The seed is hashed before logging. Prefer the task identity when present; an invalid
+      // request with no task still gets a stable, body-free identity from its request path.
+      workspaceIdentitySeed: request.taskId || request.repositoryRequestPath,
+      correlationId: request.correlationId,
+      failureOutcomeAlreadyRecorded: () => ctx.failureOutcomeRecorded,
+    },
+    () => provisionImpl(ctx, request),
+  );
+}
+
+function runLoggedActivation(
+  ctx: ProvisioningCtx,
+  request: WorkspaceActivateRequest,
+): Promise<WorkspaceActivateResult> {
+  return runWithWorkspaceLifecycleFailureLogging(
+    ctx.deps,
+    {
+      operation: "activate",
+      workspaceIdentitySeed: request.workspaceId || request.taskId || "invalid-activation",
+      correlationId: request.correlationId,
+      failureOutcomeAlreadyRecorded: () => ctx.failureOutcomeRecorded,
+    },
+    () => activateImpl(ctx, request),
+  );
+}
+
 export function createWorkspaceProvisioningService(
   deps: WorkspaceProvisioningServiceDeps,
 ): WorkspaceProvisioningService {
-  const ctx: ProvisioningCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
+  const lockTtlMs = resolveLockTtl(deps.lockTtlMs);
+  // Built PER OPERATION, not once per service: the correlation id belongs to the request, and a
+  // service-lifetime ctx is exactly what forced the previous UNKNOWN_CORRELATION_ID here.
+  const ctxFor = (correlationId: string | undefined): ProvisioningCtx => ({
+    deps,
+    lockTtlMs,
+    correlationId: correlationIdOrUnknown(correlationId),
+    failureOutcomeRecorded: false,
+  });
   return {
     provision: (request: WorkspaceProvisionRequest): Promise<WorkspaceProvisionResult> =>
-      provisionImpl(ctx, request),
+      runLoggedProvision(ctxFor(request.correlationId), request),
     activate: (request: WorkspaceActivateRequest): Promise<WorkspaceActivateResult> =>
-      activateImpl(ctx, request),
+      runLoggedActivation(ctxFor(request.correlationId), request),
     getInstance: (workspaceId: string): WorkspaceInstance | undefined =>
       deps.store.getById(workspaceId),
+    // No request, so no operation id to join to: `ensureIdentity` is a synchronous store write with
+    // no child process and therefore emits no termination evidence. UNKNOWN is honest here, and it
+    // is the sanctioned fallback rather than an ad-hoc string.
     ensureIdentity: (instance: WorkspaceInstance): void => {
-      ensureManagedWorkspaceIdentity(ctx, instance, false);
+      ensureManagedWorkspaceIdentity(ctxFor(undefined), instance, false);
     },
   };
 }

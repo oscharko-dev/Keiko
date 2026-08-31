@@ -1,6 +1,9 @@
 import { Buffer } from "node:buffer";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   buildSetupOverlayHeader,
@@ -10,6 +13,7 @@ import {
   SETUP_OVERLAY_HEADER_BYTES,
   SETUP_OVERLAY_MAGIC,
 } from "../lib/portable-setup-overlay.mjs";
+import { parseSetupOverlayFromFile } from "../build-windows-portable-setup.mjs";
 
 function sha256Hex(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
@@ -326,5 +330,83 @@ describe("parseSetupOverlay", () => {
     Buffer.from(sha256Hex(payload), "hex").copy(header, 16);
     const file = Buffer.concat([stub, header, payload]);
     expect(() => parseSetupOverlay(file)).toThrow(/payload size exceeds the supported range/u);
+  });
+});
+
+// §7: a regression pin may be RELOCATED or strengthened, never left behind guarding a path the
+// product no longer takes. The build lane moved to the streaming parser
+// (build-windows-portable-setup.mjs `parseSetupOverlayFromFile`, used by both verification call
+// sites), so the malformed-input table above — which runs against the whole-buffer
+// `parseSetupOverlay` — no longer covered the code that actually ships (review 3887051404).
+// The SAME table is therefore run against the streaming parser through real temp files: both
+// parsers must reject every one of these, so deleting a check on either side is red.
+describe("parseSetupOverlayFromFile — the SHIPPED parser rejects the same malformed inputs", () => {
+  const stub = buildSyntheticStub();
+  const payload = Buffer.from("keiko portable payload fixture bytes", "utf8");
+  const roots = [];
+
+  afterEach(() => {
+    while (roots.length > 0) rmSync(roots.pop(), { force: true, recursive: true });
+  });
+
+  function writeFixture(file) {
+    const root = mkdtempSync(join(tmpdir(), "keiko-overlay-stream-"));
+    roots.push(root);
+    const path = join(root, "keiko-windows-x64-setup.exe");
+    writeFileSync(path, file);
+    return path;
+  }
+
+  it("accepts the well-formed file and reports the same fields as the buffer parser", () => {
+    const file = buildCompleteFile(stub, payload);
+    const streamed = parseSetupOverlayFromFile(writeFixture(file));
+    const buffered = parseSetupOverlay(file);
+    expect(streamed.payloadSha256Hex).toBe(buffered.payloadSha256Hex);
+    expect(streamed.payloadSize).toBe(buffered.payloadSize);
+    expect(streamed.payloadStart).toBe(buffered.payloadStart);
+  });
+
+  it.each([
+    [
+      "a magic mismatch",
+      (file) => {
+        file[stub.byteLength] = 0x00;
+      },
+      /magic does not match KSETUP01/u,
+    ],
+    [
+      "non-zero reserved bytes",
+      (file) => {
+        file[stub.byteLength + 48] = 0x01;
+      },
+      /reserved bytes must be zero/u,
+    ],
+    [
+      "non-zero trailing padding",
+      (file) => {
+        file[file.byteLength - 1] = 0x01;
+      },
+      /padding/u,
+    ],
+  ])("rejects %s", (_label, corrupt, expected) => {
+    const file = buildCompleteFile(stub, payload, { paddingBytes: 4 });
+    corrupt(file);
+    expect(() => parseSetupOverlayFromFile(writeFixture(file))).toThrow(expected);
+  });
+
+  it("rejects a physically truncated overlay header", () => {
+    const file = buildCompleteFile(stub, payload);
+    expect(() =>
+      parseSetupOverlayFromFile(writeFixture(file.subarray(0, stub.byteLength + 8))),
+    ).toThrow();
+  });
+
+  // F3: the empty-input boundary was untested for the SHIPPED (streaming) parser. An empty file
+  // reads back a zero-length header-prefix scan (Math.min(0, OVERLAY_HEADER_SCAN_BYTES) === 0),
+  // which readExactAt does not itself reject (0 bytes requested, 0 bytes read), so the failure
+  // must come from the DOS-header length check downstream — the same guard the buffer-based
+  // "physically truncated" cases above exercise, at its most extreme input.
+  it("rejects an empty file", () => {
+    expect(() => parseSetupOverlayFromFile(writeFixture(Buffer.alloc(0)))).toThrow(/DOS header/u);
   });
 });

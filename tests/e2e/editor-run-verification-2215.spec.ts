@@ -27,6 +27,18 @@ import {
   openEditorWorkspace,
   seedEditorWindow,
 } from "./support/editorWorkspace.js";
+import { clickWindowChromeButton } from "./support/window-chrome.js";
+
+// "ControlOrMeta", NOT `editorModifier`: `quick-access.commands` is a PRODUCT shortcut (the
+// UnifiedQuickAccessPalette shell component, i18n key `quickAccess.query.commands` — "Command
+// query" below), and the product resolves its modifier from `navigator.platform`
+// (useKeyboardShortcuts' detectPlatform). Playwright's device presets override the userAgent but
+// NOT navigator.platform, so on a Mac the page still reports "MacIntel" and the product waits for
+// metaKey — which is exactly what the host-derived "ControlOrMeta" sends. `editorModifier` reads
+// the userAgent and would send Control here, failing on every real Mac (see
+// a11y.smoke.spec.ts's `openCommandPalette`, which proves this same chord both ways). It is the
+// right helper for MONACO chords only; see support/editor-chord.ts.
+const PALETTE_CHORD = "ControlOrMeta+Shift+KeyP";
 
 const FAILING_TEST = "src/sum.test.ts";
 const SOURCE = "src/sum.ts";
@@ -70,7 +82,6 @@ const BLOCKING_BUILD = "setInterval(() => undefined, 1_000);\n";
 // third line of the (deliberately minimal) failing-test fixture above.
 const FAILING_LINE = 3;
 
-const MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 
 function workspace(): { readonly root: string } {
@@ -113,7 +124,7 @@ async function openEditorFor(page: Page, root: string): Promise<Locator> {
 // top (only) result. Throws (via the `option` locator's own timeout) if the command never becomes
 // available — e.g. because the run-affordance wiring this test exists to prove is broken.
 async function runPaletteCommand(page: Page, commandTitle: string): Promise<void> {
-  await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
+  await page.keyboard.press(PALETTE_CHORD);
   const combobox = page.getByRole("combobox", { name: "Command query" });
   await expect(combobox).toBeVisible();
   await combobox.fill(`>${commandTitle}`);
@@ -198,7 +209,7 @@ test("running a workspace typecheck through the command palette exercises the no
 
   // The command becomes available again once idle — proving the run genuinely reached a terminal
   // state (not merely that the UI stopped showing a spinner for an unrelated reason).
-  await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
+  await page.keyboard.press(PALETTE_CHORD);
   await page.getByRole("combobox", { name: "Command query" }).fill(">Run Typecheck");
   await expect(page.getByRole("option").filter({ hasText: "Run Typecheck" }).first()).toBeVisible();
   await page.keyboard.press("Escape");
@@ -232,7 +243,7 @@ test("cancelling a run mid-flight through the command palette settles without le
     "Verification: cancelled",
   );
 
-  await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
+  await page.keyboard.press(PALETTE_CHORD);
   await page.getByRole("combobox", { name: "Command query" }).fill(">Run Build");
   await expect(page.getByRole("option").filter({ hasText: "Run Build" }).first()).toBeVisible();
   await page.keyboard.press("Escape");
@@ -248,7 +259,8 @@ test("fixing and saving in Monaco before rerunning clears the problem", async ({
   await openProblems(page);
   await awaitProblemsRow(page);
 
-  await page.getByRole("button", { name: "Close Problems window" }).click();
+  const problemsWindow = page.getByRole("region", { name: /^Problems/u });
+  await clickWindowChromeButton(problemsWindow, "Close Problems window");
   await expect(page.locator(`[data-testid="problems-row"]`)).toHaveCount(0);
 
   const editorInput = pane.getByRole("textbox", { name: /^Editor:/u }).first();
@@ -258,6 +270,12 @@ test("fixing and saving in Monaco before rerunning clears the problem", async ({
   // the disk assertion below proves the Save affordance persisted it.
   await page.keyboard.press("Home");
   await page.keyboard.press("Shift+End");
+  // Delete the selection with a REAL key event before inserting. `insertText` bypasses key events,
+  // and whether it replaces an existing selection is engine-dependent: Chromium replaces, Firefox
+  // inserts at the caret and LEAVES the selected text in place — doubling the line instead of
+  // replacing it (the same corruption class support/editor-chord.ts's `replaceEditorBuffer` was
+  // written to catch). Backspace on a selection is unambiguous in both.
+  await page.keyboard.press("Backspace");
   await page.keyboard.insertText(FIXED_SOURCE.trimEnd());
   await workspaceLocator.getByRole("button", { name: "Save", exact: true }).click();
   await expect(workspaceLocator.locator(EDITOR_SELECTORS.saveField)).toHaveText("Saved");

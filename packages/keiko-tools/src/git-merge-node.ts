@@ -57,6 +57,7 @@ import {
   type HomeProvider,
   type RunCommandDeps,
   type SpawnFn,
+  type CommandTerminationEvidence,
 } from "./exec.js";
 import {
   GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
@@ -78,6 +79,10 @@ export interface NodeGitMergeAdapterDeps {
   readonly home?: HomeProvider | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly timeoutMs?: number | undefined;
+  // The termination-evidence port for every runCommand this lane performs (RunCommandDeps
+  // deps-level seam, exec.ts): production composition boundaries wire it once so no call on the
+  // lane is silently unobservable (PR #3354 review, comment 3887021650).
+  readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
 }
 
 function executionResult(
@@ -112,6 +117,7 @@ function buildRunContext(deps: NodeGitMergeAdapterDeps): RunContext {
         ? { resolveExecutable: deps.resolveExecutable }
         : {}),
       ...(deps.home !== undefined ? { home: deps.home } : {}),
+      ...(deps.onTerminated !== undefined ? { onTerminated: deps.onTerminated } : {}),
     },
     signal: deps.signal ?? new AbortController().signal,
     timeoutMs: deps.timeoutMs,

@@ -211,6 +211,20 @@ describe("provisioned USearch runtime trust", () => {
     );
   });
 
+  it("resolves one Windows system root for the complete curl/tar command set", () => {
+    const environments = [];
+    const resolveSystemRoot = (environment) => {
+      environments.push(environment);
+      return String.raw`D:\Windows`;
+    };
+
+    expect(systemBinariesFor("win32", String.raw`D:\Windows`, resolveSystemRoot)).toEqual({
+      curl: join(String.raw`D:\Windows`, "System32", "curl.exe"),
+      tar: join(String.raw`D:\Windows`, "System32", "tar.exe"),
+    });
+    expect(environments).toEqual([{ SystemRoot: String.raw`D:\Windows` }]);
+  });
+
   it("routes system archive operations through the governed binary paths", () => {
     const calls = [];
     const execute = (...args) => calls.push(args);

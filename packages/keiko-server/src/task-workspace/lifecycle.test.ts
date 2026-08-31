@@ -27,6 +27,14 @@ import type {
   WorkspaceProvisioningService,
 } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/index.js";
+import { runWithWorkspaceLifecycleFailureLogging } from "./activity-log.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -103,18 +111,43 @@ function fakeProvisioning(
   };
 }
 
-function lifecycleWith(provisioning: WorkspaceProvisioningService): WorkspaceLifecycleService {
+function lifecycleWith(
+  provisioning: WorkspaceProvisioningService,
+  activityLog?: ServerLogSink,
+  evidenceStore: EvidenceStore = capturingEvidence(),
+): WorkspaceLifecycleService {
   return createWorkspaceLifecycleService({
     store,
     activePointerStore: pointerStore,
     managedRoot,
     provisioning,
-    evidenceStore: capturingEvidence(),
+    evidenceStore,
     redactString: (s: string): string => s,
     now: (): number => 1_700_000_000_000,
     newId: (): string => `id-${String(idCounter++)}`,
     mutex: __twMutex,
+    ...(activityLog === undefined ? {} : { activityLog }),
   });
+}
+
+// Single narrowing point for a captured activity-log line, so a chain of `expect(line?.field)`
+// assertions (each `?.` its own branch to ESLint's `complexity` rule) does not push an otherwise
+// linear assertion test over the repo's complexity ceiling (AGENTS.md §6).
+function activityLogEventAt(sink: BufferedServerLogSink, index: number): ServerLogEvent {
+  const line = sink.events.at(index);
+  if (line === undefined) throw new Error("no activity-log event recorded");
+  return line;
+}
+
+function lastActivityLogEvent(sink: BufferedServerLogSink): ServerLogEvent {
+  return activityLogEventAt(sink, -1);
+}
+
+function lastEventCorrelationId(): string {
+  const last = evidence.at(-1);
+  if (last === undefined) throw new Error("no evidence recorded");
+  const parsed = JSON.parse(last.json) as { readonly event: { readonly correlationId: string } };
+  return parsed.event.correlationId;
 }
 
 async function rejectsWithCode(
@@ -270,6 +303,44 @@ describe("setActive (atomic switch)", () => {
     );
   });
 
+  it("does not duplicate an invalid activation logged by the delegated provisioning boundary", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const delegated = fakeProvisioning();
+    const provisioning: WorkspaceProvisioningService = {
+      ...delegated,
+      activate: (request): Promise<WorkspaceActivateResult> =>
+        runWithWorkspaceLifecycleFailureLogging(
+          { activityLog },
+          {
+            operation: "activate",
+            workspaceIdentitySeed: request.workspaceId || request.taskId || "invalid-activation",
+            correlationId: request.correlationId,
+          },
+          () => Promise.reject(new TaskWorkspaceError("INVALID_REQUEST", "hostile body")),
+        ),
+    };
+    const withLog = lifecycleWith(provisioning, activityLog);
+
+    await rejectsWithCode(
+      () =>
+        withLog.setActive({
+          workspaceId: "",
+          requestedBy: "op",
+          acquireLock: false,
+          correlationId: "req-corr-nested-activation-1",
+        }),
+      "INVALID_REQUEST",
+    );
+
+    expect(activityLog.events).toHaveLength(1);
+    expect(lastActivityLogEvent(activityLog)).toMatchObject({
+      correlationId: "req-corr-nested-activation-1",
+      errorKind: "INVALID_REQUEST",
+      extra: { operation: "activate" },
+    });
+    expect(activityLog.lines().join("\n")).not.toContain("hostile body");
+  });
+
   // #449/#1587 follow-up: requestedBy is persisted as the active-pointer setBy, so a control/bidi
   // code point is rejected before the pointer is ever bound.
   it("rejects a bidi-override requestedBy and leaves the pointer unbound", async () => {
@@ -299,6 +370,142 @@ describe("pause", () => {
     expect(result.instance.lifecycleState).toBe("paused");
     expect(pointerStore.get()).toBeUndefined();
     expect(evidence.some((e) => e.json.includes('"paused"'))).toBe(true);
+  });
+
+  // F1: the evidence's correlationId must be the triggering request's own id, not the workspace's own
+  // persisted identity reused for every operation across the workspace's whole life — reusing it would
+  // make every distinct HTTP request against this workspace collapse onto ONE correlationId, breaking
+  // the join back to the specific request that produced each line (AGENTS.md §8).
+  it("threads the request's own correlationId into pause evidence, not the workspaceId", async () => {
+    const inst = store.upsert(instance("corr"));
+    await service.pause({
+      workspaceId: inst.workspaceId,
+      requestedBy: "op",
+      correlationId: "req-corr-pause-1",
+    });
+    expect(lastEventCorrelationId()).toBe("req-corr-pause-1");
+    expect(lastEventCorrelationId()).not.toBe(inst.workspaceId);
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID (never the workspaceId) when no request scope exists", async () => {
+    const inst = store.upsert(instance("nocorr"));
+    await service.pause({ workspaceId: inst.workspaceId, requestedBy: "op" });
+    expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    expect(lastEventCorrelationId()).not.toBe(inst.workspaceId);
+  });
+
+  // Service entry points fail closed before values reach either persisted evidence or an adapter's
+  // termination callback. This matrix pins the same safe shape the HTTP boundary accepts rather than
+  // relying on the evidence contract's intentionally generic non-empty-string validation.
+  describe("correlation-ID regression matrix", () => {
+    it.each([
+      ["empty", ""],
+      ["malformed", "req corr\ncontrol"],
+      ["oversized", `req-corr-${"a".repeat(4000)}`],
+      ["below the minimum length", "x"],
+    ] as const)(
+      "normalizes a %s correlationId before persisting evidence",
+      async (_label, value) => {
+        const inst = store.upsert(instance("corr-invalid"));
+        await service.pause({
+          workspaceId: inst.workspaceId,
+          requestedBy: "op",
+          correlationId: value,
+        });
+        expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+      },
+    );
+  });
+
+  // IDX61: the EvidenceStore ledger above is a SEPARATE audit surface from `<stateDir>/logs/
+  // server.log` — this proves the SAME pause outcome also reaches the server activity log
+  // (AGENTS.md §8), carrying the SAME correlationId the evidence assertions above just proved.
+  it("emits a task-workspace.lifecycle activity-log line alongside the evidence, same correlationId", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const withLog = lifecycleWith(fakeProvisioning(), activityLog);
+    const inst = store.upsert(instance("activity-log"));
+    await withLog.pause({
+      workspaceId: inst.workspaceId,
+      requestedBy: "op",
+      correlationId: "req-corr-pause-activity-1",
+    });
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.category).toBe("diagnostic");
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.correlationId).toBe("req-corr-pause-activity-1");
+    expect(line.level).toBe("info");
+    expect(line.errorKind).toBeUndefined();
+    const extra = line.extra ?? {};
+    expect(extra.operation).toBe("pause");
+    expect(extra.outcome).toBe("paused");
+    expect(extra.workspaceId).toBe(inst.workspaceId);
+  });
+
+  it("logs a closed, correlated rejection when an illegal pause throws before lifecycle evidence", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const withLog = lifecycleWith(fakeProvisioning(), activityLog);
+    const inst = store.upsert(instance("activity-log-rejection", { lifecycleState: "archived" }));
+    await rejectsWithCode(
+      () =>
+        withLog.pause({
+          workspaceId: inst.workspaceId,
+          requestedBy: "op",
+          correlationId: "req-corr-pause-rejection-1",
+        }),
+      "ILLEGAL_TRANSITION",
+    );
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.correlationId).toBe("req-corr-pause-rejection-1");
+    expect(line.errorKind).toBe("ILLEGAL_TRANSITION");
+    expect(line.extra?.operation).toBe("pause");
+    expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
+    const formatted = activityLog.lines().at(-1) ?? "{}";
+    const parsed = JSON.parse(formatted) as Readonly<Record<string, unknown>>;
+    expect(formatted).not.toContain(inst.workspaceId);
+    expect(parsed.operation).toBe("pause");
+    expect(parsed.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
+  });
+
+  it("logs a correlated evidence-persistence diagnostic while retaining the lifecycle outcome", async () => {
+    let putAttempts = 0;
+    let attemptedEventId: string | undefined;
+    const persistedEvidence = new Map<string, string>();
+    const throwingStore: EvidenceStore = {
+      put: (id: string): string => {
+        putAttempts += 1;
+        attemptedEventId = id;
+        throw new Error("disk full with secret payload");
+      },
+      list: (): readonly string[] => [...persistedEvidence.keys()],
+      get: (id: string): string | undefined => persistedEvidence.get(id),
+      delete: (id: string): void => {
+        persistedEvidence.delete(id);
+      },
+    };
+    const activityLog = createBufferedServerLogSink();
+    const withLog = lifecycleWith(fakeProvisioning(), activityLog, throwingStore);
+    const inst = store.upsert(instance("activity-log-evidence-failure"));
+    await withLog.pause({
+      workspaceId: inst.workspaceId,
+      requestedBy: "op",
+      correlationId: "req-corr-evidence-failure-1",
+    });
+    expect(putAttempts).toBe(1);
+    expect(attemptedEventId).toBeDefined();
+    expect(throwingStore.get(attemptedEventId ?? "")).toBeUndefined();
+    expect(activityLog.events).toHaveLength(2);
+    const diagnostic = activityLogEventAt(activityLog, 0);
+    const lifecycle = activityLogEventAt(activityLog, 1);
+    const diagnosticExtra = diagnostic.extra ?? {};
+    expect(diagnostic.errorKind).toBe("EVIDENCE_PERSISTENCE_FAILED");
+    expect(diagnostic.correlationId).toBe("req-corr-evidence-failure-1");
+    expect(diagnosticExtra.operation).toBe("pause");
+    expect(diagnosticExtra.evidencePersistence).toBe("failed");
+    expect(diagnosticExtra.workspaceId).toBe(inst.workspaceId);
+    expect(diagnosticExtra.eventId).toBe(attemptedEventId);
+    expect(lifecycle.extra?.outcome).toBe("paused");
+    expect(activityLog.lines().join("\n")).not.toContain("secret payload");
   });
 
   it("leaves the active pointer untouched when pausing a DIFFERENT (non-active) workspace", async () => {
