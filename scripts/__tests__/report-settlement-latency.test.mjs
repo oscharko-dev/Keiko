@@ -584,7 +584,10 @@ describe("collection", () => {
       truncated: true,
       heads: [
         head("2026-08-28T10:00:00Z", "2026-08-28T10:10:00Z"),
+        head("2026-08-28T10:20:00Z", "2026-08-28T10:30:00Z"),
+        head("2026-08-28T10:40:00Z", "2026-08-28T10:50:00Z"),
         head("2026-08-28T11:00:00Z", "2026-08-28T11:10:00Z"),
+        head("2026-08-28T11:20:00Z", "2026-08-28T11:30:00Z"),
       ],
       findings: ["2026-08-28T10:05:00Z"],
     });
@@ -606,6 +609,7 @@ describe("collection", () => {
     expect(findingBearing?.reactionSamples).not.toBe(
       truncated.reactionMinutes.length + measured.reactionMinutes.length,
     );
+    expect(findingBearing?.medianRepairRounds).toBe(measured.repairRounds);
   });
 
   it("cannot establish greenness from a truncated context list", () => {

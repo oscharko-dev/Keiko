@@ -318,7 +318,7 @@ function cohortSummary(reports, cohort) {
     medianGapMinutes: median(measured.map((report) => report.checksGreenToMergedMinutes)),
     medianSettlementMinutes: median(settlements),
     maxSettlementMinutes: maxOf(settlements),
-    medianRepairRounds: median(sloEligible.map((report) => report.repairRounds)),
+    medianRepairRounds: median(measured.map((report) => report.repairRounds)),
     medianReactionMinutes: median(reactions),
     ...reactionSloStats(reactions),
   };

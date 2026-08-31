@@ -704,6 +704,34 @@ describe("cleanupPortableActivation", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("removes the Windows backup tree when execPath is a sibling sharing a prefix", () => {
+    const root = join(tmpdir(), `keiko-activation-cleanup-sib-${String(process.pid)}`);
+    const backupRoot = join(root, "Keiko-old");
+    const stageRoot = join(root, "stage");
+    const siblingExe = join(root, "Keiko-old-sibling", "node.exe");
+    mkdirSync(join(backupRoot, "runtime"), { recursive: true });
+    mkdirSync(dirname(siblingExe), { recursive: true });
+    mkdirSync(stageRoot, { recursive: true });
+    writeFileSync(join(backupRoot, "marker"), "old");
+    writeFileSync(siblingExe, "exe");
+    writeFileSync(join(stageRoot, "leftover"), "x");
+    try {
+      cleanupPortableActivation(
+        {
+          managedRoot: join(root, "Keiko"),
+          stageRoot,
+          candidateRoot: join(root, "candidate"),
+          backupRoot,
+        },
+        { platform: "win32", execPath: siblingExe },
+      );
+      expect(existsSync(backupRoot)).toBe(false);
+      expect(existsSync(siblingExe)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 // PR #3355 review (IDX62): a hostile/malformed SystemRoot/WINDIR must reach the activity log

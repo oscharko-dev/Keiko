@@ -110,6 +110,11 @@ export function securityErrorKind(error: unknown): string {
 // once per sink instance via a `WeakSet` so a large batch of shard reads cannot flood stderr and a
 // replaced sink is reported again.
 const REPORTED_FAILED_SINKS = new WeakSet<SecurityLogSink>();
+const BOUND_SINK_UNDERLYING = new WeakMap<SecurityLogSink, SecurityLogSink>();
+
+function sinkIdentity(sink: SecurityLogSink): SecurityLogSink {
+  return BOUND_SINK_UNDERLYING.get(sink) ?? sink;
+}
 
 export function emitSecurityLogEvent(
   sink: SecurityLogSink | undefined,
@@ -128,11 +133,13 @@ export function bindSecurityLogCorrelation(
   correlationId: string,
 ): SecurityLogSink | undefined {
   if (sink === undefined) return undefined;
-  return {
+  const bound: SecurityLogSink = {
     write(event): void {
       sink.write({ ...event, correlationId });
     },
   };
+  BOUND_SINK_UNDERLYING.set(bound, sinkIdentity(sink));
+  return bound;
 }
 
 function reportFailedSecurityLogSink(
@@ -140,8 +147,9 @@ function reportFailedSecurityLogSink(
   droppedOp: string,
   cause: unknown,
 ): void {
-  if (REPORTED_FAILED_SINKS.has(sink)) return;
-  REPORTED_FAILED_SINKS.add(sink);
+  const identity = sinkIdentity(sink);
+  if (REPORTED_FAILED_SINKS.has(identity)) return;
+  REPORTED_FAILED_SINKS.add(identity);
   const errorKind = securityErrorKind(cause);
   try {
     sink.write({

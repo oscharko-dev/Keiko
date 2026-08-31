@@ -84,6 +84,18 @@ describe("atomicPublishRename", () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
+  it("refuses an empty backoffMs list instead of throwing undefined", () => {
+    expect(() => {
+      atomicPublishRename("/from", "/to", {
+        platform: "win32",
+        rename: () => {
+          throw eperm();
+        },
+        backoffMs: [],
+      });
+    }).toThrow(TypeError);
+  });
+
   it("retries EPERM on win32 and succeeds without logging a path", () => {
     const from = "/Users/secret/Keiko";
     const to = "/Users/secret/.keiko-previous-1";

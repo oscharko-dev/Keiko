@@ -57,7 +57,6 @@ import {
   defaultIsProcessAlive,
   inspectStateRoot,
   isInsidePath,
-  readPidRecord,
   resolveStateDir,
   scanRuntimeState,
   type RetainedNode,
@@ -117,6 +116,7 @@ export interface UninstallCliDeps {
   readonly killWindowsTree?: WindowsTreeKill | undefined;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
+  readonly verifyLaunchIdentity?: ((pid: number, launchId: string) => boolean) | undefined;
 }
 
 interface RawUninstallArgs {
@@ -214,6 +214,7 @@ interface ResolvedDeps {
   readonly platform: NodeJS.Platform;
   readonly killWindowsTree?: WindowsTreeKill | undefined;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
+  readonly verifyLaunchIdentity?: ((pid: number, launchId: string) => boolean) | undefined;
 }
 
 function defaultSleep(ms: number): Promise<void> {
@@ -230,6 +231,7 @@ function resolveDeps(deps: UninstallCliDeps): ResolvedDeps {
     platform: deps.platform?.() ?? process.platform,
     killWindowsTree: deps.killWindowsTree,
     processEnv: deps.processEnv,
+    verifyLaunchIdentity: deps.verifyLaunchIdentity,
   };
 }
 
@@ -276,7 +278,8 @@ async function ensureServerStoppable(
     processEnv: deps.processEnv,
     securityLogSink,
     escalate: deps.platform === "win32",
-    launchId: readPidRecord(join(stateDir, "ui.pid"))?.launchId,
+    launchId: probe.launchId,
+    verifyLaunchIdentity: deps.verifyLaunchIdentity,
   });
   if (!outcome.confirmed) {
     io.err(

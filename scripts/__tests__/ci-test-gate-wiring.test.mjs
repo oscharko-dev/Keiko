@@ -241,7 +241,28 @@ describe("CI test/gate wiring guard", () => {
     expect(windowsRfc3161QualityProject).toContain(
       "<RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>",
     );
-    expect(windowsNativeQuality).toContain('"-p:RestoreLockedMode=true"');
+    const rfc3161Build = windowsNativeQuality.slice(
+      windowsNativeQuality.indexOf("dotnet build $project"),
+      windowsNativeQuality.indexOf('throw ".NET analyzer quality build failed"'),
+    );
+    const activeBuild = rfc3161Build
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("#"))
+      .join("\n");
+    expect(activeBuild).toContain('"-p:RestoreLockedMode=true"');
+  });
+
+  it("fails when the RFC3161 build invocation drops locked restore", () => {
+    const rfc3161Build = windowsNativeQuality.slice(
+      windowsNativeQuality.indexOf("dotnet build $project"),
+      windowsNativeQuality.indexOf('throw ".NET analyzer quality build failed"'),
+    );
+    const weakened = rfc3161Build.replace('"-p:RestoreLockedMode=true"', "");
+    const activeBuild = weakened
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("#"))
+      .join("\n");
+    expect(activeBuild).not.toContain('"-p:RestoreLockedMode=true"');
   });
 
   it("keeps the Windows RFC3161 boundary namespaced and P/Invoke resolution constrained", () => {

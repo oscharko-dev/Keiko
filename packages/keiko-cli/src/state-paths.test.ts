@@ -16,6 +16,7 @@ import {
   readPidFile,
   readPidRecord,
   removePidFileIfMatches,
+  removeStaleShutdownRequest,
   resolveStateDir,
   scanRuntimeState,
   writeExclusivePidFile,
@@ -144,6 +145,15 @@ describe("classifyPid", () => {
     expect(result.state).toBe("running");
     expect(result.pid).toBe(1234);
   });
+
+  it("returns the launch id from the same pid record as the pid", () => {
+    const root = makeRoot();
+    const path = join(root, "ui.pid");
+    const launchId = "ab".repeat(16);
+    writeExclusivePidFile(path, 1234, launchId);
+    const result = classifyPid(path, () => true);
+    expect(result).toEqual({ state: "running", pid: 1234, launchId });
+  });
 });
 
 describe("KEIKO_STATE_FILES", () => {
@@ -172,6 +182,14 @@ describe("ui.shutdown request", () => {
     expect(() => {
       clearShutdownRequest(stateDir);
     }).not.toThrow();
+  });
+
+  it("fails closed when a stale sentinel path is a directory", () => {
+    const stateDir = makeRoot();
+    mkdirSync(join(stateDir, UI_SHUTDOWN_REQUEST_FILE));
+    expect(() => {
+      removeStaleShutdownRequest(stateDir);
+    }).toThrow();
   });
 
   it("matches a launch id across a re-exec pid change", () => {

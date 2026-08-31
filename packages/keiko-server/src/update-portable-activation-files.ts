@@ -279,16 +279,29 @@ function activationPaths(
   );
 }
 
-function restoreManagedRoot(paths: PortableActivationPaths): void {
+function treeSwapOptions(
+  securityLogSink: SecurityLogSink | undefined,
+):
+  | { readonly rename: typeof renameSync }
+  | { readonly rename: typeof renameSync; readonly securityLogSink: SecurityLogSink } {
+  if (securityLogSink === undefined) return { rename: renameSync };
+  return { rename: renameSync, securityLogSink };
+}
+
+function restoreManagedRoot(
+  paths: PortableActivationPaths,
+  securityLogSink?: SecurityLogSink,
+): void {
+  const rename = treeSwapOptions(securityLogSink);
   withCwdOutsideTree(paths.managedRoot, () => {
     if (!existsSync(paths.backupRoot)) return;
     if (existsSync(paths.managedRoot)) {
       if (existsSync(paths.candidateRoot)) {
         throw activationFailed("portable activation recovery is incomplete");
       }
-      atomicPublishTreeSwap(paths.managedRoot, paths.candidateRoot, { rename: renameSync });
+      atomicPublishTreeSwap(paths.managedRoot, paths.candidateRoot, rename);
     }
-    atomicPublishTreeSwap(paths.backupRoot, paths.managedRoot, { rename: renameSync });
+    atomicPublishTreeSwap(paths.backupRoot, paths.managedRoot, rename);
   });
 }
 
@@ -296,27 +309,32 @@ function promote(
   paths: PortableActivationPaths,
   target: UpdatePortableTarget,
   targetVersion: string,
+  securityLogSink?: SecurityLogSink,
 ): PortableActivationLayout {
   if (existsSync(paths.backupRoot)) {
     throw activationFailed("portable activation backup path is occupied");
   }
   validateLayout(target, paths.candidateRoot, targetVersion);
-  return withCwdOutsideTree(paths.managedRoot, () => swapManagedRoot(paths, target, targetVersion));
+  return withCwdOutsideTree(paths.managedRoot, () =>
+    swapManagedRoot(paths, target, targetVersion, securityLogSink),
+  );
 }
 
 function swapManagedRoot(
   paths: PortableActivationPaths,
   target: UpdatePortableTarget,
   targetVersion: string,
+  securityLogSink?: SecurityLogSink,
 ): PortableActivationLayout {
+  const rename = treeSwapOptions(securityLogSink);
   let moved = false;
   try {
-    atomicPublishTreeSwap(paths.managedRoot, paths.backupRoot, { rename: renameSync });
+    atomicPublishTreeSwap(paths.managedRoot, paths.backupRoot, rename);
     moved = true;
-    atomicPublishTreeSwap(paths.candidateRoot, paths.managedRoot, { rename: renameSync });
+    atomicPublishTreeSwap(paths.candidateRoot, paths.managedRoot, rename);
     return validateLayout(target, paths.managedRoot, targetVersion);
   } catch (error) {
-    if (moved) restoreManagedRoot(paths);
+    if (moved) restoreManagedRoot(paths, securityLogSink);
     if (error instanceof PortableUpdateActivationError) throw error;
     throw activationFailed("portable activation swap failed");
   }
@@ -347,11 +365,12 @@ function managedRootLocator(
 export function promotePortableInstall(
   input: PortableActivationFileInput,
   activationId: string,
+  securityLogSink?: SecurityLogSink,
 ): PortablePromotionResult {
   const paths = activationPaths(input, activationId);
   return {
     paths,
-    layout: promote(paths, input.stage.target, input.targetVersion),
+    layout: promote(paths, input.stage.target, input.targetVersion, securityLogSink),
   };
 }
 
@@ -755,6 +774,9 @@ function execPathMapsBackup(
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
-export function restorePortableActivation(paths: PortableActivationPaths): void {
-  restoreManagedRoot(paths);
+export function restorePortableActivation(
+  paths: PortableActivationPaths,
+  securityLogSink?: SecurityLogSink,
+): void {
+  restoreManagedRoot(paths, securityLogSink);
 }

@@ -58,6 +58,26 @@ describe("bindSecurityLogCorrelation", () => {
   it("returns undefined when no sink is wired", () => {
     expect(bindSecurityLogCorrelation(undefined, "corr-1")).toBeUndefined();
   });
+
+  it("deduplicates sink-failed reports across correlation wrappers of the same sink", () => {
+    const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const events: SecurityLogEvent[] = [];
+    const flaky: SecurityLogSink = {
+      write: (event): void => {
+        if (event.op === "security.log.sink-failed") {
+          events.push(event);
+          return;
+        }
+        throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      },
+    };
+    const first = bindSecurityLogCorrelation(flaky, "corr-1");
+    const second = bindSecurityLogCorrelation(flaky, "corr-2");
+    emitSecurityLogEvent(first, { category: "security", op: "security.vault.entries-merged" });
+    emitSecurityLogEvent(second, { category: "security", op: "security.vault.shard-unreadable" });
+    expect(events).toHaveLength(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
 });
 
 describe("securityErrorKind", () => {

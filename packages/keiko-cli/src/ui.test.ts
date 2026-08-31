@@ -1536,7 +1536,9 @@ describe("waitForShutdown", () => {
           await vi.advanceTimersByTimeAsync(250);
           await promise;
           expect(closeIdleConnections).toHaveBeenCalledTimes(1);
-          const exiting = sink.events.find((event) => event.op === "process.exiting");
+          const exiting: ServerLogEvent | undefined = sink.events.find(
+            (event: ServerLogEvent): boolean => event.op === "process.exiting",
+          );
           expect(extraOf(exiting).reason).toBe("shutdown-request");
         } finally {
           vi.useRealTimers();

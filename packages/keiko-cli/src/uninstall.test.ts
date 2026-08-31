@@ -67,12 +67,20 @@ afterEach(() => {
   }
 });
 
+const STOP_LAUNCH_ID = "ab".repeat(16);
+
 function seedState(root: string, pid = "2147483646"): string {
   const stateDir = join(root, ".keiko");
   mkdirSync(stateDir, { recursive: true });
-  writeFileSync(join(stateDir, "ui.pid"), `${pid}\n`, "utf8");
+  writeFileSync(join(stateDir, "ui.pid"), `${pid}\n${STOP_LAUNCH_ID}\n`, "utf8");
   writeFileSync(join(stateDir, "ui.log"), "log line\n", "utf8");
   return stateDir;
+}
+
+function verifiedStopIdentity(): {
+  readonly verifyLaunchIdentity: (pid: number, launchId: string) => boolean;
+} {
+  return { verifyLaunchIdentity: () => true };
 }
 
 function seedPackageJson(root: string, extra: Record<string, string> = {}): string {
@@ -593,11 +601,40 @@ describe("runUninstallCli — running server guard", () => {
         killed.push([pid, signal]);
       },
       sleep: () => Promise.resolve(),
+      ...verifiedStopIdentity(),
     };
     const c = makeIo();
     await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(0);
     expect(killed).toEqual([[555, "SIGTERM"]]);
     expect(existsSync(stateDir)).toBe(false);
+  });
+
+  it("binds launchId from the same pid record classifyPid read", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root, "555");
+    const seen: string[] = [];
+    const pidPath = join(stateDir, "ui.pid");
+    const deps: UninstallCliDeps = {
+      cwd: root,
+      homedir: () => root,
+      isProcessAlive: () => {
+        rmSync(pidPath, { force: true });
+        writeFileSync(pidPath, `555\n${"cd".repeat(16)}\n`, "utf8");
+        return true;
+      },
+      killProcess: () => {
+        /* identity refusal must happen first */
+      },
+      verifyLaunchIdentity: (_pid, launchId) => {
+        seen.push(launchId);
+        return false;
+      },
+      sleep: () => Promise.resolve(),
+    };
+    const c = makeIo();
+    await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(1);
+    expect(seen).not.toContain("cd".repeat(16));
+    expect(seen.every((id) => id === STOP_LAUNCH_ID)).toBe(true);
   });
 
   it("with --force on Windows writes ui.shutdown instead of SIGTERM", async () => {
@@ -615,7 +652,9 @@ describe("runUninstallCli — running server guard", () => {
           probe = false;
           return true;
         }
-        expect(readFileSync(join(stateDir, "ui.shutdown"), "utf8")).toBe("555\n");
+        expect(readFileSync(join(stateDir, "ui.shutdown"), "utf8")).toBe(
+          `555\n${STOP_LAUNCH_ID}\n`,
+        );
         return false;
       },
       killProcess: (pid, signal) => {
@@ -651,6 +690,7 @@ describe("runUninstallCli — running server guard", () => {
       },
       killWindowsTree,
       sleep: () => Promise.resolve(),
+      ...verifiedStopIdentity(),
     };
     const c = makeIo();
     try {
@@ -702,6 +742,7 @@ describe("runUninstallCli — running server guard", () => {
         throw new Error("ESRCH");
       },
       sleep: () => Promise.resolve(),
+      ...verifiedStopIdentity(),
     };
     const c = makeIo();
     await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(0);
@@ -733,6 +774,7 @@ describe("runUninstallCli — running server guard", () => {
         killCount += 1;
       },
       sleep: () => Promise.resolve(),
+      ...verifiedStopIdentity(),
     };
     const c = makeIo();
     let now = 0;

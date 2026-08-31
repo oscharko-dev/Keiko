@@ -36,9 +36,8 @@ import {
   KEIKO_UI_LAUNCH_ID_ENV,
   assertNotSymlink,
   assertRegularSingleLinkFile,
-  clearShutdownRequest,
-  readPidFile,
   readPidRecord,
+  removeStaleShutdownRequest,
   removePidFileIfMatches,
   resolveContainedStateDir,
   writeExclusivePidFile,
@@ -116,6 +115,7 @@ export interface LifecycleCliDeps {
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly securityLogSink?: SecurityLogSink | undefined;
   readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
+  readonly verifyLaunchIdentity?: ((pid: number, launchId: string) => boolean) | undefined;
 }
 
 interface LifecycleRuntimeDeps {
@@ -130,6 +130,7 @@ interface LifecycleRuntimeDeps {
   readonly killWindowsTree?: WindowsTreeKill | undefined;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly securityLogSink?: SecurityLogSink | undefined;
+  readonly verifyLaunchIdentity?: ((pid: number, launchId: string) => boolean) | undefined;
 }
 
 interface HealthProbeResult {
@@ -370,21 +371,28 @@ function defaultIsPortAvailable(host: string, port: number): Promise<boolean> {
   });
 }
 
+function runningPidRecord(
+  options: LifecycleOptions,
+  isAlive: (pid: number) => boolean,
+): ReturnType<typeof readPidRecord> {
+  const path = pidFile(options);
+  const record = readPidRecord(path);
+  if (record === undefined) {
+    rmSync(path, { force: true });
+    return undefined;
+  }
+  if (!isAlive(record.pid)) {
+    rmSync(path, { force: true });
+    return undefined;
+  }
+  return record;
+}
+
 function runningPid(
   options: LifecycleOptions,
   isAlive: (pid: number) => boolean,
 ): number | undefined {
-  const path = pidFile(options);
-  const pid = readPidFile(path);
-  if (pid === undefined) {
-    rmSync(path, { force: true });
-    return undefined;
-  }
-  if (!isAlive(pid)) {
-    rmSync(path, { force: true });
-    return undefined;
-  }
-  return pid;
+  return runningPidRecord(options, isAlive)?.pid;
 }
 
 // #2478 (ADR-0141 W1.5): `keiko start` is the trusted launcher of the UI process. It provisions a
@@ -689,13 +697,14 @@ async function reportUnhealthyStart(
   deps: LifecycleRuntimeDeps,
   pid: number,
   logPath: string,
+  launchId: string,
 ): Promise<number> {
   // #KEIKO-0437: escalate graceful stop -> forced stop and only remove the pid file once the
   // process is confirmed gone. If it survives forced termination, KEEP the pid file so `keiko
   // stop` can still find and finish the orphan (never orphan the port silently).
-  const outcome = await terminateAndConfirm(pid, options, deps);
+  const outcome = await terminateAndConfirm(pid, options, deps, undefined, launchId);
   if (outcome.confirmed) {
-    removePidFileIfMatches(pidFile(options), pid);
+    removePidFileIfMatches(pidFile(options), pid, launchId);
     io.err(`keiko start: UI did not become healthy. Logs: ${logPath}\n`);
   } else {
     io.err(
@@ -733,7 +742,7 @@ function publishPidOrKillChild(
 
 function clearStaleShutdownRequest(stateDir: string, io: CliIo): boolean {
   try {
-    clearShutdownRequest(stateDir);
+    removeStaleShutdownRequest(stateDir);
     return true;
   } catch {
     io.err("keiko start: failed to clear a stale shutdown request.\n");
@@ -804,7 +813,7 @@ async function cmdStart(
     );
   }
 
-  return reportUnhealthyStart(options, io, deps, child.pid, logPath);
+  return reportUnhealthyStart(options, io, deps, child.pid, logPath, launchId);
 }
 
 interface TerminateAndConfirmResult {
@@ -830,6 +839,7 @@ async function terminateAndConfirm(
   options: LifecycleOptions,
   deps: LifecycleRuntimeDeps,
   onEscalate?: () => void,
+  launchId?: string,
 ): Promise<TerminateAndConfirmResult> {
   return terminateUiProcess({
     pid,
@@ -844,7 +854,8 @@ async function terminateAndConfirm(
     securityLogSink: deps.securityLogSink,
     escalate: true,
     onEscalate,
-    launchId: readPidRecord(pidFile(options))?.launchId,
+    launchId,
+    verifyLaunchIdentity: deps.verifyLaunchIdentity,
   });
 }
 
@@ -853,24 +864,30 @@ async function cmdStop(
   io: CliIo,
   deps: LifecycleRuntimeDeps,
 ): Promise<number> {
-  const pid = runningPid(options, deps.isProcessAlive);
-  if (pid === undefined) {
+  const record = runningPidRecord(options, deps.isProcessAlive);
+  if (record === undefined) {
     io.out("Keiko UI is not running.\n");
     return 0;
   }
-  io.out(`Stopping Keiko UI (pid ${String(pid)}) ...\n`);
-  const outcome = await terminateAndConfirm(pid, options, deps, () => {
-    io.err(
-      deps.platform === "win32"
-        ? "keiko stop: UI did not exit gracefully; terminating the process tree.\n"
-        : "keiko stop: UI did not exit gracefully; sending SIGKILL.\n",
-    );
-  });
+  io.out(`Stopping Keiko UI (pid ${String(record.pid)}) ...\n`);
+  const outcome = await terminateAndConfirm(
+    record.pid,
+    options,
+    deps,
+    () => {
+      io.err(
+        deps.platform === "win32"
+          ? "keiko stop: UI did not exit gracefully; terminating the process tree.\n"
+          : "keiko stop: UI did not exit gracefully; sending SIGKILL.\n",
+      );
+    },
+    record.launchId,
+  );
   if (!outcome.confirmed) {
-    io.err(`keiko stop: failed to stop pid ${String(pid)}.\n`);
+    io.err(`keiko stop: failed to stop pid ${String(record.pid)}.\n`);
     return 1;
   }
-  removePidFileIfMatches(pidFile(options), pid);
+  removePidFileIfMatches(pidFile(options), record.pid, record.launchId);
   io.out(outcome.escalated ? "Keiko UI stopped (forced).\n" : "Keiko UI stopped.\n");
   return 0;
 }
@@ -929,6 +946,7 @@ function runtimeDeps(
     killWindowsTree: deps.killWindowsTree,
     processEnv: deps.processEnv,
     securityLogSink,
+    verifyLaunchIdentity: deps.verifyLaunchIdentity,
   };
 }
 

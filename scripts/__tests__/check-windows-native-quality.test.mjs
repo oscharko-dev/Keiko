@@ -71,11 +71,31 @@ function derivationAccepts({
 }
 
 function packageReferences(csproj) {
-  const references = [
-    ...csproj.matchAll(/<PackageReference Include="([^"]+)" Version="([^"]+)" \/>/gu),
-  ].map((match) => ({ id: match[1], version: match[2] }));
-  expect(references.length, `${RFC3161_PROJECT} has no PackageReference`).toBeGreaterThan(0);
-  return references;
+  const blocks = [...csproj.matchAll(/<PackageReference\b[\s\S]*?(?:\/>|<\/PackageReference>)/gu)];
+  expect(blocks.length, `${RFC3161_PROJECT} has no PackageReference`).toBeGreaterThan(0);
+  return blocks.map((match) => {
+    const block = match[0];
+    const include = /\bInclude\s*=\s*["']([^"']+)["']/u.exec(block)?.[1];
+    const versionAttr = /\bVersion\s*=\s*["']([^"']+)["']/u.exec(block)?.[1];
+    const versionChild = /<Version>\s*([^<]+)\s*<\/Version>/u.exec(block)?.[1]?.trim();
+    const version = versionAttr ?? versionChild;
+    expect(include, `unrecognized PackageReference ${block}`).toEqual(expect.any(String));
+    expect(version, `PackageReference ${include ?? "unknown"} has no Version`).toEqual(
+      expect.any(String),
+    );
+    return { id: include, version };
+  });
+}
+
+function stripLineComments(source) {
+  return source
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("#"))
+    .join("\n");
+}
+
+function invocationHasLockedRestore(invocation) {
+  return stripLineComments(invocation).includes('"-p:RestoreLockedMode=true"');
 }
 
 function productionDotnetBuildInvocation(gateSource) {
@@ -119,7 +139,32 @@ describe("RFC3161 NuGet lock contract (KEIKO-0899)", () => {
     expect(csproj).toMatch(/<RestorePackagesWithLockFile>true<\/RestorePackagesWithLockFile>/u);
     expect(csproj).not.toMatch(/<RestoreLockedMode>\s*true\s*<\/RestoreLockedMode>/u);
     const invocation = productionDotnetBuildInvocation(readFileSync(GATE, "utf8"));
-    expect(invocation).toContain('"-p:RestoreLockedMode=true"');
+    expect(invocationHasLockedRestore(invocation)).toBe(true);
+  });
+
+  it("rejects a PackageReference the parser cannot recognize", () => {
+    expect(() => packageReferences("<Project><PackageReference /></Project>")).toThrow();
+  });
+
+  it("reads Version from a child element and reordered attributes", () => {
+    const parsed = packageReferences(
+      '<Project><PackageReference Version="1.2.3" Include="Example.Package"></PackageReference></Project>',
+    );
+    expect(parsed).toEqual([{ id: "Example.Package", version: "1.2.3" }]);
+  });
+
+  it("fails closed when the gate build drops RestoreLockedMode", () => {
+    const invocation = productionDotnetBuildInvocation(readFileSync(GATE, "utf8")).replace(
+      '"-p:RestoreLockedMode=true"',
+      '"-p:RestoreLockedMode=false"',
+    );
+    expect(invocationHasLockedRestore(invocation)).toBe(false);
+  });
+
+  it("does not treat a commented RestoreLockedMode flag as active", () => {
+    expect(invocationHasLockedRestore('# "-p:RestoreLockedMode=true"\ndotnet build $project')).toBe(
+      false,
+    );
   });
 
   it("pins every csproj PackageReference to the same resolved version in the lock", () => {

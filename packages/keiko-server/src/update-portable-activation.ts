@@ -1,11 +1,12 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { homedir } from "node:os";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { bindSecurityLogCorrelation, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type {
   UpdatePortableActivationSummary,
   UpdatePortableStagingSummary,
 } from "@oscharko-dev/keiko-contracts";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { UpdateRuntimeFacts } from "./update-install-mode.js";
 import type { UpdateLocalStateManager } from "./update-local-state.js";
 import {
@@ -225,6 +226,7 @@ function portableStateDir(
 function settleInterruptedActivation(input: {
   readonly stateDir: string;
   readonly request: PortableUpdateActivateInput;
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }): void {
   const recovery = readPortableActivationRecovery(input.stateDir);
   if (recovery === undefined) return;
@@ -237,7 +239,7 @@ function settleInterruptedActivation(input: {
   if (recovery.phase === "verified") cleanupPortableActivation(paths);
   else {
     restorePortableRegistration({ stateDir: input.stateDir, activationId: recovery.activationId });
-    restorePortableActivation(paths);
+    restorePortableActivation(paths, input.securityLogSink);
   }
   cleanupPortableRegistrationSnapshot({
     stateDir: input.stateDir,
@@ -249,20 +251,16 @@ function settleInterruptedActivation(input: {
 function prepareActivation(input: {
   readonly request: PortableUpdateActivateInput;
   readonly activationId: string;
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }): PortablePromotionResult {
-  return promotePortableInstall(input.request, input.activationId);
+  return promotePortableInstall(input.request, input.activationId, input.securityLogSink);
 }
 
-function correlatedSecurityLogSink(
-  sink: SecurityLogSink | undefined,
+function activationLogSink(
+  options: PortableUpdateActivatorOptions,
   correlationId: string,
 ): SecurityLogSink | undefined {
-  if (sink === undefined) return undefined;
-  return {
-    write(event): void {
-      sink.write({ ...event, correlationId });
-    },
-  };
+  return bindSecurityLogCorrelation(options.securityLogSink, correlationId);
 }
 
 function finishPreparedActivation(
@@ -287,7 +285,7 @@ function finishPreparedActivation(
     layout: promoted.layout,
     env: input.options.env,
     home,
-    securityLogSink: correlatedSecurityLogSink(input.options.securityLogSink, input.correlationId),
+    securityLogSink: activationLogSink(input.options, input.correlationId),
   });
   return { shortcutRefreshed, layout: promoted.layout };
 }
@@ -328,7 +326,11 @@ function preparePortablePromotion(
   readonly promotion: PortablePromotionResult;
 } {
   assertAbort(context.request.signal);
-  settleInterruptedActivation({ stateDir: context.stateDir, request: context.request });
+  settleInterruptedActivation({
+    stateDir: context.stateDir,
+    request: context.request,
+    securityLogSink: activationLogSink(context.options, UNKNOWN_CORRELATION_ID),
+  });
   beginPortableActivationRecovery({
     stateDir: context.stateDir,
     recovery: recoveryRecord(context, "prepared"),
@@ -337,6 +339,7 @@ function preparePortablePromotion(
   const promoted = prepareActivation({
     request: context.request,
     activationId: context.activationId,
+    securityLogSink: activationLogSink(context.options, context.activationId),
   });
   progress.promoted = promoted;
   writePortableActivationRecovery({
@@ -407,7 +410,7 @@ function restoreFailedPromotion(context: ActivationContext, progress: Activation
         runtimeFacts: context.request.runtimeFacts,
         activationId: context.activationId,
       });
-    restorePortableActivation(paths);
+    restorePortableActivation(paths, activationLogSink(context.options, context.activationId));
     restorePortableRegistration({ stateDir: context.stateDir, activationId: context.activationId });
     cleanupPortableRegistrationSnapshot({
       stateDir: context.stateDir,

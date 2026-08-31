@@ -31,6 +31,18 @@ import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { resolveExternalOpener, runLifecycleCli, safeKillProcess } from "./lifecycle.js";
 import type { CliIo } from "./runner.js";
 
+const TEST_LAUNCH_ID = "ab".repeat(16);
+
+async function runLifecycle(
+  ...args: Parameters<typeof runLifecycleCli>
+): ReturnType<typeof runLifecycleCli> {
+  const deps = args[4] ?? {};
+  return runLifecycleCli(args[0], args[1], args[2], args[3], {
+    verifyLaunchIdentity: () => true,
+    ...deps,
+  });
+}
+
 interface Captured {
   readonly io: CliIo;
   readonly out: () => string;
@@ -142,7 +154,7 @@ async function expectNativeHealthStartFailure(
     // keeps these tests bounded to the wait-for-health path they exist to exercise.
     let aliveCalls = 0;
     try {
-      const code = await runLifecycleCli(
+      const code = await runLifecycle(
         "start",
         ["--port", String(port), "--start-timeout", "1", "--stop-timeout", "1"],
         c.io,
@@ -189,7 +201,7 @@ describe("runLifecycleCli", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("must not run"));
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
     try {
-      const code = await runLifecycleCli(
+      const code = await runLifecycle(
         "start",
         ["--port", String(address.port)],
         c.io,
@@ -254,7 +266,7 @@ describe("runLifecycleCli", () => {
     const root = makeRoot();
     const c = makeIo();
 
-    const code = await runLifecycleCli("status", [], c.io, {}, { cwd: root });
+    const code = await runLifecycle("status", [], c.io, {}, { cwd: root });
 
     expect(code).toBe(0);
     expect(c.out()).toContain("not running");
@@ -265,11 +277,32 @@ describe("runLifecycleCli", () => {
     const root = makeRoot();
     const c = makeIo();
 
-    const code = await runLifecycleCli("stop", [], c.io, {}, { cwd: root });
+    const code = await runLifecycle("stop", [], c.io, {}, { cwd: root });
 
     expect(code).toBe(0);
     expect(c.out()).toContain("not running");
     expect(c.err()).toBe("");
+  });
+
+  it("refuses to start when a stale ui.shutdown path is a directory", async () => {
+    const root = makeRoot();
+    mkdirSync(join(root, ".keiko", "ui.shutdown"), { recursive: true });
+    const c = makeIo();
+    const code = await runLifecycle(
+      "start",
+      [],
+      c.io,
+      {},
+      {
+        cwd: root,
+        isPortAvailable: () => Promise.resolve(true),
+        spawnFn: () => {
+          throw new Error("must not spawn");
+        },
+      },
+    );
+    expect(code).toBe(1);
+    expect(c.err()).toContain("failed to clear a stale shutdown request");
   });
 
   it("prints lifecycle help without touching runtime state", async () => {
@@ -277,7 +310,7 @@ describe("runLifecycleCli", () => {
     const c = makeIo();
     const spawnFn = vi.fn();
 
-    const code = await runLifecycleCli("start", ["--help"], c.io, {}, { cwd: root, spawnFn });
+    const code = await runLifecycle("start", ["--help"], c.io, {}, { cwd: root, spawnFn });
 
     expect(code).toBe(0);
     expect(c.out()).toContain("keiko start");
@@ -289,11 +322,11 @@ describe("runLifecycleCli", () => {
   it("reports a live pid through status without probing health", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
     const c = makeIo();
     const fetchImpl = vi.fn();
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "status",
       [],
       c.io,
@@ -317,7 +350,7 @@ describe("runLifecycleCli", () => {
     const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       ["--port", "4321", "--state-dir", ".keiko-test"],
       c.io,
@@ -381,7 +414,7 @@ describe("runLifecycleCli", () => {
     const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       [],
       c.io,
@@ -420,7 +453,7 @@ describe("runLifecycleCli", () => {
     const c = makeIo();
     const spawnFn = vi.fn();
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       [],
       c.io,
@@ -455,7 +488,7 @@ describe("runLifecycleCli", () => {
     const c = makeIo();
     const spawnFn = vi.fn();
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       ["--state-dir", escapeDir],
       c.io,
@@ -490,7 +523,7 @@ describe("runLifecycleCli", () => {
     const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       [],
       c.io,
@@ -526,7 +559,7 @@ describe("runLifecycleCli", () => {
     const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       [],
       c.io,
@@ -567,7 +600,7 @@ describe("runLifecycleCli", () => {
       "/opt/old-keiko/dist/cli/index.js",
       async () =>
         withEnvVar("KEIKO_UI_STATIC_ROOT", "/opt/old-keiko/dist/ui/static", async () =>
-          runLifecycleCli(
+          runLifecycle(
             "start",
             [],
             c.io,
@@ -623,7 +656,7 @@ describe("runLifecycleCli", () => {
     const openExternal = vi.fn();
     const spawnedEnvs: (NodeJS.ProcessEnv | undefined)[] = [];
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       ["--open"],
       c.io,
@@ -672,7 +705,7 @@ describe("runLifecycleCli", () => {
     const provided = "operator".padEnd(CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS, "x");
     const spawnedEnvs: (NodeJS.ProcessEnv | undefined)[] = [];
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       [],
       c.io,
@@ -699,11 +732,11 @@ describe("runLifecycleCli", () => {
   it("opens an unpaired URL for an already-running UI and says how to re-pair", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
     const c = makeIo();
     const openExternal = vi.fn();
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       ["--open"],
       c.io,
@@ -728,11 +761,11 @@ describe("runLifecycleCli", () => {
   it("keeps an already-running UI when the health version matches the installed package", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
     const c = makeIo();
     const spawnFn = vi.fn();
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       [],
       c.io,
@@ -756,12 +789,12 @@ describe("runLifecycleCli", () => {
   it("reopens the browser for an already-running UI when --open is requested", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
     const c = makeIo();
     const spawnFn = vi.fn();
     const openExternal = vi.fn();
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       ["--open"],
       c.io,
@@ -787,7 +820,7 @@ describe("runLifecycleCli", () => {
   it("restarts an already-running UI when the health version is stale", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
     const c = makeIo();
     const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
     const child = { pid: 67890, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
@@ -796,7 +829,7 @@ describe("runLifecycleCli", () => {
       if (pid === 12345) oldProcessAlive = false;
     });
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       ["--start-timeout", "1", "--stop-timeout", "1"],
       c.io,
@@ -840,7 +873,7 @@ describe("runLifecycleCli", () => {
   it("restarts an existing process when health is reachable but does not expose a version", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
     const c = makeIo();
     const child = { pid: 67890, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
     let oldProcessAlive = true;
@@ -848,7 +881,7 @@ describe("runLifecycleCli", () => {
       if (pid === 12345) oldProcessAlive = false;
     });
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       ["--start-timeout", "1", "--stop-timeout", "1"],
       c.io,
@@ -886,7 +919,7 @@ describe("runLifecycleCli", () => {
   it("restarts an existing process when its health endpoint is unreachable", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
     const c = makeIo();
     const child = { pid: 67890, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
     let oldProcessAlive = true;
@@ -895,7 +928,7 @@ describe("runLifecycleCli", () => {
       if (pid === 12345) oldProcessAlive = false;
     });
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       ["--start-timeout", "1", "--stop-timeout", "1"],
       c.io,
@@ -928,7 +961,7 @@ describe("runLifecycleCli", () => {
     const root = makeRoot();
     const c = makeIo();
 
-    const code = await runLifecycleCli("start", ["--port", "99999"], c.io, {}, { cwd: root });
+    const code = await runLifecycle("start", ["--port", "99999"], c.io, {}, { cwd: root });
 
     expect(code).toBe(2);
     expect(c.err().toLowerCase()).toContain("usage");
@@ -939,7 +972,7 @@ describe("runLifecycleCli", () => {
     const c = makeIo();
     const spawnFn = vi.fn();
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       ["--port", "4321"],
       c.io,
@@ -969,7 +1002,7 @@ describe("runLifecycleCli", () => {
     const child = { pid: 24680, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
     const killProcess = vi.fn();
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       ["--port", "4321", "--start-timeout", "1"],
       c.io,
@@ -1021,7 +1054,7 @@ describe("runLifecycleCli", () => {
     let aliveCalls = 0;
 
     try {
-      const code = await runLifecycleCli(
+      const code = await runLifecycle(
         "start",
         ["--port", "4322", "--start-timeout", "1", "--stop-timeout", "1"],
         c.io,
@@ -1059,7 +1092,7 @@ describe("runLifecycleCli", () => {
     const child = new EventEmitter() as unknown as ChildProcess & EventEmitter;
     Object.assign(child, { pid: 13579, unref: vi.fn() });
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       [],
       c.io,
@@ -1091,7 +1124,7 @@ describe("runLifecycleCli", () => {
     const c = makeIo();
     const child = { pid: undefined, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       [],
       c.io,
@@ -1117,7 +1150,7 @@ describe("runLifecycleCli", () => {
     const c = makeIo();
     let logFds: { readonly stdoutFd: number; readonly stderrFd: number } | undefined;
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       [],
       c.io,
@@ -1150,7 +1183,7 @@ describe("runLifecycleCli", () => {
     const c = makeIo();
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
 
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       ["--open"],
       c.io,
@@ -1201,7 +1234,7 @@ describe("runLifecycleCli", () => {
       const events: SecurityLogEvent[] = [];
       const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
 
-      const code = await runLifecycleCli("start", ["--open"], c.io, env, {
+      const code = await runLifecycle("start", ["--open"], c.io, env, {
         cwd: root,
         platform: () => "win32",
         spawnFn: () => child,
@@ -1230,7 +1263,7 @@ describe("runLifecycleCli", () => {
   it("escalates stop to SIGKILL when the process misses the graceful deadline", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
     const c = makeIo();
     let alive = true;
     const killProcess = vi.fn((_pid: number, signal?: NodeJS.Signals | 0) => {
@@ -1242,7 +1275,7 @@ describe("runLifecycleCli", () => {
     nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
 
     try {
-      const code = await runLifecycleCli(
+      const code = await runLifecycle(
         "stop",
         ["--stop-timeout", "1"],
         c.io,
@@ -1269,7 +1302,7 @@ describe("runLifecycleCli", () => {
   it("returns failure when the process is still alive after SIGKILL", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
     const c = makeIo();
     const killProcess = vi.fn();
     // terminateAndConfirm uses performance.now for a monotonic deadline (Codex thread
@@ -1278,7 +1311,7 @@ describe("runLifecycleCli", () => {
     nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
 
     try {
-      const code = await runLifecycleCli(
+      const code = await runLifecycle(
         "stop",
         ["--stop-timeout", "1"],
         c.io,
@@ -1295,7 +1328,9 @@ describe("runLifecycleCli", () => {
       expect(killProcess).toHaveBeenNthCalledWith(1, 12345, "SIGTERM");
       expect(killProcess).toHaveBeenNthCalledWith(2, 12345, "SIGKILL");
       expect(c.err()).toContain("failed to stop pid 12345");
-      expect(readFileSync(join(root, ".keiko", "ui.pid"), "utf8")).toBe("12345\n");
+      expect(readFileSync(join(root, ".keiko", "ui.pid"), "utf8")).toBe(
+        `12345\n${TEST_LAUNCH_ID}\n`,
+      );
     } finally {
       nowSpy.mockRestore();
     }
@@ -1323,7 +1358,7 @@ describe("runLifecycleCli", () => {
     });
 
     try {
-      const code = await runLifecycleCli(
+      const code = await runLifecycle(
         "start",
         ["--start-timeout", "1", "--stop-timeout", "1"],
         c.io,
@@ -1356,12 +1391,12 @@ describe("runLifecycleCli", () => {
   it("on Windows stop writes ui.shutdown and never SIGTERMs when the process exits", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
     const c = makeIo();
     const killProcess = vi.fn();
     const killWindowsTree = vi.fn(() => "succeeded" as const);
     let probe = true;
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "stop",
       ["--stop-timeout", "10"],
       c.io,
@@ -1374,7 +1409,9 @@ describe("runLifecycleCli", () => {
             probe = false;
             return true;
           }
-          expect(readFileSync(join(root, ".keiko", "ui.shutdown"), "utf8")).toBe("12345\n");
+          expect(readFileSync(join(root, ".keiko", "ui.shutdown"), "utf8")).toBe(
+            `12345\n${TEST_LAUNCH_ID}\n`,
+          );
           return false;
         },
         killProcess,
@@ -1394,7 +1431,7 @@ describe("runLifecycleCli", () => {
   it("on Windows stop escalates with tree-kill and does not SIGKILL after success", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
     const c = makeIo();
     let alive = true;
     const killProcess = vi.fn();
@@ -1405,7 +1442,7 @@ describe("runLifecycleCli", () => {
     const nowSpy = vi.spyOn(performance, "now");
     nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
     try {
-      const code = await runLifecycleCli(
+      const code = await runLifecycle(
         "stop",
         ["--stop-timeout", "1"],
         c.io,
@@ -1481,7 +1518,7 @@ describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () 
     const c = makeIo();
     const spawned: unknown[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       ["--state-dir", ".keiko"],
       c.io,
@@ -1528,7 +1565,7 @@ describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () 
 
     const c = makeIo();
     const killProcess = vi.fn();
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "stop",
       [],
       c.io,
@@ -1574,7 +1611,7 @@ describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () 
 
     const c = makeIo();
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       ["--state-dir", ".keiko"],
       c.io,
@@ -1630,7 +1667,7 @@ describe("keiko start — refuses a hard-linked/FIFO/non-regular ui.log (comment
     const c = makeIo();
     const spawned: unknown[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       ["--state-dir", ".keiko"],
       c.io,
@@ -1670,7 +1707,7 @@ describe("keiko start — refuses a hard-linked/FIFO/non-regular ui.log (comment
     const c = makeIo();
     const spawned: unknown[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       ["--state-dir", ".keiko"],
       c.io,
@@ -1706,7 +1743,7 @@ describe("keiko start — refuses a hard-linked/FIFO/non-regular ui.log (comment
     const c = makeIo();
     const spawned: unknown[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
-    const code = await runLifecycleCli(
+    const code = await runLifecycle(
       "start",
       ["--state-dir", ".keiko"],
       c.io,

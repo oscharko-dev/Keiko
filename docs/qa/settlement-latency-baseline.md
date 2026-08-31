@@ -179,17 +179,18 @@ allowlisted categorical labels.
 
 | cohort          | PRs | measured | median settlement | max settlement | median final gap | median rounds | median reaction |
 | --------------- | --: | -------: | ----------------: | -------------: | ---------------: | ------------: | --------------: |
-| finding-bearing |  10 |        8 |             169.3 |          437.4 |              0.6 |           6.5 |            19.1 |
+| finding-bearing |  10 |        8 |             169.3 |          437.4 |              0.6 |           6.5 |            17.2 |
 | clean           |   0 |        0 |                 - |              - |                - |             - |               - |
 
 | cohort          | reactions | in-SLO | 10-30 min | 30-60 min | >60 min | median reaction |
 | --------------- | --------: | ------ | --------: | --------: | ------: | --------------: |
-| finding-bearing |        34 | 8/34   |        14 |         6 |       6 |            19.1 |
+| finding-bearing |        27 | 6/27   |        12 |         5 |       4 |            17.2 |
 | clean           |         0 | 0/0    |         0 |         0 |       0 |               - |
 
 The ten finding-bearing pull requests were `#3355`, `#3356`, `#3354`, `#3348`, `#3343`, `#3345`,
-`#3308`, `#3307`, `#3306`, and `#3341`. They contain 34 measured reactions; 8 were within the
-10-minute SLO (**23.5%**) and the median reaction was **19.1 minutes**. Against the 2026-07-26 baseline
+`#3308`, `#3307`, `#3306`, and `#3341`. After omitting the truncated `#3355` row, they contain 27
+measured reactions; 6 were within the 10-minute SLO (**22.2%**) and the median reaction was
+**17.2 minutes**. Against the 2026-07-26 baseline
 (50 of 119, **42%**, median **11.4 minutes**) this remains a regression. Against the 2026-08-28
 post-adoption cohort (7 of 30, **23.3%**, median **22.5 minutes**) the share is unchanged and the
 median is slightly faster; the SLO miss did not recover.
@@ -213,14 +214,14 @@ semantics.
 Body-free only: durations, counts, pull-request numbers, and closed outcome labels.
 
 1. **Waiting for unpublished producers, not auto-merge (hypothesis).** Auto-merge still closes in under a minute
-   once the last required check is green. **14 of 34** reactions sit in the 10–30 minute band — a
+   once the last required check is green. **12 of 27** reactions sit in the 10–30 minute band — a
    shape consistent with starting a repair only after CI or another reviewer has settled, even though
    findings arrive while CI is still running.
 2. **An operating-rule contradiction (hypothesis).** [`review-settlement.md`](review-settlement.md) stated both
    "push one repair within 10 minutes of appearance" and "wait for all producers to settle" before
    composing a head. The second instruction produces the first band. The harvest window below
    replaces that wait.
-3. **Session gaps, not a tooling minimum (hypothesis).** **6 of 34** reactions exceed 60 minutes (89.2 to 158.5).
+3. **Session gaps, not a tooling minimum (hypothesis).** **4 of 27** reactions exceed 60 minutes (89.2 to 158.5).
    `#3348` carried both **8** and **158.5** minutes; `#3306` carried both **2.2–3.1** and **41.6**.
    In-SLO reaction is already achieved on the same pull requests that also carry the tail, so the
    miss is operator/session continuity rather than a reviewer or CI lower bound.
@@ -242,7 +243,7 @@ repository maintainer, via [`AGENTS.md`](../../AGENTS.md) §11 and
   reviewer that has not yet spoken, or for the ADR-0170 D5 interlock. That interlock gates
   auto-merge arming, not repair.
 - **Handoff.** If the same session cannot begin the repair within 10 minutes, the next agent that
-  touches the pull request starts from the unresolved-thread list immediately.
+  touches the pull request starts from CI logs, Sonar issues, and unresolved threads immediately.
 - **Not pulled.** No automation, bulk action, timer, or dismissal resolves a review conversation.
   Required checks are unchanged. Merge-queue activation remains an owner decision
   ([`review-settlement.md`](review-settlement.md)).

@@ -87,7 +87,7 @@ export async function terminateUiProcess(
   if (!input.escalate) {
     return finishWithoutEscalation(input);
   }
-  if (!ownedTargetAllowsForcedStop(input)) {
+  if (!targetIdentityVerified(input)) {
     emitLifecycleFailure(input, "cli.lifecycle.stop-request-failed", "unverified-pid");
     return { confirmed: false, escalated: false };
   }
@@ -119,16 +119,33 @@ function finishWithoutEscalation(input: TerminateUiProcessInput): TerminateUiPro
 function requestGracefulStop(input: TerminateUiProcessInput): boolean {
   const written = tryWriteShutdownRequest(input);
   if (!written && input.platform === "win32") return false;
-  if (input.platform !== "win32" && !signalPosixTerm(input)) return written;
+  if (input.platform === "win32") {
+    emitStopRequested(input, "shutdown-request");
+    return true;
+  }
+  return requestPosixGracefulStop(input, written);
+}
+
+function requestPosixGracefulStop(input: TerminateUiProcessInput, written: boolean): boolean {
+  if (!targetIdentityVerified(input)) {
+    if (written) emitStopRequested(input, "shutdown-request");
+    return written;
+  }
+  if (!signalPosixTerm(input)) return written;
+  emitStopRequested(input, "sigterm");
+  return true;
+}
+
+function emitStopRequested(
+  input: TerminateUiProcessInput,
+  channel: "shutdown-request" | "sigterm",
+): void {
   emitSecurityLogEvent(input.securityLogSink, {
     level: "info",
     category: "diagnostic",
     op: "cli.lifecycle.stop-requested",
-    extra: {
-      channel: input.platform === "win32" ? "shutdown-request" : "sigterm",
-    },
+    extra: { channel },
   });
-  return true;
 }
 
 function signalPosixTerm(input: TerminateUiProcessInput): boolean {
@@ -220,26 +237,20 @@ function isForbiddenTarget(input: TerminateUiProcessInput): boolean {
   return input.pid === currentPid || input.pid === parentPid;
 }
 
-function ownedTargetAllowsForcedStop(input: TerminateUiProcessInput): boolean {
+function targetIdentityVerified(input: TerminateUiProcessInput): boolean {
   const record = readPidRecord(join(input.stateDir, UI_PID_FILE));
-  if (record === undefined) return false;
-  if (record.pid !== input.pid) return false;
-  const launchId = resolveLaunchId(input);
-  if (launchId !== undefined && record.launchId !== undefined && launchId !== record.launchId) {
-    return false;
-  }
-  return verifyOptionalLinuxLaunchId(input, launchId ?? record.launchId);
+  if (record?.pid !== input.pid) return false;
+  const launchId = resolveLaunchId(input) ?? record.launchId;
+  if (launchId === undefined) return false;
+  if (record.launchId !== undefined && record.launchId !== launchId) return false;
+  return verifyLiveLaunchId(input, launchId);
 }
 
-function verifyOptionalLinuxLaunchId(
-  input: TerminateUiProcessInput,
-  launchId: string | undefined,
-): boolean {
-  if (launchId === undefined || input.platform !== "linux") return true;
+function verifyLiveLaunchId(input: TerminateUiProcessInput, launchId: string): boolean {
   if (input.verifyLaunchIdentity !== undefined) {
     return input.verifyLaunchIdentity(input.pid, launchId);
   }
-  return linuxEnvironHasLaunchId(input.pid, launchId);
+  return input.platform === "linux" && linuxEnvironHasLaunchId(input.pid, launchId);
 }
 
 function linuxEnvironHasLaunchId(pid: number, launchId: string): boolean {

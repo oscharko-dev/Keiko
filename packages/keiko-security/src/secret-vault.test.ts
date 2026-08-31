@@ -564,6 +564,15 @@ describe("createLocalSecretVault — delete", () => {
     expect(vault.get("cred:keep")).toBe("keep-secret");
     expect(vault.list()).toEqual(["cred:keep"]);
   });
+
+  it("deleteMany of an empty list does not read an unreadable store", () => {
+    const storePath = join(dir, "vault-unreadable.enc.json");
+    mkdirSync(storePath);
+    const vault = vaultAt(storePath);
+    expect(() => {
+      vault.deleteMany([]);
+    }).not.toThrow();
+  });
 });
 
 describe("createLocalSecretVault — idempotent set", () => {
@@ -1097,6 +1106,23 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
     }).toThrow(/cannot be stored as a sharded entry/u);
     expect(vault.get("cred:ok")).toBeUndefined();
     expect(vault.list()).toEqual([]);
+  });
+
+  it("rolls back earlier shard writes when a later write in the same setMany fails", () => {
+    const storeDir = join(dir, "sharded-atomic-setmany");
+    const vault = shardedVaultAt(storeDir);
+    vault.set("cred:a", "original-a");
+    mkdirSync(join(storeDir, `entry-${Buffer.from("cred:b", "utf8").toString("hex")}.sealed`));
+    expect(() => {
+      vault.setMany(
+        new Map([
+          ["cred:a", "updated-a"],
+          ["cred:b", "never-stored"],
+        ]),
+      );
+    }).toThrow();
+    expect(vault.get("cred:a")).toBe("original-a");
+    expect(vault.get("cred:b")).toBeUndefined();
   });
 
   it("writes one 0600 file per entry into a 0700 directory and never plaintext", () => {

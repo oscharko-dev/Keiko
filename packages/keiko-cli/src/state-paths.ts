@@ -240,15 +240,21 @@ export function peekShutdownRequest(stateDir: string, pid: number, launchId?: st
 }
 
 export function clearShutdownRequest(stateDir: string): void {
-  unlinkOwnedPidShapedName(shutdownRequestPath(stateDir));
+  unlinkOwnedPidShapedName(shutdownRequestPath(stateDir), true);
 }
 
-function unlinkOwnedPidShapedName(path: string): void {
+export function removeStaleShutdownRequest(stateDir: string): void {
+  unlinkOwnedPidShapedName(shutdownRequestPath(stateDir), false);
+}
+
+function unlinkOwnedPidShapedName(path: string, ignoreDirectory: boolean): void {
   try {
     rmSync(path, { force: true });
   } catch (error) {
     // Node 24 reports a directory unlink as ERR_FS_EISDIR (legacy EISDIR is kept).
-    if (isFsCode(error, "EISDIR") || isFsCode(error, "ERR_FS_EISDIR")) return;
+    if (ignoreDirectory && (isFsCode(error, "EISDIR") || isFsCode(error, "ERR_FS_EISDIR"))) {
+      return;
+    }
     throw error;
   }
 }
@@ -330,17 +336,22 @@ export type PidState = "absent" | "stale" | "running";
 export interface PidClassification {
   readonly state: PidState;
   readonly pid: number | undefined;
+  readonly launchId?: string | undefined;
 }
 
 // Classifies the UI pid file: `absent` (missing or malformed), `stale` (a pid is
-// recorded but the process is gone), or `running` (recorded and alive).
+// recorded but the process is gone), or `running` (recorded and alive). Reads the
+// pid and launch id from one record so stop/uninstall cannot pair a stale pid with
+// a replacement launch id.
 export function classifyPid(
   pidFilePath: string,
   isAlive: (pid: number) => boolean,
 ): PidClassification {
-  const pid = readPidFile(pidFilePath);
-  if (pid === undefined) return { state: "absent", pid: undefined };
-  return isAlive(pid) ? { state: "running", pid } : { state: "stale", pid };
+  const record = readPidRecord(pidFilePath);
+  if (record === undefined) return { state: "absent", pid: undefined };
+  const state: PidState = isAlive(record.pid) ? "running" : "stale";
+  if (record.launchId === undefined) return { state, pid: record.pid };
+  return { state, pid: record.pid, launchId: record.launchId };
 }
 
 // ── Runtime-state confidentiality manifest (Issue #1321) ──────────────────────

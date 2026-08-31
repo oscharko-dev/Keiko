@@ -2933,6 +2933,24 @@ function assertLifecycleRestart(runLifecycle) {
   }
 }
 
+const GRACEFUL_PROCESS_EXIT_REASONS = new Set(["shutdown-request", "sigterm"]);
+
+export function logHasGracefulProcessExit(logText) {
+  for (const line of logText.split("\n")) {
+    if (line.length === 0) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (event.op !== "process.exiting") continue;
+    const reason = event.extra?.reason;
+    if (typeof reason === "string" && GRACEFUL_PROCESS_EXIT_REASONS.has(reason)) return true;
+  }
+  return false;
+}
+
 function assertLifecycleStop(runLifecycle, stateDir) {
   const stopResult = runLifecycle("stop");
   if (stopResult.status !== 0) {
@@ -2952,8 +2970,8 @@ function assertLifecycleStop(runLifecycle, stateDir) {
     fail("keiko stop left no activity log to prove process.exiting");
   }
   const logText = readFileSync(logPath, "utf8");
-  if (!logText.includes('"op":"process.exiting"') || !logText.includes("shutdown-request")) {
-    fail("keiko stop did not record process.exiting with reason shutdown-request");
+  if (!logHasGracefulProcessExit(logText)) {
+    fail("keiko stop did not record process.exiting with a graceful drain reason");
   }
 }
 

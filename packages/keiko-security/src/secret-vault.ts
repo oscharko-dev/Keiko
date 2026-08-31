@@ -131,7 +131,8 @@ export interface LocalSecretVault {
   // Seals each entry, replacing any existing value for the same reference and leaving every other
   // stored reference untouched. Empty maps are a no-op (unlike replaceAll, which would wipe the
   // store). Atomic and crash-safe. The single-file layout commits the whole file once; the sharded
-  // layout writes one file per supplied reference and does not delete siblings.
+  // layout writes one file per supplied reference and does not delete siblings. A later shard
+  // write that fails rolls back earlier writes in the same batch.
   readonly setMany: (entries: ReadonlyMap<string, string>) => void;
   // Replaces the ENTIRE entry set with the supplied references, sealing each value. Removes any
   // reference not present in `entries`. Atomic and crash-safe. Callers that must add or overwrite a
@@ -715,19 +716,69 @@ function listShardReferences(dir: string): readonly string[] {
   return references;
 }
 
+interface PreparedShardWrite {
+  readonly path: string;
+  readonly envelope: string;
+  readonly previous: string | undefined;
+}
+
+function snapshotShardEnvelope(filePath: string): string | undefined {
+  try {
+    return readFileSync(filePath, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function restorePreparedShard(storeDir: string, item: PreparedShardWrite): void {
+  if (item.previous === undefined) {
+    rmSync(item.path, { force: true });
+    return;
+  }
+  writeShard(storeDir, item.path, item.previous);
+}
+
+function rollbackCommittedShards(storeDir: string, committed: readonly PreparedShardWrite[]): void {
+  for (let index = committed.length - 1; index >= 0; index -= 1) {
+    const item = committed[index];
+    if (item === undefined) continue;
+    try {
+      restorePreparedShard(storeDir, item);
+    } catch {
+      // Best-effort rollback; the original write failure is rethrown by the caller.
+    }
+  }
+}
+
+function commitShardWrites(storeDir: string, prepared: readonly PreparedShardWrite[]): void {
+  const committed: PreparedShardWrite[] = [];
+  try {
+    for (const item of prepared) {
+      writeShard(storeDir, item.path, item.envelope);
+      committed.push(item);
+    }
+  } catch (error) {
+    rollbackCommittedShards(storeDir, committed);
+    throw error;
+  }
+}
+
 function mergeShardEntries(
   storeDir: string,
   writePath: (reference: string) => string,
   key: Buffer,
   next: ReadonlyMap<string, string>,
 ): void {
-  const prepared: { readonly path: string; readonly envelope: string }[] = [];
+  const prepared: PreparedShardWrite[] = [];
   for (const [reference, secret] of next) {
-    prepared.push({ path: writePath(reference), envelope: sealString(key, secret) });
+    const path = writePath(reference);
+    prepared.push({
+      path,
+      envelope: sealString(key, secret),
+      previous: snapshotShardEnvelope(path),
+    });
   }
-  for (const item of prepared) {
-    writeShard(storeDir, item.path, item.envelope);
-  }
+  commitShardWrites(storeDir, prepared);
 }
 
 function deleteShardEntries(storeDir: string, references: readonly string[]): void {

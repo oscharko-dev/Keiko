@@ -75,7 +75,11 @@ function throwCaughtRenameError(error: unknown): never {
 }
 
 function renameBackoff(options: AtomicPublishRenameOptions): readonly number[] {
-  return options.backoffMs ?? WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS;
+  const backoff = options.backoffMs ?? WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS;
+  if (backoff.length === 0) {
+    throw new TypeError("atomic publish rename backoffMs must not be empty");
+  }
+  return backoff;
 }
 
 function sleepBeforeAttempt(

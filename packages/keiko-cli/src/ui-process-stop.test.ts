@@ -33,8 +33,17 @@ afterEach(() => {
   }
 });
 
+const TEST_LAUNCH_ID = "a".repeat(32);
+
 function writeOwnedPid(stateDir: string, pid: number): void {
-  writeExclusivePidFile(join(stateDir, "ui.pid"), pid);
+  writeExclusivePidFile(join(stateDir, "ui.pid"), pid, TEST_LAUNCH_ID);
+}
+
+function verifiedIdentity(): {
+  readonly launchId: string;
+  readonly verifyLaunchIdentity: (pid: number, launchId: string) => boolean;
+} {
+  return { launchId: TEST_LAUNCH_ID, verifyLaunchIdentity: () => true };
 }
 
 function eperm(message = "operation not permitted"): NodeJS.ErrnoException {
@@ -44,6 +53,7 @@ function eperm(message = "operation not permitted"): NodeJS.ErrnoException {
 describe("terminateUiProcess", () => {
   it("on POSIX writes the shutdown sentinel, sends SIGTERM, and does not SIGKILL when the pid dies", async () => {
     const stateDir = makeStateDir();
+    writeOwnedPid(stateDir, 42);
     const { sink, events } = recordingSink();
     const killed: (readonly [number, NodeJS.Signals | 0 | undefined])[] = [];
     const outcome = await terminateUiProcess({
@@ -58,6 +68,7 @@ describe("terminateUiProcess", () => {
       },
       securityLogSink: sink,
       escalate: true,
+      ...verifiedIdentity(),
     });
     expect(outcome).toEqual({ confirmed: true, escalated: false });
     expect(killed).toEqual([[42, "SIGTERM"]]);
@@ -121,6 +132,7 @@ describe("terminateUiProcess", () => {
         processEnv: treeEnv,
         securityLogSink: sink,
         escalate: true,
+        ...verifiedIdentity(),
       });
       expect(outcome.escalated).toBe(true);
       expect(outcome.confirmed).toBe(true);
@@ -151,6 +163,7 @@ describe("terminateUiProcess", () => {
         killProcess,
         killWindowsTree,
         escalate: true,
+        ...verifiedIdentity(),
       });
     } finally {
       nowSpy.mockRestore();
@@ -184,6 +197,7 @@ describe("terminateUiProcess", () => {
         },
         killWindowsTree,
         escalate: true,
+        ...verifiedIdentity(),
       });
     } finally {
       nowSpy.mockRestore();
@@ -248,6 +262,7 @@ describe("terminateUiProcess", () => {
         killProcess,
         killWindowsTree,
         escalate: true,
+        ...verifiedIdentity(),
       });
     } finally {
       nowSpy.mockRestore();
@@ -312,6 +327,7 @@ describe("terminateUiProcess", () => {
       },
       securityLogSink: sink,
       escalate: true,
+      ...verifiedIdentity(),
     });
     expect(events.map((event) => event.op)).toEqual(["cli.lifecycle.stop-request-failed"]);
     expect(events[0]?.errorKind).toBe("EPERM");
@@ -342,6 +358,7 @@ describe("terminateUiProcess", () => {
         },
         securityLogSink: sink,
         escalate: true,
+        ...verifiedIdentity(),
       });
     } finally {
       nowSpy.mockRestore();
@@ -373,12 +390,12 @@ describe("terminateUiProcess", () => {
     } finally {
       nowSpy.mockRestore();
     }
-    expect(killProcess).toHaveBeenCalledWith(12, "SIGTERM");
-    expect(killProcess).not.toHaveBeenCalledWith(12, "SIGKILL");
+    expect(killProcess).not.toHaveBeenCalled();
   });
 
   it("without escalate leaves a live POSIX pid running after SIGTERM and does not SIGKILL", async () => {
     const stateDir = makeStateDir();
+    writeOwnedPid(stateDir, 8);
     const killed: (readonly [number, NodeJS.Signals | 0 | undefined])[] = [];
     const nowSpy = vi.spyOn(performance, "now");
     nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
@@ -394,6 +411,7 @@ describe("terminateUiProcess", () => {
           killed.push([pid, signal]);
         },
         escalate: false,
+        ...verifiedIdentity(),
       });
       expect(outcome).toEqual({ confirmed: false, escalated: false });
     } finally {
@@ -401,5 +419,54 @@ describe("terminateUiProcess", () => {
     }
     expect(killed).toEqual([[8, "SIGTERM"]]);
     expect(existsSync(join(stateDir, "ui.shutdown"))).toBe(true);
+  });
+
+  it("does not SIGTERM a recycled POSIX pid whose live identity does not match", async () => {
+    const stateDir = makeStateDir();
+    writeOwnedPid(stateDir, 12);
+    const killProcess = vi.fn();
+    const outcome = await terminateUiProcess({
+      pid: 12,
+      stateDir,
+      stopTimeoutMs: 1,
+      platform: "darwin",
+      sleep: () => Promise.resolve(),
+      isProcessAlive: () => true,
+      killProcess,
+      escalate: true,
+      launchId: TEST_LAUNCH_ID,
+      verifyLaunchIdentity: () => false,
+    });
+    expect(outcome).toEqual({ confirmed: false, escalated: false });
+    expect(killProcess).not.toHaveBeenCalled();
+  });
+
+  it("does not tree-kill a recycled Windows pid whose live identity does not match", async () => {
+    const stateDir = makeStateDir();
+    writeOwnedPid(stateDir, 12);
+    const killProcess = vi.fn();
+    const killWindowsTree = vi.fn(() => "succeeded" as const);
+    const nowSpy = vi.spyOn(performance, "now");
+    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
+    try {
+      const outcome = await terminateUiProcess({
+        pid: 12,
+        stateDir,
+        stopTimeoutMs: 1,
+        platform: "win32",
+        sleep: () => Promise.resolve(),
+        isProcessAlive: () => true,
+        killProcess,
+        killWindowsTree,
+        escalate: true,
+        launchId: TEST_LAUNCH_ID,
+        verifyLaunchIdentity: () => false,
+      });
+      expect(outcome).toEqual({ confirmed: false, escalated: false });
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(killWindowsTree).not.toHaveBeenCalled();
+    expect(killProcess).not.toHaveBeenCalled();
   });
 });
