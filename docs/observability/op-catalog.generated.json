@@ -1221,6 +1221,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "security.fs.portable-backup-cleanup",
+      "category": "security",
+      "site": "packages/keiko-server/src/update-portable-activation-files.ts:811",
+      "package": "keiko-server"
+    },
+    {
       "op": "server-log.write-failed",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/observability/server-log.ts:331",

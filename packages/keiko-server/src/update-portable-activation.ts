@@ -14,7 +14,7 @@ import {
   clearPortableActivationRecovery,
   capturePortableRegistration,
   cleanupPortableRegistrationSnapshot,
-  cleanupPortableActivation,
+  commitPortableActivationCleanup,
   PortableUpdateActivationError,
   promotePortableInstall,
   readPortableActivationRecovery,
@@ -23,6 +23,7 @@ import {
   refreshPortableShortcut,
   restorePortableActivation,
   restorePortableRegistration,
+  type PortableActivationCleanupOptions,
   type PortableActivationRecovery,
   type PortableActivationLayout,
   type PortablePromotionResult,
@@ -61,6 +62,9 @@ export interface PortableUpdateActivatorOptions {
   // malformed SystemRoot/WINDIR encountered while creating or verifying the Windows Start Menu
   // shortcut is logged through this sink instead of only degrading to `shortcutRefreshed: false`.
   readonly securityLogSink?: SecurityLogSink | undefined;
+  // Test seam for Windows backup-delete deferral; production omits these and uses process values.
+  readonly platform?: NodeJS.Platform | undefined;
+  readonly execPath?: string | undefined;
 }
 
 export { PortableUpdateActivationError } from "./update-portable-activation-files.js";
@@ -222,14 +226,34 @@ function portableStateDir(
   return request.runtimeFacts?.portableStateDir ?? options.env.KEIKO_STATE_DIR ?? ".keiko";
 }
 
+function activationCleanupOptions(
+  options: PortableUpdateActivatorOptions,
+  updaterPid?: number,
+): PortableActivationCleanupOptions {
+  return {
+    ...(options.platform === undefined ? {} : { platform: options.platform }),
+    ...(options.execPath === undefined ? {} : { execPath: options.execPath }),
+    ...(updaterPid === undefined ? {} : { updaterPid }),
+  };
+}
+
+function boundActivationCleanupSink(
+  sink: SecurityLogSink | undefined,
+): { readonly securityLogSink: SecurityLogSink } | Record<string, never> {
+  return sink === undefined ? {} : { securityLogSink: sink };
+}
+
 function settleInterruptedActivation(input: {
   readonly stateDir: string;
   readonly request: PortableUpdateActivateInput;
-  readonly securityLogSink?: SecurityLogSink | undefined;
-}): void {
+  readonly options: PortableUpdateActivatorOptions;
+}): "idle" | "deferred" {
   const recovery = readPortableActivationRecovery(input.stateDir);
-  if (recovery === undefined) return;
-  const securityLogSink = activationLogSinkFromRaw(input.securityLogSink, recovery.activationId);
+  if (recovery === undefined) return "idle";
+  const securityLogSink = activationLogSinkFromRaw(
+    input.options.securityLogSink,
+    recovery.activationId,
+  );
   const paths = recoveryPaths({
     target: recovery.target,
     stageId: recovery.stageId,
@@ -237,19 +261,32 @@ function settleInterruptedActivation(input: {
     activationId: recovery.activationId,
   });
   if (recovery.phase === "verified" || recovery.phase === "cleanup-pending") {
-    cleanupPortableActivation(
+    const outcome = commitPortableActivationCleanup({
+      stateDir: input.stateDir,
       paths,
-      recovery.updaterPid === undefined ? {} : { updaterPid: recovery.updaterPid },
-    );
-  } else {
-    restorePortableRegistration({ stateDir: input.stateDir, activationId: recovery.activationId });
-    restorePortableActivation(paths, securityLogSink);
+      recovery,
+      cleanup: activationCleanupOptions(input.options, recovery.updaterPid),
+      ...boundActivationCleanupSink(securityLogSink),
+    });
+    return outcome === "deferred" ? "deferred" : "idle";
   }
+  restorePortableRegistration({ stateDir: input.stateDir, activationId: recovery.activationId });
+  restorePortableActivation(paths, securityLogSink);
   cleanupPortableRegistrationSnapshot({
     stateDir: input.stateDir,
     activationId: recovery.activationId,
   });
   clearPortableActivationRecovery(input.stateDir);
+  return "idle";
+}
+
+function assertActivationSettlementIdle(settlement: "idle" | "deferred"): void {
+  if (settlement === "deferred") {
+    throw new PortableUpdateActivationError(
+      "portable-activation-failed",
+      "portable activation recovery is pending",
+    );
+  }
 }
 
 function prepareActivation(input: {
@@ -339,11 +376,13 @@ function preparePortablePromotion(
   readonly promotion: PortablePromotionResult;
 } {
   assertAbort(context.request.signal);
-  settleInterruptedActivation({
-    stateDir: context.stateDir,
-    request: context.request,
-    securityLogSink: context.options.securityLogSink,
-  });
+  assertActivationSettlementIdle(
+    settleInterruptedActivation({
+      stateDir: context.stateDir,
+      request: context.request,
+      options: context.options,
+    }),
+  );
   beginPortableActivationRecovery({
     stateDir: context.stateDir,
     recovery: recoveryRecord(context, "prepared"),
@@ -392,31 +431,28 @@ async function verifyAndCommitPromotion(
     recovery: recoveryRecord(context, "verified"),
   });
   progress.recoveryPhase = "verified";
-  cleanupPortableActivation(prepared.promotion.paths, { updaterPid: process.pid });
-  cleanupPortableRegistrationSnapshot({
+  const outcome = commitPortableActivationCleanup({
     stateDir: context.stateDir,
-    activationId: context.activationId,
+    paths: prepared.promotion.paths,
+    recovery: recoveryRecord(context, "verified", process.pid),
+    cleanup: activationCleanupOptions(context.options, process.pid),
+    ...boundActivationCleanupSink(activationLogSink(context.options, context.activationId)),
   });
-  if (process.platform === "win32") {
-    writePortableActivationRecovery({
-      stateDir: context.stateDir,
-      recovery: recoveryRecord(context, "cleanup-pending", process.pid),
-    });
-    progress.recoveryPhase = "cleanup-pending";
-    return;
-  }
-  clearPortableActivationRecovery(context.stateDir);
-  progress.recoveryPhase = undefined;
+  progress.recoveryPhase = outcome === "deferred" ? "cleanup-pending" : undefined;
+}
+
+function isCommittedActivationPhase(
+  phase: PortableActivationRecovery["phase"] | undefined,
+): boolean {
+  return phase === "verified" || phase === "cleanup-pending";
 }
 
 function restoreFailedPromotion(context: ActivationContext, progress: ActivationProgress): void {
-  if (
-    progress.recoveryPhase === undefined ||
-    progress.recoveryPhase === "verified" ||
-    progress.recoveryPhase === "cleanup-pending"
-  ) {
+  if (isCommittedActivationPhase(progress.recoveryPhase)) return;
+  if (isCommittedActivationPhase(readPortableActivationRecovery(context.stateDir)?.phase)) {
     return;
   }
+  if (progress.recoveryPhase === undefined) return;
   try {
     // KEIKO-0493: terminate a relaunch that was already spawned before reverting the layout it
     // was launched against, so a cancelled activation cannot leave a live process running on

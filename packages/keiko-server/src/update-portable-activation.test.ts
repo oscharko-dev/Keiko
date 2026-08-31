@@ -22,6 +22,7 @@ import {
   activationIdFor,
   capturePortableRegistration,
   cleanupPortableActivation,
+  commitPortableActivationCleanup,
   promotePortableInstall,
   readPortableActivationRecovery,
   readWindowsPortableShortcutTarget,
@@ -721,6 +722,117 @@ describe("portable update activation", () => {
     expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
     expect(readFileSync(registrationPath, "utf8")).toBe(oldRegistration);
   });
+
+  it("keeps Windows cleanup-pending recovery when the same updater starts another activate", async () => {
+    const install = await makeInstall();
+    const request = {
+      sessionId: "session-same-updater-cleanup",
+      targetVersion: TARGET_VERSION,
+      stage: stageSummary(),
+      runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+    };
+    const events: SecurityLogEvent[] = [];
+    const activator = createPortableUpdateActivator({
+      env: { KEIKO_STATE_DIR: install.stateDir },
+      homedir: () => install.home,
+      platform: "win32",
+      spawnFn: () => childProcess(),
+      versionVerifier: () => Promise.resolve(true),
+      securityLogSink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+    await expect(activator.activate(request)).resolves.toMatchObject({ status: "activated" });
+    const backupRoot = join(
+      dirname(install.managedRoot),
+      `.keiko-previous-${activationIdFor(request)}`,
+    );
+    const recoveryPath = join(install.stateDir, "updates", "portable-activation-recovery.json");
+    expect(existsSync(backupRoot)).toBe(true);
+    expect(JSON.parse(readFileSync(recoveryPath, "utf8"))).toMatchObject({
+      phase: "cleanup-pending",
+      updaterPid: process.pid,
+    });
+    await expect(activator.activate(request)).rejects.toMatchObject({
+      reason: "portable-activation-failed",
+    });
+    expect(existsSync(backupRoot)).toBe(true);
+    expect(JSON.parse(readFileSync(recoveryPath, "utf8"))).toMatchObject({
+      phase: "cleanup-pending",
+      updaterPid: process.pid,
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "security.fs.portable-backup-cleanup",
+        extra: { outcome: "deferred" },
+      }),
+    );
+  });
+
+  it("lets a later process finish deferred Windows backup cleanup before promoting", async () => {
+    const install = await makeInstall();
+    const firstRequest = {
+      sessionId: "session-later-process-cleanup",
+      targetVersion: TARGET_VERSION,
+      stage: stageSummary(),
+      runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+    };
+    const activator = createPortableUpdateActivator({
+      env: { KEIKO_STATE_DIR: install.stateDir },
+      homedir: () => install.home,
+      platform: "win32",
+      spawnFn: () => childProcess(),
+      versionVerifier: () => Promise.resolve(true),
+    });
+    await expect(activator.activate(firstRequest)).resolves.toMatchObject({ status: "activated" });
+    const firstBackup = join(
+      dirname(install.managedRoot),
+      `.keiko-previous-${activationIdFor(firstRequest)}`,
+    );
+    const pending = readPortableActivationRecovery(install.stateDir);
+    expect(pending).toMatchObject({ phase: "cleanup-pending" });
+    if (pending === undefined) return;
+    writePortableActivationRecovery({
+      stateDir: install.stateDir,
+      recovery: {
+        activationId: pending.activationId,
+        stageId: pending.stageId,
+        target: TARGET,
+        phase: "cleanup-pending",
+        updaterPid: process.pid + 1,
+      },
+    });
+    const nextVersion = "0.2.13";
+    writeInstall(
+      join(dirname(install.managedRoot), ".keiko-portable-updates", "stage-2", "Keiko"),
+      nextVersion,
+    );
+    const nextRequest = {
+      sessionId: "session-later-process-next",
+      targetVersion: nextVersion,
+      stage: {
+        ...stageSummary(),
+        stageId: "stage-2",
+        packageVersion: nextVersion,
+        sha256: "c".repeat(64),
+      },
+      runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+    };
+    await expect(activator.activate(nextRequest)).resolves.toMatchObject({ status: "activated" });
+    expect(existsSync(firstBackup)).toBe(false);
+    expect(
+      existsSync(
+        join(dirname(install.managedRoot), `.keiko-previous-${activationIdFor(nextRequest)}`),
+      ),
+    ).toBe(true);
+    expect(readPortableActivationRecovery(install.stateDir)).toMatchObject({
+      phase: "cleanup-pending",
+      updaterPid: process.pid,
+    });
+    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(nextVersion);
+  });
 });
 
 describe("cleanupPortableActivation", () => {
@@ -734,15 +846,17 @@ describe("cleanupPortableActivation", () => {
     writeFileSync(mappedExe, "exe");
     writeFileSync(join(stageRoot, "leftover"), "x");
     try {
-      cleanupPortableActivation(
-        {
-          managedRoot: join(root, "Keiko"),
-          stageRoot,
-          candidateRoot: join(root, "candidate"),
-          backupRoot,
-        },
-        { platform: "win32", execPath: mappedExe },
-      );
+      expect(
+        cleanupPortableActivation(
+          {
+            managedRoot: join(root, "Keiko"),
+            stageRoot,
+            candidateRoot: join(root, "candidate"),
+            backupRoot,
+          },
+          { platform: "win32", execPath: mappedExe },
+        ),
+      ).toEqual({ backupDeleteDeferred: true });
       expect(existsSync(mappedExe)).toBe(true);
       expect(existsSync(stageRoot)).toBe(false);
     } finally {
@@ -759,15 +873,17 @@ describe("cleanupPortableActivation", () => {
     writeFileSync(join(backupRoot, "marker"), "old");
     writeFileSync(join(stageRoot, "leftover"), "x");
     try {
-      cleanupPortableActivation(
-        {
-          managedRoot: join(root, "Keiko"),
-          stageRoot,
-          candidateRoot: join(root, "candidate"),
-          backupRoot,
-        },
-        { platform: "win32", execPath: process.execPath, updaterPid: process.pid },
-      );
+      expect(
+        cleanupPortableActivation(
+          {
+            managedRoot: join(root, "Keiko"),
+            stageRoot,
+            candidateRoot: join(root, "candidate"),
+            backupRoot,
+          },
+          { platform: "win32", execPath: process.execPath, updaterPid: process.pid },
+        ),
+      ).toEqual({ backupDeleteDeferred: true });
       expect(existsSync(backupRoot)).toBe(true);
       expect(existsSync(stageRoot)).toBe(false);
     } finally {
@@ -783,15 +899,17 @@ describe("cleanupPortableActivation", () => {
     mkdirSync(stageRoot, { recursive: true });
     writeFileSync(join(backupRoot, "marker"), "old");
     try {
-      cleanupPortableActivation(
-        {
-          managedRoot: join(root, "Keiko"),
-          stageRoot,
-          candidateRoot: join(root, "candidate"),
-          backupRoot,
-        },
-        { platform: "win32", execPath: process.execPath, updaterPid: process.pid + 1 },
-      );
+      expect(
+        cleanupPortableActivation(
+          {
+            managedRoot: join(root, "Keiko"),
+            stageRoot,
+            candidateRoot: join(root, "candidate"),
+            backupRoot,
+          },
+          { platform: "win32", execPath: process.execPath, updaterPid: process.pid + 1 },
+        ),
+      ).toEqual({ backupDeleteDeferred: false });
       expect(existsSync(backupRoot)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -852,6 +970,118 @@ describe("cleanupPortableActivation", () => {
       expect(existsSync(siblingExe)).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("commitPortableActivationCleanup", () => {
+  function fixture(label: string): {
+    readonly root: string;
+    readonly stateDir: string;
+    readonly recovery: {
+      readonly activationId: string;
+      readonly stageId: string;
+      readonly target: typeof TARGET;
+      readonly phase: "verified";
+    };
+    readonly paths: {
+      readonly managedRoot: string;
+      readonly stageRoot: string;
+      readonly candidateRoot: string;
+      readonly backupRoot: string;
+    };
+  } {
+    const root = join(tmpdir(), `keiko-activation-commit-${label}-${String(process.pid)}`);
+    const backupRoot = join(root, "Keiko-old");
+    const stageRoot = join(root, "stage");
+    const stateDir = join(root, "state");
+    mkdirSync(backupRoot, { recursive: true });
+    mkdirSync(stageRoot, { recursive: true });
+    writeFileSync(join(backupRoot, "marker"), "old");
+    writeFileSync(join(stageRoot, "leftover"), "x");
+    const recovery = {
+      activationId: "a".repeat(32),
+      stageId: "stage-1",
+      target: TARGET,
+      phase: "verified" as const,
+    };
+    writePortableActivationRecovery({ stateDir, recovery });
+    return {
+      root,
+      stateDir,
+      recovery,
+      paths: {
+        managedRoot: join(root, "Keiko"),
+        stageRoot,
+        candidateRoot: join(root, "candidate"),
+        backupRoot,
+      },
+    };
+  }
+
+  it("keeps cleanup-pending recovery when Windows defers backup delete", () => {
+    const tree = fixture("deferred");
+    const events: SecurityLogEvent[] = [];
+    try {
+      expect(
+        commitPortableActivationCleanup({
+          stateDir: tree.stateDir,
+          paths: tree.paths,
+          recovery: tree.recovery,
+          cleanup: { platform: "win32", updaterPid: process.pid },
+          securityLogSink: {
+            write: (event): void => {
+              events.push(event);
+            },
+          },
+        }),
+      ).toBe("deferred");
+      expect(existsSync(tree.paths.backupRoot)).toBe(true);
+      expect(existsSync(tree.paths.stageRoot)).toBe(false);
+      expect(readPortableActivationRecovery(tree.stateDir)).toEqual({
+        ...tree.recovery,
+        phase: "cleanup-pending",
+        updaterPid: process.pid,
+      });
+      expect(events).toEqual([
+        expect.objectContaining({
+          op: "security.fs.portable-backup-cleanup",
+          correlationId: tree.recovery.activationId,
+          extra: { outcome: "deferred" },
+        }),
+      ]);
+    } finally {
+      rmSync(tree.root, { recursive: true, force: true });
+    }
+  });
+
+  it("clears recovery after a later Windows process removes the backup", () => {
+    const tree = fixture("removed");
+    const events: SecurityLogEvent[] = [];
+    try {
+      expect(
+        commitPortableActivationCleanup({
+          stateDir: tree.stateDir,
+          paths: tree.paths,
+          recovery: tree.recovery,
+          cleanup: { platform: "win32", updaterPid: process.pid + 1 },
+          securityLogSink: {
+            write: (event): void => {
+              events.push(event);
+            },
+          },
+        }),
+      ).toBe("removed");
+      expect(existsSync(tree.paths.backupRoot)).toBe(false);
+      expect(readPortableActivationRecovery(tree.stateDir)).toBeUndefined();
+      expect(events).toEqual([
+        expect.objectContaining({
+          op: "security.fs.portable-backup-cleanup",
+          extra: { outcome: "removed" },
+        }),
+      ]);
+    } finally {
+      rmSync(tree.root, { recursive: true, force: true });
     }
   });
 });
@@ -927,13 +1157,19 @@ describe("refreshPortableShortcut logs a trust-boundary refusal (win32 route)", 
       await expect(activator.activate(request)).resolves.toMatchObject({
         shortcutRefreshed: false,
       });
-      expect(events).toEqual([
+      expect(events).toContainEqual(
         expect.objectContaining({
           correlationId,
           op: "security.windows-shortcut.system-root-refused",
           extra: { mode },
         }),
-      ]);
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          correlationId,
+          op: "security.fs.portable-backup-cleanup",
+        }),
+      );
       expect(JSON.stringify(events)).not.toContain("attacker");
     },
   );

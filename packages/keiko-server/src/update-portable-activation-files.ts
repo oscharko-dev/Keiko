@@ -764,20 +764,86 @@ function lstatEntryOrUndefined(path: string): ReturnType<typeof lstatSync> | und
   }
 }
 
+export interface PortableActivationCleanupOptions {
+  readonly platform?: NodeJS.Platform;
+  readonly execPath?: string;
+  readonly updaterPid?: number;
+}
+
+export interface PortableActivationCleanupResult {
+  readonly backupDeleteDeferred: boolean;
+}
+
 export function cleanupPortableActivation(
   paths: PortableActivationPaths,
-  options: {
-    readonly platform?: NodeJS.Platform;
-    readonly execPath?: string;
-    readonly updaterPid?: number;
-  } = {},
-): void {
+  options: PortableActivationCleanupOptions = {},
+): PortableActivationCleanupResult {
   const platform = options.platform ?? process.platform;
   const execPath = options.execPath ?? process.execPath;
-  if (!shouldDeferBackupDelete(paths.backupRoot, platform, execPath, options.updaterPid)) {
+  const backupDeleteDeferred = shouldDeferBackupDelete(
+    paths.backupRoot,
+    platform,
+    execPath,
+    options.updaterPid,
+  );
+  if (!backupDeleteDeferred) {
     rmSync(paths.backupRoot, { recursive: true, force: true });
   }
   rmSync(paths.stageRoot, { recursive: true, force: true });
+  return { backupDeleteDeferred };
+}
+
+function deferredCleanupUpdaterPid(
+  recovery: PortableActivationRecovery,
+  updaterPid: number | undefined,
+): Pick<PortableActivationRecovery, "updaterPid"> | Record<string, never> {
+  const pid = updaterPid ?? recovery.updaterPid;
+  return pid === undefined ? {} : { updaterPid: pid };
+}
+
+function emitPortableBackupCleanup(
+  sink: SecurityLogSink | undefined,
+  correlationId: string,
+  outcome: "deferred" | "removed",
+): void {
+  sink?.write({
+    category: "security",
+    op: "security.fs.portable-backup-cleanup",
+    correlationId,
+    extra: { outcome },
+  });
+}
+
+export function commitPortableActivationCleanup(input: {
+  readonly stateDir: string;
+  readonly paths: PortableActivationPaths;
+  readonly recovery: PortableActivationRecovery;
+  readonly cleanup?: PortableActivationCleanupOptions;
+  readonly securityLogSink?: SecurityLogSink;
+}): "deferred" | "removed" {
+  const cleanup = input.cleanup ?? {};
+  const result = cleanupPortableActivation(input.paths, cleanup);
+  cleanupPortableRegistrationSnapshot({
+    stateDir: input.stateDir,
+    activationId: input.recovery.activationId,
+  });
+  if (result.backupDeleteDeferred) {
+    writePortableActivationRecovery({
+      stateDir: input.stateDir,
+      recovery: {
+        activationId: input.recovery.activationId,
+        stageId: input.recovery.stageId,
+        target: input.recovery.target,
+        phase: "cleanup-pending",
+        ...deferredCleanupUpdaterPid(input.recovery, cleanup.updaterPid),
+      },
+    });
+    emitPortableBackupCleanup(input.securityLogSink, input.recovery.activationId, "deferred");
+    return "deferred";
+  }
+  clearPortableActivationRecovery(input.stateDir);
+  emitPortableBackupCleanup(input.securityLogSink, input.recovery.activationId, "removed");
+  return "removed";
 }
 
 function shouldDeferBackupDelete(
