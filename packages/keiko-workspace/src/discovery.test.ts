@@ -1,9 +1,18 @@
-import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readWorkspaceFileForEditing as readViaPublishedSubpath } from "@oscharko-dev/keiko-workspace/internal/editor-read";
 import {
+  discoverCandidateInventory,
   discoverFiles,
   discoverWithStatsAsync,
   discoverWithStats,
@@ -17,7 +26,12 @@ import {
   PathEscapeError,
   WorkspaceReadError,
 } from "./errors.js";
-import type { WorkspaceDirEntry, WorkspaceFs, WorkspaceStat } from "./fs.js";
+import {
+  nodeWorkspaceFs,
+  type WorkspaceDirEntry,
+  type WorkspaceFs,
+  type WorkspaceStat,
+} from "./fs.js";
 import { DEFAULT_DISCOVERY_OPTIONS, type WorkspaceInfo } from "./types.js";
 
 let dir: string;
@@ -97,6 +111,94 @@ describe("discoverFiles", () => {
       maxFiles: 3,
     });
     expect(found).toHaveLength(3);
+  });
+
+  it("caps internal candidate traversal even when no file fills the file budget", () => {
+    const root = "/ws";
+    let readDirCalls = 0;
+    const requestedCaps: (number | undefined)[] = [];
+    const fs: WorkspaceFs = {
+      readFileUtf8: (): string => "",
+      stat: (): WorkspaceStat => ({
+        size: 0,
+        isFile: false,
+        isDirectory: true,
+        isSymbolicLink: false,
+      }),
+      readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+        readDirCalls += 1;
+        requestedCaps.push(maxEntries);
+        const entries =
+          absolutePath === root
+            ? Array.from({ length: 100 }, (_, index) => ({
+                name: `empty-${index.toString().padStart(3, "0")}`,
+                isDirectory: true,
+                isFile: false,
+                isSymbolicLink: false,
+              }))
+            : [];
+        return maxEntries === undefined ? entries : entries.slice(0, maxEntries);
+      },
+      realPath: (absolutePath): string => absolutePath,
+      exists: (): boolean => true,
+    };
+    const result = discoverCandidateInventory(
+      fakeWorkspace(root),
+      { ...DEFAULT_DISCOVERY_OPTIONS, maxFiles: 1 },
+      fs,
+    );
+    const traversalEntryBudget = Math.max(2, DEFAULT_DISCOVERY_OPTIONS.maxDepth + 2);
+
+    expect(result.files).toEqual([]);
+    expect(result.directories.length).toBeLessThanOrEqual(traversalEntryBudget + 1);
+    expect(readDirCalls).toBeLessThanOrEqual(traversalEntryBudget + 1);
+    expect(requestedCaps).toEqual([traversalEntryBudget + 1]);
+    expect(result.stats.maxFilesPruned).toBeGreaterThan(0);
+  });
+
+  it("deterministically rejects an internal flat directory that exceeds the traversal budget", () => {
+    const root = join(dir, "candidate-flat-overflow");
+    mkdirSync(root);
+    const names = Array.from(
+      { length: 50 },
+      (_, index) => `entry-${index.toString().padStart(2, "0")}.ts`,
+    );
+    for (const name of [...names].reverse()) writeFileSync(join(root, name), "x", "utf8");
+
+    const result = discoverCandidateInventory(fakeWorkspace(root), {
+      ...DEFAULT_DISCOVERY_OPTIONS,
+      maxFiles: 1,
+    });
+
+    expect(result.files).toEqual([]);
+    expect(result.directorySnapshots).toEqual([]);
+    expect(result.stats.maxFilesPruned).toBeGreaterThan(0);
+  });
+
+  it("keeps the public maxFiles contract independent of directory entry count", () => {
+    const forwardRoot = join(dir, "forward");
+    const reverseRoot = join(dir, "reverse");
+    const names = Array.from(
+      { length: 50 },
+      (_, index) => `entry-${index.toString().padStart(2, "0")}.ts`,
+    );
+    for (const [root, order] of [
+      [forwardRoot, names],
+      [reverseRoot, [...names].reverse()],
+    ] as const) {
+      mkdirSync(root);
+      writeFileSync(join(root, "package.json"), "{}", "utf8");
+      for (const name of order) writeFileSync(join(root, name), "x", "utf8");
+    }
+    const options = { ...DEFAULT_DISCOVERY_OPTIONS, maxFiles: 1 };
+
+    const forward = discoverWithStats(detectWorkspaceAt(forwardRoot), options);
+    const reverse = discoverWithStats(detectWorkspaceAt(reverseRoot), options);
+
+    expect(forward.files.map((entry) => entry.relativePath)).toEqual(["entry-00.ts"]);
+    expect(reverse.files).toEqual(forward.files);
+    expect(forward.stats.maxFilesPruned).toBeGreaterThan(0);
+    expect(reverse.stats.maxFilesPruned).toBeGreaterThan(0);
   });
 
   it("caps recursion at maxDepth", () => {
@@ -223,6 +325,122 @@ describe("discoverFiles", () => {
     expect(stats.discovered).toBeGreaterThanOrEqual(1);
   });
 
+  it("bounds the internal skipped-symlink inventory and reports pruning", () => {
+    const root = "/ws";
+    const fs: WorkspaceFs = {
+      readFileUtf8: (): string => "",
+      stat: (): WorkspaceStat => ({
+        size: 0,
+        isFile: false,
+        isDirectory: true,
+        isSymbolicLink: false,
+      }),
+      readDir: (): readonly WorkspaceDirEntry[] =>
+        Array.from({ length: 100 }, (_, index) => ({
+          name: `link-${index.toString().padStart(3, "0")}`,
+          isDirectory: false,
+          isFile: false,
+          isSymbolicLink: true,
+        })),
+      realPath: (absolutePath): string => absolutePath,
+      exists: (): boolean => true,
+    };
+
+    const result = discoverCandidateInventory(
+      fakeWorkspace(root),
+      { ...DEFAULT_DISCOVERY_OPTIONS, maxFiles: 1 },
+      fs,
+    );
+
+    expect(result.skippedSymbolicLinks).toEqual([]);
+    // A capped read returns filesystem order, so the bounded traversal rejects the whole overflowing
+    // directory rather than presenting an arbitrary prefix as a deterministic inventory.
+    expect(result.stats.maxFilesPruned).toBeGreaterThan(0);
+  });
+
+  it("fails internal candidate discovery when a directory cannot be read", () => {
+    const root = "/ws";
+    const fs: WorkspaceFs = {
+      readFileUtf8: (): string => "",
+      stat: (): WorkspaceStat => ({
+        size: 0,
+        isFile: false,
+        isDirectory: true,
+        isSymbolicLink: false,
+      }),
+      readDir: (): never => {
+        throw new Error("EIO");
+      },
+      realPath: (absolutePath): string => absolutePath,
+      exists: (): boolean => true,
+    };
+
+    expect(() =>
+      discoverCandidateInventory(fakeWorkspace(root), DEFAULT_DISCOVERY_OPTIONS, fs),
+    ).toThrow(WorkspaceReadError);
+    expect(discoverWithStats(fakeWorkspace(root), DEFAULT_DISCOVERY_OPTIONS, fs).files).toEqual([]);
+  });
+
+  it("revalidates a stale directory entry before descending through a swapped symlink", async () => {
+    const root = "/ws";
+    let outsideReadDirCalls = 0;
+    const fs: WorkspaceFs = {
+      readFileUtf8: (): never => {
+        throw new Error("content must not be read");
+      },
+      stat: (): WorkspaceStat => ({
+        size: 0,
+        isFile: false,
+        isDirectory: true,
+        isSymbolicLink: false,
+      }),
+      readDir: (absolutePath): readonly WorkspaceDirEntry[] => {
+        if (absolutePath === root) {
+          return [{ name: "swapped", isDirectory: true, isFile: false, isSymbolicLink: false }];
+        }
+        if (absolutePath.startsWith("/outside")) outsideReadDirCalls += 1;
+        return [{ name: "secret.txt", isDirectory: false, isFile: true, isSymbolicLink: false }];
+      },
+      realPath: (absolutePath): string =>
+        absolutePath === `${root}/swapped` ? "/outside/swapped" : absolutePath,
+      exists: (): boolean => true,
+    };
+    const workspace = fakeWorkspace(root);
+
+    const sync = discoverWithStats(workspace, DEFAULT_DISCOVERY_OPTIONS, fs);
+    const asyncResult = await discoverWithStatsAsync(workspace, DEFAULT_DISCOVERY_OPTIONS, fs);
+
+    expect(sync.files).toEqual([]);
+    expect(asyncResult).toEqual(sync);
+    expect(sync.stats.denied).toBe(1);
+    expect(outsideReadDirCalls).toBe(0);
+    expect(() => discoverCandidateInventory(workspace, DEFAULT_DISCOVERY_OPTIONS, fs)).toThrow(
+      PathEscapeError,
+    );
+    expect(outsideReadDirCalls).toBe(0);
+  });
+
+  it("fails internal candidate discovery when a discovered file cannot be stated", () => {
+    const root = "/ws";
+    const fs: WorkspaceFs = {
+      readFileUtf8: (): string => "",
+      stat: (): never => {
+        throw new Error("EIO");
+      },
+      readDir: (absolutePath): readonly WorkspaceDirEntry[] =>
+        absolutePath === root
+          ? [{ name: "unreadable.ts", isDirectory: false, isFile: true, isSymbolicLink: false }]
+          : [],
+      realPath: (absolutePath): string => absolutePath,
+      exists: (): boolean => true,
+    };
+
+    expect(() =>
+      discoverCandidateInventory(fakeWorkspace(root), DEFAULT_DISCOVERY_OPTIONS, fs),
+    ).toThrow(WorkspaceReadError);
+    expect(discoverWithStats(fakeWorkspace(root), DEFAULT_DISCOVERY_OPTIONS, fs).files).toEqual([]);
+  });
+
   it("keeps async discovery identical across every filtering and pruning branch", async () => {
     writeFileSync(join(dir, ".gitignore"), "*.tmp\n", "utf8");
     file(".env", "SECRET=1");
@@ -268,6 +486,18 @@ describe("readWorkspaceFile", () => {
     file(".env", "SECRET=1");
     symlinkSync(join(dir, ".env"), join(dir, "alias.env"));
     expect(() => readWorkspaceFile(detectWorkspace(dir), "alias.env")).toThrow(PathDeniedError);
+  });
+
+  it("refuses an explicit path retargeted to a different in-workspace file", () => {
+    file("selected.ts", "selected bytes");
+    file("other.ts", "other bytes");
+    const workspace = detectWorkspace(dir);
+
+    unlinkSync(join(dir, "selected.ts"));
+    symlinkSync(join(dir, "other.ts"), join(dir, "selected.ts"));
+
+    expect(() => readWorkspaceFile(workspace, "selected.ts")).toThrow(PathDeniedError);
+    expect(() => readWorkspaceFileForEditing(workspace, "selected.ts")).toThrow(PathDeniedError);
   });
 
   it("refuses to read inside a benign-named root that is a symlink into a denied dir", () => {
@@ -477,6 +707,81 @@ describe("readWorkspaceFileForEditing", () => {
     expect(() => readWorkspaceFileForEditing(detectWorkspace(dir), "alias.txt")).toThrow(
       PathDeniedError,
     );
+  });
+
+  it("rejects a real file swapped to an outside symlink after the pre-read stat", () => {
+    file("safe.ts", "SAFE");
+    const outside = mkdtempSync(join(tmpdir(), "keiko-read-race-outside-"));
+    let swapped = false;
+    let legacyReadCalled = false;
+    try {
+      const outsidePath = join(outside, "private.txt");
+      writeFileSync(outsidePath, "OUTSIDE_PRIVATE_BYTES", "utf8");
+      const fs: WorkspaceFs = {
+        ...nodeWorkspaceFs,
+        readFileUtf8: (absolutePath): string => {
+          legacyReadCalled = true;
+          return nodeWorkspaceFs.readFileUtf8(absolutePath);
+        },
+        stat: (absolutePath): WorkspaceStat => {
+          const before = nodeWorkspaceFs.stat(absolutePath);
+          if (!swapped && absolutePath.endsWith("/safe.ts")) {
+            swapped = true;
+            unlinkSync(absolutePath);
+            symlinkSync(outsidePath, absolutePath);
+          }
+          return before;
+        },
+      };
+
+      expect(() =>
+        readWorkspaceFileForEditing(detectWorkspace(dir), "safe.ts", { maxBytes: 1_024 }, fs),
+      ).toThrow(PathDeniedError);
+      expect(swapped).toBe(true);
+      expect(legacyReadCalled).toBe(false);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an in-workspace retarget after the descriptor read", () => {
+    const root = "/ws";
+    const selected = `${root}/selected.ts`;
+    const other = `${root}/other.ts`;
+    let retargeted = false;
+    const stat: WorkspaceStat = {
+      size: 4,
+      isFile: true,
+      isDirectory: false,
+      isSymbolicLink: false,
+      hardLinkCount: 1,
+      mtimeMs: 1,
+      ctimeMs: 1,
+      fileIdentity: "1:1",
+      mtimeNs: "1000000",
+      ctimeNs: "1000000",
+    };
+    const fs: WorkspaceFs = {
+      readFileUtf8: (): never => {
+        throw new Error("legacy read must not run");
+      },
+      readFileUtf8SameDescriptor: (): ReturnType<
+        NonNullable<WorkspaceFs["readFileUtf8SameDescriptor"]>
+      > => {
+        retargeted = true;
+        return { rawText: "SAFE", sizeBytes: 4, stat };
+      },
+      stat: (): WorkspaceStat => stat,
+      readDir: (): readonly WorkspaceDirEntry[] => [],
+      realPath: (absolutePath): string =>
+        retargeted && absolutePath === selected ? other : absolutePath,
+      exists: (): boolean => true,
+    };
+
+    expect(() =>
+      readWorkspaceFileForEditing(fakeWorkspace(root), "selected.ts", { maxBytes: 16 }, fs),
+    ).toThrow(PathDeniedError);
+    expect(retargeted).toBe(true);
   });
 
   it("still enforces the read cap", () => {

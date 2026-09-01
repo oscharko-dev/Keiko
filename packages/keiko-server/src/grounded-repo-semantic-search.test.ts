@@ -84,10 +84,6 @@ function childEntries(
   ];
 }
 
-function relativePath(abs: string): string {
-  return abs.startsWith(`${ROOT}/`) ? abs.slice(ROOT.length + 1) : abs;
-}
-
 function testFs(files: Record<string, string>): WorkspaceFs {
   const keyFor = (abs: string): string | undefined =>
     Object.keys(files).find((rel) => absolutePath(rel) === abs);
@@ -113,10 +109,6 @@ function testFs(files: Record<string, string>): WorkspaceFs {
     readDir: (abs: string): readonly WorkspaceDirEntry[] => childEntries(files, abs),
     realPath: (abs: string): string => abs,
     exists: (abs: string): boolean => abs === ROOT || keyFor(abs) !== undefined,
-    makeDir: () => undefined,
-    writeFileUtf8: (abs: string, content: string): void => {
-      files[relativePath(abs)] = content;
-    },
     readFileBytes: (abs: string, maxBytes: number): Promise<Uint8Array> => {
       const key = keyFor(abs);
       if (key === undefined) throw Object.assign(new Error(`ENOENT: ${abs}`), { code: "ENOENT" });
@@ -538,7 +530,11 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
 
     expect(hits).toEqual([]);
     expect(inputs).toEqual([]);
-    expect(readFileBytes).toHaveBeenCalledWith(absolutePath("src/auth.ts"), indexedText.length + 1);
+    expect(readFileBytes).toHaveBeenCalledWith(
+      absolutePath("src/auth.ts"),
+      indexedText.length + 1,
+      "reject",
+    );
     pod.store.close();
     deps.store.close();
   });
@@ -595,10 +591,11 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     let readsFail = false;
     const fs: WorkspaceFs = {
       ...baseFs,
-      readFileBytes: (path, maxBytes) =>
+      readFileBytes: (path, maxBytes, hardLinkPolicy) =>
         readsFail
           ? Promise.reject(new Error("READ_BLOCKED"))
-          : (baseFs.readFileBytes?.(path, maxBytes) ?? Promise.reject(new Error("NO_READER"))),
+          : (baseFs.readFileBytes?.(path, maxBytes, hardLinkPolicy) ??
+            Promise.reject(new Error("NO_READER"))),
     };
     const pod = await seedRepositoryPod(deps, fs, Object.keys(files));
     readsFail = true;

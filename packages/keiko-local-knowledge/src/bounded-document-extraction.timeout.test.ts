@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { CancelledError } from "@oscharko-dev/keiko-security";
 
 import type { BoundedDocumentExtractionOptions } from "./bounded-document-extraction.js";
 
@@ -53,5 +54,19 @@ describe("extractBoundedDocumentText timeout deadline", () => {
     expect(result.outcome).toBe("timed-out");
     expect(result.format).toBe("docx");
     expect(result.text).toBe("");
+  });
+
+  it("rejects promptly when caller cancellation interrupts a parser that ignores the signal", async () => {
+    const { extractBoundedDocumentText } = await import("./bounded-document-extraction.js");
+    const controller = new AbortController();
+    const outcome = extractBoundedDocumentText(
+      { bytes: new Uint8Array([1, 2, 3]), extension: "docx" },
+      options({ timeoutMs: 60_000, signal: controller.signal }),
+    );
+    const expectation = expect(outcome).rejects.toBeInstanceOf(CancelledError);
+
+    controller.abort();
+
+    await expectation;
   });
 });

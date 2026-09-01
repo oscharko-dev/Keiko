@@ -1,4 +1,5 @@
 import type { WorkspaceDirEntry, WorkspaceFileReader, WorkspaceFs, WorkspaceStat } from "./fs.js";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 
 // Minimal in-memory WorkspaceFs over a flat path->content map. Directories are implied by
@@ -73,6 +74,23 @@ function encodedFile(
     return undefined;
   }
   return new TextEncoder().encode(files[key] ?? "");
+}
+
+function memoryFileStat(absolutePath: string, content: string): WorkspaceStat {
+  const contentHash = createHash("sha256").update(content).digest("hex");
+  const timestampNs = BigInt(`0x${contentHash.slice(0, 15)}`).toString();
+  return {
+    size: Buffer.byteLength(content, "utf8"),
+    isFile: true,
+    isDirectory: false,
+    isSymbolicLink: false,
+    hardLinkCount: 1,
+    mtimeMs: Number(timestampNs) / 1_000_000,
+    ctimeMs: Number(timestampNs) / 1_000_000,
+    fileIdentity: `memfs:${canonicalPath(absolutePath)}:${contentHash}`,
+    mtimeNs: timestampNs,
+    ctimeNs: timestampNs,
+  };
 }
 
 function memReadFileBytes(
@@ -161,15 +179,12 @@ export function memFs(root: string, files: Readonly<Record<string, string>>): Wo
       if (key === undefined) {
         return { size: 0, isFile: false, isDirectory: true, isSymbolicLink: false };
       }
-      return {
-        size: Buffer.byteLength(files[key] ?? "", "utf8"),
-        isFile: true,
-        isDirectory: false,
-        isSymbolicLink: false,
-      };
+      return memoryFileStat(absolutePath, files[key] ?? "");
     },
-    readDir: (absolutePath: string): readonly WorkspaceDirEntry[] =>
-      childrenOf(root, files, absolutePath),
+    readDir: (absolutePath: string, maxEntries?: number): readonly WorkspaceDirEntry[] => {
+      const entries = childrenOf(root, files, absolutePath);
+      return maxEntries === undefined ? entries : entries.slice(0, maxEntries);
+    },
     realPath: (absolutePath: string): string => absolutePath,
     exists: (absolutePath: string): boolean =>
       findKey(absolutePath) !== undefined || canonicalPath(absolutePath) === canonicalRoot,

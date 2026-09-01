@@ -59,6 +59,8 @@ export interface EndpointContractLink {
 
 export interface EndpointContractDiagnostics {
   readonly filesScanned: number;
+  readonly filesSkipped: number;
+  readonly candidateLimitReached: boolean;
   readonly routesFound: number;
   readonly clientCallsFound: number;
   readonly linksFound: number;

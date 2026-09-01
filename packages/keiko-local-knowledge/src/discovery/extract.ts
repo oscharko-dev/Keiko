@@ -761,7 +761,7 @@ async function readBytes(
   const resolvedError = validateResolvedTarget(deps, params, target);
   if (resolvedError !== undefined) return resolvedError;
   try {
-    return await reader(target.absolutePath, maxBytes);
+    return await reader(target.absolutePath, maxBytes, "allow");
   } catch {
     return {
       code: "READ_FAILED",
@@ -861,7 +861,7 @@ async function readRange(
   const resolvedError = validateResolvedTarget(deps, params, target);
   if (resolvedError !== undefined) return resolvedError;
   try {
-    return await reader(target.absolutePath, startByte, length);
+    return await reader(target.absolutePath, startByte, length, "allow");
   } catch {
     return {
       code: "READ_FAILED",

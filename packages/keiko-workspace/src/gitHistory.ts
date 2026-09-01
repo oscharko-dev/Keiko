@@ -40,6 +40,35 @@ function containsParentTraversal(candidate: string): boolean {
   return candidate.split(/[\\/]+/).includes("..");
 }
 
+async function readGuardedBytes(
+  fs: WorkspaceFs,
+  absolutePath: string,
+  maxBytes: number,
+): Promise<string | undefined> {
+  if (fs.readFileBytes === undefined) return undefined;
+  try {
+    const bytes = await fs.readFileBytes(absolutePath, maxBytes, "reject");
+    return redact(new TextDecoder("utf-8", { fatal: false }).decode(bytes));
+  } catch {
+    return undefined;
+  }
+}
+
+function readGuardedUtf8(
+  fs: WorkspaceFs,
+  absolutePath: string,
+  maxBytes: number,
+): string | undefined {
+  try {
+    const raw =
+      fs.readFileUtf8SameDescriptor?.(absolutePath, maxBytes, "reject").rawText ??
+      fs.readFileUtf8(absolutePath);
+    return redact(raw);
+  } catch {
+    return undefined;
+  }
+}
+
 async function readGuardedAbsolute(
   fs: WorkspaceFs,
   base: string,
@@ -65,24 +94,9 @@ async function readGuardedAbsolute(
   // Enforce the size cap BEFORE reading to avoid loading multi-megabyte files into memory
   // (matches the probeBinary pattern from repoSearchScan.ts).
   if (stat.size > maxBytes) {
-    if (fs.readFileBytes !== undefined) {
-      let bytes: Uint8Array;
-      try {
-        bytes = await fs.readFileBytes(absolutePath, maxBytes);
-      } catch {
-        return undefined;
-      }
-      return redact(new TextDecoder("utf-8", { fatal: false }).decode(bytes));
-    }
-    return undefined;
+    return readGuardedBytes(fs, absolutePath, maxBytes);
   }
-  let raw: string;
-  try {
-    raw = fs.readFileUtf8(absolutePath);
-  } catch {
-    return undefined;
-  }
-  return redact(raw);
+  return readGuardedUtf8(fs, absolutePath, maxBytes);
 }
 
 function statOrUndefined(
@@ -121,7 +135,7 @@ async function readSmallUtf8File(
   }
   if (fs.readFileBytes !== undefined) {
     try {
-      const bytes = await fs.readFileBytes(abs, maxBytes);
+      const bytes = await fs.readFileBytes(abs, maxBytes, "reject");
       return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
     } catch {
       return undefined;

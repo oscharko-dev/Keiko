@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EvidenceAtom, RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/connected-context";
 import { memFs } from "./_memfs.js";
@@ -9,6 +9,7 @@ import {
   runStructuralAdapters,
   type StructuralAdapter,
   type StructuralAdapterRegistry,
+  type StructuralCoverageDiagnostics,
 } from "./structuralAdapters.js";
 import { DEFAULT_SEARCH_LIMITS, type SearchLimits, type SearchScope } from "./repoSearch.js";
 import type { WorkspaceInfo } from "./types.js";
@@ -16,6 +17,26 @@ import { ECOSYSTEMS, type Ecosystem } from "./ecosystems.js";
 
 const MEM_ROOT = "/ws";
 const FIXED_NOW = (): number => 1_700_000_000_000;
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (reason: unknown) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve = (_value: T): void => undefined;
+  let reject = (_reason: unknown): void => undefined;
+  const promise = new Promise<T>((complete, fail) => {
+    resolve = complete;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function makeScope(): { scope: SearchScope; fs: ReturnType<typeof memFs> } {
   const workspace: WorkspaceInfo = {
@@ -154,6 +175,219 @@ describe("createDefaultStructuralRegistry", () => {
 });
 
 describe("runStructuralAdapters", () => {
+  it("settles at the deadline when availability never resolves", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { scope, fs } = makeScope();
+    let availabilityCalls = 0;
+    const registry: StructuralAdapterRegistry = {
+      adapters: [
+        {
+          name: "pending-availability",
+          isAvailable: (): Promise<boolean> => {
+            availabilityCalls += 1;
+            return new Promise(() => undefined);
+          },
+          lookup: (): Promise<readonly EvidenceAtom[]> => Promise.resolve([]),
+        },
+      ],
+    };
+
+    const pending = runStructuralAdapters(registry, scope, nlq("x"), DEFAULT_SEARCH_LIMITS, fs, {
+      deadlineAtMs: 10,
+    });
+    await vi.advanceTimersByTimeAsync(10);
+
+    await expect(pending).resolves.toMatchObject({ atoms: [], errored: [] });
+    expect(availabilityCalls).toBe(1);
+  });
+
+  it("aborts and consumes a lookup rejection after the deadline", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { scope, fs } = makeScope();
+    const lookup = deferred<readonly EvidenceAtom[]>();
+    let lookupSignal: AbortSignal | undefined;
+    const registry: StructuralAdapterRegistry = {
+      adapters: [
+        {
+          name: "late-lookup",
+          isAvailable: (): Promise<boolean> => Promise.resolve(true),
+          lookup: (_scope, _query, _limits, _fs, deps): Promise<readonly EvidenceAtom[]> => {
+            lookupSignal = deps?.signal;
+            return lookup.promise;
+          },
+        },
+      ],
+    };
+    const pending = runStructuralAdapters(registry, scope, nlq("x"), DEFAULT_SEARCH_LIMITS, fs, {
+      deadlineAtMs: 10,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lookupSignal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(10);
+    const result = await pending;
+    lookup.reject(new Error("late lookup failure"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(lookupSignal?.aborted).toBe(true);
+    expect(result.atoms).toEqual([]);
+    expect(result.errored).toEqual([]);
+  });
+
+  it("aborts and discards coverage that resolves after the deadline", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { scope, fs } = makeScope();
+    const coverage = deferred<StructuralCoverageDiagnostics | undefined>();
+    let coverageSignal: AbortSignal | undefined;
+    const registry: StructuralAdapterRegistry = {
+      adapters: [
+        fakeAdapter("late-coverage", [fakeAtom("late.ts", "late")], (_s, _l, _f, deps) => {
+          coverageSignal = deps?.signal;
+          return coverage.promise;
+        }),
+      ],
+    };
+    const pending = runStructuralAdapters(registry, scope, nlq("x"), DEFAULT_SEARCH_LIMITS, fs, {
+      deadlineAtMs: 10,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(coverageSignal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(10);
+    const result = await pending;
+    coverage.resolve({
+      name: "late-coverage",
+      filesIndexed: 1,
+      filesSkipped: 0,
+      parserCoverage: [],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(coverageSignal?.aborted).toBe(true);
+    expect(result.atoms).toEqual([]);
+    expect(result.coverage).toEqual([]);
+  });
+
+  it("settles a pending availability probe when the caller cancels", async () => {
+    const { scope, fs } = makeScope();
+    const controller = new AbortController();
+    const registry: StructuralAdapterRegistry = {
+      adapters: [
+        {
+          name: "cancelled-availability",
+          isAvailable: (): Promise<boolean> => new Promise(() => undefined),
+          lookup: (): Promise<readonly EvidenceAtom[]> => Promise.resolve([]),
+        },
+      ],
+    };
+    const pending = runStructuralAdapters(registry, scope, nlq("x"), DEFAULT_SEARCH_LIMITS, fs, {
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    await expect(pending).resolves.toMatchObject({ atoms: [], errored: [] });
+  });
+
+  it("cooperatively aborts sibling adapter work when a typed error ends the runner", async () => {
+    const { scope, fs } = makeScope();
+    let siblingSignal: AbortSignal | undefined;
+    const sibling: StructuralAdapter = {
+      name: "pending-sibling",
+      isAvailable: (): Promise<boolean> => Promise.resolve(true),
+      lookup: (_scope, _query, _limits, _fs, deps): Promise<readonly EvidenceAtom[]> => {
+        siblingSignal = deps?.signal;
+        return new Promise(() => undefined);
+      },
+    };
+    const registry: StructuralAdapterRegistry = {
+      adapters: [throwingAdapter("typed-failure", new RepoSearchInvalidQueryError("bad")), sibling],
+    };
+
+    await expect(
+      runStructuralAdapters(registry, scope, nlq("x"), DEFAULT_SEARCH_LIMITS, fs),
+    ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
+    expect(siblingSignal?.aborted).toBe(true);
+  });
+
+  it("starts no adapter operation after an inherited deadline has expired", async () => {
+    const { scope, fs } = makeScope();
+    let availabilityCalls = 0;
+    let lookupCalls = 0;
+    const registry: StructuralAdapterRegistry = {
+      adapters: [
+        {
+          name: "deadline-probe",
+          isAvailable: (): Promise<boolean> => {
+            availabilityCalls += 1;
+            return Promise.resolve(true);
+          },
+          lookup: (): Promise<readonly EvidenceAtom[]> => {
+            lookupCalls += 1;
+            return Promise.resolve([]);
+          },
+        },
+      ],
+    };
+
+    const result = await runStructuralAdapters(
+      registry,
+      scope,
+      nlq("x"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: () => 10, deadlineAtMs: 10 },
+    );
+
+    expect(result.atoms).toEqual([]);
+    expect(availabilityCalls).toBe(0);
+    expect(lookupCalls).toBe(0);
+  });
+
+  it("blocks the next filesystem operation when an adapter reaches the shared deadline", async () => {
+    const { scope, fs: base } = makeScope();
+    let currentMs = 0;
+    let physicalTouches = 0;
+    const fs: typeof base = {
+      ...base,
+      realPath: (path): string => {
+        physicalTouches += 1;
+        currentMs = 10;
+        return base.realPath(path);
+      },
+      stat: (path): ReturnType<typeof base.stat> => {
+        physicalTouches += 1;
+        return base.stat(path);
+      },
+    };
+    const registry: StructuralAdapterRegistry = {
+      adapters: [
+        {
+          name: "deadline-probe",
+          isAvailable: (): Promise<boolean> => Promise.resolve(true),
+          lookup: (_scope, _query, _limits, workspaceFs): Promise<readonly EvidenceAtom[]> => {
+            workspaceFs.realPath(MEM_ROOT);
+            workspaceFs.stat(MEM_ROOT);
+            return Promise.resolve([fakeAtom("late.ts", "deadline")]);
+          },
+        },
+      ],
+    };
+
+    const result = await runStructuralAdapters(
+      registry,
+      scope,
+      nlq("x"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: () => currentMs, deadlineAtMs: 10 },
+    );
+
+    expect(result.atoms).toEqual([]);
+    expect(result.errored).toEqual([]);
+    expect(physicalTouches).toBe(1);
+  });
+
   it("only invokes available adapters and records unavailable names", async () => {
     const { scope, fs } = makeScope();
     const atom = fakeAtom("src/a.ts", "fp-1");

@@ -253,11 +253,14 @@ describe("importGraphAdapter (real fs symlink containment)", () => {
     let aliasByteReads = 0;
     const trackingFs: WorkspaceFs = {
       ...nodeWorkspaceFs,
-      readFileBytes: async (absolutePath, maxBytes) => {
+      readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy) => {
         if (absolutePath.endsWith("/src/alias.ts")) {
           aliasByteReads += 1;
         }
-        return nodeWorkspaceFs.readFileBytes?.(absolutePath, maxBytes) ?? new Uint8Array();
+        return (
+          nodeWorkspaceFs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy) ??
+          new Uint8Array()
+        );
       },
     };
     const atoms = await importGraphAdapter.lookup(

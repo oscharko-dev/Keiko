@@ -383,7 +383,8 @@ function readGitIgnoreText(fs: WorkspaceFs, absolutePath: string): string | unde
     const stat = fs.stat(absolutePath);
     if (!stat.isFile || stat.size > MAX_GITIGNORE_BYTES) return undefined;
     return (
-      fs.readFileUtf8Prefix?.(absolutePath, MAX_GITIGNORE_BYTES) ?? fs.readFileUtf8(absolutePath)
+      fs.readFileUtf8Prefix?.(absolutePath, MAX_GITIGNORE_BYTES, "allow") ??
+      fs.readFileUtf8(absolutePath)
     );
   } catch {
     return undefined;

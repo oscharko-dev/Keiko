@@ -1,7 +1,5 @@
-import { posix as path } from "node:path";
 import { readWorkspaceFile } from "./discovery.js";
 import type { WorkspaceFs } from "./fs.js";
-import { isDenied } from "./ignore.js";
 import {
   CALL_REGEX,
   IDENTIFIER_REGEX,
@@ -14,10 +12,20 @@ import {
   type DefinitionHit,
 } from "./symbolGraphLexing.js";
 import { resolveWithinWorkspace } from "./paths.js";
-import { containedRealPathInfo } from "./realpath.js";
+import { containedRealPathInfo, isCanonicalAllowedContainedPath } from "./realpath.js";
 import type { SearchLimits, SearchScope } from "./repoSearch.js";
-import { gatherCandidates, probeBinary } from "./repoSearchScan.js";
+import {
+  gatherCandidatesWithControl,
+  limitCandidateSetForStructuralBuild,
+  probeBinary,
+  type CandidateSet,
+} from "./repoSearchScan.js";
 import { symbolGraphRecordStableId } from "./stableId.js";
+import {
+  createStructuralExecutionControl,
+  structuralExecutionStopped,
+  type StructuralExecutionControl,
+} from "./structuralExecution.js";
 import type {
   SymbolDefinitionKind,
   SymbolGraph,
@@ -36,10 +44,6 @@ interface SymbolGraphBuilder {
 const MAX_SYMBOL_RECORD_MULTIPLIER = 20;
 const MIN_SYMBOL_RECORD_CAP = 1_000;
 
-function normalizeScopePath(scopePath: string): string {
-  return path.normalize(scopePath.replaceAll("\\", "/")).replace(/^\.\//u, "");
-}
-
 async function readSymbolSource(
   scope: SearchScope,
   fs: WorkspaceFs,
@@ -49,7 +53,9 @@ async function readSymbolSource(
   try {
     const absolutePath = resolveWithinWorkspace(scope.workspace.root, scopePath);
     const contained = containedRealPathInfo(fs, scope.workspace.root, absolutePath);
-    if (isDenied(normalizeScopePath(contained.realRelative))) return undefined;
+    if (!isCanonicalAllowedContainedPath(contained, scope.workspace.root, scopePath)) {
+      return undefined;
+    }
     const stat = fs.stat(contained.path);
     if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) return undefined;
     if (await probeBinary(fs, contained.path, stat.size)) return undefined;
@@ -244,21 +250,51 @@ export async function buildSymbolGraph(
   fs: WorkspaceFs,
   signal?: AbortSignal,
 ): Promise<SymbolGraph> {
-  const candidateSet = gatherCandidates(scope, limits, fs);
+  const control = createStructuralExecutionControl(limits.elapsedMsMax, Date.now, signal);
+  return buildSymbolGraphFromCandidates(
+    scope,
+    limits,
+    fs,
+    gatherCandidatesWithControl(scope, limits, fs, control),
+    signal,
+    control,
+  );
+}
+
+export async function buildSymbolGraphFromCandidates(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  candidateSet: CandidateSet,
+  signal?: AbortSignal,
+  executionControl?: StructuralExecutionControl,
+): Promise<SymbolGraph> {
+  const boundedCandidates = limitCandidateSetForStructuralBuild(candidateSet, limits, (file) =>
+    isSymbolSource(file.relativePath),
+  );
   const cap = symbolRecordCap(limits);
-  const builder = createSymbolGraphBuilder(candidateSet.truncated);
-  const startedAt = Date.now();
+  const builder = createSymbolGraphBuilder(false);
+  const control =
+    executionControl ?? createStructuralExecutionControl(limits.elapsedMsMax, Date.now, signal);
   let filesScanned = 0;
-  for (const file of candidateSet.files.map((entry) => entry.relativePath)) {
-    if (signal?.aborted === true || Date.now() - startedAt > limits.elapsedMsMax) {
+  let filesSkipped = 0;
+  for (const file of boundedCandidates.files.map((entry) => entry.relativePath)) {
+    if (structuralExecutionStopped(control)) {
       builder.truncated = true;
       break;
     }
-    if (!isSymbolSource(file)) continue;
     const text = await readSymbolSource(scope, fs, file, limits);
-    if (text === undefined) continue;
+    if (structuralExecutionStopped(control)) {
+      builder.truncated = true;
+      break;
+    }
+    if (text === undefined) {
+      filesSkipped += 1;
+      continue;
+    }
     filesScanned += 1;
     addFileSymbolRecords(builder, file, text, cap);
+    if (structuralExecutionStopped(control)) builder.truncated = true;
     if (builder.truncated) break;
   }
   return {
@@ -268,7 +304,8 @@ export async function buildSymbolGraph(
     calls: builder.calls,
     diagnostics: {
       filesScanned,
-      truncated: builder.truncated,
+      filesSkipped,
+      truncated: boundedCandidates.truncated || builder.truncated,
       unsupportedLanguages: unsupportedLanguages(scope.workspace.languages),
     },
   };

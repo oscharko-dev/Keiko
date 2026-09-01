@@ -6,6 +6,17 @@
 //   AC #3 (truncation surfacing):  truncated:true + truncationMarker present when capped
 //   AC #4 (separation):            tested at the prompt-composer layer (conversation-prompt.test.ts)
 
+import {
+  linkSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   MAX_EXTRACTED_BYTES,
@@ -18,7 +29,7 @@ import {
   type DocumentExtractionFailure,
 } from "./document-extraction.js";
 import { memFs } from "./_memfs.js";
-import type { WorkspaceFs } from "./fs.js";
+import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
 
 const ROOT = "/ws";
 
@@ -410,6 +421,81 @@ describe("extractDocumentContext — truncation", () => {
 });
 
 describe("extractDocumentContext — path-safe failures", () => {
+  it("denies a benign real-filesystem symlink to an in-workspace denied file", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-document-denied-alias-"));
+    try {
+      writeFileSync(join(root, ".env"), "opaque-private-material", "utf8");
+      symlinkSync(join(root, ".env"), join(root, "notes.txt"));
+
+      const result = await extractDocumentContext(nodeWorkspaceFs, root, "notes.txt", fullBudget());
+
+      expect(result).toEqual({ ok: false, failure: { kind: "denied-path" } });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("denies a benign real-filesystem hard link to an in-workspace denied file", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-document-denied-hardlink-"));
+    try {
+      const deniedPath = join(root, ".env");
+      writeFileSync(deniedPath, "opaque-private-material", "utf8");
+      linkSync(deniedPath, join(root, "notes.txt"));
+
+      const result = await extractDocumentContext(nodeWorkspaceFs, root, "notes.txt", fullBudget());
+
+      expect(result).toEqual({ ok: false, failure: { kind: "denied-path" } });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("denies a denied-file hardlink replacement after the owning preflight stat", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-document-hardlink-race-"));
+    try {
+      const documentPath = join(root, "notes.txt");
+      const deniedPath = join(root, ".env");
+      writeFileSync(documentPath, "ordinary project notes", "utf8");
+      writeFileSync(deniedPath, "opaque-private-material", "utf8");
+      const documentRealPath = realpathSync(documentPath);
+      let swapped = false;
+      const fs: WorkspaceFs = {
+        ...nodeWorkspaceFs,
+        stat: (absolutePath) => {
+          const stat = nodeWorkspaceFs.stat(absolutePath);
+          if (absolutePath === documentRealPath && !swapped) {
+            swapped = true;
+            unlinkSync(documentPath);
+            linkSync(deniedPath, documentPath);
+          }
+          return stat;
+        },
+      };
+
+      const result = await extractDocumentContext(fs, root, "notes.txt", fullBudget());
+
+      expect(swapped).toBe(true);
+      expect(result).toEqual({ ok: false, failure: { kind: "denied-path" } });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still extracts a normal real-filesystem document", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-document-normal-"));
+    try {
+      writeFileSync(join(root, "notes.txt"), "ordinary project notes", "utf8");
+
+      const result = await extractDocumentContext(nodeWorkspaceFs, root, "notes.txt", fullBudget());
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.context.text).toBe("ordinary project notes");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("returns denied-path for a traversal attempt and carries no path string", async () => {
     const fs = memFs(ROOT, { "doc.txt": "ok" });
     const result = await extractDocumentContext(fs, ROOT, "../../../etc/passwd", fullBudget());

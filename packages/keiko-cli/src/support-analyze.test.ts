@@ -145,6 +145,180 @@ describe("analyzeLogText — raw log", () => {
     }
   });
 
+  it("reconstructs connected-context work diagnostics on one support timeline", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-support-connected-context-"));
+    const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    const correlationId = "connected-context-support-timeline-0001";
+    const scopeIdentitySha256 = "a".repeat(64);
+    const queryIdentitySha256 = "b".repeat(64);
+    const requestShape = {
+      queryKind: "natural-language",
+      queryIdentitySha256,
+      caseSensitive: false,
+      maxResults: 20,
+      searchCallsMax: 16,
+      filesReadMax: 32,
+      excerptBytesMax: 131_072,
+      modelInputTokensMax: 116_000,
+      modelOutputTokensMax: 4_096,
+      elapsedMsMax: 30_000,
+      rerankCallsMax: 1,
+    } as const;
+    const coverageCounters = {
+      coverageFilesDiscovered: 120,
+      coverageFilesScanned: 80,
+      coverageFilesSkipped: 40,
+      coverageDepthPruned: 6,
+      coverageMaxFilesPruned: 34,
+    } as const;
+    const structuralCounters = {
+      contextCount: 3,
+      candidateInventoryBuildCount: 3,
+      candidateFileCount: 120,
+      candidateDirectoryCount: 42,
+      codeIndexBuildCount: 1,
+      symbolGraphBuildCount: 1,
+      importGraphBuildCount: 1,
+      endpointGraphBuildCount: 1,
+      fileSearchCount: 8,
+      textSearchCount: 4,
+    } as const;
+    const workspaceIndexCounters = {
+      providerStatus: "available",
+      searchMode: "persistent-warm",
+      loadStatus: "hit",
+      saveStatus: "not-attempted",
+      searchCount: 4,
+      reportCount: 4,
+      fallbackSearchCount: 0,
+      discoveredEntries: 480,
+      retainedEntries: 480,
+      indexedRecords: 480,
+      reusedRecords: 480,
+      staleRecords: 0,
+      skippedEntries: 0,
+      deletedEntries: 0,
+      droppedRecords: 0,
+      loadAttempts: 3,
+      loadHits: 3,
+      loadMisses: 0,
+      loadFailures: 0,
+      saveAttempts: 0,
+      saveSuccesses: 0,
+      saveFailures: 0,
+    } as const;
+    const workspaceIoCounters = {
+      readDirCalls: 18,
+      readDirEntries: 240,
+      statCalls: 96,
+      realPathCalls: 82,
+      existsCalls: 4,
+      contentReadCalls: 64,
+      contentReadBytes: 98_304,
+    } as const;
+    try {
+      sink.write({
+        category: "search",
+        op: "search.connected-context.started",
+        correlationId,
+        extra: {
+          scopeKind: "directory",
+          relativePathCount: 1,
+          explicitConnection: true,
+          scopeIdentitySha256,
+          ...requestShape,
+        },
+      });
+      sink.write({
+        category: "search",
+        op: "search.connected-context.completed",
+        correlationId,
+        durationMs: 17,
+        extra: {
+          activityDetailStatus: "complete",
+          scopeKind: "directory",
+          relativePathCount: 1,
+          explicitConnection: true,
+          scopeIdentitySha256,
+          ...requestShape,
+          plannedRingCount: 2,
+          usage: {
+            searchCalls: 12,
+            filesRead: 16,
+            excerptBytes: 8_192,
+            modelInputTokens: 0,
+            modelOutputTokens: 0,
+            elapsedMs: 17,
+            rerankCalls: 0,
+          },
+          selectionCounts: { selectedFileCount: 16, omittedCount: 4 },
+          structural: structuralCounters,
+          workspaceIndex: workspaceIndexCounters,
+          workspaceIo: workspaceIoCounters,
+          coverage: {
+            coverageStatus: "incomplete",
+            coverageReasons: ["file-cap"],
+            ...coverageCounters,
+          },
+          uncertainty: {
+            count: 3,
+            noEvidenceUncertaintyCount: 0,
+            staleEvidenceUncertaintyCount: 0,
+            scopeIncompleteUncertaintyCount: 2,
+            budgetClippedUncertaintyCount: 0,
+            toolUnavailableUncertaintyCount: 1,
+            lowConfidenceUncertaintyCount: 0,
+            unsupportedCitationUncertaintyCount: 0,
+            incompleteAnswerUncertaintyCount: 0,
+            unsupportedClaimUncertaintyCount: 0,
+            entailmentUnavailableUncertaintyCount: 0,
+          },
+          retrievalStatus: {
+            readBudgetBlocked: false,
+            elapsedBudgetBlocked: false,
+            workspaceIndexProviderStatus: "available",
+          },
+        },
+      });
+      sink.close?.();
+
+      const serialized = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+      const timeline = findTimeline(analyzeLogText(serialized), correlationId);
+      expect(timeline?.lines.map((entry) => entry.op)).toEqual([
+        "search.connected-context.started",
+        "search.connected-context.completed",
+      ]);
+      expect(timeline?.lines[0]?.extra).toMatchObject({
+        explicitConnection: true,
+        scopeIdentitySha256,
+        ...requestShape,
+      });
+      expect(timeline?.lines[1]?.extra).toMatchObject({
+        activityDetailStatus: "complete",
+        explicitConnection: true,
+        scopeIdentitySha256,
+        ...requestShape,
+        plannedRingCount: 2,
+        selectionCounts: { selectedFileCount: 16, omittedCount: 4 },
+        structural: structuralCounters,
+        workspaceIndex: workspaceIndexCounters,
+        workspaceIo: workspaceIoCounters,
+        coverage: {
+          coverageStatus: "incomplete",
+          coverageReasons: ["file-cap"],
+          ...coverageCounters,
+        },
+        uncertainty: {
+          scopeIncompleteUncertaintyCount: 2,
+          toolUnavailableUncertaintyCount: 1,
+        },
+      });
+    } finally {
+      sink.close?.();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("ranks process lifetimes by first appearance and orders each lifetime by seq; a pre-v2 line ranks by its own file position", () => {
     const req1 = result.timelines.find((t) => t.correlationId === "req-1");
     expect(req1?.lines.map((l) => l.op)).toEqual(["job.spawned", "op.a", "op.b", "op.c"]);

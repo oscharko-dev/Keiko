@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { PathDeniedError } from "./errors.js";
+import { PathDeniedError, PathEscapeError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
 import { memFs } from "./_memfs.js";
-import { realRootIsDeniedViaSymlink, resolveExistingAllowedWorkspaceRealRoot } from "./realpath.js";
+import {
+  containedRealPathInfo,
+  isAllowedContainedPathParent,
+  isCanonicalAllowedContainedPath,
+  realRootIsDeniedViaSymlink,
+  resolveExistingAllowedWorkspaceRealRoot,
+} from "./realpath.js";
 
 describe("resolveExistingAllowedWorkspaceRealRoot", () => {
   it("classifies and returns one canonical root identity", () => {
@@ -30,6 +36,27 @@ describe("resolveExistingAllowedWorkspaceRealRoot", () => {
     );
   });
 
+  it("reuses the request-scoped canonical root identity", () => {
+    const baseFs = memFs("/work", {});
+    let canonicalCalls = 0;
+    let realPathCalls = 0;
+    const fs: WorkspaceFs = {
+      ...baseFs,
+      canonicalWorkspaceRoot: (): string => {
+        canonicalCalls += 1;
+        return "/safe/project";
+      },
+      realPath: (): string => {
+        realPathCalls += 1;
+        return "/unexpected";
+      },
+    };
+
+    expect(resolveExistingAllowedWorkspaceRealRoot(fs, "/work/project")).toBe("/safe/project");
+    expect(canonicalCalls).toBe(1);
+    expect(realPathCalls).toBe(0);
+  });
+
   it.each(["", "relative/project", "/work/project\u0000"])(
     "rejects malformed root %j before filesystem resolution",
     (root) => {
@@ -47,6 +74,60 @@ describe("resolveExistingAllowedWorkspaceRealRoot", () => {
       expect(realPathCalls).toBe(0);
     },
   );
+});
+
+function containmentFs(target: string): {
+  readonly fs: WorkspaceFs;
+  readonly canonicalCalls: () => number;
+  readonly targetCalls: () => number;
+} {
+  let canonicalCalls = 0;
+  let targetCalls = 0;
+  const unsupported = (): never => {
+    throw new Error("filesystem operation is not used by this fixture");
+  };
+  return {
+    fs: {
+      readFileUtf8: unsupported,
+      stat: unsupported,
+      readDir: unsupported,
+      realPath: (): string => {
+        targetCalls += 1;
+        return target;
+      },
+      canonicalWorkspaceRoot: (): string => {
+        canonicalCalls += 1;
+        return "/real/workspace";
+      },
+      exists: (): boolean => true,
+    },
+    canonicalCalls: () => canonicalCalls,
+    targetCalls: () => targetCalls,
+  };
+}
+
+describe("containedRealPathInfo", () => {
+  it("uses the canonical-root seam only for the base and still resolves every target", () => {
+    const measured = containmentFs("/real/workspace/src/file.ts");
+
+    expect(containedRealPathInfo(measured.fs, "/workspace", "/workspace/src/file.ts")).toEqual({
+      path: "/real/workspace/src/file.ts",
+      realRelative: "src/file.ts",
+      realBase: "/real/workspace",
+    });
+    expect(measured.canonicalCalls()).toBe(1);
+    expect(measured.targetCalls()).toBe(1);
+  });
+
+  it("rejects an escaping target even when the canonical root is request-cached", () => {
+    const measured = containmentFs("/outside/private.txt");
+
+    expect(() =>
+      containedRealPathInfo(measured.fs, "/workspace", "/workspace/private.txt"),
+    ).toThrow(PathEscapeError);
+    expect(measured.canonicalCalls()).toBe(1);
+    expect(measured.targetCalls()).toBe(1);
+  });
 });
 
 describe("realRootIsDeniedViaSymlink", () => {
@@ -145,5 +226,90 @@ describe("realRootIsDeniedViaSymlink", () => {
         "/Users/dev/.codex/worktrees/project",
       ),
     ).toBe(true);
+  });
+});
+
+describe("isCanonicalAllowedContainedPath", () => {
+  it("accepts the canonical root and exact canonical descendants", () => {
+    expect(
+      isCanonicalAllowedContainedPath(
+        { path: "/workspace", realRelative: "", realBase: "/workspace" },
+        "/workspace",
+        "",
+      ),
+    ).toBe(true);
+    expect(
+      isCanonicalAllowedContainedPath(
+        {
+          path: "/workspace/src/file.ts",
+          realRelative: "src/file.ts",
+          realBase: "/workspace",
+        },
+        "/workspace",
+        process.platform === "win32" ? "src\\file.ts" : "src/file.ts",
+      ),
+    ).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "keeps a literal POSIX backslash distinct from a directory separator",
+    () => {
+      expect(
+        isCanonicalAllowedContainedPath(
+          {
+            path: "/workspace/src/file.ts",
+            realRelative: "src/file.ts",
+            realBase: "/workspace",
+          },
+          "/workspace",
+          "src\\file.ts",
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("rejects aliases, denied descendants, and a denied root alias", () => {
+    expect(
+      isCanonicalAllowedContainedPath(
+        {
+          path: "/workspace/other.ts",
+          realRelative: "other.ts",
+          realBase: "/workspace",
+        },
+        "/workspace",
+        "selected.ts",
+      ),
+    ).toBe(false);
+    expect(
+      isCanonicalAllowedContainedPath(
+        { path: "/workspace/.env", realRelative: ".env", realBase: "/workspace" },
+        "/workspace",
+        ".env",
+      ),
+    ).toBe(false);
+    expect(
+      isCanonicalAllowedContainedPath(
+        { path: "/safe/.aws/file", realRelative: "file", realBase: "/safe/.aws" },
+        "/safe/docs",
+        "file",
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("isAllowedContainedPathParent", () => {
+  it("allows only a deny-clean canonical ancestor of a missing target", () => {
+    const parent = { path: "/workspace/src/missing", realRelative: "src", realBase: "/workspace" };
+
+    expect(isAllowedContainedPathParent(parent, "/workspace", "src/missing/file.ts")).toBe(true);
+    expect(isAllowedContainedPathParent(parent, "/workspace", "src-other/file.ts")).toBe(false);
+    expect(isAllowedContainedPathParent(parent, "/workspace", "src/.env")).toBe(false);
+    expect(
+      isAllowedContainedPathParent(
+        { ...parent, realBase: "/workspace/.aws" },
+        "/workspace/docs",
+        "src/missing/file.ts",
+      ),
+    ).toBe(false);
   });
 });

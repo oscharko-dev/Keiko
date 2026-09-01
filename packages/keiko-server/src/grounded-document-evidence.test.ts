@@ -1,10 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type {
   SelectedScope,
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { SearchScope, WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
   collectConnectedDocumentEvidence,
@@ -22,6 +35,24 @@ const DOCX_SIMPLE = Uint8Array.from(Buffer.from(DOCX_SIMPLE_BASE64, "base64"));
 const CFB_HEADER = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0x00, 0x00]);
 
 const WORKSPACE_ROOT = "/ws";
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 interface FsEntry {
   readonly bytes: Uint8Array;
@@ -118,6 +149,117 @@ describe("isConnectedDocumentPath", () => {
 });
 
 describe("collectConnectedDocumentEvidence", () => {
+  it("does not touch a connected document after the request deadline", async () => {
+    const scope = filesScope(["docs/report.docx"]);
+    const baseInputs = inputs(
+      scope,
+      entriesFor({ "/ws/docs/report.docx": { bytes: DOCX_SIMPLE } }),
+    );
+    let fsAccesses = 0;
+    const result = await collectConnectedDocumentEvidence({
+      ...baseInputs,
+      deadlineAtMs: 1_000,
+      fs: {
+        ...baseInputs.fs,
+        realPath: (path): string => {
+          fsAccesses += 1;
+          return baseInputs.fs.realPath(path);
+        },
+      },
+    });
+
+    expect(fsAccesses).toBe(0);
+    expect(result.atoms).toEqual([]);
+    expect(result.omitted).toEqual([
+      { scopePath: "docs/report.docx", reason: "budget-exhausted", omittedAtMs: 1_000 },
+    ]);
+  });
+
+  it("does not stat or read a document after containment consumes the remaining time", async () => {
+    const scope = filesScope(["docs/report.docx"]);
+    const baseInputs = inputs(
+      scope,
+      entriesFor({ "/ws/docs/report.docx": { bytes: DOCX_SIMPLE } }),
+    );
+    let nowMs = 1_000;
+    const deadlineAtMs = 1_001;
+    let statCalls = 0;
+    let byteReads = 0;
+    const result = await collectConnectedDocumentEvidence({
+      ...baseInputs,
+      nowMs: () => nowMs,
+      deadlineAtMs,
+      fs: {
+        ...baseInputs.fs,
+        realPath: (path): string => {
+          if (path.endsWith("report.docx")) nowMs = deadlineAtMs;
+          return baseInputs.fs.realPath(path);
+        },
+        stat: (path): WorkspaceStat => {
+          statCalls += 1;
+          return baseInputs.fs.stat(path);
+        },
+        readFileBytes: (path, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+          byteReads += 1;
+          return (
+            baseInputs.fs.readFileBytes?.(path, maxBytes, hardLinkPolicy) ??
+            Promise.resolve(new Uint8Array())
+          );
+        },
+      },
+    });
+
+    expect(statCalls).toBe(0);
+    expect(byteReads).toBe(0);
+    expect(result.atoms).toEqual([]);
+    expect(result.omitted[0]?.reason).toBe("budget-exhausted");
+  });
+
+  it("bounds a never-settling byte read and observes its late rejection", async () => {
+    vi.useFakeTimers();
+    const pending = deferred<Uint8Array>();
+    const scope = filesScope(["docs/report.docx"]);
+    const baseInputs = inputs(
+      scope,
+      entriesFor({ "/ws/docs/report.docx": { bytes: DOCX_SIMPLE } }),
+    );
+    const outcome = collectConnectedDocumentEvidence({
+      ...baseInputs,
+      deadlineAtMs: 1_010,
+      fs: { ...baseInputs.fs, readFileBytes: (): Promise<Uint8Array> => pending.promise },
+    });
+    const expectation = expect(outcome).resolves.toMatchObject({
+      atoms: [],
+      omitted: [{ scopePath: "docs/report.docx", reason: "budget-exhausted" }],
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    await expectation;
+    pending.reject(new Error("late document read rejection"));
+    await Promise.resolve();
+  });
+
+  it("propagates caller cancellation while a document byte read is pending", async () => {
+    const pending = deferred<Uint8Array>();
+    const controller = new AbortController();
+    const scope = filesScope(["docs/report.docx"]);
+    const baseInputs = inputs(
+      scope,
+      entriesFor({ "/ws/docs/report.docx": { bytes: DOCX_SIMPLE } }),
+    );
+    const outcome = collectConnectedDocumentEvidence({
+      ...baseInputs,
+      signal: controller.signal,
+      fs: { ...baseInputs.fs, readFileBytes: (): Promise<Uint8Array> => pending.promise },
+    });
+    const expectation = expect(outcome).rejects.toBeInstanceOf(CancelledError);
+
+    controller.abort();
+
+    await expectation;
+    pending.resolve(DOCX_SIMPLE);
+  });
+
   it("returns empty evidence for a non-files scope", async () => {
     const scope: SelectedScope = { ...filesScope(["docs/report.docx"]), kind: "directory" };
     const result = await collectConnectedDocumentEvidence(
@@ -281,9 +423,12 @@ describe("collectConnectedDocumentEvidence", () => {
         ...baseInputs.fs,
         realPath: (absolutePath): string =>
           absolutePath === "/ws/docs/link.docx" ? "/ws/private/secret.docx" : absolutePath,
-        readFileBytes: async (absolutePath, maxBytes): Promise<Uint8Array> => {
+        readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
           readFileBytesCalls += 1;
-          return baseInputs.fs.readFileBytes?.(absolutePath, maxBytes) ?? new Uint8Array();
+          return (
+            baseInputs.fs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy) ??
+            new Uint8Array()
+          );
         },
       },
     });
@@ -293,6 +438,74 @@ describe("collectConnectedDocumentEvidence", () => {
     expect(result.omitted).toEqual([
       { scopePath: "docs/link.docx", reason: "outside-scope", omittedAtMs: 1_000 },
     ]);
+  });
+
+  it("denies a connected document when a safe workspace root aliases a denied root", async () => {
+    const scope = filesScope(["docs/report.docx"]);
+    const deniedPath = "/.aws/docs/report.docx";
+    const baseInputs = inputs(scope, entriesFor({ [deniedPath]: { bytes: DOCX_SIMPLE } }));
+    let deniedStats = 0;
+    let deniedReads = 0;
+    const result = await collectConnectedDocumentEvidence({
+      ...baseInputs,
+      fs: {
+        ...baseInputs.fs,
+        realPath: (absolutePath): string =>
+          absolutePath === WORKSPACE_ROOT
+            ? "/.aws"
+            : absolutePath.startsWith(`${WORKSPACE_ROOT}/`)
+              ? `/.aws/${absolutePath.slice(WORKSPACE_ROOT.length + 1)}`
+              : absolutePath,
+        stat: (absolutePath): WorkspaceStat => {
+          if (absolutePath === deniedPath) deniedStats += 1;
+          return baseInputs.fs.stat(absolutePath);
+        },
+        readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+          if (absolutePath === deniedPath) deniedReads += 1;
+          return (
+            baseInputs.fs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy) ??
+            new Uint8Array()
+          );
+        },
+      },
+    });
+
+    expect(deniedStats).toBe(0);
+    expect(deniedReads).toBe(0);
+    expect(result.atoms).toEqual([]);
+    expect(result.omitted).toEqual([
+      { scopePath: "docs/report.docx", reason: "outside-scope", omittedAtMs: 1_000 },
+    ]);
+  });
+
+  it("denies a document alias even when its target is another explicitly selected file", async () => {
+    const scope = filesScope(["docs/link.docx", "docs/real.docx"]);
+    const realPath = "/ws/docs/real.docx";
+    const baseInputs = inputs(scope, entriesFor({ [realPath]: { bytes: DOCX_SIMPLE } }));
+    let reads = 0;
+    const result = await collectConnectedDocumentEvidence({
+      ...baseInputs,
+      fs: {
+        ...baseInputs.fs,
+        realPath: (absolutePath): string =>
+          absolutePath === "/ws/docs/link.docx" ? realPath : absolutePath,
+        readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+          reads += 1;
+          return (
+            baseInputs.fs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy) ??
+            new Uint8Array()
+          );
+        },
+      },
+    });
+
+    expect(reads).toBe(1);
+    expect(result.candidates.map((candidate) => candidate.scopePath)).toEqual(["docs/real.docx"]);
+    expect(result.omitted).toContainEqual({
+      scopePath: "docs/link.docx",
+      reason: "outside-scope",
+      omittedAtMs: 1_000,
+    });
   });
 
   it("denies a hard-linked connected document before reading bytes", async () => {
@@ -310,9 +523,12 @@ describe("collectConnectedDocumentEvidence", () => {
           ...baseInputs.fs.stat(absolutePath),
           hardLinkCount: 2,
         }),
-        readFileBytes: async (absolutePath, maxBytes): Promise<Uint8Array> => {
+        readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
           readFileBytesCalls += 1;
-          return baseInputs.fs.readFileBytes?.(absolutePath, maxBytes) ?? new Uint8Array();
+          return (
+            baseInputs.fs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy) ??
+            new Uint8Array()
+          );
         },
       },
     });
@@ -322,6 +538,57 @@ describe("collectConnectedDocumentEvidence", () => {
     expect(result.omitted).toEqual([
       { scopePath: "docs/report.docx", reason: "outside-scope", omittedAtMs: 1_000 },
     ]);
+  });
+
+  it("denies a connected document replaced by a denied-file hard link after preflight stat", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-grounded-document-hardlink-race-"));
+    try {
+      const docs = join(root, "docs");
+      mkdirSync(docs);
+      const documentPath = join(docs, "report.docx");
+      const deniedPath = join(root, ".env");
+      writeFileSync(documentPath, DOCX_SIMPLE);
+      writeFileSync(deniedPath, DOCX_SIMPLE);
+      const documentRealPath = realpathSync(documentPath);
+      let swapped = false;
+      const fs: WorkspaceFs = {
+        ...nodeWorkspaceFs,
+        stat: (absolutePath): WorkspaceStat => {
+          const stat = nodeWorkspaceFs.stat(absolutePath);
+          if (absolutePath === documentRealPath && !swapped) {
+            swapped = true;
+            unlinkSync(documentPath);
+            linkSync(deniedPath, documentPath);
+          }
+          return stat;
+        },
+      };
+      const scope: SelectedScope = {
+        ...filesScope(["docs/report.docx"]),
+        workspaceRoot: root,
+      };
+      const searchScope: SearchScope = {
+        workspace: { root },
+        scopeId: scope.scopeId,
+        relativePaths: scope.relativePaths,
+      } as SearchScope;
+
+      const result = await collectConnectedDocumentEvidence({
+        scope,
+        query: query(),
+        searchScope,
+        fs,
+        nowMs: () => 1_000,
+      });
+
+      expect(swapped).toBe(true);
+      expect(result.atoms).toEqual([]);
+      expect(result.omitted).toEqual([
+        { scopePath: "docs/report.docx", reason: "outside-scope", omittedAtMs: 1_000 },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("extracts every connected document when the aggregate budget is not exhausted", async () => {

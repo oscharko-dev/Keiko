@@ -11,7 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  WORKSPACE_INDEX_SNAPSHOT_VERSION,
+  buildWorkspaceIndexScopeKey,
+  buildWorkspaceIndexSnapshot,
   type WorkspaceIndexScopeKey,
   type WorkspaceIndexSnapshot,
 } from "@oscharko-dev/keiko-workspace";
@@ -26,24 +27,38 @@ function tempDir(prefix: string): string {
 }
 
 function scopeKey(workspaceRoot: string): WorkspaceIndexScopeKey {
-  return {
-    workspaceRoot,
-    relativePaths: [],
-    policyMode: "workspace-root-default",
-    applyGitignore: true,
-    omitLowValueWorkspaceFiles: true,
-    maxBytesPerFileScanned: 1024,
-    maxFilesScanned: 100,
-  };
+  return buildWorkspaceIndexScopeKey(
+    {
+      workspace: {
+        root: workspaceRoot,
+        name: undefined,
+        version: undefined,
+        testFramework: "unknown",
+        sourceDirs: [],
+        testDirs: [],
+        languages: [],
+        ignoreLines: [],
+      },
+      relativePaths: [],
+    },
+    {
+      policyMode: "workspace-root-default",
+      applyGitignore: true,
+      omitLowValueWorkspaceFiles: true,
+    },
+    1024,
+    100,
+  );
 }
 
 function emptySnapshot(): WorkspaceIndexSnapshot {
-  return {
-    version: WORKSPACE_INDEX_SNAPSHOT_VERSION,
-    relativePaths: [],
-    policyMode: "workspace-root-default",
-    applyGitignore: true,
-    omitLowValueWorkspaceFiles: true,
+  return buildWorkspaceIndexSnapshot({
+    scope: { relativePaths: [] },
+    policy: {
+      policyMode: "workspace-root-default",
+      applyGitignore: true,
+      omitLowValueWorkspaceFiles: true,
+    },
     maxBytesPerFileScanned: 1024,
     maxFilesScanned: 100,
     discovery: {
@@ -56,7 +71,7 @@ function emptySnapshot(): WorkspaceIndexSnapshot {
       truncated: false,
     },
     records: [],
-  };
+  });
 }
 
 function snapshotWithFile(scopePath: string): WorkspaceIndexSnapshot {

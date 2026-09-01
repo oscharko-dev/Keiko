@@ -9,6 +9,7 @@ import {
   symbolGraphAdapter,
 } from "./symbolGraph.js";
 import { DEFAULT_SEARCH_LIMITS, type SearchScope } from "./repoSearch.js";
+import type { WorkspaceFs } from "./fs.js";
 import type { WorkspaceInfo, WorkspaceLanguage } from "./types.js";
 
 const MEM_ROOT = "/ws";
@@ -92,17 +93,58 @@ describe("buildSymbolGraph", () => {
     expect(graph.diagnostics.unsupportedLanguages).toEqual(["java"]);
   });
 
-  it("stops the scan and marks the graph truncated when the signal is already aborted", async () => {
+  it("processes every bounded symbol candidate before reporting excess coverage", async () => {
     const { scope, fs } = makeScope({
+      "src/a.ts": "export const first = true;\n",
+      "src/b.ts": "export function secondCandidate(): number { return 2; }\n",
+      "src/c.ts": "export const excess = true;\n",
+    });
+
+    const graph = await buildSymbolGraph(
+      scope,
+      { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 2 },
+      fs,
+    );
+
+    expect(graph.diagnostics.filesScanned).toBe(2);
+    expect(definitionsForSymbol(graph, "secondCandidate")).toHaveLength(1);
+    expect(graph.diagnostics.truncated).toBe(true);
+  });
+
+  it("stops the scan and marks the graph truncated when the signal is already aborted", async () => {
+    const { scope, fs: base } = makeScope({
       "src/config.ts":
         "export function parseConfig(raw: string): string {\n  return raw.trim();\n}\n",
     });
     const controller = new AbortController();
     controller.abort();
+    let directoryReads = 0;
+    const fs: WorkspaceFs = {
+      ...base,
+      readDir: (absolutePath) => {
+        directoryReads += 1;
+        return base.readDir(absolutePath);
+      },
+    };
     const graph = await buildSymbolGraph(scope, DEFAULT_SEARCH_LIMITS, fs, controller.signal);
+    expect(directoryReads).toBe(0);
     expect(graph.diagnostics.truncated).toBe(true);
     expect(graph.records).toEqual([]);
     expect(graph.diagnostics.filesScanned).toBe(0);
+  });
+
+  it("reports source reads that fail the per-file cap through adapter coverage", async () => {
+    const { scope, fs } = makeScope({
+      "src/oversized.ts": "export function oversized(): number { return 1; }",
+    });
+    const limits = { ...DEFAULT_SEARCH_LIMITS, maxBytesPerFileScanned: 1 };
+
+    const graph = await buildSymbolGraph(scope, limits, fs);
+    const coverage = await symbolGraphAdapter.coverage?.(scope, limits, fs);
+
+    expect(graph.diagnostics.filesSkipped).toBe(1);
+    expect(graph.diagnostics.truncated).toBe(false);
+    expect(coverage?.filesSkipped).toBe(1);
   });
 });
 

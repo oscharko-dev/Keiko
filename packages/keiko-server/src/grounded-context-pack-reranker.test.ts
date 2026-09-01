@@ -109,17 +109,20 @@ describe("configuredContextPackRerankerFor", () => {
     });
     const reranker = configuredContextPackRerankerFor(deps, QUERY, undefined);
     const candidates = [candidate("src/a.ts", 0.4), candidate("src/b.ts", 0.6)];
+    const controller = new AbortController();
 
     const out = await reranker?.rerank(
       candidates,
       new Map(candidates.map((entry) => [entry.scopePath, [atom(entry.scopePath, entry.score)]])),
       2,
+      { signal: controller.signal, timeoutMs: 125 },
     );
 
     expect(captured?.modelId).toBe("qwen3-reranker");
     expect(captured?.query).toBe(QUERY.text);
     expect(captured?.documents[0]).toContain("Path: src/a.ts");
     expect(captured?.documents[0]).toContain("Evidence atoms:");
+    expect(captured).toMatchObject({ signal: controller.signal, timeoutMs: 125 });
     expect(out?.map((entry) => entry.scopePath)).toEqual(["src/b.ts", "src/a.ts"]);
     expect(out?.[0]?.signals[0]).toEqual({ name: "model-rerank", value: 0.98 });
     deps.store.close();

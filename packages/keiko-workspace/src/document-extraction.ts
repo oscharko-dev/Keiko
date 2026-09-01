@@ -29,9 +29,13 @@ import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/te
 import { redact } from "@oscharko-dev/keiko-security";
 import { DEFAULT_BINARY_PROBE, looksBinary } from "./binaryDetect.js";
 import { PathEscapeError, PathDeniedError } from "./errors.js";
-import type { WorkspaceFs } from "./fs.js";
+import { WorkspaceDescriptorReadError, type WorkspaceFs } from "./fs.js";
 import { resolveWithinWorkspace } from "./paths.js";
-import { assertContainedRealPath } from "./realpath.js";
+import {
+  containedRealPathInfo,
+  isAllowedContainedPathParent,
+  isCanonicalAllowedContainedPath,
+} from "./realpath.js";
 import { isDenied } from "./ignore.js";
 
 export const MAX_EXTRACTED_BYTES = 65_536; // per-document budget (64 KiB)
@@ -166,6 +170,18 @@ function unreadable(): DocumentExtractionResult {
   return { ok: false, failure: { kind: "unreadable" } };
 }
 
+function descriptorReadFailure(error: unknown): DocumentExtractionResult {
+  if (
+    error instanceof WorkspaceDescriptorReadError &&
+    (error.reason === "hard-link" ||
+      error.reason === "not-regular" ||
+      error.reason === "symbolic-link")
+  ) {
+    return denied();
+  }
+  return unreadable();
+}
+
 function empty(): DocumentExtractionResult {
   return { ok: false, failure: { kind: "empty" } };
 }
@@ -211,25 +227,38 @@ function resolveSafePath(
   if (isDenied(normalizedRel)) {
     return denied();
   }
-  let resolved: string;
+  let contained: ReturnType<typeof containedRealPathInfo>;
   try {
-    resolved = assertContainedRealPath(fs, workspaceRoot, absolutePath, normalizedRel);
+    contained = containedRealPathInfo(fs, workspaceRoot, absolutePath);
   } catch (error) {
     if (error instanceof PathEscapeError || error instanceof PathDeniedError) {
       return denied();
     }
     throw error;
   }
-  return { step: "ok", resolved };
+  const exact = isCanonicalAllowedContainedPath(contained, workspaceRoot, normalizedRel);
+  const safeMissingTarget =
+    contained.path === absolutePath &&
+    isAllowedContainedPathParent(contained, workspaceRoot, normalizedRel);
+  return exact || safeMissingTarget ? { step: "ok", resolved: contained.path } : denied();
 }
 
 function statFile(
   fs: WorkspaceFs,
   resolvedPath: string,
-): StepResult<{ readonly size: number; readonly isFile: boolean }> {
+): StepResult<{
+  readonly size: number;
+  readonly isFile: boolean;
+  readonly hardLinkCount: number | undefined;
+}> {
   try {
     const stats = fs.stat(resolvedPath);
-    return { step: "ok", size: stats.size, isFile: stats.isFile };
+    return {
+      step: "ok",
+      size: stats.size,
+      isFile: stats.isFile,
+      hardLinkCount: stats.hardLinkCount,
+    };
   } catch {
     if (!fs.exists(resolvedPath)) {
       return notFound();
@@ -265,10 +294,14 @@ async function probeBinary(
     };
   }
   try {
-    const bytes = await fs.readFileBytes(resolvedPath, Math.min(BINARY_PROBE_BYTES, size));
+    const bytes = await fs.readFileBytes(
+      resolvedPath,
+      Math.min(BINARY_PROBE_BYTES, size),
+      "reject",
+    );
     return { step: "ok", bytes };
-  } catch {
-    return unreadable();
+  } catch (error) {
+    return descriptorReadFailure(error);
   }
 }
 
@@ -282,10 +315,10 @@ async function readBudgetedBytes(
   }
   if (fs.readFileBytes !== undefined) {
     try {
-      const bytes = await fs.readFileBytes(resolvedPath, cap);
+      const bytes = await fs.readFileBytes(resolvedPath, cap, "reject");
       return { step: "ok", bytes };
-    } catch {
-      return unreadable();
+    } catch (error) {
+      return descriptorReadFailure(error);
     }
   }
   let utf8: string;
@@ -309,28 +342,31 @@ async function readRangeBytes(
   }
   if (fs.readFileRange !== undefined) {
     try {
-      return { step: "ok", bytes: await fs.readFileRange(resolvedPath, startByte, length) };
-    } catch {
-      return unreadable();
+      return {
+        step: "ok",
+        bytes: await fs.readFileRange(resolvedPath, startByte, length, "reject"),
+      };
+    } catch (error) {
+      return descriptorReadFailure(error);
     }
   }
   if (fs.openFileReader !== undefined) {
     try {
-      const reader = await fs.openFileReader(resolvedPath);
+      const reader = await fs.openFileReader(resolvedPath, "reject");
       try {
         return { step: "ok", bytes: await reader.readRange(startByte, length) };
       } finally {
         await reader.close();
       }
-    } catch {
-      return unreadable();
+    } catch (error) {
+      return descriptorReadFailure(error);
     }
   }
   let utf8: string;
   try {
     utf8 = fs.readFileUtf8(resolvedPath);
-  } catch {
-    return unreadable();
+  } catch (error) {
+    return descriptorReadFailure(error);
   }
   const encoded = new TextEncoder().encode(utf8);
   return {
@@ -473,6 +509,20 @@ interface ResolvedFile {
   readonly size: number;
 }
 
+function resolvedFileFromStat(
+  resolvedPath: string,
+  stat: StepOk<{
+    readonly size: number;
+    readonly isFile: boolean;
+    readonly hardLinkCount: number | undefined;
+  }>,
+): StepResult<{ readonly file: ResolvedFile }> {
+  if (!stat.isFile) return notFound();
+  if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) return denied();
+  if (stat.size === 0) return empty();
+  return { step: "ok", file: { resolvedPath, size: stat.size } };
+}
+
 async function classifyFileMime(
   fs: WorkspaceFs,
   file: ResolvedFile,
@@ -594,9 +644,9 @@ async function readFocusScanChunk(
   length: number,
 ): Promise<Uint8Array> {
   if (fs.readFileRange !== undefined) {
-    return await fs.readFileRange(file.resolvedPath, offset, length);
+    return await fs.readFileRange(file.resolvedPath, offset, length, "reject");
   }
-  const reader = await fs.openFileReader?.(file.resolvedPath);
+  const reader = await fs.openFileReader?.(file.resolvedPath, "reject");
   if (reader === undefined) {
     throw new Error("openFileReader unavailable");
   }
@@ -686,8 +736,8 @@ async function locateUtf8LineRange(
   }
   try {
     return { step: "ok", range: await scanUtf8LineRange(fs, file, focus) };
-  } catch {
-    return unreadable();
+  } catch (error) {
+    return descriptorReadFailure(error);
   }
 }
 
@@ -847,13 +897,9 @@ async function extractFromResolvedPath(
   if (!isStepOk(stat)) {
     return stat;
   }
-  if (!stat.isFile) {
-    return notFound();
-  }
-  if (stat.size === 0) {
-    return empty();
-  }
-  const file: ResolvedFile = { resolvedPath, size: stat.size };
+  const resolvedFile = resolvedFileFromStat(resolvedPath, stat);
+  if (!isStepOk(resolvedFile)) return resolvedFile;
+  const { file } = resolvedFile;
   const mimeResult = await classifyFileMime(fs, file, relativePath);
   if (!isStepOk(mimeResult)) {
     return mimeResult;

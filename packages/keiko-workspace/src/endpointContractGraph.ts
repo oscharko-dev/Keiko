@@ -12,13 +12,19 @@ import type {
   EndpointRouteContract,
 } from "./endpointContractTypes.js";
 import {
+  createStructuralExecutionControl,
+  structuralExecutionStopped,
+  type StructuralExecutionControl,
+} from "./structuralExecution.js";
+import {
   hashEndpointContractId,
   joinEndpointPaths,
   lineNumberOf,
   normalizeEndpointPath,
   unquote,
 } from "./endpointContractPaths.js";
-import { endpointSourceFiles, type SourceFile } from "./endpointContractSource.js";
+import { endpointSourceFileSetFromCandidates, type SourceFile } from "./endpointContractSource.js";
+import { gatherCandidatesWithControl, type CandidateSet } from "./repoSearchScan.js";
 
 interface EndpointBuildState {
   readonly routes: EndpointRouteContract[];
@@ -396,43 +402,85 @@ function linkConfidence(
   return Number(Math.min(0.99, base + dtoBoost).toFixed(3));
 }
 
+interface MatchingClientCalls {
+  readonly calls: readonly EndpointClientCallContract[];
+  readonly truncated: boolean;
+}
+
+function matchingClientCalls(
+  route: EndpointRouteContract,
+  calls: readonly EndpointClientCallContract[],
+  control: StructuralExecutionControl,
+): MatchingClientCalls {
+  const matches: EndpointClientCallContract[] = [];
+  for (const call of calls) {
+    if (structuralExecutionStopped(control)) return { calls: matches, truncated: true };
+    if (call.method === route.method && call.normalizedPath === route.normalizedPath) {
+      matches.push(call);
+    }
+  }
+  return { calls: matches, truncated: false };
+}
+
+function linksForRoute(
+  route: EndpointRouteContract,
+  calls: readonly EndpointClientCallContract[],
+  shapes: readonly EndpointDtoShape[],
+  control: StructuralExecutionControl,
+): { readonly links: readonly EndpointContractLink[]; readonly truncated: boolean } {
+  const links: EndpointContractLink[] = [];
+  const ambiguous = calls.length > 1;
+  for (const call of calls) {
+    if (structuralExecutionStopped(control)) return { links, truncated: true };
+    const dto = dtoEvidence(route, call, shapes);
+    links.push({
+      stableId: hashEndpointContractId("ec-link", [route.stableId, call.stableId, ambiguous]),
+      method: route.method,
+      normalizedPath: route.normalizedPath,
+      route,
+      clientCall: call,
+      confidence: linkConfidence(route, call, ambiguous, dto),
+      ambiguous,
+      dtoEvidence: dto,
+    });
+  }
+  return { links, truncated: false };
+}
+
 function buildLinks(
   routes: readonly EndpointRouteContract[],
   calls: readonly EndpointClientCallContract[],
   shapes: readonly EndpointDtoShape[],
+  control: StructuralExecutionControl,
 ): {
   readonly links: readonly EndpointContractLink[];
   readonly unmatchedRoutes: readonly EndpointRouteContract[];
   readonly ambiguousClientCalls: readonly EndpointClientCallContract[];
+  readonly truncated: boolean;
 } {
   const links: EndpointContractLink[] = [];
   const unmatchedRoutes: EndpointRouteContract[] = [];
   const ambiguousClientCalls: EndpointClientCallContract[] = [];
   for (const route of routes) {
-    const matches = calls.filter(
-      (call) => call.method === route.method && call.normalizedPath === route.normalizedPath,
-    );
-    if (matches.length === 0) {
+    if (structuralExecutionStopped(control)) {
+      return { links, unmatchedRoutes, ambiguousClientCalls, truncated: true };
+    }
+    const matches = matchingClientCalls(route, calls, control);
+    if (matches.truncated) {
+      return { links, unmatchedRoutes, ambiguousClientCalls, truncated: true };
+    }
+    if (matches.calls.length === 0) {
       unmatchedRoutes.push(route);
       continue;
     }
-    const ambiguous = matches.length > 1;
-    if (ambiguous) ambiguousClientCalls.push(...matches);
-    for (const call of matches) {
-      const dto = dtoEvidence(route, call, shapes);
-      links.push({
-        stableId: hashEndpointContractId("ec-link", [route.stableId, call.stableId, ambiguous]),
-        method: route.method,
-        normalizedPath: route.normalizedPath,
-        route,
-        clientCall: call,
-        confidence: linkConfidence(route, call, ambiguous, dto),
-        ambiguous,
-        dtoEvidence: dto,
-      });
+    if (matches.calls.length > 1) ambiguousClientCalls.push(...matches.calls);
+    const routeLinks = linksForRoute(route, matches.calls, shapes, control);
+    links.push(...routeLinks.links);
+    if (routeLinks.truncated) {
+      return { links, unmatchedRoutes, ambiguousClientCalls, truncated: true };
     }
   }
-  return { links, unmatchedRoutes, ambiguousClientCalls };
+  return { links, unmatchedRoutes, ambiguousClientCalls, truncated: false };
 }
 
 function addSourceRecords(file: SourceFile, state: EndpointBuildState): void {
@@ -448,12 +496,62 @@ export async function buildEndpointContractGraph(
   scope: SearchScope,
   limits: SearchLimits,
   fs: WorkspaceFs,
+  executionControl?: StructuralExecutionControl,
 ): Promise<EndpointContractGraph> {
+  const control =
+    executionControl ?? createStructuralExecutionControl(limits.elapsedMsMax, Date.now);
+  return buildEndpointContractGraphFromCandidates(
+    scope,
+    limits,
+    fs,
+    gatherCandidatesWithControl(scope, limits, fs, control),
+    control,
+  );
+}
+
+export async function buildEndpointContractGraphFromCandidates(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  candidateSet: CandidateSet,
+  executionControl?: StructuralExecutionControl,
+): Promise<EndpointContractGraph> {
+  const control =
+    executionControl ?? createStructuralExecutionControl(limits.elapsedMsMax, Date.now);
+  const sourceSet = await endpointSourceFileSetFromCandidates(
+    scope,
+    limits,
+    fs,
+    candidateSet,
+    control,
+  );
+  return buildEndpointContractGraphFromSources(
+    sourceSet.files,
+    sourceSet.filesSkipped,
+    sourceSet.candidateLimitReached,
+    control,
+  );
+}
+
+function buildEndpointContractGraphFromSources(
+  files: readonly SourceFile[],
+  filesSkipped: number,
+  candidateLimitReached: boolean,
+  control: StructuralExecutionControl,
+): EndpointContractGraph {
   const state: EndpointBuildState = { routes: [], clientCalls: [], dtoShapes: [], filesScanned: 0 };
-  for (const file of await endpointSourceFiles(scope, limits, fs)) {
+  let executionTruncated = false;
+  for (const file of files) {
+    if (structuralExecutionStopped(control)) {
+      executionTruncated = true;
+      break;
+    }
     addSourceRecords(file, state);
+    if (structuralExecutionStopped(control)) executionTruncated = true;
+    if (executionTruncated) break;
   }
-  const linked = buildLinks(state.routes, state.clientCalls, state.dtoShapes);
+  const linked = buildLinks(state.routes, state.clientCalls, state.dtoShapes, control);
+  if (linked.truncated || structuralExecutionStopped(control)) executionTruncated = true;
   return {
     routes: state.routes,
     clientCalls: state.clientCalls,
@@ -463,6 +561,8 @@ export async function buildEndpointContractGraph(
     ambiguousClientCalls: linked.ambiguousClientCalls,
     diagnostics: {
       filesScanned: state.filesScanned,
+      filesSkipped,
+      candidateLimitReached: candidateLimitReached || executionTruncated,
       routesFound: state.routes.length,
       clientCallsFound: state.clientCalls.length,
       linksFound: linked.links.length,

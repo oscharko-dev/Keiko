@@ -11,8 +11,10 @@
 
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import { resolve } from "node:path";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  DEFAULT_EXPLORATION_BUDGET,
   isValidScopePath,
   type CandidateFile,
   type ConnectedContextPack,
@@ -25,6 +27,7 @@ import {
   type RetrievalQuery,
   type SelectedScope,
   type UncertaintyMarker,
+  type UncertaintyMarkerKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
@@ -42,6 +45,7 @@ import {
   type ExplorationPlan,
   type GovernorState,
   type MicroIndex,
+  type RerankerExecutionContext,
   type RerankerSeam,
   type RetrievalIntent,
   type RetrievalRing,
@@ -56,8 +60,9 @@ import {
   WorkspaceNotFoundError,
   detectWorkspaceAt,
   endpointContractAdapter,
-  findFiles,
   gitHistoryAdapter,
+  isAllowedContainedPathParent,
+  isCanonicalAllowedContainedPath,
   isCanonicalMetadataFile,
   isEcosystemSourceFile,
   isDenied,
@@ -65,25 +70,37 @@ import {
   resolveWithinWorkspace,
   searchText,
   symbolGraphAdapter,
+  type SearchLimits,
+  type SearchResult,
   type SearchScope,
   type SemanticSearchProvider,
   type WorkspaceDirEntry,
   type WorkspaceFs,
   type WorkspaceIndex,
+  type WorkspaceIndexPreparationReport,
   type WorkspaceInfo,
+  type WorkspaceStat,
   containedRealPathInfo,
   evidenceAtomStableId,
 } from "@oscharko-dev/keiko-workspace";
 import {
+  createStructuralAdapterRequestContext,
   createEcosystemStructureAdapters,
   importGraphAdapter,
   runStructuralAdapters,
+  type StructuralAdapterRequestContext,
+  type StructuralRequestContextDiagnostics,
   type StructuralAdapterRegistry,
   type StructuralCoverageDiagnostics,
   testSourcePairingAdapter,
 } from "@oscharko-dev/keiko-workspace/code-intelligence";
-import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { CancelledError, ERROR_CODES } from "@oscharko-dev/keiko-model-gateway";
+import {
+  nodeWorkspaceFs,
+  type WorkspaceDescriptorUtf8Read,
+  type WorkspaceFileReader,
+  type WorkspaceHardLinkPolicy,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   normalizeGroundedAnswerPayload,
   type GroundedAnswerPayload,
@@ -103,6 +120,7 @@ import type { EntailmentStage } from "./grounded-entailment-stage.js";
 import {
   collectDiscoveredSymbolTraceEvidence,
   collectFollowSymbolTraceEvidence,
+  GROUNDED_TRACE_SEARCH_LIMITS,
 } from "./grounded-symbol-trace.js";
 import {
   defaultGitFileHistoryEvidenceProvider,
@@ -120,7 +138,18 @@ import {
 } from "./grounded-evidence-selection.js";
 import { directDefinitionSymbol } from "./grounded-query-shape.js";
 import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
-import type { ServerLogSink } from "./observability/index.js";
+import { correlationIdOrUnknown } from "./correlation.js";
+import {
+  createServerLogger,
+  errorKindOf,
+  reportServerLogFailure,
+  startLogTimer,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "./observability/index.js";
+import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+import { processServerLogSink } from "./process-log-sink.js";
+import { AbortDeadlineRaceError, raceAbortDeadline } from "./abort-race.js";
 import { resolveRecordedWorkspaceRoot } from "./workspace-root-denial-log.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -147,6 +176,8 @@ export interface OrchestratorDeps {
   readonly answerer: GroundedAnswerer;
   readonly nowMs?: () => number;
   readonly signal?: AbortSignal | undefined;
+  // Activity evidence for the retrieval-only operation. Production resolves the shared process
+  // sink; tests may inject a buffer without replacing the process-wide logger.
   readonly activityLog?: ServerLogSink | undefined;
   // Optional injected port for tests; production uses the realpath-contained node adapter.
   readonly fs?: WorkspaceFs;
@@ -256,9 +287,336 @@ interface SearchInputs {
   readonly nowMs: () => number;
   readonly signal?: AbortSignal | undefined;
   readonly workspaceIndex?: WorkspaceIndex | undefined;
+  readonly workspaceIndexActivity: WorkspaceIndexActivity;
   readonly repoSemanticSearchProvider?: SemanticSearchProvider | undefined;
   readonly gitFileHistoryEvidence: GitFileHistoryEvidenceProvider;
   readonly correlationId?: string | undefined;
+  readonly structuralContexts: StructuralRequestContextPool;
+  readonly deadlineAtMs: number;
+}
+
+interface StructuralRequestContextPoolDiagnostics extends StructuralRequestContextDiagnostics {
+  readonly contextCount: number;
+}
+
+interface StructuralRequestContextPool {
+  readonly forLimits: (limits: SearchLimits) => StructuralAdapterRequestContext;
+  readonly diagnostics: () => StructuralRequestContextPoolDiagnostics;
+}
+
+type WorkspaceIndexProviderStatus = "not-evaluated" | "available" | "unavailable";
+type WorkspaceIndexSearchMode =
+  | "not-evaluated"
+  | "unused"
+  | "live-fallback"
+  | "persistent-cold"
+  | "persistent-warm"
+  | "persistent-reconciled"
+  | "request-local-cold"
+  | "request-local-warm"
+  | "request-local-reconciled";
+type WorkspaceIndexLoadStatus = "not-attempted" | "hit" | "miss" | "mixed" | "failed";
+type WorkspaceIndexSaveStatus = "not-attempted" | "succeeded" | "unfinished" | "failed";
+
+interface WorkspaceIndexActivityDiagnostics extends WorkspaceIndexPreparationReport {
+  readonly providerStatus: WorkspaceIndexProviderStatus;
+  readonly searchMode: WorkspaceIndexSearchMode;
+  readonly loadStatus: WorkspaceIndexLoadStatus;
+  readonly saveStatus: WorkspaceIndexSaveStatus;
+  readonly searchCount: number;
+  readonly reportCount: number;
+  readonly fallbackSearchCount: number;
+  readonly loadAttempts: number;
+  readonly loadHits: number;
+  readonly loadMisses: number;
+  readonly loadFailures: number;
+  readonly saveAttempts: number;
+  readonly saveSuccesses: number;
+  readonly saveFailures: number;
+}
+
+interface MutableWorkspaceIndexActivityCounters {
+  discoveredEntries: number;
+  retainedEntries: number;
+  indexedRecords: number;
+  reusedRecords: number;
+  staleRecords: number;
+  skippedEntries: number;
+  deletedEntries: number;
+  droppedRecords: number;
+  searchCount: number;
+  reportCount: number;
+  fallbackSearchCount: number;
+  loadAttempts: number;
+  loadHits: number;
+  loadMisses: number;
+  loadFailures: number;
+  saveAttempts: number;
+  saveSuccesses: number;
+  saveFailures: number;
+}
+
+interface WorkspaceIndexActivity {
+  readonly workspaceIndex: WorkspaceIndex | undefined;
+  readonly recordSearchResult: (result: SearchResult) => void;
+  readonly diagnostics: () => WorkspaceIndexActivityDiagnostics;
+}
+
+interface WorkspaceIoActivityDiagnostics {
+  readonly readDirCalls: number;
+  readonly readDirEntries: number;
+  readonly statCalls: number;
+  readonly realPathCalls: number;
+  readonly existsCalls: number;
+  readonly contentReadCalls: number;
+  readonly contentReadBytes: number;
+}
+
+type MutableWorkspaceIoActivityCounters = {
+  -readonly [Key in keyof WorkspaceIoActivityDiagnostics]: WorkspaceIoActivityDiagnostics[Key];
+};
+
+interface WorkspaceIoActivity {
+  readonly fs: WorkspaceFs;
+  readonly diagnostics: () => WorkspaceIoActivityDiagnostics;
+}
+
+function searchLimitsKey(limits: SearchLimits): string {
+  return JSON.stringify([
+    limits.maxFilesScanned,
+    limits.maxMatchesReturned,
+    limits.maxBytesPerFileScanned,
+    limits.elapsedMsMax,
+  ]);
+}
+
+function sumContextDiagnostics(
+  contexts: readonly StructuralAdapterRequestContext[],
+): StructuralRequestContextPoolDiagnostics {
+  const values = contexts.map((context) => context.diagnostics());
+  const sum = (key: keyof StructuralRequestContextDiagnostics): number =>
+    values.reduce((total, value) => total + value[key], 0);
+  return {
+    contextCount: contexts.length,
+    candidateInventoryBuildCount: sum("candidateInventoryBuildCount"),
+    candidateFileCount: sum("candidateFileCount"),
+    candidateDirectoryCount: sum("candidateDirectoryCount"),
+    codeIndexBuildCount: sum("codeIndexBuildCount"),
+    symbolGraphBuildCount: sum("symbolGraphBuildCount"),
+    importGraphBuildCount: sum("importGraphBuildCount"),
+    endpointGraphBuildCount: sum("endpointGraphBuildCount"),
+    fileSearchCount: sum("fileSearchCount"),
+    textSearchCount: sum("textSearchCount"),
+  };
+}
+
+function emptyWorkspaceIndexActivityCounters(): MutableWorkspaceIndexActivityCounters {
+  return {
+    discoveredEntries: 0,
+    retainedEntries: 0,
+    indexedRecords: 0,
+    reusedRecords: 0,
+    staleRecords: 0,
+    skippedEntries: 0,
+    deletedEntries: 0,
+    droppedRecords: 0,
+    searchCount: 0,
+    reportCount: 0,
+    fallbackSearchCount: 0,
+    loadAttempts: 0,
+    loadHits: 0,
+    loadMisses: 0,
+    loadFailures: 0,
+    saveAttempts: 0,
+    saveSuccesses: 0,
+    saveFailures: 0,
+  };
+}
+
+function stoppedBeforeWorkspaceScan(result: SearchResult): boolean {
+  return (
+    result.workspaceIndex === undefined &&
+    result.filesScanned === 0 &&
+    result.diagnostics === undefined &&
+    result.coverage.filesDiscovered === 0 &&
+    result.coverage.reasons.some((reason) => reason === "aborted" || reason === "timeout")
+  );
+}
+
+function addWorkspaceIndexResult(
+  counters: MutableWorkspaceIndexActivityCounters,
+  result: SearchResult,
+): void {
+  counters.searchCount += 1;
+  const report = result.workspaceIndex;
+  if (report === undefined) {
+    if (!stoppedBeforeWorkspaceScan(result)) counters.fallbackSearchCount += 1;
+    return;
+  }
+  counters.reportCount += 1;
+  counters.discoveredEntries += report.discoveredEntries;
+  counters.retainedEntries += report.retainedEntries;
+  counters.indexedRecords += report.indexedRecords;
+  counters.reusedRecords += report.reusedRecords;
+  counters.staleRecords += report.staleRecords;
+  counters.skippedEntries += report.skippedEntries;
+  counters.deletedEntries += report.deletedEntries;
+  counters.droppedRecords += report.droppedRecords;
+}
+
+function workspaceIndexPersistenceSucceeded(
+  providerStatus: WorkspaceIndexProviderStatus,
+  counters: MutableWorkspaceIndexActivityCounters,
+): boolean {
+  if (providerStatus !== "available") return false;
+  return counters.loadHits > 0 || counters.saveSuccesses > 0;
+}
+
+function workspaceIndexSearchMode(
+  providerStatus: WorkspaceIndexProviderStatus,
+  counters: MutableWorkspaceIndexActivityCounters,
+): WorkspaceIndexSearchMode {
+  if (providerStatus === "not-evaluated") return "not-evaluated";
+  if (counters.searchCount === 0) return "unused";
+  if (counters.reportCount === 0) {
+    return counters.fallbackSearchCount > 0 ? "live-fallback" : "unused";
+  }
+  const reconciled = counters.staleRecords + counters.deletedEntries + counters.droppedRecords > 0;
+  const persistent = workspaceIndexPersistenceSucceeded(providerStatus, counters);
+  if (reconciled) return persistent ? "persistent-reconciled" : "request-local-reconciled";
+  if (counters.reusedRecords > 0) return persistent ? "persistent-warm" : "request-local-warm";
+  return persistent ? "persistent-cold" : "request-local-cold";
+}
+
+function workspaceIndexLoadStatus(
+  counters: MutableWorkspaceIndexActivityCounters,
+): WorkspaceIndexLoadStatus {
+  if (counters.loadFailures > 0) return "failed";
+  if (counters.loadHits > 0 && counters.loadMisses > 0) return "mixed";
+  if (counters.loadHits > 0) return "hit";
+  if (counters.loadMisses > 0) return "miss";
+  return "not-attempted";
+}
+
+function workspaceIndexSaveStatus(
+  counters: MutableWorkspaceIndexActivityCounters,
+): WorkspaceIndexSaveStatus {
+  if (counters.saveFailures > 0) return "failed";
+  if (counters.saveSuccesses > 0) return "succeeded";
+  return counters.saveAttempts > 0 ? "unfinished" : "not-attempted";
+}
+
+function workspaceIndexActivityDiagnostics(
+  providerStatus: WorkspaceIndexProviderStatus,
+  counters: MutableWorkspaceIndexActivityCounters,
+): WorkspaceIndexActivityDiagnostics {
+  return {
+    providerStatus,
+    searchMode: workspaceIndexSearchMode(providerStatus, counters),
+    loadStatus: workspaceIndexLoadStatus(counters),
+    saveStatus: workspaceIndexSaveStatus(counters),
+    ...counters,
+  };
+}
+
+function observedWorkspaceIndex(
+  source: WorkspaceIndex,
+  counters: MutableWorkspaceIndexActivityCounters,
+): WorkspaceIndex {
+  return {
+    loadSnapshot: async (scopeKey): ReturnType<WorkspaceIndex["loadSnapshot"]> => {
+      counters.loadAttempts += 1;
+      try {
+        const snapshot = await source.loadSnapshot(scopeKey);
+        if (snapshot === undefined) counters.loadMisses += 1;
+        else counters.loadHits += 1;
+        return snapshot;
+      } catch (error) {
+        counters.loadFailures += 1;
+        throw error;
+      }
+    },
+    saveSnapshot: async (scopeKey, snapshot): Promise<void> => {
+      counters.saveAttempts += 1;
+      try {
+        await source.saveSnapshot(scopeKey, snapshot);
+        counters.saveSuccesses += 1;
+      } catch (error) {
+        counters.saveFailures += 1;
+        throw error;
+      }
+    },
+  };
+}
+
+function createWorkspaceIndexActivity(source: WorkspaceIndex | undefined): WorkspaceIndexActivity {
+  const providerStatus = source === undefined ? "unavailable" : "available";
+  const counters = emptyWorkspaceIndexActivityCounters();
+  return {
+    workspaceIndex: source === undefined ? undefined : observedWorkspaceIndex(source, counters),
+    recordSearchResult: (result): void => {
+      addWorkspaceIndexResult(counters, result);
+    },
+    diagnostics: (): WorkspaceIndexActivityDiagnostics =>
+      workspaceIndexActivityDiagnostics(providerStatus, counters),
+  };
+}
+
+function observedStructuralContext(
+  context: StructuralAdapterRequestContext,
+  activity: WorkspaceIndexActivity,
+): StructuralAdapterRequestContext {
+  return {
+    assertGraphBinding: context.assertGraphBinding.bind(context),
+    candidatePaths: context.candidatePaths.bind(context),
+    skippedSymbolicLinks: context.skippedSymbolicLinks.bind(context),
+    candidateLimitReached: context.candidateLimitReached.bind(context),
+    codeIntelligenceIndex: context.codeIntelligenceIndex.bind(context),
+    symbolGraph: context.symbolGraph.bind(context),
+    importGraph: context.importGraph.bind(context),
+    endpointContractGraph: context.endpointContractGraph.bind(context),
+    findFiles: context.findFiles.bind(context),
+    searchText: async (
+      query,
+      limits,
+      deps,
+    ): ReturnType<StructuralAdapterRequestContext["searchText"]> => {
+      const result = await context.searchText(query, limits, deps);
+      activity.recordSearchResult(result);
+      return result;
+    },
+    diagnostics: context.diagnostics.bind(context),
+  };
+}
+
+function createStructuralRequestContextPool(
+  scope: SearchScope,
+  fs: WorkspaceFs,
+  nowMs: () => number,
+  deadlineAtMs: number,
+  workspaceIndexActivity: WorkspaceIndexActivity,
+  signal?: AbortSignal,
+): StructuralRequestContextPool {
+  const contexts = new Map<string, StructuralAdapterRequestContext>();
+  return {
+    forLimits: (limits): StructuralAdapterRequestContext => {
+      const key = searchLimitsKey(limits);
+      const existing = contexts.get(key);
+      if (existing !== undefined) return existing;
+      const created = observedStructuralContext(
+        createStructuralAdapterRequestContext(scope, limits, fs, {
+          nowMs,
+          deadlineAtMs,
+          ...(signal === undefined ? {} : { signal }),
+        }),
+        workspaceIndexActivity,
+      );
+      contexts.set(key, created);
+      return created;
+    },
+    diagnostics: (): StructuralRequestContextPoolDiagnostics =>
+      sumContextDiagnostics([...contexts.values()]),
+  };
 }
 
 interface RingResult {
@@ -442,7 +800,11 @@ function structuralCoverageMarker(
   nowMs: number,
 ): UncertaintyMarker | undefined {
   const partiallyIndexed = coverage.filesPartiallyIndexed ?? 0;
-  if (coverage.filesSkipped <= 0 && partiallyIndexed <= 0) {
+  if (
+    coverage.filesSkipped <= 0 &&
+    partiallyIndexed <= 0 &&
+    coverage.candidateLimitReached !== true
+  ) {
     return undefined;
   }
   const safeName = safeAdapterName(coverage.name);
@@ -454,7 +816,9 @@ function structuralCoverageMarker(
         coverage.filesSkipped,
       )} file(s), partially indexed ${String(
         partiallyIndexed,
-      )} file(s); structural edges may be missing from the context pack`,
+      )} file(s), candidate limit reached=${String(
+        coverage.candidateLimitReached === true,
+      )}; structural edges may be missing from the context pack`,
     impactedAtomIds: [],
     emittedAtMs: nowMs,
   };
@@ -609,12 +973,16 @@ function isGitMetadataPath(scopePath: string): boolean {
   return scopePath === ".git" || scopePath.startsWith(".git/");
 }
 
-function isRankableFileAtom(atom: EvidenceAtom, inputs: SearchInputs): boolean {
+function isRankableFileAtom(
+  atom: EvidenceAtom,
+  inputs: SearchInputs,
+  existsCache: FileExistenceCache,
+): boolean {
   return (
     isValidScopePath(atom.scopePath, { mustBeRelative: true }) &&
     !isGitMetadataPath(atom.scopePath) &&
     !isDenied(atom.scopePath) &&
-    fileExistsInSearchScope(inputs.searchScope, inputs.fs, atom.scopePath)
+    fileExistsInSearchScope(inputs.searchScope, inputs.fs, atom.scopePath, existsCache)
   );
 }
 
@@ -671,15 +1039,19 @@ function structuralEdgeTargetAtoms(
 ): readonly EvidenceAtom[] {
   const out: EvidenceAtom[] = [];
   const seen = new Set<string>();
+  const existsCache = createFileExistenceCache();
+  const fs = cancellationGuardedWorkspaceFs(inputs.fs, inputs.signal);
   for (const atom of atoms) {
+    throwIfCancelled(inputs.signal);
+    if (inputs.nowMs() >= inputs.deadlineAtMs) break;
     const edge = atom.edge;
-    const target = edge?.target;
+    if (edge === undefined) continue;
+    const target = edge.target;
     if (
-      target === undefined ||
       target.scopePath === atom.scopePath ||
       !isValidScopePath(target.scopePath, { mustBeRelative: true }) ||
       isDenied(target.scopePath) ||
-      !fileExistsInSearchScope(inputs.searchScope, inputs.fs, target.scopePath)
+      !fileExistsInSearchScope(inputs.searchScope, fs, target.scopePath, existsCache)
     ) {
       continue;
     }
@@ -696,24 +1068,33 @@ function structuralEdgeTargetAtoms(
       continue;
     }
     seen.add(stableId);
-    out.push({
-      schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
-      stableId,
-      scopePath: target.scopePath,
-      lineRange: target.lineRange,
-      score: Math.max(0, Math.min(1, atom.score * 0.96)),
-      provenance: {
-        kind: "structural",
-        tool: "structural-edge-target",
-        queryFingerprint: atom.provenance.queryFingerprint,
-      },
-      edge,
-      redactionState: "redacted",
-      emittedAtMs: inputs.nowMs(),
-      ledgerRef: undefined,
-    });
+    out.push(structuralEdgeTargetAtom(atom, edge, stableId, inputs.nowMs));
   }
   return out;
+}
+
+function structuralEdgeTargetAtom(
+  atom: EvidenceAtom,
+  edge: NonNullable<EvidenceAtom["edge"]>,
+  stableId: string,
+  nowMs: () => number,
+): EvidenceAtom {
+  return {
+    schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+    stableId,
+    scopePath: edge.target.scopePath,
+    lineRange: edge.target.lineRange,
+    score: Math.max(0, Math.min(1, atom.score * 0.96)),
+    provenance: {
+      kind: "structural",
+      tool: "structural-edge-target",
+      queryFingerprint: atom.provenance.queryFingerprint,
+    },
+    edge,
+    redactionState: "redacted",
+    emittedAtMs: nowMs(),
+    ledgerRef: undefined,
+  };
 }
 
 function dedupeAtoms(atoms: readonly EvidenceAtom[], cap: number): readonly EvidenceAtom[] {
@@ -745,6 +1126,7 @@ async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promis
   const result = await searchText(inputs.searchScope, query, ring.searchLimits, {
     fs: inputs.fs,
     nowMs: inputs.nowMs,
+    deadlineAtMs: inputs.deadlineAtMs,
     searchHints: { retrievalIntent: inputs.retrievalIntent },
     ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
     ...(inputs.workspaceIndex === undefined ? {} : { workspaceIndex: inputs.workspaceIndex }),
@@ -752,6 +1134,7 @@ async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promis
       ? { semanticSearchProvider: inputs.repoSemanticSearchProvider }
       : {}),
   });
+  inputs.workspaceIndexActivity.recordSearchResult(result);
   // Lexical scanning is transient: each candidate file is read to match lines, then discarded.
   // It does NOT consume the excerpt budget; excerpt reads are charged later by the assembler.
   return {
@@ -786,11 +1169,16 @@ async function runAdapterQueries(
   ring: NonLexicalRing,
   queries: readonly RetrievalQuery[],
   inputs: SearchInputs,
+  requestContext: StructuralAdapterRequestContext | undefined,
 ): Promise<readonly RunRingStructuralResult[]> {
+  if (inputs.nowMs() >= inputs.deadlineAtMs) return [];
   return Promise.all(
     queries.map((query) =>
       runStructuralAdapters(registry, inputs.searchScope, query, ring.searchLimits, inputs.fs, {
         nowMs: inputs.nowMs,
+        deadlineAtMs: inputs.deadlineAtMs,
+        ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
+        ...(requestContext === undefined ? {} : { requestContext }),
       }),
     ),
   );
@@ -803,15 +1191,25 @@ async function runNonLexicalAdapters(
   const registry = registryForRing(ring);
   const queries =
     ring.kind === "structural" ? structuralQueriesForRing(ring, inputs) : [inputs.query];
-  const results = await runAdapterQueries(registry, ring, queries, inputs);
+  const requestContext =
+    ring.kind === "structural" ? inputs.structuralContexts.forLimits(ring.searchLimits) : undefined;
+  const results = await runAdapterQueries(registry, ring, queries, inputs, requestContext);
   const followUpQueries =
-    ring.kind === "structural" && !queryTargetsRouteImplementation(inputs.query.text)
+    ring.kind === "structural" &&
+    inputs.nowMs() < inputs.deadlineAtMs &&
+    !queryTargetsRouteImplementation(inputs.query.text)
       ? structuralFollowUpQueries(
           mergeAtomsByStableId(results, ring.searchLimits.maxMatchesReturned),
           inputs.query,
         )
       : [];
-  const followUpResults = await runAdapterQueries(registry, ring, followUpQueries, inputs);
+  const followUpResults = await runAdapterQueries(
+    registry,
+    ring,
+    followUpQueries,
+    inputs,
+    requestContext,
+  );
   return [...results, ...followUpResults];
 }
 
@@ -820,19 +1218,37 @@ async function gitFileAtomsForRing(
   inputs: SearchInputs,
   cap: number,
 ): Promise<{ readonly atoms: readonly EvidenceAtom[]; readonly elapsedMs: number }> {
-  if (ring.kind !== "git-history") {
+  if (ring.kind !== "git-history" || inputs.nowMs() >= inputs.deadlineAtMs) {
     return { atoms: [], elapsedMs: 0 };
   }
   const startedAtMs = inputs.nowMs();
-  const atoms = await inputs.gitFileHistoryEvidence({
-    searchScope: inputs.searchScope,
-    query: inputs.query,
-    fs: inputs.fs,
-    nowMs: inputs.nowMs,
-    signal: inputs.signal,
-    maxFiles: cap,
-    correlationId: inputs.correlationId,
-  });
+  let atoms: readonly EvidenceAtom[];
+  try {
+    atoms = await raceAbortDeadline(
+      ({ signal }) =>
+        inputs.gitFileHistoryEvidence({
+          searchScope: inputs.searchScope,
+          query: inputs.query,
+          fs: inputs.fs,
+          nowMs: inputs.nowMs,
+          signal,
+          maxFiles: cap,
+          correlationId: inputs.correlationId,
+          deadlineAtMs: inputs.deadlineAtMs,
+        }),
+      {
+        deadlineAtMs: inputs.deadlineAtMs,
+        nowMs: inputs.nowMs,
+        ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
+      },
+    );
+  } catch (error) {
+    if (!(error instanceof AbortDeadlineRaceError)) throw error;
+    if (error.reason === "aborted") {
+      throw new CancelledError("grounded repository request cancelled");
+    }
+    atoms = [];
+  }
   return { atoms, elapsedMs: Math.max(0, inputs.nowMs() - startedAtMs) };
 }
 
@@ -846,8 +1262,18 @@ function nonLexicalAtoms(
   if (ring.kind === "structural") {
     return dedupeAtoms([...merged, ...structuralEdgeTargetAtoms(merged, inputs)], cap);
   }
+  const existsCache = createFileExistenceCache();
+  const guardedInputs = {
+    ...inputs,
+    fs: cancellationGuardedWorkspaceFs(inputs.fs, inputs.signal),
+  };
   return dedupeAtoms(
-    [...merged, ...gitAtoms].filter((atom) => isRankableFileAtom(atom, inputs)),
+    [...merged, ...gitAtoms].filter((atom) => {
+      throwIfCancelled(inputs.signal);
+      return (
+        inputs.nowMs() < inputs.deadlineAtMs && isRankableFileAtom(atom, guardedInputs, existsCache)
+      );
+    }),
     cap,
   );
 }
@@ -891,9 +1317,72 @@ interface RingRunSummary {
   readonly diagnostics?: ContextPackDiagnostics | undefined;
 }
 
+interface AugmentationBudgetResult {
+  readonly governor: GovernorState;
+  readonly marker?: UncertaintyMarker | undefined;
+}
+
+interface AugmentationBudgetMeter {
+  readonly canContinue: () => boolean;
+  readonly tryReserveSearchCall: () => boolean;
+  readonly finish: (governor: GovernorState) => AugmentationBudgetResult;
+}
+
+function createAugmentationBudgetMeter(
+  plan: ExplorationPlan,
+  governor: GovernorState,
+  nowMs: () => number,
+  deadlineAtMs: number,
+): AugmentationBudgetMeter {
+  const startedAtMs = nowMs();
+  let reservedSearchCalls = 0;
+  let stopReason: string | undefined;
+  const canContinue = (): boolean => {
+    if (governor.status === "budget-exhausted") {
+      stopReason ??= governor.stopReason ?? "budget exhausted";
+      return false;
+    }
+    if (nowMs() < deadlineAtMs) return true;
+    stopReason ??= "budget-exhausted on elapsedMs";
+    return false;
+  };
+  const tryReserveSearchCall = (): boolean => {
+    if (!canContinue()) return false;
+    if (governor.usage.searchCalls + reservedSearchCalls >= plan.budget.searchCallsMax) {
+      stopReason ??= "budget-exhausted on searchCalls";
+      return false;
+    }
+    reservedSearchCalls += 1;
+    return true;
+  };
+  return {
+    canContinue,
+    tryReserveSearchCall,
+    finish: (current): AugmentationBudgetResult => {
+      const endedAtMs = nowMs();
+      if (endedAtMs >= deadlineAtMs) stopReason ??= "budget-exhausted on elapsedMs";
+      const elapsedMs = Math.max(0, Math.floor(endedAtMs - startedAtMs));
+      const charged = applyUsage(
+        current,
+        usageDelta({ searchCalls: reservedSearchCalls, elapsedMs }),
+      );
+      const reason = stopReason ?? charged.stopReason;
+      return {
+        governor: charged,
+        ...(reason === undefined ? {} : { marker: budgetClipped(reason, endedAtMs) }),
+      };
+    },
+  };
+}
+
 interface RingReservation {
   readonly governor: GovernorState;
   readonly marker?: UncertaintyMarker | undefined;
+}
+
+interface StoppedRingReservation {
+  readonly governor: GovernorState;
+  readonly marker: UncertaintyMarker;
 }
 
 function reserveRingSearchCalls(
@@ -914,20 +1403,42 @@ function reserveRingSearchCalls(
   };
 }
 
+function initialBlockedRingSummary(
+  governor: GovernorState,
+  inputs: SearchInputs,
+): RingRunSummary | undefined {
+  const reason = readBudgetStopReason(governor.plan.budget);
+  if (reason === undefined) return undefined;
+  return {
+    atoms: [],
+    omitted: [],
+    governor: complete(governor),
+    uncertainty: [budgetClipped(reason, inputs.nowMs())],
+  };
+}
+
+function elapsedDeadlineStop(
+  governor: GovernorState,
+  inputs: SearchInputs,
+): StoppedRingReservation | undefined {
+  if (inputs.nowMs() < inputs.deadlineAtMs) return undefined;
+  const remainingElapsedMs = Math.max(
+    0,
+    governor.plan.budget.elapsedMsMax - governor.usage.elapsedMs,
+  );
+  return {
+    governor: applyUsage(governor, usageDelta({ elapsedMs: remainingElapsedMs })),
+    marker: budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs()),
+  };
+}
+
 async function runAllRings(
   rings: readonly RetrievalRing[],
   inputs: SearchInputs,
   initialGovernor: GovernorState,
 ): Promise<RingRunSummary> {
-  const blockedByReadBudget = readBudgetStopReason(initialGovernor.plan.budget);
-  if (blockedByReadBudget !== undefined) {
-    return {
-      atoms: [],
-      omitted: [],
-      governor: complete(initialGovernor),
-      uncertainty: [budgetClipped(blockedByReadBudget, inputs.nowMs())],
-    };
-  }
+  const blocked = initialBlockedRingSummary(initialGovernor, inputs);
+  if (blocked !== undefined) return blocked;
   const atoms: EvidenceAtom[] = [];
   const omitted: OmittedContextEntry[] = [];
   const uncertainty: UncertaintyMarker[] = [];
@@ -938,6 +1449,12 @@ async function runAllRings(
   for (const ring of rings) {
     throwIfCancelled(inputs.signal);
     if (!canContinue(governor)) {
+      break;
+    }
+    const deadlineStop = elapsedDeadlineStop(governor, inputs);
+    if (deadlineStop !== undefined) {
+      governor = deadlineStop.governor;
+      uncertainty.push(deadlineStop.marker);
       break;
     }
     const reservation = reserveRingSearchCalls(governor, ring, inputs);
@@ -975,6 +1492,7 @@ interface ExcerptInputs {
   readonly atomsByPath: ReadonlyMap<string, readonly EvidenceAtom[]>;
   readonly nowMs: () => number;
   readonly signal?: AbortSignal | undefined;
+  readonly deadlineAtMs: number;
 }
 
 interface ExcerptReadSummary {
@@ -1068,6 +1586,9 @@ const REPOSITORY_OVERVIEW_FILENAMES = [
 ] as const;
 const WORKSPACE_PACKAGE_DIRS = ["packages", "apps", "services", "libs"] as const;
 const MAX_WORKSPACE_MANIFESTS = 24;
+const WORKSPACE_MANIFEST_BYTES_MAX = 1_048_576;
+const WORKSPACE_PATTERN_COUNT_MAX = 32;
+const WORKSPACE_PATTERN_CHARS_MAX = 1_024;
 const SYMBOL_FILE_EXTENSIONS = [
   "cs",
   "fs",
@@ -1221,32 +1742,134 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+type MetadataCoverageIssue =
+  | "workspace-manifest-byte-limit"
+  | "workspace-manifest-read-unavailable"
+  | "workspace-manifest-shape-unsupported"
+  | "workspace-pattern-count-limit"
+  | "workspace-pattern-length-limit"
+  | "workspace-pattern-shape-unsupported";
+
+function recordMetadataCoverageIssue(
+  cache: FileExistenceCache | undefined,
+  issue: MetadataCoverageIssue,
+  count = 1,
+): void {
+  if (cache === undefined || count <= 0) return;
+  cache.metadataCoverageIssues.set(issue, (cache.metadataCoverageIssues.get(issue) ?? 0) + count);
+}
+
+function descriptorReadExceededLimit(error: unknown): boolean {
+  return isRecord(error) && error.reason === "too-large";
+}
+
+function readBoundedWorkspaceManifest(
+  fs: WorkspaceFs,
+  absolutePath: string,
+  cache?: FileExistenceCache,
+): string | undefined {
+  try {
+    if (fs.readFileUtf8SameDescriptor !== undefined) {
+      return fs.readFileUtf8SameDescriptor(absolutePath, WORKSPACE_MANIFEST_BYTES_MAX, "reject")
+        .rawText;
+    }
+    const stat = fs.stat(absolutePath);
+    if (!stat.isFile || stat.size > WORKSPACE_MANIFEST_BYTES_MAX) {
+      recordMetadataCoverageIssue(cache, "workspace-manifest-byte-limit");
+      return undefined;
+    }
+    const rawText = fs.readFileUtf8(absolutePath);
+    if (utf8ByteLength(rawText) > WORKSPACE_MANIFEST_BYTES_MAX) {
+      recordMetadataCoverageIssue(cache, "workspace-manifest-byte-limit");
+      return undefined;
+    }
+    return rawText;
+  } catch (error) {
+    rethrowMetadataCancellation(error);
+    recordMetadataCoverageIssue(
+      cache,
+      descriptorReadExceededLimit(error)
+        ? "workspace-manifest-byte-limit"
+        : "workspace-manifest-read-unavailable",
+    );
+    return undefined;
+  }
+}
+
+function workspacePatternEntries(
+  workspaces: unknown,
+  cache?: FileExistenceCache,
+): readonly unknown[] | undefined {
+  if (Array.isArray(workspaces)) {
+    return workspaces.map((entry: unknown): unknown => entry);
+  }
+  if (isRecord(workspaces) && Array.isArray(workspaces.packages)) {
+    return workspaces.packages.map((entry: unknown): unknown => entry);
+  }
+  if (workspaces !== undefined) {
+    recordMetadataCoverageIssue(cache, "workspace-manifest-shape-unsupported");
+  }
+  return undefined;
+}
+
+function boundedWorkspacePatterns(
+  entries: readonly unknown[],
+  cache?: FileExistenceCache,
+): readonly string[] {
+  recordMetadataCoverageIssue(
+    cache,
+    "workspace-pattern-count-limit",
+    Math.max(0, entries.length - WORKSPACE_PATTERN_COUNT_MAX),
+  );
+  const patterns: string[] = [];
+  for (const entry of entries.slice(0, WORKSPACE_PATTERN_COUNT_MAX)) {
+    if (typeof entry !== "string") {
+      recordMetadataCoverageIssue(cache, "workspace-pattern-shape-unsupported");
+    } else if (entry.length > WORKSPACE_PATTERN_CHARS_MAX) {
+      recordMetadataCoverageIssue(cache, "workspace-pattern-length-limit");
+    } else {
+      patterns.push(entry);
+    }
+  }
+  return patterns;
+}
+
 function readWorkspacePatterns(
   searchScope: SearchScope,
   fs: WorkspaceFs,
+  control: MetadataTraversalControl,
   existsCache?: FileExistenceCache,
 ): readonly string[] {
+  if (!metadataTraversalCanContinue(control)) return [];
   if (!fileExistsInSearchScope(searchScope, fs, "package.json", existsCache)) {
     return [];
   }
+  let rawText: string | undefined;
   try {
-    const abs = resolveWithinWorkspace(searchScope.workspace.root, "package.json");
-    const contained = containedRealPathInfo(fs, searchScope.workspace.root, abs);
-    const parsed: unknown = JSON.parse(fs.readFileUtf8(contained.path));
-    if (!isRecord(parsed)) {
+    const contained = canonicalContainedSearchPath(searchScope, fs, "package.json");
+    if (contained === undefined) {
+      recordMetadataCoverageIssue(existsCache, "workspace-manifest-read-unavailable");
       return [];
     }
-    const workspaces = parsed.workspaces;
-    if (Array.isArray(workspaces)) {
-      return workspaces.filter((entry): entry is string => typeof entry === "string");
+    rawText = readBoundedWorkspaceManifest(fs, contained.path, existsCache);
+  } catch (error) {
+    rethrowMetadataCancellation(error);
+    recordMetadataCoverageIssue(existsCache, "workspace-manifest-read-unavailable");
+  }
+  if (!metadataTraversalCanContinue(control)) return [];
+  if (rawText === undefined) return [];
+  try {
+    const parsed: unknown = JSON.parse(rawText);
+    if (!isRecord(parsed)) {
+      recordMetadataCoverageIssue(existsCache, "workspace-manifest-shape-unsupported");
+      return [];
     }
-    if (isRecord(workspaces) && Array.isArray(workspaces.packages)) {
-      return workspaces.packages.filter((entry): entry is string => typeof entry === "string");
-    }
+    const entries = workspacePatternEntries(parsed.workspaces, existsCache);
+    return entries === undefined ? [] : boundedWorkspacePatterns(entries, existsCache);
   } catch {
+    recordMetadataCoverageIssue(existsCache, "workspace-manifest-shape-unsupported");
     return [];
   }
-  return [];
 }
 
 // Strips trailing "/" one character at a time instead of via `/\/+$/u` (SonarCloud S8786): that
@@ -1273,23 +1896,132 @@ export function normalizeWorkspacePattern(pattern: string): string | undefined {
   return normalized;
 }
 
+type BoundedDirectoryReadStatus = "complete" | "truncated" | "unavailable";
+
+interface BoundedDirectoryRead {
+  readonly entries: readonly WorkspaceDirEntry[];
+  readonly status: BoundedDirectoryReadStatus;
+}
+
+interface MetadataTraversalControl {
+  readonly signal: AbortSignal | undefined;
+  readonly nowMs: () => number;
+  readonly deadlineAtMs: number;
+}
+
+class MetadataTraversalDeadlineError extends Error {
+  public constructor() {
+    super("project metadata traversal deadline reached");
+    this.name = "MetadataTraversalDeadlineError";
+  }
+}
+
+function assertMetadataTraversalActive(control: MetadataTraversalControl): void {
+  throwIfCancelled(control.signal);
+  if (control.nowMs() >= control.deadlineAtMs) {
+    throw new MetadataTraversalDeadlineError();
+  }
+}
+
+function metadataTraversalOperation<T>(control: MetadataTraversalControl, run: () => T): T {
+  assertMetadataTraversalActive(control);
+  const result = run();
+  assertMetadataTraversalActive(control);
+  return result;
+}
+
+function metadataTraversalFs(fs: WorkspaceFs, control: MetadataTraversalControl): WorkspaceFs {
+  const descriptorRead = fs.readFileUtf8SameDescriptor;
+  const canonicalRoot = fs.canonicalWorkspaceRoot;
+  const run = <T>(operation: () => T): T => metadataTraversalOperation(control, operation);
+  return {
+    readFileUtf8: (path): string => run(() => fs.readFileUtf8(path)),
+    stat: (path): WorkspaceStat => run(() => fs.stat(path)),
+    readDir: (path, maxEntries): readonly WorkspaceDirEntry[] =>
+      run(() => fs.readDir(path, maxEntries)),
+    realPath: (path): string => run(() => fs.realPath(path)),
+    exists: (path): boolean => run(() => fs.exists(path)),
+    ...(descriptorRead === undefined
+      ? {}
+      : {
+          readFileUtf8SameDescriptor: (
+            path: string,
+            maxBytes: number,
+            hardLinkPolicy: WorkspaceHardLinkPolicy,
+          ): WorkspaceDescriptorUtf8Read =>
+            run(() => descriptorRead.call(fs, path, maxBytes, hardLinkPolicy)),
+        }),
+    ...(canonicalRoot === undefined
+      ? {}
+      : {
+          canonicalWorkspaceRoot: (root: string): string => run(() => canonicalRoot.call(fs, root)),
+        }),
+  };
+}
+
+function cancellationGuardedWorkspaceFs(
+  fs: WorkspaceFs,
+  signal: AbortSignal | undefined,
+): WorkspaceFs {
+  return signal === undefined
+    ? fs
+    : metadataTraversalFs(fs, { signal, nowMs: () => 0, deadlineAtMs: Number.POSITIVE_INFINITY });
+}
+
+function metadataTraversalCanContinue(control: MetadataTraversalControl): boolean {
+  throwIfCancelled(control.signal);
+  return control.nowMs() < control.deadlineAtMs;
+}
+
+function rethrowMetadataCancellation(error: unknown): void {
+  if (error instanceof CancelledError) throw error;
+}
+
+type ContainedSearchPath = ReturnType<typeof containedRealPathInfo>;
+
+function canonicalContainedSearchPath(
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  scopePath: string,
+): ContainedSearchPath | undefined {
+  const root = searchScope.workspace.root;
+  const contained = containedRealPathInfo(fs, root, resolveWithinWorkspace(root, scopePath));
+  return isCanonicalAllowedContainedPath(contained, root, scopePath) ? contained : undefined;
+}
+
 function safeReadDir(
   searchScope: SearchScope,
   fs: WorkspaceFs,
   scopePath: string,
-): readonly WorkspaceDirEntry[] {
+  maxEntries: number,
+): BoundedDirectoryRead {
   if (scopePath.length > 0 && !isValidScopePath(scopePath, { mustBeRelative: true })) {
-    return [];
+    return { entries: [], status: "unavailable" };
   }
+  const root = searchScope.workspace.root;
+  const abs = resolveWithinWorkspace(root, scopePath);
   try {
-    const abs = resolveWithinWorkspace(searchScope.workspace.root, scopePath);
-    const contained = containedRealPathInfo(fs, searchScope.workspace.root, abs);
-    if (!fs.stat(contained.path).isDirectory) {
-      return [];
+    const contained = containedRealPathInfo(fs, root, abs);
+    if (!isCanonicalAllowedContainedPath(contained, root, scopePath)) {
+      if (!isAllowedContainedPathParent(contained, root, scopePath)) {
+        return { entries: [], status: "unavailable" };
+      }
+      return fs.exists(abs)
+        ? { entries: [], status: "unavailable" }
+        : { entries: [], status: "complete" };
     }
-    return fs.readDir(contained.path);
-  } catch {
-    return [];
+    if (!fs.stat(contained.path).isDirectory) {
+      return { entries: [], status: "complete" };
+    }
+    const entries = fs.readDir(contained.path, maxEntries + 1);
+    const truncated = entries.length > maxEntries;
+    return {
+      entries: truncated ? [] : entries,
+      status: truncated ? "truncated" : "complete",
+    };
+  } catch (error) {
+    rethrowMetadataCancellation(error);
+    return { entries: [], status: "unavailable" };
   }
 }
 
@@ -1307,9 +2039,11 @@ function canonicalManifestScopePathsInDir(
   dir: string,
   searchScope: SearchScope,
   fs: WorkspaceFs,
+  maxEntries: number,
+  existsCache?: FileExistenceCache,
 ): readonly string[] {
-  return safeReadDir(searchScope, fs, dir)
-    .filter((entry) => !entry.isDirectory && !entry.isSymbolicLink)
+  return cachedDirectoryEntries(searchScope, fs, dir, maxEntries, existsCache)
+    .entries.filter((entry) => !entry.isDirectory && !entry.isSymbolicLink)
     .map((entry) => joinScopePath(dir, entry.name))
     .filter((scopePath) => isCanonicalMetadataFile(scopePath) && !isDenied(scopePath))
     .sort((a, b) => a.localeCompare(b));
@@ -1319,48 +2053,103 @@ function expandWorkspacePattern(
   pattern: string,
   searchScope: SearchScope,
   fs: WorkspaceFs,
+  control: MetadataTraversalControl,
+  existsCache?: FileExistenceCache,
 ): readonly string[] {
+  if (!metadataTraversalCanContinue(control)) return [];
   const normalized = normalizeWorkspacePattern(pattern);
   if (normalized === undefined) {
+    recordMetadataCoverageIssue(existsCache, "workspace-pattern-shape-unsupported");
     return [];
   }
   if (!normalized.includes("*")) {
     const dir = normalized.endsWith("/package.json")
       ? normalized.slice(0, -"/package.json".length)
       : normalized;
-    return canonicalManifestScopePathsInDir(dir, searchScope, fs);
+    return canonicalManifestScopePathsInDir(
+      dir,
+      searchScope,
+      fs,
+      MAX_WORKSPACE_MANIFESTS,
+      existsCache,
+    );
   }
   if (!normalized.endsWith("/*") || normalized.slice(0, -2).includes("*")) {
+    recordMetadataCoverageIssue(existsCache, "workspace-pattern-shape-unsupported");
     return [];
   }
-  const base = normalized.slice(0, -2);
-  return safeReadDir(searchScope, fs, base)
-    .filter((entry) => entry.isDirectory && !entry.isSymbolicLink)
+  return workspacePatternServiceManifests(
+    normalized.slice(0, -2),
+    searchScope,
+    fs,
+    control,
+    existsCache,
+  );
+}
+
+function workspacePatternServiceManifests(
+  base: string,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  control: MetadataTraversalControl,
+  existsCache?: FileExistenceCache,
+): readonly string[] {
+  if (!metadataTraversalCanContinue(control)) return [];
+  const serviceNames = cachedDirectoryEntries(
+    searchScope,
+    fs,
+    base,
+    MAX_MONOREPO_SERVICE_DIRS,
+    existsCache,
+  )
+    .entries.filter((entry) => entry.isDirectory && !entry.isSymbolicLink)
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b))
-    .slice(0, MAX_MONOREPO_SERVICE_DIRS)
-    .flatMap((name) =>
-      canonicalManifestScopePathsInDir(joinScopePath(base, name), searchScope, fs),
+    .slice(0, MAX_MONOREPO_SERVICE_DIRS);
+  const manifests: string[] = [];
+  for (const name of serviceNames) {
+    if (!metadataTraversalCanContinue(control)) break;
+    const remaining = MAX_WORKSPACE_MANIFESTS - manifests.length;
+    if (remaining <= 0) break;
+    manifests.push(
+      ...canonicalManifestScopePathsInDir(
+        joinScopePath(base, name),
+        searchScope,
+        fs,
+        remaining,
+        existsCache,
+      ),
     );
+  }
+  return manifests;
 }
 
 function workspacePackageManifestPaths(
   input: OrchestratorInput,
   searchScope: SearchScope,
   fs: WorkspaceFs,
+  control: MetadataTraversalControl,
   existsCache?: FileExistenceCache,
 ): readonly string[] {
   if (input.scope.kind !== "workspace-root" || input.scope.relativePaths.length !== 0) {
     return [];
   }
-  const patterns = new Set<string>(readWorkspacePatterns(searchScope, fs, existsCache));
+  if (!metadataTraversalCanContinue(control)) return [];
+  const patterns = new Set<string>(readWorkspacePatterns(searchScope, fs, control, existsCache));
   for (const dir of WORKSPACE_PACKAGE_DIRS) {
     patterns.add(`${dir}/*`);
   }
   const paths: string[] = [];
   const seen = new Set<string>();
   for (const pattern of [...patterns].sort((a, b) => a.localeCompare(b))) {
-    for (const scopePath of expandWorkspacePattern(pattern, searchScope, fs)) {
+    if (!metadataTraversalCanContinue(control)) break;
+    for (const scopePath of expandWorkspacePattern(
+      pattern,
+      searchScope,
+      fs,
+      control,
+      existsCache,
+    )) {
       if (seen.has(scopePath)) {
         continue;
       }
@@ -1484,25 +2273,36 @@ function documentReferenceCoverageMarker(
   };
 }
 
+function reserveAugmentationSearchTerms(
+  terms: readonly string[],
+  signal: AbortSignal | undefined,
+  budget: AugmentationBudgetMeter,
+): readonly string[] {
+  const reserved: string[] = [];
+  for (const term of terms) {
+    throwIfCancelled(signal);
+    if (!budget.tryReserveSearchCall()) break;
+    reserved.push(term);
+  }
+  return reserved;
+}
+
 async function documentReferenceAtoms(
   input: OrchestratorInput,
   plan: ExplorationPlan,
-  searchScope: SearchScope,
-  fs: WorkspaceFs,
   nowMs: () => number,
   signal: AbortSignal | undefined,
+  requestContext: StructuralAdapterRequestContext,
+  budget: AugmentationBudgetMeter,
 ): Promise<DeterministicContextEvidence> {
-  const terms = documentReferenceAnchorTerms(plan);
+  const terms = reserveAugmentationSearchTerms(documentReferenceAnchorTerms(plan), signal, budget);
   const results = await Promise.all(
     terms.map(async (term) => {
       throwIfCancelled(signal);
-      const result = await findFiles(
-        searchScope,
+      const result = await requestContext.findFiles(
         documentReferenceQuery(input, term),
         DOCUMENT_REFERENCE_SEARCH_LIMITS,
         {
-          fs,
-          nowMs,
           ...(signal === undefined ? {} : { signal }),
           searchHints: { retrievalIntent: plan.retrievalIntent },
         },
@@ -1573,8 +2373,65 @@ function lineDefinesSymbol(line: string, patterns: readonly RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(line));
 }
 
-function firstLineIndex(lines: readonly string[], predicate: (line: string) => boolean): number {
-  return lines.findIndex(predicate);
+interface SymbolLineScanControl {
+  readonly signal: AbortSignal | undefined;
+  readonly nowMs: () => number;
+  readonly deadlineMs: number;
+}
+
+interface SymbolLineLookupResult {
+  readonly lineNumber: number | undefined;
+  readonly deadlineReached: boolean;
+}
+
+function symbolLineDeadlineReached(control: SymbolLineScanControl): boolean {
+  return control.nowMs() >= control.deadlineMs;
+}
+
+// Exported only for deterministic cancellation/deadline regression coverage; this file is not a
+// package export. The per-line guard ensures a bounded-but-large 2 MiB source cannot run past the
+// request's absolute elapsed deadline after the descriptor read has completed.
+export function scanFirstSymbolLine(
+  rawText: string,
+  term: string,
+  control: SymbolLineScanControl,
+): SymbolLineLookupResult {
+  const loweredTerm = term.toLowerCase();
+  const definitionPatterns = symbolDefinitionPatterns(term);
+  let firstOccurrence: number | undefined;
+  let lineNumber = 1;
+  let start = 0;
+  while (start <= rawText.length) {
+    throwIfCancelled(control.signal);
+    if (symbolLineDeadlineReached(control)) {
+      return { lineNumber: undefined, deadlineReached: true };
+    }
+    const newline = rawText.indexOf("\n", start);
+    const line = rawText.slice(start, newline < 0 ? rawText.length : newline);
+    if (lineDefinesSymbol(line, definitionPatterns)) {
+      return { lineNumber, deadlineReached: false };
+    }
+    if (firstOccurrence === undefined && line.toLowerCase().includes(loweredTerm)) {
+      firstOccurrence = lineNumber;
+    }
+    if (newline < 0) break;
+    start = newline + 1;
+    lineNumber += 1;
+  }
+  return { lineNumber: firstOccurrence, deadlineReached: false };
+}
+
+function boundedSymbolFileText(fs: WorkspaceFs, absolutePath: string): string | undefined {
+  if (fs.readFileUtf8SameDescriptor !== undefined) {
+    return fs.readFileUtf8SameDescriptor(absolutePath, SYMBOL_LINE_SCAN_BYTES_MAX, "reject")
+      .rawText;
+  }
+  // Compatibility for in-memory/test ports only. Production always supplies the same-descriptor
+  // reader; the pre-read stat keeps legacy fakes bounded without weakening the production path.
+  const stat = fs.stat(absolutePath);
+  if (!stat.isFile || stat.size > SYMBOL_LINE_SCAN_BYTES_MAX) return undefined;
+  const rawText = fs.readFileUtf8(absolutePath);
+  return utf8ByteLength(rawText) <= SYMBOL_LINE_SCAN_BYTES_MAX ? rawText : undefined;
 }
 
 function firstSymbolLine(
@@ -1582,27 +2439,25 @@ function firstSymbolLine(
   fs: WorkspaceFs,
   scopePath: string,
   term: string,
-): number | undefined {
+  control: SymbolLineScanControl,
+): SymbolLineLookupResult {
+  throwIfCancelled(control.signal);
+  if (symbolLineDeadlineReached(control)) {
+    return { lineNumber: undefined, deadlineReached: true };
+  }
   try {
-    const abs = resolveWithinWorkspace(searchScope.workspace.root, scopePath);
-    const contained = containedRealPathInfo(fs, searchScope.workspace.root, abs);
-    const stat = fs.stat(contained.path);
-    if (!stat.isFile || stat.size > SYMBOL_LINE_SCAN_BYTES_MAX) {
-      return undefined;
+    const contained = canonicalContainedSearchPath(searchScope, fs, scopePath);
+    if (contained === undefined) return { lineNumber: undefined, deadlineReached: false };
+    throwIfCancelled(control.signal);
+    if (symbolLineDeadlineReached(control)) {
+      return { lineNumber: undefined, deadlineReached: true };
     }
-    const loweredTerm = term.toLowerCase();
-    const definitionPatterns = symbolDefinitionPatterns(term);
-    const lines = fs.readFileUtf8(contained.path).split("\n");
-    const definitionIndex = firstLineIndex(lines, (line) =>
-      lineDefinesSymbol(line, definitionPatterns),
-    );
-    const index =
-      definitionIndex >= 0
-        ? definitionIndex
-        : firstLineIndex(lines, (line) => line.toLowerCase().includes(loweredTerm));
-    return index < 0 ? undefined : index + 1;
-  } catch {
-    return undefined;
+    const rawText = boundedSymbolFileText(fs, contained.path);
+    if (rawText === undefined) return { lineNumber: undefined, deadlineReached: false };
+    return scanFirstSymbolLine(rawText, term, control);
+  } catch (error) {
+    if (error instanceof CancelledError) throw error;
+    return { lineNumber: undefined, deadlineReached: false };
   }
 }
 
@@ -1728,6 +2583,21 @@ function symbolLineReadOverflow(
   };
 }
 
+function symbolLineDeadlineMarker(
+  skippedCount: number,
+  nowMs: () => number,
+): UncertaintyMarker | undefined {
+  if (skippedCount === 0) return undefined;
+  return {
+    kind: "scope-incomplete",
+    claim:
+      `Symbol line lookup reached the absolute elapsed deadline and skipped ` +
+      `${String(skippedCount)} definition file(s); file-level symbol matches remain available.`,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs(),
+  };
+}
+
 // Walk the tree ONCE for `**/term.*` and keep only `term.<code-ext>` definition files. The single
 // walk replaces the prior
 // per-extension globs (up to 27 redundant full-tree walks per question, ~4.7s on a 3.5k-file repo).
@@ -1735,20 +2605,18 @@ async function symbolDefinitionMatchesForTerm(
   term: string,
   input: OrchestratorInput,
   plan: ExplorationPlan,
-  searchScope: SearchScope,
-  fs: WorkspaceFs,
   nowMs: () => number,
+  signal: AbortSignal | undefined,
+  requestContext: StructuralAdapterRequestContext,
 ): Promise<{
   readonly matches: readonly SymbolDefinitionMatch[];
   readonly uncertainty: readonly UncertaintyMarker[];
 }> {
-  const result = await findFiles(
-    searchScope,
+  const result = await requestContext.findFiles(
     symbolFileQuery(input, `**/${term}.*`),
     SYMBOL_FILE_SEARCH_LIMITS,
     {
-      fs,
-      nowMs,
+      ...(signal === undefined ? {} : { signal }),
       searchHints: { retrievalIntent: plan.retrievalIntent },
     },
   );
@@ -1771,18 +2639,19 @@ async function collectSymbolDefinitionMatches(
   terms: readonly string[],
   input: OrchestratorInput,
   plan: ExplorationPlan,
-  searchScope: SearchScope,
-  fs: WorkspaceFs,
   nowMs: () => number,
   signal: AbortSignal | undefined,
+  requestContext: StructuralAdapterRequestContext,
+  budget: AugmentationBudgetMeter,
 ): Promise<{
   readonly matches: readonly SymbolDefinitionMatch[];
   readonly uncertainty: readonly UncertaintyMarker[];
 }> {
+  const reservedTerms = reserveAugmentationSearchTerms(terms, signal, budget);
   const results = await Promise.all(
-    terms.map((term) => {
+    reservedTerms.map((term) => {
       throwIfCancelled(signal);
-      return symbolDefinitionMatchesForTerm(term, input, plan, searchScope, fs, nowMs);
+      return symbolDefinitionMatchesForTerm(term, input, plan, nowMs, signal, requestContext);
     }),
   );
   const matches: SymbolDefinitionMatch[] = [];
@@ -1811,11 +2680,12 @@ function pushSymbolLineAtom(
   match: SymbolDefinitionMatch,
   atoms: EvidenceAtom[],
   seen: Set<string>,
-): void {
+  control: SymbolLineScanControl,
+): boolean {
   const { atom, term } = match;
-  const lineNumber = firstSymbolLine(searchScope, fs, atom.scopePath, term);
-  if (lineNumber === undefined) {
-    return;
+  const lookup = firstSymbolLine(searchScope, fs, atom.scopePath, term, control);
+  if (lookup.lineNumber === undefined) {
+    return lookup.deadlineReached;
   }
   pushUniqueAtom(
     atoms,
@@ -1823,11 +2693,68 @@ function pushSymbolLineAtom(
     symbolLineAtom(
       input.scope,
       atom.scopePath,
-      lineNumber,
+      lookup.lineNumber,
       atom.provenance.queryFingerprint,
       nowMs,
     ),
   );
+  return false;
+}
+
+interface PrioritizedSymbolInputs {
+  readonly input: OrchestratorInput;
+  readonly searchScope: SearchScope;
+  readonly fs: WorkspaceFs;
+  readonly nowMs: () => number;
+  readonly signal: AbortSignal | undefined;
+  readonly deadlineAtMs: number;
+}
+
+function collectPrioritizedSymbolAtoms(
+  inputs: PrioritizedSymbolInputs,
+  matches: readonly SymbolDefinitionMatch[],
+  terms: readonly string[],
+): SymbolDiscoveryResult {
+  const atoms: EvidenceAtom[] = [];
+  const seen = new Set<string>();
+  let remainingLineReads = MAX_SYMBOL_LINE_READS;
+  let overflowCount = 0;
+  let deadlineSkippedCount = 0;
+  let lineDeadlineReached = false;
+  const control: SymbolLineScanControl = {
+    signal: inputs.signal,
+    nowMs: inputs.nowMs,
+    deadlineMs: inputs.deadlineAtMs,
+  };
+  for (const match of [...matches].sort(compareSymbolMatches)) {
+    throwIfCancelled(inputs.signal);
+    pushUniqueAtom(atoms, seen, match.atom);
+    if (lineDeadlineReached) {
+      deadlineSkippedCount += 1;
+    } else if (remainingLineReads <= 0) {
+      overflowCount += 1;
+    } else {
+      remainingLineReads -= 1;
+      lineDeadlineReached = pushSymbolLineAtom(
+        inputs.input,
+        inputs.searchScope,
+        inputs.fs,
+        inputs.nowMs,
+        match,
+        atoms,
+        seen,
+        control,
+      );
+      if (lineDeadlineReached) deadlineSkippedCount += 1;
+    }
+  }
+  return {
+    atoms,
+    uncertainty: [
+      symbolLineReadOverflow(overflowCount, terms, inputs.nowMs),
+      symbolLineDeadlineMarker(deadlineSkippedCount, inputs.nowMs),
+    ].filter((marker): marker is UncertaintyMarker => marker !== undefined),
+  };
 }
 
 async function symbolFileAtoms(
@@ -1837,6 +2764,9 @@ async function symbolFileAtoms(
   fs: WorkspaceFs,
   nowMs: () => number,
   signal: AbortSignal | undefined,
+  requestContext: StructuralAdapterRequestContext,
+  deadlineAtMs: number,
+  budget: AugmentationBudgetMeter,
 ): Promise<SymbolDiscoveryResult> {
   const terms = symbolFileAnchorTerms(plan);
   if (terms.length === 0) {
@@ -1846,30 +2776,27 @@ async function symbolFileAtoms(
     terms,
     input,
     plan,
-    searchScope,
-    fs,
     nowMs,
     signal,
+    requestContext,
+    budget,
   );
-  const atoms: EvidenceAtom[] = [];
-  const uncertainty: UncertaintyMarker[] = [...collected.uncertainty];
-  const seen = new Set<string>();
-  let remainingLineReads = MAX_SYMBOL_LINE_READS;
-  let overflowCount = 0;
-  for (const match of [...collected.matches].sort(compareSymbolMatches)) {
-    pushUniqueAtom(atoms, seen, match.atom);
-    if (remainingLineReads <= 0) {
-      overflowCount += 1;
-      continue;
-    }
-    remainingLineReads -= 1;
-    pushSymbolLineAtom(input, searchScope, fs, nowMs, match, atoms, seen);
-  }
-  const overflowMarker = symbolLineReadOverflow(overflowCount, terms, nowMs);
-  if (overflowMarker !== undefined) {
-    uncertainty.push(overflowMarker);
-  }
-  return { atoms, uncertainty };
+  const prioritized = collectPrioritizedSymbolAtoms(
+    {
+      input,
+      searchScope,
+      fs,
+      nowMs,
+      signal,
+      deadlineAtMs,
+    },
+    collected.matches,
+    terms,
+  );
+  return {
+    atoms: prioritized.atoms,
+    uncertainty: [...collected.uncertainty, ...prioritized.uncertainty],
+  };
 }
 
 function selectedFileAtom(
@@ -1912,40 +2839,78 @@ function fileExistsInSearchScope(
   if (cached !== undefined) return cached;
   const parentScopePath = dirname(scopePath);
   const entryName = basenameScopePath(scopePath);
-  const entry =
-    entryName.length > 0
-      ? cachedDirectoryEntries(searchScope, fs, parentScopePath, existsCache).find(
-          (candidate) => candidate.name === entryName,
-        )
-      : undefined;
+  const directory = cachedDirectoryEntries(
+    searchScope,
+    fs,
+    parentScopePath,
+    MAX_WORKSPACE_MANIFESTS,
+    existsCache,
+  );
+  const entry = directory.entries.find((candidate) => candidate.name === entryName);
   if (entry === undefined) {
-    existsCache?.files.set(scopePath, false);
-    return false;
-  }
-  if (!entry.isSymbolicLink) {
-    const exists = entry.isFile;
+    const exists =
+      directory.status === "complete"
+        ? false
+        : fileExistsByContainedStat(searchScope, fs, scopePath);
     existsCache?.files.set(scopePath, exists);
     return exists;
   }
-  let exists: boolean;
-  try {
-    const abs = resolveWithinWorkspace(searchScope.workspace.root, scopePath);
-    const contained = containedRealPathInfo(fs, searchScope.workspace.root, abs);
-    exists = fs.stat(contained.path).isFile;
-  } catch {
-    exists = false;
-  }
+  // A Dirent is only an enumeration hint. The path may have been replaced after readDir(), and a
+  // hard link is reported as an ordinary file, so every positive candidate still needs the shared
+  // canonical/stat authority check before it can produce evidence.
+  const exists =
+    entry.isFile || entry.isSymbolicLink
+      ? fileExistsByContainedStat(searchScope, fs, scopePath)
+      : false;
   existsCache?.files.set(scopePath, exists);
   return exists;
 }
 
+function fileExistsByContainedStat(
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  scopePath: string,
+): boolean {
+  try {
+    const contained = canonicalContainedSearchPath(searchScope, fs, scopePath);
+    return containedPathIsSafeRegularFile(fs, contained);
+  } catch (error) {
+    rethrowMetadataCancellation(error);
+    return false;
+  }
+}
+
+function isSafeRegularFile(stat: WorkspaceStat): boolean {
+  return (
+    stat.isFile &&
+    !stat.isSymbolicLink &&
+    (stat.hardLinkCount === undefined || stat.hardLinkCount <= 1)
+  );
+}
+
+function containedPathIsSafeRegularFile(
+  fs: WorkspaceFs,
+  contained: ContainedSearchPath | undefined,
+): boolean {
+  return contained === undefined ? false : isSafeRegularFile(fs.stat(contained.path));
+}
+
 interface FileExistenceCache {
   readonly files: Map<string, boolean>;
-  readonly directories: Map<string, readonly WorkspaceDirEntry[]>;
+  readonly directories: Map<string, BoundedDirectoryRead>;
+  readonly truncatedDirectories: Set<string>;
+  readonly unavailableDirectories: Set<string>;
+  readonly metadataCoverageIssues: Map<MetadataCoverageIssue, number>;
 }
 
 function createFileExistenceCache(): FileExistenceCache {
-  return { files: new Map(), directories: new Map() };
+  return {
+    files: new Map(),
+    directories: new Map(),
+    truncatedDirectories: new Set(),
+    unavailableDirectories: new Set(),
+    metadataCoverageIssues: new Map(),
+  };
 }
 
 function basenameScopePath(scopePath: string): string {
@@ -1957,13 +2922,17 @@ function cachedDirectoryEntries(
   searchScope: SearchScope,
   fs: WorkspaceFs,
   scopePath: string,
+  maxEntries: number,
   existsCache?: FileExistenceCache,
-): readonly WorkspaceDirEntry[] {
-  const cached = existsCache?.directories.get(scopePath);
+): BoundedDirectoryRead {
+  const cacheKey = `${maxEntries.toString()}:${scopePath}`;
+  const cached = existsCache?.directories.get(cacheKey);
   if (cached !== undefined) return cached;
-  const entries = safeReadDir(searchScope, fs, scopePath);
-  existsCache?.directories.set(scopePath, entries);
-  return entries;
+  const read = safeReadDir(searchScope, fs, scopePath, maxEntries);
+  existsCache?.directories.set(cacheKey, read);
+  if (read.status === "truncated") existsCache?.truncatedDirectories.add(scopePath);
+  if (read.status === "unavailable") existsCache?.unavailableDirectories.add(scopePath);
+  return read;
 }
 
 function selectedFileScopeAtoms(
@@ -1972,6 +2941,8 @@ function selectedFileScopeAtoms(
   fs: WorkspaceFs,
   nowMs: () => number,
   existsCache?: FileExistenceCache,
+  deadlineAtMs?: number,
+  signal?: AbortSignal,
 ): readonly EvidenceAtom[] {
   if (input.scope.explicitConnection !== true || input.scope.kind !== "files") {
     return [];
@@ -1979,7 +2950,10 @@ function selectedFileScopeAtoms(
   const atoms: EvidenceAtom[] = [];
   const seen = new Set<string>();
   const queryFingerprint = selectedFileQueryFingerprint(input.query);
+  const guardedFs = cancellationGuardedWorkspaceFs(fs, signal);
   for (const entry of input.scope.relativePaths) {
+    throwIfCancelled(signal);
+    if (deadlineAtMs !== undefined && nowMs() >= deadlineAtMs) break;
     if (!isValidScopePath(entry, { mustBeRelative: true })) {
       continue;
     }
@@ -1995,7 +2969,7 @@ function selectedFileScopeAtoms(
     if (isConnectedDocumentPath(scopePath)) {
       continue;
     }
-    if (fileExistsInSearchScope(searchScope, fs, scopePath, existsCache)) {
+    if (fileExistsInSearchScope(searchScope, guardedFs, scopePath, existsCache)) {
       atoms.push(selectedFileAtom(input.scope, scopePath, queryFingerprint, nowMs));
     }
   }
@@ -2030,9 +3004,18 @@ function rootGlobManifestPaths(
   searchScope: SearchScope,
   fs: WorkspaceFs,
   seen: Set<string>,
+  control: MetadataTraversalControl,
+  existsCache?: FileExistenceCache,
 ): readonly string[] {
+  if (!metadataTraversalCanContinue(control)) return [];
   const paths: string[] = [];
-  for (const scopePath of canonicalManifestScopePathsInDir(root, searchScope, fs)) {
+  for (const scopePath of canonicalManifestScopePathsInDir(
+    root,
+    searchScope,
+    fs,
+    MAX_ROOT_GLOB_MANIFESTS,
+    existsCache,
+  )) {
     if (paths.length >= MAX_ROOT_GLOB_MANIFESTS) {
       break;
     }
@@ -2043,6 +3026,66 @@ function rootGlobManifestPaths(
   return paths;
 }
 
+interface MetadataAtomCollectionContext {
+  readonly input: OrchestratorInput;
+  readonly searchScope: SearchScope;
+  readonly fs: WorkspaceFs;
+  readonly nowMs: () => number;
+  readonly queryFingerprint: string;
+  readonly control: MetadataTraversalControl;
+  readonly existsCache: FileExistenceCache;
+  readonly seen: Set<string>;
+}
+
+function projectMetadataRootAtoms(
+  root: string,
+  context: MetadataAtomCollectionContext,
+): readonly EvidenceAtom[] {
+  const { input, searchScope, fs, nowMs, queryFingerprint, control, existsCache, seen } = context;
+  const atoms: EvidenceAtom[] = [];
+  for (const filename of PROJECT_METADATA_FILENAMES) {
+    if (!metadataTraversalCanContinue(control)) break;
+    const scopePath = joinScopePath(root, filename);
+    if (
+      acceptInjectionScopePath(scopePath, seen) &&
+      fileExistsInSearchScope(searchScope, fs, scopePath, existsCache)
+    ) {
+      atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
+    }
+  }
+  for (const scopePath of rootGlobManifestPaths(
+    root,
+    searchScope,
+    fs,
+    seen,
+    control,
+    existsCache,
+  )) {
+    atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
+  }
+  return atoms;
+}
+
+function workspacePackageMetadataAtoms(
+  context: MetadataAtomCollectionContext,
+): readonly EvidenceAtom[] {
+  const { input, searchScope, fs, nowMs, queryFingerprint, control, existsCache, seen } = context;
+  const atoms: EvidenceAtom[] = [];
+  for (const scopePath of workspacePackageManifestPaths(
+    input,
+    searchScope,
+    fs,
+    control,
+    existsCache,
+  )) {
+    if (!metadataTraversalCanContinue(control)) break;
+    if (acceptInjectionScopePath(scopePath, seen)) {
+      atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
+    }
+  }
+  return atoms;
+}
+
 function projectMetadataAtoms(
   input: OrchestratorInput,
   intent: RetrievalIntent,
@@ -2050,34 +3093,29 @@ function projectMetadataAtoms(
   fs: WorkspaceFs,
   nowMs: () => number,
   queryFingerprint: string,
-  existsCache?: FileExistenceCache,
+  control: MetadataTraversalControl,
+  existsCache: FileExistenceCache,
 ): readonly EvidenceAtom[] {
-  if (!wantsProjectMetadata(input, intent)) {
+  if (!wantsProjectMetadata(input, intent) || !metadataTraversalCanContinue(control)) {
     return [];
   }
   const atoms: EvidenceAtom[] = [];
   const seen = new Set<string>();
+  const context: MetadataAtomCollectionContext = {
+    input,
+    searchScope,
+    fs,
+    nowMs,
+    queryFingerprint,
+    control,
+    existsCache,
+    seen,
+  };
   for (const root of metadataRootsForScope(input.scope)) {
-    for (const filename of PROJECT_METADATA_FILENAMES) {
-      const scopePath = joinScopePath(root, filename);
-      if (
-        acceptInjectionScopePath(scopePath, seen) &&
-        fileExistsInSearchScope(searchScope, fs, scopePath, existsCache)
-      ) {
-        atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
-      }
-    }
-    // Glob-manifest sweep of the directory itself (bounded), so a root-level *.csproj / *.tf that
-    // the fixed-name list cannot enumerate is still injected. Exact names already seen are deduped.
-    for (const scopePath of rootGlobManifestPaths(root, searchScope, fs, seen)) {
-      atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
-    }
+    if (!metadataTraversalCanContinue(control)) break;
+    atoms.push(...projectMetadataRootAtoms(root, context));
   }
-  for (const scopePath of workspacePackageManifestPaths(input, searchScope, fs, existsCache)) {
-    if (acceptInjectionScopePath(scopePath, seen)) {
-      atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
-    }
-  }
+  atoms.push(...workspacePackageMetadataAtoms(context));
   return atoms;
 }
 
@@ -2088,15 +3126,18 @@ function repositoryOverviewAtoms(
   fs: WorkspaceFs,
   nowMs: () => number,
   queryFingerprint: string,
+  control: MetadataTraversalControl,
   existsCache?: FileExistenceCache,
 ): readonly EvidenceAtom[] {
-  if (!wantsRepositoryOverview(intent)) {
+  if (!wantsRepositoryOverview(intent) || !metadataTraversalCanContinue(control)) {
     return [];
   }
   const atoms: EvidenceAtom[] = [];
   const seen = new Set<string>();
   for (const root of metadataRootsForScope(input.scope)) {
+    if (!metadataTraversalCanContinue(control)) break;
     for (const filename of REPOSITORY_OVERVIEW_FILENAMES) {
+      if (!metadataTraversalCanContinue(control)) break;
       const scopePath = joinScopePath(root, filename);
       if (
         acceptInjectionScopePath(scopePath, seen) &&
@@ -2114,47 +3155,120 @@ interface DeterministicContextEvidence {
   readonly uncertainty: readonly UncertaintyMarker[];
 }
 
-function deterministicMetadataAtoms(
-  input: OrchestratorInput,
-  plan: ExplorationPlan,
-  searchScope: SearchScope,
-  fs: WorkspaceFs,
-  nowMs: () => number,
-): readonly EvidenceAtom[] {
-  const existsCache = createFileExistenceCache();
-  const queryFingerprint = projectMetadataQueryFingerprint(input.query);
+function metadataDirectoryCoverageUncertainty(
+  cache: FileExistenceCache,
+  nowMs: number,
+): readonly UncertaintyMarker[] {
+  const markers: UncertaintyMarker[] = [];
+  if (cache.truncatedDirectories.size > 0) {
+    markers.push({
+      kind: "scope-incomplete",
+      claim:
+        `project metadata discovery was truncated by bounded directory reads in ` +
+        `${String(cache.truncatedDirectories.size)} directory path(s); relevant manifests may be missing`,
+      impactedAtomIds: [],
+      emittedAtMs: nowMs,
+    });
+  }
+  if (cache.unavailableDirectories.size > 0) {
+    markers.push({
+      kind: "scope-incomplete",
+      claim:
+        `project metadata discovery could not enumerate ` +
+        `${String(cache.unavailableDirectories.size)} directory path(s); ` +
+        `exact manifest probes were used but glob manifests may be missing`,
+      impactedAtomIds: [],
+      emittedAtMs: nowMs,
+    });
+  }
+  return markers;
+}
+
+function metadataManifestCoverageUncertainty(
+  cache: FileExistenceCache,
+  nowMs: number,
+): readonly UncertaintyMarker[] {
+  if (cache.metadataCoverageIssues.size === 0) return [];
+  const issueCounts = [...cache.metadataCoverageIssues]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([issue, count]) => `${issue}:${String(count)}`)
+    .join(",");
   return [
-    ...projectMetadataAtoms(
-      input,
-      plan.retrievalIntent,
-      searchScope,
-      fs,
-      nowMs,
-      queryFingerprint,
-      existsCache,
-    ),
-    ...repositoryOverviewAtoms(
-      input,
-      plan.retrievalIntent,
-      searchScope,
-      fs,
-      nowMs,
-      queryFingerprint,
-      existsCache,
-    ),
+    {
+      kind: "scope-incomplete",
+      claim:
+        `project metadata discovery skipped bounded or unsupported workspace metadata ` +
+        `(reasons=${issueCounts}); workspace package manifests may be missing`,
+      impactedAtomIds: [],
+      emittedAtMs: nowMs,
+    },
   ];
 }
 
-async function deterministicContextEvidence(
+function deterministicMetadataEvidence(
   input: OrchestratorInput,
   plan: ExplorationPlan,
   searchScope: SearchScope,
   fs: WorkspaceFs,
   nowMs: () => number,
   signal: AbortSignal | undefined,
-): Promise<DeterministicContextEvidence> {
-  const [symbolDiscovery, traceEvidence, referencedDocuments] = await Promise.all([
-    symbolFileAtoms(input, plan, searchScope, fs, nowMs, signal),
+  deadlineAtMs: number,
+): DeterministicContextEvidence {
+  const control: MetadataTraversalControl = { signal, nowMs, deadlineAtMs };
+  const guardedFs = metadataTraversalFs(fs, control);
+  const existsCache = createFileExistenceCache();
+  const queryFingerprint = projectMetadataQueryFingerprint(input.query);
+  const atoms = [
+    ...projectMetadataAtoms(
+      input,
+      plan.retrievalIntent,
+      searchScope,
+      guardedFs,
+      nowMs,
+      queryFingerprint,
+      control,
+      existsCache,
+    ),
+    ...repositoryOverviewAtoms(
+      input,
+      plan.retrievalIntent,
+      searchScope,
+      guardedFs,
+      nowMs,
+      queryFingerprint,
+      control,
+      existsCache,
+    ),
+  ];
+  const emittedAtMs = nowMs();
+  return {
+    atoms,
+    uncertainty: [
+      ...metadataDirectoryCoverageUncertainty(existsCache, emittedAtMs),
+      ...metadataManifestCoverageUncertainty(existsCache, emittedAtMs),
+    ],
+  };
+}
+
+type ParallelDeterministicEvidence = readonly [
+  DeterministicContextEvidence,
+  DeterministicContextEvidence,
+  DeterministicContextEvidence,
+];
+
+async function collectParallelDeterministicEvidence(
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  nowMs: () => number,
+  signal: AbortSignal | undefined,
+  fileSearchContext: StructuralAdapterRequestContext,
+  traceContext: StructuralAdapterRequestContext,
+  deadlineAtMs: number,
+  budget: AugmentationBudgetMeter,
+): Promise<ParallelDeterministicEvidence> {
+  return Promise.all([
     collectFollowSymbolTraceEvidence({
       scope: input.scope,
       query: input.query,
@@ -2164,20 +3278,66 @@ async function deterministicContextEvidence(
       fs,
       nowMs,
       signal,
+      requestContext: traceContext,
+      deadlineAtMs,
+      tryReserveSearchCall: budget.tryReserveSearchCall,
     }),
-    documentReferenceAtoms(input, plan, searchScope, fs, nowMs, signal),
+    symbolFileAtoms(
+      input,
+      plan,
+      searchScope,
+      fs,
+      nowMs,
+      signal,
+      fileSearchContext,
+      deadlineAtMs,
+      budget,
+    ),
+    documentReferenceAtoms(input, plan, nowMs, signal, fileSearchContext, budget),
   ]);
+}
+
+async function deterministicContextEvidence(
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  nowMs: () => number,
+  signal: AbortSignal | undefined,
+  structuralContexts: StructuralRequestContextPool,
+  deadlineAtMs: number,
+  budget: AugmentationBudgetMeter,
+): Promise<DeterministicContextEvidence> {
+  const fileSearchContext = structuralContexts.forLimits(SYMBOL_FILE_SEARCH_LIMITS);
+  const traceContext = structuralContexts.forLimits(GROUNDED_TRACE_SEARCH_LIMITS);
+  const [traceEvidence, symbolDiscovery, referencedDocuments] =
+    await collectParallelDeterministicEvidence(
+      input,
+      plan,
+      searchScope,
+      fs,
+      nowMs,
+      signal,
+      fileSearchContext,
+      traceContext,
+      deadlineAtMs,
+      budget,
+    );
+  const metadata = budget.canContinue()
+    ? deterministicMetadataEvidence(input, plan, searchScope, fs, nowMs, signal, deadlineAtMs)
+    : { atoms: [], uncertainty: [] };
   return {
     atoms: [
       ...symbolDiscovery.atoms,
       ...traceEvidence.atoms,
       ...referencedDocuments.atoms,
-      ...deterministicMetadataAtoms(input, plan, searchScope, fs, nowMs),
+      ...metadata.atoms,
     ],
     uncertainty: [
       ...symbolDiscovery.uncertainty,
       ...traceEvidence.uncertainty,
       ...referencedDocuments.uncertainty,
+      ...metadata.uncertainty,
     ],
   };
 }
@@ -2190,6 +3350,9 @@ async function withDeterministicContextAtoms(
   fs: WorkspaceFs,
   nowMs: () => number,
   signal: AbortSignal | undefined,
+  structuralContexts: StructuralRequestContextPool,
+  deadlineAtMs: number,
+  budget: AugmentationBudgetMeter,
 ): Promise<RingRunSummary> {
   const deterministic = await deterministicContextEvidence(
     input,
@@ -2198,6 +3361,9 @@ async function withDeterministicContextAtoms(
     fs,
     nowMs,
     signal,
+    structuralContexts,
+    deadlineAtMs,
+    budget,
   );
   if (deterministic.atoms.length === 0 && deterministic.uncertainty.length === 0) {
     return rings;
@@ -2215,6 +3381,8 @@ function withExplicitScopeAtoms(
   searchScope: SearchScope,
   fs: WorkspaceFs,
   nowMs: () => number,
+  deadlineAtMs: number,
+  signal: AbortSignal | undefined,
 ): RingRunSummary {
   const selectedAtoms = selectedFileScopeAtoms(
     input,
@@ -2222,6 +3390,8 @@ function withExplicitScopeAtoms(
     fs,
     nowMs,
     createFileExistenceCache(),
+    deadlineAtMs,
+    signal,
   );
   return selectedAtoms.length === 0
     ? rings
@@ -2534,6 +3704,7 @@ interface ReadPathExcerptWindowsResult {
   readonly bytesConsumed: number;
   readonly omittedWindowCount: number;
   readonly truncatedWindowCount: number;
+  readonly deadlineReached: boolean;
 }
 
 interface ReadPathExcerptTaskResult {
@@ -2550,9 +3721,14 @@ async function readPathExcerptWindows(
   const windows: ExcerptWindow[] = [];
   let bytesConsumed = 0;
   let truncatedWindowCount = 0;
+  let deadlineReached = false;
   const selection = excerptLineWindows(inputs.atomsByPath.get(scopePath));
   for (const window of selection.windows) {
     throwIfCancelled(inputs.signal);
+    if (inputs.nowMs() >= inputs.deadlineAtMs) {
+      deadlineReached = true;
+      break;
+    }
     const availableBytes = remainingBytes - bytesConsumed;
     if (availableBytes <= 0) {
       break;
@@ -2561,9 +3737,15 @@ async function readPathExcerptWindows(
     const result = await readExcerpt(
       inputs.searchScope,
       { scopePath, startLine: window.startLine, endLine: window.endLine, maxBytes },
-      { fs: inputs.fs, ...(inputs.signal === undefined ? {} : { signal: inputs.signal }) },
+      {
+        fs: inputs.fs,
+        nowMs: inputs.nowMs,
+        deadlineAtMs: inputs.deadlineAtMs,
+        ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
+      },
     );
     throwIfCancelled(inputs.signal);
+    if (inputs.nowMs() >= inputs.deadlineAtMs) deadlineReached = true;
     if (result.truncated) {
       truncatedWindowCount += 1;
     }
@@ -2578,6 +3760,7 @@ async function readPathExcerptWindows(
     bytesConsumed,
     omittedWindowCount: selection.omittedWindowCount,
     truncatedWindowCount,
+    deadlineReached,
   };
 }
 
@@ -2648,17 +3831,31 @@ async function readPathExcerptTask(
   }
 }
 
+interface RemainingExcerptCapacity {
+  readonly files: number;
+  readonly bytes: number;
+}
+
+function remainingExcerptCapacity(inputs: ExcerptInputs): RemainingExcerptCapacity {
+  return {
+    files: Math.max(0, inputs.budget.filesReadMax - inputs.initialUsage.filesRead),
+    bytes: Math.max(0, inputs.budget.excerptBytesMax - inputs.initialUsage.excerptBytes),
+  };
+}
+
 async function readKeptExcerpts(
   keptPaths: readonly string[],
   inputs: ExcerptInputs,
 ): Promise<ExcerptReadSummary> {
   const excerpts = new Map<string, readonly ExcerptWindow[]>();
   const uncertainty: UncertaintyMarker[] = [];
-  const remainingFiles = Math.max(0, inputs.budget.filesReadMax - inputs.initialUsage.filesRead);
-  const remainingBytes = Math.max(
-    0,
-    inputs.budget.excerptBytesMax - inputs.initialUsage.excerptBytes,
-  );
+  const { files: remainingFiles, bytes: remainingBytes } = remainingExcerptCapacity(inputs);
+  if (inputs.nowMs() >= inputs.deadlineAtMs) {
+    return {
+      excerpts,
+      uncertainty: [budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs())],
+    };
+  }
   if (remainingFiles <= 0 || remainingBytes <= 0) {
     const dimensions = exhaustedDimensions(remainingFiles, remainingBytes);
     return {
@@ -2688,6 +3885,9 @@ async function readKeptExcerpts(
     excerpts.set(scopePath, result.windows);
     uncertainty.push(...excerptWindowUncertainty(scopePath, result, inputs.nowMs));
   }
+  if (results.some(({ result }) => result?.deadlineReached === true)) {
+    uncertainty.push(budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs()));
+  }
   return { excerpts, uncertainty };
 }
 
@@ -2699,31 +3899,78 @@ function buildSearchScope(scope: SelectedScope, workspace: WorkspaceInfo): Searc
   };
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function strongFileCacheIdentity(
+  scopePath: string,
+  canonicalRelativePath: string,
+  stat: WorkspaceStat,
+): string | undefined {
+  if (
+    canonicalRelativePath !== scopePath ||
+    !stat.isFile ||
+    stat.isSymbolicLink ||
+    stat.hardLinkCount !== 1 ||
+    !isNonEmptyString(stat.fileIdentity) ||
+    !isNonEmptyString(stat.mtimeNs) ||
+    !isNonEmptyString(stat.ctimeNs)
+  ) {
+    return undefined;
+  }
+  return JSON.stringify({
+    scopePath,
+    canonicalRelativePath,
+    size: stat.size,
+    fileIdentity: stat.fileIdentity,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+    hardLinkCount: stat.hardLinkCount,
+  });
+}
+
 function fileStateCacheIdentity(
   keptPaths: readonly string[],
   searchScope: SearchScope,
   fs: WorkspaceFs,
+  nowMs: () => number,
+  deadlineAtMs: number,
+  signal?: AbortSignal,
 ): PackCacheIdentity | undefined {
   const identity: string[] = [];
+  const guardedFs = cancellationGuardedWorkspaceFs(fs, signal);
   try {
     for (const scopePath of keptPaths) {
-      const target = containedRealPathInfo(
-        fs,
-        searchScope.workspace.root,
-        resolveWithinWorkspace(searchScope.workspace.root, scopePath),
-      );
-      const stat = fs.stat(target.path);
-      if (!stat.isFile || stat.mtimeMs === undefined) {
-        return undefined;
-      }
-      identity.push(
-        `${scopePath}:${target.realRelative}:${stat.size.toString()}:${stat.mtimeMs.toString()}`,
-      );
+      throwIfCancelled(signal);
+      if (nowMs() >= deadlineAtMs) return undefined;
+      const target = canonicalContainedSearchPath(searchScope, guardedFs, scopePath);
+      if (target === undefined) return undefined;
+      throwIfCancelled(signal);
+      if (nowMs() >= deadlineAtMs) return undefined;
+      const stat = guardedFs.stat(target.path);
+      const strongIdentity = strongFileCacheIdentity(scopePath, target.realRelative, stat);
+      if (strongIdentity === undefined) return undefined;
+      identity.push(strongIdentity);
     }
-  } catch {
+  } catch (error) {
+    rethrowMetadataCancellation(error);
     return undefined;
   }
   return identity.sort((left, right) => left.localeCompare(right));
+}
+
+// Internal mutation seam: package-local tests pin cancellation between synchronous cache-identity
+// probes without exposing this implementation detail from the server package root.
+export function _fileStateCacheIdentityForTests(
+  keptPaths: readonly string[],
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  nowMs: () => number,
+  deadlineAtMs: number,
+  signal: AbortSignal | undefined,
+): readonly string[] | undefined {
+  return fileStateCacheIdentity(keptPaths, searchScope, fs, nowMs, deadlineAtMs, signal);
 }
 
 interface ReadyPlanResult {
@@ -2763,6 +4010,9 @@ interface AssembleGroundedPackInputs {
   readonly searchScope: SearchScope;
   readonly fs: WorkspaceFs;
   readonly nowMs: () => number;
+  readonly structuralContexts: StructuralRequestContextPool;
+  readonly workspaceIndex: WorkspaceIndex | undefined;
+  readonly deadlineAtMs: number;
 }
 
 interface EmptyGroundedPackInputs {
@@ -2776,7 +4026,6 @@ interface EmptyGroundedPackInputs {
 
 interface GroundedPackCacheLookupInputs {
   readonly input: OrchestratorInput;
-  readonly deps: OrchestratorDeps;
   readonly plan: ExplorationPlan;
   readonly rings: RingRunSummary;
   readonly atoms: readonly EvidenceAtom[];
@@ -2792,15 +4041,94 @@ interface AssembleOptionsForGroundedPack {
   readonly reranker?: RerankerSeam;
 }
 
+function deadlineBoundMicroIndex(
+  index: MicroIndex,
+  nowMs: () => number,
+  deadlineAtMs: number,
+): MicroIndex {
+  const canStart = (): boolean => nowMs() < deadlineAtMs;
+  return {
+    get: (key): ConnectedContextPack | undefined => (canStart() ? index.get(key) : undefined),
+    set: (key, pack): void => {
+      if (canStart()) index.set(key, pack);
+    },
+    delete: index.delete.bind(index),
+    clear: index.clear.bind(index),
+    size: index.size.bind(index),
+  };
+}
+
+async function raceRerankerToDeadline<T>(
+  operation: (context: RerankerExecutionContext) => Promise<T>,
+  nowMs: () => number,
+  deadlineAtMs: number,
+  callerSignal: AbortSignal | undefined,
+): Promise<T | undefined> {
+  try {
+    return await raceAbortDeadline(operation, {
+      deadlineAtMs,
+      nowMs,
+      ...(callerSignal === undefined ? {} : { signal: callerSignal }),
+    });
+  } catch (error) {
+    if (error instanceof AbortDeadlineRaceError) {
+      if (error.reason === "aborted") {
+        throw new CancelledError("grounded repository request cancelled");
+      }
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function deadlineBoundReranker(
+  reranker: RerankerSeam,
+  nowMs: () => number,
+  deadlineAtMs: number,
+  callerSignal: AbortSignal | undefined,
+): RerankerSeam {
+  return {
+    name: reranker.name,
+    isAvailable: async (): ReturnType<RerankerSeam["isAvailable"]> => {
+      const availability = await raceRerankerToDeadline(
+        (context) => reranker.isAvailable(context),
+        nowMs,
+        deadlineAtMs,
+        callerSignal,
+      );
+      return availability ?? { available: false, reason: "elapsed-budget-exhausted" };
+    },
+    rerank: async (candidates, atomsByPath, topK): ReturnType<RerankerSeam["rerank"]> => {
+      const reordered = await raceRerankerToDeadline(
+        (context) => reranker.rerank(candidates, atomsByPath, topK, context),
+        nowMs,
+        deadlineAtMs,
+        callerSignal,
+      );
+      return reordered ?? candidates;
+    },
+  };
+}
+
 function assembleOptionsFor(
   deps: OrchestratorDeps,
   nowMs: () => number,
   includeMicroIndex: boolean,
+  includeReranker = true,
+  deadlineAtMs?: number,
 ): AssembleOptionsForGroundedPack {
+  const microIndex =
+    deps.microIndex === undefined || deadlineAtMs === undefined
+      ? deps.microIndex
+      : deadlineBoundMicroIndex(deps.microIndex, nowMs, deadlineAtMs);
+  const reranker =
+    deps.contextPackReranker === undefined || deadlineAtMs === undefined
+      ? deps.contextPackReranker
+      : deadlineBoundReranker(deps.contextPackReranker, nowMs, deadlineAtMs, deps.signal);
   return {
     nowMs,
-    ...(includeMicroIndex && deps.microIndex !== undefined ? { microIndex: deps.microIndex } : {}),
-    ...(deps.contextPackReranker === undefined ? {} : { reranker: deps.contextPackReranker }),
+    ...(includeMicroIndex && microIndex !== undefined ? { microIndex } : {}),
+    ...(includeReranker && reranker !== undefined ? { reranker } : {}),
   };
 }
 
@@ -2848,7 +4176,9 @@ async function assembleEmptyGroundedPack({
   nowMs,
   stopReason,
 }: EmptyGroundedPackInputs): Promise<ConnectedContextPack> {
-  const assembleOptions = assembleOptionsFor(deps, nowMs, true);
+  // An empty pack has nothing to rerank or cache. Keeping both seams out also ensures a request
+  // stopped before workspace IO cannot start unrelated external work during empty-pack assembly.
+  const assembleOptions = assembleOptionsFor(deps, nowMs, false, false);
   const assemble = await assembleContextPack(
     {
       scope: input.scope,
@@ -2868,7 +4198,6 @@ async function assembleEmptyGroundedPack({
 
 function cachedGroundedPack({
   input,
-  deps,
   plan,
   rings,
   atoms,
@@ -2877,7 +4206,7 @@ function cachedGroundedPack({
   initialUsage,
   assembleOptions,
 }: GroundedPackCacheLookupInputs): ConnectedContextPack | undefined {
-  if (deps.microIndex === undefined || cacheIdentity === undefined) {
+  if (assembleOptions.microIndex === undefined || cacheIdentity === undefined) {
     return undefined;
   }
   const key = contextPackIndexKey(
@@ -2895,7 +4224,7 @@ function cachedGroundedPack({
     },
     assembleOptions,
   );
-  return deps.microIndex.get(key);
+  return assembleOptions.microIndex.get(key);
 }
 
 function preparePackAssembly(
@@ -2993,16 +4322,69 @@ async function assemblePackFromReads({
   return assemble.pack;
 }
 
-async function augmentRingsWithDeterministicAtoms({
-  input,
-  deps,
-  plan,
-  rings,
-  searchScope,
-  fs,
-  nowMs,
-}: AssembleGroundedPackInputs): Promise<RingRunSummary> {
-  const scopedRings = withExplicitScopeAtoms(rings, input, searchScope, fs, nowMs);
+function finishAugmentationBudget(
+  rings: RingRunSummary,
+  budget: AugmentationBudgetMeter,
+): RingRunSummary {
+  const result = budget.finish(rings.governor);
+  return {
+    ...rings,
+    governor: result.governor,
+    uncertainty: dedupeUncertainty([
+      ...rings.uncertainty,
+      ...(result.marker === undefined ? [] : [result.marker]),
+    ]),
+  };
+}
+
+async function discoveredTraceForAugmentation(
+  args: AssembleGroundedPackInputs,
+  rings: RingRunSummary,
+  budget: AugmentationBudgetMeter,
+): Promise<DeterministicContextEvidence> {
+  if (!budget.canContinue()) return { atoms: [], uncertainty: [] };
+  const {
+    input,
+    deps,
+    plan,
+    searchScope,
+    fs,
+    nowMs,
+    structuralContexts,
+    workspaceIndex,
+    deadlineAtMs,
+  } = args;
+  return collectDiscoveredSymbolTraceEvidence({
+    scope: input.scope,
+    query: input.query,
+    anchors: plan.anchors,
+    retrievalIntent: plan.retrievalIntent,
+    searchScope,
+    fs,
+    nowMs,
+    atoms: rings.atoms,
+    signal: deps.signal,
+    workspaceIndex,
+    requestContext: structuralContexts.forLimits(GROUNDED_TRACE_SEARCH_LIMITS),
+    deadlineAtMs,
+    tryReserveSearchCall: budget.tryReserveSearchCall,
+  });
+}
+
+async function augmentRingsWithDeterministicAtoms(
+  args: AssembleGroundedPackInputs,
+): Promise<RingRunSummary> {
+  const { input, deps, plan, rings, searchScope, fs, nowMs, structuralContexts, deadlineAtMs } =
+    args;
+  const budget = createAugmentationBudgetMeter(plan, rings.governor, nowMs, deadlineAtMs);
+  // Explicitly selected files are direct user scope, not another search. Preserve healthy files
+  // when a planned ring consumed the search-call share (notably multi-source splits), while the
+  // absolute deadline still prevents any new containment/stat work.
+  const scopedRings =
+    nowMs() < deadlineAtMs
+      ? withExplicitScopeAtoms(rings, input, searchScope, fs, nowMs, deadlineAtMs, deps.signal)
+      : rings;
+  if (!budget.canContinue()) return finishAugmentationBudget(scopedRings, budget);
   const deterministicRings = await withDeterministicContextAtoms(
     scopedRings,
     input,
@@ -3011,24 +4393,19 @@ async function augmentRingsWithDeterministicAtoms({
     fs,
     nowMs,
     deps.signal,
+    structuralContexts,
+    deadlineAtMs,
+    budget,
   );
-  const discoveredTrace = await collectDiscoveredSymbolTraceEvidence({
-    scope: input.scope,
-    query: input.query,
-    anchors: plan.anchors,
-    retrievalIntent: plan.retrievalIntent,
-    searchScope,
-    fs,
-    nowMs,
-    atoms: deterministicRings.atoms,
-    signal: deps.signal,
-    workspaceIndex: deps.workspaceIndexForRoot?.(searchScope.workspace.root),
-  });
-  return {
-    ...deterministicRings,
-    atoms: [...deterministicRings.atoms, ...discoveredTrace.atoms],
-    uncertainty: [...deterministicRings.uncertainty, ...discoveredTrace.uncertainty],
-  };
+  const discoveredTrace = await discoveredTraceForAugmentation(args, deterministicRings, budget);
+  return finishAugmentationBudget(
+    {
+      ...deterministicRings,
+      atoms: [...deterministicRings.atoms, ...discoveredTrace.atoms],
+      uncertainty: [...deterministicRings.uncertainty, ...discoveredTrace.uncertainty],
+    },
+    budget,
+  );
 }
 
 interface GroundedAssemblyContext {
@@ -3038,12 +4415,20 @@ interface GroundedAssemblyContext {
   readonly assembleOptions: AssembleOptionsForGroundedPack;
 }
 
+function assemblyFileStateCacheIdentity(
+  args: AssembleGroundedPackInputs,
+  keptPaths: readonly string[],
+): PackCacheIdentity | undefined {
+  const { searchScope, fs, nowMs, deadlineAtMs, deps } = args;
+  return fileStateCacheIdentity(keptPaths, searchScope, fs, nowMs, deadlineAtMs, deps.signal);
+}
+
 async function prepareGroundedAssembly(
   args: AssembleGroundedPackInputs,
   augmentedRings: RingRunSummary,
   prepared: PreparedPackAssembly,
 ): Promise<GroundedAssemblyContext> {
-  const { input, deps, plan, searchScope, fs, nowMs } = args;
+  const { input, deps, plan, searchScope, fs, nowMs, deadlineAtMs } = args;
   // Bounded small-document extraction for explicit `files` scopes (Issue #1285). Returns empty
   // evidence for every other scope kind, leaving the code-first path byte-identical.
   const documentEvidence = await collectConnectedDocumentEvidence({
@@ -3053,21 +4438,29 @@ async function prepareGroundedAssembly(
     fs,
     nowMs,
     signal: deps.signal,
+    deadlineAtMs,
   });
   const hasDocumentEvidence =
     documentEvidence.atoms.length > 0 || documentEvidence.omitted.length > 0;
+  const withinDeadline = nowMs() < deadlineAtMs;
   const cacheIdentity =
-    deps.microIndex === undefined || hasDocumentEvidence
+    deps.microIndex === undefined || hasDocumentEvidence || !withinDeadline
       ? undefined
-      : fileStateCacheIdentity(prepared.keptPaths, searchScope, fs);
-  const assembleOptions = assembleOptionsFor(deps, nowMs, !hasDocumentEvidence);
+      : assemblyFileStateCacheIdentity(args, prepared.keptPaths);
+  const canStartAssemblySeams = nowMs() < deadlineAtMs;
+  const assembleOptions = assembleOptionsFor(
+    deps,
+    nowMs,
+    !hasDocumentEvidence && canStartAssemblySeams,
+    canStartAssemblySeams,
+    deadlineAtMs,
+  );
   // The micro-index cache key does not model request-local document evidence, so a scope that
   // carried documents this run must not be served from (or written to) the shared cache.
   const cached = hasDocumentEvidence
     ? undefined
     : cachedGroundedPack({
         input,
-        deps,
         plan,
         rings: augmentedRings,
         atoms: prepared.atoms,
@@ -3097,7 +4490,7 @@ function withGroundedContextDiagnostics(
 async function assembleGroundedPack(
   args: AssembleGroundedPackInputs,
 ): Promise<ConnectedContextPack> {
-  const { input, deps, plan, searchScope, fs, nowMs } = args;
+  const { input, deps, plan, searchScope, fs, nowMs, deadlineAtMs } = args;
   const augmentedRings = await augmentRingsWithDeterministicAtoms(args);
   const prepared = preparePackAssembly(input, plan, augmentedRings, nowMs);
   const ctx = await prepareGroundedAssembly(args, augmentedRings, prepared);
@@ -3112,6 +4505,7 @@ async function assembleGroundedPack(
     atomsByPath: prepared.atomsByPath,
     nowMs,
     signal: deps.signal,
+    deadlineAtMs,
   });
   const pack = await assemblePackFromReads({
     input,
@@ -3127,6 +4521,974 @@ async function assembleGroundedPack(
 }
 
 // ─── Public entry ─────────────────────────────────────────────────────────────
+
+interface ConnectedContextCompletionStatus {
+  readonly readBudgetBlocked: boolean;
+  readonly elapsedBudgetBlocked: boolean;
+  readonly workspaceIndexProviderStatus: "not-evaluated" | "available" | "unavailable";
+}
+
+interface ConnectedContextExecution {
+  readonly output: RetrievalOnlyOutput;
+  readonly status: ConnectedContextCompletionStatus;
+  readonly structural: StructuralRequestContextPoolDiagnostics;
+  readonly workspaceIndex: WorkspaceIndexActivityDiagnostics;
+  readonly workspaceIo: WorkspaceIoActivityDiagnostics;
+}
+
+interface ConnectedContextActivity {
+  readonly elapsedMs: () => number;
+  readonly started: () => void;
+  readonly completed: (execution: ConnectedContextExecution) => void;
+  readonly failed: (error: unknown, progress: ConnectedContextProgress) => void;
+}
+
+type ConnectedContextPhase =
+  | "request-validation"
+  | "planning"
+  | "workspace-admission"
+  | "budget-evaluation"
+  | "workspace-detection"
+  | "ring-retrieval"
+  | "pack-assembly"
+  | "empty-pack-assembly";
+
+interface ConnectedContextProgress {
+  phase: ConnectedContextPhase;
+  plannedRingCount: number;
+  structuralContexts?: StructuralRequestContextPool | undefined;
+  workspaceIndexActivity?: WorkspaceIndexActivity | undefined;
+  workspaceIoActivity?: WorkspaceIoActivity | undefined;
+}
+
+interface ConnectedContextRuntime {
+  readonly fs: WorkspaceFs;
+  readonly workspaceRoot: string;
+  readonly detect: (root: string, fs: WorkspaceFs) => WorkspaceInfo;
+  readonly nowMs: () => number;
+  readonly activity: ConnectedContextActivity;
+  readonly progress: ConnectedContextProgress;
+  readonly workspaceIoActivity: WorkspaceIoActivity;
+  readonly requestStartedAtMs: number;
+}
+
+const EMPTY_STRUCTURAL_DIAGNOSTICS: StructuralRequestContextPoolDiagnostics = {
+  contextCount: 0,
+  candidateInventoryBuildCount: 0,
+  candidateFileCount: 0,
+  candidateDirectoryCount: 0,
+  codeIndexBuildCount: 0,
+  symbolGraphBuildCount: 0,
+  importGraphBuildCount: 0,
+  endpointGraphBuildCount: 0,
+  fileSearchCount: 0,
+  textSearchCount: 0,
+};
+
+const NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS = workspaceIndexActivityDiagnostics(
+  "not-evaluated",
+  emptyWorkspaceIndexActivityCounters(),
+);
+
+function liveRetrievalCompletion(
+  workspaceIndexAvailable: boolean,
+): ConnectedContextCompletionStatus {
+  return {
+    readBudgetBlocked: false,
+    elapsedBudgetBlocked: false,
+    workspaceIndexProviderStatus: workspaceIndexAvailable ? "available" : "unavailable",
+  };
+}
+
+function stoppedRetrievalCompletion(
+  readBudgetBlocked: boolean,
+  elapsedBudgetBlocked: boolean,
+): ConnectedContextCompletionStatus {
+  return {
+    readBudgetBlocked,
+    elapsedBudgetBlocked,
+    workspaceIndexProviderStatus: "not-evaluated",
+  };
+}
+
+type ActivityScopeKind = "workspace-root" | "directory" | "files" | "invalid";
+type ActivityQueryKind = RetrievalQuery["kind"] | "invalid";
+type ActivityNumber = number | "invalid";
+type ActivityBoolean = boolean | "invalid";
+
+interface ConnectedContextActivityIdentity {
+  readonly scopeKind: ActivityScopeKind;
+  readonly relativePathCount: number;
+  readonly explicitConnection: boolean;
+  readonly scopeIdentitySha256: string;
+  readonly queryKind: ActivityQueryKind;
+  readonly queryIdentitySha256: string;
+  readonly caseSensitive: ActivityBoolean;
+  readonly maxResults: ActivityNumber;
+  readonly searchCallsMax: ActivityNumber;
+  readonly filesReadMax: ActivityNumber;
+  readonly excerptBytesMax: ActivityNumber;
+  readonly modelInputTokensMax: ActivityNumber;
+  readonly modelOutputTokensMax: ActivityNumber;
+  readonly elapsedMsMax: ActivityNumber;
+  readonly rerankCallsMax: ActivityNumber;
+}
+
+function activityProperty(record: Readonly<Record<string, unknown>>, key: string): unknown {
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function activityString(record: Readonly<Record<string, unknown>>, key: string): string {
+  const value = activityProperty(record, key);
+  return typeof value === "string" ? value : "";
+}
+
+function activityNumber(record: Readonly<Record<string, unknown>>, key: string): ActivityNumber {
+  const value = activityProperty(record, key);
+  return typeof value === "number" && Number.isFinite(value) ? value : "invalid";
+}
+
+function activityBoolean(record: Readonly<Record<string, unknown>>, key: string): ActivityBoolean {
+  const value = activityProperty(record, key);
+  return typeof value === "boolean" ? value : "invalid";
+}
+
+function activityScopeKind(value: unknown): ActivityScopeKind {
+  return value === "workspace-root" || value === "directory" || value === "files"
+    ? value
+    : "invalid";
+}
+
+function activityQueryKind(value: unknown): ActivityQueryKind {
+  return value === "natural-language" ||
+    value === "exact-symbol" ||
+    value === "file-pattern" ||
+    value === "regex"
+    ? value
+    : "invalid";
+}
+
+function activityRelativePaths(scope: Readonly<Record<string, unknown>>): readonly string[] {
+  const value = activityProperty(scope, "relativePaths");
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+function connectedContextActivityDigest(domain: string, parts: readonly string[]): string {
+  const hash = createHash("sha256");
+  for (const part of [domain, ...parts]) {
+    hash.update(`${String(part.length)}:${part}`);
+  }
+  return hash.digest("hex");
+}
+
+function activityBudget(
+  input: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  const value = activityProperty(input, "budget");
+  if (value === undefined) return { ...DEFAULT_EXPLORATION_BUDGET };
+  return isRecord(value) ? value : {};
+}
+
+function queryActivityIdentity(
+  input: Readonly<Record<string, unknown>>,
+): Pick<
+  ConnectedContextActivityIdentity,
+  "queryKind" | "queryIdentitySha256" | "caseSensitive" | "maxResults"
+> {
+  const value = activityProperty(input, "query");
+  const query = isRecord(value) ? value : {};
+  const queryKind = activityQueryKind(activityProperty(query, "kind"));
+  const caseSensitive = activityBoolean(query, "caseSensitive");
+  const maxResults = activityNumber(query, "maxResults");
+  return {
+    queryKind,
+    caseSensitive,
+    maxResults,
+    queryIdentitySha256: connectedContextActivityDigest("keiko.connected-context.query.v1", [
+      queryKind,
+      activityString(query, "text"),
+      String(caseSensitive),
+      String(maxResults),
+    ]),
+  };
+}
+
+function budgetActivityIdentity(
+  input: Readonly<Record<string, unknown>>,
+): Pick<
+  ConnectedContextActivityIdentity,
+  | "searchCallsMax"
+  | "filesReadMax"
+  | "excerptBytesMax"
+  | "modelInputTokensMax"
+  | "modelOutputTokensMax"
+  | "elapsedMsMax"
+  | "rerankCallsMax"
+> {
+  const budget = activityBudget(input);
+  return {
+    searchCallsMax: activityNumber(budget, "searchCallsMax"),
+    filesReadMax: activityNumber(budget, "filesReadMax"),
+    excerptBytesMax: activityNumber(budget, "excerptBytesMax"),
+    modelInputTokensMax: activityNumber(budget, "modelInputTokensMax"),
+    modelOutputTokensMax: activityNumber(budget, "modelOutputTokensMax"),
+    elapsedMsMax: activityNumber(budget, "elapsedMsMax"),
+    rerankCallsMax: activityNumber(budget, "rerankCallsMax"),
+  };
+}
+
+function connectedContextActivityIdentity(
+  input: OrchestratorInput,
+): ConnectedContextActivityIdentity {
+  const inputRecord = isRecord(input) ? input : {};
+  const scopeValue = activityProperty(inputRecord, "scope");
+  const scope = isRecord(scopeValue) ? scopeValue : {};
+  const scopeKind = activityScopeKind(activityProperty(scope, "kind"));
+  const relativePaths = activityRelativePaths(scope);
+  const explicitConnection = activityProperty(scope, "explicitConnection") === true;
+  const digest = connectedContextActivityDigest("keiko.connected-context.scope.v2", [
+    activityString(scope, "scopeId"),
+    activityString(inputRecord, "workspaceRoot"),
+    scopeKind,
+    String(explicitConnection),
+    ...relativePaths,
+  ]);
+  return {
+    scopeKind,
+    relativePathCount: relativePaths.length,
+    explicitConnection,
+    scopeIdentitySha256: digest,
+    ...queryActivityIdentity(inputRecord),
+    ...budgetActivityIdentity(inputRecord),
+  };
+}
+
+function commonActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+): Readonly<Record<string, unknown>> {
+  return {
+    scopeKind: identity.scopeKind,
+    relativePathCount: identity.relativePathCount,
+    explicitConnection: identity.explicitConnection,
+    scopeIdentitySha256: identity.scopeIdentitySha256,
+    queryKind: identity.queryKind,
+    queryIdentitySha256: identity.queryIdentitySha256,
+    caseSensitive: identity.caseSensitive,
+    maxResults: identity.maxResults,
+    searchCallsMax: identity.searchCallsMax,
+    filesReadMax: identity.filesReadMax,
+    excerptBytesMax: identity.excerptBytesMax,
+    modelInputTokensMax: identity.modelInputTokensMax,
+    modelOutputTokensMax: identity.modelOutputTokensMax,
+    elapsedMsMax: identity.elapsedMsMax,
+    rerankCallsMax: identity.rerankCallsMax,
+  };
+}
+
+function uncertaintyActivityExtra(
+  markers: readonly UncertaintyMarker[],
+): Readonly<Record<string, number>> {
+  const counts: Record<UncertaintyMarkerKind, number> = {
+    "no-evidence": 0,
+    "stale-evidence": 0,
+    "scope-incomplete": 0,
+    "budget-clipped": 0,
+    "tool-unavailable": 0,
+    "low-confidence": 0,
+    "unsupported-citation": 0,
+    "incomplete-answer": 0,
+    "unsupported-claim": 0,
+    "entailment-unavailable": 0,
+  };
+  for (const marker of markers) counts[marker.kind] += 1;
+  return {
+    noEvidenceUncertaintyCount: counts["no-evidence"],
+    staleEvidenceUncertaintyCount: counts["stale-evidence"],
+    scopeIncompleteUncertaintyCount: counts["scope-incomplete"],
+    budgetClippedUncertaintyCount: counts["budget-clipped"],
+    toolUnavailableUncertaintyCount: counts["tool-unavailable"],
+    lowConfidenceUncertaintyCount: counts["low-confidence"],
+    unsupportedCitationUncertaintyCount: counts["unsupported-citation"],
+    incompleteAnswerUncertaintyCount: counts["incomplete-answer"],
+    unsupportedClaimUncertaintyCount: counts["unsupported-claim"],
+    entailmentUnavailableUncertaintyCount: counts["entailment-unavailable"],
+  };
+}
+
+function coverageActivityExtra(pack: ConnectedContextPack): Readonly<Record<string, unknown>> {
+  const coverage = pack.diagnostics?.coverage;
+  if (coverage === undefined) {
+    return { coverageStatus: "not-reported", coverageReasons: [] };
+  }
+  return {
+    coverageStatus: coverage.incomplete ? "incomplete" : "complete",
+    coverageReasons: coverage.reasons,
+    coverageFilesDiscovered: coverage.filesDiscovered,
+    coverageFilesScanned: coverage.filesScanned,
+    coverageFilesSkipped: coverage.filesSkipped,
+    coverageDepthPruned: coverage.depthPrunedByDiscovery,
+    coverageMaxFilesPruned: coverage.maxFilesPrunedByDiscovery,
+  };
+}
+
+function completionActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+  execution: ConnectedContextExecution,
+): Readonly<Record<string, unknown>> {
+  const { pack, plan } = execution.output;
+  return {
+    ...commonActivityExtra(identity),
+    activityDetailStatus: "complete",
+    plannedRingCount: plan.rings.length,
+    usage: {
+      searchCalls: pack.usage.searchCalls,
+      filesRead: pack.usage.filesRead,
+      excerptBytes: pack.usage.excerptBytes,
+      modelInputTokens: pack.usage.modelInputTokens,
+      modelOutputTokens: pack.usage.modelOutputTokens,
+      elapsedMs: pack.usage.elapsedMs,
+      rerankCalls: pack.usage.rerankCalls,
+    },
+    selectionCounts: {
+      selectedFileCount: pack.files.length,
+      omittedCount: pack.omitted.length,
+    },
+    uncertainty: {
+      count: pack.uncertainty.length,
+      ...uncertaintyActivityExtra(pack.uncertainty),
+    },
+    coverage: coverageActivityExtra(pack),
+    retrievalStatus: execution.status,
+    structural: execution.structural,
+    workspaceIndex: execution.workspaceIndex,
+    workspaceIo: execution.workspaceIo,
+  };
+}
+
+function failureActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+  error: unknown,
+  progress: ConnectedContextProgress,
+  cancelled: boolean,
+): Readonly<Record<string, unknown>> {
+  const frames = keikoStackFrames(error);
+  const chain = causeChain(error);
+  return {
+    ...commonActivityExtra(identity),
+    activityDetailStatus: "complete",
+    outcome: cancelled ? "cancelled" : "failed",
+    retrievalPhase: progress.phase,
+    plannedRingCount: progress.plannedRingCount,
+    structural: progress.structuralContexts?.diagnostics() ?? EMPTY_STRUCTURAL_DIAGNOSTICS,
+    workspaceIndex:
+      progress.workspaceIndexActivity?.diagnostics() ?? NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS,
+    workspaceIo:
+      progress.workspaceIoActivity?.diagnostics() ?? emptyWorkspaceIoActivityDiagnostics(),
+    ...(frames.length === 0 ? {} : { frames }),
+    ...(chain.length === 0 ? {} : { causeChain: chain }),
+  };
+}
+
+function safeConnectedContextErrorKind(error: unknown): string {
+  try {
+    return errorKindOf(error);
+  } catch {
+    return "unknown";
+  }
+}
+
+function isConnectedContextCancellation(error: unknown, errorKind: string): boolean {
+  try {
+    if (error instanceof CancelledError) return true;
+  } catch {
+    // A hostile getPrototypeOf trap cannot be allowed to replace the original retrieval failure.
+  }
+  return errorKind === ERROR_CODES.CANCELLED;
+}
+
+function unavailableActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+  workspaceIo: WorkspaceIoActivityDiagnostics,
+): Readonly<Record<string, unknown>> {
+  return { ...commonActivityExtra(identity), activityDetailStatus: "unavailable", workspaceIo };
+}
+
+function safeCompletionActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+  execution: ConnectedContextExecution,
+  correlationId: string,
+): Readonly<Record<string, unknown>> {
+  try {
+    return completionActivityExtra(identity, execution);
+  } catch (error) {
+    reportServerLogFailure(error, { op: "search.connected-context.completed", correlationId });
+    return unavailableActivityExtra(identity, execution.workspaceIo);
+  }
+}
+
+function safeFailureActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+  error: unknown,
+  progress: ConnectedContextProgress,
+  cancelled: boolean,
+  correlationId: string,
+): Readonly<Record<string, unknown>> {
+  try {
+    return failureActivityExtra(identity, error, progress, cancelled);
+  } catch (projectionError) {
+    reportServerLogFailure(projectionError, {
+      op: "search.connected-context.failed",
+      correlationId,
+    });
+    return {
+      ...unavailableActivityExtra(
+        identity,
+        progress.workspaceIoActivity?.diagnostics() ?? emptyWorkspaceIoActivityDiagnostics(),
+      ),
+      outcome: cancelled ? "cancelled" : "failed",
+      retrievalPhase: progress.phase,
+      plannedRingCount: progress.plannedRingCount,
+    };
+  }
+}
+
+function createConnectedContextActivity(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  nowMs: () => number,
+  logicalStartMs: number,
+): ConnectedContextActivity {
+  const sink = deps.activityLog ?? processServerLogSink();
+  const logger = createServerLogger({ sink, level: "debug" });
+  const correlationId = correlationIdOrUnknown(deps.correlationId);
+  const identity = connectedContextActivityIdentity(input);
+  const logElapsed = startLogTimer();
+  return {
+    elapsedMs: (): number => Math.max(0, nowMs() - logicalStartMs),
+    started: (): void => {
+      logger.info(() => ({
+        category: "search",
+        op: "search.connected-context.started",
+        correlationId,
+        extra: commonActivityExtra(identity),
+      }));
+    },
+    completed: (execution): void => {
+      logger.info(() => ({
+        category: "search",
+        op: "search.connected-context.completed",
+        correlationId,
+        durationMs: logElapsed(),
+        extra: safeCompletionActivityExtra(identity, execution, correlationId),
+      }));
+    },
+    failed: (error, progress): void => {
+      const errorKind = safeConnectedContextErrorKind(error);
+      const cancelled = isConnectedContextCancellation(error, errorKind);
+      const event = (): ServerLogEvent => ({
+        category: "search" as const,
+        op: "search.connected-context.failed",
+        correlationId,
+        durationMs: logElapsed(),
+        errorKind,
+        extra: safeFailureActivityExtra(identity, error, progress, cancelled, correlationId),
+      });
+      if (cancelled) logger.warn(event);
+      else logger.error(event);
+    },
+  };
+}
+
+function fallbackConnectedContextActivity(
+  nowMs: () => number,
+  logicalStartMs: number,
+): ConnectedContextActivity {
+  return {
+    elapsedMs: (): number => Math.max(0, nowMs() - logicalStartMs),
+    started: (): void => undefined,
+    completed: (): void => undefined,
+    failed: (): void => undefined,
+  };
+}
+
+function safeActivityCorrelationId(deps: OrchestratorDeps): string {
+  const record = isRecord(deps) ? deps : {};
+  const value = activityProperty(record, "correlationId");
+  return correlationIdOrUnknown(typeof value === "string" ? value : undefined);
+}
+
+function safeConnectedContextActivity(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  nowMs: () => number,
+  logicalStartMs: number,
+): ConnectedContextActivity {
+  try {
+    return createConnectedContextActivity(input, deps, nowMs, logicalStartMs);
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: "search.connected-context.started",
+      correlationId: safeActivityCorrelationId(deps),
+    });
+    return fallbackConnectedContextActivity(nowMs, logicalStartMs);
+  }
+}
+
+function connectedContextExecution(
+  pack: ConnectedContextPack,
+  plan: ExplorationPlan,
+  activity: ConnectedContextActivity,
+  status: ConnectedContextCompletionStatus,
+  structural: StructuralRequestContextPoolDiagnostics,
+  workspaceIndex: WorkspaceIndexActivityDiagnostics,
+  workspaceIo: WorkspaceIoActivityDiagnostics,
+): ConnectedContextExecution {
+  return {
+    output: { pack, elapsedMs: activity.elapsedMs(), plan },
+    status,
+    structural,
+    workspaceIndex,
+    workspaceIo,
+  };
+}
+
+function connectedContextSearchInputs(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  plan: ExplorationPlan,
+  runtime: ConnectedContextRuntime,
+  searchScope: SearchScope,
+  structuralContexts: StructuralRequestContextPool,
+  workspaceIndex: WorkspaceIndex | undefined,
+  workspaceIndexActivity: WorkspaceIndexActivity,
+  deadlineAtMs: number,
+): SearchInputs {
+  return {
+    searchScope,
+    query: input.query,
+    anchors: plan.anchors,
+    retrievalIntent: plan.retrievalIntent,
+    fs: runtime.fs,
+    nowMs: runtime.nowMs,
+    signal: deps.signal,
+    ...(workspaceIndex === undefined ? {} : { workspaceIndex }),
+    workspaceIndexActivity,
+    repoSemanticSearchProvider: deps.repoSemanticSearchProvider ?? deps.semanticSearchProvider,
+    gitFileHistoryEvidence: deps.gitFileHistoryEvidence ?? defaultGitFileHistoryEvidenceProvider,
+    correlationId: deps.correlationId,
+    structuralContexts,
+    deadlineAtMs,
+  };
+}
+
+function emptyWorkspaceIoActivityDiagnostics(): WorkspaceIoActivityDiagnostics {
+  return {
+    readDirCalls: 0,
+    readDirEntries: 0,
+    statCalls: 0,
+    realPathCalls: 0,
+    existsCalls: 0,
+    contentReadCalls: 0,
+    contentReadBytes: 0,
+  };
+}
+
+function addWorkspaceIoPayloadCount(
+  counters: MutableWorkspaceIoActivityCounters,
+  key: "readDirEntries" | "contentReadBytes",
+  value: unknown,
+): void {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) return;
+  counters[key] = Math.min(Number.MAX_SAFE_INTEGER, counters[key] + value);
+}
+
+function recordTextPayload(counters: MutableWorkspaceIoActivityCounters, value: string): string {
+  try {
+    addWorkspaceIoPayloadCount(counters, "contentReadBytes", Buffer.byteLength(value, "utf8"));
+  } catch {
+    // Observability must never replace the workspace result supplied by the owning port.
+  }
+  return value;
+}
+
+function recordDescriptorPayload(
+  counters: MutableWorkspaceIoActivityCounters,
+  value: WorkspaceDescriptorUtf8Read,
+): void {
+  try {
+    addWorkspaceIoPayloadCount(counters, "contentReadBytes", value.sizeBytes);
+  } catch {
+    // Observability must never evaluate a hostile projection outside its own failure boundary.
+  }
+}
+
+function recordBytePayload<T extends Uint8Array>(
+  counters: MutableWorkspaceIoActivityCounters,
+  value: T,
+): T {
+  try {
+    addWorkspaceIoPayloadCount(counters, "contentReadBytes", value.byteLength);
+  } catch {
+    // Observability must never replace the workspace result supplied by the owning port.
+  }
+  return value;
+}
+
+function observedWorkspaceFileReader(
+  reader: WorkspaceFileReader,
+  counters: MutableWorkspaceIoActivityCounters,
+): WorkspaceFileReader {
+  return {
+    close: (): Promise<void> => reader.close(),
+    readRange: async (startByte, length): Promise<Uint8Array> => {
+      counters.contentReadCalls += 1;
+      return recordBytePayload(counters, await reader.readRange(startByte, length));
+    },
+  };
+}
+
+function workspaceFsProperty<Key extends keyof WorkspaceFs>(
+  fs: WorkspaceFs,
+  key: Key,
+): WorkspaceFs[Key] | undefined {
+  try {
+    return fs[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function observedSynchronousContentReads(
+  fs: WorkspaceFs,
+  counters: MutableWorkspaceIoActivityCounters,
+): Partial<WorkspaceFs> {
+  const descriptorRead = workspaceFsProperty(fs, "readFileUtf8SameDescriptor");
+  const prefixRead = workspaceFsProperty(fs, "readFileUtf8Prefix");
+  return {
+    ...(descriptorRead === undefined
+      ? {}
+      : {
+          readFileUtf8SameDescriptor: (
+            path: string,
+            maxBytes: number,
+            hardLinkPolicy: WorkspaceHardLinkPolicy,
+          ): WorkspaceDescriptorUtf8Read => {
+            counters.contentReadCalls += 1;
+            const result = descriptorRead.call(fs, path, maxBytes, hardLinkPolicy);
+            recordDescriptorPayload(counters, result);
+            return result;
+          },
+        }),
+    ...(prefixRead === undefined
+      ? {}
+      : {
+          readFileUtf8Prefix: (
+            path: string,
+            maxBytes: number,
+            hardLinkPolicy: WorkspaceHardLinkPolicy,
+          ): string => {
+            counters.contentReadCalls += 1;
+            return recordTextPayload(counters, prefixRead.call(fs, path, maxBytes, hardLinkPolicy));
+          },
+        }),
+  };
+}
+
+function observedAsyncByteRead(
+  read: (
+    path: string,
+    maxBytes: number,
+    hardLinkPolicy: WorkspaceHardLinkPolicy,
+  ) => Promise<Uint8Array>,
+  fs: WorkspaceFs,
+  counters: MutableWorkspaceIoActivityCounters,
+): (
+  path: string,
+  maxBytes: number,
+  hardLinkPolicy: WorkspaceHardLinkPolicy,
+) => Promise<Uint8Array> {
+  return async (path, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+    counters.contentReadCalls += 1;
+    return recordBytePayload(counters, await read.call(fs, path, maxBytes, hardLinkPolicy));
+  };
+}
+
+function observedAsyncContentReads(
+  fs: WorkspaceFs,
+  counters: MutableWorkspaceIoActivityCounters,
+): Partial<WorkspaceFs> {
+  const byteRead = workspaceFsProperty(fs, "readFileBytes");
+  const rangeRead = workspaceFsProperty(fs, "readFileRange");
+  const openReader = workspaceFsProperty(fs, "openFileReader");
+  return {
+    ...(byteRead === undefined
+      ? {}
+      : { readFileBytes: observedAsyncByteRead(byteRead, fs, counters) }),
+    ...(rangeRead === undefined
+      ? {}
+      : {
+          readFileRange: async (
+            path: string,
+            start: number,
+            length: number,
+            hardLinkPolicy: WorkspaceHardLinkPolicy,
+          ): Promise<Uint8Array> => {
+            counters.contentReadCalls += 1;
+            return recordBytePayload(
+              counters,
+              await rangeRead.call(fs, path, start, length, hardLinkPolicy),
+            );
+          },
+        }),
+    ...(openReader === undefined
+      ? {}
+      : {
+          openFileReader: async (
+            path: string,
+            hardLinkPolicy: WorkspaceHardLinkPolicy,
+          ): Promise<WorkspaceFileReader> => {
+            counters.contentReadCalls += 1;
+            return observedWorkspaceFileReader(
+              await openReader.call(fs, path, hardLinkPolicy),
+              counters,
+            );
+          },
+        }),
+  };
+}
+
+function observedCanonicalWorkspaceRoot(
+  fs: WorkspaceFs,
+  counters: MutableWorkspaceIoActivityCounters,
+  canonicalRoots: Map<string, string>,
+  observedRealPath: (absolutePath: string) => string,
+  absoluteRoot: string,
+): string {
+  const key = resolve(absoluteRoot);
+  const cached = canonicalRoots.get(key);
+  if (cached !== undefined) return cached;
+  const canonicalRoot = workspaceFsProperty(fs, "canonicalWorkspaceRoot");
+  if (canonicalRoot === undefined) {
+    const canonical = observedRealPath(absoluteRoot);
+    canonicalRoots.set(key, canonical);
+    return canonical;
+  }
+  counters.realPathCalls += 1;
+  const canonical = canonicalRoot.call(fs, absoluteRoot);
+  canonicalRoots.set(key, canonical);
+  return canonical;
+}
+
+function requestScopedWorkspaceFs(fs: WorkspaceFs): WorkspaceIoActivity {
+  const counters: MutableWorkspaceIoActivityCounters = emptyWorkspaceIoActivityDiagnostics();
+  const canonicalRoots = new Map<string, string>();
+  const observedRealPath = (absolutePath: string): string => {
+    counters.realPathCalls += 1;
+    return fs.realPath(absolutePath);
+  };
+  return {
+    fs: {
+      readFileUtf8: (absolutePath): string => {
+        counters.contentReadCalls += 1;
+        return recordTextPayload(counters, fs.readFileUtf8(absolutePath));
+      },
+      stat: (absolutePath): WorkspaceStat => {
+        counters.statCalls += 1;
+        return fs.stat(absolutePath);
+      },
+      readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+        counters.readDirCalls += 1;
+        const entries = fs.readDir(absolutePath, maxEntries);
+        try {
+          addWorkspaceIoPayloadCount(counters, "readDirEntries", entries.length);
+        } catch {
+          // Observability must never replace the workspace result supplied by the owning port.
+        }
+        return entries;
+      },
+      realPath: observedRealPath,
+      exists: (absolutePath): boolean => {
+        counters.existsCalls += 1;
+        return fs.exists(absolutePath);
+      },
+      ...observedSynchronousContentReads(fs, counters),
+      ...observedAsyncContentReads(fs, counters),
+      canonicalWorkspaceRoot: (absoluteRoot): string =>
+        observedCanonicalWorkspaceRoot(
+          fs,
+          counters,
+          canonicalRoots,
+          observedRealPath,
+          absoluteRoot,
+        ),
+    },
+    diagnostics: (): WorkspaceIoActivityDiagnostics => ({ ...counters }),
+  };
+}
+
+function liveStructuralContexts(
+  searchScope: SearchScope,
+  runtime: ConnectedContextRuntime,
+  deadlineAtMs: number,
+  workspaceIndexActivity: WorkspaceIndexActivity,
+  signal: AbortSignal | undefined,
+): StructuralRequestContextPool {
+  return createStructuralRequestContextPool(
+    searchScope,
+    runtime.fs,
+    runtime.nowMs,
+    deadlineAtMs,
+    workspaceIndexActivity,
+    signal,
+  );
+}
+
+interface LiveRetrievalContext {
+  readonly deadlineAtMs: number;
+  readonly searchScope: SearchScope;
+  readonly structuralContexts: StructuralRequestContextPool;
+  readonly workspaceIndexSource: WorkspaceIndex | undefined;
+  readonly workspaceIndexActivity: WorkspaceIndexActivity;
+  readonly workspaceIndex: WorkspaceIndex | undefined;
+}
+
+function prepareLiveRetrievalContext(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  plan: ExplorationPlan,
+  runtime: ConnectedContextRuntime,
+): LiveRetrievalContext {
+  const deadlineAtMs = runtime.requestStartedAtMs + Math.max(0, plan.budget.elapsedMsMax);
+  runtime.progress.phase = "workspace-detection";
+  const workspace = runtime.detect(runtime.workspaceRoot, runtime.fs);
+  const searchScope = buildSearchScope(input.scope, workspace);
+  const workspaceIndexSource =
+    runtime.nowMs() < deadlineAtMs ? deps.workspaceIndexForRoot?.(workspace.root) : undefined;
+  const workspaceIndexActivity = createWorkspaceIndexActivity(workspaceIndexSource);
+  runtime.progress.workspaceIndexActivity = workspaceIndexActivity;
+  const structuralContexts = liveStructuralContexts(
+    searchScope,
+    runtime,
+    deadlineAtMs,
+    workspaceIndexActivity,
+    deps.signal,
+  );
+  runtime.progress.structuralContexts = structuralContexts;
+  return {
+    deadlineAtMs,
+    searchScope,
+    structuralContexts,
+    workspaceIndexSource,
+    workspaceIndexActivity,
+    workspaceIndex: workspaceIndexActivity.workspaceIndex,
+  };
+}
+
+async function retrieveLiveConnectedContext(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  plan: ExplorationPlan,
+  governor: GovernorState,
+  runtime: ConnectedContextRuntime,
+): Promise<ConnectedContextExecution> {
+  const context = prepareLiveRetrievalContext(input, deps, plan, runtime);
+  runtime.progress.phase = "ring-retrieval";
+  const rings = await runAllRings(
+    plan.rings,
+    connectedContextSearchInputs(
+      input,
+      deps,
+      plan,
+      runtime,
+      context.searchScope,
+      context.structuralContexts,
+      context.workspaceIndex,
+      context.workspaceIndexActivity,
+      context.deadlineAtMs,
+    ),
+    governor,
+  );
+  throwIfCancelled(deps.signal);
+  runtime.progress.phase = "pack-assembly";
+  const pack = await assembleGroundedPack({
+    input,
+    deps,
+    plan,
+    rings,
+    searchScope: context.searchScope,
+    fs: runtime.fs,
+    nowMs: runtime.nowMs,
+    structuralContexts: context.structuralContexts,
+    workspaceIndex: context.workspaceIndex,
+    deadlineAtMs: context.deadlineAtMs,
+  });
+  throwIfCancelled(deps.signal);
+  return connectedContextExecution(
+    pack,
+    plan,
+    runtime.activity,
+    liveRetrievalCompletion(context.workspaceIndexSource !== undefined),
+    context.structuralContexts.diagnostics(),
+    context.workspaceIndexActivity.diagnostics(),
+    runtime.workspaceIoActivity.diagnostics(),
+  );
+}
+
+async function executeConnectedContextRetrieval(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  runtime: ConnectedContextRuntime,
+): Promise<ConnectedContextExecution> {
+  throwIfCancelled(deps.signal);
+  runtime.progress.phase = "planning";
+  const { plan, governor } = createReadyGovernedPlan(input, runtime.nowMs);
+  runtime.progress.plannedRingCount = plan.rings.length;
+  deps.recordPlan?.(plan);
+  throwIfCancelled(deps.signal);
+  runtime.progress.phase = "workspace-admission";
+  const admittedRuntime: ConnectedContextRuntime = {
+    ...runtime,
+    workspaceRoot: assertGroundedWorkspaceRootAllowed(runtime.fs, input.workspaceRoot, deps),
+  };
+  runtime.progress.phase = "budget-evaluation";
+  const readBudgetBlock = readBudgetStopReason(plan.budget);
+  const deadlineAtMs = runtime.requestStartedAtMs + Math.max(0, plan.budget.elapsedMsMax);
+  const elapsedBudgetBlock =
+    runtime.nowMs() >= deadlineAtMs ? "budget-exhausted on elapsedMs" : undefined;
+  const stopReason = readBudgetBlock ?? elapsedBudgetBlock;
+  if (stopReason === undefined) {
+    return retrieveLiveConnectedContext(input, deps, plan, governor, admittedRuntime);
+  }
+  runtime.progress.phase = "empty-pack-assembly";
+  const stoppedGovernor =
+    elapsedBudgetBlock === undefined
+      ? governor
+      : applyUsage(governor, usageDelta({ elapsedMs: plan.budget.elapsedMsMax }));
+  const pack = await assembleEmptyGroundedPack({
+    input,
+    deps,
+    plan,
+    governor: stoppedGovernor,
+    nowMs: runtime.nowMs,
+    stopReason,
+  });
+  throwIfCancelled(deps.signal);
+  return connectedContextExecution(
+    pack,
+    plan,
+    runtime.activity,
+    stoppedRetrievalCompletion(readBudgetBlock !== undefined, elapsedBudgetBlock !== undefined),
+    EMPTY_STRUCTURAL_DIAGNOSTICS,
+    NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS,
+    runtime.workspaceIoActivity.diagnostics(),
+  );
+}
 
 // Epic #532 — retrieval-only pipeline: the ready-governed plan, workspace detection, ring run,
 // and pack assembly (the original steps 1–4) WITHOUT the model answer. `deps.answerer` is part of
@@ -3147,68 +5509,37 @@ function assertGroundedWorkspaceRootAllowed(
   }
 }
 
-function detectGroundedWorkspace(
-  workspaceRoot: string,
-  deps: OrchestratorDeps,
-  fs: WorkspaceFs,
-): WorkspaceInfo {
-  return (deps.detectWorkspace ?? detectWorkspaceAt)(workspaceRoot, fs);
-}
-
 export async function retrieveConnectedContextPack(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
 ): Promise<RetrievalOnlyOutput> {
-  const fs = deps.fs ?? nodeWorkspaceFs;
   const nowMs = deps.nowMs ?? Date.now;
-  const start = nowMs();
-  throwIfCancelled(deps.signal);
-
-  // Validate the request shape before touching caller-selected storage. Keep the selected scope and
-  // its pre-derived scopeId intact, while binding detector/search IO to the admitted canonical root.
-  const { plan, governor } = createReadyGovernedPlan(input, nowMs);
-  deps.recordPlan?.(plan);
-  throwIfCancelled(deps.signal);
-  const workspaceRoot = assertGroundedWorkspaceRootAllowed(fs, input.workspaceRoot, deps);
-
-  const blockedByReadBudget = readBudgetStopReason(plan.budget);
-  if (blockedByReadBudget !== undefined) {
-    const pack = await assembleEmptyGroundedPack({
-      input,
-      deps,
-      plan,
-      governor,
+  const requestStartedAtMs = nowMs();
+  const activity = safeConnectedContextActivity(input, deps, nowMs, requestStartedAtMs);
+  const progress: ConnectedContextProgress = {
+    phase: "request-validation",
+    plannedRingCount: 0,
+  };
+  activity.started();
+  try {
+    const workspaceIoActivity = requestScopedWorkspaceFs(deps.fs ?? nodeWorkspaceFs);
+    progress.workspaceIoActivity = workspaceIoActivity;
+    const execution = await executeConnectedContextRetrieval(input, deps, {
+      fs: workspaceIoActivity.fs,
+      workspaceRoot: input.workspaceRoot,
+      detect: deps.detectWorkspace ?? detectWorkspaceAt,
       nowMs,
-      stopReason: blockedByReadBudget,
+      activity,
+      progress,
+      workspaceIoActivity,
+      requestStartedAtMs,
     });
-    throwIfCancelled(deps.signal);
-    return { pack, elapsedMs: Math.max(0, nowMs() - start), plan };
+    activity.completed(execution);
+    return execution.output;
+  } catch (error) {
+    activity.failed(error, progress);
+    throw error;
   }
-
-  const workspace = detectGroundedWorkspace(workspaceRoot, deps, fs);
-  const searchScope = buildSearchScope(input.scope, workspace);
-  const workspaceIndex = deps.workspaceIndexForRoot?.(workspace.root);
-  const rings = await runAllRings(
-    plan.rings,
-    {
-      searchScope,
-      query: input.query,
-      anchors: plan.anchors,
-      retrievalIntent: plan.retrievalIntent,
-      fs,
-      nowMs,
-      signal: deps.signal,
-      ...(workspaceIndex === undefined ? {} : { workspaceIndex }),
-      repoSemanticSearchProvider: deps.repoSemanticSearchProvider ?? deps.semanticSearchProvider,
-      gitFileHistoryEvidence: deps.gitFileHistoryEvidence ?? defaultGitFileHistoryEvidenceProvider,
-      correlationId: deps.correlationId,
-    },
-    governor,
-  );
-  throwIfCancelled(deps.signal);
-  const pack = await assembleGroundedPack({ input, deps, plan, rings, searchScope, fs, nowMs });
-  throwIfCancelled(deps.signal);
-  return { pack, elapsedMs: Math.max(0, nowMs() - start), plan };
 }
 
 // Knowledge M1.2 (#2563): fetch the injected entailment stage's markers for the answer, or `[]`
