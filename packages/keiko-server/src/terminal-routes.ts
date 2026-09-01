@@ -17,6 +17,10 @@ import {
   type TerminalExecutionManager,
 } from "./terminal.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { requiresConfiguredManagedWorkspaceAuthority } from "./task-workspace/workspace-root-access.js";
+import { correlationIdOrUnknown } from "./correlation.js";
+import { createServerLogger } from "./observability/index.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "./sse.js";
 import { redactedEventJson } from "./sse-frame-cache.js";
 import {
@@ -158,6 +162,31 @@ export function handleTerminalPolicy(_ctx: RouteContext, _deps: UiHandlerDeps): 
   return { status: 200, body: buildTerminalPolicySummary() };
 }
 
+// #3347 owner P2 — `resolveWorkspaceRootAccess` is OPTIONAL on the manager interface, so a
+// composition that lacks it used to leave `access` undefined and let listDirectories fall back to
+// plain `nodeWorkspaceFs`: a registered project under the configured managed task-workspace root
+// could then be enumerated with no lifecycle or gitdir proof behind it. A managed-classified root
+// now fails CLOSED here — before the store lookup and before any filesystem read — and leaves a
+// correlated, body-free record behind, in the same op/category/decision vocabulary the managed-root
+// prover itself emits. `projectId` IS the registered root path on this surface (the store matches
+// projects by path), and the classifier is lexical for a candidate under the managed root.
+function assertManagedRootAuthorityAvailable(
+  deps: UiHandlerDeps,
+  projectId: string,
+  correlationId: string | undefined,
+): void {
+  if (deps.terminal?.resolveWorkspaceRootAccess !== undefined) return;
+  if (!requiresConfiguredManagedWorkspaceAuthority(deps, projectId)) return;
+  createServerLogger({ sink: processServerLogSink(), level: "debug" }).warn({
+    category: "security",
+    op: "workspace.root.denied",
+    correlationId: correlationIdOrUnknown(correlationId),
+    errorKind: "WORKSPACE_MANAGED_AUTHORITY_DENIED",
+    extra: { decision: "denied", reason: "managed-authority-unavailable" },
+  });
+  throw new TerminalToolError("CWD_DENIED", "Working directory is denied by policy.");
+}
+
 export async function handleTerminalDirectories(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -168,6 +197,7 @@ export async function handleTerminalDirectories(
       throw new TerminalToolError("BAD_REQUEST", "Query parameter 'projectId' is required.");
     }
     const requestedPath = ctx.url.searchParams.get("path") ?? undefined;
+    assertManagedRootAuthorityAvailable(deps, projectId, ctx.correlationId);
     const access = deps.terminal?.resolveWorkspaceRootAccess?.(projectId, ctx.correlationId);
     const listing = await listDirectories(
       deps.store,

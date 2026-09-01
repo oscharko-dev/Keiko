@@ -61,6 +61,7 @@ function paths(ws: WorkspaceInfo): readonly string[] {
 function fakeWorkspace(root: string): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: "x",
     version: undefined,
     testFramework: "unknown",

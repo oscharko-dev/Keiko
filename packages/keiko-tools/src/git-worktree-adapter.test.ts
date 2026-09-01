@@ -179,6 +179,7 @@ describe("real git worktree lifecycle (EV2)", () => {
   function workspaceInfo(rootPath: string): WorkspaceInfo {
     return {
       root: rootPath,
+      selectedRoot: rootPath,
       name: "demo",
       version: undefined,
       testFramework: "vitest",

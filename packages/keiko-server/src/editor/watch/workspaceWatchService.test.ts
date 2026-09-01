@@ -17,9 +17,16 @@ import { tmpdir } from "node:os";
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { EditorM7WatchEvent } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceDirEntry, WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
+  createOrdinaryWorkspaceRootAccess,
+  type WorkspaceRootAccess,
+} from "../../task-workspace/workspace-root-access.js";
+import {
   createWorkspaceWatchService,
+  MAX_RETAINED_REVOKED_WATCH_SESSIONS,
   type WorkspaceWatchFileSystem,
   type WorkspaceNativeWatchHandle,
   type WorkspaceWatchAdapter,
@@ -29,6 +36,52 @@ import {
 
 function errno(code: string): NodeJS.ErrnoException {
   return Object.assign(new Error(code), { code });
+}
+
+// Stands in for the module-level Node filesystem default: every method fails loudly, so a managed
+// root effect that still reaches the service's configured filesystem instead of the re-proved
+// WorkspaceRootAccess.fs capability degrades the watch instead of quietly succeeding.
+class SentinelFileSystem implements WorkspaceWatchFileSystem {
+  public reached = 0;
+
+  public readonly lstat = (): Promise<Stats> => this.refuse();
+  public readonly realpath = (): Promise<string> => this.refuse();
+  public readonly stat = (): Promise<Stats> => this.refuse();
+  public readonly readdir = (): Promise<readonly Dirent[]> => this.refuse();
+
+  private refuse(): Promise<never> {
+    this.reached += 1;
+    return Promise.reject(new Error("global node filesystem reached for a managed root"));
+  }
+}
+
+// The unforgeable capability a managed-root re-proof mints. Content reads are refused outright:
+// the watch service reports metadata only and must never open a workspace file.
+class RecordingWorkspaceFs implements WorkspaceFs {
+  public readonly calls: string[] = [];
+
+  public readFileUtf8(): string {
+    throw new Error("workspace watch must never read file content");
+  }
+
+  public stat(absolutePath: string): WorkspaceStat {
+    this.calls.push("stat");
+    return nodeWorkspaceFs.stat(absolutePath);
+  }
+
+  public readDir(absolutePath: string, maxEntries?: number): readonly WorkspaceDirEntry[] {
+    this.calls.push("readDir");
+    return nodeWorkspaceFs.readDir(absolutePath, maxEntries);
+  }
+
+  public realPath(absolutePath: string): string {
+    this.calls.push("realPath");
+    return nodeWorkspaceFs.realPath(absolutePath);
+  }
+
+  public exists(absolutePath: string): boolean {
+    return nodeWorkspaceFs.exists(absolutePath);
+  }
 }
 
 class InjectedFileSystem implements WorkspaceWatchFileSystem {
@@ -102,11 +155,17 @@ afterEach(async () => {
   await rm(outside, { recursive: true, force: true });
 });
 
+// Bounded by wall clock, not by a fixed iteration count. Reconciliation here is real filesystem
+// work on the libuv threadpool, so a 40-turn budget is not a budget at all: on a loaded machine (or
+// under coverage instrumentation) the scan simply has not finished yet and the assertion fails for
+// a reason that has nothing to do with the behaviour under test. Same rationale, and the same
+// generous ceiling, as workspaceWatchRoutes.test.ts's `vi.waitFor` budgets.
 async function waitForCondition(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
     if (predicate()) return;
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 1);
+      setTimeout(resolve, 2);
     });
   }
   throw new Error("condition was not observed");
@@ -625,7 +684,7 @@ describe("workspace watch service", () => {
     manager.subscribe({
       root,
       onEvent: (event) => events.push(event),
-      reproveRoot: () => hasAuthority,
+      reproveRoot: () => (hasAuthority ? createOrdinaryWorkspaceRootAccess(root) : undefined),
       onAuthorityRevoked: () => {
         authorityRevokedCalls += 1;
       },
@@ -701,5 +760,176 @@ describe("workspace watch service", () => {
       sizeBytes: 8,
     });
     expect(manager.snapshot(root).health).toBe("healthy");
+  });
+
+  // #3347 review (oscharko, P1): admission handed the session an unforgeable WorkspaceRootAccess
+  // and the session then ran every stat/readDir through its own configured filesystem — the global
+  // Node fs in production — so the capability was discarded the moment admission succeeded. The
+  // sentinel below IS that configured filesystem: if any managed-root effect still reaches it, the
+  // baseline scan and every reconciliation fail and no delta is ever produced.
+  it("runs managed-root effects on the re-proved capability, never the configured global filesystem", async () => {
+    const adapter = new FakeAdapter();
+    const sentinel = new SentinelFileSystem();
+    const capability = new RecordingWorkspaceFs();
+    await writeFile(join(root, "seed.txt"), "seed", "utf8");
+    const manager = createWorkspaceWatchService({
+      adapter,
+      fileSystem: sentinel,
+      coalesceMs: 0,
+      fallbackPollMs: 5_000,
+      idleTearDownMs: 0,
+    });
+    const events: EditorM7WatchEvent[] = [];
+    const subscription = manager.subscribe({
+      root,
+      onEvent: (event) => events.push(event),
+      reproveRoot: (): WorkspaceRootAccess => ({
+        kind: "managed-task",
+        canonicalRoot: root,
+        fs: capability,
+      }),
+    });
+    expect(subscription.kind).toBe("ok");
+    await drainInitialBaseline(manager, adapter);
+
+    await writeFile(join(root, "created.txt"), "one", "utf8");
+    adapter.emit({ eventType: "rename", filename: "created.txt" });
+    await waitForCondition(() => events.some((event) => event.kind === "created"));
+
+    expect(sentinel.reached).toBe(0);
+    expect(capability.calls).toContain("readDir");
+    expect(capability.calls).toContain("realPath");
+    expect(manager.snapshot(root)).toMatchObject({ health: "healthy", degradedReasons: [] });
+    manager.disposeAll();
+  });
+
+  // #3347 review (oscharko, P2): `this.reproveRoot ??= args.reproveRoot` pinned the shared session
+  // to the FIRST subscriber's resolver forever. Direction one — after A leaves, A's still-valid
+  // answer must not keep authorizing the session's scanning on behalf of a revoked B.
+  it("does not let a departed subscriber's stale-valid authority authorize a later subscriber", async () => {
+    const adapter = new FakeAdapter();
+    const manager = service(adapter);
+    let secondAuthorized = true;
+    const first = manager.subscribe({
+      root,
+      onEvent: vi.fn(),
+      reproveRoot: () => createOrdinaryWorkspaceRootAccess(root),
+    });
+    let revocations = 0;
+    manager.subscribe({
+      root,
+      onEvent: vi.fn(),
+      reproveRoot: () => (secondAuthorized ? createOrdinaryWorkspaceRootAccess(root) : undefined),
+      onAuthorityRevoked: () => {
+        revocations += 1;
+      },
+    });
+    await drainInitialBaseline(manager, adapter);
+    if (first.kind !== "ok") throw new Error("Expected first subscription");
+    first.unsubscribe();
+
+    secondAuthorized = false;
+    adapter.emit({ eventType: "rename", filename: "after-departure.txt" });
+    await waitForCondition(() => manager.snapshot(root).health === "rescanRequired");
+
+    expect(revocations).toBe(1);
+    expect(manager.snapshot(root).nativeWatcherCount).toBe(0);
+    expect(adapter.handles[0]?.close).toHaveBeenCalled();
+  });
+
+  // Direction two of the same defect: after A leaves, A's stale REVOCATION must not tear down B's
+  // otherwise valid watch.
+  it("does not let a departed subscriber's stale revocation tear down a live subscriber", async () => {
+    const adapter = new FakeAdapter();
+    const manager = service(adapter);
+    let firstAuthorized = true;
+    const first = manager.subscribe({
+      root,
+      onEvent: vi.fn(),
+      reproveRoot: () => (firstAuthorized ? createOrdinaryWorkspaceRootAccess(root) : undefined),
+    });
+    const events: EditorM7WatchEvent[] = [];
+    let revocations = 0;
+    manager.subscribe({
+      root,
+      onEvent: (event) => events.push(event),
+      reproveRoot: () => createOrdinaryWorkspaceRootAccess(root),
+      onAuthorityRevoked: () => {
+        revocations += 1;
+      },
+    });
+    await drainInitialBaseline(manager, adapter);
+    if (first.kind !== "ok") throw new Error("Expected first subscription");
+    first.unsubscribe();
+    firstAuthorized = false;
+
+    await writeFile(join(root, "still-watched.txt"), "one", "utf8");
+    adapter.emit({ eventType: "rename", filename: "still-watched.txt" });
+    await waitForCondition(() => events.some((event) => event.kind === "created"));
+
+    expect(revocations).toBe(0);
+    expect(manager.snapshot(root)).toMatchObject({ health: "healthy", degradedReasons: [] });
+  });
+
+  // #3347 review (oscharko, P2): the revocation tombstone must keep EXPLAINING the revocation
+  // (health + degraded reasons, pinned above) without retaining the heavy per-session state — the
+  // known-metadata map, the replay ring and the exclusion sets — that the explanation never needs.
+  it("releases replayable state when revocation tombstones a session", async () => {
+    const adapter = new FakeAdapter();
+    const manager = createWorkspaceWatchService({
+      adapter,
+      coalesceMs: 0,
+      fallbackPollMs: 5_000,
+      idleTearDownMs: 0,
+      replayCapacity: 8,
+    });
+    const events: EditorM7WatchEvent[] = [];
+    let authorized = true;
+    manager.subscribe({
+      root,
+      onEvent: (event) => events.push(event),
+      reproveRoot: () => (authorized ? createOrdinaryWorkspaceRootAccess(root) : undefined),
+    });
+    await drainInitialBaseline(manager, adapter);
+    for (const name of ["a.txt", "b.txt"]) {
+      await writeFile(join(root, name), name, "utf8");
+      adapter.emit({ eventType: "rename", filename: name });
+    }
+    await waitForCondition(() => events.filter((event) => event.kind === "created").length === 2);
+    const live = manager.snapshot(root);
+    expect(live.replayOldestSequence).toBeLessThan(live.sequence);
+
+    authorized = false;
+    adapter.emit({ eventType: "rename", filename: "c.txt" });
+
+    const tombstone = manager.snapshot(root);
+    expect(tombstone.health).toBe("rescanRequired");
+    expect(tombstone.degradedReasons).toContain("root-replaced");
+    expect(tombstone.replayOldestSequence).toBe(tombstone.sequence);
+    expect(tombstone.queueDepth).toBe(0);
+  });
+
+  // The other half of the same finding: one tombstone per revoked root, retained forever, is
+  // unbounded state in a multi-root session. Retention is capped and newest-first; the durable
+  // record stays the authority-revoked activity-log line.
+  it("bounds retained revocation tombstones and keeps the newest ones", () => {
+    const adapter = new FakeAdapter();
+    const manager = service(adapter);
+    const roots = Array.from({ length: MAX_RETAINED_REVOKED_WATCH_SESSIONS + 2 }, (_value, index) =>
+      join(outside, `revoked-root-${String(index)}`),
+    );
+
+    for (const revokedRoot of roots) {
+      const result = manager.subscribe({
+        root: revokedRoot,
+        onEvent: vi.fn(),
+        reproveRoot: () => undefined,
+      });
+      expect(result.kind).toBe("rootUnavailable");
+    }
+
+    const retained = roots.filter((each) => manager.snapshot(each).health === "rescanRequired");
+    expect(retained).toStrictEqual(roots.slice(2));
+    manager.disposeAll();
   });
 });

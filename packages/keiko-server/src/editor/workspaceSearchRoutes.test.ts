@@ -22,6 +22,11 @@ import type { UiStore } from "../store/index.js";
 import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
 import { deriveManagedWorktreePath } from "../task-workspace/naming.js";
 import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
+import {
+  createOrdinaryWorkspaceRootAccess,
+  grantedWorkspaceRootAccess,
+  type WorkspaceRootAccessOutcome,
+} from "../task-workspace/workspace-root-access.js";
 import type { WorkspaceProvisioningService } from "../task-workspace/types.js";
 import {
   handleEditorWorkspaceReplaceApply,
@@ -1028,6 +1033,61 @@ describe("POST /api/editor/workspace-search/replace-apply", () => {
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ appliedCount: 1, conflictCount: 0, conflicts: [] });
     expect(content).toContain('export const marker = readConfig("large-file");');
+  });
+
+  // #3347 write-boundary re-proof. Admission, the closed-file read and the keiko-tools preflight all
+  // run on the capability proved once, at the top of the request; the WRITE is the only effect that
+  // leaves authorized memory. Authority can be revoked — or the managed root replaced — inside that
+  // window, so the writer is constructed from a capability re-proved immediately before it, and a
+  // denial is a route-level 403 rather than a per-file conflict: the request never reached bytes it
+  // was allowed to change. Verified red by hand: with the writer built from the admission-time root,
+  // the revoked apply returned 200 with appliedCount 1 and rewrote the file on disk.
+  it("leaves disk untouched when authority is revoked before the governed write", async () => {
+    const file = await previewForApply();
+    const before = await readFile(join(root, "src", "a.ts"), "utf8");
+
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+      deps({
+        workspaceRootAccessResolver: (): WorkspaceRootAccessOutcome => ({ decision: "denied" }),
+      }),
+    );
+
+    expect(result.status).toBe(403);
+    expect(result.body).toMatchObject({ error: { code: "DENIED" } });
+    expect(await readFile(join(root, "src", "a.ts"), "utf8")).toBe(before);
+    expect(before).toContain("parseConfig");
+  });
+
+  it("re-proves authority once per governed write, not once per admitted request", async () => {
+    const preview = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({ includeGlobs: ["src/a.ts", "src/b.ts"] }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+    const previewed = (
+      preview.body as {
+        files: { path: string; baseContentHash: string; edits: readonly unknown[] }[];
+      }
+    ).files;
+    expect(previewed).toHaveLength(2);
+    const proofs: string[] = [];
+
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: previewed }, "/api/editor/workspace-search/replace-apply"),
+      deps({
+        workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome => {
+          proofs.push(requestedRoot);
+          return grantedWorkspaceRootAccess(createOrdinaryWorkspaceRootAccess(requestedRoot));
+        },
+      }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ appliedCount: 2, conflictCount: 0 });
+    expect(proofs).toEqual([root, root]);
   });
 });
 

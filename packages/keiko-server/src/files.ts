@@ -71,6 +71,7 @@ import {
   createOrdinaryWorkspaceRootAccess,
   requiresConfiguredManagedWorkspaceAuthority,
   resolveManagedWorkspaceRootAccess,
+  workspaceRootAccessOrUndefined,
   type WorkspaceRootAccess,
 } from "./task-workspace/workspace-root-access.js";
 export { requiresManagedRootAuthority } from "./task-workspace/workspace-root-access.js";
@@ -185,12 +186,23 @@ interface ResolvedTarget {
   readonly path: string;
   readonly stats: Stats;
   readonly symlink: boolean;
-  // The resolved root's WorkspaceFs, plus the WorkspaceStat identity (device+inode) captured at
-  // THIS admission -- carried alongside the plain path so a later content read can bind itself to
-  // the exact file that was admitted (see readContainedBytes) instead of trusting a bare path
-  // string that a parent-directory swap could redirect after admission. Identity only changes on
-  // replacement (a different inode); an in-place edit keeps the same identity, so this check is
-  // orthogonal to -- and does not need refreshing by -- the existing mtime/hash staleness checks.
+  // The resolved root's WorkspaceFs, plus the WorkspaceStat captured at THIS admission -- carried
+  // alongside the plain path so a later content read can bind itself to the exact file that was
+  // admitted (see readContainedBytes) instead of trusting a bare path string that a
+  // parent-directory swap could redirect after admission.
+  //
+  // The snapshot is FULL, not device+inode alone. `WorkspaceFs.readFileBytes` re-derives it from
+  // the opened descriptor and compares fileIdentity AND size, mtime, ctime and link count
+  // (expectedDescriptorSnapshotMatches, keiko-workspace/src/fs.ts). ANY change to the file fails
+  // that read -- an in-place edit that keeps the inode exactly as much as an inode swap. A caught
+  // WorkspaceDescriptorReadError therefore means "the admitted revision is gone", which is a stale
+  // session and not a retryable condition: every further attempt against the same snapshot fails
+  // identically, and re-deriving the snapshot from the live path instead would accept whatever
+  // inode now sits there -- the hole readContainedBytes exists to close.
+  //
+  // The mutation guards do NOT reuse this full snapshot: they re-prove `fileIdentity` and the
+  // canonical pathname only (assertAdmittedIdentityCurrent), so a legitimate in-place edit before a
+  // delete or a rename stays a delete and not a spurious 409.
   readonly fs: WorkspaceFs;
   readonly identity: WorkspaceStat;
 }
@@ -278,9 +290,14 @@ export function requestRootAccessResolver(
       ) {
         return undefined;
       }
+      // This surface answers every refusal the same way (no access), so the resolver's
+      // denied-vs-unresolved decision is collapsed here, explicitly, at the consumer (#3347). The
+      // fallback still runs only when NO central resolver is composed: a composed resolver that
+      // refuses returns a non-nullish outcome, and fallbackRequestRootAccess refuses on its own.
       const resolved =
-        deps.workspaceRootAccessResolver?.(expected.access.canonicalRoot) ??
-        fallbackRequestRootAccess(deps, expected);
+        workspaceRootAccessOrUndefined(
+          deps.workspaceRootAccessResolver?.(expected.access.canonicalRoot),
+        ) ?? fallbackRequestRootAccess(deps, expected);
       return resolved?.kind === expected.access.kind &&
         resolved.canonicalRoot === expected.access.canonicalRoot
         ? resolved
@@ -463,6 +480,66 @@ function stalePathError(): FilesError {
   return new FilesError(409, "STALE_PATH", "The file changed before the operation could complete.");
 }
 
+// The three things every guard needs to re-prove an admission, structurally satisfied by both
+// ResolvedTarget (an existing entry) and ResolvedCreationTarget's parent (a destination directory).
+interface AdmittedPath {
+  readonly realRoot: string;
+  readonly path: string;
+  readonly fs: WorkspaceFs;
+}
+
+// #3347 owner P1. `isContained(realRoot, path)` is a STRING comparison over a pathname that has not
+// moved, so it keeps answering "contained" after the root it names has been replaced by a symlink
+// pointing outside -- every filesystem call on that pathname then lands out of the workspace while
+// the check that is supposed to notice reports nothing. Containment only means something when the
+// pathname is re-canonicalized, and it must be re-canonicalized through the ADMITTED capability,
+// not a bare node:fs realpath, so the answer comes from the same authority the request was
+// admitted under. Mirrors isWorkspacePathSnapshotCurrent's pathname-plus-identity shape from
+// keiko-workspace; it is not a second containment model.
+function assertAdmittedPathCurrent(admitted: AdmittedPath, escapeMessage: string): void {
+  let canonical: string;
+  try {
+    canonical = admitted.fs.realPath(admitted.path);
+  } catch {
+    throw stalePathError();
+  }
+  if (!sameNativePath(canonical, admitted.path) || !isContained(admitted.realRoot, canonical)) {
+    throw new FilesError(403, "PATH_ESCAPE", escapeMessage);
+  }
+  const relativeCanonical = rootRelativePosixPath(admitted.realRoot, canonical);
+  if (relativeCanonical.length > 0 && pathIsDenied(relativeCanonical)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+}
+
+// Re-proves an admitted ENTRY: the object sitting at the pathname is still the one admission bound
+// to, and the pathname still canonicalizes to itself inside the root. Device+inode and the entry
+// kind only -- deliberately NOT ResolvedTarget.identity's full snapshot, which readFileBytes owns:
+// a mutation must still reject a replaced inode, but a file legitimately edited in place between
+// the browse and the delete is still the same file and must still be deletable.
+//
+// Order matters. The identity/symlink question is asked FIRST so an entry replaced in place by a
+// link keeps reporting the 409 STALE_PATH it always has; the canonical-pathname question is what
+// catches the case identity alone cannot see, where the replacement happened ABOVE the entry (a
+// swapped root or parent) and the identity re-read therefore observes the substitute on both sides.
+function assertAdmittedIdentityCurrent(target: ResolvedTarget): void {
+  let current: WorkspaceStat;
+  try {
+    current = target.fs.stat(target.path);
+  } catch {
+    throw stalePathError();
+  }
+  if (
+    current.isSymbolicLink ||
+    current.isDirectory !== target.identity.isDirectory ||
+    target.identity.fileIdentity === undefined ||
+    current.fileIdentity !== target.identity.fileIdentity
+  ) {
+    throw stalePathError();
+  }
+  assertAdmittedPathCurrent(target, "The requested path is outside the selected root.");
+}
+
 async function resolveInsideRoot(
   store: UiStore,
   rootInput: string | null,
@@ -504,7 +581,7 @@ async function resolveInsideRoot(
   const linkStat = root.access.fs.stat(candidate);
   const identity = root.access.fs.stat(target);
   const targetStats = await stat(target);
-  return {
+  const resolved: ResolvedTarget = {
     root: root.root,
     realRoot: root.realRoot,
     relativePath,
@@ -514,6 +591,14 @@ async function resolveInsideRoot(
     fs: root.access.fs,
     identity,
   };
+  // #3347 owner P1: `stats` above is the one node:fs call left in this function, and until this
+  // re-proof it was unbound -- a root swapped to a symlink between realPath() and it produced a
+  // ResolvedTarget whose `stats` (and `identity`) described a file OUTSIDE the workspace, self
+  // consistently, so every later guard that compares them agreed and the mutation went through.
+  // Re-canonicalizing through the admitted capability here is what makes the returned snapshot
+  // provably about the admitted path.
+  assertAdmittedIdentityCurrent(resolved);
+  return resolved;
 }
 
 function extensionOf(name: string): string | null {
@@ -1436,13 +1521,14 @@ async function readPrefix(
 // open()/readFile() on `target.path`. `identity` is the WorkspaceStat captured at ADMISSION time
 // (ResolvedTarget.identity) -- not re-derived here -- so the open is bound to the exact file that
 // was admitted: if a path segment was swapped anywhere between admission and this call, the opened
-// descriptor's device+inode will not match `identity` and the read is rejected, even when the
+// descriptor's snapshot will not match `identity` and the read is rejected, even when the
 // substitute happens to share the original's size and mtime (which the older stat-after-read
-// comparison this module otherwise relies on cannot detect). Identity is unaffected by a legitimate
-// in-place edit (same inode), so callers that already retry on a changed mtime/hash keep working
-// unchanged. Hard links are allowed (not rejected): unlike the privileged metadata readers
-// elsewhere in the codebase, this is an interactive human browsing a root they selected, so a
-// hard-linked file the human already has plain read access to must keep working.
+// comparison this module otherwise relies on cannot detect). The comparison is the FULL snapshot,
+// not device+inode alone, so a legitimate in-place edit rejects the read too: callers must map a
+// WorkspaceDescriptorReadError to "reload before editing" at once and must never retry it against
+// the same admission-time snapshot. Hard links are allowed (not rejected): unlike the privileged
+// metadata readers elsewhere in the codebase, this is an interactive human browsing a root they
+// selected, so a hard-linked file the human already has plain read access to must keep working.
 async function readContainedBytes(
   targetPath: string,
   fs: WorkspaceFs,
@@ -1606,6 +1692,32 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+function staleSessionOpenError(): FilesError {
+  return new FilesError(
+    409,
+    "STALE_SESSION",
+    "This file changed while it was being opened. Reload it before editing.",
+  );
+}
+
+// A descriptor-read failure is TERMINAL here, never an attempt the loop below may spend budget on.
+// `target.identity` is the FULL admission-time snapshot (see ResolvedTarget.identity) and
+// readFileBytes compares all of it, so a plain in-place edit between admission and this read fails
+// the descriptor check and would fail it identically on every retry -- the earlier retry path could
+// not recover, it only burned the budget and two 25ms sleeps before reporting the same
+// STALE_SESSION. Refreshing the snapshot from the live path to make the retry "work" is the one
+// repair that must never be made: it would re-admit whatever inode now sits at the path.
+async function readAdmittedEditableBytes(target: ResolvedTarget): Promise<Buffer> {
+  try {
+    return (
+      await readContainedBytes(target.path, target.fs, target.identity, MAX_TEXT_PREVIEW_BYTES)
+    ).buffer;
+  } catch (error) {
+    if (error instanceof WorkspaceDescriptorReadError) throw staleSessionOpenError();
+    throw error;
+  }
+}
+
 async function readStableEditableContent(
   target: ResolvedTarget,
 ): Promise<{ readonly content: string; readonly stats: Stats }> {
@@ -1618,24 +1730,7 @@ async function readStableEditableContent(
         `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
       );
     }
-    let buffer: Buffer;
-    try {
-      buffer = (
-        await readContainedBytes(target.path, target.fs, target.identity, MAX_TEXT_PREVIEW_BYTES)
-      ).buffer;
-    } catch (error) {
-      // A caught identity mismatch is exactly the "changed under us" condition the post-read
-      // statsMatch() check below already retries on -- fold it into the same retry budget instead
-      // of failing the first attempt outright. `target.identity` stays admission-time-fixed across
-      // attempts on purpose (see ResolvedTarget.identity): identity only drifts on replacement, so
-      // reusing it keeps guarding against a swapped inode on every retry, not just the first.
-      if (!(error instanceof WorkspaceDescriptorReadError)) throw error;
-      before = await stat(target.path);
-      if (attempt < STABLE_CONTENT_READ_ATTEMPTS - 1) {
-        await sleep(STABLE_CONTENT_RETRY_DELAY_MS);
-      }
-      continue;
-    }
+    const buffer = await readAdmittedEditableBytes(target);
     const content = decodeUtf8(buffer);
     if (content === null || buffer.includes(0)) {
       throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
@@ -1647,11 +1742,7 @@ async function readStableEditableContent(
       await sleep(STABLE_CONTENT_RETRY_DELAY_MS);
     }
   }
-  throw new FilesError(
-    409,
-    "STALE_SESSION",
-    "This file changed while it was being opened. Reload it before editing.",
-  );
+  throw staleSessionOpenError();
 }
 
 // Bounded re-read (mirrors the content-classification read): if the file grew past the editable
@@ -2089,6 +2180,11 @@ interface ResolvedCreationTarget {
   readonly realRoot: string;
   readonly relativePath: string;
   readonly path: string;
+  // #3347 owner P1: a destination has no admitted identity yet (nothing is there), so the thing a
+  // create/rename/copy effect re-proves is its PARENT. That re-proof has to run on the admitted
+  // capability, exactly like an existing entry's, or the same swapped-root pathname walks straight
+  // out of the workspace through a bare node:fs realpath.
+  readonly fs: WorkspaceFs;
 }
 
 // Resolve a path that should NOT exist yet (a create destination, or a rename target). The PARENT
@@ -2105,18 +2201,19 @@ function assertSafeLeafName(name: string): void {
 
 // Resolve the directory a new entry will be created in: it must already exist, be a directory,
 // resolve (through symlinks) to a path inside the root, and not be deny-listed.
-async function resolveContainedParentDir(
+function resolveContainedParentDir(
+  fs: WorkspaceFs,
   realRoot: string,
   parentRelative: string,
-): Promise<string> {
+): string {
   const parentNative = nativePath(realRoot, parentRelative === "." ? "" : parentRelative);
   let realParent: string;
   try {
-    realParent = await realpath(parentNative);
+    realParent = fs.realPath(parentNative);
   } catch {
     throw new FilesError(404, "PARENT_NOT_FOUND", "The destination folder does not exist.");
   }
-  if (!(await stat(realParent)).isDirectory()) {
+  if (!fs.stat(realParent).isDirectory) {
     throw new FilesError(400, "NOT_DIRECTORY", "The destination is not a folder.");
   }
   if (!isContained(realRoot, realParent)) {
@@ -2148,10 +2245,8 @@ async function resolveCreationTarget(
   }
   const name = pathPosix.basename(relativePath);
   assertSafeLeafName(name);
-  const realParent = await resolveContainedParentDir(
-    root.realRoot,
-    pathPosix.dirname(relativePath),
-  );
+  const fs = root.access.fs;
+  const realParent = resolveContainedParentDir(fs, root.realRoot, pathPosix.dirname(relativePath));
   const targetNative = join(realParent, name);
   if (!isContained(root.realRoot, targetNative)) {
     throw new FilesError(403, "PATH_ESCAPE", "The destination is outside the selected root.");
@@ -2161,27 +2256,28 @@ async function resolveCreationTarget(
   if (pathIsDenied(targetRel)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  return { root: root.root, realRoot: root.realRoot, relativePath: targetRel, path: targetNative };
+  return {
+    root: root.root,
+    realRoot: root.realRoot,
+    relativePath: targetRel,
+    path: targetNative,
+    fs,
+  };
 }
 
-async function assertCreationParentStillContained(target: ResolvedCreationTarget): Promise<void> {
-  const parent = dirname(target.path);
-  let realParent: string;
-  try {
-    realParent = await realpath(parent);
-  } catch {
-    throw stalePathError();
-  }
-  if (!sameNativePath(realParent, parent) || !isContained(target.realRoot, realParent)) {
-    throw new FilesError(403, "PATH_ESCAPE", "The destination is outside the selected root.");
-  }
-  const relativeParent = rootRelativePosixPath(target.realRoot, realParent);
-  if (relativeParent.length > 0 && pathIsDenied(relativeParent)) {
-    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
-  }
+function assertCreationParentStillContained(target: ResolvedCreationTarget): void {
+  assertAdmittedPathCurrent(
+    { realRoot: target.realRoot, path: dirname(target.path), fs: target.fs },
+    "The destination is outside the selected root.",
+  );
 }
 
+// The single mutation-boundary guard: every mutating effect on an admitted entry (delete, rename,
+// copy source, and both halves of the atomic write) calls this IMMEDIATELY before it acts, so the
+// admitted identity is re-proved through the admitted capability rather than assumed to have held
+// since resolveInsideRoot returned (#3347 owner P1).
 async function assertResolvedTargetStillCurrent(target: ResolvedTarget): Promise<Stats> {
+  assertAdmittedIdentityCurrent(target);
   let current: Stats;
   try {
     current = await lstat(target.path);
@@ -2191,27 +2287,32 @@ async function assertResolvedTargetStillCurrent(target: ResolvedTarget): Promise
   if (current.isSymbolicLink() || !sameFileIdentity(target.stats, current)) {
     throw stalePathError();
   }
-  if (!isContained(target.realRoot, target.path)) {
-    throw new FilesError(403, "PATH_ESCAPE", "The requested path is outside the selected root.");
-  }
   return current;
 }
 
-function assertCreatedEntryKind(current: Stats, kind: FilesEntryKind): void {
-  if (current.isSymbolicLink()) {
+function assertCreatedEntryKind(current: WorkspaceStat, kind: FilesEntryKind): void {
+  if (current.isSymbolicLink) {
     throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be created here.");
   }
-  if (kind === "file" && !current.isFile()) {
+  if (kind === "file" && !current.isFile) {
     throw new FilesError(400, "BAD_REQUEST", "The mutation did not create a file.");
   }
-  if (kind === "directory" && !current.isDirectory()) {
+  if (kind === "directory" && !current.isDirectory) {
     throw new FilesError(400, "BAD_REQUEST", "The mutation did not create a directory.");
   }
 }
 
-async function realpathOrStale(path: string): Promise<string> {
+function realpathOrStale(fs: WorkspaceFs, path: string): string {
   try {
-    return await realpath(path);
+    return fs.realPath(path);
+  } catch {
+    throw stalePathError();
+  }
+}
+
+function lstatOrStale(fs: WorkspaceFs, path: string): WorkspaceStat {
+  try {
+    return fs.stat(path);
   } catch {
     throw stalePathError();
   }
@@ -2227,29 +2328,21 @@ function assertMutationRealPathContained(target: ResolvedCreationTarget, realTar
   }
 }
 
-async function assertMutationEffectContained(
-  target: ResolvedCreationTarget,
-  kind: FilesEntryKind,
-): Promise<void> {
-  let current: Stats;
-  try {
-    current = await lstat(target.path);
-  } catch {
-    throw stalePathError();
-  }
-  assertCreatedEntryKind(current, kind);
-  assertMutationRealPathContained(target, await realpathOrStale(target.path));
+function assertMutationEffectContained(target: ResolvedCreationTarget, kind: FilesEntryKind): void {
+  assertCreatedEntryKind(lstatOrStale(target.fs, target.path), kind);
+  assertMutationRealPathContained(target, realpathOrStale(target.fs, target.path));
 }
 
 async function assertCopiedTreeContainsNoSymlinks(
+  fs: WorkspaceFs,
   realRoot: string,
   absolutePath: string,
 ): Promise<void> {
-  const current = await lstat(absolutePath);
-  if (current.isSymbolicLink()) {
+  const current = lstatOrStale(fs, absolutePath);
+  if (current.isSymbolicLink) {
     throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be copied here.");
   }
-  const realCurrent = await realpath(absolutePath);
+  const realCurrent = realpathOrStale(fs, absolutePath);
   if (!isContained(realRoot, realCurrent)) {
     throw new FilesError(403, "PATH_ESCAPE", "The copied entry escaped the selected root.");
   }
@@ -2257,10 +2350,10 @@ async function assertCopiedTreeContainsNoSymlinks(
   if (relativeReal.length > 0 && pathIsDenied(relativeReal)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  if (!current.isDirectory()) return;
+  if (!current.isDirectory) return;
   const dir = await opendir(absolutePath);
   for await (const entry of dir) {
-    await assertCopiedTreeContainsNoSymlinks(realRoot, join(absolutePath, entry.name));
+    await assertCopiedTreeContainsNoSymlinks(fs, realRoot, join(absolutePath, entry.name));
   }
 }
 
@@ -2330,7 +2423,7 @@ export async function createFilesEntry(args: {
     args.redactor ?? staticFilesMetadataRedactor,
     args.resolvedRoot,
   );
-  await assertCreationParentStillContained(target);
+  assertCreationParentStillContained(target);
   try {
     if (args.kind === "directory") {
       // Non-recursive: the parent was already verified, and EEXIST surfaces as a clean 409.
@@ -2427,7 +2520,7 @@ async function resolveRenameFilesPlan(args: RenameFilesEntryArgs): Promise<Renam
   assertRenameRelativePathAllowed(source.relativePath, target.relativePath);
   await assertRenameDestinationFree(target.path, source.path);
   await assertResolvedTargetStillCurrent(source);
-  await assertCreationParentStillContained(target);
+  assertCreationParentStillContained(target);
   return { source, target, kind };
 }
 
@@ -2439,7 +2532,7 @@ async function executeContainedRename(
   try {
     await rename(source.path, target.path);
     try {
-      await assertMutationEffectContained(target, kind);
+      assertMutationEffectContained(target, kind);
     } catch (error) {
       await rename(target.path, source.path).catch(() => undefined);
       throw error;
@@ -2544,7 +2637,7 @@ export async function copyFilesEntry(args: {
     throw new FilesError(400, "BAD_PATH", "A folder cannot be copied into itself.");
   }
   await assertResolvedTargetStillCurrent(source);
-  await assertCreationParentStillContained(target);
+  assertCreationParentStillContained(target);
   try {
     // `force:false` + `errorOnExist` refuse to overwrite; `dereference:false` copies symlinks as
     // links (never follows one out of the root). Contents stay inside the root throughout.
@@ -2555,8 +2648,8 @@ export async function copyFilesEntry(args: {
       dereference: false,
     });
     try {
-      await assertMutationEffectContained(target, kind);
-      await assertCopiedTreeContainsNoSymlinks(target.realRoot, target.path);
+      assertMutationEffectContained(target, kind);
+      await assertCopiedTreeContainsNoSymlinks(target.fs, target.realRoot, target.path);
     } catch (error) {
       await rm(target.path, { recursive: true, force: true }).catch(() => undefined);
       throw error;

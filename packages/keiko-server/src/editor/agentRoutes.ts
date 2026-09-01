@@ -110,6 +110,7 @@ import {
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { workspaceRootAccessOrUndefined } from "../task-workspace/workspace-root-access.js";
 import {
   errorBody,
   STREAMING,
@@ -373,6 +374,7 @@ function textEditsConflict(action: EditorAgentAction): EditorAgentActionResult |
 function workspaceInfoFromRoot(root: string): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework: "unknown",
@@ -1907,7 +1909,11 @@ function changesetWorkspaceFs(
 ): WorkspaceFs | undefined {
   if (runtimeMutation.kind !== "runtime") return nodeWorkspaceFs;
   try {
-    const access = deps?.workspaceRootAccessResolver?.(workspaceRoot);
+    // Only a proven managed root grants a writable fs here, so both refusal decisions collapse to
+    // the same answer; the collapse is stated at this consumer rather than in the resolver (#3347).
+    const access = workspaceRootAccessOrUndefined(
+      deps?.workspaceRootAccessResolver?.(workspaceRoot),
+    );
     return access?.kind === "managed-task" && access.canonicalRoot === workspaceRoot
       ? access.fs
       : undefined;

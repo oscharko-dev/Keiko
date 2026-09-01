@@ -47,6 +47,7 @@ function workspaceOf(
 ): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework,

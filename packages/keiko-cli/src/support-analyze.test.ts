@@ -1,9 +1,17 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { createFileServerLogSink } from "@oscharko-dev/keiko-server";
+import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
+import {
+  causeChain as productionCauseChain,
+  createFileServerLogSink,
+  keikoStackFrames,
+  type ServerLogCategory,
+  type ServerLogSink,
+} from "@oscharko-dev/keiko-server";
 
 import {
   analyzeLogText,
@@ -26,6 +34,79 @@ import {
 function line(fields: Record<string, unknown>): string {
   return JSON.stringify(fields);
 }
+
+// ─── Driving the timeline contract from the production emitters, not from hand-written JSON ───────
+//
+// A support timeline is the ONLY artifact an agent has when a customer's managed root is denied or
+// a live workspace watch is revoked, so this file must prove the analyzer carries what the REAL
+// emitters write — not what a fixture author guessed they write (AGENTS.md §7: a fixture derives
+// its expectation from the production entry point).
+//
+// Three production seams are reused directly below: `createFileServerLogSink` (the activity log's
+// own writer, including its redaction and its hoisting of `extra` onto the line), `keikoStackFrames`
+// / `causeChain` (the exact evidence helpers `recordWorkspaceRootDenial` calls), and the real
+// `PathDeniedError`, whose `code` IS the `errorKind` the emitter writes.
+//
+// The emitter FUNCTIONS themselves (`recordWorkspaceRootDenial` in
+// `keiko-server/src/workspace-root-denial-log.ts`, `recordWatchAuthorityRevoked` in
+// `keiko-server/src/editor/watch/workspaceWatchRoutes.ts`) are module-private and are not part of
+// `@oscharko-dev/keiko-server`'s single entry point; booting the BFF here to drive them would
+// duplicate keiko-server's own route tests instead of reusing them (AGENTS.md §5). The generated op
+// catalog is the seam that keeps the remaining inputs honest: it is produced by scanning every
+// production `op:` call site and pinned against them by `npm run check:op-catalog`, so an op that is
+// renamed, recategorised or deleted in production moves this file's INPUTS — the test cannot keep
+// asserting against an op the product no longer emits.
+const OP_CATALOG_PATH = fileURLToPath(
+  new URL("../../../docs/observability/op-catalog.generated.json", import.meta.url),
+);
+
+interface OpCatalogDocument {
+  readonly entries?: readonly { readonly op: string; readonly category: string }[];
+}
+
+const OP_CATALOG = JSON.parse(readFileSync(OP_CATALOG_PATH, "utf8")) as OpCatalogDocument;
+
+// `ServerLogCategory` is a compile-time union, so the catalog's string is narrowed through an
+// explicit table rather than a cast: a production op that moves to a category this file does not
+// model fails loudly here instead of silently logging under the wrong one.
+const MODELLED_LOG_CATEGORIES: Readonly<Record<string, ServerLogCategory>> = {
+  diagnostic: "diagnostic",
+  search: "search",
+  security: "security",
+};
+
+function productionLogCategory(op: string): ServerLogCategory {
+  const entry = OP_CATALOG.entries?.find((candidate) => candidate.op === op);
+  if (entry === undefined) {
+    throw new Error(`op-catalog registers no production emitter for op "${op}"`);
+  }
+  const category = MODELLED_LOG_CATEGORIES[entry.category];
+  if (category === undefined) {
+    throw new Error(`op "${op}" is emitted under unmodelled category "${entry.category}"`);
+  }
+  return category;
+}
+
+// Writes through the real file sink and returns what actually landed in `<stateDir>/logs/server.log`
+// — the same bytes `keiko support analyze` is handed — so redaction, field hoisting and the v2
+// envelope are all exercised rather than assumed.
+function serializedActivityLog(prefix: string, write: (sink: ServerLogSink) => void): string {
+  const stateDir = mkdtempSync(join(tmpdir(), prefix));
+  const sink = createFileServerLogSink(stateDir, { level: "debug" });
+  try {
+    write(sink);
+    sink.close?.();
+    return readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+  } finally {
+    sink.close?.();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+}
+
+const CONNECTED_CONTEXT_STARTED = "search.connected-context.started";
+const CONNECTED_CONTEXT_COMPLETED = "search.connected-context.completed";
+const WORKSPACE_ROOT_DENIED = "workspace.root.denied";
+const WATCH_AUTHORITY_REVOKED = "editor.workspace-watch.authority-revoked";
 
 const T0 = "2026-08-21T00:00:00.000Z";
 const T1 = "2026-08-21T00:00:01.000Z";
@@ -218,8 +299,8 @@ describe("analyzeLogText — raw log", () => {
     } as const;
     try {
       sink.write({
-        category: "search",
-        op: "search.connected-context.started",
+        category: productionLogCategory(CONNECTED_CONTEXT_STARTED),
+        op: CONNECTED_CONTEXT_STARTED,
         correlationId,
         extra: {
           scopeKind: "directory",
@@ -230,8 +311,8 @@ describe("analyzeLogText — raw log", () => {
         },
       });
       sink.write({
-        category: "search",
-        op: "search.connected-context.completed",
+        category: productionLogCategory(CONNECTED_CONTEXT_COMPLETED),
+        op: CONNECTED_CONTEXT_COMPLETED,
         correlationId,
         durationMs: 17,
         extra: {
@@ -285,8 +366,12 @@ describe("analyzeLogText — raw log", () => {
       const serialized = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
       const timeline = findTimeline(analyzeLogText(serialized), correlationId);
       expect(timeline?.lines.map((entry) => entry.op)).toEqual([
-        "search.connected-context.started",
-        "search.connected-context.completed",
+        CONNECTED_CONTEXT_STARTED,
+        CONNECTED_CONTEXT_COMPLETED,
+      ]);
+      expect(timeline?.lines.map((entry) => entry.category)).toEqual([
+        productionLogCategory(CONNECTED_CONTEXT_STARTED),
+        productionLogCategory(CONNECTED_CONTEXT_COMPLETED),
       ]);
       expect(timeline?.lines[0]?.extra).toMatchObject({
         explicitConnection: true,
@@ -408,6 +493,150 @@ describe("analyzeLogText — raw log", () => {
   it("omits frames entirely (never an empty array) when no line in the timeline carried any", () => {
     const req1 = result.timelines.find((t) => t.correlationId === "req-1");
     expect(req1?.frames).toBeUndefined();
+  });
+});
+
+// The two workspace-authority security ops #3347 introduced. Each is the LAST evidence a support
+// bundle carries when authority is withdrawn mid-operation — a denied managed root, a live watch
+// revoked out from under a streaming client — so each must survive the round trip through
+// `keiko support analyze` with its correlation, its error kind and its body-free evidence intact.
+// A field the analyzer drops here is a defect an agent can no longer reconstruct at all.
+describe("support timeline contract — the #3347 workspace-authority security ops", () => {
+  const CORRELATION_ID = "33470000abcdef000000000000000001";
+
+  // The denial evidence, built the way `recordWorkspaceRootDenial` builds it: a real
+  // `PathDeniedError` (whose `code` IS the emitted `errorKind`) reduced through the production
+  // `keikoStackFrames`/`causeChain` helpers. Nothing here restates a shape this test owns.
+  function denialEvidence(): {
+    readonly error: PathDeniedError;
+    readonly frames: readonly string[];
+    readonly causes: readonly string[];
+  } {
+    const error = new PathDeniedError("workspace root denied", "<requested-root>");
+    // A denial raised while re-proving a managed root wraps the failure that caused it, which is
+    // what gives `causeChain` a non-empty reduction — the emitter spreads the chain in only when it
+    // has one, so a cause-less fixture would exercise the empty branch and prove nothing here.
+    error.cause = new TypeError("realpath rejected the locus");
+    return { error, frames: keikoStackFrames(error), causes: productionCauseChain(error) };
+  }
+
+  it("carries the denial's production error code, stack frames and cause chain onto the timeline", () => {
+    const { error, frames, causes } = denialEvidence();
+    // Fail closed rather than assert vacuously: with no frames or no cause classes the two
+    // `toEqual`s below would pass against empty arrays and prove nothing.
+    expect(frames.length).toBeGreaterThan(0);
+    expect(causes.length).toBeGreaterThan(0);
+
+    const serialized = serializedActivityLog("keiko-support-root-denied-", (sink) => {
+      sink.write({
+        level: "warn",
+        category: productionLogCategory(WORKSPACE_ROOT_DENIED),
+        op: WORKSPACE_ROOT_DENIED,
+        correlationId: CORRELATION_ID,
+        errorKind: error.code,
+        extra: { decision: "denied", reason: "denied-locus", frames, causeChain: causes },
+      });
+    });
+
+    const timeline = findTimeline(analyzeLogText(serialized), CORRELATION_ID);
+    expect(timeline?.lines[0]).toMatchObject({
+      category: "security",
+      op: WORKSPACE_ROOT_DENIED,
+      errorKind: error.code,
+      extra: { decision: "denied", reason: "denied-locus" },
+    });
+    // `frames`/`causeChain` are written INSIDE `extra` by the emitter and hoisted onto the line by
+    // the sink's own formatter — which is the only reason `keiko support analyze --seed` finds them
+    // as typed evidence instead of leaving them buried in `extra`.
+    expect(timeline?.lines[0]?.frames).toEqual(frames);
+    expect(timeline?.lines[0]?.causeChain).toEqual(causes);
+    expect(timeline?.errorKinds).toEqual([error.code]);
+  });
+
+  it("reconstructs a denial and a revoked watch that share one correlation as ONE timeline", () => {
+    const { error, frames } = denialEvidence();
+    const serialized = serializedActivityLog("keiko-support-authority-", (sink) => {
+      sink.write({
+        level: "warn",
+        category: productionLogCategory(WORKSPACE_ROOT_DENIED),
+        op: WORKSPACE_ROOT_DENIED,
+        correlationId: CORRELATION_ID,
+        errorKind: error.code,
+        extra: { decision: "denied", reason: "managed-root-resolution-failed", frames },
+      });
+      sink.write({
+        level: "warn",
+        category: productionLogCategory(WATCH_AUTHORITY_REVOKED),
+        op: WATCH_AUTHORITY_REVOKED,
+        correlationId: CORRELATION_ID,
+        errorKind: "WATCH_AUTHORITY_REVOKED",
+        extra: { decision: "revoked", rootToken: "a".repeat(24) },
+      });
+    });
+
+    const timeline = findTimeline(analyzeLogText(serialized), CORRELATION_ID);
+    expect(timeline?.lines.map((entry) => entry.op)).toEqual([
+      WORKSPACE_ROOT_DENIED,
+      WATCH_AUTHORITY_REVOKED,
+    ]);
+    expect(timeline?.lines.map((entry) => entry.category)).toEqual(["security", "security"]);
+    expect(timeline?.errorKinds).toEqual([error.code, "WATCH_AUTHORITY_REVOKED"]);
+    expect(timeline?.lines[1]?.extra).toEqual({ decision: "revoked", rootToken: "a".repeat(24) });
+    // The revocation carries no path, no endpoint and no client identity — only a decision and the
+    // body-free root token the watch session is joined on.
+    expect(JSON.stringify(timeline?.lines[1]?.extra)).not.toContain("/");
+  });
+
+  it("turns the denial into a reproduction seed whose stack frames are the emitter's own", () => {
+    const { error, frames, causes } = denialEvidence();
+    const serialized = serializedActivityLog("keiko-support-denial-seed-", (sink) => {
+      sink.write({
+        level: "warn",
+        category: productionLogCategory(WORKSPACE_ROOT_DENIED),
+        op: WORKSPACE_ROOT_DENIED,
+        correlationId: CORRELATION_ID,
+        errorKind: error.code,
+        extra: { decision: "denied", reason: "denied-locus", frames, causeChain: causes },
+      });
+    });
+
+    const seed = buildReproductionSeed(serialized, CORRELATION_ID, new Date(T1));
+
+    expect(seed?.stackFrames).toEqual(frames);
+    expect(seed?.causeChain).toEqual(causes);
+  });
+
+  it("drops the operation from every timeline when an emitter writes no correlationId at all", () => {
+    // The sanctioned fallback is `UNKNOWN_CORRELATION_ID`, never an absent field: an emitter that
+    // omits the id entirely loses its own timeline, and this pin makes that cost visible instead of
+    // letting a future emitter discover it in production. The line is still ACCOUNTED for — it is
+    // neither malformed nor silently discarded — so a cluster read still surfaces the op.
+    const serialized = serializedActivityLog("keiko-support-no-correlation-", (sink) => {
+      sink.write({
+        level: "warn",
+        category: productionLogCategory(WATCH_AUTHORITY_REVOKED),
+        op: WATCH_AUTHORITY_REVOKED,
+        errorKind: "WATCH_AUTHORITY_REVOKED",
+        extra: { decision: "revoked", rootToken: "b".repeat(24) },
+      });
+    });
+
+    const result = analyzeLogText(serialized);
+
+    expect(result.timelines).toEqual([]);
+    expect(result.malformedLineCount).toBe(0);
+    expect(result.clusters.map((cluster) => cluster.op)).toEqual([WATCH_AUTHORITY_REVOKED]);
+  });
+
+  it("fails closed when an op this contract covers is no longer emitted anywhere in production", () => {
+    // The catalog is generated from the real `op:` call sites, so a rename or a deletion moves this
+    // file's inputs rather than leaving it asserting against an op the product stopped emitting.
+    for (const op of [WORKSPACE_ROOT_DENIED, WATCH_AUTHORITY_REVOKED]) {
+      expect(productionLogCategory(op)).toBe("security");
+    }
+    expect(() => productionLogCategory("workspace.root.denied.removed")).toThrow(
+      /registers no production emitter/,
+    );
   });
 });
 

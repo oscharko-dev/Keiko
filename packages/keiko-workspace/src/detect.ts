@@ -179,18 +179,52 @@ function admitAncestorRoot(root: string, startDir: string, fs: WorkspaceFs): str
   }
 }
 
-function findRoot(startDir: string, fs: WorkspaceFs): string {
+// The canonical root the walk admitted, paired with the lexical path that names it for the caller.
+interface DetectedRoot {
+  readonly root: string;
+  readonly selectedRoot: string;
+}
+
+// Carry the caller's lexical naming of the root up the walk alongside the canonical one, one
+// dirname step at a time, and keep it only while it still resolves to the canonical directory the
+// walk is standing on. An intermediate symlink can change a tree's depth, so counting levels
+// afterwards would invent an alias that names a different directory; verifying each step instead
+// makes `selectedRoot` either a proven alias of `root` or nothing. `undefined` means "no verified
+// lexical identity" and the caller falls back to the canonical root — the walk itself, and every
+// filesystem effect bound to it, is unaffected either way.
+function lexicalParentAliasOf(
+  lexical: string,
+  canonicalParent: string,
+  fs: WorkspaceFs,
+): string | undefined {
+  const candidate = dirname(lexical);
+  if (candidate === lexical) return undefined;
+  try {
+    return resolveExistingAllowedWorkspaceRealRoot(fs, candidate) === canonicalParent
+      ? candidate
+      : undefined;
+  } catch {
+    // A denied or unresolvable alias is not an authorization decision here — the canonical walk
+    // already made that one. Drop the lexical identity and keep going.
+    return undefined;
+  }
+}
+
+function findRoot(startDir: string, fs: WorkspaceFs): DetectedRoot {
   let current = admitDetectionRoot(startDir, fs);
+  let lexical: string | undefined = resolve(startDir);
   // Bounded by the filesystem: dirname() reaches a fixed point at the volume root.
   for (;;) {
     if (isRoot(current, workspaceFsBoundToCanonicalRoot(fs, current))) {
-      return current;
+      return { root: current, selectedRoot: lexical ?? current };
     }
     const parent = dirname(current);
     if (parent === current) {
       throw workspaceMarkerNotFound(startDir);
     }
-    current = admitAncestorRoot(parent, startDir, fs);
+    const admittedParent = admitAncestorRoot(parent, startDir, fs);
+    lexical = lexical === undefined ? undefined : lexicalParentAliasOf(lexical, admittedParent, fs);
+    current = admittedParent;
   }
 }
 
@@ -305,6 +339,8 @@ function discoveryWorkspace(
 ): WorkspaceInfo {
   return {
     root,
+    // The bounded language scan is a filesystem effect, so it runs against the canonical root only.
+    selectedRoot: root,
     name: meta.name,
     version: meta.version,
     testFramework: meta.testFramework,
@@ -362,10 +398,11 @@ function detectedLanguagesOrDefault(
 }
 
 function inspectCanonicalWorkspace(
-  root: string,
+  detected: DetectedRoot,
   fs: WorkspaceFs,
   scanSourceFiles: boolean,
 ): WorkspaceInfo {
+  const root = detected.root;
   assertCanonicalWorkspaceRootIdentity(fs, root);
   const meta = readPackageMeta(root, fs);
   const sourceDirs = detectDirs(root, fs, ["src"]);
@@ -373,6 +410,7 @@ function inspectCanonicalWorkspace(
   const ignoreLines = readIgnoreLines(root, fs);
   return {
     root,
+    selectedRoot: detected.selectedRoot,
     name: meta.name,
     version: meta.version,
     testFramework: meta.testFramework,
@@ -385,7 +423,9 @@ function inspectCanonicalWorkspace(
 
 // Build workspace metadata treating `root` as THE workspace root — no walk-up. The
 // connected-context feature uses this for a folder the user explicitly connected (Files-window
-// scope): that existing folder IS the root even without a `.git`/ecosystem marker.
+// scope): that existing folder IS the root even without a `.git`/ecosystem marker. There is no
+// walk, so the caller's own argument is the selected identity: admission already proved it resolves
+// to the canonical root that every filesystem effect below binds to.
 export function detectWorkspaceAt(
   root: string,
   fs: WorkspaceFs = nodeWorkspaceFs,
@@ -393,7 +433,7 @@ export function detectWorkspaceAt(
 ): WorkspaceInfo {
   const canonicalRoot = admitDetectionRoot(root, fs);
   return inspectCanonicalWorkspace(
-    canonicalRoot,
+    { root: canonicalRoot, selectedRoot: resolve(root) },
     workspaceFsBoundToCanonicalRoot(fs, canonicalRoot),
     options.scanSourceFilesForLanguages !== false,
   );
@@ -405,10 +445,10 @@ export function detectWorkspace(
   startDir: string,
   fs: WorkspaceFs = nodeWorkspaceFs,
 ): WorkspaceInfo {
-  const canonicalRoot = findRoot(startDir, fs);
+  const detected = findRoot(startDir, fs);
   return inspectCanonicalWorkspace(
-    canonicalRoot,
-    workspaceFsBoundToCanonicalRoot(fs, canonicalRoot),
+    detected,
+    workspaceFsBoundToCanonicalRoot(fs, detected.root),
     true,
   );
 }

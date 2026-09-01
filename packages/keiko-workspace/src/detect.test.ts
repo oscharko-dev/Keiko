@@ -111,7 +111,62 @@ describe("detectWorkspace", () => {
     writePkg(dir, { name: "demo" });
     const nested = join(dir, "src", "deep");
     mkdirSync(nested, { recursive: true });
-    expect(detectWorkspace(nested).root).toBe(dir);
+    const info = detectWorkspace(nested);
+    expect(info.root).toBe(dir);
+    // No alias in play, so both identities name the same path.
+    expect(info.selectedRoot).toBe(dir);
+  });
+
+  // Reporting only the canonical root loses the name the caller knows the project by. Every
+  // authorization comparison against a registered path and every root the UI displays is lexical,
+  // so a project reached through a symlinked ancestor — the ordinary case on macOS, where `/var`
+  // and `/tmp` resolve under `/private` — was answered as an unregistered directory.
+  function aliasedWalkFs(aliasRoot: string, realRoot: string, relativeTarget: string): WorkspaceFs {
+    const base = memFs(realRoot, {
+      "package.json": JSON.stringify({ name: "aliased-demo" }),
+      "src/deep/file.ts": "export {};",
+    });
+    return {
+      ...base,
+      realPath: (path): string =>
+        path.startsWith(aliasRoot)
+          ? join(realRoot, relativeTarget, path.slice(aliasRoot.length))
+          : path,
+      readFileUtf8SameDescriptor: (
+        path,
+      ): { rawText: string; sizeBytes: number; stat: WorkspaceStat } => {
+        const stat = base.stat(path);
+        return { rawText: base.readFileUtf8(path), sizeBytes: stat.size, stat };
+      },
+    };
+  }
+
+  it("keeps the caller's lexical root alongside the canonical one it binds effects to", () => {
+    const realRoot = join(dir, "aliased-real");
+    const aliasRoot = join(dir, "aliased-link");
+    const fs = aliasedWalkFs(aliasRoot, realRoot, ".");
+
+    const info = detectWorkspace(join(aliasRoot, "src", "deep"), fs);
+
+    expect(info.root).toBe(realRoot);
+    expect(info.selectedRoot).toBe(aliasRoot);
+    expect(info.name).toBe("aliased-demo");
+  });
+
+  // The lexical identity is derived by verifying each dirname step against the canonical directory
+  // the walk stands on, never by counting how many levels the walk climbed. An intermediate symlink
+  // changes a tree's depth, so a level count would name `dir` here — a directory that is not the
+  // workspace root at all. Failing to verify must yield the canonical root, never a guess.
+  it("drops the lexical identity when the alias chain cannot be verified step by step", () => {
+    const realRoot = join(dir, "shifted-real");
+    const aliasRoot = join(dir, "shifted-link");
+    const fs = aliasedWalkFs(aliasRoot, realRoot, "src");
+
+    const info = detectWorkspace(join(aliasRoot, "deep"), fs);
+
+    expect(info.root).toBe(realRoot);
+    expect(info.selectedRoot).toBe(realRoot);
+    expect(info.selectedRoot).not.toBe(dir);
   });
 
   it("walks only on the admitted canonical lineage", () => {
@@ -549,6 +604,9 @@ describe("detectWorkspaceAt", () => {
     const info = detectWorkspaceAt(selected, fs);
 
     expect(info.root).toBe(realRoot);
+    // There is no walk here, so the caller's own argument IS the selected identity — admission has
+    // already proven it resolves to the canonical root the inspection below binds to.
+    expect(info.selectedRoot).toBe(selected);
     expect(info.name).toBe("canonical-selection");
   });
 

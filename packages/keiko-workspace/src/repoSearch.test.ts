@@ -39,6 +39,7 @@ function memScope(
 ): { scope: SearchScope; fs: ReturnType<typeof memFs> } {
   const workspace: WorkspaceInfo = {
     root: MEM_ROOT,
+    selectedRoot: MEM_ROOT,
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",
@@ -970,6 +971,7 @@ describe("searchText (memFs)", () => {
       {
         workspace: {
           root: MEM_ROOT,
+          selectedRoot: MEM_ROOT,
           name: "demo",
           version: "1.0.0",
           testFramework: "vitest",
@@ -1046,6 +1048,7 @@ describe("searchText (memFs)", () => {
       {
         workspace: {
           root: MEM_ROOT,
+          selectedRoot: MEM_ROOT,
           name: "demo",
           version: "1.0.0",
           testFramework: "vitest",
@@ -1612,6 +1615,7 @@ describe("findFiles (memFs)", () => {
       {
         workspace: {
           root: MEM_ROOT,
+          selectedRoot: MEM_ROOT,
           name: "demo",
           version: "1.0.0",
           testFramework: "vitest",
@@ -1645,6 +1649,7 @@ describe("findFiles (memFs)", () => {
       {
         workspace: {
           root: MEM_ROOT,
+          selectedRoot: MEM_ROOT,
           name: "demo",
           version: "1.0.0",
           testFramework: "unknown",
@@ -2242,6 +2247,7 @@ describe("Copilot finding fixes (memFs)", () => {
       {
         workspace: {
           root: MEM_ROOT,
+          selectedRoot: MEM_ROOT,
           name: "demo",
           version: "1.0.0",
           testFramework: "vitest",
@@ -2315,6 +2321,7 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     scope = {
       workspace: {
         root: tmp,
+        selectedRoot: tmp,
         name: "demo",
         version: "1.0.0",
         testFramework: "vitest",

@@ -50,6 +50,7 @@ const FILES: Readonly<Record<string, string>> = {
 function scope(relativePaths: readonly string[] = []): SearchScope {
   const workspace: WorkspaceInfo = {
     root: ROOT,
+    selectedRoot: ROOT,
     name: "request-context-fixture",
     version: "1.0.0",
     testFramework: "vitest",

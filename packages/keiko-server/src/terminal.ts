@@ -16,7 +16,14 @@
 //   • Directory picker preserved from the previous PTY module, anchored at the project root.
 
 import { randomUUID } from "node:crypto";
-import { dirname, isAbsolute, join, parse as parsePath, resolve as resolvePath } from "node:path";
+import {
+  dirname,
+  isAbsolute,
+  join,
+  parse as parsePath,
+  relative,
+  resolve as resolvePath,
+} from "node:path";
 import {
   CommandCancelledError,
   CommandDeniedError,
@@ -35,6 +42,7 @@ import {
   PathDeniedError,
   PathEscapeError,
   isDenied,
+  type WorkspaceDirEntry,
   type WorkspaceFs,
   containedRealPathInfo,
   type WorkspaceInfo,
@@ -54,8 +62,14 @@ import {
 } from "./diagnostics-log.js";
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
 import type { ServerLogSink } from "./observability/server-log.js";
-import { resolveRecordedWorkspaceRoot } from "./workspace-root-denial-log.js";
-import type { WorkspaceRootAccess } from "./task-workspace/workspace-root-access.js";
+import {
+  recordWorkspaceRootDenial,
+  resolveRecordedWorkspaceRoot,
+} from "./workspace-root-denial-log.js";
+import type {
+  WorkspaceRootAccess,
+  WorkspaceRootAccessOutcome,
+} from "./task-workspace/workspace-root-access.js";
 
 const MAX_CONCURRENT_EXECUTIONS = 8;
 const MIN_TIMEOUT_MS = 1_000;
@@ -173,8 +187,11 @@ export interface TerminalExecutionManagerOptions {
   readonly activityLog?: ServerLogSink | undefined;
   readonly runDeps?: Partial<RunCommandDeps> | undefined;
   readonly now?: (() => number) | undefined;
+  // Returns the TYPED outcome, not `WorkspaceRootAccess | undefined`: this manager is the surface
+  // that maps a resolution failure onto an HTTP status, so a resolver that collapses a denied root
+  // and a missing one into the same value makes every failure here report CWD_DENIED (#3347).
   readonly resolveWorkspaceRootAccess?:
-    ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
+    ((requestedRoot: string, correlationId?: string) => WorkspaceRootAccessOutcome) | undefined;
 }
 
 function defaultRedactor(input: string): string {
@@ -711,7 +728,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
   private readonly runDeps: Partial<RunCommandDeps>;
   private readonly now: () => number;
   private readonly rootAccessResolver:
-    ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
+    ((requestedRoot: string, correlationId?: string) => WorkspaceRootAccessOutcome) | undefined;
   private readonly executions = new Map<string, InFlightExecution>();
   private readonly subscribers = new Set<TerminalEventEmitter>();
 
@@ -754,9 +771,18 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
       throw new TerminalToolError("PROJECT_NOT_FOUND", "Project not found.");
     }
     if (this.rootAccessResolver !== undefined) {
-      const access = this.rootAccessResolver(project.path);
-      if (access !== undefined) return access;
-      throw new TerminalToolError("CWD_DENIED", "Working directory is denied by policy.");
+      // The injected resolver carries the DECISION out, so this surface answers a policy refusal
+      // 403 CWD_DENIED and a missing/unreadable root 404 PROJECT_NOT_FOUND — the same split
+      // projectRootOrThrow applies on the fallback path below. Before #3347 the resolver collapsed
+      // both to `undefined` here, so every production failure reported CWD_DENIED and the
+      // not-found branch was dead. The correlation id is threaded so the resolver's own
+      // workspace.root.denied line joins the request that caused it.
+      const outcome = this.rootAccessResolver(project.path, correlationId);
+      if (outcome.decision === "granted") return outcome.access;
+      if (outcome.decision === "denied") {
+        throw new TerminalToolError("CWD_DENIED", "Working directory is denied by policy.");
+      }
+      throw new TerminalToolError("PROJECT_NOT_FOUND", "Project root path could not be resolved.");
     }
     const fs = this.runDeps.fs ?? nodeWorkspaceFs;
     const canonicalRoot = projectRootOrThrow(project, fs, this.activityLog, correlationId);
@@ -814,6 +840,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
   private buildRunDepsFor(access: WorkspaceRootAccess): RunCommandDeps {
     const workspace: WorkspaceInfo = {
       root: access.canonicalRoot,
+      selectedRoot: access.canonicalRoot,
       name: undefined,
       version: undefined,
       testFramework: "unknown",
@@ -1125,6 +1152,53 @@ function normalizeClientPath(pathInput: string | undefined, projectRoot: string)
   return isAbsolute(raw) ? raw : resolvePath(projectRoot, raw);
 }
 
+// The root-relative form the deny vocabulary expects, or undefined when `candidate` is not
+// lexically inside `root` (containment itself is decided by resolveDirectory, never here). Pure —
+// resolveWithinWorkspace performs no filesystem access — so a denied target can be refused before
+// any read happens.
+function projectRelativePath(root: string, candidate: string): string | undefined {
+  if (!isWithinWorkspace(root, candidate)) return undefined;
+  const rel = relative(root, candidate);
+  return process.platform === "win32" ? rel.replaceAll("\\", "/") : rel;
+}
+
+// ADR-0016 — the picker is a read surface, so the always-on deny vocabulary (`isDenied`, the same
+// one assertCwdInsideProject and the files tree already use) applies to it too. Before #3347 the
+// picker's checks were containment-only: a root listing offered `node_modules`, `.git`, `.keiko`,
+// `.aws` and `.ssh`, and navigating straight into one returned its contents. A denied target is
+// refused BEFORE any filesystem read; denied children never enter a listing.
+function assertPickerTargetAllowed(
+  projectRoot: string,
+  candidate: string,
+  correlationId: string | undefined,
+): void {
+  const relativePath = projectRelativePath(projectRoot, candidate);
+  if (relativePath === undefined || !isDenied(relativePath)) return;
+  // Reported through the existing denial recorder rather than a second logging shape: the typed
+  // PathDeniedError is what that vocabulary classifies on, and neither its message nor its
+  // requestedPath reaches the emitted line (counts, codes and frames only — ADR-0173 D4).
+  recordWorkspaceRootDenial(
+    new PathDeniedError("terminal directory picker target is denied by policy", candidate),
+    { correlationId },
+  );
+  throw new TerminalToolError("CWD_DENIED", "Working directory is denied by policy.");
+}
+
+function allowedChildDirectories(
+  projectRoot: string,
+  pathValue: string,
+  entries: readonly WorkspaceDirEntry[],
+): readonly TerminalDirectoryEntry[] {
+  return entries
+    .filter((entry) => entry.isDirectory)
+    .map((entry) => ({ name: entry.name, path: join(pathValue, entry.name) }))
+    .filter((entry) => {
+      const relativePath = projectRelativePath(projectRoot, entry.path);
+      return relativePath !== undefined && !isDenied(relativePath);
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 function resolveDirectory(candidate: string, projectRoot: string, fs: WorkspaceFs): string {
   let resolved: string;
   try {
@@ -1164,12 +1238,14 @@ export function listDirectories(
     projectRootOrThrow(project, nodeWorkspaceFs, processServerLogSink(), correlationId);
   const fs = access?.fs ?? nodeWorkspaceFs;
   const lexical = normalizeClientPath(pathInput, projectRoot);
+  // Twice on purpose: once lexically, so a denied target costs no filesystem read at all, and once
+  // on the realpath, so a benign-looking symlink that resolves into a denied directory is refused
+  // with the same code rather than enumerated (the Tier-2 pattern resolveDirectory already applies
+  // to containment).
+  assertPickerTargetAllowed(projectRoot, lexical, correlationId);
   const pathValue = resolveDirectory(lexical, projectRoot, fs);
-  const entries = fs.readDir(pathValue);
-  const dirs = entries
-    .filter((entry) => entry.isDirectory)
-    .map((entry) => ({ name: entry.name, path: join(pathValue, entry.name) }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+  assertPickerTargetAllowed(projectRoot, pathValue, correlationId);
+  const dirs = allowedChildDirectories(projectRoot, pathValue, fs.readDir(pathValue));
   // A3 — roots contains only the project root. Home and FS-root are no longer exposed because
   // they could be outside the project boundary. The UI cwd picker shows only project-scoped paths.
   const roots: readonly TerminalDirectoryRoot[] = [{ label: "Project root", path: projectRoot }];

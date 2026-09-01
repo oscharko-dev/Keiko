@@ -84,6 +84,7 @@ function configuration(): ManagedLspRustConfiguration {
 function workspace(): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework: "unknown",

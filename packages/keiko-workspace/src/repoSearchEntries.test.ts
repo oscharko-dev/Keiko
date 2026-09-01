@@ -6,6 +6,7 @@ import type { WorkspaceInfo } from "./types.js";
 function fakeWorkspace(root: string): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: "x",
     version: undefined,
     testFramework: "unknown",

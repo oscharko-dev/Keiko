@@ -19,7 +19,8 @@ import { createRunRegistry } from "../../runs.js";
 import { createUiServer, UI_HOST } from "../../server.js";
 import {
   createOrdinaryWorkspaceRootAccess,
-  type WorkspaceRootAccess,
+  grantedWorkspaceRootAccess,
+  type WorkspaceRootAccessOutcome,
 } from "../../task-workspace/workspace-root-access.js";
 import {
   createWorkspaceWatchService,
@@ -203,8 +204,10 @@ function buildRevocableDeps(root: string): {
     modelPortFactory: () => undefined,
     store,
     workspaceWatchService: service,
-    workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccess | undefined =>
-      revoked ? undefined : createOrdinaryWorkspaceRootAccess(requestedRoot),
+    workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+      revoked
+        ? { decision: "denied" }
+        : grantedWorkspaceRootAccess(createOrdinaryWorkspaceRootAccess(requestedRoot)),
   };
   return {
     deps,
@@ -265,6 +268,41 @@ describe("workspace watch authority revocation logging (#3347)", () => {
     } finally {
       await closeServer(built.server);
       await rm(revocableRoot, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  // #3347 review (oscharko, P2): when the very FIRST reproof denies, subscribe() fails before the
+  // subscriber is added, so revokeRoot() has nobody to invoke `onAuthorityRevoked` on. The 403 used
+  // to return with zero revocation callbacks and zero activity-log evidence — the same security
+  // denial as the mid-stream case above, invisible in the log.
+  it("records the catalogued op when the very first reproof denies the subscription", async () => {
+    const deniedRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-watch-denied-root-")));
+    const sink: BufferedServerLogSink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const { deps, revoke } = buildRevocableDeps(deniedRoot);
+    revoke();
+    const built = await buildServer(deps);
+    try {
+      const response = await fetch(
+        `http://${UI_HOST}:${String(built.port)}/api/editor/workspace-watch/events?root=${encodeURIComponent(
+          deniedRoot,
+        )}`,
+      );
+      const correlationId = response.headers.get("x-keiko-correlation-id");
+      expect(response.status).toBe(403);
+      await response.text();
+
+      const deniedEvent = sink.events.find(
+        (event) => event.op === "editor.workspace-watch.authority-revoked",
+      );
+      expect(deniedEvent).toBeDefined();
+      expect(deniedEvent?.category).toBe("security");
+      expect(deniedEvent?.correlationId).toBe(correlationId);
+      expect(deniedEvent?.errorKind).toBe("WATCH_AUTHORITY_REVOKED");
+      expect(JSON.stringify(deniedEvent)).not.toContain(deniedRoot);
+    } finally {
+      await closeServer(built.server);
+      await rm(deniedRoot, { recursive: true, force: true });
     }
   }, 30_000);
 });

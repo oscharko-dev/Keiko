@@ -56,7 +56,14 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { FilesError, readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
+import {
+  FilesError,
+  readJsonObject,
+  requestRootAccessResolver,
+  resolveRequestRoot,
+  runFilesHandler,
+} from "../files.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import { DENIED_MESSAGE, pathIsDenied } from "../files-deny.js";
 import { clientAbortSignal } from "./languageRoutes.js";
 
@@ -667,11 +674,29 @@ function validateReplacePatchPreflight(
   }
 }
 
+// The read, the edit re-application and the keiko-tools preflight above all run on the capability
+// proved once at admission; the write below is the only step that leaves authorized memory, and the
+// preflight is a real window in which authority can be revoked or the root identity replaced. So the
+// writer is constructed from a capability re-proved immediately before it, and the path it is handed
+// comes from THAT proof rather than the admission-time scope — never a bare contained Node writer
+// over a root string that a mid-request revocation has already invalidated (#3347).
+function writeReplacedFile(
+  resolveAccess: () => WorkspaceRootAccess | undefined,
+  file: WorkspaceReplaceApplyFile,
+  next: string,
+): void {
+  const access = resolveAccess();
+  if (access === undefined) throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  const writer = createContainedNodeWorkspaceWriter(access.canonicalRoot);
+  writer.writeFileUtf8(join(access.canonicalRoot, file.path), next);
+}
+
 function applyReplaceFile(
   scope: SearchScope,
   fs: WorkspaceFs,
   file: WorkspaceReplaceApplyFile,
   signal: AbortSignal,
+  resolveAccess: () => WorkspaceRootAccess | undefined,
 ): WorkspaceReplaceApplyConflict | null {
   const content = readWorkspaceFileForEditing(scope.workspace, file.path, EDITOR_READ_OPTIONS, fs);
   if (contentHash(content.rawText) !== file.baseContentHash) {
@@ -688,8 +713,7 @@ function applyReplaceFile(
     signal,
   );
   if (patchConflict !== null) return patchConflict;
-  const writer = createContainedNodeWorkspaceWriter(scope.workspace.root);
-  writer.writeFileUtf8(join(scope.workspace.root, file.path), next);
+  writeReplacedFile(resolveAccess, file, next);
   return null;
 }
 
@@ -698,15 +722,20 @@ function buildReplaceApplyResponse(
   fs: WorkspaceFs,
   request: WorkspaceReplaceApplyRequest,
   signal: AbortSignal,
+  resolveAccess: () => WorkspaceRootAccess | undefined,
 ): WorkspaceReplaceApplyResponse {
   let appliedCount = 0;
   const conflicts: WorkspaceReplaceApplyConflict[] = [];
   for (const file of request.files) {
     try {
-      const conflict = applyReplaceFile(scope, fs, file, signal);
+      const conflict = applyReplaceFile(scope, fs, file, signal, resolveAccess);
       if (conflict === null) appliedCount += 1;
       else conflicts.push(conflict);
     } catch (error) {
+      // A revoked root is NOT one file's write conflict: it is the whole request losing the
+      // authority it was admitted under, so it must reach runFilesHandler as a 403 instead of being
+      // downgraded into a per-file `out-of-scope` entry under a 200.
+      if (error instanceof FilesError) throw error;
       conflicts.push({
         path: file.path,
         reason: "out-of-scope",
@@ -845,10 +874,17 @@ export async function handleEditorWorkspaceReplaceApply(
   return runFilesHandler(async () => {
     const root = await resolveRequestRoot(ctx, deps, request.root);
     const { canonicalRoot, fs } = root.access;
+    const resolveAccess = requestRootAccessResolver(ctx, deps, root);
     try {
       assertAllowedApplyFiles(request);
       const scope = buildSearchScope(canonicalRoot, fs);
-      const response = buildReplaceApplyResponse(scope, fs, request, clientAbortSignal(ctx));
+      const response = buildReplaceApplyResponse(
+        scope,
+        fs,
+        request,
+        clientAbortSignal(ctx),
+        resolveAccess,
+      );
       return { status: 200, body: deps.redactor(response) };
     } catch (error) {
       const routeError = searchRouteErrorResult(error);

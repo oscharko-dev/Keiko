@@ -31,6 +31,7 @@ function git(args: readonly string[]): string {
 function workspaceInfo(rootPath: string): WorkspaceInfo {
   return {
     root: rootPath,
+    selectedRoot: rootPath,
     name: "demo",
     version: undefined,
     testFramework: "vitest",

@@ -16,6 +16,7 @@ const ROOT = "/workspace";
 
 const BASE_WORKSPACE: WorkspaceInfo = {
   root: ROOT,
+  selectedRoot: ROOT,
   name: "fixture",
   version: undefined,
   testFramework: "vitest",

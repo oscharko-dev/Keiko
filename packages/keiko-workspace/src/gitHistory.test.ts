@@ -29,6 +29,7 @@ function makeScope(files: Readonly<Record<string, string>>): {
 } {
   const workspace: WorkspaceInfo = {
     root: MEM_ROOT,
+    selectedRoot: MEM_ROOT,
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",
@@ -56,6 +57,7 @@ const tempDirs: string[] = [];
 function realScope(root: string, scopeId: string): SearchScope {
   const workspace: WorkspaceInfo = {
     root,
+    selectedRoot: root,
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",
@@ -478,6 +480,7 @@ describe("gitHistoryAdapter — worktree pointer support (Finding 7)", () => {
     writeFileSync(join(victim, "logs", "HEAD"), SAMPLE_REFLOG, "utf8");
     const workspace: WorkspaceInfo = {
       root: workspaceRoot,
+      selectedRoot: workspaceRoot,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",

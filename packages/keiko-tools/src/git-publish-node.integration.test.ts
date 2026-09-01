@@ -47,6 +47,7 @@ function configure(repo: string): void {
 function workspaceInfo(rootPath: string): WorkspaceInfo {
   return {
     root: rootPath,
+    selectedRoot: rootPath,
     name: "demo",
     version: undefined,
     testFramework: "vitest",

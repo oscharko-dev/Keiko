@@ -394,6 +394,7 @@ function fixtureInput(root: string): OrchestratorInput {
 function fixtureWorkspace(root: string): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: "denied-root-fixture",
     version: "0.0.0",
     testFramework: "vitest",

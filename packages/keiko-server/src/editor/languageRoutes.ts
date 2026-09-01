@@ -279,6 +279,7 @@ function workspaceForRoot(
 ): Parameters<typeof detectHostLanguageProviderDescriptors>[0]["workspace"] {
   return {
     root: realRoot,
+    selectedRoot: realRoot,
     name: undefined,
     version: undefined,
     testFramework: "unknown",

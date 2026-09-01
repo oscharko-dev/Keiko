@@ -126,9 +126,12 @@ import {
 } from "./editor/verificationRunner.js";
 import {
   createOrdinaryWorkspaceRootAccess,
+  grantedWorkspaceRootAccess,
   requiresConfiguredManagedWorkspaceAuthority,
   resolveManagedWorkspaceRootAccess,
+  workspaceRootAccessOrUndefined,
   type WorkspaceRootAccess,
+  type WorkspaceRootAccessOutcome,
 } from "./task-workspace/workspace-root-access.js";
 import {
   createWorkspaceScriptTrustService,
@@ -817,10 +820,12 @@ export interface UiHandlerDeps {
   // The Keiko-owned managed worktree root that backs workspaceProvisioning. Routes that accept a
   // task-bound activeRoot as their execution root use this to re-prove containment before authorizing.
   readonly managedTaskWorkspaceRoot?: string | undefined;
-  // Re-proves exact ordinary or managed workspace authority at an operation's effect boundary. The
-  // optional correlationId lets a caller that has one in scope thread it into the body-free
-  // workspace.root.denied activity-log line a resolution failure emits (#3347); callers that omit
-  // it still compile and still get the event, logged under UNKNOWN_CORRELATION_ID.
+  // Re-proves exact ordinary or managed workspace authority at an operation's effect boundary, and
+  // returns the TYPED outcome so a caller that maps a failure onto an HTTP status can tell a policy
+  // refusal from a root that is merely missing or unreadable (#3347). The optional correlationId
+  // lets a caller that has one in scope thread it into the body-free workspace.root.denied
+  // activity-log line a denial emits; callers that omit it still compile and still get the event,
+  // logged under UNKNOWN_CORRELATION_ID.
   readonly workspaceRootAccessResolver?: WorkspaceRootAccessResolver | undefined;
   // Issue #446 (Epic #443, ADR-0090) — active task-workspace binding + lifecycle service. Owns the
   // singleton active pointer and the switch/pause/resume/handoff actions surfaces consume. Optional so
@@ -1631,6 +1636,19 @@ function buildTerminalManager(options: {
   });
 }
 
+// Adapter for the managers whose own error vocabulary has exactly ONE answer for both refusal
+// decisions — the command runner and the verification runner each map any resolution failure onto
+// PROJECT_NOT_FOUND and have no denied-specific code to reach, and the coding runtime only ever
+// asks whether a managed root re-proved. The collapse is stated HERE, at the injection point that
+// owns it, instead of inside the resolver: the surface that can tell the two decisions apart (the
+// terminal manager, which answers 403 vs 404) consumes the undiluted outcome (#3347).
+function collapsedWorkspaceRootAccessResolver(
+  resolveAccess: WorkspaceRootAccessResolver,
+): (requestedRoot: string) => WorkspaceRootAccess | undefined {
+  return (requestedRoot): WorkspaceRootAccess | undefined =>
+    workspaceRootAccessOrUndefined(resolveAccess(requestedRoot));
+}
+
 // Issue #1387 — the command runner reuses the same store + evidence + live-redactor wiring as the
 // terminal manager so discovered test/build/run tasks inherit the identical workspace containment,
 // secret-shape scrubbing, and content-free audit trail.
@@ -1648,7 +1666,9 @@ function buildCommandRunner(options: {
     evidenceStore: options.evidenceStore,
     processEnv: options.env,
     diagnostics: options.diagnostics,
-    resolveWorkspaceRootAccess: options.resolveWorkspaceRootAccess,
+    resolveWorkspaceRootAccess: collapsedWorkspaceRootAccessResolver(
+      options.resolveWorkspaceRootAccess,
+    ),
     isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
       options.workspaceScriptTrust.isTrusted(projectId, workspace),
     redactor: (value: string): string => {
@@ -1677,7 +1697,9 @@ function buildVerificationRunner(options: {
     store: options.store,
     evidenceStore: options.evidenceStore,
     diagnostics: options.diagnostics,
-    resolveWorkspaceRootAccess: options.resolveWorkspaceRootAccess,
+    resolveWorkspaceRootAccess: collapsedWorkspaceRootAccessResolver(
+      options.resolveWorkspaceRootAccess,
+    ),
     isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
       options.workspaceScriptTrust.isTrusted(projectId, workspace),
     redactor: (value: string): string => {
@@ -3081,31 +3103,36 @@ interface PersistenceBundle {
 type WorkspaceRootAccessResolver = (
   requestedRoot: string,
   correlationId?: string,
-) => WorkspaceRootAccess | undefined;
+) => WorkspaceRootAccessOutcome;
 
 function createWorkspaceRootAccessResolver(
   bundle: Pick<PersistenceBundle, "managedTaskWorkspaceRoot" | "workspaceProvisioning">,
 ): WorkspaceRootAccessResolver {
-  return (requestedRoot, correlationId): WorkspaceRootAccess | undefined => {
+  return (requestedRoot, correlationId): WorkspaceRootAccessOutcome => {
     const logging = { activityLog: processServerLogSink(), correlationId };
     const managed = resolveManagedWorkspaceRootAccess(bundle, requestedRoot, logging);
-    if (managed !== undefined) return managed;
-    if (requiresConfiguredManagedWorkspaceAuthority(bundle, requestedRoot)) return undefined;
+    if (managed !== undefined) return grantedWorkspaceRootAccess(managed);
+    // A root the configured managed authority owns but could not re-prove is a policy refusal, not
+    // a missing directory: fail closed with "denied" so no caller can answer it 404.
+    if (requiresConfiguredManagedWorkspaceAuthority(bundle, requestedRoot)) {
+      return { decision: "denied" };
+    }
     try {
       const canonicalRoot = resolveExistingAllowedWorkspaceRealRoot(nodeWorkspaceFs, requestedRoot);
-      return createOrdinaryWorkspaceRootAccess(canonicalRoot);
+      return grantedWorkspaceRootAccess(createOrdinaryWorkspaceRootAccess(canonicalRoot));
     } catch (error) {
       // Distinguish a genuinely DENIED root (a security-relevant event that must reach the activity
       // log with correlation, via the same recordWorkspaceRootDenial path every other denial site
       // uses) from a MISSING or unreadable one, which is an ordinary outcome and must never be
-      // misreported as a denial (#3347 P1: "do not return a bare undefined for both"). Both still
-      // resolve to `undefined` here, because every current caller of this resolver shares one
-      // WorkspaceRootAccess-or-undefined contract — but the distinction that used to be lost
-      // entirely is now always evaluated and, for the denied case, always logged.
+      // misreported as a denial (#3347 P1). The split is the same one projectRootOrThrow already
+      // applies — PathDeniedError is a refusal, everything else is an unresolvable root — and it
+      // now travels out of this resolver in the RETURN TYPE, so a caller that maps the failure to
+      // an HTTP status can no longer report a missing root as denied.
       if (error instanceof PathDeniedError) {
         recordWorkspaceRootDenial(error, logging);
+        return { decision: "denied" };
       }
-      return undefined;
+      return { decision: "unresolved" };
     }
   };
 }
@@ -4013,6 +4040,7 @@ function buildCodingContextPortsDependency(
       : createGitHubCodeContextApiPort({
           workspace: {
             root: args.bundle.preferredProjectPath,
+            selectedRoot: args.bundle.preferredProjectPath,
             name: undefined,
             version: undefined,
             testFramework: "unknown",
@@ -4365,7 +4393,7 @@ function qualifiedRuntimeResolver(
     commandRunner: input.commandRunner,
     verificationRunner: input.verificationRunner,
     runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker,
-    resolveWorkspaceRootAccess,
+    resolveWorkspaceRootAccess: collapsedWorkspaceRootAccessResolver(resolveWorkspaceRootAccess),
     gatewayEgress: () => args.runtimeConfig.current()?.egress ?? args.egress,
     childModelPortFactory:
       args.options.modelPortFactory ?? defaultModelPortFactory(args.runtimeConfig),

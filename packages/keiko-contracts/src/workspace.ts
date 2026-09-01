@@ -33,8 +33,18 @@ export type WorkspaceLanguage = (typeof WORKSPACE_LANGUAGES)[number];
 
 export type TestFramework = "vitest" | "jest" | "mocha" | "unknown";
 
+// A detected workspace carries TWO identities for one directory, and they are not interchangeable.
+// `root` is the realpath-admitted canonical root: every filesystem effect (discovery, reads, patch
+// application, containment) binds to it, so a mutable alias can never present one target to policy
+// and another to IO. `selectedRoot` is the lexical path the caller actually selected or registered,
+// verified at detection time to resolve to `root`; it is the identity the UI displays and the value
+// an authorization comparison against a registered project path may be compared with. Collapsing
+// the two — reporting the canonical root where a registration is lexical — answered 403 for every
+// project reached through a symlinked ancestor (on macOS the `/var` -> `/private/var` alias makes
+// that the ordinary case). When no lexical alias can be verified, `selectedRoot` equals `root`.
 export interface WorkspaceInfo {
   readonly root: string;
+  readonly selectedRoot: string;
   readonly name: string | undefined;
   readonly version: string | undefined;
   readonly testFramework: TestFramework;

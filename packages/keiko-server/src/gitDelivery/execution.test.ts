@@ -76,6 +76,7 @@ function git(args: readonly string[]): string {
 function workspaceInfo(rootPath: string): WorkspaceInfo {
   return {
     root: rootPath,
+    selectedRoot: rootPath,
     name: undefined,
     version: undefined,
     testFramework: "unknown",

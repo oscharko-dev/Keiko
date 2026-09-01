@@ -32,6 +32,7 @@ const SOME_BYTES = new Uint8Array([1, 2, 3, 4]);
 function workspace(): WorkspaceInfo {
   return {
     root: WORKSPACE_ROOT,
+    selectedRoot: WORKSPACE_ROOT,
     name: "fixture",
     version: "0.0.0",
     testFramework: "vitest",

@@ -20,6 +20,7 @@ function makeScope(files: Readonly<Record<string, string>>): {
 } {
   const workspace: WorkspaceInfo = {
     root: MEM_ROOT,
+    selectedRoot: MEM_ROOT,
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",
@@ -171,6 +172,7 @@ describe("importGraphAdapter", () => {
     // query specifier must NOT produce atoms.
     const workspace: WorkspaceInfo = {
       root: MEM_ROOT,
+      selectedRoot: MEM_ROOT,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",
@@ -217,6 +219,7 @@ describe("importGraphAdapter (real fs symlink containment)", () => {
     symlinkSync(join(outside, "rogue.ts"), join(root, "src", "linked.ts"));
     const workspace: WorkspaceInfo = {
       root,
+      selectedRoot: root,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",
@@ -241,6 +244,7 @@ describe("importGraphAdapter (real fs symlink containment)", () => {
     linkSync(join(outside, "aliased.ts"), join(root, "src", "alias.ts"));
     const workspace: WorkspaceInfo = {
       root,
+      selectedRoot: root,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",
@@ -278,6 +282,7 @@ describe("importGraphAdapter (real fs symlink containment)", () => {
     symlinkSync(outside, join(root, "linked-dir"));
     const workspace: WorkspaceInfo = {
       root,
+      selectedRoot: root,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",

@@ -105,6 +105,7 @@ function fixtureInput(readBudgetBlocked = false): OrchestratorInput {
 function fixtureWorkspace(): WorkspaceInfo {
   return {
     root: FIXTURE_ROOT,
+    selectedRoot: FIXTURE_ROOT,
     name: "connected-context-log-fixture",
     version: "0.0.0",
     testFramework: "vitest",

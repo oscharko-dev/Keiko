@@ -77,6 +77,7 @@ afterEach(async () => {
 function workspace(): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework: "unknown" as const,

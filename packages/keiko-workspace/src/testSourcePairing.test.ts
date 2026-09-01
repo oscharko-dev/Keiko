@@ -20,6 +20,7 @@ function makeScope(files: Readonly<Record<string, string>>): {
 } {
   const workspace: WorkspaceInfo = {
     root: MEM_ROOT,
+    selectedRoot: MEM_ROOT,
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",
@@ -465,6 +466,7 @@ describe("testSourcePairingAdapter", () => {
     // lives outside the restricted scope. Only files discovered within src/ feed pathsForSymbol.
     const workspace: WorkspaceInfo = {
       root: MEM_ROOT,
+      selectedRoot: MEM_ROOT,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",
@@ -554,6 +556,7 @@ describe("testSourcePairingAdapter (real fs symlink containment)", () => {
   it("rejects escapes via a symlinked candidate directory", async () => {
     const workspace: WorkspaceInfo = {
       root,
+      selectedRoot: root,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",
@@ -585,6 +588,7 @@ describe("testSourcePairingAdapter (real fs symlink containment)", () => {
     writeFileSync(deniedTarget, "[credential]", "utf8");
     const workspace: WorkspaceInfo = {
       root,
+      selectedRoot: root,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",
@@ -624,6 +628,7 @@ describe("testSourcePairingAdapter (real fs symlink containment)", () => {
     writeFileSync(candidate, "test('foo', () => {});", "utf8");
     const workspace: WorkspaceInfo = {
       root,
+      selectedRoot: root,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",

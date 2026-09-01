@@ -62,6 +62,7 @@ describe("gopls provider fake-protocol conformance", () => {
       const outcome = await runHostLanguageOperation(request, {
         workspace: {
           root,
+          selectedRoot: root,
           name: undefined,
           version: undefined,
           testFramework: "unknown",
@@ -154,6 +155,7 @@ describe("gopls provider fake-protocol conformance", () => {
       {
         workspace: {
           root,
+          selectedRoot: root,
           name: undefined,
           version: undefined,
           testFramework: "unknown",

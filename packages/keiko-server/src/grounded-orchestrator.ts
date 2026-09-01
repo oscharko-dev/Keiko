@@ -1783,24 +1783,18 @@ function readBoundedWorkspaceManifest(
       recordMetadataCoverageIssue(cache, "workspace-manifest-byte-limit");
       return undefined;
     }
-    if (fs.readFileUtf8SameDescriptor !== undefined) {
-      const read = fs.readFileUtf8SameDescriptor(
-        absolutePath,
-        WORKSPACE_MANIFEST_BYTES_MAX,
-        "reject",
-        stat,
-      );
-      return isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, stat)
-        ? read.rawText
-        : undefined;
-    }
-    const rawText = fs.readFileUtf8(absolutePath);
-    if (!isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, stat)) return undefined;
-    if (utf8ByteLength(rawText) > WORKSPACE_MANIFEST_BYTES_MAX) {
-      recordMetadataCoverageIssue(cache, "workspace-manifest-byte-limit");
+    const boundedRead = fs.readFileUtf8SameDescriptor;
+    // ADR-0005 D1: a bounded lane, or no advisory metadata at all. Falling back to the unbounded
+    // `readFileUtf8` and checking the cap afterwards materializes the entire file first, so the cap
+    // stops bounding anything — the exact class this PR removed from the workspace read lanes.
+    if (boundedRead === undefined) {
+      recordMetadataCoverageIssue(cache, "workspace-manifest-read-unavailable");
       return undefined;
     }
-    return rawText;
+    const read = boundedRead(absolutePath, WORKSPACE_MANIFEST_BYTES_MAX, "reject", stat);
+    return isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, stat)
+      ? read.rawText
+      : undefined;
   } catch (error) {
     rethrowMetadataCancellation(error);
     recordMetadataCoverageIssue(
@@ -2454,23 +2448,15 @@ export function scanFirstSymbolLine(
 function boundedSymbolFileText(fs: WorkspaceFs, absolutePath: string): string | undefined {
   const stat = fs.stat(absolutePath);
   if (!stat.isFile || stat.size > SYMBOL_LINE_SCAN_BYTES_MAX) return undefined;
-  if (fs.readFileUtf8SameDescriptor !== undefined) {
-    const read = fs.readFileUtf8SameDescriptor(
-      absolutePath,
-      SYMBOL_LINE_SCAN_BYTES_MAX,
-      "reject",
-      stat,
-    );
-    return isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, stat)
-      ? read.rawText
-      : undefined;
-  }
-  // Compatibility for in-memory/test ports only. Production always supplies the same-descriptor
-  // reader; the pre-read stat keeps legacy fakes bounded without weakening the production path.
-  const rawText = fs.readFileUtf8(absolutePath);
-  return utf8ByteLength(rawText) <= SYMBOL_LINE_SCAN_BYTES_MAX &&
-    isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, stat)
-    ? rawText
+  const boundedRead = fs.readFileUtf8SameDescriptor;
+  // ADR-0005 D1: bounded primitive or nothing. A port without it yields no symbol-line evidence
+  // rather than an uncapped `readFileUtf8` whose size is only inspected once the whole file is
+  // already resident. A pre-read stat is not a bound: the file it describes can grow before the
+  // read, and the post-read length check has already paid the memory cost it was meant to refuse.
+  if (boundedRead === undefined) return undefined;
+  const read = boundedRead(absolutePath, SYMBOL_LINE_SCAN_BYTES_MAX, "reject", stat);
+  return isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, stat)
+    ? read.rawText
     : undefined;
 }
 
@@ -2712,35 +2698,6 @@ function pushUniqueAtom(atoms: EvidenceAtom[], seen: Set<string>, atom: Evidence
   atoms.push(atom);
 }
 
-function pushSymbolLineAtom(
-  input: OrchestratorInput,
-  searchScope: SearchScope,
-  fs: WorkspaceFs,
-  nowMs: () => number,
-  match: SymbolDefinitionMatch,
-  atoms: EvidenceAtom[],
-  seen: Set<string>,
-  control: SymbolLineScanControl,
-): boolean {
-  const { atom, term } = match;
-  const lookup = firstSymbolLine(searchScope, fs, atom.scopePath, term, control);
-  if (lookup.lineNumber === undefined) {
-    return lookup.deadlineReached;
-  }
-  pushUniqueAtom(
-    atoms,
-    seen,
-    symbolLineAtom(
-      input.scope,
-      atom.scopePath,
-      lookup.lineNumber,
-      atom.provenance.queryFingerprint,
-      nowMs,
-    ),
-  );
-  return false;
-}
-
 interface PrioritizedSymbolInputs {
   readonly input: OrchestratorInput;
   readonly searchScope: SearchScope;
@@ -2748,6 +2705,40 @@ interface PrioritizedSymbolInputs {
   readonly nowMs: () => number;
   readonly signal: AbortSignal | undefined;
   readonly deadlineAtMs: number;
+}
+
+// The per-match state the prioritized-symbol loop threads into one line lookup: the match itself,
+// the loop's shared accumulator, and the scan control derived once from the request-scoped inputs.
+// Kept apart from PrioritizedSymbolInputs so the request-scoped values stay one shared value.
+interface SymbolLineAtomTarget {
+  readonly match: SymbolDefinitionMatch;
+  readonly atoms: EvidenceAtom[];
+  readonly seen: Set<string>;
+  readonly control: SymbolLineScanControl;
+}
+
+function pushSymbolLineAtom(
+  inputs: PrioritizedSymbolInputs,
+  target: SymbolLineAtomTarget,
+): boolean {
+  const { match, atoms, seen, control } = target;
+  const { atom, term } = match;
+  const lookup = firstSymbolLine(inputs.searchScope, inputs.fs, atom.scopePath, term, control);
+  if (lookup.lineNumber === undefined) {
+    return lookup.deadlineReached;
+  }
+  pushUniqueAtom(
+    atoms,
+    seen,
+    symbolLineAtom(
+      inputs.input.scope,
+      atom.scopePath,
+      lookup.lineNumber,
+      atom.provenance.queryFingerprint,
+      inputs.nowMs,
+    ),
+  );
+  return false;
 }
 
 function collectPrioritizedSymbolAtoms(
@@ -2775,16 +2766,7 @@ function collectPrioritizedSymbolAtoms(
       overflowCount += 1;
     } else {
       remainingLineReads -= 1;
-      lineDeadlineReached = pushSymbolLineAtom(
-        inputs.input,
-        inputs.searchScope,
-        inputs.fs,
-        inputs.nowMs,
-        match,
-        atoms,
-        seen,
-        control,
-      );
+      lineDeadlineReached = pushSymbolLineAtom(inputs, { match, atoms, seen, control });
       if (lineDeadlineReached) deadlineSkippedCount += 1;
     }
   }
@@ -2798,16 +2780,10 @@ function collectPrioritizedSymbolAtoms(
 }
 
 async function symbolFileAtoms(
-  input: OrchestratorInput,
-  plan: ExplorationPlan,
-  searchScope: SearchScope,
-  fs: WorkspaceFs,
-  nowMs: () => number,
-  signal: AbortSignal | undefined,
+  inputs: DeterministicContextInputs,
   requestContext: StructuralAdapterRequestContext,
-  deadlineAtMs: number,
-  budget: AugmentationBudgetMeter,
 ): Promise<SymbolDiscoveryResult> {
+  const { input, plan, searchScope, fs, nowMs, signal, deadlineAtMs, budget } = inputs;
   const terms = symbolFileAnchorTerms(plan);
   if (terms.length === 0) {
     return { atoms: [], uncertainty: [] };
@@ -3066,14 +3042,23 @@ function rootGlobManifestPaths(
   return paths;
 }
 
-interface MetadataAtomCollectionContext {
+// The request-scoped input set both deterministic metadata passes read, built once per request so
+// the guarded fs, the traversal control and the shared existence cache stay in lockstep across
+// them instead of being re-threaded positionally into each pass.
+interface MetadataDiscoveryInputs {
   readonly input: OrchestratorInput;
+  readonly intent: RetrievalIntent;
   readonly searchScope: SearchScope;
   readonly fs: WorkspaceFs;
   readonly nowMs: () => number;
   readonly queryFingerprint: string;
   readonly control: MetadataTraversalControl;
   readonly existsCache: FileExistenceCache;
+}
+
+// `seen` is added per pass, not shared: each pass de-duplicates injection scope paths within its
+// own atom set.
+interface MetadataAtomCollectionContext extends MetadataDiscoveryInputs {
   readonly seen: Set<string>;
 }
 
@@ -3126,31 +3111,13 @@ function workspacePackageMetadataAtoms(
   return atoms;
 }
 
-function projectMetadataAtoms(
-  input: OrchestratorInput,
-  intent: RetrievalIntent,
-  searchScope: SearchScope,
-  fs: WorkspaceFs,
-  nowMs: () => number,
-  queryFingerprint: string,
-  control: MetadataTraversalControl,
-  existsCache: FileExistenceCache,
-): readonly EvidenceAtom[] {
+function projectMetadataAtoms(inputs: MetadataDiscoveryInputs): readonly EvidenceAtom[] {
+  const { input, intent, control } = inputs;
   if (!wantsProjectMetadata(input, intent) || !metadataTraversalCanContinue(control)) {
     return [];
   }
   const atoms: EvidenceAtom[] = [];
-  const seen = new Set<string>();
-  const context: MetadataAtomCollectionContext = {
-    input,
-    searchScope,
-    fs,
-    nowMs,
-    queryFingerprint,
-    control,
-    existsCache,
-    seen,
-  };
+  const context: MetadataAtomCollectionContext = { ...inputs, seen: new Set<string>() };
   for (const root of metadataRootsForScope(input.scope)) {
     if (!metadataTraversalCanContinue(control)) break;
     atoms.push(...projectMetadataRootAtoms(root, context));
@@ -3159,16 +3126,8 @@ function projectMetadataAtoms(
   return atoms;
 }
 
-function repositoryOverviewAtoms(
-  input: OrchestratorInput,
-  intent: RetrievalIntent,
-  searchScope: SearchScope,
-  fs: WorkspaceFs,
-  nowMs: () => number,
-  queryFingerprint: string,
-  control: MetadataTraversalControl,
-  existsCache?: FileExistenceCache,
-): readonly EvidenceAtom[] {
+function repositoryOverviewAtoms(inputs: MetadataDiscoveryInputs): readonly EvidenceAtom[] {
+  const { input, intent, searchScope, fs, nowMs, queryFingerprint, control, existsCache } = inputs;
   if (!wantsRepositoryOverview(intent) || !metadataTraversalCanContinue(control)) {
     return [];
   }
@@ -3264,31 +3223,18 @@ function deterministicMetadataEvidence(
   deadlineAtMs: number,
 ): DeterministicContextEvidence {
   const control: MetadataTraversalControl = { signal, nowMs, deadlineAtMs };
-  const guardedFs = metadataTraversalFs(fs, control);
   const existsCache = createFileExistenceCache();
-  const queryFingerprint = projectMetadataQueryFingerprint(input.query);
-  const atoms = [
-    ...projectMetadataAtoms(
-      input,
-      plan.retrievalIntent,
-      searchScope,
-      guardedFs,
-      nowMs,
-      queryFingerprint,
-      control,
-      existsCache,
-    ),
-    ...repositoryOverviewAtoms(
-      input,
-      plan.retrievalIntent,
-      searchScope,
-      guardedFs,
-      nowMs,
-      queryFingerprint,
-      control,
-      existsCache,
-    ),
-  ];
+  const discovery: MetadataDiscoveryInputs = {
+    input,
+    intent: plan.retrievalIntent,
+    searchScope,
+    fs: metadataTraversalFs(fs, control),
+    nowMs,
+    queryFingerprint: projectMetadataQueryFingerprint(input.query),
+    control,
+    existsCache,
+  };
+  const atoms = [...projectMetadataAtoms(discovery), ...repositoryOverviewAtoms(discovery)];
   const emittedAtMs = nowMs();
   return {
     atoms,
@@ -3344,17 +3290,7 @@ async function collectParallelDeterministicEvidence(
       deadlineAtMs,
       tryReserveSearchCall: budget.tryReserveSearchCall,
     }),
-    symbolFileAtoms(
-      input,
-      plan,
-      searchScope,
-      fs,
-      nowMs,
-      signal,
-      fileSearchContext,
-      deadlineAtMs,
-      budget,
-    ),
+    symbolFileAtoms(inputs, fileSearchContext),
     documentReferenceAtoms(input, plan, nowMs, signal, fileSearchContext, budget),
   ]);
 }

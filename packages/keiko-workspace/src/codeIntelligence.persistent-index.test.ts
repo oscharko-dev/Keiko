@@ -42,6 +42,7 @@ const BILLING_SOURCE = [
 function scopeFor(root: string): SearchScope {
   const workspace: WorkspaceInfo = {
     root,
+    selectedRoot: root,
     name: "billing-demo",
     version: "1.0.0",
     testFramework: "vitest",

@@ -20,7 +20,7 @@
 // git-worktree-snapshot-node.ts's `runRead(ctx, …)` does) — never as a substitute for a call site this
 // scanner CAN read precisely. There is deliberately NO exemption list.
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import ts from "typescript";
 
@@ -390,30 +390,45 @@ const SOFT_VERDICT_BUDGET = 9;
 // for a different, newly-unsafe one while the count stays put — invisible to a pin whose own title
 // promises "does not grow the set". Listing the exact set here and asserting equality below closes
 // that gap; the budget constant stays as a secondary, independently-edited sanity ceiling.
+//
+// Each entry names the OWNING FUNCTION, never a line number (review finding: a hand-maintained line
+// went red on the next insertion above the call and was repaired against the fixture instead of the
+// producer). `analyzeFile` derives the same name from the parsed source, so an edit that only moves
+// the call keeps this pin green while adding, removing, or relocating a soft-verdict site still
+// turns it red. Two soft sites inside ONE listed function render the identity twice, which the
+// sorted `toEqual` below rejects against a single expected entry — so a second silent call bolted
+// into an already-listed function is caught too.
 const EXPECTED_SOFT_VERDICT_SITES = [
-  { pkg: "keiko-tools", file: "git-merge-node.ts", line: 156 },
-  { pkg: "keiko-tools", file: "git-mutation-node.ts", line: 176 },
-  { pkg: "keiko-tools", file: "git-mutation-node.ts", line: 209 },
-  { pkg: "keiko-tools", file: "git-pr-node.ts", line: 145 },
-  { pkg: "keiko-tools", file: "git-publish-node.ts", line: 161 },
-  // `runGit`'s single call, still reached through `ctx.runDeps` (built by `buildAdapterContext`,
-  // which spreads `deps.onTerminated` in). Moved 402 -> 404 when the optional `fs` seam was threaded
-  // through `NodeGitWorktreeAdapterDeps`: two inserted lines ABOVE the call, no change to the call
-  // or to why it lands on the soft verdict.
-  { pkg: "keiko-tools", file: "git-worktree-adapter.ts", line: 404 },
-  { pkg: "keiko-tools", file: "git-worktree-snapshot-node.ts", line: 117 },
-  { pkg: "keiko-tools", file: "git-worktree-snapshot-node.ts", line: 301 },
-  { pkg: "keiko-verification", file: "orchestrator.ts", line: 334 },
+  { pkg: "keiko-tools", file: "git-merge-node.ts", fn: "runGh" },
+  { pkg: "keiko-tools", file: "git-mutation-node.ts", fn: "runOne" },
+  { pkg: "keiko-tools", file: "git-mutation-node.ts", fn: "globalSigningRequired" },
+  { pkg: "keiko-tools", file: "git-pr-node.ts", fn: "runGh" },
+  { pkg: "keiko-tools", file: "git-publish-node.ts", fn: "runPush" },
+  // Reached through `ctx.runDeps` (built by `buildAdapterContext`, which spreads `deps.onTerminated`
+  // in), so this single call cannot be resolved within its own file and lands on the soft verdict.
+  { pkg: "keiko-tools", file: "git-worktree-adapter.ts", fn: "runGit" },
+  { pkg: "keiko-tools", file: "git-worktree-snapshot-node.ts", fn: "runRead" },
+  {
+    pkg: "keiko-tools",
+    file: "git-worktree-snapshot-node.ts",
+    fn: "readStagedConflictMarkerFileCount",
+  },
+  { pkg: "keiko-verification", file: "orchestrator.ts", fn: "runStep" },
 ];
 
-// Renders EXPECTED_SOFT_VERDICT_SITES in the SAME `${path}:${line}` shape (and against the SAME
-// PACKAGES_ROOT) `analyzeFile`'s real call sites are rendered in, so the comparison in the test below
-// holds regardless of the absolute checkout path (CI vs. a local clone) — never a literal absolute
-// path hardcoded into the fixture.
-function expectedSoftVerdictSiteStrings() {
-  return EXPECTED_SOFT_VERDICT_SITES.map(
-    ({ pkg, file, line }) => `${join(PACKAGES_ROOT, pkg, "src", file)}:${String(line)}`,
-  ).sort();
+// The one rendering both sides of the comparison use, so the expected set and the derived set are
+// never two spellings of the same idea. Package-relative and `/`-normalized: the identity must not
+// depend on the absolute checkout path (CI vs. a local clone) or on the host path separator.
+function softVerdictIdentity(site) {
+  return `${relative(PACKAGES_ROOT, site.path).split(sep).join("/")}#${site.fn}`;
+}
+
+function expectedSoftVerdictIdentities() {
+  return EXPECTED_SOFT_VERDICT_SITES.map(({ pkg, file, fn }) => `${pkg}/src/${file}#${fn}`).sort();
+}
+
+function renderedSoftVerdictIdentities(analyses) {
+  return analyses.flatMap(({ softlyWired }) => softlyWired.map(softVerdictIdentity)).sort();
 }
 
 // A call site is "wired" when at least one argument provably carries onTerminated, OR when every
@@ -450,6 +465,41 @@ function locationOf(sourceFile, node) {
   return { line: line + 1, column: character + 1 };
 }
 
+// ─── Line-number-free call-site identity (fixes the "hand-maintained number" review finding) ──────
+//
+// A soft-verdict site used to be pinned as `<file>:<line>`, so ANY insertion above the call — an
+// unrelated API-shape edit two lines up — turned this gate red and had to be repaired by hand
+// against the new number. That makes the pin prove the fixture rather than the runtime. The identity
+// below is DERIVED from the producer instead: the nearest enclosing named function (or the
+// variable/property an anonymous function is assigned to) that CONTAINS the call, resolved off the
+// same parsed AST `analyzeFile` already builds. Moving the call within its function does not change
+// it; adding, removing, or relocating a soft-verdict call site does.
+
+function functionExpressionName(node) {
+  const parent = node.parent;
+  if (parent === undefined) return "<anonymous>";
+  if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) return parent.name.text;
+  if (ts.isPropertyAssignment(parent) && ts.isIdentifier(parent.name)) return parent.name.text;
+  return "<anonymous>";
+}
+
+function declaredFunctionName(node) {
+  return node.name !== undefined && ts.isIdentifier(node.name) ? node.name.text : "<anonymous>";
+}
+
+function enclosingFunctionName(node) {
+  for (let current = node.parent; current !== undefined; current = current.parent) {
+    if (ts.isFunctionDeclaration(current) || ts.isMethodDeclaration(current)) {
+      return declaredFunctionName(current);
+    }
+    if (ts.isConstructorDeclaration(current)) return "constructor";
+    if (ts.isFunctionExpression(current) || ts.isArrowFunction(current)) {
+      return functionExpressionName(current);
+    }
+  }
+  return "<module>";
+}
+
 function analyzeFile(path, text) {
   const sourceFile = parseSourceFile(path, text);
   const bindings = collectRunCommandBindings(sourceFile);
@@ -465,7 +515,11 @@ function analyzeFile(path, text) {
     .map(({ call }) => ({ path, ...locationOf(sourceFile, call) }));
   const softlyWired = verdicts
     .filter(({ verdict }) => verdict === "wired-by-file-text")
-    .map(({ call }) => ({ path, ...locationOf(sourceFile, call) }));
+    .map(({ call }) => ({
+      path,
+      fn: enclosingFunctionName(call),
+      ...locationOf(sourceFile, call),
+    }));
   return { path, callSiteCount: callSites.length, unwired, softlyWired };
 }
 
@@ -480,8 +534,10 @@ function analyzeProductionCallers() {
     .filter((entry) => entry !== undefined);
 }
 
+const PRODUCTION_ANALYSES = analyzeProductionCallers();
+
 describe("runCommand termination-evidence wiring (PR #3354, comment 3887021650)", () => {
-  const analyses = analyzeProductionCallers();
+  const analyses = PRODUCTION_ANALYSES;
 
   it("finds the known production caller surface (the scanner itself is not vacuous)", () => {
     // The scanner must SEE the surface it polices. If a refactor moves these files, update the
@@ -510,11 +566,16 @@ describe("runCommand termination-evidence wiring (PR #3354, comment 3887021650)"
   // that swap, since a new/different site changes the rendered array even when its length does not.
   it("does not grow OR change the set of call sites that pass only on file-level evidence", () => {
     const soft = analyses.flatMap(({ softlyWired }) => softlyWired);
-    const rendered = soft.map((site) => `${site.path}:${String(site.line)}`).sort();
+    const rendered = renderedSoftVerdictIdentities(analyses);
+    // The line numbers appear in the FAILURE MESSAGE only — never in the asserted value, so an edit
+    // that merely moves a call cannot turn this pin red.
+    const located = soft
+      .map((site) => `${softVerdictIdentity(site)} (line ${String(site.line)})`)
+      .sort();
     expect(
       rendered,
-      `call sites passing only on file-text evidence:\n${rendered.join("\n")}`,
-    ).toEqual(expectedSoftVerdictSiteStrings());
+      `call sites passing only on file-text evidence:\n${located.join("\n")}`,
+    ).toEqual(expectedSoftVerdictIdentities());
     // Secondary sanity check: the exact-set assertion above already pins the count, but the explicit
     // ratchet stays legible as its own number rather than only implied by the array's length.
     expect(rendered.length).toBeLessThanOrEqual(SOFT_VERDICT_BUDGET);
@@ -523,6 +584,88 @@ describe("runCommand termination-evidence wiring (PR #3354, comment 3887021650)"
   it("every production runCommand call site references the onTerminated evidence seam", () => {
     const unwired = analyses.flatMap((entry) => entry.unwired);
     expect(unwired).toEqual([]);
+  });
+});
+
+// ─── The soft-verdict identity itself, proven on the REAL producer ────────────────────────────────
+//
+// The pin above is only worth its cost if BOTH halves hold: an unrelated edit that merely moves a
+// call must NOT turn it red (the review finding — a hand-maintained line number failed exactly
+// this), and a genuinely new, removed, or relocated silent call site MUST. Both are proven here
+// against `git-worktree-adapter.ts`'s real text, mutated IN MEMORY — the production file is never
+// touched, so this proof is hermetic and repeatable.
+
+const ADAPTER_PATH = join(PACKAGES_ROOT, "keiko-tools", "src", "git-worktree-adapter.ts");
+const ADAPTER_IDENTITY = "keiko-tools/src/git-worktree-adapter.ts#runGit";
+
+// A silent-by-construction extra lane: its second argument is a property of a bare parameter, which
+// this single-file analyzer cannot resolve, so it lands on exactly the soft verdict the pin counts.
+const EXTRA_SOFT_SITE = `
+async function newlyAddedLane(ctx: AdapterContext): Promise<CommandResult> {
+  return runCommand(
+    { command: "git", args: ["status"], cwd: undefined, timeoutMs: ctx.timeoutMs, signal: ctx.signal },
+    ctx.runDeps,
+  );
+}
+`;
+
+function analysesWithAdapterReplacedBy(analysis) {
+  return PRODUCTION_ANALYSES.map((entry) =>
+    entry.path === ADAPTER_PATH ? analysis : entry,
+  ).filter((entry) => entry !== undefined);
+}
+
+describe("soft-verdict call-site identity is derived from the producer, not a pinned line number", () => {
+  const adapterText = readFileSync(ADAPTER_PATH, "utf8");
+  const baseline = analyzeFile(ADAPTER_PATH, adapterText);
+
+  it("the production adapter really is one of the pinned soft-verdict sites", () => {
+    // Guards the two proofs below against becoming vacuous if the adapter ever stops landing on the
+    // soft verdict: a mutation proof over a file with no soft site proves nothing.
+    expect(baseline?.softlyWired.map(softVerdictIdentity)).toEqual([ADAPTER_IDENTITY]);
+    expect(expectedSoftVerdictIdentities()).toContain(ADAPTER_IDENTITY);
+  });
+
+  it("stays GREEN when lines are inserted ABOVE the call — the line moves, the identity does not", () => {
+    const shifted = analyzeFile(ADAPTER_PATH, `// inserted\n// inserted\n${adapterText}`);
+
+    // The exact failure the review named: the old `<file>:<line>` pin went red right here.
+    expect(shifted?.softlyWired[0]?.line).toBe((baseline?.softlyWired[0]?.line ?? 0) + 2);
+    expect(renderedSoftVerdictIdentities(analysesWithAdapterReplacedBy(shifted))).toEqual(
+      expectedSoftVerdictIdentities(),
+    );
+  });
+
+  it("turns RED when a genuinely new file-level-evidence-only call site is ADDED", () => {
+    const grown = analyzeFile(ADAPTER_PATH, `${adapterText}${EXTRA_SOFT_SITE}`);
+    const rendered = renderedSoftVerdictIdentities(analysesWithAdapterReplacedBy(grown));
+
+    expect(rendered).toContain("keiko-tools/src/git-worktree-adapter.ts#newlyAddedLane");
+    expect(rendered).not.toEqual(expectedSoftVerdictIdentities());
+  });
+
+  it("turns RED when a SECOND silent call is bolted into an ALREADY-pinned function", () => {
+    // The identity renders twice; a sorted `toEqual` against one expected entry rejects the
+    // duplicate. Without this, a per-function identity could be read as a licence to add more.
+    const doubled = analyzeFile(
+      ADAPTER_PATH,
+      adapterText.replace(
+        "async function runGit(ctx: AdapterContext, argv: readonly string[]): Promise<CommandResult> {",
+        'async function runGit(ctx: AdapterContext, argv: readonly string[]): Promise<CommandResult> {\n  await runCommand({ command: "git", args: argv, cwd: undefined, timeoutMs: 1, signal: ctx.signal }, ctx.otherDeps);',
+      ),
+    );
+
+    const rendered = renderedSoftVerdictIdentities(analysesWithAdapterReplacedBy(doubled));
+    expect(rendered.filter((identity) => identity === ADAPTER_IDENTITY)).toHaveLength(2);
+    expect(rendered).not.toEqual(expectedSoftVerdictIdentities());
+  });
+
+  it("turns RED when a pinned soft-verdict call site DISAPPEARS", () => {
+    const withoutAdapter = PRODUCTION_ANALYSES.filter((entry) => entry.path !== ADAPTER_PATH);
+
+    expect(renderedSoftVerdictIdentities(withoutAdapter)).not.toEqual(
+      expectedSoftVerdictIdentities(),
+    );
   });
 });
 

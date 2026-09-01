@@ -1342,14 +1342,13 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
 
 // #3347 P1: the production-composed workspaceRootAccessResolver's ordinary-root catch used to
 // collapse a denied root and a merely missing/unreadable one to the same bare `undefined`, losing
-// the correlated workspace.root.denied activity-log line for the denied case. These tests exercise
-// the REAL buildUiHandlerDeps-composed resolver (never a hand-rolled fake) end to end: a denied root
-// must both stay refused AND emit the correlated, body-free denial event; a genuinely missing root
-// must stay refused WITHOUT being misreported as a security denial. (The resolver itself still
-// returns `undefined` for both — every current caller shares that one contract — so this pins the
-// distinction the resolver can now make internally, not a status-code difference at any specific
-// route; TerminalManager.resolveWorkspaceRootAccess's CWD_DENIED-vs-PROJECT_NOT_FOUND mapping is
-// terminal.ts's own concern and out of this change's file scope.)
+// the correlated workspace.root.denied activity-log line for the denied case AND leaving every
+// caller unable to tell a policy refusal from a not-found. These tests exercise the REAL
+// buildUiHandlerDeps-composed resolver (never a hand-rolled fake) end to end: a denied root must
+// stay refused with the "denied" decision AND emit the correlated, body-free denial event; a
+// genuinely missing root must stay refused with the distinct "unresolved" decision and no denial
+// event. The decision is what terminal.ts maps onto 403 CWD_DENIED vs 404 PROJECT_NOT_FOUND, so a
+// regression here would be invisible at every route that depends on it.
 describe("buildUiHandlerDeps — workspaceRootAccessResolver denial logging (#3347 P1)", () => {
   it("logs a correlated workspace.root.denied event for a denied ordinary root", () => {
     const activityLog = createBufferedServerLogSink();
@@ -1366,7 +1365,7 @@ describe("buildUiHandlerDeps — workspaceRootAccessResolver denial logging (#33
     const deniedRoot = join(tmp("denied-root-parent-"), ".aws", "workspace");
     const correlationId = "deps-denied-root-000001";
 
-    let access: ReturnType<NonNullable<UiHandlerDeps["workspaceRootAccessResolver"]>>;
+    let access: ReturnType<NonNullable<UiHandlerDeps["workspaceRootAccessResolver"]>> | undefined;
     try {
       access = deps.workspaceRootAccessResolver?.(deniedRoot, correlationId);
     } finally {
@@ -1374,7 +1373,7 @@ describe("buildUiHandlerDeps — workspaceRootAccessResolver denial logging (#33
       resetServerLogger();
     }
 
-    expect(access).toBeUndefined();
+    expect(access).toEqual({ decision: "denied" });
     const denialEvents = activityLog.events.filter((event) => event.op === "workspace.root.denied");
     expect(denialEvents).toHaveLength(1);
     expect(denialEvents[0]).toMatchObject({
@@ -1400,7 +1399,7 @@ describe("buildUiHandlerDeps — workspaceRootAccessResolver denial logging (#33
     const missingRoot = join(tmp("missing-root-parent-"), "does-not-exist");
     const correlationId = "deps-missing-root-000001";
 
-    let access: ReturnType<NonNullable<UiHandlerDeps["workspaceRootAccessResolver"]>>;
+    let access: ReturnType<NonNullable<UiHandlerDeps["workspaceRootAccessResolver"]>> | undefined;
     try {
       access = deps.workspaceRootAccessResolver?.(missingRoot, correlationId);
     } finally {
@@ -1408,7 +1407,7 @@ describe("buildUiHandlerDeps — workspaceRootAccessResolver denial logging (#33
       resetServerLogger();
     }
 
-    expect(access).toBeUndefined();
+    expect(access).toEqual({ decision: "unresolved" });
     expect(activityLog.events.some((event) => event.op === "workspace.root.denied")).toBe(false);
   });
 });

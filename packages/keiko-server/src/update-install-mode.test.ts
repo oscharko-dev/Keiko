@@ -274,6 +274,7 @@ describe("update command policy", () => {
         {
           workspace: {
             root: process.cwd(),
+            selectedRoot: process.cwd(),
             name: undefined,
             version: undefined,
             testFramework: "unknown",

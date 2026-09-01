@@ -132,6 +132,7 @@ function projectRootOrThrow(project: Project, fs: WorkspaceFs): string {
 function buildWorkspaceInfo(projectRoot: string): WorkspaceInfo {
   return {
     root: projectRoot,
+    selectedRoot: projectRoot,
     name: undefined,
     version: undefined,
     testFramework: "unknown",

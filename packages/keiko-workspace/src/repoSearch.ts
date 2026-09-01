@@ -3159,17 +3159,13 @@ function executeFindFilesSync(inputs: FindFilesExecutionInputs): SearchResult {
   });
 }
 
-function findFilesSync(
-  scope: SearchScope,
-  query: RetrievalQuery,
-  limits: SearchLimits,
-  fs: WorkspaceFs,
-  nowMs: () => number,
-  hints: SearchHints | undefined,
-  candidateSetFor: CandidateSetProvider | undefined,
-  deadlineAtMs: number | undefined,
-  signal?: AbortSignal,
-): SearchResult {
+// The caller-supplied half of a find-files run: everything the execution inputs carry except the
+// start timestamp, which `findFilesSync` takes itself so the elapsed budget is measured from the
+// same clock read that anchors the execution control.
+type FindFilesRequest = Omit<FindFilesExecutionInputs, "startMs">;
+
+function findFilesSync(request: FindFilesRequest): SearchResult {
+  const { limits, fs, nowMs, deadlineAtMs, signal } = request;
   const startMs = nowMs();
   const control: StructuralExecutionControl = {
     nowMs,
@@ -3181,18 +3177,7 @@ function findFilesSync(
   };
   const controlledFs = executionControlledWorkspaceFs(fs, control);
   try {
-    return executeFindFilesSync({
-      scope,
-      query,
-      limits,
-      fs: controlledFs,
-      nowMs,
-      hints,
-      candidateSetFor,
-      deadlineAtMs,
-      signal,
-      startMs,
-    });
+    return executeFindFilesSync({ ...request, fs: controlledFs, startMs });
   } catch (error) {
     if (error instanceof StructuralExecutionStoppedError) {
       return stoppedSearchResult(error.reason, nowMs() - startMs, limits);
@@ -3289,17 +3274,17 @@ export async function findFiles(
   const fs = deps.fs ?? nodeWorkspaceFs;
   const nowMs = deps.nowMs ?? Date.now;
   return await Promise.resolve(
-    findFilesSync(
+    findFilesSync({
       scope,
       query,
       limits,
       fs,
       nowMs,
-      deps.searchHints,
-      deps.candidateSetFor,
-      deps.deadlineAtMs,
-      deps.signal,
-    ),
+      hints: deps.searchHints,
+      candidateSetFor: deps.candidateSetFor,
+      deadlineAtMs: deps.deadlineAtMs,
+      signal: deps.signal,
+    }),
   );
 }
 
@@ -3452,6 +3437,59 @@ function excerptFileLines(
   return readWorkspaceFile(scope.workspace, request.scopePath, opts, fs).text.split("\n");
 }
 
+// Reads the bounded byte prefix of an oversized file. An IO failure of that probe is the same
+// one-file, non-denial read outcome `readExcerptLines` degrades for a WorkspaceReadError, so it
+// costs this excerpt alone; anything else keeps propagating.
+async function excerptPrefixBytes(
+  readFileBytes: NonNullable<WorkspaceFs["readFileBytes"]>,
+  targetPath: string,
+  expected: WorkspaceStat,
+  scopePath: string,
+): Promise<Uint8Array> {
+  try {
+    return await readFileBytes(targetPath, MAX_EXCERPT_FILE_BYTES, "reject", expected);
+  } catch (readErr) {
+    if (isIoError(readErr)) {
+      throw excerptUnreadable(scopePath);
+    }
+    throw readErr;
+  }
+}
+
+interface OversizedExcerptInputs {
+  readonly request: ReadExcerptRequest;
+  readonly fs: WorkspaceFs;
+  readonly targetPath: string;
+  readonly expected: WorkspaceStat;
+  readonly lane: WorkspaceContentLane;
+  // The budget error that sent the read down this path. It is rethrown unchanged whenever the
+  // bounded prefix cannot answer the request, so a caller still sees the original file-too-large
+  // outcome instead of a fallback-specific error it does not handle.
+  readonly tooLarge: FileTooLargeError;
+}
+
+// The bounded fallback for a file that exceeded the excerpt read budget: decode the byte prefix the
+// port can still serve, re-check the descriptor identity so a file rewritten mid-read is reported
+// rather than mixed, and split the lines under the caller's lane (the editor lane keeps raw text —
+// see the note on excerptFileLines about redaction shifting line coordinates).
+async function oversizedExcerptLines(inputs: OversizedExcerptInputs): Promise<readonly string[]> {
+  const { request, fs, targetPath, expected, lane, tooLarge } = inputs;
+  const readFileBytes = fs.readFileBytes;
+  if (readFileBytes === undefined) {
+    throw tooLarge;
+  }
+  const bytes = await excerptPrefixBytes(readFileBytes, targetPath, expected, request.scopePath);
+  const prefix = decodeUtf8Prefix(bytes);
+  if (!isWorkspacePathSnapshotCurrent(fs, targetPath, targetPath, expected)) {
+    throw new RepoSearchUnsupportedFileError("file changed during excerpt read", "io-error");
+  }
+  const lines = (lane === "editor" ? prefix : redact(prefix)).split("\n");
+  if (request.startLine > lines.length) {
+    throw tooLarge;
+  }
+  return lines;
+}
+
 async function readExcerptLines(
   scope: SearchScope,
   request: ReadExcerptRequest,
@@ -3476,28 +3514,14 @@ async function readExcerptLines(
     if (!(err instanceof FileTooLargeError)) {
       throw err;
     }
-    const readFileBytes = fs.readFileBytes;
-    if (readFileBytes === undefined) {
-      throw err;
-    }
-    let bytes: Uint8Array;
-    try {
-      bytes = await readFileBytes(targetPath, MAX_EXCERPT_FILE_BYTES, "reject", expected);
-    } catch (readErr) {
-      if (isIoError(readErr)) {
-        throw excerptUnreadable(request.scopePath);
-      }
-      throw readErr;
-    }
-    const prefix = decodeUtf8Prefix(bytes);
-    if (!isWorkspacePathSnapshotCurrent(fs, targetPath, targetPath, expected)) {
-      throw new RepoSearchUnsupportedFileError("file changed during excerpt read", "io-error");
-    }
-    const lines = (lane === "editor" ? prefix : redact(prefix)).split("\n");
-    if (request.startLine > lines.length) {
-      throw err;
-    }
-    return lines;
+    return await oversizedExcerptLines({
+      request,
+      fs,
+      targetPath,
+      expected,
+      lane,
+      tooLarge: err,
+    });
   }
 }
 

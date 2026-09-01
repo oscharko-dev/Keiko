@@ -116,6 +116,7 @@ function scope(relativePaths: readonly string[] = []): SearchScope {
     relativePaths,
     workspace: {
       root: ROOT,
+      selectedRoot: ROOT,
       name: "demo",
       version: "0.0.0",
       testFramework: "vitest",

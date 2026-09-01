@@ -502,6 +502,7 @@ function sameFile(left: BigIntStats, right: BigIntStats): boolean {
 function workspace(root: string): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework: "unknown",

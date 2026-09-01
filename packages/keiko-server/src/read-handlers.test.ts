@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -656,14 +656,50 @@ describe("GET /api/workspace", () => {
           context?: { entries: { path: string; excerpt: string }[] };
         };
       };
-      // The summary reports the canonical root the detection layer admitted, not the alias the
-      // caller happened to register — one filesystem object, one identity.
-      expect(body.summary.root).toBe(canonicalRootOf(root));
+      // The summary is the client-facing projection, so it reports the path the caller registered
+      // — the value a client may hand straight back as `dir` — not the canonical root that only
+      // filesystem effects bind to.
+      expect(body.summary.root).toBe(root);
       expect(body.summary.name).toBe("[REDACTED]");
       expect(body.summary.context).toBeUndefined();
       expect(JSON.stringify(result.body)).not.toContain("topsecret");
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // A user registers the path the platform handed them, which routinely differs from its realpath:
+  // macOS resolves `/var` and `/tmp` under `/private`, and any project reached through a symlinked
+  // parent behaves the same on every platform. The symlink here is explicit so the case is
+  // falsifiable on Linux too, where `os.tmpdir()` is usually not aliased and the assertion would
+  // otherwise be inert exactly where CI runs it.
+  it("keeps the registered identity for a project reached through a symlinked root", async () => {
+    const real = createWorkspaceFixture();
+    const alias = `${real}-alias`;
+    symlinkSync(real, alias, "dir");
+    try {
+      const deps = depsWithRegisteredProject(alias);
+      // Guard against a silently inert case: the aliased root MUST differ from its canonical form,
+      // otherwise the assertions below prove nothing about the two identities.
+      expect(canonicalRootOf(alias)).not.toBe(alias);
+      const result = await handleWorkspace(
+        ctx(`/api/workspace?dir=${encodeURIComponent(alias)}`),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      const body = result.body as { summary: { root: string } };
+      expect(body.summary.root).toBe(alias);
+      // The identity the response reports has to survive a round trip: a client that hands
+      // `summary.root` straight back as `dir` must still be a registered project, which the
+      // canonical root never is.
+      const echoed = await handleWorkspace(
+        ctx(`/api/workspace?dir=${encodeURIComponent(body.summary.root)}`),
+        deps,
+      );
+      expect(echoed.status).toBe(200);
+    } finally {
+      rmSync(alias, { force: true });
+      rmSync(real, { recursive: true, force: true });
     }
   });
 

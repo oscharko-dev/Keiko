@@ -16,6 +16,7 @@ export function makeWorkspace(): { root: string; info: WorkspaceInfo } {
   writeFileSync(join(root, "package.json"), JSON.stringify({ name: "demo" }), "utf8");
   const info: WorkspaceInfo = {
     root,
+    selectedRoot: root,
     name: "demo",
     version: undefined,
     testFramework: "vitest",

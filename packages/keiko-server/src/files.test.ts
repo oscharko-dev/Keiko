@@ -1,4 +1,5 @@
 import {
+  link,
   mkdtemp,
   mkdir,
   readFile,
@@ -9,7 +10,7 @@ import {
   utimes,
   writeFile,
 } from "node:fs/promises";
-import { rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -772,6 +773,187 @@ describe("desktop files browser", () => {
     const onDisk = await readFile(targetPath, "utf8");
     expect(onDisk).toBe(substitute);
     expect(onDisk).toHaveLength(original.byteLength);
+  });
+
+  // #3367 review (Cursor): WorkspaceFs.readFileBytes compares the FULL admission-time snapshot --
+  // fileIdentity AND size/mtime/ctime/nlink -- so an ordinary in-place edit (same inode) fails the
+  // descriptor check just as hard as an inode swap. readStableEditableContent used to fold that
+  // failure into its retry budget, which could never recover: every remaining attempt compares
+  // against the same fixed snapshot and fails identically, so a legitimate concurrent save cost the
+  // full budget and two 25ms sleeps before reporting the STALE_SESSION it reports on the first
+  // attempt now. The retry loop still exists for reads that SUCCEED and then fail statsMatch.
+  it("reports an in-place edit between admission and the editable read as a stale session on the first attempt", async () => {
+    const targetPath = join(root, "src", "app.ts");
+    const before = await stat(targetPath);
+    const boundedRead = nodeWorkspaceFs.readFileBytes;
+    if (boundedRead === undefined) throw new Error("expected a bounded byte reader");
+    let reads = 0;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readFileBytes: async (
+        path: string,
+        maxBytes: number,
+        policy: WorkspaceHardLinkPolicy,
+        expected: WorkspaceStat,
+      ): Promise<Uint8Array> => {
+        reads += 1;
+        const bytes = await boundedRead.call(nodeWorkspaceFs, path, maxBytes, policy, expected);
+        // Staged AFTER the editability probe completes, so the stable-content read below is the
+        // one that meets the edited file. An ordinary truncating rewrite: same inode, no swap.
+        if (reads === 1 && path === targetPath) {
+          writeFileSync(
+            path,
+            'const value: string = "edited in place by another editor";\n',
+            "utf8",
+          );
+        }
+        return bytes;
+      },
+    };
+    const resolvedRoot: ResolvedProjectRoot = {
+      root,
+      realRoot: root,
+      access: { kind: "ordinary", canonicalRoot: root, fs },
+    };
+
+    await expect(
+      readFilesContent(store, root, "src/app.ts", buildRedactor({}), resolvedRoot),
+    ).rejects.toMatchObject({ status: 409, code: "STALE_SESSION" });
+    // Two bounded reads: the editability probe, then ONE stable-content attempt. Retrying the
+    // descriptor mismatch would make this 4 without changing the outcome.
+    expect(reads).toBe(2);
+    // The edit really was in place -- the same inode admission bound to, not a replacement.
+    expect((await stat(targetPath)).ino).toBe(before.ino);
+  });
+
+  // #3367 owner P1, reproduced on the current head: admit a root, replace that root directory with
+  // a symlink pointing OUTSIDE it before the next filesystem call, then delete. The admitted
+  // pathname never moves, so `isContained(realRoot, target.path)` -- a string comparison -- keeps
+  // answering "contained", and every stat taken after the swap sees the outside file on BOTH sides
+  // of the identity comparison. The delete then landed on the outside target while the original
+  // file survived. The re-canonicalization through the admitted capability is what refuses it.
+  it("refuses to delete through a root swapped to an outside symlink after admission", async () => {
+    extraRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-rootswap-")));
+    const workspace = join(extraRoot, "workspace");
+    const displaced = join(extraRoot, "displaced");
+    const outside = join(extraRoot, "outside");
+    await mkdir(workspace);
+    await mkdir(outside);
+    await writeFile(join(workspace, "note.txt"), "inside\n", "utf8");
+    await writeFile(join(outside, "note.txt"), "outside\n", "utf8");
+    let swapped = false;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      realPath: (path: string): string => {
+        const canonical = nodeWorkspaceFs.realPath(path);
+        // The race made deterministic: admission has resolved the canonical, contained pathname,
+        // and the root underneath it is replaced before anything stats that pathname.
+        if (!swapped) {
+          swapped = true;
+          renameSync(workspace, displaced);
+          symlinkSync(outside, workspace);
+        }
+        return canonical;
+      },
+    };
+    const resolvedRoot: ResolvedProjectRoot = {
+      root: workspace,
+      realRoot: workspace,
+      access: { kind: "ordinary", canonicalRoot: workspace, fs },
+    };
+
+    await expect(
+      deleteFilesEntry({
+        store,
+        rootInput: workspace,
+        pathInput: "note.txt",
+        redactor: buildRedactor({}),
+        resolvedRoot,
+      }),
+    ).rejects.toMatchObject({ status: 403, code: "PATH_ESCAPE" });
+    expect(swapped).toBe(true);
+    expect(await readFile(join(outside, "note.txt"), "utf8")).toBe("outside\n");
+    expect(await readFile(join(displaced, "note.txt"), "utf8")).toBe("inside\n");
+  });
+
+  // The read half of the same admission hole, and the reason the re-proof lives in
+  // resolveInsideRoot rather than only in the mutation guard: with the root swapped during
+  // admission, `identity` and `stats` BOTH describe the outside file, so the identity-bound bounded
+  // read agreed with itself and handed the caller content from outside the workspace.
+  it("refuses to read through a root swapped to an outside symlink during admission", async () => {
+    extraRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-readswap-")));
+    const workspace = join(extraRoot, "workspace");
+    const displaced = join(extraRoot, "displaced");
+    const outside = join(extraRoot, "outside");
+    await mkdir(workspace);
+    await mkdir(outside);
+    await writeFile(join(workspace, "note.txt"), "inside\n", "utf8");
+    await writeFile(join(outside, "note.txt"), "outside secret\n", "utf8");
+    let swapped = false;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      realPath: (path: string): string => {
+        const canonical = nodeWorkspaceFs.realPath(path);
+        if (!swapped) {
+          swapped = true;
+          renameSync(workspace, displaced);
+          symlinkSync(outside, workspace);
+        }
+        return canonical;
+      },
+    };
+
+    await expect(
+      readFilesPreview(store, workspace, "note.txt", buildRedactor({}), {
+        root: workspace,
+        realRoot: workspace,
+        access: { kind: "ordinary", canonicalRoot: workspace, fs },
+      }),
+    ).rejects.toMatchObject({ status: 403, code: "PATH_ESCAPE" });
+    expect(swapped).toBe(true);
+  });
+
+  // The same escape, staged at the MUTATION boundary instead of at admission, through the product's
+  // own afterConflictCheck hook (no injected WorkspaceFs at all -- the real node port answers every
+  // call). The outside file is a HARD LINK to the admitted one, so `sameFileIdentity` compares equal
+  // device+inode and waves the swap through; only re-canonicalizing the pathname sees it. Before the
+  // fix the atomic save wrote its temp file into the outside directory and renamed it over the
+  // outside entry, leaving the workspace copy untouched.
+  it("refuses to write through a root swapped to an outside symlink after the conflict check", async () => {
+    extraRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-writeswap-")));
+    const workspace = join(extraRoot, "workspace");
+    const displaced = join(extraRoot, "displaced");
+    const outside = join(extraRoot, "outside");
+    await mkdir(workspace);
+    await mkdir(outside);
+    await writeFile(join(workspace, "note.txt"), "inside\n", "utf8");
+    await link(join(workspace, "note.txt"), join(outside, "note.txt"));
+    let swapped = false;
+
+    await expect(
+      writeFilesContent({
+        store,
+        rootInput: workspace,
+        pathInput: "note.txt",
+        content: "escaped\n",
+        redactor: buildRedactor({}),
+        resolvedRoot: {
+          root: workspace,
+          realRoot: workspace,
+          access: { kind: "ordinary", canonicalRoot: workspace, fs: nodeWorkspaceFs },
+        },
+        testControl: {
+          afterConflictCheck: (): void => {
+            swapped = true;
+            renameSync(workspace, displaced);
+            symlinkSync(outside, workspace);
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ status: 403, code: "PATH_ESCAPE" });
+    expect(swapped).toBe(true);
+    expect(await readFile(join(outside, "note.txt"), "utf8")).toBe("inside\n");
+    expect(await readFile(join(displaced, "note.txt"), "utf8")).toBe("inside\n");
   });
 
   it("rejects saving when the file changed after the editor loaded it", async () => {

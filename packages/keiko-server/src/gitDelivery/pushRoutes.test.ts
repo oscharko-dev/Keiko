@@ -609,6 +609,7 @@ const BLOCK_ALL_PUBLISH_PACK: GitDeliveryRepoPolicyPack = {
 function testWorkspace(root: string): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework: "unknown",

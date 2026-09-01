@@ -382,15 +382,19 @@ export function __workspaceWalkCacheEntryForTests(root: string): DiscoveryResult
   return workspaceWalkCache.get(root)?.value;
 }
 
-// `detectWorkspace` admits its start directory through the workspace layer's canonical-root
-// admission and returns that realpath-resolved root, so the registered project path must be
-// canonicalized with the SAME admission before the identity comparison below. Comparing the
-// canonical walk result against the lexical registration denied every project reached through a
-// symlinked ancestor: on macOS the platform aliases resolve `/tmp/...` and `/var/...` to
-// `/private/...`, so an ordinary user-selected root answered 403 on every workspace read. Root
-// admission is unchanged and still runs first — a denied root raises PathDeniedError (recorded on
-// the activity log by the shared helper) and an unresolvable one surfaces as WORKSPACE_NOT_FOUND,
-// mirroring the detection layer's own taxonomy rather than escaping as an opaque 500.
+// A detected workspace carries two identities (see WorkspaceInfo): `root` is the realpath-admitted
+// canonical directory every filesystem effect binds to, and `selectedRoot` is the lexical path the
+// caller named. The authorization decision below stays canonical-to-canonical on purpose — it is
+// the identity that holds even when no lexical alias could be verified — so the registered project
+// path is canonicalized through the SAME admission before it is compared. Comparing the canonical
+// walk result against the lexical registration denied every project reached through a symlinked
+// ancestor: on macOS the platform aliases resolve `/tmp/...` and `/var/...` to `/private/...`, so
+// an ordinary user-selected root answered 403 on every workspace read. The response body is the
+// other half of that pair and reports `selectedRoot` (via buildWorkspaceSummary), so a client that
+// hands the reported root back as `dir` still names a registered project. Root admission is
+// unchanged and still runs first — a denied root raises PathDeniedError (recorded on the activity
+// log by the shared helper) and an unresolvable one surfaces as WORKSPACE_NOT_FOUND, mirroring the
+// detection layer's own taxonomy rather than escaping as an opaque 500.
 function canonicalRegisteredWorkspaceRoot(
   registeredRoot: string,
   correlationId: string | undefined,

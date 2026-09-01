@@ -4652,6 +4652,82 @@ function readSource(
   }
 }
 
+interface SourceReadTally {
+  readonly files: SourceFile[];
+  skipped: number;
+  partiallyIndexed: number;
+  truncated: boolean;
+}
+
+interface SourceReadArgs {
+  readonly scope: SearchScope;
+  readonly limits: SearchLimits;
+  readonly fs: WorkspaceFs;
+  readonly control: StructuralExecutionControl;
+  readonly tally: SourceReadTally;
+}
+
+// "stop" ends the candidate walk because the execution deadline fired part-way through it; the
+// tally carries the resulting truncation flag, so the caller only has to stop looping.
+type CandidateReadOutcome = "continue" | "stop";
+
+// A path the inventory does not index and a path with no known language are the same non-event:
+// neither is read, neither is counted.
+function indexableLanguageFor(scopePath: string): CodeLanguage | undefined {
+  return isIndexable(scopePath) ? languageForPath(scopePath) : undefined;
+}
+
+function parseSourceFile(source: SourceText): SourceFile {
+  const parser = parserKindForSource(source.scopePath, source.language);
+  return {
+    scopePath: source.scopePath,
+    text: source.text,
+    language: source.language,
+    parser,
+    syntaxTree: parser === "typescript-compiler-ast" ? parseTypescriptSource(source) : undefined,
+  };
+}
+
+// Reading and parsing one candidate is the expensive step, so the deadline is checked on both
+// sides of it: a stop observed before the file is recorded discards that file entirely, while a
+// stop observed once it is recorded keeps it and truncates only the remaining candidates.
+function recordCandidateSource(
+  args: SourceReadArgs,
+  relativePath: string,
+  language: CodeLanguage,
+): CandidateReadOutcome {
+  const source = readSource(args.scope, args.limits, args.fs, relativePath, language);
+  if (structuralExecutionStopped(args.control)) {
+    args.tally.truncated = true;
+    return "stop";
+  }
+  if (source.partial) {
+    args.tally.partiallyIndexed += 1;
+  }
+  args.tally.files.push(parseSourceFile(source));
+  if (!structuralExecutionStopped(args.control)) {
+    return "continue";
+  }
+  args.tally.truncated = true;
+  return "stop";
+}
+
+// A candidate the index cannot use is dropped for free; one it could use but cannot read —
+// oversized past the prefix fallback of readSource, vanished, or denied — is counted as skipped so
+// that a single unreadable file never fails the whole inventory.
+function readCandidateInto(args: SourceReadArgs, relativePath: string): CandidateReadOutcome {
+  const language = indexableLanguageFor(relativePath);
+  if (language === undefined) {
+    return "continue";
+  }
+  try {
+    return recordCandidateSource(args, relativePath, language);
+  } catch {
+    args.tally.skipped += 1;
+    return "continue";
+  }
+}
+
 function readSources(
   scope: SearchScope,
   limits: SearchLimits,
@@ -4664,54 +4740,18 @@ function readSources(
   partiallyIndexed: number;
   truncated: boolean;
 } {
-  const files: SourceFile[] = [];
-  let skipped = 0;
-  let partiallyIndexed = 0;
-  let truncated = false;
+  const tally: SourceReadTally = { files: [], skipped: 0, partiallyIndexed: 0, truncated: false };
+  const args: SourceReadArgs = { scope, limits, fs, control, tally };
   for (const candidate of candidates) {
     if (structuralExecutionStopped(control)) {
-      truncated = true;
+      tally.truncated = true;
       break;
     }
-    if (!isIndexable(candidate.relativePath)) {
-      continue;
-    }
-    const language = languageForPath(candidate.relativePath);
-    if (language === undefined) {
-      continue;
-    }
-    try {
-      const source = readSource(scope, limits, fs, candidate.relativePath, language);
-      if (structuralExecutionStopped(control)) {
-        truncated = true;
-        break;
-      }
-      if (source.partial) {
-        partiallyIndexed += 1;
-      }
-      const parser = parserKindForSource(source.scopePath, source.language);
-      const parsed: SourceFile = {
-        scopePath: source.scopePath,
-        text: source.text,
-        language: source.language,
-        parser,
-        syntaxTree:
-          parser === "typescript-compiler-ast" ? parseTypescriptSource(source) : undefined,
-      };
-      files.push(parsed);
-      if (structuralExecutionStopped(control)) {
-        truncated = true;
-        break;
-      }
-    } catch (error) {
-      if (error instanceof FileTooLargeError) {
-        skipped += 1;
-        continue;
-      }
-      skipped += 1;
+    if (readCandidateInto(args, candidate.relativePath) === "stop") {
+      break;
     }
   }
-  return { files, skipped, partiallyIndexed, truncated };
+  return tally;
 }
 
 function collectParserCoverage(files: readonly SourceFile[]): readonly CodeParserCoverage[] {

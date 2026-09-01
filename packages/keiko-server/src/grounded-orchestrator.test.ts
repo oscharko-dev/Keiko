@@ -90,6 +90,7 @@ const echoAnswerer: GroundedAnswerer = {
 function fakeWorkspace(): WorkspaceInfo {
   return {
     root: ROOT,
+    selectedRoot: ROOT,
     name: "demo",
     version: "0.0.0",
     testFramework: "vitest",
@@ -395,6 +396,26 @@ function input(overrides: Partial<OrchestratorInput> = {}): OrchestratorInput {
     query: happyQuery(),
     workspaceRoot: ROOT,
     ...overrides,
+  };
+}
+
+// A supported optional-compatible port: every bounded lane the Node port offers EXCEPT
+// `readFileUtf8SameDescriptor`, which `WorkspaceFs` declares optional. Each call to the unbounded
+// `readFileUtf8` is recorded, so a test can pin that no advisory-metadata lane falls back to it —
+// a fallback that only checks the byte cap once the whole file is already resident is not a bound
+// (ADR-0005 D1).
+function descriptorlessWorkspaceFs(unboundedReads: string[]): WorkspaceFs {
+  // Omit rather than assign undefined: `exactOptionalPropertyTypes` rejects the latter.
+  const { readFileUtf8SameDescriptor: omitted, ...withoutDescriptorRead } = nodeWorkspaceFs;
+  if (omitted === undefined) {
+    throw new Error("nodeWorkspaceFs always provides readFileUtf8SameDescriptor");
+  }
+  return {
+    ...withoutDescriptorRead,
+    readFileUtf8: (absolutePath): string => {
+      unboundedReads.push(absolutePath);
+      return nodeWorkspaceFs.readFileUtf8(absolutePath);
+    },
   };
 }
 
@@ -1969,6 +1990,10 @@ describe("runGroundedExploration", () => {
     ).toBe(false);
   });
 
+  // The cap this pins is the PRE-read one: `stat.size > WORKSPACE_MANIFEST_BYTES_MAX` refuses the
+  // manifest before any read primitive is chosen, so it is unaffected by ADR-0005 D1's rule that a
+  // port without the bounded same-descriptor lane yields absent advisory metadata (the case the
+  // next test covers). The compatibility port below therefore still reports the byte-limit reason.
   it("uses the compatibility stat cap before reading a workspace manifest", async () => {
     mkdirSync(join(ROOT, "hidden-services/payments"), { recursive: true });
     writeFileSync(
@@ -2018,6 +2043,44 @@ describe("runGroundedExploration", () => {
           marker.claim.includes("workspace-manifest-byte-limit:1"),
       ),
     ).toBe(true);
+  });
+
+  it("omits manifest metadata rather than reading it unbounded without a same-descriptor lane", async () => {
+    mkdirSync(join(ROOT, "hidden-services/payments"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "package.json"),
+      JSON.stringify({ workspaces: ["hidden-services/*"] }),
+    );
+    writeFileSync(
+      join(ROOT, "hidden-services/payments/pom.xml"),
+      "<project><properties><maven.compiler.release>99</maven.compiler.release></properties></project>\n",
+    );
+    const manifestPath = realpathSync(join(ROOT, "package.json"));
+    const unboundedReads: string[] = [];
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which Java version does the hidden service use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        fs: descriptorlessWorkspaceFs(unboundedReads),
+      },
+    );
+
+    expect(unboundedReads).not.toContain(manifestPath);
+    expect(
+      out.pack.uncertainty.some(
+        (marker) =>
+          marker.kind === "scope-incomplete" &&
+          marker.claim.includes("workspace-manifest-read-unavailable:1"),
+      ),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
   it("caps workspace patterns before normalization and reports only body-free reasons", async () => {
@@ -2480,6 +2543,66 @@ describe("runGroundedExploration", () => {
       );
     expect(descriptorCaps).toContain(2_097_152);
     expect(descriptorExcerpt).toBeDefined();
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("omits symbol-line evidence rather than reading it unbounded without a same-descriptor lane", async () => {
+    writeFileSync(
+      join(ROOT, "src/DescriptorProbe.ts"),
+      "// preface\n// another line\nexport function DescriptorProbe(): number { return 1; }\n",
+    );
+    const targetPath = realpathSync(join(ROOT, "src/DescriptorProbe.ts"));
+    const unboundedReads: string[] = [];
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Where is DescriptorProbe defined?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        fs: descriptorlessWorkspaceFs(unboundedReads),
+      },
+    );
+
+    // The symbol-line scan has no bounded lane on this port, so it contributes no evidence at all;
+    // the request still answers, and the file is simply absent from the symbol-discovery excerpts.
+    expect(unboundedReads).not.toContain(targetPath);
+    expect(
+      out.pack.files
+        .find((file) => file.scopePath === "src/DescriptorProbe.ts")
+        ?.excerpts.some((excerpt) => excerpt.atom.provenance.tool === "repo.symbolFileDiscovery"),
+    ).not.toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  // #3347 / ADR-0005 D1: `readFileUtf8SameDescriptor` is OPTIONAL on `WorkspaceFs`, so a port that
+  // implements the bounded prefix/byte lanes but not that one is a SUPPORTED shape, not a broken
+  // one. The workspace read lane reports it as an unavailable read, and every ring must degrade it
+  // to one skipped file: the request still answers, the file is absent, and the absence is stated
+  // in `uncertainty` rather than being silent. This pin is load-bearing on the excerpt lane's
+  // degrade — drop it and the read lane's error fails the whole grounded answer instead.
+  it("answers with the file absent when the port omits the optional same-descriptor lane", async () => {
+    const unboundedReads: string[] = [];
+
+    const out = await retrieveConnectedContextPack(input(), {
+      correlationId: undefined,
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+      fs: descriptorlessWorkspaceFs(unboundedReads),
+    });
+
+    expect(out.pack.files.map((file) => file.scopePath)).not.toContain("src/foo.ts");
+    expect(
+      out.pack.uncertainty.some((marker) =>
+        marker.claim.includes("excerpt unavailable for src/foo.ts"),
+      ),
+    ).toBe(true);
+    expect(unboundedReads).toEqual([]);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 

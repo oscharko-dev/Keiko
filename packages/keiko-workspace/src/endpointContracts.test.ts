@@ -22,6 +22,7 @@ function makeScope(files: Readonly<Record<string, string>>): {
 } {
   const workspace: WorkspaceInfo = {
     root: MEM_ROOT,
+    selectedRoot: MEM_ROOT,
     name: "endpoint-demo",
     version: "1.0.0",
     testFramework: "vitest",

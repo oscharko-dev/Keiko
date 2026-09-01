@@ -55,6 +55,7 @@ afterEach(() => {
 function workspace(): WorkspaceInfo {
   return {
     root: WORKSPACE_ROOT,
+    selectedRoot: WORKSPACE_ROOT,
     name: undefined,
     version: undefined,
     testFramework: "unknown",

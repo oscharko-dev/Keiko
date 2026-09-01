@@ -161,6 +161,7 @@ function testFs(files: Record<string, string>): WorkspaceFs {
 function testWorkspace(): WorkspaceInfo {
   return {
     root: ROOT,
+    selectedRoot: ROOT,
     name: "repository-semantic-test",
     version: "1.0.0",
     testFramework: "vitest",

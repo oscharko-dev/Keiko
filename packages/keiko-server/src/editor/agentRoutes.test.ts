@@ -78,7 +78,11 @@ import {
 import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
 import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 import { deriveManagedWorktreePath } from "../task-workspace/naming.js";
-import { resolveLifecycleManagedWorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
+import {
+  grantedWorkspaceRootAccess,
+  resolveLifecycleManagedWorkspaceRootAccess,
+  type WorkspaceRootAccessOutcome,
+} from "../task-workspace/workspace-root-access.js";
 
 // Epic #2384: governed-assist now gates workspace-contained mutations, so the action-mechanics
 // harness runs at the Full-access deployment ceiling. Explicit mode-policy tests keep exercising
@@ -536,7 +540,12 @@ function runtimeMutationDeps(
   runtimeMutationLease: NonNullable<UiHandlerDeps["runtimeMutationLease"]>,
   workspaceRootAccessResolver: NonNullable<UiHandlerDeps["workspaceRootAccessResolver"]> = (
     requestedRoot,
-  ) => ({ kind: "managed-task", canonicalRoot: requestedRoot, fs: nodeWorkspaceFs }),
+  ) =>
+    grantedWorkspaceRootAccess({
+      kind: "managed-task",
+      canonicalRoot: requestedRoot,
+      fs: nodeWorkspaceFs,
+    }),
 ): Parameters<typeof handleEditorAgentActions>[1] {
   return { runtimeMutationLease, workspaceRootAccessResolver };
 }
@@ -592,11 +601,13 @@ function createManagedAgentWorkspaceFixture(): ManagedAgentWorkspaceFixture {
   };
   return {
     root,
-    resolveAccess: (requestedRoot) =>
-      resolveLifecycleManagedWorkspaceRootAccess(
+    resolveAccess: (requestedRoot): WorkspaceRootAccessOutcome => {
+      const access = resolveLifecycleManagedWorkspaceRootAccess(
         { managedRoot, store: { getById: (): WorkspaceInstance => instance } },
         requestedRoot,
-      ),
+      );
+      return access === undefined ? { decision: "denied" } : grantedWorkspaceRootAccess(access);
+    },
     dispose: (): void => {
       rmSync(base, { recursive: true, force: true });
     },
@@ -4319,7 +4330,11 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     const accessRead = vi.spyOn(accessFs, "readFileUtf8");
     const resolveWorkspaceRootAccess = vi.fn((requestedRoot: string) => {
       order.push("access");
-      return { kind: "managed-task" as const, canonicalRoot: requestedRoot, fs: accessFs };
+      return grantedWorkspaceRootAccess({
+        kind: "managed-task",
+        canonicalRoot: requestedRoot,
+        fs: accessFs,
+      });
     });
     const writeFileUtf8 = vi.fn((_path: string, _content: string): void => {
       order.push("write");
@@ -4382,23 +4397,25 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       };
       _setEditorAgentPatchWriterForTests(writer);
       let proofCount = 0;
-      const resolveWorkspaceRootAccess = vi.fn((requestedRoot: string) => {
-        proofCount += 1;
-        if (proofCount < 3) {
-          return {
-            kind: "managed-task" as const,
-            canonicalRoot: requestedRoot,
-            fs: nodeWorkspaceFs,
-          };
-        }
-        return outcome === "revoked"
-          ? undefined
-          : {
-              kind: "managed-task" as const,
-              canonicalRoot: join(requestedRoot, "replacement"),
+      const resolveWorkspaceRootAccess = vi.fn(
+        (requestedRoot: string): WorkspaceRootAccessOutcome => {
+          proofCount += 1;
+          if (proofCount < 3) {
+            return grantedWorkspaceRootAccess({
+              kind: "managed-task",
+              canonicalRoot: requestedRoot,
               fs: nodeWorkspaceFs,
-            };
-      });
+            });
+          }
+          return outcome === "revoked"
+            ? { decision: "denied" }
+            : grantedWorkspaceRootAccess({
+                kind: "managed-task",
+                canonicalRoot: join(requestedRoot, "replacement"),
+                fs: nodeWorkspaceFs,
+              });
+        },
+      );
       const runtimeMutationLease = {
         matches: vi.fn((): boolean => true),
         requiresReview: vi.fn((): boolean => true),

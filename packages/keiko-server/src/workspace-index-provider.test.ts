@@ -31,6 +31,7 @@ function scopeKey(workspaceRoot: string): WorkspaceIndexScopeKey {
     {
       workspace: {
         root: workspaceRoot,
+        selectedRoot: workspaceRoot,
         name: undefined,
         version: undefined,
         testFramework: "unknown",

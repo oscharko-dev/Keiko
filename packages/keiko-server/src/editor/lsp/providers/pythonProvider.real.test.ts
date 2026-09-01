@@ -45,6 +45,7 @@ describe.skipIf(!provisioned)(suiteName, () => {
       const outcome = await runHostLanguageOperation(request, {
         workspace: {
           root,
+          selectedRoot: root,
           name: undefined,
           version: undefined,
           testFramework: "unknown",

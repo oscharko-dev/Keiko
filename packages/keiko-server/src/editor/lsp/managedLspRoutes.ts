@@ -124,11 +124,16 @@ export async function handleGetManagedLspControl(
   return runFilesHandler(async () => {
     const resolved = await resolveRequestRoot(ctx, deps, ctx.url.searchParams.get("root"));
     const resolveAccess = requestRootAccessResolver(ctx, deps, resolved);
-    const snapshot = await deps.managedLspControl?.read(resolved.realRoot);
-    if (snapshot === undefined) throw new Error("managed LSP control disappeared");
+    // Mirrors the PUT handler's second re-proof, and must stay AHEAD of the governed read the same
+    // way that one stays ahead of mutate(): root admission above is a single point-in-time check,
+    // and reading managed language settings is itself an effect on the resolved root. Re-prove
+    // first, then run the read and every downstream lookup through the freshly proven capability
+    // rather than the admission-time path string (#3347).
     const access = resolveAccess();
     if (access === undefined) throw new FilesError(403, "DENIED", DENIED_MESSAGE);
-    const health = listHostLspHealthSnapshotsForRoot(resolved.realRoot);
+    const snapshot = await deps.managedLspControl?.read(access.canonicalRoot);
+    if (snapshot === undefined) throw new Error("managed LSP control disappeared");
+    const health = listHostLspHealthSnapshotsForRoot(access.canonicalRoot);
     const response = {
       ...snapshot,
       languages: projectManagedLspLiveLanguages(snapshot, health),

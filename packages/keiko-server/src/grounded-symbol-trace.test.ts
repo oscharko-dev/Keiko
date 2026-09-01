@@ -31,6 +31,7 @@ interface FsProbe {
 function workspaceInfo(): WorkspaceInfo {
   return {
     root: WORKSPACE_ROOT,
+    selectedRoot: WORKSPACE_ROOT,
     name: "workspace",
     version: "1.0.0",
     testFramework: "vitest",

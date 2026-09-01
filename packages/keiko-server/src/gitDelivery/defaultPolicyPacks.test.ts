@@ -180,6 +180,7 @@ describe("shipped KEIKO_DEFAULT_*_POLICY_PACK constants remain mintable (KEIKO-0
 describe("mutating route groups wire their fallback default through defaultMintableRepoPack (KEIKO-0526)", () => {
   const WORKSPACE: WorkspaceInfo = {
     root: "/tmp/keiko-policy-pack-mintability-test",
+    selectedRoot: "/tmp/keiko-policy-pack-mintability-test",
     name: undefined,
     version: undefined,
     testFramework: "unknown",

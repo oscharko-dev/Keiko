@@ -563,16 +563,27 @@ function resolvePackage(
   return undefined;
 }
 
+// The resolver inputs one import specifier is resolved against: the workspace binding, the
+// tsconfig aliases and workspace packages a bare specifier may match, the candidate set a
+// resolution has to stay inside, and the failure sink that records an unreadable probe. They stay
+// constant for a whole import-graph build except `resolverFailures`, which is the accumulator's,
+// so they travel as one readonly context — the resolver entry points stay under the parameter bar
+// (S107) and a new resolver input is threaded in one place instead of two signatures.
+interface ImportResolutionContext {
+  readonly scope: SearchScope;
+  readonly fs: WorkspaceFs;
+  readonly aliases: readonly TsconfigAlias[];
+  readonly packages: readonly PackageInfo[];
+  readonly candidatePaths: ReadonlySet<string>;
+  readonly resolverFailures: Set<string>;
+}
+
 function resolveImport(
-  scope: SearchScope,
-  fs: WorkspaceFs,
+  resolution: ImportResolutionContext,
   importer: string,
   specifier: string,
-  aliases: readonly TsconfigAlias[],
-  packages: readonly PackageInfo[],
-  candidatePaths: ReadonlySet<string>,
-  resolverFailures: Set<string>,
 ): { readonly path?: string; readonly kind: ImportResolutionKind } {
+  const { scope, fs, candidatePaths, resolverFailures } = resolution;
   if (specifier.startsWith(".")) {
     const resolved = resolveModuleCandidate(
       scope,
@@ -583,9 +594,23 @@ function resolveImport(
     );
     return resolved === undefined ? { kind: "unresolved" } : { path: resolved, kind: "relative" };
   }
-  const alias = resolveAlias(scope, fs, specifier, aliases, candidatePaths, resolverFailures);
+  const alias = resolveAlias(
+    scope,
+    fs,
+    specifier,
+    resolution.aliases,
+    candidatePaths,
+    resolverFailures,
+  );
   if (alias !== undefined) return { path: alias, kind: "tsconfig-path" };
-  const pkg = resolvePackage(scope, fs, specifier, packages, candidatePaths, resolverFailures);
+  const pkg = resolvePackage(
+    scope,
+    fs,
+    specifier,
+    resolution.packages,
+    candidatePaths,
+    resolverFailures,
+  );
   return pkg === undefined ? { kind: "unresolved" } : { path: pkg.path, kind: pkg.kind };
 }
 
@@ -611,25 +636,11 @@ function score(confidenceValue: number, distanceValue: number): number {
 }
 
 function buildEdge(
-  scope: SearchScope,
-  fs: WorkspaceFs,
+  resolution: ImportResolutionContext,
   importerPath: string,
   hit: ImportSpecifierHit,
-  aliases: readonly TsconfigAlias[],
-  packages: readonly PackageInfo[],
-  candidatePaths: ReadonlySet<string>,
-  resolverFailures: Set<string>,
 ): ResolvedImportEdge {
-  const resolved = resolveImport(
-    scope,
-    fs,
-    importerPath,
-    hit.specifier,
-    aliases,
-    packages,
-    candidatePaths,
-    resolverFailures,
-  );
+  const resolved = resolveImport(resolution, importerPath, hit.specifier);
   const confidenceValue = confidence(resolved.kind);
   const distanceValue = distance(importerPath, resolved.path);
   return {
@@ -876,24 +887,32 @@ interface ImportGraphScanContext {
   readonly control: StructuralExecutionControl;
 }
 
+// Narrows the fixed scan context to the resolver view, binding the accumulator's failure sink so
+// every edge of one file records its unreadable probes in the same place.
+function importResolutionContext(
+  context: ImportGraphScanContext,
+  resolverFailures: Set<string>,
+): ImportResolutionContext {
+  return {
+    scope: context.scope,
+    fs: context.fs,
+    aliases: context.aliases.items,
+    packages: context.packages.items,
+    candidatePaths: context.candidatePaths,
+    resolverFailures,
+  };
+}
+
 function appendImportEdges(
   context: ImportGraphScanContext,
   accumulator: ImportGraphAccumulator,
   file: string,
   text: string,
 ): boolean {
+  const resolution = importResolutionContext(context, accumulator.resolverFailures);
   for (const hit of collectImportSpecifiers(text)) {
     if (structuralExecutionStopped(context.control)) return false;
-    const edge = buildEdge(
-      context.scope,
-      context.fs,
-      file,
-      hit,
-      context.aliases.items,
-      context.packages.items,
-      context.candidatePaths,
-      accumulator.resolverFailures,
-    );
+    const edge = buildEdge(resolution, file, hit);
     accumulator.edges.push(edge);
     addToIndex(accumulator.forward, edge.importerPath, edge);
     addToIndex(accumulator.reverse, edge.targetPath, edge);

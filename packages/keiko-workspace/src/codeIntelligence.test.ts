@@ -32,6 +32,7 @@ function workspace(
 ): WorkspaceInfo {
   return {
     root: MEM_ROOT,
+    selectedRoot: MEM_ROOT,
     name: "code-intelligence-demo",
     version: "1.0.0",
     testFramework: "vitest",

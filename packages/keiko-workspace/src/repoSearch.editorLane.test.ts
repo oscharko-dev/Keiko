@@ -56,6 +56,7 @@ const PEM_FILE = [
 function workspace(): WorkspaceInfo {
   return {
     root: MEM_ROOT,
+    selectedRoot: MEM_ROOT,
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",

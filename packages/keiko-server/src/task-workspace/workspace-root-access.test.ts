@@ -29,11 +29,20 @@ import {
   type GroundedAnswerer,
   type OrchestratorInput,
 } from "../grounded-orchestrator.js";
-import { createBufferedServerLogSink } from "../observability/index.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/index.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { assertManagedRootOwned } from "./managed-root.js";
 import { inspectManagedGitdirIdentity, parseGitdirPointerTarget } from "./gitdir-identity.js";
-import { deriveManagedWorktreePath, deriveRepositoryId } from "./naming.js";
+import {
+  deriveManagedWorktreePath,
+  deriveRepositoryId,
+  MANAGED_ROOT_MARKER_FILENAME,
+} from "./naming.js";
 import type { WorkspaceProvisioningService } from "./types.js";
 import {
   requiresConfiguredManagedWorkspaceAuthority,
@@ -110,6 +119,22 @@ function resolveAccess(root = workspaceRoot): WorkspaceRootAccess | undefined {
     { managedTaskWorkspaceRoot: managedRoot, workspaceProvisioning: provisioning() },
     root,
   );
+}
+
+function resolveAccessLogged(
+  activityLog: ServerLogSink,
+  correlationId: string,
+  root = workspaceRoot,
+): WorkspaceRootAccess | undefined {
+  return resolveManagedWorkspaceRootAccess(
+    { managedTaskWorkspaceRoot: managedRoot, workspaceProvisioning: provisioning() },
+    root,
+    { activityLog, correlationId },
+  );
+}
+
+function denialEvents(activityLog: BufferedServerLogSink): readonly ServerLogEvent[] {
+  return activityLog.events.filter((event) => event.op === "workspace.root.denied");
 }
 
 function groundedInput(fs: WorkspaceFs): OrchestratorInput {
@@ -420,6 +445,208 @@ describe("resolveManagedWorkspaceRootAccess", () => {
     }
   });
 
+  // #3347 owner P2 / cursor: the ORDINARY managed-denial cases returned `undefined` with no
+  // activity-log line at all -- only a thrown failure reached the catch-based recorder. A route
+  // could therefore answer 403 with nothing correlated in the log to reconstruct WHY, which is the
+  // one question a managed-authority denial has to answer. Each guard now emits exactly one
+  // classified, body-free line on the SAME op/category/redaction vocabulary the catch already used.
+  it("logs one correlated lifecycle denial when the managed instance is archived", () => {
+    registered = { ...instanceAt(workspaceRoot), lifecycleState: "archived" };
+    const activityLog = createBufferedServerLogSink();
+
+    expect(resolveAccessLogged(activityLog, "wra-lifecycle-0001")).toBeUndefined();
+    expect(denialEvents(activityLog)).toHaveLength(1);
+    expect(denialEvents(activityLog)[0]).toMatchObject({
+      level: "warn",
+      category: "security",
+      correlationId: "wra-lifecycle-0001",
+      extra: { decision: "denied", reason: "managed-root-lifecycle" },
+    });
+    // Body-free: the denial never carries the workspace path or the persisted Git identity.
+    expect(JSON.stringify(denialEvents(activityLog)[0])).not.toContain(workspaceRoot);
+  });
+
+  it("logs one correlated identity denial when the persisted Git identity drifted", () => {
+    registered = instanceAt(workspaceRoot, "mismatched-gitdir-identity");
+    const activityLog = createBufferedServerLogSink();
+
+    expect(resolveAccessLogged(activityLog, "wra-identity-0001")).toBeUndefined();
+    expect(denialEvents(activityLog)).toHaveLength(1);
+    expect(denialEvents(activityLog)[0]).toMatchObject({
+      level: "warn",
+      category: "security",
+      correlationId: "wra-identity-0001",
+      extra: { decision: "denied", reason: "managed-root-identity" },
+    });
+    expect(JSON.stringify(denialEvents(activityLog)[0])).not.toContain(
+      "mismatched-gitdir-identity",
+    );
+  });
+
+  it("logs one correlated ownership denial when the managed-root marker is gone", () => {
+    rmSync(join(managedRoot, MANAGED_ROOT_MARKER_FILENAME), { force: true });
+    const activityLog = createBufferedServerLogSink();
+
+    expect(resolveAccessLogged(activityLog, "wra-ownership-0001")).toBeUndefined();
+    expect(denialEvents(activityLog)).toHaveLength(1);
+    expect(denialEvents(activityLog)[0]).toMatchObject({
+      correlationId: "wra-ownership-0001",
+      extra: { decision: "denied", reason: "managed-root-ownership" },
+    });
+  });
+
+  it("logs one correlated registration denial for an unregistered valid-shaped sibling", () => {
+    const sibling = deriveManagedWorktreePath({
+      managedRoot,
+      repositoryId,
+      workspaceId: "ws_ffffffffffffffffffffffff",
+    });
+    mkdirSync(sibling, { recursive: true });
+    const activityLog = createBufferedServerLogSink();
+
+    expect(resolveAccessLogged(activityLog, "wra-registration-01", sibling)).toBeUndefined();
+    expect(denialEvents(activityLog)).toHaveLength(1);
+    expect(denialEvents(activityLog)[0]).toMatchObject({
+      correlationId: "wra-registration-01",
+      extra: { decision: "denied", reason: "managed-root-not-registered" },
+    });
+  });
+
+  // The gate on the emit is load-bearing, not cosmetic: deps.ts asks THIS resolver about every
+  // requested root before it falls back to ordinary admission, so an ungated emit would label every
+  // ordinary workspace resolution in the product a managed-authority denial and bury the real ones.
+  it("stays silent for an ordinary root that never required managed authority", () => {
+    const ordinaryRoot = join(base, "ordinary-project");
+    mkdirSync(ordinaryRoot);
+    const activityLog = createBufferedServerLogSink();
+
+    expect(resolveAccessLogged(activityLog, "wra-ordinary-0001", ordinaryRoot)).toBeUndefined();
+    expect(denialEvents(activityLog)).toHaveLength(0);
+  });
+
+  // #3347 cursor: resolveLifecycleManagedWorkspaceRootAccess kept the empty `catch { return
+  // undefined; }` its interactive twin already lost -- no catalogued op, no errorKind, no
+  // correlation. It reuses the same recorder now, with a reason that keeps the maintenance lane
+  // distinguishable from an interactive admission failure in one grep.
+  it("logs a correlated workspace.root.denied event when the lifecycle-maintenance re-proof throws", () => {
+    const activityLog = createBufferedServerLogSink();
+    const realStat = nodeWorkspaceFs.stat.bind(nodeWorkspaceFs);
+    const simulatedRace = new Error("simulated stat failure racing a concurrent sweep");
+    const statSpy = vi.spyOn(nodeWorkspaceFs, "stat").mockImplementation((path: string) => {
+      if (path === workspaceRoot) throw simulatedRace;
+      return realStat(path);
+    });
+
+    let access: WorkspaceRootAccess | undefined;
+    try {
+      access = resolveLifecycleManagedWorkspaceRootAccess(
+        { managedRoot, store: { getById: (): WorkspaceInstance | undefined => registered } },
+        workspaceRoot,
+        { activityLog, correlationId: "wra-lifecycle-catch" },
+      );
+    } finally {
+      statSpy.mockRestore();
+    }
+
+    expect(access).toBeUndefined();
+    expect(denialEvents(activityLog)).toHaveLength(1);
+    expect(denialEvents(activityLog)[0]).toMatchObject({
+      level: "warn",
+      category: "security",
+      correlationId: "wra-lifecycle-catch",
+      extra: { decision: "denied", reason: "managed-root-lifecycle-resolution-failed" },
+    });
+    expect(JSON.stringify(denialEvents(activityLog)[0])).not.toContain(simulatedRace.message);
+  });
+
+  // #3347 owner P1: production registers a managed worktree in UiStore like any other project, so
+  // resolveRegisteredOrManagedWorkspaceRoot's store loop used to run FIRST and return a
+  // WorkspaceInfo for a path the strong managed prover denies -- the store hit bypassed the
+  // lifecycle/gitdir proof entirely. The archived instance below is simultaneously (a) denied by
+  // resolveManagedWorkspaceRootAccess and (b) present in store.listProjects(), which is exactly the
+  // shape run/apply/git-delivery callers act on after managed authority was revoked.
+  it("rejects an archived managed worktree that is ALSO registered as an ordinary project in the store", () => {
+    registered = { ...instanceAt(workspaceRoot), lifecycleState: "archived" };
+    const store = createInMemoryUiStore();
+    const deps = {
+      managedTaskWorkspaceRoot: managedRoot,
+      workspaceProvisioning: provisioning(),
+      store,
+    };
+
+    try {
+      store.createProject(workspaceRoot, "managed-worktree-also-registered");
+
+      // Guards the pin against vacuity: the bypass only exists while the store really lists it.
+      expect(store.listProjects().map((project) => project.path)).toContain(workspaceRoot);
+      expect(resolveAccess()).toBeUndefined();
+      expect(resolveManagedTaskWorkspaceRoot(deps, workspaceRoot)).toBeUndefined();
+      expect(resolveRegisteredOrManagedWorkspaceRoot(deps, workspaceRoot)).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
+  it("rejects an identity-replaced managed worktree that is ALSO registered as an ordinary project", () => {
+    registered = instanceAt(workspaceRoot, "mismatched-gitdir-identity");
+    const store = createInMemoryUiStore();
+    const deps = {
+      managedTaskWorkspaceRoot: managedRoot,
+      workspaceProvisioning: provisioning(),
+      store,
+    };
+
+    try {
+      store.createProject(workspaceRoot, "managed-worktree-also-registered");
+
+      expect(store.listProjects().map((project) => project.path)).toContain(workspaceRoot);
+      expect(resolveRegisteredOrManagedWorkspaceRoot(deps, workspaceRoot)).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
+  it("still admits an ordinary registered project that is not classified as managed", () => {
+    const ordinaryRoot = join(base, "ordinary-project");
+    mkdirSync(ordinaryRoot);
+    const store = createInMemoryUiStore();
+    const deps = {
+      managedTaskWorkspaceRoot: managedRoot,
+      workspaceProvisioning: provisioning(),
+      store,
+    };
+
+    try {
+      store.createProject(ordinaryRoot, "ordinary-project");
+
+      expect(resolveRegisteredOrManagedWorkspaceRoot(deps, ordinaryRoot)?.root).toBe(ordinaryRoot);
+    } finally {
+      store.close();
+    }
+  });
+
+  // The classify-first order must not over-deny either. A user's ordinary project directory very
+  // often CONTAINS Keiko's managed root (`<project>/.keiko/task-workspaces`), and
+  // requiresManagedRootAuthority deliberately answers false for that shape because the `.keiko`
+  // segment is on the deny list. Losing that would take every such project's routes to 403.
+  it("still admits a registered ordinary project that CONTAINS the managed root", () => {
+    const store = createInMemoryUiStore();
+    const deps = {
+      managedTaskWorkspaceRoot: managedRoot,
+      workspaceProvisioning: provisioning(),
+      store,
+    };
+
+    try {
+      store.createProject(base, "project-containing-the-managed-root");
+
+      expect(requiresConfiguredManagedWorkspaceAuthority(deps, base)).toBe(false);
+      expect(resolveRegisteredOrManagedWorkspaceRoot(deps, base)?.root).toBe(base);
+    } finally {
+      store.close();
+    }
+  });
+
   it("admits an active worktree through resolveManagedTaskWorkspaceRoot and resolveRegisteredOrManagedWorkspaceRoot at the SAME canonical root interactive admission proves", () => {
     const store = createInMemoryUiStore();
     const deps = {
@@ -431,6 +658,9 @@ describe("resolveManagedWorkspaceRootAccess", () => {
     try {
       expect(resolveManagedTaskWorkspaceRoot(deps, workspaceRoot)).toEqual({
         root: workspaceRoot,
+        // The managed projection reports the canonical root it just re-proved as BOTH identities:
+        // no lexical alias is admitted here, so there is no second path to display.
+        selectedRoot: workspaceRoot,
         name: undefined,
         version: undefined,
         testFramework: "unknown",

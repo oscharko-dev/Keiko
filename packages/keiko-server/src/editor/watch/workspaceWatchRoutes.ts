@@ -34,20 +34,28 @@ function watchRootToken(root: string): string {
   return sha256Hex(root).slice(0, 24);
 }
 
-// AGENTS.md §8 Rule 1: a live watch that disappears mid-stream must be reconstructable from the
-// activity log alone. `onAuthorityRevoked` (wired below) previously aborted the controller and
+// Which side of the subscription the denial happened on. `admission` is the very first re-proof,
+// before any subscriber exists; `stream` is a live subscriber losing authority mid-stream.
+type WatchAuthorityDenialPhase = "admission" | "stream";
+
+// AGENTS.md §8 Rule 1: a watch that is denied or disappears mid-stream must be reconstructable from
+// the activity log alone. `onAuthorityRevoked` (wired below) previously aborted the controller and
 // closed the response with no catalogued op, no errorKind, and no correlation id — indistinguishable
 // in the log from an ordinary client disconnect. Mirrors `workspace-root-denial-log.ts`'s
 // `recordWorkspaceRootDenial`: same `security` category, same correlation-or-unknown fallback,
 // body-free `extra`.
-function recordWatchAuthorityRevoked(ctx: RouteContext, root: string): void {
+function recordWatchAuthorityRevoked(
+  ctx: RouteContext,
+  root: string,
+  phase: WatchAuthorityDenialPhase,
+): void {
   processServerLogSink().write({
     level: "warn",
     category: "security",
     op: "editor.workspace-watch.authority-revoked",
     correlationId: correlationIdOrUnknown(ctx.correlationId),
     errorKind: "WATCH_AUTHORITY_REVOKED",
-    extra: { decision: "revoked", rootToken: watchRootToken(root) },
+    extra: { decision: "revoked", phase, rootToken: watchRootToken(root) },
   });
 }
 
@@ -194,15 +202,22 @@ export async function handleEditorWorkspaceWatchEvents(
     root: root.realRoot,
     lastSequence: parseLastSequence(ctx),
     onEvent: (event) => writeOrDestroy(ctx.res, frameWatchEvent(event), controller),
-    reproveRoot: (): boolean => resolveAccess() !== undefined,
+    // The resolver itself, not a boolean reduction of it (#3347 owner P1): the watch session runs
+    // every scan/metadata read of this long-lived effect on the capability each re-proof mints.
+    reproveRoot: resolveAccess,
     onAuthorityRevoked: (): void => {
-      recordWatchAuthorityRevoked(ctx, root.realRoot);
+      recordWatchAuthorityRevoked(ctx, root.realRoot, "stream");
       controller.abort();
       if (!ctx.res.writableEnded) ctx.res.end();
     },
     additionalExclusions,
   });
   if (result.kind === "rootUnavailable") {
+    // #3347 owner P2: the initial re-proof fails BEFORE a subscriber is added, so revokeRoot() has
+    // nobody to invoke `onAuthorityRevoked` on and this 403 used to leave no trace whatsoever — the
+    // same security denial, invisible in the log. Emit the catalogued op here too, so an admission
+    // denial and a mid-stream revocation are both reconstructable and told apart by `phase`.
+    recordWatchAuthorityRevoked(ctx, root.realRoot, "admission");
     return { status: 403, body: errorBody("DENIED", "Workspace watch authority is unavailable.") };
   }
   if (result.kind === "subscriberLimit") {

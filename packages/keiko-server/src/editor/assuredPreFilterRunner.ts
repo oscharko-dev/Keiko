@@ -198,6 +198,7 @@ export function candidateFileText(edits: readonly { readonly newText: string }[]
 function disposableWorkspace(root: string): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework: "unknown",
