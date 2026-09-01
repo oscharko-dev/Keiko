@@ -68,6 +68,37 @@ function fakeWorkspace(root: string): WorkspaceInfo {
   };
 }
 
+function mutableRootDiscoveryFs(): {
+  readonly fs: WorkspaceFs;
+  readonly readDirPaths: readonly string[];
+  readonly statCalls: () => number;
+} {
+  const readDirPaths: string[] = [];
+  let selectedRootCalls = 0;
+  let statCalls = 0;
+  return {
+    fs: {
+      readFileUtf8: (): string => "",
+      stat: (): WorkspaceStat => {
+        statCalls += 1;
+        return { size: 1, isFile: true, isDirectory: false, isSymbolicLink: false };
+      },
+      readDir: (path): readonly WorkspaceDirEntry[] => {
+        readDirPaths.push(path);
+        return [{ name: "safe.ts", isDirectory: false, isFile: true, isSymbolicLink: false }];
+      },
+      realPath: (path): string => {
+        if (path !== "/selected") return path;
+        selectedRootCalls += 1;
+        return selectedRootCalls <= 3 ? "/safe/project" : "/safe/.aws";
+      },
+      exists: (): boolean => true,
+    },
+    readDirPaths,
+    statCalls: () => statCalls,
+  };
+}
+
 describe("discoverFiles", () => {
   it("discovers regular files in deterministic sorted order", () => {
     file("src/b.ts");
@@ -313,6 +344,47 @@ describe("discoverFiles", () => {
     expect(discoverFiles(fakeWorkspace(root), DEFAULT_DISCOVERY_OPTIONS, fs)).toEqual([]);
   });
 
+  it("keeps unavailable-root discovery tolerant", () => {
+    const fs: WorkspaceFs = {
+      readFileUtf8: (): string => "",
+      stat: (): never => {
+        throw new Error("unavailable root must not be statted");
+      },
+      readDir: (): readonly WorkspaceDirEntry[] => [],
+      realPath: (): never => {
+        throw new Error("EACCES");
+      },
+      exists: (): boolean => false,
+    };
+
+    expect(discoverFiles(fakeWorkspace("/unavailable"), DEFAULT_DISCOVERY_OPTIONS, fs)).toEqual([]);
+  });
+
+  it("enumerates only the admitted canonical root when the lexical alias changes", () => {
+    const measured = mutableRootDiscoveryFs();
+
+    expect(
+      discoverFiles(fakeWorkspace("/selected"), DEFAULT_DISCOVERY_OPTIONS, measured.fs),
+    ).toEqual([]);
+    expect(measured.readDirPaths).toEqual(["/safe/project"]);
+    expect(measured.readDirPaths).not.toContain("/selected");
+    expect(measured.statCalls()).toBe(0);
+  });
+
+  it("enumerates only the admitted canonical root in asynchronous discovery", async () => {
+    const measured = mutableRootDiscoveryFs();
+
+    const result = await discoverWithStatsAsync(
+      fakeWorkspace("/selected"),
+      DEFAULT_DISCOVERY_OPTIONS,
+      measured.fs,
+    );
+    expect(result.files).toEqual([]);
+    expect(measured.readDirPaths).toEqual(["/safe/project"]);
+    expect(measured.readDirPaths).not.toContain("/selected");
+    expect(measured.statCalls()).toBe(0);
+  });
+
   it("reports denied and ignored counts via discoverWithStats", () => {
     writeFileSync(join(dir, ".gitignore"), "*.tmp\n", "utf8");
     file(".env", "SECRET=1");
@@ -498,6 +570,39 @@ describe("readWorkspaceFile", () => {
 
     expect(() => readWorkspaceFile(workspace, "selected.ts")).toThrow(PathDeniedError);
     expect(() => readWorkspaceFileForEditing(workspace, "selected.ts")).toThrow(PathDeniedError);
+  });
+
+  it("uses the contained relative path without re-resolving a mutable root", () => {
+    let rootResolutionCalls = 0;
+    let statCalls = 0;
+    let readCalls = 0;
+    const fs: WorkspaceFs = {
+      readFileUtf8: (): string => {
+        readCalls += 1;
+        return "must not be read";
+      },
+      stat: (): WorkspaceStat => {
+        statCalls += 1;
+        return { size: 16, isFile: true, isDirectory: false, isSymbolicLink: false };
+      },
+      readDir: (): readonly WorkspaceDirEntry[] => [],
+      realPath: (path): string => {
+        if (path === "/selected") {
+          rootResolutionCalls += 1;
+          return rootResolutionCalls === 1 ? "/safe/project" : "/safe/project/.aws";
+        }
+        if (path === "/selected/alias.txt") return "/safe/project/.aws/credentials";
+        return path;
+      },
+      exists: (): boolean => true,
+    };
+
+    expect(() =>
+      readWorkspaceFile(fakeWorkspace("/selected"), "alias.txt", { maxBytes: 100 }, fs),
+    ).toThrow(PathDeniedError);
+    expect(rootResolutionCalls).toBe(1);
+    expect(statCalls).toBe(0);
+    expect(readCalls).toBe(0);
   });
 
   it("refuses to read inside a benign-named root that is a symlink into a denied dir", () => {

@@ -17,10 +17,10 @@ import {
 import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import {
+  assertAllowedWorkspaceRealRoot,
   containedRealPathInfo,
   isAllowedContainedPathParent,
   isCanonicalAllowedContainedPath,
-  resolveExistingAllowedWorkspaceRealRoot,
 } from "./realpath.js";
 import {
   FileTooLargeError,
@@ -422,7 +422,7 @@ function createWalk(
   return {
     fs,
     root: workspace.root,
-    realRoot: resolveExistingAllowedWorkspaceRealRoot(fs, workspace.root),
+    realRoot: assertAllowedWorkspaceRealRoot(fs, workspace.root),
     matcher: compileIgnore(workspace.ignoreLines),
     opts,
     applyGitignore: opts.applyGitignore,

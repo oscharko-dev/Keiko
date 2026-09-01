@@ -39,6 +39,44 @@ const ANSWERER_NOT_USED: GroundedAnswerer = {
   answer: (): Promise<string> => Promise.reject(new Error("answerer must not run")),
 };
 
+type BufferedActivityLog = ReturnType<typeof createBufferedServerLogSink>;
+
+function expectSearchLifecycle(
+  activityLog: BufferedActivityLog,
+  terminalOp: "search.connected-context.completed" | "search.connected-context.failed",
+): void {
+  expect(activityLog.events.map((event) => event.op)).toEqual([
+    "search.connected-context.started",
+    terminalOp,
+  ]);
+  expect(activityLog.events.every((event) => event.correlationId === CORRELATION_ID)).toBe(true);
+}
+
+function expectDeniedLifecycle(activityLog: BufferedActivityLog): void {
+  expect(activityLog.events.map((event) => event.op)).toEqual([
+    "search.connected-context.started",
+    "workspace.root-relocation.denied",
+    "search.connected-context.failed",
+  ]);
+  expect(activityLog.events.every((event) => event.correlationId === CORRELATION_ID)).toBe(true);
+  expect(activityLog.events[1]).toMatchObject({
+    level: "warn",
+    category: "security",
+    errorKind: "WORKSPACE_PATH_DENIED",
+    extra: { decision: "denied", reason: "relocated-denied-locus" },
+  });
+  expect(activityLog.events[2]).toMatchObject({
+    level: "error",
+    category: "search",
+    errorKind: "WORKSPACE_PATH_DENIED",
+    extra: {
+      outcome: "failed",
+      retrievalPhase: "workspace-admission",
+      workspaceIo: { realPathCalls: 1, contentReadCalls: 0 },
+    },
+  });
+}
+
 describe("grounded orchestrator denied-root activity", () => {
   let fixtureRoot: string | undefined;
 
@@ -73,18 +111,7 @@ describe("grounded orchestrator denied-root activity", () => {
     ).rejects.toBeInstanceOf(PathDeniedError);
 
     expect(detectCalls).toBe(0);
-    expect(activityLog.events).toHaveLength(1);
-    expect(activityLog.events[0]).toMatchObject({
-      level: "warn",
-      category: "security",
-      op: "workspace.root-relocation.denied",
-      correlationId: CORRELATION_ID,
-      errorKind: "WORKSPACE_PATH_DENIED",
-    });
-    expect(activityLog.events[0]?.extra).toMatchObject({
-      decision: "denied",
-      reason: "relocated-denied-locus",
-    });
+    expectDeniedLifecycle(activityLog);
     expect(JSON.stringify(activityLog.events)).not.toContain(fixtureRoot);
     expect(JSON.stringify(activityLog.events)).not.toContain("private customer content");
   });
@@ -116,13 +143,7 @@ describe("grounded orchestrator denied-root activity", () => {
     ).rejects.toBeInstanceOf(PathDeniedError);
 
     expect(detectCalls).toBe(0);
-    expect(activityLog.events).toEqual([
-      expect.objectContaining({
-        op: "workspace.root-relocation.denied",
-        correlationId: CORRELATION_ID,
-        errorKind: "WORKSPACE_PATH_DENIED",
-      }),
-    ]);
+    expectDeniedLifecycle(activityLog);
     expect(JSON.stringify(activityLog.events)).not.toContain(fixtureRoot);
   });
 
@@ -158,7 +179,11 @@ describe("grounded orchestrator denied-root activity", () => {
 
     expect(detectCalls).toBe(0);
     expect(realPathCalls).toBe(0);
-    expect(activityLog.events).toEqual([]);
+    expectSearchLifecycle(activityLog, "search.connected-context.failed");
+    expect(activityLog.events[1]).toMatchObject({
+      errorKind: "ClarificationNeededError",
+      extra: { outcome: "failed", retrievalPhase: "planning" },
+    });
   });
 
   it("fails closed before detection when exact root admission cannot resolve the root", async () => {
@@ -190,7 +215,15 @@ describe("grounded orchestrator denied-root activity", () => {
 
     expect(realPathCalls).toBe(1);
     expect(detectCalls).toBe(0);
-    expect(activityLog.events).toEqual([]);
+    expectSearchLifecycle(activityLog, "search.connected-context.failed");
+    expect(activityLog.events[1]).toMatchObject({
+      errorKind: "WORKSPACE_NOT_FOUND",
+      extra: {
+        outcome: "failed",
+        retrievalPhase: "workspace-admission",
+        workspaceIo: { realPathCalls: 1, contentReadCalls: 0 },
+      },
+    });
   });
 
   it("normalizes dot segments before classifying the selected root", async () => {
@@ -218,7 +251,10 @@ describe("grounded orchestrator denied-root activity", () => {
     ).rejects.toBe(detectionFailure);
 
     expect(detectedRoot).toBe(realpathSync(safeRoot));
-    expect(activityLog.events).toEqual([]);
+    expectSearchLifecycle(activityLog, "search.connected-context.failed");
+    expect(activityLog.events[1]).toMatchObject({
+      extra: { outcome: "failed", retrievalPhase: "workspace-detection" },
+    });
   });
 
   it("hands detection the admitted canonical root if the selected alias changes later", async () => {
@@ -249,6 +285,36 @@ describe("grounded orchestrator denied-root activity", () => {
     expect(detectedRoot).toBe(canonicalSafeRoot);
   });
 
+  it("keeps the lexical connected scope while effects use the admitted canonical root", async () => {
+    fixtureRoot = mkdtempSync(join(tmpdir(), "keiko-canonical-effect-root-"));
+    const safeRoot = join(fixtureRoot, "safe");
+    const selectedRoot = join(fixtureRoot, "selected");
+    mkdirSync(safeRoot);
+    writeFileSync(join(safeRoot, "secret.ts"), "export const value = 'safe';\n");
+    symlinkSync(safeRoot, selectedRoot);
+    const canonicalSafeRoot = realpathSync(safeRoot);
+    const activityLog = createBufferedServerLogSink();
+    const input = fixtureInput(selectedRoot);
+    let detectedRoot: string | undefined;
+
+    const output = await retrieveConnectedContextPack(input, {
+      answerer: ANSWERER_NOT_USED,
+      activityLog,
+      correlationId: CORRELATION_ID,
+      nowMs: () => NOW,
+      detectWorkspace: (root): WorkspaceInfo => {
+        detectedRoot = root;
+        return fixtureWorkspace(root);
+      },
+      gitFileHistoryEvidence: (): Promise<readonly []> => Promise.resolve([]),
+    });
+
+    expect(detectedRoot).toBe(canonicalSafeRoot);
+    expect(output.pack.scope).toEqual(input.scope);
+    expect(output.pack.scope.workspaceRoot).toBe(selectedRoot);
+    expectSearchLifecycle(activityLog, "search.connected-context.completed");
+  });
+
   it("allows an unchanged root below an existing denied ancestor", async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), "keiko-unchanged-denied-root-"));
     const unchangedRoot = join(fixtureRoot, ".codex", "worktrees", "project");
@@ -265,7 +331,7 @@ describe("grounded orchestrator denied-root activity", () => {
     expect(output.pack.uncertainty).toContainEqual(
       expect.objectContaining({ kind: "budget-clipped" }),
     );
-    expect(activityLog.events).toEqual([]);
+    expectSearchLifecycle(activityLog, "search.connected-context.completed");
   });
 
   it.skipIf(process.platform !== "darwin")(
@@ -286,7 +352,7 @@ describe("grounded orchestrator denied-root activity", () => {
       expect(output.pack.uncertainty).toContainEqual(
         expect.objectContaining({ kind: "budget-clipped" }),
       );
-      expect(activityLog.events).toEqual([]);
+      expectSearchLifecycle(activityLog, "search.connected-context.completed");
     },
   );
 });

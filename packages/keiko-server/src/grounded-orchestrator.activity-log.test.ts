@@ -381,6 +381,10 @@ function emptyExpectedWorkspaceIoActivity(): Readonly<Record<string, number>> {
   return Object.fromEntries(WORKSPACE_IO_COUNTER_FIELDS.map((field) => [field, 0]));
 }
 
+function admissionOnlyExpectedWorkspaceIoActivity(): Readonly<Record<string, number>> {
+  return { ...emptyExpectedWorkspaceIoActivity(), realPathCalls: 1 };
+}
+
 describe("retrieveConnectedContextPack activity log", () => {
   it("persists the real producer lifecycle as body-free server-log lines", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-connected-context-log-"));
@@ -809,7 +813,9 @@ describe("retrieveConnectedContextPack activity log", () => {
     });
     expectWorkspaceIndexCounters(completed.extra ?? {});
     expectWorkspaceIoCounters(completed.extra ?? {});
-    expect(nestedExtra(completed.extra, "workspaceIo")).toEqual(emptyExpectedWorkspaceIoActivity());
+    expect(nestedExtra(completed.extra, "workspaceIo")).toEqual(
+      admissionOnlyExpectedWorkspaceIoActivity(),
+    );
     expectCommonExtra(started, completed, input);
     expectBodyFree(activityLog);
   });
@@ -832,7 +838,9 @@ describe("retrieveConnectedContextPack activity log", () => {
       elapsedBudgetBlocked: true,
       workspaceIndexProviderStatus: "not-evaluated",
     });
-    expect(nestedExtra(completed.extra, "workspaceIo")).toEqual(emptyExpectedWorkspaceIoActivity());
+    expect(nestedExtra(completed.extra, "workspaceIo")).toEqual(
+      admissionOnlyExpectedWorkspaceIoActivity(),
+    );
     expectCommonExtra(started, completed, input);
     expectBodyFree(activityLog);
   });
@@ -904,7 +912,9 @@ describe("retrieveConnectedContextPack activity log", () => {
     expect(failed.extra?.causeChain).toEqual(["RangeError"]);
     expectAnchoredFrames(failed.extra?.frames);
     expectZeroStructuralWork(failed);
-    expect(nestedExtra(failed.extra, "workspaceIo")).toEqual(emptyExpectedWorkspaceIoActivity());
+    expect(nestedExtra(failed.extra, "workspaceIo")).toEqual(
+      admissionOnlyExpectedWorkspaceIoActivity(),
+    );
     expect(failed.durationMs).toBeGreaterThanOrEqual(0);
     expectCommonExtra(started, failed, input);
     expectBodyFree(activityLog);
@@ -973,6 +983,7 @@ describe("retrieveConnectedContextPack activity log", () => {
     const [, failed] = lifecycleEvents(activityLog, "search.connected-context.failed");
     expect(nestedExtra(failed.extra, "workspaceIo")).toEqual({
       ...emptyExpectedWorkspaceIoActivity(),
+      realPathCalls: 1,
       contentReadCalls: 1,
       contentReadBytes: 1,
     });
@@ -1028,6 +1039,7 @@ describe("retrieveConnectedContextPack activity log", () => {
     expect(sizeReads).toBe(1);
     expect(nestedExtra(failed.extra, "workspaceIo")).toEqual({
       ...emptyExpectedWorkspaceIoActivity(),
+      realPathCalls: 1,
       readDirCalls: 1,
       contentReadCalls: 1,
       contentReadBytes: 1,
@@ -1066,6 +1078,7 @@ describe("retrieveConnectedContextPack activity log", () => {
     const [, failed] = lifecycleEvents(activityLog, "search.connected-context.failed");
     expect(nestedExtra(failed.extra, "workspaceIo")).toEqual({
       ...emptyExpectedWorkspaceIoActivity(),
+      realPathCalls: 1,
       contentReadCalls: 1,
     });
     expectBodyFree(activityLog);
