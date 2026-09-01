@@ -1297,6 +1297,12 @@
       "category": "http",
       "site": "packages/keiko-server/src/voice-realtime.ts:364",
       "package": "keiko-server"
+    },
+    {
+      "op": "workspace.root-relocation.denied",
+      "category": "security",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:3142",
+      "package": "keiko-server"
     }
   ],
   "violations": []

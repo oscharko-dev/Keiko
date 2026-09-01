@@ -8,6 +8,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   FileTooLargeError,
+  PathDeniedError,
   RepoSearchInvalidQueryError,
   RepoSearchInvalidRangeError,
   RepoSearchUnsupportedFileError,
@@ -2086,6 +2087,40 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  it("rejects an explicitly scoped search through a relocated denied workspace root", async () => {
+    const deniedTarget = join(tmp, ".aws", "workspace");
+    const linkedRoot = join(tmp, "node_modules", "workspace");
+    mkdirSync(deniedTarget, { recursive: true });
+    mkdirSync(dirname(linkedRoot), { recursive: true });
+    writeFileSync(join(deniedTarget, "secret.ts"), "export const secret = 'do not read';\n");
+    symlinkSync(deniedTarget, linkedRoot);
+    scope = {
+      ...scope,
+      workspace: { ...scope.workspace, root: linkedRoot },
+      relativePaths: ["secret.ts"],
+    };
+    let byteProbeCalls = 0;
+    const readFileBytes = nodeWorkspaceFs.readFileBytes;
+    if (readFileBytes === undefined) {
+      throw new Error("nodeWorkspaceFs.readFileBytes is required for this test");
+    }
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readFileBytes: async (absolutePath, maxBytes): Promise<Uint8Array> => {
+        byteProbeCalls += 1;
+        return await readFileBytes(absolutePath, maxBytes);
+      },
+    };
+
+    await expect(
+      searchText(scope, nlq("secret"), DEFAULT_SEARCH_LIMITS, {
+        fs,
+        nowMs: FIXED_NOW,
+      }),
+    ).rejects.toBeInstanceOf(PathDeniedError);
+    expect(byteProbeCalls).toBe(0);
   });
 
   it("readExcerpt rejects a symlink whose resolved target is outside scope.relativePaths", async () => {

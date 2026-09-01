@@ -6,11 +6,13 @@
 // IO is auditable in one place (ADR-0005 D2, ADR-0006 D2). The read path (discovery.ts) and the
 // write/cwd paths (tools/patch.ts, tools/exec.ts) share this single primitive — no duplicated logic.
 
-import { dirname } from "node:path";
+import { dirname, isAbsolute, win32 } from "node:path";
 import type { WorkspaceFs } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { isWithinWorkspace } from "./paths.js";
-import { PathEscapeError } from "./errors.js";
+import { PathDeniedError, PathEscapeError } from "./errors.js";
+
+const RELOCATED_DENIED_WORKSPACE_ROOT_REQUEST = "[relocated-denied-workspace-root]";
 
 // Resolves `root` through any platform symlinks (e.g. macOS /var -> /private/var) so the
 // containment comparison is symlink-consistent on both sides. Falls back to the lexical root.
@@ -79,6 +81,7 @@ function isKnownPlatformRootAlias(realRoot: string, lexicalRoot: string): boolea
 // denied locus introduced or relocated by the symlink. Comparing only the denied segment identity
 // is insufficient: one `.codex` worktree could otherwise redirect to a separate `.codex` store.
 export function realRootIsDeniedViaSymlink(realRoot: string, lexicalRoot: string): boolean {
+  if (!validAbsoluteRoot(realRoot) || !validAbsoluteRoot(lexicalRoot)) return true;
   const lexicalDeniedLoci = deniedLocusSuffixes(lexicalRoot);
   const realDeniedLoci = deniedLocusSuffixes(realRoot);
   for (const realDeniedLocus of realDeniedLoci) {
@@ -89,6 +92,23 @@ export function realRootIsDeniedViaSymlink(realRoot: string, lexicalRoot: string
     normalizedAbsolutePath(realRoot) !== normalizedAbsolutePath(lexicalRoot) &&
     !isKnownPlatformRootAlias(realRoot, lexicalRoot)
   );
+}
+
+function validAbsoluteRoot(root: string): boolean {
+  return (
+    root.length > 0 && !root.includes("\u0000") && (isAbsolute(root) || win32.isAbsolute(root))
+  );
+}
+
+export function assertAllowedWorkspaceRealRoot(fs: WorkspaceFs, lexicalRoot: string): string {
+  const realBase = realRoot(fs, lexicalRoot);
+  if (realRootIsDeniedViaSymlink(realBase, lexicalRoot)) {
+    throw new PathDeniedError(
+      "refusing a relocated denied workspace root",
+      RELOCATED_DENIED_WORKSPACE_ROOT_REQUEST,
+    );
+  }
+  return realBase;
 }
 
 export interface ContainedRealPathInfo {
@@ -105,7 +125,7 @@ export function containedRealPathInfo(
   root: string,
   absolutePath: string,
 ): ContainedRealPathInfo {
-  const realBase = realRoot(fs, root);
+  const realBase = assertAllowedWorkspaceRealRoot(fs, root);
   try {
     const target = fs.realPath(absolutePath);
     if (!isWithinWorkspace(realBase, target)) {

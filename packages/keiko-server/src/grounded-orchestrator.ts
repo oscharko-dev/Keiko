@@ -51,6 +51,7 @@ import {
   CANONICAL_MANIFEST_BASENAMES,
   DEFAULT_SEARCH_LIMITS,
   FileTooLargeError,
+  PathDeniedError,
   RepoSearchUnsupportedFileError,
   detectWorkspaceAt,
   endpointContractAdapter,
@@ -118,6 +119,9 @@ import {
 } from "./grounded-evidence-selection.js";
 import { directDefinitionSymbol } from "./grounded-query-shape.js";
 import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
+import { correlationIdOrUnknown } from "./correlation.js";
+import { createServerLogger, type ServerLogSink } from "./observability/index.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -143,6 +147,7 @@ export interface OrchestratorDeps {
   readonly answerer: GroundedAnswerer;
   readonly nowMs?: () => number;
   readonly signal?: AbortSignal | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   // Optional injected port for tests; production uses the realpath-contained node adapter.
   readonly fs?: WorkspaceFs;
   // Optional injected detector for tests so memFs fixtures don't need full WorkspaceInfo wiring.
@@ -3127,12 +3132,47 @@ async function assembleGroundedPack(
 // and pack assembly (the original steps 1–4) WITHOUT the model answer. `deps.answerer` is part of
 // the shared deps type but is intentionally not invoked here; the multi-source path answers once
 // over the merged packs rather than per source.
+function logRelocatedDeniedRoot(error: PathDeniedError, deps: OrchestratorDeps): void {
+  const logger = createServerLogger({
+    sink: deps.activityLog ?? processServerLogSink(),
+    level: "debug",
+  });
+  logger.warn({
+    category: "security",
+    op: "workspace.root-relocation.denied",
+    correlationId: correlationIdOrUnknown(deps.correlationId),
+    errorKind: error.code,
+    extra: { decision: "denied", reason: "relocated-denied-locus" },
+  });
+}
+
+function assertGroundedWorkspaceRootAllowed(
+  fs: WorkspaceFs,
+  workspaceRoot: string,
+  deps: OrchestratorDeps,
+): void {
+  try {
+    containedRealPathInfo(fs, workspaceRoot, workspaceRoot);
+  } catch (error) {
+    if (error instanceof PathDeniedError) logRelocatedDeniedRoot(error, deps);
+    throw error;
+  }
+}
+
+function detectGroundedWorkspace(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  fs: WorkspaceFs,
+): WorkspaceInfo {
+  assertGroundedWorkspaceRootAllowed(fs, input.workspaceRoot, deps);
+  return (deps.detectWorkspace ?? detectWorkspaceAt)(input.workspaceRoot, fs);
+}
+
 export async function retrieveConnectedContextPack(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
 ): Promise<RetrievalOnlyOutput> {
   const fs = deps.fs ?? nodeWorkspaceFs;
-  const detect = deps.detectWorkspace ?? detectWorkspaceAt;
   const nowMs = deps.nowMs ?? Date.now;
   const start = nowMs();
   throwIfCancelled(deps.signal);
@@ -3155,7 +3195,7 @@ export async function retrieveConnectedContextPack(
     return { pack, elapsedMs: Math.max(0, nowMs() - start), plan };
   }
 
-  const workspace = detect(input.workspaceRoot, fs);
+  const workspace = detectGroundedWorkspace(input, deps, fs);
   const searchScope = buildSearchScope(input.scope, workspace);
   const workspaceIndex = deps.workspaceIndexForRoot?.(workspace.root);
   const rings = await runAllRings(

@@ -3,6 +3,14 @@ import { describe, expect, it } from "vitest";
 import { realRootIsDeniedViaSymlink } from "./realpath.js";
 
 describe("realRootIsDeniedViaSymlink", () => {
+  it("fails closed for empty or malformed roots", () => {
+    expect(realRootIsDeniedViaSymlink("", "/work/project")).toBe(true);
+    expect(realRootIsDeniedViaSymlink("/work/project", "")).toBe(true);
+    expect(realRootIsDeniedViaSymlink("relative/project", "/work/project")).toBe(true);
+    expect(realRootIsDeniedViaSymlink("/work/project", "relative/project")).toBe(true);
+    expect(realRootIsDeniedViaSymlink("/work/project\u0000", "/work/project")).toBe(true);
+  });
+
   it("rejects a different denied segment introduced under an already-denied lexical root", () => {
     expect(realRootIsDeniedViaSymlink("/work/.aws/project", "/work/node_modules/project")).toBe(
       true,

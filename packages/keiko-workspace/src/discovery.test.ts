@@ -134,16 +134,19 @@ describe("discoverFiles", () => {
     }
   });
 
-  it("refuses to walk a benign-named root that is a symlink into a denied dir", () => {
+  it("refuses to walk a benign-named root that is a symlink into a denied dir", async () => {
     // Discovery does not realpath-contain the ROOT, so a "docs" -> ".aws" symlink would otherwise list
-    // the credential dir's files. The walk is refused (denied counted, zero files), never listed.
+    // the credential dir's files. The walk fails closed before anything can be listed.
     const aws = join(dir, ".aws");
     mkdirSync(aws);
     writeFileSync(join(aws, "credentials.md"), "aws_secret should never be listed", "utf8");
     symlinkSync(aws, join(dir, "docs"));
     const ws = detectWorkspaceAt(join(dir, "docs"));
-    expect(discoverFiles(ws, DEFAULT_DISCOVERY_OPTIONS)).toEqual([]);
-    expect(discoverWithStats(ws, DEFAULT_DISCOVERY_OPTIONS).stats.denied).toBeGreaterThanOrEqual(1);
+    expect(() => discoverFiles(ws, DEFAULT_DISCOVERY_OPTIONS)).toThrow(PathDeniedError);
+    expect(() => discoverWithStats(ws, DEFAULT_DISCOVERY_OPTIONS)).toThrow(PathDeniedError);
+    await expect(discoverWithStatsAsync(ws, DEFAULT_DISCOVERY_OPTIONS)).rejects.toBeInstanceOf(
+      PathDeniedError,
+    );
   });
 
   it("refuses a root symlink that replaces one denied ancestor with another", () => {
@@ -156,8 +159,8 @@ describe("discoverFiles", () => {
     symlinkSync(deniedTarget, linkedRoot);
     const workspace = detectWorkspaceAt(linkedRoot);
 
-    expect(discoverFiles(workspace, DEFAULT_DISCOVERY_OPTIONS)).toEqual([]);
-    expect(discoverWithStats(workspace, DEFAULT_DISCOVERY_OPTIONS).stats.denied).toBe(1);
+    expect(() => discoverFiles(workspace, DEFAULT_DISCOVERY_OPTIONS)).toThrow(PathDeniedError);
+    expect(() => discoverWithStats(workspace, DEFAULT_DISCOVERY_OPTIONS)).toThrow(PathDeniedError);
     expect(() => readWorkspaceFile(workspace, "notes.md")).toThrow(PathDeniedError);
   });
 
@@ -171,8 +174,8 @@ describe("discoverFiles", () => {
     symlinkSync(deniedTarget, linkedRoot);
     const workspace = detectWorkspaceAt(linkedRoot);
 
-    expect(discoverFiles(workspace, DEFAULT_DISCOVERY_OPTIONS)).toEqual([]);
-    expect(discoverWithStats(workspace, DEFAULT_DISCOVERY_OPTIONS).stats.denied).toBe(1);
+    expect(() => discoverFiles(workspace, DEFAULT_DISCOVERY_OPTIONS)).toThrow(PathDeniedError);
+    expect(() => discoverWithStats(workspace, DEFAULT_DISCOVERY_OPTIONS)).toThrow(PathDeniedError);
     expect(() => readWorkspaceFile(workspace, "notes.md")).toThrow(PathDeniedError);
   });
 
