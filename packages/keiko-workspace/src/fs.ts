@@ -18,6 +18,7 @@ import {
 } from "node:fs";
 import { lstat, open, type FileHandle } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
 export interface WorkspaceStat {
   readonly size: number;
@@ -224,18 +225,21 @@ function forwardedOptionalOperations(
   };
 }
 
-/** Builds a plain method-complete port without losing a class/prototype adapter's receiver. */
+/**
+ * Builds a plain method-complete port without losing a class/prototype adapter's receiver: every
+ * forwarder invokes the method through `fs.<method>(...)`, and that property access already binds
+ * `fs` as the receiver, so a prototype adapter's `this` survives the copy.
+ */
 export function forwardWorkspaceFs(
   fs: WorkspaceFs,
   canonicalRoot: WorkspaceFs["canonicalWorkspaceRoot"] = fs.canonicalWorkspaceRoot,
 ): WorkspaceFs {
   return {
-    readFileUtf8: (path): string => fs.readFileUtf8.call(fs, path),
-    stat: (path): WorkspaceStat => fs.stat.call(fs, path),
-    readDir: (path, maxEntries): readonly WorkspaceDirEntry[] =>
-      fs.readDir.call(fs, path, maxEntries),
-    realPath: (path): string => fs.realPath.call(fs, path),
-    exists: (path): boolean => fs.exists.call(fs, path),
+    readFileUtf8: (path): string => fs.readFileUtf8(path),
+    stat: (path): WorkspaceStat => fs.stat(path),
+    readDir: (path, maxEntries): readonly WorkspaceDirEntry[] => fs.readDir(path, maxEntries),
+    realPath: (path): string => fs.realPath(path),
+    exists: (path): boolean => fs.exists(path),
     ...forwardedSynchronousReads(fs),
     ...forwardedAsynchronousReads(fs),
     ...forwardedOptionalOperations(fs, canonicalRoot),
@@ -781,7 +785,9 @@ function collectDirectoryEntries(
       isFile: entry.isFile(),
       isSymbolicLink: entry.isSymbolicLink(),
     }))
-    .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+    // The shared code-unit comparator (issue #2723), not `localeCompare`: enumeration order must
+    // stay locale-independent so a directory fingerprint is identical on every machine.
+    .sort((left, right) => compareStrings(left.name, right.name));
   return entries;
 }
 

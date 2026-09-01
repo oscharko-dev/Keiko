@@ -1773,6 +1773,27 @@ describe("readExcerpt (memFs)", () => {
     expect(error).toMatchObject({ reason: "outside-range" });
   });
 
+  // #3347: the guarded read lane serves content ONLY through the bounded same-descriptor primitive
+  // (ADR-0005 D1), so a port that does not offer one — like every read failure that lane reports —
+  // surfaces as WorkspaceReadError. That is a non-denial outcome for ONE file and must degrade to
+  // the same skip the binary/TOCTOU probe already produces; letting it escape raw fails the whole
+  // grounded answer instead of a single excerpt (grounded-orchestrator's readKeptExcerpts).
+  it("degrades to an unsupported-file skip when the port offers no bounded descriptor read", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "L1\nL2\n" });
+    const { readFileUtf8SameDescriptor, ...withoutDescriptorRead } = fs;
+    expect(readFileUtf8SameDescriptor).toBeTypeOf("function");
+    expect(withoutDescriptorRead.readFileBytes).toBeTypeOf("function");
+
+    const error = await readExcerpt(
+      scope,
+      { scopePath: "src/a.ts", startLine: 1, endLine: 1, maxBytes: 256 },
+      { fs: withoutDescriptorRead, nowMs: FIXED_NOW },
+    ).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(RepoSearchUnsupportedFileError);
+    expect(error).toMatchObject({ reason: "io-error" });
+  });
+
   it("truncates the excerpt to maxBytes and reports truncated=true", async () => {
     const { scope, fs } = memScope({ "src/a.ts": "0123456789\n" });
     const r = await readExcerpt(

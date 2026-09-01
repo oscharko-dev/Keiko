@@ -198,7 +198,9 @@ function readDirSafe(
       walk.entriesVisited = walk.entryLimit ?? walk.entriesVisited;
       return [];
     }
-    const ordered = [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    // The shared code-unit comparator (issue #2723), not `localeCompare`: the directory
+    // fingerprint recorded below must be identical across platforms and locales.
+    const ordered = [...entries].sort((a, b) => compareStrings(a.name, b.name));
     const after = currentContainedDirectory(walk, current, relativeDir);
     if (after === undefined) return [];
     walk.directorySnapshots.set(relativeDir, {

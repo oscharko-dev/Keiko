@@ -862,27 +862,36 @@ function createImportGraphScanState(): ImportGraphScanState {
   };
 }
 
+// The scan inputs that stay fixed for a whole import-graph build: the workspace binding, the
+// resolver metadata every edge is resolved against, and the execution control the scan is bounded
+// by. They travel as one readonly context so the scan helpers stay under the parameter bar (S107)
+// and so a new resolver input is threaded in one place instead of four signatures.
+interface ImportGraphScanContext {
+  readonly scope: SearchScope;
+  readonly limits: SearchLimits;
+  readonly fs: WorkspaceFs;
+  readonly aliases: ImportMetadata<TsconfigAlias>;
+  readonly packages: ImportMetadata<PackageInfo>;
+  readonly candidatePaths: ReadonlySet<string>;
+  readonly control: StructuralExecutionControl;
+}
+
 function appendImportEdges(
+  context: ImportGraphScanContext,
   accumulator: ImportGraphAccumulator,
-  scope: SearchScope,
-  fs: WorkspaceFs,
   file: string,
   text: string,
-  aliases: ImportMetadata<TsconfigAlias>,
-  packages: ImportMetadata<PackageInfo>,
-  candidatePaths: ReadonlySet<string>,
-  control: StructuralExecutionControl,
 ): boolean {
   for (const hit of collectImportSpecifiers(text)) {
-    if (structuralExecutionStopped(control)) return false;
+    if (structuralExecutionStopped(context.control)) return false;
     const edge = buildEdge(
-      scope,
-      fs,
+      context.scope,
+      context.fs,
       file,
       hit,
-      aliases.items,
-      packages.items,
-      candidatePaths,
+      context.aliases.items,
+      context.packages.items,
+      context.candidatePaths,
       accumulator.resolverFailures,
     );
     accumulator.edges.push(edge);
@@ -893,67 +902,34 @@ function appendImportEdges(
 }
 
 async function scanImportFile(
+  context: ImportGraphScanContext,
   state: ImportGraphScanState,
-  scope: SearchScope,
-  limits: SearchLimits,
-  fs: WorkspaceFs,
   file: string,
-  aliases: ImportMetadata<TsconfigAlias>,
-  packages: ImportMetadata<PackageInfo>,
-  candidatePaths: ReadonlySet<string>,
-  control: StructuralExecutionControl,
 ): Promise<boolean> {
-  if (structuralExecutionStopped(control)) return false;
-  const text = await readImportSource(scope, fs, file, limits);
-  if (structuralExecutionStopped(control)) return false;
+  if (structuralExecutionStopped(context.control)) return false;
+  const text = await readImportSource(context.scope, context.fs, file, context.limits);
+  if (structuralExecutionStopped(context.control)) return false;
   if (text === undefined) {
     state.sourceFailures.add(file);
     return true;
   }
   state.filesScanned += 1;
   return (
-    appendImportEdges(
-      state.accumulator,
-      scope,
-      fs,
-      file,
-      text,
-      aliases,
-      packages,
-      candidatePaths,
-      control,
-    ) && !structuralExecutionStopped(control)
+    appendImportEdges(context, state.accumulator, file, text) &&
+    !structuralExecutionStopped(context.control)
   );
 }
 
 async function collectImportGraph(
-  scope: SearchScope,
-  limits: SearchLimits,
-  fs: WorkspaceFs,
+  context: ImportGraphScanContext,
   files: readonly string[],
-  aliases: ImportMetadata<TsconfigAlias>,
-  packages: ImportMetadata<PackageInfo>,
-  candidatePaths: ReadonlySet<string>,
-  control: StructuralExecutionControl,
 ): Promise<ImportGraphCollection> {
   const state = createImportGraphScanState();
-  const metadataFilesSkipped = aliases.filesSkipped + packages.filesSkipped;
-  const metadataTruncated = aliases.truncated || packages.truncated;
+  const metadataFilesSkipped = context.aliases.filesSkipped + context.packages.filesSkipped;
+  const metadataTruncated = context.aliases.truncated || context.packages.truncated;
   let executionTruncated = false;
   for (const file of files) {
-    if (
-      !(await scanImportFile(
-        state,
-        scope,
-        limits,
-        fs,
-        file,
-        aliases,
-        packages,
-        candidatePaths,
-        control,
-      ))
-    ) {
+    if (!(await scanImportFile(context, state, file))) {
       executionTruncated = true;
       break;
     }
@@ -993,14 +969,8 @@ export async function buildImportGraphFromCandidates(
       );
   const packages = packageInfos(scope, fs, metadataFiles, control);
   const collected = await collectImportGraph(
-    scope,
-    limits,
-    fs,
+    { scope, limits, fs, aliases, packages, candidatePaths, control },
     files,
-    aliases,
-    packages,
-    candidatePaths,
-    control,
   );
   return {
     edges: collected.edges,

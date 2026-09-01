@@ -145,7 +145,7 @@ export function workspaceFsBoundToCanonicalRoot(
   canonicalRoot: string,
 ): WorkspaceFs {
   const bound = forwardWorkspaceFs(fs, (root): string =>
-    root === canonicalRoot ? canonicalRoot : fs.realPath.call(fs, root),
+    root === canonicalRoot ? canonicalRoot : fs.realPath(root),
   );
   return ownedWorkspaceRootAuthority(fs) === canonicalRoot
     ? preserveOwnedRootAuthority(fs, bound)

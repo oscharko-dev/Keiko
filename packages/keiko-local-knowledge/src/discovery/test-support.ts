@@ -142,8 +142,13 @@ export function memoryFs(root: string, files: readonly MemoryFsFile[]): Workspac
       return new TextDecoder("utf-8").decode(map.get(key)?.content ?? new Uint8Array());
     },
     stat: memoryStat(root, map, findKey),
-    readDir: (absolutePath: string): readonly WorkspaceDirEntry[] =>
-      entriesByPrefix(root, map, absolutePath),
+    // Honours the port's bounded `maxEntries` contract (ADR-0005 D1) the way nodeWorkspaceFs does,
+    // so a caller that caps enumeration is actually exercised against a capped fake rather than
+    // silently receiving the whole directory (#3347).
+    readDir: (absolutePath: string, maxEntries?: number): readonly WorkspaceDirEntry[] => {
+      const entries = entriesByPrefix(root, map, absolutePath);
+      return maxEntries === undefined ? entries : entries.slice(0, Math.max(0, maxEntries));
+    },
     realPath: (absolutePath: string): string => {
       const key = findKey(absolutePath);
       const override = key === undefined ? undefined : map.get(key)?.realPathOverride;

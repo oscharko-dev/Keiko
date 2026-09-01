@@ -396,7 +396,11 @@ const EXPECTED_SOFT_VERDICT_SITES = [
   { pkg: "keiko-tools", file: "git-mutation-node.ts", line: 209 },
   { pkg: "keiko-tools", file: "git-pr-node.ts", line: 145 },
   { pkg: "keiko-tools", file: "git-publish-node.ts", line: 161 },
-  { pkg: "keiko-tools", file: "git-worktree-adapter.ts", line: 402 },
+  // `runGit`'s single call, still reached through `ctx.runDeps` (built by `buildAdapterContext`,
+  // which spreads `deps.onTerminated` in). Moved 402 -> 404 when the optional `fs` seam was threaded
+  // through `NodeGitWorktreeAdapterDeps`: two inserted lines ABOVE the call, no change to the call
+  // or to why it lands on the soft verdict.
+  { pkg: "keiko-tools", file: "git-worktree-adapter.ts", line: 404 },
   { pkg: "keiko-tools", file: "git-worktree-snapshot-node.ts", line: 117 },
   { pkg: "keiko-tools", file: "git-worktree-snapshot-node.ts", line: 301 },
   { pkg: "keiko-verification", file: "orchestrator.ts", line: 334 },

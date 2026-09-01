@@ -629,3 +629,59 @@ describe("walkSource — transient filesystem failures", () => {
     });
   });
 });
+
+describe("walkSource — bounded directory enumeration (#3347)", () => {
+  it("passes a finite maxEntries to readDir instead of materializing the whole directory", () => {
+    // Owner P1 on this PR: `safeReadDir` called `ctx.fs.readDir(path)` with no cap, so one
+    // adversarially large directory was fully allocated (and sorted) before `maxFiles`, abort or
+    // the elapsed budget could stop the walk. The reported repro observed `maxEntries === undefined`;
+    // this pins the ARGUMENT itself, not just the resulting file count, so removing the cap fails
+    // here even when the yielded files happen to stay the same.
+    const base = simpleFs();
+    const observedCaps: (number | undefined)[] = [];
+    const fs = {
+      ...base,
+      readDir: (absolutePath: string, maxEntries?: number): ReturnType<typeof base.readDir> => {
+        observedCaps.push(maxEntries);
+        return base.readDir(absolutePath, maxEntries);
+      },
+    };
+
+    const walked = [...walkSource(fs, folderScope(ROOT))];
+
+    expect(walked.length).toBeGreaterThan(0);
+    expect(observedCaps.length).toBeGreaterThan(0);
+    for (const cap of observedCaps) {
+      expect(cap).toBeTypeOf("number");
+      expect(Number.isFinite(cap)).toBe(true);
+    }
+  });
+
+  it("reports LIMIT_REACHED instead of yielding an arbitrary subset when a directory overflows", () => {
+    // A directory whose entry count exceeds the per-directory memory bound must stop the walk
+    // rather than silently discovering whatever filesystem order happened to return first. The
+    // fake caps at the requested `maxEntries`, so returning a full page proves the overflow.
+    const base = simpleFs();
+    const fs = {
+      ...base,
+      readDir: (absolutePath: string, maxEntries?: number): ReturnType<typeof base.readDir> => {
+        const entry = {
+          name: "filler.md",
+          isDirectory: false,
+          isFile: true,
+          isSymbolicLink: false,
+        };
+        return maxEntries === undefined
+          ? base.readDir(absolutePath)
+          : Array(maxEntries).fill(entry);
+      },
+    };
+
+    const out = [...walkSource(fs, folderScope(ROOT))];
+
+    expect(out).toContainEqual({
+      kind: "error",
+      error: { code: "LIMIT_REACHED", message: "directory entry limit reached" },
+    });
+  });
+});

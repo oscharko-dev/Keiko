@@ -771,7 +771,7 @@ describe("desktop files browser", () => {
     // what the older stat-after-read comparison could not detect.
     const onDisk = await readFile(targetPath, "utf8");
     expect(onDisk).toBe(substitute);
-    expect(onDisk.length).toBe(original.byteLength);
+    expect(onDisk).toHaveLength(original.byteLength);
   });
 
   it("rejects saving when the file changed after the editor loaded it", async () => {

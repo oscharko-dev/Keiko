@@ -2,8 +2,8 @@
 // NO clock, NO Math.random: every value comes from fixed fixtures or a seeded LCG so the corpus
 // (and therefore every preservation/budget/injection/redaction metric derived from it) is
 // byte-reproducible across runs. Mirrors the {ok, classes:[...]}-style multi-dimension shape of
-// scripts/lib/local-state-audit.mjs and the inline buildFixtureFs WorkspaceFs builder of
-// scripts/check-retrieval-quality.mjs (the test-only _memfs is not importable from a script).
+// scripts/lib/local-state-audit.mjs, and takes its WorkspaceFs fixture from the package's own
+// sanctioned `@oscharko-dev/keiko-workspace/testing` double rather than restating the port here.
 //
 // Each scenario provides per-lane ContextLaneInput[] PLUS oracle tags marking which item ids are
 // CRITICAL (user instructions, active plan, current diff, failing tests) versus droppable, plus
@@ -12,10 +12,8 @@
 // synthetic polyglot monorepo so its items carry a real scopePath + line range that readExcerpt can
 // re-verify (line-reference accuracy).
 
-import { Buffer } from "node:buffer";
-import { TextEncoder } from "node:util";
-
 import { DEFAULT_SEARCH_LIMITS, readExcerpt, searchText } from "@oscharko-dev/keiko-workspace";
+import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 
 const MEM_ROOT = "/corpus";
 const FIXED_NOW = () => 1_700_000_000_000;
@@ -45,77 +43,20 @@ function padTo(text, targetChars, rng) {
   return out;
 }
 
-// ─── Inline WorkspaceFs fixture (mirrors check-retrieval-quality.mjs) ─────────
+// ─── WorkspaceFs fixture ─────────────────────────────────────────────────────
+// The corpus-relative key -> absolute path mapping the fixture fs (and fileContentHash) key on.
+// Kept local because `corpusAbsolutePath` exposes it to the harness; the fs itself is `memFs`.
 function toAbs(rel) {
   return rel === MEM_ROOT ? MEM_ROOT : `${MEM_ROOT}/${rel}`.replace(/\/+/g, "/");
 }
 
-function dirEntry(name, isDirectory) {
-  return { name, isDirectory, isFile: !isDirectory, isSymbolicLink: false };
-}
-
-function childrenOf(keys, dirAbs) {
-  const prefix = dirAbs === MEM_ROOT ? `${MEM_ROOT}/` : `${dirAbs}/`;
-  const fileNames = new Set();
-  const dirNames = new Set();
-  for (const key of keys) {
-    const full = toAbs(key);
-    if (!full.startsWith(prefix)) {
-      continue;
-    }
-    const rest = full.slice(prefix.length);
-    const slash = rest.indexOf("/");
-    if (slash === -1) {
-      fileNames.add(rest);
-    } else {
-      dirNames.add(rest.slice(0, slash));
-    }
-  }
-  return [
-    ...[...dirNames].map((name) => dirEntry(name, true)),
-    ...[...fileNames].map((name) => dirEntry(name, false)),
-  ];
-}
-
+// Delegates to the package's own sanctioned in-memory `WorkspaceFs` double. It is the ONE
+// implementation of the port's bounded-read semantics (`readFileUtf8SameDescriptor`, the stat
+// snapshot fields it reconfirms against, the hard-link policy and the "too-large"/"changed"
+// `WorkspaceDescriptorReadError` reasons) that tracks `fs.ts` whenever the port moves, so the gate
+// exercises the real contract instead of a local restatement that can silently drift from it.
 export function buildFixtureFs(files) {
-  const keys = Object.keys(files);
-  const encoder = new TextEncoder();
-  const findKey = (abs) => keys.find((key) => toAbs(key) === abs);
-  return {
-    readFileUtf8: (abs) => {
-      const key = findKey(abs);
-      if (key === undefined) throw new Error(`ENOENT: ${abs}`);
-      return files[key];
-    },
-    stat: (abs) => {
-      const key = findKey(abs);
-      if (key === undefined) {
-        return { size: 0, isFile: false, isDirectory: true, isSymbolicLink: false };
-      }
-      return {
-        size: Buffer.byteLength(files[key], "utf8"),
-        isFile: true,
-        isDirectory: false,
-        isSymbolicLink: false,
-      };
-    },
-    readDir: (abs) => childrenOf(keys, abs),
-    realPath: (abs) => abs,
-    exists: (abs) => findKey(abs) !== undefined || abs === MEM_ROOT,
-    readFileBytes: (abs, maxBytes) => {
-      const key = findKey(abs);
-      if (key === undefined) return Promise.reject(new Error(`ENOENT: ${abs}`));
-      const encoded = encoder.encode(files[key]);
-      return Promise.resolve(encoded.subarray(0, Math.min(encoded.length, Math.max(0, maxBytes))));
-    },
-    readFileRange: (abs, startByte, length) => {
-      const key = findKey(abs);
-      if (key === undefined) return Promise.reject(new Error(`ENOENT: ${abs}`));
-      const encoded = encoder.encode(files[key]);
-      const start = Math.max(0, startByte);
-      return Promise.resolve(encoded.subarray(start, Math.min(encoded.length, start + length)));
-    },
-  };
+  return memFs(MEM_ROOT, files);
 }
 
 export function buildScope() {

@@ -6,6 +6,7 @@
 // never leaks the config path even on a load failure (handled upstream in deps.ts, which yields
 // `config: undefined` rather than throwing).
 
+import { resolve } from "node:path";
 import {
   findConfiguredCapability,
   toSafeObject,
@@ -36,10 +37,13 @@ import {
   discoverWithStatsAsync,
   WORKSPACE_CODES,
   WorkspaceError,
+  WorkspaceNotFoundError,
   type WorkspaceCode,
   type DiscoveryResult,
   type WorkspaceSummary,
 } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { resolveRecordedWorkspaceRoot } from "./workspace-root-denial-log.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -378,15 +382,45 @@ export function __workspaceWalkCacheEntryForTests(root: string): DiscoveryResult
   return workspaceWalkCache.get(root)?.value;
 }
 
+// `detectWorkspace` admits its start directory through the workspace layer's canonical-root
+// admission and returns that realpath-resolved root, so the registered project path must be
+// canonicalized with the SAME admission before the identity comparison below. Comparing the
+// canonical walk result against the lexical registration denied every project reached through a
+// symlinked ancestor: on macOS the platform aliases resolve `/tmp/...` and `/var/...` to
+// `/private/...`, so an ordinary user-selected root answered 403 on every workspace read. Root
+// admission is unchanged and still runs first — a denied root raises PathDeniedError (recorded on
+// the activity log by the shared helper) and an unresolvable one surfaces as WORKSPACE_NOT_FOUND,
+// mirroring the detection layer's own taxonomy rather than escaping as an opaque 500.
+function canonicalRegisteredWorkspaceRoot(
+  registeredRoot: string,
+  correlationId: string | undefined,
+): string {
+  try {
+    return resolveRecordedWorkspaceRoot(nodeWorkspaceFs, resolve(registeredRoot), {
+      correlationId,
+    });
+  } catch (error) {
+    if (error instanceof WorkspaceError) {
+      throw error;
+    }
+    throw new WorkspaceNotFoundError("workspace root is unavailable", registeredRoot);
+  }
+}
+
 async function workspaceSummaryResult(
   request: WorkspaceRequest,
   registeredRoot: string,
   deps: UiHandlerDeps,
+  correlationId: string | undefined,
   now: () => number = Date.now,
 ): Promise<RouteResult> {
   try {
+    const canonicalRoot = canonicalRegisteredWorkspaceRoot(registeredRoot, correlationId);
     const workspace = detectWorkspace(registeredRoot);
-    if (workspace.root !== registeredRoot) {
+    // The walk-up must land on the registered directory itself and never on a parent workspace,
+    // whose wider tree would otherwise be summarized for a project the user never registered.
+    // That invariant is unchanged; it is now decided canonical-to-canonical.
+    if (workspace.root !== canonicalRoot) {
       return workspaceNotRegisteredResult();
     }
     const walk = await workspaceWalkFor(workspace, now);
@@ -431,7 +465,7 @@ export async function handleWorkspace(
   if ("status" in registered) {
     return registered;
   }
-  return workspaceSummaryResult(request, registered.normalized, deps, now);
+  return workspaceSummaryResult(request, registered.normalized, deps, ctx.correlationId, now);
 }
 
 interface EvidenceFilters {

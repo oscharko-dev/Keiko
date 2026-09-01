@@ -322,6 +322,23 @@ type DirectoryRead =
   | { readonly ok: true; readonly entries: readonly WalkDirEntry[] }
   | { readonly ok: false; readonly error: DiscoveryError };
 
+// #3347 (owner P1): a single directory must never be fully materialized (and then sorted) before
+// `maxFiles`, abort or the elapsed budget can stop the walk -- one adversarially large directory
+// would otherwise allocate every entry first. ADR-0005 D1 gives the port a bounded
+// `readDir(path, maxEntries)` exactly for this, so the walker now always passes a finite cap.
+//
+// This is a MEMORY bound per directory, deliberately independent of `maxFiles`: a directory holds
+// subdirectories too, and those do not consume the file budget, so deriving the cap from the
+// remaining file budget would abort a legitimate walk whose root merely has more children than the
+// caller wants files (the `maxFiles: 2` pin below is exactly that case). The `+ 1` is a sentinel:
+// reading one more entry than the budget proves the directory overflows, without enumerating the
+// rest of it.
+const MAX_DIRECTORY_ENTRIES = 10_000;
+
+function directoryEntryCap(): number {
+  return MAX_DIRECTORY_ENTRIES + 1;
+}
+
 interface DirectorySnapshot {
   readonly realPath: string;
   readonly stat: WorkspaceStat;
@@ -350,11 +367,23 @@ function safeReadDir(ctx: WalkContext, absolutePath: string): DirectoryRead {
   try {
     const before = directorySnapshot(ctx, absolutePath);
     if (before === undefined) return directoryReadFailure();
-    const entries = ctx.fs.readDir(before.realPath);
-    return rootSnapshotIsCurrent(ctx) &&
-      isWorkspacePathSnapshotCurrent(ctx.fs, absolutePath, before.realPath, before.stat)
-      ? { ok: true, entries }
-      : directoryReadFailure();
+    const cap = directoryEntryCap();
+    const entries = ctx.fs.readDir(before.realPath, cap);
+    if (
+      !rootSnapshotIsCurrent(ctx) ||
+      !isWorkspacePathSnapshotCurrent(ctx.fs, absolutePath, before.realPath, before.stat)
+    ) {
+      return directoryReadFailure();
+    }
+    // The sentinel came back: this directory holds more entries than the walk could ever yield,
+    // so stop here instead of silently discovering an arbitrary filesystem-order subset.
+    if (entries.length >= cap) {
+      return {
+        ok: false,
+        error: { code: "LIMIT_REACHED", message: "directory entry limit reached" },
+      };
+    }
+    return { ok: true, entries };
   } catch {
     return directoryReadFailure();
   }

@@ -4383,6 +4383,34 @@ function collectEndpoints(file: SourceFile): readonly ApiEndpoint[] {
   return endpoints;
 }
 
+// A wildcard method on either side still pairs the endpoints, but only an exact method match is
+// reported as resolved: the wildcard pairing is a heuristic the caller may down-rank.
+function apiContractEdgeFor(client: ApiEndpoint, server: ApiEndpoint): ApiContractEdge | undefined {
+  const methodMatches =
+    client.method === "ANY" || server.method === "ANY" || client.method === server.method;
+  if (!methodMatches || client.path !== server.path) {
+    return undefined;
+  }
+  return {
+    client,
+    server,
+    confidence: client.method === server.method ? "resolved" : "heuristic",
+  };
+}
+
+function collectApiContractEdgesForClient(
+  client: ApiEndpoint,
+  servers: readonly ApiEndpoint[],
+  edges: ApiContractEdge[],
+  control: StructuralExecutionControl,
+): void {
+  for (const server of servers) {
+    if (structuralExecutionStopped(control)) break;
+    const edge = apiContractEdgeFor(client, server);
+    if (edge !== undefined) edges.push(edge);
+  }
+}
+
 function linkApiContracts(
   endpoints: readonly ApiEndpoint[],
   control: StructuralExecutionControl,
@@ -4392,18 +4420,7 @@ function linkApiContracts(
   const edges: ApiContractEdge[] = [];
   for (const client of clients) {
     if (structuralExecutionStopped(control)) break;
-    for (const server of servers) {
-      if (structuralExecutionStopped(control)) break;
-      const methodMatches =
-        client.method === "ANY" || server.method === "ANY" || client.method === server.method;
-      if (methodMatches && client.path === server.path) {
-        edges.push({
-          client,
-          server,
-          confidence: client.method === server.method ? "resolved" : "heuristic",
-        });
-      }
-    }
+    collectApiContractEdgesForClient(client, servers, edges, control);
   }
   return edges;
 }
@@ -4433,6 +4450,44 @@ function sharedDtoFields(
   return shared;
 }
 
+// A DTO pair is only interesting across a scope and a language boundary: the same shape declared
+// twice in one scope, or twice in one language, is a local duplicate rather than a contract. A
+// normalized name match is authoritative; two or more shared fields is a heuristic pairing.
+function dtoContractEdgeFor(source: CodeSymbol, target: CodeSymbol): DtoContractEdge | undefined {
+  if (source.scopePath === target.scopePath || source.language === target.language) {
+    return undefined;
+  }
+  const sharedFields = sharedDtoFields(source.fields, target.fields);
+  const nameMatch = normalizedDtoName(source.name) === normalizedDtoName(target.name);
+  if (!nameMatch && sharedFields.length < 2) {
+    return undefined;
+  }
+  return {
+    source,
+    target,
+    sharedFields,
+    confidence: nameMatch ? "resolved" : "heuristic",
+  };
+}
+
+// Pairs are unordered, so the inner scan starts past the source index and every pair is visited
+// exactly once.
+function collectDtoContractEdgesFrom(
+  typed: readonly CodeSymbol[],
+  sourceIndex: number,
+  edges: DtoContractEdge[],
+  control: StructuralExecutionControl,
+): void {
+  const source = typed[sourceIndex];
+  for (let j = sourceIndex + 1; j < typed.length; j += 1) {
+    if (structuralExecutionStopped(control)) break;
+    const target = typed[j];
+    if (source === undefined || target === undefined) continue;
+    const edge = dtoContractEdgeFor(source, target);
+    if (edge !== undefined) edges.push(edge);
+  }
+}
+
 function linkDtoContracts(
   symbols: readonly CodeSymbol[],
   control: StructuralExecutionControl,
@@ -4441,29 +4496,7 @@ function linkDtoContracts(
   const edges: DtoContractEdge[] = [];
   for (let i = 0; i < typed.length; i += 1) {
     if (structuralExecutionStopped(control)) break;
-    for (let j = i + 1; j < typed.length; j += 1) {
-      if (structuralExecutionStopped(control)) break;
-      const a = typed[i];
-      const b = typed[j];
-      if (
-        a === undefined ||
-        b === undefined ||
-        a.scopePath === b.scopePath ||
-        a.language === b.language
-      ) {
-        continue;
-      }
-      const sharedFields = sharedDtoFields(a.fields, b.fields);
-      const nameMatch = normalizedDtoName(a.name) === normalizedDtoName(b.name);
-      if (nameMatch || sharedFields.length >= 2) {
-        edges.push({
-          source: a,
-          target: b,
-          sharedFields,
-          confidence: nameMatch ? "resolved" : "heuristic",
-        });
-      }
-    }
+    collectDtoContractEdgesFrom(typed, i, edges, control);
   }
   return edges;
 }

@@ -8,9 +8,10 @@
 //     exercise the governed outcomes (success, preflight-block, policy-block, approval-required) and
 //     prove evidence is recorded and the mutation never bypasses the kernel.
 
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -43,6 +44,8 @@ import {
   deriveTaskBranchName,
   deriveWorkspaceId,
 } from "../task-workspace/naming.js";
+import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
+import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 
@@ -179,6 +182,31 @@ function deps(
   };
 }
 
+// #3347 managed-worktree identity: resolveRegisteredOrManagedWorkspaceRoot now composes
+// resolveManagedWorkspaceRootAccess, which re-proves a REAL Git linked-worktree pointer
+// (gitdir-identity.ts) instead of trusting path shape alone -- a plain mkdir with a placeholder
+// gitdirIdentity no longer admits. Builds a genuine `git worktree add` linkage rooted at
+// `sourceRepo` at `worktreePath` and returns its real gitdir identity for the fixture instance.
+function buildManagedGitWorktree(
+  sourceRepo: string,
+  worktreePath: string,
+  taskBranch: string,
+): string {
+  execFileSync("git", ["init", "-q"], { cwd: sourceRepo });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: sourceRepo });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: sourceRepo });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: sourceRepo });
+  mkdirSync(dirname(worktreePath), { recursive: true });
+  execFileSync("git", ["worktree", "add", "-q", "-b", taskBranch, worktreePath, "HEAD"], {
+    cwd: sourceRepo,
+  });
+  const inspection = inspectManagedGitdirIdentity(worktreePath, sourceRepo);
+  if (inspection === undefined) {
+    throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+  }
+  return inspection.identity;
+}
+
 function managedWorkspaceDeps(taskId = "task-443"): {
   readonly instance: WorkspaceInstance;
   readonly override: Partial<UiHandlerDeps>;
@@ -186,10 +214,15 @@ function managedWorkspaceDeps(taskId = "task-443"): {
 } {
   const managedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-local-managed-")));
   const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-local-repo-")));
+  // Ownership must be established BEFORE anything creates a directory under the managed root: a
+  // recursive mkdir of the worktree parent would materialize the root itself under the ambient
+  // umask, and the marker initialization would then see "already exists" and never apply.
+  assertManagedRootOwned(managedRoot);
   const repositoryId = deriveRepositoryId(repoRoot);
   const workspaceId = deriveWorkspaceId({ repositoryId, taskId });
   const managedWorktreePath = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
-  mkdirSync(managedWorktreePath, { recursive: true });
+  const taskBranch = deriveTaskBranchName({ taskId });
+  const gitdirIdentity = buildManagedGitWorktree(repoRoot, managedWorktreePath, taskBranch);
   const instance: WorkspaceInstance = {
     schemaVersion: "1",
     workspaceId,
@@ -197,9 +230,9 @@ function managedWorkspaceDeps(taskId = "task-443"): {
     repositoryId,
     repositoryRoot: repoRoot,
     baseBranch: "main",
-    taskBranch: deriveTaskBranchName({ taskId }),
+    taskBranch,
     managedWorktreePath,
-    gitdirIdentity: "gitdir-hash",
+    gitdirIdentity,
     lifecycleState: "active",
     health: "healthy",
     lock: null,

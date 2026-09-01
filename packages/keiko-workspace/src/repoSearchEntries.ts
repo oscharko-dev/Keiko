@@ -90,7 +90,9 @@ function readDirSorted(
       walk.truncated = true;
       return [];
     }
-    return [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    // Deliberately the shared code-unit comparator (epic #2719 W4, issue #2723), never
+    // `localeCompare`: traversal order must stay byte-stable and locale-independent.
+    return [...entries].sort((a, b) => compareStrings(a.name, b.name));
   } catch (error) {
     if (error instanceof StructuralExecutionStoppedError) throw error;
     const message = error instanceof Error ? error.message : "unknown error";

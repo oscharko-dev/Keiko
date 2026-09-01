@@ -19,7 +19,7 @@ const OWNED_ROOT_LOOKUP_SPECIFIER = `${OWNED_ROOT_INTERNAL_PREFIX}owned-root-loo
 const OWNED_ROOT_IMPLEMENTATION_SPECIFIER = `${OWNED_ROOT_INTERNAL_PREFIX}owned-root-authority`;
 const ownedRootDeepPathPattern = (moduleName) =>
   new RegExp(
-    `^(node_modules/@oscharko-dev/keiko-workspace/|packages/keiko-workspace/)(src|dist)/${moduleName}(\\.[cm]?[jt]s)?($|/)`,
+    String.raw`^(node_modules/@oscharko-dev/keiko-workspace/|packages/keiko-workspace/)(src|dist)/${moduleName}(\.[cm]?[jt]s)?($|/)`,
     "u",
   );
 const OWNED_ROOT_CONTAINMENT_DEEP_PATH_PATTERN = ownedRootDeepPathPattern("ownedRoot");

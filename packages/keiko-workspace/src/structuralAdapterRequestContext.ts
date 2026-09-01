@@ -176,6 +176,18 @@ function immutableSearchScope(scope: SearchScope): SearchScope {
   };
 }
 
+// A per-call search must abort when either the request context or the individual call aborts, but
+// `AbortSignal.any` allocates a follower on every call, so the two degenerate cases (no parent
+// signal / the same signal on both sides, and no call signal) reuse the existing signal instead.
+function combinedAbortSignal(
+  parentSignal: AbortSignal | undefined,
+  callSignal: AbortSignal | undefined,
+): AbortSignal | undefined {
+  if (parentSignal === undefined || parentSignal === callSignal) return callSignal;
+  if (callSignal === undefined) return parentSignal;
+  return AbortSignal.any([parentSignal, callSignal]);
+}
+
 class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequestContext {
   private readonly scope: SearchScope;
   private readonly limits: SearchLimits;
@@ -293,18 +305,18 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
         throw error;
       }
     }
-    return deriveCandidateSetFromInventory(
-      this.scope,
+    return deriveCandidateSetFromInventory({
+      scope: this.scope,
       query,
       limits,
-      this.executionFs,
+      fs: this.executionFs,
       policy,
       inventory,
       candidatePathPredicate,
-      (file) => this.contentPreview(file, control),
-      control,
+      contentPreviewFor: (file) => this.contentPreview(file, control),
+      executionControl: control,
       prescoreContent,
-    );
+    });
   }
 
   private contentPreview(
@@ -364,7 +376,14 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   }
 
   private validateCachedContentPreviews(control: StructuralExecutionControl): void {
-    for (const cached of [...this.contentPreviews.values()]) {
+    // The snapshot is deliberate and must not become a direct `this.contentPreviews.values()` walk
+    // (S7747): revalidating a stale entry deletes its key and re-inserts it (see `contentPreview`
+    // via `resolveCachedContentPreview`), which moves it to the end of a LIVE Map iteration and
+    // makes the loop visit it a second time. Each extra visit spends another
+    // `structuralExecutionStopped` clock read against the caller's deadline, so iterating live
+    // would let a re-read entry shorten the budget the rest of the cache is validated under.
+    const pending = [...this.contentPreviews.values()];
+    for (const cached of pending) {
       if (structuralExecutionStopped(control)) return;
       this.contentPreview(cached.file, control);
     }
@@ -481,14 +500,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   ): StructuralExecutionControl {
     const nowMs = this.executionControl.nowMs;
     const callDeadlineAtMs = nowMs() + Math.max(0, limits.elapsedMsMax);
-    const parentSignal = this.executionControl.signal;
-    const callSignal = deps.signal;
-    const signal =
-      parentSignal === undefined || parentSignal === callSignal
-        ? callSignal
-        : callSignal === undefined
-          ? parentSignal
-          : AbortSignal.any([parentSignal, callSignal]);
+    const signal = combinedAbortSignal(this.executionControl.signal, deps.signal);
     return {
       nowMs,
       deadlineAtMs: Math.min(this.executionControl.deadlineAtMs, callDeadlineAtMs),

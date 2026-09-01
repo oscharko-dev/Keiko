@@ -264,35 +264,49 @@ export function limitCandidateSetForStructuralBuild(
   };
 }
 
+export interface CandidateSetFromInventoryInputs {
+  readonly scope: ScopeShape;
+  readonly query: RetrievalQuery;
+  readonly limits: LimitsShape;
+  readonly fs: WorkspaceFs;
+  readonly policy: SearchPolicy;
+  readonly inventory: CandidateSet;
+  readonly candidatePathPredicate?: ((scopePath: string) => boolean) | undefined;
+  readonly contentPreviewFor?: CandidateContentPreviewProvider | undefined;
+  readonly executionControl?: StructuralExecutionControl | undefined;
+  // Omitted means "let the query kind decide", exactly like the former default parameter.
+  readonly prescoreContent?: boolean | undefined;
+}
+
+function inventoryOrderingInputs(inputs: CandidateSetFromInventoryInputs): GatherInputs {
+  return {
+    query: inputs.query,
+    limits: inputs.limits,
+    fs: inputs.fs,
+    policy: inputs.policy,
+    prescoreContent: inputs.prescoreContent ?? shouldPrescoreContent(inputs.query),
+    ...(inputs.candidatePathPredicate === undefined
+      ? {}
+      : { candidatePathPredicate: inputs.candidatePathPredicate }),
+    ...(inputs.contentPreviewFor === undefined
+      ? {}
+      : { contentPreviewFor: inputs.contentPreviewFor }),
+    ...(inputs.executionControl === undefined ? {} : { executionControl: inputs.executionControl }),
+  };
+}
+
 /**
  * Reorders one request-local inventory for a concrete query without rediscovering the workspace.
  * The caller must key the inventory by the exact discovery policy and maxFilesScanned ceiling;
  * only query-dependent ranking is recomputed here.
  */
 export function deriveCandidateSetFromInventory(
-  scope: ScopeShape,
-  query: RetrievalQuery,
-  limits: LimitsShape,
-  fs: WorkspaceFs,
-  policy: SearchPolicy,
-  inventory: CandidateSet,
-  candidatePathPredicate?: (scopePath: string) => boolean,
-  contentPreviewFor?: CandidateContentPreviewProvider,
-  executionControl?: StructuralExecutionControl,
-  prescoreContent = shouldPrescoreContent(query),
+  inputs: CandidateSetFromInventoryInputs,
 ): CandidateSet {
+  const { scope, inventory } = inputs;
   return orderCollectedCandidates(
     scope,
-    {
-      query,
-      limits,
-      fs,
-      policy,
-      prescoreContent,
-      ...(candidatePathPredicate === undefined ? {} : { candidatePathPredicate }),
-      ...(contentPreviewFor === undefined ? {} : { contentPreviewFor }),
-      ...(executionControl === undefined ? {} : { executionControl }),
-    },
+    inventoryOrderingInputs(inputs),
     {
       files: inventory.files,
       directories: inventory.directories,

@@ -28,6 +28,7 @@ import {
   RepoSearchInvalidQueryError,
   RepoSearchInvalidRangeError,
   RepoSearchUnsupportedFileError,
+  WorkspaceReadError,
 } from "./errors.js";
 import {
   isWorkspacePathSnapshotCurrent,
@@ -2216,25 +2217,29 @@ function validateAndInvalidateCachedCandidateContent(
   }
 }
 
-function refreshWorkspaceIndexCandidateSet(
-  scope: SearchScope,
-  query: RetrievalQuery,
-  limits: SearchLimits,
-  runner: SearchTextRunner,
-  session: SearchWorkspaceIndexSession,
-  candidateSetFor: CandidateSetProvider | undefined,
-  validateCachedCandidateContent: FacadeDeps["validateCachedCandidateContent"],
-  drainStaleCandidateContentPaths: FacadeDeps["drainStaleCandidateContentPaths"],
-): boolean {
+interface WorkspaceIndexCandidateRefreshInputs {
+  readonly scope: SearchScope;
+  readonly query: RetrievalQuery;
+  readonly limits: SearchLimits;
+  readonly runner: SearchTextRunner;
+  readonly session: SearchWorkspaceIndexSession;
+  readonly candidateSetFor: CandidateSetProvider | undefined;
+  readonly validateCachedCandidateContent: FacadeDeps["validateCachedCandidateContent"];
+  readonly drainStaleCandidateContentPaths: FacadeDeps["drainStaleCandidateContentPaths"];
+}
+
+function refreshWorkspaceIndexCandidateSet(inputs: WorkspaceIndexCandidateRefreshInputs): boolean {
+  const { scope, query, limits, runner, session, drainStaleCandidateContentPaths } = inputs;
   if (runnerExecutionStopped(runner)) return false;
   validateAndInvalidateCachedCandidateContent(
     session,
-    validateCachedCandidateContent,
+    inputs.validateCachedCandidateContent,
     drainStaleCandidateContentPaths,
   );
   if (runnerExecutionStopped(runner)) return false;
   const prepared = preparedSessionRankingSnapshot(scope, runner, session);
   const membership = session.candidateSet;
+  const candidateSetFor = inputs.candidateSetFor;
   let ranked: CandidateSet;
   try {
     ranked =
@@ -2608,16 +2613,16 @@ class DefaultRequestLocalSearchTextSessionPool implements RequestLocalSearchText
           deps.candidateSetFor,
         );
       } else if (
-        !refreshWorkspaceIndexCandidateSet(
+        !refreshWorkspaceIndexCandidateSet({
           scope,
           query,
           limits,
           runner,
-          entry.session,
-          deps.candidateSetFor,
-          deps.validateCachedCandidateContent,
-          deps.drainStaleCandidateContentPaths,
-        )
+          session: entry.session,
+          candidateSetFor: deps.candidateSetFor,
+          validateCachedCandidateContent: deps.validateCachedCandidateContent,
+          drainStaleCandidateContentPaths: deps.drainStaleCandidateContentPaths,
+        })
       ) {
         return stoppedSearchResult(runnerStopReason(runner) ?? "timeout", elapsed(runner), limits);
       }
@@ -3086,18 +3091,25 @@ function findFilesContext(
   };
 }
 
+interface FindFilesExecutionInputs {
+  readonly scope: SearchScope;
+  readonly query: RetrievalQuery;
+  readonly limits: SearchLimits;
+  readonly fs: WorkspaceFs;
+  readonly nowMs: () => number;
+  readonly hints: SearchHints | undefined;
+  readonly candidateSetFor: CandidateSetProvider | undefined;
+  readonly deadlineAtMs: number | undefined;
+  readonly signal: AbortSignal | undefined;
+  readonly startMs: number;
+}
+
 function findFilesCandidateSet(
-  scope: SearchScope,
-  query: RetrievalQuery,
-  limits: SearchLimits,
-  fs: WorkspaceFs,
+  inputs: FindFilesExecutionInputs,
   policy: SearchPolicy,
-  candidateSetFor: CandidateSetProvider | undefined,
-  nowMs: () => number,
-  startMs: number,
-  deadlineAtMs: number | undefined,
-  signal: AbortSignal | undefined,
 ): CandidateSet {
+  const { scope, query, limits, fs, nowMs, startMs, deadlineAtMs, signal, candidateSetFor } =
+    inputs;
   return candidateSetFor === undefined
     ? gatherCandidates(scope, query, limits, fs, policy, undefined, {
         nowMs,
@@ -3117,19 +3129,6 @@ function effectiveFindFilesLimits(query: RetrievalQuery, limits: SearchLimits): 
   };
 }
 
-interface FindFilesExecutionInputs {
-  readonly scope: SearchScope;
-  readonly query: RetrievalQuery;
-  readonly limits: SearchLimits;
-  readonly fs: WorkspaceFs;
-  readonly nowMs: () => number;
-  readonly hints: SearchHints | undefined;
-  readonly candidateSetFor: CandidateSetProvider | undefined;
-  readonly deadlineAtMs: number | undefined;
-  readonly signal: AbortSignal | undefined;
-  readonly startMs: number;
-}
-
 function executeFindFilesSync(inputs: FindFilesExecutionInputs): SearchResult {
   const { scope, query, limits, fs, nowMs, deadlineAtMs, signal, startMs } = inputs;
   const stopped = stoppedFindFilesResult(nowMs, startMs, limits, deadlineAtMs, signal);
@@ -3137,18 +3136,7 @@ function executeFindFilesSync(inputs: FindFilesExecutionInputs): SearchResult {
   const effectiveLimits = effectiveFindFilesLimits(query, limits);
   const ctx = findFilesContext(scope, query, nowMs);
   const policy = resolveSearchPolicy(scope.relativePaths.length > 0, inputs.hints);
-  const candidateSet = findFilesCandidateSet(
-    scope,
-    query,
-    limits,
-    fs,
-    policy,
-    inputs.candidateSetFor,
-    nowMs,
-    startMs,
-    deadlineAtMs,
-    signal,
-  );
+  const candidateSet = findFilesCandidateSet(inputs, policy);
   const stoppedAfterDiscovery = stoppedFindFilesResult(
     nowMs,
     startMs,
@@ -3405,6 +3393,16 @@ function assertExcerptRange(request: ReadExcerptRequest): void {
   }
 }
 
+// The single "this excerpt cannot be served, skip it" outcome of the excerpt read lane. Every
+// producer below funnels a non-denial read failure through it so `readKeptExcerpts` in the
+// grounded orchestrator drops exactly one excerpt instead of failing the whole answer.
+function excerptUnreadable(scopePath: string): RepoSearchUnsupportedFileError {
+  return new RepoSearchUnsupportedFileError(
+    `cannot read excerpt of unreadable file: ${scopePath}`,
+    "io-error",
+  );
+}
+
 // Probes for binary content and throws RepoSearchUnsupportedFileError on both binary detection
 // and IO errors (EACCES, ENOENT, …) so the caller can treat both as a graceful skip.
 async function assertExcerptNotBinary(
@@ -3422,10 +3420,7 @@ async function assertExcerptNotBinary(
     // of crashing the whole grounded answer (the comment at grounded-orchestrator readKeptExcerpts
     // explicitly promises this invariant).
     if (isIoError(err) || err instanceof WorkspaceDescriptorReadError) {
-      throw new RepoSearchUnsupportedFileError(
-        `cannot read excerpt of unreadable file: ${scopePath}`,
-        "io-error",
-      );
+      throw excerptUnreadable(scopePath);
     }
     throw err;
   }
@@ -3468,6 +3463,16 @@ async function readExcerptLines(
   try {
     return excerptFileLines(scope, request, fs, lane);
   } catch (err) {
+    // The guarded read lane serves content ONLY through the bounded same-descriptor primitive
+    // (ADR-0005 D1). Everything it reports as a WorkspaceReadError — a port that does not offer
+    // that primitive, a stat it cannot take, a path it cannot resolve, or a file whose identity
+    // changed under the open descriptor — is a non-denial read outcome for ONE file, the same
+    // class assertExcerptNotBinary re-classifies one call earlier. Degrade it to the same skip so
+    // a concurrently rewritten (or unreadable) file costs its own excerpt instead of the whole
+    // grounded answer. PathDeniedError/PathEscapeError are distinct types and still propagate.
+    if (err instanceof WorkspaceReadError) {
+      throw excerptUnreadable(request.scopePath);
+    }
     if (!(err instanceof FileTooLargeError)) {
       throw err;
     }
@@ -3480,10 +3485,7 @@ async function readExcerptLines(
       bytes = await readFileBytes(targetPath, MAX_EXCERPT_FILE_BYTES, "reject", expected);
     } catch (readErr) {
       if (isIoError(readErr)) {
-        throw new RepoSearchUnsupportedFileError(
-          `cannot read excerpt of unreadable file: ${request.scopePath}`,
-          "io-error",
-        );
+        throw excerptUnreadable(request.scopePath);
       }
       throw readErr;
     }

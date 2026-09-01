@@ -3305,18 +3305,31 @@ type ParallelDeterministicEvidence = readonly [
   DeterministicContextEvidence,
 ];
 
+// The one request-scoped input set every deterministic-evidence step reads, kept as a single value
+// so the shared members stay in lockstep across the collect/metadata/merge chain instead of being
+// re-threaded positionally at each hop.
+interface DeterministicContextInputs {
+  readonly input: OrchestratorInput;
+  readonly plan: ExplorationPlan;
+  readonly searchScope: SearchScope;
+  readonly fs: WorkspaceFs;
+  // The request's plain, unwrapped fs — used only for project-metadata discovery (#3347 P1), which
+  // is not bound to `structuralContexts` and must keep making its own real, individually observable
+  // reads rather than the ring-retrieval discovery cache `fs` may carry.
+  readonly metadataFs: WorkspaceFs;
+  readonly nowMs: () => number;
+  readonly signal: AbortSignal | undefined;
+  readonly structuralContexts: StructuralRequestContextPool;
+  readonly deadlineAtMs: number;
+  readonly budget: AugmentationBudgetMeter;
+}
+
 async function collectParallelDeterministicEvidence(
-  input: OrchestratorInput,
-  plan: ExplorationPlan,
-  searchScope: SearchScope,
-  fs: WorkspaceFs,
-  nowMs: () => number,
-  signal: AbortSignal | undefined,
+  inputs: DeterministicContextInputs,
   fileSearchContext: StructuralAdapterRequestContext,
   traceContext: StructuralAdapterRequestContext,
-  deadlineAtMs: number,
-  budget: AugmentationBudgetMeter,
 ): Promise<ParallelDeterministicEvidence> {
+  const { input, plan, searchScope, fs, nowMs, signal, deadlineAtMs, budget } = inputs;
   return Promise.all([
     collectFollowSymbolTraceEvidence({
       scope: input.scope,
@@ -3353,65 +3366,29 @@ async function collectParallelDeterministicEvidence(
 // not bound to `structuralContexts`, so it never needs to match that pool's fs identity for
 // assertGraphBinding.
 function deterministicMetadataAtoms(
-  budget: AugmentationBudgetMeter,
-  input: OrchestratorInput,
-  plan: ExplorationPlan,
-  searchScope: SearchScope,
-  metadataFs: WorkspaceFs,
-  nowMs: () => number,
-  signal: AbortSignal | undefined,
-  deadlineAtMs: number,
+  inputs: DeterministicContextInputs,
 ): DeterministicContextEvidence {
-  return budget.canContinue()
+  return inputs.budget.canContinue()
     ? deterministicMetadataEvidence(
-        input,
-        plan,
-        searchScope,
-        metadataFs,
-        nowMs,
-        signal,
-        deadlineAtMs,
+        inputs.input,
+        inputs.plan,
+        inputs.searchScope,
+        inputs.metadataFs,
+        inputs.nowMs,
+        inputs.signal,
+        inputs.deadlineAtMs,
       )
     : { atoms: [], uncertainty: [] };
 }
 
 async function deterministicContextEvidence(
-  input: OrchestratorInput,
-  plan: ExplorationPlan,
-  searchScope: SearchScope,
-  fs: WorkspaceFs,
-  metadataFs: WorkspaceFs,
-  nowMs: () => number,
-  signal: AbortSignal | undefined,
-  structuralContexts: StructuralRequestContextPool,
-  deadlineAtMs: number,
-  budget: AugmentationBudgetMeter,
+  inputs: DeterministicContextInputs,
 ): Promise<DeterministicContextEvidence> {
-  const fileSearchContext = structuralContexts.forLimits(SYMBOL_FILE_SEARCH_LIMITS);
-  const traceContext = structuralContexts.forLimits(GROUNDED_TRACE_SEARCH_LIMITS);
+  const fileSearchContext = inputs.structuralContexts.forLimits(SYMBOL_FILE_SEARCH_LIMITS);
+  const traceContext = inputs.structuralContexts.forLimits(GROUNDED_TRACE_SEARCH_LIMITS);
   const [traceEvidence, symbolDiscovery, referencedDocuments] =
-    await collectParallelDeterministicEvidence(
-      input,
-      plan,
-      searchScope,
-      fs,
-      nowMs,
-      signal,
-      fileSearchContext,
-      traceContext,
-      deadlineAtMs,
-      budget,
-    );
-  const metadata = deterministicMetadataAtoms(
-    budget,
-    input,
-    plan,
-    searchScope,
-    metadataFs,
-    nowMs,
-    signal,
-    deadlineAtMs,
-  );
+    await collectParallelDeterministicEvidence(inputs, fileSearchContext, traceContext);
+  const metadata = deterministicMetadataAtoms(inputs);
   return mergeDeterministicEvidence([
     symbolDiscovery,
     traceEvidence,
@@ -3422,29 +3399,9 @@ async function deterministicContextEvidence(
 
 async function withDeterministicContextAtoms(
   rings: RingRunSummary,
-  input: OrchestratorInput,
-  plan: ExplorationPlan,
-  searchScope: SearchScope,
-  fs: WorkspaceFs,
-  metadataFs: WorkspaceFs,
-  nowMs: () => number,
-  signal: AbortSignal | undefined,
-  structuralContexts: StructuralRequestContextPool,
-  deadlineAtMs: number,
-  budget: AugmentationBudgetMeter,
+  inputs: DeterministicContextInputs,
 ): Promise<RingRunSummary> {
-  const deterministic = await deterministicContextEvidence(
-    input,
-    plan,
-    searchScope,
-    fs,
-    metadataFs,
-    nowMs,
-    signal,
-    structuralContexts,
-    deadlineAtMs,
-    budget,
-  );
+  const deterministic = await deterministicContextEvidence(inputs);
   if (deterministic.atoms.length === 0 && deterministic.uncertainty.length === 0) {
     return rings;
   }
@@ -4479,19 +4436,18 @@ async function augmentRingsWithDeterministicAtoms(
       ? withExplicitScopeAtoms(rings, input, searchScope, fs, nowMs, deadlineAtMs, deps.signal)
       : rings;
   if (!budget.canContinue()) return finishAugmentationBudget(scopedRings, budget);
-  const deterministicRings = await withDeterministicContextAtoms(
-    scopedRings,
+  const deterministicRings = await withDeterministicContextAtoms(scopedRings, {
     input,
     plan,
     searchScope,
     fs,
     metadataFs,
     nowMs,
-    deps.signal,
+    signal: deps.signal,
     structuralContexts,
     deadlineAtMs,
     budget,
-  );
+  });
   const discoveredTrace = await discoveredTraceForAugmentation(args, deterministicRings, budget);
   return finishAugmentationBudget(
     {
@@ -5158,28 +5114,24 @@ function connectedContextSearchInputs(
   deps: OrchestratorDeps,
   plan: ExplorationPlan,
   runtime: ConnectedContextRuntime,
-  fs: WorkspaceFs,
-  searchScope: SearchScope,
-  structuralContexts: StructuralRequestContextPool,
-  workspaceIndex: WorkspaceIndex | undefined,
-  workspaceIndexActivity: WorkspaceIndexActivity,
-  deadlineAtMs: number,
+  context: LiveRetrievalContext,
 ): SearchInputs {
+  const { workspaceIndex } = context;
   return {
-    searchScope,
+    searchScope: context.searchScope,
     query: input.query,
     anchors: plan.anchors,
     retrievalIntent: plan.retrievalIntent,
-    fs,
+    fs: context.ringFs,
     nowMs: runtime.nowMs,
     signal: deps.signal,
     ...(workspaceIndex === undefined ? {} : { workspaceIndex }),
-    workspaceIndexActivity,
+    workspaceIndexActivity: context.workspaceIndexActivity,
     repoSemanticSearchProvider: deps.repoSemanticSearchProvider ?? deps.semanticSearchProvider,
     gitFileHistoryEvidence: deps.gitFileHistoryEvidence ?? defaultGitFileHistoryEvidenceProvider,
     correlationId: deps.correlationId,
-    structuralContexts,
-    deadlineAtMs,
+    structuralContexts: context.structuralContexts,
+    deadlineAtMs: context.deadlineAtMs,
   };
 }
 
@@ -5650,18 +5602,7 @@ async function retrieveLiveConnectedContext(
   runtime.progress.phase = "ring-retrieval";
   const rings = await runAllRings(
     plan.rings,
-    connectedContextSearchInputs(
-      input,
-      deps,
-      plan,
-      runtime,
-      context.ringFs,
-      context.searchScope,
-      context.structuralContexts,
-      context.workspaceIndex,
-      context.workspaceIndexActivity,
-      context.deadlineAtMs,
-    ),
+    connectedContextSearchInputs(input, deps, plan, runtime, context),
     governor,
   );
   throwIfCancelled(deps.signal);
@@ -5681,18 +5622,26 @@ async function retrieveLiveConnectedContext(
   );
 }
 
+// Which budget actually stopped the request is reported, not inferred: `readBudgetBlocked` and
+// `elapsedBudgetBlocked` stay separate flags because both can be true at once and the completion
+// status distinguishes them. Carried together so the reason and the two flags that describe it
+// cannot drift apart across the two call sites that raise them.
+interface BudgetExhaustedStop {
+  readonly stopReason: string;
+  readonly readBudgetBlocked: boolean;
+  readonly elapsedBudgetBlocked: boolean;
+}
+
 async function emptyBudgetExhaustedRetrieval(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
   plan: ExplorationPlan,
   governor: GovernorState,
   runtime: ConnectedContextRuntime,
-  stopReason: string,
-  readBudgetBlocked: boolean,
-  elapsedBudgetBlocked: boolean,
+  stop: BudgetExhaustedStop,
 ): Promise<ConnectedContextExecution> {
   runtime.progress.phase = "empty-pack-assembly";
-  const stoppedGovernor = elapsedBudgetBlocked
+  const stoppedGovernor = stop.elapsedBudgetBlocked
     ? applyUsage(governor, usageDelta({ elapsedMs: plan.budget.elapsedMsMax }))
     : governor;
   const pack = await assembleEmptyGroundedPack({
@@ -5701,14 +5650,14 @@ async function emptyBudgetExhaustedRetrieval(
     plan,
     governor: stoppedGovernor,
     nowMs: runtime.nowMs,
-    stopReason,
+    stopReason: stop.stopReason,
   });
   throwIfCancelled(deps.signal);
   return connectedContextExecution(
     pack,
     plan,
     runtime.activity,
-    stoppedRetrievalCompletion(readBudgetBlocked, elapsedBudgetBlocked),
+    stoppedRetrievalCompletion(stop.readBudgetBlocked, stop.elapsedBudgetBlocked),
     EMPTY_STRUCTURAL_DIAGNOSTICS,
     NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS,
     runtime.workspaceIoActivity.diagnostics(),
@@ -5735,16 +5684,11 @@ async function retrieveLiveOrDeadlineExhausted(
     liveContext = prepareLiveRetrievalContext(input, deps, plan, runtime);
   } catch (error) {
     if (!isMetadataTraversalDeadline(error)) throw error;
-    return emptyBudgetExhaustedRetrieval(
-      input,
-      deps,
-      plan,
-      governor,
-      runtime,
-      "budget-exhausted on elapsedMs",
-      false,
-      true,
-    );
+    return emptyBudgetExhaustedRetrieval(input, deps, plan, governor, runtime, {
+      stopReason: "budget-exhausted on elapsedMs",
+      readBudgetBlocked: false,
+      elapsedBudgetBlocked: true,
+    });
   }
   return retrieveLiveConnectedContext(input, deps, plan, governor, runtime, liveContext);
 }
@@ -5774,16 +5718,11 @@ async function executeConnectedContextRetrieval(
   if (stopReason === undefined) {
     return retrieveLiveOrDeadlineExhausted(input, deps, plan, governor, admittedRuntime);
   }
-  return emptyBudgetExhaustedRetrieval(
-    input,
-    deps,
-    plan,
-    governor,
-    runtime,
+  return emptyBudgetExhaustedRetrieval(input, deps, plan, governor, runtime, {
     stopReason,
-    readBudgetBlock !== undefined,
-    elapsedBudgetBlock !== undefined,
-  );
+    readBudgetBlocked: readBudgetBlock !== undefined,
+    elapsedBudgetBlocked: elapsedBudgetBlock !== undefined,
+  });
 }
 
 // Epic #532 — retrieval-only pipeline: the ready-governed plan, workspace detection, ring run,

@@ -283,7 +283,10 @@ export function workspaceCandidatePathPolicyFingerprint(
     ["exclude", policy?.exclude ?? []],
   ] as const) {
     hash.update(`${kind}\0`);
-    for (const pattern of [...new Set(patterns)].sort()) {
+    // S2871: the comparator must stay code-unit stable, not locale-collated -- this ordering
+    // feeds a persisted candidate-path policy fingerprint, so `compareStrings` reproduces the
+    // exact order a bare `.sort()` produced and keeps every already-stored fingerprint valid.
+    for (const pattern of [...new Set(patterns)].sort(compareStrings)) {
       const encoded = Buffer.from(pattern, "utf8");
       hash.update(`${String(encoded.byteLength)}:`);
       hash.update(encoded);
@@ -335,7 +338,7 @@ function normalizeFileIdentityHash(value: unknown): string | undefined {
 }
 
 function normalizeNanoseconds(value: unknown): string | undefined {
-  if (typeof value !== "string" || !/^(?:0|[1-9][0-9]{0,30})$/u.test(value)) {
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d{0,30})$/u.test(value)) {
     return undefined;
   }
   return value;

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorkspaceFs, WorkspaceInfo, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   PathHostExecutableProbe,
   detectRuntimeCapabilities,
@@ -92,6 +93,34 @@ function workspaceWithPackageJson(_packageJson: string): WorkspaceInfo {
   return { ...BASE_WORKSPACE };
 }
 
+// The guarded read lane serves manifest content ONLY through the bounded same-descriptor primitive
+// (ADR-0005 D1) — the unbounded `readFileUtf8` fallback that used to sit beside the byte cap was
+// removed. A double that offers only `readFileUtf8` therefore reads nothing, and every manifest
+// assertion below would silently collapse to "manifest-not-found". Mirrors
+// `readFileUtf8SameDescriptor` in keiko-workspace's node port: refuse a hard-linked alias, re-prove
+// the caller's expected snapshot, and refuse a file that does not fit the cap rather than
+// truncating it.
+function manifestDescriptorReader(
+  text: string,
+): NonNullable<WorkspaceFs["readFileUtf8SameDescriptor"]> {
+  return (_absolutePath, maxBytes, hardLinkPolicy, expected) => {
+    if (hardLinkPolicy === "reject" && (expected.hardLinkCount ?? 1) > 1) {
+      throw new WorkspaceDescriptorReadError("hard-link");
+    }
+    if (!expected.isFile || expected.isSymbolicLink) {
+      throw new WorkspaceDescriptorReadError("not-regular");
+    }
+    const sizeBytes = Buffer.byteLength(text, "utf8");
+    if (expected.size !== sizeBytes) {
+      throw new WorkspaceDescriptorReadError("changed");
+    }
+    if (sizeBytes > Math.max(0, Math.floor(maxBytes))) {
+      throw new WorkspaceDescriptorReadError("too-large", sizeBytes);
+    }
+    return { rawText: text, sizeBytes, stat: expected };
+  };
+}
+
 let tempDirs: string[] = [];
 
 async function makeTempDir(prefix: string): Promise<string> {
@@ -168,8 +197,9 @@ describe("detectRuntimeCapabilities", () => {
     });
     const fs: WorkspaceFs = {
       readFileUtf8: (): string => packageJson,
+      readFileUtf8SameDescriptor: manifestDescriptorReader(packageJson),
       stat: (): WorkspaceStat => ({
-        size: packageJson.length,
+        size: Buffer.byteLength(packageJson, "utf8"),
         isFile: true,
         isDirectory: false,
         isSymbolicLink: false,
@@ -211,8 +241,9 @@ describe("detectRuntimeCapabilities", () => {
     ]);
     const fs: WorkspaceFs = {
       readFileUtf8: (): string => packageJson,
+      readFileUtf8SameDescriptor: manifestDescriptorReader(packageJson),
       stat: (absolutePath: string): WorkspaceStat => ({
-        size: packageJson.length,
+        size: Buffer.byteLength(packageJson, "utf8"),
         isFile: files.has(absolutePath),
         isDirectory: !files.has(absolutePath),
         isSymbolicLink: false,
