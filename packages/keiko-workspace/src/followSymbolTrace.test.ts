@@ -81,4 +81,40 @@ describe("followSymbolTrace", () => {
     expect(recordCapped.diagnostics.budgetExhausted).toBe(true);
     expect(recordCapped.diagnostics.skippedEdges).toBeGreaterThan(0);
   });
+
+  it("marks the trace incomplete when only the import graph hits its source ceiling", async () => {
+    const { scope, fs } = makeScope({
+      "packages/a.ts": "export function seed(): void {}",
+      "packages/b.vue": "<script>export const b = 1;</script>",
+      "packages/c.vue": "<script>export const c = 1;</script>",
+    });
+    const cappedLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+
+    const trace = await followSymbolTrace(scope, cappedLimits, fs, {
+      symbols: ["seed"],
+      maxDepth: 1,
+      maxRecords: 20,
+    });
+
+    expect(trace.records).toEqual([
+      expect.objectContaining({ relation: "definition", scopePath: "packages/a.ts" }),
+    ]);
+    expect(trace.diagnostics.sourceGraphTruncated).toBe(true);
+  });
+
+  it("marks the trace incomplete when graph source reads are skipped", async () => {
+    const { scope, fs } = makeScope({
+      "src/oversized.ts": "export function seed(): void {}",
+    });
+
+    const trace = await followSymbolTrace(
+      scope,
+      { ...DEFAULT_SEARCH_LIMITS, maxBytesPerFileScanned: 1 },
+      fs,
+      { symbols: ["seed"] },
+    );
+
+    expect(trace.records).toEqual([]);
+    expect(trace.diagnostics.sourceGraphTruncated).toBe(true);
+  });
 });

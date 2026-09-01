@@ -1,5 +1,5 @@
 import { captureActivityLog } from "./activityLogCapture.test-support.js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   mkdirSync,
   mkdtempSync,
@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
+import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import type {
   SearchScope,
   WorkspaceDirEntry,
@@ -27,6 +28,20 @@ const NOW = 1_700_000_000_000;
 const RECORD_SEP = "\x1e";
 
 let ROOT = "";
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 function ok(stdout: string): GitProcessResult {
   return { exitCode: 0, signal: null, stdout, stderr: "", truncated: false };
@@ -71,6 +86,30 @@ function nodeFs(): WorkspaceFs {
   };
 }
 
+function deadlineReadProbe(
+  fs: WorkspaceFs,
+  deadlineReached: () => boolean,
+): { readonly fs: WorkspaceFs; readonly lateReads: () => number } {
+  let lateReads = 0;
+  const record = (): void => {
+    if (deadlineReached()) lateReads += 1;
+  };
+  return {
+    fs: {
+      ...fs,
+      realPath: (absolutePath): string => {
+        record();
+        return fs.realPath(absolutePath);
+      },
+      stat: (absolutePath): WorkspaceStat => {
+        record();
+        return fs.stat(absolutePath);
+      },
+    },
+    lateReads: () => lateReads,
+  };
+}
+
 function scope(relativePaths: readonly string[] = []): SearchScope {
   return {
     scopeId: "scope-1",
@@ -107,10 +146,219 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   rmSync(ROOT, { recursive: true, force: true });
 });
 
 describe("defaultGitFileHistoryEvidenceProvider", () => {
+  it("caps both Git subprocesses to the request time remaining", async () => {
+    let nowMs = NOW;
+    const timeouts: number[] = [];
+    const runner: GitProcessRunner = (args, options) => {
+      timeouts.push(options.timeoutMs);
+      if (args.includes("rev-parse")) {
+        nowMs += 1_000;
+        return Promise.resolve(ok(`${ROOT}\n`));
+      }
+      return Promise.resolve(ok(""));
+    };
+
+    await defaultGitFileHistoryEvidenceProvider({
+      searchScope: scope(),
+      query: query(),
+      fs: nodeFs(),
+      nowMs: () => nowMs,
+      deadlineAtMs: NOW + 1_500,
+      runner,
+    });
+
+    expect(timeouts).toEqual([1_500, 500]);
+  });
+
+  it("does not start Git after the request deadline", async () => {
+    let runnerCalls = 0;
+    const runner: GitProcessRunner = () => {
+      runnerCalls += 1;
+      return Promise.resolve(ok(""));
+    };
+
+    const atoms = await defaultGitFileHistoryEvidenceProvider({
+      searchScope: scope(),
+      query: query(),
+      fs: nodeFs(),
+      nowMs: () => NOW,
+      deadlineAtMs: NOW,
+      runner,
+    });
+
+    expect(atoms).toEqual([]);
+    expect(runnerCalls).toBe(0);
+  });
+
+  it("bounds a never-settling membership lookup and observes its late rejection", async () => {
+    vi.useFakeTimers();
+    const pending = deferred<GitProcessResult>();
+    const runner: GitProcessRunner = () => pending.promise;
+    const outcome = defaultGitFileHistoryEvidenceProvider({
+      searchScope: scope(),
+      query: query(),
+      fs: nodeFs(),
+      nowMs: () => NOW,
+      deadlineAtMs: NOW + 10,
+      runner,
+    });
+    const expectation = expect(outcome).resolves.toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(10);
+    await expectation;
+    pending.reject(new Error("late git membership rejection"));
+    await Promise.resolve();
+  });
+
+  it("forwards cancellation to Git and does not wait for a non-cooperative runner", async () => {
+    const pending = deferred<GitProcessResult>();
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const runner: GitProcessRunner = (_args, options) => {
+      receivedSignal = options.abortSignal;
+      return pending.promise;
+    };
+    const outcome = defaultGitFileHistoryEvidenceProvider({
+      searchScope: scope(),
+      query: query(),
+      fs: nodeFs(),
+      nowMs: () => NOW,
+      signal: controller.signal,
+      runner,
+    });
+    const expectation = expect(outcome).rejects.toBeInstanceOf(CancelledError);
+    await vi.waitFor(() => {
+      expect(receivedSignal).toBeDefined();
+    });
+
+    controller.abort();
+
+    await expectation;
+    expect(receivedSignal?.aborted).toBe(true);
+    pending.resolve(ok(""));
+  });
+
+  it("stops path validation immediately when cancellation arrives during metadata I/O", async () => {
+    const controller = new AbortController();
+    const baseFs = nodeFs();
+    let postAbortReads = 0;
+    const fs: WorkspaceFs = {
+      ...baseFs,
+      realPath: (absolutePath): string => {
+        if (controller.signal.aborted) postAbortReads += 1;
+        return baseFs.realPath(absolutePath);
+      },
+      stat: (absolutePath): WorkspaceStat => {
+        if (controller.signal.aborted) postAbortReads += 1;
+        if (absolutePath.endsWith("src/recent.ts")) controller.abort();
+        return baseFs.stat(absolutePath);
+      },
+    };
+    const runner: GitProcessRunner = (args) =>
+      Promise.resolve(
+        args.includes("rev-parse")
+          ? ok(`${ROOT}\n`)
+          : ok(
+              [
+                `${RECORD_SEP}1700000000`,
+                "src/recent.ts",
+                "src/stale.ts",
+                "src/ignored.md",
+                "",
+              ].join("\n"),
+            ),
+      );
+
+    await expect(
+      defaultGitFileHistoryEvidenceProvider({
+        searchScope: scope(),
+        query: query(),
+        fs,
+        nowMs: () => NOW,
+        signal: controller.signal,
+        runner,
+      }),
+    ).rejects.toBeInstanceOf(CancelledError);
+    expect(postAbortReads).toBe(0);
+  });
+
+  it("forwards a bounded signal to both Git subprocesses", async () => {
+    const signals: AbortSignal[] = [];
+    const runner: GitProcessRunner = (args, options) => {
+      if (options.abortSignal !== undefined) signals.push(options.abortSignal);
+      return Promise.resolve(args.includes("rev-parse") ? ok(`${ROOT}\n`) : ok(""));
+    };
+
+    await defaultGitFileHistoryEvidenceProvider({
+      searchScope: scope(),
+      query: query(),
+      fs: nodeFs(),
+      nowMs: () => NOW,
+      runner,
+    });
+
+    expect(signals).toHaveLength(2);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+
+  it("starts no repository lookup after membership consumes the remaining time", async () => {
+    let nowMs = NOW;
+    const deadlineAtMs = NOW + 100;
+    const probed = deadlineReadProbe(nodeFs(), () => nowMs >= deadlineAtMs);
+    let runnerCalls = 0;
+    const runner: GitProcessRunner = () => {
+      runnerCalls += 1;
+      nowMs = deadlineAtMs;
+      return Promise.resolve(ok(`${ROOT}\n`));
+    };
+
+    const atoms = await defaultGitFileHistoryEvidenceProvider({
+      searchScope: scope(),
+      query: query(),
+      fs: probed.fs,
+      nowMs: () => nowMs,
+      deadlineAtMs,
+      runner,
+    });
+
+    expect(atoms).toEqual([]);
+    expect(runnerCalls).toBe(1);
+    expect(probed.lateReads()).toBe(0);
+  });
+
+  it("does not validate history paths after the history read consumes the remaining time", async () => {
+    let nowMs = NOW;
+    const deadlineAtMs = NOW + 100;
+    const probed = deadlineReadProbe(nodeFs(), () => nowMs >= deadlineAtMs);
+    let runnerCalls = 0;
+    const runner: GitProcessRunner = (args) => {
+      runnerCalls += 1;
+      if (args.includes("rev-parse")) {
+        return Promise.resolve(ok(`${ROOT}\n`));
+      }
+      nowMs = deadlineAtMs;
+      return Promise.resolve(ok(`${RECORD_SEP}1700000000\nsrc/recent.ts\n`));
+    };
+
+    const atoms = await defaultGitFileHistoryEvidenceProvider({
+      searchScope: scope(),
+      query: query(),
+      fs: probed.fs,
+      nowMs: () => nowMs,
+      deadlineAtMs,
+      runner,
+    });
+
+    expect(atoms).toEqual([]);
+    expect(runnerCalls).toBe(2);
+    expect(probed.lateReads()).toBe(0);
+  });
+
   it("turns bounded git log --name-only output into file-scoped recency/churn atoms", async () => {
     const mutableCalls: string[][] = [];
     const runner: GitProcessRunner = (args) => {
@@ -222,6 +470,42 @@ describe("defaultGitFileHistoryEvidenceProvider", () => {
     });
 
     expect(atoms.map((atom) => atom.scopePath)).toEqual(["src/stale.ts"]);
+  });
+
+  it("does not emit history evidence for a path alias that resolves into a denied target", async () => {
+    mkdirSync(join(ROOT, ".aws"), { recursive: true });
+    writeFileSync(join(ROOT, ".aws/secret.ts"), "export const privateValue = true;\n");
+    const lexicalPath = join(ROOT, "src/recent.ts");
+    const deniedTarget = realpathSync(join(ROOT, ".aws/secret.ts"));
+    const baseFs = nodeFs();
+    let deniedStats = 0;
+    const fs: WorkspaceFs = {
+      ...baseFs,
+      realPath: (absolutePath): string =>
+        absolutePath === lexicalPath ? deniedTarget : baseFs.realPath(absolutePath),
+      stat: (absolutePath): WorkspaceStat => {
+        if (absolutePath === deniedTarget) deniedStats += 1;
+        return baseFs.stat(absolutePath);
+      },
+    };
+    const runner: GitProcessRunner = (args) =>
+      Promise.resolve(
+        args.includes("rev-parse")
+          ? ok(`${ROOT}\n`)
+          : ok([`${RECORD_SEP}1700000000`, "src/recent.ts", ""].join("\n")),
+      );
+
+    const atoms = await defaultGitFileHistoryEvidenceProvider({
+      searchScope: scope(),
+      query: query(),
+      fs,
+      nowMs: () => NOW,
+      runner,
+      maxFiles: 10,
+    });
+
+    expect(deniedStats).toBe(0);
+    expect(atoms).toEqual([]);
   });
 });
 

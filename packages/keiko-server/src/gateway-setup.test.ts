@@ -9345,12 +9345,11 @@ describe("stripTrailingSlashes", () => {
   // concluding "$" can never be reached from here. A run with NO "/" at all is fast even for the
   // old regex (the very first character check fails immediately at every position), so it would not
   // have caught a regression — this shape is the one that actually distinguishes old from new.
-  it("completes within a tight budget for a long slash run blocked by a trailing character", () => {
+  // Wall-clock enforcement is consolidated in grounded-orchestrator.workspace-pattern.test.ts;
+  // required-path Vitest remains behavioral under ADR-0139 D1.
+  it("preserves a long slash run blocked by a trailing character", () => {
     const adversarial = `${"/".repeat(100_000)}!`;
-    const start = Date.now();
     const result = stripTrailingSlashes(adversarial);
-    const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(1000);
     expect(result).toBe(adversarial);
   });
 });

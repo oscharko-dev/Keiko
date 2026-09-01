@@ -346,15 +346,11 @@ describe("stripTrailingSlashes", () => {
     expect(stripTrailingSlashes("///")).toBe("");
   });
 
-  // SonarCloud S8786: the previous `/\/+$/` pattern has no leading `^` anchor, so the engine
-  // retries the match at every position inside a long slash run before concluding there is no
-  // match — O(n^2) when the string never ends in "/". Empirically, the old pattern took ~1.6s
-  // for a 64k-character adversarial input; this bounded scan must stay near-instant at 5x that.
-  it("stays linear for a long non-terminating slash run (regression for SonarCloud S8786)", () => {
+  // SonarCloud S8786: retain the adversarial behavior pin here. Its wall-clock ceiling is
+  // consolidated in grounded-orchestrator.workspace-pattern.test.ts under ADR-0139 D1.
+  it("preserves a long non-terminating slash run", () => {
     const adversarial = "/".repeat(320_000) + "x";
-    const start = Date.now();
     const result = stripTrailingSlashes(adversarial);
-    expect(Date.now() - start).toBeLessThan(1500);
     expect(result).toBe(adversarial);
   });
 });

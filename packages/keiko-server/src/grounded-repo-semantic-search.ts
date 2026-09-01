@@ -376,7 +376,7 @@ async function readLiveFingerprintBytes(
   try {
     const file = liveFingerprintFile(ctx, pod, scopePath, byteLength);
     if (file === undefined) return undefined;
-    const bytes = await ctx.fs.readFileBytes(file.realPath, byteLength + 1);
+    const bytes = await ctx.fs.readFileBytes(file.realPath, byteLength + 1, "reject");
     const after = ctx.fs.stat(file.absolutePath);
     return bytes.byteLength === byteLength && stableFileStat(file.before, after)
       ? bytes

@@ -3,10 +3,20 @@ import { readWorkspaceFile } from "./discovery.js";
 import type { WorkspaceFs } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
-import { containedRealPathInfo } from "./realpath.js";
+import { containedRealPathInfo, isCanonicalAllowedContainedPath } from "./realpath.js";
 import type { SearchLimits, SearchScope } from "./repoSearch.js";
-import { gatherCandidates, probeBinary } from "./repoSearchScan.js";
+import {
+  gatherCandidatesWithControl,
+  limitCandidateSetForStructuralBuild,
+  probeBinary,
+  type CandidateSet,
+} from "./repoSearchScan.js";
 import { importEdgeStableId } from "./stableId.js";
+import {
+  createStructuralExecutionControl,
+  structuralExecutionStopped,
+  type StructuralExecutionControl,
+} from "./structuralExecution.js";
 
 export type ImportEdgeKind = "static-import" | "re-export" | "commonjs-require" | "dynamic-import";
 export type ImportResolutionKind =
@@ -38,6 +48,13 @@ export interface ImportGraph {
   readonly forward: ReadonlyMap<string, readonly ResolvedImportEdge[]>;
   readonly reverse: ReadonlyMap<string, readonly ResolvedImportEdge[]>;
   readonly unresolved: readonly ResolvedImportEdge[];
+  readonly diagnostics: ImportGraphDiagnostics;
+}
+
+export interface ImportGraphDiagnostics {
+  readonly filesScanned: number;
+  readonly filesSkipped: number;
+  readonly truncated: boolean;
 }
 
 export interface ImportGraphTraversalOptions {
@@ -59,6 +76,17 @@ interface PackageInfo {
 interface PackageTarget {
   readonly target: string;
   readonly kind: ImportResolutionKind;
+}
+
+interface ParsedJsonFile {
+  readonly value: Record<string, unknown> | undefined;
+  readonly failed: boolean;
+}
+
+interface ImportMetadata<T> {
+  readonly items: readonly T[];
+  readonly filesSkipped: number;
+  readonly truncated: boolean;
 }
 
 const SOURCE_EXTENSIONS = new Set([
@@ -294,16 +322,35 @@ export function collectImportSpecifiers(text: string): readonly ImportSpecifierH
   return hits.sort((a, b) => a.line - b.line || a.ordinal - b.ordinal);
 }
 
-function safeFileExists(scope: SearchScope, fs: WorkspaceFs, scopePath: string): boolean {
+function safeFileExists(
+  scope: SearchScope,
+  fs: WorkspaceFs,
+  scopePath: string,
+  candidatePaths: ReadonlySet<string>,
+  resolverFailures: Set<string>,
+): boolean {
   const normalized = normalizeScopePath(scopePath);
-  if (normalized.startsWith("../") || normalized === ".." || isDenied(normalized)) return false;
+  if (
+    normalized.startsWith("../") ||
+    normalized === ".." ||
+    isDenied(normalized) ||
+    !candidatePaths.has(normalized)
+  ) {
+    return false;
+  }
   try {
     const abs = resolveWithinWorkspace(scope.workspace.root, normalized);
     const contained = containedRealPathInfo(fs, scope.workspace.root, abs);
-    if (isDenied(normalizeScopePath(contained.realRelative))) return false;
-    if (!fs.exists(contained.path)) return false;
-    return fs.stat(contained.path).isFile;
+    if (!isCanonicalAllowedContainedPath(contained, scope.workspace.root, normalized)) {
+      resolverFailures.add(normalized);
+      return false;
+    }
+    const stat = fs.stat(contained.path);
+    const allowed = stat.isFile && !(stat.hardLinkCount !== undefined && stat.hardLinkCount > 1);
+    if (!allowed) resolverFailures.add(normalized);
+    return allowed;
   } catch {
+    resolverFailures.add(normalized);
     return false;
   }
 }
@@ -312,6 +359,8 @@ function resolveModuleCandidate(
   scope: SearchScope,
   fs: WorkspaceFs,
   basePath: string,
+  candidatePaths: ReadonlySet<string>,
+  resolverFailures: Set<string>,
 ): string | undefined {
   const normalized = normalizeScopePath(basePath);
   const candidates = [
@@ -319,30 +368,43 @@ function resolveModuleCandidate(
     ...RESOLVE_EXTENSIONS.map((ext) => `${normalized}${ext}`),
     ...RESOLVE_EXTENSIONS.map((ext) => path.join(normalized, `index${ext}`)),
   ];
-  return candidates.find((candidate) => safeFileExists(scope, fs, candidate));
+  return candidates.find((candidate) =>
+    safeFileExists(scope, fs, candidate, candidatePaths, resolverFailures),
+  );
 }
 
-function readJson(
-  scope: SearchScope,
-  fs: WorkspaceFs,
-  scopePath: string,
-): Record<string, unknown> | undefined {
+function readJson(scope: SearchScope, fs: WorkspaceFs, scopePath: string): ParsedJsonFile {
   try {
-    return JSON.parse(
+    const parsed: unknown = JSON.parse(
       readWorkspaceFile(scope.workspace, scopePath, { maxBytes: 256 * 1024 }, fs).text,
-    ) as Record<string, unknown>;
+    );
+    return {
+      value:
+        typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>)
+          : undefined,
+      failed: false,
+    };
   } catch {
-    return undefined;
+    return { value: undefined, failed: true };
   }
 }
 
-function tsconfigAliases(scope: SearchScope, fs: WorkspaceFs): readonly TsconfigAlias[] {
-  const parsed = readJson(scope, fs, "tsconfig.json");
+function tsconfigAliases(
+  scope: SearchScope,
+  fs: WorkspaceFs,
+  scopePath: string | undefined,
+): ImportMetadata<TsconfigAlias> {
+  if (scopePath === undefined) return { items: [], filesSkipped: 0, truncated: false };
+  const result = readJson(scope, fs, scopePath);
+  const parsed = result.value;
   const compilerOptions = parsed?.compilerOptions as Record<string, unknown> | undefined;
   const paths = compilerOptions?.paths as Record<string, unknown> | undefined;
   const baseUrl = typeof compilerOptions?.baseUrl === "string" ? compilerOptions.baseUrl : ".";
-  if (paths === undefined) return [];
-  return Object.entries(paths)
+  if (paths === undefined) {
+    return { items: [], filesSkipped: result.failed ? 1 : 0, truncated: false };
+  }
+  const items = Object.entries(paths)
     .map(([pattern, value]) => ({
       pattern,
       targets: Array.isArray(value)
@@ -351,33 +413,35 @@ function tsconfigAliases(scope: SearchScope, fs: WorkspaceFs): readonly Tsconfig
       baseUrl,
     }))
     .filter((entry) => entry.targets.length > 0);
+  return { items, filesSkipped: result.failed ? 1 : 0, truncated: false };
 }
 
 function packageInfos(
   scope: SearchScope,
   fs: WorkspaceFs,
   files: readonly string[],
-): readonly PackageInfo[] {
-  return files
-    .filter((file) => path.basename(file) === "package.json")
-    .map((file) => ({ file, manifest: readJson(scope, fs, file) }))
-    .filter(
-      (entry): entry is { file: string; manifest: Record<string, unknown> } =>
-        entry.manifest !== undefined,
-    )
-    .map((entry) => ({ name: entry.manifest.name, entry }))
-    .filter(
-      (
-        entry,
-      ): entry is { name: string; entry: { file: string; manifest: Record<string, unknown> } } =>
-        typeof entry.name === "string",
-    )
-    .map(({ name, entry }) => ({
-      name,
-      rootPath: path.dirname(entry.file),
-      manifest: entry.manifest,
-    }))
-    .sort((a, b) => b.name.length - a.name.length);
+  control: StructuralExecutionControl,
+): ImportMetadata<PackageInfo> {
+  const items: PackageInfo[] = [];
+  let filesSkipped = 0;
+  let truncated = false;
+  for (const file of files.filter((candidate) => path.basename(candidate) === "package.json")) {
+    if (structuralExecutionStopped(control)) {
+      truncated = true;
+      break;
+    }
+    const result = readJson(scope, fs, file);
+    if (result.failed) filesSkipped += 1;
+    const manifest = result.value;
+    if (manifest === undefined || typeof manifest.name !== "string") continue;
+    items.push({ name: manifest.name, rootPath: path.dirname(file), manifest });
+    if (structuralExecutionStopped(control)) {
+      truncated = true;
+      break;
+    }
+  }
+  items.sort((a, b) => b.name.length - a.name.length);
+  return { items, filesSkipped, truncated };
 }
 
 function matchAliasPattern(
@@ -402,10 +466,12 @@ function resolveAliasTargets(
   fs: WorkspaceFs,
   alias: TsconfigAlias,
   capture: string,
+  candidatePaths: ReadonlySet<string>,
+  resolverFailures: Set<string>,
 ): string | undefined {
   for (const target of alias.targets) {
     const candidate = path.join(alias.baseUrl, target.split("*").join(capture));
-    const resolved = resolveModuleCandidate(scope, fs, candidate);
+    const resolved = resolveModuleCandidate(scope, fs, candidate, candidatePaths, resolverFailures);
     if (resolved !== undefined) return resolved;
   }
   return undefined;
@@ -416,11 +482,20 @@ function resolveAlias(
   fs: WorkspaceFs,
   specifier: string,
   aliases: readonly TsconfigAlias[],
+  candidatePaths: ReadonlySet<string>,
+  resolverFailures: Set<string>,
 ): string | undefined {
   for (const alias of aliases) {
     const match = matchAliasPattern(alias, specifier);
     if (match === undefined) continue;
-    const resolved = resolveAliasTargets(scope, fs, alias, match.capture);
+    const resolved = resolveAliasTargets(
+      scope,
+      fs,
+      alias,
+      match.capture,
+      candidatePaths,
+      resolverFailures,
+    );
     if (resolved !== undefined) return resolved;
   }
   return undefined;
@@ -469,12 +544,20 @@ function resolvePackage(
   fs: WorkspaceFs,
   specifier: string,
   packages: readonly PackageInfo[],
+  candidatePaths: ReadonlySet<string>,
+  resolverFailures: Set<string>,
 ): { readonly path: string; readonly kind: ImportResolutionKind } | undefined {
   for (const pkg of packages) {
     if (specifier !== pkg.name && !specifier.startsWith(`${pkg.name}/`)) continue;
     const subpath = specifier === pkg.name ? "" : specifier.slice(pkg.name.length);
     const target = packageTarget(pkg, subpath);
-    const resolved = resolveModuleCandidate(scope, fs, path.join(pkg.rootPath, target.target));
+    const resolved = resolveModuleCandidate(
+      scope,
+      fs,
+      path.join(pkg.rootPath, target.target),
+      candidatePaths,
+      resolverFailures,
+    );
     if (resolved !== undefined) return { path: resolved, kind: target.kind };
   }
   return undefined;
@@ -487,18 +570,22 @@ function resolveImport(
   specifier: string,
   aliases: readonly TsconfigAlias[],
   packages: readonly PackageInfo[],
+  candidatePaths: ReadonlySet<string>,
+  resolverFailures: Set<string>,
 ): { readonly path?: string; readonly kind: ImportResolutionKind } {
   if (specifier.startsWith(".")) {
     const resolved = resolveModuleCandidate(
       scope,
       fs,
       path.join(path.dirname(importer), specifier),
+      candidatePaths,
+      resolverFailures,
     );
     return resolved === undefined ? { kind: "unresolved" } : { path: resolved, kind: "relative" };
   }
-  const alias = resolveAlias(scope, fs, specifier, aliases);
+  const alias = resolveAlias(scope, fs, specifier, aliases, candidatePaths, resolverFailures);
   if (alias !== undefined) return { path: alias, kind: "tsconfig-path" };
-  const pkg = resolvePackage(scope, fs, specifier, packages);
+  const pkg = resolvePackage(scope, fs, specifier, packages, candidatePaths, resolverFailures);
   return pkg === undefined ? { kind: "unresolved" } : { path: pkg.path, kind: pkg.kind };
 }
 
@@ -530,8 +617,19 @@ function buildEdge(
   hit: ImportSpecifierHit,
   aliases: readonly TsconfigAlias[],
   packages: readonly PackageInfo[],
+  candidatePaths: ReadonlySet<string>,
+  resolverFailures: Set<string>,
 ): ResolvedImportEdge {
-  const resolved = resolveImport(scope, fs, importerPath, hit.specifier, aliases, packages);
+  const resolved = resolveImport(
+    scope,
+    fs,
+    importerPath,
+    hit.specifier,
+    aliases,
+    packages,
+    candidatePaths,
+    resolverFailures,
+  );
   const confidenceValue = confidence(resolved.kind);
   const distanceValue = distance(importerPath, resolved.path);
   return {
@@ -569,6 +667,73 @@ function isImportSource(scopePath: string): boolean {
   return SOURCE_EXTENSIONS.has(path.extname(scopePath).toLowerCase());
 }
 
+function isImportResolverMetadata(scopePath: string): boolean {
+  const normalized = normalizeScopePath(scopePath);
+  return normalized === "tsconfig.json" || path.basename(normalized) === "package.json";
+}
+
+function addAncestorDistances(distances: Map<string, number>, scopePath: string): void {
+  const directory = path.dirname(normalizeScopePath(scopePath)).replace(/^\.$/u, "");
+  const segments = directory.split("/").filter((segment) => segment.length > 0);
+  for (let ancestorDepth = segments.length; ancestorDepth >= 0; ancestorDepth -= 1) {
+    const ancestor = segments.slice(0, ancestorDepth).join("/");
+    const distance = segments.length - ancestorDepth;
+    const current = distances.get(ancestor);
+    if (current === undefined || distance < current) {
+      distances.set(ancestor, distance);
+    }
+  }
+}
+
+function rankResolverMetadata<T extends { readonly relativePath: string }>(
+  metadata: readonly T[],
+  sources: readonly { readonly relativePath: string }[],
+): readonly T[] {
+  const ancestorDistances = new Map<string, number>();
+  for (const source of sources) addAncestorDistances(ancestorDistances, source.relativePath);
+  return metadata
+    .map((file) => ({
+      file,
+      distance: ancestorDistances.get(
+        path.dirname(normalizeScopePath(file.relativePath)).replace(/^\.$/u, ""),
+      ),
+    }))
+    .filter(({ distance }) => sources.length === 0 || distance !== undefined)
+    .sort((left, right) => {
+      const leftDistance = left.distance ?? Number.POSITIVE_INFINITY;
+      const rightDistance = right.distance ?? Number.POSITIVE_INFINITY;
+      if (leftDistance !== rightDistance) return leftDistance - rightDistance;
+      return left.file.relativePath < right.file.relativePath
+        ? -1
+        : Number(left.file.relativePath > right.file.relativePath);
+    })
+    .map(({ file }) => file);
+}
+
+function boundedImportGraphInputs(candidateSet: CandidateSet, limits: SearchLimits): CandidateSet {
+  const sourceInputs = candidateSet.files.filter((file) => isImportSource(file.relativePath));
+  const metadataInputs = candidateSet.files.filter(
+    (file) => !isImportSource(file.relativePath) && isImportResolverMetadata(file.relativePath),
+  );
+  const fileBudget = Math.max(0, limits.maxFilesScanned);
+  const metadataCapacity = sourceInputs.length === 0 ? fileBudget : Math.floor(fileBudget / 2);
+  const rankedMetadata = rankResolverMetadata(metadataInputs, sourceInputs);
+  const reservedMetadata = rankedMetadata.slice(0, metadataCapacity);
+  const reservedPaths = new Set(reservedMetadata.map((file) => file.relativePath));
+  return limitCandidateSetForStructuralBuild(
+    {
+      ...candidateSet,
+      files: [
+        ...reservedMetadata,
+        ...sourceInputs,
+        ...metadataInputs.filter((file) => !reservedPaths.has(file.relativePath)),
+      ],
+    },
+    limits,
+    () => true,
+  );
+}
+
 async function readImportSource(
   scope: SearchScope,
   fs: WorkspaceFs,
@@ -578,7 +743,9 @@ async function readImportSource(
   try {
     const absolutePath = resolveWithinWorkspace(scope.workspace.root, scopePath);
     const contained = containedRealPathInfo(fs, scope.workspace.root, absolutePath);
-    if (isDenied(normalizeScopePath(contained.realRelative))) return undefined;
+    if (!isCanonicalAllowedContainedPath(contained, scope.workspace.root, scopePath)) {
+      return undefined;
+    }
     const stat = fs.stat(contained.path);
     if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) return undefined;
     if (await probeBinary(fs, contained.path, stat.size)) return undefined;
@@ -650,28 +817,200 @@ export async function buildImportGraph(
   limits: SearchLimits,
   fs: WorkspaceFs,
 ): Promise<ImportGraph> {
-  const candidateSet = gatherCandidates(scope, limits, fs);
-  const files = candidateSet.files.map((file) => file.relativePath);
-  const aliases = tsconfigAliases(scope, fs);
-  const packages = packageInfos(scope, fs, files);
-  const edges: ResolvedImportEdge[] = [];
-  const forward = new Map<string, ResolvedImportEdge[]>();
-  const reverse = new Map<string, ResolvedImportEdge[]>();
+  const control = createStructuralExecutionControl(limits.elapsedMsMax, Date.now);
+  return buildImportGraphFromCandidates(
+    scope,
+    limits,
+    fs,
+    gatherCandidatesWithControl(scope, limits, fs, control),
+    control,
+  );
+}
+
+interface ImportGraphCollection {
+  readonly edges: readonly ResolvedImportEdge[];
+  readonly forward: ReadonlyMap<string, readonly ResolvedImportEdge[]>;
+  readonly reverse: ReadonlyMap<string, readonly ResolvedImportEdge[]>;
+  readonly filesScanned: number;
+  readonly filesSkipped: number;
+  readonly truncated: boolean;
+}
+
+interface ImportGraphAccumulator {
+  readonly edges: ResolvedImportEdge[];
+  readonly forward: Map<string, ResolvedImportEdge[]>;
+  readonly reverse: Map<string, ResolvedImportEdge[]>;
+  readonly resolverFailures: Set<string>;
+}
+
+interface ImportGraphScanState {
+  readonly accumulator: ImportGraphAccumulator;
+  readonly sourceFailures: Set<string>;
+  filesScanned: number;
+}
+
+function createImportGraphScanState(): ImportGraphScanState {
+  return {
+    accumulator: {
+      edges: [],
+      forward: new Map(),
+      reverse: new Map(),
+      resolverFailures: new Set(),
+    },
+    sourceFailures: new Set(),
+    filesScanned: 0,
+  };
+}
+
+function appendImportEdges(
+  accumulator: ImportGraphAccumulator,
+  scope: SearchScope,
+  fs: WorkspaceFs,
+  file: string,
+  text: string,
+  aliases: ImportMetadata<TsconfigAlias>,
+  packages: ImportMetadata<PackageInfo>,
+  candidatePaths: ReadonlySet<string>,
+  control: StructuralExecutionControl,
+): boolean {
+  for (const hit of collectImportSpecifiers(text)) {
+    if (structuralExecutionStopped(control)) return false;
+    const edge = buildEdge(
+      scope,
+      fs,
+      file,
+      hit,
+      aliases.items,
+      packages.items,
+      candidatePaths,
+      accumulator.resolverFailures,
+    );
+    accumulator.edges.push(edge);
+    addToIndex(accumulator.forward, edge.importerPath, edge);
+    addToIndex(accumulator.reverse, edge.targetPath, edge);
+  }
+  return true;
+}
+
+async function scanImportFile(
+  state: ImportGraphScanState,
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  file: string,
+  aliases: ImportMetadata<TsconfigAlias>,
+  packages: ImportMetadata<PackageInfo>,
+  candidatePaths: ReadonlySet<string>,
+  control: StructuralExecutionControl,
+): Promise<boolean> {
+  if (structuralExecutionStopped(control)) return false;
+  const text = await readImportSource(scope, fs, file, limits);
+  if (structuralExecutionStopped(control)) return false;
+  if (text === undefined) {
+    state.sourceFailures.add(file);
+    return true;
+  }
+  state.filesScanned += 1;
+  return (
+    appendImportEdges(
+      state.accumulator,
+      scope,
+      fs,
+      file,
+      text,
+      aliases,
+      packages,
+      candidatePaths,
+      control,
+    ) && !structuralExecutionStopped(control)
+  );
+}
+
+async function collectImportGraph(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  files: readonly string[],
+  aliases: ImportMetadata<TsconfigAlias>,
+  packages: ImportMetadata<PackageInfo>,
+  candidatePaths: ReadonlySet<string>,
+  control: StructuralExecutionControl,
+): Promise<ImportGraphCollection> {
+  const state = createImportGraphScanState();
+  const metadataFilesSkipped = aliases.filesSkipped + packages.filesSkipped;
+  const metadataTruncated = aliases.truncated || packages.truncated;
+  let executionTruncated = false;
   for (const file of files) {
-    if (!isImportSource(file)) continue;
-    const text = await readImportSource(scope, fs, file, limits);
-    if (text === undefined) continue;
-    for (const hit of collectImportSpecifiers(text)) {
-      const edge = buildEdge(scope, fs, file, hit, aliases, packages);
-      edges.push(edge);
-      addToIndex(forward, edge.importerPath, edge);
-      addToIndex(reverse, edge.targetPath, edge);
+    if (
+      !(await scanImportFile(
+        state,
+        scope,
+        limits,
+        fs,
+        file,
+        aliases,
+        packages,
+        candidatePaths,
+        control,
+      ))
+    ) {
+      executionTruncated = true;
+      break;
     }
   }
   return {
-    edges,
-    forward,
-    reverse,
-    unresolved: edges.filter((edge) => edge.targetPath === undefined),
+    edges: state.accumulator.edges,
+    forward: state.accumulator.forward,
+    reverse: state.accumulator.reverse,
+    filesScanned: state.filesScanned,
+    filesSkipped:
+      metadataFilesSkipped +
+      new Set([...state.sourceFailures, ...state.accumulator.resolverFailures]).size,
+    truncated: metadataTruncated || executionTruncated,
+  };
+}
+
+export async function buildImportGraphFromCandidates(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  candidateSet: CandidateSet,
+  executionControl?: StructuralExecutionControl,
+): Promise<ImportGraph> {
+  const control =
+    executionControl ?? createStructuralExecutionControl(limits.elapsedMsMax, Date.now);
+  const boundedInputs = boundedImportGraphInputs(candidateSet, limits);
+  const inputPaths = boundedInputs.files.map((file) => file.relativePath);
+  const files = inputPaths.filter(isImportSource);
+  const metadataFiles = inputPaths.filter(isImportResolverMetadata);
+  const candidatePaths = new Set(candidateSet.files.map((file) => file.relativePath));
+  const aliases = structuralExecutionStopped(control)
+    ? { items: [], filesSkipped: 0, truncated: true }
+    : tsconfigAliases(
+        scope,
+        fs,
+        metadataFiles.find((file) => normalizeScopePath(file) === "tsconfig.json"),
+      );
+  const packages = packageInfos(scope, fs, metadataFiles, control);
+  const collected = await collectImportGraph(
+    scope,
+    limits,
+    fs,
+    files,
+    aliases,
+    packages,
+    candidatePaths,
+    control,
+  );
+  return {
+    edges: collected.edges,
+    forward: collected.forward,
+    reverse: collected.reverse,
+    unresolved: collected.edges.filter((edge) => edge.targetPath === undefined),
+    diagnostics: {
+      filesScanned: collected.filesScanned,
+      filesSkipped: collected.filesSkipped,
+      truncated: boundedInputs.truncated || collected.truncated,
+    },
   };
 }

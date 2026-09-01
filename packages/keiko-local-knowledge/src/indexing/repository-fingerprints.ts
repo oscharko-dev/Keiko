@@ -140,7 +140,7 @@ async function readBoundedFile(
 ): Promise<Uint8Array | undefined> {
   if (size < 0 || size > limit || fs.readFileBytes === undefined) return undefined;
   try {
-    const bytes = await fs.readFileBytes(absolutePath, size + 1);
+    const bytes = await fs.readFileBytes(absolutePath, size + 1, "allow");
     return bytes.byteLength === size ? bytes : undefined;
   } catch {
     return undefined;
@@ -222,7 +222,7 @@ async function hashWithOpenReader(
 ): Promise<boolean> {
   if (fs.openFileReader === undefined) return false;
   let complete: boolean;
-  const reader = await fs.openFileReader(absolutePath);
+  const reader = await fs.openFileReader(absolutePath, "allow");
   try {
     complete = await hashRanges(reader.readRange, size, hash);
   } finally {
@@ -249,14 +249,14 @@ async function hashFileContent(
     if (fs.readFileRange !== undefined) {
       return await hashRanges(
         (start, length) =>
-          fs.readFileRange?.(absolutePath, start, length) ??
+          fs.readFileRange?.(absolutePath, start, length, "allow") ??
           Promise.reject(new Error("range reader unavailable")),
         size,
         hash,
       );
     }
     if (fs.readFileBytes === undefined || size > MAX_SINGLE_READ_BYTES) return false;
-    const bytes = await fs.readFileBytes(absolutePath, size + 1);
+    const bytes = await fs.readFileBytes(absolutePath, size + 1, "allow");
     if (bytes.byteLength !== size) return false;
     hash.update(bytes);
     return true;

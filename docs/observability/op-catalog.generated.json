@@ -1221,9 +1221,45 @@
       "package": "keiko-server"
     },
     {
+      "op": "search.connected-context.completed",
+      "category": "search",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4937",
+      "package": "keiko-server"
+    },
+    {
+      "op": "search.connected-context.completed",
+      "category": "search",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4992",
+      "package": "keiko-server"
+    },
+    {
+      "op": "search.connected-context.failed",
+      "category": "search",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4953",
+      "package": "keiko-server"
+    },
+    {
+      "op": "search.connected-context.failed",
+      "category": "search",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5003",
+      "package": "keiko-server"
+    },
+    {
+      "op": "search.connected-context.started",
+      "category": "search",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4984",
+      "package": "keiko-server"
+    },
+    {
+      "op": "search.connected-context.started",
+      "category": "search",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5043",
+      "package": "keiko-server"
+    },
+    {
       "op": "search.rerank.completed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-rerank-facade.ts:327",
+      "site": "packages/keiko-server/src/grounded-rerank-facade.ts:336",
       "package": "keiko-server"
     },
     {

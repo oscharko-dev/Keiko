@@ -25,15 +25,16 @@ describe("stripTrailingSlashes", () => {
     expect(stripTrailingSlashes(adversarial)).toBe(adversarial);
   });
 
-  // Required-path tests stay behavioral (ADR-0139 D1). The 2000ms wall-clock pin lives only
+  // Required-path tests stay behavioral (ADR-0139 D1). The consolidated wall-clock pin lives only
   // behind KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1 so a loaded required runner cannot fail the suite.
   it.skipIf(process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS !== "1")(
-    "completes the blocked slash-run shape within 2000ms",
+    "runs both workspace-pattern helpers on the 320k blocked slash shape within 1000ms",
     () => {
-      const adversarial = `${"/".repeat(100_000)}!`;
+      const adversarial = `${"/".repeat(320_000)}!`;
       const started = performance.now();
       expect(stripTrailingSlashes(adversarial)).toBe(adversarial);
-      expect(performance.now() - started).toBeLessThan(2000);
+      expect(normalizeWorkspacePattern(adversarial)).toBe(adversarial);
+      expect(performance.now() - started).toBeLessThan(1000);
     },
   );
 });

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-07-16).
+Accepted (2026-07-16); amended for the local-only #3347 diagnostic on 2026-09-01.
 
 ## Amends
 
@@ -52,9 +52,9 @@ A check may be GitHub-required for `dev` integration only if it is deterministic
 source tree: type checking, linting, formatting, hermetic unit/integration tests, coverage
 ratchets, architecture rules, static security scans, packaging smokes, bounded-behaviour e2e
 assertions (caps, counts, markers, redaction), and validation of committed evidence documents.
-Wall-clock assertions (latency percentiles, long-task ceilings, memory-over-time) are enforced
-only in controlled measurement contexts: the official D12 producer environment and the scheduled
-performance workflow, both of which set `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1`. In required-runner
+Authoritative wall-clock assertions (latency percentiles, long-task ceilings, memory-over-time) are
+enforced only in controlled measurement contexts: the official D12 producer environment and the
+scheduled performance workflow, both of which set `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1`. In required-runner
 context the same specs still verify their bounded-cap composition (byte, marker, retained-entry,
 and variable caps) but reduce the repeated latency-sampling loops that exist only to feed those
 percentiles — a full ten-sample stop/flood loop can exceed the E2E timeout on a shared two-core
@@ -62,6 +62,15 @@ runner even when nothing regressed. A shared-runner scheduling spike can therefo
 budget assertion nor time out an integration. The budgets themselves are unchanged and continue to
 be enforced deterministically at PR time through the committed D12 evidence document, which was
 measured under the controlled environment with the full sample count.
+
+Separately, a regression pin for a pure-CPU algorithm may also run as an opt-in developer
+pre-flight micro-benchmark in the version-pinned local Linux gate container when it is not invoked
+by any required CI context, enables the wall-clock environment variable only for its focused child
+process, and separately pins the deterministic behavioral invariant in ordinary tests. Such a
+local check is diagnostic only: it does not produce D12 evidence, confer an integration verdict,
+or widen the set of required wall-clock assertions. This narrow allowance keeps isolated
+algorithmic pins such as the bounded workspace-pattern normalization check available as a focused
+developer pre-flight without reintroducing shared-runner timing into the pull-request path.
 
 ### D2 — Performance evidence binds the measured product, not the repository
 

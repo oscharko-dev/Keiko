@@ -153,6 +153,43 @@ describe("collectConnectedDocumentEvidence with a mocked extractor", () => {
     expect(MAX_DOCUMENT_EXTRACTED_BYTES).toBeGreaterThan(0);
   });
 
+  it("starts a fresh parser timeout for each document within the parent request deadline", async () => {
+    const paths = ["docs/a.docx", "docs/b.docx", "docs/c.docx"];
+    let nowMs = 1_000;
+    const parserTimeouts: number[] = [];
+    extractMock.mockImplementation((_input: unknown, options: { readonly timeoutMs: number }) => {
+      parserTimeouts.push(options.timeoutMs);
+      nowMs += 2_000;
+      return Promise.resolve({
+        outcome: "extracted",
+        format: "docx",
+        text: "bounded document text",
+        extractedBytes: 21,
+        truncated: false,
+        diagnostics: [],
+      });
+    });
+    const searchScope: SearchScope = {
+      workspace: { root: WORKSPACE_ROOT },
+      scopeId: "scope-docs",
+      relativePaths: paths,
+    } as SearchScope;
+
+    const result = await collectConnectedDocumentEvidence({
+      scope: scope(paths),
+      query: query(),
+      searchScope,
+      fs: fs(),
+      nowMs: () => nowMs,
+      deadlineAtMs: 31_000,
+    });
+
+    expect(nowMs).toBe(7_000);
+    expect(parserTimeouts).toEqual([5_000, 5_000, 5_000]);
+    expect(result.candidates).toHaveLength(3);
+    expect(result.omitted).toEqual([]);
+  });
+
   it("discloses a truncation uncertainty marker when a document is clipped", async () => {
     extractMock.mockResolvedValue({
       outcome: "extracted",

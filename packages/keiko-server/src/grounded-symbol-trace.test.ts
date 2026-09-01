@@ -7,8 +7,14 @@ import type {
   WorkspaceInfo,
   WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
+import { createStructuralAdapterRequestContext } from "@oscharko-dev/keiko-workspace/code-intelligence";
+import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 
-import { collectDiscoveredSymbolTraceEvidence } from "./grounded-symbol-trace.js";
+import {
+  collectDiscoveredSymbolTraceEvidence,
+  collectFollowSymbolTraceEvidence,
+  GROUNDED_TRACE_SEARCH_LIMITS,
+} from "./grounded-symbol-trace.js";
 
 const NOW = 1_784_653_600_000;
 const WORKSPACE_ROOT = "/workspace";
@@ -141,7 +147,108 @@ describe("collectDiscoveredSymbolTraceEvidence", () => {
         atoms: [routeAtom()],
         signal: controller.signal,
       }),
-    ).rejects.toThrow(/aborted/iu);
+    ).rejects.toBeInstanceOf(CancelledError);
+    expect(probe.accessCount()).toBe(0);
+  });
+
+  it("does not start a discovered-symbol search without a reserved search call", async () => {
+    const probe = fsProbe();
+    const searchScope: SearchScope = {
+      workspace: workspaceInfo(),
+      scopeId: "scope-route",
+      relativePaths: [],
+    };
+    const requestContext = createStructuralAdapterRequestContext(
+      searchScope,
+      GROUNDED_TRACE_SEARCH_LIMITS,
+      probe.fs,
+      { nowMs: () => NOW },
+    );
+    let reservations = 0;
+
+    const result = await collectDiscoveredSymbolTraceEvidence({
+      scope: selectedScope(),
+      query: routeQuery(),
+      anchors: [],
+      retrievalIntent: "targeted-code-search",
+      searchScope,
+      fs: probe.fs,
+      nowMs: () => NOW,
+      atoms: [routeAtom()],
+      requestContext,
+      tryReserveSearchCall: () => {
+        reservations += 1;
+        return false;
+      },
+    });
+
+    expect(reservations).toBe(1);
+    expect(requestContext.diagnostics().textSearchCount).toBe(0);
+    expect(result).toEqual({ atoms: [], uncertainty: [] });
+  });
+
+  it("surfaces incomplete discovered-symbol searches after the shared deadline expires", async () => {
+    const probe = fsProbe();
+    const searchScope: SearchScope = {
+      workspace: workspaceInfo(),
+      scopeId: "scope-route",
+      relativePaths: [],
+    };
+    let currentMs = 0;
+    const requestContext = createStructuralAdapterRequestContext(
+      searchScope,
+      GROUNDED_TRACE_SEARCH_LIMITS,
+      probe.fs,
+      { nowMs: () => currentMs },
+    );
+    currentMs = GROUNDED_TRACE_SEARCH_LIMITS.elapsedMsMax + 1;
+
+    const result = await collectDiscoveredSymbolTraceEvidence({
+      scope: selectedScope(),
+      query: routeQuery(),
+      anchors: [],
+      retrievalIntent: "targeted-code-search",
+      searchScope,
+      fs: probe.fs,
+      nowMs: () => currentMs,
+      atoms: [routeAtom()],
+      requestContext,
+    });
+
+    expect(result.atoms).toEqual([]);
+    expect(result.uncertainty).toHaveLength(1);
+    expect(result.uncertainty[0]?.kind).toBe("budget-clipped");
+    expect(result.uncertainty[0]?.claim).toContain("Discovered-symbol trace search was incomplete");
+    expect(JSON.stringify(result.uncertainty)).not.toContain(ROUTE_CONTENT);
+  });
+});
+
+describe("collectFollowSymbolTraceEvidence", () => {
+  it("does not start the trace when its search call cannot be reserved", async () => {
+    const probe = fsProbe();
+    const searchScope: SearchScope = {
+      workspace: workspaceInfo(),
+      scopeId: "scope-route",
+      relativePaths: [],
+    };
+    let reservations = 0;
+
+    const result = await collectFollowSymbolTraceEvidence({
+      scope: selectedScope(),
+      query: routeQuery(),
+      anchors: [{ term: "handlePostItem", weight: 0.9, kind: "identifier" }],
+      retrievalIntent: "targeted-code-search",
+      searchScope,
+      fs: probe.fs,
+      nowMs: () => NOW,
+      tryReserveSearchCall: () => {
+        reservations += 1;
+        return false;
+      },
+    });
+
+    expect(result).toEqual({ atoms: [], uncertainty: [] });
+    expect(reservations).toBe(1);
     expect(probe.accessCount()).toBe(0);
   });
 });

@@ -52,7 +52,7 @@ async function readLocalPage(
     // swapped between the realPath()/stat() check above and this read would otherwise let
     // bytes be read from outside the approved root despite the containment check passing
     // (mirrors orchestrator.ts's readSourceText, which reads via `real` for the same reason).
-    const bytes = await readFileBytes(realPath, options.maxBytes);
+    const bytes = await readFileBytes(realPath, options.maxBytes, "allow");
     return { ok: true, bytes, contentType: "text/html", truncated };
   } catch {
     return { ok: false, reason: "fetch-failed" };

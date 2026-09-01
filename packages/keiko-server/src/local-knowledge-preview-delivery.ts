@@ -221,7 +221,7 @@ async function sha256Source(absolutePath: string, byteLength: number): Promise<S
     const length = Math.min(PDF_PREVIEW_HASH_CHUNK_BYTES, byteLength - offset);
     let bytes: Uint8Array;
     try {
-      bytes = await readRange(absolutePath, offset, length);
+      bytes = await readRange(absolutePath, offset, length, "allow");
     } catch {
       return { kind: "unreadable" };
     }
@@ -389,7 +389,7 @@ async function captureFilesystemSourceBlob(
   if (readFileBytes === undefined) return undefined;
   let bytes: Uint8Array;
   try {
-    bytes = await readFileBytes(source.absolutePath, source.byteLength);
+    bytes = await readFileBytes(source.absolutePath, source.byteLength, "allow");
   } catch {
     return undefined;
   }
@@ -613,7 +613,7 @@ export async function openPdfPreviewSourceReader(
   const openFileReader = nodeWorkspaceFs.openFileReader;
   if (openFileReader === undefined) return undefined;
   try {
-    return await openFileReader(source.absolutePath);
+    return await openFileReader(source.absolutePath, "allow");
   } catch {
     return undefined;
   }

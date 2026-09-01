@@ -4,7 +4,11 @@ import { RepoSearchInvalidQueryError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
 import type { SearchLimits, SearchScope } from "./repoSearch.js";
 import { buildAtom } from "./repoSearchScan.js";
-import type { StructuralAdapter, StructuralAdapterDeps } from "./structuralAdapters.js";
+import type {
+  StructuralAdapter,
+  StructuralAdapterDeps,
+  StructuralCoverageDiagnostics,
+} from "./structuralAdapters.js";
 import {
   buildSymbolGraph,
   callsToSymbol,
@@ -60,6 +64,21 @@ function recordsForQuery(graph: SymbolGraph, query: RetrievalQuery): readonly Sy
   return out.sort((a, b) => a.scopePath.localeCompare(b.scopePath) || a.line - b.line);
 }
 
+async function graphForRequest(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  deps: StructuralAdapterDeps | undefined,
+): Promise<SymbolGraph> {
+  deps?.requestContext?.assertGraphBinding(scope, limits, fs);
+  const graph =
+    deps?.requestContext === undefined
+      ? await buildSymbolGraph(scope, limits, fs, deps?.signal)
+      : await deps.requestContext.symbolGraph();
+  deps?.requestContext?.assertGraphBinding(scope, limits, fs);
+  return graph;
+}
+
 export const symbolGraphAdapter: StructuralAdapter = {
   name: "symbol-graph",
   isAvailable: (): Promise<boolean> => Promise.resolve(true),
@@ -75,10 +94,22 @@ export const symbolGraphAdapter: StructuralAdapter = {
         `symbol-graph adapter does not accept query kind: ${query.kind}`,
       );
     }
-    const graph = await buildSymbolGraph(scope, limits, fs);
+    const graph = await graphForRequest(scope, limits, fs, deps);
     const nowMs = deps?.nowMs ?? Date.now;
     return recordsForQuery(graph, query)
       .slice(0, Math.min(limits.maxMatchesReturned, query.maxResults))
       .map((record) => emitRecordAtom(scope, record, query, nowMs));
+  },
+  coverage: async (scope, limits, fs, deps): Promise<StructuralCoverageDiagnostics> => {
+    const graph = await graphForRequest(scope, limits, fs, deps);
+    return {
+      name: "symbol-graph",
+      filesIndexed: graph.diagnostics.filesScanned,
+      filesSkipped: graph.diagnostics.filesSkipped,
+      candidateLimitReached: graph.diagnostics.truncated,
+      parserCoverage: [
+        { parser: "polyglot-symbol-graph", filesIndexed: graph.diagnostics.filesScanned },
+      ],
+    };
   },
 };

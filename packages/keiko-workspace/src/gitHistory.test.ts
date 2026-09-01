@@ -272,9 +272,9 @@ describe("gitHistoryAdapter — worktree pointer support (Finding 7)", () => {
         utf8Reads += 1;
         return baseFs.readFileUtf8(abs);
       },
-      readFileBytes: async (abs, maxBytes) => {
+      readFileBytes: async (abs, maxBytes, hardLinkPolicy) => {
         byteReads += 1;
-        return baseFs.readFileBytes?.(abs, maxBytes) ?? new Uint8Array();
+        return baseFs.readFileBytes?.(abs, maxBytes, hardLinkPolicy) ?? new Uint8Array();
       },
     };
     await expect(gitHistoryAdapter.isAvailable(scope, cappedFs)).resolves.toBe(false);

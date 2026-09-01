@@ -583,8 +583,8 @@ describe("extractDocument — path containment", () => {
         return baseFs.realPath(absolutePath);
       },
       stat: (absolutePath: string) => baseFs.stat(toRequestedPath(absolutePath)),
-      readFileBytes: (absolutePath: string, maxBytes: number) =>
-        baseFs.readFileBytes?.(toRequestedPath(absolutePath), maxBytes) ??
+      readFileBytes: (absolutePath: string, maxBytes: number, hardLinkPolicy) =>
+        baseFs.readFileBytes?.(toRequestedPath(absolutePath), maxBytes, hardLinkPolicy) ??
         Promise.reject(new Error("readFileBytes unavailable")),
     };
     const registry = createDefaultParserRegistry();
@@ -711,11 +711,15 @@ describe("extractDocument — path containment", () => {
 
   it("rejects direct extraction targets when byte reads are shorter than the selected size", async () => {
     const baseFs = memoryFs(ROOT, [{ relativePath: "docs/short.txt", content: "secret" }]);
-    const fs = {
+    const fs: ReturnType<typeof memoryFs> = {
       ...baseFs,
-      readFileBytes: async (absolutePath: string, maxBytes: number): Promise<Uint8Array> => {
+      readFileBytes: async (
+        absolutePath: string,
+        maxBytes: number,
+        hardLinkPolicy,
+      ): Promise<Uint8Array> => {
         if (baseFs.readFileBytes === undefined) throw new Error("readFileBytes unavailable");
-        const bytes = await baseFs.readFileBytes(absolutePath, maxBytes);
+        const bytes = await baseFs.readFileBytes(absolutePath, maxBytes, hardLinkPolicy);
         return bytes.subarray(0, Math.max(0, bytes.byteLength - 1));
       },
     };

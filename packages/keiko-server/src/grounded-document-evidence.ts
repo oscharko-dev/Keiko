@@ -22,6 +22,7 @@ import {
   extractBoundedDocumentText,
   type BoundedDocumentExtractionOutcome,
   type BoundedDocumentFormat,
+  type BoundedDocumentExtractionResult,
 } from "@oscharko-dev/keiko-local-knowledge";
 import {
   isValidScopePath,
@@ -38,13 +39,17 @@ import { redact } from "@oscharko-dev/keiko-security";
 import {
   containedRealPathInfo,
   evidenceAtomStableId,
+  isCanonicalAllowedContainedPath,
   isDenied,
   resolveWithinWorkspace,
   type SearchScope,
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
+import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
+import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { ExcerptWindow } from "@oscharko-dev/keiko-workflows";
 import { createHash } from "node:crypto";
+import { AbortDeadlineRaceError, raceAbortDeadline } from "./abort-race.js";
 
 // ─── Bounds ──────────────────────────────────────────────────────────────────
 export const MAX_DOCUMENT_INPUT_BYTES = 2 * 1024 * 1024; // 2 MiB, enforced before parser execution
@@ -144,6 +149,7 @@ export interface DocumentEvidenceInputs {
   readonly fs: WorkspaceFs;
   readonly nowMs: () => number;
   readonly signal?: AbortSignal | undefined;
+  readonly deadlineAtMs?: number | undefined;
 }
 
 export interface DocumentEvidenceResult {
@@ -161,6 +167,32 @@ const EMPTY_RESULT: DocumentEvidenceResult = {
   omitted: [],
   uncertainty: [],
 };
+
+function documentDeadlineReached(inputs: DocumentEvidenceInputs): boolean {
+  return inputs.deadlineAtMs !== undefined && inputs.nowMs() >= inputs.deadlineAtMs;
+}
+
+function remainingDocumentTimeMs(inputs: DocumentEvidenceInputs): number {
+  return inputs.deadlineAtMs === undefined
+    ? DOCUMENT_PARSE_TIMEOUT_MS
+    : Math.max(0, inputs.deadlineAtMs - inputs.nowMs());
+}
+
+function throwIfDocumentCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw new CancelledError("connected document evidence cancelled");
+  }
+}
+
+function boundedDocumentInputs(inputs: DocumentEvidenceInputs): DocumentEvidenceInputs {
+  const localDeadlineAtMs = inputs.nowMs() + DOCUMENT_PARSE_TIMEOUT_MS;
+  const parentDeadlineAtMs = inputs.deadlineAtMs;
+  const deadlineAtMs =
+    parentDeadlineAtMs === undefined || !Number.isFinite(parentDeadlineAtMs)
+      ? localDeadlineAtMs
+      : Math.min(parentDeadlineAtMs, localDeadlineAtMs);
+  return { ...inputs, deadlineAtMs };
+}
 
 // ─── Outcome → omission reason ───────────────────────────────────────────────────
 
@@ -344,59 +376,111 @@ interface ResolvedDocument {
   readonly sizeBytes: number;
 }
 
-function resolveDocument(
+type DocumentResolution = ResolvedDocument | "budget-exhausted" | "denied" | "unreadable";
+type ContainedDocument = ReturnType<typeof containedRealPathInfo>;
+const DENIED_DESCRIPTOR_READ_REASONS: ReadonlySet<string> = new Set([
+  "hard-link",
+  "not-regular",
+  "symbolic-link",
+]);
+
+function containDocument(
   inputs: DocumentEvidenceInputs,
-  scopePath: string,
-): ResolvedDocument | "denied" | "unreadable" {
+  normalizedScopePath: string,
+): ContainedDocument | "budget-exhausted" | "denied" {
+  try {
+    const absolute = resolveWithinWorkspace(inputs.searchScope.workspace.root, normalizedScopePath);
+    return containedRealPathInfo(inputs.fs, inputs.searchScope.workspace.root, absolute);
+  } catch {
+    return documentDeadlineReached(inputs) ? "budget-exhausted" : "denied";
+  }
+}
+
+function statDocument(
+  inputs: DocumentEvidenceInputs,
+  contained: ContainedDocument,
+  realRelative: string,
+): DocumentResolution {
+  try {
+    const stat = inputs.fs.stat(contained.path);
+    if (!stat.isFile || stat.isSymbolicLink) return "unreadable";
+    if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) return "denied";
+    return { absolutePath: contained.path, realRelative, sizeBytes: stat.size };
+  } catch {
+    return documentDeadlineReached(inputs) ? "budget-exhausted" : "unreadable";
+  }
+}
+
+function resolveDocument(inputs: DocumentEvidenceInputs, scopePath: string): DocumentResolution {
+  if (documentDeadlineReached(inputs)) {
+    return "budget-exhausted";
+  }
   const normalizedScopePath = normalizeScopePath(scopePath);
   if (isDenied(normalizedScopePath)) {
     return "denied";
   }
-  let contained: ReturnType<typeof containedRealPathInfo>;
-  try {
-    const absolute = resolveWithinWorkspace(inputs.searchScope.workspace.root, normalizedScopePath);
-    contained = containedRealPathInfo(inputs.fs, inputs.searchScope.workspace.root, absolute);
-  } catch {
+  const contained = containDocument(inputs, normalizedScopePath);
+  if (typeof contained === "string") return contained;
+  if (documentDeadlineReached(inputs)) return "budget-exhausted";
+  if (
+    !isCanonicalAllowedContainedPath(
+      contained,
+      inputs.searchScope.workspace.root,
+      normalizedScopePath,
+    )
+  ) {
     return "denied";
   }
   const realRelative = normalizeScopePath(contained.realRelative);
   if (isDenied(realRelative) || !isWithinSelectedScope(inputs.searchScope, realRelative)) {
     return "denied";
   }
-  try {
-    const stat = inputs.fs.stat(contained.path);
-    if (!stat.isFile) {
-      return "unreadable";
-    }
-    if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) {
-      return "denied";
-    }
-    return {
-      absolutePath: contained.path,
-      realRelative,
-      sizeBytes: stat.size,
-    };
-  } catch {
-    return "unreadable";
-  }
+  return statDocument(inputs, contained, realRelative);
 }
 
 async function readDocumentBytes(
   inputs: DocumentEvidenceInputs,
   absolutePath: string,
   sizeBytes: number,
-): Promise<Uint8Array | "unreadable"> {
+): Promise<Uint8Array | "budget-exhausted" | "denied" | "unreadable"> {
+  if (documentDeadlineReached(inputs)) {
+    return "budget-exhausted";
+  }
   if (inputs.fs.readFileBytes === undefined) {
     return "unreadable";
   }
+  const readFileBytes = inputs.fs.readFileBytes;
   try {
-    return await inputs.fs.readFileBytes(
-      absolutePath,
-      Math.min(sizeBytes, MAX_DOCUMENT_INPUT_BYTES),
+    return await raceAbortDeadline(
+      () => readFileBytes(absolutePath, Math.min(sizeBytes, MAX_DOCUMENT_INPUT_BYTES), "reject"),
+      {
+        deadlineAtMs: inputs.deadlineAtMs ?? inputs.nowMs() + DOCUMENT_PARSE_TIMEOUT_MS,
+        nowMs: inputs.nowMs,
+        ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
+      },
     );
-  } catch {
-    return "unreadable";
+  } catch (error) {
+    return documentReadFailure(inputs, error);
   }
+}
+
+function documentReadFailure(
+  inputs: DocumentEvidenceInputs,
+  error: unknown,
+): "budget-exhausted" | "denied" | "unreadable" {
+  if (error instanceof AbortDeadlineRaceError) {
+    if (error.reason === "aborted") {
+      throw new CancelledError("connected document evidence cancelled");
+    }
+    return "budget-exhausted";
+  }
+  if (
+    error instanceof WorkspaceDescriptorReadError &&
+    DENIED_DESCRIPTOR_READ_REASONS.has(error.reason)
+  ) {
+    return "denied";
+  }
+  return documentDeadlineReached(inputs) ? "budget-exhausted" : "unreadable";
 }
 
 // Resolves and reads the document bytes through the workspace path-safety primitives, returning the
@@ -412,10 +496,14 @@ async function loadDocumentBytes(
   if (resolved === "unreadable") {
     return "tool-unavailable";
   }
+  if (resolved === "budget-exhausted") {
+    return resolved;
+  }
   if (resolved.sizeBytes > MAX_DOCUMENT_INPUT_BYTES) {
     return "size-exceeded";
   }
   const bytes = await readDocumentBytes(inputs, resolved.absolutePath, resolved.sizeBytes);
+  if (bytes === "denied") return "outside-scope";
   return bytes === "unreadable" ? "tool-unavailable" : bytes;
 }
 
@@ -457,35 +545,34 @@ function recordExtractedDocument(
   }
 }
 
-async function processDocument(
+async function extractDocumentText(
   inputs: DocumentEvidenceInputs,
-  scopePath: string,
   binding: FormatBinding,
-  queryFingerprint: string,
-  acc: MutableEvidence,
-): Promise<void> {
-  const nowMs = inputs.nowMs();
-  const remainingBudget = MAX_TOTAL_DOCUMENT_EXTRACTED_BYTES - acc.totalExtractedBytes;
-  if (remainingBudget <= 0) {
-    omit(acc, scopePath, "budget-exhausted", nowMs);
-    return;
-  }
-  const loaded = await loadDocumentBytes(inputs, scopePath);
-  if (typeof loaded === "string") {
-    omit(acc, scopePath, loaded, nowMs);
-    return;
-  }
-  const extraction = await extractBoundedDocumentText(
-    { bytes: loaded, extension: binding.format, mediaType: binding.mediaType },
+  bytes: Uint8Array,
+  remainingBudget: number,
+  remainingTimeMs: number,
+): Promise<BoundedDocumentExtractionResult> {
+  return extractBoundedDocumentText(
+    { bytes, extension: binding.format, mediaType: binding.mediaType },
     {
       maxInputBytes: MAX_DOCUMENT_INPUT_BYTES,
       maxOutputBytes: Math.min(MAX_DOCUMENT_EXTRACTED_BYTES, remainingBudget),
       maxUnits: MAX_DOCUMENT_PARSE_UNITS,
-      timeoutMs: DOCUMENT_PARSE_TIMEOUT_MS,
+      timeoutMs: Math.min(DOCUMENT_PARSE_TIMEOUT_MS, remainingTimeMs),
       now: inputs.nowMs,
       ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
     },
   );
+}
+
+function recordDocumentExtraction(
+  inputs: DocumentEvidenceInputs,
+  scopePath: string,
+  extraction: BoundedDocumentExtractionResult,
+  queryFingerprint: string,
+  acc: MutableEvidence,
+  nowMs: number,
+): void {
   if (extraction.outcome !== "extracted") {
     omit(acc, scopePath, omissionReasonForOutcome(extraction.outcome), nowMs);
     return;
@@ -498,6 +585,50 @@ async function processDocument(
     acc,
     nowMs,
   );
+}
+
+async function processDocument(
+  inputs: DocumentEvidenceInputs,
+  scopePath: string,
+  binding: FormatBinding,
+  queryFingerprint: string,
+  acc: MutableEvidence,
+): Promise<void> {
+  const documentInputs = boundedDocumentInputs(inputs);
+  const nowMs = documentInputs.nowMs();
+  if (documentDeadlineReached(documentInputs)) {
+    omit(acc, scopePath, "budget-exhausted", nowMs);
+    return;
+  }
+  const remainingBudget = MAX_TOTAL_DOCUMENT_EXTRACTED_BYTES - acc.totalExtractedBytes;
+  if (remainingBudget <= 0) {
+    omit(acc, scopePath, "budget-exhausted", nowMs);
+    return;
+  }
+  const loaded = await loadDocumentBytes(documentInputs, scopePath);
+  throwIfDocumentCancelled(documentInputs.signal);
+  if (typeof loaded === "string") {
+    omit(acc, scopePath, loaded, nowMs);
+    return;
+  }
+  const remainingTimeMs = remainingDocumentTimeMs(documentInputs);
+  if (remainingTimeMs <= 0) {
+    omit(acc, scopePath, "budget-exhausted", documentInputs.nowMs());
+    return;
+  }
+  const extraction = await extractDocumentText(
+    documentInputs,
+    binding,
+    loaded,
+    remainingBudget,
+    remainingTimeMs,
+  );
+  throwIfDocumentCancelled(documentInputs.signal);
+  if (documentDeadlineReached(documentInputs)) {
+    omit(acc, scopePath, "budget-exhausted", documentInputs.nowMs());
+    return;
+  }
+  recordDocumentExtraction(documentInputs, scopePath, extraction, queryFingerprint, acc, nowMs);
 }
 
 // ─── Public entry ────────────────────────────────────────────────────────────────
@@ -556,6 +687,7 @@ export async function collectConnectedDocumentEvidence(
   if (inputs.scope.kind !== "files" || inputs.scope.explicitConnection !== true) {
     return EMPTY_RESULT;
   }
+  throwIfDocumentCancelled(inputs.signal);
   const queryFingerprint = documentQueryFingerprint(inputs.query);
   const acc: MutableEvidence = {
     atoms: [],
@@ -567,10 +699,9 @@ export async function collectConnectedDocumentEvidence(
   };
   const seen = new Set<string>();
   for (const entry of inputs.scope.relativePaths) {
-    if (inputs.signal?.aborted === true) {
-      break;
-    }
+    throwIfDocumentCancelled(inputs.signal);
     await processConnectedEntry(inputs, entry, seen, queryFingerprint, acc);
+    throwIfDocumentCancelled(inputs.signal);
   }
   // The skipped-document disclosure (one marker summarizing all omissions) plus any per-document
   // truncation markers accumulated during extraction.

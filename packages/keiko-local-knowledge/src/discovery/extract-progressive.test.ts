@@ -69,12 +69,12 @@ function countByteReads(fs: WorkspaceFs): {
       readFileBytes: async (absolutePath, maxBytes): Promise<Uint8Array> => {
         readFileBytesCount += 1;
         if (fs.readFileBytes === undefined) throw new Error("readFileBytes unavailable");
-        return fs.readFileBytes(absolutePath, maxBytes);
+        return fs.readFileBytes(absolutePath, maxBytes, "allow");
       },
       readFileRange: async (absolutePath, startByte, length): Promise<Uint8Array> => {
         readFileRangeCount += 1;
         if (fs.readFileRange === undefined) throw new Error("readFileRange unavailable");
-        return fs.readFileRange(absolutePath, startByte, length);
+        return fs.readFileRange(absolutePath, startByte, length, "allow");
       },
     },
     readFileBytes: () => readFileBytesCount,
@@ -158,7 +158,7 @@ describe("extractDocument — progressive large-document path", () => {
       ...baseFs,
       readFileRange: async (absolutePath, startByte, length): Promise<Uint8Array> => {
         if (baseFs.readFileRange === undefined) throw new Error("readFileRange unavailable");
-        const bytes = await baseFs.readFileRange(absolutePath, startByte, length);
+        const bytes = await baseFs.readFileRange(absolutePath, startByte, length, "allow");
         return bytes.subarray(0, Math.max(0, bytes.byteLength - 1));
       },
     };

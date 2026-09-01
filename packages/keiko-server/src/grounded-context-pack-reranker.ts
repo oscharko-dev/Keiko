@@ -5,7 +5,7 @@ import type {
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { RerankResult } from "@oscharko-dev/keiko-model-gateway";
-import type { RerankerSeam } from "@oscharko-dev/keiko-workflows";
+import type { RerankerExecutionContext, RerankerSeam } from "@oscharko-dev/keiko-workflows";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig } from "./deps.js";
 import { rerankSelection } from "./grounded-rerank-facade.js";
@@ -67,6 +67,13 @@ function withRerankerSignal(candidate: CandidateFile, result: RerankResult): Can
   };
 }
 
+function executionSignal(
+  configuredSignal: AbortSignal | undefined,
+  context: RerankerExecutionContext | undefined,
+): AbortSignal | undefined {
+  return context?.signal ?? configuredSignal;
+}
+
 export function configuredContextPackRerankerFor(
   deps: UiHandlerDeps,
   query: RetrievalQuery,
@@ -80,7 +87,8 @@ export function configuredContextPackRerankerFor(
   return {
     name: "configured-model-reranker",
     isAvailable: () => Promise.resolve({ available: true, modelLabel: reranker.modelId }),
-    rerank: async (candidates, atomsByPath, topK): Promise<readonly CandidateFile[]> => {
+    rerank: async (candidates, atomsByPath, topK, context): Promise<readonly CandidateFile[]> => {
+      const requestSignal = executionSignal(signal, context);
       const result = await rerankSelection({
         deps,
         gatewayConfig,
@@ -88,7 +96,8 @@ export function configuredContextPackRerankerFor(
         candidates,
         documentFor: (candidate) => candidateDocument(deps, candidate, atomsByPath),
         topN: topK,
-        signal,
+        ...(requestSignal === undefined ? {} : { signal: requestSignal }),
+        ...(context?.timeoutMs === undefined ? {} : { timeoutMs: context.timeoutMs }),
         applyScore: withRerankerSignal,
         fallbackMode: "identity",
       });

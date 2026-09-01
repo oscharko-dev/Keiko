@@ -167,6 +167,6 @@ export async function fileContentHash(
   if (readFileBytes === undefined) {
     return undefined;
   }
-  const bytes = await readFileBytes(absolutePath, MAX_HASH_FILE_BYTES);
+  const bytes = await readFileBytes(absolutePath, MAX_HASH_FILE_BYTES, "reject");
   return createHash("sha256").update(bytes).digest("hex");
 }

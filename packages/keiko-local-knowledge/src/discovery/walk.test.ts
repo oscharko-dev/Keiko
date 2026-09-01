@@ -206,8 +206,8 @@ describe("walkSource — path containment", () => {
         return baseFs.realPath(absolutePath);
       },
       stat: (absolutePath: string) => baseFs.stat(toRequestedPath(absolutePath)),
-      readFileBytes: (absolutePath: string, maxBytes: number) =>
-        baseFs.readFileBytes?.(toRequestedPath(absolutePath), maxBytes) ??
+      readFileBytes: (absolutePath: string, maxBytes: number, hardLinkPolicy) =>
+        baseFs.readFileBytes?.(toRequestedPath(absolutePath), maxBytes, hardLinkPolicy) ??
         Promise.reject(new Error("readFileBytes unavailable")),
     };
 
