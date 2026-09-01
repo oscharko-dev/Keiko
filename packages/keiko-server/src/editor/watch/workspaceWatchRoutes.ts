@@ -6,7 +6,12 @@ import type {
   EditorM11SettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 
-import { resolveRequestRoot, runFilesHandler } from "../../files.js";
+import {
+  requestRootAccessResolver,
+  resolveRequestRoot,
+  runFilesHandler,
+  type ResolvedProjectRoot,
+} from "../../files.js";
 import {
   errorBody,
   STREAMING,
@@ -41,9 +46,11 @@ function parseLastSequence(ctx: RouteContext): number | undefined {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
-async function resolveRealRoot(ctx: RouteContext, deps: UiHandlerDeps): Promise<string> {
-  const resolved = await resolveRequestRoot(ctx, deps, ctx.url.searchParams.get("root"));
-  return resolved.realRoot;
+async function resolveWatchRequestRoot(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<ResolvedProjectRoot> {
+  return resolveRequestRoot(ctx, deps, ctx.url.searchParams.get("root"));
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
@@ -74,14 +81,14 @@ async function resolveAdditionalExclusions(
 async function resolveWatchRoot(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-): Promise<RouteResult | { readonly ok: true; readonly root: string }> {
+): Promise<RouteResult | { readonly ok: true; readonly resolved: ResolvedProjectRoot }> {
   const result = await runFilesHandler(async () => ({
     status: 200,
-    body: { root: await resolveRealRoot(ctx, deps) },
+    body: { resolved: await resolveWatchRequestRoot(ctx, deps) },
   }));
   if (result.status !== 200) return result;
-  const body = result.body as { readonly root: string };
-  return { ok: true, root: body.root };
+  const body = result.body as { readonly resolved: ResolvedProjectRoot };
+  return { ok: true, resolved: body.resolved };
 }
 
 function unavailable(): HandlerOutcome {
@@ -133,7 +140,7 @@ export async function handleEditorWorkspaceWatchSnapshot(
   const service = deps.workspaceWatchService;
   return runFilesHandler(async () => ({
     status: 200,
-    body: service.snapshot(await resolveRealRoot(ctx, deps)),
+    body: service.snapshot((await resolveWatchRequestRoot(ctx, deps)).realRoot),
   }));
 }
 
@@ -152,14 +159,24 @@ export async function handleEditorWorkspaceWatchEvents(
   const service = deps.workspaceWatchService;
   const resolved = await resolveWatchRoot(ctx, deps);
   if (!("ok" in resolved)) return resolved;
-  const additionalExclusions = await resolveAdditionalExclusions(deps, resolved.root);
+  const { resolved: root } = resolved;
+  const additionalExclusions = await resolveAdditionalExclusions(deps, root.realRoot);
   const controller = new AbortController();
+  const resolveAccess = requestRootAccessResolver(ctx, deps, root);
   const result = service.subscribe({
-    root: resolved.root,
+    root: root.realRoot,
     lastSequence: parseLastSequence(ctx),
     onEvent: (event) => writeOrDestroy(ctx.res, frameWatchEvent(event), controller),
+    reproveRoot: (): boolean => resolveAccess() !== undefined,
+    onAuthorityRevoked: (): void => {
+      controller.abort();
+      if (!ctx.res.writableEnded) ctx.res.end();
+    },
     additionalExclusions,
   });
+  if (result.kind === "rootUnavailable") {
+    return { status: 403, body: errorBody("DENIED", "Workspace watch authority is unavailable.") };
+  }
   if (result.kind === "subscriberLimit") {
     return {
       status: 429,

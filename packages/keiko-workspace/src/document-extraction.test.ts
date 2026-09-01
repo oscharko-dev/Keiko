@@ -29,7 +29,7 @@ import {
   type DocumentExtractionFailure,
 } from "./document-extraction.js";
 import { memFs } from "./_memfs.js";
-import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
+import { nodeWorkspaceFs, type WorkspaceFileReader, type WorkspaceFs } from "./fs.js";
 
 const ROOT = "/ws";
 
@@ -101,6 +101,105 @@ function openReaderOnlyFs(files: Readonly<Record<string, string>>): WorkspaceFs 
     Object.assign(fs, { openFileReader: base.openFileReader });
   }
   return fs;
+}
+
+interface FocusReaderCounts {
+  opens: number;
+  readerReads: number;
+  oneShotReads: number;
+  closes: number;
+}
+
+interface InstrumentedFocusReaderFs {
+  readonly fs: WorkspaceFs;
+  readonly counts: FocusReaderCounts;
+}
+
+interface ReceiverBoundWorkspaceFs extends WorkspaceFs {
+  readonly receiverToken: symbol;
+}
+
+function receiverBoundFocusFs(includePreferredReader: boolean): WorkspaceFs {
+  const base = memFs(ROOT, { "receiver.txt": "one\ntwo\nthree\n" });
+  const rangeRead = base.readFileRange;
+  const openReader = base.openFileReader;
+  if (rangeRead === undefined || openReader === undefined) {
+    throw new Error("memFs range readers unavailable");
+  }
+  const token = Symbol("receiver");
+  const common: ReceiverBoundWorkspaceFs = {
+    readFileUtf8: base.readFileUtf8,
+    stat: base.stat,
+    readDir: base.readDir,
+    realPath: base.realPath,
+    exists: base.exists,
+    receiverToken: token,
+    async readFileRange(path, startByte, length, hardLinkPolicy, expected): Promise<Uint8Array> {
+      if (this.receiverToken !== token) throw new Error("lost WorkspaceFs receiver");
+      return await rangeRead.call(base, path, startByte, length, hardLinkPolicy, expected);
+    },
+  };
+  if (!includePreferredReader) return common;
+  const withReader: ReceiverBoundWorkspaceFs = {
+    ...common,
+    async openFileReader(path, hardLinkPolicy, expected): Promise<WorkspaceFileReader> {
+      if (this.receiverToken !== token) throw new Error("lost WorkspaceFs receiver");
+      return await openReader.call(base, path, hardLinkPolicy, expected);
+    },
+  };
+  return withReader;
+}
+
+function instrumentedFocusReaderFs(
+  files: Readonly<Record<string, string>>,
+  failOnReaderRead?: number,
+): InstrumentedFocusReaderFs {
+  const base = memFs(ROOT, files);
+  const readFileRange = base.readFileRange;
+  const openFileReader = base.openFileReader;
+  if (readFileRange === undefined || openFileReader === undefined) {
+    throw new Error("memFs range readers unavailable");
+  }
+  const counts: FocusReaderCounts = { opens: 0, readerReads: 0, oneShotReads: 0, closes: 0 };
+  return {
+    counts,
+    fs: {
+      ...base,
+      readFileRange: async (
+        path,
+        startByte,
+        length,
+        hardLinkPolicy,
+        expected,
+      ): Promise<Uint8Array> => {
+        counts.oneShotReads += 1;
+        return await readFileRange(path, startByte, length, hardLinkPolicy, expected);
+      },
+      openFileReader: async (path, hardLinkPolicy, expected): Promise<WorkspaceFileReader> => {
+        counts.opens += 1;
+        const reader = await openFileReader(path, hardLinkPolicy, expected);
+        return {
+          readRange: async (startByte, length): Promise<Uint8Array> => {
+            counts.readerReads += 1;
+            if (counts.readerReads === failOnReaderRead) throw new Error("range read failed");
+            return await reader.readRange(startByte, length);
+          },
+          close: async (): Promise<void> => {
+            counts.closes += 1;
+            await reader.close();
+          },
+        };
+      },
+    },
+  };
+}
+
+function multiChunkFocusedSource(): { readonly source: string; readonly targetLine: number } {
+  const prefix = Array.from({ length: 14_000 }, (_, index) => `// padding ${String(index)}`);
+  return {
+    source: [...prefix, "const focusedValue = 42;", "// suffix"].join("\n"),
+    targetLine: prefix.length + 1,
+  };
 }
 
 function utf16Bytes(value: string, endian: "le" | "be", bom = true): Uint8Array {
@@ -333,6 +432,68 @@ describe("extractDocumentContext — truncation", () => {
     );
   });
 
+  it("reuses one open reader across a focused scan spanning more than two chunks", async () => {
+    const { source, targetLine } = multiChunkFocusedSource();
+    expect(Buffer.byteLength(source, "utf8")).toBeGreaterThan(131_072);
+    const instrumented = instrumentedFocusReaderFs({ "src/large.ts": source });
+
+    const result = await extractDocumentContext(
+      instrumented.fs,
+      ROOT,
+      "src/large.ts",
+      fullBudget(),
+      { focus: { kind: "line-range", startLine: targetLine, contextLines: 0 } },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.text).toBe("const focusedValue = 42;");
+    expect(instrumented.counts).toMatchObject({ opens: 1, oneShotReads: 0, closes: 1 });
+    expect(instrumented.counts.readerReads).toBeGreaterThan(3);
+  });
+
+  it("closes the preferred reader when a later focused scan chunk fails", async () => {
+    const { source, targetLine } = multiChunkFocusedSource();
+    const instrumented = instrumentedFocusReaderFs({ "src/large.ts": source }, 3);
+
+    const result = await extractDocumentContext(
+      instrumented.fs,
+      ROOT,
+      "src/large.ts",
+      fullBudget(),
+      { focus: { kind: "line-range", startLine: targetLine, contextLines: 0 } },
+    );
+
+    expect(result).toEqual({ ok: false, failure: { kind: "unreadable" } });
+    expect(instrumented.counts).toEqual({
+      opens: 1,
+      readerReads: 3,
+      oneShotReads: 0,
+      closes: 1,
+    });
+  });
+
+  it("does not open a focused reader when the extraction budget is already exhausted", async () => {
+    const { source, targetLine } = multiChunkFocusedSource();
+    const instrumented = instrumentedFocusReaderFs({ "src/large.ts": source });
+
+    const result = await extractDocumentContext(
+      instrumented.fs,
+      ROOT,
+      "src/large.ts",
+      { perDocBytes: 0, totalBudgetUsedBytes: 0, totalBudgetBytes: 0 },
+      { focus: { kind: "line-range", startLine: targetLine, contextLines: 0 } },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(instrumented.counts).toEqual({
+      opens: 0,
+      readerReads: 0,
+      oneShotReads: 0,
+      closes: 0,
+    });
+  });
+
   it("budget fully exhausted ⇒ extractedBytes:0, truncated:true, text empty", async () => {
     const fs = memFs(ROOT, { "doc.txt": "any content" });
     const budget: DocumentExtractionBudget = {
@@ -373,6 +534,23 @@ describe("extractDocumentContext — truncation", () => {
     if (!result.ok) return;
     expect(result.context.text).toBe("two");
   });
+
+  it.each([true, false])(
+    "preserves the injected WorkspaceFs receiver for focused range reads (preferred=%s)",
+    async (includePreferredReader) => {
+      const result = await extractDocumentContext(
+        receiverBoundFocusFs(includePreferredReader),
+        ROOT,
+        "receiver.txt",
+        fullBudget(),
+        { focus: { kind: "line-range", startLine: 2, contextLines: 0 } },
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.context.text).toBe("two");
+    },
+  );
 
   it("falls back to a full extraction when the requested focused line range is invalid or absent", async () => {
     const fs = utf8OnlyFs({ "focus.txt": "one\ntwo\n" });

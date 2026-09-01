@@ -7,7 +7,7 @@ import {
   containedRealPathInfo,
   isAllowedContainedPathParent,
   isCanonicalAllowedContainedPath,
-  realRootIsDeniedViaSymlink,
+  resolveExistingAllowedWorkspaceRealRoot,
 } from "./realpath.js";
 import { DEFAULT_DISCOVERY_OPTIONS, type DiscoveredFile, type WorkspaceInfo } from "./types.js";
 import {
@@ -244,12 +244,6 @@ function handleScopeEntry(walk: EntryWalk, entry: string): void {
   const abs = resolveWithinWorkspace(root, entryRel);
   const contained = containedRealPathInfo(walk.fs, root, abs);
   const realRel = normalizeScopePath(contained.realRelative);
-  if (realRootIsDeniedViaSymlink(contained.realBase, root)) {
-    throw new PathDeniedError(
-      "Connected scope root resolves into a denied workspace location.",
-      entryRel,
-    );
-  }
   if (contained.realBase !== walk.realRoot) {
     return;
   }
@@ -273,12 +267,14 @@ function handleScopeEntry(walk: EntryWalk, entry: string): void {
   pushAllowedFile(walk, realRel, stat);
 }
 
-function realWorkspaceRoot(fs: WorkspaceFs, root: string): string {
+function resolveEntryWalkRoot(fs: WorkspaceFs, root: string): string {
   try {
-    return fs.realPath(root);
+    return resolveExistingAllowedWorkspaceRealRoot(fs, root);
   } catch (error) {
-    if (error instanceof StructuralExecutionStoppedError) throw error;
-    return root;
+    if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
+      throw error;
+    }
+    return inaccessibleScopeEntry();
   }
 }
 
@@ -292,7 +288,7 @@ function createEntryWalk(
     scope,
     limits,
     fs,
-    realRoot: realWorkspaceRoot(fs, scope.workspace.root),
+    realRoot: resolveEntryWalkRoot(fs, scope.workspace.root),
     ...(executionControl === undefined ? {} : { executionControl }),
     traversalEntryBudget: explicitScopeTraversalEntryBudget(limits.maxFilesScanned),
     files: [],

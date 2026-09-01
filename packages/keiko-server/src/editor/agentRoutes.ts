@@ -106,6 +106,7 @@ import {
   containedRealPathInfo,
   isDenied,
   readWorkspaceFile,
+  type WorkspaceFs,
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -154,6 +155,7 @@ type EditorAgentRouteDeps = Pick<
   | "autonomousDeliveryApprovalStore"
   | "autonomousDeliveryDeploymentCeiling"
   | "runtimeMutationLease"
+  | "workspaceRootAccessResolver"
   | "workspaceScriptTrust"
 > & { readonly store?: UiHandlerDeps["store"] | undefined };
 
@@ -700,11 +702,12 @@ function changesetConflict(
 function inspectChangeset(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
+  fs: WorkspaceFs = nodeWorkspaceFs,
 ): ChangesetInspection {
   const inspection = inspectPatch(
     workspaceInfoFromRoot(snapshot.workspaceRoot),
     action.changeset?.patch ?? "",
-    { fs: nodeWorkspaceFs },
+    { fs },
   );
   const validation = inspection.validation;
   const issues = firstChangesetIssueGroup(action, snapshot, inspection);
@@ -1065,9 +1068,10 @@ function structuralWriteConflict(
 function inspectAdmissionAction(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
+  fs: WorkspaceFs = nodeWorkspaceFs,
 ): AdmissionInspection {
   if (action.type === "applyChangeset") {
-    return { changeset: inspectChangeset(action, snapshot) };
+    return { changeset: inspectChangeset(action, snapshot, fs) };
   }
   if (action.type === "applyPatch") {
     return {
@@ -1086,6 +1090,7 @@ function inspectAdmissionAction(
 function preflight(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot | undefined,
+  fs: WorkspaceFs = nodeWorkspaceFs,
 ): PreflightOutcome {
   if (snapshot === undefined) {
     return {
@@ -1095,7 +1100,7 @@ function preflight(
   }
   const targetConflict = activeBufferTargetConflict(action, snapshot);
   if (targetConflict !== null) return { ok: false, result: targetConflict };
-  const inspection = inspectAdmissionAction(action, snapshot);
+  const inspection = inspectAdmissionAction(action, snapshot, fs);
   const structural = structuralWriteConflict(action, snapshot, inspection);
   if (structural !== null) return { ok: false, result: structural };
   if (!editorAgentRegistry.hasLiveBridge(action.sessionId)) {
@@ -1830,13 +1835,14 @@ function projectChangeset(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
   validation: PatchValidation,
+  fs: WorkspaceFs = nodeWorkspaceFs,
 ): ChangesetProjectionOutcome {
   const selectedPaths = selectedChangesetPaths(action);
   try {
     const diff = projectValidatedPatch(validation, selectedPaths);
     const projected = projectedAction(action, diff, selectedPaths);
     const projectedValidation = validatePatch(workspaceInfoFromRoot(snapshot.workspaceRoot), diff, {
-      fs: nodeWorkspaceFs,
+      fs,
     });
     const issues = projectedChangesetIssues(projected, projectedValidation);
     return issues.length === 0
@@ -1875,11 +1881,13 @@ function applyChangeset(
   if (!claimRuntimeMutation(runtimeMutation, deps)) {
     return runtimeMutationLeaseDeniedResult(action);
   }
+  const fs = changesetWorkspaceFs(snapshot.workspaceRoot, runtimeMutation, deps);
+  if (fs === undefined) return runtimeMutationLeaseDeniedResult(action);
   try {
     applyPatch(workspaceInfoFromRoot(snapshot.workspaceRoot), projection.diff, {
       applyEnabled: true,
       signal: new AbortController().signal,
-      fs: nodeWorkspaceFs,
+      fs,
       ...(editorAgentPatchWriterForTests === undefined
         ? {}
         : { writer: editorAgentPatchWriterForTests }),
@@ -1889,6 +1897,22 @@ function applyChangeset(
     const message = applyChangesetErrorMessage(error);
     emitChangesetDiagnostic(action, "editor.agent.commitChangeset", error, message);
     return changesetTerminalResult(action, projection.selectedPaths, "failed", message);
+  }
+}
+
+function changesetWorkspaceFs(
+  workspaceRoot: string,
+  runtimeMutation: RuntimeMutationClassification,
+  deps?: EditorAgentRouteDeps,
+): WorkspaceFs | undefined {
+  if (runtimeMutation.kind !== "runtime") return nodeWorkspaceFs;
+  try {
+    const access = deps?.workspaceRootAccessResolver?.(workspaceRoot);
+    return access?.kind === "managed-task" && access.canonicalRoot === workspaceRoot
+      ? access.fs
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -2076,23 +2100,29 @@ function handleApprovedChangesetResult(
       decision,
     );
   }
-  const inspection = inspectChangeset(action, snapshot);
-  if (inspection.result !== null) {
-    return finishRuntimeChangeset(
-      action,
-      snapshot,
-      inspection.result,
-      deps,
-      runtimeMutation,
-      decision,
-    );
-  }
-  const projection = projectChangeset(action, snapshot, inspection.validation);
+  const projection = projectApprovedChangeset(action, snapshot, runtimeMutation, deps);
   const result =
     projection.kind === "conflict"
       ? projection.result
       : applyChangeset(action, snapshot, projection, runtimeMutation, deps);
   return finishRuntimeChangeset(action, snapshot, result, deps, runtimeMutation, decision);
+}
+
+function projectApprovedChangeset(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  runtimeMutation: RuntimeMutationClassification,
+  deps: EditorAgentRouteDeps | undefined,
+): ChangesetProjectionOutcome {
+  const inspectionFs = changesetWorkspaceFs(snapshot.workspaceRoot, runtimeMutation, deps);
+  if (inspectionFs === undefined) {
+    return { kind: "conflict", result: runtimeMutationLeaseDeniedResult(action) };
+  }
+  const inspection = inspectChangeset(action, snapshot, inspectionFs);
+  if (inspection.result !== null) {
+    return { kind: "conflict", result: inspection.result };
+  }
+  return projectChangeset(action, snapshot, inspection.validation, inspectionFs);
 }
 
 function finishRuntimeChangeset(
@@ -3514,7 +3544,21 @@ function admitAndReserveAction(
   requestHash: string,
   deps: EditorAgentActionRouteDeps | undefined,
 ): { readonly ok: true; readonly inspection: AdmissionInspection } | RouteResult {
-  const admission = preflight(action, snapshot);
+  const inspectionFs =
+    action.type === "applyChangeset" && snapshot !== undefined
+      ? changesetWorkspaceFs(snapshot.workspaceRoot, runtimeMutation, deps)
+      : nodeWorkspaceFs;
+  if (inspectionFs === undefined) {
+    return rejectActionRequest(
+      action,
+      snapshot,
+      decision,
+      runtimeMutationLeaseDeniedResult(action),
+      requestHash,
+      403,
+    );
+  }
+  const admission = preflight(action, snapshot, inspectionFs);
   if (!admission.ok) {
     return rejectActionRequest(action, snapshot, decision, admission.result, requestHash, 409);
   }

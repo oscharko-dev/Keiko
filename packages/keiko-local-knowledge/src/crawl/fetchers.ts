@@ -16,6 +16,7 @@
 // forward proxy, where DNS resolution happens on the proxy side.
 
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { isWorkspacePathSnapshotCurrent } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { isContained } from "../discovery/walk.js";
 import type {
   ManualCrawlFetcher,
@@ -43,16 +44,28 @@ async function readLocalPage(
   if (readFileBytes === undefined) return { ok: false, reason: "fetch-failed" };
   const absolutePath = `${deps.rootAbsolutePath}/${relativePath}`.replace(/\/+/gu, "/");
   try {
-    const realPath = deps.fs.realPath(absolutePath);
-    if (!isContained(deps.rootAbsolutePath, realPath)) {
+    const rootRealPath = deps.fs.realPath(deps.rootAbsolutePath);
+    const rootStat = deps.fs.stat(rootRealPath);
+    if (!rootStat.isDirectory || rootStat.isSymbolicLink) {
       return { ok: false, reason: "path-traversal" };
     }
-    const truncated = deps.fs.stat(realPath).size > options.maxBytes;
+    const realPath = deps.fs.realPath(absolutePath);
+    if (!isContained(rootRealPath, realPath)) {
+      return { ok: false, reason: "path-traversal" };
+    }
+    const expected = deps.fs.stat(realPath);
+    const truncated = expected.size > options.maxBytes;
     // Read through the realpath-verified path, not the original absolutePath — a symlink
     // swapped between the realPath()/stat() check above and this read would otherwise let
     // bytes be read from outside the approved root despite the containment check passing
     // (mirrors orchestrator.ts's readSourceText, which reads via `real` for the same reason).
-    const bytes = await readFileBytes(realPath, options.maxBytes, "allow");
+    const bytes = await readFileBytes(realPath, options.maxBytes, "allow", expected);
+    if (
+      !isWorkspacePathSnapshotCurrent(deps.fs, deps.rootAbsolutePath, rootRealPath, rootStat) ||
+      !isWorkspacePathSnapshotCurrent(deps.fs, absolutePath, realPath, expected)
+    ) {
+      return { ok: false, reason: "path-traversal" };
+    }
     return { ok: true, bytes, contentType: "text/html", truncated };
   } catch {
     return { ok: false, reason: "fetch-failed" };

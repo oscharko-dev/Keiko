@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listEvidence, loadEvidence } from "@oscharko-dev/keiko-evidence";
 import {
   createTerminalExecutionManager,
+  listDirectories,
   type TerminalEventEnvelope,
   type TerminalExecutionManager,
 } from "./terminal.js";
@@ -27,6 +28,8 @@ import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { TerminalToolError } from "./terminal-errors.js";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import type { ServerLogEvent, ServerLogSink } from "./observability/server-log.js";
+import type { WorkspaceRootAccess } from "./task-workspace/workspace-root-access.js";
+import { forwardWorkspaceFs, nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 // ── Fake spawn helpers ─────────────────────────────────────────────────────────
 
@@ -143,13 +146,20 @@ afterEach(() => {
 
 function makeManager(
   spawnImpl: SpawnFn = makeSpawn(),
-  extra: { processEnv?: NodeJS.ProcessEnv; activityLog?: ServerLogSink } = {},
+  extra: {
+    processEnv?: NodeJS.ProcessEnv;
+    activityLog?: ServerLogSink;
+    resolveWorkspaceRootAccess?: (root: string) => WorkspaceRootAccess | undefined;
+  } = {},
 ): TerminalExecutionManager {
   return createTerminalExecutionManager({
     store,
     evidenceStore,
     processEnv: extra.processEnv ?? { PATH: "/usr/bin" },
     ...(extra.activityLog === undefined ? {} : { activityLog: extra.activityLog }),
+    ...(extra.resolveWorkspaceRootAccess === undefined
+      ? {}
+      : { resolveWorkspaceRootAccess: extra.resolveWorkspaceRootAccess }),
     runDeps: {
       spawn: spawnImpl,
       resolveExecutable: (command: string) => command,
@@ -182,6 +192,45 @@ async function waitForCondition(
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 describe("TerminalExecutionManager — happy path", () => {
+  it("uses the resolved root access for directory inspection", async () => {
+    mkdirSync(join(workspaceRoot, "managed-directory"));
+    const fs = forwardWorkspaceFs(nodeWorkspaceFs);
+    const readDir = vi.spyOn(fs, "readDir");
+    const access: WorkspaceRootAccess = {
+      kind: "managed-task",
+      canonicalRoot: workspaceRoot,
+      fs,
+    };
+
+    const listing = await listDirectories(store, workspaceRoot, undefined, undefined, access);
+
+    expect(readDir).toHaveBeenCalledExactlyOnceWith(workspaceRoot);
+    expect(listing.entries).toContainEqual({
+      name: "managed-directory",
+      path: join(workspaceRoot, "managed-directory"),
+    });
+  });
+
+  it("uses a centrally resolved managed-root access and fails closed when it is absent", async () => {
+    const spawn = vi.fn(makeSpawn({ stdout: "ok" }));
+    const access: WorkspaceRootAccess = {
+      kind: "managed-task",
+      canonicalRoot: workspaceRoot,
+      fs: nodeWorkspaceFs,
+    };
+    const admitted = makeManager(spawn, { resolveWorkspaceRootAccess: () => access });
+    await expect(
+      admitted.execute({ projectId: workspaceRoot, command: "pwd", args: [] }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+
+    const deniedSpawn = vi.fn(makeSpawn());
+    const denied = makeManager(deniedSpawn, { resolveWorkspaceRootAccess: () => undefined });
+    await expect(
+      denied.execute({ projectId: workspaceRoot, command: "pwd", args: [] }),
+    ).rejects.toMatchObject({ code: "CWD_DENIED" });
+    expect(deniedSpawn).not.toHaveBeenCalled();
+  });
+
   it("runs an allowed command, returns redacted output, emits start+complete events", async () => {
     const manager = makeManager(makeSpawn({ stdout: "hello\n", exitCode: 0 }));
     const events = collect(manager);
@@ -268,13 +317,13 @@ describe("TerminalExecutionManager — denials and validation", () => {
     expect(events).toEqual([]);
     expect(activityEvents).toHaveLength(1);
     expect(activityEvents[0]).toMatchObject({
-      op: "workspace.root-relocation.denied",
+      op: "workspace.root.denied",
       correlationId,
       errorKind: "WORKSPACE_PATH_DENIED",
     });
     expect(activityEvents[0]?.extra).toMatchObject({
       decision: "denied",
-      reason: "relocated-denied-locus",
+      reason: "denied-locus",
     });
     expect(JSON.stringify(activityEvents)).not.toContain(fixture);
   });

@@ -18,6 +18,7 @@ import {
   createWorkspaceIndex,
   type WorkspaceIndex,
   type WorkspaceInfo,
+  type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
@@ -47,6 +48,12 @@ const FIXTURE_QUERY_TEXT = "Trace PrivateCustomerHandler implementation";
 const CORRELATION_ID = "connected-context-log-correlation-0001";
 const PRIVATE_SCOPE_PATH = "private-source";
 const PRIVATE_SCOPE_FILE = `${PRIVATE_SCOPE_PATH}/private-customer-handler.ts`;
+const UNUSED_EXPECTED_STAT: WorkspaceStat = {
+  size: 1,
+  isFile: true,
+  isDirectory: false,
+  isSymbolicLink: false,
+};
 
 const ANSWERER_NOT_USED: GroundedAnswerer = {
   answer: (): Promise<string> => Promise.resolve("answerer must not run"),
@@ -974,7 +981,7 @@ describe("retrieveConnectedContextPack activity log", () => {
           }),
         },
         detectWorkspace: (_root, requestFs): never => {
-          requestFs.readFileUtf8SameDescriptor?.("unused", 1, "reject");
+          requestFs.readFileUtf8SameDescriptor?.("unused", 1, "reject", UNUSED_EXPECTED_STAT);
           throw failure;
         },
       }),
@@ -1029,7 +1036,7 @@ describe("retrieveConnectedContextPack activity log", () => {
         },
         detectWorkspace: (_root, requestFs): never => {
           requestFs.readDir("unused");
-          requestFs.readFileUtf8SameDescriptor?.("unused", 1, "reject");
+          requestFs.readFileUtf8SameDescriptor?.("unused", 1, "reject", UNUSED_EXPECTED_STAT);
           throw failure;
         },
       }),
@@ -1069,7 +1076,7 @@ describe("retrieveConnectedContextPack activity log", () => {
             }),
         },
         detectWorkspace: (_root, requestFs): never => {
-          void requestFs.openFileReader?.("unused", "reject");
+          void requestFs.openFileReader?.("unused", "reject", UNUSED_EXPECTED_STAT);
           throw failure;
         },
       }),

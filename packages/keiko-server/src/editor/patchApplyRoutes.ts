@@ -42,8 +42,7 @@ import {
   type PatchRejection,
   type PatchValidation,
 } from "@oscharko-dev/keiko-tools";
-import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { detectWorkspaceAt, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -261,6 +260,7 @@ interface ApplyContext {
   readonly request: EditorPatchApplyWireRequest;
   readonly deps: UiHandlerDeps;
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   readonly signal: AbortSignal;
   readonly nowMs: number;
   readonly options: EditorPatchApplyRouteOptions;
@@ -279,6 +279,7 @@ async function runVerificationPhase(
   const port = ctx.options.verification ?? defaultPostApplyVerification;
   return port({
     realRoot: ctx.realRoot,
+    fs: ctx.fs,
     appliedTestFiles: verifiableFiles(result),
     signal: ctx.signal,
     correlationId: ctx.correlationId,
@@ -332,6 +333,7 @@ async function verificationPreflightOutcome(
   const port = ctx.options.verificationPreflight ?? defaultPostApplyVerificationPreflight;
   const preflight = await port({
     realRoot: ctx.realRoot,
+    fs: ctx.fs,
     appliedTestFiles: verifiableValidationFiles(validation.files),
   });
   if (preflight.ok) {
@@ -407,8 +409,11 @@ async function appliedOutcome(
 
 async function handleApply(ctx: ApplyContext): Promise<EditorPatchApplyWireResponse> {
   const allowOverwrite = ctx.request.allowOverwrite === true;
-  const workspace = detectWorkspaceAt(ctx.realRoot, nodeWorkspaceFs);
-  const validation = validatePatch(workspace, ctx.request.diff, { allowOverwrite });
+  const workspace = detectWorkspaceAt(ctx.realRoot, ctx.fs);
+  const validation = validatePatch(workspace, ctx.request.diff, {
+    fs: ctx.fs,
+    allowOverwrite,
+  });
   if (!validation.ok) {
     return conflictOutcome(ctx, validation);
   }
@@ -428,6 +433,7 @@ async function handleApply(ctx: ApplyContext): Promise<EditorPatchApplyWireRespo
   let restoreDiff: string | undefined;
   try {
     restoreDiff = buildRestorePatch(workspace, validation.normalizedDiff ?? ctx.request.diff, {
+      fs: ctx.fs,
       allowOverwrite,
     });
   } catch {
@@ -439,6 +445,7 @@ async function handleApply(ctx: ApplyContext): Promise<EditorPatchApplyWireRespo
       applyEnabled: true,
       signal: ctx.signal,
       allowOverwrite,
+      fs: ctx.fs,
     });
   } catch {
     return failureOutcome(ctx);
@@ -490,7 +497,8 @@ export async function handleEditorPatchApply(
   const request = parsed.value;
   return runFilesHandler(async () => {
     const root = await resolveRequestRoot(ctx, deps, request.root);
-    const activation = await resolveEditorAiAssistStatusForRoot(deps, root.realRoot, "patchApply");
+    const { canonicalRoot, fs } = root.access;
+    const activation = await resolveEditorAiAssistStatusForRoot(deps, canonicalRoot, "patchApply");
     if (!editorAiStatusActive(activation)) {
       return { status: 200, body: deps.redactor(disabledResponse()) };
     }
@@ -502,7 +510,8 @@ export async function handleEditorPatchApply(
     const response = await handleApply({
       request,
       deps,
-      realRoot: root.realRoot,
+      realRoot: canonicalRoot,
+      fs,
       signal,
       nowMs,
       options,

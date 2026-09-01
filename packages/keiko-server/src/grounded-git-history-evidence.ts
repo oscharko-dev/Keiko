@@ -14,13 +14,13 @@ import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import {
   containedRealPathInfo,
   evidenceAtomStableId,
-  isCanonicalAllowedContainedPath,
   isDenied,
   resolveWithinWorkspace,
   type SearchScope,
   type WorkspaceFs,
   type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
+import { isCanonicalAllowedContainedPath } from "@oscharko-dev/keiko-workspace/internal/realpath-policy";
 import {
   containsPath,
   defaultGitProcessRunner,
@@ -538,6 +538,8 @@ export const defaultGitFileHistoryEvidenceProvider: GitFileHistoryEvidenceProvid
   const result = await readGitHistoryResult(boundedInputs, runner, repo);
   if (result?.exitCode !== 0) return [];
   throwIfCancelled(boundedInputs.signal);
+  // A completed subprocess does not widen the request's absolute deadline. Ranking and evidence
+  // emission after the deadline would make the outcome depend on event-loop timer ordering.
   if (gitHistoryDeadlineReached(boundedInputs)) return [];
   return rankedHistoryAtoms(boundedInputs, repo, result.stdout);
 };

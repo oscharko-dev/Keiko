@@ -1,13 +1,28 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { memFs } from "./_memfs.js";
-import type { WorkspaceDescriptorUtf8Read, WorkspaceFileReader, WorkspaceFs } from "./fs.js";
+import { PathDeniedError } from "./errors.js";
+import type {
+  WorkspaceDescriptorUtf8Read,
+  WorkspaceFileReader,
+  WorkspaceFs,
+  WorkspaceStat,
+} from "./fs.js";
+import { workspaceFsWithOwnedRootAuthority } from "./ownedRootMint.js";
+import { resolveExistingAllowedWorkspaceRealRoot } from "./realpath.js";
 import {
   executionControlledWorkspaceFs,
+  sameStructuralExecutionFs,
   StructuralExecutionStoppedError,
   type StructuralExecutionControl,
 } from "./structuralExecution.js";
 
 const ROOT = "/ws";
+const EXPECTED_FILE_STAT: WorkspaceStat = {
+  size: 4,
+  isFile: true,
+  isDirectory: false,
+  isSymbolicLink: false,
+};
 
 function deferred<T>(): {
   readonly promise: Promise<T>;
@@ -45,6 +60,11 @@ function fullWorkspaceFs(onTouch: () => void): WriteCapableTestFs {
       const rawText = base.readFileUtf8(path).slice(0, maxBytes);
       return { rawText, sizeBytes: Buffer.byteLength(rawText), stat: base.stat(path) };
     },
+    readFileUtf8WithinRootSameDescriptor: (_root, path, maxBytes): WorkspaceDescriptorUtf8Read => {
+      onTouch();
+      const rawText = base.readFileUtf8(path).slice(0, maxBytes);
+      return { rawText, sizeBytes: Buffer.byteLength(rawText), stat: base.stat(path) };
+    },
     makeDir: (): void => {
       onTouch();
     },
@@ -64,19 +84,37 @@ function fullWorkspaceFs(onTouch: () => void): WriteCapableTestFs {
 function synchronousOperations(fs: WorkspaceFs): readonly (() => unknown)[] {
   return [
     (): unknown => fs.readFileUtf8(`${ROOT}/src/a.ts`),
-    (): unknown => fs.readFileUtf8SameDescriptor?.(`${ROOT}/src/a.ts`, 4, "reject"),
+    (): unknown =>
+      fs.readFileUtf8SameDescriptor?.(`${ROOT}/src/a.ts`, 4, "reject", EXPECTED_FILE_STAT),
+    (): unknown =>
+      fs.readFileUtf8WithinRootSameDescriptor?.(ROOT, `${ROOT}/src/a.ts`, 4, "reject", "complete"),
     (): unknown => fs.stat(`${ROOT}/src/a.ts`),
     (): unknown => fs.readDir(ROOT),
     (): unknown => fs.realPath(ROOT),
     (): unknown => fs.canonicalWorkspaceRoot?.(ROOT),
     (): unknown => fs.exists(ROOT),
-    (): unknown => fs.readFileBytes?.(`${ROOT}/src/a.ts`, 4, "reject"),
-    (): unknown => fs.readFileUtf8Prefix?.(`${ROOT}/src/a.ts`, 4, "reject"),
-    (): unknown => fs.readFileRange?.(`${ROOT}/src/a.ts`, 0, 4, "reject"),
+    (): unknown => fs.readFileBytes?.(`${ROOT}/src/a.ts`, 4, "reject", EXPECTED_FILE_STAT),
+    (): unknown => fs.readFileUtf8Prefix?.(`${ROOT}/src/a.ts`, 4, "reject", EXPECTED_FILE_STAT),
+    (): unknown => fs.readFileRange?.(`${ROOT}/src/a.ts`, 0, 4, "reject", EXPECTED_FILE_STAT),
   ];
 }
 
 describe("executionControlledWorkspaceFs", () => {
+  it("preserves exact owned-root authority without authorizing a sibling", () => {
+    const root = "/home/user/.keiko/task-workspaces/repo_a/ws_b";
+    const source = workspaceFsWithOwnedRootAuthority(memFs(root, {}), root);
+    const controlled = executionControlledWorkspaceFs(source, {
+      nowMs: () => 0,
+      deadlineAtMs: 1,
+    });
+
+    expect(resolveExistingAllowedWorkspaceRealRoot(controlled, root)).toBe(root);
+    expect(() => resolveExistingAllowedWorkspaceRealRoot(controlled, `${root}/../ws_c`)).toThrow(
+      PathDeniedError,
+    );
+    expect(sameStructuralExecutionFs(controlled, source)).toBe(true);
+  });
+
   it("rejects every filesystem operation without touching the port after expiry", async () => {
     let touches = 0;
     const control: StructuralExecutionControl = { nowMs: () => 10, deadlineAtMs: 10 };
@@ -90,9 +128,9 @@ describe("executionControlledWorkspaceFs", () => {
     for (const operation of synchronousOperations(fs)) {
       expect(operation).toThrow(StructuralExecutionStoppedError);
     }
-    await expect(fs.openFileReader?.(`${ROOT}/src/a.ts`, "reject")).rejects.toBeInstanceOf(
-      StructuralExecutionStoppedError,
-    );
+    await expect(
+      fs.openFileReader?.(`${ROOT}/src/a.ts`, "reject", EXPECTED_FILE_STAT),
+    ).rejects.toBeInstanceOf(StructuralExecutionStoppedError);
     expect("makeDir" in fs).toBe(false);
     expect("writeFileUtf8" in fs).toBe(false);
     expect(touches).toBe(0);
@@ -125,7 +163,11 @@ describe("executionControlledWorkspaceFs", () => {
       deadlineAtMs: 10,
     });
 
-    const reader = await controlled.openFileReader?.(`${ROOT}/src/a.ts`, "reject");
+    const reader = await controlled.openFileReader?.(
+      `${ROOT}/src/a.ts`,
+      "reject",
+      EXPECTED_FILE_STAT,
+    );
     if (reader === undefined) throw new TypeError("missing controlled reader");
     currentMs = 10;
     expect(() => reader.readRange(0, 1)).toThrow(StructuralExecutionStoppedError);
@@ -144,7 +186,7 @@ describe("executionControlledWorkspaceFs", () => {
       { nowMs: Date.now, deadlineAtMs: 10 },
     );
 
-    const outcome = fs.readFileBytes?.(`${ROOT}/src/a.ts`, 4, "reject");
+    const outcome = fs.readFileBytes?.(`${ROOT}/src/a.ts`, 4, "reject", EXPECTED_FILE_STAT);
     const expectation = expect(outcome).rejects.toMatchObject({ reason: "timeout" });
     await vi.advanceTimersByTimeAsync(10);
 
@@ -168,9 +210,9 @@ describe("executionControlledWorkspaceFs", () => {
       { nowMs: () => currentMs, deadlineAtMs: 10 },
     );
 
-    await expect(fs.readFileBytes?.(`${ROOT}/src/a.ts`, 4, "reject")).rejects.toMatchObject({
-      reason: "timeout",
-    });
+    await expect(
+      fs.readFileBytes?.(`${ROOT}/src/a.ts`, 4, "reject", EXPECTED_FILE_STAT),
+    ).rejects.toMatchObject({ reason: "timeout" });
   });
 
   it("removes the abort listener after cancelling a never-settling range read", async () => {
@@ -187,7 +229,7 @@ describe("executionControlledWorkspaceFs", () => {
       },
     );
 
-    const outcome = fs.readFileRange?.(`${ROOT}/src/a.ts`, 0, 4, "reject");
+    const outcome = fs.readFileRange?.(`${ROOT}/src/a.ts`, 0, 4, "reject", EXPECTED_FILE_STAT);
     const expectation = expect(outcome).rejects.toMatchObject({ reason: "aborted" });
     controller.abort();
 
@@ -212,7 +254,7 @@ describe("executionControlledWorkspaceFs", () => {
       },
     );
 
-    const outcome = fs.readFileBytes?.(`${ROOT}/src/a.ts`, 4, "reject");
+    const outcome = fs.readFileBytes?.(`${ROOT}/src/a.ts`, 4, "reject", EXPECTED_FILE_STAT);
     let settled = false;
     void outcome?.then(
       () => {
@@ -244,7 +286,7 @@ describe("executionControlledWorkspaceFs", () => {
         signal: controller.signal,
       },
     );
-    const outcome = fs.openFileReader?.(`${ROOT}/src/a.ts`, "reject");
+    const outcome = fs.openFileReader?.(`${ROOT}/src/a.ts`, "reject", EXPECTED_FILE_STAT);
     const expectation = expect(outcome).rejects.toMatchObject({ reason: "aborted" });
 
     controller.abort();

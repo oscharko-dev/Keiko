@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import { createProductionCodingRuntimeHost } from "./productionCodingRuntimeHost.js";
@@ -189,6 +190,13 @@ describe("production coding runtime resolver", () => {
 
     expect(turns).toEqual(["initial private task", "follow-up private task"]);
     expect(createRun).toHaveBeenCalledOnce();
+    const backendInput = createRun.mock.calls[0]?.[0];
+    expect(backendInput?.resolveWorkspaceRootAccess()).toMatchObject({
+      kind: "managed-task",
+      canonicalRoot: fixture.workspace,
+    });
+    fixture.revokeWorkspaceAccess();
+    expect(backendInput?.resolveWorkspaceRootAccess()).toBeUndefined();
     expect(JSON.stringify(createRun.mock.calls[0]?.[0].minted)).not.toContain("private task");
     expect(createRun.mock.calls[0]?.[0].authorityLifecycle.revokeRuntime("run-1")).toBe(true);
     await expect(
@@ -317,6 +325,10 @@ function resolverFor(
         }),
     },
     verificationRunner: { runToReport: vi.fn() },
+    resolveWorkspaceRootAccess: (requestedRoot) =>
+      fixture.workspaceAccessAvailable()
+        ? { kind: "managed-task", canonicalRoot: requestedRoot, fs: nodeWorkspaceFs }
+        : undefined,
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
     ...(runtimeMutationLeaseBroker ? { runtimeMutationLeaseBroker } : {}),
   });
@@ -422,6 +434,7 @@ function workspaceFixture() {
   const workspace = join(managed, "repo", "workspace");
   mkdirSync(workspace, { recursive: true });
   let head = "1".repeat(40);
+  let workspaceAccessAvailable = true;
   let nowMs = Date.parse("2026-07-13T12:00:00.000Z");
   const instance = {
     workspaceId: "workspace-private",
@@ -453,6 +466,10 @@ function workspaceFixture() {
     },
     setHead: (value: string): void => {
       head = value;
+    },
+    workspaceAccessAvailable: (): boolean => workspaceAccessAvailable,
+    revokeWorkspaceAccess: (): void => {
+      workspaceAccessAvailable = false;
     },
   };
 }

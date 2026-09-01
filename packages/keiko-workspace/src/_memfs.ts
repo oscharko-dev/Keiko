@@ -1,4 +1,12 @@
-import type { WorkspaceDirEntry, WorkspaceFileReader, WorkspaceFs, WorkspaceStat } from "./fs.js";
+import {
+  WorkspaceDescriptorReadError,
+  type WorkspaceDescriptorReadCompleteness,
+  type WorkspaceDescriptorUtf8Read,
+  type WorkspaceDirEntry,
+  type WorkspaceFileReader,
+  type WorkspaceFs,
+  type WorkspaceStat,
+} from "./fs.js";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 
@@ -123,6 +131,33 @@ function memReadFileUtf8Prefix(
     .replace(/\uFFFD$/u, "");
 }
 
+function memReadFileUtf8WithinRoot(
+  root: string,
+  files: Readonly<Record<string, string>>,
+  key: string | undefined,
+  absolutePath: string,
+  maxBytes: number,
+  completeness: WorkspaceDescriptorReadCompleteness,
+): WorkspaceDescriptorUtf8Read {
+  const canonicalRoot = canonicalPath(root);
+  const canonicalTarget = canonicalPath(absolutePath);
+  if (!canonicalTarget.startsWith(`${canonicalRoot}/`)) {
+    throw new WorkspaceDescriptorReadError("outside-root");
+  }
+  const encoded = encodedFile(files, key);
+  if (encoded === undefined) throw new Error(`ENOENT: ${absolutePath}`);
+  const cap = Math.max(0, Math.floor(maxBytes));
+  if (completeness === "complete" && encoded.length > cap) {
+    throw new WorkspaceDescriptorReadError("too-large", encoded.length);
+  }
+  const bytes = encoded.subarray(0, Math.min(encoded.length, cap));
+  return {
+    rawText: new TextDecoder("utf-8", { fatal: false }).decode(bytes),
+    sizeBytes: bytes.length,
+    stat: memoryFileStat(absolutePath, files[key ?? ""] ?? ""),
+  };
+}
+
 function memReadFileRange(
   files: Readonly<Record<string, string>>,
   key: string | undefined,
@@ -162,6 +197,21 @@ function memOpenFileReader(
   });
 }
 
+function memContainedDescriptorReader(
+  files: Readonly<Record<string, string>>,
+  findKey: (absolutePath: string) => string | undefined,
+): NonNullable<WorkspaceFs["readFileUtf8WithinRootSameDescriptor"]> {
+  return (root, absolutePath, maxBytes, _hardLinkPolicy, completeness) =>
+    memReadFileUtf8WithinRoot(
+      root,
+      files,
+      findKey(absolutePath),
+      absolutePath,
+      maxBytes,
+      completeness,
+    );
+}
+
 export function memFs(root: string, files: Readonly<Record<string, string>>): WorkspaceFs {
   const findKey = (absolutePath: string): string | undefined =>
     Object.keys(files).find((key) => toAbs(root, key) === canonicalPath(absolutePath));
@@ -174,6 +224,7 @@ export function memFs(root: string, files: Readonly<Record<string, string>>): Wo
       }
       return files[key] ?? "";
     },
+    readFileUtf8WithinRootSameDescriptor: memContainedDescriptorReader(files, findKey),
     stat: (absolutePath: string): WorkspaceStat => {
       const key = findKey(absolutePath);
       if (key === undefined) {

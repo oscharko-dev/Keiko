@@ -15,6 +15,22 @@
       "types": "./dist/fs.d.ts",
       "import": "./dist/fs.js"
     },
+    "./internal/owned-root": {
+      "types": "./dist/ownedRoot.d.ts",
+      "import": "./dist/ownedRoot.js"
+    },
+    "./internal/owned-root-mint": {
+      "types": "./dist/ownedRootMint.d.ts",
+      "import": "./dist/ownedRootMint.js"
+    },
+    "./internal/owned-root-preserve": {
+      "types": "./dist/ownedRootPreserve.d.ts",
+      "import": "./dist/ownedRootPreserve.js"
+    },
+    "./internal/realpath-policy": {
+      "types": "./dist/realpathPolicy.d.ts",
+      "import": "./dist/realpathPolicy.js"
+    },
     "./internal/editor-read": {
       "types": "./dist/editorRead.d.ts",
       "import": "./dist/editorRead.js"

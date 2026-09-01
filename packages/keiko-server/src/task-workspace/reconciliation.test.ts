@@ -370,9 +370,8 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     expect(reportEntry?.driftMarkers).toContain("gitdir-mismatch");
   });
 
-  // S8786 pointer-drift regression: safeGitdirIdentity's `.git` pointer parse mirrors provisioning.ts's
-  // gitdirIdentity (`/^gitdir:\s*(.+)\s*$/mu` → `/^gitdir:(.+)$/mu`), removing the leading/trailing
-  // `\s*` that overlapped with `(.+)` — the overlapping-quantifier shape SonarCloud's S8786 rule flags.
+  // S8786 pointer-drift regression: the shared production parser replaced both formerly duplicated
+  // regex parsers with a literal prefix plus a bounded complete descriptor read.
   // This pads the real `.git` pointer with a huge whitespace run around the actual target and asserts
   // reconciliation still classifies it healthy: the parse still extracts the right target and matches
   // the identity computed at provision time despite the padding. That correctness guarantee is real and

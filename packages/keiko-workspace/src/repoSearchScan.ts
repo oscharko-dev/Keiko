@@ -21,7 +21,11 @@ import {
   type WorkspaceContentLane,
 } from "./discovery.js";
 import { FileTooLargeError, PathDeniedError, PathEscapeError, WORKSPACE_CODES } from "./errors.js";
-import type { WorkspaceFs } from "./fs.js";
+import {
+  isWorkspacePathSnapshotCurrent,
+  WorkspaceDescriptorReadError,
+  type WorkspaceFs,
+} from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import {
@@ -651,10 +655,18 @@ export async function probeBinary(fs: WorkspaceFs, abs: string, size: number): P
   if (cap === 0) {
     return false;
   }
+  const expected = fs.stat(abs);
   if (fs.readFileBytes !== undefined) {
-    return looksBinary(await fs.readFileBytes(abs, cap, "reject"));
+    const bytes = await fs.readFileBytes(abs, cap, "reject", expected);
+    if (!isWorkspacePathSnapshotCurrent(fs, abs, abs, expected)) {
+      throw new WorkspaceDescriptorReadError("changed");
+    }
+    return looksBinary(bytes);
   }
   const text = fs.readFileUtf8(abs);
+  if (!isWorkspacePathSnapshotCurrent(fs, abs, abs, expected)) {
+    throw new WorkspaceDescriptorReadError("changed");
+  }
   return looksBinary(new TextEncoder().encode(text.slice(0, cap)));
 }
 

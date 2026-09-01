@@ -50,6 +50,8 @@ interface WorkspaceWatchSubscribeArgs {
   readonly root: string;
   readonly lastSequence?: number | undefined;
   readonly onEvent: (event: EditorM7WatchEvent) => void;
+  readonly reproveRoot?: (() => boolean) | undefined;
+  readonly onAuthorityRevoked?: (() => void) | undefined;
   readonly additionalExclusions?: readonly string[] | undefined;
 }
 
@@ -61,7 +63,8 @@ export type WorkspaceWatchSubscribeResult =
       readonly snapshotRequired: boolean;
       readonly unsubscribe: () => void;
     }
-  | { readonly kind: "subscriberLimit"; readonly snapshot: EditorM7WatchSnapshot };
+  | { readonly kind: "subscriberLimit"; readonly snapshot: EditorM7WatchSnapshot }
+  | { readonly kind: "rootUnavailable"; readonly snapshot: EditorM7WatchSnapshot };
 
 export interface WorkspaceWatchServiceOptions {
   readonly adapter?: WorkspaceWatchAdapter | undefined;
@@ -86,6 +89,8 @@ export interface WorkspaceWatchFileSystem {
 interface WatchSubscriber {
   readonly id: number;
   readonly onEvent: (event: EditorM7WatchEvent) => void;
+  readonly reproveRoot: (() => boolean) | undefined;
+  readonly onAuthorityRevoked: (() => void) | undefined;
 }
 
 interface PendingChange {
@@ -139,6 +144,15 @@ function configuredFileSystem(
   fileSystem: WorkspaceWatchFileSystem | undefined,
 ): WorkspaceWatchFileSystem {
   return fileSystem ?? NODE_FILE_SYSTEM;
+}
+
+function safeReprove(reprove: (() => boolean) | undefined): boolean {
+  if (reprove === undefined) return true;
+  try {
+    return reprove();
+  } catch {
+    return false;
+  }
 }
 
 const DEFAULT_CONFIG: Omit<WatchConfig, "adapter" | "fileSystem"> = {
@@ -363,6 +377,7 @@ class WorkspaceWatchSession {
   private disposed = false;
   private additionalExclusions: WatchExclusions = NO_EXCLUSIONS;
   private exclusionsInitialized = false;
+  private reproveRoot: (() => boolean) | undefined;
 
   public constructor(
     private readonly root: string,
@@ -372,6 +387,11 @@ class WorkspaceWatchSession {
 
   public subscribe(args: WorkspaceWatchSubscribeArgs): WorkspaceWatchSubscribeResult {
     this.cancelIdleTimer();
+    if (!safeReprove(args.reproveRoot)) {
+      this.revokeRoot();
+      return { kind: "rootUnavailable", snapshot: this.snapshot(true) };
+    }
+    this.reproveRoot ??= args.reproveRoot;
     // Exclusions are fixed at first-subscribe for the life of the session: the initial baseline
     // scan (seedBaseline, triggered by ensureStarted below) is filtered by whatever is set here,
     // so accepting a different value from a later subscriber would leave the seeded `known` map
@@ -385,7 +405,7 @@ class WorkspaceWatchSession {
     if (this.subscribers.size >= this.config.maxSubscribersPerRoot) {
       return { kind: "subscriberLimit", snapshot: this.snapshot(true) };
     }
-    const subscriber = this.addSubscriber(args.onEvent);
+    const subscriber = this.addSubscriber(args);
     const replay = this.replayAfter(args.lastSequence);
     const snapshotRequired = this.snapshotRequired(args.lastSequence);
     return {
@@ -416,8 +436,15 @@ class WorkspaceWatchSession {
     };
   }
 
+  public isDisposed(): boolean {
+    return this.disposed;
+  }
+
   public dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      this.clearTimers();
+      return;
+    }
     this.disposed = true;
     this.clearTimers();
     this.handle?.close();
@@ -428,9 +455,14 @@ class WorkspaceWatchSession {
     this.degradedReasons.add("shutdown");
   }
 
-  private addSubscriber(onEvent: (event: EditorM7WatchEvent) => void): WatchSubscriber {
+  private addSubscriber(args: WorkspaceWatchSubscribeArgs): WatchSubscriber {
     this.nextSubscriberId += 1;
-    const subscriber = { id: this.nextSubscriberId, onEvent };
+    const subscriber = {
+      id: this.nextSubscriberId,
+      onEvent: args.onEvent,
+      reproveRoot: args.reproveRoot,
+      onAuthorityRevoked: args.onAuthorityRevoked,
+    };
     this.subscribers.set(subscriber.id, subscriber);
     return subscriber;
   }
@@ -442,6 +474,7 @@ class WorkspaceWatchSession {
 
   private ensureStarted(): void {
     if (this.disposed || this.handle !== null || this.pollTimer !== null) return;
+    if (!this.ensureLiveRootAuthority()) return;
     try {
       this.handle = this.config.adapter.watch({
         root: this.root,
@@ -472,7 +505,7 @@ class WorkspaceWatchSession {
   }
 
   private handleRawEvent(event: WorkspaceWatchRawEvent): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.ensureLiveRootAuthority()) return;
     if (event.eventType === "overflow") {
       this.emitRescan("event-overflow", "overflow");
       return;
@@ -514,11 +547,12 @@ class WorkspaceWatchSession {
   }
 
   private async flushPending(): Promise<void> {
-    if (this.flushing) return;
+    if (this.flushing || !this.ensureLiveRootAuthority()) return;
     this.flushing = true;
     try {
       await this.awaitBaseline();
       while (this.pending.size > 0 && !this.disposed) {
+        if (!this.ensureLiveRootAuthority()) return;
         const batch = [...this.pending.values()].slice(0, this.config.maxBatchSize);
         for (const change of batch) this.pending.delete(change.relativePath);
         for (const change of batch) await this.reconcileChange(change);
@@ -530,7 +564,7 @@ class WorkspaceWatchSession {
   }
 
   private async reconcileChange(change: PendingChange): Promise<void> {
-    if (this.disposed) return;
+    if (this.disposed || !this.ensureLiveRootAuthority()) return;
     if (change.oldRelativePath !== undefined) {
       await this.reconcileRename(change.oldRelativePath, change.relativePath);
       return;
@@ -541,6 +575,7 @@ class WorkspaceWatchSession {
       this.additionalExclusions,
       this.config.fileSystem,
     );
+    if (!this.ensureLiveRootAuthority()) return;
     this.applyMetadataResult(change.relativePath, current);
   }
 
@@ -551,6 +586,7 @@ class WorkspaceWatchSession {
       this.additionalExclusions,
       this.config.fileSystem,
     );
+    if (!this.ensureLiveRootAuthority()) return;
     if (current.kind !== "present") {
       const reason = current.kind === "unsafe" ? "unsafe-path" : "ambiguous-event";
       this.emitRescan(reason, "rescan");
@@ -605,17 +641,31 @@ class WorkspaceWatchSession {
 
   private async seedBaseline(): Promise<void> {
     const next = await this.scanTree();
-    if (next === null || !next.complete || this.disposed) return;
+    if (
+      next === null ||
+      !next.complete ||
+      this.disposed ||
+      !this.ensureLiveRootAuthority()
+    ) {
+      return;
+    }
     this.known.clear();
     for (const metadata of next.entries.values()) this.known.set(metadata.relativePath, metadata);
   }
 
   private async scanAndEmitDiff(): Promise<void> {
-    if (this.scanning) return;
+    if (this.scanning || !this.ensureLiveRootAuthority()) return;
     this.scanning = true;
     try {
       const next = await this.scanTree();
-      if (next === null || !next.complete || this.disposed) return;
+      if (
+        next === null ||
+        !next.complete ||
+        this.disposed ||
+        !this.ensureLiveRootAuthority()
+      ) {
+        return;
+      }
       for (const [path, previous] of this.known)
         if (!next.entries.has(path))
           this.emit(deletedEvent(this.nextSequence(), previous.relativePath));
@@ -627,8 +677,10 @@ class WorkspaceWatchSession {
   }
 
   private async scanTree(): Promise<ScanResult | null> {
+    if (!this.ensureLiveRootAuthority()) return null;
     try {
       const rootStats = await this.config.fileSystem.stat(this.root);
+      if (!this.ensureLiveRootAuthority()) return null;
       if (!rootStats.isDirectory()) return this.rootReplaced();
       return await this.scanDirectory("");
     } catch (error) {
@@ -640,7 +692,7 @@ class WorkspaceWatchSession {
   }
 
   private rootReplaced(): null {
-    this.emitRescan("root-replaced", "rescan");
+    this.revokeRoot();
     return null;
   }
 
@@ -669,11 +721,12 @@ class WorkspaceWatchSession {
     const directory =
       relativeDirectory.length === 0 ? this.root : join(this.root, relativeDirectory);
     let entries: readonly Dirent[];
-    try {
-      entries = await this.config.fileSystem.readdir(directory);
-    } catch {
-      return "unavailable";
-    }
+      try {
+        entries = await this.config.fileSystem.readdir(directory);
+      } catch {
+        return "unavailable";
+      }
+      if (!this.ensureLiveRootAuthority()) return "unavailable";
     for (const entry of entries) {
       const relativePath =
         relativeDirectory.length === 0 ? entry.name : `${relativeDirectory}/${entry.name}`;
@@ -685,6 +738,7 @@ class WorkspaceWatchSession {
         this.additionalExclusions,
         this.config.fileSystem,
       );
+      if (!this.ensureLiveRootAuthority()) return "unavailable";
       if (result.kind === "unavailable") return "unavailable";
       if (result.kind !== "present") continue;
       found.set(relativePath, result.metadata);
@@ -737,11 +791,52 @@ class WorkspaceWatchSession {
   }
 
   private emit(event: EditorM7WatchEvent): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.ensureLiveRootAuthority()) return;
     this.eventCount += 1;
     this.replay.push(event);
     while (this.replay.length > this.config.replayCapacity) this.replay.shift();
-    for (const subscriber of this.subscribers.values()) subscriber.onEvent(event);
+    for (const subscriber of this.subscribers.values()) {
+      if (!safeReprove(subscriber.reproveRoot)) {
+        subscriber.onAuthorityRevoked?.();
+        this.subscribers.delete(subscriber.id);
+        continue;
+      }
+      subscriber.onEvent(event);
+    }
+  }
+
+  private ensureLiveRootAuthority(): boolean {
+    if (safeReprove(this.reproveRoot)) return true;
+    this.revokeRoot();
+    return false;
+  }
+
+  private revokeRoot(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.clearTimers();
+    this.handle?.close();
+    this.handle = null;
+    this.pending.clear();
+    this.degradedReasons.add("root-replaced");
+    this.health = "rescanRequired";
+    const event: EditorM7WatchEvent = {
+      schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+      sequence: this.nextSequence(),
+      kind: "rescan",
+      relativePath: "",
+      entryKind: "unknown",
+      health: this.health,
+      reason: "root-replaced",
+    };
+    this.eventCount += 1;
+    for (const subscriber of this.subscribers.values()) {
+      subscriber.onEvent(event);
+      subscriber.onAuthorityRevoked?.();
+    }
+    this.health = "stopped";
+    this.subscribers.clear();
+    this.scheduleIdleDispose();
   }
 
   private replayAfter(lastSequence: number | undefined): readonly EditorM7WatchEvent[] {
@@ -787,9 +882,11 @@ export function createWorkspaceWatchService(
 ): WorkspaceWatchService {
   const config = configFromOptions(options);
   const sessions = new Map<string, WorkspaceWatchSession>();
-  const sessionFor = (root: string): WorkspaceWatchSession => {
+  const sessionFor = (root: string, replaceDisposed = false): WorkspaceWatchSession => {
     const existing = sessions.get(root);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined && (!replaceDisposed || !existing.isDisposed())) return existing;
+    existing?.dispose();
+    sessions.delete(root);
     const session = new WorkspaceWatchSession(root, config, (idleRoot) => {
       sessions.get(idleRoot)?.dispose();
       sessions.delete(idleRoot);
@@ -798,7 +895,8 @@ export function createWorkspaceWatchService(
     return session;
   };
   return {
-    subscribe: (args): WorkspaceWatchSubscribeResult => sessionFor(args.root).subscribe(args),
+    subscribe: (args): WorkspaceWatchSubscribeResult =>
+      sessionFor(args.root, true).subscribe(args),
     snapshot: (root): EditorM7WatchSnapshot => sessionFor(root).snapshot(),
     disposeRoot: (root): void => {
       sessions.get(root)?.dispose();

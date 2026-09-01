@@ -242,9 +242,9 @@ describe("scanFile – aborted after binary check", () => {
     if (baseReadFileBytes === undefined) throw new Error("memFs always provides readFileBytes");
     const interceptedFs: WorkspaceFs = {
       ...fs,
-      readFileBytes: async (abs, max, hardLinkPolicy): Promise<Uint8Array> => {
+      readFileBytes: async (abs, max, hardLinkPolicy, expected): Promise<Uint8Array> => {
         controller.abort();
-        return await baseReadFileBytes(abs, max, hardLinkPolicy);
+        return await baseReadFileBytes(abs, max, hardLinkPolicy, expected);
       },
     };
 
@@ -330,9 +330,14 @@ describe("scanFile – cached metadata validation", () => {
     let contentReads = 0;
     const fs: WorkspaceFs = {
       ...base,
-      readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+      readFileBytes: async (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): Promise<Uint8Array> => {
         contentReads += 1;
-        return await readFileBytes(absolutePath, maxBytes, hardLinkPolicy);
+        return await readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
       },
     };
     const stalePaths: string[] = [];
@@ -503,9 +508,14 @@ describe("scanFile – live candidate retargeting", () => {
           candidateRealPathCalls += 1;
           return candidateRealPathCalls === 1 ? absolutePath : retargetedPath;
         },
-        readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+        readFileBytes: async (
+          absolutePath,
+          maxBytes,
+          hardLinkPolicy,
+          expected,
+        ): Promise<Uint8Array> => {
           contentReads += 1;
-          return await (base.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy) ??
+          return await (base.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy, expected) ??
             Promise.resolve(new Uint8Array()));
         },
       };
@@ -537,8 +547,13 @@ describe("scanFile – stable persistence metadata", () => {
     let replacementScheduled = false;
     const fs: WorkspaceFs = {
       ...base,
-      readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
-        const bytes = await baseReadFileBytes(absolutePath, maxBytes, hardLinkPolicy);
+      readFileBytes: async (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): Promise<Uint8Array> => {
+        const bytes = await baseReadFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
         if (maxBytes === limits().maxBytesPerFileScanned) scheduleReplacement = true;
         return bytes;
       },
@@ -657,9 +672,9 @@ describe("hitEmissionLimit – AbortSignal fires during emission loop", () => {
     let byteReads = 0;
     const interceptedFs: WorkspaceFs = {
       ...base,
-      readFileBytes: async (abs, max, hardLinkPolicy): Promise<Uint8Array> => {
+      readFileBytes: async (abs, max, hardLinkPolicy, expected): Promise<Uint8Array> => {
         byteReads += 1;
-        const result = await baseReadFileBytes(abs, max, hardLinkPolicy);
+        const result = await baseReadFileBytes(abs, max, hardLinkPolicy, expected);
         if (byteReads === 2) {
           controller.abort();
         }

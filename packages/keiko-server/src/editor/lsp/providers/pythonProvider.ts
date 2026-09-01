@@ -1,4 +1,3 @@
-import { readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import type {
@@ -6,7 +5,8 @@ import type {
   ManagedLspPythonConfiguration,
   ManagedLspPythonSettings,
 } from "@oscharko-dev/keiko-contracts";
-import { isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
+import { isWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import type { HostLanguageProviderSpec } from "../hostLanguageProviders.js";
 
@@ -81,22 +81,32 @@ export function pythonProtocolConfiguration(
   };
 }
 
-export function detectPythonConfigurationPrecedence(root: string): PythonConfigurationPrecedence {
-  if (safeContainedFile(root, "pyrightconfig.json") !== undefined) return "pyrightconfig";
-  const pyproject = safeContainedFile(root, "pyproject.toml");
+export function detectPythonConfigurationPrecedence(
+  root: string,
+  fs: WorkspaceFs = nodeWorkspaceFs,
+): PythonConfigurationPrecedence {
+  if (safeContainedFile(root, "pyrightconfig.json", fs) !== undefined) return "pyrightconfig";
+  const pyproject = safeContainedFile(root, "pyproject.toml", fs);
   const hasPyrightSection =
     pyproject?.split("\n").some((line) => line.trim() === "[tool.pyright]") === true;
   return hasPyrightSection ? "pyproject" : "workspaceConfiguration";
 }
 
-function safeContainedFile(root: string, relativePath: string): string | undefined {
+function safeContainedFile(
+  root: string,
+  relativePath: string,
+  fs: WorkspaceFs,
+): string | undefined {
   try {
-    const realRoot = realpathSync(root);
-    const realFile = realpathSync(join(realRoot, relativePath));
+    const realRoot = fs.realPath(root);
+    const realFile = fs.realPath(join(realRoot, relativePath));
     if (!isWithinWorkspace(realRoot, realFile)) return undefined;
-    const stat = statSync(realFile);
-    if (!stat.isFile() || stat.size > MAX_PROJECT_CONFIGURATION_BYTES) return undefined;
-    return readFileSync(realFile, "utf8");
+    const stat = fs.stat(realFile);
+    if (!stat.isFile || stat.size > MAX_PROJECT_CONFIGURATION_BYTES) return undefined;
+    const read = fs.readFileUtf8WithinRootSameDescriptor;
+    if (read === undefined) return undefined;
+    return read.call(fs, realRoot, realFile, MAX_PROJECT_CONFIGURATION_BYTES, "reject", "complete")
+      .rawText;
   } catch {
     return undefined;
   }

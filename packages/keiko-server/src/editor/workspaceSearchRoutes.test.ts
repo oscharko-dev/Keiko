@@ -4,11 +4,22 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { DEFAULT_SEARCH_LIMITS, detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
+import {
+  createFakeSessionPairingPort,
+  fakePairingRequestBody,
+} from "../coding-app-session/_support.js";
+import { createCodingAppSessionChannel } from "../coding-app-session/sessionChannel.js";
+import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js";
+import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js";
 import type { UiStore } from "../store/index.js";
+import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
+import { deriveManagedWorktreePath } from "../task-workspace/naming.js";
+import type { WorkspaceProvisioningService } from "../task-workspace/types.js";
 import {
   handleEditorWorkspaceReplaceApply,
   handleEditorWorkspaceReplacePreview,
@@ -36,11 +47,12 @@ function postContext(body: unknown, path = "/api/editor/workspace-search"): Rout
 let root: string;
 let store: UiStore;
 
-function deps(): UiHandlerDeps {
+function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   return {
     store,
     redactor: buildRedactor({}),
     evidenceStore: createInMemoryEvidenceStore(),
+    ...overrides,
   } as unknown as UiHandlerDeps;
 }
 
@@ -77,6 +89,65 @@ function symbolBody(overrides: Record<string, unknown> = {}): Record<string, unk
     query: "parse",
     maxResults: 20,
     ...overrides,
+  };
+}
+
+async function managedSearchFixture(): Promise<{
+  readonly managedWorktree: string;
+  readonly cookie: string;
+  readonly deps: UiHandlerDeps;
+}> {
+  const managedRoot = join(root, ".keiko", "task-workspaces");
+  assertManagedRootOwned(managedRoot);
+  const repositoryId = "repo_0123456789abcdef";
+  const workspaceId = "ws_0123456789abcdef01234567";
+  const managedWorktree = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
+  await mkdir(join(managedWorktree, "src"), { recursive: true });
+  await writeFile(join(managedWorktree, "src", "managed.ts"), "export const managedNeedle = 1;\n");
+  const timestamp = new Date(0).toISOString();
+  const instance: WorkspaceInstance = {
+    schemaVersion: "1",
+    workspaceId,
+    taskId: "workspace-search",
+    repositoryId,
+    repositoryRoot: root,
+    baseBranch: "dev",
+    taskBranch: "keiko/task/workspace-search-01234567",
+    managedWorktreePath: managedWorktree,
+    gitdirIdentity: "gitdir-identity",
+    lifecycleState: "active",
+    health: "healthy",
+    lock: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    driftMarkers: [],
+    recoveryHints: [],
+    auditCorrelationId: "corr_workspace_search",
+  };
+  const workspaceProvisioning = {
+    provision: (): never => {
+      throw new Error("not used in this test");
+    },
+    activate: (): never => {
+      throw new Error("not used in this test");
+    },
+    getInstance: (id: string): WorkspaceInstance | undefined =>
+      id === workspaceId ? instance : undefined,
+  } satisfies WorkspaceProvisioningService;
+  const channel = createCodingAppSessionChannel({
+    registry: createSessionRegistry(),
+    pairingPort: createFakeSessionPairingPort(),
+  });
+  const paired = channel.pair(fakePairingRequestBody());
+  if (!paired.paired) throw new Error("pairing failed");
+  return {
+    managedWorktree,
+    cookie: `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`,
+    deps: deps({
+      managedTaskWorkspaceRoot: managedRoot,
+      workspaceProvisioning,
+      codingAppSessionChannel: channel,
+    }),
   };
 }
 
@@ -146,6 +217,21 @@ describe("the editor read lane is reachable through its published export subpath
 });
 
 describe("POST /api/editor/workspace-search", () => {
+  it("uses request-scoped owned-root access for a paired managed worktree", async () => {
+    const fixture = await managedSearchFixture();
+    const request = postContext(
+      searchBody({ root: fixture.managedWorktree, query: "managedNeedle" }),
+    );
+    request.req.headers = { cookie: fixture.cookie };
+
+    const result = await handleEditorWorkspaceSearch(request, fixture.deps);
+
+    expect(result.status).toBe(200);
+    const body = result.body as { readonly results: readonly { path: string; snippet: string }[] };
+    expect(body.results[0]?.path, JSON.stringify(body)).toBe("src/managed.ts");
+    expect(body.results[0]?.snippet).toContain("managedNeedle");
+  });
+
   it("returns literal search results with bounded snippets", async () => {
     const result = await handleEditorWorkspaceSearch(postContext(searchBody()), deps());
 

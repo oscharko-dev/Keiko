@@ -48,6 +48,7 @@ import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connecte
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
 import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { currentGateway, currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { newCorrelationId } from "../correlation.js";
@@ -204,6 +205,7 @@ interface InlineModelOutcome {
 interface ElectedInlineModelContext {
   readonly request: EditorInlineCompletionWireRequest;
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   readonly signal: AbortSignal;
   readonly deps: UiHandlerDeps;
   readonly selection: CompletionModelSelection;
@@ -376,6 +378,7 @@ async function runElectedInlineModel(ctx: ElectedInlineModelContext): Promise<In
   const pack = await assembleCodingContext(buildContextRequest(ctx.request), {
     deps: ctx.deps,
     realRoot: ctx.realRoot,
+    fs: ctx.fs,
     signal: ctx.signal,
     nowMs: ctx.nowMs,
     budgetBytes: effectiveContextBudgetBytes(ctx.request),
@@ -485,6 +488,7 @@ function reportInlineModelFailure(
 async function runInlineModelTier(
   request: EditorInlineCompletionWireRequest,
   realRoot: string,
+  fs: WorkspaceFs,
   signal: AbortSignal,
   deps: UiHandlerDeps,
   options: EditorInlineCompletionRouteOptions,
@@ -509,6 +513,7 @@ async function runInlineModelTier(
     const outcome = await runElectedInlineModel({
       request,
       realRoot,
+      fs,
       signal: modelSignal(
         selection,
         signal,
@@ -543,6 +548,7 @@ function invalidChangedFiles(message: string): RouteResult {
 
 function sanitizeChangedFiles(
   realRoot: string,
+  fs: WorkspaceFs,
   changedFiles: readonly string[] | undefined,
 ): readonly string[] | RouteResult | undefined {
   if (changedFiles === undefined) {
@@ -560,7 +566,7 @@ function sanitizeChangedFiles(
         `context.changedFiles contains an invalid workspace-relative path: ${changed}`,
       );
     }
-    resolveOverlayPath(realRoot, changed);
+    resolveOverlayPath(realRoot, changed, fs);
   }
   return deduped.length > 0 ? deduped : undefined;
 }
@@ -568,8 +574,9 @@ function sanitizeChangedFiles(
 function sanitizeRequestContext(
   request: EditorInlineCompletionWireRequest,
   realRoot: string,
+  fs: WorkspaceFs,
 ): EditorInlineCompletionWireRequest | RouteResult {
-  const changedFiles = sanitizeChangedFiles(realRoot, request.context?.changedFiles);
+  const changedFiles = sanitizeChangedFiles(realRoot, fs, request.context?.changedFiles);
   if (isRouteResult(changedFiles)) {
     return changedFiles;
   }
@@ -657,25 +664,27 @@ export async function handleEditorInlineCompletion(
   const request = parsed.value;
   return runFilesHandler(async () => {
     const root = await resolveRequestRoot(ctx, deps, request.root);
+    const { canonicalRoot, fs } = root.access;
     // Containment check for the overlay document path (throws on escape → handled by runFilesHandler).
-    resolveOverlayPath(root.realRoot, request.document.path);
-    if (!(await activationStillActive(deps, root.realRoot))) {
+    resolveOverlayPath(canonicalRoot, request.document.path, fs);
+    if (!(await activationStillActive(deps, canonicalRoot))) {
       return noItemsRouteResult(deps);
     }
-    const sanitizedRequest = sanitizeRequestContext(request, root.realRoot);
+    const sanitizedRequest = sanitizeRequestContext(request, canonicalRoot, fs);
     if (isRouteResult(sanitizedRequest)) {
       return sanitizedRequest;
     }
     const signal = clientAbortSignal(ctx);
     const outcome = await runInlineModelTier(
       sanitizedRequest,
-      root.realRoot,
+      canonicalRoot,
+      fs,
       signal,
       deps,
       options,
       ctx.correlationId,
     );
-    if (!(await activationStillActive(deps, root.realRoot))) {
+    if (!(await activationStillActive(deps, canonicalRoot))) {
       return noItemsRouteResult(deps);
     }
     return { status: 200, body: deps.redactor(buildWireResponse(outcome)) };
@@ -701,7 +710,7 @@ export async function handleEditorInlineCompletionTelemetry(
     recordInlineCompletionTelemetryEvidence(
       deps.evidenceStore,
       deps.redactor,
-      { ...parsed.value, root: root.realRoot },
+      { ...parsed.value, root: root.access.canonicalRoot },
       now(),
     );
     return { status: 200, body: deps.redactor({ ok: true }) };

@@ -39,14 +39,18 @@ import { redact } from "@oscharko-dev/keiko-security";
 import {
   containedRealPathInfo,
   evidenceAtomStableId,
-  isCanonicalAllowedContainedPath,
   isDenied,
   resolveWithinWorkspace,
   type SearchScope,
   type WorkspaceFs,
+  type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
+import { isCanonicalAllowedContainedPath } from "@oscharko-dev/keiko-workspace/internal/realpath-policy";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
-import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  isWorkspacePathSnapshotCurrent,
+  WorkspaceDescriptorReadError,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { ExcerptWindow } from "@oscharko-dev/keiko-workflows";
 import { createHash } from "node:crypto";
 import { AbortDeadlineRaceError, raceAbortDeadline } from "./abort-race.js";
@@ -374,9 +378,11 @@ interface ResolvedDocument {
   readonly absolutePath: string;
   readonly realRelative: string;
   readonly sizeBytes: number;
+  readonly snapshot: WorkspaceStat;
 }
 
 type DocumentResolution = ResolvedDocument | "budget-exhausted" | "denied" | "unreadable";
+type DocumentResolutionFailure = Exclude<DocumentResolution, ResolvedDocument>;
 type ContainedDocument = ReturnType<typeof containedRealPathInfo>;
 const DENIED_DESCRIPTOR_READ_REASONS: ReadonlySet<string> = new Set([
   "hard-link",
@@ -405,7 +411,7 @@ function statDocument(
     const stat = inputs.fs.stat(contained.path);
     if (!stat.isFile || stat.isSymbolicLink) return "unreadable";
     if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) return "denied";
-    return { absolutePath: contained.path, realRelative, sizeBytes: stat.size };
+    return { absolutePath: contained.path, realRelative, sizeBytes: stat.size, snapshot: stat };
   } catch {
     return documentDeadlineReached(inputs) ? "budget-exhausted" : "unreadable";
   }
@@ -442,6 +448,7 @@ async function readDocumentBytes(
   inputs: DocumentEvidenceInputs,
   absolutePath: string,
   sizeBytes: number,
+  expected: WorkspaceStat,
 ): Promise<Uint8Array | "budget-exhausted" | "denied" | "unreadable"> {
   if (documentDeadlineReached(inputs)) {
     return "budget-exhausted";
@@ -452,7 +459,13 @@ async function readDocumentBytes(
   const readFileBytes = inputs.fs.readFileBytes;
   try {
     return await raceAbortDeadline(
-      () => readFileBytes(absolutePath, Math.min(sizeBytes, MAX_DOCUMENT_INPUT_BYTES), "reject"),
+      () =>
+        readFileBytes(
+          absolutePath,
+          Math.min(sizeBytes, MAX_DOCUMENT_INPUT_BYTES),
+          "reject",
+          expected,
+        ),
       {
         deadlineAtMs: inputs.deadlineAtMs ?? inputs.nowMs() + DOCUMENT_PARSE_TIMEOUT_MS,
         nowMs: inputs.nowMs,
@@ -483,6 +496,21 @@ function documentReadFailure(
   return documentDeadlineReached(inputs) ? "budget-exhausted" : "unreadable";
 }
 
+function documentResolutionOmission(
+  resolution: DocumentResolutionFailure,
+): CandidateOmissionReason {
+  if (resolution === "denied") return "outside-scope";
+  return resolution === "unreadable" ? "tool-unavailable" : resolution;
+}
+
+function sameResolvedDocument(left: ResolvedDocument, right: ResolvedDocument): boolean {
+  return [
+    left.absolutePath === right.absolutePath,
+    left.realRelative === right.realRelative,
+    left.sizeBytes === right.sizeBytes,
+  ].every(Boolean);
+}
+
 // Resolves and reads the document bytes through the workspace path-safety primitives, returning the
 // bytes or the precise omission reason for an unusable path.
 async function loadDocumentBytes(
@@ -490,21 +518,30 @@ async function loadDocumentBytes(
   scopePath: string,
 ): Promise<Uint8Array | CandidateOmissionReason> {
   const resolved = resolveDocument(inputs, scopePath);
-  if (resolved === "denied") {
-    return "outside-scope";
-  }
-  if (resolved === "unreadable") {
-    return "tool-unavailable";
-  }
-  if (resolved === "budget-exhausted") {
-    return resolved;
-  }
+  if (typeof resolved === "string") return documentResolutionOmission(resolved);
   if (resolved.sizeBytes > MAX_DOCUMENT_INPUT_BYTES) {
     return "size-exceeded";
   }
-  const bytes = await readDocumentBytes(inputs, resolved.absolutePath, resolved.sizeBytes);
-  if (bytes === "denied") return "outside-scope";
-  return bytes === "unreadable" ? "tool-unavailable" : bytes;
+  const bytes = await readDocumentBytes(
+    inputs,
+    resolved.absolutePath,
+    resolved.sizeBytes,
+    resolved.snapshot,
+  );
+  if (typeof bytes === "string") return documentResolutionOmission(bytes);
+  if (
+    !isWorkspacePathSnapshotCurrent(
+      inputs.fs,
+      resolved.absolutePath,
+      resolved.absolutePath,
+      resolved.snapshot,
+    )
+  ) {
+    return "tool-unavailable";
+  }
+  const after = resolveDocument(inputs, scopePath);
+  if (typeof after === "string") return documentResolutionOmission(after);
+  return sameResolvedDocument(resolved, after) ? bytes : "tool-unavailable";
 }
 
 // Redacts the extracted text and records the document atoms + excerpt windows, or an omission when
@@ -624,6 +661,8 @@ async function processDocument(
     remainingTimeMs,
   );
   throwIfDocumentCancelled(documentInputs.signal);
+  // Extraction completing at/after the absolute request deadline is late evidence. Do not admit it
+  // merely because a synchronous parser prevented the deadline timer from running first.
   if (documentDeadlineReached(documentInputs)) {
     omit(acc, scopePath, "budget-exhausted", documentInputs.nowMs());
     return;

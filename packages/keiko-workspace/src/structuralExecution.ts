@@ -1,9 +1,12 @@
 import type {
   WorkspaceDescriptorUtf8Read,
+  WorkspaceDescriptorReadCompleteness,
   WorkspaceFileReader,
   WorkspaceFs,
   WorkspaceHardLinkPolicy,
+  WorkspaceStat,
 } from "./fs.js";
+import { preserveOwnedRootAuthority } from "./ownedRootPreserve.js";
 
 export interface StructuralExecutionControl {
   readonly nowMs: () => number;
@@ -176,6 +179,7 @@ function optionalSynchronousReadOperations(
   control: StructuralExecutionControl,
 ): Partial<WorkspaceFs> {
   const readDescriptor = fs.readFileUtf8SameDescriptor;
+  const readContainedDescriptor = fs.readFileUtf8WithinRootSameDescriptor;
   const readPrefix = fs.readFileUtf8Prefix;
   return {
     ...(readDescriptor === undefined
@@ -185,9 +189,31 @@ function optionalSynchronousReadOperations(
             path: string,
             maxBytes: number,
             hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
           ): WorkspaceDescriptorUtf8Read => {
             assertStructuralExecutionActive(control);
-            return readDescriptor.call(fs, path, maxBytes, hardLinkPolicy);
+            return readDescriptor.call(fs, path, maxBytes, hardLinkPolicy, expected);
+          },
+        }),
+    ...(readContainedDescriptor === undefined
+      ? {}
+      : {
+          readFileUtf8WithinRootSameDescriptor: (
+            canonicalRoot: string,
+            path: string,
+            maxBytes: number,
+            hardLinkPolicy: WorkspaceHardLinkPolicy,
+            completeness: WorkspaceDescriptorReadCompleteness,
+          ): WorkspaceDescriptorUtf8Read => {
+            assertStructuralExecutionActive(control);
+            return readContainedDescriptor.call(
+              fs,
+              canonicalRoot,
+              path,
+              maxBytes,
+              hardLinkPolicy,
+              completeness,
+            );
           },
         }),
     ...(readPrefix === undefined
@@ -197,9 +223,10 @@ function optionalSynchronousReadOperations(
             path: string,
             maxBytes: number,
             hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
           ): string => {
             assertStructuralExecutionActive(control);
-            return readPrefix.call(fs, path, maxBytes, hardLinkPolicy);
+            return readPrefix.call(fs, path, maxBytes, hardLinkPolicy, expected);
           },
         }),
   };
@@ -219,10 +246,11 @@ function optionalAsynchronousReadOperations(
             path: string,
             maxBytes: number,
             hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
           ): Promise<Uint8Array> => {
             assertStructuralExecutionActive(control);
             return raceStructuralExecution(
-              readBytes.call(fs, path, maxBytes, hardLinkPolicy),
+              readBytes.call(fs, path, maxBytes, hardLinkPolicy, expected),
               control,
             );
           },
@@ -235,10 +263,11 @@ function optionalAsynchronousReadOperations(
             startByte: number,
             length: number,
             hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
           ): Promise<Uint8Array> => {
             assertStructuralExecutionActive(control);
             return raceStructuralExecution(
-              readRange.call(fs, path, startByte, length, hardLinkPolicy),
+              readRange.call(fs, path, startByte, length, hardLinkPolicy, expected),
               control,
             );
           },
@@ -267,10 +296,11 @@ function optionalWorkspaceOperations(
           openFileReader: async (
             path: string,
             hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
           ): Promise<WorkspaceFileReader> => {
             assertStructuralExecutionActive(control);
             const reader = await raceStructuralExecution(
-              openReader.call(fs, path, hardLinkPolicy),
+              openReader.call(fs, path, hardLinkPolicy, expected),
               control,
               (late) => late.close(),
             );
@@ -315,6 +345,7 @@ export function executionControlledWorkspaceFs(
     ...optionalAsynchronousReadOperations(fs, control),
     ...optionalWorkspaceOperations(fs, control),
   };
-  executionSources.set(controlled, executionSource(fs));
-  return controlled;
+  const result = preserveOwnedRootAuthority(fs, controlled);
+  executionSources.set(result, executionSource(fs));
+  return result;
 }

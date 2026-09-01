@@ -159,6 +159,11 @@ function assertProductionIncludeOnlyIsCovered() {
 }
 
 const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
+  "adr-0005-owned-root-authority-implementation-private": 1,
+  "adr-0005-owned-root-containment-allowed-callers": 1,
+  "adr-0005-owned-root-lookup-allowed-callers": 1,
+  "adr-0005-owned-root-mint-allowed-callers": 1,
+  "adr-0005-owned-root-preserve-allowed-callers": 1,
   "gen-perf-cli-001-cli-heavy-graphs-load-lazily": 1,
   "adr-0019-trust-1-provider-sdk-isolation": 1,
   "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,

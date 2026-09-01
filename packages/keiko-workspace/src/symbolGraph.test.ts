@@ -93,6 +93,33 @@ describe("buildSymbolGraph", () => {
     expect(graph.diagnostics.unsupportedLanguages).toEqual(["java"]);
   });
 
+  it.each([
+    ["Ruby", "src/service.rb", "ruby"],
+    ["PHP", "src/service.php", "php"],
+    ["Scala", "src/Service.scala", "scala"],
+    ["C", "src/service.c", "cpp"],
+    ["C++", "src/service.cpp", "cpp"],
+    ["Swift", "src/Service.swift", "swift"],
+    ["F#", "src/Service.fs", "fsharp"],
+    ["Visual Basic", "src/Service.vb", "vb"],
+    ["SQL", "src/schema.sql", "sql"],
+    ["Terraform", "infra/main.tf", "terraform"],
+    ["Protobuf", "proto/service.proto", "protobuf"],
+    ["GraphQL", "src/schema.graphql", "graphql"],
+    ["Groovy", "src/Service.groovy", "groovy"],
+    ["Python", "src/service.py", "python"],
+  ] as const)(
+    "derives unsupported %s from the bounded candidate inventory",
+    async (_label, scopePath, language) => {
+      const { scope, fs } = makeScope({ [scopePath]: "source" }, ["javascript"]);
+
+      const graph = await buildSymbolGraph(scope, DEFAULT_SEARCH_LIMITS, fs);
+
+      expect(graph.records).toEqual([]);
+      expect(graph.diagnostics.unsupportedLanguages).toEqual([language]);
+    },
+  );
+
   it("processes every bounded symbol candidate before reporting excess coverage", async () => {
     const { scope, fs } = makeScope({
       "src/a.ts": "export const first = true;\n",

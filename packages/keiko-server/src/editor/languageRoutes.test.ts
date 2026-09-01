@@ -15,6 +15,7 @@ import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { RouteResult } from "../routes.js";
 import type { UiStore } from "../store/index.js";
 import {
+  clientAbortSignal,
   handleEditorLanguage,
   handleEditorLanguageCapabilities,
   handleEditorLanguageCapabilitiesForRoute,
@@ -118,6 +119,20 @@ function postContextWithResponseClose(body: unknown, writableEnded: boolean): Ro
   } as unknown as ServerResponse;
   return { ...ctx, res };
 }
+
+describe("clientAbortSignal", () => {
+  it("does not treat a normally completed request close as client cancellation", () => {
+    const context = postContext({});
+    Object.defineProperty(context.req, "complete", { value: true, configurable: true });
+    const signal = clientAbortSignal(context);
+
+    context.req.emit("close");
+    expect(signal.aborted).toBe(false);
+
+    context.req.emit("aborted");
+    expect(signal.aborted).toBe(true);
+  });
+});
 
 let root: string;
 let store: UiStore;

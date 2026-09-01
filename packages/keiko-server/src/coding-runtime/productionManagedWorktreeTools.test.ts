@@ -7,12 +7,18 @@ import type {
   CodingWorkbenchRuntimeAuthorityFacts,
 } from "@oscharko-dev/keiko-contracts";
 import type { GatewayFetchOptions } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { createProductionManagedWorktreeToolFacade } from "./productionManagedWorktreeTools.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 
 const DIGEST = "a".repeat(64);
+const resolveWorkspaceRootAccess = () => ({
+  kind: "managed-task" as const,
+  canonicalRoot: "/managed/worktree",
+  fs: nodeWorkspaceFs,
+});
 const FACTS: CodingWorkbenchRuntimeAuthorityFacts = {
   binding: {
     taskId: "task-1",
@@ -52,6 +58,7 @@ describe("production managed worktree tools", () => {
       },
       authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
       workspaceRoot: "/managed/worktree",
+      resolveWorkspaceRootAccess,
       authorityExpiresAt: "2099-01-01T00:00:00.000Z",
       effectiveMode: "supervised-coding",
       deploymentCeiling: "supervised-coding",
@@ -107,6 +114,7 @@ describe("production managed worktree tools", () => {
         },
         authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
         workspaceRoot: "/managed/worktree",
+        resolveWorkspaceRootAccess,
         authorityExpiresAt: "2099-01-01T00:00:00.000Z",
         effectiveMode,
         deploymentCeiling: "autonomous-delivery",
@@ -181,6 +189,7 @@ describe("production managed worktree tools", () => {
       },
       authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
       workspaceRoot: "/managed/worktree",
+      resolveWorkspaceRootAccess,
       authorityExpiresAt: "2099-01-01T00:00:00.000Z",
       effectiveMode: "supervised-coding",
       deploymentCeiling: "supervised-coding",
@@ -262,6 +271,7 @@ describe("production managed worktree tools", () => {
       },
       authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
       workspaceRoot: "/managed/worktree",
+      resolveWorkspaceRootAccess,
       authorityExpiresAt: "2099-01-01T00:00:00.000Z",
       effectiveMode: "autonomous-delivery",
       deploymentCeiling: "autonomous-delivery",
@@ -324,6 +334,7 @@ describe("production managed worktree tools", () => {
         },
         authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
         workspaceRoot: "/managed/worktree",
+        resolveWorkspaceRootAccess,
         authorityExpiresAt: "2099-01-01T00:00:00.000Z",
         effectiveMode: "autonomous-delivery",
         deploymentCeiling: "autonomous-delivery",

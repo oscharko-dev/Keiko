@@ -13,12 +13,11 @@ import {
   RepoSearchInvalidRangeError,
   RepoSearchUnsupportedFileError,
 } from "./errors.js";
-import {
-  PathEscapeError,
-  WorkspaceError,
-} from "@oscharko-dev/keiko-security/errors/workspace";
+import { PathEscapeError, WorkspaceError } from "@oscharko-dev/keiko-security/errors/workspace";
 import { memFs } from "./_memfs.js";
+import { detectWorkspaceAt } from "./detect.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
+import { workspaceFsWithOwnedRootAuthority } from "./ownedRootMint.js";
 import {
   DEFAULT_SEARCH_LIMITS,
   createRequestLocalSearchTextSessionPool,
@@ -135,9 +134,11 @@ function measuredExcerptFs(
         touched();
         return base.readFileUtf8(path);
       },
-      readFileBytes: async (path, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+      readFileBytes: async (path, maxBytes, hardLinkPolicy, expected): Promise<Uint8Array> => {
         touched();
-        return (await base.readFileBytes?.(path, maxBytes, hardLinkPolicy)) ?? new Uint8Array();
+        return (
+          (await base.readFileBytes?.(path, maxBytes, hardLinkPolicy, expected)) ?? new Uint8Array()
+        );
       },
     },
     touchCount: (): number => touches,
@@ -2245,6 +2246,36 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/a.ts"]);
   });
 
+  it("scans children of only the exact owned denied workspace root", async () => {
+    const ownedRoot = join(tmp, ".keiko", "task-workspaces", "repo_a", "ws_b");
+    mkdirSync(join(ownedRoot, "src"), { recursive: true });
+    writeFileSync(join(ownedRoot, "src", "managed.ts"), "export const managedNeedle = 1;\n");
+    const canonicalRoot = nodeWorkspaceFs.realPath(ownedRoot);
+    const ownedScope: SearchScope = {
+      ...scope,
+      workspace: detectWorkspaceAt(
+        canonicalRoot,
+        workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, canonicalRoot),
+      ),
+    };
+    const fs = workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, canonicalRoot);
+
+    const result = await searchText(ownedScope, nlq("managedNeedle"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+    });
+
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/managed.ts"]);
+    expect(result.filesScanned).toBe(1);
+    await expect(
+      searchText(
+        { ...ownedScope, workspace: { ...ownedScope.workspace, root: dirname(canonicalRoot) } },
+        nlq("managedNeedle"),
+        DEFAULT_SEARCH_LIMITS,
+        { fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toBeInstanceOf(PathDeniedError);
+  });
+
   it("rejects a missing explicitly selected file on the real filesystem", async () => {
     file("src/present.ts", "match\n");
     const missingScope = { ...scope, relativePaths: ["src/missing.ts"] };
@@ -2457,9 +2488,14 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     }
     const fs: WorkspaceFs = {
       ...nodeWorkspaceFs,
-      readFileBytes: async (absolutePath, maxBytes): Promise<Uint8Array> => {
+      readFileBytes: async (
+        absolutePath,
+        maxBytes,
+        _hardLinkPolicy,
+        expected,
+      ): Promise<Uint8Array> => {
         byteProbeCalls += 1;
-        return await readFileBytes(absolutePath, maxBytes, "reject");
+        return await readFileBytes(absolutePath, maxBytes, "reject", expected);
       },
     };
 
@@ -2470,6 +2506,57 @@ describe("repoSearch (mkdtemp / real fs)", () => {
       }),
     ).rejects.toBeInstanceOf(PathDeniedError);
     expect(byteProbeCalls).toBe(0);
+  });
+
+  it("rejects an unavailable explicit-scope root before probing its contents", async () => {
+    scope = { ...scope, relativePaths: ["src"] };
+    let statCalls = 0;
+    let readDirCalls = 0;
+    let contentReadCalls = 0;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      realPath: (absolutePath): string => {
+        if (absolutePath === scope.workspace.root) throw new Error("EACCES");
+        return nodeWorkspaceFs.realPath(absolutePath);
+      },
+      stat: (absolutePath) => {
+        statCalls += 1;
+        return nodeWorkspaceFs.stat(absolutePath);
+      },
+      readDir: (absolutePath, maxEntries) => {
+        readDirCalls += 1;
+        return nodeWorkspaceFs.readDir(absolutePath, maxEntries);
+      },
+      readFileUtf8: (absolutePath): string => {
+        contentReadCalls += 1;
+        return nodeWorkspaceFs.readFileUtf8(absolutePath);
+      },
+      readFileBytes: async (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): Promise<Uint8Array> => {
+        contentReadCalls += 1;
+        return (
+          (await nodeWorkspaceFs.readFileBytes?.(
+            absolutePath,
+            maxBytes,
+            hardLinkPolicy,
+            expected,
+          )) ?? new Uint8Array()
+        );
+      },
+    };
+
+    await expect(
+      findFiles(scope, fpq("**/*.ts"), DEFAULT_SEARCH_LIMITS, { fs, nowMs: FIXED_NOW }),
+    ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
+    expect({ statCalls, readDirCalls, contentReadCalls }).toEqual({
+      statCalls: 0,
+      readDirCalls: 0,
+      contentReadCalls: 0,
+    });
   });
 
   it("readExcerpt rejects a symlink whose resolved target is outside scope.relativePaths", async () => {
@@ -2498,9 +2585,14 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     }
     const fs: WorkspaceFs = {
       ...nodeWorkspaceFs,
-      readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+      readFileBytes: async (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): Promise<Uint8Array> => {
         byteProbeCalls += 1;
-        return await readFileBytes(absolutePath, maxBytes, hardLinkPolicy);
+        return await readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
       },
     };
 
@@ -2541,9 +2633,14 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     }
     const fs: WorkspaceFs = {
       ...nodeWorkspaceFs,
-      readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+      readFileBytes: async (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): Promise<Uint8Array> => {
         byteProbeCalls += 1;
-        return await readFileBytes(absolutePath, maxBytes, hardLinkPolicy);
+        return await readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
       },
     };
 
@@ -2570,9 +2667,14 @@ describe("repoSearch (mkdtemp / real fs)", () => {
       }
       const fs: WorkspaceFs = {
         ...nodeWorkspaceFs,
-        readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+        readFileBytes: async (
+          absolutePath,
+          maxBytes,
+          hardLinkPolicy,
+          expected,
+        ): Promise<Uint8Array> => {
           byteProbeCalls += 1;
-          return await readFileBytes(absolutePath, maxBytes, hardLinkPolicy);
+          return await readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
         },
       };
 
@@ -2653,12 +2755,12 @@ describe("IO-error resilience (Audit Finding 1 – scan path)", () => {
     });
     const fs: WorkspaceFs = {
       ...baseFs,
-      readFileBytes: (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+      readFileBytes: (absolutePath, maxBytes, hardLinkPolicy, expected): Promise<Uint8Array> => {
         if (absolutePath.includes("secret.ts")) {
           return Promise.reject(makeErrnoError("EACCES"));
         }
         if (baseFs.readFileBytes !== undefined) {
-          return baseFs.readFileBytes(absolutePath, maxBytes, hardLinkPolicy);
+          return baseFs.readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
         }
         return Promise.resolve(new Uint8Array());
       },
@@ -2687,12 +2789,12 @@ describe("IO-error resilience (Audit Finding 1 – scan path)", () => {
         }
         return baseFs.readFileUtf8(absolutePath);
       },
-      readFileBytes: (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+      readFileBytes: (absolutePath, maxBytes, hardLinkPolicy, expected): Promise<Uint8Array> => {
         if (absolutePath.includes("secret.ts")) {
           return Promise.reject(makeErrnoError("EACCES"));
         }
         if (baseFs.readFileBytes !== undefined) {
-          return baseFs.readFileBytes(absolutePath, maxBytes, hardLinkPolicy);
+          return baseFs.readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
         }
         return Promise.resolve(new Uint8Array());
       },

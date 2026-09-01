@@ -21,6 +21,7 @@ import { createCodingAppSessionChannel } from "./coding-app-session/sessionChann
 import { handleFilesContent, handleFilesTree, type FilesTreeResponse } from "./files.js";
 import type { RouteContext } from "./routes.js";
 import { deriveManagedWorktreePath } from "./task-workspace/naming.js";
+import { assertManagedRootOwned } from "./task-workspace/managed-root.js";
 import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
 
 const REPOSITORY_ID = "repo_0123456789abcdef";
@@ -95,6 +96,7 @@ function contentPath(path: string): string {
 beforeEach(async (): Promise<void> => {
   fixtureRoot = await mkdtemp(join(tmpdir(), "keiko-files-managed-auth-"));
   managedRoot = join(fixtureRoot, "managed", "task-workspaces");
+  assertManagedRootOwned(managedRoot);
   managedWorktree = deriveManagedWorktreePath({
     managedRoot,
     repositoryId: REPOSITORY_ID,

@@ -1855,8 +1855,9 @@ describe("buildCodeIntelligenceIndex", () => {
       readDir: (absolutePath): ReturnType<WorkspaceFs["readDir"]> =>
         base.readDir(lexicalPath(absolutePath)),
       readFileUtf8: (absolutePath): string => base.readFileUtf8(lexicalPath(absolutePath)),
-      readFileUtf8Prefix: (absolutePath, maxBytes, hardLinkPolicy): string =>
-        base.readFileUtf8Prefix?.(lexicalPath(absolutePath), maxBytes, hardLinkPolicy) ?? "",
+      readFileUtf8Prefix: (absolutePath, maxBytes, hardLinkPolicy, expected): string =>
+        base.readFileUtf8Prefix?.(lexicalPath(absolutePath), maxBytes, hardLinkPolicy, expected) ??
+        "",
       exists: (absolutePath): boolean => base.exists(lexicalPath(absolutePath)),
     };
     const candidates = gatherCandidates(searchScope, DEFAULT_SEARCH_LIMITS, fs);

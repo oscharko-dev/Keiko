@@ -89,7 +89,13 @@ function memoryStat(
         toAbs(root, k).startsWith(`${absolutePath}/`),
       );
       if (hasChildren || absolutePath === root) {
-        return { size: 0, isFile: false, isDirectory: true, isSymbolicLink: false };
+        return {
+          size: 0,
+          isFile: false,
+          isDirectory: true,
+          isSymbolicLink: false,
+          fileIdentity: `memory:${absolutePath}`,
+        };
       }
       throw new Error(`ENOENT: ${absolutePath}`);
     }
@@ -99,6 +105,7 @@ function memoryStat(
       isDirectory: false,
       isSymbolicLink: map.get(key)?.isSymbolicLink ?? false,
       hardLinkCount: map.get(key)?.hardLinkCount,
+      fileIdentity: `memory:${absolutePath}`,
     };
   };
 }

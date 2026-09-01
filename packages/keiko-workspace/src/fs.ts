@@ -14,10 +14,10 @@ import {
   readFileSync,
   readSync,
   realpathSync,
-  statSync,
   type BigIntStats,
 } from "node:fs";
 import { lstat, open, type FileHandle } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export interface WorkspaceStat {
   readonly size: number;
@@ -33,7 +33,7 @@ export interface WorkspaceStat {
 }
 
 export type WorkspaceDescriptorReadFailureReason =
-  "changed" | "hard-link" | "not-regular" | "symbolic-link" | "too-large";
+  "changed" | "hard-link" | "not-regular" | "outside-root" | "symbolic-link" | "too-large";
 
 export class WorkspaceDescriptorReadError extends Error {
   public constructor(
@@ -53,6 +53,9 @@ export interface WorkspaceDescriptorUtf8Read {
 
 /** The owning read lane must declare whether a stable hard link is within its authority. */
 export type WorkspaceHardLinkPolicy = "allow" | "reject";
+
+/** Whether a bounded descriptor read must consume the complete file or may return a prefix. */
+export type WorkspaceDescriptorReadCompleteness = "complete" | "prefix";
 
 export interface WorkspaceDirEntry {
   readonly name: string;
@@ -75,6 +78,16 @@ export interface WorkspaceFs {
     absolutePath: string,
     maxBytes: number,
     hardLinkPolicy: WorkspaceHardLinkPolicy,
+    expected: WorkspaceStat,
+  ) => WorkspaceDescriptorUtf8Read;
+  // Privileged metadata readers use this lane so canonical containment, every parent-directory
+  // identity, and the opened file descriptor form one fail-closed operation.
+  readonly readFileUtf8WithinRootSameDescriptor?: (
+    canonicalRoot: string,
+    absolutePath: string,
+    maxBytes: number,
+    hardLinkPolicy: WorkspaceHardLinkPolicy,
+    completeness: WorkspaceDescriptorReadCompleteness,
   ) => WorkspaceDescriptorUtf8Read;
   readonly stat: (absolutePath: string) => WorkspaceStat;
   readonly readDir: (absolutePath: string, maxEntries?: number) => readonly WorkspaceDirEntry[];
@@ -91,6 +104,7 @@ export interface WorkspaceFs {
     absolutePath: string,
     maxBytes: number,
     hardLinkPolicy: WorkspaceHardLinkPolicy,
+    expected: WorkspaceStat,
   ) => Promise<Uint8Array>;
   // Optional synchronous bounded UTF-8 prefix read for synchronous indexers. This must never be used
   // before the caller has applied the normal workspace containment and deny gates.
@@ -98,6 +112,7 @@ export interface WorkspaceFs {
     absolutePath: string,
     maxBytes: number,
     hardLinkPolicy: WorkspaceHardLinkPolicy,
+    expected: WorkspaceStat,
   ) => string;
   // Optional bounded range read over [startByte, startByte + length). Large-document parsers use
   // this instead of materializing the full raw file at the workspace boundary.
@@ -106,17 +121,125 @@ export interface WorkspaceFs {
     startByte: number,
     length: number,
     hardLinkPolicy: WorkspaceHardLinkPolicy,
+    expected: WorkspaceStat,
   ) => Promise<Uint8Array>;
   // Optional reusable raw-byte reader. Streaming callers use this when a single response should
   // hold one file descriptor instead of re-opening the file for every bounded range read.
   readonly openFileReader?: (
     absolutePath: string,
     hardLinkPolicy: WorkspaceHardLinkPolicy,
+    expected: WorkspaceStat,
   ) => Promise<WorkspaceFileReader>;
 }
 
-function isSymlink(absolutePath: string): boolean {
-  return lstatSync(absolutePath, { throwIfNoEntry: false })?.isSymbolicLink() ?? false;
+function forwardedSynchronousReads(fs: WorkspaceFs): Partial<WorkspaceFs> {
+  const descriptorRead = fs.readFileUtf8SameDescriptor;
+  const containedDescriptorRead = fs.readFileUtf8WithinRootSameDescriptor;
+  const prefixRead = fs.readFileUtf8Prefix;
+  return {
+    ...(descriptorRead === undefined
+      ? {}
+      : {
+          readFileUtf8SameDescriptor: (
+            path: string,
+            maxBytes: number,
+            policy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
+          ): WorkspaceDescriptorUtf8Read =>
+            descriptorRead.call(fs, path, maxBytes, policy, expected),
+        }),
+    ...(containedDescriptorRead === undefined
+      ? {}
+      : {
+          readFileUtf8WithinRootSameDescriptor: (
+            root: string,
+            path: string,
+            maxBytes: number,
+            policy: WorkspaceHardLinkPolicy,
+            completeness: WorkspaceDescriptorReadCompleteness,
+          ): WorkspaceDescriptorUtf8Read =>
+            containedDescriptorRead.call(fs, root, path, maxBytes, policy, completeness),
+        }),
+    ...(prefixRead === undefined
+      ? {}
+      : {
+          readFileUtf8Prefix: (
+            path: string,
+            maxBytes: number,
+            policy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
+          ): string => prefixRead.call(fs, path, maxBytes, policy, expected),
+        }),
+  };
+}
+
+function forwardedAsynchronousReads(fs: WorkspaceFs): Partial<WorkspaceFs> {
+  const byteRead = fs.readFileBytes;
+  const rangeRead = fs.readFileRange;
+  return {
+    ...(byteRead === undefined
+      ? {}
+      : {
+          readFileBytes: (
+            path: string,
+            maxBytes: number,
+            policy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
+          ): Promise<Uint8Array> => byteRead.call(fs, path, maxBytes, policy, expected),
+        }),
+    ...(rangeRead === undefined
+      ? {}
+      : {
+          readFileRange: (
+            path: string,
+            startByte: number,
+            length: number,
+            policy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
+          ): Promise<Uint8Array> => rangeRead.call(fs, path, startByte, length, policy, expected),
+        }),
+  };
+}
+
+function forwardedOptionalOperations(
+  fs: WorkspaceFs,
+  canonicalRoot: WorkspaceFs["canonicalWorkspaceRoot"],
+): Partial<WorkspaceFs> {
+  const openReader = fs.openFileReader;
+  return {
+    ...(canonicalRoot === undefined
+      ? {}
+      : {
+          canonicalWorkspaceRoot: (root: string): string => canonicalRoot.call(fs, root),
+        }),
+    ...(openReader === undefined
+      ? {}
+      : {
+          openFileReader: (
+            path: string,
+            policy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
+          ): Promise<WorkspaceFileReader> => openReader.call(fs, path, policy, expected),
+        }),
+  };
+}
+
+/** Builds a plain method-complete port without losing a class/prototype adapter's receiver. */
+export function forwardWorkspaceFs(
+  fs: WorkspaceFs,
+  canonicalRoot: WorkspaceFs["canonicalWorkspaceRoot"] = fs.canonicalWorkspaceRoot,
+): WorkspaceFs {
+  return {
+    readFileUtf8: (path): string => fs.readFileUtf8.call(fs, path),
+    stat: (path): WorkspaceStat => fs.stat.call(fs, path),
+    readDir: (path, maxEntries): readonly WorkspaceDirEntry[] =>
+      fs.readDir.call(fs, path, maxEntries),
+    realPath: (path): string => fs.realPath.call(fs, path),
+    exists: (path): boolean => fs.exists.call(fs, path),
+    ...forwardedSynchronousReads(fs),
+    ...forwardedAsynchronousReads(fs),
+    ...forwardedOptionalOperations(fs, canonicalRoot),
+  };
 }
 
 function workspaceStat(stats: BigIntStats, isSymbolicLink: boolean): WorkspaceStat {
@@ -134,6 +257,76 @@ function workspaceStat(stats: BigIntStats, isSymbolicLink: boolean): WorkspaceSt
   };
 }
 
+function sameWorkspaceStat(left: WorkspaceStat, right: WorkspaceStat): boolean {
+  return [
+    left.size === right.size,
+    left.isFile === right.isFile,
+    left.isDirectory === right.isDirectory,
+    left.isSymbolicLink === right.isSymbolicLink,
+    left.hardLinkCount === right.hardLinkCount,
+    left.fileIdentity === right.fileIdentity,
+    (left.mtimeNs ?? left.mtimeMs) === (right.mtimeNs ?? right.mtimeMs),
+    (left.ctimeNs ?? left.ctimeMs) === (right.ctimeNs ?? right.ctimeMs),
+  ].every(Boolean);
+}
+
+const WINDOWS_ABSOLUTE_PATH = /^(?:[A-Za-z]:[\\/]|\\\\)/u;
+
+function normalizedWorkspacePath(path: string): string {
+  return process.platform === "win32" || WINDOWS_ABSOLUTE_PATH.test(path)
+    ? path.replaceAll("\\", "/")
+    : path;
+}
+
+/** Revalidates the pathname, canonical identity, and metadata snapshot after a guarded read. */
+export function isWorkspacePathSnapshotCurrent(
+  fs: WorkspaceFs,
+  requestedPath: string,
+  canonicalPath: string,
+  expected: WorkspaceStat,
+): boolean {
+  try {
+    return (
+      normalizedWorkspacePath(fs.realPath(requestedPath)) ===
+        normalizedWorkspacePath(canonicalPath) &&
+      sameWorkspaceStat(expected, fs.stat(canonicalPath))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function sameKnownSnapshotValue(left: unknown, right: unknown): boolean {
+  return left === undefined || right === undefined || left === right;
+}
+
+function expectedDescriptorSnapshotMatches(expected: WorkspaceStat, actual: BigIntStats): boolean {
+  const observed = workspaceStat(actual, actual.isSymbolicLink());
+  return [
+    expected.isFile === observed.isFile,
+    expected.isDirectory === observed.isDirectory,
+    expected.isSymbolicLink === observed.isSymbolicLink,
+    expected.size === observed.size,
+    expected.fileIdentity !== undefined,
+    expected.fileIdentity === observed.fileIdentity,
+    sameKnownSnapshotValue(expected.hardLinkCount, observed.hardLinkCount),
+    sameKnownSnapshotValue(
+      expected.mtimeNs ?? expected.mtimeMs,
+      expected.mtimeNs === undefined ? observed.mtimeMs : observed.mtimeNs,
+    ),
+    sameKnownSnapshotValue(
+      expected.ctimeNs ?? expected.ctimeMs,
+      expected.ctimeNs === undefined ? observed.ctimeMs : observed.ctimeNs,
+    ),
+  ].every(Boolean);
+}
+
+function assertExpectedDescriptorSnapshot(expected: WorkspaceStat, actual: BigIntStats): void {
+  if (!expectedDescriptorSnapshotMatches(expected, actual)) {
+    throw new WorkspaceDescriptorReadError("changed");
+  }
+}
+
 function sameDescriptorSnapshot(left: BigIntStats, right: BigIntStats): boolean {
   return (
     left.dev === right.dev &&
@@ -144,6 +337,102 @@ function sameDescriptorSnapshot(left: BigIntStats, right: BigIntStats): boolean 
     left.mtimeNs === right.mtimeNs &&
     left.ctimeNs === right.ctimeNs
   );
+}
+
+interface DescriptorPathSnapshot {
+  readonly path: string;
+  readonly stat: BigIntStats;
+}
+
+interface DescriptorLineageSnapshot {
+  readonly entries: readonly DescriptorPathSnapshot[];
+  readonly root: string;
+  readonly target: string;
+}
+
+function containedLineagePaths(canonicalRoot: string, absolutePath: string): readonly string[] {
+  const root = resolve(canonicalRoot);
+  const target = resolve(absolutePath);
+  const relativePath = relative(root, target);
+  if (
+    relativePath.length === 0 ||
+    isAbsolute(relativePath) ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${sep}`)
+  ) {
+    throw new WorkspaceDescriptorReadError("outside-root");
+  }
+  const paths = [root];
+  let current = root;
+  for (const segment of relativePath.split(sep)) {
+    current = join(current, segment);
+    paths.push(current);
+  }
+  return paths;
+}
+
+function assertLineageEntry(
+  stats: BigIntStats,
+  isTarget: boolean,
+  hardLinkPolicy: WorkspaceHardLinkPolicy,
+): void {
+  if (stats.isSymbolicLink()) throw new WorkspaceDescriptorReadError("symbolic-link");
+  if (isTarget) {
+    assertReadableDescriptor(stats, hardLinkPolicy);
+  } else if (!stats.isDirectory()) {
+    throw new WorkspaceDescriptorReadError("not-regular");
+  }
+}
+
+function captureDescriptorLineage(
+  canonicalRoot: string,
+  absolutePath: string,
+  hardLinkPolicy: WorkspaceHardLinkPolicy,
+): DescriptorLineageSnapshot {
+  const paths = containedLineagePaths(canonicalRoot, absolutePath);
+  const entries = paths.map((path, index): DescriptorPathSnapshot => {
+    const stat = lstatSync(path, { bigint: true, throwIfNoEntry: true });
+    assertLineageEntry(stat, index === paths.length - 1, hardLinkPolicy);
+    return { path, stat };
+  });
+  return { entries, root: paths[0] ?? canonicalRoot, target: paths.at(-1) ?? absolutePath };
+}
+
+function sameDescriptorLineage(
+  reference: DescriptorLineageSnapshot,
+  candidate: DescriptorLineageSnapshot,
+): boolean {
+  return (
+    reference.root === candidate.root &&
+    reference.target === candidate.target &&
+    reference.entries.length === candidate.entries.length &&
+    reference.entries.every((entry, index) => {
+      const other = candidate.entries[index];
+      if (other === undefined) return false;
+      return entry.path === other.path && sameDescriptorSnapshot(entry.stat, other.stat);
+    })
+  );
+}
+
+function assertCanonicalDescriptorLineage(lineage: DescriptorLineageSnapshot): void {
+  if (
+    realpathSync.native(lineage.root) !== lineage.root ||
+    realpathSync.native(lineage.target) !== lineage.target
+  ) {
+    throw new WorkspaceDescriptorReadError("changed");
+  }
+}
+
+function authorizeDescriptorLineage(
+  canonicalRoot: string,
+  absolutePath: string,
+  hardLinkPolicy: WorkspaceHardLinkPolicy,
+): DescriptorLineageSnapshot {
+  const before = captureDescriptorLineage(canonicalRoot, absolutePath, hardLinkPolicy);
+  assertCanonicalDescriptorLineage(before);
+  const after = captureDescriptorLineage(canonicalRoot, absolutePath, hardLinkPolicy);
+  if (!sameDescriptorLineage(before, after)) throw new WorkspaceDescriptorReadError("changed");
+  return after;
 }
 
 function boundedReadCap(maxBytes: number): number {
@@ -240,11 +529,30 @@ function readFileBytesSameDescriptor(
   maxBytes: number,
   requireComplete: boolean,
   hardLinkPolicy: WorkspaceHardLinkPolicy,
+  expected: WorkspaceStat,
 ): DescriptorByteRead {
-  const cap = boundedReadCap(maxBytes);
   const pathBefore = lstatSync(absolutePath, { bigint: true, throwIfNoEntry: true });
   if (pathBefore.isSymbolicLink()) throw new WorkspaceDescriptorReadError("symbolic-link");
   assertReadableDescriptor(pathBefore, hardLinkPolicy);
+  assertExpectedDescriptorSnapshot(expected, pathBefore);
+  return readFileBytesFromExpectedDescriptor(
+    absolutePath,
+    maxBytes,
+    requireComplete,
+    hardLinkPolicy,
+    pathBefore,
+  );
+}
+
+function readFileBytesFromExpectedDescriptor(
+  absolutePath: string,
+  maxBytes: number,
+  requireComplete: boolean,
+  hardLinkPolicy: WorkspaceHardLinkPolicy,
+  pathBefore: BigIntStats,
+  assertLineageAfter?: () => void,
+): DescriptorByteRead {
+  const cap = boundedReadCap(maxBytes);
   const fd = openNoFollow(absolutePath);
   try {
     const before = fstatSync(fd, { bigint: true });
@@ -268,19 +576,47 @@ function readFileBytesSameDescriptor(
     ) {
       throw new WorkspaceDescriptorReadError("changed");
     }
+    assertLineageAfter?.();
     return { bytes, stat: workspaceStat(after, false) };
   } finally {
     closeSync(fd);
   }
 }
 
+function readFileUtf8WithinRootSameDescriptor(
+  canonicalRoot: string,
+  absolutePath: string,
+  maxBytes: number,
+  hardLinkPolicy: WorkspaceHardLinkPolicy,
+  completeness: WorkspaceDescriptorReadCompleteness,
+): WorkspaceDescriptorUtf8Read {
+  const lineage = authorizeDescriptorLineage(canonicalRoot, absolutePath, hardLinkPolicy);
+  const target = lineage.entries.at(-1);
+  if (target === undefined) throw new WorkspaceDescriptorReadError("outside-root");
+  const read = readFileBytesFromExpectedDescriptor(
+    lineage.target,
+    maxBytes,
+    completeness === "complete",
+    hardLinkPolicy,
+    target.stat,
+    (): void => {
+      const after = captureDescriptorLineage(canonicalRoot, absolutePath, hardLinkPolicy);
+      if (!sameDescriptorLineage(lineage, after)) {
+        throw new WorkspaceDescriptorReadError("changed");
+      }
+    },
+  );
+  return { rawText: read.bytes.toString("utf8"), sizeBytes: read.bytes.length, stat: read.stat };
+}
+
 async function readFileBytesSameDescriptorAsync(
   absolutePath: string,
   maxBytes: number,
   hardLinkPolicy: WorkspaceHardLinkPolicy,
+  expected: WorkspaceStat,
 ): Promise<DescriptorByteRead> {
   const cap = boundedReadCap(maxBytes);
-  const descriptor = await openValidatedFileDescriptor(absolutePath, hardLinkPolicy);
+  const descriptor = await openValidatedFileDescriptor(absolutePath, hardLinkPolicy, expected);
   try {
     const expectedBytes = descriptorReadLength(descriptor.snapshot.size, cap);
     const bytes = await readDescriptorBytesAsync(descriptor.handle, expectedBytes);
@@ -295,10 +631,12 @@ async function readFileBytesSameDescriptorAsync(
 async function openValidatedFileDescriptor(
   absolutePath: string,
   hardLinkPolicy: WorkspaceHardLinkPolicy,
+  expected: WorkspaceStat,
 ): Promise<ValidatedFileDescriptor> {
   const pathBefore = await lstat(absolutePath, { bigint: true });
   if (pathBefore.isSymbolicLink()) throw new WorkspaceDescriptorReadError("symbolic-link");
   assertReadableDescriptor(pathBefore, hardLinkPolicy);
+  assertExpectedDescriptorSnapshot(expected, pathBefore);
   const handle = await openNoFollowAsync(absolutePath);
   try {
     const before = await handle.stat({ bigint: true });
@@ -363,8 +701,9 @@ async function readFileRangeSameDescriptor(
   startByte: number,
   length: number,
   hardLinkPolicy: WorkspaceHardLinkPolicy,
+  expected: WorkspaceStat,
 ): Promise<Uint8Array> {
-  const descriptor = await openValidatedFileDescriptor(absolutePath, hardLinkPolicy);
+  const descriptor = await openValidatedFileDescriptor(absolutePath, hardLinkPolicy, expected);
   try {
     return await readValidatedRange(absolutePath, descriptor, startByte, length);
   } finally {
@@ -375,8 +714,9 @@ async function readFileRangeSameDescriptor(
 async function openValidatedFileReader(
   absolutePath: string,
   hardLinkPolicy: WorkspaceHardLinkPolicy,
+  expected: WorkspaceStat,
 ): Promise<WorkspaceFileReader> {
-  const descriptor = await openValidatedFileDescriptor(absolutePath, hardLinkPolicy);
+  const descriptor = await openValidatedFileDescriptor(absolutePath, hardLinkPolicy, expected);
   let closed = false;
   return {
     readRange: (startByte: number, length: number): Promise<Uint8Array> =>
@@ -393,8 +733,9 @@ function readFileUtf8SameDescriptor(
   absolutePath: string,
   maxBytes: number,
   hardLinkPolicy: WorkspaceHardLinkPolicy,
+  expected: WorkspaceStat,
 ): WorkspaceDescriptorUtf8Read {
-  const read = readFileBytesSameDescriptor(absolutePath, maxBytes, true, hardLinkPolicy);
+  const read = readFileBytesSameDescriptor(absolutePath, maxBytes, true, hardLinkPolicy, expected);
   return { rawText: read.bytes.toString("utf8"), sizeBytes: read.bytes.length, stat: read.stat };
 }
 
@@ -462,9 +803,10 @@ function readDirectoryEntries(
 export const nodeWorkspaceFs: WorkspaceFs = {
   readFileUtf8: (absolutePath: string): string => readFileSync(absolutePath, "utf8"),
   readFileUtf8SameDescriptor,
+  readFileUtf8WithinRootSameDescriptor,
   stat: (absolutePath: string): WorkspaceStat => {
-    const stats = statSync(absolutePath, { bigint: true, throwIfNoEntry: true });
-    return workspaceStat(stats, isSymlink(absolutePath));
+    const stats = lstatSync(absolutePath, { bigint: true, throwIfNoEntry: true });
+    return workspaceStat(stats, stats.isSymbolicLink());
   },
   readDir: (absolutePath: string, maxEntries?: number): readonly WorkspaceDirEntry[] =>
     readDirectoryEntries(absolutePath, maxEntries),
@@ -474,7 +816,7 @@ export const nodeWorkspaceFs: WorkspaceFs = {
   realPath: (absolutePath: string): string => realpathSync.native(absolutePath),
   exists: (absolutePath: string): boolean => {
     try {
-      return statSync(absolutePath, { throwIfNoEntry: false }) !== undefined;
+      return lstatSync(absolutePath, { throwIfNoEntry: false }) !== undefined;
     } catch {
       return false;
     }
@@ -483,20 +825,24 @@ export const nodeWorkspaceFs: WorkspaceFs = {
     absolutePath: string,
     maxBytes: number,
     hardLinkPolicy: WorkspaceHardLinkPolicy,
+    expected: WorkspaceStat,
   ): Promise<Uint8Array> =>
     Uint8Array.from(
-      (await readFileBytesSameDescriptorAsync(absolutePath, maxBytes, hardLinkPolicy)).bytes,
+      (await readFileBytesSameDescriptorAsync(absolutePath, maxBytes, hardLinkPolicy, expected))
+        .bytes,
     ),
   readFileUtf8Prefix: (
     absolutePath: string,
     maxBytes: number,
     hardLinkPolicy: WorkspaceHardLinkPolicy,
+    expected: WorkspaceStat,
   ): string => {
     const read = readFileBytesSameDescriptor(
       absolutePath,
       boundedReadCap(maxBytes),
       false,
       hardLinkPolicy,
+      expected,
     );
     return read.bytes.toString("utf8").replace(/\uFFFD$/u, "");
   },
@@ -505,7 +851,8 @@ export const nodeWorkspaceFs: WorkspaceFs = {
     startByte: number,
     length: number,
     hardLinkPolicy: WorkspaceHardLinkPolicy,
+    expected: WorkspaceStat,
   ): Promise<Uint8Array> =>
-    readFileRangeSameDescriptor(absolutePath, startByte, length, hardLinkPolicy),
+    readFileRangeSameDescriptor(absolutePath, startByte, length, hardLinkPolicy, expected),
   openFileReader: openValidatedFileReader,
 };

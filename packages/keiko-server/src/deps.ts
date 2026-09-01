@@ -75,7 +75,11 @@ import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/cod
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type { IncomingMessage } from "node:http";
 import type { DatabaseSync } from "node:sqlite";
-import { detectWorkspaceAt, isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
+import {
+  detectWorkspaceAt,
+  isWithinWorkspace,
+  resolveExistingAllowedWorkspaceRealRoot,
+} from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
@@ -118,6 +122,12 @@ import {
   createVerificationRunnerManager,
   type VerificationRunnerManager,
 } from "./editor/verificationRunner.js";
+import {
+  createOrdinaryWorkspaceRootAccess,
+  requiresConfiguredManagedWorkspaceAuthority,
+  resolveManagedWorkspaceRootAccess,
+  type WorkspaceRootAccess,
+} from "./task-workspace/workspace-root-access.js";
 import {
   createWorkspaceScriptTrustService,
   type WorkspaceScriptTrustService,
@@ -194,11 +204,12 @@ function logWorktreeTermination(
 function createGitWorktreeAdapterFactory(
   processEnv: NodeJS.ProcessEnv | undefined,
 ): WorkspaceProvisioningServiceDeps["createAdapter"] {
-  return (workspace, correlationId) =>
+  return (workspace, correlationId, fs) =>
     createNodeGitWorktreeAdapter({
       workspace,
       processEnv,
       onTerminated: logWorktreeTermination(correlationId),
+      ...(fs === undefined ? {} : { fs }),
     });
 }
 
@@ -804,6 +815,9 @@ export interface UiHandlerDeps {
   // The Keiko-owned managed worktree root that backs workspaceProvisioning. Routes that accept a
   // task-bound activeRoot as their execution root use this to re-prove containment before authorizing.
   readonly managedTaskWorkspaceRoot?: string | undefined;
+  /** Re-proves exact ordinary or managed workspace authority at an operation's effect boundary. */
+  readonly workspaceRootAccessResolver?:
+    ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
   // Issue #446 (Epic #443, ADR-0090) — active task-workspace binding + lifecycle service. Owns the
   // singleton active pointer and the switch/pause/resume/handoff actions surfaces consume. Optional so
   // legacy tests that do not exercise the active-binding routes keep their fixtures unchanged;
@@ -1598,12 +1612,14 @@ function buildTerminalManager(options: {
   readonly env: EnvSource;
   readonly liveRedactor: Redactor;
   readonly diagnostics: ServerDiagnosticSink | undefined;
+  readonly resolveWorkspaceRootAccess: WorkspaceRootAccessResolver;
 }): TerminalExecutionManager {
   return createTerminalExecutionManager({
     store: options.store,
     evidenceStore: options.evidenceStore,
     processEnv: options.env,
     diagnostics: options.diagnostics,
+    resolveWorkspaceRootAccess: options.resolveWorkspaceRootAccess,
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
@@ -1621,12 +1637,14 @@ function buildCommandRunner(options: {
   readonly liveRedactor: Redactor;
   readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly workspaceScriptTrust: WorkspaceScriptTrustService;
+  readonly resolveWorkspaceRootAccess: WorkspaceRootAccessResolver;
 }): CommandRunnerManager {
   return createCommandRunnerManager({
     store: options.store,
     evidenceStore: options.evidenceStore,
     processEnv: options.env,
     diagnostics: options.diagnostics,
+    resolveWorkspaceRootAccess: options.resolveWorkspaceRootAccess,
     isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
       options.workspaceScriptTrust.isTrusted(projectId, workspace),
     redactor: (value: string): string => {
@@ -1649,11 +1667,13 @@ function buildVerificationRunner(options: {
   readonly liveRedactor: Redactor;
   readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly workspaceScriptTrust: WorkspaceScriptTrustService;
+  readonly resolveWorkspaceRootAccess: WorkspaceRootAccessResolver;
 }): VerificationRunnerManager {
   return createVerificationRunnerManager({
     store: options.store,
     evidenceStore: options.evidenceStore,
     diagnostics: options.diagnostics,
+    resolveWorkspaceRootAccess: options.resolveWorkspaceRootAccess,
     isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
       options.workspaceScriptTrust.isTrusted(projectId, workspace),
     redactor: (value: string): string => {
@@ -2415,6 +2435,7 @@ interface BuildPeripheralsArgs {
   readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
   readonly runtimeStateDir: string;
   readonly dapRuntime: DapRuntimeReference;
+  readonly resolveWorkspaceRootAccess: WorkspaceRootAccessResolver;
 }
 
 function unavailableDebugDeploymentPolicy(): DebugDeploymentPolicy {
@@ -2884,6 +2905,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       env: args.options.env,
       liveRedactor: args.liveRedactor,
       diagnostics: args.options.diagnostics,
+      resolveWorkspaceRootAccess: args.resolveWorkspaceRootAccess,
     }),
     commandRunner: buildCommandRunner({
       store: args.uiStore,
@@ -2892,6 +2914,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       liveRedactor: args.liveRedactor,
       diagnostics: args.options.diagnostics,
       workspaceScriptTrust,
+      resolveWorkspaceRootAccess: args.resolveWorkspaceRootAccess,
     }),
     verificationRunner: buildVerificationRunner({
       store: args.uiStore,
@@ -2899,6 +2922,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       liveRedactor: args.liveRedactor,
       diagnostics: args.options.diagnostics,
       workspaceScriptTrust,
+      resolveWorkspaceRootAccess: args.resolveWorkspaceRootAccess,
     }),
     workspaceScriptTrust,
     disposeTrustLspBridge,
@@ -3042,6 +3066,24 @@ interface PersistenceBundle {
   readonly managedTaskWorkspaceRoot: string | undefined;
   readonly preferredProjectPath: string | undefined;
   readonly codingRuntimeSnapshotStore: CodingRuntimeSnapshotStore | undefined;
+}
+
+type WorkspaceRootAccessResolver = (requestedRoot: string) => WorkspaceRootAccess | undefined;
+
+function createWorkspaceRootAccessResolver(
+  bundle: Pick<PersistenceBundle, "managedTaskWorkspaceRoot" | "workspaceProvisioning">,
+): WorkspaceRootAccessResolver {
+  return (requestedRoot): WorkspaceRootAccess | undefined => {
+    const managed = resolveManagedWorkspaceRootAccess(bundle, requestedRoot);
+    if (managed !== undefined) return managed;
+    if (requiresConfiguredManagedWorkspaceAuthority(bundle, requestedRoot)) return undefined;
+    try {
+      const canonicalRoot = resolveExistingAllowedWorkspaceRealRoot(nodeWorkspaceFs, requestedRoot);
+      return createOrdinaryWorkspaceRootAccess(canonicalRoot);
+    } catch {
+      return undefined;
+    }
+  };
 }
 
 // The #445–#448 task-workspace services, composed over the shared instance/active-pointer stores. Each
@@ -3233,6 +3275,7 @@ function buildPersistenceBundle(
 // the corresponding routes to degrade to 503, exactly as before.
 function optionalPersistenceServices(bundle: PersistenceBundle): Partial<UiHandlerDeps> {
   return {
+    workspaceRootAccessResolver: createWorkspaceRootAccessResolver(bundle),
     ...(bundle.relationship === undefined ? {} : { relationship: bundle.relationship }),
     ...(bundle.workspaceProvisioning === undefined
       ? {}
@@ -3377,6 +3420,7 @@ function buildAssemblyPeripherals(
   args: UiHandlerDepsAssemblyArgs,
   dapRuntime: DapRuntimeReference,
 ): PeripheralManagers {
+  const resolveWorkspaceRootAccess = createWorkspaceRootAccessResolver(args.bundle);
   return buildPeripherals({
     options: args.options,
     uiStore: args.bundle.uiStore,
@@ -3388,6 +3432,7 @@ function buildAssemblyPeripherals(
     localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     dapRuntime,
+    resolveWorkspaceRootAccess,
   });
 }
 
@@ -4284,6 +4329,7 @@ function qualifiedRuntimeResolver(
 ): ProductionCodingRuntimeResolver {
   const { args } = input;
   const confirmationConsumer = runtimeStartConfirmationConsumer(args, input.activated);
+  const resolveWorkspaceRootAccess = createWorkspaceRootAccessResolver(args.bundle);
   return createProductionCodingRuntimeResolver({
     workspaceAuthority: runtimeWorkspaceAuthority(
       args,
@@ -4295,6 +4341,7 @@ function qualifiedRuntimeResolver(
     commandRunner: input.commandRunner,
     verificationRunner: input.verificationRunner,
     runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker,
+    resolveWorkspaceRootAccess,
     gatewayEgress: () => args.runtimeConfig.current()?.egress ?? args.egress,
     childModelPortFactory:
       args.options.modelPortFactory ?? defaultModelPortFactory(args.runtimeConfig),

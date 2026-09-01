@@ -2,6 +2,8 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -20,6 +22,7 @@ import {
   readWorkspaceFileForEditing,
 } from "./discovery.js";
 import { detectWorkspace, detectWorkspaceAt } from "./detect.js";
+import { memFs } from "./_memfs.js";
 import {
   FileTooLargeError,
   PathDeniedError,
@@ -71,6 +74,7 @@ function fakeWorkspace(root: string): WorkspaceInfo {
 function mutableRootDiscoveryFs(): {
   readonly fs: WorkspaceFs;
   readonly readDirPaths: readonly string[];
+  readonly selectedRootCalls: () => number;
   readonly statCalls: () => number;
 } {
   const readDirPaths: string[] = [];
@@ -90,11 +94,12 @@ function mutableRootDiscoveryFs(): {
       realPath: (path): string => {
         if (path !== "/selected") return path;
         selectedRootCalls += 1;
-        return selectedRootCalls <= 3 ? "/safe/project" : "/safe/.aws";
+        return selectedRootCalls === 1 ? "/safe/project" : "/safe/.aws";
       },
       exists: (): boolean => true,
     },
     readDirPaths,
+    selectedRootCalls: () => selectedRootCalls,
     statCalls: () => statCalls,
   };
 }
@@ -187,6 +192,56 @@ describe("discoverFiles", () => {
     expect(result.stats.maxFilesPruned).toBeGreaterThan(0);
   });
 
+  it("exhausts one global entry budget after the first overflowing sibling directory", () => {
+    const root = "/ws";
+    const readDirPaths: string[] = [];
+    const requestedCaps: (number | undefined)[] = [];
+    const siblingNames = ["large-c", "large-b", "large-a"];
+    const overflowingEntries = Array.from({ length: 100 }, (_, index) => ({
+      name: `entry-${index.toString().padStart(3, "0")}`,
+      isDirectory: true,
+      isFile: false,
+      isSymbolicLink: false,
+    }));
+    const fs: WorkspaceFs = {
+      readFileUtf8: (): string => "",
+      stat: (): WorkspaceStat => ({
+        size: 0,
+        isFile: false,
+        isDirectory: true,
+        isSymbolicLink: false,
+      }),
+      readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+        readDirPaths.push(absolutePath);
+        requestedCaps.push(maxEntries);
+        const entries =
+          absolutePath === root
+            ? siblingNames.map((name) => ({
+                name,
+                isDirectory: true,
+                isFile: false,
+                isSymbolicLink: false,
+              }))
+            : overflowingEntries;
+        return maxEntries === undefined ? entries : entries.slice(0, maxEntries);
+      },
+      realPath: (absolutePath): string => absolutePath,
+      exists: (): boolean => true,
+    };
+
+    const result = discoverCandidateInventory(
+      fakeWorkspace(root),
+      { ...DEFAULT_DISCOVERY_OPTIONS, maxFiles: 8 },
+      fs,
+    );
+
+    expect(result.files).toEqual([]);
+    expect(readDirPaths).toEqual([root, `${root}/large-a`]);
+    expect(requestedCaps).toHaveLength(2);
+    expect(requestedCaps.every((cap) => cap !== undefined)).toBe(true);
+    expect(result.stats.maxFilesPruned).toBeGreaterThan(0);
+  });
+
   it("deterministically rejects an internal flat directory that exceeds the traversal budget", () => {
     const root = join(dir, "candidate-flat-overflow");
     mkdirSync(root);
@@ -274,7 +329,7 @@ describe("discoverFiles", () => {
     mkdirSync(aws);
     writeFileSync(join(aws, "credentials.md"), "aws_secret should never be listed", "utf8");
     symlinkSync(aws, join(dir, "docs"));
-    const ws = detectWorkspaceAt(join(dir, "docs"));
+    const ws = fakeWorkspace(join(dir, "docs"));
     expect(() => discoverFiles(ws, DEFAULT_DISCOVERY_OPTIONS)).toThrow(PathDeniedError);
     expect(() => discoverWithStats(ws, DEFAULT_DISCOVERY_OPTIONS)).toThrow(PathDeniedError);
     await expect(discoverWithStatsAsync(ws, DEFAULT_DISCOVERY_OPTIONS)).rejects.toBeInstanceOf(
@@ -290,11 +345,77 @@ describe("discoverFiles", () => {
     writeFileSync(join(deniedTarget, "notes.md"), "must not be listed", "utf8");
     const linkedRoot = join(lexicalParent, "linked-workspace");
     symlinkSync(deniedTarget, linkedRoot);
-    const workspace = detectWorkspaceAt(linkedRoot);
+    const workspace = fakeWorkspace(linkedRoot);
 
     expect(() => discoverFiles(workspace, DEFAULT_DISCOVERY_OPTIONS)).toThrow(PathDeniedError);
     expect(() => discoverWithStats(workspace, DEFAULT_DISCOVERY_OPTIONS)).toThrow(PathDeniedError);
     expect(() => readWorkspaceFile(workspace, "notes.md")).toThrow(PathDeniedError);
+  });
+
+  it("rejects a directly selected credential root before any workspace read", () => {
+    const credentialRoot = join(dir, ".aws");
+    mkdirSync(credentialRoot);
+    writeFileSync(join(credentialRoot, "credentials"), "must not be read", "utf8");
+    let readDirCalls = 0;
+    let statCalls = 0;
+    let contentReadCalls = 0;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readDir: (): readonly WorkspaceDirEntry[] => {
+        readDirCalls += 1;
+        return [];
+      },
+      stat: (): WorkspaceStat => {
+        statCalls += 1;
+        throw new Error("denied root must not be statted");
+      },
+      readFileUtf8: (): string => {
+        contentReadCalls += 1;
+        return "must not be read";
+      },
+    };
+
+    expect(() =>
+      discoverFiles(fakeWorkspace(credentialRoot), DEFAULT_DISCOVERY_OPTIONS, fs),
+    ).toThrow(PathDeniedError);
+    expect({ readDirCalls, statCalls, contentReadCalls }).toEqual({
+      readDirCalls: 0,
+      statCalls: 0,
+      contentReadCalls: 0,
+    });
+  });
+
+  it("does not re-resolve the lexical root after binding discovery to its admitted identity", () => {
+    const selected = join(dir, "selected");
+    const safe = join(dir, "safe");
+    const denied = join(dir, ".aws");
+    let realPathCalls = 0;
+    let readDirCalls = 0;
+    let statCalls = 0;
+    const base = memFs(selected, {});
+    const fs: WorkspaceFs = {
+      ...base,
+      realPath: (absolutePath): string => {
+        if (absolutePath !== selected) return absolutePath;
+        realPathCalls += 1;
+        return realPathCalls === 1 ? safe : denied;
+      },
+      readDir: (): readonly WorkspaceDirEntry[] => {
+        readDirCalls += 1;
+        return [];
+      },
+      stat: (): WorkspaceStat => {
+        statCalls += 1;
+        return { size: 0, isFile: false, isDirectory: true, isSymbolicLink: false };
+      },
+    };
+
+    expect(discoverFiles(fakeWorkspace(selected), DEFAULT_DISCOVERY_OPTIONS, fs)).toEqual([]);
+    expect({ realPathCalls, readDirCalls, statCalls }).toEqual({
+      realPathCalls: 1,
+      readDirCalls: 1,
+      statCalls: 0,
+    });
   });
 
   it("refuses a root symlink relocated between separate loci of the same denied ancestor", () => {
@@ -305,7 +426,7 @@ describe("discoverFiles", () => {
     writeFileSync(join(deniedTarget, "notes.md"), "must not be listed", "utf8");
     const linkedRoot = join(lexicalParent, "docs");
     symlinkSync(deniedTarget, linkedRoot);
-    const workspace = detectWorkspaceAt(linkedRoot);
+    const workspace = fakeWorkspace(linkedRoot);
 
     expect(() => discoverFiles(workspace, DEFAULT_DISCOVERY_OPTIONS)).toThrow(PathDeniedError);
     expect(() => discoverWithStats(workspace, DEFAULT_DISCOVERY_OPTIONS)).toThrow(PathDeniedError);
@@ -320,6 +441,81 @@ describe("discoverFiles", () => {
     const found = paths(detectWorkspace(dir));
     expect(found).toContain("src/real.ts");
     expect(found).not.toContain("src/alias.ts");
+  });
+
+  it("drops an enumeration when its directory is replaced after entries are returned", () => {
+    file("docs/safe.ts", "SAFE");
+    const outside = mkdtempSync(join(tmpdir(), "keiko-directory-race-outside-"));
+    const documentDirectory = realpathSync(join(dir, "docs"));
+    let swapped = false;
+    try {
+      writeFileSync(join(outside, "private.ts"), "OUTSIDE_PRIVATE_BYTES", "utf8");
+      const fs: WorkspaceFs = {
+        ...nodeWorkspaceFs,
+        readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+          if (!swapped && absolutePath === documentDirectory) {
+            const entries = nodeWorkspaceFs.readDir(outside, maxEntries);
+            renameSync(join(dir, "docs"), join(dir, "docs-original"));
+            symlinkSync(outside, join(dir, "docs"));
+            swapped = true;
+            return entries;
+          }
+          return nodeWorkspaceFs.readDir(absolutePath, maxEntries);
+        },
+      };
+
+      const found = discoverFiles(detectWorkspace(dir), DEFAULT_DISCOVERY_OPTIONS, fs);
+
+      expect(swapped).toBe(true);
+      expect(found.map((entry) => entry.relativePath)).not.toContain("docs/private.ts");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the original canonical root as the authority anchor for the full walk", () => {
+    const root = "/workspace";
+    const safeRoot = "/safe/workspace";
+    let swapped = false;
+    const directoryStat = (fileIdentity: string): WorkspaceStat => ({
+      size: 1,
+      isFile: false,
+      isDirectory: true,
+      isSymbolicLink: false,
+      hardLinkCount: 1,
+      mtimeNs: "1",
+      ctimeNs: "1",
+      fileIdentity,
+    });
+    const fs: WorkspaceFs = {
+      readFileUtf8: (): string => "",
+      stat: (absolutePath): WorkspaceStat =>
+        absolutePath === safeRoot ? directoryStat("1:1") : directoryStat("2:2"),
+      readDir: (absolutePath): readonly WorkspaceDirEntry[] => {
+        if (absolutePath === safeRoot) {
+          swapped = true;
+          return [
+            {
+              name: "private.ts",
+              isDirectory: false,
+              isFile: true,
+              isSymbolicLink: false,
+            },
+          ];
+        }
+        return [];
+      },
+      realPath: (absolutePath): string => {
+        if (absolutePath === root) return swapped ? "/outside/workspace" : safeRoot;
+        return absolutePath;
+      },
+      exists: (): boolean => true,
+    };
+
+    const found = discoverFiles(fakeWorkspace(root), DEFAULT_DISCOVERY_OPTIONS, fs);
+
+    expect(swapped).toBe(true);
+    expect(found).toEqual([]);
   });
 
   it("tolerates an unreadable subdirectory without throwing", () => {
@@ -344,20 +540,43 @@ describe("discoverFiles", () => {
     expect(discoverFiles(fakeWorkspace(root), DEFAULT_DISCOVERY_OPTIONS, fs)).toEqual([]);
   });
 
-  it("keeps unavailable-root discovery tolerant", () => {
+  it("keeps public unavailable-root discovery tolerant without probing the root", async () => {
+    let readDirCalls = 0;
+    let statCalls = 0;
+    let contentReadCalls = 0;
     const fs: WorkspaceFs = {
-      readFileUtf8: (): string => "",
+      readFileUtf8: (): string => {
+        contentReadCalls += 1;
+        return "";
+      },
       stat: (): never => {
+        statCalls += 1;
         throw new Error("unavailable root must not be statted");
       },
-      readDir: (): readonly WorkspaceDirEntry[] => [],
+      readDir: (): readonly WorkspaceDirEntry[] => {
+        readDirCalls += 1;
+        return [];
+      },
       realPath: (): never => {
         throw new Error("EACCES");
       },
       exists: (): boolean => false,
     };
+    const workspace = fakeWorkspace("/unavailable");
 
-    expect(discoverFiles(fakeWorkspace("/unavailable"), DEFAULT_DISCOVERY_OPTIONS, fs)).toEqual([]);
+    expect(discoverFiles(workspace, DEFAULT_DISCOVERY_OPTIONS, fs)).toEqual([]);
+    expect(discoverWithStats(workspace, DEFAULT_DISCOVERY_OPTIONS, fs).files).toEqual([]);
+    expect((await discoverWithStatsAsync(workspace, DEFAULT_DISCOVERY_OPTIONS, fs)).files).toEqual(
+      [],
+    );
+    expect(() => discoverCandidateInventory(workspace, DEFAULT_DISCOVERY_OPTIONS, fs)).toThrow(
+      WorkspaceReadError,
+    );
+    expect({ readDirCalls, statCalls, contentReadCalls }).toEqual({
+      readDirCalls: 0,
+      statCalls: 0,
+      contentReadCalls: 0,
+    });
   });
 
   it("enumerates only the admitted canonical root when the lexical alias changes", () => {
@@ -365,10 +584,11 @@ describe("discoverFiles", () => {
 
     expect(
       discoverFiles(fakeWorkspace("/selected"), DEFAULT_DISCOVERY_OPTIONS, measured.fs),
-    ).toEqual([]);
+    ).toEqual([{ relativePath: "safe.ts", sizeBytes: 1 }]);
     expect(measured.readDirPaths).toEqual(["/safe/project"]);
     expect(measured.readDirPaths).not.toContain("/selected");
-    expect(measured.statCalls()).toBe(0);
+    expect(measured.selectedRootCalls()).toBe(1);
+    expect(measured.statCalls()).toBe(1);
   });
 
   it("enumerates only the admitted canonical root in asynchronous discovery", async () => {
@@ -379,10 +599,11 @@ describe("discoverFiles", () => {
       DEFAULT_DISCOVERY_OPTIONS,
       measured.fs,
     );
-    expect(result.files).toEqual([]);
+    expect(result.files).toEqual([{ relativePath: "safe.ts", sizeBytes: 1 }]);
     expect(measured.readDirPaths).toEqual(["/safe/project"]);
     expect(measured.readDirPaths).not.toContain("/selected");
-    expect(measured.statCalls()).toBe(0);
+    expect(measured.selectedRootCalls()).toBe(1);
+    expect(measured.statCalls()).toBe(1);
   });
 
   it("reports denied and ignored counts via discoverWithStats", () => {
@@ -605,6 +826,46 @@ describe("readWorkspaceFile", () => {
     expect(readCalls).toBe(0);
   });
 
+  it("fails closed before probing a file when the workspace root is unavailable", () => {
+    let statCalls = 0;
+    let readCalls = 0;
+    let existsCalls = 0;
+    const fs: WorkspaceFs = {
+      readFileUtf8: (): string => {
+        readCalls += 1;
+        return "must not be read";
+      },
+      stat: (): WorkspaceStat => {
+        statCalls += 1;
+        return { size: 16, isFile: true, isDirectory: false, isSymbolicLink: false };
+      },
+      readDir: (): readonly WorkspaceDirEntry[] => [],
+      realPath: (path): string => {
+        if (path === "/selected") throw new Error("EACCES /private/customer/.aws");
+        return "/safe/project/selected.ts";
+      },
+      exists: (): boolean => {
+        existsCalls += 1;
+        return true;
+      },
+    };
+
+    let failure: unknown;
+    try {
+      readWorkspaceFile(fakeWorkspace("/selected"), "selected.ts", { maxBytes: 100 }, fs);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(WorkspaceReadError);
+    expect(failure).toBeInstanceOf(Error);
+    if (failure instanceof Error) expect(failure.message).not.toContain("/private/customer/.aws");
+    expect({ statCalls, readCalls, existsCalls }).toEqual({
+      statCalls: 0,
+      readCalls: 0,
+      existsCalls: 0,
+    });
+  });
+
   it("refuses to read inside a benign-named root that is a symlink into a denied dir", () => {
     // A directory symlink whose name is innocuous ("docs") but whose REAL target is a denied
     // credential dir (".aws") must not read through: the relative deny checks only see the basename,
@@ -613,16 +874,13 @@ describe("readWorkspaceFile", () => {
     mkdirSync(aws);
     writeFileSync(join(aws, "config.md"), "aws_session_token opaque-bare-token-not-shaped", "utf8");
     symlinkSync(aws, join(dir, "docs")); // benign-named link -> denied real dir
-    expect(() => readWorkspaceFile(detectWorkspaceAt(join(dir, "docs")), "config.md")).toThrow(
+    expect(() => readWorkspaceFile(fakeWorkspace(join(dir, "docs")), "config.md")).toThrow(
       PathDeniedError,
     );
   });
 
-  it("still reads a root whose own path contains a denied-named ANCESTOR but is not symlinked", () => {
-    // False-positive guard: a non-symlinked root that merely sits under a denied-named ancestor (e.g.
-    // the product's own ".cache"/".claude" worktree) must keep working. Its canonical and lexical
-    // roots are identical, so no denied locus was introduced or relocated by a symlink.
-    const nested = join(dir, ".cache", "proj");
+  it("still reads an admitted Codex worktree below its denied internal-state ancestor", () => {
+    const nested = join(dir, ".codex", "worktrees", "task", "project");
     mkdirSync(nested, { recursive: true });
     writeFileSync(join(nested, "notes.md"), "ordinary project notes", "utf8");
     const content = readWorkspaceFile(detectWorkspaceAt(nested), "notes.md");
@@ -842,6 +1100,40 @@ describe("readWorkspaceFileForEditing", () => {
       expect(() =>
         readWorkspaceFileForEditing(detectWorkspace(dir), "safe.ts", { maxBytes: 1_024 }, fs),
       ).toThrow(PathDeniedError);
+      expect(swapped).toBe(true);
+      expect(legacyReadCalled).toBe(false);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a parent directory swapped to an outside symlink after preflight", () => {
+    file("docs/safe.ts", "SAFE");
+    const outside = mkdtempSync(join(tmpdir(), "keiko-parent-race-outside-"));
+    let swapped = false;
+    let legacyReadCalled = false;
+    try {
+      writeFileSync(join(outside, "safe.ts"), "OUTSIDE_PRIVATE_BYTES", "utf8");
+      const fs: WorkspaceFs = {
+        ...nodeWorkspaceFs,
+        readFileUtf8: (absolutePath): string => {
+          legacyReadCalled = true;
+          return nodeWorkspaceFs.readFileUtf8(absolutePath);
+        },
+        stat: (absolutePath): WorkspaceStat => {
+          const before = nodeWorkspaceFs.stat(absolutePath);
+          if (!swapped && absolutePath.endsWith("/docs/safe.ts")) {
+            swapped = true;
+            renameSync(join(dir, "docs"), join(dir, "docs-original"));
+            symlinkSync(outside, join(dir, "docs"));
+          }
+          return before;
+        },
+      };
+
+      expect(() =>
+        readWorkspaceFileForEditing(detectWorkspace(dir), "docs/safe.ts", { maxBytes: 1_024 }, fs),
+      ).toThrow(WorkspaceReadError);
       expect(swapped).toBe(true);
       expect(legacyReadCalled).toBe(false);
     } finally {

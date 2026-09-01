@@ -13,7 +13,7 @@ export interface WorkspaceRootDenialLogContext {
   readonly correlationId?: string | undefined;
 }
 
-export function recordRelocatedWorkspaceRootDenial(
+export function recordWorkspaceRootDenial(
   error: PathDeniedError,
   context: WorkspaceRootDenialLogContext,
 ): void {
@@ -24,12 +24,12 @@ export function recordRelocatedWorkspaceRootDenial(
     level: "debug",
   }).warn({
     category: "security",
-    op: "workspace.root-relocation.denied",
+    op: "workspace.root.denied",
     correlationId: correlationIdOrUnknown(context.correlationId),
     errorKind: error.code,
     extra: {
       decision: "denied",
-      reason: "relocated-denied-locus",
+      reason: "denied-locus",
       ...(frames.length === 0 ? {} : { frames }),
       ...(causes.length === 0 ? {} : { causeChain: causes }),
     },
@@ -44,7 +44,7 @@ export function resolveRecordedWorkspaceRoot(
   try {
     return resolveExistingAllowedWorkspaceRealRoot(fs, lexicalRoot);
   } catch (error) {
-    if (error instanceof PathDeniedError) recordRelocatedWorkspaceRootDenial(error, context);
+    if (error instanceof PathDeniedError) recordWorkspaceRootDenial(error, context);
     throw error;
   }
 }

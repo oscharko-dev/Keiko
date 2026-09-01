@@ -273,7 +273,7 @@ describe("GET /api/terminal/directories", () => {
       expect(res.status).toBe(403);
       expect(sink.events).toHaveLength(1);
       expect(sink.events[0]).toMatchObject({
-        op: "workspace.root-relocation.denied",
+        op: "workspace.root.denied",
         correlationId,
         errorKind: "WORKSPACE_PATH_DENIED",
       });

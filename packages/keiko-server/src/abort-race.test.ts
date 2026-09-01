@@ -95,6 +95,19 @@ describe("raceAbortDeadline", () => {
     await expect(outcome).rejects.toMatchObject({ reason: "timeout" });
   });
 
+  it("reports timeout when an operation fulfills after reaching the deadline", async () => {
+    let nowMs = 0;
+    const outcome = raceAbortDeadline(
+      () => {
+        nowMs = 10;
+        return Promise.resolve("late result");
+      },
+      { deadlineAtMs: 10, nowMs: () => nowMs },
+    );
+
+    await expect(outcome).rejects.toMatchObject({ reason: "timeout" });
+  });
+
   it("bounds a never-settling operation and observes its late rejection", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

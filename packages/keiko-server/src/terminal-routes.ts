@@ -168,7 +168,14 @@ export async function handleTerminalDirectories(
       throw new TerminalToolError("BAD_REQUEST", "Query parameter 'projectId' is required.");
     }
     const requestedPath = ctx.url.searchParams.get("path") ?? undefined;
-    const listing = await listDirectories(deps.store, projectId, requestedPath, ctx.correlationId);
+    const access = deps.terminal?.resolveWorkspaceRootAccess?.(projectId, ctx.correlationId);
+    const listing = await listDirectories(
+      deps.store,
+      projectId,
+      requestedPath,
+      ctx.correlationId,
+      access,
+    );
     return { status: 200, body: listing };
   });
 }

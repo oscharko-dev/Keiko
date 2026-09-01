@@ -29,7 +29,13 @@ import {
   RepoSearchInvalidRangeError,
   RepoSearchUnsupportedFileError,
 } from "./errors.js";
-import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
+import {
+  isWorkspacePathSnapshotCurrent,
+  nodeWorkspaceFs,
+  WorkspaceDescriptorReadError,
+  type WorkspaceFs,
+  type WorkspaceStat,
+} from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import { containedRealPathInfo, isCanonicalAllowedContainedPath } from "./realpath.js";
@@ -3379,7 +3385,7 @@ async function assertExcerptNotBinary(
     // Re-classify as an unsupported-file skip so readKeptExcerpts degrades gracefully instead
     // of crashing the whole grounded answer (the comment at grounded-orchestrator readKeptExcerpts
     // explicitly promises this invariant).
-    if (isIoError(err)) {
+    if (isIoError(err) || err instanceof WorkspaceDescriptorReadError) {
       throw new RepoSearchUnsupportedFileError(
         `cannot read excerpt of unreadable file: ${scopePath}`,
         "io-error",
@@ -3420,6 +3426,7 @@ async function readExcerptLines(
   request: ReadExcerptRequest,
   fs: WorkspaceFs,
   targetPath: string,
+  expected: WorkspaceStat,
   lane: WorkspaceContentLane,
 ): Promise<readonly string[]> {
   try {
@@ -3434,7 +3441,7 @@ async function readExcerptLines(
     }
     let bytes: Uint8Array;
     try {
-      bytes = await readFileBytes(targetPath, MAX_EXCERPT_FILE_BYTES, "reject");
+      bytes = await readFileBytes(targetPath, MAX_EXCERPT_FILE_BYTES, "reject", expected);
     } catch (readErr) {
       if (isIoError(readErr)) {
         throw new RepoSearchUnsupportedFileError(
@@ -3445,6 +3452,9 @@ async function readExcerptLines(
       throw readErr;
     }
     const prefix = decodeUtf8Prefix(bytes);
+    if (!isWorkspacePathSnapshotCurrent(fs, targetPath, targetPath, expected)) {
+      throw new RepoSearchUnsupportedFileError("file changed during excerpt read", "io-error");
+    }
     const lines = (lane === "editor" ? prefix : redact(prefix)).split("\n");
     if (request.startLine > lines.length) {
       throw err;
@@ -3520,8 +3530,12 @@ async function readExcerptWithControl(
     request,
     fs,
     target.path,
+    stat,
     deps.contentLane ?? "evidence",
   );
+  if (!isWorkspacePathSnapshotCurrent(fs, target.path, target.path, stat)) {
+    throw new RepoSearchUnsupportedFileError("file changed during excerpt read", "io-error");
+  }
   assertStructuralExecutionActive(control);
   assertExcerptStartWithinLines(request, allLines);
   const window = excerptWindow(request, allLines);

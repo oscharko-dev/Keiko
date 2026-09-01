@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { isDenied } from "@oscharko-dev/keiko-workspace";
+import { isDenied, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { Readable } from "node:stream";
@@ -45,6 +46,7 @@ import {
   decideSupervisedVerificationCommand,
   resolveEditTargetRealPath,
   type SupervisedCodingDecision,
+  type SupervisedCodingFileEditRequest,
 } from "./supervisedCodingPolicy.js";
 import {
   createInMemorySupervisedCodingApprovalStore,
@@ -87,6 +89,7 @@ import {
   type CodingRuntimeStderrDrainer,
   type CodingRuntimeStderrSummary,
 } from "./codingRuntimeProcessIo.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 export type CodingRuntimeAdapterKind = "opencode-compatible" | "codex-cli";
 
@@ -254,6 +257,7 @@ export interface CodingRuntimeManagerDeps {
   readonly codexLifecycleAdapter?: CodexLifecycleAdapter | undefined;
   /** Existing, server-owned local-secret root; Codex state is derived beneath it per run. */
   readonly codexLocalSecretRoot?: string | undefined;
+  readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   /**
    * Server-side egress verifier. Its receipt attests to network enforcement; environment
    * projection is configuration only and is never treated as confinement.
@@ -403,6 +407,7 @@ interface NormalizedCodingRuntimeManagerDeps {
   readonly openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined;
   readonly codexLifecycleAdapter: CodexLifecycleAdapter | undefined;
   readonly codexLocalSecretRoot: string | undefined;
+  readonly resolveWorkspaceRootAccess: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly qualifyCodexEgress:
     ((request: CodingRuntimeLaunchRequest) => ReviewedCodexEgressPolicy | undefined) | undefined;
   readonly portableRuntimeResolver:
@@ -506,6 +511,7 @@ interface ActiveRuntime {
   readonly codingToolApprovals: CodingToolApprovalBridge | undefined;
   readonly nowMs: () => number;
   readonly nowIso: () => string;
+  readonly resolveWorkspaceRootAccess: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined;
   readonly codexLifecycleAdapter: CodexLifecycleAdapter | undefined;
   startupOutput: OpenCodeStartupMailbox | undefined;
@@ -666,6 +672,7 @@ function normalizeDeps(deps: CodingRuntimeManagerDeps): NormalizedCodingRuntimeM
     openCodeLifecycleAdapter: deps.openCodeLifecycleAdapter,
     codexLifecycleAdapter: deps.codexLifecycleAdapter,
     codexLocalSecretRoot: deps.codexLocalSecretRoot,
+    resolveWorkspaceRootAccess: deps.resolveWorkspaceRootAccess,
     qualifyCodexEgress: deps.qualifyCodexEgress,
     portableRuntimeResolver: deps.portableRuntimeResolver,
     revokeRuntime: deps.revokeRuntime,
@@ -1532,6 +1539,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       this.deps.approvalStore,
       this.deps.now,
       this.deps.nowIso,
+      this.deps.resolveWorkspaceRootAccess,
     );
     this.emit(
       runtimeEvent(active, this.nextSequence(active), "failure-redacted", {
@@ -2081,7 +2089,7 @@ function createActiveRuntime(
   tree: RuntimeProcessTree,
   deps: Pick<
     NormalizedCodingRuntimeManagerDeps,
-    "approvalStore" | "codingToolApprovals" | "now" | "nowIso"
+    "approvalStore" | "codingToolApprovals" | "now" | "nowIso" | "resolveWorkspaceRootAccess"
   >,
   openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined,
   codexLifecycleAdapter?: CodexLifecycleAdapter,
@@ -2096,6 +2104,7 @@ function createActiveRuntime(
     codingToolApprovals: deps.codingToolApprovals,
     nowMs: deps.now,
     nowIso: deps.nowIso,
+    resolveWorkspaceRootAccess: deps.resolveWorkspaceRootAccess,
     openCodeLifecycleAdapter,
     codexLifecycleAdapter,
     startupOutput:
@@ -2125,6 +2134,7 @@ function createInactiveRuntime(
   approvalStore: SupervisedCodingApprovalStore,
   nowMs: () => number,
   nowIso: () => string,
+  resolveWorkspaceRootAccess: (() => WorkspaceRootAccess | undefined) | undefined,
 ): ActiveRuntime {
   return {
     context: eventContext(request),
@@ -2136,6 +2146,7 @@ function createInactiveRuntime(
     codingToolApprovals: undefined,
     nowMs,
     nowIso,
+    resolveWorkspaceRootAccess,
     openCodeLifecycleAdapter: undefined,
     codexLifecycleAdapter: undefined,
     startupOutput: undefined,
@@ -2772,9 +2783,13 @@ function governedActionRuntimeEvent(
 // symlink-resolved target within the workspace. A benign-looking in-workspace symlink (e.g.
 // `src/config-alias` -> `../.env`) stays root-contained -- so the containment gate alone would
 // admit it -- while pointing at a deny-listed file the lexical name never reveals.
-function classifySupervisedTargetSensitive(workspaceRoot: string, targetPath: string): boolean {
+function classifySupervisedTargetSensitive(
+  workspaceRoot: string,
+  targetPath: string,
+  fs: WorkspaceFs,
+): boolean {
   if (isDenied(targetPath)) return true;
-  const real = resolveEditTargetRealPath(workspaceRoot, targetPath);
+  const real = resolveEditTargetRealPath(workspaceRoot, targetPath, fs);
   return real.realRelative !== undefined && isDenied(real.realRelative);
 }
 
@@ -2787,8 +2802,8 @@ function supervisedFileEditEvent(
   const decision = decideSupervisedFileEdit({
     ...supervisedEvidenceContext(active, "file-edit"),
     workspaceRoot: active.context.workspaceRoot,
+    ...supervisedFileTargetPolicy(active, targetPath),
     targetPath,
-    targetSensitive: classifySupervisedTargetSensitive(active.context.workspaceRoot, targetPath),
     allowedRelativePaths: event.allowedRelativePaths ?? [".."],
     fileCount: event.fileCount ?? 0,
     addedLines: event.addedLines ?? 0,
@@ -2800,6 +2815,33 @@ function supervisedFileEditEvent(
     addedLines: decision.evidence.addedLines ?? 0,
     deletedLines: decision.evidence.deletedLines ?? 0,
   });
+}
+
+function supervisedFileTargetPolicy(
+  active: ActiveRuntime,
+  targetPath: string,
+): Pick<SupervisedCodingFileEditRequest, "targetSensitive" | "workspaceFs"> {
+  const workspaceFs = resolveSupervisedWorkspaceFs(active);
+  if (workspaceFs === undefined) return { targetSensitive: true };
+  return {
+    workspaceFs,
+    targetSensitive: classifySupervisedTargetSensitive(
+      active.context.workspaceRoot,
+      targetPath,
+      workspaceFs,
+    ),
+  };
+}
+
+function resolveSupervisedWorkspaceFs(active: ActiveRuntime): WorkspaceFs | undefined {
+  const resolveAccess = active.resolveWorkspaceRootAccess;
+  if (resolveAccess === undefined) return nodeWorkspaceFs;
+  try {
+    const access = resolveAccess();
+    return access?.canonicalRoot === active.context.workspaceRoot ? access.fs : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function supervisedVerificationEvent(

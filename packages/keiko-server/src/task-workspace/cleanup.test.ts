@@ -19,9 +19,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type {
   GitWorktreeAdapter,
   WorktreeOperationResult,
@@ -43,6 +44,7 @@ import { MANAGED_ROOT_MARKER_FILENAME } from "./naming.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";
 import { createWorkspaceCleanupService, safelyRemoveManagedPath } from "./cleanup.js";
 import { TaskWorkspaceError } from "./errors.js";
+import { assertManagedRootOwned } from "./managed-root.js";
 import type { WorkspaceCleanupService, WorkspaceProvisioningService } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -66,7 +68,11 @@ let evidence: { id: string; json: string }[];
 let idCounter: number;
 let nowMs: number;
 
-type AdapterFactory = (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
+type AdapterFactory = (
+  workspace: WorkspaceInfo,
+  correlationId: string,
+  fs?: WorkspaceFs,
+) => GitWorktreeAdapter;
 
 function git(args: readonly string[], cwd = repoRoot): string {
   return execFileSync("git", [...args], { cwd, encoding: "utf8" });
@@ -104,14 +110,22 @@ function capturingEvidence(): EvidenceStore {
   };
 }
 
-function realAdapter(workspace: WorkspaceInfo): GitWorktreeAdapter {
-  return createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } });
+function realAdapter(
+  workspace: WorkspaceInfo,
+  _correlationId?: string,
+  fs?: WorkspaceFs,
+): GitWorktreeAdapter {
+  return createNodeGitWorktreeAdapter({
+    workspace,
+    processEnv: { PATH: process.env.PATH ?? "" },
+    ...(fs === undefined ? {} : { fs }),
+  });
 }
 
 function capturingAdapterFactory(received: string[]): AdapterFactory {
-  return (workspace, correlationId): GitWorktreeAdapter => {
+  return (workspace, correlationId, fs): GitWorktreeAdapter => {
     received.push(correlationId);
-    return realAdapter(workspace);
+    return realAdapter(workspace, correlationId, fs);
   };
 }
 
@@ -234,6 +248,29 @@ afterEach(() => {
 });
 
 describe("governed cleanup happy path (AC4)", () => {
+  it("completes cleanup for an exact registered workspace below the denied state directory", async () => {
+    managedRoot = join(dirname(managedRoot), ".keiko", "task-workspaces");
+    const instance = await provisionTask("t-owned-denied-root");
+    setState(instance, "archived");
+    await cleanup().cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "request",
+    });
+
+    const completed = await cleanup().cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+
+    expect(completed.outcome).toBe("completed");
+    expect(existsSync(instance.managedWorktreePath)).toBe(false);
+    expect(store.getById(instance.workspaceId)).toBeUndefined();
+  });
+
   it("request → complete removes the worktree, deletes the row, and clears the active pointer", async () => {
     const instance = await provisionTask("t-archive");
     const removedIdentities: WorkspaceInstance[] = [];
@@ -618,6 +655,7 @@ describe("cleanup safety refusals (SC4 — refusal is a successful outcome, neve
   });
 
   it("refuses when the managed-root ownership marker is absent (ownership-unproven)", async () => {
+    managedRoot = join(dirname(managedRoot), ".keiko", "task-workspaces");
     const instance = await provisionTask("t-unowned");
     setState(instance, "cleanup-pending");
     rmSync(join(managedRoot, MANAGED_ROOT_MARKER_FILENAME));
@@ -726,6 +764,25 @@ describe("cleanup approval + eligibility gates", () => {
 });
 
 describe("orphan cleanup", () => {
+  it("refuses an unregistered orphan below the denied state directory", async () => {
+    managedRoot = join(dirname(managedRoot), ".keiko", "task-workspaces");
+    const instance = await provisionTask("t-owned-denied-orphan");
+    const orphanPath = instance.managedWorktreePath;
+    store.delete(instance.workspaceId);
+
+    const result = await cleanup().cleanupOrphans({
+      repositoryRoot: repoRoot,
+      requestedBy: "u",
+      operatorApproved: true,
+    });
+
+    expect(result).toMatchObject({
+      removed: 0,
+      refused: [{ refusalReason: "worktree-dirty" }],
+    });
+    expect(existsSync(orphanPath)).toBe(true);
+  });
+
   it("removes an orphaned managed worktree (directory with no persisted record)", async () => {
     const instance = await provisionTask("t-orphan");
     const orphanPath = instance.managedWorktreePath;
@@ -944,8 +1001,7 @@ describe("orphan cleanup", () => {
 describe("safelyRemoveManagedPath choke point (SC1 — the only filesystem deletion)", () => {
   beforeEach(() => {
     // Establish ownership of the managed root for the positive case.
-    mkdirSync(managedRoot, { recursive: true });
-    writeFileSync(join(managedRoot, MANAGED_ROOT_MARKER_FILENAME), "{}");
+    assertManagedRootOwned(managedRoot);
   });
 
   it("removes a contained <repoId>/<leaf> directory", () => {

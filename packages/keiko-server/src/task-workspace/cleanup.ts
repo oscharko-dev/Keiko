@@ -21,6 +21,7 @@ import type {
   TaskWorkspaceLifecycleState,
   WorkspaceCleanupRefusalReason,
   WorkspaceEventType,
+  WorkspaceInfo,
   WorkspaceInstance,
   WorkspaceLock,
 } from "@oscharko-dev/keiko-contracts";
@@ -61,6 +62,7 @@ import type {
   WorkspaceOrphanCleanupResult,
   WorkspaceOrphanRefusal,
 } from "./types.js";
+import { resolveLifecycleManagedWorkspaceRootAccess } from "./workspace-root-access.js";
 
 const MAX_FIELD_LENGTH = 512;
 
@@ -276,12 +278,38 @@ async function probeCleanupDirty(
   ctx: CleanupCtx,
   worktreePath: string,
   probeable: boolean,
+  registered: boolean,
 ): Promise<boolean> {
   if (!probeable) return false;
-  const status = await ctx.deps
-    .createAdapter(detectWorkspaceAt(worktreePath), ctx.correlationId)
-    .worktreeStatus();
-  return !status.ok || status.dirty;
+  const access = registered
+    ? resolveLifecycleManagedWorkspaceRootAccess(ctx.deps, worktreePath)
+    : undefined;
+  if (registered && access === undefined) return true;
+  const workspace =
+    access === undefined
+      ? workspaceInfo(worktreePath)
+      : detectWorkspaceAt(access.canonicalRoot, access.fs);
+  try {
+    const status = await ctx.deps
+      .createAdapter(workspace, ctx.correlationId, access?.fs)
+      .worktreeStatus();
+    return !status.ok || status.dirty;
+  } catch {
+    return true;
+  }
+}
+
+function workspaceInfo(root: string): WorkspaceInfo {
+  return {
+    root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
 }
 
 async function evaluateLiveCleanupSafety(
@@ -304,6 +332,7 @@ async function evaluateLiveCleanupSafety(
     ctx,
     instance.managedWorktreePath,
     facts.worktreeDirExists && facts.pathContained,
+    true,
   );
   return evaluateWorkspaceCleanupSafety({
     lifecycleState: instance.lifecycleState,
@@ -329,7 +358,7 @@ async function removeManagedWorktree(
     const removal = await adapter.removeWorktree({ worktreePath, force: true });
     await adapter.pruneWorktrees();
     if (existsSync(worktreePath)) {
-      const dirty = await probeCleanupDirty(ctx, worktreePath, true);
+      const dirty = await probeCleanupDirty(ctx, worktreePath, true, true);
       if (dirty || !removal.ok) {
         return { removed: false, refusalReason: "worktree-dirty" };
       }
@@ -497,7 +526,8 @@ async function cleanupOneOrphan(
   const pathContained = isManagedTargetContained(ctx.deps.managedRoot, candidate);
   // Fail closed: an orphan whose `git status` is inconclusive (broken pointer) is treated as dirty and
   // refused, never force-removed (SC4) — it may still hold uncommitted work.
-  const worktreeDirty = await probeCleanupDirty(ctx, candidate, pathContained);
+  const probeable = pathContained && ownershipProven;
+  const worktreeDirty = await probeCleanupDirty(ctx, candidate, probeable, false);
   const decision = evaluateWorkspaceCleanupSafety({
     lifecycleState: "abandoned",
     hasRecord: false,
@@ -512,7 +542,7 @@ async function cleanupOneOrphan(
       refusal: { orphanId, refusalReason: decision.refusalReason ?? "path-escape" },
     };
   }
-  const stillDirty = await probeCleanupDirty(ctx, candidate, pathContained);
+  const stillDirty = await probeCleanupDirty(ctx, candidate, probeable, false);
   if (stillDirty) {
     return {
       removed: false,

@@ -149,12 +149,16 @@ describe("walkSource — Windows separator normalisation", () => {
     const winFs: import("@oscharko-dev/keiko-workspace").WorkspaceFs = {
       readFileUtf8: () => "content",
       stat: (p) => {
-        if (p === winRoot || p === "C:\\Users\\workspace\\docs\\notes\\report.md") {
+        const isRoot = p === winRoot;
+        const isNotes = p === "C:\\Users\\workspace\\docs\\notes";
+        const isReport = p === "C:\\Users\\workspace\\docs\\notes\\report.md";
+        if (isRoot || isNotes || isReport) {
           return {
             size: fileContent.byteLength,
-            isFile: p !== winRoot,
-            isDirectory: p === winRoot,
+            isFile: isReport,
+            isDirectory: !isReport,
             isSymbolicLink: false,
+            fileIdentity: `windows:${p}`,
           };
         }
         throw new Error(`ENOENT: ${p}`);
@@ -163,7 +167,7 @@ describe("walkSource — Windows separator normalisation", () => {
         if (p === winRoot) {
           return [{ name: "notes", isDirectory: true, isFile: false, isSymbolicLink: false }];
         }
-        if (p === `${winRoot}/notes`) {
+        if (p === `${winRoot}/notes` || p === "C:\\Users\\workspace\\docs\\notes") {
           return [{ name: "report.md", isDirectory: false, isFile: true, isSymbolicLink: false }];
         }
         return [];
@@ -195,19 +199,24 @@ describe("walkSource — path containment", () => {
     const baseFs = memoryFs(ROOT, [{ relativePath: "docs/report.md", content: "ok" }]);
     const realRoot = `/private${ROOT}`;
     const toRequestedPath = (absolutePath: string): string =>
-      absolutePath.startsWith(`${realRoot}/`)
-        ? `${ROOT}/${absolutePath.slice(realRoot.length + 1)}`
-        : absolutePath;
+      absolutePath === realRoot
+        ? ROOT
+        : absolutePath.startsWith(`${realRoot}/`)
+          ? `${ROOT}/${absolutePath.slice(realRoot.length + 1)}`
+          : absolutePath;
     const fs: ReturnType<typeof memoryFs> = {
       ...baseFs,
       realPath: (absolutePath: string): string => {
         if (absolutePath === ROOT) return realRoot;
-        if (absolutePath === `${ROOT}/docs/report.md`) return `${realRoot}/docs/report.md`;
+        if (absolutePath.startsWith(`${ROOT}/`)) {
+          return `${realRoot}/${absolutePath.slice(ROOT.length + 1)}`;
+        }
         return baseFs.realPath(absolutePath);
       },
       stat: (absolutePath: string) => baseFs.stat(toRequestedPath(absolutePath)),
-      readFileBytes: (absolutePath: string, maxBytes: number, hardLinkPolicy) =>
-        baseFs.readFileBytes?.(toRequestedPath(absolutePath), maxBytes, hardLinkPolicy) ??
+      readDir: (absolutePath: string) => baseFs.readDir(toRequestedPath(absolutePath)),
+      readFileBytes: (absolutePath: string, maxBytes: number, hardLinkPolicy, expected) =>
+        baseFs.readFileBytes?.(toRequestedPath(absolutePath), maxBytes, hardLinkPolicy, expected) ??
         Promise.reject(new Error("readFileBytes unavailable")),
     };
 
@@ -533,6 +542,52 @@ describe("walkSource — transient filesystem failures", () => {
     expect([...walkSource(fs, folderScope(ROOT))]).toContainEqual({
       kind: "error",
       error: { code: "READ_FAILED", message: "directory read failed" },
+    });
+  });
+
+  it("rejects entries when the enumerated directory changes canonical identity", () => {
+    const base = memoryFs(ROOT, [{ relativePath: "src/safe.ts", content: "safe" }]);
+    let swapped = false;
+    const fs: typeof base = {
+      ...base,
+      realPath: (absolutePath: string): string =>
+        swapped && absolutePath === `${ROOT}/src`
+          ? "/outside/private"
+          : base.realPath(absolutePath),
+      readDir: (absolutePath: string) => {
+        if (absolutePath === `${ROOT}/src`) {
+          swapped = true;
+          return [
+            {
+              name: "private.ts",
+              isDirectory: false,
+              isFile: true,
+              isSymbolicLink: false,
+            },
+          ];
+        }
+        return base.readDir(absolutePath);
+      },
+    };
+
+    const out = [...walkSource(fs, folderScope(ROOT))];
+
+    expect(swapped).toBe(true);
+    expect(out).toContainEqual({
+      kind: "error",
+      error: { code: "READ_FAILED", message: "directory read failed" },
+    });
+    expect(out).not.toContainEqual({
+      kind: "file",
+      file: { relativePath: "src/private.ts", sizeBytes: 4 },
+    });
+    expect(out).not.toContainEqual({
+      kind: "error",
+      error: {
+        code: "STAT_FAILED",
+        message: "entry stat failed",
+        relativePath: "src/private.ts",
+      },
     });
   });
 });

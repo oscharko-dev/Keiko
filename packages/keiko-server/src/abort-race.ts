@@ -111,6 +111,9 @@ export async function raceAbortDeadline<T>(
   });
   try {
     const result = await Promise.race([work, execution.stopped]);
+    // The absolute deadline is authoritative even when synchronous work blocked the event loop and
+    // prevented the timer promise from settling first. A value produced at/after the deadline is
+    // late; accepting it would make the same operation depend on timer scheduling rather than time.
     const reason = abortDeadlineReason(options);
     if (reason !== undefined) throw new AbortDeadlineRaceError(reason);
     return result;

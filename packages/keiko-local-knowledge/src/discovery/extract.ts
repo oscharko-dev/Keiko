@@ -40,6 +40,7 @@ import {
 import { isSafeScopePath } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-paths";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
+import { isWorkspacePathSnapshotCurrent } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
   type AsyncParserAdapter,
@@ -733,15 +734,6 @@ function statResolvedTarget(
   }
 }
 
-function validateResolvedTarget(
-  deps: ExtractDocumentDeps,
-  params: ExtractDocumentParams,
-  target: ResolvedTarget,
-): DiscoveryError | undefined {
-  const resolvedStat = statResolvedTarget(deps, params, target);
-  return "code" in resolvedStat ? resolvedStat : undefined;
-}
-
 async function readBytes(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
@@ -758,10 +750,22 @@ async function readBytes(
   }
   const requestedError = validateRequestedTarget(deps, params, target);
   if (requestedError !== undefined) return requestedError;
-  const resolvedError = validateResolvedTarget(deps, params, target);
-  if (resolvedError !== undefined) return resolvedError;
+  const expected = statResolvedTarget(deps, params, target);
+  if ("code" in expected) return expected;
   try {
-    return await reader(target.absolutePath, maxBytes, "allow");
+    const bytes = await reader(target.absolutePath, maxBytes, "allow", expected);
+    return isWorkspacePathSnapshotCurrent(
+      deps.fs,
+      target.requestedAbsolutePath,
+      target.absolutePath,
+      expected,
+    )
+      ? bytes
+      : {
+          code: "READ_FAILED",
+          message: "selected file changed during read",
+          relativePath: params.file.relativePath,
+        };
   } catch {
     return {
       code: "READ_FAILED",
@@ -858,10 +862,22 @@ async function readRange(
   }
   const requestedError = validateRequestedTarget(deps, params, target);
   if (requestedError !== undefined) return requestedError;
-  const resolvedError = validateResolvedTarget(deps, params, target);
-  if (resolvedError !== undefined) return resolvedError;
+  const expected = statResolvedTarget(deps, params, target);
+  if ("code" in expected) return expected;
   try {
-    return await reader(target.absolutePath, startByte, length, "allow");
+    const bytes = await reader(target.absolutePath, startByte, length, "allow", expected);
+    return isWorkspacePathSnapshotCurrent(
+      deps.fs,
+      target.requestedAbsolutePath,
+      target.absolutePath,
+      expected,
+    )
+      ? bytes
+      : {
+          code: "READ_FAILED",
+          message: "selected file changed during range read",
+          relativePath: params.file.relativePath,
+        };
   } catch {
     return {
       code: "READ_FAILED",

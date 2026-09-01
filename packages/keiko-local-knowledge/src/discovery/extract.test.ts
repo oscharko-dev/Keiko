@@ -583,8 +583,8 @@ describe("extractDocument — path containment", () => {
         return baseFs.realPath(absolutePath);
       },
       stat: (absolutePath: string) => baseFs.stat(toRequestedPath(absolutePath)),
-      readFileBytes: (absolutePath: string, maxBytes: number, hardLinkPolicy) =>
-        baseFs.readFileBytes?.(toRequestedPath(absolutePath), maxBytes, hardLinkPolicy) ??
+      readFileBytes: (absolutePath: string, maxBytes: number, hardLinkPolicy, expected) =>
+        baseFs.readFileBytes?.(toRequestedPath(absolutePath), maxBytes, hardLinkPolicy, expected) ??
         Promise.reject(new Error("readFileBytes unavailable")),
     };
     const registry = createDefaultParserRegistry();
@@ -717,9 +717,10 @@ describe("extractDocument — path containment", () => {
         absolutePath: string,
         maxBytes: number,
         hardLinkPolicy,
+        expected,
       ): Promise<Uint8Array> => {
         if (baseFs.readFileBytes === undefined) throw new Error("readFileBytes unavailable");
-        const bytes = await baseFs.readFileBytes(absolutePath, maxBytes, hardLinkPolicy);
+        const bytes = await baseFs.readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
         return bytes.subarray(0, Math.max(0, bytes.byteLength - 1));
       },
     };

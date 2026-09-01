@@ -45,17 +45,22 @@ describe("keiko-workspace/testing", () => {
     const readFileBytes = required(fs.readFileBytes);
     const readFileUtf8Prefix = required(fs.readFileUtf8Prefix);
     const readFileRange = required(fs.readFileRange);
+    const expected = fs.stat(file);
 
-    await expect(readFileBytes(file, 5, "reject")).resolves.toEqual(
+    await expect(readFileBytes(file, 5, "reject", expected)).resolves.toEqual(
       new TextEncoder().encode("alpha"),
     );
-    await expect(readFileBytes(missing, 5, "reject")).rejects.toThrow(`ENOENT: ${missing}`);
-    expect(readFileUtf8Prefix(file, 7, "reject")).toBe("alpha");
-    expect(() => readFileUtf8Prefix(missing, 5, "reject")).toThrow(`ENOENT: ${missing}`);
-    await expect(readFileRange(file, 5, 4, "reject")).resolves.toEqual(
+    await expect(readFileBytes(missing, 5, "reject", expected)).rejects.toThrow(
+      `ENOENT: ${missing}`,
+    );
+    expect(readFileUtf8Prefix(file, 7, "reject", expected)).toBe("alpha");
+    expect(() => readFileUtf8Prefix(missing, 5, "reject", expected)).toThrow(`ENOENT: ${missing}`);
+    await expect(readFileRange(file, 5, 4, "reject", expected)).resolves.toEqual(
       new TextEncoder().encode("🙂"),
     );
-    await expect(readFileRange(missing, 0, 4, "reject")).rejects.toThrow(`ENOENT: ${missing}`);
+    await expect(readFileRange(missing, 0, 4, "reject", expected)).rejects.toThrow(
+      `ENOENT: ${missing}`,
+    );
   });
 
   it("fails closed after an in-memory reader is closed", async () => {
@@ -64,11 +69,12 @@ describe("keiko-workspace/testing", () => {
     const missing = `${ROOT}/src/missing.txt`;
     const openFileReader = required(fs.openFileReader);
 
-    const reader = await openFileReader(file, "reject");
+    const expected = fs.stat(file);
+    const reader = await openFileReader(file, "reject", expected);
     expect(reader).toBeDefined();
     await expect(reader.readRange(0, 5)).resolves.toEqual(new TextEncoder().encode("alpha"));
     await reader.close();
     await expect(reader.readRange(0, 1)).rejects.toThrow(`EBADF: ${file}`);
-    await expect(openFileReader(missing, "reject")).rejects.toThrow(`ENOENT: ${missing}`);
+    await expect(openFileReader(missing, "reject", expected)).rejects.toThrow(`ENOENT: ${missing}`);
   });
 });

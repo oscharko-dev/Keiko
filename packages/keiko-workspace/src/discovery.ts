@@ -17,10 +17,11 @@ import {
 import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import {
-  assertAllowedWorkspaceRealRoot,
   containedRealPathInfo,
   isAllowedContainedPathParent,
   isCanonicalAllowedContainedPath,
+  resolveExistingAllowedWorkspaceRealRoot,
+  workspaceFsBoundToCanonicalRoot,
 } from "./realpath.js";
 import {
   FileTooLargeError,
@@ -52,7 +53,7 @@ import {
 interface Walk {
   readonly fs: WorkspaceFs;
   readonly root: string;
-  readonly realRoot: string;
+  readonly realRoot: string | undefined;
   readonly matcher: IgnoreMatcher;
   readonly opts: DiscoveryOptions;
   readonly applyGitignore: boolean;
@@ -68,6 +69,27 @@ interface Walk {
   ignored: number;
   depthPruned: number;
   maxFilesPruned: number;
+}
+
+function unavailableWalkRoot(error: unknown, failOnReadError: boolean): undefined {
+  if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
+    throw error;
+  }
+  if (failOnReadError) throw new WorkspaceReadError("cannot resolve workspace root", ".");
+  return undefined;
+}
+
+function resolveWalkRoot(
+  fs: WorkspaceFs,
+  root: string,
+  failOnReadError: boolean,
+): string | undefined {
+  try {
+    return resolveExistingAllowedWorkspaceRealRoot(fs, root);
+  } catch (error) {
+    unavailableWalkRoot(error, failOnReadError);
+    return undefined;
+  }
 }
 
 interface AsyncWalkState {
@@ -141,7 +163,9 @@ function failedDirectoryRead(
   relativeDir: string,
   error: unknown,
 ): readonly WorkspaceDirEntry[] {
-  if (error instanceof StructuralExecutionStoppedError) throw error;
+  if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
+    throw error;
+  }
   if (!walk.failOnReadError) return [];
   if (error instanceof PathEscapeError || error instanceof WorkspaceReadError) throw error;
   throw new WorkspaceReadError(
@@ -171,6 +195,7 @@ function readDirSafe(
       // retrieval nondeterministic across platforms. Reject the whole overflowing directory and mark
       // the inventory truncated; public discovery remains uncapped to preserve its legacy contract.
       walk.maxFilesPruned += entries.length;
+      walk.entriesVisited = walk.entryLimit ?? walk.entriesVisited;
       return [];
     }
     const ordered = [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -198,7 +223,9 @@ function currentEntryStat(
   try {
     return walk.fs.stat(absolutePath);
   } catch (error) {
-    if (error instanceof StructuralExecutionStoppedError) throw error;
+    if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
+      throw error;
+    }
     if (walk.failOnReadError) {
       throw new WorkspaceReadError(
         `cannot stat discovered path: ${relativePath} (${describe(error)})`,
@@ -212,9 +239,9 @@ function currentEntryStat(
 function recordSkippedSymbolicLink(walk: Walk, relPath: string): void {
   if (walk.skippedSymbolicLinks.length >= walk.opts.maxFiles) {
     walk.maxFilesPruned += 1;
-    return;
+  } else {
+    walk.skippedSymbolicLinks.push(relPath);
   }
-  walk.skippedSymbolicLinks.push(relPath);
 }
 
 interface CurrentEntry {
@@ -224,7 +251,9 @@ interface CurrentEntry {
 }
 
 function rejectContainedEntry(walk: Walk, relativePath: string, error: unknown): undefined {
-  if (error instanceof StructuralExecutionStoppedError) throw error;
+  if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
+    throw error;
+  }
   if (walk.failOnReadError) {
     if (error instanceof PathEscapeError) throw error;
     throw new WorkspaceReadError(
@@ -419,10 +448,11 @@ function createWalk(
   executionControl?: StructuralExecutionControl,
   entryLimit?: number,
 ): Walk {
+  const realRoot = resolveWalkRoot(fs, workspace.root, failOnReadError);
   return {
-    fs,
-    root: workspace.root,
-    realRoot: assertAllowedWorkspaceRealRoot(fs, workspace.root),
+    fs: realRoot === undefined ? fs : workspaceFsBoundToCanonicalRoot(fs, realRoot),
+    root: realRoot ?? workspace.root,
+    realRoot,
     matcher: compileIgnore(workspace.ignoreLines),
     opts,
     applyGitignore: opts.applyGitignore,
@@ -450,9 +480,7 @@ function runWalk(
   entryLimit?: number,
 ): Walk {
   const walk = createWalk(workspace, opts, fs, failOnReadError, executionControl, entryLimit);
-  // Refuse to walk a benign-named root that resolves into a denied location via a symlink: discovery
-  // does not realpath-contain the ROOT, so it would otherwise list a symlinked credential dir's files.
-  descend(walk, walk.realRoot, "", 0);
+  if (walk.realRoot !== undefined) descend(walk, walk.realRoot, "", 0);
   return walk;
 }
 
@@ -462,7 +490,9 @@ async function runWalkAsync(
   fs: WorkspaceFs,
 ): Promise<Walk> {
   const walk = createWalk(workspace, opts, fs, false);
-  await descendAsync(walk, { entriesSinceYield: 0 }, walk.realRoot, "", 0);
+  if (walk.realRoot !== undefined) {
+    await descendAsync(walk, { entriesSinceYield: 0 }, walk.realRoot, "", 0);
+  }
   return walk;
 }
 
@@ -655,7 +685,12 @@ function readDescriptor(
 ): WorkspaceDescriptorUtf8Read {
   try {
     if (fs.readFileUtf8SameDescriptor !== undefined) {
-      return fs.readFileUtf8SameDescriptor(target.resolvedPath, opts.maxBytes, "reject");
+      return fs.readFileUtf8SameDescriptor(
+        target.resolvedPath,
+        opts.maxBytes,
+        "reject",
+        target.stat,
+      );
     }
     const rawText = fs.readFileUtf8(target.resolvedPath);
     return {
@@ -797,7 +832,7 @@ export async function readWorkspaceFileBytesPrefixForInternalUse(
   }
   let bytes: Uint8Array;
   try {
-    bytes = await readBytes(target.resolvedPath, maxBytes, "reject");
+    bytes = await readBytes(target.resolvedPath, maxBytes, "reject", target.stat);
   } catch (error) {
     mapPrefixReadFailure(error, target, maxBytes);
   }
@@ -823,7 +858,7 @@ export function readWorkspaceFilePrefixForEvidence(
   const target = resolvePrefixReadableWorkspaceFile(workspace, relPath, maxBytes, fs);
   let rawText: string;
   try {
-    rawText = readPrefix(target.resolvedPath, maxBytes, "reject");
+    rawText = readPrefix(target.resolvedPath, maxBytes, "reject", target.stat);
   } catch (error) {
     mapPrefixReadFailure(error, target, maxBytes);
   }
@@ -866,6 +901,26 @@ function isCanonicalOrSafelyMissingWorkspacePath(
   );
 }
 
+function containedReadableWorkspacePath(
+  workspaceRoot: string,
+  normalizedRel: string,
+  absolutePath: string,
+  fs: WorkspaceFs,
+): ReturnType<typeof containedRealPathInfo> {
+  try {
+    return containedRealPathInfo(fs, workspaceRoot, absolutePath);
+  } catch (error) {
+    if (
+      error instanceof PathDeniedError ||
+      error instanceof PathEscapeError ||
+      error instanceof StructuralExecutionStoppedError
+    ) {
+      throw error;
+    }
+    throw new WorkspaceReadError(`cannot resolve workspace path: ${normalizedRel}`, normalizedRel);
+  }
+}
+
 function resolveReadableWorkspaceFile(
   workspace: WorkspaceInfo,
   relPath: string,
@@ -878,7 +933,7 @@ function resolveReadableWorkspaceFile(
   if (isDenied(normalizedRel)) {
     throw new PathDeniedError(`refusing to read a denied path: ${normalizedRel}`, normalizedRel);
   }
-  const contained = containedRealPathInfo(fs, workspace.root, absolutePath);
+  const contained = containedReadableWorkspacePath(workspace.root, normalizedRel, absolutePath, fs);
   // Deny a benign-named root symlink that resolves into a protected location (e.g. "~/docs" ->
   // "~/.aws"): the deny checks here only see the path relative to the realpath'd root, so a denied
   // segment in the ROOT itself is invisible to them and the file would read through. Only the symlink

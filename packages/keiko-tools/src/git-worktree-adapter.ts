@@ -30,7 +30,7 @@ import {
   type SpawnFn,
   type CommandTerminationEvidence,
 } from "./exec.js";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 
 // The dedicated worktree-lifecycle allowlist. `worktree` covers add/list/remove/prune (the second
 // token is fixed by the builder, never caller-supplied); `rev-parse` and `show-ref` are read-only
@@ -338,6 +338,7 @@ export interface GitWorktreeAdapter {
 
 export interface NodeGitWorktreeAdapterDeps {
   readonly workspace: WorkspaceInfo;
+  readonly fs?: WorkspaceFs | undefined;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly now?: (() => number) | undefined;
   readonly spawn?: SpawnFn | undefined;
@@ -386,6 +387,7 @@ function buildAdapterContext(deps: NodeGitWorktreeAdapterDeps): AdapterContext {
       spawn: deps.spawn ?? nodeSpawnFn,
       processEnv: structuredCommandEnvironment(deps.processEnv ?? process.env, policy),
       now: deps.now ?? Date.now,
+      ...(deps.fs === undefined ? {} : { fs: deps.fs }),
       ...(deps.resolveExecutable !== undefined
         ? { resolveExecutable: deps.resolveExecutable }
         : {}),

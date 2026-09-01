@@ -170,6 +170,7 @@ function composeOpenCodeRun(
     onRuntimeEvent: run.onRuntimeEvent,
     authorityLifecycle: run.authorityLifecycle,
     codingToolApprovals: run.codingToolApprovals,
+    resolveWorkspaceRootAccess: run.resolveWorkspaceRootAccess,
   });
 }
 

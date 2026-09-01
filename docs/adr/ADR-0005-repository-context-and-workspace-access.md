@@ -65,16 +65,22 @@ asynchronous file reader. Detection, discovery, structural analysis, context-pac
 workspace-content indexing depend on this port. Async facades use the same port; they do not create
 a second scanner or bypass containment.
 
-The production same-descriptor read validates the pathname with `lstat`, opens without following a
-symlink where the platform supports it, checks stable device/inode/metadata (including link count)
-before and after the read, rejects non-regular files, and enforces its byte cap. Owning guarded
-read lanes decide whether a stable hard link is authorized: grounded evidence rejects it, while a
-separately hash-verified local-knowledge source may accept it.
+The production bounded reads require the owning lane's preflight `WorkspaceStat`, validate the
+pathname with `lstat`, open without following a final-component symlink where the platform supports
+it, and bind the opened descriptor to that expected device/inode/metadata snapshot. They check the
+descriptor identity again after the read, reject non-regular files, and enforce their byte caps.
+Owning guarded read lanes decide whether a stable hard link is authorized: grounded evidence
+rejects it, while a separately hash-verified local-knowledge source may accept it.
 `readDir(path, maxEntries)` allows callers to detect overflow without materializing an unbounded
 directory. Strong metadata (`fileIdentity`, nanosecond timestamps, link count, and size) lets the
 workspace index reject stale or substituted records. This keeps the security-relevant logic
 testable with an in-memory fake, confines production workspace IO to one auditable adapter, and
 keeps consumers independent of the host filesystem API.
+
+The production `stat` and `exists` operations use no-follow metadata semantics: a symlink is
+reported as a symlink entry rather than dereferenced. Detection reads manifests and ignore metadata
+only through the bounded same-descriptor lane; a custom port without that capability yields absent
+advisory metadata instead of falling back to an unbounded raw content read.
 
 ### D2 — Lexical containment plus canonical identity at guarded content-read IO edges
 
@@ -93,26 +99,59 @@ root introduces a denied segment. A missing target may pass `isAllowedContainedP
 for an existence probe; that result does not authorize reading or enumeration. New consumers must
 compose lexical resolution with these canonical and deny checks before handing a target to IO.
 
-Where the production bounded-read lane is available, its same-descriptor read closes the remaining
-path-check/open race and rejects symlinks, non-regular files, oversized inputs, and identities that
-change during the read. Guarded evidence lanes additionally reject hard-link aliases before
-content access. Request-local canonical-root reuse in grounded
-retrieval may avoid repeating the root resolution, but each target path is still resolved so
-replacement cannot hide behind the cached root identity. Consumers that use an older or optional
-raw port method retain responsibility for the same lexical, canonical, and deny policy. These
-checks preserve the static analyser's explicit sanitisation boundary while enforcing the runtime
-identity of the file that is actually read.
+Where the production bounded-read lane is available, its descriptor read binds returned bytes to
+the regular-file identity selected by the owning lane's preflight snapshot and rejects symlinks,
+non-regular files, oversized inputs, and identities that change before or during the read. Guarded
+evidence lanes additionally reject hard-link aliases before content access and revalidate pathname,
+canonical containment, root identity, and the strong snapshot after the read before exposing bytes.
+Request-local canonical-root reuse in grounded retrieval may avoid repeating initial discovery, but
+the admitted root stays the authority anchor and every target is revalidated so replacement cannot
+hide behind a new root identity.
 
-A symlinked workspace root must also not introduce or relocate a denied path locus. Comparing only
-whether both roots contain the same denied segment is insufficient: one `.codex` tree could
-otherwise redirect to another. Keiko therefore compares the normalised denied suffix at its exact
-locus. When a denied locus is involved, it allows only an unchanged root plus the platform-defined
-macOS `/private` aliases for `/etc`, `/tmp`, and `/var`; ordinary aliases between roots with no
-denied locus remain valid. Identity comparison preserves component case and Unicode spelling because
-those semantics are properties of the mounted volume, not the host OS; uncertain spelling fails
-closed. The shared realpath boundary raises a typed denial before any target IO; repository
-retrieval records that decision through the existing correlated, body-free server activity log
-instead of presenting the protected root as an empty workspace.
+`O_NOFOLLOW` protects only the final component, and Node exposes no portable `openat`-style API.
+The contained metadata lane therefore binds the admitted root, each parent component, the final
+pathname, and the opened descriptor to one lineage snapshot; general guarded lanes bind the
+preflight target snapshot and perform the post-read checks above. These checks fail closed on a
+persistent parent-component or root substitution. They cannot make several pathname syscalls atomic
+against an adversary that alternates an intermediate component between observations; eliminating
+that platform limit requires a supported directory-descriptor-relative API. Consumers that use an
+older raw port method retain responsibility for the same lexical, canonical, deny, and post-read
+validation policy. These checks preserve the static analyser's explicit sanitisation boundary while
+binding returned bytes to the validated identity under the host API's documented limit.
+
+A workspace root must not name, introduce, or relocate a denied path locus. Direct credential,
+runtime-state, cache, dependency, and VCS roots remain denied even when their lexical and canonical
+identities are equal; otherwise selecting `.aws` itself would make a root-relative `credentials`
+file appear safe. Ordinary root admission has one narrow path-shaped exception: a project below
+`.codex/worktrees/<non-empty descendant>`, because Codex stores real repository worktrees there.
+The `.codex` state root and `.codex/worktrees` container themselves remain denied, as does a second
+denied segment below an admitted worktree. Keiko also compares each normalised denied suffix at its
+exact locus, so one admitted worktree cannot redirect to a separate `.codex` store. The
+platform-defined macOS `/private` aliases for `/etc`, `/tmp`, and `/var` remain recognised; ordinary
+aliases between roots with no denied locus remain valid. Identity comparison preserves component
+case and Unicode spelling because those semantics are properties of the mounted volume, not the
+host OS; uncertain spelling fails closed. The shared realpath boundary raises a typed denial before
+any target IO; repository retrieval records that decision through the existing correlated,
+body-free server activity log instead of presenting the protected root as an empty workspace.
+
+Keiko-managed task worktrees use a separate capability path, never a second path-shape exception.
+The server lifecycle owner re-proves the configured managed-root marker as a bounded, regular,
+exact-schema file, the persisted workspace instance, deterministically derived exact path,
+containment, permitted lifecycle purpose, and the persisted Git linked-worktree identity before
+each operation. That identity binds the repository's Git common directory, worktree directory,
+`.git` pointer, Git admin directory, and reciprocal `gitdir` backpointer descriptor identities;
+deleting and recreating the same path
+therefore revokes authority instead of manufacturing a replacement workspace. The owner then
+supplies that operation with an unforgeable `WorkspaceFs` capability for the one canonical
+worktree root. Generic workspace admission still rejects the same `.keiko` path, unregistered
+siblings, aliases, and copied wrapper
+objects. Capability minting and propagation are package-internal subpaths pinned to reviewed callers
+by the import-policy gate; wrapping an authorised filesystem may preserve its exact authority but
+cannot widen or manufacture it. Long-lived consumers must refresh the capability at each governed
+effect so removal of the persisted instance or ownership proof revokes subsequent access.
+Connected-context detection uses marker-only language metadata because its request-local candidate
+inventory already performs the bounded repository walk; structural diagnostics derive additional
+observed languages from that shared inventory instead of scanning the repository twice.
 
 ### D3 — Two-tier filtering: always-on security DENY vs. best-effort `.gitignore`
 

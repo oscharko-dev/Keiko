@@ -29,6 +29,7 @@ import type { ResearchGrantRegistry, ResolvedResearchGrant } from "./researchGra
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import type { SkillCatalog } from "./skillCatalog.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import {
   createSkillInvocationPort,
   type SkillReevaluationDecision,
@@ -41,6 +42,7 @@ export interface ProductionAuxiliaryPortInput {
   readonly runId: string;
   readonly workspaceId: () => string;
   readonly workspaceRoot: string;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
   readonly modelId: string;
   readonly authorityExpiresAt: string;
   readonly catalog: SkillCatalog;
@@ -60,19 +62,44 @@ export interface ProductionAuxiliaryPorts {
 export function createProductionAuxiliaryPorts(
   input: ProductionAuxiliaryPortInput,
 ): ProductionAuxiliaryPorts {
+  const authorizedInput = {
+    ...input,
+    secureWorkspaceTextRead: workspaceAuthorityCheckedRead(input),
+  };
   const runner = createProductionReadOnlyChildRunner({
     modelPortFactory: input.modelPortFactory,
-    secureWorkspaceTextRead: input.secureWorkspaceTextRead,
+    secureWorkspaceTextRead: authorizedInput.secureWorkspaceTextRead,
     reservePromptTokens: input.reservePromptTokens,
   });
   return {
-    skillAuthority: skillPort(input),
+    skillAuthority: skillPort(authorizedInput),
     // A child agent needs a resolvable PROVIDER model id. When the deployment has no coding-safe
     // model configured, the port is not mounted at all and the governed delegate answers "failed"
     // — a child must never be launched against a placeholder or a launch-profile identifier the
     // gateway cannot resolve.
-    ...(input.modelId === "" ? {} : { childAgentAuthority: childPort(input, runner) }),
+    ...(input.modelId === "" ? {} : { childAgentAuthority: childPort(authorizedInput, runner) }),
   };
+}
+
+function workspaceAuthorityCheckedRead(
+  input: ProductionAuxiliaryPortInput,
+): SecureWorkspaceTextReadPort {
+  return {
+    readText: async (request): ReturnType<SecureWorkspaceTextReadPort["readText"]> => {
+      if (!hasExactWorkspaceAccess(input)) return { ok: false, reason: "denied" };
+      const result = await input.secureWorkspaceTextRead.readText(request);
+      return hasExactWorkspaceAccess(input) ? result : { ok: false, reason: "denied" };
+    },
+  };
+}
+
+function hasExactWorkspaceAccess(input: ProductionAuxiliaryPortInput): boolean {
+  try {
+    const access = input.resolveWorkspaceRootAccess();
+    return access?.kind === "managed-task" && access.canonicalRoot === input.workspaceRoot;
+  } catch {
+    return false;
+  }
 }
 
 function skillPort(input: ProductionAuxiliaryPortInput): GovernedCodingToolPort<"skill"> {

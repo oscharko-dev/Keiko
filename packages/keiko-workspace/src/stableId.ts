@@ -9,7 +9,7 @@ import type {
   ConnectedContextPackStableIdInput,
   EvidenceAtomStableIdInput,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { WorkspaceFs } from "./fs.js";
+import { isWorkspacePathSnapshotCurrent, type WorkspaceFs } from "./fs.js";
 
 type JsonScalar = string | number | boolean | null;
 type JsonValue = JsonScalar | JsonObject | readonly JsonValue[];
@@ -167,6 +167,8 @@ export async function fileContentHash(
   if (readFileBytes === undefined) {
     return undefined;
   }
-  const bytes = await readFileBytes(absolutePath, MAX_HASH_FILE_BYTES, "reject");
+  const expected = fs.stat(absolutePath);
+  const bytes = await readFileBytes(absolutePath, MAX_HASH_FILE_BYTES, "reject", expected);
+  if (!isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, expected)) return undefined;
   return createHash("sha256").update(bytes).digest("hex");
 }

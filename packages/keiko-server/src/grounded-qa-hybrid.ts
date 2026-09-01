@@ -125,6 +125,7 @@ import {
   groundedContextAssemblyInput,
   groundedContextSummaryInput,
   groundedEvidenceRunId,
+  groundedScopeWorkspaceFs,
   internalError,
   isValidGroundedPack,
   mappedGatewayError,
@@ -509,7 +510,14 @@ async function retrieveFolderIntoSlot(
   const scope = buildSelectedScopeFrom(ctx.chat, cs, deriveScopeIdFrom(ctx.chat, cs, index));
   let out: RetrievalOnlyOutput;
   try {
-    out = await retriever({ scope, query, workspaceRoot: scope.workspaceRoot, budget });
+    const workspaceFs = groundedScopeWorkspaceFs(cs);
+    out = await retriever({
+      scope,
+      query,
+      workspaceRoot: scope.workspaceRoot,
+      budget,
+      ...(workspaceFs === undefined ? {} : { workspaceFs }),
+    });
     ensureNotCancelled(ctx.signal);
   } catch (error) {
     // Mirror retrieveOneConnector (GRD-006): a per-source embedding-adapter outage is a skippable

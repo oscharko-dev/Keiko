@@ -1132,9 +1132,15 @@ describe("workspaceIndex", () => {
         directoryReads.push(absolutePath);
         return base.readDir(absolutePath, maxEntries);
       },
-      readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+      readFileBytes: async (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): Promise<Uint8Array> => {
         const bytes =
-          (await base.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy)) ?? new Uint8Array();
+          (await base.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy, expected)) ??
+          new Uint8Array();
         scanReads += 1;
         scanReadComplete = scanReads >= 2;
         return bytes;
@@ -1821,13 +1827,9 @@ describe("workspaceIndex", () => {
         expect(
           isWorkspaceIndexSnapshotFresh(cachedSnapshot, currentScope.workspace, nodeWorkspaceFs),
         ).toBe(false);
-        const prepared = prepareWorkspaceIndexSnapshot(
-          cachedSnapshot,
-          currentScope.workspace,
-          nodeWorkspaceFs,
-        );
-        expect(prepared.entries).toEqual([]);
-        expect(prepared.report.skippedEntries).toBe(1);
+        expect(() =>
+          prepareWorkspaceIndexSnapshot(cachedSnapshot, currentScope.workspace, nodeWorkspaceFs),
+        ).toThrow(PathDeniedError);
 
         await expect(
           searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {

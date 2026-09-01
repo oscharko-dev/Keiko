@@ -16,7 +16,6 @@
 //   • Directory picker preserved from the previous PTY module, anchored at the project root.
 
 import { randomUUID } from "node:crypto";
-import { readdir, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, parse as parsePath, resolve as resolvePath } from "node:path";
 import {
   CommandCancelledError,
@@ -56,6 +55,7 @@ import {
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
 import type { ServerLogSink } from "./observability/server-log.js";
 import { resolveRecordedWorkspaceRoot } from "./workspace-root-denial-log.js";
+import type { WorkspaceRootAccess } from "./task-workspace/workspace-root-access.js";
 
 const MAX_CONCURRENT_EXECUTIONS = 8;
 const MIN_TIMEOUT_MS = 1_000;
@@ -98,6 +98,10 @@ export interface TerminalExecutionManager {
   readonly abort: (executionId: string) => boolean;
   readonly subscribe: (listener: TerminalEventEmitter) => () => void;
   readonly inFlightCount: () => number;
+  readonly resolveWorkspaceRootAccess?: (
+    projectId: string,
+    correlationId?: string,
+  ) => WorkspaceRootAccess;
 }
 
 export interface TerminalDirectoryEntry {
@@ -169,6 +173,8 @@ export interface TerminalExecutionManagerOptions {
   readonly activityLog?: ServerLogSink | undefined;
   readonly runDeps?: Partial<RunCommandDeps> | undefined;
   readonly now?: (() => number) | undefined;
+  readonly resolveWorkspaceRootAccess?:
+    ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
 }
 
 function defaultRedactor(input: string): string {
@@ -704,6 +710,8 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
   private readonly activityLog: ServerLogSink;
   private readonly runDeps: Partial<RunCommandDeps>;
   private readonly now: () => number;
+  private readonly rootAccessResolver:
+    ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
   private readonly executions = new Map<string, InFlightExecution>();
   private readonly subscribers = new Set<TerminalEventEmitter>();
 
@@ -717,6 +725,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
     this.activityLog = opts.activityLog ?? processServerLogSink();
     this.runDeps = opts.runDeps ?? {};
     this.now = opts.now ?? Date.now;
+    this.rootAccessResolver = opts.resolveWorkspaceRootAccess;
   }
 
   public readonly inFlightCount = (): number => this.executions.size;
@@ -736,6 +745,24 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
     return true;
   };
 
+  public readonly resolveWorkspaceRootAccess = (
+    projectId: string,
+    correlationId?: string,
+  ): WorkspaceRootAccess => {
+    const project = projectFor(this.store, projectId);
+    if (project === undefined) {
+      throw new TerminalToolError("PROJECT_NOT_FOUND", "Project not found.");
+    }
+    if (this.rootAccessResolver !== undefined) {
+      const access = this.rootAccessResolver(project.path);
+      if (access !== undefined) return access;
+      throw new TerminalToolError("CWD_DENIED", "Working directory is denied by policy.");
+    }
+    const fs = this.runDeps.fs ?? nodeWorkspaceFs;
+    const canonicalRoot = projectRootOrThrow(project, fs, this.activityLog, correlationId);
+    return { kind: "ordinary", canonicalRoot, fs };
+  };
+
   public readonly execute = async (
     input: TerminalExecutionInput,
   ): Promise<TerminalExecutionResult> => {
@@ -753,15 +780,14 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
         "Too many in-flight terminal executions.",
       );
     }
-    const fs = this.runDeps.fs ?? nodeWorkspaceFs;
-    const projectRoot = projectRootOrThrow(project, fs, this.activityLog, input.correlationId);
-    const cwd = assertCwdInsideProject(project.path, projectRoot, input.cwd, fs);
-    validateCommandOperands(projectRoot, cwd, input, fs);
-    return this.runExecution(projectRoot, cwd, input);
+    const access = this.resolveWorkspaceRootAccess(input.projectId, input.correlationId);
+    const cwd = assertCwdInsideProject(project.path, access.canonicalRoot, input.cwd, access.fs);
+    validateCommandOperands(access.canonicalRoot, cwd, input, access.fs);
+    return this.runExecution(access, cwd, input);
   };
 
   private async runExecution(
-    projectRoot: string,
+    access: WorkspaceRootAccess,
     cwd: string,
     input: TerminalExecutionInput,
   ): Promise<TerminalExecutionResult> {
@@ -776,7 +802,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
     const startedAt = this.now();
     this.emitStarted(executionId, input, startedAt);
     try {
-      return await this.invokeRunCommand(executionId, projectRoot, cwd, input, entry, startedAt);
+      return await this.invokeRunCommand(executionId, access, cwd, input, entry, startedAt);
     } finally {
       this.executions.delete(executionId);
     }
@@ -785,9 +811,9 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
   // Keep runCommand on the same terminal policy table used by the BFF pre-check. Layer 2 above
   // covers operand containment, while runCommand still owns the spawn boundary, cwd realpath check,
   // executable resolution, sandbox env, timeout, and output cap.
-  private buildRunDepsFor(projectRoot: string): RunCommandDeps {
+  private buildRunDepsFor(access: WorkspaceRootAccess): RunCommandDeps {
     const workspace: WorkspaceInfo = {
-      root: projectRoot,
+      root: access.canonicalRoot,
       name: undefined,
       version: undefined,
       testFramework: "unknown",
@@ -803,23 +829,23 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
       spawn: this.runDeps.spawn ?? nodeSpawnFn,
       processEnv: this.processEnv,
       now: this.runDeps.now ?? this.now,
+      fs: access.fs,
       ...(this.runDeps.resolveExecutable === undefined
         ? {}
         : { resolveExecutable: this.runDeps.resolveExecutable }),
-      ...(this.runDeps.fs === undefined ? {} : { fs: this.runDeps.fs }),
       ...(this.runDeps.home === undefined ? {} : { home: this.runDeps.home }),
     };
   }
 
   private async invokeRunCommand(
     executionId: string,
-    projectRoot: string,
+    access: WorkspaceRootAccess,
     cwd: string,
     input: TerminalExecutionInput,
     entry: InFlightExecution,
     startedAt: number,
   ): Promise<TerminalExecutionResult> {
-    const deps = this.buildRunDepsFor(projectRoot);
+    const deps = this.buildRunDepsFor(access);
     const timeoutMs = clampTimeout(input.timeoutMs, this.policy.defaultTimeoutMs);
     let result: import("@oscharko-dev/keiko-tools").CommandResult;
     try {
@@ -1099,10 +1125,10 @@ function normalizeClientPath(pathInput: string | undefined, projectRoot: string)
   return isAbsolute(raw) ? raw : resolvePath(projectRoot, raw);
 }
 
-async function resolveDirectory(candidate: string, projectRoot: string): Promise<string> {
+function resolveDirectory(candidate: string, projectRoot: string, fs: WorkspaceFs): string {
   let resolved: string;
   try {
-    resolved = await realpath(candidate);
+    resolved = fs.realPath(candidate);
   } catch {
     throw new TerminalToolError("BAD_REQUEST", "The working directory does not exist.");
   }
@@ -1113,18 +1139,19 @@ async function resolveDirectory(candidate: string, projectRoot: string): Promise
       "Working directory is outside the selected project.",
     );
   }
-  const info = await stat(resolved);
-  if (!info.isDirectory()) {
+  const info = fs.stat(resolved);
+  if (!info.isDirectory) {
     throw new TerminalToolError("BAD_REQUEST", "The working directory must be a directory.");
   }
   return resolved;
 }
 
-export async function listDirectories(
+export function listDirectories(
   store: UiStore,
   projectId: string,
   pathInput: string | undefined,
   correlationId?: string,
+  access?: WorkspaceRootAccess,
 ): Promise<TerminalDirectoryListing> {
   const project = projectFor(store, projectId);
   if (project === undefined) {
@@ -1132,26 +1159,24 @@ export async function listDirectories(
   }
   // Resolve the project root to its real path first so that comparisons on macOS (where /tmp
   // is a symlink to /private/tmp) don't false-positive as escapes.
-  const projectRoot = projectRootOrThrow(
-    project,
-    nodeWorkspaceFs,
-    processServerLogSink(),
-    correlationId,
-  );
+  const projectRoot =
+    access?.canonicalRoot ??
+    projectRootOrThrow(project, nodeWorkspaceFs, processServerLogSink(), correlationId);
+  const fs = access?.fs ?? nodeWorkspaceFs;
   const lexical = normalizeClientPath(pathInput, projectRoot);
-  const pathValue = await resolveDirectory(lexical, projectRoot);
-  const entries = await readdir(pathValue, { withFileTypes: true });
+  const pathValue = resolveDirectory(lexical, projectRoot, fs);
+  const entries = fs.readDir(pathValue);
   const dirs = entries
-    .filter((entry) => entry.isDirectory())
+    .filter((entry) => entry.isDirectory)
     .map((entry) => ({ name: entry.name, path: join(pathValue, entry.name) }))
     .sort((a, b) => a.name.localeCompare(b.name));
   // A3 — roots contains only the project root. Home and FS-root are no longer exposed because
   // they could be outside the project boundary. The UI cwd picker shows only project-scoped paths.
   const roots: readonly TerminalDirectoryRoot[] = [{ label: "Project root", path: projectRoot }];
-  return {
+  return Promise.resolve({
     path: pathValue,
     parent: parentPath(pathValue, projectRoot),
     entries: dirs,
     roots,
-  };
+  });
 }

@@ -20,6 +20,7 @@ import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js"
 import { createCodingAppSessionChannel } from "../coding-app-session/sessionChannel.js";
 import type { RouteContext } from "../routes.js";
 import type { UiStore } from "../store/index.js";
+import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
 import { deriveManagedWorktreePath } from "../task-workspace/naming.js";
 import type { WorkspaceProvisioningService } from "../task-workspace/types.js";
 import { handleRuntimeCapabilities } from "./capabilityRoutes.js";
@@ -120,7 +121,11 @@ describe("GET /api/runtime/capabilities", () => {
   });
 
   it("admits only launcher-paired, persisted managed task worktrees", async (): Promise<void> => {
-    const managedRoot = join(root, "managed-task-workspaces");
+    // Production managed worktrees live below `.keiko`, which ordinary workspace admission denies.
+    // The paired request must therefore carry its request-scoped owned-root filesystem all the way
+    // through manifest discovery; a route that falls back to the node filesystem fails this proof.
+    const managedRoot = join(root, ".keiko", "managed-task-workspaces");
+    assertManagedRootOwned(managedRoot);
     const repositoryId = "repo_0123456789abcdef";
     const workspaceId = "ws_0123456789abcdef01234567";
     const managedWorktree = deriveManagedWorktreePath({
@@ -189,5 +194,6 @@ describe("GET /api/runtime/capabilities", () => {
       body: { error: { code: "WORKSPACE_NOT_REGISTERED" } },
     });
     expect(pairedResult.status).toBe(200);
+    expect(JSON.stringify(pairedResult.body)).toContain('"path":"package.json"');
   });
 });

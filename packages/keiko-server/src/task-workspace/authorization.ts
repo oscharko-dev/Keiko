@@ -7,6 +7,7 @@
 // path, derived managed path, realpath containment, and on-disk presence must all agree.
 
 import { basename } from "node:path";
+import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { UiHandlerDeps } from "../deps.js";
 import { isManagedTargetContained, managedTargetExists } from "./managed-root.js";
@@ -16,6 +17,11 @@ type ManagedRootDeps = Pick<
   UiHandlerDeps,
   "managedTaskWorkspaceRoot" | "store" | "workspaceProvisioning"
 >;
+
+export interface ManagedTaskWorkspaceLookup {
+  readonly managedRoot: string | undefined;
+  readonly getInstance: (workspaceId: string) => WorkspaceInstance | undefined;
+}
 
 function workspaceInfo(root: string): WorkspaceInfo {
   return {
@@ -43,16 +49,13 @@ function pathLeaf(path: string): string {
   return basename(trimTrailingSeparators(path));
 }
 
-export function resolveManagedTaskWorkspaceRoot(
-  deps: Pick<ManagedRootDeps, "managedTaskWorkspaceRoot" | "workspaceProvisioning">,
+export function resolveManagedTaskWorkspaceInstanceFromLookup(
+  lookup: ManagedTaskWorkspaceLookup,
   root: string,
-): WorkspaceInfo | undefined {
-  const managedRoot = deps.managedTaskWorkspaceRoot;
-  const provisioning = deps.workspaceProvisioning;
-  if (managedRoot === undefined || provisioning === undefined || root.length === 0) {
-    return undefined;
-  }
-  const instance = provisioning.getInstance(pathLeaf(root));
+): WorkspaceInstance | undefined {
+  const managedRoot = lookup.managedRoot;
+  if (managedRoot === undefined || root.length === 0) return undefined;
+  const instance = lookup.getInstance(pathLeaf(root));
   if (instance === undefined) return undefined;
   const expected = deriveManagedWorktreePath({
     managedRoot,
@@ -62,7 +65,31 @@ export function resolveManagedTaskWorkspaceRoot(
   if (root !== expected || instance.managedWorktreePath !== expected) return undefined;
   if (!isManagedTargetContained(managedRoot, instance.managedWorktreePath)) return undefined;
   if (!managedTargetExists(instance.managedWorktreePath)) return undefined;
-  return workspaceInfo(instance.managedWorktreePath);
+  return instance;
+}
+
+export function resolveManagedTaskWorkspaceInstance(
+  deps: Pick<ManagedRootDeps, "managedTaskWorkspaceRoot" | "workspaceProvisioning">,
+  root: string,
+): WorkspaceInstance | undefined {
+  const provisioning = deps.workspaceProvisioning;
+  if (provisioning === undefined) return undefined;
+  return resolveManagedTaskWorkspaceInstanceFromLookup(
+    {
+      managedRoot: deps.managedTaskWorkspaceRoot,
+      getInstance: (workspaceId): WorkspaceInstance | undefined =>
+        provisioning.getInstance(workspaceId),
+    },
+    root,
+  );
+}
+
+export function resolveManagedTaskWorkspaceRoot(
+  deps: Pick<ManagedRootDeps, "managedTaskWorkspaceRoot" | "workspaceProvisioning">,
+  root: string,
+): WorkspaceInfo | undefined {
+  const instance = resolveManagedTaskWorkspaceInstance(deps, root);
+  return instance === undefined ? undefined : workspaceInfo(instance.managedWorktreePath);
 }
 
 export function resolveRegisteredOrManagedWorkspaceRoot(

@@ -1,5 +1,7 @@
 import { readWorkspaceFile } from "./discovery.js";
+import { workspaceLanguageForPath } from "./ecosystems.js";
 import type { WorkspaceFs } from "./fs.js";
+import { languageForFileName } from "./languageClassification.js";
 import {
   CALL_REGEX,
   IDENTIFIER_REGEX,
@@ -26,6 +28,7 @@ import {
   structuralExecutionStopped,
   type StructuralExecutionControl,
 } from "./structuralExecution.js";
+import type { WorkspaceLanguage } from "./types.js";
 import type {
   SymbolDefinitionKind,
   SymbolGraph,
@@ -306,7 +309,20 @@ export async function buildSymbolGraphFromCandidates(
       filesScanned,
       filesSkipped,
       truncated: boundedCandidates.truncated || builder.truncated,
-      unsupportedLanguages: unsupportedLanguages(scope.workspace.languages),
+      unsupportedLanguages: unsupportedLanguages(observedLanguages(scope, candidateSet)),
     },
   };
+}
+
+function observedLanguages(
+  scope: SearchScope,
+  candidateSet: CandidateSet,
+): readonly WorkspaceLanguage[] {
+  const languages = new Set(scope.workspace.languages);
+  for (const file of candidateSet.files) {
+    const language =
+      workspaceLanguageForPath(file.relativePath) ?? languageForFileName(file.relativePath);
+    if (language !== undefined) languages.add(language);
+  }
+  return [...languages];
 }

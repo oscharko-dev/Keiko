@@ -17,16 +17,14 @@
 // SAME store. Restoration of the last active workspace is conservative — it never auto-selects among
 // ambiguous active workspaces (SC).
 
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
 import {
-  assertContainedRealPath,
   detectWorkspaceAt,
   PathEscapeError,
   resolveWithinWorkspace,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { assertContainedRealPathWithinOwnedRoot } from "@oscharko-dev/keiko-workspace/internal/owned-root";
 import type {
   GitWorktreeAdapter,
   WorktreeListEntry,
@@ -50,6 +48,7 @@ import {
   validateTaskWorkspaceTransition,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { deriveRepositoryId } from "./naming.js";
+import { inspectManagedGitdirIdentity } from "./gitdir-identity.js";
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import { correlationIdOrUnknown } from "../correlation.js";
@@ -80,45 +79,6 @@ function isoFrom(nowMs: number): string {
   return new Date(nowMs).toISOString();
 }
 
-// Parses the raw content of a `.git` linked-worktree pointer file and returns its (trimmed) target, or
-// undefined when the pointer is missing/malformed. Split out of safeGitdirIdentity so the parse itself —
-// specifically its cost on adversarial whitespace padding (S8786) — is directly measurable with no file
-// I/O in the timed path: see reconciliation-gitdir-pointer-parse.bench.ts, which imports this exact
-// function (never a hand-copied regex) so the bench can never silently drift from the parse it measures.
-// See provisioning.ts's gitdirIdentity: the removed leading/trailing `\s*` overlapped with `(.+)`, the
-// overlapping-quantifier shape SonarCloud's S8786 rule flags as ReDoS-risky. `.trim()` below already
-// strips the same whitespace, so behavior is unchanged. The bench's header states the honest empirical
-// result plainly: for this always-matching, single-line pointer, no dynamic measurement (this bench
-// included) reliably shows the pre-fix pattern as slower — the S8786 finding is a static, structural
-// classification of the pattern's shape, not a demonstrated exploit in this usage. The simplification is
-// kept regardless: it is a harmless, strictly-simpler pattern that satisfies the static gate
-// (`gates:sonar`) without changing parse behavior.
-export function parseGitdirPointerTarget(raw: string): string | undefined {
-  const match = /^gitdir:(.+)$/mu.exec(raw);
-  if (match?.[1] === undefined || match[1].length === 0) return undefined;
-  return match[1].trim();
-}
-
-// Non-throwing content-free identity of a worktree's git admin dir, or undefined when the `.git`
-// linked-worktree pointer is missing/malformed. Mirrors the throwing variant in provisioning.ts but
-// returns undefined so reconciliation can classify a stale pointer instead of failing.
-function safeGitdirIdentity(worktreePath: string): string | undefined {
-  let raw: string;
-  try {
-    const dotGit = join(worktreePath, ".git");
-    if (statSync(dotGit).isDirectory()) return undefined;
-    raw = readFileSync(dotGit, "utf8");
-  } catch {
-    return undefined;
-  }
-  const target = parseGitdirPointerTarget(raw);
-  // Preserves the pre-extraction behavior exactly: only an UNDEFINED target (no match, or an entirely
-  // empty capture pre-trim) short-circuits. A target that trims down to "" (e.g. an all-whitespace
-  // capture) still reaches the hash below, unchanged from before this function was split out.
-  if (target === undefined) return undefined;
-  return createHash("sha256").update(target, "utf8").digest("hex").slice(0, 32);
-}
-
 // Realpath-aware containment check delegated to keiko-workspace (same engine provisioning uses). True
 // when the persisted managed path still resolves inside the managed root after symlink resolution; any
 // escape OR an unverifiable parent chain is treated conservatively as not-contained, so reconciliation
@@ -126,7 +86,12 @@ function safeGitdirIdentity(worktreePath: string): string | undefined {
 function isContained(managedRoot: string, worktreePath: string): boolean {
   try {
     resolveWithinWorkspace(managedRoot, worktreePath);
-    assertContainedRealPath(nodeWorkspaceFs, managedRoot, worktreePath, "managed worktree path");
+    assertContainedRealPathWithinOwnedRoot(
+      nodeWorkspaceFs,
+      managedRoot,
+      worktreePath,
+      "managed worktree path",
+    );
     return true;
   } catch (error) {
     if (error instanceof PathEscapeError) return false;
@@ -204,7 +169,9 @@ async function gatherFacts(
 ): Promise<FactsAndHead> {
   const pathContained = isContained(ctx.deps.managedRoot, instance.managedWorktreePath);
   const worktreeDirExists = pathContained && existsSync(instance.managedWorktreePath);
-  const identity = worktreeDirExists ? safeGitdirIdentity(instance.managedWorktreePath) : undefined;
+  const identity = worktreeDirExists
+    ? inspectManagedGitdirIdentity(instance.managedWorktreePath, instance.repositoryRoot)?.identity
+    : undefined;
   const taskBranchPresent = worktreeDirExists
     ? await adapter.localBranchExists(instance.taskBranch)
     : false;

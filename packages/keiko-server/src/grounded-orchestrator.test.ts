@@ -64,6 +64,7 @@ import {
 } from "./grounded-orchestrator.js";
 import {
   nodeWorkspaceFs,
+  type WorkspaceDescriptorReadCompleteness,
   type WorkspaceDescriptorUtf8Read,
   type WorkspaceFileReader,
   type WorkspaceHardLinkPolicy,
@@ -417,6 +418,7 @@ function throwingReadFs(): WorkspaceFs {
 interface FsOperationCounts {
   readonly readFileUtf8: number;
   readonly readFileUtf8SameDescriptor: number;
+  readonly readFileUtf8WithinRootSameDescriptor: number;
   readonly readFileBytes: number;
   readonly readFileUtf8Prefix: number;
   readonly readFileRange: number;
@@ -437,6 +439,7 @@ function countingNodeFs(): {
 } {
   let readFileUtf8Calls = 0;
   let descriptorUtf8Calls = 0;
+  let containedDescriptorUtf8Calls = 0;
   let readFileBytesCalls = 0;
   let readFileUtf8PrefixCalls = 0;
   let readFileRangeCalls = 0;
@@ -450,6 +453,7 @@ function countingNodeFs(): {
   let existsCalls = 0;
   let contentReadBytes = 0;
   const descriptorUtf8 = nodeWorkspaceFs.readFileUtf8SameDescriptor;
+  const containedDescriptorUtf8 = nodeWorkspaceFs.readFileUtf8WithinRootSameDescriptor;
   const readFileBytes = nodeWorkspaceFs.readFileBytes;
   const readFileUtf8Prefix = nodeWorkspaceFs.readFileUtf8Prefix;
   const readFileRange = nodeWorkspaceFs.readFileRange;
@@ -489,9 +493,32 @@ function countingNodeFs(): {
               absolutePath: string,
               maxBytes: number,
               hardLinkPolicy: WorkspaceHardLinkPolicy,
+              expected: WorkspaceStat,
             ): WorkspaceDescriptorUtf8Read => {
               descriptorUtf8Calls += 1;
-              const value = descriptorUtf8(absolutePath, maxBytes, hardLinkPolicy);
+              const value = descriptorUtf8(absolutePath, maxBytes, hardLinkPolicy, expected);
+              contentReadBytes += value.sizeBytes;
+              return value;
+            },
+          }),
+      ...(containedDescriptorUtf8 === undefined
+        ? {}
+        : {
+            readFileUtf8WithinRootSameDescriptor: (
+              canonicalRoot: string,
+              absolutePath: string,
+              maxBytes: number,
+              hardLinkPolicy: WorkspaceHardLinkPolicy,
+              completeness: WorkspaceDescriptorReadCompleteness,
+            ): WorkspaceDescriptorUtf8Read => {
+              containedDescriptorUtf8Calls += 1;
+              const value = containedDescriptorUtf8(
+                canonicalRoot,
+                absolutePath,
+                maxBytes,
+                hardLinkPolicy,
+                completeness,
+              );
               contentReadBytes += value.sizeBytes;
               return value;
             },
@@ -503,9 +530,10 @@ function countingNodeFs(): {
               absolutePath: string,
               maxBytes: number,
               hardLinkPolicy: WorkspaceHardLinkPolicy,
+              expected: WorkspaceStat,
             ): Promise<Uint8Array> => {
               readFileBytesCalls += 1;
-              const value = await readFileBytes(absolutePath, maxBytes, hardLinkPolicy);
+              const value = await readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
               contentReadBytes += value.byteLength;
               return value;
             },
@@ -517,9 +545,10 @@ function countingNodeFs(): {
               absolutePath: string,
               maxBytes: number,
               hardLinkPolicy: WorkspaceHardLinkPolicy,
+              expected: WorkspaceStat,
             ): string => {
               readFileUtf8PrefixCalls += 1;
-              const value = readFileUtf8Prefix(absolutePath, maxBytes, hardLinkPolicy);
+              const value = readFileUtf8Prefix(absolutePath, maxBytes, hardLinkPolicy, expected);
               contentReadBytes += Buffer.byteLength(value, "utf8");
               return value;
             },
@@ -532,9 +561,16 @@ function countingNodeFs(): {
               startByte: number,
               length: number,
               hardLinkPolicy: WorkspaceHardLinkPolicy,
+              expected: WorkspaceStat,
             ): Promise<Uint8Array> => {
               readFileRangeCalls += 1;
-              const value = await readFileRange(absolutePath, startByte, length, hardLinkPolicy);
+              const value = await readFileRange(
+                absolutePath,
+                startByte,
+                length,
+                hardLinkPolicy,
+                expected,
+              );
               contentReadBytes += value.byteLength;
               return value;
             },
@@ -545,12 +581,14 @@ function countingNodeFs(): {
             openFileReader: async (
               absolutePath: string,
               hardLinkPolicy: WorkspaceHardLinkPolicy,
+              expected: WorkspaceStat,
             ): Promise<WorkspaceFileReader> => {
               openFileReaderCalls += 1;
               const reader = await openFileReader.call(
                 nodeWorkspaceFs,
                 absolutePath,
                 hardLinkPolicy,
+                expected,
               );
               return {
                 close: (): Promise<void> => reader.close(),
@@ -567,6 +605,7 @@ function countingNodeFs(): {
     counts: () => ({
       readFileUtf8: readFileUtf8Calls,
       readFileUtf8SameDescriptor: descriptorUtf8Calls,
+      readFileUtf8WithinRootSameDescriptor: containedDescriptorUtf8Calls,
       readFileBytes: readFileBytesCalls,
       readFileUtf8Prefix: readFileUtf8PrefixCalls,
       readFileRange: readFileRangeCalls,
@@ -606,9 +645,10 @@ function deadlineProbeOptionalReads(fs: WorkspaceFs, record: () => void): Partia
             path: string,
             maxBytes: number,
             hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
           ): WorkspaceDescriptorUtf8Read => {
             record();
-            return descriptorUtf8.call(fs, path, maxBytes, hardLinkPolicy);
+            return descriptorUtf8.call(fs, path, maxBytes, hardLinkPolicy, expected);
           },
         }),
     ...(readFileBytes === undefined
@@ -618,9 +658,10 @@ function deadlineProbeOptionalReads(fs: WorkspaceFs, record: () => void): Partia
             path: string,
             maxBytes: number,
             hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
           ): Promise<Uint8Array> => {
             record();
-            return readFileBytes.call(fs, path, maxBytes, hardLinkPolicy);
+            return readFileBytes.call(fs, path, maxBytes, hardLinkPolicy, expected);
           },
         }),
     ...(readFileUtf8Prefix === undefined
@@ -630,9 +671,10 @@ function deadlineProbeOptionalReads(fs: WorkspaceFs, record: () => void): Partia
             path: string,
             maxBytes: number,
             hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
           ): string => {
             record();
-            return readFileUtf8Prefix.call(fs, path, maxBytes, hardLinkPolicy);
+            return readFileUtf8Prefix.call(fs, path, maxBytes, hardLinkPolicy, expected);
           },
         }),
     ...(readFileRange === undefined
@@ -643,9 +685,10 @@ function deadlineProbeOptionalReads(fs: WorkspaceFs, record: () => void): Partia
             start: number,
             length: number,
             hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
           ): Promise<Uint8Array> => {
             record();
-            return readFileRange.call(fs, path, start, length, hardLinkPolicy);
+            return readFileRange.call(fs, path, start, length, hardLinkPolicy, expected);
           },
         }),
   };
@@ -669,9 +712,13 @@ function deadlineProbeOptionalWorkspace(fs: WorkspaceFs, record: () => void): Pa
           openFileReader: async (
             path: string,
             hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
           ): Promise<WorkspaceFileReader> => {
             record();
-            return deadlineProbeReader(await openFileReader.call(fs, path, hardLinkPolicy), record);
+            return deadlineProbeReader(
+              await openFileReader.call(fs, path, hardLinkPolicy, expected),
+              record,
+            );
           },
         }),
   };
@@ -861,7 +908,6 @@ async function measureRetrievalTraversal(
       nowMs: () => NOW,
       fs: counted.fs,
       activityLog,
-      detectWorkspace: () => ({ ...fakeWorkspace(), root: fixtureRoot }),
     },
   );
   const completed = activityLog.events.find(
@@ -923,6 +969,7 @@ function workspaceContentReadOperationCount(operations: FsOperationCounts): numb
   return (
     operations.readFileUtf8 +
     operations.readFileUtf8SameDescriptor +
+    operations.readFileUtf8WithinRootSameDescriptor +
     operations.readFileBytes +
     operations.readFileUtf8Prefix +
     operations.readFileRange +
@@ -941,7 +988,7 @@ function expectAbsoluteRetrievalIoBound(measurement: TraversalMeasurement): void
   const { directoryCount, fileCount, operations } = measurement;
   const contentReadByteCeiling =
     16 * measurement.fixtureContentBytes + 32 * measurement.maxReadableFixtureFileBytes;
-  expect(operations.unboundedReadDir).toBeLessThanOrEqual(4 * directoryCount);
+  expect(operations.unboundedReadDir).toBe(0);
   expect(operations.readDir).toBeLessThanOrEqual(6 * directoryCount + 32);
   expect(operations.readDirEntries).toBeLessThanOrEqual(10 * directoryCount + 32);
   expect(workspaceReadOperationCount(operations)).toBeLessThanOrEqual(16 * fileCount + 32);
@@ -1644,11 +1691,12 @@ describe("runGroundedExploration", () => {
         absolutePath,
         maxBytes,
         hardLinkPolicy,
+        expected,
       ): WorkspaceDescriptorUtf8Read => {
         if (absolutePath === realpathSync(manifestPath)) hardlinkDescriptorReads += 1;
         const read = nodeWorkspaceFs.readFileUtf8SameDescriptor;
         if (read === undefined) throw new Error("same-descriptor read is unavailable");
-        return read(absolutePath, maxBytes, hardLinkPolicy);
+        return read(absolutePath, maxBytes, hardLinkPolicy, expected);
       },
     };
 
@@ -1683,12 +1731,17 @@ describe("runGroundedExploration", () => {
     const descriptorCaps: number[] = [];
     const fs: WorkspaceFs = {
       ...nodeWorkspaceFs,
-      readFileUtf8SameDescriptor: (absolutePath, maxBytes, hardLinkPolicy) => {
+      readFileUtf8SameDescriptor: (absolutePath, maxBytes, hardLinkPolicy, expected) => {
         if (absolutePath === realpathSync(join(ROOT, "package.json"))) {
           descriptorCaps.push(maxBytes);
         }
         return (
-          nodeWorkspaceFs.readFileUtf8SameDescriptor?.(absolutePath, maxBytes, hardLinkPolicy) ?? {
+          nodeWorkspaceFs.readFileUtf8SameDescriptor?.(
+            absolutePath,
+            maxBytes,
+            hardLinkPolicy,
+            expected,
+          ) ?? {
             rawText: readFileSync(absolutePath, "utf8"),
             sizeBytes: statSync(absolutePath).size,
             stat: nodeWorkspaceFs.stat(absolutePath),
@@ -1750,11 +1803,12 @@ describe("runGroundedExploration", () => {
         absolutePath,
         maxBytes,
         hardLinkPolicy,
+        expected,
       ): WorkspaceDescriptorUtf8Read => {
         if (absolutePath === deniedTarget) deniedReads += 1;
         const read = nodeWorkspaceFs.readFileUtf8SameDescriptor;
         if (read === undefined) throw new Error("same-descriptor read is unavailable");
-        return read(absolutePath, maxBytes, hardLinkPolicy);
+        return read(absolutePath, maxBytes, hardLinkPolicy, expected);
       },
     };
 
@@ -2314,10 +2368,15 @@ describe("runGroundedExploration", () => {
     const descriptorCaps: number[] = [];
     const fs: WorkspaceFs = {
       ...nodeWorkspaceFs,
-      readFileUtf8SameDescriptor: (absolutePath, maxBytes, hardLinkPolicy) => {
+      readFileUtf8SameDescriptor: (absolutePath, maxBytes, hardLinkPolicy, expected) => {
         if (absolutePath === targetPath) descriptorCaps.push(maxBytes);
         return (
-          nodeWorkspaceFs.readFileUtf8SameDescriptor?.(absolutePath, maxBytes, hardLinkPolicy) ?? {
+          nodeWorkspaceFs.readFileUtf8SameDescriptor?.(
+            absolutePath,
+            maxBytes,
+            hardLinkPolicy,
+            expected,
+          ) ?? {
             rawText: readFileSync(absolutePath, "utf8"),
             sizeBytes: statSync(absolutePath).size,
             stat: nodeWorkspaceFs.stat(absolutePath),
@@ -2609,7 +2668,14 @@ describe("runGroundedExploration", () => {
     expect(
       multi.operations.contentReadBytes - single.operations.contentReadBytes,
     ).toBeLessThanOrEqual(32 * multi.maxReadableFixtureFileBytes);
-    expect(multi.operations.stat - single.operations.stat).toBeLessThanOrEqual(16);
+    const additionalContentReads =
+      workspaceContentReadOperationCount(multi.operations) -
+      workspaceContentReadOperationCount(single.operations);
+    // Every additional bounded read now earns one post-read stat revalidation. Keep the original
+    // discovery-work ceiling and account only for that mandatory trust check.
+    expect(multi.operations.stat - single.operations.stat).toBeLessThanOrEqual(
+      16 + additionalContentReads,
+    );
     expect(multi.operations.realPath - single.operations.realPath).toBeLessThanOrEqual(32);
     expect(multi.operations.unboundedReadDir - single.operations.unboundedReadDir).toBe(0);
   });
@@ -4378,11 +4444,11 @@ describe("runGroundedExploration", () => {
     let binaryProbeReads = 0;
     const fs: WorkspaceFs = {
       ...counted.fs,
-      readFileBytes: (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+      readFileBytes: (absolutePath, maxBytes, hardLinkPolicy, expected): Promise<Uint8Array> => {
         binaryProbeReads += 1;
         controller.abort();
         return (
-          counted.fs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy) ??
+          counted.fs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy, expected) ??
           Promise.resolve(new Uint8Array())
         );
       },

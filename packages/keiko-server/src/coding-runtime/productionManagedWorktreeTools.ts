@@ -40,6 +40,7 @@ import {
 } from "./codingToolReadEditPorts.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 export interface ProductionManagedWorktreeToolInput {
   readonly authority: Pick<
@@ -52,6 +53,7 @@ export interface ProductionManagedWorktreeToolInput {
   readonly modelId?: string | undefined;
   readonly adapterKind?: CodingWorkbenchRuntimeAdapterKind | undefined;
   readonly workspaceRoot: string;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
   readonly authorityExpiresAt: string;
   readonly effectiveMode: CodingWorkbenchMode;
   readonly effectiveModeNow?: (() => CodingWorkbenchMode | undefined) | undefined;
@@ -130,6 +132,7 @@ function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingT
       expiresAt: input.authorityExpiresAt,
     }),
     resolveWorkspaceRoot: () => input.workspaceRoot,
+    resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess,
     requiresEditorReview: () =>
       codingWorkbenchPolicyEffectFor(
         input.effectiveModeNow?.() ?? input.effectiveMode,
@@ -254,6 +257,7 @@ function auxiliaryPorts(
     runId: input.authorityRef.runId,
     workspaceId: () => input.liveFacts().binding.workspaceId,
     workspaceRoot: input.workspaceRoot,
+    resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess,
     // Empty means "no coding-safe provider model resolved": the child-agent port then stays
     // unmounted (fail closed) instead of running a child against an unusable model id.
     modelId: input.modelId ?? "",

@@ -36,8 +36,8 @@ import {
   RepoSearchUnsupportedFileError,
   searchText,
   type SearchScope,
+  type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assembleGroundedContext } from "@oscharko-dev/keiko-local-knowledge";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -102,12 +102,12 @@ function dedupeAndCapPathList(
   return deduped;
 }
 
-function assertContained(realRoot: string, relativePath: string): void {
+function assertContained(realRoot: string, relativePath: string, fs: WorkspaceFs): void {
   if (isAbsolute(relativePath) || pathIsDenied(relativePath)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   try {
-    containedRealPathInfo(nodeWorkspaceFs, realRoot, resolve(realRoot, relativePath));
+    containedRealPathInfo(fs, realRoot, resolve(realRoot, relativePath));
   } catch {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
@@ -147,6 +147,22 @@ function sanitizeCodingContextRequest(
   };
 }
 
+function validateCodingContextPaths(
+  realRoot: string,
+  fs: WorkspaceFs,
+  request: CodingContextRequest,
+): RouteResult | undefined {
+  assertContained(realRoot, request.documentPath, fs);
+  const invalidDocument = validateRelativePathShape("documentPath", request.documentPath);
+  if (invalidDocument !== undefined) return invalidDocument;
+  for (const changed of request.changedFiles ?? []) {
+    assertContained(realRoot, changed, fs);
+    const invalidChanged = validateRelativePathShape("changedFiles", changed);
+    if (invalidChanged !== undefined) return invalidChanged;
+  }
+  return undefined;
+}
+
 // ─── POST /api/editor/context ─────────────────────────────────────────────────────
 export async function handleEditorContext(
   ctx: RouteContext,
@@ -163,26 +179,18 @@ export async function handleEditorContext(
   const rootInput = rootFieldOf(body);
   return runFilesHandler(async () => {
     const root = await resolveRequestRoot(ctx, deps, rootInput);
+    const { canonicalRoot, fs } = root.access;
     const request = sanitizeCodingContextRequest(buildInternalRequest(body));
     if (isRouteResult(request)) {
       return request;
     }
-    assertContained(root.realRoot, request.documentPath);
-    const invalidDocument = validateRelativePathShape("documentPath", request.documentPath);
-    if (invalidDocument !== undefined) {
-      return invalidDocument;
-    }
-    for (const changed of request.changedFiles ?? []) {
-      assertContained(root.realRoot, changed);
-      const invalidChanged = validateRelativePathShape("changedFiles", changed);
-      if (invalidChanged !== undefined) {
-        return invalidChanged;
-      }
-    }
+    const invalidPath = validateCodingContextPaths(canonicalRoot, fs, request);
+    if (invalidPath !== undefined) return invalidPath;
     const nowMs = Date.now();
     const pack = await assembleCodingContext(request, {
       deps,
-      realRoot: root.realRoot,
+      realRoot: canonicalRoot,
+      fs,
       signal: clientAbortSignal(ctx),
       nowMs,
       // The git context is assembled by calling the git routes in-process; without this their
@@ -353,25 +361,30 @@ function repoSearchErrorResult(error: unknown): RouteResult | undefined {
 
 function validateRepoSearchPaths(
   realRoot: string,
+  fs: WorkspaceFs,
   input: RepoSearchInput,
 ): RouteResult | undefined {
   for (const path of input.paths) {
-    assertContained(realRoot, path);
+    assertContained(realRoot, path, fs);
     const invalid = validateRelativePathShape("paths", path);
     if (invalid !== undefined) {
       return invalid;
     }
   }
   if (input.operation === "readExcerpt") {
-    assertContained(realRoot, input.scopePath);
+    assertContained(realRoot, input.scopePath, fs);
     return validateRelativePathShape("scopePath", input.scopePath);
   }
   return undefined;
 }
 
-function buildRepoSearchScope(realRoot: string, input: RepoSearchInput): SearchScope {
+function buildRepoSearchScope(
+  realRoot: string,
+  fs: WorkspaceFs,
+  input: RepoSearchInput,
+): SearchScope {
   return {
-    workspace: detectWorkspaceAt(realRoot, nodeWorkspaceFs),
+    workspace: detectWorkspaceAt(realRoot, fs),
     scopeId: "editor-repo-search",
     relativePaths: input.paths,
   };
@@ -398,6 +411,7 @@ async function runReadExcerptOperation(
   scope: SearchScope,
   input: RepoSearchExcerptInput,
   signal: AbortSignal,
+  fs: WorkspaceFs,
 ): Promise<RouteResult> {
   const result = await readExcerpt(
     scope,
@@ -407,7 +421,7 @@ async function runReadExcerptOperation(
       endLine: input.endLine,
       maxBytes: input.maxBytes,
     },
-    { signal },
+    { signal, fs },
   );
   return {
     status: 200,
@@ -425,14 +439,16 @@ async function runQueryOperation(
   scope: SearchScope,
   input: RepoSearchQueryInput,
   signal: AbortSignal,
+  fs: WorkspaceFs,
 ): Promise<RouteResult> {
   const query = buildRepoSearchQuery(input, Date.now());
   const workspaceIndex = deps.workspaceIndexForRoot?.(scope.workspace.root);
   const result =
     input.operation === "findFiles"
-      ? await findFiles(scope, query, DEFAULT_SEARCH_LIMITS, { signal })
+      ? await findFiles(scope, query, DEFAULT_SEARCH_LIMITS, { signal, fs })
       : await searchText(scope, query, DEFAULT_SEARCH_LIMITS, {
           signal,
+          fs,
           ...(workspaceIndex === undefined ? {} : { workspaceIndex }),
         });
   return {
@@ -451,11 +467,12 @@ async function runRepoSearchOperation(
   scope: SearchScope,
   input: RepoSearchInput,
   signal: AbortSignal,
+  fs: WorkspaceFs,
 ): Promise<RouteResult> {
   try {
     return input.operation === "readExcerpt"
-      ? await runReadExcerptOperation(deps, scope, input, signal)
-      : await runQueryOperation(deps, scope, input, signal);
+      ? await runReadExcerptOperation(deps, scope, input, signal, fs)
+      : await runQueryOperation(deps, scope, input, signal, fs);
   } catch (error) {
     const routeError = repoSearchErrorResult(error);
     if (routeError !== undefined) {
@@ -479,15 +496,17 @@ export async function handleEditorRepoSearch(
   }
   return runFilesHandler(async () => {
     const root = await resolveRequestRoot(ctx, deps, input.root);
-    const invalid = validateRepoSearchPaths(root.realRoot, input);
+    const { canonicalRoot, fs } = root.access;
+    const invalid = validateRepoSearchPaths(canonicalRoot, fs, input);
     if (invalid !== undefined) {
       return invalid;
     }
     return await runRepoSearchOperation(
       deps,
-      buildRepoSearchScope(root.realRoot, input),
+      buildRepoSearchScope(canonicalRoot, fs, input),
       input,
       clientAbortSignal(ctx),
+      fs,
     );
   });
 }

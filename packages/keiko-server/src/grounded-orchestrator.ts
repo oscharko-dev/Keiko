@@ -61,8 +61,6 @@ import {
   detectWorkspaceAt,
   endpointContractAdapter,
   gitHistoryAdapter,
-  isAllowedContainedPathParent,
-  isCanonicalAllowedContainedPath,
   isCanonicalMetadataFile,
   isEcosystemSourceFile,
   isDenied,
@@ -84,6 +82,10 @@ import {
   evidenceAtomStableId,
 } from "@oscharko-dev/keiko-workspace";
 import {
+  isAllowedContainedPathParent,
+  isCanonicalAllowedContainedPath,
+} from "@oscharko-dev/keiko-workspace/internal/realpath-policy";
+import {
   createStructuralAdapterRequestContext,
   createEcosystemStructureAdapters,
   importGraphAdapter,
@@ -96,11 +98,14 @@ import {
 } from "@oscharko-dev/keiko-workspace/code-intelligence";
 import { CancelledError, ERROR_CODES } from "@oscharko-dev/keiko-model-gateway";
 import {
+  isWorkspacePathSnapshotCurrent,
   nodeWorkspaceFs,
+  type WorkspaceDescriptorReadCompleteness,
   type WorkspaceDescriptorUtf8Read,
   type WorkspaceFileReader,
   type WorkspaceHardLinkPolicy,
 } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { preserveOwnedRootAuthority } from "@oscharko-dev/keiko-workspace/internal/owned-root-preserve";
 import {
   normalizeGroundedAnswerPayload,
   type GroundedAnswerPayload,
@@ -169,6 +174,10 @@ export interface OrchestratorInput {
   readonly answerQuestion?: string | undefined;
   readonly answerOnlyContextAvailable?: boolean | undefined;
   readonly workspaceRoot: string;
+  // Request-scoped filesystem authority for the exact canonical root. Ordinary callers omit it;
+  // managed-task callers receive it only after the lifecycle owner has re-proved the persisted
+  // instance and paired app session. It is never serialized into evidence or wire payloads.
+  readonly workspaceFs?: WorkspaceFs | undefined;
   readonly budget?: ExplorationBudget;
 }
 
@@ -1769,16 +1778,24 @@ function readBoundedWorkspaceManifest(
   cache?: FileExistenceCache,
 ): string | undefined {
   try {
-    if (fs.readFileUtf8SameDescriptor !== undefined) {
-      return fs.readFileUtf8SameDescriptor(absolutePath, WORKSPACE_MANIFEST_BYTES_MAX, "reject")
-        .rawText;
-    }
     const stat = fs.stat(absolutePath);
     if (!stat.isFile || stat.size > WORKSPACE_MANIFEST_BYTES_MAX) {
       recordMetadataCoverageIssue(cache, "workspace-manifest-byte-limit");
       return undefined;
     }
+    if (fs.readFileUtf8SameDescriptor !== undefined) {
+      const read = fs.readFileUtf8SameDescriptor(
+        absolutePath,
+        WORKSPACE_MANIFEST_BYTES_MAX,
+        "reject",
+        stat,
+      );
+      return isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, stat)
+        ? read.rawText
+        : undefined;
+    }
     const rawText = fs.readFileUtf8(absolutePath);
+    if (!isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, stat)) return undefined;
     if (utf8ByteLength(rawText) > WORKSPACE_MANIFEST_BYTES_MAX) {
       recordMetadataCoverageIssue(cache, "workspace-manifest-byte-limit");
       return undefined;
@@ -1934,7 +1951,7 @@ function metadataTraversalFs(fs: WorkspaceFs, control: MetadataTraversalControl)
   const descriptorRead = fs.readFileUtf8SameDescriptor;
   const canonicalRoot = fs.canonicalWorkspaceRoot;
   const run = <T>(operation: () => T): T => metadataTraversalOperation(control, operation);
-  return {
+  return preserveOwnedRootAuthority(fs, {
     readFileUtf8: (path): string => run(() => fs.readFileUtf8(path)),
     stat: (path): WorkspaceStat => run(() => fs.stat(path)),
     readDir: (path, maxEntries): readonly WorkspaceDirEntry[] =>
@@ -1948,15 +1965,16 @@ function metadataTraversalFs(fs: WorkspaceFs, control: MetadataTraversalControl)
             path: string,
             maxBytes: number,
             hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
           ): WorkspaceDescriptorUtf8Read =>
-            run(() => descriptorRead.call(fs, path, maxBytes, hardLinkPolicy)),
+            run(() => descriptorRead.call(fs, path, maxBytes, hardLinkPolicy, expected)),
         }),
     ...(canonicalRoot === undefined
       ? {}
       : {
           canonicalWorkspaceRoot: (root: string): string => run(() => canonicalRoot.call(fs, root)),
         }),
-  };
+  });
 }
 
 function cancellationGuardedWorkspaceFs(
@@ -2422,16 +2440,26 @@ export function scanFirstSymbolLine(
 }
 
 function boundedSymbolFileText(fs: WorkspaceFs, absolutePath: string): string | undefined {
+  const stat = fs.stat(absolutePath);
+  if (!stat.isFile || stat.size > SYMBOL_LINE_SCAN_BYTES_MAX) return undefined;
   if (fs.readFileUtf8SameDescriptor !== undefined) {
-    return fs.readFileUtf8SameDescriptor(absolutePath, SYMBOL_LINE_SCAN_BYTES_MAX, "reject")
-      .rawText;
+    const read = fs.readFileUtf8SameDescriptor(
+      absolutePath,
+      SYMBOL_LINE_SCAN_BYTES_MAX,
+      "reject",
+      stat,
+    );
+    return isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, stat)
+      ? read.rawText
+      : undefined;
   }
   // Compatibility for in-memory/test ports only. Production always supplies the same-descriptor
   // reader; the pre-read stat keeps legacy fakes bounded without weakening the production path.
-  const stat = fs.stat(absolutePath);
-  if (!stat.isFile || stat.size > SYMBOL_LINE_SCAN_BYTES_MAX) return undefined;
   const rawText = fs.readFileUtf8(absolutePath);
-  return utf8ByteLength(rawText) <= SYMBOL_LINE_SCAN_BYTES_MAX ? rawText : undefined;
+  return utf8ByteLength(rawText) <= SYMBOL_LINE_SCAN_BYTES_MAX &&
+    isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, stat)
+    ? rawText
+    : undefined;
 }
 
 function firstSymbolLine(
@@ -5169,6 +5197,7 @@ function observedSynchronousContentReads(
   counters: MutableWorkspaceIoActivityCounters,
 ): Partial<WorkspaceFs> {
   const descriptorRead = workspaceFsProperty(fs, "readFileUtf8SameDescriptor");
+  const containedDescriptorRead = workspaceFsProperty(fs, "readFileUtf8WithinRootSameDescriptor");
   const prefixRead = workspaceFsProperty(fs, "readFileUtf8Prefix");
   return {
     ...(descriptorRead === undefined
@@ -5178,9 +5207,33 @@ function observedSynchronousContentReads(
             path: string,
             maxBytes: number,
             hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
           ): WorkspaceDescriptorUtf8Read => {
             counters.contentReadCalls += 1;
-            const result = descriptorRead.call(fs, path, maxBytes, hardLinkPolicy);
+            const result = descriptorRead.call(fs, path, maxBytes, hardLinkPolicy, expected);
+            recordDescriptorPayload(counters, result);
+            return result;
+          },
+        }),
+    ...(containedDescriptorRead === undefined
+      ? {}
+      : {
+          readFileUtf8WithinRootSameDescriptor: (
+            canonicalRoot: string,
+            path: string,
+            maxBytes: number,
+            hardLinkPolicy: WorkspaceHardLinkPolicy,
+            completeness: WorkspaceDescriptorReadCompleteness,
+          ): WorkspaceDescriptorUtf8Read => {
+            counters.contentReadCalls += 1;
+            const result = containedDescriptorRead.call(
+              fs,
+              canonicalRoot,
+              path,
+              maxBytes,
+              hardLinkPolicy,
+              completeness,
+            );
             recordDescriptorPayload(counters, result);
             return result;
           },
@@ -5192,9 +5245,13 @@ function observedSynchronousContentReads(
             path: string,
             maxBytes: number,
             hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
           ): string => {
             counters.contentReadCalls += 1;
-            return recordTextPayload(counters, prefixRead.call(fs, path, maxBytes, hardLinkPolicy));
+            return recordTextPayload(
+              counters,
+              prefixRead.call(fs, path, maxBytes, hardLinkPolicy, expected),
+            );
           },
         }),
   };
@@ -5205,6 +5262,7 @@ function observedAsyncByteRead(
     path: string,
     maxBytes: number,
     hardLinkPolicy: WorkspaceHardLinkPolicy,
+    expected: WorkspaceStat,
   ) => Promise<Uint8Array>,
   fs: WorkspaceFs,
   counters: MutableWorkspaceIoActivityCounters,
@@ -5212,10 +5270,14 @@ function observedAsyncByteRead(
   path: string,
   maxBytes: number,
   hardLinkPolicy: WorkspaceHardLinkPolicy,
+  expected: WorkspaceStat,
 ) => Promise<Uint8Array> {
-  return async (path, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+  return async (path, maxBytes, hardLinkPolicy, expected): Promise<Uint8Array> => {
     counters.contentReadCalls += 1;
-    return recordBytePayload(counters, await read.call(fs, path, maxBytes, hardLinkPolicy));
+    return recordBytePayload(
+      counters,
+      await read.call(fs, path, maxBytes, hardLinkPolicy, expected),
+    );
   };
 }
 
@@ -5238,11 +5300,12 @@ function observedAsyncContentReads(
             start: number,
             length: number,
             hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
           ): Promise<Uint8Array> => {
             counters.contentReadCalls += 1;
             return recordBytePayload(
               counters,
-              await rangeRead.call(fs, path, start, length, hardLinkPolicy),
+              await rangeRead.call(fs, path, start, length, hardLinkPolicy, expected),
             );
           },
         }),
@@ -5252,10 +5315,11 @@ function observedAsyncContentReads(
           openFileReader: async (
             path: string,
             hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
           ): Promise<WorkspaceFileReader> => {
             counters.contentReadCalls += 1;
             return observedWorkspaceFileReader(
-              await openReader.call(fs, path, hardLinkPolicy),
+              await openReader.call(fs, path, hardLinkPolicy, expected),
               counters,
             );
           },
@@ -5292,42 +5356,37 @@ function requestScopedWorkspaceFs(fs: WorkspaceFs): WorkspaceIoActivity {
     counters.realPathCalls += 1;
     return fs.realPath(absolutePath);
   };
-  return {
-    fs: {
-      readFileUtf8: (absolutePath): string => {
-        counters.contentReadCalls += 1;
-        return recordTextPayload(counters, fs.readFileUtf8(absolutePath));
-      },
-      stat: (absolutePath): WorkspaceStat => {
-        counters.statCalls += 1;
-        return fs.stat(absolutePath);
-      },
-      readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
-        counters.readDirCalls += 1;
-        const entries = fs.readDir(absolutePath, maxEntries);
-        try {
-          addWorkspaceIoPayloadCount(counters, "readDirEntries", entries.length);
-        } catch {
-          // Observability must never replace the workspace result supplied by the owning port.
-        }
-        return entries;
-      },
-      realPath: observedRealPath,
-      exists: (absolutePath): boolean => {
-        counters.existsCalls += 1;
-        return fs.exists(absolutePath);
-      },
-      ...observedSynchronousContentReads(fs, counters),
-      ...observedAsyncContentReads(fs, counters),
-      canonicalWorkspaceRoot: (absoluteRoot): string =>
-        observedCanonicalWorkspaceRoot(
-          fs,
-          counters,
-          canonicalRoots,
-          observedRealPath,
-          absoluteRoot,
-        ),
+  const observedFs = preserveOwnedRootAuthority(fs, {
+    readFileUtf8: (absolutePath): string => {
+      counters.contentReadCalls += 1;
+      return recordTextPayload(counters, fs.readFileUtf8(absolutePath));
     },
+    stat: (absolutePath): WorkspaceStat => {
+      counters.statCalls += 1;
+      return fs.stat(absolutePath);
+    },
+    readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+      counters.readDirCalls += 1;
+      const entries = fs.readDir(absolutePath, maxEntries);
+      try {
+        addWorkspaceIoPayloadCount(counters, "readDirEntries", entries.length);
+      } catch {
+        // Observability must never replace the workspace result supplied by the owning port.
+      }
+      return entries;
+    },
+    realPath: observedRealPath,
+    exists: (absolutePath): boolean => {
+      counters.existsCalls += 1;
+      return fs.exists(absolutePath);
+    },
+    ...observedSynchronousContentReads(fs, counters),
+    ...observedAsyncContentReads(fs, counters),
+    canonicalWorkspaceRoot: (absoluteRoot): string =>
+      observedCanonicalWorkspaceRoot(fs, counters, canonicalRoots, observedRealPath, absoluteRoot),
+  });
+  return {
+    fs: observedFs,
     diagnostics: (): WorkspaceIoActivityDiagnostics => ({ ...counters }),
   };
 }
@@ -5356,6 +5415,10 @@ interface LiveRetrievalContext {
   readonly workspaceIndexSource: WorkspaceIndex | undefined;
   readonly workspaceIndexActivity: WorkspaceIndexActivity;
   readonly workspaceIndex: WorkspaceIndex | undefined;
+}
+
+function detectConnectedContextWorkspace(root: string, fs: WorkspaceFs): WorkspaceInfo {
+  return detectWorkspaceAt(root, fs, { scanSourceFilesForLanguages: false });
 }
 
 function prepareLiveRetrievalContext(
@@ -5522,12 +5585,14 @@ export async function retrieveConnectedContextPack(
   };
   activity.started();
   try {
-    const workspaceIoActivity = requestScopedWorkspaceFs(deps.fs ?? nodeWorkspaceFs);
+    const workspaceIoActivity = requestScopedWorkspaceFs(
+      input.workspaceFs ?? deps.fs ?? nodeWorkspaceFs,
+    );
     progress.workspaceIoActivity = workspaceIoActivity;
     const execution = await executeConnectedContextRetrieval(input, deps, {
       fs: workspaceIoActivity.fs,
       workspaceRoot: input.workspaceRoot,
-      detect: deps.detectWorkspace ?? detectWorkspaceAt,
+      detect: deps.detectWorkspace ?? detectConnectedContextWorkspace,
       nowMs,
       activity,
       progress,

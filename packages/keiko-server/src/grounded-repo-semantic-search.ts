@@ -25,7 +25,10 @@ import {
   type SemanticSearchProvider,
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  isWorkspacePathSnapshotCurrent,
+  nodeWorkspaceFs,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import {
   configuredEmbeddingProviders,
@@ -325,15 +328,6 @@ function isContainedPath(root: string, candidate: string): boolean {
   return fromRoot.length > 0 && !fromRoot.startsWith("..") && !isAbsolute(fromRoot);
 }
 
-function stableFileStat(
-  before: ReturnType<WorkspaceFs["stat"]>,
-  after: ReturnType<WorkspaceFs["stat"]>,
-): boolean {
-  if (!after.isFile || after.isSymbolicLink || before.size !== after.size) return false;
-  if (before.mtimeMs !== undefined && before.mtimeMs !== after.mtimeMs) return false;
-  return before.ctimeMs === undefined || before.ctimeMs === after.ctimeMs;
-}
-
 function fingerprintByteLength(fingerprint: RepositoryFileFingerprint): number | undefined {
   const byteLength = fingerprint.byteLength;
   return Number.isSafeInteger(byteLength) &&
@@ -376,9 +370,9 @@ async function readLiveFingerprintBytes(
   try {
     const file = liveFingerprintFile(ctx, pod, scopePath, byteLength);
     if (file === undefined) return undefined;
-    const bytes = await ctx.fs.readFileBytes(file.realPath, byteLength + 1, "reject");
-    const after = ctx.fs.stat(file.absolutePath);
-    return bytes.byteLength === byteLength && stableFileStat(file.before, after)
+    const bytes = await ctx.fs.readFileBytes(file.realPath, byteLength + 1, "reject", file.before);
+    return bytes.byteLength === byteLength &&
+      isWorkspacePathSnapshotCurrent(ctx.fs, file.absolutePath, file.realPath, file.before)
       ? bytes
       : undefined;
   } catch {

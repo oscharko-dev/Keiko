@@ -7,24 +7,15 @@
 // write/cwd paths (tools/patch.ts, tools/exec.ts) share this single primitive — no duplicated logic.
 
 import { dirname, isAbsolute, resolve, win32 } from "node:path";
-import type { WorkspaceFs } from "./fs.js";
+import { forwardWorkspaceFs, type WorkspaceFs } from "./fs.js";
+import { ownedWorkspaceRootAuthority } from "./ownedRootLookup.js";
+import { preserveOwnedRootAuthority } from "./ownedRootPreserve.js";
 import { isDenied } from "./ignore.js";
 import { isWithinWorkspace } from "./paths.js";
 import { PathDeniedError, PathEscapeError } from "./errors.js";
 import { StructuralExecutionStoppedError } from "./structuralExecution.js";
 
-const RELOCATED_DENIED_WORKSPACE_ROOT_REQUEST = "[relocated-denied-workspace-root]";
-
-// Resolves `root` through any platform symlinks (e.g. macOS /var -> /private/var) so the
-// containment comparison is symlink-consistent on both sides. Falls back to the lexical root.
-function realRoot(fs: WorkspaceFs, root: string): string {
-  try {
-    return fs.canonicalWorkspaceRoot?.(root) ?? fs.realPath(root);
-  } catch (error) {
-    if (error instanceof StructuralExecutionStoppedError) throw error;
-    return root;
-  }
-}
+const DENIED_WORKSPACE_ROOT_REQUEST = "[denied-workspace-root]";
 
 // Walks up from `absolutePath` to the nearest ancestor that exists on disk and returns its real
 // path. A create target does not exist yet, so we must realpath the deepest existing parent to
@@ -51,15 +42,47 @@ function toRelative(root: string, absolutePath: string): string {
 }
 
 function deniedLocusSuffixes(path: string): ReadonlySet<string> {
-  const normalized = normalizedAbsolutePath(path);
-  const segments = (windowsPathShape(path) ? normalized.replaceAll("\\", "/") : normalized)
-    .split("/")
-    .filter((segment) => segment.length > 0);
+  const segments = absolutePathSegments(path);
   const loci = new Set<string>();
   for (const [index, segment] of segments.entries()) {
     if (isDenied(segment)) loci.add(segments.slice(index).join("/"));
   }
   return loci;
+}
+
+function absolutePathSegments(path: string): readonly string[] {
+  const normalized = normalizedAbsolutePath(path);
+  return (windowsPathShape(path) ? normalized.replaceAll("\\", "/") : normalized)
+    .split("/")
+    .filter((segment) => segment.length > 0);
+}
+
+function deniedSegmentIndexes(segments: readonly string[]): readonly number[] {
+  const indexes: number[] = [];
+  for (const [index, segment] of segments.entries()) {
+    if (isDenied(segment)) indexes.push(index);
+  }
+  return indexes;
+}
+
+function isAllowedCodexWorktreeRoot(
+  segments: readonly string[],
+  deniedIndexes: readonly number[],
+): boolean {
+  if (deniedIndexes.length !== 1) return false;
+  const deniedIndex = deniedIndexes[0];
+  if (deniedIndex === undefined) return false;
+  return (
+    segments[deniedIndex]?.toLowerCase() === ".codex" &&
+    segments[deniedIndex + 1]?.toLowerCase() === "worktrees" &&
+    segments.length > deniedIndex + 2
+  );
+}
+
+function deniedWorkspaceRootPath(path: string): boolean {
+  const segments = absolutePathSegments(path);
+  const deniedIndexes = deniedSegmentIndexes(segments);
+  return deniedIndexes.length > 0 && !isAllowedCodexWorktreeRoot(segments, deniedIndexes);
 }
 
 function windowsPathShape(path: string): boolean {
@@ -90,10 +113,9 @@ function isKnownPlatformRootAlias(realRoot: string, lexicalRoot: string): boolea
 }
 
 // A workspace root can hide a protected location when only paths below the root are checked (for
-// example, "docs" -> ".aws"). Preserve relative-only deny semantics for a root already nested below
-// `.codex` or another denied ancestor, including benign platform prefix aliases, but refuse every
-// denied locus introduced or relocated by the symlink. Comparing only the denied segment identity
-// is insufficient: one `.codex` worktree could otherwise redirect to a separate `.codex` store.
+// example, "docs" -> ".aws"). Comparing only the denied segment identity is insufficient: one
+// `.codex` worktree could otherwise redirect to a separate `.codex` store. Direct denied roots are
+// classified separately during root admission; this predicate owns relocation identity only.
 export function realRootIsDeniedViaSymlink(realRoot: string, lexicalRoot: string): boolean {
   if (!validAbsoluteRoot(realRoot) || !validAbsoluteRoot(lexicalRoot)) return true;
   const lexicalDeniedLoci = deniedLocusSuffixes(lexicalRoot);
@@ -114,22 +136,53 @@ function validAbsoluteRoot(root: string): boolean {
   );
 }
 
-function throwRelocatedDeniedWorkspaceRoot(): never {
-  throw new PathDeniedError(
-    "refusing a relocated denied workspace root",
-    RELOCATED_DENIED_WORKSPACE_ROOT_REQUEST,
+function throwDeniedWorkspaceRoot(): never {
+  throw new PathDeniedError("refusing a denied workspace root", DENIED_WORKSPACE_ROOT_REQUEST);
+}
+
+export function workspaceFsBoundToCanonicalRoot(
+  fs: WorkspaceFs,
+  canonicalRoot: string,
+): WorkspaceFs {
+  const bound = forwardWorkspaceFs(fs, (root): string =>
+    root === canonicalRoot ? canonicalRoot : fs.realPath.call(fs, root),
   );
+  return ownedWorkspaceRootAuthority(fs) === canonicalRoot
+    ? preserveOwnedRootAuthority(fs, bound)
+    : bound;
+}
+
+export function assertCanonicalWorkspaceRootIdentity(fs: WorkspaceFs, canonicalRoot: string): void {
+  if (!validAbsoluteRoot(canonicalRoot) || fs.realPath(canonicalRoot) !== canonicalRoot) {
+    throwDeniedWorkspaceRoot();
+  }
 }
 
 function assertAllowedResolvedWorkspaceRoot(realBase: string, lexicalRoot: string): string {
-  if (realRootIsDeniedViaSymlink(realBase, lexicalRoot)) throwRelocatedDeniedWorkspaceRoot();
+  if (
+    deniedWorkspaceRootPath(lexicalRoot) ||
+    deniedWorkspaceRootPath(realBase) ||
+    realRootIsDeniedViaSymlink(realBase, lexicalRoot)
+  ) {
+    throwDeniedWorkspaceRoot();
+  }
   return realBase;
 }
 
-export function assertAllowedWorkspaceRealRoot(fs: WorkspaceFs, lexicalRoot: string): string {
-  if (!validAbsoluteRoot(lexicalRoot)) throwRelocatedDeniedWorkspaceRoot();
-  const realBase = realRoot(fs, lexicalRoot);
-  return assertAllowedResolvedWorkspaceRoot(realBase, lexicalRoot);
+function ownsExactWorkspaceRoot(fs: WorkspaceFs, lexicalRoot: string): boolean {
+  const ownedRoot = ownedWorkspaceRootAuthority(fs);
+  return ownedRoot !== undefined && validAbsoluteRoot(ownedRoot) && ownedRoot === lexicalRoot;
+}
+
+// Internal containment also protects Keiko-owned roots such as ~/.keiko/task-workspaces and the
+// Git-history adapter's already-authorized metadata root. Those roots may intentionally live below
+// an always-denied user-workspace segment, but must still have one stable canonical identity and
+// must never relocate to a different denied locus.
+function resolveContainedWorkspaceRealRoot(fs: WorkspaceFs, lexicalRoot: string): string {
+  if (!validAbsoluteRoot(lexicalRoot)) throwDeniedWorkspaceRoot();
+  const realBase = fs.canonicalWorkspaceRoot?.(lexicalRoot) ?? fs.realPath(lexicalRoot);
+  if (realRootIsDeniedViaSymlink(realBase, lexicalRoot)) throwDeniedWorkspaceRoot();
+  return realBase;
 }
 
 // Effectful consumers need one stable canonical identity. Resolve exactly once, then classify and
@@ -138,16 +191,23 @@ export function resolveExistingAllowedWorkspaceRealRoot(
   fs: WorkspaceFs,
   lexicalRoot: string,
 ): string {
-  if (!validAbsoluteRoot(lexicalRoot)) throwRelocatedDeniedWorkspaceRoot();
-  const realBase = fs.canonicalWorkspaceRoot?.(lexicalRoot) ?? fs.realPath(lexicalRoot);
+  const ownedRoot = ownsExactWorkspaceRoot(fs, lexicalRoot);
+  if (!validAbsoluteRoot(lexicalRoot) || (deniedWorkspaceRootPath(lexicalRoot) && !ownedRoot)) {
+    throwDeniedWorkspaceRoot();
+  }
+  const realBase = resolveContainedWorkspaceRealRoot(fs, lexicalRoot);
+  if (ownedRoot) {
+    if (realBase !== lexicalRoot) throwDeniedWorkspaceRoot();
+    return realBase;
+  }
   return assertAllowedResolvedWorkspaceRoot(realBase, lexicalRoot);
 }
 export interface ContainedRealPathInfo {
   readonly path: string;
   readonly realRelative: string;
-  // The symlink-resolved workspace root (`fs.realPath(root)`, lexical root on failure). Exposed so the
-  // read path can deny a benign-named root symlink that resolves into a protected location — a denied
-  // segment that lives in the realpath'd ROOT is invisible to the root-relative deny checks.
+  // The strictly resolved workspace root. Exposed so the read path can deny a benign-named root
+  // symlink that resolves into a protected location — a denied segment that lives in the realpath'd
+  // ROOT is invisible to the root-relative deny checks.
   readonly realBase: string;
 }
 
@@ -199,12 +259,11 @@ export function isAllowedContainedPathParent(
   );
 }
 
-export function containedRealPathInfo(
+function containedRealPathInfoFromBase(
   fs: WorkspaceFs,
-  root: string,
+  realBase: string,
   absolutePath: string,
 ): ContainedRealPathInfo {
-  const realBase = assertAllowedWorkspaceRealRoot(fs, root);
   try {
     const target = fs.realPath(absolutePath);
     if (!isWithinWorkspace(realBase, target)) {
@@ -229,6 +288,35 @@ export function containedRealPathInfo(
   }
 }
 
+export function containedRealPathInfo(
+  fs: WorkspaceFs,
+  root: string,
+  absolutePath: string,
+): ContainedRealPathInfo {
+  return containedRealPathInfoFromBase(
+    fs,
+    resolveExistingAllowedWorkspaceRealRoot(fs, root),
+    absolutePath,
+  );
+}
+
+/**
+ * Internal-root containment for a root whose owning layer has already proved its authority.
+ * This is intentionally distinct from user-workspace admission: Keiko-managed state and the sole
+ * Git metadata adapter may live below a globally denied segment, while relocation still fails.
+ */
+export function containedRealPathInfoWithinOwnedRoot(
+  fs: WorkspaceFs,
+  root: string,
+  absolutePath: string,
+): ContainedRealPathInfo {
+  return containedRealPathInfoFromBase(
+    fs,
+    resolveContainedWorkspaceRealRoot(fs, root),
+    absolutePath,
+  );
+}
+
 // Asserts that `absolutePath` (already lexically contained) does not escape `root` via a symlink.
 // For an existing target, the target's own realpath must stay within the real root. For a
 // not-yet-existing target (create), the nearest existing ancestor's realpath must stay within it,
@@ -243,4 +331,14 @@ export function assertContainedRealPath(
 ): string {
   const info = containedRealPathInfo(fs, root, absolutePath);
   return info.path;
+}
+
+/** Call only after the owning layer has proved authority over `root`. */
+export function assertContainedRealPathWithinOwnedRoot(
+  fs: WorkspaceFs,
+  root: string,
+  absolutePath: string,
+  _label: string,
+): string {
+  return containedRealPathInfoWithinOwnedRoot(fs, root, absolutePath).path;
 }

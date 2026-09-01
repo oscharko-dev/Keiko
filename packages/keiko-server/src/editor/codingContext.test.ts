@@ -19,6 +19,7 @@ import type {
   LiteLLMRerankRequest,
   RerankOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { buildRedactor } from "../index.js";
 import type { UiHandlerDeps } from "../index.js";
 import type { GitHubCodeContextApiPort } from "../coding-context/githubCodeContextConnector.js";
@@ -115,6 +116,7 @@ function ctx(
   return {
     deps: deps(),
     realRoot: root,
+    fs: nodeWorkspaceFs,
     signal,
     nowMs,
     currentTimeMs: () => nowMs,

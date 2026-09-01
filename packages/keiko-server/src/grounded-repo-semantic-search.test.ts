@@ -534,6 +534,12 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
       absolutePath("src/auth.ts"),
       indexedText.length + 1,
       "reject",
+      expect.objectContaining({
+        isFile: true,
+        isDirectory: false,
+        isSymbolicLink: false,
+        size: Buffer.byteLength(liveText),
+      }),
     );
     pod.store.close();
     deps.store.close();
@@ -591,10 +597,10 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     let readsFail = false;
     const fs: WorkspaceFs = {
       ...baseFs,
-      readFileBytes: (path, maxBytes, hardLinkPolicy) =>
+      readFileBytes: (path, maxBytes, hardLinkPolicy, expected) =>
         readsFail
           ? Promise.reject(new Error("READ_BLOCKED"))
-          : (baseFs.readFileBytes?.(path, maxBytes, hardLinkPolicy) ??
+          : (baseFs.readFileBytes?.(path, maxBytes, hardLinkPolicy, expected) ??
             Promise.reject(new Error("NO_READER"))),
     };
     const pod = await seedRepositoryPod(deps, fs, Object.keys(files));

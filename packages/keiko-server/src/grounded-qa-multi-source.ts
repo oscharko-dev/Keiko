@@ -87,6 +87,7 @@ import {
   groundedContextAssemblyInput,
   groundedContextSummaryInput,
   groundedEvidenceRunId,
+  groundedScopeWorkspaceFs,
   internalError,
   isValidGroundedPack,
   mappedGatewayError,
@@ -680,11 +681,13 @@ async function retrieveOneSource(
   const scope = buildSelectedScopeFrom(ctx.chat, cs, deriveScopeIdFrom(ctx.chat, cs, i));
   let out: Awaited<ReturnType<GroundedRetriever>>;
   try {
+    const workspaceFs = groundedScopeWorkspaceFs(cs);
     out = await ctx.retriever({
       scope,
       query,
       workspaceRoot: scope.workspaceRoot,
       budget,
+      ...(workspaceFs === undefined ? {} : { workspaceFs }),
     });
     ensureNotCancelled(ctx.signal);
   } catch (error) {

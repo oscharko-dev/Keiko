@@ -1,15 +1,46 @@
 import { describe, expect, it } from "vitest";
 
 import { PathDeniedError, PathEscapeError } from "./errors.js";
-import type { WorkspaceFs } from "./fs.js";
+import type { WorkspaceDirEntry, WorkspaceFs, WorkspaceStat } from "./fs.js";
+import { workspaceFsWithOwnedRootAuthority } from "./ownedRootMint.js";
+import { preserveOwnedRootAuthority } from "./ownedRootPreserve.js";
 import { memFs } from "./_memfs.js";
 import {
   containedRealPathInfo,
+  containedRealPathInfoWithinOwnedRoot,
   isAllowedContainedPathParent,
   isCanonicalAllowedContainedPath,
   realRootIsDeniedViaSymlink,
   resolveExistingAllowedWorkspaceRealRoot,
 } from "./realpath.js";
+
+class PrototypeWorkspaceFs implements WorkspaceFs {
+  readonly #root: string;
+
+  public constructor(root: string) {
+    this.#root = root;
+  }
+
+  public readFileUtf8(_absolutePath: string): string {
+    return this.#root;
+  }
+
+  public stat(_absolutePath: string): WorkspaceStat {
+    return { size: 0, isFile: false, isDirectory: true, isSymbolicLink: false };
+  }
+
+  public readDir(_absolutePath: string): readonly WorkspaceDirEntry[] {
+    return [];
+  }
+
+  public realPath(_absolutePath: string): string {
+    return this.#root;
+  }
+
+  public exists(_absolutePath: string): boolean {
+    return true;
+  }
+}
 
 describe("resolveExistingAllowedWorkspaceRealRoot", () => {
   it("classifies and returns one canonical root identity", () => {
@@ -34,6 +65,133 @@ describe("resolveExistingAllowedWorkspaceRealRoot", () => {
     expect(() => resolveExistingAllowedWorkspaceRealRoot(fs, "/work/project")).toThrow(
       PathDeniedError,
     );
+  });
+
+  it.each([
+    "/home/user/.aws",
+    "/home/user/.ssh/project",
+    "/home/user/.codex",
+    "/home/user/.codex/worktrees",
+    "/home/user/.codex/worktrees/project/.aws",
+    "/home/user/.keiko",
+    "/home/user/.keiko/task-workspaces",
+    "/home/user/.keiko/task-workspaces/repo_invalid/ws_invalid",
+    "/home/user/.keiko/task-workspaces/repo_aaaaaaaaaaaaaaaa/ws_bbbbbbbbbbbbbbbbbbbbbbbb/.aws",
+  ])("rejects a directly selected denied root %s", (root) => {
+    const baseFs = memFs("/home/user", {});
+    let realPathCalls = 0;
+    const fs: WorkspaceFs = {
+      ...baseFs,
+      realPath: (): string => {
+        realPathCalls += 1;
+        return root;
+      },
+    };
+
+    expect(() => resolveExistingAllowedWorkspaceRealRoot(fs, root)).toThrow(PathDeniedError);
+    expect(realPathCalls).toBe(0);
+  });
+
+  it("admits a canonical Codex worktree below its internal state root", () => {
+    const root = "/home/user/.codex/worktrees/task/project";
+    const baseFs = memFs("/home/user", {});
+    const fs: WorkspaceFs = { ...baseFs, realPath: (): string => root };
+
+    expect(resolveExistingAllowedWorkspaceRealRoot(fs, root)).toBe(root);
+  });
+
+  it("admits only the exact canonical root pre-authorized by its owning layer", () => {
+    const root = "/home/user/.keiko/dev/ui/task-workspaces/repo_a/ws_b";
+    const baseFs = memFs("/home/user", {});
+    const fs = workspaceFsWithOwnedRootAuthority(
+      { ...baseFs, realPath: (path): string => path },
+      root,
+    );
+
+    expect(resolveExistingAllowedWorkspaceRealRoot(fs, root)).toBe(root);
+    expect(() => resolveExistingAllowedWorkspaceRealRoot(fs, `${root}/nested`)).toThrow(
+      PathDeniedError,
+    );
+    expect(() => resolveExistingAllowedWorkspaceRealRoot(fs, `${root}/../ws_b`)).toThrow(
+      PathDeniedError,
+    );
+    expect(() =>
+      resolveExistingAllowedWorkspaceRealRoot(fs, "/home/user/.keiko/dev/ui/task-workspaces"),
+    ).toThrow(PathDeniedError);
+  });
+
+  it("rejects a pre-authorized root whose current canonical identity changed", () => {
+    const root = "/home/user/.keiko/dev/ui/task-workspaces/repo_a/ws_b";
+    const relocated = "/home/user/.keiko/dev/ui/task-workspaces/repo_c/ws_d";
+    const baseFs = memFs("/home/user", {});
+    const fs = workspaceFsWithOwnedRootAuthority(
+      { ...baseFs, realPath: (): string => relocated },
+      root,
+    );
+
+    expect(() => resolveExistingAllowedWorkspaceRealRoot(fs, root)).toThrow(PathDeniedError);
+  });
+
+  it("does not treat a copied plain filesystem port as owned authority", () => {
+    const root = "/home/user/.keiko/dev/ui/task-workspaces/repo_a/ws_b";
+    const baseFs = memFs("/home/user", {});
+    const plain: WorkspaceFs = { ...baseFs, realPath: (path): string => path };
+
+    expect(() => resolveExistingAllowedWorkspaceRealRoot(plain, root)).toThrow(PathDeniedError);
+  });
+
+  it("preserves prototype methods without exposing a copyable authority marker", () => {
+    const root = "/home/user/.keiko/dev/ui/task-workspaces/repo_a/ws_b";
+    const authorized = workspaceFsWithOwnedRootAuthority(new PrototypeWorkspaceFs(root), root);
+    const requestWrapper: WorkspaceFs = { ...authorized };
+    const preservedWrapper = preserveOwnedRootAuthority(authorized, requestWrapper);
+
+    expect(Reflect.ownKeys(authorized).filter((key) => typeof key === "symbol")).toEqual([]);
+    expect(Object.values(authorized)).not.toContain(root);
+    expect(requestWrapper.readFileUtf8(root)).toBe(root);
+    expect(requestWrapper.stat(root).isDirectory).toBe(true);
+    const copiedWrapper: WorkspaceFs = { ...authorized };
+    expect(() => resolveExistingAllowedWorkspaceRealRoot(copiedWrapper, root)).toThrow(
+      PathDeniedError,
+    );
+    expect(resolveExistingAllowedWorkspaceRealRoot(preservedWrapper, root)).toBe(root);
+    expect(() =>
+      resolveExistingAllowedWorkspaceRealRoot(
+        preservedWrapper,
+        "/home/user/.keiko/dev/ui/task-workspaces/repo_a/ws_c",
+      ),
+    ).toThrow(PathDeniedError);
+  });
+
+  it("cannot mint authority by reflecting, copying, or preserving from an unauthorized port", () => {
+    const root = "/home/user/.keiko/dev/ui/task-workspaces/repo_a/ws_b";
+    const sibling = "/home/user/.keiko/dev/ui/task-workspaces/repo_a/ws_c";
+    const baseFs = memFs("/home/user", {});
+    const authorized = workspaceFsWithOwnedRootAuthority(
+      { ...baseFs, realPath: (path): string => path },
+      root,
+    );
+    const reflectedCopy = Object.assign(
+      { ...baseFs, realPath: (path: string): string => path },
+      Object.fromEntries(
+        Object.getOwnPropertySymbols(authorized).map((symbol) => [
+          symbol,
+          Reflect.get(authorized, symbol),
+        ]),
+      ),
+    );
+    const unauthorizedSource: WorkspaceFs = { ...authorized };
+
+    expect(Object.getOwnPropertySymbols(authorized)).toEqual([]);
+    expect(() => resolveExistingAllowedWorkspaceRealRoot(reflectedCopy, sibling)).toThrow(
+      PathDeniedError,
+    );
+    expect(() =>
+      resolveExistingAllowedWorkspaceRealRoot(
+        preserveOwnedRootAuthority(unauthorizedSource, reflectedCopy),
+        sibling,
+      ),
+    ).toThrow(PathDeniedError);
   });
 
   it("reuses the request-scoped canonical root identity", () => {
@@ -127,6 +285,24 @@ describe("containedRealPathInfo", () => {
     ).toThrow(PathEscapeError);
     expect(measured.canonicalCalls()).toBe(1);
     expect(measured.targetCalls()).toBe(1);
+  });
+
+  it("contains a child below an already-owned internal state root", () => {
+    const root = "/home/user/.keiko/task-workspaces";
+    const target = `${root}/task-1`;
+    const baseFs = memFs(root, {});
+    const fs: WorkspaceFs = {
+      ...baseFs,
+      canonicalWorkspaceRoot: (): string => root,
+      realPath: (absolutePath): string => absolutePath,
+    };
+
+    expect(() => containedRealPathInfo(fs, root, target)).toThrow(PathDeniedError);
+    expect(containedRealPathInfoWithinOwnedRoot(fs, root, target)).toEqual({
+      path: target,
+      realRelative: "task-1",
+      realBase: root,
+    });
   });
 });
 

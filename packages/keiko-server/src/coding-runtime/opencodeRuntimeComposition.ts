@@ -23,6 +23,7 @@ import type {
   CodingWorkbenchRuntimeEvent,
   UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 import {
   contentFreeErrorClass,
@@ -135,6 +136,7 @@ export interface OpenCodeRuntimeCompositionInput {
   };
   readonly fetch: typeof globalThis.fetch;
   readonly supervisor: RuntimeProcessSupervisor;
+  readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
   /**
@@ -230,6 +232,9 @@ export function createOpenCodeRuntimeComposition(
     processEnv: {},
     openCodeLifecycleAdapter: lifecycle,
     portableRuntimeResolver: () => input.portable,
+    ...(input.resolveWorkspaceRootAccess === undefined
+      ? {}
+      : { resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess }),
     ...(input.onRuntimeEvent ? { onRuntimeEvent: input.onRuntimeEvent } : {}),
     ...(input.codingToolApprovals === undefined
       ? {}

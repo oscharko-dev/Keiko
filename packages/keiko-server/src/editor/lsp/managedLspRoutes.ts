@@ -12,7 +12,14 @@ import {
 import { resolveManagedLspActivation } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation";
 
 import type { UiHandlerDeps } from "../../deps.js";
-import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../../files.js";
+import {
+  FilesError,
+  readJsonObject,
+  requestRootAccessResolver,
+  resolveRequestRoot,
+  runFilesHandler,
+} from "../../files.js";
+import { DENIED_MESSAGE } from "../../files-deny.js";
 import { errorBody, type RouteContext, type RouteResult } from "../../routes.js";
 import { listHostLspHealthSnapshotsForRoot } from "./hostLanguageOperation.js";
 import { managedLspConfigurationDefaults } from "./managedLspConfigurationDefaults.js";
@@ -116,8 +123,11 @@ export async function handleGetManagedLspControl(
   }
   return runFilesHandler(async () => {
     const resolved = await resolveRequestRoot(ctx, deps, ctx.url.searchParams.get("root"));
+    const resolveAccess = requestRootAccessResolver(ctx, deps, resolved);
     const snapshot = await deps.managedLspControl?.read(resolved.realRoot);
     if (snapshot === undefined) throw new Error("managed LSP control disappeared");
+    const access = resolveAccess();
+    if (access === undefined) throw new FilesError(403, "DENIED", DENIED_MESSAGE);
     const health = listHostLspHealthSnapshotsForRoot(resolved.realRoot);
     const response = {
       ...snapshot,
@@ -127,7 +137,10 @@ export async function handleGetManagedLspControl(
       providerMetadata: [
         {
           language: "python",
-          configurationSource: detectPythonConfigurationPrecedence(resolved.realRoot),
+          configurationSource: detectPythonConfigurationPrecedence(
+            access.canonicalRoot,
+            access.fs,
+          ),
           runtimeIdentitySource: pythonRuntimeIdentitySourceFor(snapshot),
         },
       ],

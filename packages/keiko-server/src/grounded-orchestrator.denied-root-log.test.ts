@@ -55,7 +55,7 @@ function expectSearchLifecycle(
 function expectDeniedLifecycle(activityLog: BufferedActivityLog): void {
   expect(activityLog.events.map((event) => event.op)).toEqual([
     "search.connected-context.started",
-    "workspace.root-relocation.denied",
+    "workspace.root.denied",
     "search.connected-context.failed",
   ]);
   expect(activityLog.events.every((event) => event.correlationId === CORRELATION_ID)).toBe(true);
@@ -63,7 +63,7 @@ function expectDeniedLifecycle(activityLog: BufferedActivityLog): void {
     level: "warn",
     category: "security",
     errorKind: "WORKSPACE_PATH_DENIED",
-    extra: { decision: "denied", reason: "relocated-denied-locus" },
+    extra: { decision: "denied", reason: "denied-locus" },
   });
   expect(activityLog.events[2]).toMatchObject({
     level: "error",

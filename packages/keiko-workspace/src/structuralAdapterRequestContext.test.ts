@@ -125,10 +125,11 @@ function countingFs(files: Readonly<Record<string, string>> = FILES): {
         absolutePath,
         maxBytes,
         hardLinkPolicy,
+        expected,
       ): ReturnType<NonNullable<WorkspaceFs["readFileUtf8SameDescriptor"]>> => {
         readFileUtf8Calls += 1;
         return (
-          base.readFileUtf8SameDescriptor?.(absolutePath, maxBytes, hardLinkPolicy) ?? {
+          base.readFileUtf8SameDescriptor?.(absolutePath, maxBytes, hardLinkPolicy, expected) ?? {
             rawText: base.readFileUtf8(absolutePath),
             sizeBytes: base.stat(absolutePath).size,
             stat: base.stat(absolutePath),
@@ -139,10 +140,16 @@ function countingFs(files: Readonly<Record<string, string>> = FILES): {
         readFileUtf8Calls += 1;
         return base.readFileUtf8(absolutePath);
       },
-      readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+      readFileBytes: async (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): Promise<Uint8Array> => {
         readFileBytesCalls += 1;
         return (
-          (await base.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy)) ?? new Uint8Array()
+          (await base.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy, expected)) ??
+          new Uint8Array()
         );
       },
       readDir: (absolutePath, maxEntries): ReturnType<WorkspaceFs["readDir"]> => {
@@ -705,20 +712,22 @@ describe("StructuralAdapterRequestContext", () => {
         ioCalls += 1;
         return base.exists(path);
       },
-      readFileUtf8SameDescriptor: (path, maxBytes, hardLinkPolicy) => {
+      readFileUtf8SameDescriptor: (path, maxBytes, hardLinkPolicy, expected) => {
         ioCalls += 1;
         return (
-          base.readFileUtf8SameDescriptor?.(path, maxBytes, hardLinkPolicy) ?? {
+          base.readFileUtf8SameDescriptor?.(path, maxBytes, hardLinkPolicy, expected) ?? {
             rawText: base.readFileUtf8(path),
             sizeBytes: base.stat(path).size,
             stat: base.stat(path),
           }
         );
       },
-      readFileBytes: async (path, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+      readFileBytes: async (path, maxBytes, hardLinkPolicy, expected): Promise<Uint8Array> => {
         ioCalls += 1;
         if (path.endsWith("/src/a.ts")) aByteReads += 1;
-        return (await base.readFileBytes?.(path, maxBytes, hardLinkPolicy)) ?? new Uint8Array();
+        return (
+          (await base.readFileBytes?.(path, maxBytes, hardLinkPolicy, expected)) ?? new Uint8Array()
+        );
       },
     };
     let saveCount = 0;

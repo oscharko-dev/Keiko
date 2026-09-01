@@ -13,7 +13,8 @@ import type {
   KnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
 import { isSafeStorageReference } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-paths";
-import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { isDenied, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { isWorkspacePathSnapshotCurrent } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { isContained, walkSource } from "../discovery/walk.js";
 import type { DiscoveryOptions } from "../discovery/types.js";
@@ -56,6 +57,72 @@ export interface ScanRepositoryFingerprintsOptions {
 
 function joinAbsolute(root: string, relativePath: string): string {
   return root.endsWith("/") ? `${root}${relativePath}` : `${root}/${relativePath}`;
+}
+
+function canonicalRelative(root: string, target: string): string | undefined {
+  const normalizedRoot = root.replaceAll("\\", "/").replace(/\/$/u, "");
+  const normalizedTarget = target.replaceAll("\\", "/");
+  if (!isContained(normalizedRoot, normalizedTarget)) return undefined;
+  return normalizedTarget === normalizedRoot
+    ? ""
+    : normalizedTarget.slice(normalizedRoot.length + 1);
+}
+
+function isCanonicalGitDirectory(
+  stat: ReturnType<WorkspaceFs["stat"]>,
+  rootRealPath: string,
+  gitRealPath: string,
+): boolean {
+  return (
+    stat.isDirectory &&
+    !stat.isSymbolicLink &&
+    canonicalRelative(rootRealPath, gitRealPath) === ".git"
+  );
+}
+
+function isCanonicalGitIndex(
+  stat: ReturnType<WorkspaceFs["stat"]>,
+  gitRealPath: string,
+  indexRealPath: string,
+): boolean {
+  return (
+    stat.isFile && !stat.isSymbolicLink && canonicalRelative(gitRealPath, indexRealPath) === "index"
+  );
+}
+
+interface GitIndexSnapshots {
+  readonly rootPath: string;
+  readonly rootRealPath: string;
+  readonly rootStat: ReturnType<WorkspaceFs["stat"]>;
+  readonly gitDirectory: string;
+  readonly gitRealPath: string;
+  readonly gitStat: ReturnType<WorkspaceFs["stat"]>;
+  readonly indexPath: string;
+  readonly indexRealPath: string;
+  readonly indexStat: ReturnType<WorkspaceFs["stat"]>;
+}
+
+function gitIndexSnapshotsAreCurrent(fs: WorkspaceFs, snapshots: GitIndexSnapshots): boolean {
+  return (
+    isWorkspacePathSnapshotCurrent(
+      fs,
+      snapshots.rootPath,
+      snapshots.rootRealPath,
+      snapshots.rootStat,
+    ) &&
+    isWorkspacePathSnapshotCurrent(
+      fs,
+      snapshots.gitDirectory,
+      snapshots.gitRealPath,
+      snapshots.gitStat,
+    ) &&
+    isWorkspacePathSnapshotCurrent(
+      fs,
+      snapshots.indexPath,
+      snapshots.indexRealPath,
+      snapshots.indexStat,
+    )
+  );
 }
 
 function uint16(bytes: Uint8Array, offset: number): number | undefined {
@@ -137,10 +204,11 @@ async function readBoundedFile(
   absolutePath: string,
   size: number,
   limit: number,
+  expected: ReturnType<WorkspaceFs["stat"]>,
 ): Promise<Uint8Array | undefined> {
   if (size < 0 || size > limit || fs.readFileBytes === undefined) return undefined;
   try {
-    const bytes = await fs.readFileBytes(absolutePath, size + 1, "allow");
+    const bytes = await fs.readFileBytes(absolutePath, size + 1, "allow", expected);
     return bytes.byteLength === size ? bytes : undefined;
   } catch {
     return undefined;
@@ -154,17 +222,38 @@ async function trackedPathsFromGitIndex(
   const gitDirectory = joinAbsolute(rootPath, ".git");
   try {
     const rootRealPath = fs.realPath(rootPath);
-    const gitStat = fs.stat(gitDirectory);
+    const rootStat = fs.stat(rootRealPath);
     const gitRealPath = fs.realPath(gitDirectory);
-    if (!gitStat.isDirectory || gitStat.isSymbolicLink || !isContained(rootRealPath, gitRealPath)) {
+    const gitStat = fs.stat(gitRealPath);
+    if (!isCanonicalGitDirectory(gitStat, rootRealPath, gitRealPath)) return undefined;
+    const indexPath = joinAbsolute(gitDirectory, "index");
+    const indexRealPath = fs.realPath(indexPath);
+    const indexStat = fs.stat(indexRealPath);
+    if (!isCanonicalGitIndex(indexStat, gitRealPath, indexRealPath)) return undefined;
+    const bytes = await readBoundedFile(
+      fs,
+      indexRealPath,
+      indexStat.size,
+      MAX_GIT_INDEX_BYTES,
+      indexStat,
+    );
+    if (bytes === undefined) return undefined;
+    if (
+      !gitIndexSnapshotsAreCurrent(fs, {
+        rootPath,
+        rootRealPath,
+        rootStat,
+        gitDirectory,
+        gitRealPath,
+        gitStat,
+        indexPath,
+        indexRealPath,
+        indexStat,
+      })
+    ) {
       return undefined;
     }
-    const indexPath = joinAbsolute(gitDirectory, "index");
-    const indexStat = fs.stat(indexPath);
-    const indexRealPath = fs.realPath(indexPath);
-    if (!indexStat.isFile || !isContained(gitRealPath, indexRealPath)) return undefined;
-    const bytes = await readBoundedFile(fs, indexPath, indexStat.size, MAX_GIT_INDEX_BYTES);
-    return bytes === undefined ? undefined : parseGitIndexTrackedPaths(bytes);
+    return parseGitIndexTrackedPaths(bytes);
   } catch {
     return undefined;
   }
@@ -219,10 +308,11 @@ async function hashWithOpenReader(
   absolutePath: string,
   size: number,
   hash: Hash,
+  expected: ReturnType<WorkspaceFs["stat"]>,
 ): Promise<boolean> {
   if (fs.openFileReader === undefined) return false;
   let complete: boolean;
-  const reader = await fs.openFileReader(absolutePath, "allow");
+  const reader = await fs.openFileReader(absolutePath, "allow", expected);
   try {
     complete = await hashRanges(reader.readRange, size, hash);
   } finally {
@@ -240,23 +330,24 @@ async function hashFileContent(
   absolutePath: string,
   size: number,
   hash: Hash,
+  expected: ReturnType<WorkspaceFs["stat"]>,
 ): Promise<boolean> {
   if (!Number.isSafeInteger(size) || size < 0 || size > DEFAULT_MAX_BYTES) return false;
   try {
     if (fs.openFileReader !== undefined) {
-      return await hashWithOpenReader(fs, absolutePath, size, hash);
+      return await hashWithOpenReader(fs, absolutePath, size, hash, expected);
     }
     if (fs.readFileRange !== undefined) {
       return await hashRanges(
         (start, length) =>
-          fs.readFileRange?.(absolutePath, start, length, "allow") ??
+          fs.readFileRange?.(absolutePath, start, length, "allow", expected) ??
           Promise.reject(new Error("range reader unavailable")),
         size,
         hash,
       );
     }
     if (fs.readFileBytes === undefined || size > MAX_SINGLE_READ_BYTES) return false;
-    const bytes = await fs.readFileBytes(absolutePath, size + 1, "allow");
+    const bytes = await fs.readFileBytes(absolutePath, size + 1, "allow", expected);
     if (bytes.byteLength !== size) return false;
     hash.update(bytes);
     return true;
@@ -296,6 +387,44 @@ function fileFingerprint(
   return mtimeMs === undefined ? fingerprint : { ...fingerprint, mtimeMs };
 }
 
+interface FingerprintTarget {
+  readonly absolutePath: string;
+  readonly rootRealPath: string;
+  readonly rootStat: ReturnType<WorkspaceFs["stat"]>;
+  readonly realPath: string;
+  readonly stat: ReturnType<WorkspaceFs["stat"]>;
+}
+
+function resolveFingerprintTarget(
+  fs: WorkspaceFs,
+  rootPath: string,
+  relativePath: string,
+  size: number,
+): FingerprintTarget | undefined {
+  const absolutePath = joinAbsolute(rootPath, relativePath);
+  const rootRealPath = fs.realPath(rootPath);
+  const rootStat = fs.stat(rootRealPath);
+  const realPath = fs.realPath(absolutePath);
+  if (!isContained(rootRealPath, realPath)) return undefined;
+  const canonicalPath = canonicalRelative(rootRealPath, realPath);
+  if (canonicalPath === undefined || isDenied(canonicalPath)) return undefined;
+  const stat = fs.stat(realPath);
+  if (!stat.isFile || stat.size !== size) return undefined;
+  return { absolutePath, rootRealPath, rootStat, realPath, stat };
+}
+
+function fingerprintTargetIsCurrent(
+  fs: WorkspaceFs,
+  rootPath: string,
+  target: FingerprintTarget,
+): boolean {
+  return (
+    isStableFile(target.stat, fs.stat(target.realPath)) &&
+    isWorkspacePathSnapshotCurrent(fs, rootPath, target.rootRealPath, target.rootStat) &&
+    isWorkspacePathSnapshotCurrent(fs, target.absolutePath, target.realPath, target.stat)
+  );
+}
+
 async function fingerprintFile(
   fs: WorkspaceFs,
   rootPath: string,
@@ -304,15 +433,13 @@ async function fingerprintFile(
   trackedPaths: ReadonlySet<string> | undefined,
 ): Promise<RepositoryFileFingerprint | undefined> {
   try {
-    const absolutePath = joinAbsolute(rootPath, relativePath);
-    const stat = fs.stat(absolutePath);
-    if (!stat.isFile || stat.size !== size) return undefined;
+    const target = resolveFingerprintTarget(fs, rootPath, relativePath, size);
+    if (target === undefined) return undefined;
     const tracked = trackedPaths?.has(relativePath) === true;
     const hash = createFingerprintHash(tracked, size);
-    if (!(await hashFileContent(fs, absolutePath, size, hash))) return undefined;
-    const after = fs.stat(absolutePath);
-    if (!isStableFile(stat, after)) return undefined;
-    return fileFingerprint(relativePath, size, stat.mtimeMs, tracked, hash.digest("hex"));
+    if (!(await hashFileContent(fs, target.realPath, size, hash, target.stat))) return undefined;
+    if (!fingerprintTargetIsCurrent(fs, rootPath, target)) return undefined;
+    return fileFingerprint(relativePath, size, target.stat.mtimeMs, tracked, hash.digest("hex"));
   } catch {
     return undefined;
   }

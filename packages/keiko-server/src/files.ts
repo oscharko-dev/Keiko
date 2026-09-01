@@ -66,7 +66,13 @@ import {
 import type { UiHandlerDeps } from "./deps.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import type { Project, UiStore } from "./store/index.js";
-import { resolveManagedTaskWorkspaceRoot } from "./task-workspace/authorization.js";
+import {
+  createOrdinaryWorkspaceRootAccess,
+  requiresConfiguredManagedWorkspaceAuthority,
+  resolveManagedWorkspaceRootAccess,
+  type WorkspaceRootAccess,
+} from "./task-workspace/workspace-root-access.js";
+export { requiresManagedRootAuthority } from "./task-workspace/workspace-root-access.js";
 
 const MAX_DIRECTORY_ENTRIES = 1_000;
 const DEFAULT_FILE_SEARCH_LIMIT = 24;
@@ -196,6 +202,7 @@ export interface ContainedEditorFilePath {
 export interface ResolvedProjectRoot {
   readonly root: string;
   readonly realRoot: string;
+  readonly access: WorkspaceRootAccess;
 }
 
 export interface ResolveRequestRootOptions {
@@ -206,38 +213,8 @@ export interface ResolveRequestRootOptions {
   readonly managedRootAuthority?: "authorize" | "defer-to-caller";
 }
 
-/**
- * Decides whether a candidate root may only be served under managed-workspace authority. Exported
- * so Git classifies identically to Files: two copies of this rule drifted once already (#2473), and
- * the divergence made the operator's own repository look unavailable while Files served it.
- */
-export function requiresManagedRootAuthority(managedRoot: string, candidateRoot: string): boolean {
-  if (containsPath(managedRoot, candidateRoot)) return true;
-  if (!containsPath(candidateRoot, managedRoot)) return false;
-  // Production state may live below the selected workspace only inside its already-denied `.keiko`
-  // subtree. Keep that ancestor browsable while the Files deny layer excludes the complete managed
-  // subtree from tree/search and rejects every direct target or mutation before filesystem access.
-  return !pathIsDenied(rootRelativePosixPath(candidateRoot, managedRoot));
-}
-
 function requestedManagedRoot(deps: UiHandlerDeps, rootInput: string | null): boolean {
-  const managedRoot = deps.managedTaskWorkspaceRoot;
-  if (managedRoot === undefined || rootInput === null || !isAbsolute(rootInput)) return false;
-  return requiresManagedRootAuthority(resolve(managedRoot), resolve(rootInput));
-}
-
-async function resolvesInsideManagedRoot(deps: UiHandlerDeps, realRoot: string): Promise<boolean> {
-  const managedRoot = deps.managedTaskWorkspaceRoot;
-  if (managedRoot === undefined) return false;
-  try {
-    const realManagedRoot = await realpath(managedRoot);
-    return requiresManagedRootAuthority(realManagedRoot, realRoot);
-  } catch {
-    // This check separates ordinary roots from Keiko-owned managed worktrees. An unreadable or
-    // missing managed root is therefore an unknown authorization state, never proof that the
-    // candidate is outside it.
-    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
-  }
+  return rootInput !== null && requiresConfiguredManagedWorkspaceAuthority(deps, rootInput);
 }
 
 /**
@@ -254,32 +231,65 @@ export async function resolveRequestRoot(
 ): Promise<ResolvedProjectRoot> {
   const deferManagedAuthority = options.managedRootAuthority === "defer-to-caller";
   if (!requestedManagedRoot(deps, rootInput)) {
-    const root = await resolveRoot(deps.store, rootInput, deps.redactor);
-    if (!(await resolvesInsideManagedRoot(deps, root.realRoot))) return root;
-    if (deferManagedAuthority) return root;
-    // An external symlink or registered-project alias must not turn a managed worktree into an
-    // ordinary root. Only the canonical derived path can be re-proven against persisted identity.
-    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+    return resolveRoot(deps.store, rootInput, deps.redactor);
   }
   if (deferManagedAuthority) {
-    const root = await resolveRoot(deps.store, rootInput, deps.redactor);
-    if (!(await resolvesInsideManagedRoot(deps, root.realRoot))) {
-      throw new FilesError(403, "DENIED", DENIED_MESSAGE);
-    }
-    return root;
+    return resolveRoot(deps.store, rootInput, deps.redactor);
   }
   if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  const workspace =
-    rootInput === null ? undefined : resolveManagedTaskWorkspaceRoot(deps, rootInput);
-  if (workspace === undefined) {
+  if (rootInput === null) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  assertMetadataSafe(workspace.root, deps.redactor);
-  const realRoot = await resolveDirectory(workspace.root);
-  assertMetadataSafe(realRoot, deps.redactor);
-  return { root: workspace.root, realRoot };
+  const access = resolveManagedWorkspaceRootAccess(deps, rootInput);
+  if (access === undefined) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+  assertMetadataSafe(rootInput, deps.redactor);
+  assertMetadataSafe(access.canonicalRoot, deps.redactor);
+  return { root: rootInput, realRoot: access.canonicalRoot, access };
+}
+
+/**
+ * Binds request/session admission to an operation-scoped authority resolver. Production reaches
+ * the central resolver composed in deps.ts; the fallback keeps isolated route tests on the same
+ * owning access functions. Every invocation verifies the exact admitted kind and canonical root.
+ */
+export function requestRootAccessResolver(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  expected: ResolvedProjectRoot,
+): () => WorkspaceRootAccess | undefined {
+  return (): WorkspaceRootAccess | undefined => {
+    try {
+      if (
+        expected.access.kind === "managed-task" &&
+        resolveAppSessionReadAuthority(deps, ctx.req) === undefined
+      ) {
+        return undefined;
+      }
+      const resolved =
+        deps.workspaceRootAccessResolver?.(expected.access.canonicalRoot) ??
+        fallbackRequestRootAccess(deps, expected);
+      return resolved?.kind === expected.access.kind &&
+        resolved.canonicalRoot === expected.access.canonicalRoot
+        ? resolved
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+}
+
+function fallbackRequestRootAccess(
+  deps: UiHandlerDeps,
+  expected: ResolvedProjectRoot,
+): WorkspaceRootAccess | undefined {
+  if (deps.workspaceRootAccessResolver !== undefined) return undefined;
+  return expected.access.kind === "managed-task"
+    ? resolveManagedWorkspaceRootAccess(deps, expected.access.canonicalRoot)
+    : expected.access;
 }
 
 function filesErrorResult(error: FilesError): RouteResult {
@@ -355,7 +365,11 @@ async function resolveRegisteredRoot(
   if (rootPathIsDenied(realRoot)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  return { root: project.path, realRoot };
+  return {
+    root: project.path,
+    realRoot,
+    access: createOrdinaryWorkspaceRootAccess(realRoot),
+  };
 }
 
 // Epic #532 — Keiko is a workspace for EVERYONE, not only devs: a Files window may browse ANY folder
@@ -381,7 +395,7 @@ async function resolveArbitraryRoot(
   if (pathIsDenied(realRoot)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  return { root: rootInput, realRoot };
+  return { root: rootInput, realRoot, access: createOrdinaryWorkspaceRootAccess(realRoot) };
 }
 
 export async function resolveRoot(

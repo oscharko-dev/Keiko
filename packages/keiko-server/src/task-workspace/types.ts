@@ -5,6 +5,7 @@
 
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type {
   TaskWorkspaceDriftMarker,
   TaskWorkspaceLifecycleState,
@@ -70,6 +71,12 @@ export interface WorkspaceProvisioningService {
   readonly ensureIdentity?: ((instance: WorkspaceInstance) => void) | undefined;
 }
 
+export type GitWorktreeAdapterFactory = (
+  workspace: WorkspaceInfo,
+  correlationId: string,
+  fs?: WorkspaceFs,
+) => GitWorktreeAdapter;
+
 export interface WorkspaceProvisioningServiceDeps extends WorkspaceActivityLogSeam {
   readonly store: WorkspaceInstanceStore;
   readonly evidenceStore: EvidenceStore;
@@ -86,7 +93,7 @@ export interface WorkspaceProvisioningServiceDeps extends WorkspaceActivityLogSe
   // join this evidence exists to enable (PR #3355 review, P2). Callers pass the id they already
   // hold; `UNKNOWN_CORRELATION_ID` remains the sanctioned fallback where an operation genuinely
   // has none, never an ad-hoc string.
-  readonly createAdapter: (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
+  readonly createAdapter: GitWorktreeAdapterFactory;
   readonly redactString: (input: string) => string;
   // Clock + id generator, injected for deterministic tests. `now` is epoch ms.
   readonly now: () => number;
@@ -214,7 +221,7 @@ export interface WorkspaceReconciliationServiceDeps extends WorkspaceActivityLog
   // The Keiko-owned managed worktree root (absolute) — every persisted path is realpath-checked for
   // containment inside it before it is trusted (SC).
   readonly managedRoot: string;
-  readonly createAdapter: (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
+  readonly createAdapter: GitWorktreeAdapterFactory;
   readonly redactString: (input: string) => string;
   readonly now: () => number;
   readonly newId: () => string;
@@ -262,7 +269,7 @@ export interface WorkspaceRepairServiceDeps extends WorkspaceActivityLogSeam {
   // Reused #445 service: worktree-recreating repairs delegate the re-materialization walk to it.
   readonly provisioning: WorkspaceProvisioningService;
   readonly managedRoot: string;
-  readonly createAdapter: (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
+  readonly createAdapter: GitWorktreeAdapterFactory;
   readonly redactString: (input: string) => string;
   readonly now: () => number;
   readonly newId: () => string;

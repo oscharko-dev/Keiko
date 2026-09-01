@@ -14,6 +14,8 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type {
@@ -2415,6 +2417,52 @@ describe("coding runtime manager", () => {
     });
     expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
     expect(JSON.stringify(events)).not.toContain(fixture.workspaceRoot);
+  });
+
+  it("denies a supervised edit after managed-root authority is revoked", async () => {
+    const fixture = createManagedFixture();
+    mkdirSync(join(fixture.workspaceRoot, "src"), { recursive: true });
+    writeFileSync(join(fixture.workspaceRoot, "src", "allowed.ts"), "export {};\n");
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    let access: WorkspaceRootAccess | undefined = {
+      kind: "managed-task",
+      canonicalRoot: fixture.workspaceRoot,
+      fs: nodeWorkspaceFs,
+    };
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      resolveWorkspaceRootAccess: () => access,
+      onRuntimeEvent: (event): void => {
+        events.push(event);
+      },
+    });
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    access = undefined;
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-revoked-file",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "scoped-file-edit",
+        actionKind: "file-edit",
+        scopeLabel: "workspace-scope",
+        risk: "medium",
+        policyReason: "scoped-file-edit",
+        targetPath: "src/allowed.ts",
+        allowedRelativePaths: ["src"],
+        fileCount: 1,
+        addedLines: 1,
+        deletedLines: 0,
+      }),
+    );
+    await settle();
+
+    expect(events.some((event) => event.kind === "diff-summarized")).toBe(false);
+    expect(events.find((event) => event.failureCode === "out-of-scope-file-edit")).toBeDefined();
   });
 
   // Behavioral replacement for the former KEIKO-0557 source-text-grep pin (#2906): a benign-

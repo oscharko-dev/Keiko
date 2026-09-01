@@ -29,7 +29,12 @@ import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/te
 import { redact } from "@oscharko-dev/keiko-security";
 import { DEFAULT_BINARY_PROBE, looksBinary } from "./binaryDetect.js";
 import { PathEscapeError, PathDeniedError } from "./errors.js";
-import { WorkspaceDescriptorReadError, type WorkspaceFs } from "./fs.js";
+import {
+  isWorkspacePathSnapshotCurrent,
+  WorkspaceDescriptorReadError,
+  type WorkspaceFs,
+  type WorkspaceStat,
+} from "./fs.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import {
   containedRealPathInfo,
@@ -250,6 +255,7 @@ function statFile(
   readonly size: number;
   readonly isFile: boolean;
   readonly hardLinkCount: number | undefined;
+  readonly snapshot: WorkspaceStat;
 }> {
   try {
     const stats = fs.stat(resolvedPath);
@@ -258,6 +264,7 @@ function statFile(
       size: stats.size,
       isFile: stats.isFile,
       hardLinkCount: stats.hardLinkCount,
+      snapshot: stats,
     };
   } catch {
     if (!fs.exists(resolvedPath)) {
@@ -276,6 +283,7 @@ async function probeBinary(
   fs: WorkspaceFs,
   resolvedPath: string,
   size: number,
+  expected: WorkspaceStat,
 ): Promise<StepResult<{ readonly bytes: Uint8Array }>> {
   if (fs.readFileBytes === undefined) {
     // Synchronous read fallback for FS adapters without the byte-level port. We only need a
@@ -284,6 +292,9 @@ async function probeBinary(
     let utf8: string;
     try {
       utf8 = fs.readFileUtf8(resolvedPath);
+      if (!isWorkspacePathSnapshotCurrent(fs, resolvedPath, resolvedPath, expected)) {
+        return unreadable();
+      }
     } catch {
       return unreadable();
     }
@@ -298,8 +309,11 @@ async function probeBinary(
       resolvedPath,
       Math.min(BINARY_PROBE_BYTES, size),
       "reject",
+      expected,
     );
-    return { step: "ok", bytes };
+    return isWorkspacePathSnapshotCurrent(fs, resolvedPath, resolvedPath, expected)
+      ? { step: "ok", bytes }
+      : unreadable();
   } catch (error) {
     return descriptorReadFailure(error);
   }
@@ -309,14 +323,17 @@ async function readBudgetedBytes(
   fs: WorkspaceFs,
   resolvedPath: string,
   cap: number,
+  expected: WorkspaceStat,
 ): Promise<StepResult<{ readonly bytes: Uint8Array }>> {
   if (cap === 0) {
     return { step: "ok", bytes: new Uint8Array(0) };
   }
   if (fs.readFileBytes !== undefined) {
     try {
-      const bytes = await fs.readFileBytes(resolvedPath, cap, "reject");
-      return { step: "ok", bytes };
+      const bytes = await fs.readFileBytes(resolvedPath, cap, "reject", expected);
+      return isWorkspacePathSnapshotCurrent(fs, resolvedPath, resolvedPath, expected)
+        ? { step: "ok", bytes }
+        : unreadable();
     } catch (error) {
       return descriptorReadFailure(error);
     }
@@ -324,6 +341,9 @@ async function readBudgetedBytes(
   let utf8: string;
   try {
     utf8 = fs.readFileUtf8(resolvedPath);
+    if (!isWorkspacePathSnapshotCurrent(fs, resolvedPath, resolvedPath, expected)) {
+      return unreadable();
+    }
   } catch {
     return unreadable();
   }
@@ -336,25 +356,29 @@ async function readRangeBytes(
   resolvedPath: string,
   startByte: number,
   length: number,
+  expected: WorkspaceStat,
 ): Promise<StepResult<{ readonly bytes: Uint8Array }>> {
   if (length === 0) {
     return { step: "ok", bytes: new Uint8Array(0) };
   }
   if (fs.readFileRange !== undefined) {
     try {
-      return {
-        step: "ok",
-        bytes: await fs.readFileRange(resolvedPath, startByte, length, "reject"),
-      };
+      const bytes = await fs.readFileRange(resolvedPath, startByte, length, "reject", expected);
+      return isWorkspacePathSnapshotCurrent(fs, resolvedPath, resolvedPath, expected)
+        ? { step: "ok", bytes }
+        : unreadable();
     } catch (error) {
       return descriptorReadFailure(error);
     }
   }
   if (fs.openFileReader !== undefined) {
     try {
-      const reader = await fs.openFileReader(resolvedPath, "reject");
+      const reader = await fs.openFileReader(resolvedPath, "reject", expected);
       try {
-        return { step: "ok", bytes: await reader.readRange(startByte, length) };
+        const bytes = await reader.readRange(startByte, length);
+        return isWorkspacePathSnapshotCurrent(fs, resolvedPath, resolvedPath, expected)
+          ? { step: "ok", bytes }
+          : unreadable();
       } finally {
         await reader.close();
       }
@@ -365,6 +389,9 @@ async function readRangeBytes(
   let utf8: string;
   try {
     utf8 = fs.readFileUtf8(resolvedPath);
+    if (!isWorkspacePathSnapshotCurrent(fs, resolvedPath, resolvedPath, expected)) {
+      return unreadable();
+    }
   } catch (error) {
     return descriptorReadFailure(error);
   }
@@ -507,6 +534,7 @@ export function trimTrailingWhitespace(value: string): string {
 interface ResolvedFile {
   readonly resolvedPath: string;
   readonly size: number;
+  readonly snapshot: WorkspaceStat;
 }
 
 function resolvedFileFromStat(
@@ -515,12 +543,16 @@ function resolvedFileFromStat(
     readonly size: number;
     readonly isFile: boolean;
     readonly hardLinkCount: number | undefined;
+    readonly snapshot: WorkspaceStat;
   }>,
 ): StepResult<{ readonly file: ResolvedFile }> {
   if (!stat.isFile) return notFound();
   if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) return denied();
   if (stat.size === 0) return empty();
-  return { step: "ok", file: { resolvedPath, size: stat.size } };
+  return {
+    step: "ok",
+    file: { resolvedPath, size: stat.size, snapshot: stat.snapshot },
+  };
 }
 
 async function classifyFileMime(
@@ -528,7 +560,7 @@ async function classifyFileMime(
   file: ResolvedFile,
   relativePath: string,
 ): Promise<StepResult<{ readonly mimeType: string }>> {
-  const probe = await probeBinary(fs, file.resolvedPath, file.size);
+  const probe = await probeBinary(fs, file.resolvedPath, file.size, file.snapshot);
   if (!isStepOk(probe)) {
     return probe;
   }
@@ -555,7 +587,7 @@ async function readAndCap(
   budget: DocumentExtractionBudget,
 ): Promise<StepResult<{ readonly value: ReadAndCapResult }>> {
   const cap = effectivePerDocBudget(budget);
-  const read = await readBudgetedBytes(fs, file.resolvedPath, cap);
+  const read = await readBudgetedBytes(fs, file.resolvedPath, cap, file.snapshot);
   if (!isStepOk(read)) {
     return read;
   }
@@ -591,6 +623,8 @@ interface LineScanState {
   startByte: number | undefined;
   endByte: number | undefined;
 }
+
+type FocusRangeReader = (startByte: number, length: number) => Promise<Uint8Array>;
 
 function normalizeLineFocus(focus: DocumentExtractionLineFocus): NormalizedLineFocus | undefined {
   const startLine = Math.floor(focus.startLine);
@@ -637,26 +671,6 @@ function fallbackLineRangeFromUtf8Text(
   return { startByte, endByte: endByte ?? Buffer.byteLength(text, "utf8") };
 }
 
-async function readFocusScanChunk(
-  fs: WorkspaceFs,
-  file: ResolvedFile,
-  offset: number,
-  length: number,
-): Promise<Uint8Array> {
-  if (fs.readFileRange !== undefined) {
-    return await fs.readFileRange(file.resolvedPath, offset, length, "reject");
-  }
-  const reader = await fs.openFileReader?.(file.resolvedPath, "reject");
-  if (reader === undefined) {
-    throw new Error("openFileReader unavailable");
-  }
-  try {
-    return await reader.readRange(offset, length);
-  } finally {
-    await reader.close();
-  }
-}
-
 function advanceLineScan(
   state: LineScanState,
   focus: NormalizedLineFocus,
@@ -689,7 +703,7 @@ function scanChunkForLineRange(
 }
 
 async function scanUtf8LineRange(
-  fs: WorkspaceFs,
+  readRange: FocusRangeReader,
   file: ResolvedFile,
   focus: NormalizedLineFocus,
 ): Promise<LineByteRange | undefined> {
@@ -699,12 +713,7 @@ async function scanUtf8LineRange(
     endByte: undefined,
   };
   for (let offset = 0; offset < file.size; offset += FOCUS_SCAN_CHUNK_BYTES) {
-    const chunk = await readFocusScanChunk(
-      fs,
-      file,
-      offset,
-      Math.min(FOCUS_SCAN_CHUNK_BYTES, file.size - offset),
-    );
+    const chunk = await readRange(offset, Math.min(FOCUS_SCAN_CHUNK_BYTES, file.size - offset));
     if (chunk.length === 0) {
       break;
     }
@@ -723,19 +732,48 @@ async function locateUtf8LineRange(
   fs: WorkspaceFs,
   file: ResolvedFile,
   focus: NormalizedLineFocus,
+  readRange: FocusRangeReader | undefined,
 ): Promise<StepResult<{ readonly range: LineByteRange | undefined }>> {
-  if (fs.readFileRange === undefined && fs.openFileReader === undefined) {
+  if (readRange === undefined) {
     try {
-      return {
-        step: "ok",
-        range: fallbackLineRangeFromUtf8Text(fs.readFileUtf8(file.resolvedPath), focus),
-      };
+      const text = fs.readFileUtf8(file.resolvedPath);
+      return isWorkspacePathSnapshotCurrent(fs, file.resolvedPath, file.resolvedPath, file.snapshot)
+        ? { step: "ok", range: fallbackLineRangeFromUtf8Text(text, focus) }
+        : unreadable();
     } catch {
       return unreadable();
     }
   }
   try {
-    return { step: "ok", range: await scanUtf8LineRange(fs, file, focus) };
+    return { step: "ok", range: await scanUtf8LineRange(readRange, file, focus) };
+  } catch (error) {
+    return descriptorReadFailure(error);
+  }
+}
+
+function oneShotFocusRangeReader(
+  fs: WorkspaceFs,
+  file: ResolvedFile,
+): FocusRangeReader | undefined {
+  const readRange = fs.readFileRange;
+  if (readRange === undefined) return undefined;
+  return async (startByte, length) =>
+    await readRange.call(fs, file.resolvedPath, startByte, length, "reject", file.snapshot);
+}
+
+async function readFocusedBytes(
+  fs: WorkspaceFs,
+  file: ResolvedFile,
+  startByte: number,
+  length: number,
+  readRange: FocusRangeReader | undefined,
+): Promise<StepResult<{ readonly bytes: Uint8Array }>> {
+  if (readRange === undefined) {
+    return await readRangeBytes(fs, file.resolvedPath, startByte, length, file.snapshot);
+  }
+  if (length === 0) return { step: "ok", bytes: new Uint8Array(0) };
+  try {
+    return { step: "ok", bytes: await readRange(startByte, length) };
   } catch (error) {
     return descriptorReadFailure(error);
   }
@@ -779,20 +817,16 @@ function buildFocusedReadResult(input: {
   };
 }
 
-async function readFocusedRangeAndCap(
+type FocusedReadStep = StepResult<{ readonly value: ReadAndCapResult | undefined }>;
+
+async function readFocusedRangeWithReader(
   fs: WorkspaceFs,
   file: ResolvedFile,
   budget: DocumentExtractionBudget,
-  focus: DocumentExtractionLineFocus | undefined,
-): Promise<StepResult<{ readonly value: ReadAndCapResult | undefined }>> {
-  if (focus === undefined) {
-    return { step: "ok", value: undefined };
-  }
-  const normalized = normalizeLineFocus(focus);
-  if (normalized === undefined) {
-    return { step: "ok", value: undefined };
-  }
-  const located = await locateUtf8LineRange(fs, file, normalized);
+  focus: NormalizedLineFocus,
+  readRange: FocusRangeReader | undefined,
+): Promise<FocusedReadStep> {
+  const located = await locateUtf8LineRange(fs, file, focus, readRange);
   if (!isStepOk(located)) {
     return located;
   }
@@ -800,11 +834,12 @@ async function readFocusedRangeAndCap(
     return { step: "ok", value: undefined };
   }
   const selectedBytes = Math.max(0, located.range.endByte - located.range.startByte);
-  const read = await readRangeBytes(
+  const read = await readFocusedBytes(
     fs,
-    file.resolvedPath,
+    file,
     located.range.startByte,
     Math.min(effectivePerDocBudget(budget), selectedBytes),
+    readRange,
   );
   if (!isStepOk(read)) {
     return read;
@@ -821,12 +856,66 @@ async function readFocusedRangeAndCap(
     value: buildFocusedReadResult({
       text: decoded.text,
       range: located.range,
-      focus: normalized,
+      focus,
       extractedBytes,
       selectedBytes,
       fileSize: file.size,
     }),
   };
+}
+
+async function readFocusedWithPreferredReader(
+  fs: WorkspaceFs,
+  file: ResolvedFile,
+  budget: DocumentExtractionBudget,
+  focus: NormalizedLineFocus,
+): Promise<FocusedReadStep> {
+  const openReader = fs.openFileReader;
+  if (openReader === undefined) {
+    const result = await readFocusedRangeWithReader(
+      fs,
+      file,
+      budget,
+      focus,
+      oneShotFocusRangeReader(fs, file),
+    );
+    return isWorkspacePathSnapshotCurrent(fs, file.resolvedPath, file.resolvedPath, file.snapshot)
+      ? result
+      : unreadable();
+  }
+  try {
+    const reader = await openReader.call(fs, file.resolvedPath, "reject", file.snapshot);
+    try {
+      const result = await readFocusedRangeWithReader(
+        fs,
+        file,
+        budget,
+        focus,
+        (startByte, length) => reader.readRange(startByte, length),
+      );
+      return isWorkspacePathSnapshotCurrent(fs, file.resolvedPath, file.resolvedPath, file.snapshot)
+        ? result
+        : unreadable();
+    } finally {
+      await reader.close();
+    }
+  } catch (error) {
+    return descriptorReadFailure(error);
+  }
+}
+
+async function readFocusedRangeAndCap(
+  fs: WorkspaceFs,
+  file: ResolvedFile,
+  budget: DocumentExtractionBudget,
+  focus: DocumentExtractionLineFocus | undefined,
+): Promise<FocusedReadStep> {
+  if (focus === undefined || effectivePerDocBudget(budget) === 0) {
+    return { step: "ok", value: undefined };
+  }
+  const normalized = normalizeLineFocus(focus);
+  if (normalized === undefined) return { step: "ok", value: undefined };
+  return await readFocusedWithPreferredReader(fs, file, budget, normalized);
 }
 
 function buildContext(

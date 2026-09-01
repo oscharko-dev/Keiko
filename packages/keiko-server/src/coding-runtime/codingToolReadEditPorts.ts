@@ -6,7 +6,12 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import type { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
-import { detectWorkspaceAt, discoverWithStats, isDenied } from "@oscharko-dev/keiko-workspace";
+import {
+  detectWorkspaceAt,
+  discoverWithStats,
+  isDenied,
+  type WorkspaceFs,
+} from "@oscharko-dev/keiko-workspace";
 
 import {
   contentFreeErrorClass,
@@ -21,6 +26,7 @@ import type {
   CodingRuntimeEditorMutationLeaseRequest,
 } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 const MAX_READ_BYTES = 65_536;
 const RAW_SINGLE_FILE_PATCH =
@@ -57,6 +63,7 @@ export interface CodingToolReadEditPortDeps {
   readonly resolveEditorActionContext: () => EditorActionContext;
   readonly resolveRepositoryReadContext?: (() => RuntimeProducerBinding) | undefined;
   readonly resolveWorkspaceRoot?: (() => string | undefined) | undefined;
+  readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly requiresEditorReview?: (() => boolean) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly mutationLeaseCoordinator?:
@@ -136,20 +143,24 @@ function executeDiscoverSync(
   const binding = discoveryPreflight(deps, signal, mutationGuard);
   if (binding === false) return { status: "failed" };
   try {
-    const workspaceRoot = deps.resolveWorkspaceRoot?.();
-    if (workspaceRoot === undefined) return { status: "failed" };
-    const workspace = detectWorkspaceAt(workspaceRoot);
-    const discovered = discoverWithStats(workspace, {
-      maxDepth: 40,
-      maxFiles: 20_000,
-      applyGitignore: true,
-    });
+    const resolved = discoveryWorkspace(deps);
+    if (resolved === undefined) return { status: "failed" };
+    const workspace = detectWorkspaceAt(resolved.root, resolved.fs);
+    const discovered = discoverWithStats(
+      workspace,
+      {
+        maxDepth: 40,
+        maxFiles: 20_000,
+        applyGitignore: true,
+      },
+      resolved.fs,
+    );
     const text = discoveredPathText(
       discovered.files.map(({ relativePath }): string => relativePath),
       request.query,
       request.maxResults,
     );
-    if (!discoveryPostflight(deps, workspaceRoot, binding, signal, mutationGuard)) {
+    if (!discoveryPostflight(deps, resolved.root, binding, signal, mutationGuard)) {
       return { status: "failed" };
     }
     return { status: "completed", read: discoveryReadResult(text) };
@@ -157,6 +168,20 @@ function executeDiscoverSync(
     emitDiscoveryFailureDiagnostic(deps.diagnostics, binding, request.actionId, error);
     return { status: "failed" };
   }
+}
+
+interface DiscoveryWorkspace {
+  readonly root: string;
+  readonly fs?: WorkspaceFs | undefined;
+}
+
+function discoveryWorkspace(deps: CodingToolReadEditPortDeps): DiscoveryWorkspace | undefined {
+  if (deps.resolveWorkspaceRootAccess !== undefined) {
+    const access = deps.resolveWorkspaceRootAccess();
+    return access === undefined ? undefined : { root: access.canonicalRoot, fs: access.fs };
+  }
+  const root = deps.resolveWorkspaceRoot?.();
+  return root === undefined ? undefined : { root };
 }
 
 const SAFE_DISCOVERY_CORRELATION_ID = /^[A-Za-z0-9:._-]{1,128}$/u;
@@ -305,7 +330,9 @@ function readPreflight(
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
 ): RuntimeProducerBinding | undefined | false {
-  if (isAborted(signal) || isDenied(request.relativePath)) return false;
+  if (isAborted(signal) || isDenied(request.relativePath) || !hasLiveWorkspaceAccess(deps)) {
+    return false;
+  }
   const binding = mutationBinding(mutationGuard);
   if (binding === null) return false;
   if (binding === undefined && deps.enforceProducerBinding === true) return false;
@@ -332,8 +359,9 @@ function discoveryPostflight(
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
 ): boolean {
+  const currentRoot = discoveryWorkspace(deps)?.root;
   return (
-    deps.resolveWorkspaceRoot?.() === workspaceRoot &&
+    currentRoot === workspaceRoot &&
     checkGuard(mutationGuard) &&
     readContextMatches(deps, binding) &&
     !isAborted(signal)
@@ -349,6 +377,7 @@ function readPostflight(
 ): result is Extract<typeof result, { readonly ok: true }> {
   return (
     result.ok &&
+    hasLiveWorkspaceAccess(deps) &&
     checkGuard(mutationGuard) &&
     readContextMatches(deps, binding) &&
     !isAborted(signal)
@@ -380,6 +409,10 @@ async function executeEdit(
     if (action === undefined) {
       discardMutationLease(deps, prepared.leaseRequest);
       return { status: "failed", reasonCode: "NO_ACTIVE_SESSION" };
+    }
+    if (!hasLiveWorkspaceAccess(deps)) {
+      discardMutationLease(deps, prepared.leaseRequest);
+      return { status: "failed" };
     }
     const result = await deps.editorAgentClient.action(action, prepared.signal);
     const completed = result.ok && editorStatusCompleted(result.value.result.status);
@@ -473,7 +506,7 @@ function prepareEdit(
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
 ): PreparedEdit | undefined {
-  const changeset = validatedChangeset(request, signal, mutationGuard);
+  const changeset = validatedChangeset(deps, request, signal, mutationGuard);
   if (changeset === undefined) return undefined;
   const binding = mutationBinding(mutationGuard);
   if (binding === null) return undefined;
@@ -491,12 +524,32 @@ function prepareEdit(
   };
 }
 
+function hasLiveWorkspaceAccess(deps: CodingToolReadEditPortDeps): boolean {
+  const resolveAccess = deps.resolveWorkspaceRootAccess;
+  if (resolveAccess === undefined) return true;
+  try {
+    const access = resolveAccess();
+    const expectedRoot = deps.resolveWorkspaceRoot?.();
+    return (
+      access !== undefined && (expectedRoot === undefined || access.canonicalRoot === expectedRoot)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function validatedChangeset(
+  deps: CodingToolReadEditPortDeps,
   request: EditorChangesetRequest,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
 ): EditorAgentChangeset | undefined {
-  if (isAborted(signal) || !checkGuard(mutationGuard) || !("changeset" in request)) {
+  if (
+    !hasLiveWorkspaceAccess(deps) ||
+    isAborted(signal) ||
+    !checkGuard(mutationGuard) ||
+    !("changeset" in request)
+  ) {
     return undefined;
   }
   if (!isExactEditorAgentChangeset(request.changeset)) return undefined;

@@ -47,6 +47,7 @@ import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connecte
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { currentGateway, currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
@@ -156,6 +157,7 @@ interface ModelTierOutcome {
 interface ElectedModelContext {
   readonly request: EditorCompletionWireRequest;
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   readonly signal: AbortSignal;
   readonly deps: UiHandlerDeps;
   readonly selection: CompletionModelSelection;
@@ -206,6 +208,7 @@ function invalidChangedFiles(message: string): RouteResult {
 
 function sanitizeChangedFiles(
   realRoot: string,
+  fs: WorkspaceFs,
   changedFiles: readonly string[] | undefined,
 ): readonly string[] | RouteResult | undefined {
   if (changedFiles === undefined) {
@@ -223,7 +226,7 @@ function sanitizeChangedFiles(
         `context.changedFiles contains an invalid workspace-relative path: ${changed}`,
       );
     }
-    resolveOverlayPath(realRoot, changed);
+    resolveOverlayPath(realRoot, changed, fs);
   }
   return deduped.length > 0 ? deduped : undefined;
 }
@@ -231,8 +234,9 @@ function sanitizeChangedFiles(
 function sanitizeRequestContext(
   request: EditorCompletionWireRequest,
   realRoot: string,
+  fs: WorkspaceFs,
 ): EditorCompletionWireRequest | RouteResult {
-  const changedFiles = sanitizeChangedFiles(realRoot, request.context?.changedFiles);
+  const changedFiles = sanitizeChangedFiles(realRoot, fs, request.context?.changedFiles);
   if (isRouteResult(changedFiles)) {
     return changedFiles;
   }
@@ -376,6 +380,7 @@ async function runElectedModel(ctx: ElectedModelContext): Promise<ModelTierOutco
   const pack = await assembleCodingContext(buildContextRequest(ctx.request), {
     deps: ctx.deps,
     realRoot: ctx.realRoot,
+    fs: ctx.fs,
     signal: ctx.signal,
     nowMs: ctx.nowMs,
     budgetBytes: effectiveContextBudgetBytes(ctx.request),
@@ -422,6 +427,7 @@ async function runElectedModel(ctx: ElectedModelContext): Promise<ModelTierOutco
 interface ModelTierInputs {
   readonly request: EditorCompletionWireRequest;
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   readonly signal: AbortSignal;
   readonly deps: UiHandlerDeps;
   readonly chatFactory: CompletionChatFactory;
@@ -431,7 +437,7 @@ interface ModelTierInputs {
 }
 
 async function runModelTier(inputs: ModelTierInputs): Promise<ModelTierOutcome> {
-  const { request, realRoot, signal, deps, chatFactory, tokenBudget, now } = inputs;
+  const { request, realRoot, fs, signal, deps, chatFactory, tokenBudget, now } = inputs;
   const config = currentGatewayConfig(deps);
   if (config === undefined) {
     return DETERMINISTIC_OUTCOME("deterministic", "no-infilling-model", undefined, undefined);
@@ -455,6 +461,7 @@ async function runModelTier(inputs: ModelTierInputs): Promise<ModelTierOutcome> 
     const outcome = await runElectedModel({
       request,
       realRoot,
+      fs,
       signal: modelSignal(selection, signal),
       deps,
       selection,
@@ -592,6 +599,7 @@ async function runDeterministicCompletion(input: {
   readonly request: EditorCompletionWireRequest;
   readonly deps: UiHandlerDeps;
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   readonly overlayAbsolutePath: string;
   readonly signal: AbortSignal;
   readonly limits?: LanguageServiceLimits | undefined;
@@ -609,6 +617,7 @@ async function runDeterministicCompletion(input: {
     input.realRoot,
     input.overlayAbsolutePath,
     input.signal,
+    input.fs,
     {
       limits: input.limits ?? COMPLETION_LANGUAGE_SERVICE_LIMITS,
       now: input.now,
@@ -644,8 +653,9 @@ export async function handleEditorCompletion(
   const request = parsed.value;
   return runFilesHandler(async () => {
     const root = await resolveRequestRoot(ctx, deps, request.root);
-    const overlayAbsolutePath = resolveOverlayPath(root.realRoot, request.document.path);
-    const sanitizedRequest = sanitizeRequestContext(request, root.realRoot);
+    const { canonicalRoot, fs } = root.access;
+    const overlayAbsolutePath = resolveOverlayPath(canonicalRoot, request.document.path, fs);
+    const sanitizedRequest = sanitizeRequestContext(request, canonicalRoot, fs);
     if (isRouteResult(sanitizedRequest)) {
       return sanitizedRequest;
     }
@@ -655,7 +665,8 @@ export async function handleEditorCompletion(
     const deterministic = await runDeterministicCompletion({
       request: sanitizedRequest,
       deps,
-      realRoot: root.realRoot,
+      realRoot: canonicalRoot,
+      fs,
       overlayAbsolutePath,
       signal,
       limits: options.languageServiceLimits,
@@ -668,7 +679,8 @@ export async function handleEditorCompletion(
     // Tier 2: gated model-assisted completion.
     const model = await runModelTier({
       request: sanitizedRequest,
-      realRoot: root.realRoot,
+      realRoot: canonicalRoot,
+      fs,
       signal,
       deps,
       chatFactory: options.chatFactory ?? defaultChatFactoryFor(deps, ctx.correlationId),

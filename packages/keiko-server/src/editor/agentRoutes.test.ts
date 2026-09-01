@@ -2,6 +2,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -26,6 +27,7 @@ import type {
   EditorAgentActionStatus,
   EditorAgentEvent,
   EditorAgentSessionSnapshot,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
@@ -48,7 +50,7 @@ import {
   type WorkspaceWriter,
 } from "@oscharko-dev/keiko-tools";
 import type { GitProcessOptions, GitProcessResult } from "@oscharko-dev/keiko-git";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { forwardWorkspaceFs, nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { STREAMING, type RouteContext } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
@@ -73,6 +75,10 @@ import {
   editorAgentAuthorityRegistry,
   editorAgentWorkspaceRootDigest,
 } from "./agentAuthorityRegistry.js";
+import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
+import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
+import { deriveManagedWorktreePath } from "../task-workspace/naming.js";
+import { resolveLifecycleManagedWorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 // Epic #2384: governed-assist now gates workspace-contained mutations, so the action-mechanics
 // harness runs at the Full-access deployment ceiling. Explicit mode-policy tests keep exercising
@@ -528,8 +534,73 @@ async function postActionResult(
 
 function runtimeMutationDeps(
   runtimeMutationLease: NonNullable<UiHandlerDeps["runtimeMutationLease"]>,
+  workspaceRootAccessResolver: NonNullable<UiHandlerDeps["workspaceRootAccessResolver"]> = (
+    requestedRoot,
+  ) => ({ kind: "managed-task", canonicalRoot: requestedRoot, fs: nodeWorkspaceFs }),
 ): Parameters<typeof handleEditorAgentActions>[1] {
-  return { runtimeMutationLease };
+  return { runtimeMutationLease, workspaceRootAccessResolver };
+}
+
+interface ManagedAgentWorkspaceFixture {
+  readonly dispose: () => void;
+  readonly resolveAccess: NonNullable<UiHandlerDeps["workspaceRootAccessResolver"]>;
+  readonly root: string;
+}
+
+function runManagedFixtureGit(repositoryRoot: string, args: readonly string[]): void {
+  execFileSync("git", [...args], { cwd: repositoryRoot, stdio: "ignore" });
+}
+
+function createManagedAgentWorkspaceFixture(): ManagedAgentWorkspaceFixture {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-agent-managed-")));
+  const repositoryRoot = join(base, "repository");
+  mkdirSync(repositoryRoot);
+  runManagedFixtureGit(repositoryRoot, ["init", "-q"]);
+  runManagedFixtureGit(repositoryRoot, ["config", "user.email", "test@example.invalid"]);
+  runManagedFixtureGit(repositoryRoot, ["config", "user.name", "Keiko Test"]);
+  writeFileSync(join(repositoryRoot, "README.md"), "managed agent fixture\n");
+  runManagedFixtureGit(repositoryRoot, ["add", "README.md"]);
+  runManagedFixtureGit(repositoryRoot, ["commit", "-qm", "fixture"]);
+  const managedRoot = join(base, ".keiko", "task-workspaces");
+  assertManagedRootOwned(managedRoot);
+  const repositoryId = "repo_0123456789abcdef";
+  const workspaceId = "ws_0123456789abcdef01234567";
+  const root = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
+  mkdirSync(join(managedRoot, repositoryId), { recursive: true });
+  const taskBranch = "keiko/task/agent-managed-access-01234567";
+  runManagedFixtureGit(repositoryRoot, ["worktree", "add", "-q", "-b", taskBranch, root, "HEAD"]);
+  const gitdirIdentity = inspectManagedGitdirIdentity(root, repositoryRoot)?.identity;
+  if (gitdirIdentity === undefined) throw new Error("expected managed linked-worktree identity");
+  const instance: WorkspaceInstance = {
+    schemaVersion: "1",
+    workspaceId,
+    taskId: "agent-managed-access",
+    repositoryId,
+    repositoryRoot,
+    baseBranch: "dev",
+    taskBranch,
+    managedWorktreePath: root,
+    gitdirIdentity,
+    lifecycleState: "active",
+    health: "healthy",
+    lock: null,
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    driftMarkers: [],
+    recoveryHints: [],
+    auditCorrelationId: "corr_agent_managed_access",
+  };
+  return {
+    root,
+    resolveAccess: (requestedRoot) =>
+      resolveLifecycleManagedWorkspaceRootAccess(
+        { managedRoot, store: { getById: (): WorkspaceInstance => instance } },
+        requestedRoot,
+      ),
+    dispose: (): void => {
+      rmSync(base, { recursive: true, force: true });
+    },
+  };
 }
 
 function lastEmittedAction(frames: string): EditorAgentAction {
@@ -4083,6 +4154,40 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     },
   );
 
+  it("applies a runtime changeset through freshly resolved managed-root authority", async () => {
+    const fixture = createManagedAgentWorkspaceFixture();
+    try {
+      writeWorkspaceFile(fixture.root, "src/a.txt", "A0\n");
+      writeWorkspaceFile(fixture.root, "src/b.txt", "B0\n");
+      const patch = oneLineModifyPatch([
+        { file: "src/a.txt", before: "A0", after: "A1" },
+        { file: "src/b.txt", before: "B0", after: "B1" },
+      ]);
+      const proposed = changesetActionFor(fixture.root, patch, ["src/a.txt", "src/b.txt"]);
+      await registerChangesetSnapshot(fixture.root, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+      const runtimeMutationLease = {
+        matches: vi.fn((): boolean => true),
+        requiresReview: vi.fn((): boolean => true),
+        claim: vi.fn((): boolean => true),
+        complete: vi.fn((): boolean => true),
+        discard: vi.fn((): boolean => true),
+      } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
+      const resolveAccess = vi.fn(fixture.resolveAccess);
+      const deps = runtimeMutationDeps(runtimeMutationLease, resolveAccess);
+
+      expect((await handleEditorAgentActions(context(proposed), deps)).status).toBe(202);
+      const committed = await postActionResult(proposed, "succeeded", "session-1", undefined, deps);
+
+      expect(actionResultStatus(committed.body)).toBe("succeeded");
+      expect(resolveAccess).toHaveBeenCalledTimes(3);
+      expect(runtimeMutationLease.claim).toHaveBeenCalledOnce();
+      expect(readWorkspaceFile(fixture.root, "src/a.txt")).toBe("A1\n");
+      expect(readWorkspaceFile(fixture.root, "src/b.txt")).toBe("B1\n");
+    } finally {
+      fixture.dispose();
+    }
+  });
+
   it("keeps a local changeset with an authority reference on the established audit path", async () => {
     const arranged = arrangeTwoFiles();
     await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
@@ -4210,6 +4315,12 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
     registerTestAuthority(workspaceRoot);
     const order: string[] = [];
+    const accessFs = forwardWorkspaceFs(nodeWorkspaceFs);
+    const accessRead = vi.spyOn(accessFs, "readFileUtf8");
+    const resolveWorkspaceRootAccess = vi.fn((requestedRoot: string) => {
+      order.push("access");
+      return { kind: "managed-task" as const, canonicalRoot: requestedRoot, fs: accessFs };
+    });
     const writeFileUtf8 = vi.fn((_path: string, _content: string): void => {
       order.push("write");
     });
@@ -4232,32 +4343,92 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       }),
       discard: vi.fn((): boolean => true),
     } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
+    const deps = runtimeMutationDeps(runtimeMutationLease, resolveWorkspaceRootAccess);
 
-    expect(
-      (
-        await handleEditorAgentActions(
-          context(arranged.action),
-          runtimeMutationDeps(runtimeMutationLease),
-        )
-      ).status,
-    ).toBe(202);
+    expect((await handleEditorAgentActions(context(arranged.action), deps)).status).toBe(202);
     const committed = await postActionResult(
       arranged.action,
       "succeeded",
       arranged.action.sessionId,
       undefined,
-      runtimeMutationDeps(runtimeMutationLease),
+      deps,
     );
 
     expect(actionResultStatus(committed.body)).toBe("succeeded");
     expect(runtimeMutationLease.matches).toHaveBeenCalledTimes(1);
     expect(runtimeMutationLease.claim).toHaveBeenCalledTimes(1);
     expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(expect.any(Object), true);
-    expect(order).toEqual(expect.arrayContaining(["claim", "write"]));
+    expect(resolveWorkspaceRootAccess).toHaveBeenCalledTimes(3);
+    expect(accessRead).toHaveBeenCalled();
+    expect(order).toEqual(expect.arrayContaining(["claim", "access", "write"]));
     expect(order.indexOf("claim")).toBeLessThan(order.indexOf("write"));
+    expect(order.lastIndexOf("access")).toBeGreaterThan(order.indexOf("claim"));
+    expect(order.lastIndexOf("access")).toBeLessThan(order.indexOf("write"));
     expect(auditRecords().at(-2)).not.toHaveProperty("targetPath");
     expect(auditRecords().at(-1)).not.toHaveProperty("targetPath");
   });
+
+  it.each(["revoked", "replaced"] as const)(
+    "re-proves managed workspace authority and fails closed when it is %s before apply",
+    async (outcome) => {
+      const arranged = arrangeTwoFiles();
+      await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+      registerTestAuthority(workspaceRoot);
+      const writer = {
+        writeFileUtf8: vi.fn((_path: string, _content: string): void => undefined),
+        mkdirp: vi.fn((_path: string): void => undefined),
+        remove: vi.fn((_path: string): void => undefined),
+        rename: vi.fn((_from: string, _to: string): void => undefined),
+      };
+      _setEditorAgentPatchWriterForTests(writer);
+      let proofCount = 0;
+      const resolveWorkspaceRootAccess = vi.fn((requestedRoot: string) => {
+        proofCount += 1;
+        if (proofCount < 3) {
+          return {
+            kind: "managed-task" as const,
+            canonicalRoot: requestedRoot,
+            fs: nodeWorkspaceFs,
+          };
+        }
+        return outcome === "revoked"
+          ? undefined
+          : {
+              kind: "managed-task" as const,
+              canonicalRoot: join(requestedRoot, "replacement"),
+              fs: nodeWorkspaceFs,
+            };
+      });
+      const runtimeMutationLease = {
+        matches: vi.fn((): boolean => true),
+        requiresReview: vi.fn((): boolean => true),
+        claim: vi.fn((): boolean => true),
+        complete: vi.fn((): boolean => true),
+        discard: vi.fn((): boolean => true),
+      } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
+      const deps = runtimeMutationDeps(runtimeMutationLease, resolveWorkspaceRootAccess);
+
+      expect((await handleEditorAgentActions(context(arranged.action), deps)).status).toBe(202);
+      const denied = await postActionResult(
+        arranged.action,
+        "succeeded",
+        "session-1",
+        undefined,
+        deps,
+      );
+
+      expect(actionResultStatus(denied.body)).toBe("failed");
+      expect(resolveWorkspaceRootAccess).toHaveBeenCalledTimes(3);
+      expect(runtimeMutationLease.claim).toHaveBeenCalledOnce();
+      expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(
+        expect.any(Object),
+        false,
+      );
+      expect(Object.values(writer).every((effect) => effect.mock.calls.length === 0)).toBe(true);
+      expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+      expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B0\n");
+    },
+  );
 
   it("revalidates every changeset member after a target becomes an outward symlink", async () => {
     const arranged = arrangeTwoFiles();

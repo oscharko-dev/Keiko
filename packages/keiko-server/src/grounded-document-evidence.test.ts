@@ -199,10 +199,10 @@ describe("collectConnectedDocumentEvidence", () => {
           statCalls += 1;
           return baseInputs.fs.stat(path);
         },
-        readFileBytes: (path, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+        readFileBytes: (path, maxBytes, hardLinkPolicy, expected): Promise<Uint8Array> => {
           byteReads += 1;
           return (
-            baseInputs.fs.readFileBytes?.(path, maxBytes, hardLinkPolicy) ??
+            baseInputs.fs.readFileBytes?.(path, maxBytes, hardLinkPolicy, expected) ??
             Promise.resolve(new Uint8Array())
           );
         },
@@ -423,10 +423,15 @@ describe("collectConnectedDocumentEvidence", () => {
         ...baseInputs.fs,
         realPath: (absolutePath): string =>
           absolutePath === "/ws/docs/link.docx" ? "/ws/private/secret.docx" : absolutePath,
-        readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+        readFileBytes: async (
+          absolutePath,
+          maxBytes,
+          hardLinkPolicy,
+          expected,
+        ): Promise<Uint8Array> => {
           readFileBytesCalls += 1;
           return (
-            baseInputs.fs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy) ??
+            baseInputs.fs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy, expected) ??
             new Uint8Array()
           );
         },
@@ -460,10 +465,15 @@ describe("collectConnectedDocumentEvidence", () => {
           if (absolutePath === deniedPath) deniedStats += 1;
           return baseInputs.fs.stat(absolutePath);
         },
-        readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+        readFileBytes: async (
+          absolutePath,
+          maxBytes,
+          hardLinkPolicy,
+          expected,
+        ): Promise<Uint8Array> => {
           if (absolutePath === deniedPath) deniedReads += 1;
           return (
-            baseInputs.fs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy) ??
+            baseInputs.fs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy, expected) ??
             new Uint8Array()
           );
         },
@@ -489,10 +499,15 @@ describe("collectConnectedDocumentEvidence", () => {
         ...baseInputs.fs,
         realPath: (absolutePath): string =>
           absolutePath === "/ws/docs/link.docx" ? realPath : absolutePath,
-        readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+        readFileBytes: async (
+          absolutePath,
+          maxBytes,
+          hardLinkPolicy,
+          expected,
+        ): Promise<Uint8Array> => {
           reads += 1;
           return (
-            baseInputs.fs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy) ??
+            baseInputs.fs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy, expected) ??
             new Uint8Array()
           );
         },
@@ -523,10 +538,15 @@ describe("collectConnectedDocumentEvidence", () => {
           ...baseInputs.fs.stat(absolutePath),
           hardLinkCount: 2,
         }),
-        readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy): Promise<Uint8Array> => {
+        readFileBytes: async (
+          absolutePath,
+          maxBytes,
+          hardLinkPolicy,
+          expected,
+        ): Promise<Uint8Array> => {
           readFileBytesCalls += 1;
           return (
-            baseInputs.fs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy) ??
+            baseInputs.fs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy, expected) ??
             new Uint8Array()
           );
         },

@@ -14,6 +14,7 @@ import {
   tierForCodingContextSource,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { rerankSelection } from "../grounded-rerank-facade.js";
 import {
@@ -46,6 +47,7 @@ const DEFERRED_CONTEXT_ORDER_BASE = 6;
 export interface AssembleCodingContextDeps {
   readonly deps: UiHandlerDeps;
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   readonly signal: AbortSignal;
   readonly nowMs: number;
   readonly currentTimeMs?: (() => number) | undefined;
@@ -68,6 +70,7 @@ function buildProviderContext(
   return {
     deps: context.deps,
     realRoot: context.realRoot,
+    fs: context.fs,
     signal: context.signal,
     maxBytesPerExcerpt: budget.maxBytesPerSource,
     currentTimeMs,
