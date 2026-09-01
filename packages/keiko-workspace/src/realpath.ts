@@ -8,6 +8,7 @@
 
 import { dirname } from "node:path";
 import type { WorkspaceFs } from "./fs.js";
+import { isDenied } from "./ignore.js";
 import { isWithinWorkspace } from "./paths.js";
 import { PathEscapeError } from "./errors.js";
 
@@ -42,6 +43,52 @@ function realNearestExisting(fs: WorkspaceFs, absolutePath: string): string {
 
 function toRelative(root: string, absolutePath: string): string {
   return absolutePath.slice(root.length).replace(/^[/\\]/, "");
+}
+
+function deniedLocusSuffixes(path: string): ReadonlySet<string> {
+  const segments = path
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter((segment) => segment.length > 0);
+  const normalized = segments.map((segment) => segment.normalize("NFC").toLowerCase());
+  const loci = new Set<string>();
+  for (const [index, segment] of segments.entries()) {
+    if (isDenied(segment)) loci.add(normalized.slice(index).join("/"));
+  }
+  return loci;
+}
+
+function normalizedAbsolutePath(path: string): string {
+  const normalized = path.replaceAll("\\", "/").normalize("NFC").replace(/\/$/u, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function isKnownPlatformRootAlias(realRoot: string, lexicalRoot: string): boolean {
+  if (process.platform !== "darwin") return false;
+  const real = normalizedAbsolutePath(realRoot);
+  const lexical = normalizedAbsolutePath(lexicalRoot);
+  return ["/etc", "/tmp", "/var"].some(
+    (prefix) =>
+      (lexical === prefix || lexical.startsWith(`${prefix}/`)) && real === `/private${lexical}`,
+  );
+}
+
+// A workspace root can hide a protected location when only paths below the root are checked (for
+// example, "docs" -> ".aws"). Preserve relative-only deny semantics for a root already nested below
+// `.codex` or another denied ancestor, including benign platform prefix aliases, but refuse every
+// denied locus introduced or relocated by the symlink. Comparing only the denied segment identity
+// is insufficient: one `.codex` worktree could otherwise redirect to a separate `.codex` store.
+export function realRootIsDeniedViaSymlink(realRoot: string, lexicalRoot: string): boolean {
+  const lexicalDeniedLoci = deniedLocusSuffixes(lexicalRoot);
+  const realDeniedLoci = deniedLocusSuffixes(realRoot);
+  for (const realDeniedLocus of realDeniedLoci) {
+    if (!lexicalDeniedLoci.has(realDeniedLocus)) return true;
+  }
+  if (lexicalDeniedLoci.size === 0 && realDeniedLoci.size === 0) return false;
+  return (
+    normalizedAbsolutePath(realRoot) !== normalizedAbsolutePath(lexicalRoot) &&
+    !isKnownPlatformRootAlias(realRoot, lexicalRoot)
+  );
 }
 
 export interface ContainedRealPathInfo {

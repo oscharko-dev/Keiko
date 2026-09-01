@@ -14,7 +14,7 @@ import {
 } from "./fs.js";
 import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
-import { containedRealPathInfo } from "./realpath.js";
+import { containedRealPathInfo, realRootIsDeniedViaSymlink } from "./realpath.js";
 import { FileTooLargeError, PathDeniedError, WorkspaceReadError } from "./errors.js";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { redact } from "@oscharko-dev/keiko-security";
@@ -64,17 +64,6 @@ function toRealRelative(fs: WorkspaceFs, root: string, absolutePath: string): st
   } catch {
     return toRelative(root, absolutePath);
   }
-}
-
-// A benign-named workspace root that is a SYMLINK into a denied location (e.g. "~/docs" -> "~/.aws")
-// is invisible to the root-relative deny checks: they only see paths BELOW the root, never the denied
-// segment that resolving the root itself introduces. Flag it — but ONLY when the symlink ADDS the
-// denial (the real root is denied while the lexical root is not). A non-symlinked root, a benign
-// platform link (macOS "/tmp" -> "/private/tmp"), and a root that merely sits under a denied-named
-// ANCESTOR the user did not symlink into (e.g. the product's own ".claude" worktree) all keep working,
-// preserving the existing relative-only semantics for every non-attack path.
-function realRootIsDeniedViaSymlink(realRoot: string, lexicalRoot: string): boolean {
-  return isDenied(realRoot) && !isDenied(lexicalRoot);
 }
 
 // Returns false when the entry must be skipped for any security or noise reason, recording

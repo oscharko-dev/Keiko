@@ -146,6 +146,36 @@ describe("discoverFiles", () => {
     expect(discoverWithStats(ws, DEFAULT_DISCOVERY_OPTIONS).stats.denied).toBeGreaterThanOrEqual(1);
   });
 
+  it("refuses a root symlink that replaces one denied ancestor with another", () => {
+    const lexicalParent = join(dir, "node_modules");
+    const deniedTarget = join(dir, ".aws", "workspace");
+    mkdirSync(lexicalParent);
+    mkdirSync(deniedTarget, { recursive: true });
+    writeFileSync(join(deniedTarget, "notes.md"), "must not be listed", "utf8");
+    const linkedRoot = join(lexicalParent, "linked-workspace");
+    symlinkSync(deniedTarget, linkedRoot);
+    const workspace = detectWorkspaceAt(linkedRoot);
+
+    expect(discoverFiles(workspace, DEFAULT_DISCOVERY_OPTIONS)).toEqual([]);
+    expect(discoverWithStats(workspace, DEFAULT_DISCOVERY_OPTIONS).stats.denied).toBe(1);
+    expect(() => readWorkspaceFile(workspace, "notes.md")).toThrow(PathDeniedError);
+  });
+
+  it("refuses a root symlink relocated between separate loci of the same denied ancestor", () => {
+    const lexicalParent = join(dir, ".codex", "worktrees", "fixture");
+    const deniedTarget = join(dir, "other", ".codex");
+    mkdirSync(lexicalParent, { recursive: true });
+    mkdirSync(deniedTarget, { recursive: true });
+    writeFileSync(join(deniedTarget, "notes.md"), "must not be listed", "utf8");
+    const linkedRoot = join(lexicalParent, "docs");
+    symlinkSync(deniedTarget, linkedRoot);
+    const workspace = detectWorkspaceAt(linkedRoot);
+
+    expect(discoverFiles(workspace, DEFAULT_DISCOVERY_OPTIONS)).toEqual([]);
+    expect(discoverWithStats(workspace, DEFAULT_DISCOVERY_OPTIONS).stats.denied).toBe(1);
+    expect(() => readWorkspaceFile(workspace, "notes.md")).toThrow(PathDeniedError);
+  });
+
   it("does not follow an internal symlink-to-file, but keeps the real target", () => {
     // Conservative, environment-independent behavior: a symlink is never traversed. The real
     // file is still found and discovery never throws. (Escaping symlinks are covered above.)
@@ -252,8 +282,8 @@ describe("readWorkspaceFile", () => {
 
   it("still reads a root whose own path contains a denied-named ANCESTOR but is not symlinked", () => {
     // False-positive guard: a non-symlinked root that merely sits under a denied-named ancestor (e.g.
-    // the product's own ".cache"/".claude" worktree) must keep working — the guard only fires when a
-    // SYMLINK adds the denial (real root denied while lexical root is not), never on a lexical ancestor.
+    // the product's own ".cache"/".claude" worktree) must keep working. Its canonical and lexical
+    // roots are identical, so no denied locus was introduced or relocated by a symlink.
     const nested = join(dir, ".cache", "proj");
     mkdirSync(nested, { recursive: true });
     writeFileSync(join(nested, "notes.md"), "ordinary project notes", "utf8");

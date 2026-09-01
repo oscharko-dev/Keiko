@@ -4,7 +4,10 @@
 
 Accepted
 
-Accepted — module location superseded by ADR-0019 (now `packages/keiko-workspace/`, not `src/workspace/**`; the single-package model was replaced by the modular monorepo package architecture). D1–D5 remain accurate and are actively cited (e.g. by ADR-0023) as live precedent.
+Accepted — module location superseded by ADR-0019 (now `packages/keiko-workspace/`, not
+`src/workspace/**`; the single-package model was replaced by the modular monorepo package
+architecture). D1–D5 remain live precedent (for example, in ADR-0023). D2 was clarified during
+#3347 hardening on 2026-09-01 to cover denied workspace-root relocation through symlinks.
 
 D2's "one workspace read, always redacted" is amended by [ADR-0165](ADR-0165-editor-raw-read-lane-and-the-redacting-barrel.md): the redacting read remains the only one on the package barrel and the only lane permitted to feed evidence, manifests, diagnostics, the workspace index, or a grounded answer, but a second, raw lane now exists behind the `./internal/editor-read` subpath for the editor's write-back path, which cannot derive correct offsets from redacted text.
 
@@ -71,6 +74,12 @@ containment is enforced separately at the IO edge in `discovery.ts`: any entry w
 resolves outside the root (or whose `realPath` cannot be resolved) is skipped, never followed. The
 returned value of `resolveWithinWorkspace` is the ONLY path handed to the filesystem, so a static
 analyser's path sanitiser (CodeQL `javascript-typescript`) sits exactly on the read boundary.
+
+A symlinked workspace root must also not introduce or relocate a denied path locus. Comparing only
+whether both roots contain the same denied segment is insufficient: one `.codex` tree could
+otherwise redirect to another. Keiko therefore compares the normalized denied suffix at its exact
+locus and allows only unchanged roots plus the platform-defined macOS `/private` aliases for
+`/etc`, `/tmp`, and `/var`.
 
 ### D3 — Two-tier filtering: always-on security DENY vs. best-effort `.gitignore`
 
