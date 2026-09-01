@@ -2,7 +2,7 @@
 // the real spawn-backed manager so these tests never spawn a real child. The createUiServer
 // fixture mirrors browser-routes.test.ts so CSRF guard, host-check, and SSE framer run live.
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -251,6 +251,39 @@ describe("GET /api/terminal/directories", () => {
     expect(body.roots.some((r) => r.label === "Project root")).toBe(true);
   });
 
+  it("threads the request correlation into a denied-root directory log", async () => {
+    const fixture = await mkdtemp(join(tmpdir(), "keiko-term-route-denied-"));
+    const deniedTarget = join(fixture, ".aws", "workspace");
+    const linkedRoot = join(fixture, "selected-project");
+    const correlationId = "terminal-directories-correlation-0001";
+    const sink = createBufferedServerLogSink();
+    try {
+      await mkdir(linkedRoot);
+      deps.store.createProject(linkedRoot, "denied-root");
+      await rm(linkedRoot, { recursive: true });
+      await mkdir(deniedTarget, { recursive: true });
+      await symlink(deniedTarget, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+
+      const res = await fetch(
+        `${baseUrl()}/api/terminal/directories?projectId=${encodeURIComponent(linkedRoot)}`,
+        { headers: { "X-Keiko-Correlation-Id": correlationId } },
+      );
+
+      expect(res.status).toBe(403);
+      expect(sink.events).toHaveLength(1);
+      expect(sink.events[0]).toMatchObject({
+        op: "workspace.root-relocation.denied",
+        correlationId,
+        errorKind: "WORKSPACE_PATH_DENIED",
+      });
+      expect(JSON.stringify(sink.events)).not.toContain(fixture);
+    } finally {
+      resetServerLogger();
+      await rm(fixture, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed when the registered project root has been deleted instead of falling back to process.cwd()", async () => {
     await rm(workspaceRoot, { recursive: true, force: true });
     const res = await fetch(
@@ -314,16 +347,21 @@ describe("POST /api/terminal/executions", () => {
   });
 
   it("forwards a valid request to execute() and returns the result body", async () => {
+    const correlationId = "terminal-execution-correlation-0001";
     const res = await fetch(`${baseUrl()}/api/terminal/executions`, {
       method: "POST",
-      headers: csrfHeaders(),
+      headers: { ...csrfHeaders(), "X-Keiko-Correlation-Id": correlationId },
       body: JSON.stringify({ projectId: workspaceRoot, command: "ls", args: ["-la"] }),
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { exitCode: number; stdout: string };
     expect(body.exitCode).toBe(0);
     expect(body.stdout).toBe("ok");
-    expect(terminal.executed[0]).toMatchObject({ projectId: workspaceRoot, command: "ls" });
+    expect(terminal.executed[0]).toMatchObject({
+      projectId: workspaceRoot,
+      command: "ls",
+      correlationId,
+    });
   });
 
   it("forwards an optional requestId to execute()", async () => {

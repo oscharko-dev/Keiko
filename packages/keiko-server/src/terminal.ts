@@ -55,6 +55,7 @@ import {
 } from "./diagnostics-log.js";
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
 import type { ServerLogSink } from "./observability/server-log.js";
+import { resolveRecordedWorkspaceRoot } from "./workspace-root-denial-log.js";
 
 const MAX_CONCURRENT_EXECUTIONS = 8;
 const MIN_TIMEOUT_MS = 1_000;
@@ -68,6 +69,7 @@ export interface TerminalExecutionInput {
   readonly cwd?: string | undefined;
   readonly timeoutMs?: number | undefined;
   readonly requestId?: string | undefined;
+  readonly correlationId?: string | undefined;
 }
 
 export interface TerminalExecutionResult {
@@ -219,10 +221,18 @@ function assertCwdInsideProject(
   }
 }
 
-async function projectRootOrThrow(project: Project): Promise<string> {
+function projectRootOrThrow(
+  project: Project,
+  fs: WorkspaceFs,
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
+): string {
   try {
-    return await realpath(project.path);
-  } catch {
+    return resolveRecordedWorkspaceRoot(fs, project.path, { activityLog, correlationId });
+  } catch (error) {
+    if (error instanceof PathDeniedError) {
+      throw new TerminalToolError("CWD_DENIED", "Working directory is denied by policy.");
+    }
     throw new TerminalToolError("PROJECT_NOT_FOUND", "Project root path could not be resolved.");
   }
 }
@@ -743,8 +753,8 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
         "Too many in-flight terminal executions.",
       );
     }
-    const projectRoot = await projectRootOrThrow(project);
     const fs = this.runDeps.fs ?? nodeWorkspaceFs;
+    const projectRoot = projectRootOrThrow(project, fs, this.activityLog, input.correlationId);
     const cwd = assertCwdInsideProject(project.path, projectRoot, input.cwd, fs);
     validateCommandOperands(projectRoot, cwd, input, fs);
     return this.runExecution(projectRoot, cwd, input);
@@ -1114,20 +1124,20 @@ export async function listDirectories(
   store: UiStore,
   projectId: string,
   pathInput: string | undefined,
+  correlationId?: string,
 ): Promise<TerminalDirectoryListing> {
   const project = projectFor(store, projectId);
   if (project === undefined) {
     throw new TerminalToolError("PROJECT_NOT_FOUND", "Project not found.");
   }
-  const projectRootRaw = project.path;
   // Resolve the project root to its real path first so that comparisons on macOS (where /tmp
   // is a symlink to /private/tmp) don't false-positive as escapes.
-  let projectRoot: string;
-  try {
-    projectRoot = await realpath(projectRootRaw);
-  } catch {
-    throw new TerminalToolError("PROJECT_NOT_FOUND", "Project root path could not be resolved.");
-  }
+  const projectRoot = projectRootOrThrow(
+    project,
+    nodeWorkspaceFs,
+    processServerLogSink(),
+    correlationId,
+  );
   const lexical = normalizeClientPath(pathInput, projectRoot);
   const pathValue = await resolveDirectory(lexical, projectRoot);
   const entries = await readdir(pathValue, { withFileTypes: true });

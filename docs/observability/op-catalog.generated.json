@@ -1301,7 +1301,7 @@
     {
       "op": "workspace.root-relocation.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:3142",
+      "site": "packages/keiko-server/src/workspace-root-denial-log.ts:27",
       "package": "keiko-server"
     }
   ],

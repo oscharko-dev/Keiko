@@ -5,7 +5,6 @@
 // inputs (chatId + content) and enforces that the chat carries a connected scope.
 
 import { createHash, randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
 import { basename } from "node:path";
 import {
   CancelledError,
@@ -24,10 +23,12 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
+  PathDeniedError,
   RepoSearchInvalidQueryError,
   RepoSearchInvalidRangeError,
   RepoSearchUnsupportedFileError,
 } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -99,6 +100,7 @@ import {
   type HybridAnswerer,
 } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import { resolveRecordedWorkspaceRoot } from "./workspace-root-denial-log.js";
 import {
   uncitedMemoryContextMarker,
   type NumericEntailmentEvidence,
@@ -242,7 +244,15 @@ export function mappedGatewayError(
   );
 }
 
+function pathDeniedResult(error: PathDeniedError): RouteResult {
+  return {
+    status: 400,
+    body: errorBody(error.code, "The workspace path is denied by policy."),
+  };
+}
+
 export function mappedWorkspaceError(error: unknown): RouteResult | undefined {
+  if (error instanceof PathDeniedError) return pathDeniedResult(error);
   if (
     error instanceof RepoSearchInvalidQueryError ||
     error instanceof RepoSearchInvalidRangeError ||
@@ -416,18 +426,22 @@ function buildSelectedScope(chat: Chat): SelectedScope | undefined {
   return buildSelectedScopeFrom(chat, cs, deriveScopeId(chat));
 }
 
-function canonicalGroundedRoot(rootInput: string, deps: UiHandlerDeps): string | RouteResult {
+function canonicalGroundedRoot(
+  rootInput: string,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): string | RouteResult {
   if (pathIsDenied(rootInput)) {
     return badRequest("Connected scope is excluded from Keiko's safe read surface.");
   }
   let realRoot: string;
   try {
-    realRoot = realpathSync(rootInput);
-  } catch {
+    realRoot = resolveRecordedWorkspaceRoot(nodeWorkspaceFs, rootInput, { correlationId });
+  } catch (error) {
+    if (error instanceof PathDeniedError) {
+      return pathDeniedResult(error);
+    }
     return badRequest("Connected scope root is not accessible.");
-  }
-  if (pathIsDenied(realRoot)) {
-    return badRequest("Connected scope is excluded from Keiko's safe read surface.");
   }
   const redacted = deps.redactor(realRoot);
   if (typeof redacted === "string" && redacted !== realRoot) {
@@ -460,12 +474,13 @@ function canonicalizeGroundedFolderScopes(
   chat: Chat,
   deps: UiHandlerDeps,
   scopes: readonly ChatConnectedScope[],
+  correlationId: string | undefined,
 ): CanonicalizedFolderScopes {
   const canonical: ChatConnectedScope[] = [];
   const skipped: SkippedFolderScope[] = [];
   for (const scope of scopes) {
     const rootInput = scope.root ?? chat.projectPath;
-    const realRoot = canonicalGroundedRoot(rootInput, deps);
+    const realRoot = canonicalGroundedRoot(rootInput, deps, correlationId);
     if (typeof realRoot !== "string") {
       const label = scope.root !== undefined ? basename(scope.root) : "project";
       skipped.push({ label, message: skippedFolderMessage(realRoot), reason: realRoot });
@@ -1811,7 +1826,7 @@ async function dispatchPreparedGroundedAsk(
   // user sees a clear rejection (security preserved).
   const folderScopes = buildConnectedScopes(chat);
   const { canonical: canonicalFolderScopes, skipped: skippedFolders } =
-    canonicalizeGroundedFolderScopes(chat, deps, folderScopes);
+    canonicalizeGroundedFolderScopes(chat, deps, folderScopes, prepared.correlationId);
   const preparedWithCanonicalFolders: PreparedGroundedAsk = {
     ...prepared,
     chat: withCanonicalFolderScopes(chat, canonicalFolderScopes),

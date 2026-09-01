@@ -644,11 +644,13 @@ function classifyPerSourceRetrieveError(
 ): { readonly skipped: SkippedScope; readonly mapped: RouteResult } | undefined {
   const mapped = mappedWorkspaceError(error);
   if (mapped === undefined) return undefined;
+  const body = mapped.body as { readonly error?: { readonly message?: unknown } };
+  const safeMessage =
+    typeof body.error?.message === "string"
+      ? body.error.message
+      : "Connected source is not readable.";
   return {
-    skipped: {
-      label,
-      message: error instanceof Error ? error.message : "Connected source is not readable.",
-    },
+    skipped: { label, message: safeMessage },
     mapped,
   };
 }

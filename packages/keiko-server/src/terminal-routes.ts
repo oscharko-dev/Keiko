@@ -168,7 +168,7 @@ export async function handleTerminalDirectories(
       throw new TerminalToolError("BAD_REQUEST", "Query parameter 'projectId' is required.");
     }
     const requestedPath = ctx.url.searchParams.get("path") ?? undefined;
-    const listing = await listDirectories(deps.store, projectId, requestedPath);
+    const listing = await listDirectories(deps.store, projectId, requestedPath, ctx.correlationId);
     return { status: 200, body: listing };
   });
 }
@@ -194,6 +194,7 @@ export async function handleCreateTerminalExecution(
       ...(cwd === undefined ? {} : { cwd }),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
       ...(requestId === undefined ? {} : { requestId }),
+      correlationId: ctx.correlationId,
     };
     const raw = await guard.execute(input);
     // A4 (M3) — Layer-2 redaction on the synchronous POST response body. runCommand already

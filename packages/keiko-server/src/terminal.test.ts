@@ -2,7 +2,15 @@
 // manager exercises the real allowlist + cwd containment + redaction passthrough without a real
 // child process. Route-level coverage lives in terminal-routes.test.ts.
 
-import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
@@ -18,7 +26,7 @@ import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/k
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { TerminalToolError } from "./terminal-errors.js";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
-import type { ServerLogEvent } from "./observability/server-log.js";
+import type { ServerLogEvent, ServerLogSink } from "./observability/server-log.js";
 
 // ── Fake spawn helpers ─────────────────────────────────────────────────────────
 
@@ -135,12 +143,13 @@ afterEach(() => {
 
 function makeManager(
   spawnImpl: SpawnFn = makeSpawn(),
-  extra: { processEnv?: NodeJS.ProcessEnv } = {},
+  extra: { processEnv?: NodeJS.ProcessEnv; activityLog?: ServerLogSink } = {},
 ): TerminalExecutionManager {
   return createTerminalExecutionManager({
     store,
     evidenceStore,
     processEnv: extra.processEnv ?? { PATH: "/usr/bin" },
+    ...(extra.activityLog === undefined ? {} : { activityLog: extra.activityLog }),
     runDeps: {
       spawn: spawnImpl,
       resolveExecutable: (command: string) => command,
@@ -228,6 +237,68 @@ describe("TerminalExecutionManager — happy path", () => {
 });
 
 describe("TerminalExecutionManager — denials and validation", () => {
+  it("rejects a registered project alias relocated into a denied root before spawn", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "keiko-term-denied-root-"));
+    outsideRoots.push(fixture);
+    const deniedTarget = join(fixture, ".aws", "workspace");
+    const linkedRoot = join(fixture, "selected-project");
+    mkdirSync(linkedRoot);
+    store.createProject(linkedRoot, "denied-root");
+    rmSync(linkedRoot, { recursive: true });
+    mkdirSync(deniedTarget, { recursive: true });
+    symlinkSync(deniedTarget, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+    const spawn = vi.fn<SpawnFn>(makeSpawn());
+    const activityEvents: ServerLogEvent[] = [];
+    const manager = makeManager(spawn, {
+      activityLog: { write: (event): void => void activityEvents.push(event) },
+    });
+    const events = collect(manager);
+    const correlationId = "terminal-root-correlation-0001";
+
+    await expect(
+      manager.execute({
+        projectId: linkedRoot,
+        command: "ls",
+        args: [],
+        correlationId,
+      }),
+    ).rejects.toMatchObject({ code: "CWD_DENIED" });
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+    expect(activityEvents).toHaveLength(1);
+    expect(activityEvents[0]).toMatchObject({
+      op: "workspace.root-relocation.denied",
+      correlationId,
+      errorKind: "WORKSPACE_PATH_DENIED",
+    });
+    expect(activityEvents[0]?.extra).toMatchObject({
+      decision: "denied",
+      reason: "relocated-denied-locus",
+    });
+    expect(JSON.stringify(activityEvents)).not.toContain(fixture);
+  });
+
+  it("keeps an ordinary registered project alias usable with its canonical cwd", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "keiko-term-safe-root-"));
+    outsideRoots.push(fixture);
+    const linkedRoot = join(fixture, "selected-project");
+    const safeTarget = join(fixture, "physical-project");
+    mkdirSync(linkedRoot);
+    store.createProject(linkedRoot, "safe-alias");
+    renameSync(linkedRoot, safeTarget);
+    symlinkSync(safeTarget, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+    const spawn = vi.fn<SpawnFn>(makeSpawn());
+    const manager = makeManager(spawn);
+
+    await expect(
+      manager.execute({ projectId: linkedRoot, command: "ls", args: [] }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(spawn.mock.calls[0]?.[2]?.cwd).toBe(realpathSync(safeTarget));
+  });
+
   it("rejects a command not on the allowlist (COMMAND_DENIED)", async () => {
     const manager = makeManager();
     await expect(

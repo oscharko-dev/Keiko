@@ -30,7 +30,7 @@ describe("nodeWorkspaceFs", () => {
     expect(nodeWorkspaceFs.readDir(root)).toContainEqual(
       expect.objectContaining({ name: "nested", isDirectory: true }),
     );
-    expect(nodeWorkspaceFs.realPath(file)).toBe(realpathSync(file));
+    expect(nodeWorkspaceFs.realPath(file)).toBe(realpathSync.native(file));
     expect(nodeWorkspaceFs.exists(file)).toBe(true);
     expect(nodeWorkspaceFs.exists(join(root, "missing"))).toBe(false);
   });

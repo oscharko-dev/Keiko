@@ -78,10 +78,13 @@ analyser's path sanitiser (CodeQL `javascript-typescript`) sits exactly on the r
 A symlinked workspace root must also not introduce or relocate a denied path locus. Comparing only
 whether both roots contain the same denied segment is insufficient: one `.codex` tree could
 otherwise redirect to another. Keiko therefore compares the normalised denied suffix at its exact
-locus and allows only unchanged roots plus the platform-defined macOS `/private` aliases for
-`/etc`, `/tmp`, and `/var`. The shared realpath boundary raises a typed denial before any target IO;
-repository retrieval records that decision through the existing correlated, body-free server
-activity log instead of presenting the protected root as an empty workspace.
+locus. When a denied locus is involved, it allows only an unchanged root plus the platform-defined
+macOS `/private` aliases for `/etc`, `/tmp`, and `/var`; ordinary aliases between roots with no
+denied locus remain valid. Identity comparison preserves component case and Unicode spelling because
+those semantics are properties of the mounted volume, not the host OS; uncertain spelling fails
+closed. The shared realpath boundary raises a typed denial before any target IO; repository
+retrieval records that decision through the existing correlated, body-free server activity log
+instead of presenting the protected root as an empty workspace.
 
 ### D3 — Two-tier filtering: always-on security DENY vs. best-effort `.gitignore`
 

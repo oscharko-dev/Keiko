@@ -6,7 +6,7 @@
 // IO is auditable in one place (ADR-0005 D2, ADR-0006 D2). The read path (discovery.ts) and the
 // write/cwd paths (tools/patch.ts, tools/exec.ts) share this single primitive — no duplicated logic.
 
-import { dirname, isAbsolute, win32 } from "node:path";
+import { dirname, isAbsolute, resolve, win32 } from "node:path";
 import type { WorkspaceFs } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { isWithinWorkspace } from "./paths.js";
@@ -48,21 +48,32 @@ function toRelative(root: string, absolutePath: string): string {
 }
 
 function deniedLocusSuffixes(path: string): ReadonlySet<string> {
-  const segments = path
-    .replaceAll("\\", "/")
+  const normalized = normalizedAbsolutePath(path);
+  const segments = (windowsPathShape(path) ? normalized.replaceAll("\\", "/") : normalized)
     .split("/")
     .filter((segment) => segment.length > 0);
-  const normalized = segments.map((segment) => segment.normalize("NFC").toLowerCase());
   const loci = new Set<string>();
   for (const [index, segment] of segments.entries()) {
-    if (isDenied(segment)) loci.add(normalized.slice(index).join("/"));
+    if (isDenied(segment)) loci.add(segments.slice(index).join("/"));
   }
   return loci;
 }
 
+function windowsPathShape(path: string): boolean {
+  return win32.isAbsolute(path) && (process.platform === "win32" || !isAbsolute(path));
+}
+
 function normalizedAbsolutePath(path: string): string {
-  const normalized = path.replaceAll("\\", "/").normalize("NFC").replace(/\/$/u, "");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  // Case and Unicode-normalisation semantics belong to the mounted volume, not the host OS. A
+  // case-sensitive NTFS directory or a POSIX network/FUSE volume mounted on macOS can preserve
+  // names the default host filesystem would merge. Keep every component spelling so an uncertain
+  // identity fails closed; only the Windows drive designator is case-insensitive by definition.
+  // `resolve`/`win32.resolve` still remove dot segments and redundant trailing separators linearly.
+  if (!windowsPathShape(path)) return resolve(path);
+  const normalized = win32.resolve(path);
+  return /^[A-Za-z]:/u.test(normalized)
+    ? `${normalized.slice(0, 2).toUpperCase()}${normalized.slice(2)}`
+    : normalized;
 }
 
 function isKnownPlatformRootAlias(realRoot: string, lexicalRoot: string): boolean {
@@ -100,15 +111,32 @@ function validAbsoluteRoot(root: string): boolean {
   );
 }
 
-export function assertAllowedWorkspaceRealRoot(fs: WorkspaceFs, lexicalRoot: string): string {
-  const realBase = realRoot(fs, lexicalRoot);
-  if (realRootIsDeniedViaSymlink(realBase, lexicalRoot)) {
-    throw new PathDeniedError(
-      "refusing a relocated denied workspace root",
-      RELOCATED_DENIED_WORKSPACE_ROOT_REQUEST,
-    );
-  }
+function throwRelocatedDeniedWorkspaceRoot(): never {
+  throw new PathDeniedError(
+    "refusing a relocated denied workspace root",
+    RELOCATED_DENIED_WORKSPACE_ROOT_REQUEST,
+  );
+}
+
+function assertAllowedResolvedWorkspaceRoot(realBase: string, lexicalRoot: string): string {
+  if (realRootIsDeniedViaSymlink(realBase, lexicalRoot)) throwRelocatedDeniedWorkspaceRoot();
   return realBase;
+}
+
+export function assertAllowedWorkspaceRealRoot(fs: WorkspaceFs, lexicalRoot: string): string {
+  if (!validAbsoluteRoot(lexicalRoot)) throwRelocatedDeniedWorkspaceRoot();
+  const realBase = realRoot(fs, lexicalRoot);
+  return assertAllowedResolvedWorkspaceRoot(realBase, lexicalRoot);
+}
+
+// Effectful consumers need one stable canonical identity. Resolve exactly once, then classify and
+// return that same result so a mutable alias cannot present one target to policy and another to IO.
+export function resolveExistingAllowedWorkspaceRealRoot(
+  fs: WorkspaceFs,
+  lexicalRoot: string,
+): string {
+  if (!validAbsoluteRoot(lexicalRoot)) throwRelocatedDeniedWorkspaceRoot();
+  return assertAllowedResolvedWorkspaceRoot(fs.realPath(lexicalRoot), lexicalRoot);
 }
 
 export interface ContainedRealPathInfo {

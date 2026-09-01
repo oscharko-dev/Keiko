@@ -70,7 +70,7 @@ import {
   scriptedAdapter,
   seedCapsuleWithVectors,
 } from "@oscharko-dev/keiko-local-knowledge/testing";
-import { RepoSearchInvalidQueryError } from "@oscharko-dev/keiko-workspace";
+import { PathDeniedError, RepoSearchInvalidQueryError } from "@oscharko-dev/keiko-workspace";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryUserId } from "@oscharko-dev/keiko-contracts";
@@ -86,6 +86,12 @@ import {
   CONVERSATION_MEMORY_FENCE_END,
   CONVERSATION_MEMORY_FENCE_START,
 } from "./conversation-prompt.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -1608,6 +1614,30 @@ describe("handleGroundedAsk", () => {
     ]);
   });
 
+  it("maps a runner root denial to a path-free policy response and retains the user turn", async () => {
+    const { chatId } = await setupChatWithScope();
+    const sensitivePath = join(tmp, ".aws", "private-customer-root");
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain src/foo.ts" })),
+      deps(),
+      () =>
+        Promise.reject(
+          new PathDeniedError(`denied sensitive root: ${sensitivePath}`, sensitivePath),
+        ),
+    );
+
+    expect(result.status).toBe(400);
+    const body = result.body as { error: { code: string; message: string } };
+    expect(body.error).toEqual({
+      code: "WORKSPACE_PATH_DENIED",
+      message: "The workspace path is denied by policy.",
+    });
+    expect(JSON.stringify(result)).not.toContain(sensitivePath);
+    expect(store.listMessages(chatId)).toMatchObject([
+      { role: "user", content: "explain src/foo.ts" },
+    ]);
+  });
+
   it("rejects a grounded ask whose workspace root is on the deny-list before invoking the runner", async () => {
     // Epic #177 audit (GAP-B): a chat whose projectPath sits inside a credential directory must be
     // refused at the route — before any filesystem access — with a generic message that does not
@@ -1666,18 +1696,58 @@ describe("handleGroundedAsk", () => {
       runnerCalled = true;
       return Promise.resolve({ pack: emptyPack(), assistantContent: "ok", elapsedMs: 1 });
     };
+    const activityLog = createBufferedServerLogSink();
+    const correlationId = "grounded-root-relocation-corr-0001";
+    setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
 
-    const result = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId: chat.id, content: "Inspect leak.txt", modelId: CHAT_MODEL })),
-      deps(),
-      spyRunner,
-    );
+    try {
+      const result = await handleGroundedAsk(
+        {
+          ...ctx(
+            JSON.stringify({
+              chatId: chat.id,
+              content: "Inspect leak.txt",
+              modelId: CHAT_MODEL,
+            }),
+          ),
+          correlationId,
+        },
+        deps(),
+        spyRunner,
+      );
 
-    expect(result.status).toBe(400);
-    expect(runnerCalled).toBe(false);
-    const body = result.body as { error: { message: string } };
-    expect(body.error.message).toContain("safe read surface");
-    expect(JSON.stringify(result)).not.toContain(".ssh");
+      expect(result.status).toBe(400);
+      expect(runnerCalled).toBe(false);
+      const body = result.body as { error: { code: string; message: string } };
+      expect(body.error).toEqual({
+        code: "WORKSPACE_PATH_DENIED",
+        message: "The workspace path is denied by policy.",
+      });
+      expect(JSON.stringify(result)).not.toContain(".ssh");
+      const denialEvents = activityLog.events.filter(
+        (event) => event.op === "workspace.root-relocation.denied",
+      );
+      expect(denialEvents).toHaveLength(1);
+      expect(denialEvents[0]).toMatchObject({
+        level: "warn",
+        category: "security",
+        op: "workspace.root-relocation.denied",
+        correlationId,
+        errorKind: "WORKSPACE_PATH_DENIED",
+      });
+      expect(denialEvents[0]?.extra).toMatchObject({
+        decision: "denied",
+        reason: "relocated-denied-locus",
+      });
+      const serializedEvents = JSON.stringify(denialEvents);
+      expect(serializedEvents).not.toContain(tmp);
+      expect(serializedEvents).not.toContain(linkedRoot);
+      expect(serializedEvents).not.toContain(deniedRoot);
+      expect(serializedEvents).not.toContain(".ssh");
+      expect(serializedEvents).not.toContain("leak.txt");
+    } finally {
+      resetServerLogger();
+    }
   });
 
   it("passes repository-root connectedScope kind through to the grounded runner", async () => {
@@ -1948,8 +2018,11 @@ describe("handleGroundedAsk", () => {
 
     expect(result.status).toBe(400);
     expect(seenRequests).toHaveLength(0);
-    const body = result.body as { error: { message: string } };
-    expect(body.error.message).toContain("excluded from Keiko's safe read surface");
+    const body = result.body as { error: { code: string; message: string } };
+    expect(body.error).toEqual({
+      code: "WORKSPACE_PATH_DENIED",
+      message: "The workspace path is denied by policy.",
+    });
     expect(JSON.stringify(result)).not.toContain(".ssh");
   });
 

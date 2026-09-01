@@ -93,7 +93,10 @@ export const nodeWorkspaceFs: WorkspaceFs = {
       isFile: entry.isFile(),
       isSymbolicLink: entry.isSymbolicLink(),
     })),
-  realPath: (absolutePath: string): string => realpathSync(absolutePath),
+  // Use the native implementation as the single canonical-identity source. On
+  // case-insensitive filesystems it returns the on-disk spelling, so callers do not need a
+  // second, independently mutable realpath pass merely to stabilize casing.
+  realPath: (absolutePath: string): string => realpathSync.native(absolutePath),
   exists: (absolutePath: string): boolean => {
     try {
       return statSync(absolutePath, { throwIfNoEntry: false }) !== undefined;
