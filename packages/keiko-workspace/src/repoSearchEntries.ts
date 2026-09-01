@@ -8,6 +8,7 @@ import {
   isAllowedContainedPathParent,
   isCanonicalAllowedContainedPath,
   resolveExistingAllowedWorkspaceRealRoot,
+  workspaceFsBoundToCanonicalRoot,
 } from "./realpath.js";
 import { DEFAULT_DISCOVERY_OPTIONS, type DiscoveredFile, type WorkspaceInfo } from "./types.js";
 import {
@@ -98,7 +99,7 @@ function readDirSorted(
 }
 
 function isCurrentEntryDirectory(walk: EntryWalk, dirRel: string, absoluteDir: string): boolean {
-  const root = walk.scope.workspace.root;
+  const root = walk.realRoot;
   const lexical = resolveWithinWorkspace(root, dirRel);
   const contained = containedRealPathInfo(walk.fs, root, lexical);
   if (
@@ -170,7 +171,7 @@ function handleDirectoryEntry(
   if (entry.isSymbolicLink) {
     return;
   }
-  const root = walk.scope.workspace.root;
+  const root = walk.realRoot;
   const childRel = dirRel.length === 0 ? entry.name : `${dirRel}/${entry.name}`;
   if (!allowedByFilters(childRel)) {
     return;
@@ -236,7 +237,7 @@ function walkEntryDirectory(
 }
 
 function handleScopeEntry(walk: EntryWalk, entry: string): void {
-  const root = walk.scope.workspace.root;
+  const root = walk.realRoot;
   const entryRel = normalizeScopePath(entry);
   if (isDenied(entryRel)) {
     return;
@@ -284,11 +285,20 @@ function createEntryWalk(
   fs: WorkspaceFs,
   executionControl?: StructuralExecutionControl,
 ): EntryWalk {
+  // Resolve the canonical root exactly once, then bind fs to that identity (the same shape as
+  // discovery.ts's createWalk): every subsequent containedRealPathInfo call below is made through
+  // this bound fs and against realRoot, never the caller's raw port or the lexical
+  // scope.workspace.root. Without the bind, each call re-resolves the lexical root's realpath from
+  // scratch, so a root symlink repointed after admission (but before the walk actually reads
+  // anything) would be re-admitted or re-classified on its own, independent of what was already
+  // proven safe. Binding makes the admitted identity structural instead of relying on every call
+  // site to compare against it by convention.
+  const realRoot = resolveEntryWalkRoot(fs, scope.workspace.root);
   return {
     scope,
     limits,
-    fs,
-    realRoot: resolveEntryWalkRoot(fs, scope.workspace.root),
+    fs: workspaceFsBoundToCanonicalRoot(fs, realRoot),
+    realRoot,
     ...(executionControl === undefined ? {} : { executionControl }),
     traversalEntryBudget: explicitScopeTraversalEntryBudget(limits.maxFilesScanned),
     files: [],

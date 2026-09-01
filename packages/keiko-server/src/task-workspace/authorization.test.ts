@@ -1,34 +1,28 @@
 // Coverage for the managed-task-workspace authorization boundary's leaf-id derivation (Epic #443).
-// resolveManagedTaskWorkspaceRoot re-derives a WorkspaceInstance's identity from a candidate root
-// before trusting it; these tests exercise that derivation directly against a stubbed provisioning
-// port, without needing a live managed worktree on disk.
+// resolveManagedTaskWorkspaceInstanceFromLookup re-derives a WorkspaceInstance's identity from a
+// candidate root before trusting it; these tests exercise that derivation directly against a
+// stubbed lookup, without needing a live managed worktree on disk. (#3347 review moved the
+// WorkspaceInfo-returning wrappers that used to live here — resolveManagedTaskWorkspaceRoot /
+// resolveRegisteredOrManagedWorkspaceRoot — into workspace-root-access.ts, where they compose the
+// STRONG proof (ownership, lifecycle, gitdir identity) instead of trusting this lookup alone; see
+// workspace-root-access.test.ts for their coverage.)
 
 import { describe, expect, it, vi } from "vitest";
-import { resolveManagedTaskWorkspaceRoot } from "./authorization.js";
+import { resolveManagedTaskWorkspaceInstanceFromLookup } from "./authorization.js";
 import type { WorkspaceProvisioningService } from "./types.js";
 
-function provisioningStub(
-  getInstance: WorkspaceProvisioningService["getInstance"],
-): WorkspaceProvisioningService {
-  return {
-    provision: (): never => {
-      throw new Error("not used in this test");
-    },
-    activate: (): never => {
-      throw new Error("not used in this test");
-    },
-    getInstance,
-  };
+function lookupStub(getInstance: WorkspaceProvisioningService["getInstance"]): {
+  readonly managedRoot: string;
+  readonly getInstance: WorkspaceProvisioningService["getInstance"];
+} {
+  return { managedRoot: "/managed", getInstance };
 }
 
-describe("resolveManagedTaskWorkspaceRoot", () => {
+describe("resolveManagedTaskWorkspaceInstanceFromLookup", () => {
   it("derives the workspace leaf id after trimming trailing path separators", () => {
     const getInstance = vi.fn<WorkspaceProvisioningService["getInstance"]>();
-    const result = resolveManagedTaskWorkspaceRoot(
-      {
-        managedTaskWorkspaceRoot: "/managed",
-        workspaceProvisioning: provisioningStub(getInstance),
-      },
+    const result = resolveManagedTaskWorkspaceInstanceFromLookup(
+      lookupStub(getInstance),
       "/managed/repo_a/ws_b///",
     );
 
@@ -36,10 +30,10 @@ describe("resolveManagedTaskWorkspaceRoot", () => {
     expect(getInstance).toHaveBeenCalledWith("ws_b");
   });
 
-  it("returns undefined when the managed root or provisioning port is missing", () => {
+  it("returns undefined when the managed root is missing", () => {
     expect(
-      resolveManagedTaskWorkspaceRoot(
-        { managedTaskWorkspaceRoot: undefined, workspaceProvisioning: undefined },
+      resolveManagedTaskWorkspaceInstanceFromLookup(
+        { managedRoot: undefined, getInstance: vi.fn() },
         "/managed/repo_a/ws_b",
       ),
     ).toBeUndefined();
@@ -54,13 +48,7 @@ describe("resolveManagedTaskWorkspaceRoot", () => {
     const root = `/managed/repo_a/ws_b${"/".repeat(20_000)}`;
 
     const start = Date.now();
-    const result = resolveManagedTaskWorkspaceRoot(
-      {
-        managedTaskWorkspaceRoot: "/managed",
-        workspaceProvisioning: provisioningStub(getInstance),
-      },
-      root,
-    );
+    const result = resolveManagedTaskWorkspaceInstanceFromLookup(lookupStub(getInstance), root);
     const elapsedMs = Date.now() - start;
 
     expect(elapsedMs).toBeLessThan(1000);

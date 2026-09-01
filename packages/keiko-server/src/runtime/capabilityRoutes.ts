@@ -7,7 +7,7 @@ import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
 import { resolveRequestRoot, runFilesHandler } from "../files.js";
-import { resolveManagedTaskWorkspaceRoot } from "../task-workspace/authorization.js";
+import { resolveManagedTaskWorkspaceRoot } from "../task-workspace/workspace-root-access.js";
 import {
   detectRuntimeCapabilities,
   type RuntimeCapabilityDetectorOptions,

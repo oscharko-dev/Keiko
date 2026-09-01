@@ -110,6 +110,23 @@ function memoryStat(
   };
 }
 
+// Bounded synchronous prefix read: walk.ts's readGitIgnoreText requires this primitive (the
+// unbounded readFileUtf8 fallback was removed) to read a repository's .gitignore.
+function memoryPrefixReader(
+  map: ReadonlyMap<string, MemFsEntry>,
+  findKey: (absolutePath: string) => string | undefined,
+): (absolutePath: string, maxBytes: number) => string {
+  return (absolutePath: string, maxBytes: number): string => {
+    const key = findKey(absolutePath);
+    if (key === undefined) throw new Error(`ENOENT: ${absolutePath}`);
+    const buf = map.get(key)?.content ?? new Uint8Array();
+    const cap = Math.max(0, Math.floor(maxBytes));
+    return new TextDecoder("utf-8", { fatal: false }).decode(
+      buf.subarray(0, Math.min(buf.length, cap)),
+    );
+  };
+}
+
 export function memoryFs(root: string, files: readonly MemoryFsFile[]): WorkspaceFs {
   const map = buildMap(files);
   const findKey = (absolutePath: string): string | undefined => {
@@ -141,6 +158,7 @@ export function memoryFs(root: string, files: readonly MemoryFsFile[]): Workspac
       const cap = Math.max(0, Math.floor(maxBytes));
       return Promise.resolve(buf.subarray(0, Math.min(buf.length, cap)));
     },
+    readFileUtf8Prefix: memoryPrefixReader(map, findKey),
     readFileRange: (
       absolutePath: string,
       startByte: number,

@@ -1933,6 +1933,18 @@ class MetadataTraversalDeadlineError extends Error {
   }
 }
 
+// `instanceof` walks the thrown value's prototype chain, and a hostile getPrototypeOf trap (a
+// proxied error from an injected callback, e.g. a test/adversarial `detectWorkspace`) can make that
+// walk throw. Matches `isConnectedContextCancellation`'s established degrade-to-false shape so a
+// hostile trap can never be allowed to replace the original retrieval failure.
+function isMetadataTraversalDeadline(error: unknown): boolean {
+  try {
+    return error instanceof MetadataTraversalDeadlineError;
+  } catch {
+    return false;
+  }
+}
+
 function assertMetadataTraversalActive(control: MetadataTraversalControl): void {
   throwIfCancelled(control.signal);
   if (control.nowMs() >= control.deadlineAtMs) {
@@ -3183,6 +3195,15 @@ interface DeterministicContextEvidence {
   readonly uncertainty: readonly UncertaintyMarker[];
 }
 
+function mergeDeterministicEvidence(
+  sources: readonly DeterministicContextEvidence[],
+): DeterministicContextEvidence {
+  return {
+    atoms: sources.flatMap((source) => source.atoms),
+    uncertainty: sources.flatMap((source) => source.uncertainty),
+  };
+}
+
 function metadataDirectoryCoverageUncertainty(
   cache: FileExistenceCache,
   nowMs: number,
@@ -3325,11 +3346,41 @@ async function collectParallelDeterministicEvidence(
   ]);
 }
 
+// Project-metadata discovery (package.json/pom.xml et al.) intentionally reads directly against
+// `metadataFs` — the request's plain, unwrapped fs — rather than the ring-retrieval discovery cache
+// `deterministicContextEvidence` otherwise shares: it deliberately re-probes a directory at
+// escalating small caps to detect and report a genuine enumeration failure (#3347 P1), and it is
+// not bound to `structuralContexts`, so it never needs to match that pool's fs identity for
+// assertGraphBinding.
+function deterministicMetadataAtoms(
+  budget: AugmentationBudgetMeter,
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+  searchScope: SearchScope,
+  metadataFs: WorkspaceFs,
+  nowMs: () => number,
+  signal: AbortSignal | undefined,
+  deadlineAtMs: number,
+): DeterministicContextEvidence {
+  return budget.canContinue()
+    ? deterministicMetadataEvidence(
+        input,
+        plan,
+        searchScope,
+        metadataFs,
+        nowMs,
+        signal,
+        deadlineAtMs,
+      )
+    : { atoms: [], uncertainty: [] };
+}
+
 async function deterministicContextEvidence(
   input: OrchestratorInput,
   plan: ExplorationPlan,
   searchScope: SearchScope,
   fs: WorkspaceFs,
+  metadataFs: WorkspaceFs,
   nowMs: () => number,
   signal: AbortSignal | undefined,
   structuralContexts: StructuralRequestContextPool,
@@ -3351,23 +3402,22 @@ async function deterministicContextEvidence(
       deadlineAtMs,
       budget,
     );
-  const metadata = budget.canContinue()
-    ? deterministicMetadataEvidence(input, plan, searchScope, fs, nowMs, signal, deadlineAtMs)
-    : { atoms: [], uncertainty: [] };
-  return {
-    atoms: [
-      ...symbolDiscovery.atoms,
-      ...traceEvidence.atoms,
-      ...referencedDocuments.atoms,
-      ...metadata.atoms,
-    ],
-    uncertainty: [
-      ...symbolDiscovery.uncertainty,
-      ...traceEvidence.uncertainty,
-      ...referencedDocuments.uncertainty,
-      ...metadata.uncertainty,
-    ],
-  };
+  const metadata = deterministicMetadataAtoms(
+    budget,
+    input,
+    plan,
+    searchScope,
+    metadataFs,
+    nowMs,
+    signal,
+    deadlineAtMs,
+  );
+  return mergeDeterministicEvidence([
+    symbolDiscovery,
+    traceEvidence,
+    referencedDocuments,
+    metadata,
+  ]);
 }
 
 async function withDeterministicContextAtoms(
@@ -3376,6 +3426,7 @@ async function withDeterministicContextAtoms(
   plan: ExplorationPlan,
   searchScope: SearchScope,
   fs: WorkspaceFs,
+  metadataFs: WorkspaceFs,
   nowMs: () => number,
   signal: AbortSignal | undefined,
   structuralContexts: StructuralRequestContextPool,
@@ -3387,6 +3438,7 @@ async function withDeterministicContextAtoms(
     plan,
     searchScope,
     fs,
+    metadataFs,
     nowMs,
     signal,
     structuralContexts,
@@ -4037,6 +4089,10 @@ interface AssembleGroundedPackInputs {
   readonly rings: RingRunSummary;
   readonly searchScope: SearchScope;
   readonly fs: WorkspaceFs;
+  // The request's plain, unwrapped fs — used only for project-metadata discovery (#3347 P1), which
+  // is not bound to `structuralContexts` and must keep making its own real, individually observable
+  // reads rather than the ring-retrieval discovery cache `fs` may carry.
+  readonly metadataFs: WorkspaceFs;
   readonly nowMs: () => number;
   readonly structuralContexts: StructuralRequestContextPool;
   readonly workspaceIndex: WorkspaceIndex | undefined;
@@ -4402,8 +4458,18 @@ async function discoveredTraceForAugmentation(
 async function augmentRingsWithDeterministicAtoms(
   args: AssembleGroundedPackInputs,
 ): Promise<RingRunSummary> {
-  const { input, deps, plan, rings, searchScope, fs, nowMs, structuralContexts, deadlineAtMs } =
-    args;
+  const {
+    input,
+    deps,
+    plan,
+    rings,
+    searchScope,
+    fs,
+    metadataFs,
+    nowMs,
+    structuralContexts,
+    deadlineAtMs,
+  } = args;
   const budget = createAugmentationBudgetMeter(plan, rings.governor, nowMs, deadlineAtMs);
   // Explicitly selected files are direct user scope, not another search. Preserve healthy files
   // when a planned ring consumed the search-call share (notably multi-source splits), while the
@@ -4419,6 +4485,7 @@ async function augmentRingsWithDeterministicAtoms(
     plan,
     searchScope,
     fs,
+    metadataFs,
     nowMs,
     deps.signal,
     structuralContexts,
@@ -5091,6 +5158,7 @@ function connectedContextSearchInputs(
   deps: OrchestratorDeps,
   plan: ExplorationPlan,
   runtime: ConnectedContextRuntime,
+  fs: WorkspaceFs,
   searchScope: SearchScope,
   structuralContexts: StructuralRequestContextPool,
   workspaceIndex: WorkspaceIndex | undefined,
@@ -5102,7 +5170,7 @@ function connectedContextSearchInputs(
     query: input.query,
     anchors: plan.anchors,
     retrievalIntent: plan.retrievalIntent,
-    fs: runtime.fs,
+    fs,
     nowMs: runtime.nowMs,
     signal: deps.signal,
     ...(workspaceIndex === undefined ? {} : { workspaceIndex }),
@@ -5192,68 +5260,86 @@ function workspaceFsProperty<Key extends keyof WorkspaceFs>(
   }
 }
 
+function observedDescriptorRead(
+  fs: WorkspaceFs,
+  counters: MutableWorkspaceIoActivityCounters,
+): Pick<WorkspaceFs, "readFileUtf8SameDescriptor"> | Record<string, never> {
+  const descriptorRead = workspaceFsProperty(fs, "readFileUtf8SameDescriptor");
+  if (descriptorRead === undefined) return {};
+  return {
+    readFileUtf8SameDescriptor: (
+      path: string,
+      maxBytes: number,
+      hardLinkPolicy: WorkspaceHardLinkPolicy,
+      expected: WorkspaceStat,
+    ): WorkspaceDescriptorUtf8Read => {
+      counters.contentReadCalls += 1;
+      const result = descriptorRead.call(fs, path, maxBytes, hardLinkPolicy, expected);
+      recordDescriptorPayload(counters, result);
+      return result;
+    },
+  };
+}
+
+function observedContainedDescriptorRead(
+  fs: WorkspaceFs,
+  counters: MutableWorkspaceIoActivityCounters,
+): Pick<WorkspaceFs, "readFileUtf8WithinRootSameDescriptor"> | Record<string, never> {
+  const containedDescriptorRead = workspaceFsProperty(fs, "readFileUtf8WithinRootSameDescriptor");
+  if (containedDescriptorRead === undefined) return {};
+  return {
+    readFileUtf8WithinRootSameDescriptor: (
+      canonicalRoot: string,
+      path: string,
+      maxBytes: number,
+      hardLinkPolicy: WorkspaceHardLinkPolicy,
+      completeness: WorkspaceDescriptorReadCompleteness,
+    ): WorkspaceDescriptorUtf8Read => {
+      counters.contentReadCalls += 1;
+      const result = containedDescriptorRead.call(
+        fs,
+        canonicalRoot,
+        path,
+        maxBytes,
+        hardLinkPolicy,
+        completeness,
+      );
+      recordDescriptorPayload(counters, result);
+      return result;
+    },
+  };
+}
+
+function observedPrefixRead(
+  fs: WorkspaceFs,
+  counters: MutableWorkspaceIoActivityCounters,
+): Pick<WorkspaceFs, "readFileUtf8Prefix"> | Record<string, never> {
+  const prefixRead = workspaceFsProperty(fs, "readFileUtf8Prefix");
+  if (prefixRead === undefined) return {};
+  return {
+    readFileUtf8Prefix: (
+      path: string,
+      maxBytes: number,
+      hardLinkPolicy: WorkspaceHardLinkPolicy,
+      expected: WorkspaceStat,
+    ): string => {
+      counters.contentReadCalls += 1;
+      return recordTextPayload(
+        counters,
+        prefixRead.call(fs, path, maxBytes, hardLinkPolicy, expected),
+      );
+    },
+  };
+}
+
 function observedSynchronousContentReads(
   fs: WorkspaceFs,
   counters: MutableWorkspaceIoActivityCounters,
 ): Partial<WorkspaceFs> {
-  const descriptorRead = workspaceFsProperty(fs, "readFileUtf8SameDescriptor");
-  const containedDescriptorRead = workspaceFsProperty(fs, "readFileUtf8WithinRootSameDescriptor");
-  const prefixRead = workspaceFsProperty(fs, "readFileUtf8Prefix");
   return {
-    ...(descriptorRead === undefined
-      ? {}
-      : {
-          readFileUtf8SameDescriptor: (
-            path: string,
-            maxBytes: number,
-            hardLinkPolicy: WorkspaceHardLinkPolicy,
-            expected: WorkspaceStat,
-          ): WorkspaceDescriptorUtf8Read => {
-            counters.contentReadCalls += 1;
-            const result = descriptorRead.call(fs, path, maxBytes, hardLinkPolicy, expected);
-            recordDescriptorPayload(counters, result);
-            return result;
-          },
-        }),
-    ...(containedDescriptorRead === undefined
-      ? {}
-      : {
-          readFileUtf8WithinRootSameDescriptor: (
-            canonicalRoot: string,
-            path: string,
-            maxBytes: number,
-            hardLinkPolicy: WorkspaceHardLinkPolicy,
-            completeness: WorkspaceDescriptorReadCompleteness,
-          ): WorkspaceDescriptorUtf8Read => {
-            counters.contentReadCalls += 1;
-            const result = containedDescriptorRead.call(
-              fs,
-              canonicalRoot,
-              path,
-              maxBytes,
-              hardLinkPolicy,
-              completeness,
-            );
-            recordDescriptorPayload(counters, result);
-            return result;
-          },
-        }),
-    ...(prefixRead === undefined
-      ? {}
-      : {
-          readFileUtf8Prefix: (
-            path: string,
-            maxBytes: number,
-            hardLinkPolicy: WorkspaceHardLinkPolicy,
-            expected: WorkspaceStat,
-          ): string => {
-            counters.contentReadCalls += 1;
-            return recordTextPayload(
-              counters,
-              prefixRead.call(fs, path, maxBytes, hardLinkPolicy, expected),
-            );
-          },
-        }),
+    ...observedDescriptorRead(fs, counters),
+    ...observedContainedDescriptorRead(fs, counters),
+    ...observedPrefixRead(fs, counters),
   };
 }
 
@@ -5391,8 +5477,49 @@ function requestScopedWorkspaceFs(fs: WorkspaceFs): WorkspaceIoActivity {
   };
 }
 
+// Ring-retrieval directory-listing cache (#3347 P1): the structural ring's own SearchLimits, the
+// symbol-file and trace search contexts drawn from the SAME pool (deterministicContextEvidence),
+// and the lexical ring's direct searchText call each build their own bounded candidate inventory
+// over the SAME workspace tree — multiplying real filesystem I/O by the number of rings that run
+// (a 65-package/133-directory fixture measured readDirCalls=532, four full traversals, instead of
+// one). Scoped to ring retrieval only — a fresh wrapper around `runtime.fs`, not a change to
+// `runtime.fs` itself — so project-metadata discovery (deterministicMetadataEvidence's
+// package.json/pom.xml probing, which deliberately re-reads a directory at escalating small caps to
+// detect and report a genuine enumeration failure) keeps making its own real, individually
+// observable calls against the unwrapped fs. Every consumer of `readDir` that ring retrieval feeds
+// either (a) treats a capped read that comes back at its cap as an opaque "too many entries, reject
+// this directory" signal — a count comparison, not an ordering assumption (discovery.ts) — or (b)
+// hashes the returned entries through `workspaceDirectoryFingerprint`, which sorts before hashing
+// and is therefore order-independent. So once a directory has been read to completion (uncapped, or
+// capped but returning fewer entries than the cap — proof nothing was left unread), replaying that
+// exact listing for every later request within this SAME wrapper — sliced down to the caller's own
+// cap when smaller — is observably identical to issuing a fresh read, and lets every ring after the
+// first reuse one shared discovery snapshot instead of re-walking the tree. `runtime.fs`'s own
+// methods are plain closures with no `this` dependency (see requestScopedWorkspaceFs), so spreading
+// it to forward every other method verbatim is safe.
+function ringDiscoveryFs(fs: WorkspaceFs): WorkspaceFs {
+  const completeReads = new Map<string, readonly WorkspaceDirEntry[]>();
+  return preserveOwnedRootAuthority(fs, {
+    ...fs,
+    readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+      const cached = completeReads.get(absolutePath);
+      if (cached !== undefined) {
+        return maxEntries === undefined || cached.length <= maxEntries
+          ? cached
+          : cached.slice(0, maxEntries);
+      }
+      const entries = fs.readDir(absolutePath, maxEntries);
+      if (maxEntries === undefined || entries.length < maxEntries) {
+        completeReads.set(absolutePath, entries);
+      }
+      return entries;
+    },
+  });
+}
+
 function liveStructuralContexts(
   searchScope: SearchScope,
+  fs: WorkspaceFs,
   runtime: ConnectedContextRuntime,
   deadlineAtMs: number,
   workspaceIndexActivity: WorkspaceIndexActivity,
@@ -5400,7 +5527,7 @@ function liveStructuralContexts(
 ): StructuralRequestContextPool {
   return createStructuralRequestContextPool(
     searchScope,
-    runtime.fs,
+    fs,
     runtime.nowMs,
     deadlineAtMs,
     workspaceIndexActivity,
@@ -5411,6 +5538,7 @@ function liveStructuralContexts(
 interface LiveRetrievalContext {
   readonly deadlineAtMs: number;
   readonly searchScope: SearchScope;
+  readonly ringFs: WorkspaceFs;
   readonly structuralContexts: StructuralRequestContextPool;
   readonly workspaceIndexSource: WorkspaceIndex | undefined;
   readonly workspaceIndexActivity: WorkspaceIndexActivity;
@@ -5421,6 +5549,30 @@ function detectConnectedContextWorkspace(root: string, fs: WorkspaceFs): Workspa
   return detectWorkspaceAt(root, fs, { scanSourceFilesForLanguages: false });
 }
 
+// #3347 P2: detection previously received the observed raw filesystem with no request signal or
+// deadline, so its first time check happened only after `detect` returned — a hostile or merely
+// huge workspace could stat past the deadline before the request noticed. Guard the sync core
+// operations detection actually performs (stat/exists/readFileUtf8/realPath/readDir) with the SAME
+// cancellation/deadline control the rest of this request honors — the check-run-check pattern
+// `metadataTraversalOperation` already uses to bound the deterministic-metadata traversal — so a
+// trip lands BETWEEN two detector filesystem operations, not only after `detect` returns. Unlike
+// `metadataTraversalFs`, this spreads `fs` first (safe: `runtime.fs`'s methods are plain closures
+// with no `this` dependency, see requestScopedWorkspaceFs/ringDiscoveryFs) so every OTHER method —
+// including the async descriptor/range readers detection never calls but callers may still probe —
+// stays forwarded unguarded, rather than silently dropped.
+function detectionGuardedFs(fs: WorkspaceFs, control: MetadataTraversalControl): WorkspaceFs {
+  const run = <T>(operation: () => T): T => metadataTraversalOperation(control, operation);
+  return preserveOwnedRootAuthority(fs, {
+    ...fs,
+    readFileUtf8: (path): string => run(() => fs.readFileUtf8(path)),
+    stat: (path): WorkspaceStat => run(() => fs.stat(path)),
+    readDir: (path, maxEntries): readonly WorkspaceDirEntry[] =>
+      run(() => fs.readDir(path, maxEntries)),
+    realPath: (path): string => run(() => fs.realPath(path)),
+    exists: (path): boolean => run(() => fs.exists(path)),
+  });
+}
+
 function prepareLiveRetrievalContext(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
@@ -5429,14 +5581,24 @@ function prepareLiveRetrievalContext(
 ): LiveRetrievalContext {
   const deadlineAtMs = runtime.requestStartedAtMs + Math.max(0, plan.budget.elapsedMsMax);
   runtime.progress.phase = "workspace-detection";
-  const workspace = runtime.detect(runtime.workspaceRoot, runtime.fs);
+  const detectionControl: MetadataTraversalControl = {
+    signal: deps.signal,
+    nowMs: runtime.nowMs,
+    deadlineAtMs,
+  };
+  const workspace = runtime.detect(
+    runtime.workspaceRoot,
+    detectionGuardedFs(runtime.fs, detectionControl),
+  );
   const searchScope = buildSearchScope(input.scope, workspace);
   const workspaceIndexSource =
     runtime.nowMs() < deadlineAtMs ? deps.workspaceIndexForRoot?.(workspace.root) : undefined;
   const workspaceIndexActivity = createWorkspaceIndexActivity(workspaceIndexSource);
   runtime.progress.workspaceIndexActivity = workspaceIndexActivity;
+  const ringFs = ringDiscoveryFs(runtime.fs);
   const structuralContexts = liveStructuralContexts(
     searchScope,
+    ringFs,
     runtime,
     deadlineAtMs,
     workspaceIndexActivity,
@@ -5446,10 +5608,34 @@ function prepareLiveRetrievalContext(
   return {
     deadlineAtMs,
     searchScope,
+    ringFs,
     structuralContexts,
     workspaceIndexSource,
     workspaceIndexActivity,
     workspaceIndex: workspaceIndexActivity.workspaceIndex,
+  };
+}
+
+function liveGroundedPackInputs(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  plan: ExplorationPlan,
+  runtime: ConnectedContextRuntime,
+  context: LiveRetrievalContext,
+  rings: RingRunSummary,
+): AssembleGroundedPackInputs {
+  return {
+    input,
+    deps,
+    plan,
+    rings,
+    searchScope: context.searchScope,
+    fs: context.ringFs,
+    metadataFs: runtime.fs,
+    nowMs: runtime.nowMs,
+    structuralContexts: context.structuralContexts,
+    workspaceIndex: context.workspaceIndex,
+    deadlineAtMs: context.deadlineAtMs,
   };
 }
 
@@ -5459,8 +5645,8 @@ async function retrieveLiveConnectedContext(
   plan: ExplorationPlan,
   governor: GovernorState,
   runtime: ConnectedContextRuntime,
+  context: LiveRetrievalContext,
 ): Promise<ConnectedContextExecution> {
-  const context = prepareLiveRetrievalContext(input, deps, plan, runtime);
   runtime.progress.phase = "ring-retrieval";
   const rings = await runAllRings(
     plan.rings,
@@ -5469,6 +5655,7 @@ async function retrieveLiveConnectedContext(
       deps,
       plan,
       runtime,
+      context.ringFs,
       context.searchScope,
       context.structuralContexts,
       context.workspaceIndex,
@@ -5479,18 +5666,9 @@ async function retrieveLiveConnectedContext(
   );
   throwIfCancelled(deps.signal);
   runtime.progress.phase = "pack-assembly";
-  const pack = await assembleGroundedPack({
-    input,
-    deps,
-    plan,
-    rings,
-    searchScope: context.searchScope,
-    fs: runtime.fs,
-    nowMs: runtime.nowMs,
-    structuralContexts: context.structuralContexts,
-    workspaceIndex: context.workspaceIndex,
-    deadlineAtMs: context.deadlineAtMs,
-  });
+  const pack = await assembleGroundedPack(
+    liveGroundedPackInputs(input, deps, plan, runtime, context, rings),
+  );
   throwIfCancelled(deps.signal);
   return connectedContextExecution(
     pack,
@@ -5501,6 +5679,74 @@ async function retrieveLiveConnectedContext(
     context.workspaceIndexActivity.diagnostics(),
     runtime.workspaceIoActivity.diagnostics(),
   );
+}
+
+async function emptyBudgetExhaustedRetrieval(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  plan: ExplorationPlan,
+  governor: GovernorState,
+  runtime: ConnectedContextRuntime,
+  stopReason: string,
+  readBudgetBlocked: boolean,
+  elapsedBudgetBlocked: boolean,
+): Promise<ConnectedContextExecution> {
+  runtime.progress.phase = "empty-pack-assembly";
+  const stoppedGovernor = elapsedBudgetBlocked
+    ? applyUsage(governor, usageDelta({ elapsedMs: plan.budget.elapsedMsMax }))
+    : governor;
+  const pack = await assembleEmptyGroundedPack({
+    input,
+    deps,
+    plan,
+    governor: stoppedGovernor,
+    nowMs: runtime.nowMs,
+    stopReason,
+  });
+  throwIfCancelled(deps.signal);
+  return connectedContextExecution(
+    pack,
+    plan,
+    runtime.activity,
+    stoppedRetrievalCompletion(readBudgetBlocked, elapsedBudgetBlocked),
+    EMPTY_STRUCTURAL_DIAGNOSTICS,
+    NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS,
+    runtime.workspaceIoActivity.diagnostics(),
+  );
+}
+
+// #3347 P2: workspace detection is deadline/signal-guarded (see prepareLiveRetrievalContext) so a
+// request that is already out of budget by the time detection runs stops mid-traversal instead of
+// finishing an unbounded filesystem walk, rather than reaching ring retrieval on a workspace that
+// was never actually resolved in time. Catching only around preparation — not the whole
+// live-retrieval call — keeps this narrow: nothing past preparation uses the same deadline-guarded
+// fs, so no later, unrelated deadline trip can be mistaken for this one. Fold the outcome into the
+// SAME empty-pack, budget-exhausted result the caller's pre-flight elapsedMs check already produces,
+// instead of letting a half-finished detection surface as an unhandled orchestrator error.
+async function retrieveLiveOrDeadlineExhausted(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  plan: ExplorationPlan,
+  governor: GovernorState,
+  runtime: ConnectedContextRuntime,
+): Promise<ConnectedContextExecution> {
+  let liveContext: LiveRetrievalContext;
+  try {
+    liveContext = prepareLiveRetrievalContext(input, deps, plan, runtime);
+  } catch (error) {
+    if (!isMetadataTraversalDeadline(error)) throw error;
+    return emptyBudgetExhaustedRetrieval(
+      input,
+      deps,
+      plan,
+      governor,
+      runtime,
+      "budget-exhausted on elapsedMs",
+      false,
+      true,
+    );
+  }
+  return retrieveLiveConnectedContext(input, deps, plan, governor, runtime, liveContext);
 }
 
 async function executeConnectedContextRetrieval(
@@ -5526,30 +5772,17 @@ async function executeConnectedContextRetrieval(
     runtime.nowMs() >= deadlineAtMs ? "budget-exhausted on elapsedMs" : undefined;
   const stopReason = readBudgetBlock ?? elapsedBudgetBlock;
   if (stopReason === undefined) {
-    return retrieveLiveConnectedContext(input, deps, plan, governor, admittedRuntime);
+    return retrieveLiveOrDeadlineExhausted(input, deps, plan, governor, admittedRuntime);
   }
-  runtime.progress.phase = "empty-pack-assembly";
-  const stoppedGovernor =
-    elapsedBudgetBlock === undefined
-      ? governor
-      : applyUsage(governor, usageDelta({ elapsedMs: plan.budget.elapsedMsMax }));
-  const pack = await assembleEmptyGroundedPack({
+  return emptyBudgetExhaustedRetrieval(
     input,
     deps,
     plan,
-    governor: stoppedGovernor,
-    nowMs: runtime.nowMs,
+    governor,
+    runtime,
     stopReason,
-  });
-  throwIfCancelled(deps.signal);
-  return connectedContextExecution(
-    pack,
-    plan,
-    runtime.activity,
-    stoppedRetrievalCompletion(readBudgetBlock !== undefined, elapsedBudgetBlock !== undefined),
-    EMPTY_STRUCTURAL_DIAGNOSTICS,
-    NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS,
-    runtime.workspaceIoActivity.diagnostics(),
+    readBudgetBlock !== undefined,
+    elapsedBudgetBlock !== undefined,
   );
 }
 
@@ -5565,7 +5798,13 @@ function assertGroundedWorkspaceRootAllowed(
   try {
     return resolveRecordedWorkspaceRoot(fs, workspaceRoot, deps);
   } catch (error) {
-    if (error instanceof PathDeniedError) throw error;
+    if (
+      error instanceof PathDeniedError ||
+      error instanceof WorkspaceNotFoundError ||
+      error instanceof CancelledError
+    ) {
+      throw error;
+    }
     throw new WorkspaceNotFoundError("The workspace root is unavailable.", workspaceRoot, [
       workspaceRoot,
     ]);

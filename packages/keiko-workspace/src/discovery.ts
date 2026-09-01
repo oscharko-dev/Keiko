@@ -678,26 +678,22 @@ function mapDescriptorReadError(
   );
 }
 
+// Bounded primitive present -> use it; absent -> the read is unavailable. Never fall back to the
+// unbounded `readFileUtf8`, which would materialize the whole file before the size cap below ever
+// runs (the class of bug this function exists to close — see the read-lane boundary note above).
 function readDescriptor(
   fs: WorkspaceFs,
   target: ReadableWorkspaceFile,
   opts: ReadOptions,
 ): WorkspaceDescriptorUtf8Read {
+  if (fs.readFileUtf8SameDescriptor === undefined) {
+    throw new WorkspaceReadError(
+      `bounded same-descriptor read is unavailable: ${target.normalizedRel}`,
+      target.normalizedRel,
+    );
+  }
   try {
-    if (fs.readFileUtf8SameDescriptor !== undefined) {
-      return fs.readFileUtf8SameDescriptor(
-        target.resolvedPath,
-        opts.maxBytes,
-        "reject",
-        target.stat,
-      );
-    }
-    const rawText = fs.readFileUtf8(target.resolvedPath);
-    return {
-      rawText,
-      sizeBytes: Buffer.byteLength(rawText, "utf8"),
-      stat: target.stat,
-    };
+    return fs.readFileUtf8SameDescriptor(target.resolvedPath, opts.maxBytes, "reject", target.stat);
   } catch (error) {
     if (error instanceof StructuralExecutionStoppedError) throw error;
     if (error instanceof WorkspaceDescriptorReadError) {

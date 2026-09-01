@@ -33,6 +33,7 @@ import {
   gitHistoryAdapter,
   symbolGraphAdapter,
   createWorkspaceIndex,
+  WorkspaceNotFoundError,
   type SemanticSearchProvider,
   type SearchScope,
   type WorkspaceFs,
@@ -984,13 +985,22 @@ function workspaceReadOperationCount(operations: FsOperationCounts): number {
 // Calibrated against the production Node adapter at both fixture sizes with roughly 30% headroom.
 // The paired size and anchor-shape checks catch query-invariant work being repeated; these ceilings
 // intentionally pin bounded growth, rather than claiming a general asymptotic proof.
+//
+// readDir/readDirEntries are pinned to (approximately) ONE full traversal, not a multiple (#3347
+// P1): this query selects both the lexical and the structural ring plus the symbol-file and trace
+// search contexts, and prior to the ring-retrieval discovery cache (grounded-orchestrator.ts's
+// `ringDiscoveryFs`) each of those rebuilt its own candidate inventory over the same workspace tree
+// — a 65-package/133-directory fixture measured readDirCalls=532 (four full traversals) instead of
+// one. Measured on the production Node adapter: readDir === directoryCount exactly at both fixture
+// sizes (37/37 and 135/135) — the additive headroom below only guards against incidental variance,
+// not a reintroduced repeated walk.
 function expectAbsoluteRetrievalIoBound(measurement: TraversalMeasurement): void {
   const { directoryCount, fileCount, operations } = measurement;
   const contentReadByteCeiling =
     16 * measurement.fixtureContentBytes + 32 * measurement.maxReadableFixtureFileBytes;
   expect(operations.unboundedReadDir).toBe(0);
-  expect(operations.readDir).toBeLessThanOrEqual(6 * directoryCount + 32);
-  expect(operations.readDirEntries).toBeLessThanOrEqual(10 * directoryCount + 32);
+  expect(operations.readDir).toBeLessThanOrEqual(directoryCount + 16);
+  expect(operations.readDirEntries).toBeLessThanOrEqual(2 * directoryCount + 32);
   expect(workspaceReadOperationCount(operations)).toBeLessThanOrEqual(16 * fileCount + 32);
   expect(operations.contentReadBytes).toBeLessThanOrEqual(contentReadByteCeiling);
   expect(operations.stat).toBeLessThanOrEqual(22 * fileCount + 14 * directoryCount);
@@ -1013,9 +1023,11 @@ function expectLinearRetrievalGrowth(
     large.operations[key] - small.operations[key];
   const addedReadOperations =
     workspaceReadOperationCount(large.operations) - workspaceReadOperationCount(small.operations);
-  expect(delta("readDir")).toBeLessThanOrEqual(6 * addedDirectories + 16);
+  // #3347 P1: one shared discovery snapshot means each added directory is walked once, not once per
+  // ring — the delta tracks addedDirectories directly rather than a multiple of it.
+  expect(delta("readDir")).toBeLessThanOrEqual(addedDirectories + 16);
   expect(delta("unboundedReadDir")).toBeLessThanOrEqual(4 * addedDirectories);
-  expect(delta("readDirEntries")).toBeLessThanOrEqual(10 * addedDirectories + 16);
+  expect(delta("readDirEntries")).toBeLessThanOrEqual(2 * addedDirectories + 32);
   expect(addedReadOperations).toBeLessThanOrEqual(16 * addedFiles + 16);
   expect(delta("contentReadBytes")).toBeLessThanOrEqual(
     16 * addedFixtureBytes + 16 * largestReadableFileBytes,
@@ -1289,6 +1301,66 @@ describe("runGroundedExploration", () => {
       throw new Error("expected orchestrator output to expose the recorded plan");
     }
     expect(events).toEqual([`record:${plan.planId}`, "detect"]);
+  });
+
+  it("rethrows an existing WorkspaceNotFoundError from workspace-root admission instead of flattening it", async () => {
+    // #3347 P2: assertGroundedWorkspaceRootAllowed's catch block previously replaced ANY non-denial
+    // error — including one that was already a typed WorkspaceNotFoundError — with a brand new,
+    // generic WorkspaceNotFoundError. Force resolveRecordedWorkspaceRoot's underlying realPath call
+    // to throw an already-typed WorkspaceNotFoundError carrying a distinguishing marker and assert
+    // that exact error (not a replacement) is what the request rejects with.
+    const marker = "existing-workspace-not-found-marker";
+    const failingFs: WorkspaceFs = {
+      ...countingNodeFs().fs,
+      realPath: (path): never => {
+        throw new WorkspaceNotFoundError(marker, path, [path]);
+      },
+    };
+
+    const expectation = retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which package manager does this repository use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        fs: failingFs,
+      },
+    );
+
+    await expect(expectation).rejects.toBeInstanceOf(WorkspaceNotFoundError);
+    await expect(expectation).rejects.toMatchObject({ message: marker });
+  });
+
+  it("rethrows a cancellation from workspace-root admission instead of flattening it into WorkspaceNotFoundError", async () => {
+    // Same catch-block flattening bug (#3347 P2), for the CancelledError case cursor's review
+    // specifically named: any CancelledError that realPath might surface must propagate as a real
+    // cancellation, never get replaced with a generic "workspace root is unavailable" error.
+    const controller = new AbortController();
+    const failingFs: WorkspaceFs = {
+      ...countingNodeFs().fs,
+      realPath: (): never => {
+        throw new CancelledError("grounded repository request cancelled");
+      },
+    };
+
+    const expectation = retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which package manager does this repository use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        fs: failingFs,
+        signal: controller.signal,
+      },
+    );
+
+    await expect(expectation).rejects.toBeInstanceOf(CancelledError);
   });
 
   it("passes the question and the full pack to the injected answerer", async () => {
@@ -3432,6 +3504,93 @@ describe("runGroundedExploration", () => {
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
+        fs: fs.fs,
+        signal: controller.signal,
+      },
+    );
+
+    await expect(expectation).rejects.toBeInstanceOf(CancelledError);
+    expect(controller.signal.aborted).toBe(true);
+    expect(fs.accessesAfterDeadline()).toBe(0);
+  });
+
+  it("starts no further filesystem access when the deadline crosses inside workspace detection", async () => {
+    // #3347 P2: deadlineAtMs is computed before workspace detection runs, but detection previously
+    // received the observed raw filesystem with no request signal or deadline guard — the first
+    // elapsed-budget check happened only after `detect` returned. Cross the deadline mid-detection
+    // (on the "src" directory stat, which `inspectCanonicalWorkspace` reaches only after the
+    // package.json read that precedes it, and well before the ignore-file and language-marker
+    // checks that follow it) to prove the guard trips BETWEEN detector filesystem operations, not
+    // only at detector return.
+    const elapsedMsMax = 100;
+    const deadlineAtMs = NOW + elapsedMsMax;
+    let nowMs = NOW;
+    const baseFs = countingNodeFs().fs;
+    const srcDirPath = realpathSync(join(ROOT, "src"));
+    const crossingFs: WorkspaceFs = {
+      ...baseFs,
+      stat: (path): WorkspaceStat => {
+        const stat = baseFs.stat(path);
+        if (path === srcDirPath) nowMs = deadlineAtMs;
+        return stat;
+      },
+    };
+    const fs = deadlineFsProbe(crossingFs, () => nowMs >= deadlineAtMs);
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({
+          kind: "workspace-root",
+          relativePaths: [],
+          explicitConnection: true,
+        }),
+        query: happyQuery({ text: "Which package manager does this repository use?" }),
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, elapsedMsMax },
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => nowMs,
+        // No detectWorkspace override: this test exercises the REAL detector so the deadline guard
+        // added around it is actually on the call path.
+        fs: fs.fs,
+      },
+    );
+
+    expect(nowMs).toBe(deadlineAtMs);
+    expect(fs.accessesAfterDeadline()).toBe(0);
+    expect(out.pack.usage.elapsedMs).toBe(elapsedMsMax);
+    expect(out.pack.uncertainty.some((marker) => marker.claim.includes("elapsedMs"))).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("propagates cancellation that arrives inside workspace detection", async () => {
+    const controller = new AbortController();
+    const baseFs = countingNodeFs().fs;
+    const srcDirPath = realpathSync(join(ROOT, "src"));
+    const cancellingFs: WorkspaceFs = {
+      ...baseFs,
+      stat: (path): WorkspaceStat => {
+        const stat = baseFs.stat(path);
+        if (path === srcDirPath) controller.abort();
+        return stat;
+      },
+    };
+    const fs = deadlineFsProbe(cancellingFs, () => controller.signal.aborted);
+
+    const expectation = retrieveConnectedContextPack(
+      input({
+        scope: happyScope({
+          kind: "workspace-root",
+          relativePaths: [],
+          explicitConnection: true,
+        }),
+        query: happyQuery({ text: "Which package manager does this repository use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
         fs: fs.fs,
         signal: controller.signal,
       },

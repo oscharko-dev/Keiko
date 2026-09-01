@@ -7,8 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough, Readable } from "node:stream";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { IncomingMessage } from "node:http";
 
 import type {
@@ -111,6 +112,7 @@ import { createCodingAppSessionChannel } from "./coding-app-session/sessionChann
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 import { assertManagedRootOwned } from "./task-workspace/managed-root.js";
 import { deriveManagedWorktreePath } from "./task-workspace/naming.js";
+import { inspectManagedGitdirIdentity } from "./task-workspace/gitdir-identity.js";
 import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
 
 const NOW = 1_700_000_000_000;
@@ -1753,8 +1755,35 @@ describe("handleGroundedAsk", () => {
       repositoryId,
       workspaceId,
     });
-    mkdirSync(managedWorktree, { recursive: true });
+    // #3347 managed-worktree identity: resolveManagedWorkspaceRootAccess re-proves a real Git
+    // linked-worktree pointer (gitdir-identity.ts) instead of trusting a path shape, so `tmp` (the
+    // instance's repositoryRoot) and managedWorktree must be an actual `git worktree add` linkage,
+    // not a plain mkdir, for the paired branch below to reach 200 instead of a fail-closed denial.
+    execFileSync("git", ["init", "-q"], { cwd: tmp });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: tmp });
+    execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: tmp });
+    writeFileSync(join(tmp, "README.md"), "managed grounding fixture\n");
+    execFileSync("git", ["add", "README.md"], { cwd: tmp });
+    execFileSync("git", ["commit", "-qm", "fixture"], { cwd: tmp });
+    mkdirSync(dirname(managedWorktree), { recursive: true });
+    execFileSync(
+      "git",
+      [
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "keiko/task/managed-grounding-01234567",
+        managedWorktree,
+        "HEAD",
+      ],
+      { cwd: tmp },
+    );
     writeFileSync(join(managedWorktree, "package.json"), '{"name":"managed-grounding"}\n');
+    const gitdirInspection = inspectManagedGitdirIdentity(managedWorktree, tmp);
+    if (gitdirInspection === undefined) {
+      throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+    }
     const instance: WorkspaceInstance = {
       schemaVersion: "1",
       workspaceId,
@@ -1764,7 +1793,7 @@ describe("handleGroundedAsk", () => {
       baseBranch: "dev",
       taskBranch: "keiko/task/managed-grounding-01234567",
       managedWorktreePath: managedWorktree,
-      gitdirIdentity: "gitdir-identity",
+      gitdirIdentity: gitdirInspection.identity,
       lifecycleState: "active",
       health: "healthy",
       lock: null,

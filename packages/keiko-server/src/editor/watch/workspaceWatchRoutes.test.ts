@@ -8,8 +8,19 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 
 import { buildCspHeader } from "../../csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../../index.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+} from "../../observability/index.js";
 import { createRunRegistry } from "../../runs.js";
 import { createUiServer, UI_HOST } from "../../server.js";
+import {
+  createOrdinaryWorkspaceRootAccess,
+  type WorkspaceRootAccess,
+} from "../../task-workspace/workspace-root-access.js";
 import {
   createWorkspaceWatchService,
   type WorkspaceNativeWatchHandle,
@@ -162,6 +173,101 @@ async function waitForBaselineSeed(): Promise<void> {
     { interval: 5, timeout: 15_000 },
   );
 }
+
+// Standalone fixture for the authority-revocation test below: it needs its own adapter/service
+// (kept off the module-level `adapter`/`watchService` the other tests share via `baseDeps()`) and
+// a `workspaceRootAccessResolver` whose answer can flip mid-test, so `reproveRoot` can be made to
+// fail on demand from a subscriber that already reached a live stream.
+function buildRevocableDeps(root: string): {
+  deps: UiHandlerDeps;
+  revoke: () => void;
+  adapter: FakeAdapter;
+} {
+  const store = createInMemoryUiStore();
+  store.createProject(root);
+  const revocableAdapter = new FakeAdapter();
+  const service = createWorkspaceWatchService({
+    adapter: revocableAdapter,
+    coalesceMs: 0,
+    idleTearDownMs: 0,
+    replayCapacity: 1,
+  });
+  let revoked = false;
+  const deps: UiHandlerDeps = {
+    config: undefined,
+    configPresent: false,
+    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+    env: {},
+    redactor: buildRedactor({}),
+    registry: createRunRegistry(),
+    modelPortFactory: () => undefined,
+    store,
+    workspaceWatchService: service,
+    workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccess | undefined =>
+      revoked ? undefined : createOrdinaryWorkspaceRootAccess(requestedRoot),
+  };
+  return {
+    deps,
+    adapter: revocableAdapter,
+    revoke: (): void => {
+      revoked = true;
+    },
+  };
+}
+
+describe("workspace watch authority revocation logging (#3347)", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("records a catalogued, correlated op before closing an SSE stream whose authority was revoked", async () => {
+    const revocableRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-watch-revoke-root-")));
+    const sink: BufferedServerLogSink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const { deps, adapter: revocableAdapter, revoke } = buildRevocableDeps(revocableRoot);
+    const built = await buildServer(deps);
+    try {
+      const controller = new AbortController();
+      const stream = await fetch(
+        `http://${UI_HOST}:${String(built.port)}/api/editor/workspace-watch/events?root=${encodeURIComponent(
+          revocableRoot,
+        )}`,
+        { signal: controller.signal },
+      );
+      const correlationId = stream.headers.get("x-keiko-correlation-id");
+      expect(correlationId).not.toBeNull();
+      try {
+        await readUntil(stream, "event: ready");
+        revoke();
+        // Any subsequent watcher event forces the live subscriber's per-event reprove check
+        // (workspaceWatchService.ts's `emit()`), which now fails and fires `onAuthorityRevoked`.
+        revocableAdapter.emit({ eventType: "change", filename: "revoked-trigger.txt" });
+        await vi.waitFor(
+          () => {
+            expect(
+              sink.events.some((event) => event.op === "editor.workspace-watch.authority-revoked"),
+            ).toBe(true);
+          },
+          { interval: 5, timeout: 15_000 },
+        );
+      } finally {
+        controller.abort();
+        await stream.body?.cancel().catch(() => undefined);
+      }
+      const revokedEvent = sink.events.find(
+        (event) => event.op === "editor.workspace-watch.authority-revoked",
+      );
+      expect(revokedEvent).toBeDefined();
+      expect(revokedEvent?.category).toBe("security");
+      expect(revokedEvent?.correlationId).toBe(correlationId);
+      expect(revokedEvent?.errorKind).toBe("WATCH_AUTHORITY_REVOKED");
+      expect(JSON.stringify(revokedEvent)).not.toContain(revocableRoot);
+    } finally {
+      await closeServer(built.server);
+      await rm(revocableRoot, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
 
 describe("workspace watch routes", () => {
   it("returns content-free health snapshots without absolute workspace roots", async () => {

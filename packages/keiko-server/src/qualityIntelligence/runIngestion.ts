@@ -7,7 +7,7 @@
 // inputs fail with user-actionable errors (#278 AC) before any model prompt is built.
 
 import { realpathSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import type {
   QualityIntelligence as QI,
   QualityIntelligenceInlineSource,
@@ -732,7 +732,27 @@ function readSingleFileContent(
     throw error;
   }
   try {
-    return readWorkspaceFile(workspace, relative(workspace.root, absFile), {
+    // `workspace.root` is the CANONICAL (realpath'd) identity of `dirname(absFile)` —
+    // detectWorkspaceAt admits it via resolveExistingAllowedWorkspaceRealRoot (keiko-workspace
+    // realpath.ts), which resolves the directory through the same realpath primitive
+    // nodeWorkspaceFs uses everywhere else. `absFile` itself is still the caller's lexical
+    // absolute path, so combining the two with `relative(workspace.root, absFile)` compares a
+    // canonical base against a lexical target: whenever any ancestor segment is a symlink —
+    // including a benign directory link (allowed `linked/spec.md` -> real `real-specs/spec.md`)
+    // or the ordinary macOS `/tmp` -> `/private/tmp` alias, which hits temp-file ingestion
+    // broadly — that mismatch produces a "../"-prefixed relative path that the keiko-workspace
+    // containment gate then (correctly, given that input) rejects as an escape, even though the
+    // file is legitimately inside the admitted root (QI_SOURCE_DENIED).
+    //
+    // `dirname(absFile)` is exactly the lexical root that was canonicalized into `workspace.root`
+    // above, so the file's own basename is already expressed relative to that SAME admitted
+    // identity — no second, independently-derived realpath call is needed (or wanted: it would
+    // fail for a not-yet-verified file and would re-run canonicalization outside the one place
+    // that owns it). This only re-expresses an already-admitted file's location through the
+    // identity `detectWorkspaceAt` already established; every denied-realpath / symlink-escape
+    // check for the file itself still runs unchanged, downstream, inside readWorkspaceFile's own
+    // containment gate.
+    return readWorkspaceFile(workspace, basename(absFile), {
       ...DEFAULT_READ_OPTIONS,
       maxBytes,
     });

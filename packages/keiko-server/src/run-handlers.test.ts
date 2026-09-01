@@ -6,6 +6,7 @@
 // (409 when not appliable), and that NO secret-shaped string appears in ANY response body.
 
 import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -41,6 +42,8 @@ import {
   deriveTaskBranchName,
   deriveWorkspaceId,
 } from "./task-workspace/naming.js";
+import { assertManagedRootOwned } from "./task-workspace/managed-root.js";
+import { inspectManagedGitdirIdentity } from "./task-workspace/gitdir-identity.js";
 import { closeUiTestServer, startUiTestServer } from "./ui-test-server/_support.js";
 import type { AppSession } from "./coding-app-session/sessionRegistry.js";
 import type { CodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
@@ -974,24 +977,45 @@ describe("Security #1 — workflow workspaceRoot project-allowlist check", () =>
 
   it("returns 202 for verify with a persisted managed task workspace root", async () => {
     const managedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-run-managed-")));
-    const repositoryId = deriveRepositoryId(workspace);
+    // #3347: resolveRegisteredOrManagedWorkspaceRoot now composes resolveManagedWorkspaceRootAccess,
+    // which re-proves ownership and a real Git linked-worktree pointer instead of trusting path
+    // shape alone -- a plain mkdir no longer admits, so this fixture builds a genuine `git worktree
+    // add` linkage off a dedicated repository root (never the shared `workspace` fixture, which is
+    // not a Git repository).
+    assertManagedRootOwned(managedRoot);
+    const repositoryRoot = mkdtempSync(join(tmpdir(), "keiko-run-managed-source-"));
+    execFileSync("git", ["init", "-q"], { cwd: repositoryRoot });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repositoryRoot });
+    execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: repositoryRoot });
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], {
+      cwd: repositoryRoot,
+    });
+    const repositoryId = deriveRepositoryId(repositoryRoot);
     const workspaceId = deriveWorkspaceId({ repositoryId, taskId: "task-443" });
     const managedWorktreePath = deriveManagedWorktreePath({
       managedRoot,
       repositoryId,
       workspaceId,
     });
-    mkdirSync(managedWorktreePath, { recursive: true });
+    const taskBranch = deriveTaskBranchName({ taskId: "task-443" });
+    mkdirSync(dirname(managedWorktreePath), { recursive: true });
+    execFileSync("git", ["worktree", "add", "-q", "-b", taskBranch, managedWorktreePath, "HEAD"], {
+      cwd: repositoryRoot,
+    });
+    const gitdirInspection = inspectManagedGitdirIdentity(managedWorktreePath, repositoryRoot);
+    if (gitdirInspection === undefined) {
+      throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+    }
     const instance: WorkspaceInstance = {
       schemaVersion: "1",
       workspaceId,
       taskId: "task-443",
       repositoryId,
-      repositoryRoot: workspace,
+      repositoryRoot,
       baseBranch: "main",
-      taskBranch: deriveTaskBranchName({ taskId: "task-443" }),
+      taskBranch,
       managedWorktreePath,
-      gitdirIdentity: "gitdir-hash",
+      gitdirIdentity: gitdirInspection.identity,
       lifecycleState: "active",
       health: "healthy",
       lock: null,
@@ -1019,6 +1043,7 @@ describe("Security #1 — workflow workspaceRoot project-allowlist check", () =>
       expect(res.status).toBe(202);
     } finally {
       rmSync(managedRoot, { recursive: true, force: true });
+      rmSync(repositoryRoot, { recursive: true, force: true });
     }
   });
 

@@ -22,7 +22,7 @@ import {
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   retrieveConnectedContextPack,
   runGroundedExploration,
@@ -30,6 +30,7 @@ import {
   type OrchestratorInput,
 } from "../grounded-orchestrator.js";
 import { createBufferedServerLogSink } from "../observability/index.js";
+import { createInMemoryUiStore } from "../store/index.js";
 import { assertManagedRootOwned } from "./managed-root.js";
 import { inspectManagedGitdirIdentity, parseGitdirPointerTarget } from "./gitdir-identity.js";
 import { deriveManagedWorktreePath, deriveRepositoryId } from "./naming.js";
@@ -37,7 +38,9 @@ import type { WorkspaceProvisioningService } from "./types.js";
 import {
   requiresConfiguredManagedWorkspaceAuthority,
   resolveLifecycleManagedWorkspaceRootAccess,
+  resolveManagedTaskWorkspaceRoot,
   resolveManagedWorkspaceRootAccess,
+  resolveRegisteredOrManagedWorkspaceRoot,
   type WorkspaceRootAccess,
 } from "./workspace-root-access.js";
 
@@ -348,6 +351,100 @@ describe("resolveManagedWorkspaceRootAccess", () => {
         workspaceRoot,
       ),
     ).toMatchObject({ kind: "managed-task", canonicalRoot: workspaceRoot });
+  });
+
+  // #3347 cursor finding: the empty `catch { return undefined; }` around the managed-root re-proof
+  // used to swallow an IO/parse failure with no logged activity event. Every input-driven scenario
+  // that could reach this catch is already denied one layer earlier by an existsSync-equivalent
+  // check (isManagedRootOwned / managedTargetExists), so the only way this catch actually fires is
+  // a genuine race (the managed worktree vanishing between that earlier check and this re-proof) or
+  // an exotic IO fault -- neither reproducible deterministically through fixtures alone. This proves
+  // the catch itself is wired correctly by forcing exactly that failure through the same WorkspaceFs
+  // port the re-proof already depends on, and asserts the correlated, body-free denial event that
+  // used to never exist.
+  it("logs a correlated workspace.root.denied event when the managed-root re-proof itself throws, instead of silently returning undefined", () => {
+    const activityLog = createBufferedServerLogSink();
+    const realStat = nodeWorkspaceFs.stat.bind(nodeWorkspaceFs);
+    const simulatedRace = new Error("simulated stat failure racing a concurrent cleanup");
+    const statSpy = vi.spyOn(nodeWorkspaceFs, "stat").mockImplementation((path: string) => {
+      if (path === workspaceRoot) throw simulatedRace;
+      return realStat(path);
+    });
+
+    let access: WorkspaceRootAccess | undefined;
+    try {
+      access = resolveManagedWorkspaceRootAccess(
+        { managedTaskWorkspaceRoot: managedRoot, workspaceProvisioning: provisioning() },
+        workspaceRoot,
+        { activityLog, correlationId: "wra-catch-000001" },
+      );
+    } finally {
+      statSpy.mockRestore();
+    }
+
+    expect(access).toBeUndefined();
+    const denialEvents = activityLog.events.filter((event) => event.op === "workspace.root.denied");
+    expect(denialEvents).toHaveLength(1);
+    expect(denialEvents[0]).toMatchObject({
+      level: "warn",
+      category: "security",
+      correlationId: "wra-catch-000001",
+      extra: { decision: "denied" },
+    });
+    // Body-free: the simulated failure's own message never enters the logged event.
+    expect(JSON.stringify(denialEvents[0])).not.toContain(simulatedRace.message);
+  });
+
+  // #3347 cursor finding: run-handlers.ts (apply) and gitDelivery/execution.ts used to authorize
+  // through resolveManagedTaskWorkspaceInstanceFromLookup's weaker containment/existence check
+  // directly, which never reads lifecycleState -- an archived (or identity-replaced) worktree whose
+  // directory still exists could pass apply/git while interactive admission denied it. Both
+  // WorkspaceInfo-returning surfaces now compose resolveManagedWorkspaceRootAccess, so this proves
+  // they agree with interactive admission on the exact same archived instance, not merely that all
+  // three happen to return undefined for unrelated reasons.
+  it("rejects an archived worktree through resolveManagedTaskWorkspaceRoot and resolveRegisteredOrManagedWorkspaceRoot the same way interactive admission rejects it", () => {
+    registered = { ...instanceAt(workspaceRoot), lifecycleState: "archived" };
+    const store = createInMemoryUiStore();
+    const deps = {
+      managedTaskWorkspaceRoot: managedRoot,
+      workspaceProvisioning: provisioning(),
+      store,
+    };
+
+    try {
+      expect(resolveAccess()).toBeUndefined();
+      expect(resolveManagedTaskWorkspaceRoot(deps, workspaceRoot)).toBeUndefined();
+      expect(resolveRegisteredOrManagedWorkspaceRoot(deps, workspaceRoot)).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
+  it("admits an active worktree through resolveManagedTaskWorkspaceRoot and resolveRegisteredOrManagedWorkspaceRoot at the SAME canonical root interactive admission proves", () => {
+    const store = createInMemoryUiStore();
+    const deps = {
+      managedTaskWorkspaceRoot: managedRoot,
+      workspaceProvisioning: provisioning(),
+      store,
+    };
+
+    try {
+      expect(resolveManagedTaskWorkspaceRoot(deps, workspaceRoot)).toEqual({
+        root: workspaceRoot,
+        name: undefined,
+        version: undefined,
+        testFramework: "unknown",
+        sourceDirs: [],
+        testDirs: [],
+        languages: [],
+        ignoreLines: [],
+      });
+      expect(resolveRegisteredOrManagedWorkspaceRoot(deps, workspaceRoot)?.root).toBe(
+        workspaceRoot,
+      );
+    } finally {
+      store.close();
+    }
   });
 });
 

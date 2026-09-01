@@ -1226,11 +1226,28 @@ describe("StructuralAdapterRequestContext", () => {
       let contentReads = 0;
       const fs: WorkspaceFs = {
         ...base,
-        readFileUtf8: (absolutePath): string => {
+        // readWorkspaceFile's only read primitive is readFileUtf8SameDescriptor (the unbounded
+        // readFileUtf8 fallback was removed), so the counter/clock-advance has to live there —
+        // mirrors countingFs's own readFileUtf8SameDescriptor wrapper above.
+        readFileUtf8SameDescriptor: (
+          absolutePath,
+          maxBytes,
+          hardLinkPolicy,
+          expected,
+        ): ReturnType<NonNullable<WorkspaceFs["readFileUtf8SameDescriptor"]>> => {
           contentReads += 1;
-          const content = base.readFileUtf8(absolutePath);
+          const result = base.readFileUtf8SameDescriptor?.(
+            absolutePath,
+            maxBytes,
+            hardLinkPolicy,
+            expected,
+          ) ?? {
+            rawText: base.readFileUtf8(absolutePath),
+            sizeBytes: base.stat(absolutePath).size,
+            stat: base.stat(absolutePath),
+          };
           currentMs = 2;
-          return content;
+          return result;
         },
       };
       const capped = { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1 };

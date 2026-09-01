@@ -23,7 +23,13 @@ import {
   isSafeStorageReference,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-paths";
 import type { IgnoreMatcher, WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
-import { compileIgnore, isDenied, isIgnored } from "@oscharko-dev/keiko-workspace";
+import {
+  compileIgnore,
+  isDenied,
+  isIgnored,
+  PathDeniedError,
+  resolveExistingAllowedWorkspaceRealRoot,
+} from "@oscharko-dev/keiko-workspace";
 import { isWorkspacePathSnapshotCurrent } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { compileGlobList, matchesAny, type CompiledGlob } from "./glob.js";
@@ -159,6 +165,26 @@ function safeRealPath(fs: WorkspaceFs, absolutePath: string): string | undefined
     return fs.realPath(absolutePath);
   } catch {
     return undefined;
+  }
+}
+
+// Admits the scope's own root through the SAME deny-root policy the workspace package already
+// enforces for its own walk (workspaceFsBoundToCanonicalRoot's resolveWalkRoot in discovery.ts).
+// A plain `fs.realPath` on the root only follows symlinks — it never asks whether the resolved
+// target is itself a denied locus (e.g. a source lexically admitted as safe, then retargeted via
+// symlink to `~/.ssh` before this call runs). Only the root needs this: every descendant is
+// already re-checked against `ctx.realRootPath` and the deny list on every subsequent snapshot.
+function resolveAdmittedRealRoot(fs: WorkspaceFs, rootPath: string): string | DiscoveryError {
+  try {
+    return resolveExistingAllowedWorkspaceRealRoot(fs, rootPath);
+  } catch (error) {
+    if (error instanceof PathDeniedError) {
+      return {
+        code: "PATH_ESCAPE",
+        message: "selected source root is a denied workspace root",
+      };
+    }
+    return { code: "READ_FAILED", message: "realPath failed for selected source root" };
   }
 }
 
@@ -472,12 +498,12 @@ function gitIgnoreSnapshot(
   return { realPath, stat };
 }
 
+// Bounded primitive present -> use it; absent -> ignore metadata is unavailable. Never fall back
+// to an unbounded `readFileUtf8`, which would materialize the whole file before any cap applies.
 function readGitIgnoreText(fs: WorkspaceFs, snapshot: GitIgnoreSnapshot): string | undefined {
+  if (fs.readFileUtf8Prefix === undefined) return undefined;
   try {
-    return (
-      fs.readFileUtf8Prefix?.(snapshot.realPath, MAX_GITIGNORE_BYTES, "allow", snapshot.stat) ??
-      fs.readFileUtf8(snapshot.realPath)
-    );
+    return fs.readFileUtf8Prefix(snapshot.realPath, MAX_GITIGNORE_BYTES, "allow", snapshot.stat);
   } catch {
     return undefined;
   }
@@ -523,14 +549,12 @@ export function* walkSource(
     yield { kind: "error", error: bounds };
     return;
   }
-  const realRootPath = safeRealPath(fs, bounds.rootPath);
-  if (realRootPath === undefined) {
-    yield {
-      kind: "error",
-      error: { code: "READ_FAILED", message: "realPath failed for selected source root" },
-    };
+  const admittedRoot = resolveAdmittedRealRoot(fs, bounds.rootPath);
+  if (typeof admittedRoot !== "string") {
+    yield { kind: "error", error: admittedRoot };
     return;
   }
+  const realRootPath = admittedRoot;
   const rootStat = safeStatFile(fs, realRootPath);
   if ("code" in rootStat || !rootStat.isDirectory || rootStat.isSymbolicLink) {
     yield {

@@ -641,12 +641,7 @@ class WorkspaceWatchSession {
 
   private async seedBaseline(): Promise<void> {
     const next = await this.scanTree();
-    if (
-      next === null ||
-      !next.complete ||
-      this.disposed ||
-      !this.ensureLiveRootAuthority()
-    ) {
+    if (next === null || !next.complete || this.disposed || !this.ensureLiveRootAuthority()) {
       return;
     }
     this.known.clear();
@@ -658,12 +653,7 @@ class WorkspaceWatchSession {
     this.scanning = true;
     try {
       const next = await this.scanTree();
-      if (
-        next === null ||
-        !next.complete ||
-        this.disposed ||
-        !this.ensureLiveRootAuthority()
-      ) {
+      if (next === null || !next.complete || this.disposed || !this.ensureLiveRootAuthority()) {
         return;
       }
       for (const [path, previous] of this.known)
@@ -691,8 +681,14 @@ class WorkspaceWatchSession {
     }
   }
 
+  // Disk-level detection (the watched path is gone or is no longer a directory) is a distinct
+  // condition from caller-authority revocation (reproveRoot rejecting the operation-scoped
+  // authority, e.g. a managed workspace being torn down): the former asks the caller to rescan
+  // the still-subscribed session, the latter stops it outright. Routing this through revokeRoot
+  // collapsed the two and made every disk-level root replacement look like a stopped session
+  // (#3347 fallout) — keep this on the pre-existing rescanRequired path instead.
   private rootReplaced(): null {
-    this.revokeRoot();
+    this.emitRescan("root-replaced", "rescan");
     return null;
   }
 
@@ -721,30 +717,41 @@ class WorkspaceWatchSession {
     const directory =
       relativeDirectory.length === 0 ? this.root : join(this.root, relativeDirectory);
     let entries: readonly Dirent[];
-      try {
-        entries = await this.config.fileSystem.readdir(directory);
-      } catch {
-        return "unavailable";
-      }
-      if (!this.ensureLiveRootAuthority()) return "unavailable";
+    try {
+      entries = await this.config.fileSystem.readdir(directory);
+    } catch {
+      return "unavailable";
+    }
+    if (!this.ensureLiveRootAuthority()) return "unavailable";
     for (const entry of entries) {
-      const relativePath =
-        relativeDirectory.length === 0 ? entry.name : `${relativeDirectory}/${entry.name}`;
-      if (!eventPathAllowed(relativePath, this.additionalExclusions)) continue;
-      if (found.size >= this.config.maxScanEntries) return "overflow";
-      const result = await metadataFor(
-        this.root,
-        relativePath,
-        this.additionalExclusions,
-        this.config.fileSystem,
-      );
-      if (!this.ensureLiveRootAuthority()) return "unavailable";
-      if (result.kind === "unavailable") return "unavailable";
-      if (result.kind !== "present") continue;
-      found.set(relativePath, result.metadata);
-      if (result.metadata.entryKind === "directory") queue.push(relativePath);
+      const outcome = await this.scanDirectoryEntry(relativeDirectory, entry, found, queue);
+      if (outcome !== "continue") return outcome;
     }
     return "complete";
+  }
+
+  private async scanDirectoryEntry(
+    relativeDirectory: string,
+    entry: Dirent,
+    found: Map<string, FileMetadata>,
+    queue: string[],
+  ): Promise<ScanDirectoryResult | "continue"> {
+    const relativePath =
+      relativeDirectory.length === 0 ? entry.name : `${relativeDirectory}/${entry.name}`;
+    if (!eventPathAllowed(relativePath, this.additionalExclusions)) return "continue";
+    if (found.size >= this.config.maxScanEntries) return "overflow";
+    const result = await metadataFor(
+      this.root,
+      relativePath,
+      this.additionalExclusions,
+      this.config.fileSystem,
+    );
+    if (!this.ensureLiveRootAuthority()) return "unavailable";
+    if (result.kind === "unavailable") return "unavailable";
+    if (result.kind !== "present") return "continue";
+    found.set(relativePath, result.metadata);
+    if (result.metadata.entryKind === "directory") queue.push(relativePath);
+    return "continue";
   }
 
   private startFallbackPolling(): void {
@@ -834,9 +841,14 @@ class WorkspaceWatchSession {
       subscriber.onEvent(event);
       subscriber.onAuthorityRevoked?.();
     }
-    this.health = "stopped";
+    // Authority is revoked and handles are closed above, but the reported health stays a
+    // terminal, tombstoned "rescanRequired" (not "stopped" -- that means deliberate shutdown, see
+    // dispose()) so a later snapshot still explains why the watch ended. Scheduling idle-dispose
+    // here would let onIdleDispose remove this session from the map after idleTearDownMs, and the
+    // next access would then construct a brand-new session defaulting to "healthy", silently
+    // erasing the very reason a client needs to see. This session now stays disposed-but-present
+    // until an explicitly valid re-subscribe (sessionFor(root, true)) replaces it.
     this.subscribers.clear();
-    this.scheduleIdleDispose();
   }
 
   private replayAfter(lastSequence: number | undefined): readonly EditorM7WatchEvent[] {
@@ -895,8 +907,7 @@ export function createWorkspaceWatchService(
     return session;
   };
   return {
-    subscribe: (args): WorkspaceWatchSubscribeResult =>
-      sessionFor(args.root, true).subscribe(args),
+    subscribe: (args): WorkspaceWatchSubscribeResult => sessionFor(args.root, true).subscribe(args),
     snapshot: (root): EditorM7WatchSnapshot => sessionFor(root).snapshot(),
     disposeRoot: (root): void => {
       sessions.get(root)?.dispose();

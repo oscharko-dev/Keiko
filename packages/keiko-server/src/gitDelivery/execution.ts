@@ -34,7 +34,7 @@ import {
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { resolveRegisteredOrManagedWorkspaceRoot } from "../task-workspace/authorization.js";
+import { resolveRegisteredOrManagedWorkspaceRoot } from "../task-workspace/workspace-root-access.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import type { GitDeliveryBranchProtectionReader } from "./branchProtectionPreflight.js";

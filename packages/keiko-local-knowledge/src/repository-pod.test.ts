@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -77,7 +78,14 @@ function countingAdapter(): CountingAdapter {
 }
 
 function writeFixture(): void {
-  fixtureRoot = mkdtempSync(join(tmpdir(), "keiko-repository-pod-"));
+  // realpathSync collapses a symlinked tmpdir prefix (macOS: /var -> /private/var) so every
+  // absolute path this suite builds by joining onto `repositoryRoot` matches, byte-for-byte, the
+  // realpath-normalised absolute path the hardened walker (walk.ts `directorySnapshot`) actually
+  // hands to `WorkspaceFs.readDir`/`stat`. Without this, a fault-injected `workspaceFs` fake that
+  // compares against `join(repositoryRoot, ...)` silently never matches on macOS and the injected
+  // failure never fires — see the sibling fault-injection fixtures in
+  // packages/keiko-security/src/secret-vault.fs-fault-injection.test.ts for the same idiom.
+  fixtureRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-pod-")));
   repositoryRoot = join(fixtureRoot, "repo");
   mkdirSync(join(repositoryRoot, "src"), { recursive: true });
   mkdirSync(join(repositoryRoot, "node_modules", "ignored"), { recursive: true });

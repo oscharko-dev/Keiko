@@ -59,6 +59,10 @@ export interface PdfCitationPreviewSource {
   readonly mtimeMs?: number | undefined;
   readonly sourceId: string;
   readonly sourceRoot?: string | undefined;
+  // Descriptor-safety snapshot from the fresh stat already taken to resolve this filesystem
+  // source (session open, and every per-request re-resolve). Reused to open the reusable file
+  // reader so streaming never re-hashes the file it already verified (#3347).
+  readonly statSnapshot?: ReturnType<typeof nodeWorkspaceFs.stat> | undefined;
   readonly storageKind?: "plaintext" | "sealed" | undefined;
 }
 
@@ -374,6 +378,7 @@ function resolveFilesystemSource(
       ...(stat.mtimeMs === undefined ? {} : { mtimeMs: stat.mtimeMs }),
       sourceId: String(authority.citation.lineage.sourceId),
       sourceRoot: sourceRoot(source.scope),
+      statSnapshot: stat,
     },
   };
 }
@@ -639,10 +644,16 @@ export async function openPdfPreviewSourceReader(
   if (source.absolutePath === undefined) return undefined;
   const openFileReader = nodeWorkspaceFs.openFileReader;
   if (openFileReader === undefined) return undefined;
-  const verified = await sha256Source(source.absolutePath, source.byteLength);
-  if (verified.kind !== "ok" || verified.hash !== source.contentHash) return undefined;
+  // The content hash was already verified once for this source (session open, in
+  // loadVerifiedSource), and every subsequent request re-resolves and re-stats the source
+  // before reaching here (loadPdfPreviewSourceForSession -> resolveFilesystemSource). Reuse
+  // that already-current stat as the descriptor-safety snapshot instead of re-reading and
+  // re-hashing the whole file: openFileReader's own descriptor open re-validates it against
+  // the live file, so a genuine change since that stat still fails closed (#3347).
+  const snapshot = source.statSnapshot ?? statSafeSource(source.absolutePath);
+  if (snapshot?.size !== source.byteLength) return undefined;
   try {
-    return await openFileReader(source.absolutePath, "allow", verified.snapshot);
+    return await openFileReader(source.absolutePath, "allow", snapshot);
   } catch {
     return undefined;
   }

@@ -174,61 +174,79 @@ function controlledReader(
   };
 }
 
+function optionalDescriptorReadOperation(
+  fs: WorkspaceFs,
+  control: StructuralExecutionControl,
+): Pick<WorkspaceFs, "readFileUtf8SameDescriptor"> | Record<string, never> {
+  const readDescriptor = fs.readFileUtf8SameDescriptor;
+  if (readDescriptor === undefined) return {};
+  return {
+    readFileUtf8SameDescriptor: (
+      path: string,
+      maxBytes: number,
+      hardLinkPolicy: WorkspaceHardLinkPolicy,
+      expected: WorkspaceStat,
+    ): WorkspaceDescriptorUtf8Read => {
+      assertStructuralExecutionActive(control);
+      return readDescriptor.call(fs, path, maxBytes, hardLinkPolicy, expected);
+    },
+  };
+}
+
+function optionalContainedDescriptorReadOperation(
+  fs: WorkspaceFs,
+  control: StructuralExecutionControl,
+): Pick<WorkspaceFs, "readFileUtf8WithinRootSameDescriptor"> | Record<string, never> {
+  const readContainedDescriptor = fs.readFileUtf8WithinRootSameDescriptor;
+  if (readContainedDescriptor === undefined) return {};
+  return {
+    readFileUtf8WithinRootSameDescriptor: (
+      canonicalRoot: string,
+      path: string,
+      maxBytes: number,
+      hardLinkPolicy: WorkspaceHardLinkPolicy,
+      completeness: WorkspaceDescriptorReadCompleteness,
+    ): WorkspaceDescriptorUtf8Read => {
+      assertStructuralExecutionActive(control);
+      return readContainedDescriptor.call(
+        fs,
+        canonicalRoot,
+        path,
+        maxBytes,
+        hardLinkPolicy,
+        completeness,
+      );
+    },
+  };
+}
+
+function optionalPrefixReadOperation(
+  fs: WorkspaceFs,
+  control: StructuralExecutionControl,
+): Pick<WorkspaceFs, "readFileUtf8Prefix"> | Record<string, never> {
+  const readPrefix = fs.readFileUtf8Prefix;
+  if (readPrefix === undefined) return {};
+  return {
+    readFileUtf8Prefix: (
+      path: string,
+      maxBytes: number,
+      hardLinkPolicy: WorkspaceHardLinkPolicy,
+      expected: WorkspaceStat,
+    ): string => {
+      assertStructuralExecutionActive(control);
+      return readPrefix.call(fs, path, maxBytes, hardLinkPolicy, expected);
+    },
+  };
+}
+
 function optionalSynchronousReadOperations(
   fs: WorkspaceFs,
   control: StructuralExecutionControl,
 ): Partial<WorkspaceFs> {
-  const readDescriptor = fs.readFileUtf8SameDescriptor;
-  const readContainedDescriptor = fs.readFileUtf8WithinRootSameDescriptor;
-  const readPrefix = fs.readFileUtf8Prefix;
   return {
-    ...(readDescriptor === undefined
-      ? {}
-      : {
-          readFileUtf8SameDescriptor: (
-            path: string,
-            maxBytes: number,
-            hardLinkPolicy: WorkspaceHardLinkPolicy,
-            expected: WorkspaceStat,
-          ): WorkspaceDescriptorUtf8Read => {
-            assertStructuralExecutionActive(control);
-            return readDescriptor.call(fs, path, maxBytes, hardLinkPolicy, expected);
-          },
-        }),
-    ...(readContainedDescriptor === undefined
-      ? {}
-      : {
-          readFileUtf8WithinRootSameDescriptor: (
-            canonicalRoot: string,
-            path: string,
-            maxBytes: number,
-            hardLinkPolicy: WorkspaceHardLinkPolicy,
-            completeness: WorkspaceDescriptorReadCompleteness,
-          ): WorkspaceDescriptorUtf8Read => {
-            assertStructuralExecutionActive(control);
-            return readContainedDescriptor.call(
-              fs,
-              canonicalRoot,
-              path,
-              maxBytes,
-              hardLinkPolicy,
-              completeness,
-            );
-          },
-        }),
-    ...(readPrefix === undefined
-      ? {}
-      : {
-          readFileUtf8Prefix: (
-            path: string,
-            maxBytes: number,
-            hardLinkPolicy: WorkspaceHardLinkPolicy,
-            expected: WorkspaceStat,
-          ): string => {
-            assertStructuralExecutionActive(control);
-            return readPrefix.call(fs, path, maxBytes, hardLinkPolicy, expected);
-          },
-        }),
+    ...optionalDescriptorReadOperation(fs, control),
+    ...optionalContainedDescriptorReadOperation(fs, control),
+    ...optionalPrefixReadOperation(fs, control),
   };
 }
 

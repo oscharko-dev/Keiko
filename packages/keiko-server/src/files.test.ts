@@ -9,7 +9,7 @@ import {
   utimes,
   writeFile,
 } from "node:fs/promises";
-import { rmSync, symlinkSync } from "node:fs";
+import { rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +18,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EDITOR_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-session";
 import type { LocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
+import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import {
+  nodeWorkspaceFs,
+  type WorkspaceHardLinkPolicy,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 
 // KEIKO-0192 regression: create/rename/delete must forward workspace/didChangeWatchedFiles to
 // pooled host LSP processes, the same way writeFilesContentRoute already does for content saves.
@@ -42,7 +47,12 @@ import {
   searchFiles,
   writeFilesContent,
 } from "./index.js";
-import { normalizeRelativePath, resolveRoot, classifyInLockRefreshFailure } from "./files.js";
+import {
+  normalizeRelativePath,
+  resolveRoot,
+  classifyInLockRefreshFailure,
+  type ResolvedProjectRoot,
+} from "./files.js";
 import type { RouteContext, UiHandlerDeps } from "./index.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { createBreakpointStore } from "./editor/dap/breakpointStore.js";
@@ -711,6 +721,57 @@ describe("desktop files browser", () => {
       }),
     ).rejects.toMatchObject({ status: 409, code: "STALE_PATH" });
     expect(await readFile(victim, "utf8")).toBe("outside\n");
+  });
+
+  // #3347 consumer-boundary hardening: readContainedBytes binds a content read to the WorkspaceStat
+  // identity (device+inode) captured at admission, not just size/mtime. This proves the gap the
+  // older stat-after-read comparison could not close: a substitute file crafted with the EXACT same
+  // byte length and mtime as the admitted one is still rejected, because it is necessarily a
+  // different inode.
+  it("rejects a same-size, same-mtime substitute swapped in between admission and the content read", async () => {
+    const targetPath = join(root, "src", "app.ts");
+    const original = await readFile(targetPath);
+    const originalStat = await stat(targetPath);
+    const substitute = "y".repeat(original.byteLength);
+    let swapped = false;
+    const boundedRead = nodeWorkspaceFs.readFileBytes;
+    if (boundedRead === undefined) throw new Error("expected a bounded byte reader");
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      // The race, staged at exactly the boundary under test: admission has already captured the
+      // original's identity by the time this runs, and the substitute lands immediately before the
+      // bounded read opens its descriptor. Hooking the read (rather than counting stat calls) keeps
+      // the test bound to that ordering rather than to how many times admission happens to stat.
+      readFileBytes: async (
+        path: string,
+        maxBytes: number,
+        policy: WorkspaceHardLinkPolicy,
+        expected: WorkspaceStat,
+      ): Promise<Uint8Array> => {
+        if (path === targetPath && !swapped) {
+          swapped = true;
+          rmSync(path, { force: true });
+          writeFileSync(path, substitute, "utf8");
+          utimesSync(path, originalStat.mtime, originalStat.mtime);
+        }
+        return boundedRead.call(nodeWorkspaceFs, path, maxBytes, policy, expected);
+      },
+    };
+    const resolvedRoot: ResolvedProjectRoot = {
+      root,
+      realRoot: root,
+      access: { kind: "ordinary", canonicalRoot: root, fs },
+    };
+
+    await expect(
+      readFilesContent(store, root, "src/app.ts", buildRedactor({}), resolvedRoot),
+    ).rejects.toMatchObject({ status: 409, code: "STALE_PATH" });
+    expect(swapped).toBe(true);
+    // Same byte length and mtime as the admitted file: only the inode differs, which is precisely
+    // what the older stat-after-read comparison could not detect.
+    const onDisk = await readFile(targetPath, "utf8");
+    expect(onDisk).toBe(substitute);
+    expect(onDisk.length).toBe(original.byteLength);
   });
 
   it("rejects saving when the file changed after the editor loaded it", async () => {

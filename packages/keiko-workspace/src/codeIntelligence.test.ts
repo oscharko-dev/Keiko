@@ -10,7 +10,7 @@ import {
   queryCodeIntelligenceIndex,
   type CodeIntelligenceIndex,
 } from "./codeIntelligence.js";
-import type { WorkspaceFs } from "./fs.js";
+import type { WorkspaceDescriptorUtf8Read, WorkspaceFs, WorkspaceStat } from "./fs.js";
 import { DEFAULT_SEARCH_LIMITS, type SearchScope } from "./repoSearch.js";
 import { gatherCandidates } from "./repoSearchScan.js";
 import type { WorkspaceInfo, WorkspaceLanguage } from "./types.js";
@@ -86,6 +86,17 @@ function persistentMemFs(files: Record<string, string>): PersistenceCapableTestF
       files[relative(absolutePath)] = content;
     },
   };
+}
+
+// A same-descriptor read for fixtures that fabricate a `stat` identity disconnected from the
+// underlying memFs content (e.g. a synthetic fileIdentity/timestamp for cache-key tests). memFs's
+// own readFileUtf8SameDescriptor would reject that mismatch as "changed", so these fixtures build
+// the WorkspaceDescriptorUtf8Read directly from the SAME fabricated stat instead of delegating.
+function fabricatedDescriptorRead(
+  rawText: string,
+  stat: WorkspaceStat,
+): WorkspaceDescriptorUtf8Read {
+  return { rawText, sizeBytes: Buffer.byteLength(rawText, "utf8"), stat };
 }
 
 function hasResolvedApiContract(
@@ -1036,9 +1047,19 @@ describe("buildCodeIntelligenceIndex", () => {
     let fileReads = 0;
     const fs: WorkspaceFs = {
       ...base,
-      readFileUtf8: (absolutePath): string => {
+      // readWorkspaceFile's only read primitive is readFileUtf8SameDescriptor (the unbounded
+      // readFileUtf8 fallback was removed), so the counter below has to wrap it instead.
+      readFileUtf8SameDescriptor: (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): WorkspaceDescriptorUtf8Read => {
         fileReads += 1;
-        return base.readFileUtf8(absolutePath);
+        if (base.readFileUtf8SameDescriptor === undefined) {
+          throw new Error("test fixture requires memFs's readFileUtf8SameDescriptor");
+        }
+        return base.readFileUtf8SameDescriptor(absolutePath, maxBytes, hardLinkPolicy, expected);
       },
     };
     const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 6 };
@@ -1541,21 +1562,29 @@ describe("buildCodeIntelligenceIndex", () => {
     };
     const base = persistentMemFs(files);
     let timestampNs = "1000000";
+    const statOverride = (absolutePath: string): WorkspaceStat => {
+      const stat = base.stat(absolutePath);
+      return stat.isFile
+        ? {
+            ...stat,
+            fileIdentity: "1:1",
+            mtimeMs: 1,
+            ctimeMs: 1,
+            mtimeNs: timestampNs,
+            ctimeNs: timestampNs,
+          }
+        : stat;
+    };
     const fs: WorkspaceFs = {
       ...base,
-      stat: (absolutePath) => {
-        const stat = base.stat(absolutePath);
-        return stat.isFile
-          ? {
-              ...stat,
-              fileIdentity: "1:1",
-              mtimeMs: 1,
-              ctimeMs: 1,
-              mtimeNs: timestampNs,
-              ctimeNs: timestampNs,
-            }
-          : stat;
-      },
+      stat: statOverride,
+      // The fabricated fileIdentity above is deliberately disconnected from memFs's own
+      // content-hash identity, which readFileUtf8SameDescriptor's expected-stat check would
+      // otherwise reject as "changed" on every read — build the descriptor from the caller's
+      // already-captured `expected` stat instead of delegating to memFs's real same-descriptor
+      // read (mirrors the removed unbounded fallback, which echoed the same captured stat back).
+      readFileUtf8SameDescriptor: (absolutePath, _maxBytes, _hardLinkPolicy, expected) =>
+        fabricatedDescriptorRead(base.readFileUtf8(absolutePath), expected),
     };
     const candidates = gatherCandidates(scope, DEFAULT_SEARCH_LIMITS, fs);
     const first = buildCodeIntelligenceIndexFromCandidates(
@@ -1587,21 +1616,29 @@ describe("buildCodeIntelligenceIndex", () => {
     };
     const base = persistentMemFs(files);
     let fileIdentity = "1:1";
+    const statOverride = (absolutePath: string): WorkspaceStat => {
+      const stat = base.stat(absolutePath);
+      return stat.isFile
+        ? {
+            ...stat,
+            fileIdentity,
+            mtimeMs: 1,
+            ctimeMs: 1,
+            mtimeNs: "1000000",
+            ctimeNs: "1000000",
+          }
+        : stat;
+    };
     const fs: WorkspaceFs = {
       ...base,
-      stat: (absolutePath) => {
-        const stat = base.stat(absolutePath);
-        return stat.isFile
-          ? {
-              ...stat,
-              fileIdentity,
-              mtimeMs: 1,
-              ctimeMs: 1,
-              mtimeNs: "1000000",
-              ctimeNs: "1000000",
-            }
-          : stat;
-      },
+      stat: statOverride,
+      // The fabricated fileIdentity above is deliberately disconnected from memFs's own
+      // content-hash identity, which readFileUtf8SameDescriptor's expected-stat check would
+      // otherwise reject as "changed" on every read — build the descriptor from the caller's
+      // already-captured `expected` stat instead of delegating to memFs's real same-descriptor
+      // read (mirrors the removed unbounded fallback, which echoed the same captured stat back).
+      readFileUtf8SameDescriptor: (absolutePath, _maxBytes, _hardLinkPolicy, expected) =>
+        fabricatedDescriptorRead(base.readFileUtf8(absolutePath), expected),
     };
     const candidates = gatherCandidates(scope, DEFAULT_SEARCH_LIMITS, fs);
     const first = buildCodeIntelligenceIndexFromCandidates(
@@ -1703,6 +1740,14 @@ describe("buildCodeIntelligenceIndex", () => {
             }
           : stat;
       },
+      // The fabricated fileIdentity above is deliberately disconnected from memFs's own
+      // content-hash identity, which readFileUtf8SameDescriptor's expected-stat check would
+      // otherwise reject as "changed" on every read. Echo the caller's already-captured
+      // `expected` stat back verbatim (mirrors the removed unbounded fallback's `stat:
+      // target.stat`) rather than calling `stat()` again, which would perturb sourceStatCalls'
+      // carefully staged count above.
+      readFileUtf8SameDescriptor: (absolutePath, _maxBytes, _hardLinkPolicy, expected) =>
+        fabricatedDescriptorRead(base.readFileUtf8(absolutePath), expected),
     };
     const candidates = gatherCandidates(scope, DEFAULT_SEARCH_LIMITS, fs);
     sourceStatCalls = 0;
@@ -1842,6 +1887,20 @@ describe("buildCodeIntelligenceIndex", () => {
       absolutePath.replace(/^\/real\/[ab](?=\/|$)/u, MEM_ROOT);
     const fs: WorkspaceFs = {
       ...base,
+      // The untranslated resolvedPath discovery.ts passes to readFileUtf8SameDescriptor would miss
+      // in `base`'s own MEM_ROOT-keyed file map, since that lane isn't retargeted the way the other
+      // overrides here already are — translate it through the SAME lexicalPath before delegating.
+      readFileUtf8SameDescriptor: (absolutePath, maxBytes, hardLinkPolicy, expected) => {
+        if (base.readFileUtf8SameDescriptor === undefined) {
+          throw new Error("test fixture requires memFs's readFileUtf8SameDescriptor");
+        }
+        return base.readFileUtf8SameDescriptor(
+          lexicalPath(absolutePath),
+          maxBytes,
+          hardLinkPolicy,
+          expected,
+        );
+      },
       realPath: (absolutePath): string => {
         if (absolutePath === MEM_ROOT || absolutePath.startsWith(`${MEM_ROOT}/`)) {
           return absolutePath.replace(MEM_ROOT, `/real/${target}`);
@@ -1883,7 +1942,13 @@ describe("buildCodeIntelligenceIndex", () => {
     expect(retargeted.symbols.some((symbol) => symbol.name === "alpha")).toBe(false);
   });
 
-  it("bypasses caching when the filesystem cannot provide mutation timestamps", () => {
+  it("skips files instead of an unbounded read when the filesystem cannot provide mutation timestamps", () => {
+    // A WorkspaceFs unable to report stable mutation timestamps is, by construction, unable to
+    // supply readFileUtf8SameDescriptor either — a real port in that position would not implement
+    // the same-descriptor lane. The removed unbounded readFileUtf8 fallback used to let such a
+    // port keep reading (while only caching was bypassed); the port boundary now fails closed:
+    // metadata unavailable means read unavailable, so the file is skipped, never silently indexed
+    // through an unbounded read.
     const files = { "src/mutable.ts": "export const first = 1;" };
     const searchScope: SearchScope = {
       workspace: workspace(),
@@ -1891,8 +1956,15 @@ describe("buildCodeIntelligenceIndex", () => {
       relativePaths: [],
     };
     const base = memFs(MEM_ROOT, files);
+    // Omit (never assign undefined to, under exactOptionalPropertyTypes) readFileUtf8SameDescriptor
+    // so this port matches one genuinely unable to supply it.
+    const { readFileUtf8SameDescriptor: removedSameDescriptor, ...baseWithoutSameDescriptor } =
+      base;
+    if (removedSameDescriptor === undefined) {
+      throw new Error("memFs always provides readFileUtf8SameDescriptor");
+    }
     const fs: WorkspaceFs = {
-      ...base,
+      ...baseWithoutSameDescriptor,
       stat: (absolutePath) => {
         const stat = base.stat(absolutePath);
         if (!stat.isFile) return stat;
@@ -1905,24 +1977,15 @@ describe("buildCodeIntelligenceIndex", () => {
       },
     };
     const candidates = gatherCandidates(searchScope, DEFAULT_SEARCH_LIMITS, fs);
-    const first = buildCodeIntelligenceIndexFromCandidates(
+    const result = buildCodeIntelligenceIndexFromCandidates(
       searchScope,
       DEFAULT_SEARCH_LIMITS,
       fs,
       candidates,
     );
 
-    files["src/mutable.ts"] = "export const later = 1;";
-    const updated = buildCodeIntelligenceIndexFromCandidates(
-      searchScope,
-      DEFAULT_SEARCH_LIMITS,
-      fs,
-      candidates,
-    );
-
-    expect(updated).not.toBe(first);
-    expect(updated.symbols.some((symbol) => symbol.name === "later")).toBe(true);
-    expect(updated.symbols.some((symbol) => symbol.name === "first")).toBe(false);
+    expect(result.filesSkipped).toBe(1);
+    expect(result.symbols.some((symbol) => symbol.name === "first")).toBe(false);
   });
 
   it("does not cache a partial index after a transient source read failure", () => {
@@ -1936,12 +1999,17 @@ describe("buildCodeIntelligenceIndex", () => {
     let failNextRead = true;
     const fs: WorkspaceFs = {
       ...base,
-      readFileUtf8: (absolutePath): string => {
+      // readWorkspaceFile's only read primitive is readFileUtf8SameDescriptor (the unbounded
+      // readFileUtf8 fallback was removed), so the transient-failure injection has to live there.
+      readFileUtf8SameDescriptor: (absolutePath, maxBytes, hardLinkPolicy, expected) => {
         if (failNextRead && absolutePath.endsWith("/src/transient.ts")) {
           failNextRead = false;
           throw new Error("EIO");
         }
-        return base.readFileUtf8(absolutePath);
+        if (base.readFileUtf8SameDescriptor === undefined) {
+          throw new Error("test fixture requires memFs's readFileUtf8SameDescriptor");
+        }
+        return base.readFileUtf8SameDescriptor(absolutePath, maxBytes, hardLinkPolicy, expected);
       },
     };
     const candidates = gatherCandidates(searchScope, DEFAULT_SEARCH_LIMITS, fs);

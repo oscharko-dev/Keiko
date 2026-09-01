@@ -20,7 +20,13 @@ import {
   readWorkspaceFileTextForInternalUse,
   type WorkspaceContentLane,
 } from "./discovery.js";
-import { FileTooLargeError, PathDeniedError, PathEscapeError, WORKSPACE_CODES } from "./errors.js";
+import {
+  FileTooLargeError,
+  PathDeniedError,
+  PathEscapeError,
+  WORKSPACE_CODES,
+  WorkspaceReadError,
+} from "./errors.js";
 import {
   isWorkspacePathSnapshotCurrent,
   WorkspaceDescriptorReadError,
@@ -650,24 +656,25 @@ function orderCollectedCandidates(
   };
 }
 
+// Bounded primitive present -> use it; absent -> the probe is unavailable. Never fall back to an
+// unbounded `readFileUtf8` and then slice to the cap — that materializes the whole file before any
+// bound applies. `WorkspaceReadError` carries a string `code` that is not a hard-trust-denial code,
+// so `isIoError` (and every existing probeBinary caller's TOCTOU/`tool-unavailable` degrade path)
+// already treats this the same way it treats EACCES/ENOENT — a graceful skip, not a crash.
 export async function probeBinary(fs: WorkspaceFs, abs: string, size: number): Promise<boolean> {
   const cap = Math.min(BINARY_PROBE_BYTES, size);
   if (cap === 0) {
     return false;
   }
   const expected = fs.stat(abs);
-  if (fs.readFileBytes !== undefined) {
-    const bytes = await fs.readFileBytes(abs, cap, "reject", expected);
-    if (!isWorkspacePathSnapshotCurrent(fs, abs, abs, expected)) {
-      throw new WorkspaceDescriptorReadError("changed");
-    }
-    return looksBinary(bytes);
+  if (fs.readFileBytes === undefined) {
+    throw new WorkspaceReadError(`bounded byte reads are unavailable: ${abs}`, abs);
   }
-  const text = fs.readFileUtf8(abs);
+  const bytes = await fs.readFileBytes(abs, cap, "reject", expected);
   if (!isWorkspacePathSnapshotCurrent(fs, abs, abs, expected)) {
     throw new WorkspaceDescriptorReadError("changed");
   }
-  return looksBinary(new TextEncoder().encode(text.slice(0, cap)));
+  return looksBinary(bytes);
 }
 
 export interface SearchTextRunner {

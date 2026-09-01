@@ -195,17 +195,26 @@ describe("crawlManual — local link graph via injected fetcher", () => {
 });
 
 // Minimal in-memory WorkspaceFs for the local fetcher (bytes-only, no symlinks by default).
-// `realPath` may be overridden per-test to simulate a resolved symlink.
+// `realPath` may be overridden per-test to simulate a resolved symlink. A path not registered
+// as file content is an implied directory (mirrors `memFs` in _memfs.ts) — the fetcher's root
+// containment check resolves and stats the manual root itself, which is never one of the
+// registered file entries.
 function fakeWorkspaceFs(
   files: Readonly<Record<string, string>>,
   realPath: (path: string) => string = (path): string => path,
 ): WorkspaceFs {
-  const stat = (path: string): WorkspaceStat => ({
-    size: new TextEncoder().encode(files[path] ?? "").length,
-    isFile: true,
-    isDirectory: false,
-    isSymbolicLink: false,
-  });
+  const stat = (path: string): WorkspaceStat => {
+    const content = files[path];
+    if (content === undefined) {
+      return { size: 0, isFile: false, isDirectory: true, isSymbolicLink: false };
+    }
+    return {
+      size: new TextEncoder().encode(content).length,
+      isFile: true,
+      isDirectory: false,
+      isSymbolicLink: false,
+    };
+  };
   return {
     readFileUtf8: (path: string): string => files[path] ?? "",
     stat,
@@ -252,9 +261,13 @@ describe("createWorkspaceFsManualFetcher", () => {
     // /ws/manuals/x-secrets is a SIBLING of /ws/manuals/x: it shares the root string as a prefix
     // but is NOT contained by it. A bare `startsWith` would wrongly accept this.
     const escapedPath = "/ws/manuals/x-secrets/leaked.html";
+    const targetPath = "/ws/manuals/x/escape/leaked.html";
     const fs = fakeWorkspaceFs(
       { [escapedPath]: "<title>Leaked</title>" },
-      (): string => escapedPath,
+      // Only the requested file resolves through the "symlink" — the root itself stays put, so
+      // this exercises the isContained() prefix-sharing guard rather than the separate
+      // root-must-be-a-directory check.
+      (path): string => (path === targetPath ? escapedPath : path),
     );
     const fetcher = createWorkspaceFsManualFetcher({ fs, rootAbsolutePath: "/ws/manuals/x" });
     const result = await fetcher.fetchManualPage(
@@ -271,9 +284,12 @@ describe("createWorkspaceFsManualFetcher", () => {
     // path means the pre-fix code (which reads absolutePath) gets ENOENT, while the fixed
     // code (which reads realPath) succeeds — proving the read goes through the verified path.
     const resolvedPath = "/ws/manuals/x/real-index.html";
+    const targetPath = "/ws/manuals/x/index.html";
     const fs = fakeWorkspaceFs(
       { [resolvedPath]: "<title>Real</title>" },
-      (): string => resolvedPath,
+      // Only the requested file resolves through the "symlink" — the root itself stays put, so
+      // the root-must-be-a-directory check still sees a genuine directory.
+      (path): string => (path === targetPath ? resolvedPath : path),
     );
     const fetcher = createWorkspaceFsManualFetcher({ fs, rootAbsolutePath: "/ws/manuals/x" });
     const result = await fetcher.fetchManualPage(

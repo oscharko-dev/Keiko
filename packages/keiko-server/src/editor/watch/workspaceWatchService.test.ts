@@ -603,6 +603,59 @@ describe("workspace watch service", () => {
     });
   });
 
+  // #3347 review (oscharko, P1): revokeRoot() correctly tears down handles and revokes authority,
+  // but used to immediately overwrite the just-emitted "rescanRequired" health with "stopped" and
+  // then schedule idle-dispose -- once idleTearDownMs elapsed, onIdleDispose removed the session
+  // from the map entirely, so the NEXT snapshot() silently constructed a brand-new session
+  // reporting "healthy", losing every trace of why the watch actually ended. This pins both parts:
+  // the immediate health value, and that it survives past idle-teardown time undisturbed.
+  it("keeps a tombstoned rescanRequired snapshot past idle-teardown time after authority is revoked mid-session", async () => {
+    const adapter = new FakeAdapter();
+    const manager = createWorkspaceWatchService({
+      adapter,
+      coalesceMs: 0,
+      fallbackPollMs: 5,
+      idleTearDownMs: 0,
+      maxQueueDepth: 16,
+      replayCapacity: 8,
+    });
+    const events: EditorM7WatchEvent[] = [];
+    let authorityRevokedCalls = 0;
+    let hasAuthority = true;
+    manager.subscribe({
+      root,
+      onEvent: (event) => events.push(event),
+      reproveRoot: () => hasAuthority,
+      onAuthorityRevoked: () => {
+        authorityRevokedCalls += 1;
+      },
+    });
+    await drainInitialBaseline(manager, adapter);
+
+    hasAuthority = false;
+    await writeFile(join(root, "after-revocation.txt"), "one", "utf8");
+    adapter.emit({ eventType: "rename", filename: "after-revocation.txt" });
+
+    await waitForCondition(() => authorityRevokedCalls === 1);
+    expect(events.find((event) => event.kind === "rescan")).toMatchObject({
+      reason: "root-replaced",
+      health: "rescanRequired",
+    });
+    const immediate = manager.snapshot(root);
+    expect(immediate.health).toBe("rescanRequired");
+    expect(immediate.degradedReasons).toContain("root-replaced");
+
+    // Give the (idleTearDownMs: 0) idle-dispose timer every chance to fire and, under the bug,
+    // recreate the session as a fresh "healthy" one on next access.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
+
+    const afterIdleWindow = manager.snapshot(root);
+    expect(afterIdleWindow.health).toBe("rescanRequired");
+    expect(afterIdleWindow.degradedReasons).toContain("root-replaced");
+  });
+
   it("stays healthy when a native event's file vanishes before its metadata stat (ENOENT race)", async () => {
     const adapter = new FakeAdapter();
     const manager = service(adapter);

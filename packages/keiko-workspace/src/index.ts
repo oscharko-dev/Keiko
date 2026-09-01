@@ -50,12 +50,7 @@ export {
   type WorkspaceCode,
 } from "./errors.js";
 
-export {
-  type WorkspaceDirEntry,
-  type WorkspaceFs,
-  type WorkspaceHardLinkPolicy,
-  type WorkspaceStat,
-} from "./fs.js";
+export { type WorkspaceDirEntry, type WorkspaceFs, type WorkspaceStat } from "./fs.js";
 
 export { isWithinWorkspace, resolveWithinWorkspace } from "./paths.js";
 

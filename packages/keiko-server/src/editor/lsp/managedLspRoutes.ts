@@ -137,10 +137,7 @@ export async function handleGetManagedLspControl(
       providerMetadata: [
         {
           language: "python",
-          configurationSource: detectPythonConfigurationPrecedence(
-            access.canonicalRoot,
-            access.fs,
-          ),
+          configurationSource: detectPythonConfigurationPrecedence(access.canonicalRoot, access.fs),
           runtimeIdentitySource: pythonRuntimeIdentitySourceFor(snapshot),
         },
       ],
@@ -252,6 +249,7 @@ export async function handlePutManagedLspControl(
   }
   return runFilesHandler(async () => {
     const resolved = await resolveRequestRoot(ctx, deps, body.root);
+    const resolveAccess = requestRootAccessResolver(ctx, deps, resolved);
     const mutation: ManagedLspControlMutation = {
       ...body,
       root: resolved.realRoot,
@@ -259,6 +257,11 @@ export async function handlePutManagedLspControl(
       idempotencyKey: key,
       actorClass: "localHuman",
     };
+    // Mirrors the GET handler's second re-proof: root admission above is a single point-in-time
+    // check, but this mutation can run after a long-lived client interaction. Re-prove authority
+    // immediately before the effectful mutate() call so a revoked/rotated root cannot mutate
+    // managed language settings on stale capability.
+    if (resolveAccess() === undefined) throw new FilesError(403, "DENIED", DENIED_MESSAGE);
     const result = await deps.managedLspControl?.mutate(mutation);
     return result === undefined
       ? {

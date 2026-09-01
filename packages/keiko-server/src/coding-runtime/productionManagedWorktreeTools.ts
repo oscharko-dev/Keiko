@@ -322,10 +322,17 @@ function buildEgressAuthority(
   });
 }
 
+// The capability is plumbed to every governed port (read/edit, command, verification, git/delivery/
+// connector, egress) specifically so liveness can be re-proven against the SAME resolver those ports
+// use, not just an expiry timestamp. A lifecycle transition or gitdir-identity mismatch mid-run must
+// revoke every one of those ports immediately, not only wait for authorityExpiresAt to lapse (#3347).
 function live(input: ProductionManagedWorktreeToolInput): boolean {
   try {
     input.liveFacts();
-    return Date.now() < Date.parse(input.authorityExpiresAt);
+    return (
+      input.resolveWorkspaceRootAccess()?.kind === "managed-task" &&
+      Date.now() < Date.parse(input.authorityExpiresAt)
+    );
   } catch {
     return false;
   }

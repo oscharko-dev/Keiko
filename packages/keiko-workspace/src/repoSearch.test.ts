@@ -1,7 +1,7 @@
 import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   RetrievalQuery,
   RetrievalQueryKind,
@@ -1985,6 +1985,79 @@ describe("Copilot finding fixes (memFs)", () => {
 
     expect(directoryReads).toBeGreaterThanOrEqual(4);
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/z.ts"]);
+  });
+
+  it("does not let a slow workspace-index save commit after the search already returned (#3347)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { scope, fs } = memScope({ "src/a.ts": "export const alpha = 1;" });
+      // A controlled clock: scanning this one-file scope never advances it, so the runner still
+      // has budget when persistence starts. The save mock itself jumps the clock forward past the
+      // budget the instant it is invoked, modeling a save that is slow relative to the search's
+      // own deadline -- exactly the scenario the fix must not let commit after the caller moved
+      // on. Fake timers make the old racing implementation's internal setTimeout (real wall-clock,
+      // independent of this injected clock) controllable, instead of depending on real elapsed
+      // time in the test.
+      let tick = 0;
+      const nowMs = (): number => tick;
+      let saveCalls = 0;
+      let resolveSave: (() => void) | undefined;
+      const committedSnapshots: unknown[] = [];
+      const workspaceIndex: WorkspaceIndex = {
+        loadSnapshot: () => Promise.resolve(undefined),
+        saveSnapshot: (_scopeKey, snapshot) => {
+          saveCalls += 1;
+          tick = 1_000;
+          return new Promise<void>((resolve) => {
+            resolveSave = (): void => {
+              committedSnapshots.push(snapshot);
+              resolve();
+            };
+          });
+        },
+      };
+      const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 30 };
+
+      const resultPromise = searchText(scope, exq("alpha"), limits, { fs, nowMs, workspaceIndex });
+
+      let settled = false;
+      void resultPromise.then(() => {
+        settled = true;
+      });
+
+      // Drive the microtask queue (via fake-timer advances, not real waiting) until persistence
+      // has reached and invoked the still-pending save.
+      for (let i = 0; i < 50 && saveCalls === 0; i += 1) {
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      expect(saveCalls).toBe(1);
+      expect(settled).toBe(false);
+      expect(committedSnapshots).toHaveLength(0);
+
+      // Advance real wall-clock-equivalent (fake) time well past the search's own elapsedMsMax
+      // budget while the save is still pending. Under the old racing behavior this alone would
+      // resolve the search via the abandoned-timeout branch; the fix must keep waiting for the
+      // save it already started instead.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled).toBe(false);
+      expect(committedSnapshots).toHaveLength(0);
+
+      resolveSave?.();
+      const result = await resultPromise;
+
+      expect(settled).toBe(true);
+      expect(committedSnapshots).toHaveLength(1);
+      expect(saveCalls).toBe(1);
+      expect(result.coverage.reasons).toContain("timeout");
+
+      // Observe the provider directly, well past when a delayed save would land under the old
+      // racing behavior, to prove there is no late, unaccounted-for second commit.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(saveCalls).toBe(1);
+      expect(committedSnapshots).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("searchText clamps matches to min(limits.maxMatchesReturned, query.maxResults)", async () => {

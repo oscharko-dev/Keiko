@@ -261,6 +261,44 @@ describe("walkSource — path containment", () => {
     expect(files).toStrictEqual([]);
   });
 
+  it("denies the walk when the scope root itself was retargeted to a denied locus before this admission (#3347)", () => {
+    // Verified exploit: a lexical source initially admitted as safe (e.g. a symlinked scope
+    // root) is retargeted -- via the underlying symlink -- to a denied directory such as
+    // ~/.ssh before walkSource ever runs. A plain fs.realPath(root) only follows the symlink;
+    // it never asks whether the RESOLVED root is itself a denied locus, so the retargeted
+    // directory would otherwise be trusted as the new walk root and its contents yielded.
+    // The root must go through the same deny-root admission rule every other effectful
+    // consumer of a workspace root uses (resolveExistingAllowedWorkspaceRealRoot), not a bare
+    // realPath call.
+    const deniedRoot = "/home/test/.ssh";
+    const baseFs = memoryFs(deniedRoot, [
+      { relativePath: "notes.txt", content: "id_rsa contents" },
+    ]);
+    const fs: ReturnType<typeof memoryFs> = {
+      ...baseFs,
+      // The scope's lexical root -- and every path lexically beneath it, exactly like a real
+      // symlinked directory -- resolves through a symlink that was swapped, between admission
+      // and this walk, to point at the denied directory. Every descendant's realpath call must
+      // translate the same way a real symlinked mount would, not just the exact root path.
+      realPath: (absolutePath: string): string => {
+        if (absolutePath === ROOT) return deniedRoot;
+        if (absolutePath.startsWith(`${ROOT}/`)) {
+          return `${deniedRoot}/${absolutePath.slice(ROOT.length + 1)}`;
+        }
+        return baseFs.realPath(absolutePath);
+      },
+    };
+
+    const out = [...walkSource(fs, folderScope(ROOT))];
+
+    expect(out.some((yld) => yld.kind === "file")).toBe(false);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.kind).toBe("error");
+    if (out[0]?.kind === "error") {
+      expect(out[0].error.code).toBe("PATH_ESCAPE");
+    }
+  });
+
   it("yields in-scope symlinks after their realPath passes the boundary checks", () => {
     const fs = memoryFs(ROOT, [
       {

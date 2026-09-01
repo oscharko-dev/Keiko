@@ -78,6 +78,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   detectWorkspaceAt,
   isWithinWorkspace,
+  PathDeniedError,
   resolveExistingAllowedWorkspaceRealRoot,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -107,6 +108,7 @@ import {
 } from "./diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
+import { recordWorkspaceRootDenial } from "./workspace-root-denial-log.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
   assertUiDbOutsideProject,
@@ -815,9 +817,11 @@ export interface UiHandlerDeps {
   // The Keiko-owned managed worktree root that backs workspaceProvisioning. Routes that accept a
   // task-bound activeRoot as their execution root use this to re-prove containment before authorizing.
   readonly managedTaskWorkspaceRoot?: string | undefined;
-  /** Re-proves exact ordinary or managed workspace authority at an operation's effect boundary. */
-  readonly workspaceRootAccessResolver?:
-    ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
+  // Re-proves exact ordinary or managed workspace authority at an operation's effect boundary. The
+  // optional correlationId lets a caller that has one in scope thread it into the body-free
+  // workspace.root.denied activity-log line a resolution failure emits (#3347); callers that omit
+  // it still compile and still get the event, logged under UNKNOWN_CORRELATION_ID.
+  readonly workspaceRootAccessResolver?: WorkspaceRootAccessResolver | undefined;
   // Issue #446 (Epic #443, ADR-0090) — active task-workspace binding + lifecycle service. Owns the
   // singleton active pointer and the switch/pause/resume/handoff actions surfaces consume. Optional so
   // legacy tests that do not exercise the active-binding routes keep their fixtures unchanged;
@@ -3068,19 +3072,39 @@ interface PersistenceBundle {
   readonly codingRuntimeSnapshotStore: CodingRuntimeSnapshotStore | undefined;
 }
 
-type WorkspaceRootAccessResolver = (requestedRoot: string) => WorkspaceRootAccess | undefined;
+// The optional correlationId is forward-compatible plumbing: no current caller of this resolver
+// type threads one through yet (TerminalManager.resolveWorkspaceRootAccess and the editor/files
+// route seams still call it with one argument), but every resolution failure below is reported
+// under UNKNOWN_CORRELATION_ID until one is. An extra optional trailing parameter is always a valid
+// substitute wherever the narrower one-argument shape is expected, so this stays a non-breaking
+// widening (#3347).
+type WorkspaceRootAccessResolver = (
+  requestedRoot: string,
+  correlationId?: string,
+) => WorkspaceRootAccess | undefined;
 
 function createWorkspaceRootAccessResolver(
   bundle: Pick<PersistenceBundle, "managedTaskWorkspaceRoot" | "workspaceProvisioning">,
 ): WorkspaceRootAccessResolver {
-  return (requestedRoot): WorkspaceRootAccess | undefined => {
-    const managed = resolveManagedWorkspaceRootAccess(bundle, requestedRoot);
+  return (requestedRoot, correlationId): WorkspaceRootAccess | undefined => {
+    const logging = { activityLog: processServerLogSink(), correlationId };
+    const managed = resolveManagedWorkspaceRootAccess(bundle, requestedRoot, logging);
     if (managed !== undefined) return managed;
     if (requiresConfiguredManagedWorkspaceAuthority(bundle, requestedRoot)) return undefined;
     try {
       const canonicalRoot = resolveExistingAllowedWorkspaceRealRoot(nodeWorkspaceFs, requestedRoot);
       return createOrdinaryWorkspaceRootAccess(canonicalRoot);
-    } catch {
+    } catch (error) {
+      // Distinguish a genuinely DENIED root (a security-relevant event that must reach the activity
+      // log with correlation, via the same recordWorkspaceRootDenial path every other denial site
+      // uses) from a MISSING or unreadable one, which is an ordinary outcome and must never be
+      // misreported as a denial (#3347 P1: "do not return a bare undefined for both"). Both still
+      // resolve to `undefined` here, because every current caller of this resolver shares one
+      // WorkspaceRootAccess-or-undefined contract — but the distinction that used to be lost
+      // entirely is now always evaluated and, for the denied case, always logged.
+      if (error instanceof PathDeniedError) {
+        recordWorkspaceRootDenial(error, logging);
+      }
       return undefined;
     }
   };

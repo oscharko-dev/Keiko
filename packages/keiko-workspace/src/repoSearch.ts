@@ -1448,6 +1448,42 @@ function fixedFileSnapshotIsCoherent(
   );
 }
 
+// A persist attempt, once the caller below has committed to it (session dirty, runner still
+// within budget, membership coherent), must settle -- successfully or by throwing -- inside this
+// search's own lifetime rather than being abandoned mid-flight. Racing the await against the
+// runner's derived elapsed-time deadline (the old behavior, shared with the load path via
+// awaitRunnerOperation) only stops *awaiting* workspaceIndex.saveSnapshot; it cannot cancel the
+// write already handed to the store. A 30ms-budget search whose save took 100ms was observed to
+// report "timeout" at ~31ms while the commit landed on the backing store afterward, unseen by the
+// caller that had already moved on (#3347, "Do not let index effects outlive a timed-out
+// search"). Bound the wait only by an explicit external abort -- the same signal this runner
+// already threads everywhere else -- never by the soft, derived elapsed-time deadline that a slow
+// but healthy store can legitimately exceed. An abort still cannot cancel a write already in
+// flight, so its eventual settlement is tracked here (never left an unhandled floating promise)
+// and always reported as not-committed to the caller, which fences `session.dirty` against ever
+// crediting a generation this attempt already gave up on.
+async function awaitPersistedSave(
+  signal: AbortSignal | undefined,
+  operation: () => Promise<void>,
+): Promise<boolean> {
+  if (signal?.aborted === true) return false;
+  const settled = operation().then(
+    () => true,
+    () => false,
+  );
+  if (signal === undefined) return await settled;
+  return await new Promise<boolean>((resolvePersist) => {
+    const onAbort = (): void => {
+      resolvePersist(false);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void settled.then((ok) => {
+      signal.removeEventListener("abort", onAbort);
+      resolvePersist(ok);
+    });
+  });
+}
+
 function persistWorkspaceIndexSession(
   workspaceIndex: WorkspaceIndex,
   scope: SearchScope,
@@ -1468,10 +1504,10 @@ function persistWorkspaceIndexSession(
       return;
     }
     try {
-      const saved = await awaitRunnerOperation(runner, () =>
+      const committed = await awaitPersistedSave(runner.signal, () =>
         workspaceIndex.saveSnapshot(scopeKey, snapshot),
       );
-      if (saved.status === "completed") session.dirty = false;
+      if (committed) session.dirty = false;
     } catch {
       // The workspace index is an opportunistic acceleration layer; search correctness must not
       // depend on the runtime cache directory being writable.

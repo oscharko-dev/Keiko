@@ -128,7 +128,7 @@ or peer graph).
 | `eslint`                      | root                  | 10.9.1  | current        | ESLint 10 lane; the `eslint-config-next` peer cap was cleared by #2777.                |
 | `eslint`                      | keiko-ui              | 10.9.1  | current        | Deduplicated onto the root node by #2777; the workspace no longer pins its own copy.   |
 | `@eslint/js`                  | root                  | 10.0.1  | current        | Realigned with the `eslint` 10 lane by #2777; one family, one major again.             |
-| `typescript-eslint`           | root                  | 8.68.0  | patch-deferred | 8.69.0 published 2026-08-31; held by the reviewed seven-day update cooldown.          |
+| `typescript-eslint`           | root                  | 8.68.0  | patch-deferred | 8.69.0 published 2026-08-31; held by the reviewed seven-day update cooldown.           |
 | `next`                        | keiko-ui              | 16.3.1  | patch-deferred | 16.3.3 available; deferred to a reviewed batch with `eslint-config-next`.              |
 | `eslint-config-next`          | keiko-ui              | 16.3.1  | patch-deferred | Kept exactly aligned with `next`; the two move together or not at all.                 |
 | `react`                       | keiko-ui              | 19.2.8  | current        | React 19 runtime delivered by #2295.                                                   |

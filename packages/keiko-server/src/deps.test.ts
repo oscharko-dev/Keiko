@@ -13,6 +13,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
@@ -81,6 +82,8 @@ import type { DapProductionProvisioning } from "./editor/dap/dapProductionServic
 import type { ManagedLspControlService } from "./editor/lsp/managedLspControl.js";
 import { createWorkspaceScriptTrustService } from "./workspace-script-trust.js";
 import { buildBinding } from "./task-workspace/binding.js";
+import { assertManagedRootOwned } from "./task-workspace/managed-root.js";
+import { inspectManagedGitdirIdentity } from "./task-workspace/gitdir-identity.js";
 import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
 import {
   createBufferedServerLogSink,
@@ -261,7 +264,17 @@ function realWorkspaceFs(): WorkspaceFs {
   };
 }
 
-function managedWorkspaceInstance(repositoryRoot: string, managedRoot: string): WorkspaceInstance {
+function managedWorkspaceInstance(
+  repositoryRoot: string,
+  managedRoot: string,
+  // #3347 managed-worktree identity: resolveManagedWorkspaceRootAccess re-proves a real Git
+  // linked-worktree pointer instead of trusting a path shape, so a caller that actually reaches
+  // that resolver (verificationRunner.discover, provisioning.provision) must construct a genuine
+  // `git worktree add` linkage and pass its real inspectManagedGitdirIdentity() result here. The
+  // placeholder default keeps the other two callers below unchanged -- they exercise
+  // ensureManagedTaskWorkspaceIdentity/workspaceScriptTrust directly and never validate this field.
+  gitdirIdentity = "gitdir-identity",
+): WorkspaceInstance {
   return {
     schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
     workspaceId: "workspace-1",
@@ -271,7 +284,7 @@ function managedWorkspaceInstance(repositoryRoot: string, managedRoot: string): 
     baseBranch: "dev",
     taskBranch: "keiko/task/coding-workbench-dev",
     managedWorktreePath: managedRoot,
-    gitdirIdentity: "gitdir-identity",
+    gitdirIdentity,
     lifecycleState: "active",
     health: "healthy",
     lock: null,
@@ -500,11 +513,37 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const stateDir = tmp("managed-root-identity-");
     const repositoryRoot = tmp("managed-root-source-");
     const managedRoot = join(stateDir, "task-workspaces", "repo-1", "workspace-1");
-    mkdirSync(managedRoot, { recursive: true });
+    // This test reaches deps.verificationRunner.discover(managedRoot) below, which resolves
+    // through resolveManagedWorkspaceRootAccess and therefore genuinely re-proves a Git linked
+    // worktree pointer (#3347) -- a plain mkdir no longer admits, so build a real one.
+    // assertManagedRootOwned must run BEFORE anything else touches "task-workspaces": a plain
+    // recursive mkdir for the repo-1 subdirectory below would otherwise create it first with the
+    // process umask's default mode, so buildUiHandlerDeps' own materializedManagedRoot call later
+    // finds it "already exists" and never applies the 0700 mode + ownership marker this check needs.
+    assertManagedRootOwned(join(stateDir, "task-workspaces"));
+    execFileSync("git", ["init", "-q"], { cwd: repositoryRoot });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repositoryRoot });
+    execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: repositoryRoot });
     const packageManifest = JSON.stringify({ name: "shared" });
     writeFileSync(join(repositoryRoot, "package.json"), packageManifest);
+    execFileSync("git", ["add", "package.json"], { cwd: repositoryRoot });
+    execFileSync("git", ["commit", "-qm", "fixture"], { cwd: repositoryRoot });
+    mkdirSync(join(stateDir, "task-workspaces", "repo-1"), { recursive: true });
+    execFileSync(
+      "git",
+      ["worktree", "add", "-q", "-b", "keiko/task/coding-workbench-dev", managedRoot, "HEAD"],
+      { cwd: repositoryRoot },
+    );
     writeFileSync(join(managedRoot, "package.json"), packageManifest);
-    const instance = managedWorkspaceInstance(repositoryRoot, managedRoot);
+    const gitdirInspection = inspectManagedGitdirIdentity(managedRoot, repositoryRoot);
+    if (gitdirInspection === undefined) {
+      throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+    }
+    const instance = managedWorkspaceInstance(
+      repositoryRoot,
+      managedRoot,
+      gitdirInspection.identity,
+    );
     const store = createInMemoryUiStore();
     const deps = buildUiHandlerDeps({
       configPath: undefined,
@@ -1298,6 +1337,79 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     expect(records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
     // Content-free: the state directory path never enters the record.
     expect(JSON.stringify(records)).not.toContain(stateDir);
+  });
+});
+
+// #3347 P1: the production-composed workspaceRootAccessResolver's ordinary-root catch used to
+// collapse a denied root and a merely missing/unreadable one to the same bare `undefined`, losing
+// the correlated workspace.root.denied activity-log line for the denied case. These tests exercise
+// the REAL buildUiHandlerDeps-composed resolver (never a hand-rolled fake) end to end: a denied root
+// must both stay refused AND emit the correlated, body-free denial event; a genuinely missing root
+// must stay refused WITHOUT being misreported as a security denial. (The resolver itself still
+// returns `undefined` for both — every current caller shares that one contract — so this pins the
+// distinction the resolver can now make internally, not a status-code difference at any specific
+// route; TerminalManager.resolveWorkspaceRootAccess's CWD_DENIED-vs-PROJECT_NOT_FOUND mapping is
+// terminal.ts's own concern and out of this change's file scope.)
+describe("buildUiHandlerDeps — workspaceRootAccessResolver denial logging (#3347 P1)", () => {
+  it("logs a correlated workspace.root.denied event for a denied ordinary root", () => {
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-denied-root-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+    // A denied path SEGMENT (".aws") refuses at the lexical check inside
+    // resolveExistingAllowedWorkspaceRealRoot before any real filesystem read, so the directory
+    // need not exist on disk (same fixture shape as grounded-orchestrator.denied-root-log.test.ts).
+    const deniedRoot = join(tmp("denied-root-parent-"), ".aws", "workspace");
+    const correlationId = "deps-denied-root-000001";
+
+    let access: ReturnType<NonNullable<UiHandlerDeps["workspaceRootAccessResolver"]>>;
+    try {
+      access = deps.workspaceRootAccessResolver?.(deniedRoot, correlationId);
+    } finally {
+      deps.store.close();
+      resetServerLogger();
+    }
+
+    expect(access).toBeUndefined();
+    const denialEvents = activityLog.events.filter((event) => event.op === "workspace.root.denied");
+    expect(denialEvents).toHaveLength(1);
+    expect(denialEvents[0]).toMatchObject({
+      level: "warn",
+      category: "security",
+      correlationId,
+      errorKind: "WORKSPACE_PATH_DENIED",
+      extra: { decision: "denied" },
+    });
+    // Body-free: the denied path itself never enters the logged event.
+    expect(JSON.stringify(denialEvents[0])).not.toContain(deniedRoot);
+  });
+
+  it("refuses a genuinely missing ordinary root without misreporting it as a denial", () => {
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-missing-root-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+    const missingRoot = join(tmp("missing-root-parent-"), "does-not-exist");
+    const correlationId = "deps-missing-root-000001";
+
+    let access: ReturnType<NonNullable<UiHandlerDeps["workspaceRootAccessResolver"]>>;
+    try {
+      access = deps.workspaceRootAccessResolver?.(missingRoot, correlationId);
+    } finally {
+      deps.store.close();
+      resetServerLogger();
+    }
+
+    expect(access).toBeUndefined();
+    expect(activityLog.events.some((event) => event.op === "workspace.root.denied")).toBe(false);
   });
 });
 

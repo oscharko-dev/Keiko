@@ -39,7 +39,11 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 import { isSafeScopePath } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-paths";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
-import { isDenied } from "@oscharko-dev/keiko-workspace";
+import {
+  isDenied,
+  PathDeniedError,
+  resolveExistingAllowedWorkspaceRealRoot,
+} from "@oscharko-dev/keiko-workspace";
 import { isWorkspacePathSnapshotCurrent } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
@@ -629,6 +633,37 @@ function resolveRealPathTarget(
   }
 }
 
+// Admits the SCOPE ROOT itself through the deny-root policy before trusting it as the containment
+// base for this read. A plain `deps.fs.realPath(root)` only follows symlinks — it never asks
+// whether the resolved target is itself a denied locus, so a source lexically admitted as safe and
+// then symlink-retargeted (e.g. to `~/.ssh`) between admission and this call would otherwise read
+// through. Every consumer of `extractDocument()` re-resolves the root independently (defence in
+// depth against a caller bypassing the walker), so this admission must run on every call, not once.
+function resolveRootRealPath(
+  deps: ExtractDocumentDeps,
+  root: string,
+  relativePath: string,
+): string | TargetResolution {
+  try {
+    return resolveExistingAllowedWorkspaceRealRoot(deps.fs, root);
+  } catch (error) {
+    if (error instanceof PathDeniedError) {
+      return targetError(
+        {
+          code: "PATH_ESCAPE",
+          message: "selected source root is a denied workspace root",
+          relativePath,
+        },
+        true,
+      );
+    }
+    return targetError(
+      { code: "READ_FAILED", message: "realPath failed for selected source root", relativePath },
+      true,
+    );
+  }
+}
+
 function containedRealFileTarget(
   realRoot: string,
   real: string,
@@ -672,12 +707,7 @@ function resolveTargetPath(
   }
   const root = policy.rootPath;
   const absolute = joinAbs(root, relativePath);
-  const realRoot = resolveRealPathTarget(
-    deps,
-    root,
-    relativePath,
-    "realPath failed for selected source root",
-  );
+  const realRoot = resolveRootRealPath(deps, root, relativePath);
   if (typeof realRoot !== "string") return realRoot;
   const real = resolveRealPathTarget(
     deps,

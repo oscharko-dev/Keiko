@@ -679,4 +679,46 @@ describe("managed LSP same-origin control routes", () => {
     expect(response.status).toBe(400);
     expect(dispose).not.toHaveBeenCalled();
   });
+
+  // #3347 consumer-boundary hardening: resolveRequestRoot's admission is a single point-in-time
+  // check, so both routes re-prove authority a second time immediately before their effect (GET's
+  // read, PUT's mutate()) via requestRootAccessResolver. These isolate that SECOND re-proof from
+  // the coarse "root never resolved" case above by keeping admission itself successful and denying
+  // only the follow-up resolver -- the only way to prove the second check is load-bearing on its
+  // own, not merely redundant with the first.
+  it("fails closed when the second re-proof denies authority immediately before the GET read", async () => {
+    await closeServer();
+    const built = await buildServer({
+      ...baseDeps(),
+      workspaceRootAccessResolver: () => undefined,
+    });
+    server = built.server;
+    port = built.port;
+
+    const response = await snapshot();
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: "DENIED" } });
+  });
+
+  it("fails closed when the second re-proof denies authority immediately before the mutation effect", async () => {
+    const current = await snapshot();
+    const etag = current.headers.get("etag") ?? "";
+    await closeServer();
+    const built = await buildServer({
+      ...baseDeps(),
+      workspaceRootAccessResolver: () => undefined,
+    });
+    server = built.server;
+    port = built.port;
+
+    const response = await mutation(activateBody(), {
+      "If-Match": etag,
+      "Idempotency-Key": "denied-second-reproof",
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: "DENIED" } });
+    expect(dispose).not.toHaveBeenCalled();
+  });
 });

@@ -12,9 +12,10 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { createProductionManagedWorktreeToolFacade } from "./productionManagedWorktreeTools.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 const DIGEST = "a".repeat(64);
-const resolveWorkspaceRootAccess = () => ({
+const resolveWorkspaceRootAccess = (): WorkspaceRootAccess => ({
   kind: "managed-task" as const,
   canonicalRoot: "/managed/worktree",
   fs: nodeWorkspaceFs,
@@ -312,6 +313,98 @@ describe("production managed worktree tools", () => {
         timeoutMs: 10_000,
       }),
     );
+  });
+
+  it("revokes liveness the instant resolveWorkspaceRootAccess stops proving managed authority, even before expiry (#3347)", async () => {
+    let access: ReturnType<typeof resolveWorkspaceRootAccess> | undefined = {
+      kind: "managed-task" as const,
+      canonicalRoot: "/managed/worktree",
+      fs: nodeWorkspaceFs,
+    };
+    const execute = vi.fn((): Promise<CommandTaskRunResult> =>
+      Promise.resolve({
+        schemaVersion: "1",
+        runId: "command-run-1",
+        taskId: "npm-script:test",
+        kind: "test",
+        exitCode: 0,
+        durationMs: 1,
+        truncated: false,
+        timedOut: false,
+        failureReason: "none",
+        stdout: "",
+        stderr: "",
+      }),
+    );
+    const liveFacts: CodingWorkbenchRuntimeAuthorityFacts = {
+      ...FACTS,
+      actionClasses: ["workspace-read", "workspace-write", "verification", "command-execution"],
+    };
+    const facade = createProductionManagedWorktreeToolFacade({
+      authority: {
+        revalidateCapabilityForMutation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(true),
+        }),
+        resolveCapabilityForDelegation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(true),
+        }),
+      },
+      authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+      workspaceRoot: "/managed/worktree",
+      resolveWorkspaceRootAccess: () => access,
+      // Authority stays valid for decades: only resolveWorkspaceRootAccess flips, so a status
+      // change here can only be attributed to the new liveness check, never to expiry.
+      authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+      effectiveMode: "autonomous-delivery",
+      deploymentCeiling: "autonomous-delivery",
+      liveFacts: () => liveFacts,
+      secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: false, reason: "denied" }) },
+      editorAgentClient: {
+        action: () =>
+          Promise.resolve({
+            ok: false as const,
+            error: { kind: "route" as const, code: "denied", message: "denied" },
+          }),
+      },
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      commandRunner: { execute },
+      verificationRunner: { runToReport: vi.fn() },
+      onRuntimeEvent: vi.fn(),
+    });
+
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "command",
+          actionId: "command-1",
+          idempotencyKey: "command-key-1",
+          commandId: "npm-script:test",
+        }),
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(execute).toHaveBeenCalledOnce();
+
+    // Simulate mid-run revocation: lifecycle state or gitdir identity no longer proves managed
+    // authority (the resolver re-checks both on every call), even though authorityExpiresAt has
+    // not been reached.
+    access = undefined;
+
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "command",
+          actionId: "command-2",
+          idempotencyKey: "command-key-2",
+          commandId: "npm-script:test",
+        }),
+      }),
+    ).resolves.toMatchObject({ status: "failed", reasonCode: "command-authority-revoked" });
+    // The command backend must never have been re-invoked once liveness flipped to false.
+    expect(execute).toHaveBeenCalledOnce();
   });
 
   it.each([

@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { CandidateFile, EvidenceAtom } from "@oscharko-dev/keiko-contracts/connected-context";
-import { PathDeniedError, PathEscapeError, WORKSPACE_CODES } from "./errors.js";
+import { PathDeniedError, PathEscapeError, WORKSPACE_CODES, WorkspaceReadError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
 import { memFs } from "./_memfs.js";
 import {
@@ -153,7 +153,9 @@ describe("probeBinary – zero-size file", () => {
 });
 
 describe("probeBinary – no readFileBytes on fs", () => {
-  it("falls back to readFileUtf8 when readFileBytes is absent", async () => {
+  // Bounded primitive present -> use it; absent -> the probe is unavailable. probeBinary must
+  // never fall back to an unbounded readFileUtf8 and slice to the cap after the fact.
+  it("throws a body-free WorkspaceReadError instead of an unbounded readFileUtf8 fallback", async () => {
     const plainText = "hello world\n";
     const base = memFs(MEM_ROOT, { "src/a.ts": plainText });
     const fs: WorkspaceFs = {
@@ -162,16 +164,15 @@ describe("probeBinary – no readFileBytes on fs", () => {
       readDir: base.readDir,
       realPath: base.realPath,
       exists: base.exists,
-      // Deliberately omit readFileBytes to trigger the utf8 fallback branch.
+      // Deliberately omit readFileBytes to exercise the "unavailable" branch.
     };
-    const result = await probeBinary(fs, `${MEM_ROOT}/src/a.ts`, plainText.length);
-    expect(result).toBe(false);
+    await expect(probeBinary(fs, `${MEM_ROOT}/src/a.ts`, plainText.length)).rejects.toBeInstanceOf(
+      WorkspaceReadError,
+    );
   });
 
-  it("detects binary content via readFileUtf8 fallback when readFileBytes is absent", async () => {
-    // A NUL byte makes looksBinary return true.
-    const binaryContent = String.fromCharCode(0x00) + "PNG data";
-    const base = memFs(MEM_ROOT, { "img.png": binaryContent });
+  it("shapes the unavailable-primitive error as an IO error so every probeBinary caller's TOCTOU degrade path still catches it", async () => {
+    const base = memFs(MEM_ROOT, { "src/a.ts": "hello world\n" });
     const fs: WorkspaceFs = {
       readFileUtf8: base.readFileUtf8,
       stat: base.stat,
@@ -179,8 +180,12 @@ describe("probeBinary – no readFileBytes on fs", () => {
       realPath: base.realPath,
       exists: base.exists,
     };
-    const result = await probeBinary(fs, `${MEM_ROOT}/img.png`, binaryContent.length);
-    expect(result).toBe(true);
+    try {
+      await probeBinary(fs, `${MEM_ROOT}/src/a.ts`, 12);
+      expect.unreachable("probeBinary must throw when readFileBytes is unavailable");
+    } catch (error) {
+      expect(isIoError(error)).toBe(true);
+    }
   });
 });
 
@@ -596,46 +601,21 @@ describe("scanFile – stable persistence metadata", () => {
     expect(records[0]).toMatchObject({ kind: "text", scopePath: "src/a.ts", mtimeMs: 1 });
   });
 
-  it("does not bind UTF-8 fallback text to replacement metadata", async () => {
+  // readForScan's UTF-8 lane (readUtf8TextForScan) only ran when readFileBytes was absent. Since
+  // probeBinary no longer falls back to an unbounded readFileUtf8 either, binaryOmission now
+  // fails closed for every non-empty file on a WorkspaceFs missing readFileBytes — the file never
+  // reaches readForScan at all, so that lane's own stat-race handling can no longer be exercised
+  // this way. What IS still true, and worth pinning, is that this degrades to a clean
+  // tool-unavailable omission rather than reading unbounded and persisting a workspace-index
+  // record built from unbounded text.
+  it("omits a non-empty file as tool-unavailable, and persists no record, when readFileBytes is absent", async () => {
     const files = { "src/a.ts": "needle\n" };
     const base = memFs(MEM_ROOT, files);
     const { readFileBytes: removedReadFileBytes, ...baseWithoutBytes } = base;
     if (removedReadFileBytes === undefined) throw new Error("memFs always provides readFileBytes");
-    let version = 1;
-    let utf8Reads = 0;
-    let scheduleReplacement = false;
-    let replacementScheduled = false;
-    const fs: WorkspaceFs = {
-      ...baseWithoutBytes,
-      readFileUtf8: (absolutePath) => {
-        const text = base.readFileUtf8(absolutePath);
-        utf8Reads += 1;
-        if (utf8Reads === 2) scheduleReplacement = true;
-        return text;
-      },
-      stat: (absolutePath) => {
-        const stat = base.stat(absolutePath);
-        const snapshot = stat.isFile
-          ? {
-              ...stat,
-              fileIdentity: `1:${String(version)}`,
-              mtimeMs: version,
-              ctimeMs: version,
-              mtimeNs: `${String(version)}000000`,
-              ctimeNs: `${String(version)}000000`,
-            }
-          : stat;
-        if (scheduleReplacement && !replacementScheduled && stat.isFile) {
-          replacementScheduled = true;
-          queueMicrotask(() => {
-            files["src/a.ts"] = "actual\n";
-            version = 2;
-          });
-        }
-        return snapshot;
-      },
-    };
+    const fs: WorkspaceFs = baseWithoutBytes;
     const records: WorkspaceIndexRecord[] = [];
+    const candidates: CandidateFile[] = [];
     const runner: SearchTextRunner = {
       ...buildRunner(fs),
       workspaceIndex: {
@@ -645,11 +625,12 @@ describe("scanFile – stable persistence metadata", () => {
       },
     };
 
-    await scanFile(runner, discoveredFile("src/a.ts", 7), freshState(), [], []);
+    await scanFile(runner, discoveredFile("src/a.ts", 7), freshState(), [], candidates);
 
-    expect(version).toBe(2);
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({ kind: "text", scopePath: "src/a.ts", mtimeMs: 1 });
+    expect(records).toHaveLength(0);
+    expect(candidates.map(({ scopePath, omitted }) => ({ scopePath, omitted }))).toEqual([
+      { scopePath: "src/a.ts", omitted: "tool-unavailable" },
+    ]);
   });
 });
 

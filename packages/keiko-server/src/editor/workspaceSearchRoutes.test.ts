@@ -1,6 +1,8 @@
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -19,6 +21,7 @@ import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js"
 import type { UiStore } from "../store/index.js";
 import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
 import { deriveManagedWorktreePath } from "../task-workspace/naming.js";
+import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 import type { WorkspaceProvisioningService } from "../task-workspace/types.js";
 import {
   handleEditorWorkspaceReplaceApply,
@@ -45,6 +48,7 @@ function postContext(body: unknown, path = "/api/editor/workspace-search"): Rout
 }
 
 let root: string;
+let managedSourceRoot: string | undefined;
 let store: UiStore;
 
 function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
@@ -102,6 +106,35 @@ async function managedSearchFixture(): Promise<{
   const repositoryId = "repo_0123456789abcdef";
   const workspaceId = "ws_0123456789abcdef01234567";
   const managedWorktree = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
+  // #3347 managed-worktree identity: resolveManagedWorkspaceRootAccess re-proves a real Git
+  // linked-worktree pointer instead of trusting a path shape, so this fixture needs an actual
+  // `git worktree add` linkage -- a separate, independently-cleaned-up repositoryRoot, not the
+  // shared search-fixture `root` (which dozens of unrelated tests scan directly and must not gain
+  // a `.git` directory).
+  const repositoryRoot = await mkdtemp(join(tmpdir(), "keiko-workspace-search-managed-source-"));
+  managedSourceRoot = repositoryRoot;
+  execFileSync("git", ["init", "-q"], { cwd: repositoryRoot });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repositoryRoot });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: repositoryRoot });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: repositoryRoot });
+  mkdirSync(dirname(managedWorktree), { recursive: true });
+  execFileSync(
+    "git",
+    [
+      "worktree",
+      "add",
+      "-q",
+      "-b",
+      "keiko/task/workspace-search-01234567",
+      managedWorktree,
+      "HEAD",
+    ],
+    { cwd: repositoryRoot },
+  );
+  const gitdirInspection = inspectManagedGitdirIdentity(managedWorktree, repositoryRoot);
+  if (gitdirInspection === undefined) {
+    throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+  }
   await mkdir(join(managedWorktree, "src"), { recursive: true });
   await writeFile(join(managedWorktree, "src", "managed.ts"), "export const managedNeedle = 1;\n");
   const timestamp = new Date(0).toISOString();
@@ -110,11 +143,11 @@ async function managedSearchFixture(): Promise<{
     workspaceId,
     taskId: "workspace-search",
     repositoryId,
-    repositoryRoot: root,
+    repositoryRoot,
     baseBranch: "dev",
     taskBranch: "keiko/task/workspace-search-01234567",
     managedWorktreePath: managedWorktree,
-    gitdirIdentity: "gitdir-identity",
+    gitdirIdentity: gitdirInspection.identity,
     lifecycleState: "active",
     health: "healthy",
     lock: null,
@@ -189,11 +222,15 @@ beforeEach(async () => {
   await writeFile(join(root, "src", "case.ts"), "Alpha\nalpha\n", "utf8");
   store = createInMemoryUiStore();
   store.createProject(root, "fixture");
+  managedSourceRoot = undefined;
 });
 
 afterEach(async () => {
   store.close();
   await rm(root, { recursive: true, force: true });
+  if (managedSourceRoot !== undefined) {
+    await rm(managedSourceRoot, { recursive: true, force: true });
+  }
 });
 
 // Qodo review on #2869: the raw editor read reaches this route through the package's

@@ -21,6 +21,7 @@ import { memFs } from "./_memfs.js";
 import { PathDeniedError } from "./errors.js";
 import {
   nodeWorkspaceFs,
+  type WorkspaceDescriptorUtf8Read,
   type WorkspaceDirEntry,
   type WorkspaceFs,
   type WorkspaceStat,
@@ -319,6 +320,30 @@ function createTrackedFs(
     }
     return false;
   };
+  // Shared by `stat` and `readFileUtf8SameDescriptor` so the descriptor-read lane observes exactly
+  // the same identity `stat` reports — mirrors production's same-descriptor read, which derives
+  // both from one open file handle.
+  const statOrThrow = (absolutePath: string): WorkspaceStat => {
+    const file = fileAt(absolutePath);
+    if (file !== undefined) {
+      return {
+        size: Buffer.byteLength(file.content, "utf8"),
+        isFile: true,
+        isDirectory: false,
+        isSymbolicLink: false,
+        hardLinkCount: 1,
+        mtimeMs: file.mtimeMs,
+        ctimeMs: Number(file.ctimeNs) / 1_000_000,
+        fileIdentity: file.fileIdentity,
+        mtimeNs: String(Math.trunc(file.mtimeMs * 1_000_000)),
+        ctimeNs: file.ctimeNs,
+      };
+    }
+    if (directoryExists(absolutePath)) {
+      return statDir(absoluteToRelative(absolutePath) ?? "");
+    }
+    throw makeErrnoError("ENOENT", absolutePath);
+  };
   return {
     counters,
     fs: {
@@ -330,27 +355,31 @@ function createTrackedFs(
         }
         return file.content;
       },
+      // Bounded same-descriptor read: the sole primitive `readWorkspaceFileTextForInternalUse`
+      // uses for a complete text read. Counted under the SAME `readFileUtf8` counter every
+      // existing assertion in this file already keys on — this fake has no unbounded-fallback
+      // branch left to invoke, so this is now the only text-read path production code reaches.
+      readFileUtf8SameDescriptor: (
+        absolutePath: string,
+        maxBytes: number,
+      ): WorkspaceDescriptorUtf8Read => {
+        counters.readFileUtf8 += 1;
+        const file = fileAt(absolutePath);
+        if (file === undefined) {
+          throw makeErrnoError("ENOENT", absolutePath);
+        }
+        const encoded = new TextEncoder().encode(file.content);
+        const cap = Math.max(0, Math.trunc(maxBytes));
+        const bytes = encoded.subarray(0, Math.min(encoded.length, cap));
+        return {
+          rawText: new TextDecoder("utf-8", { fatal: false }).decode(bytes),
+          sizeBytes: bytes.length,
+          stat: statOrThrow(absolutePath),
+        };
+      },
       stat: (absolutePath: string): WorkspaceStat => {
         counters.stat += 1;
-        const file = fileAt(absolutePath);
-        if (file !== undefined) {
-          return {
-            size: Buffer.byteLength(file.content, "utf8"),
-            isFile: true,
-            isDirectory: false,
-            isSymbolicLink: false,
-            hardLinkCount: 1,
-            mtimeMs: file.mtimeMs,
-            ctimeMs: Number(file.ctimeNs) / 1_000_000,
-            fileIdentity: file.fileIdentity,
-            mtimeNs: String(Math.trunc(file.mtimeMs * 1_000_000)),
-            ctimeNs: file.ctimeNs,
-          };
-        }
-        if (directoryExists(absolutePath)) {
-          return statDir(absoluteToRelative(absolutePath) ?? "");
-        }
-        throw makeErrnoError("ENOENT", absolutePath);
+        return statOrThrow(absolutePath);
       },
       readDir: (absolutePath: string): readonly WorkspaceDirEntry[] => {
         counters.readDir += 1;

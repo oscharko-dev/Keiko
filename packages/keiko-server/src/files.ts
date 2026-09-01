@@ -18,7 +18,6 @@ import {
   mkdir,
   opendir,
   open,
-  readFile,
   realpath,
   rename,
   rm,
@@ -66,6 +65,8 @@ import {
 import type { UiHandlerDeps } from "./deps.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import type { Project, UiStore } from "./store/index.js";
+import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   createOrdinaryWorkspaceRootAccess,
   requiresConfiguredManagedWorkspaceAuthority,
@@ -184,6 +185,14 @@ interface ResolvedTarget {
   readonly path: string;
   readonly stats: Stats;
   readonly symlink: boolean;
+  // The resolved root's WorkspaceFs, plus the WorkspaceStat identity (device+inode) captured at
+  // THIS admission -- carried alongside the plain path so a later content read can bind itself to
+  // the exact file that was admitted (see readContainedBytes) instead of trusting a bare path
+  // string that a parent-directory swap could redirect after admission. Identity only changes on
+  // replacement (a different inode); an in-place edit keeps the same identity, so this check is
+  // orthogonal to -- and does not need refreshing by -- the existing mtime/hash staleness checks.
+  readonly fs: WorkspaceFs;
+  readonly identity: WorkspaceStat;
 }
 
 // Exported for reuse by the editor language-service route (#1198): the same realpath +
@@ -473,7 +482,10 @@ async function resolveInsideRoot(
   const candidate = nativePath(root.realRoot, relativePath);
   let target: string;
   try {
-    target = await realpath(candidate);
+    // ADR-0005 D2 / #3347: admission for this specific candidate goes through the owner-supplied
+    // access.fs, the same unforgeable capability every other IO call in this function now uses --
+    // not a bare Node realpath -- so the whole request, not just the content read, is bound to it.
+    target = root.access.fs.realPath(candidate);
   } catch {
     throw new FilesError(404, "NOT_FOUND", "The requested path was not found.");
   }
@@ -485,7 +497,12 @@ async function resolveInsideRoot(
   if (pathIsDenied(targetRelativePath)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  const linkStats = await lstat(candidate);
+  // candidate's own lstat (pre-realpath, may itself be a symlink) drives the UI-facing `symlink`
+  // indicator; target's lstat (post-realpath, the file identity content reads bind to) drives
+  // `identity`. Collapsing these into one call would either always report symlink:false (lstat on
+  // an already-resolved path never sees a link) or bind identity to the unresolved alias.
+  const linkStat = root.access.fs.stat(candidate);
+  const identity = root.access.fs.stat(target);
   const targetStats = await stat(target);
   return {
     root: root.root,
@@ -493,7 +510,9 @@ async function resolveInsideRoot(
     relativePath,
     path: target,
     stats: targetStats,
-    symlink: linkStats.isSymbolicLink(),
+    symlink: linkStat.isSymbolicLink,
+    fs: root.access.fs,
+    identity,
   };
 }
 
@@ -1413,6 +1432,46 @@ async function readPrefix(
   }
 }
 
+// #3347 consumer-boundary hardening: every content read below goes through this instead of a bare
+// open()/readFile() on `target.path`. `identity` is the WorkspaceStat captured at ADMISSION time
+// (ResolvedTarget.identity) -- not re-derived here -- so the open is bound to the exact file that
+// was admitted: if a path segment was swapped anywhere between admission and this call, the opened
+// descriptor's device+inode will not match `identity` and the read is rejected, even when the
+// substitute happens to share the original's size and mtime (which the older stat-after-read
+// comparison this module otherwise relies on cannot detect). Identity is unaffected by a legitimate
+// in-place edit (same inode), so callers that already retry on a changed mtime/hash keep working
+// unchanged. Hard links are allowed (not rejected): unlike the privileged metadata readers
+// elsewhere in the codebase, this is an interactive human browsing a root they selected, so a
+// hard-linked file the human already has plain read access to must keep working.
+async function readContainedBytes(
+  targetPath: string,
+  fs: WorkspaceFs,
+  identity: WorkspaceStat,
+  maxBytes: number,
+): Promise<{ readonly buffer: Buffer; readonly truncated: boolean }> {
+  const boundedRead = fs.readFileBytes;
+  if (boundedRead === undefined) return readPrefix(targetPath, maxBytes);
+  const bytes = await boundedRead.call(fs, targetPath, maxBytes, "allow", identity);
+  return { buffer: Buffer.from(bytes), truncated: identity.size > maxBytes };
+}
+
+// Same-shape convenience for the (majority) call sites that have no retry loop of their own: a
+// caught identity mismatch becomes the same STALE_SESSION rejection those sites already use for
+// "content changed under us", rather than a raw error surfacing as an opaque 500.
+async function readContainedPrefixOrStale(
+  targetPath: string,
+  fs: WorkspaceFs,
+  identity: WorkspaceStat,
+  maxBytes: number,
+): Promise<{ readonly buffer: Buffer; readonly truncated: boolean }> {
+  try {
+    return await readContainedBytes(targetPath, fs, identity, maxBytes);
+  } catch (error) {
+    if (error instanceof WorkspaceDescriptorReadError) throw stalePathError();
+    throw error;
+  }
+}
+
 async function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {
   return new Promise<string>((resolveBody, reject) => {
     const chunks: Buffer[] = [];
@@ -1507,7 +1566,12 @@ async function textPreview(
   base: FilesPreviewBase,
   redactor: UiHandlerDeps["redactor"],
 ): Promise<FilesPreviewResponse> {
-  const prefix = await readPrefix(target.path, MAX_TEXT_PREVIEW_BYTES);
+  const prefix = await readContainedPrefixOrStale(
+    target.path,
+    target.fs,
+    target.identity,
+    MAX_TEXT_PREVIEW_BYTES,
+  );
   const content = decodeUtf8(prefix.buffer);
   if (content === null || prefix.buffer.includes(0)) {
     return { ...base, kind: "binary", reason: "unsupported" };
@@ -1554,7 +1618,24 @@ async function readStableEditableContent(
         `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
       );
     }
-    const buffer = await readFile(target.path);
+    let buffer: Buffer;
+    try {
+      buffer = (
+        await readContainedBytes(target.path, target.fs, target.identity, MAX_TEXT_PREVIEW_BYTES)
+      ).buffer;
+    } catch (error) {
+      // A caught identity mismatch is exactly the "changed under us" condition the post-read
+      // statsMatch() check below already retries on -- fold it into the same retry budget instead
+      // of failing the first attempt outright. `target.identity` stays admission-time-fixed across
+      // attempts on purpose (see ResolvedTarget.identity): identity only drifts on replacement, so
+      // reusing it keeps guarding against a swapped inode on every retry, not just the first.
+      if (!(error instanceof WorkspaceDescriptorReadError)) throw error;
+      before = await stat(target.path);
+      if (attempt < STABLE_CONTENT_READ_ATTEMPTS - 1) {
+        await sleep(STABLE_CONTENT_RETRY_DELAY_MS);
+      }
+      continue;
+    }
     const content = decodeUtf8(buffer);
     if (content === null || buffer.includes(0)) {
       throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
@@ -1573,6 +1654,34 @@ async function readStableEditableContent(
   );
 }
 
+// Bounded re-read (mirrors the content-classification read): if the file grew past the editable
+// limit between the stat and this read, treat the truncated result as a mismatch. A caught
+// identity mismatch (readContainedBytes) is the same "changed under us" signal -- it folds into a
+// false return exactly like a hash difference would, rather than a distinct error.
+async function currentContentMatchesHash(
+  target: ResolvedTarget,
+  contentHash: string,
+): Promise<boolean> {
+  let current: { readonly buffer: Buffer; readonly truncated: boolean } | undefined;
+  try {
+    current = await readContainedBytes(
+      target.path,
+      target.fs,
+      target.identity,
+      MAX_TEXT_PREVIEW_BYTES,
+    );
+  } catch (error) {
+    if (!(error instanceof WorkspaceDescriptorReadError)) throw error;
+  }
+  if (current === undefined || current.truncated) return false;
+  const currentContent = decodeUtf8(current.buffer);
+  return (
+    currentContent !== null &&
+    !current.buffer.includes(0) &&
+    sha256Hex(currentContent) === contentHash
+  );
+}
+
 // Issue #1197: version-aware optimistic concurrency. Rejects a save when the on-disk document no
 // longer matches the revision the editor opened. Size/mtime are compared first so the content is
 // only re-read (bounded by the editable size limit) when those cheap signals match.
@@ -1582,18 +1691,11 @@ async function assertSessionNotStale(
 ): Promise<void> {
   const sizeMatches = target.stats.size === baseVersion.sizeBytes;
   const mtimeMatches = Math.abs(target.stats.mtimeMs - baseVersion.modifiedAt) <= 1;
-  let hashMatches = false;
-  if (sizeMatches && mtimeMatches && target.stats.size <= MAX_TEXT_PREVIEW_BYTES) {
-    // Bounded re-read (mirrors the content-classification read): if the file grew past the editable
-    // limit between the stat and this read, treat the truncated result as a mismatch.
-    const current = await readPrefix(target.path, MAX_TEXT_PREVIEW_BYTES);
-    const currentContent = decodeUtf8(current.buffer);
-    hashMatches =
-      !current.truncated &&
-      currentContent !== null &&
-      !current.buffer.includes(0) &&
-      sha256Hex(currentContent) === baseVersion.contentHash;
-  }
+  const hashMatches =
+    sizeMatches &&
+    mtimeMatches &&
+    target.stats.size <= MAX_TEXT_PREVIEW_BYTES &&
+    (await currentContentMatchesHash(target, baseVersion.contentHash));
   if (!sizeMatches || !mtimeMatches || !hashMatches) {
     throw new FilesError(
       409,
@@ -1647,7 +1749,12 @@ export async function readFilesContent(
     throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
   }
   const base = basePreview(target);
-  const prefix = await readPrefix(target.path, Math.min(target.stats.size, 4096));
+  const prefix = await readContainedPrefixOrStale(
+    target.path,
+    target.fs,
+    target.identity,
+    Math.min(target.stats.size, 4096),
+  );
   if (!isEditableUtf8File(base.extension, prefix.buffer)) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
@@ -1838,7 +1945,12 @@ async function writeResolvedFilesContent(args: {
     throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
   }
   const base = basePreview(args.target);
-  const prefix = await readPrefix(args.target.path, Math.min(args.target.stats.size, 4096));
+  const prefix = await readContainedPrefixOrStale(
+    args.target.path,
+    args.target.fs,
+    args.target.identity,
+    Math.min(args.target.stats.size, 4096),
+  );
   if (!isEditableUtf8File(base.extension, prefix.buffer)) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
@@ -2477,7 +2589,12 @@ export async function readFilesPreview(
   }
   const base = basePreview(target);
   if (isImageExtension(base.extension)) return imagePreview(target, base);
-  const prefix = await readPrefix(target.path, Math.min(target.stats.size, 4096));
+  const prefix = await readContainedPrefixOrStale(
+    target.path,
+    target.fs,
+    target.identity,
+    Math.min(target.stats.size, 4096),
+  );
   if (isEditableUtf8File(base.extension, prefix.buffer)) {
     return textPreview(target, base, redactor);
   }

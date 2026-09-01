@@ -270,7 +270,13 @@ function sameWorkspaceStat(left: WorkspaceStat, right: WorkspaceStat): boolean {
   ].every(Boolean);
 }
 
-const WINDOWS_ABSOLUTE_PATH = /^(?:[A-Za-z]:[\\/]|\\\\)/u;
+// Matches a drive-letter path (`C:\` / `C:/`), a UNC path (`\\server\share`), or any other
+// path rooted at a bare backslash (`\srv\docs\...`, e.g. a drive-relative-root path a
+// WorkspaceFs.realPath() implementation may return on Windows). A POSIX absolute path can
+// never start with `\` — it is always `/`-rooted — so matching a leading backslash here
+// cannot misclassify a real POSIX path; it only widens detection to cover Windows-style
+// absolute paths that lack a drive letter, which the drive-letter/UNC-only pattern missed.
+const WINDOWS_ABSOLUTE_PATH = /^(?:[A-Za-z]:[\\/]|\\)/u;
 
 function normalizedWorkspacePath(path: string): string {
   return process.platform === "win32" || WINDOWS_ABSOLUTE_PATH.test(path)
