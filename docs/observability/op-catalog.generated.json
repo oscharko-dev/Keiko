@@ -1223,37 +1223,37 @@
     {
       "op": "search.connected-context.completed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4937",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4930",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.completed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4992",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4985",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.failed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4953",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4946",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.failed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5003",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4996",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.started",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4984",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4977",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.started",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5043",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5036",
       "package": "keiko-server"
     },
     {
