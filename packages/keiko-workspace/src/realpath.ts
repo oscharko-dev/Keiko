@@ -239,6 +239,9 @@ export function isCanonicalAllowedContainedPath(
  * Positive classification for a missing target whose nearest existing parent was contained.
  * This authorizes an existence probe only; callers must still require the exact predicate above
  * before enumerating or reading. Segment-aware prefix matching rejects in-workspace parent aliases.
+ * Every info this module produces has passed containedRealPathInfoFromBase, which refuses a final
+ * component the port reports as a symlink when the path itself does not resolve, so a target
+ * classified here is a missing name rather than a link whose destination was never resolved.
  */
 export function isAllowedContainedPathParent(
   info: ContainedRealPathInfo,
@@ -259,6 +262,24 @@ export function isAllowedContainedPathParent(
   );
 }
 
+// `realPath` fails the same way for a genuinely missing leaf and for a leaf that exists as a symlink
+// whose target does not resolve (a dangling link, or a link cycle). Only the first is a create
+// target. The second names a link, so an effect caller that opens it for writing follows it to a
+// location this containment never resolved and cannot classify — including one outside the root.
+// `stat` is the port's no-follow metadata read (`nodeWorkspaceFs` backs it with `lstat`, and
+// discovery already skips entries on its `isSymbolicLink`), so a link reported here is enough to
+// refuse. A `stat` that fails leaves the missing-leaf classification below untouched.
+function unresolvableSymbolicLinkLeaf(fs: WorkspaceFs, absolutePath: string): boolean {
+  try {
+    return fs.stat(absolutePath).isSymbolicLink;
+  } catch (error) {
+    if (error instanceof StructuralExecutionStoppedError || error instanceof PathDeniedError) {
+      throw error;
+    }
+    return false;
+  }
+}
+
 function containedRealPathInfoFromBase(
   fs: WorkspaceFs,
   realBase: string,
@@ -276,6 +297,12 @@ function containedRealPathInfoFromBase(
   } catch (error) {
     if (error instanceof PathEscapeError || error instanceof StructuralExecutionStoppedError) {
       throw error;
+    }
+    if (unresolvableSymbolicLinkLeaf(fs, absolutePath)) {
+      throw new PathEscapeError(
+        `refusing an unresolvable symlink at the workspace boundary: ${absolutePath}`,
+        absolutePath,
+      );
     }
     const parentReal = realNearestExisting(fs, absolutePath);
     if (!isWithinWorkspace(realBase, parentReal)) {
@@ -320,7 +347,9 @@ export function containedRealPathInfoWithinOwnedRoot(
 // Asserts that `absolutePath` (already lexically contained) does not escape `root` via a symlink.
 // For an existing target, the target's own realpath must stay within the real root. For a
 // not-yet-existing target (create), the nearest existing ancestor's realpath must stay within it,
-// which blocks `create through a symlinked directory` (the S-H1 .git/hooks escalation).
+// which blocks `create through a symlinked directory` (the S-H1 .git/hooks escalation). A final
+// component the port reports as a symlink when the path does not resolve is refused outright rather
+// than treated as a create target: the write would follow that link off this proven ground.
 // Returns the canonical real path to hand to IO (existing case) or the lexically-resolved path
 // (pure-create case where the target itself has no realpath yet).
 export function assertContainedRealPath(

@@ -237,6 +237,11 @@ export const defaultPostApplyVerification: PostApplyVerificationPort = async (ar
   const { report, probe } = await executeVerificationEnforced({
     plan: { workspaceRoot: workspace.root, steps },
     workspace,
+    // The admitted capability must reach the EFFECT, not just detection and planning (#3347 owner
+    // P1). Omitting it here made runVerification fall back to `nodeWorkspaceFs` at the command
+    // spawn boundary, so a managed root replaced or revoked after planning could still execute the
+    // verification command through unbound filesystem authority.
+    fs: args.fs,
     signal: args.signal,
     probeCwd: args.realRoot,
     correlationId: args.correlationId,

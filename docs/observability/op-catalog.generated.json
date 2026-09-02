@@ -1013,19 +1013,19 @@
     {
       "op": "git.delivery.dispatch.no-spawn",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:153",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:269",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:396",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:567",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:427",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:598",
       "package": "keiko-server"
     },
     {
@@ -1229,37 +1229,37 @@
     {
       "op": "search.connected-context.completed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4917",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5003",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.completed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4972",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5058",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.failed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4933",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5019",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.failed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4983",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5069",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.started",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:4964",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5050",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.started",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5023",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5109",
       "package": "keiko-server"
     },
     {

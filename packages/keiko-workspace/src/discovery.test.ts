@@ -288,6 +288,116 @@ describe("discoverFiles", () => {
     expect(reverse.stats.maxFilesPruned).toBeGreaterThan(0);
   });
 
+  it("passes a finite entry cap to every public-discovery directory read", () => {
+    // #3347 (owner P1): public discovery passed `maxEntries: undefined`, so `nodeWorkspaceFs.readDir`
+    // took the `readdirSync(...).map(...).sort(...)` branch and materialized the whole directory.
+    // This pins the ARGUMENT, so dropping the cap fails here even when the yielded files are equal.
+    file("src/a.ts");
+    file("src/nested/b.ts");
+    const requestedCaps: (number | undefined)[] = [];
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+        requestedCaps.push(maxEntries);
+        return nodeWorkspaceFs.readDir(absolutePath, maxEntries);
+      },
+    };
+
+    const found = discoverFiles(detectWorkspace(dir), DEFAULT_DISCOVERY_OPTIONS, fs).map(
+      (entry) => entry.relativePath,
+    );
+
+    expect(found).toContain("src/nested/b.ts");
+    expect(requestedCaps.length).toBeGreaterThan(0);
+    expect(requestedCaps.every((cap) => cap !== undefined && Number.isFinite(cap))).toBe(true);
+  });
+
+  it("bounds ONE high-fan-out public-discovery directory instead of materializing it", async () => {
+    // The DoS behind #3347 needs a single huge directory, not many small ones: the whole cost is one
+    // synchronous allocate-and-sort that the async walk cannot yield across. The fake builds only as
+    // many entries as it is asked for, so `materialized` is the memory the walk actually demanded.
+    const root = "/ws";
+    const hugeDirectoryEntries = 60_000;
+    const requestedCaps: (number | undefined)[] = [];
+    let materialized = 0;
+    const fs: WorkspaceFs = {
+      readFileUtf8: (): string => "",
+      stat: (absolutePath): WorkspaceStat => ({
+        size: 1,
+        isFile: absolutePath !== root,
+        isDirectory: absolutePath === root,
+        isSymbolicLink: false,
+      }),
+      readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+        requestedCaps.push(maxEntries);
+        if (absolutePath !== root) return [];
+        const produced = Math.min(maxEntries ?? hugeDirectoryEntries, hugeDirectoryEntries);
+        materialized += produced;
+        return Array.from({ length: produced }, (_, index) => ({
+          name: `entry-${index.toString().padStart(6, "0")}.ts`,
+          isDirectory: false,
+          isFile: true,
+          isSymbolicLink: false,
+        }));
+      },
+      realPath: (absolutePath): string => absolutePath,
+      exists: (): boolean => true,
+    };
+    const workspace = fakeWorkspace(root);
+
+    const result = discoverWithStats(workspace, DEFAULT_DISCOVERY_OPTIONS, fs);
+    const streamed = await discoverWithStatsAsync(workspace, DEFAULT_DISCOVERY_OPTIONS, fs);
+
+    expect(requestedCaps.every((cap) => cap !== undefined && Number.isFinite(cap))).toBe(true);
+    expect(materialized).toBeLessThan(hugeDirectoryEntries);
+    // Truncation is reported rather than an arbitrary filesystem-order prefix being discovered.
+    expect(result.files).toEqual([]);
+    expect(result.stats.maxFilesPruned).toBeGreaterThan(0);
+    expect(streamed.files).toEqual([]);
+    expect(streamed.stats.maxFilesPruned).toBeGreaterThan(0);
+  });
+
+  it("keeps walking siblings after a directory exceeds the per-directory entry bound", () => {
+    // The memory bound is not the traversal entry budget: one oversized directory is skipped and
+    // reported, while the rest of the walk still completes.
+    const root = "/ws";
+    const fs: WorkspaceFs = {
+      readFileUtf8: (): string => "",
+      stat: (absolutePath): WorkspaceStat => ({
+        size: 1,
+        isFile: absolutePath.endsWith(".ts"),
+        isDirectory: !absolutePath.endsWith(".ts"),
+        isSymbolicLink: false,
+      }),
+      readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+        if (absolutePath === root) {
+          return ["huge", "small"].map((name) => ({
+            name,
+            isDirectory: true,
+            isFile: false,
+            isSymbolicLink: false,
+          }));
+        }
+        if (absolutePath === `${root}/small`) {
+          return [{ name: "keep.ts", isDirectory: false, isFile: true, isSymbolicLink: false }];
+        }
+        return Array.from({ length: maxEntries ?? 1 }, (_, index) => ({
+          name: `noise-${index.toString().padStart(6, "0")}.ts`,
+          isDirectory: false,
+          isFile: true,
+          isSymbolicLink: false,
+        }));
+      },
+      realPath: (absolutePath): string => absolutePath,
+      exists: (): boolean => true,
+    };
+
+    const result = discoverWithStats(fakeWorkspace(root), DEFAULT_DISCOVERY_OPTIONS, fs);
+
+    expect(result.files.map((entry) => entry.relativePath)).toEqual(["small/keep.ts"]);
+    expect(result.stats.maxFilesPruned).toBeGreaterThan(0);
+  });
+
   it("caps recursion at maxDepth", () => {
     file("a/b/c/d/deep.ts");
     file("top.ts");

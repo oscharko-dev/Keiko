@@ -68,6 +68,7 @@ import {
   resolveWithinWorkspace,
   searchText,
   symbolGraphAdapter,
+  type ReadExcerptResult,
   type SearchLimits,
   type SearchResult,
   type SearchScope,
@@ -1493,7 +1494,7 @@ async function runAllRings(
   return { atoms, omitted, governor, uncertainty, diagnostics };
 }
 
-interface ExcerptInputs {
+export interface ExcerptInputs {
   readonly searchScope: SearchScope;
   readonly fs: WorkspaceFs;
   readonly budget: ExplorationBudget;
@@ -1504,9 +1505,13 @@ interface ExcerptInputs {
   readonly deadlineAtMs: number;
 }
 
-interface ExcerptReadSummary {
+export interface ExcerptReadSummary {
   readonly excerpts: ReadonlyMap<string, readonly ExcerptWindow[]>;
   readonly uncertainty: readonly UncertaintyMarker[];
+  // True when the absolute deadline stopped excerpt reading — either a read observed it after
+  // returning, or the excerpt facade itself stopped a read with reason `timeout`. Reported rather
+  // than inferred so the completion status cannot claim an unblocked elapsed budget (#3347 P1).
+  readonly elapsedBudgetBlocked: boolean;
 }
 
 type PackCacheIdentity = readonly string[];
@@ -3680,10 +3685,30 @@ interface ReadPathExcerptWindowsResult {
   readonly deadlineReached: boolean;
 }
 
+type ExcerptSkippedReason = "too-large" | "unsupported" | "timeout";
+
 interface ReadPathExcerptTaskResult {
   readonly scopePath: string;
   readonly result?: ReadPathExcerptWindowsResult | undefined;
-  readonly skippedReason?: "too-large" | "unsupported" | undefined;
+  readonly skippedReason?: ExcerptSkippedReason | undefined;
+}
+
+function readExcerptWindow(
+  scopePath: string,
+  window: LineWindow,
+  maxBytes: number,
+  inputs: ExcerptInputs,
+): Promise<ReadExcerptResult> {
+  return readExcerpt(
+    inputs.searchScope,
+    { scopePath, startLine: window.startLine, endLine: window.endLine, maxBytes },
+    {
+      fs: inputs.fs,
+      nowMs: inputs.nowMs,
+      deadlineAtMs: inputs.deadlineAtMs,
+      ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
+    },
+  );
 }
 
 async function readPathExcerptWindows(
@@ -3707,18 +3732,16 @@ async function readPathExcerptWindows(
       break;
     }
     const maxBytes = Math.min(8192, availableBytes);
-    const result = await readExcerpt(
-      inputs.searchScope,
-      { scopePath, startLine: window.startLine, endLine: window.endLine, maxBytes },
-      {
-        fs: inputs.fs,
-        nowMs: inputs.nowMs,
-        deadlineAtMs: inputs.deadlineAtMs,
-        ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
-      },
-    );
+    const result = await readExcerptWindow(scopePath, window, maxBytes, inputs);
     throwIfCancelled(inputs.signal);
-    if (inputs.nowMs() >= inputs.deadlineAtMs) deadlineReached = true;
+    if (inputs.nowMs() >= inputs.deadlineAtMs) {
+      // The absolute deadline is authoritative (#3347 P1). A read that only came back after it is
+      // dropped whole — the window is not appended and its bytes are not charged — so a late
+      // completion can neither enter the evidence pack nor spend an excerpt budget the request no
+      // longer has. Recording `deadlineReached` while keeping the content did both.
+      deadlineReached = true;
+      break;
+    }
     if (result.truncated) {
       truncatedWindowCount += 1;
     }
@@ -3798,7 +3821,11 @@ async function readPathExcerptTask(
       return { scopePath, skippedReason: "too-large" };
     }
     if (error instanceof RepoSearchUnsupportedFileError) {
-      return { scopePath, skippedReason: "unsupported" };
+      // Preserve the stop reason (#3347 P1): the excerpt facade reports an elapsed-budget stop as
+      // `timeout`, and flattening that to `unsupported` erased the only evidence that this file was
+      // dropped because the request ran out of time — so no elapsed-budget marker was raised and
+      // the completion status reported an unblocked elapsed budget.
+      return { scopePath, skippedReason: error.reason === "timeout" ? "timeout" : "unsupported" };
     }
     throw error;
   }
@@ -3816,6 +3843,16 @@ function remainingExcerptCapacity(inputs: ExcerptInputs): RemainingExcerptCapaci
   };
 }
 
+// Both ways the absolute deadline can stop one file's excerpt read: the loop observed it after a
+// read returned (and dropped that result), or the excerpt facade stopped the read itself and
+// reported `timeout`.
+function excerptTaskStoppedByDeadline({
+  result,
+  skippedReason,
+}: ReadPathExcerptTaskResult): boolean {
+  return result?.deadlineReached === true || skippedReason === "timeout";
+}
+
 async function readKeptExcerpts(
   keptPaths: readonly string[],
   inputs: ExcerptInputs,
@@ -3827,6 +3864,7 @@ async function readKeptExcerpts(
     return {
       excerpts,
       uncertainty: [budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs())],
+      elapsedBudgetBlocked: true,
     };
   }
   if (remainingFiles <= 0 || remainingBytes <= 0) {
@@ -3834,6 +3872,7 @@ async function readKeptExcerpts(
     return {
       excerpts,
       uncertainty: [budgetClipped(`budget-exhausted on ${dimensions}`, inputs.nowMs())],
+      elapsedBudgetBlocked: false,
     };
   }
   const readablePaths = keptPaths.slice(0, remainingFiles);
@@ -3858,10 +3897,21 @@ async function readKeptExcerpts(
     excerpts.set(scopePath, result.windows);
     uncertainty.push(...excerptWindowUncertainty(scopePath, result, inputs.nowMs));
   }
-  if (results.some(({ result }) => result?.deadlineReached === true)) {
+  const elapsedBudgetBlocked = results.some(excerptTaskStoppedByDeadline);
+  if (elapsedBudgetBlocked) {
     uncertainty.push(budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs()));
   }
-  return { excerpts, uncertainty };
+  return { excerpts, uncertainty, elapsedBudgetBlocked };
+}
+
+// Internal seam: package-local tests drive the excerpt-read step with a scripted clock, which the
+// whole-request path cannot do — every other phase reads the same clock, so a crossing aimed at one
+// excerpt read would land somewhere else.
+export function _readKeptExcerptsForTests(
+  keptPaths: readonly string[],
+  inputs: ExcerptInputs,
+): Promise<ExcerptReadSummary> {
+  return readKeptExcerpts(keptPaths, inputs);
 }
 
 function buildSearchScope(scope: SelectedScope, workspace: WorkspaceInfo): SearchScope {
@@ -4402,6 +4452,11 @@ interface GroundedAssemblyContext {
   readonly assembleOptions: AssembleOptionsForGroundedPack;
 }
 
+interface GroundedPackAssembly {
+  readonly pack: ConnectedContextPack;
+  readonly elapsedBudgetBlocked: boolean;
+}
+
 function assemblyFileStateCacheIdentity(
   args: AssembleGroundedPackInputs,
   keptPaths: readonly string[],
@@ -4474,15 +4529,39 @@ function withGroundedContextDiagnostics(
   return attachContextBudgetDiagnostics(pack, deps.contextProfile);
 }
 
+// #3347 P1: `ctx.cacheIdentity` is captured BEFORE the excerpt reads, and the pack cache key
+// substitutes it for the excerpt content hashes (keiko-workflows' cacheExcerptIdentity). A file
+// replaced between the capture and its read would therefore publish the REPLACEMENT's bytes under
+// the ORIGINAL's identity, so a later request over the restored original would be served the
+// replacement out of the micro-index. A per-read descriptor check cannot close this: it proves each
+// individual read was self-consistent, not that every kept path still presents the identity the key
+// claims. Re-derive the identity after the reads and keep it only when every kept path matches the
+// one proven before them; on any mismatch — or an identity that can no longer be established at all
+// — drop the identity so the pack is assembled but never inserted into the cache.
+function excerptBoundCacheIdentity(
+  args: AssembleGroundedPackInputs,
+  keptPaths: readonly string[],
+  captured: PackCacheIdentity | undefined,
+): PackCacheIdentity | undefined {
+  if (captured === undefined) return undefined;
+  const current = assemblyFileStateCacheIdentity(args, keptPaths);
+  if (current === undefined) return undefined;
+  if (current.length !== captured.length) return undefined;
+  return current.every((entry, index) => entry === captured[index]) ? captured : undefined;
+}
+
 async function assembleGroundedPack(
   args: AssembleGroundedPackInputs,
-): Promise<ConnectedContextPack> {
+): Promise<GroundedPackAssembly> {
   const { input, deps, plan, searchScope, fs, nowMs, deadlineAtMs } = args;
   const augmentedRings = await augmentRingsWithDeterministicAtoms(args);
   const prepared = preparePackAssembly(input, plan, augmentedRings, nowMs);
   const ctx = await prepareGroundedAssembly(args, augmentedRings, prepared);
   if (ctx.cached !== undefined) {
-    return withGroundedContextDiagnostics(ctx.cached, deps);
+    return {
+      pack: withGroundedContextDiagnostics(ctx.cached, deps),
+      elapsedBudgetBlocked: false,
+    };
   }
   const excerptReads = await readKeptExcerpts(prepared.keptPaths, {
     searchScope,
@@ -4501,10 +4580,13 @@ async function assembleGroundedPack(
     prepared,
     excerptReads,
     documentEvidence: ctx.documentEvidence,
-    cacheIdentity: ctx.cacheIdentity,
+    cacheIdentity: excerptBoundCacheIdentity(args, prepared.keptPaths, ctx.cacheIdentity),
     assembleOptions: ctx.assembleOptions,
   });
-  return withGroundedContextDiagnostics(pack, deps);
+  return {
+    pack: withGroundedContextDiagnostics(pack, deps),
+    elapsedBudgetBlocked: excerptReads.elapsedBudgetBlocked,
+  };
 }
 
 // ─── Public entry ─────────────────────────────────────────────────────────────
@@ -4577,12 +4659,16 @@ const NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS = workspaceIndexActivityDiagnost
   emptyWorkspaceIndexActivityCounters(),
 );
 
+// `elapsedBudgetBlocked` is reported by the assembly that observed it, never hardcoded (#3347 P1):
+// a live retrieval whose excerpt reads were stopped by the absolute deadline reached this status
+// claiming an unblocked elapsed budget, contradicting the elapsed-budget marker on its own pack.
 function liveRetrievalCompletion(
   workspaceIndexAvailable: boolean,
+  elapsedBudgetBlocked: boolean,
 ): ConnectedContextCompletionStatus {
   return {
     readBudgetBlocked: false,
-    elapsedBudgetBlocked: false,
+    elapsedBudgetBlocked,
     workspaceIndexProviderStatus: workspaceIndexAvailable ? "available" : "unavailable",
   };
 }
@@ -5365,45 +5451,103 @@ function requestScopedWorkspaceFs(fs: WorkspaceFs): WorkspaceIoActivity {
   };
 }
 
-// Ring-retrieval directory-listing cache (#3347 P1): the structural ring's own SearchLimits, the
-// symbol-file and trace search contexts drawn from the SAME pool (deterministicContextEvidence),
-// and the lexical ring's direct searchText call each build their own bounded candidate inventory
-// over the SAME workspace tree — multiplying real filesystem I/O by the number of rings that run
-// (a 65-package/133-directory fixture measured readDirCalls=532, four full traversals, instead of
-// one). Scoped to ring retrieval only — a fresh wrapper around `runtime.fs`, not a change to
-// `runtime.fs` itself — so project-metadata discovery (deterministicMetadataEvidence's
-// package.json/pom.xml probing, which deliberately re-reads a directory at escalating small caps to
-// detect and report a genuine enumeration failure) keeps making its own real, individually
-// observable calls against the unwrapped fs. Every consumer of `readDir` that ring retrieval feeds
-// either (a) treats a capped read that comes back at its cap as an opaque "too many entries, reject
-// this directory" signal — a count comparison, not an ordering assumption (discovery.ts) — or (b)
-// hashes the returned entries through `workspaceDirectoryFingerprint`, which sorts before hashing
-// and is therefore order-independent. So once a directory has been read to completion (uncapped, or
-// capped but returning fewer entries than the cap — proof nothing was left unread), replaying that
-// exact listing for every later request within this SAME wrapper — sliced down to the caller's own
-// cap when smaller — is observably identical to issuing a fresh read, and lets every ring after the
-// first reuse one shared discovery snapshot instead of re-walking the tree. `runtime.fs`'s own
-// methods are plain closures with no `this` dependency (see requestScopedWorkspaceFs), so spreading
-// it to forward every other method verbatim is safe.
+// One request-wide sentinel cap for the ring-retrieval directory snapshot (#3347 P1). Ring
+// consumers do not agree on a per-directory cap: the lexical ring's candidate discovery, the
+// structural ring's own SearchLimits, and the symbol-file / document-reference search contexts each
+// derive an entry budget from their own `maxFilesScanned`, so ONE request asks the SAME directory
+// for several listings at caps orders of magnitude apart — measured against this pipeline with the
+// snapshot disabled, four enumerations of one workspace root at 10_001 apiece on one fixture and at
+// 56_301 / 30_701 / 100_001 / 500_001 on another, and a selected directory at 25 for a `files`
+// scope. Reading at the caller's own cap and retaining the listing only when it came back BELOW
+// that cap therefore kept exactly the cheap case and dropped the expensive one: a directory whose
+// fan-out reaches a cap was discarded and re-enumerated by every later consumer, which is where a
+// repeated walk costs the most. Reading once at a cap chosen before the first ring instead lets
+// every later consumer be served from that single listing.
+//
+// 500_001 is the largest of those measured caps (the symbol-file / document-reference search
+// contexts' 10_000-file scan budget, expanded by the workspace layer's candidate-discovery entry
+// budget). Nothing depends on that number for CORRECTNESS: a request the snapshot cannot answer
+// exactly — an uncapped read, or a cap beyond a snapshot that already overflowed — falls through to
+// a real read rather than returning a silent subset. It buys the single-enumeration property, and
+// the cost it trades for it is that the FIRST consumer to touch a directory pays the sentinel read
+// instead of its own smaller one. In a request that also walks the directory that is a move, not an
+// addition — the walk would have made the larger read anyway, and every consumer after it now makes
+// none; a directory touched only by a small probe pays the sentinel read in place of that probe.
+const RING_DISCOVERY_SENTINEL_ENTRIES = 500_001;
+
+interface RingDirectorySnapshot {
+  readonly entries: readonly WorkspaceDirEntry[];
+  // True when the directory holds MORE entries than this snapshot captured, so the snapshot can
+  // only answer a request whose cap it can satisfy exactly.
+  readonly overflowed: boolean;
+}
+
+// Every consumer of `readDir` that ring retrieval feeds either (a) treats a capped read that comes
+// back at its cap as an opaque "too many entries, reject this directory" signal — a count
+// comparison, not an ordering assumption (discovery.ts) — or (b) hashes the returned entries
+// through `workspaceDirectoryFingerprint`, which sorts before hashing and is therefore
+// order-independent. Serving the first `maxEntries` of the snapshot is consequently observably
+// identical to a fresh read at that cap. Returning `undefined` means the snapshot CANNOT answer
+// exactly: it overflowed and the caller asked for more than it holds, so the caller must see a real
+// read instead of a subset the snapshot cannot prove is the whole answer.
+function sliceRingDirectorySnapshot(
+  snapshot: RingDirectorySnapshot,
+  maxEntries: number | undefined,
+): readonly WorkspaceDirEntry[] | undefined {
+  const { entries, overflowed } = snapshot;
+  if (maxEntries !== undefined && maxEntries <= entries.length) {
+    return maxEntries === entries.length ? entries : entries.slice(0, maxEntries);
+  }
+  return overflowed ? undefined : entries;
+}
+
+function ringDirectorySnapshot(
+  fs: WorkspaceFs,
+  snapshots: Map<string, RingDirectorySnapshot>,
+  absolutePath: string,
+): RingDirectorySnapshot {
+  const cached = snapshots.get(absolutePath);
+  if (cached !== undefined) return cached;
+  // One entry past the sentinel: coming back at or below the sentinel is proof nothing was left
+  // unread, which is what lets a later consumer with a larger cap be answered from this listing.
+  const entries = fs.readDir(absolutePath, RING_DISCOVERY_SENTINEL_ENTRIES + 1);
+  const snapshot: RingDirectorySnapshot = {
+    entries,
+    overflowed: entries.length > RING_DISCOVERY_SENTINEL_ENTRIES,
+  };
+  snapshots.set(absolutePath, snapshot);
+  return snapshot;
+}
+
+// A side effect worth naming: because every ring consumer is served from the same snapshot, they
+// all see ONE generation of each directory. Four independent enumerations could each observe a
+// different generation of the same directory and mix them across the rings of one request; the port
+// detects a replacement around each single enumeration, but nothing reconciled the four against
+// each other.
+//
+// Scoped to ring retrieval only — a fresh wrapper around `runtime.fs`, not a change to `runtime.fs`
+// itself — so project-metadata discovery (deterministicMetadataEvidence's package.json/pom.xml
+// probing, which deliberately re-reads a directory at escalating small caps to detect and report a
+// genuine enumeration failure) keeps making its own real, individually observable calls against the
+// unwrapped fs. `runtime.fs`'s own methods are plain closures with no `this` dependency (see
+// requestScopedWorkspaceFs), so spreading it to forward every other method verbatim is safe.
 function ringDiscoveryFs(fs: WorkspaceFs): WorkspaceFs {
-  const completeReads = new Map<string, readonly WorkspaceDirEntry[]>();
+  const snapshots = new Map<string, RingDirectorySnapshot>();
   return preserveOwnedRootAuthority(fs, {
     ...fs,
-    readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
-      const cached = completeReads.get(absolutePath);
-      if (cached !== undefined) {
-        return maxEntries === undefined || cached.length <= maxEntries
-          ? cached
-          : cached.slice(0, maxEntries);
-      }
-      const entries = fs.readDir(absolutePath, maxEntries);
-      if (maxEntries === undefined || entries.length < maxEntries) {
-        completeReads.set(absolutePath, entries);
-      }
-      return entries;
-    },
+    readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] =>
+      sliceRingDirectorySnapshot(ringDirectorySnapshot(fs, snapshots, absolutePath), maxEntries) ??
+      fs.readDir(absolutePath, maxEntries),
   });
 }
+
+// Internal seam: package-local tests drive the ring-retrieval snapshot at fan-outs and caps the
+// production rings only reach on a workspace far too large to seed in a unit test.
+export function _ringDiscoveryFsForTests(fs: WorkspaceFs): WorkspaceFs {
+  return ringDiscoveryFs(fs);
+}
+
+export const _RING_DISCOVERY_SENTINEL_ENTRIES_FOR_TESTS = RING_DISCOVERY_SENTINEL_ENTRIES;
 
 function liveStructuralContexts(
   searchScope: SearchScope,
@@ -5543,15 +5687,18 @@ async function retrieveLiveConnectedContext(
   );
   throwIfCancelled(deps.signal);
   runtime.progress.phase = "pack-assembly";
-  const pack = await assembleGroundedPack(
+  const assembled = await assembleGroundedPack(
     liveGroundedPackInputs(input, deps, plan, runtime, context, rings),
   );
   throwIfCancelled(deps.signal);
   return connectedContextExecution(
-    pack,
+    assembled.pack,
     plan,
     runtime.activity,
-    liveRetrievalCompletion(context.workspaceIndexSource !== undefined),
+    liveRetrievalCompletion(
+      context.workspaceIndexSource !== undefined,
+      assembled.elapsedBudgetBlocked,
+    ),
     context.structuralContexts.diagnostics(),
     context.workspaceIndexActivity.diagnostics(),
     runtime.workspaceIoActivity.diagnostics(),

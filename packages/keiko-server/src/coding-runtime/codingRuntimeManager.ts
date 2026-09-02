@@ -118,7 +118,9 @@ export type CodingRuntimeFailureCode =
   | "signature-unverified"
   | "spawn-failed"
   | "start-aborted"
-  | "start-timeout";
+  | "start-timeout"
+  // The admitted managed workspace root no longer re-proves at the spawn boundary (#3347 owner P1).
+  | "workspace-root-denied";
 
 export type CodingRuntimeStatus =
   "ready" | "recovery-required" | "restart-denied" | "starting" | "stopped" | "stopping";
@@ -994,8 +996,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (portableAvailability !== undefined) {
       return this.recordLaunchFailure(request, portableAvailability);
     }
+    const proof = proveSpawnWorkspaceRoot(
+      this.deps.resolveWorkspaceRootAccess,
+      request.workspaceRoot,
+    );
+    if (!proof.ok)
+      return this.recordLaunchFailure(request, failure("workspace-root-denied", false));
     const launched = this.deps.supervisor.spawnOwnedTree(
-      supervisorLaunchRequest(request, executablePath, env, args),
+      supervisorLaunchRequest(request, executablePath, env, args, proof.cwd),
     );
     if (!launched.ok) {
       return this.recordLaunchFailure(
@@ -1101,8 +1109,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     const portableAvailability = portableAvailabilityFailure(portable);
     if (portableAvailability !== undefined)
       return this.recordLaunchFailure(request, portableAvailability);
+    const proof = proveSpawnWorkspaceRoot(
+      this.deps.resolveWorkspaceRootAccess,
+      request.workspaceRoot,
+    );
+    if (!proof.ok)
+      return this.recordLaunchFailure(request, failure("workspace-root-denied", false));
     const launched = this.deps.supervisor.spawnOwnedTree(
-      supervisorLaunchRequest(request, executablePath, env, FIXED_CODEX_ARGS),
+      supervisorLaunchRequest(request, executablePath, env, FIXED_CODEX_ARGS, proof.cwd),
     );
     if (!launched.ok) {
       return this.recordLaunchFailure(
@@ -2484,11 +2498,46 @@ function failure(code: CodingRuntimeFailureCode, retryable: boolean): FailureRes
   return { ok: false, failureCode: code, retryable };
 }
 
+type SpawnWorkspaceRootProof = { readonly ok: true; readonly cwd: string } | { readonly ok: false };
+
+/**
+ * The exact managed-root proof taken immediately before a runtime spawn (#3347 owner P1).
+ *
+ * The run surface proves workspace access once, before backend construction, and OpenCode/Codex
+ * preparation then awaits (qualification, prepare, egress). A worktree archived or identity-replaced
+ * during those awaits would previously still receive a long-lived runtime tree, because the resolver
+ * was only copied onto `ActiveRuntime` for later supervised file-event classification and was never
+ * consulted at the spawn itself. This re-runs it and requires the same managed-task grant for the
+ * identical admitted canonical root; the spawn then uses that proven path as its cwd.
+ *
+ * A run composed WITHOUT a resolver is not bound to a managed root (the same convention
+ * `resolveSupervisedWorkspaceFs` follows for its node-fs fallback), so it keeps the request's own
+ * root and its previous outcome.
+ */
+function proveSpawnWorkspaceRoot(
+  resolveAccess: (() => WorkspaceRootAccess | undefined) | undefined,
+  workspaceRoot: string,
+): SpawnWorkspaceRootProof {
+  if (resolveAccess === undefined) return { ok: true, cwd: workspaceRoot };
+  try {
+    const access = resolveAccess();
+    return access?.kind === "managed-task" && access.canonicalRoot === workspaceRoot
+      ? { ok: true, cwd: access.canonicalRoot }
+      : { ok: false };
+  } catch {
+    return { ok: false };
+  }
+}
+
 function supervisorLaunchRequest(
   request: CodingRuntimeLaunchRequest,
   executable: string,
   env: Record<string, string>,
   args: readonly string[],
+  // The canonical root of the capability proved immediately before this spawn (see
+  // proveSpawnWorkspaceRoot): the long-lived tree starts in the path that just re-proved, not in
+  // the request string admitted before the preparation awaits.
+  cwd: string,
 ): Parameters<RuntimeProcessSupervisor["spawnOwnedTree"]>[0] {
   return {
     runId: request.runId,
@@ -2496,7 +2545,7 @@ function supervisorLaunchRequest(
     treeBindingId: request.treeBindingId,
     executable,
     args,
-    cwd: request.workspaceRoot,
+    cwd,
     env,
     qualification: request.confinement ?? {
       platform: "win32",

@@ -12,6 +12,7 @@ import {
 } from "node:fs/promises";
 import { renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -49,11 +50,14 @@ import {
   writeFilesContent,
 } from "./index.js";
 import {
+  handleFilesPreviewImage,
   normalizeRelativePath,
   resolveRoot,
   classifyInLockRefreshFailure,
   type ResolvedProjectRoot,
 } from "./files.js";
+import { STREAMING } from "./routes.js";
+import { mockRequest, mockResponse, type MockResponse } from "./_support.js";
 import type { RouteContext, UiHandlerDeps } from "./index.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { createBreakpointStore } from "./editor/dap/breakpointStore.js";
@@ -94,6 +98,52 @@ const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ax6XK0AAAAASUVORK5CYII=",
   "base64",
 );
+
+interface ImagePreviewCall {
+  readonly ctx: RouteContext;
+  readonly response: MockResponse;
+  // Raw response bytes. MockResponse.body() decodes as UTF-8, which cannot round-trip PNG bytes.
+  readonly bytes: () => Buffer;
+  readonly finished: Promise<unknown>;
+}
+
+// GET /api/files/preview/image writes to `res` itself and returns STREAMING instead of a
+// RouteResult, so its body has to be captured off the response. `mockResponse` is a real
+// PassThrough, which keeps working whether the handler pipes into it or ends it with one buffer.
+// `onWriteHead` runs at the instant the handler commits its status line — the boundary the
+// regression below stages its swap at.
+function imagePreviewCall(
+  rootInput: string,
+  relativePath: string,
+  onWriteHead: () => void,
+): ImagePreviewCall {
+  const response = mockResponse();
+  const chunks: Buffer[] = [];
+  const stream = response.res as unknown as Readable;
+  stream.on("data", (chunk: Buffer) => {
+    chunks.push(Buffer.from(chunk));
+  });
+  const commit = response.res.writeHead.bind(response.res);
+  response.res.writeHead = ((status: number, headers?: Record<string, string>): ServerResponse => {
+    onWriteHead();
+    return commit(status, headers);
+  }) as ServerResponse["writeHead"];
+  const query = new URLSearchParams({ root: rootInput, path: relativePath });
+  const url = `/api/files/preview/image?${query.toString()}`;
+  return {
+    ctx: {
+      correlationId: undefined,
+      req: mockRequest({ url }),
+      res: response.res,
+      params: {},
+      url: new URL(`http://localhost${url}`),
+    },
+    response,
+    bytes: (): Buffer => Buffer.concat(chunks),
+    // Attached eagerly: "end" can fire while the caller is still awaiting the handler.
+    finished: once(stream, "end"),
+  };
+}
 
 // Drives real filesystem round-trips on `path`, draining the event loop between them. A stat()
 // submitted before the first of these has certainly completed by the last — used to give an
@@ -1651,6 +1701,68 @@ describe("desktop files browser", () => {
       expect(preview.url).toContain("path=assets%2Fpixel.png");
       expect(preview.maxBytes).toBe(3_000_000);
     }
+  });
+
+  it("serves the admitted image bytes under a Content-Length that describes them", async () => {
+    const call = imagePreviewCall(root, "assets/pixel.png", () => undefined);
+
+    const outcome = await handleFilesPreviewImage(call.ctx, {
+      store,
+      redactor: buildRedactor({}),
+    } as unknown as UiHandlerDeps);
+    await call.finished;
+
+    expect(outcome).toBe(STREAMING);
+    expect(call.response.writeHeadCalls).toEqual([
+      {
+        statusCode: 200,
+        headers: {
+          "Content-Type": "image/png",
+          "Content-Length": String(PNG_1X1.byteLength),
+          "Cache-Control": "private, max-age=60",
+        },
+      },
+    ]);
+    expect(call.bytes()).toEqual(PNG_1X1);
+  });
+
+  // #3367 owner P1, reproduced on the current head: this route wrote its 200 headers from the
+  // admission-time size and only THEN opened `target.path` with a bare createReadStream, so a
+  // parent replaced in that gap redirected the open — the response carried bytes from a different
+  // inode OUTSIDE the admitted root, under a Content-Length taken from the admitted file. The
+  // substitute here is deliberately the same LENGTH as the admitted image, so neither the header
+  // nor a downstream byte count could have noticed. Staged at writeHead: the exact instant the old
+  // code committed its headers, and the last moment before the old read began.
+  it("never streams a same-size parent swap staged at the image route's header commit", async () => {
+    extraRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-outside-")));
+    const outsideAssets = join(extraRoot, "assets");
+    await mkdir(outsideAssets);
+    const outsideBytes = Buffer.alloc(PNG_1X1.byteLength, 0x41);
+    await writeFile(join(outsideAssets, "pixel.png"), outsideBytes);
+    const deps = { store, redactor: buildRedactor({}) } as unknown as UiHandlerDeps;
+    let swapped = false;
+    const call = imagePreviewCall(root, "assets/pixel.png", () => {
+      swapped = true;
+      rmSync(join(root, "assets"), { recursive: true, force: true });
+      symlinkSync(outsideAssets, join(root, "assets"), "dir");
+    });
+
+    const outcome = await handleFilesPreviewImage(call.ctx, deps);
+    await call.finished;
+
+    expect(swapped).toBe(true);
+    expect(outcome).toBe(STREAMING);
+    expect(call.bytes()).toEqual(PNG_1X1);
+    expect(call.bytes()).not.toEqual(outsideBytes);
+    // The swap really landed, and really was indistinguishable by size from the admitted image.
+    expect(await readFile(join(root, "assets", "pixel.png"))).toEqual(outsideBytes);
+    expect(outsideBytes.byteLength).toBe(PNG_1X1.byteLength);
+    // A fresh request through the swapped parent is refused outright: the outside bytes are not
+    // reachable through this route at all, in the gap or after it.
+    const second = imagePreviewCall(root, "assets/pixel.png", () => undefined);
+    await expect(handleFilesPreviewImage(second.ctx, deps)).resolves.toMatchObject({
+      status: 403,
+    });
   });
 
   it("returns metadata for unsupported binary files", async () => {

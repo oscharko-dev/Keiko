@@ -3,7 +3,8 @@
 //   - every directory descent and every read goes through resolveWithinWorkspace first;
 //   - always-on DENY patterns are applied before the optional .gitignore subset;
 //   - a symlink whose realpath escapes the root is skipped (never followed);
-//   - recursion is capped by maxDepth and total results by maxFiles.
+//   - recursion is capped by maxDepth and total results by maxFiles;
+//   - every directory read is capped, so one huge directory cannot be materialized in full.
 
 import { relative } from "node:path";
 import {
@@ -174,6 +175,35 @@ function failedDirectoryRead(
   );
 }
 
+// #3347 (owner P1): a single directory must never be materialized (and then sorted) in full before
+// a budget can stop the walk. The port's bounded `readDir(path, maxEntries)` (ADR-0005 D1) exists
+// for exactly that, but public discovery passed `undefined` and so allocated every entry of one
+// attacker-controlled directory — synchronously, which the async walk cannot yield through. Every
+// read is capped now.
+//
+// The cap is a per-directory MEMORY bound and is deliberately NOT derived from `maxFiles`:
+// subdirectories are entries too and do not consume the file budget, so a maxFiles-derived bound
+// would abort a legitimate walk whose directory merely holds more children than the caller wants
+// files. The traversal entry budget of `discoverCandidateInventory` still applies on top when it is
+// the tighter of the two. The `+ 1` is a sentinel: reading one entry more than the bound proves the
+// directory overflows without enumerating the rest of it.
+const MAX_DIRECTORY_ENTRIES = 10_000;
+
+interface DirectoryReadCap {
+  readonly limit: number;
+  /** True when the walk's traversal entry budget, not the memory bound, set this limit. */
+  readonly fromEntryBudget: boolean;
+}
+
+function directoryReadCap(walk: Walk): DirectoryReadCap {
+  const memoryLimit = MAX_DIRECTORY_ENTRIES + 1;
+  if (walk.entryLimit === undefined) return { limit: memoryLimit, fromEntryBudget: false };
+  const remaining = Math.max(0, walk.entryLimit - walk.entriesVisited) + 1;
+  return remaining <= memoryLimit
+    ? { limit: remaining, fromEntryBudget: true }
+    : { limit: memoryLimit, fromEntryBudget: false };
+}
+
 function readDirSafe(
   walk: Walk,
   absoluteDir: string,
@@ -182,20 +212,15 @@ function readDirSafe(
   try {
     const current = currentContainedDirectory(walk, absoluteDir, relativeDir);
     if (current === undefined) return [];
-    const remainingEntries =
-      walk.entryLimit === undefined
-        ? undefined
-        : Math.max(0, walk.entryLimit - walk.entriesVisited);
-    const entries = walk.fs.readDir(
-      current,
-      remainingEntries === undefined ? undefined : remainingEntries + 1,
-    );
-    if (remainingEntries !== undefined && entries.length > remainingEntries) {
+    const cap = directoryReadCap(walk);
+    const entries = walk.fs.readDir(current, cap.limit);
+    if (entries.length >= cap.limit) {
       // A capped directory read is in filesystem order, so consuming its arbitrary prefix would make
       // retrieval nondeterministic across platforms. Reject the whole overflowing directory and mark
-      // the inventory truncated; public discovery remains uncapped to preserve its legacy contract.
+      // the inventory truncated. Only a spent traversal entry budget ends the walk; a directory that
+      // merely exceeds the memory bound is skipped and its siblings are still visited.
       walk.maxFilesPruned += entries.length;
-      walk.entriesVisited = walk.entryLimit ?? walk.entriesVisited;
+      if (cap.fromEntryBudget) walk.entriesVisited = walk.entryLimit ?? walk.entriesVisited;
       return [];
     }
     // The shared code-unit comparator (issue #2723), not `localeCompare`: the directory

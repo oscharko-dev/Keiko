@@ -1,6 +1,10 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { PathDeniedError, PathEscapeError } from "./errors.js";
+import { nodeWorkspaceFs } from "./fs.js";
 import type { WorkspaceDirEntry, WorkspaceFs, WorkspaceStat } from "./fs.js";
 import { workspaceFsWithOwnedRootAuthority } from "./ownedRootMint.js";
 import { preserveOwnedRootAuthority } from "./ownedRootPreserve.js";
@@ -304,6 +308,62 @@ describe("containedRealPathInfo", () => {
       realBase: root,
     });
   });
+});
+
+// Real symlinks: an in-memory port cannot produce a leaf that `lstat` resolves and `realPath` does
+// not, which is exactly the state this class of defect lives in.
+function withDiskRoot(run: (root: string, outside: string) => void): void {
+  const base = realpathSync.native(mkdtempSync(join(tmpdir(), "keiko-realpath-")));
+  const root = join(base, "root");
+  const outside = join(base, "outside");
+  try {
+    mkdirSync(root);
+    mkdirSync(outside);
+    run(root, outside);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+}
+
+describe("containedRealPathInfo — unresolvable symlink leaf (#3347)", () => {
+  it.skipIf(process.platform === "win32")(
+    "refuses a dangling final symlink instead of reporting an allowed missing target",
+    () => {
+      withDiskRoot((root, outside) => {
+        // The owner's reproduction: `root/link -> outside/new` with `outside/new` absent. `realPath`
+        // fails exactly as it does for a missing leaf, so the create-target fallback used to hand
+        // back an empty `realRelative` — an allowed missing target — for a name that is a symlink
+        // pointing out of the root.
+        symlinkSync(join(outside, "new"), join(root, "link"));
+        // Same class through a link cycle: `realPath` fails with ELOOP, `lstat` still sees a link.
+        symlinkSync(join(root, "cycle"), join(root, "cycle"));
+        // And a dangling link whose target would land inside the root: the effect would still write
+        // to a name other than the one containment classified.
+        symlinkSync(join(root, "inner-new"), join(root, "inner"));
+
+        for (const name of ["link", "cycle", "inner"]) {
+          expect(() => containedRealPathInfo(nodeWorkspaceFs, root, join(root, name))).toThrow(
+            PathEscapeError,
+          );
+          expect(() =>
+            containedRealPathInfoWithinOwnedRoot(nodeWorkspaceFs, root, join(root, name)),
+          ).toThrow(PathEscapeError);
+        }
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "still admits a genuinely missing leaf as a contained create target",
+    () => {
+      withDiskRoot((root) => {
+        const missing = containedRealPathInfo(nodeWorkspaceFs, root, join(root, "new.ts"));
+
+        expect(missing).toEqual({ path: join(root, "new.ts"), realRelative: "", realBase: root });
+        expect(isAllowedContainedPathParent(missing, root, "new.ts")).toBe(true);
+      });
+    },
+  );
 });
 
 describe("realRootIsDeniedViaSymlink", () => {

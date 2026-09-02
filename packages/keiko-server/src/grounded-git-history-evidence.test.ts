@@ -360,6 +360,82 @@ describe("defaultGitFileHistoryEvidenceProvider", () => {
     expect(probed.lateReads()).toBe(0);
   });
 
+  // A virtual clock that expires inside path validation: the `stat` admitting `src/recent.ts`
+  // returns a usable regular file AND leaves the request past its absolute deadline. `src/stale.ts`
+  // was already validated and recorded before that, so a lane that kept what it had accumulated
+  // would rank and emit both atoms after the deadline — the outcome the all-or-empty check after
+  // the subprocess exists to prevent.
+  function expiringStatFs(
+    onExpire: () => void,
+    expireOn: string,
+  ): { readonly fs: WorkspaceFs; readonly statPaths: () => readonly string[] } {
+    const baseFs = nodeFs();
+    const statPaths: string[] = [];
+    return {
+      fs: {
+        ...baseFs,
+        stat: (absolutePath): WorkspaceStat => {
+          const stat = baseFs.stat(absolutePath);
+          statPaths.push(absolutePath);
+          if (absolutePath.endsWith(expireOn)) onExpire();
+          return stat;
+        },
+      },
+      statPaths: () => statPaths,
+    };
+  }
+
+  function historyRunner(stdout: string): GitProcessRunner {
+    return (args) => Promise.resolve(args.includes("rev-parse") ? ok(`${ROOT}\n`) : ok(stdout));
+  }
+
+  it("discards the whole history lane when a mid-record path validation expires the deadline", async () => {
+    let nowMs = NOW;
+    const deadlineAtMs = NOW + 100;
+    const probed = expiringStatFs(() => {
+      nowMs = deadlineAtMs;
+    }, "src/recent.ts");
+
+    const atoms = await defaultGitFileHistoryEvidenceProvider({
+      searchScope: scope(),
+      query: query(),
+      fs: probed.fs,
+      nowMs: () => nowMs,
+      deadlineAtMs,
+      // One record whose second path is the one whose `stat` consumes the last of the budget.
+      runner: historyRunner(
+        [`${RECORD_SEP}1700000000`, "src/stale.ts", "src/recent.ts", ""].join("\n"),
+      ),
+    });
+
+    expect(probed.statPaths().some((path) => path.endsWith("src/stale.ts"))).toBe(true);
+    expect(atoms).toEqual([]);
+  });
+
+  it("discards the whole history lane when the last validated path expires the deadline", async () => {
+    let nowMs = NOW;
+    const deadlineAtMs = NOW + 100;
+    const probed = expiringStatFs(() => {
+      nowMs = deadlineAtMs;
+    }, "src/recent.ts");
+
+    const atoms = await defaultGitFileHistoryEvidenceProvider({
+      searchScope: scope(),
+      query: query(),
+      fs: probed.fs,
+      nowMs: () => nowMs,
+      deadlineAtMs,
+      // The expiring path is the final line of the final record, so no later loop iteration is
+      // left to observe the trip: parsing itself has to report the lane as stopped.
+      runner: historyRunner(
+        `${RECORD_SEP}1700000000\nsrc/stale.ts${RECORD_SEP}1700000000\nsrc/recent.ts`,
+      ),
+    });
+
+    expect(probed.statPaths().some((path) => path.endsWith("src/stale.ts"))).toBe(true);
+    expect(atoms).toEqual([]);
+  });
+
   it("turns bounded git log --name-only output into file-scoped recency/churn atoms", async () => {
     const mutableCalls: string[][] = [];
     const runner: GitProcessRunner = (args) => {

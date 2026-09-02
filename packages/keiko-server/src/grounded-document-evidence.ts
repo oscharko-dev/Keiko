@@ -503,11 +503,41 @@ function documentResolutionOmission(
   return resolution === "unreadable" ? "tool-unavailable" : resolution;
 }
 
+// Full-snapshot comparison of two metadata reads of the same path. The field set and the
+// treatment of the optional fields mirror the workspace layer's own `sameWorkspaceStat` — the
+// comparison behind `isWorkspacePathSnapshotCurrent`, which is module-private there — so this lane
+// and the shared matcher agree on what "the same file generation" means: identity, type, link
+// count, size, and the nanosecond stamps.
+function sameDocumentSnapshot(left: WorkspaceStat, right: WorkspaceStat): boolean {
+  return [
+    left.size === right.size,
+    left.isFile === right.isFile,
+    left.isDirectory === right.isDirectory,
+    left.isSymbolicLink === right.isSymbolicLink,
+    left.hardLinkCount === right.hardLinkCount,
+    left.fileIdentity === right.fileIdentity,
+    (left.mtimeNs ?? left.mtimeMs) === (right.mtimeNs ?? right.mtimeMs),
+    (left.ctimeNs ?? left.ctimeMs) === (right.ctimeNs ?? right.ctimeMs),
+  ].every(Boolean);
+}
+
+/**
+ * Two resolutions of one scope path name the same file generation.
+ *
+ * The paths and the size are not enough to answer that. A replacement that swaps the file for a
+ * same-length one keeps the requested path, the canonical path, the real-relative path and the
+ * size; only the metadata snapshot moves. Comparing paths alone would report "unchanged" for a
+ * second resolution that already names a different file, and the bytes read from the first would
+ * be published under a citation path that now resolves to the second — so the snapshot the first
+ * resolution captured, which is also the snapshot the guarded read was proved against, is part of
+ * the comparison rather than a field carried alongside it.
+ */
 function sameResolvedDocument(left: ResolvedDocument, right: ResolvedDocument): boolean {
   return [
     left.absolutePath === right.absolutePath,
     left.realRelative === right.realRelative,
     left.sizeBytes === right.sizeBytes,
+    sameDocumentSnapshot(left.snapshot, right.snapshot),
   ].every(Boolean);
 }
 
@@ -539,6 +569,9 @@ async function loadDocumentBytes(
   ) {
     return "tool-unavailable";
   }
+  // The re-resolution is the last read before the bytes are committed to an excerpt, and it is
+  // measured against the one snapshot captured before the read rather than against whatever the
+  // previous step happened to observe (invariant: one file generation for the whole read).
   const after = resolveDocument(inputs, scopePath);
   if (typeof after === "string") return documentResolutionOmission(after);
   return sameResolvedDocument(resolved, after) ? bytes : "tool-unavailable";

@@ -28,6 +28,7 @@ import {
   type EvidenceAtom,
   type RetrievalQuery,
   type SelectedScope,
+  type UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   gitHistoryAdapter,
@@ -54,7 +55,11 @@ import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import {
   ClarificationNeededError,
   DEFAULT_SEARCH_LIMITS,
+  _RING_DISCOVERY_SENTINEL_ENTRIES_FOR_TESTS,
   _fileStateCacheIdentityForTests,
+  _readKeptExcerptsForTests,
+  _ringDiscoveryFsForTests,
+  type ExcerptReadSummary,
   clarificationUserMessage,
   isSymbolDefinitionPath,
   retrieveConnectedContextPack,
@@ -62,6 +67,7 @@ import {
   scanFirstSymbolLine,
   type GroundedAnswerer,
   type OrchestratorInput,
+  type RetrievalOnlyOutput,
 } from "./grounded-orchestrator.js";
 import {
   nodeWorkspaceFs,
@@ -3826,7 +3832,16 @@ describe("runGroundedExploration", () => {
       ...counted.fs,
       readDir: (path, maxEntries): readonly WorkspaceDirEntry[] => {
         const entries = counted.fs.readDir(path, maxEntries);
-        if (path === canonicalSrc && maxEntries === 25) selectedDirectoryEnumerated = true;
+        // The selected directory's one ring enumeration. Ring retrieval used to read it at the
+        // requesting consumer's own cap (25 for this scope) and now reads it once at the shared
+        // sentinel cap (#3347 P1), so the trigger names that enumeration through the production
+        // constant instead of the cap one consumer happened to ask for. Same event, same moment.
+        if (
+          path === canonicalSrc &&
+          maxEntries === _RING_DISCOVERY_SENTINEL_ENTRIES_FOR_TESTS + 1
+        ) {
+          selectedDirectoryEnumerated = true;
+        }
         return entries;
       },
       stat: (path): WorkspaceStat => {
@@ -5035,5 +5050,408 @@ describe("clarificationUserMessage", () => {
       }),
     );
     expect(message).toBe("Die verbundene Quelle konnte nicht durchsucht werden.");
+  });
+});
+
+// ─── #3347 P1: one request-wide directory snapshot for ring retrieval ─────────
+
+interface RecordedDirectoryRead {
+  readonly path: string;
+  readonly maxEntries: number | undefined;
+}
+
+// A directory-only port. Ring retrieval asks the SAME directory for several different bounded
+// listings in one request, and only `readDir` is under test here — every other operation stays the
+// throwing port so an accidental widening of the wrapper surfaces as a failure. The port answers
+// exactly the way the Node port does: a bounded read returns the first `maxEntries` entries.
+function fanOutWorkspaceFs(
+  directory: string,
+  entryCount: number,
+  reads: RecordedDirectoryRead[],
+): WorkspaceFs {
+  const entryAt = (index: number): WorkspaceDirEntry => ({
+    name: `entry-${String(index)}.ts`,
+    isDirectory: false,
+    isFile: true,
+    isSymbolicLink: false,
+  });
+  return {
+    ...throwingReadFs(),
+    readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+      reads.push({ path: absolutePath, maxEntries });
+      const served = maxEntries === undefined ? entryCount : Math.min(entryCount, maxEntries);
+      return Array.from({ length: served }, (_value, index) => entryAt(index));
+    },
+  };
+}
+
+describe("ring-retrieval directory snapshot (#3347 P1)", () => {
+  const DIRECTORY = "/workspace/wide";
+  const SENTINEL = _RING_DISCOVERY_SENTINEL_ENTRIES_FOR_TESTS;
+
+  it("answers every ring cap from ONE enumeration when the fan-out reaches the smallest cap", () => {
+    const wrapped: RecordedDirectoryRead[] = [];
+    const direct: RecordedDirectoryRead[] = [];
+    // Above the smallest cap below, so the first consumer's listing comes back AT its cap — the
+    // case the previous cache discarded and every later consumer then re-enumerated.
+    const fanOut = 12_000;
+    const ringFs = _ringDiscoveryFsForTests(fanOutWorkspaceFs(DIRECTORY, fanOut, wrapped));
+    const unwrapped = fanOutWorkspaceFs(DIRECTORY, fanOut, direct);
+    const caps: readonly (number | undefined)[] = [10_001, fanOut, 30_701, 100_001, undefined];
+
+    for (const cap of caps) {
+      // The expectation is the production port's own answer for the same cap, never a restated
+      // slice rule: whatever a real read would return is what the snapshot has to return.
+      expect(ringFs.readDir(DIRECTORY, cap)).toEqual(unwrapped.readDir(DIRECTORY, cap));
+    }
+
+    expect(wrapped).toEqual([{ path: DIRECTORY, maxEntries: SENTINEL + 1 }]);
+    expect(direct).toHaveLength(caps.length);
+  });
+
+  it("re-reads rather than serving a subset when the request runs past an overflowed snapshot", () => {
+    const wrapped: RecordedDirectoryRead[] = [];
+    const ringFs = _ringDiscoveryFsForTests(fanOutWorkspaceFs(DIRECTORY, SENTINEL + 2, wrapped));
+
+    expect(ringFs.readDir(DIRECTORY, SENTINEL + 1)).toHaveLength(SENTINEL + 1);
+    // Beyond what the snapshot captured: the overflow bit says the snapshot cannot prove it holds
+    // the whole directory, so the caller gets a real read instead of a silently truncated listing.
+    expect(ringFs.readDir(DIRECTORY, undefined)).toHaveLength(SENTINEL + 2);
+    expect(ringFs.readDir(DIRECTORY, SENTINEL + 2)).toHaveLength(SENTINEL + 2);
+
+    expect(wrapped).toEqual([
+      { path: DIRECTORY, maxEntries: SENTINEL + 1 },
+      { path: DIRECTORY, maxEntries: undefined },
+      { path: DIRECTORY, maxEntries: SENTINEL + 2 },
+    ]);
+  });
+
+  // A root whose fan-out reaches the smallest per-directory cap ring retrieval requests. Every
+  // existing performance fixture spreads its entries across many low-fan-out directories, where
+  // each ring's read completes BELOW its own cap — the one case the previous cache retained — so
+  // none of them can observe the repeated walk this pins.
+  const WIDE_ROOT_ENTRY_COUNT = 12_000;
+
+  it("enumerates a high-fan-out workspace root once, not once per ring consumer", async () => {
+    const fixtureRoot = realpathSync(ROOT);
+    writeFileSync(
+      join(fixtureRoot, "package.json"),
+      JSON.stringify({ name: "wide-root-fixture", version: "1.0.0" }),
+    );
+    for (let index = 0; index < WIDE_ROOT_ENTRY_COUNT; index += 1) {
+      writeFileSync(join(fixtureRoot, `wide-${index.toString()}.txt`), "x");
+    }
+    const rootReads: (number | undefined)[] = [];
+    const countingFs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+        if (absolutePath === fixtureRoot) rootReads.push(maxEntries);
+        return nodeWorkspaceFs.readDir(absolutePath, maxEntries);
+      },
+    };
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        workspaceRoot: fixtureRoot,
+        scope: happyScope({
+          workspaceRoot: fixtureRoot,
+          kind: "workspace-root",
+          relativePaths: [],
+          explicitConnection: true,
+        }),
+        query: happyQuery({ text: "Trace MyClass implementations" }),
+      }),
+      { correlationId: undefined, answerer: echoAnswerer, nowMs: () => NOW, fs: countingFs },
+    );
+
+    // Not vacuous: the product itself reports that enumerating this root reached a ring cap. Were a
+    // future cap change to lift every ring above this fan-out, this fails instead of passing while
+    // silently no longer exercising the case.
+    expect(out.pack.diagnostics?.coverage?.maxFilesPrunedByDiscovery ?? 0).toBeGreaterThan(0);
+    expect(rootReads).toEqual([SENTINEL + 1]);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+});
+
+// ─── #3347 P1: the pack cache key must describe the bytes that were actually read ─
+
+interface CapturingMicroIndex {
+  readonly index: MicroIndex;
+  readonly publishedKeys: () => readonly string[];
+  readonly entryFor: (key: string) => ConnectedContextPack | undefined;
+}
+
+// Records what a run publishes, and offers a seam at the exact point between the pre-read
+// cache-identity capture and the excerpt reads: `cachedGroundedPack` performs the first micro-index
+// read of a run, after the identity has been captured and before any excerpt byte is read.
+function capturingMicroIndex(onFirstGet?: () => void): CapturingMicroIndex {
+  const entries = new Map<string, ConnectedContextPack>();
+  const published: string[] = [];
+  let gets = 0;
+  return {
+    index: {
+      get: (key): ConnectedContextPack | undefined => {
+        gets += 1;
+        if (gets === 1) onFirstGet?.();
+        return entries.get(key);
+      },
+      set: (key, pack): void => {
+        published.push(key);
+        entries.set(key, pack);
+      },
+      delete: (key): void => {
+        entries.delete(key);
+      },
+      clear: (): void => {
+        entries.clear();
+      },
+      size: (): number => entries.size,
+    },
+    publishedKeys: (): readonly string[] => published,
+    entryFor: (key): ConnectedContextPack | undefined => entries.get(key),
+  };
+}
+
+describe("pack cache identity after the excerpt reads (#3347 P1)", () => {
+  const REPLACEMENT_BODY =
+    "export function MyClass() {\n  return 'replacement body';\n}\n// MyClass call site here\n";
+
+  function excerptText(pack: ConnectedContextPack, scopePath: string): string {
+    return (pack.files.find((file) => file.scopePath === scopePath)?.excerpts ?? [])
+      .map((excerpt) => excerpt.content)
+      .join("\n");
+  }
+
+  function retrieveWith(microIndex: MicroIndex): Promise<RetrievalOnlyOutput> {
+    return retrieveConnectedContextPack(input(), {
+      correlationId: undefined,
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      microIndex,
+    });
+  }
+
+  it("never publishes a replacement's excerpt under the identity proven before the read", async () => {
+    const stash = mkdtempSync(join(tmpdir(), "keiko-grounded-orch-stash-"));
+    const target = join(ROOT, "src/foo.ts");
+    const originalAside = join(stash, "original.ts");
+    const replacementAside = join(stash, "replacement.ts");
+    try {
+      // A: the run that establishes what "src/foo.ts is cached" means.
+      const clean = capturingMicroIndex();
+      const first = await retrieveWith(clean.index);
+      const identityKey = clean.publishedKeys()[0];
+      expect(identityKey).toBeDefined();
+      expect(excerptText(first.pack, "src/foo.ts")).toContain("foo body");
+
+      // B: a replacement lands after the identity was captured and before the excerpt is read.
+      // A rename gives the path a genuinely different file, exactly as a concurrent editor would.
+      writeFileSync(replacementAside, REPLACEMENT_BODY);
+      const poisoned = capturingMicroIndex(() => {
+        renameSync(target, originalAside);
+        renameSync(replacementAside, target);
+      });
+      const second = await retrieveWith(poisoned.index);
+      // The run really did assemble the replacement's bytes — without this the rest is vacuous.
+      expect(excerptText(second.pack, "src/foo.ts")).toContain("replacement body");
+      expect(identityKey).toBeDefined();
+      if (identityKey === undefined) throw new Error("unreachable");
+      // …and published nothing under the original's identity, so restoring A cannot be answered
+      // with B out of the micro-index.
+      expect(poisoned.entryFor(identityKey)).toBeUndefined();
+      expect(poisoned.publishedKeys()).not.toContain(identityKey);
+
+      // A again: the restored original reads as itself, and the poisoned key is still absent.
+      renameSync(target, replacementAside);
+      renameSync(originalAside, target);
+      const third = await retrieveWith(poisoned.index);
+      expect(excerptText(third.pack, "src/foo.ts")).toContain("foo body");
+      expect(poisoned.entryFor(identityKey)).toBeUndefined();
+    } finally {
+      rmSync(stash, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── #3347 P1: a result observed after the absolute deadline is not evidence ──
+
+const EXCERPT_DEADLINE_AT_MS = NOW + 5_000;
+
+const ZERO_EXPLORATION_USAGE = {
+  searchCalls: 0,
+  filesRead: 0,
+  excerptBytes: 0,
+  modelInputTokens: 0,
+  modelOutputTokens: 0,
+  elapsedMs: 0,
+  rerankCalls: 0,
+} as const;
+
+interface ScriptedExcerptClockOptions {
+  readonly lateMs?: number;
+  // 1-based clock read from which the request is past its deadline.
+  readonly crossAtClockRead?: number;
+  // Move the deadline while the facade still holds the file open, so it stops its own read.
+  readonly crossDuringContentRead?: boolean;
+  // Leave the crossing disabled until `arm()` — used when the clock drives a whole request and only
+  // the excerpt phase may move it.
+  readonly startArmed?: boolean;
+}
+
+interface ScriptedExcerptClock {
+  readonly fs: WorkspaceFs;
+  readonly nowMs: () => number;
+  readonly clockReads: () => number;
+  readonly arm: () => void;
+}
+
+function scriptedExcerptClock(options: ScriptedExcerptClockOptions): ScriptedExcerptClock {
+  const lateMs = options.lateMs ?? EXCERPT_DEADLINE_AT_MS + 1_000;
+  let armed = options.startArmed ?? true;
+  let reads = 0;
+  let late = false;
+  const nowMs = (): number => {
+    reads += 1;
+    if (!late && armed && options.crossAtClockRead !== undefined) {
+      late = reads >= options.crossAtClockRead;
+    }
+    return late ? lateMs : NOW;
+  };
+  const onContentRead = (): void => {
+    if (armed && options.crossDuringContentRead === true) late = true;
+  };
+  const descriptorUtf8 = nodeWorkspaceFs.readFileUtf8SameDescriptor;
+  const containedDescriptorUtf8 = nodeWorkspaceFs.readFileUtf8WithinRootSameDescriptor;
+  return {
+    nowMs,
+    clockReads: (): number => reads,
+    arm: (): void => {
+      armed = true;
+    },
+    fs: {
+      ...nodeWorkspaceFs,
+      ...(descriptorUtf8 === undefined
+        ? {}
+        : {
+            readFileUtf8SameDescriptor: (
+              absolutePath: string,
+              maxBytes: number,
+              hardLinkPolicy: WorkspaceHardLinkPolicy,
+              expected: WorkspaceStat,
+            ): WorkspaceDescriptorUtf8Read => {
+              onContentRead();
+              return descriptorUtf8(absolutePath, maxBytes, hardLinkPolicy, expected);
+            },
+          }),
+      ...(containedDescriptorUtf8 === undefined
+        ? {}
+        : {
+            readFileUtf8WithinRootSameDescriptor: (
+              canonicalRoot: string,
+              absolutePath: string,
+              maxBytes: number,
+              hardLinkPolicy: WorkspaceHardLinkPolicy,
+              completeness: WorkspaceDescriptorReadCompleteness,
+            ): WorkspaceDescriptorUtf8Read => {
+              onContentRead();
+              return containedDescriptorUtf8(
+                canonicalRoot,
+                absolutePath,
+                maxBytes,
+                hardLinkPolicy,
+                completeness,
+              );
+            },
+          }),
+    },
+  };
+}
+
+describe("excerpt reads past the absolute deadline (#3347 P1)", () => {
+  function readOneExcerpt(clock: ScriptedExcerptClock): Promise<ExcerptReadSummary> {
+    return _readKeptExcerptsForTests(["src/foo.ts"], {
+      searchScope: { workspace: fakeWorkspace(), scopeId: "scope-1", relativePaths: ["src"] },
+      fs: clock.fs,
+      budget: DEFAULT_EXPLORATION_BUDGET,
+      initialUsage: ZERO_EXPLORATION_USAGE,
+      atomsByPath: new Map(),
+      nowMs: clock.nowMs,
+      signal: undefined,
+      deadlineAtMs: EXCERPT_DEADLINE_AT_MS,
+    });
+  }
+
+  function elapsedBudgetClaims(markers: readonly UncertaintyMarker[]): readonly string[] {
+    return markers
+      .filter((marker) => marker.kind === "budget-clipped")
+      .map((marker) => marker.claim)
+      .filter((claim) => claim.includes("elapsedMs"));
+  }
+
+  it("keeps the window of a read that finished inside the deadline", async () => {
+    const summary = await readOneExcerpt(scriptedExcerptClock({}));
+
+    expect(summary.excerpts.get("src/foo.ts")).toHaveLength(1);
+    expect(summary.elapsedBudgetBlocked).toBe(false);
+    expect(elapsedBudgetClaims(summary.uncertainty)).toEqual([]);
+  });
+
+  it("drops a window whose read only came back after the deadline", async () => {
+    // Calibrated against the production step rather than a hardcoded call index: on the success
+    // path the LAST clock read of the whole step is the deadline re-check taken once the facade has
+    // already returned its result, so crossing exactly there is a read that completes just after
+    // the deadline.
+    const control = scriptedExcerptClock({});
+    const clean = await readOneExcerpt(control);
+    expect(clean.excerpts.get("src/foo.ts")).toHaveLength(1);
+
+    const summary = await readOneExcerpt(
+      scriptedExcerptClock({ crossAtClockRead: control.clockReads() }),
+    );
+
+    expect(summary.excerpts.size).toBe(0);
+    expect(summary.elapsedBudgetBlocked).toBe(true);
+    expect(elapsedBudgetClaims(summary.uncertainty).length).toBeGreaterThan(0);
+  });
+
+  it("reports a read the facade stopped on the elapsed budget as an elapsed-budget stop", async () => {
+    const summary = await readOneExcerpt(scriptedExcerptClock({ crossDuringContentRead: true }));
+
+    expect(summary.excerpts.size).toBe(0);
+    expect(summary.elapsedBudgetBlocked).toBe(true);
+    expect(elapsedBudgetClaims(summary.uncertainty).length).toBeGreaterThan(0);
+  });
+
+  it("reports the elapsed-budget stop on the completed retrieval status", async () => {
+    // End to end: the completion status the activity log carries must not claim an unblocked
+    // elapsed budget while the pack it describes lost its excerpts to that budget. The micro-index
+    // read is the seam — it happens after the ring phase and immediately before the excerpt reads —
+    // so no earlier phase can move this clock.
+    const clock = scriptedExcerptClock({
+      lateMs: NOW + DEFAULT_EXPLORATION_BUDGET.elapsedMsMax,
+      crossDuringContentRead: true,
+      startArmed: false,
+    });
+    const cache = capturingMicroIndex(() => {
+      clock.arm();
+    });
+    const activityLog = createBufferedServerLogSink();
+
+    const out = await retrieveConnectedContextPack(input(), {
+      correlationId: undefined,
+      answerer: echoAnswerer,
+      nowMs: clock.nowMs,
+      microIndex: cache.index,
+      fs: clock.fs,
+      activityLog,
+    });
+
+    expect(out.pack.files.flatMap((file) => file.excerpts)).toEqual([]);
+    expect(out.pack.usage.excerptBytes).toBe(0);
+    expect(elapsedBudgetClaims(out.pack.uncertainty).length).toBeGreaterThan(0);
+    expect(
+      activityLog.events.find((event) => event.op === "search.connected-context.completed")?.extra
+        ?.retrievalStatus,
+    ).toMatchObject({ elapsedBudgetBlocked: true });
   });
 });

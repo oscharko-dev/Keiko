@@ -9,7 +9,7 @@ import { createWorkspaceMutexRegistry, fileWriteKeys } from "./task-workspace/mu
 // (KEIKO-0495). It composes with, never replaces, the persisted advisory WorkspaceLock.
 const fileWriteMutex = createWorkspaceMutexRegistry();
 import type { Dirent, Stats } from "node:fs";
-import { constants, createReadStream } from "node:fs";
+import { constants } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { TextDecoder } from "node:util";
 import {
@@ -1517,8 +1517,19 @@ async function readPrefix(
   }
 }
 
-// #3347 consumer-boundary hardening: every content read below goes through this instead of a bare
-// open()/readFile() on `target.path`. `identity` is the WorkspaceStat captured at ADMISSION time
+// #3347 consumer-boundary hardening. Every read of an admitted file's BYTES in this module routes
+// through this helper -- the text preview, the editable-content reads, the search/classification
+// prefixes and, since the #3367 owner P1 repair in readAdmittedImageBytes, the image preview route,
+// which until then wrote its headers and only then opened `target.path` with a bare
+// createReadStream (an import this module no longer carries).
+//
+// The two opens that do NOT come through here, named rather than covered by a blanket claim:
+// `readPrefix` immediately above, taken when the resolved root's WorkspaceFs exposes no
+// `readFileBytes` at all -- it is an ordinary unbound open(), reachable only from an in-memory fake,
+// since the production `nodeWorkspaceFs` always implements the bounded reader; and the
+// O_WRONLY/O_RDONLY handles in the write and directory-fsync paths, which read no file content.
+//
+// `identity` is the WorkspaceStat captured at ADMISSION time
 // (ResolvedTarget.identity) -- not re-derived here -- so the open is bound to the exact file that
 // was admitted: if a path segment was swapped anywhere between admission and this call, the opened
 // descriptor's snapshot will not match `identity` and the read is rejected, even when the
@@ -2755,6 +2766,32 @@ export async function handleFilesPreview(
   });
 }
 
+// #3367 owner P1: the image route used to write the 200 headers from the admission-time size and
+// only then open `target.path` with a bare createReadStream. A root or parent replaced in that gap
+// redirected the open to a different inode -- possibly one outside the admitted root -- and the
+// Content-Length already on the wire described a file the client never received. Previews are
+// capped at MAX_IMAGE_PREVIEW_BYTES (3 MB), so the whole body is affordable to prove up front:
+// the identity-bound read happens BEFORE any header is written, and the caller then sizes the
+// response from the buffer it is about to send.
+//
+// The caller's `target.stats.size` test stays as the cheap early rejection; the `truncated` test
+// here is the one taken against a size that has been proven, since readFileBytes only returns after
+// the opened descriptor's snapshot matched `identity` in full. They can disagree: `stats` and
+// `identity` are two separate stat calls made at admission, so a file that grew between them
+// reaches this point with an over-cap identity. Refused, rather than short-sent as a valid image.
+async function readAdmittedImageBytes(target: ResolvedTarget): Promise<Buffer> {
+  const read = await readContainedPrefixOrStale(
+    target.path,
+    target.fs,
+    target.identity,
+    MAX_IMAGE_PREVIEW_BYTES,
+  );
+  if (read.truncated) {
+    throw new FilesError(413, "PAYLOAD_TOO_LARGE", "The image exceeds the preview size limit.");
+  }
+  return read.buffer;
+}
+
 export async function handleFilesPreviewImage(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2779,16 +2816,13 @@ export async function handleFilesPreviewImage(
     if (target.stats.size > MAX_IMAGE_PREVIEW_BYTES) {
       throw new FilesError(413, "PAYLOAD_TOO_LARGE", "The image exceeds the preview size limit.");
     }
+    const bytes = await readAdmittedImageBytes(target);
     ctx.res.writeHead(200, {
       "Content-Type": base.mime,
-      "Content-Length": String(target.stats.size),
+      "Content-Length": String(bytes.byteLength),
       "Cache-Control": "private, max-age=60",
     });
-    const stream = createReadStream(target.path);
-    stream.on("error", () => {
-      ctx.res.destroy();
-    });
-    stream.pipe(ctx.res);
+    ctx.res.end(bytes);
     return STREAMING;
   } catch (error) {
     if (error instanceof FilesError) return filesErrorResult(error);

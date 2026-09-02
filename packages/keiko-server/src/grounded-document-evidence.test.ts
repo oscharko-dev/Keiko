@@ -5,7 +5,9 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -605,6 +607,62 @@ describe("collectConnectedDocumentEvidence", () => {
       expect(result.atoms).toEqual([]);
       expect(result.omitted).toEqual([
         { scopePath: "docs/report.docx", reason: "outside-scope", omittedAtMs: 1_000 },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The race the post-read comparison has to answer: the snapshot check passes, and the file is
+  // atomically replaced before the second resolution re-reads it. The replacement is the SAME SIZE
+  // and reuses the same path, so path and size alone report "unchanged" while the bytes already in
+  // hand came from the file that no longer answers to this citation path.
+  it("denies a connected document atomically replaced by a same-size file at the second resolution", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-grounded-document-replace-race-"));
+    try {
+      const docs = join(root, "docs");
+      mkdirSync(docs);
+      const documentPath = join(docs, "report.docx");
+      const replacementPath = join(root, "replacement.bin");
+      writeFileSync(documentPath, DOCX_SIMPLE);
+      writeFileSync(replacementPath, new Uint8Array(DOCX_SIMPLE.byteLength).fill(0x41));
+      const documentRealPath = realpathSync(documentPath);
+      let documentStats = 0;
+      const fs: WorkspaceFs = {
+        ...nodeWorkspaceFs,
+        stat: (absolutePath): WorkspaceStat => {
+          const stat = nodeWorkspaceFs.stat(absolutePath);
+          if (absolutePath !== documentRealPath) return stat;
+          documentStats += 1;
+          // Stat 1 is the preflight the bytes are read against; stat 2 is the post-read snapshot
+          // check, which must still observe that generation. Replace once it has returned — the
+          // exact boundary before the second resolution stats the path again.
+          if (documentStats === 2) renameSync(replacementPath, documentPath);
+          return stat;
+        },
+      };
+      const scope: SelectedScope = { ...filesScope(["docs/report.docx"]), workspaceRoot: root };
+      const searchScope = {
+        workspace: { root },
+        scopeId: scope.scopeId,
+        relativePaths: scope.relativePaths,
+      } as SearchScope;
+
+      const result = await collectConnectedDocumentEvidence({
+        scope,
+        query: query(),
+        searchScope,
+        fs,
+        nowMs: () => 1_000,
+      });
+
+      // The replacement kept the path and the byte count; only the file identity moved.
+      expect(documentStats).toBeGreaterThanOrEqual(3);
+      expect(statSync(documentPath).size).toBe(DOCX_SIMPLE.byteLength);
+      expect(result.atoms).toEqual([]);
+      expect(result.excerpts.size).toBe(0);
+      expect(result.omitted).toEqual([
+        { scopePath: "docs/report.docx", reason: "tool-unavailable", omittedAtMs: 1_000 },
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });

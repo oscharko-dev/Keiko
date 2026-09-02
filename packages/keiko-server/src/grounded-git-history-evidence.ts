@@ -237,6 +237,12 @@ function fileExistsInScope(inputs: GitFileHistoryEvidenceInputs, scopePath: stri
     throwIfCancelled(inputs.signal);
     const stat = fs.stat(contained.path);
     throwIfCancelled(inputs.signal);
+    // The metadata read itself can consume the last of the budget. Re-read the clock after it:
+    // admitting a path on a `stat` that only returned once the deadline had already passed would
+    // record evidence the request is no longer allowed to produce.
+    if (gitHistoryDeadlineReached(inputs)) {
+      return false;
+    }
     return isSafeRegularFile(stat);
   } catch {
     throwIfCancelled(inputs.signal);
@@ -381,16 +387,52 @@ function recordFileHistory(
   existing.lastCommitUnix = Math.max(existing.lastCommitUnix, timestamp);
 }
 
+// Returns false once the request deadline trips while validating this commit's paths, so the
+// caller can discard the lane instead of keeping what happened to be validated first.
+function collectCommitFileHistory(
+  byPath: Map<string, FileHistoryStats>,
+  rawPaths: readonly string[],
+  timestamp: number,
+  repo: GitRepositoryForHistory,
+  inputs: GitFileHistoryEvidenceInputs,
+): boolean {
+  const seenInCommit = new Set<string>();
+  for (const rawPath of rawPaths) {
+    throwIfCancelled(inputs.signal);
+    if (gitHistoryDeadlineReached(inputs)) {
+      return false;
+    }
+    const scopePath = scopePathForHistoryLine(rawPath, repo, inputs);
+    if (scopePath === undefined || seenInCommit.has(scopePath)) {
+      continue;
+    }
+    seenInCommit.add(scopePath);
+    recordFileHistory(byPath, scopePath, timestamp);
+  }
+  return true;
+}
+
+/**
+ * Parses the bounded `git log --name-only` output into per-file stats, or returns the stopped
+ * sentinel `undefined` when the request deadline trips anywhere inside parsing.
+ *
+ * Stopping is deliberately terminal for the whole lane rather than a loop `break`. Path validation
+ * performs metadata I/O, so the deadline can expire between two records — or inside the `stat` that
+ * admitted the last path. Returning the partially built map would hand ranking a set whose
+ * membership depends on where the clock ran out, and those atoms would then be emitted after the
+ * request deadline: exactly the outcome the all-or-empty post-subprocess check in the provider
+ * below exists to prevent. Discarding the lane keeps both paths on one rule.
+ */
 function parseGitHistoryStats(
   stdout: string,
   repo: GitRepositoryForHistory,
   inputs: GitFileHistoryEvidenceInputs,
-): readonly FileHistoryStats[] {
+): readonly FileHistoryStats[] | undefined {
   const byPath = new Map<string, FileHistoryStats>();
   for (const record of stdout.split(GIT_HISTORY_RECORD_SEP)) {
     throwIfCancelled(inputs.signal);
     if (gitHistoryDeadlineReached(inputs)) {
-      break;
+      return undefined;
     }
     if (record.length === 0) {
       continue;
@@ -400,21 +442,13 @@ function parseGitHistoryStats(
     if (timestamp === undefined) {
       continue;
     }
-    const seenInCommit = new Set<string>();
-    for (const rawPath of lines.slice(1)) {
-      throwIfCancelled(inputs.signal);
-      if (gitHistoryDeadlineReached(inputs)) {
-        break;
-      }
-      const scopePath = scopePathForHistoryLine(rawPath, repo, inputs);
-      if (scopePath === undefined || seenInCommit.has(scopePath)) {
-        continue;
-      }
-      seenInCommit.add(scopePath);
-      recordFileHistory(byPath, scopePath, timestamp);
+    if (!collectCommitFileHistory(byPath, lines.slice(1), timestamp, repo, inputs)) {
+      return undefined;
     }
   }
-  return [...byPath.values()];
+  // The final record's last path validation can expire the clock with no later iteration left to
+  // observe it, so the lane is re-checked once after the loop.
+  return gitHistoryDeadlineReached(inputs) ? undefined : [...byPath.values()];
 }
 
 function compareStats(
@@ -501,7 +535,9 @@ function rankedHistoryAtoms(
   stdout: string,
 ): readonly EvidenceAtom[] {
   const stats = parseGitHistoryStats(stdout, repo, inputs);
-  if (stats.length === 0) return [];
+  // `undefined` is the stopped sentinel: the deadline tripped during parsing, so there is no
+  // ranking to do — the lane is discarded whole rather than emitted from a partial map.
+  if (stats === undefined || stats.length === 0) return [];
   const maxCommitCount = Math.max(...stats.map((entry) => entry.commitCount));
   const maxFiles = Math.max(
     0,
