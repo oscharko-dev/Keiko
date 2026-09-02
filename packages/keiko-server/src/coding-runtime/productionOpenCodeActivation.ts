@@ -12,7 +12,10 @@ import {
 
 import { codingSidecarDisabledByPolicy } from "../coding-sidecar-gateway.js";
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
+import type { ServerLogSink } from "../observability/index.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import {
   discoverDevLaneOpenCode,
@@ -53,6 +56,8 @@ export interface ProductionOpenCodeActivationInput {
     ProductionCodingRuntimeResolverInput["editorAgentClient"] | undefined;
   readonly fetch?: typeof globalThis.fetch | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  /** Body-free lifecycle evidence for the chosen dev-lane outcome. */
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 export type ProductionOpenCodeActivationResult =
@@ -135,7 +140,10 @@ type ResolvedRuntime =
     };
 
 function resolveRuntime(
-  input: Pick<ProductionOpenCodeActivationInput, "env" | "platform" | "arch" | "diagnostics">,
+  input: Pick<
+    ProductionOpenCodeActivationInput,
+    "env" | "platform" | "arch" | "diagnostics" | "activityLog"
+  >,
 ): ResolvedRuntime {
   const host = {
     env: input.env,
@@ -145,7 +153,38 @@ function resolveRuntime(
   };
   const packaged = discoverQualifiedPortableOpenCode(host);
   if (packaged !== undefined) return { portable: packaged };
-  return devLaneRuntime(discoverDevLaneOpenCode(host));
+  const discovery = discoverDevLaneOpenCode(host);
+  recordDevLaneDiscovery(input.activityLog ?? processServerLogSink(), discovery);
+  return devLaneRuntime(discovery);
+}
+
+function recordDevLaneDiscovery(
+  activityLog: ServerLogSink,
+  discovery: DevLaneOpenCodeDiscovery,
+): void {
+  if (discovery.outcome === "inactive") return;
+  if (discovery.outcome === "activated") {
+    activityLog.write({
+      category: "process",
+      op: "coding-runtime.dev-lane.activated",
+      correlationId: UNKNOWN_CORRELATION_ID,
+      extra: {
+        lane: discovery.runtime.lane,
+        target: discovery.runtime.target,
+        evidenceClass: discovery.runtime.evidenceClass,
+        ...(discovery.runtime.nativeHelperSha256 === undefined
+          ? {}
+          : { runtimeSupervisorSha256: discovery.runtime.nativeHelperSha256 }),
+      },
+    });
+    return;
+  }
+  activityLog.write({
+    category: "process",
+    op: "coding-runtime.dev-lane.refused",
+    correlationId: UNKNOWN_CORRELATION_ID,
+    extra: { lane: "dev-checkout", reason: discovery.reason },
+  });
 }
 
 function devLaneRuntime(discovery: DevLaneOpenCodeDiscovery): ResolvedRuntime {
@@ -169,6 +208,8 @@ function devLaneRefusalReason(
     case "payload-unapproved":
     case "payload-tampered":
       return reason;
+    case "native-helper-directory-untrusted":
+      return "payload-tampered";
   }
 }
 

@@ -359,6 +359,8 @@ async function assertWindowsSourceContract() {
     nativeSource,
     /_setmode\(_fileno\(stdin\), _O_BINARY\).*_setmode\(_fileno\(stdout\), _O_BINARY\)/su,
   );
+  assert.match(nativeSource, /SetDefaultDllDirectories\(LOAD_LIBRARY_SEARCH_SYSTEM32\)/u);
+  assert.match(nativeSource, /SetDllDirectoryW\(L(?:"")?\)/u);
   assert.match(nativeSource, /if \(!binary_standard_io\(\)\) return 1;.*parse_request\(/su);
   for (const stem of WINDOWS_RESERVED_STEMS)
     assert.ok(nativeSourceCommentsStripped.includes(`"${stem}"`));

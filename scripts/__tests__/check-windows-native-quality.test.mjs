@@ -1,11 +1,12 @@
-// The Windows native-quality gate compiles TWO independently hardened native producers with the
-// PRODUCTION hardening flags — compileWindowsLauncher() in stage-portable-runtime.mjs and
-// compileSetupBootstrap() in build-windows-portable-setup.mjs — and it derives those flags from
-// each producer rather than restating them, so a change that drops `/MT` or
-// `/DEPENDENTLOADFLAG:0x800` from either shipped command cannot leave the gate happily proving a
-// configuration the product no longer ships (PR #3355 review, and its follow-up: the gate
-// originally derived only the launcher's flags and never inspected compileSetupBootstrap() at all,
-// so THAT binary's hardening could silently drop with the gate still green).
+// The Windows native-quality gate compiles FOUR independently hardened native producers with the
+// PRODUCTION hardening flags — compileWindowsLauncher() in stage-portable-runtime.mjs,
+// compileSetupBootstrap() in build-windows-portable-setup.mjs, windowsCompilerFlags() in
+// build-secure-workspace-read.mjs, and compilerInvocation() in build-runtime-supervisor.mjs — and
+// it derives those flags from each producer rather than restating them. A change that drops `/MT`
+// or `/DEPENDENTLOADFLAG:0x800` from any shipped command cannot leave the gate happily proving a
+// configuration the product no longer ships. The original review found that the gate derived only
+// the launcher, and its follow-up found that it omitted the setup bootstrap; the same protection
+// now covers both dev-lane native helpers.
 //
 // That derivation is itself untested logic living in PowerShell, which is exactly the shape that
 // rots unnoticed. These tests run the real derivation block against the real production files and
@@ -27,6 +28,8 @@ const RFC3161_PROJECT = "scripts/native-quality/windows-rfc3161-quality.csproj";
 const RFC3161_LOCK = "scripts/native-quality/packages.lock.json";
 const PRODUCTION_LAUNCHER = "scripts/stage-portable-runtime.mjs";
 const PRODUCTION_SETUP_BOOTSTRAP = "scripts/build-windows-portable-setup.mjs";
+const PRODUCTION_SECURE_READ = "scripts/build-secure-workspace-read.mjs";
+const PRODUCTION_RUNTIME_SUPERVISOR = "scripts/build-runtime-supervisor.mjs";
 
 function hasPwsh() {
   try {
@@ -46,6 +49,8 @@ function hasPwsh() {
 function derivationAccepts({
   launcherSourcePath = PRODUCTION_LAUNCHER,
   setupBootstrapSourcePath = PRODUCTION_SETUP_BOOTSTRAP,
+  secureReadBuildSourcePath = PRODUCTION_SECURE_READ,
+  runtimeSupervisorBuildSourcePath = PRODUCTION_RUNTIME_SUPERVISOR,
 } = {}) {
   const gate = readFileSync(GATE, "utf8");
   const start = gate.indexOf("function Get-ActiveNativeProducerSource");
@@ -59,10 +64,17 @@ function derivationAccepts({
     helpers,
     `$launcherSource = Get-Content -Raw ${JSON.stringify(launcherSourcePath)}`,
     `$setupSource = Get-Content -Raw ${JSON.stringify(setupBootstrapSourcePath)}`,
+    `$secureReadSource = Get-Content -Raw ${JSON.stringify(secureReadBuildSourcePath)}`,
+    `$supervisorSource = Get-Content -Raw ${JSON.stringify(runtimeSupervisorBuildSourcePath)}`,
     `$required = @('"/MT"', '"/DEPENDENTLOADFLAG:0x800"')`,
+    `$secureReadCompileRequired = @('"/MT"')`,
+    `$secureReadLinkRequired = @('"/DEPENDENTLOADFLAG:0x800"')`,
     "try {",
     "  Assert-NativeProducerLinkFlags -Source $launcherSource -FunctionName 'compileWindowsLauncher' -EndMarker 'function requireWindowsLauncherIconSource(' -ProducerPath 'scripts/stage-portable-runtime.mjs' -RequiredFlagLiterals $required",
     "  Assert-NativeProducerLinkFlags -Source $setupSource -FunctionName 'compileSetupBootstrap' -EndMarker 'function fsyncFile(' -ProducerPath 'scripts/build-windows-portable-setup.mjs' -RequiredFlagLiterals $required",
+    "  Assert-NativeProducerLinkFlags -Source $secureReadSource -FunctionName 'windowsCompilerFlags' -EndMarker 'const supported =' -ProducerPath 'scripts/build-secure-workspace-read.mjs' -RequiredFlagLiterals $secureReadCompileRequired",
+    "  Assert-NativeProducerLinkFlags -Source $secureReadSource -FunctionName 'compilerInvocation' -EndMarker 'export async function runSecureWorkspaceReadBuild(' -ProducerPath 'scripts/build-secure-workspace-read.mjs' -RequiredFlagLiterals $secureReadLinkRequired",
+    "  Assert-NativeProducerLinkFlags -Source $supervisorSource -FunctionName 'compilerInvocation' -EndMarker 'function macosComponentInvocations(' -ProducerPath 'scripts/build-runtime-supervisor.mjs' -RequiredFlagLiterals $required",
     "  'ACCEPTED'",
     "} catch { 'REJECTED: ' + $_.Exception.Message }",
   ].join("\n");
@@ -215,6 +227,14 @@ describe.skipIf(!hasPwsh())("check-windows-native-quality flag derivation", () =
     return copyWith(PRODUCTION_SETUP_BOOTSTRAP, "build-windows-portable-setup.mjs", transform);
   }
 
+  function copySecureReadBuildWith(transform) {
+    return copyWith(PRODUCTION_SECURE_READ, "build-secure-workspace-read.mjs", transform);
+  }
+
+  function copyRuntimeSupervisorBuildWith(transform) {
+    return copyWith(PRODUCTION_RUNTIME_SUPERVISOR, "build-runtime-supervisor.mjs", transform);
+  }
+
   it("accepts the real production files unchanged", () => {
     expect(derivationAccepts()).toContain("ACCEPTED");
   });
@@ -243,6 +263,26 @@ describe.skipIf(!hasPwsh())("check-windows-native-quality flag derivation", () =
     },
   );
 
+  it.each(['"/MT"', '"/DEPENDENTLOADFLAG:0x800"'])(
+    "rejects a runtime-supervisor build that drops %s",
+    (flag) => {
+      const runtimeSupervisorBuildSourcePath = copyRuntimeSupervisorBuildWith((source) =>
+        source.replace(flag, '"/REMOVED"'),
+      );
+      expect(derivationAccepts({ runtimeSupervisorBuildSourcePath })).toContain("REJECTED");
+    },
+  );
+
+  it.each(['"/MT"', '"/DEPENDENTLOADFLAG:0x800"'])(
+    "rejects a secure-read build that drops %s",
+    (flag) => {
+      const secureReadBuildSourcePath = copySecureReadBuildWith((source) =>
+        source.replace(flag, '"/REMOVED"'),
+      );
+      expect(derivationAccepts({ secureReadBuildSourcePath })).toContain("REJECTED");
+    },
+  );
+
   // The stale-evidence case the review named: the literal still EXISTS in the function, but only in
   // a comment — the active compiler argument list no longer carries it. A plain substring search is
   // satisfied here and would keep certifying a posture the product dropped. Covered for both
@@ -262,6 +302,20 @@ describe.skipIf(!hasPwsh())("check-windows-native-quality flag derivation", () =
     expect(derivationAccepts({ setupBootstrapSourcePath })).toContain("REJECTED");
   });
 
+  it("rejects a runtime-supervisor flag that survives only in a comment, not in the argument list", () => {
+    const runtimeSupervisorBuildSourcePath = copyRuntimeSupervisorBuildWith((source) =>
+      source.replace('        "/MT",\n', '        // "/MT",\n'),
+    );
+    expect(derivationAccepts({ runtimeSupervisorBuildSourcePath })).toContain("REJECTED");
+  });
+
+  it("rejects a secure-read flag that survives only in a comment, not in the argument list", () => {
+    const secureReadBuildSourcePath = copySecureReadBuildWith((source) =>
+      source.replace('    "/MT",\n', '    // "/MT",\n'),
+    );
+    expect(derivationAccepts({ secureReadBuildSourcePath })).toContain("REJECTED");
+  });
+
   it("rejects a launcher flag hidden inside an interior block-comment line", () => {
     const launcherSourcePath = copyLauncherWith((source) =>
       source.replace('        "/MT",\n', '        /*\n        "/MT",\n        */\n'),
@@ -274,6 +328,20 @@ describe.skipIf(!hasPwsh())("check-windows-native-quality flag derivation", () =
       source.replace('        "/MT",\n', '        /*\n        "/MT",\n        */\n'),
     );
     expect(derivationAccepts({ setupBootstrapSourcePath })).toContain("REJECTED");
+  });
+
+  it("rejects a runtime-supervisor flag hidden inside an interior block-comment line", () => {
+    const runtimeSupervisorBuildSourcePath = copyRuntimeSupervisorBuildWith((source) =>
+      source.replace('        "/MT",\n', '        /*\n        "/MT",\n        */\n'),
+    );
+    expect(derivationAccepts({ runtimeSupervisorBuildSourcePath })).toContain("REJECTED");
+  });
+
+  it("rejects a secure-read flag hidden inside an interior block-comment line", () => {
+    const secureReadBuildSourcePath = copySecureReadBuildWith((source) =>
+      source.replace('    "/MT",\n', '    /*\n    "/MT",\n    */\n'),
+    );
+    expect(derivationAccepts({ secureReadBuildSourcePath })).toContain("REJECTED");
   });
 
   it("rejects a file whose compileWindowsLauncher() cannot be located at all", () => {
@@ -291,5 +359,19 @@ describe.skipIf(!hasPwsh())("check-windows-native-quality flag derivation", () =
       source.replaceAll("compileSetupBootstrap", "renamedAway"),
     );
     expect(derivationAccepts({ setupBootstrapSourcePath })).toContain("REJECTED");
+  });
+
+  it("rejects a file whose compilerInvocation() cannot be located at all", () => {
+    const runtimeSupervisorBuildSourcePath = copyRuntimeSupervisorBuildWith((source) =>
+      source.replaceAll("compilerInvocation", "renamedAway"),
+    );
+    expect(derivationAccepts({ runtimeSupervisorBuildSourcePath })).toContain("REJECTED");
+  });
+
+  it("rejects a file whose windowsCompilerFlags() cannot be located at all", () => {
+    const secureReadBuildSourcePath = copySecureReadBuildWith((source) =>
+      source.replaceAll("windowsCompilerFlags", "renamedAway"),
+    );
+    expect(derivationAccepts({ secureReadBuildSourcePath })).toContain("REJECTED");
   });
 });

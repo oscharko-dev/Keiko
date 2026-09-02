@@ -262,6 +262,8 @@ function runSourceContractOn(rawSource) {
   assert.match(codeText, /JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO/u);
   assert.match(codeText, /accounting\.ActiveProcesses == 0/u);
   assert.match(codeText, /PROC_THREAD_ATTRIBUTE_HANDLE_LIST/u);
+  assert.match(codeText, /SetDefaultDllDirectories\(LOAD_LIBRARY_SEARCH_SYSTEM32\)/u);
+  assert.match(codeText, /SetDllDirectoryW\(L(?:"")?\)/u);
   // Coderabbit 3793899396 on #3202: the negative shell-launch regex must accept `system` /
   // `ShellExecute` calls with OPTIONAL whitespace before the opening parenthesis (`system
   // ("cmd")` and `ShellExecute (…)` both compile identically). Word boundary on `system`
@@ -294,6 +296,20 @@ function assertMutationRejected(rawSource) {
     /CREATE_SUSPENDED/,
     "assertSourceContract must reject a mutation that hides CREATE_SUSPENDED inside a " +
       "diagnostic string — pins that `stripStringLiteralBodies` runs on the identifier pin",
+  );
+  const withoutLoaderHardening = rawSource.replace(
+    "SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)",
+    "0",
+  );
+  assert.notEqual(
+    withoutLoaderHardening,
+    rawSource,
+    "loader-hardening mutation must change source",
+  );
+  assert.throws(
+    () => runSourceContractOn(withoutLoaderHardening),
+    /SetDefaultDllDirectories/,
+    "assertSourceContract must reject a source that drops its runtime DLL search-path hardening",
   );
 }
 

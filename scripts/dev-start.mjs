@@ -361,6 +361,10 @@ export function codingRuntimeRequired(platform = process.platform, arch = proces
   return hostDevLaneTarget(platform, arch) !== undefined;
 }
 
+export function healthyDevServer(health) {
+  return health.startsWith("ok");
+}
+
 function healthError(name, error) {
   if (error instanceof Error) return `${name}: ${error.message}`;
   return `${name}: ${String(error)}`;
@@ -418,7 +422,7 @@ async function devServerHealth(port) {
   ];
 
   const runtime = await requiredRuntimeHealth(baseUrl);
-  if (!runtime.startsWith("ok")) return runtime;
+  if (!healthyDevServer(runtime)) return runtime;
   const runtimeDetail = runtime === "ok" ? "" : runtime.slice("ok".length);
 
   for (const check of checks) {
@@ -460,7 +464,7 @@ async function waitForHealth(port, child) {
     lastError = await devServerHealth(port);
     // Same rule as the gate above: the status word is "ok", anything after it is the runtime's
     // honest evidence detail and must never turn a healthy server into a failed start.
-    if (lastError.startsWith("ok"))
+    if (healthyDevServer(lastError))
       return lastError === "ok" ? undefined : lastError.slice(2).trim();
     if (lastError.startsWith("runtime: unavailable")) {
       throw new Error(`coding runtime failed readiness: ${lastError}; see ${logFile}`);
@@ -483,7 +487,7 @@ async function restartExistingRunnerIfNeeded() {
 
   const runningPort = state.publicPort ?? publicPort;
   const health = await devServerHealth(runningPort);
-  if (health === "ok") {
+  if (healthyDevServer(health)) {
     console.log(
       `Keiko dev UI already running on ${publicBrowserUrl(runningPort)} (pid ${String(
         state.runnerPid,

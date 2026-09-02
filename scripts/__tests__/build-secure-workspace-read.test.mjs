@@ -169,6 +169,9 @@ describe("secure workspace read compiler environment", () => {
     expect(status).toBe(0);
     // Absolute path, never a bare name: options.env.PATH is not reliably searched on Windows.
     expect(invocation.command).toBe("C:\\MSVC\\bin\\cl.exe");
+    expect(invocation.args).toEqual(
+      expect.arrayContaining(["/MT", "/link", "/DEPENDENTLOADFLAG:0x800"]),
+    );
     expect(invocation.args).toContain("ntdll.lib");
     expect(invocation.options).toEqual({
       env: {

@@ -8,6 +8,7 @@ import {
   codingRuntimeRequired,
   DEV_START_LOCK_FILE,
   ensureDevCodingRuntime,
+  healthyDevServer,
   maybeOpenPairedBrowser,
   npmCommand,
   pairedDevBrowserUrl,
@@ -128,6 +129,13 @@ describe("dev-start runtime health gate", () => {
 
     expect(health.startsWith("ok")).toBe(true);
     expect(health).not.toContain("runtime:");
+  });
+
+  it("reuses a running server whose healthy runtime status carries evidence detail", () => {
+    expect(healthyDevServer("ok · local runtime integrity verified (no platform signature)")).toBe(
+      true,
+    );
+    expect(healthyDevServer("runtime: unavailable (payload-missing)")).toBe(false);
   });
 
   it("skips the runtime gate entirely on a host with no dev lane", async () => {

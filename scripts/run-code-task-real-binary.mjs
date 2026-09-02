@@ -269,9 +269,10 @@ function writeEvidence(path, report) {
   writeFileSync(path, `${JSON.stringify(report, null, 2)}\n`);
 }
 
-function ensureMacTarget() {
-  const target = hostDevLaneTarget();
-  if (target === undefined) throw new Error("real-binary journey requires macOS arm64 or x64");
+export function ensureMacTarget(target = hostDevLaneTarget()) {
+  if (target !== "macos-arm64" && target !== "macos-x64") {
+    throw new Error("real-binary journey requires macOS arm64 or x64");
+  }
   return target;
 }
 

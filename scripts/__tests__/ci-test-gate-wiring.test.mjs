@@ -26,6 +26,10 @@ const setupBootstrapSource = readFileSync(
   resolve(repoRoot, "native/setup-bootstrap/keiko-setup-bootstrap.c"),
   "utf8",
 );
+const runtimeSupervisorSource = readFileSync(
+  resolve(repoRoot, "native/runtime-supervisor/windows/keiko_runtime_supervisor.c"),
+  "utf8",
+);
 const windowsRfc3161QualityProject = readFileSync(
   resolve(repoRoot, "scripts/native-quality/windows-rfc3161-quality.csproj"),
   "utf8",
@@ -220,6 +224,15 @@ describe("CI test/gate wiring guard", () => {
     expect(setupBootstrapSource).toContain("KEIKO_SETUP_PAYLOAD_SHA256_HEX");
     expect(setupBootstrapSource).toContain("BCRYPT_SHA256_ALGORITHM");
     expect(setupBootstrapSource).toContain("GetSystemDirectoryW");
+  });
+
+  it("keeps the staged Windows runtime supervisor out of its writable DLL search path", () => {
+    expect(windowsNativeQuality).toContain("MSVC runtime-supervisor quality analysis failed");
+    expect(windowsNativeQuality).toContain("build-runtime-supervisor.mjs");
+    expect(runtimeSupervisorSource).toContain(
+      "SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)",
+    );
+    expect(runtimeSupervisorSource).toContain('SetDllDirectoryW(L"")');
   });
 
   it("pins the PKCS assembly required by the RFC3161 analyzer build", () => {

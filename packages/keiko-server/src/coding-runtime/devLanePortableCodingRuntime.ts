@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 
 import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-sandbox";
 
@@ -34,6 +34,7 @@ export type DevLaneOpenCodeRefusalReason =
   | "payload-missing"
   | "payload-unapproved"
   | "payload-tampered"
+  | "native-helper-directory-untrusted"
   | "secure-read-helper-missing"
   | "secure-read-helper-stale";
 
@@ -59,6 +60,8 @@ export interface DevLanePortableOpenCodeRuntime {
   readonly secureRead: DevLaneSecureReadBinding;
   /** Present on Windows, where the native Job Object supervisor is part of the dev-lane layout. */
   readonly nativeHelperPath?: string | undefined;
+  /** The verified Windows supervisor digest is re-checked immediately before every spawn. */
+  readonly nativeHelperSha256?: string | undefined;
 }
 
 export type DevLaneOpenCodeDiscovery =
@@ -107,14 +110,18 @@ function discoverEnabledLane(input: DevLaneOpenCodeDiscoveryInput): DevLaneOpenC
   if (!payload.ok) return refused(payload.refusal);
   const secureRead = verifiedSecureRead(checkoutRoot.root, stagedTargetRoot, target);
   if (!secureRead.ok) return refused(secureRead.refusal);
-  const nativeHelperPath = verifiedRuntimeSupervisor(checkoutRoot.root, stagedTargetRoot, target);
-  if (target === "windows-x64" && nativeHelperPath === undefined) return refused("payload-missing");
+  const runtimeSupervisor = verifiedRuntimeSupervisor(checkoutRoot.root, stagedTargetRoot, target);
+  if (target === "windows-x64" && runtimeSupervisor === undefined)
+    return refused("payload-missing");
+  if (!trustedNativeHelperDirectory(stagedTargetRoot, target)) {
+    return refused("native-helper-directory-untrusted");
+  }
   return activatedDevLaneRuntime(
     target,
     stagedTargetRoot,
     payload.sidecar,
     secureRead.binding,
-    nativeHelperPath,
+    runtimeSupervisor,
   );
 }
 
@@ -129,7 +136,7 @@ function activatedDevLaneRuntime(
   stagedTargetRoot: string,
   sidecar: PortableSidecarRuntimeVerification,
   secureRead: DevLaneSecureReadBinding,
-  nativeHelperPath: string | undefined,
+  runtimeSupervisor: VerifiedRuntimeSupervisor | undefined,
 ): DevLaneOpenCodeDiscovery {
   const runtime = {
     evidenceClass: "functional-not-platform-qualified" as const,
@@ -137,11 +144,18 @@ function activatedDevLaneRuntime(
     installRoot: join(stagedTargetRoot, SIDECAR_NAME),
     target,
     sidecar,
-    qualification: devLaneQualification(target, sidecar, secureRead),
+    qualification: devLaneQualification(target, sidecar, secureRead, runtimeSupervisor),
     secureRead,
   };
-  if (nativeHelperPath === undefined) return { outcome: "activated", runtime };
-  return { outcome: "activated", runtime: { ...runtime, nativeHelperPath } };
+  if (runtimeSupervisor === undefined) return { outcome: "activated", runtime };
+  return {
+    outcome: "activated",
+    runtime: {
+      ...runtime,
+      nativeHelperPath: runtimeSupervisor.path,
+      nativeHelperSha256: runtimeSupervisor.sha256,
+    },
+  };
 }
 
 function refused(reason: DevLaneOpenCodeRefusalReason): DevLaneOpenCodeDiscovery {
@@ -391,11 +405,16 @@ function verifiedSecureRead(
   };
 }
 
+interface VerifiedRuntimeSupervisor {
+  readonly path: string;
+  readonly sha256: string;
+}
+
 function verifiedRuntimeSupervisor(
   checkoutRoot: string,
   stagedTargetRoot: string,
   target: DevLaneOpenCodeTarget,
-): string | undefined {
+): VerifiedRuntimeSupervisor | undefined {
   if (target !== "windows-x64") return undefined;
   const path = join(stagedTargetRoot, runtimeSupervisorRelativePath(target));
   const manifest = devLaneManifestRuntimeSupervisor(
@@ -403,12 +422,31 @@ function verifiedRuntimeSupervisor(
     target,
   );
   if (manifest === undefined || !isRegularFile(path)) return undefined;
-  return sha256File(path) === manifest.sha256 &&
+  const sha256 = sha256File(path);
+  return sha256 === manifest.sha256 &&
     statSync(path).size === manifest.sizeBytes &&
     hashHelperSourceTree(join(checkoutRoot, "native", "runtime-supervisor", "windows")) ===
       manifest.sourceTreeSha256
-    ? path
+    ? { path, sha256 }
     : undefined;
+}
+
+function trustedNativeHelperDirectory(
+  stagedTargetRoot: string,
+  target: DevLaneOpenCodeTarget,
+): boolean {
+  const nativeDirectory = join(stagedTargetRoot, "native");
+  const expected = new Set([basename(helperRelativePath(target))]);
+  if (target === "windows-x64") expected.add(basename(runtimeSupervisorRelativePath(target)));
+  try {
+    const entries = readdirSync(nativeDirectory);
+    return (
+      entries.length === expected.size &&
+      entries.every((entry) => expected.has(entry) && isRegularFile(join(nativeDirectory, entry)))
+    );
+  } catch {
+    return false;
+  }
 }
 
 interface DevLaneHelperManifest {
@@ -470,12 +508,14 @@ function devLaneQualification(
   target: DevLaneOpenCodeTarget,
   sidecar: PortableSidecarRuntimeVerification,
   secureRead: DevLaneSecureReadBinding,
+  runtimeSupervisor: VerifiedRuntimeSupervisor | undefined,
 ): LongLivedRuntimeQualification {
   const binding = JSON.stringify({
     lane: "dev-checkout",
     target,
     executableTreeSha256: sidecar.executableTreeSha256,
     helperSha256: secureRead.artifact.sha256,
+    runtimeSupervisorSha256: runtimeSupervisor?.sha256,
   });
   return {
     platform: target === "windows-x64" ? "win32" : "darwin",

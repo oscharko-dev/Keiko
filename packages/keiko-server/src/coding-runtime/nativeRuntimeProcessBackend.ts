@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Readable, Writable } from "node:stream";
 import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-sandbox";
@@ -35,6 +37,7 @@ export type NativeRuntimeHelperSpawn = (
 
 export interface NativeRuntimeProcessBackendOptions {
   readonly helperPath: string;
+  readonly expectedHelperSha256?: string | undefined;
   readonly runtimeRoots: readonly string[];
   readonly workspaceRoot: string;
   readonly identity?: Pick<LongLivedRuntimeQualification, "platform" | "arch" | "backend">;
@@ -47,6 +50,7 @@ export interface NativeRuntimeRecoveryPort {
 
 interface ValidatedBackendOptions {
   readonly helperPath: string;
+  readonly expectedHelperSha256?: string | undefined;
   readonly runtimeRoots: readonly string[];
   readonly workspaceRoot: string;
   readonly identity: Pick<LongLivedRuntimeQualification, "platform" | "arch" | "backend">;
@@ -60,13 +64,23 @@ export function createNativeRuntimeProcessBackend(
 }
 
 export function createNativeRuntimeRecoveryPort(
-  options: Pick<NativeRuntimeProcessBackendOptions, "helperPath" | "spawnHelper">,
+  options: Pick<
+    NativeRuntimeProcessBackendOptions,
+    "helperPath" | "expectedHelperSha256" | "spawnHelper"
+  >,
 ): NativeRuntimeRecoveryPort {
   const helperPath = safeRealFile(options.helperPath);
+  const expectedHelperSha256 = validExpectedHelperSha256(options.expectedHelperSha256);
   const spawnHelper = options.spawnHelper ?? spawnNativeHelper;
   return {
     reconcile: (recoveryHandle, timeoutMs) =>
-      reconcileRecoveryHandle(helperPath, spawnHelper, recoveryHandle, timeoutMs),
+      reconcileRecoveryHandle(
+        helperPath,
+        expectedHelperSha256,
+        spawnHelper,
+        recoveryHandle,
+        timeoutMs,
+      ),
   };
 }
 
@@ -87,6 +101,7 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
     });
     const recoveryHandle = request.recoveryHandle;
     const packet = encodeLaunchPacket(request, paths);
+    assertExpectedHelperSha256(this.options.helperPath, this.options.expectedHelperSha256);
     const child = this.options.spawnHelper(this.options.helperPath, [], {
       cwd: dirname(this.options.helperPath),
       env: {},
@@ -118,6 +133,7 @@ function validateBackendOptions(
   options: NativeRuntimeProcessBackendOptions,
 ): ValidatedBackendOptions {
   const helperPath = safeRealFile(options.helperPath);
+  const expectedHelperSha256 = validExpectedHelperSha256(options.expectedHelperSha256);
   const workspaceRoot = safeRealDirectory(options.workspaceRoot);
   if (options.runtimeRoots.length === 0 || options.runtimeRoots.length > 8) {
     throw new Error("native-runtime-config-invalid");
@@ -125,6 +141,7 @@ function validateBackendOptions(
   const runtimeRoots = options.runtimeRoots.map(safeRealDirectory);
   return {
     helperPath,
+    ...(expectedHelperSha256 === undefined ? {} : { expectedHelperSha256 }),
     workspaceRoot,
     runtimeRoots,
     identity:
@@ -136,6 +153,18 @@ function validateBackendOptions(
       }),
     spawnHelper: options.spawnHelper ?? spawnNativeHelper,
   };
+}
+
+function validExpectedHelperSha256(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (!/^[a-f0-9]{64}$/u.test(value)) throw new Error("native-runtime-config-invalid");
+  return value;
+}
+
+function assertExpectedHelperSha256(path: string, expected: string | undefined): void {
+  if (expected === undefined) return;
+  const actual = createHash("sha256").update(readFileSync(path)).digest("hex");
+  if (actual !== expected) throw new Error("native-runtime-helper-digest-mismatch");
 }
 
 function spawnNativeHelper(
@@ -175,11 +204,13 @@ function spawnNativeHelper(
 
 async function reconcileRecoveryHandle(
   helperPath: string,
+  expectedHelperSha256: string | undefined,
   spawnHelper: NativeRuntimeHelperSpawn,
   recoveryHandle: string,
   timeoutMs: number,
 ): Promise<boolean> {
   if (!/^[0-9a-f]{32}$/u.test(recoveryHandle)) invalidRequest();
+  assertExpectedHelperSha256(helperPath, expectedHelperSha256);
   const child = spawnHelper(helperPath, ["--reconcile", recoveryHandle], {
     cwd: dirname(helperPath),
     env: {},

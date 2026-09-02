@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -197,6 +198,25 @@ describe("native runtime process backend", () => {
     for (const candidate of candidates) {
       expect(() => backend.spawnOwnedTree(candidate)).toThrow("native-runtime-request-invalid");
     }
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rechecks a Windows helper digest immediately before spawn", () => {
+    const paths = fixture();
+    const spawn = vi.fn<NativeRuntimeHelperSpawn>(() => new FakeHelper());
+    const expectedHelperSha256 = createHash("sha256").update("helper").digest("hex");
+    const backend = createNativeRuntimeProcessBackend({
+      helperPath: paths.helper,
+      expectedHelperSha256,
+      runtimeRoots: [join(paths.runtime, "..")],
+      workspaceRoot: paths.workspace,
+      spawnHelper: spawn,
+    });
+    writeFileSync(paths.helper, "replaced helper");
+
+    expect(() => backend.spawnOwnedTree(request(paths.runtime, paths.workspace))).toThrow(
+      "native-runtime-helper-digest-mismatch",
+    );
     expect(spawn).not.toHaveBeenCalled();
   });
 

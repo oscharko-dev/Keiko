@@ -328,6 +328,9 @@ static enum ksr_status secure_read(const struct request *request, unsigned char 
 
 int main(void) {
 #if defined(_WIN32)
+  /* /MT and /DEPENDENTLOADFLAG:0x800 protect implicit imports before main. This rejects a host
+   * that cannot close the search path for any later dynamic dependency. */
+  if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) || !SetDllDirectoryW(L"")) return 1;
   if (!binary_standard_io()) return 1;
 #endif
   struct request request; unsigned char *content = NULL; uint32_t length = 0; enum ksr_status status = parse_request(&request);

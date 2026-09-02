@@ -39,7 +39,7 @@ describe("runtime supervisor build", () => {
     expect(spawnSyncImpl).not.toHaveBeenCalled();
   });
 
-  it("builds Windows with the bounded compiler environment and propagates failure", async () => {
+  it("builds Windows with the bounded compiler environment and hardened loader flags", async () => {
     const root = await temporaryRoot();
     const output = join(root, "keiko-runtime-supervisor.exe");
     const environment = {
@@ -61,7 +61,13 @@ describe("runtime supervisor build", () => {
     // Absolute path, never a bare name: options.env.PATH is not reliably searched on Windows.
     expect(success).toHaveBeenCalledWith(
       "C:\\Program Files\\MSVC\\bin\\cl.exe",
-      expect.arrayContaining(["/std:c11", `/Fe:${output}`]),
+      expect.arrayContaining([
+        "/std:c11",
+        "/MT",
+        `/Fe:${output}`,
+        "/link",
+        "/DEPENDENTLOADFLAG:0x800",
+      ]),
       {
         env: {
           PATH: environment.PATH,

@@ -406,6 +406,7 @@ function devLaneSupervisor(
   return createRuntimeProcessSupervisor({
     backend: createNativeRuntimeProcessBackend({
       helperPath: portable.nativeHelperPath,
+      expectedHelperSha256: portable.nativeHelperSha256,
       runtimeRoots: [join(portable.installRoot, portable.sidecar.payloadRootPath)],
       workspaceRoot,
       identity: portable.qualification,

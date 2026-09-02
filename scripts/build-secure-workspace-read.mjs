@@ -6,6 +6,24 @@ import { resolveWindowsMsvcEnv, windowsToolFromPath } from "./lib/windows-msvc.m
 import { fileURLToPath } from "node:url";
 
 const source = resolve("native/secure-workspace-read/secure_workspace_read.c");
+
+function windowsCompilerFlags() {
+  return [
+    "/nologo",
+    "/std:c11",
+    "/W4",
+    "/WX",
+    "/O2",
+    // The helper is staged beneath a developer checkout. Static CRT prevents a plantable VC
+    // runtime DLL from resolving beside the executable before main runs.
+    "/MT",
+    "/DUNICODE",
+    "/D_UNICODE",
+    "/D_CRT_SECURE_NO_WARNINGS",
+    "/Fe:",
+  ];
+}
+
 const supported = new Map([
   [
     "macos-arm64",
@@ -41,23 +59,7 @@ const supported = new Map([
       ],
     ],
   ],
-  [
-    "windows-x64",
-    [
-      "cl",
-      [
-        "/nologo",
-        "/std:c11",
-        "/W4",
-        "/WX",
-        "/O2",
-        "/DUNICODE",
-        "/D_UNICODE",
-        "/D_CRT_SECURE_NO_WARNINGS",
-        "/Fe:",
-      ],
-    ],
-  ],
+  ["windows-x64", ["cl", windowsCompilerFlags()]],
 ]);
 
 const COMPILER_ENV_KEYS = {
@@ -103,7 +105,7 @@ function compilerInvocation(argv) {
   const [compiler, flags] = supported.get(target);
   const args =
     target === "windows-x64"
-      ? [...flags, output, source, "/link", "ntdll.lib"]
+      ? [...flags, output, source, "/link", "/DEPENDENTLOADFLAG:0x800", "ntdll.lib"]
       : [...flags, "-o", output, source];
   return { args, compiler, output, target };
 }

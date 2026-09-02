@@ -15,6 +15,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   computePortableSidecarPayloadTreeDigest,
+  DEV_LANE_MANIFEST_FILE,
+  DEV_LANE_RUNTIME_SUPERVISOR_RELATIVE_PATH,
   discoverDevLaneOpenCode,
   devLaneEnvEnabled,
   KEIKO_CODING_RUNTIME_DEV_LANE_ENV,
@@ -117,6 +119,57 @@ describe("dev-lane OpenCode discovery", () => {
       },
     });
     expect(discovery.runtime.nativeHelperPath).toContain("keiko-runtime-supervisor.exe");
+    expect(discovery.runtime.nativeHelperSha256).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("refuses an unexpected DLL beside a staged Windows helper", () => {
+    const staged = fixture("windows-x64");
+    writeFileSync(join(staged.paths.stagedTargetRoot, "native", "plantable.dll"), "malicious");
+
+    expectRefusal(
+      discover(staged, { platform: "win32", arch: "x64" }),
+      "native-helper-directory-untrusted",
+    );
+  });
+
+  it("fails closed on a malformed Windows supervisor binding", () => {
+    const staged = fixture("windows-x64");
+    const manifest = JSON.parse(readFileSync(staged.paths.helperManifest, "utf8")) as {
+      runtimeSupervisor: { sha256: string };
+    };
+    manifest.runtimeSupervisor.sha256 = "not-a-digest";
+    writeFileSync(staged.paths.helperManifest, JSON.stringify(manifest));
+
+    expectRefusal(discover(staged, { platform: "win32", arch: "x64" }), "payload-missing");
+  });
+
+  it("binds the verified Windows supervisor into the dev-lane receipt", () => {
+    const staged = fixture("windows-x64");
+    const first = discover(staged, { platform: "win32", arch: "x64" });
+    expect(first.outcome).toBe("activated");
+    if (first.outcome !== "activated") return;
+
+    const supervisor = join(
+      staged.paths.stagedTargetRoot,
+      `${DEV_LANE_RUNTIME_SUPERVISOR_RELATIVE_PATH}.exe`,
+    );
+    writeFileSync(supervisor, "rebuilt supervisor");
+    const manifestPath = join(staged.paths.stagedTargetRoot, DEV_LANE_MANIFEST_FILE);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      runtimeSupervisor: { sha256: string; sizeBytes: number };
+    };
+    manifest.runtimeSupervisor.sha256 = createHash("sha256")
+      .update(readFileSync(supervisor))
+      .digest("hex");
+    manifest.runtimeSupervisor.sizeBytes = readFileSync(supervisor).length;
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    const second = discover(staged, { platform: "win32", arch: "x64" });
+    expect(second.outcome).toBe("activated");
+    if (second.outcome !== "activated") return;
+    expect(second.runtime.qualification.releaseReceipt).not.toBe(
+      first.runtime.qualification.releaseReceipt,
+    );
   });
 
   it("refuses unsupported platforms and unknown architectures", () => {
