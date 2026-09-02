@@ -3,11 +3,13 @@ import fs, {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -168,6 +170,104 @@ describe("nodeWorkspaceFs", () => {
         "complete",
       ),
     ).toThrow(WorkspaceDescriptorReadError);
+  });
+
+  // Every term of the admission-time snapshot comparison, proven ONE AT A TIME.
+  //
+  // The consumer-level pin for this guard (files.test.ts, "rejects a same-size, same-mtime
+  // substitute swapped in between admission and the content read") cannot carry it. A substitute
+  // file has to be created, and creating it moves `ctime`, which userland cannot set back — so that
+  // test is refused on the ctime term no matter what the inode term does. Verified by deleting
+  // `expected.fileIdentity === observed.fileIdentity` from the comparator: the consumer pin stayed
+  // green while the binding it is named after was gone.
+  //
+  // Mutating exactly one field of `expected` is the only way to hold each term individually
+  // falsifiable, and it goes through the production read rather than reaching for the private
+  // comparator, so the pin cannot drift away from the code path callers actually use.
+  it.each([
+    { term: "file identity (device:inode)", change: { fileIdentity: "0:0" } },
+    { term: "size", change: { size: 1 } },
+    { term: "hard link count", change: { hardLinkCount: 99 } },
+    { term: "modification time", change: { mtimeNs: "1" } },
+    { term: "change time", change: { ctimeNs: "1" } },
+    { term: "regular-file kind", change: { isFile: false } },
+    { term: "directory kind", change: { isDirectory: true } },
+    { term: "symbolic-link kind", change: { isSymbolicLink: true } },
+  ])("refuses a bounded read whose admitted $term no longer matches", async ({ change }) => {
+    const { file } = workspaceFixture();
+    const admitted = nodeWorkspaceFs.stat(file);
+
+    await expect(
+      nodeWorkspaceFs.readFileBytes?.(file, 64, "reject", { ...admitted, ...change }),
+    ).rejects.toThrow(WorkspaceDescriptorReadError);
+    // The unmutated snapshot still reads, so each rejection above is the mutated term and not a
+    // fixture that could never be admitted in the first place.
+    await expect(
+      nodeWorkspaceFs.readFileBytes?.(file, 64, "reject", admitted),
+    ).resolves.toBeInstanceOf(Uint8Array);
+  });
+
+  // The PRODUCER, not just the comparator. The cases above prove the comparison consumes whatever
+  // `workspaceStat` calls `fileIdentity`; they do not prove that value is still device+inode.
+  // Review demonstrated the gap by replacing the producer with `String(stats.ctimeNs)` — every
+  // comparator case, the consumer substitution test, and the whole workspace suite stayed green
+  // while the independent identity signal had collapsed onto a timestamp.
+  //
+  // These three hold the producer to inode semantics without restating its formula: an identity that
+  // followed any timestamp fails the second, and one that followed the path fails the first.
+  it("gives two names for one inode the same identity, and a copy a different one", () => {
+    const { root, file } = workspaceFixture();
+    const hardLink = join(root, "same-inode.txt");
+    const copy = join(root, "copied.txt");
+    linkSync(file, hardLink);
+    writeFileSync(copy, readFileSync(file));
+
+    expect(nodeWorkspaceFs.stat(hardLink).fileIdentity).toBe(
+      nodeWorkspaceFs.stat(file).fileIdentity,
+    );
+    expect(nodeWorkspaceFs.stat(copy).fileIdentity).not.toBe(
+      nodeWorkspaceFs.stat(file).fileIdentity,
+    );
+  });
+
+  it("does not move when the file's content and every timestamp move", () => {
+    const { file } = workspaceFixture();
+    const before = nodeWorkspaceFs.stat(file);
+
+    writeFileSync(file, "rewritten with a different length", "utf8");
+    utimesSync(file, new Date(0), new Date(0));
+    const after = nodeWorkspaceFs.stat(file);
+
+    // The rewrite has to have actually moved the fields an identity must not be built from,
+    // otherwise this passes for the wrong reason.
+    expect(after.size).not.toBe(before.size);
+    expect(after.mtimeNs).not.toBe(before.mtimeNs);
+    expect(after.ctimeNs).not.toBe(before.ctimeNs);
+    expect(after.fileIdentity).toBe(before.fileIdentity);
+  });
+
+  it("distinguishes two files that exist at the same moment", () => {
+    const { root, file } = workspaceFixture();
+    const sibling = join(root, "sibling.txt");
+    writeFileSync(sibling, "alpha🙂omega", { encoding: "utf8", mode: 0o600 });
+
+    expect(nodeWorkspaceFs.stat(sibling).fileIdentity).not.toBe(
+      nodeWorkspaceFs.stat(file).fileIdentity,
+    );
+  });
+
+  // An admission that never captured an identity cannot be re-proved against one. Fails closed
+  // rather than treating "nothing to compare" as "nothing changed".
+  it("refuses a bounded read admitted without a file identity", async () => {
+    const { file } = workspaceFixture();
+    const withoutIdentity: WorkspaceStat = {
+      ...nodeWorkspaceFs.stat(file),
+      fileIdentity: undefined,
+    };
+
+    await expect(
+      nodeWorkspaceFs.readFileBytes?.(file, 64, "reject", withoutIdentity),
+    ).rejects.toThrow(WorkspaceDescriptorReadError);
   });
 
   it("caps byte, prefix, and range reads without over-reading", async () => {
