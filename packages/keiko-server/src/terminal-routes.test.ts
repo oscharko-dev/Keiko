@@ -2,12 +2,16 @@
 // the real spawn-backed manager so these tests never spawn a real child. The createUiServer
 // fixture mirrors browser-routes.test.ts so CSRF guard, host-check, and SSE framer run live.
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { createTerminalExecutionManager } from "./terminal.js";
+import type { WorkspaceRootAccessOutcome } from "./task-workspace/workspace-root-access.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";
@@ -163,6 +167,20 @@ function baseUrl(): string {
   return `http://${UI_HOST}:${String(port)}`;
 }
 
+// Serves one request against a server composed from the fixture deps plus `overrides`, so a test
+// can vary the terminal manager or the managed-root configuration without reshaping the fixture.
+async function withDeps<T>(
+  overrides: Partial<UiHandlerDeps>,
+  run: (url: string) => Promise<T>,
+): Promise<T> {
+  const built = await buildServer({ ...deps, ...overrides });
+  try {
+    return await run(`http://${UI_HOST}:${String(built.port)}`);
+  } finally {
+    await closeServer(built.server);
+  }
+}
+
 function csrfHeaders(): Record<string, string> {
   return {
     "Content-Type": "application/json",
@@ -251,6 +269,39 @@ describe("GET /api/terminal/directories", () => {
     expect(body.roots.some((r) => r.label === "Project root")).toBe(true);
   });
 
+  it("threads the request correlation into a denied-root directory log", async () => {
+    const fixture = await mkdtemp(join(tmpdir(), "keiko-term-route-denied-"));
+    const deniedTarget = join(fixture, ".aws", "workspace");
+    const linkedRoot = join(fixture, "selected-project");
+    const correlationId = "terminal-directories-correlation-0001";
+    const sink = createBufferedServerLogSink();
+    try {
+      await mkdir(linkedRoot);
+      deps.store.createProject(linkedRoot, "denied-root");
+      await rm(linkedRoot, { recursive: true });
+      await mkdir(deniedTarget, { recursive: true });
+      await symlink(deniedTarget, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+
+      const res = await fetch(
+        `${baseUrl()}/api/terminal/directories?projectId=${encodeURIComponent(linkedRoot)}`,
+        { headers: { "X-Keiko-Correlation-Id": correlationId } },
+      );
+
+      expect(res.status).toBe(403);
+      expect(sink.events).toHaveLength(1);
+      expect(sink.events[0]).toMatchObject({
+        op: "workspace.root.denied",
+        correlationId,
+        errorKind: "WORKSPACE_PATH_DENIED",
+      });
+      expect(JSON.stringify(sink.events)).not.toContain(fixture);
+    } finally {
+      resetServerLogger();
+      await rm(fixture, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed when the registered project root has been deleted instead of falling back to process.cwd()", async () => {
     await rm(workspaceRoot, { recursive: true, force: true });
     const res = await fetch(
@@ -280,6 +331,173 @@ describe("GET /api/terminal/directories", () => {
       `${baseUrl()}/api/terminal/directories?projectId=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent(sub)}`,
     );
     expect(res.status).toBe(200);
+  });
+});
+
+// Every production request reaches the terminal manager with a central root resolver injected, so
+// this — not the un-injected fallback the fixture above exercises — is the branch a user hits. It
+// used to collapse both refusal decisions onto CWD_DENIED, so a missing or unreadable registered
+// root was reported to the user as a policy denial and the manager's PROJECT_NOT_FOUND branch was
+// dead in production (#3347 cursor). The status is the user-visible artifact, so both are pinned
+// here, at the route.
+describe("GET /api/terminal/directories — resolver decision → HTTP status (#3347)", () => {
+  function managerWithOutcome(outcome: WorkspaceRootAccessOutcome): TerminalExecutionManager {
+    return createTerminalExecutionManager({
+      store: deps.store,
+      evidenceStore: createInMemoryEvidenceStore(),
+      processEnv: { PATH: "/usr/bin" },
+      resolveWorkspaceRootAccess: () => outcome,
+    });
+  }
+
+  async function directoriesStatus(
+    outcome: WorkspaceRootAccessOutcome,
+  ): Promise<{ status: number; code: string }> {
+    return withDeps({ terminal: managerWithOutcome(outcome) }, async (url) => {
+      const res = await fetch(
+        `${url}/api/terminal/directories?projectId=${encodeURIComponent(workspaceRoot)}`,
+      );
+      const body = (await res.json()) as { error?: { code?: string } };
+      return { status: res.status, code: body.error?.code ?? "" };
+    });
+  }
+
+  it("answers 403 CWD_DENIED when the resolver refuses the root by policy", async () => {
+    await expect(directoriesStatus({ decision: "denied" })).resolves.toEqual({
+      status: 403,
+      code: "CWD_DENIED",
+    });
+  });
+
+  it("answers 404 PROJECT_NOT_FOUND when the root is missing or unreadable", async () => {
+    await expect(directoriesStatus({ decision: "unresolved" })).resolves.toEqual({
+      status: 404,
+      code: "PROJECT_NOT_FOUND",
+    });
+  });
+
+  it("answers 404 PROJECT_NOT_FOUND on the execution route for the same root", async () => {
+    const result = await withDeps(
+      { terminal: managerWithOutcome({ decision: "unresolved" }) },
+      async (url) => {
+        const res = await fetch(`${url}/api/terminal/executions`, {
+          method: "POST",
+          headers: csrfHeaders(),
+          body: JSON.stringify({ projectId: workspaceRoot, command: "ls", args: [] }),
+        });
+        const body = (await res.json()) as { error?: { code?: string } };
+        return { status: res.status, code: body.error?.code ?? "" };
+      },
+    );
+
+    expect(result).toEqual({ status: 404, code: "PROJECT_NOT_FOUND" });
+  });
+});
+
+// #3347 owner P2: `resolveWorkspaceRootAccess` is optional on the manager interface, so a
+// composition without it left `access` undefined and let the listing fall back to plain
+// nodeWorkspaceFs — a registered project under the configured managed task-workspace root could be
+// enumerated with no lifecycle or gitdir proof behind it. Managed classification must fail closed.
+describe("GET /api/terminal/directories — managed root, no authority resolver (#3347)", () => {
+  let managedRoot: string;
+  let registeredRoot: string;
+
+  beforeEach(async () => {
+    managedRoot = await mkdtemp(join(tmpdir(), "keiko-term-managed-"));
+    registeredRoot = join(managedRoot, "repo-1", "workspace-1");
+    await mkdir(join(registeredRoot, "src"), { recursive: true });
+    deps.store.createProject(registeredRoot, "managed-project");
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(managedRoot, { recursive: true, force: true });
+  });
+
+  it("fails closed with 403 CWD_DENIED and performs no filesystem read", async () => {
+    const readDir = vi.spyOn(nodeWorkspaceFs, "readDir");
+    const realPath = vi.spyOn(nodeWorkspaceFs, "realPath");
+    const stat = vi.spyOn(nodeWorkspaceFs, "stat");
+
+    // The fixture's FakeTerminalExecutionManager deliberately does NOT implement the optional
+    // resolveWorkspaceRootAccess method — the exact composition this finding is about.
+    const result = await withDeps({ managedTaskWorkspaceRoot: managedRoot }, async (url) => {
+      const res = await fetch(
+        `${url}/api/terminal/directories?projectId=${encodeURIComponent(registeredRoot)}`,
+      );
+      const body = (await res.json()) as { error?: { code?: string } };
+      return { status: res.status, code: body.error?.code ?? "" };
+    });
+
+    expect(result).toEqual({ status: 403, code: "CWD_DENIED" });
+    expect(readDir).not.toHaveBeenCalled();
+    expect(realPath).not.toHaveBeenCalled();
+    expect(stat).not.toHaveBeenCalled();
+  });
+
+  it("records the refusal as a correlated, body-free denial event", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      await withDeps({ managedTaskWorkspaceRoot: managedRoot }, async (url) => {
+        const res = await fetch(
+          `${url}/api/terminal/directories?projectId=${encodeURIComponent(registeredRoot)}`,
+          { headers: { "X-Keiko-Correlation-Id": "terminal-managed-correlation-0001" } },
+        );
+        expect(res.status).toBe(403);
+      });
+    } finally {
+      resetServerLogger();
+    }
+
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      op: "workspace.root.denied",
+      correlationId: "terminal-managed-correlation-0001",
+      extra: { decision: "denied", reason: "managed-authority-unavailable" },
+    });
+    expect(JSON.stringify(sink.events)).not.toContain(managedRoot);
+  });
+
+  it("still serves an ordinary registered root outside the managed root", async () => {
+    const result = await withDeps({ managedTaskWorkspaceRoot: managedRoot }, async (url) => {
+      const res = await fetch(
+        `${url}/api/terminal/directories?projectId=${encodeURIComponent(workspaceRoot)}`,
+      );
+      return res.status;
+    });
+
+    expect(result).toBe(200);
+  });
+});
+
+// #3347 owner P2 (reproduced): the picker discovered denied directories — a root listing offered
+// node_modules and navigating straight into it returned its contents.
+describe("GET /api/terminal/directories — deny vocabulary (#3347)", () => {
+  it("omits denied children from a root listing", async () => {
+    for (const name of ["node_modules", ".git", ".keiko", ".aws", ".ssh", "src"]) {
+      await mkdir(join(workspaceRoot, name), { recursive: true });
+    }
+
+    const res = await fetch(
+      `${baseUrl()}/api/terminal/directories?projectId=${encodeURIComponent(workspaceRoot)}`,
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { entries: { name: string }[] };
+    expect(body.entries.map((entry) => entry.name)).toEqual(["src"]);
+  });
+
+  it("refuses direct navigation into a denied directory with 403 CWD_DENIED", async () => {
+    await mkdir(join(workspaceRoot, "node_modules", "pkg"), { recursive: true });
+
+    const res = await fetch(
+      `${baseUrl()}/api/terminal/directories?projectId=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent("node_modules")}`,
+    );
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("CWD_DENIED");
   });
 });
 
@@ -314,16 +532,21 @@ describe("POST /api/terminal/executions", () => {
   });
 
   it("forwards a valid request to execute() and returns the result body", async () => {
+    const correlationId = "terminal-execution-correlation-0001";
     const res = await fetch(`${baseUrl()}/api/terminal/executions`, {
       method: "POST",
-      headers: csrfHeaders(),
+      headers: { ...csrfHeaders(), "X-Keiko-Correlation-Id": correlationId },
       body: JSON.stringify({ projectId: workspaceRoot, command: "ls", args: ["-la"] }),
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { exitCode: number; stdout: string };
     expect(body.exitCode).toBe(0);
     expect(body.stdout).toBe("ok");
-    expect(terminal.executed[0]).toMatchObject({ projectId: workspaceRoot, command: "ls" });
+    expect(terminal.executed[0]).toMatchObject({
+      projectId: workspaceRoot,
+      command: "ls",
+      correlationId,
+    });
   });
 
   it("forwards an optional requestId to execute()", async () => {

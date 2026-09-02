@@ -11,15 +11,24 @@ import type {
   LineRange,
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import { redact } from "@oscharko-dev/keiko-security";
-import { readWorkspaceFile } from "./discovery.js";
+import { readWorkspaceFile, readWorkspaceFilePrefixForEvidence } from "./discovery.js";
 import { FileTooLargeError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
 import { resolveWithinWorkspace } from "./paths.js";
-import { buildAtom, gatherCandidates } from "./repoSearchScan.js";
+import {
+  buildAtom,
+  gatherCandidatesWithControl,
+  limitCandidateSetForStructuralBuild,
+  type CandidateSet,
+} from "./repoSearchScan.js";
 import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
 import type { SearchLimits, SearchScope } from "./repoSearch.js";
 import { assertContainedRealPath } from "./realpath.js";
+import {
+  createStructuralExecutionControl,
+  structuralExecutionStopped,
+  type StructuralExecutionControl,
+} from "./structuralExecution.js";
 
 const require = createRequire(import.meta.url);
 let cachedTypeScript: typeof ts | undefined;
@@ -176,6 +185,7 @@ export interface CodeIntelligenceIndex {
   readonly filesIndexed: number;
   readonly filesSkipped: number;
   readonly filesPartiallyIndexed: number;
+  readonly candidateLimitReached?: boolean | undefined;
   readonly parserCoverage: readonly CodeParserCoverage[];
 }
 
@@ -226,7 +236,9 @@ interface ResolvedTypescriptImportTarget {
 
 interface BuildDeps {
   readonly nowMs?: () => number;
+  readonly signal?: AbortSignal | undefined;
   readonly disableCache?: boolean | undefined;
+  readonly executionControl?: StructuralExecutionControl | undefined;
 }
 
 interface TsPathAlias {
@@ -241,6 +253,14 @@ interface TsImportResolverConfig {
   readonly baseUrls: readonly string[];
   readonly packages: readonly WorkspacePackageAlias[];
   readonly goModules: readonly GoModuleAlias[];
+  readonly filesSkipped: number;
+  readonly truncated: boolean;
+}
+
+interface MetadataCollection<T> {
+  readonly items: readonly T[];
+  readonly filesSkipped: number;
+  readonly truncated: boolean;
 }
 
 interface WorkspacePackageExport {
@@ -526,6 +546,66 @@ function isGoModPath(scopePath: string): boolean {
   return scopePath.split("/").at(-1)?.toLowerCase() === "go.mod";
 }
 
+function isImportResolverMetadataPath(scopePath: string): boolean {
+  return isTsconfigPath(scopePath) || isPackageJsonPath(scopePath) || isGoModPath(scopePath);
+}
+
+interface ResolverMetadataAncestors {
+  readonly javascript: ReadonlyMap<string, number>;
+  readonly go: ReadonlyMap<string, number>;
+}
+
+function addAncestorDistances(distances: Map<string, number>, scopePath: string): void {
+  let directory: string | undefined = tsconfigDir(scopePath);
+  let distance = 0;
+  while (directory !== undefined) {
+    const current = distances.get(directory);
+    if (current === undefined || distance < current) distances.set(directory, distance);
+    directory = directory.length === 0 ? undefined : tsconfigDir(directory);
+    distance += 1;
+  }
+}
+
+function resolverMetadataAncestors(
+  sources: readonly { readonly relativePath: string }[],
+): ResolverMetadataAncestors {
+  const javascript = new Map<string, number>();
+  const go = new Map<string, number>();
+  for (const source of sources) {
+    const language = languageForPath(source.relativePath);
+    if (language === "typescript" || language === "javascript") {
+      addAncestorDistances(javascript, source.relativePath);
+    } else if (language === "go") {
+      addAncestorDistances(go, source.relativePath);
+    }
+  }
+  return { javascript, go };
+}
+
+function rankResolverMetadata<T extends { readonly relativePath: string }>(
+  metadata: readonly T[],
+  sources: readonly { readonly relativePath: string }[],
+): readonly T[] {
+  const ancestors = resolverMetadataAncestors(sources);
+  return metadata
+    .map((file) => ({
+      file,
+      distance: (isGoModPath(file.relativePath) ? ancestors.go : ancestors.javascript).get(
+        tsconfigDir(file.relativePath),
+      ),
+    }))
+    .filter(({ distance }) => sources.length === 0 || distance !== undefined)
+    .sort((left, right) => {
+      const leftDistance = left.distance ?? Number.POSITIVE_INFINITY;
+      const rightDistance = right.distance ?? Number.POSITIVE_INFINITY;
+      if (leftDistance !== rightDistance) return leftDistance - rightDistance;
+      return left.file.relativePath < right.file.relativePath
+        ? -1
+        : Number(left.file.relativePath > right.file.relativePath);
+    })
+    .map(({ file }) => file);
+}
+
 function asStringArray(value: unknown): readonly string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
@@ -610,9 +690,16 @@ function collectWorkspacePackages(
   scope: SearchScope,
   fs: WorkspaceFs,
   candidates: readonly { readonly relativePath: string }[],
-): readonly WorkspacePackageAlias[] {
+  control: StructuralExecutionControl,
+): MetadataCollection<WorkspacePackageAlias> {
   const packages: WorkspacePackageAlias[] = [];
+  let filesSkipped = 0;
+  let truncated = false;
   for (const candidate of candidates) {
+    if (structuralExecutionStopped(control)) {
+      truncated = true;
+      break;
+    }
     if (
       !isPackageJsonPath(candidate.relativePath) ||
       candidate.relativePath.includes("node_modules/")
@@ -625,7 +712,12 @@ function collectWorkspacePackages(
         readWorkspaceFile(scope.workspace, candidate.relativePath, { maxBytes: 262_144 }, fs).text,
       );
     } catch {
+      filesSkipped += 1;
       continue;
+    }
+    if (structuralExecutionStopped(control)) {
+      truncated = true;
+      break;
     }
     if (!isRecord(parsed) || typeof parsed.name !== "string" || parsed.name.length === 0) {
       continue;
@@ -639,16 +731,23 @@ function collectWorkspacePackages(
       dependencies: packageDependencies(parsed),
     });
   }
-  return packages;
+  return { items: packages, filesSkipped, truncated };
 }
 
 function collectGoModules(
   scope: SearchScope,
   fs: WorkspaceFs,
   candidates: readonly { readonly relativePath: string }[],
-): readonly GoModuleAlias[] {
+  control: StructuralExecutionControl,
+): MetadataCollection<GoModuleAlias> {
   const modules: GoModuleAlias[] = [];
+  let filesSkipped = 0;
+  let truncated = false;
   for (const candidate of candidates) {
+    if (structuralExecutionStopped(control)) {
+      truncated = true;
+      break;
+    }
     if (!isGoModPath(candidate.relativePath)) {
       continue;
     }
@@ -661,7 +760,12 @@ function collectGoModules(
         fs,
       ).text;
     } catch {
+      filesSkipped += 1;
       continue;
+    }
+    if (structuralExecutionStopped(control)) {
+      truncated = true;
+      break;
     }
     // Leading whitespace is bounded so a run of blank lines cannot force the multiline
     // anchor to re-scan the remaining text from every line start (superlinear backtracking).
@@ -675,23 +779,29 @@ function collectGoModules(
     modules.push({ modulePath, root: tsconfigDir(candidate.relativePath) });
   }
   modules.sort((a, b) => b.modulePath.length - a.modulePath.length || a.root.localeCompare(b.root));
-  return modules;
+  return { items: modules, filesSkipped, truncated };
+}
+
+interface CompilerOptionsRead {
+  readonly options?: Record<string, unknown> | undefined;
+  readonly readFailed: boolean;
 }
 
 function readTsCompilerOptions(
   scope: SearchScope,
   fs: WorkspaceFs,
   relativePath: string,
-): Record<string, unknown> | undefined {
+): CompilerOptionsRead {
   try {
     const text = readWorkspaceFile(scope.workspace, relativePath, { maxBytes: 262_144 }, fs).text;
     const result = typeScriptCompiler().parseConfigFileTextToJson(relativePath, text);
-    const parsed: unknown = result.error === undefined ? (result.config as unknown) : undefined;
-    return isRecord(parsed) && isRecord(parsed.compilerOptions)
-      ? parsed.compilerOptions
-      : undefined;
+    if (result.error !== undefined) return { readFailed: true };
+    const parsed: unknown = result.config as unknown;
+    const options =
+      isRecord(parsed) && isRecord(parsed.compilerOptions) ? parsed.compilerOptions : undefined;
+    return options === undefined ? { readFailed: false } : { options, readFailed: false };
   } catch {
-    return undefined;
+    return { readFailed: true };
   }
 }
 
@@ -711,12 +821,25 @@ function collectTsImportResolverConfig(
   scope: SearchScope,
   fs: WorkspaceFs,
   candidates: readonly { readonly relativePath: string }[],
+  control: StructuralExecutionControl,
 ): TsImportResolverConfig {
   const aliases: TsPathAlias[] = [];
   const baseUrls: string[] = [];
+  let filesSkipped = 0;
+  let truncated = false;
   for (const candidate of candidates) {
+    if (structuralExecutionStopped(control)) {
+      truncated = true;
+      break;
+    }
     if (!isTsconfigPath(candidate.relativePath)) continue;
-    const compilerOptions = readTsCompilerOptions(scope, fs, candidate.relativePath);
+    const read = readTsCompilerOptions(scope, fs, candidate.relativePath);
+    if (read.readFailed) filesSkipped += 1;
+    if (structuralExecutionStopped(control)) {
+      truncated = true;
+      break;
+    }
+    const compilerOptions = read.options;
     if (compilerOptions === undefined) continue;
     const baseUrl = typeof compilerOptions.baseUrl === "string" ? compilerOptions.baseUrl : ".";
     const configDir = tsconfigDir(candidate.relativePath);
@@ -725,11 +848,15 @@ function collectTsImportResolverConfig(
     }
     collectTsConfigAliases(aliases, compilerOptions, configDir, baseUrl);
   }
+  const packages = collectWorkspacePackages(scope, fs, candidates, control);
+  const goModules = collectGoModules(scope, fs, candidates, control);
   return {
     aliases,
     baseUrls: [...new Set(baseUrls)],
-    packages: collectWorkspacePackages(scope, fs, candidates),
-    goModules: collectGoModules(scope, fs, candidates),
+    packages: packages.items,
+    goModules: goModules.items,
+    filesSkipped: filesSkipped + packages.filesSkipped + goModules.filesSkipped,
+    truncated: truncated || packages.truncated || goModules.truncated,
   };
 }
 
@@ -4256,22 +4383,44 @@ function collectEndpoints(file: SourceFile): readonly ApiEndpoint[] {
   return endpoints;
 }
 
-function linkApiContracts(endpoints: readonly ApiEndpoint[]): readonly ApiContractEdge[] {
+// A wildcard method on either side still pairs the endpoints, but only an exact method match is
+// reported as resolved: the wildcard pairing is a heuristic the caller may down-rank.
+function apiContractEdgeFor(client: ApiEndpoint, server: ApiEndpoint): ApiContractEdge | undefined {
+  const methodMatches =
+    client.method === "ANY" || server.method === "ANY" || client.method === server.method;
+  if (!methodMatches || client.path !== server.path) {
+    return undefined;
+  }
+  return {
+    client,
+    server,
+    confidence: client.method === server.method ? "resolved" : "heuristic",
+  };
+}
+
+function collectApiContractEdgesForClient(
+  client: ApiEndpoint,
+  servers: readonly ApiEndpoint[],
+  edges: ApiContractEdge[],
+  control: StructuralExecutionControl,
+): void {
+  for (const server of servers) {
+    if (structuralExecutionStopped(control)) break;
+    const edge = apiContractEdgeFor(client, server);
+    if (edge !== undefined) edges.push(edge);
+  }
+}
+
+function linkApiContracts(
+  endpoints: readonly ApiEndpoint[],
+  control: StructuralExecutionControl,
+): readonly ApiContractEdge[] {
   const servers = endpoints.filter((endpoint) => endpoint.role === "server");
   const clients = endpoints.filter((endpoint) => endpoint.role === "client");
   const edges: ApiContractEdge[] = [];
   for (const client of clients) {
-    for (const server of servers) {
-      const methodMatches =
-        client.method === "ANY" || server.method === "ANY" || client.method === server.method;
-      if (methodMatches && client.path === server.path) {
-        edges.push({
-          client,
-          server,
-          confidence: client.method === server.method ? "resolved" : "heuristic",
-        });
-      }
-    }
+    if (structuralExecutionStopped(control)) break;
+    collectApiContractEdgesForClient(client, servers, edges, control);
   }
   return edges;
 }
@@ -4301,64 +4450,120 @@ function sharedDtoFields(
   return shared;
 }
 
-function linkDtoContracts(symbols: readonly CodeSymbol[]): readonly DtoContractEdge[] {
+// A DTO pair is only interesting across a scope and a language boundary: the same shape declared
+// twice in one scope, or twice in one language, is a local duplicate rather than a contract. A
+// normalized name match is authoritative; two or more shared fields is a heuristic pairing.
+function dtoContractEdgeFor(source: CodeSymbol, target: CodeSymbol): DtoContractEdge | undefined {
+  if (source.scopePath === target.scopePath || source.language === target.language) {
+    return undefined;
+  }
+  const sharedFields = sharedDtoFields(source.fields, target.fields);
+  const nameMatch = normalizedDtoName(source.name) === normalizedDtoName(target.name);
+  if (!nameMatch && sharedFields.length < 2) {
+    return undefined;
+  }
+  return {
+    source,
+    target,
+    sharedFields,
+    confidence: nameMatch ? "resolved" : "heuristic",
+  };
+}
+
+// Pairs are unordered, so the inner scan starts past the source index and every pair is visited
+// exactly once.
+function collectDtoContractEdgesFrom(
+  typed: readonly CodeSymbol[],
+  sourceIndex: number,
+  edges: DtoContractEdge[],
+  control: StructuralExecutionControl,
+): void {
+  const source = typed[sourceIndex];
+  for (let j = sourceIndex + 1; j < typed.length; j += 1) {
+    if (structuralExecutionStopped(control)) break;
+    const target = typed[j];
+    if (source === undefined || target === undefined) continue;
+    const edge = dtoContractEdgeFor(source, target);
+    if (edge !== undefined) edges.push(edge);
+  }
+}
+
+function linkDtoContracts(
+  symbols: readonly CodeSymbol[],
+  control: StructuralExecutionControl,
+): readonly DtoContractEdge[] {
   const typed = symbols.filter((symbol) => symbol.fields.length > 0);
   const edges: DtoContractEdge[] = [];
   for (let i = 0; i < typed.length; i += 1) {
-    for (let j = i + 1; j < typed.length; j += 1) {
-      const a = typed[i];
-      const b = typed[j];
-      if (
-        a === undefined ||
-        b === undefined ||
-        a.scopePath === b.scopePath ||
-        a.language === b.language
-      ) {
-        continue;
-      }
-      const sharedFields = sharedDtoFields(a.fields, b.fields);
-      const nameMatch = normalizedDtoName(a.name) === normalizedDtoName(b.name);
-      if (nameMatch || sharedFields.length >= 2) {
-        edges.push({
-          source: a,
-          target: b,
-          sharedFields,
-          confidence: nameMatch ? "resolved" : "heuristic",
-        });
-      }
-    }
+    if (structuralExecutionStopped(control)) break;
+    collectDtoContractEdgesFrom(typed, i, edges, control);
   }
   return edges;
+}
+
+function cacheEntryFingerprint(
+  scope: SearchScope,
+  fs: WorkspaceFs,
+  candidate: { readonly relativePath: string },
+): string | undefined {
+  const abs = resolveWithinWorkspace(scope.workspace.root, candidate.relativePath);
+  try {
+    const containedPath = assertContainedRealPath(
+      fs,
+      scope.workspace.root,
+      abs,
+      "code-intelligence cache fingerprint",
+    );
+    const stat = fs.stat(containedPath);
+    if (
+      typeof stat.fileIdentity !== "string" ||
+      stat.fileIdentity.length === 0 ||
+      typeof stat.mtimeNs !== "string" ||
+      stat.mtimeNs.length === 0 ||
+      typeof stat.ctimeNs !== "string" ||
+      stat.ctimeNs.length === 0 ||
+      stat.hardLinkCount !== 1
+    ) {
+      return undefined;
+    }
+    return JSON.stringify({
+      containedPath,
+      relativePath: candidate.relativePath,
+      size: stat.size,
+      fileIdentity: stat.fileIdentity,
+      mtimeNs: stat.mtimeNs,
+      ctimeNs: stat.ctimeNs,
+      hardLinkCount: stat.hardLinkCount,
+    });
+  } catch {
+    return undefined;
+  }
 }
 
 function cacheFingerprintFor(
   scope: SearchScope,
   limits: SearchLimits,
   fs: WorkspaceFs,
-  candidates: readonly { readonly relativePath: string; readonly sizeBytes: number }[],
-): string {
-  const entries = candidates.map((candidate) => {
-    const abs = resolveWithinWorkspace(scope.workspace.root, candidate.relativePath);
-    let mtime: string;
-    try {
-      mtime = String(fs.stat(abs).mtimeMs ?? "");
-    } catch {
-      mtime = "";
-    }
-    let ctime: string;
-    try {
-      ctime = String(fs.stat(abs).ctimeMs ?? "");
-    } catch {
-      ctime = "";
-    }
-    return `${candidate.relativePath}:${String(candidate.sizeBytes)}:${mtime}:${ctime}`;
-  });
+  candidates: readonly { readonly relativePath: string }[],
+  candidateLimitReached: boolean,
+  inputFileCount: number,
+  control?: StructuralExecutionControl,
+): string | undefined {
+  const entries: string[] = [];
+  for (const candidate of candidates) {
+    if (control !== undefined && structuralExecutionStopped(control)) return undefined;
+    const entry = cacheEntryFingerprint(scope, fs, candidate);
+    if (entry === undefined) return undefined;
+    entries.push(entry);
+  }
   return JSON.stringify({
     root: scope.workspace.root,
     scope: scope.relativePaths,
     maxFilesScanned: limits.maxFilesScanned,
     maxBytesPerFileScanned: limits.maxBytesPerFileScanned,
     codeIndexMaxSourceBytes: CODE_INDEX_MAX_SOURCE_BYTES,
+    candidateLimitReached,
+    inputFileCount,
     files: entries,
   });
 }
@@ -4406,20 +4611,16 @@ function readOversizedSourcePrefix(
   relativePath: string,
   language: CodeLanguage,
 ): SourceText | undefined {
-  const readPrefix = fs.readFileUtf8Prefix;
-  if (readPrefix === undefined) {
-    return undefined;
-  }
-  const absolutePath = resolveWithinWorkspace(scope.workspace.root, relativePath);
   try {
-    const containedPath = assertContainedRealPath(
+    const text = readWorkspaceFilePrefixForEvidence(
+      scope.workspace,
+      relativePath,
+      sourceReadCap(limits),
       fs,
-      scope.workspace.root,
-      absolutePath,
-      "code-intelligence source prefix",
     );
-    const text = redact(readPrefix(containedPath, sourceReadCap(limits)));
-    return text.length === 0 ? undefined : sourceText(relativePath, text, language, true);
+    return text === undefined || text.length === 0
+      ? undefined
+      : sourceText(relativePath, text, language, true);
   } catch {
     return undefined;
   }
@@ -4451,46 +4652,106 @@ function readSource(
   }
 }
 
+interface SourceReadTally {
+  readonly files: SourceFile[];
+  skipped: number;
+  partiallyIndexed: number;
+  truncated: boolean;
+}
+
+interface SourceReadArgs {
+  readonly scope: SearchScope;
+  readonly limits: SearchLimits;
+  readonly fs: WorkspaceFs;
+  readonly control: StructuralExecutionControl;
+  readonly tally: SourceReadTally;
+}
+
+// "stop" ends the candidate walk because the execution deadline fired part-way through it; the
+// tally carries the resulting truncation flag, so the caller only has to stop looping.
+type CandidateReadOutcome = "continue" | "stop";
+
+// A path the inventory does not index and a path with no known language are the same non-event:
+// neither is read, neither is counted.
+function indexableLanguageFor(scopePath: string): CodeLanguage | undefined {
+  return isIndexable(scopePath) ? languageForPath(scopePath) : undefined;
+}
+
+function parseSourceFile(source: SourceText): SourceFile {
+  const parser = parserKindForSource(source.scopePath, source.language);
+  return {
+    scopePath: source.scopePath,
+    text: source.text,
+    language: source.language,
+    parser,
+    syntaxTree: parser === "typescript-compiler-ast" ? parseTypescriptSource(source) : undefined,
+  };
+}
+
+// Reading and parsing one candidate is the expensive step, so the deadline is checked on both
+// sides of it: a stop observed before the file is recorded discards that file entirely, while a
+// stop observed once it is recorded keeps it and truncates only the remaining candidates.
+function recordCandidateSource(
+  args: SourceReadArgs,
+  relativePath: string,
+  language: CodeLanguage,
+): CandidateReadOutcome {
+  const source = readSource(args.scope, args.limits, args.fs, relativePath, language);
+  if (structuralExecutionStopped(args.control)) {
+    args.tally.truncated = true;
+    return "stop";
+  }
+  if (source.partial) {
+    args.tally.partiallyIndexed += 1;
+  }
+  args.tally.files.push(parseSourceFile(source));
+  if (!structuralExecutionStopped(args.control)) {
+    return "continue";
+  }
+  args.tally.truncated = true;
+  return "stop";
+}
+
+// A candidate the index cannot use is dropped for free; one it could use but cannot read —
+// oversized past the prefix fallback of readSource, vanished, or denied — is counted as skipped so
+// that a single unreadable file never fails the whole inventory.
+function readCandidateInto(args: SourceReadArgs, relativePath: string): CandidateReadOutcome {
+  const language = indexableLanguageFor(relativePath);
+  if (language === undefined) {
+    return "continue";
+  }
+  try {
+    return recordCandidateSource(args, relativePath, language);
+  } catch {
+    args.tally.skipped += 1;
+    return "continue";
+  }
+}
+
 function readSources(
   scope: SearchScope,
   limits: SearchLimits,
   fs: WorkspaceFs,
   candidates: readonly { readonly relativePath: string }[],
-): { files: readonly SourceFile[]; skipped: number; partiallyIndexed: number } {
-  const files: SourceFile[] = [];
-  let skipped = 0;
-  let partiallyIndexed = 0;
+  control: StructuralExecutionControl,
+): {
+  files: readonly SourceFile[];
+  skipped: number;
+  partiallyIndexed: number;
+  truncated: boolean;
+} {
+  const tally: SourceReadTally = { files: [], skipped: 0, partiallyIndexed: 0, truncated: false };
+  const args: SourceReadArgs = { scope, limits, fs, control, tally };
   for (const candidate of candidates) {
-    if (!isIndexable(candidate.relativePath)) {
-      continue;
+    if (structuralExecutionStopped(control)) {
+      tally.truncated = true;
+      break;
     }
-    const language = languageForPath(candidate.relativePath);
-    if (language === undefined) {
-      continue;
-    }
-    try {
-      const source = readSource(scope, limits, fs, candidate.relativePath, language);
-      if (source.partial) {
-        partiallyIndexed += 1;
-      }
-      const parser = parserKindForSource(source.scopePath, source.language);
-      files.push({
-        scopePath: source.scopePath,
-        text: source.text,
-        language: source.language,
-        parser,
-        syntaxTree:
-          parser === "typescript-compiler-ast" ? parseTypescriptSource(source) : undefined,
-      });
-    } catch (error) {
-      if (error instanceof FileTooLargeError) {
-        skipped += 1;
-        continue;
-      }
-      skipped += 1;
+    if (readCandidateInto(args, candidate.relativePath) === "stop") {
+      break;
     }
   }
-  return { files, skipped, partiallyIndexed };
+  return tally;
 }
 
 function collectParserCoverage(files: readonly SourceFile[]): readonly CodeParserCoverage[] {
@@ -4503,46 +4764,213 @@ function collectParserCoverage(files: readonly SourceFile[]): readonly CodeParse
     .map(([parser, filesIndexed]) => ({ parser, filesIndexed }));
 }
 
+interface ControlledBuildState {
+  truncated: boolean;
+}
+
+// This implementation-module export is intentionally absent from codeIntelligenceSurface.ts. It
+// keeps the deadline acceptance boundary directly testable without exposing it as package API.
+export function controlledBuild<T>(
+  control: StructuralExecutionControl,
+  state: ControlledBuildState,
+  fallback: T,
+  build: () => T,
+): T {
+  if (structuralExecutionStopped(control)) {
+    state.truncated = true;
+    return fallback;
+  }
+  const value = build();
+  if (!structuralExecutionStopped(control)) return value;
+  state.truncated = true;
+  return fallback;
+}
+
 export function buildCodeIntelligenceIndex(
   scope: SearchScope,
   limits: SearchLimits,
   fs: WorkspaceFs,
   deps?: BuildDeps,
 ): CodeIntelligenceIndex {
-  const candidates = gatherCandidates(scope, limits, fs).files;
-  const fingerprint = cacheFingerprintFor(scope, limits, fs, candidates);
-  const cacheKey = memoryCacheKeyFor(fingerprint, fs);
-  if (deps?.disableCache !== true) {
+  const executionControl =
+    deps?.executionControl ??
+    createStructuralExecutionControl(limits.elapsedMsMax, deps?.nowMs ?? Date.now, deps?.signal);
+  return buildCodeIntelligenceIndexFromCandidates(
+    scope,
+    limits,
+    fs,
+    gatherCandidatesWithControl(scope, limits, fs, executionControl),
+    { ...deps, executionControl },
+  );
+}
+
+// Internal owning-layer entry point for one request-scoped structural inventory. The public
+// builder above deliberately keeps its established cold-call behaviour; the structural adapter
+// request context calls this variant so concurrent adapter queries do not rediscover the same
+// workspace before building an otherwise identical index.
+export function buildCodeIntelligenceIndexFromCandidates(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  candidateSet: CandidateSet,
+  deps?: BuildDeps,
+): CodeIntelligenceIndex {
+  const executionControl =
+    deps?.executionControl ??
+    createStructuralExecutionControl(limits.elapsedMsMax, deps?.nowMs ?? Date.now, deps?.signal);
+  // Resolver metadata is tiny but changes the meaning of many source imports. Reserve it inside
+  // the existing file ceiling before filling the remaining slots with source files; otherwise a
+  // large source set deterministically pushes every tsconfig/package/go.mod past the cap and turns
+  // otherwise resolvable workspace edges into heuristics. Rank that reservation by the nearest
+  // ancestor of a source guaranteed to remain inside the same cap, so unrelated manifests cannot
+  // crowd out the selected source tree's resolver configuration.
+  const sourceInputs = candidateSet.files.filter((file) => isIndexable(file.relativePath));
+  const metadataInputs = candidateSet.files.filter(
+    (file) => !isIndexable(file.relativePath) && isImportResolverMetadataPath(file.relativePath),
+  );
+  const fileBudget = Math.max(0, limits.maxFilesScanned);
+  const metadataCapacity = sourceInputs.length === 0 ? fileBudget : Math.floor(fileBudget / 2);
+  const guaranteedSourceCapacity = fileBudget - metadataCapacity;
+  const rankedMetadata = rankResolverMetadata(
+    metadataInputs,
+    sourceInputs.slice(0, guaranteedSourceCapacity),
+  );
+  const reservedMetadata = rankedMetadata.slice(0, metadataCapacity);
+  const reservedPaths = new Set(reservedMetadata.map((file) => file.relativePath));
+  const inputFiles = [
+    ...reservedMetadata,
+    ...sourceInputs,
+    ...metadataInputs.filter((file) => !reservedPaths.has(file.relativePath)),
+  ];
+  const boundedInputs = limitCandidateSetForStructuralBuild(
+    { ...candidateSet, files: inputFiles },
+    limits,
+    () => true,
+  );
+  const candidates = boundedInputs.files.filter((file) => isIndexable(file.relativePath));
+  const resolverMetadata = boundedInputs.files.filter((file) =>
+    isImportResolverMetadataPath(file.relativePath),
+  );
+  const fingerprint =
+    deps?.disableCache === true
+      ? undefined
+      : cacheFingerprintFor(
+          scope,
+          limits,
+          fs,
+          boundedInputs.files,
+          boundedInputs.truncated,
+          inputFiles.length,
+          executionControl,
+        );
+  const cacheKey = fingerprint === undefined ? undefined : memoryCacheKeyFor(fingerprint, fs);
+  if (deps?.disableCache !== true && cacheKey !== undefined) {
     const cached = indexCache.get(cacheKey);
     if (cached !== undefined) {
+      const confirmedFingerprint = cacheFingerprintFor(
+        scope,
+        limits,
+        fs,
+        boundedInputs.files,
+        boundedInputs.truncated,
+        inputFiles.length,
+        executionControl,
+      );
+      if (confirmedFingerprint === fingerprint) {
+        indexCache.delete(cacheKey);
+        indexCache.set(cacheKey, cached);
+        return cached;
+      }
       indexCache.delete(cacheKey);
-      indexCache.set(cacheKey, cached);
-      return cached;
     }
   }
-  const { files, skipped, partiallyIndexed } = readSources(scope, limits, fs, candidates);
+  const { files, skipped, partiallyIndexed, truncated } = readSources(
+    scope,
+    limits,
+    fs,
+    candidates,
+    executionControl,
+  );
   const pathSet = new Set(files.map((file) => file.scopePath));
-  const importResolver = collectTsImportResolverConfig(scope, fs, candidates);
-  const packageDependencies = linkPackageDependencies(importResolver.packages);
-  const imports = files.flatMap((file) => collectImportEdges(file, pathSet, importResolver));
-  const symbols = files.flatMap((file) => collectSymbols(file));
-  const reExports = files.flatMap((file) => collectTypescriptReExportBindings(file, imports));
-  const defaultExports = files.flatMap((file) => collectTypescriptDefaultExports(file));
+  const importResolver = collectTsImportResolverConfig(
+    scope,
+    fs,
+    resolverMetadata,
+    executionControl,
+  );
+  const buildState: ControlledBuildState = {
+    truncated: truncated || importResolver.truncated,
+  };
+  const packageDependencies = controlledBuild(
+    executionControl,
+    buildState,
+    [] as readonly PackageDependencyEdge[],
+    () => linkPackageDependencies(importResolver.packages),
+  );
+  const imports = controlledBuild(
+    executionControl,
+    buildState,
+    [] as readonly CodeImportEdge[],
+    () => files.flatMap((file) => collectImportEdges(file, pathSet, importResolver)),
+  );
+  const symbols = controlledBuild(executionControl, buildState, [] as readonly CodeSymbol[], () =>
+    files.flatMap((file) => collectSymbols(file)),
+  );
+  const reExports = controlledBuild(
+    executionControl,
+    buildState,
+    [] as readonly TypescriptReExportBinding[],
+    () => files.flatMap((file) => collectTypescriptReExportBindings(file, imports)),
+  );
+  const defaultExports = controlledBuild(
+    executionControl,
+    buildState,
+    [] as readonly TypescriptDefaultExport[],
+    () => files.flatMap((file) => collectTypescriptDefaultExports(file)),
+  );
   const reExportResolver = buildTypescriptReExportResolverContext(
     reExports,
     defaultExports,
     symbols,
   );
-  const importBindings = files.flatMap((file) =>
-    file.syntaxTree === undefined
-      ? collectPolyglotImportBindings(file, imports)
-      : collectTypescriptImportBindings(file, imports, reExportResolver),
+  const importBindings = controlledBuild(
+    executionControl,
+    buildState,
+    [] as readonly CodeImportBinding[],
+    () =>
+      files.flatMap((file) =>
+        file.syntaxTree === undefined
+          ? collectPolyglotImportBindings(file, imports)
+          : collectTypescriptImportBindings(file, imports, reExportResolver),
+      ),
   );
-  const calls = collectCalls(files, symbols, imports, importBindings);
-  const references = collectReferences(files, symbols, importBindings);
-  const endpoints = files.flatMap((file) => collectEndpoints(file));
-  const apiContracts = linkApiContracts(endpoints);
-  const dtoContracts = linkDtoContracts(symbols);
+  const calls = controlledBuild(executionControl, buildState, [] as readonly CodeCallEdge[], () =>
+    collectCalls(files, symbols, imports, importBindings),
+  );
+  const references = controlledBuild(
+    executionControl,
+    buildState,
+    [] as readonly CodeReferenceEdge[],
+    () => collectReferences(files, symbols, importBindings),
+  );
+  const endpoints = controlledBuild(
+    executionControl,
+    buildState,
+    [] as readonly ApiEndpoint[],
+    () => files.flatMap((file) => collectEndpoints(file)),
+  );
+  const apiContracts = controlledBuild(
+    executionControl,
+    buildState,
+    [] as readonly ApiContractEdge[],
+    () => linkApiContracts(endpoints, executionControl),
+  );
+  const dtoContracts = controlledBuild(
+    executionControl,
+    buildState,
+    [] as readonly DtoContractEdge[],
+    () => linkDtoContracts(symbols, executionControl),
+  );
   const index: CodeIntelligenceIndex = {
     imports,
     symbols,
@@ -4553,12 +4981,30 @@ export function buildCodeIntelligenceIndex(
     dtoContracts,
     packageDependencies,
     filesIndexed: files.length,
-    filesSkipped: skipped,
+    filesSkipped: skipped + importResolver.filesSkipped,
     filesPartiallyIndexed: partiallyIndexed,
+    candidateLimitReached: boundedInputs.truncated || buildState.truncated,
     parserCoverage: collectParserCoverage(files),
   };
-  if (deps?.disableCache !== true) {
-    rememberIndex(cacheKey, index);
+  if (
+    deps?.disableCache !== true &&
+    fingerprint !== undefined &&
+    skipped === 0 &&
+    importResolver.filesSkipped === 0 &&
+    !buildState.truncated
+  ) {
+    const postBuildFingerprint = cacheFingerprintFor(
+      scope,
+      limits,
+      fs,
+      boundedInputs.files,
+      boundedInputs.truncated,
+      inputFiles.length,
+      executionControl,
+    );
+    if (postBuildFingerprint === fingerprint) {
+      rememberIndex(memoryCacheKeyFor(postBuildFingerprint, fs), index);
+    }
   }
   return index;
 }

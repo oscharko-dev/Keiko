@@ -36,7 +36,7 @@ async function expectedSnapshotRef(
   if (pathIsDenied(normalizedPath)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  return store.snapshotRefFor(resolvedRoot.root, normalizedPath);
+  return store.snapshotRefFor(resolvedRoot.access.canonicalRoot, normalizedPath);
 }
 
 async function validateSnapshotBinding(

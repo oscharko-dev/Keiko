@@ -12,9 +12,11 @@ import type {
   CommandTerminationEvidence,
   GitDeliveryActionKind,
   GitDeliveryApprovalRequirement,
+  GitDeliveryExecutionResult,
   GitDeliveryRepoPolicyPack,
   GitSyncOperation,
 } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
@@ -34,7 +36,12 @@ import {
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { resolveRegisteredOrManagedWorkspaceRoot } from "../task-workspace/authorization.js";
+import {
+  requiresConfiguredManagedWorkspaceAuthority,
+  resolveManagedWorkspaceRootAccess,
+  resolveRegisteredOrManagedWorkspaceRoot,
+  type WorkspaceRootAccessDenialLogging,
+} from "../task-workspace/workspace-root-access.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import type { GitDeliveryBranchProtectionReader } from "./branchProtectionPreflight.js";
@@ -95,6 +102,115 @@ export function resolveProjectWorkspace(
   projectId: string,
 ): WorkspaceInfo | undefined {
   return resolveRegisteredOrManagedWorkspaceRoot(deps, projectId);
+}
+
+/**
+ * What `executeGovernedMutation` needs from the request deps: the evidence pair it always used,
+ * plus the two managed-workspace fields the root re-proof below runs on. Both managed fields are
+ * OPTIONAL on `UiHandlerDeps`, so every existing caller — production routes passing the whole deps
+ * bag, and route tests passing an evidence-only literal — satisfies this unchanged.
+ */
+export type GitDeliveryMutationDeps = Pick<
+  UiHandlerDeps,
+  "evidenceStore" | "redactor" | "managedTaskWorkspaceRoot" | "workspaceProvisioning"
+>;
+
+/** A governed mutation refused because the admitted workspace root no longer re-proves. */
+export class GitDeliveryRootAuthorityRevokedError extends Error {
+  public constructor() {
+    // The message is the classification: this error is diagnosed by its name and by the
+    // `git.delivery.dispatch.no-spawn` line written before it is thrown, never by free text.
+    super("git-delivery-root-authority-revoked");
+    this.name = "GitDeliveryRootAuthorityRevokedError";
+  }
+}
+
+/**
+ * The managed-root re-proof this execution path carries to every spawn (#3347 owner P1).
+ *
+ * `resolveProjectWorkspace` admits a managed worktree through the strong prover and then collapses
+ * it to a path-only `WorkspaceInfo`; nothing in that value can observe an archive or an identity
+ * replacement that happens after admission, so the multi-command snapshot read and the mutation
+ * commands that follow it could run in a repository that had replaced the admitted one. This
+ * closure re-runs the SAME prover (`resolveManagedWorkspaceRootAccess`) and requires the re-proved
+ * capability to still be a managed-task grant for the identical canonical path. Its refusals are
+ * reported by the prover itself, on the existing `workspace.root.denied` vocabulary.
+ *
+ * An ordinary registered project is not under managed authority and keeps its previous outcome —
+ * the classifier is the same one admission used, not a second path-shape rule.
+ */
+export function managedRootStillAuthorized(
+  deps: Pick<UiHandlerDeps, "managedTaskWorkspaceRoot" | "workspaceProvisioning">,
+  workspace: WorkspaceInfo,
+  logging: WorkspaceRootAccessDenialLogging,
+): () => boolean {
+  if (!requiresConfiguredManagedWorkspaceAuthority(deps, workspace.root)) {
+    return (): boolean => true;
+  }
+  return (): boolean => {
+    const access = resolveManagedWorkspaceRootAccess(deps, workspace.root, logging);
+    return access?.kind === "managed-task" && access.canonicalRoot === workspace.root;
+  };
+}
+
+// One refusal record per governed mutation: it writes the no-spawn marker the instant the guard
+// refuses a dispatch, and remembers that it did so, so the terminal lifecycle can be projected as
+// the governance block it is instead of the adapter's synthetic transport abort.
+interface MutationDispatchRefusal {
+  readonly deny: () => void;
+  readonly denied: () => boolean;
+}
+
+function mutationDispatchRefusal(
+  activityLog: ServerLogSink,
+  actionKind: GitDeliveryActionKind,
+  correlationId: string | undefined,
+): MutationDispatchRefusal {
+  let denied = false;
+  return {
+    deny: (): void => {
+      denied = true;
+      logGitDeliveryNoSpawnRefusal(activityLog, actionKind, correlationId);
+    },
+    denied: (): boolean => denied,
+  };
+}
+
+type MutationDispatch<Req> = (request: Req) => Promise<GitDeliveryExecutionResult>;
+
+function guardedMutationDispatch<Req>(
+  dispatch: MutationDispatch<Req>,
+  refuseDispatch: () => GitDeliveryExecutionResult | undefined,
+): MutationDispatch<Req> {
+  return (request): Promise<GitDeliveryExecutionResult> => {
+    const refusal = refuseDispatch();
+    return refusal === undefined ? dispatch(request) : Promise.resolve(refusal);
+  };
+}
+
+// Mirrors pushExecution.ts/prExecution.ts/mergeExecution.ts's `authorityGuarded*Adapter`: the real
+// adapter is never called when the guard refuses, so no git process is spawned for that attempt.
+// The synthetic `aborted` result exists only to unwind the kernel; the durable governance fact is
+// the caller-side authority-denied projection plus the no-spawn marker written by `deny()`.
+function authorityGuardedMutationAdapter(
+  adapter: GitLocalMutationAdapter,
+  stillAuthorized: () => boolean,
+  refusal: MutationDispatchRefusal,
+): GitLocalMutationAdapter {
+  const refuseDispatch = (): GitDeliveryExecutionResult | undefined => {
+    if (stillAuthorized()) return undefined;
+    refusal.deny();
+    return { schemaVersion: GIT_DELIVERY_SCHEMA_VERSION, outcome: "aborted", durationMs: 0 };
+  };
+  return {
+    createBranch: guardedMutationDispatch((req) => adapter.createBranch(req), refuseDispatch),
+    switchBranch: guardedMutationDispatch((req) => adapter.switchBranch(req), refuseDispatch),
+    stage: guardedMutationDispatch((req) => adapter.stage(req), refuseDispatch),
+    unstage: guardedMutationDispatch((req) => adapter.unstage(req), refuseDispatch),
+    commit: guardedMutationDispatch((req) => adapter.commit(req), refuseDispatch),
+    abort: guardedMutationDispatch((req) => adapter.abort(req), refuseDispatch),
+    recover: guardedMutationDispatch((req) => adapter.recover(req), refuseDispatch),
+  };
 }
 
 // The minimal "does this seam bag carry the caller's chosen activity-log sink" contract every
@@ -308,29 +424,80 @@ interface GitDeliveryLifecycleRecordInput {
   readonly authorityDenied: boolean;
 }
 
-export function recordGitDeliveryLifecycle(input: GitDeliveryLifecycleRecordInput): void {
+// Returns the lifecycle it actually recorded so a caller that answers the client from the same
+// fact (executeGovernedMutation) reports the governance block it persisted, rather than projecting
+// the authority-denied result a second time or returning the adapter's synthetic abort.
+export function recordGitDeliveryLifecycle(
+  input: GitDeliveryLifecycleRecordInput,
+): GitMutationLifecycleResult {
   const lifecycle = input.authorityDenied
     ? authorityDeniedGitDeliveryLifecycle(input.result)
     : input.result;
   persistGitDeliveryEvidence(input.deps, lifecycle, input.snapshot, input.repoId, input.now);
   logGitDeliveryMutation(input.activityLog, lifecycle, input.correlationId);
+  return lifecycle;
+}
+
+interface GovernedMutationKernelInput {
+  readonly command: GitMutationCommand;
+  readonly approval: GitDeliveryApprovalRequirement;
+  readonly adapter: GitLocalMutationAdapter;
+  readonly snapshot: GitWorktreeSnapshot;
+  readonly seams: GitDeliveryExecutionSeams;
+  readonly now: () => number;
+}
+
+// The #472 kernel invocation with its trusted policy packs and action-id minting resolved from the
+// caller's seams. Split out only to keep executeGovernedMutation within the function-size bar; the
+// composition is unchanged.
+function runGovernedMutationKernel(
+  input: GovernedMutationKernelInput,
+): Promise<GitMutationLifecycleResult> {
+  const { command, seams, now } = input;
+  const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK);
+  const newActionId =
+    seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));
+  return runGitMutation(
+    { command, approval: input.approval },
+    {
+      adapter: input.adapter,
+      snapshot: input.snapshot,
+      ...(packs.orgPack !== undefined ? { orgPolicyPack: packs.orgPack } : {}),
+      ...(packs.repoPack !== undefined ? { repoPolicyPack: packs.repoPack } : {}),
+      now,
+      newActionId,
+    },
+  );
 }
 
 /**
  * Runs ONE governed local mutation end-to-end: live snapshot → kernel (preflight + policy + approval +
  * execute) → evidence. Returns the kernel lifecycle result; the caller projects it into a content-free
  * HTTP body. Evidence is appended best-effort BEFORE the caller responds.
+ *
+ * The admitted managed-root authority is re-proved immediately before the snapshot read and again
+ * immediately before every mutation command (#3347 owner P1): both are spawn boundaries, and the
+ * awaits between them are exactly where an archive or identity replacement lands.
  */
 export async function executeGovernedMutation(
   command: GitMutationCommand,
   approval: GitDeliveryApprovalRequirement,
   workspace: WorkspaceInfo,
-  deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
+  deps: GitDeliveryMutationDeps,
   seams: GitDeliveryExecutionSeams,
   correlationId: string | undefined,
 ): Promise<GitMutationLifecycleResult> {
   const now = seams.now ?? Date.now;
   const activityLog = seams.activityLog ?? processServerLogSink();
+  const stillAuthorized = managedRootStillAuthorized(deps, workspace, {
+    activityLog,
+    correlationId,
+  });
+  const refusal = mutationDispatchRefusal(activityLog, command.kind, correlationId);
+  if (!stillAuthorized()) {
+    refusal.deny();
+    throw new GitDeliveryRootAuthorityRevokedError();
+  }
   let snapshot: GitWorktreeSnapshot;
   try {
     snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
@@ -338,24 +505,28 @@ export async function executeGovernedMutation(
     logGitDeliveryPreconditionFailure(activityLog, command.kind, error, correlationId);
     throw error;
   }
-  const adapter = adapterFor(workspace, seams, now, correlationId);
-  const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK);
-  const newActionId =
-    seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));
-  const result = await runGitMutation(
-    { command, approval },
-    {
-      adapter,
-      snapshot,
-      ...(packs.orgPack !== undefined ? { orgPolicyPack: packs.orgPack } : {}),
-      ...(packs.repoPack !== undefined ? { repoPolicyPack: packs.repoPack } : {}),
-      now,
-      newActionId,
-    },
-  );
-  persistGitDeliveryEvidence(deps, result, snapshot, workspace.root, now);
-  logGitDeliveryMutation(activityLog, result, correlationId);
-  return result;
+  const result = await runGovernedMutationKernel({
+    command,
+    approval,
+    adapter: authorityGuardedMutationAdapter(
+      adapterFor(workspace, seams, now, correlationId),
+      stillAuthorized,
+      refusal,
+    ),
+    snapshot,
+    seams,
+    now,
+  });
+  return recordGitDeliveryLifecycle({
+    deps,
+    result,
+    snapshot,
+    repoId: workspace.root,
+    now,
+    activityLog,
+    correlationId,
+    authorityDenied: refusal.denied(),
+  });
 }
 
 /**

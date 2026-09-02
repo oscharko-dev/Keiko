@@ -13,6 +13,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
+import type { WorkspaceRootAccessOutcome } from "../../task-workspace/workspace-root-access.js";
 import { buildCspHeader } from "../../csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../../index.js";
 import { createRunRegistry } from "../../runs.js";
@@ -677,6 +678,60 @@ describe("managed LSP same-origin control routes", () => {
     const response = await snapshot();
 
     expect(response.status).toBe(400);
+    expect(dispose).not.toHaveBeenCalled();
+  });
+
+  // The composed resolver answers a revoked root with an explicit "denied" decision rather than a
+  // bare absence, so these fixtures model revocation the way production reports it.
+  const revokedRootAccess = (): WorkspaceRootAccessOutcome => ({ decision: "denied" });
+
+  // #3347 consumer-boundary hardening: resolveRequestRoot's admission is a single point-in-time
+  // check, so both routes re-prove authority a second time immediately before their effect (GET's
+  // read, PUT's mutate()) via requestRootAccessResolver. These isolate that SECOND re-proof from
+  // the coarse "root never resolved" case above by keeping admission itself successful and denying
+  // only the follow-up resolver -- the only way to prove the second check is load-bearing on its
+  // own, not merely redundant with the first.
+  it("fails closed when the second re-proof denies authority immediately before the GET read", async () => {
+    const denied = baseDeps();
+    const control = denied.managedLspControl;
+    if (control === undefined) throw new Error("missing managed LSP control fixture");
+    const read = vi.fn((realRoot: string) => control.read(realRoot));
+    await closeServer();
+    const built = await buildServer({
+      ...denied,
+      managedLspControl: { ...control, read },
+      workspaceRootAccessResolver: revokedRootAccess,
+    });
+    server = built.server;
+    port = built.port;
+
+    const response = await snapshot();
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: "DENIED" } });
+    // A 403 alone would still pass with the governed read already executed on the admission-time
+    // capability. The denial must land BEFORE the effect, so the read spy stays untouched.
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the second re-proof denies authority immediately before the mutation effect", async () => {
+    const current = await snapshot();
+    const etag = current.headers.get("etag") ?? "";
+    await closeServer();
+    const built = await buildServer({
+      ...baseDeps(),
+      workspaceRootAccessResolver: revokedRootAccess,
+    });
+    server = built.server;
+    port = built.port;
+
+    const response = await mutation(activateBody(), {
+      "If-Match": etag,
+      "Idempotency-Key": "denied-second-reproof",
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: "DENIED" } });
     expect(dispose).not.toHaveBeenCalled();
   });
 });

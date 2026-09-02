@@ -3,11 +3,13 @@ import { memFs } from "./_memfs.js";
 import type { WorkspaceFs } from "./fs.js";
 import {
   buildImportGraph,
+  buildImportGraphFromCandidates,
   collectImportSpecifiers,
   importsFromSource,
   importersForTarget,
 } from "./importGraphEdges.js";
 import { DEFAULT_SEARCH_LIMITS, type SearchScope } from "./repoSearch.js";
+import { gatherCandidates } from "./repoSearchScan.js";
 import type { WorkspaceInfo } from "./types.js";
 
 const MEM_ROOT = "/ws";
@@ -18,6 +20,7 @@ function makeScope(files: Readonly<Record<string, string>>): {
 } {
   const workspace: WorkspaceInfo = {
     root: MEM_ROOT,
+    selectedRoot: MEM_ROOT,
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",
@@ -166,6 +169,27 @@ describe("collectImportSpecifiers", () => {
 });
 
 describe("buildImportGraph", () => {
+  it("does not start candidate discovery when the elapsed ceiling is already exhausted", async () => {
+    const { scope, fs: base } = makeScope({
+      "src/expired.ts": 'import "./target";',
+      "src/target.ts": "export const target = 1;",
+    });
+    let directoryReads = 0;
+    const fs: WorkspaceFs = {
+      ...base,
+      readDir: (absolutePath) => {
+        directoryReads += 1;
+        return base.readDir(absolutePath);
+      },
+    };
+
+    const graph = await buildImportGraph(scope, { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 0 }, fs);
+
+    expect(directoryReads).toBe(0);
+    expect(graph.edges).toEqual([]);
+    expect(graph.diagnostics.truncated).toBe(true);
+  });
+
   it("resolves a relative import and indexes reverse dependencies", async () => {
     const { scope, fs } = makeScope({
       "src/a.ts": 'import { b } from "./b";',
@@ -185,6 +209,23 @@ describe("buildImportGraph", () => {
     expect(importersForTarget(graph, "src/b.ts")).toEqual([edge]);
   });
 
+  it("resolves a JSON target from the contained inventory without parsing it as source", async () => {
+    const { scope, fs } = makeScope({
+      "src/config.json": '{"enabled":true}',
+      "src/main.ts": 'import config from "./config.json"; export { config };',
+    });
+
+    const graph = await buildImportGraph(scope, DEFAULT_SEARCH_LIMITS, fs);
+
+    expect(graph.edges[0]).toMatchObject({
+      importerPath: "src/main.ts",
+      specifier: "./config.json",
+      targetPath: "src/config.json",
+      resolutionKind: "relative",
+    });
+    expect(graph.diagnostics.filesScanned).toBe(1);
+  });
+
   it("resolves tsconfig path aliases", async () => {
     const { scope, fs } = makeScope({
       "tsconfig.json": JSON.stringify({
@@ -199,6 +240,29 @@ describe("buildImportGraph", () => {
       targetPath: "src/lib.ts",
       resolutionKind: "tsconfig-path",
     });
+  });
+
+  it("reserves tsconfig metadata inside the structural file ceiling", async () => {
+    const { scope, fs } = makeScope({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { baseUrl: ".", paths: { "@app/*": ["src/*"] } },
+      }),
+      "src/a.ts": 'import { lib } from "@app/lib";',
+      "src/lib.ts": "export const lib = 1;",
+      "src/z.ts": "export const z = 1;",
+    });
+
+    const graph = await buildImportGraph(
+      scope,
+      { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 2 },
+      fs,
+    );
+
+    expect(graph.edges.find((edge) => edge.specifier === "@app/lib")).toMatchObject({
+      targetPath: "src/lib.ts",
+      resolutionKind: "tsconfig-path",
+    });
+    expect(graph.diagnostics).toMatchObject({ filesScanned: 1, truncated: true });
   });
 
   it("substitutes every wildcard occurrence in tsconfig alias targets", async () => {
@@ -276,6 +340,106 @@ describe("buildImportGraph", () => {
       targetPath: "packages/pkg/src/feature.ts",
       resolutionKind: "package-export",
     });
+  });
+
+  it("reserves package metadata inside the structural file ceiling", async () => {
+    const { scope, fs } = makeScope({
+      "src/a.ts": 'import { feature } from "@demo/pkg/feature";',
+      "packages/pkg/package.json": JSON.stringify({
+        name: "@demo/pkg",
+        exports: { "./feature": "./src/feature.ts" },
+      }),
+      "packages/pkg/src/feature.ts": "export const feature = 1;",
+      "src/z.ts": "export const z = 1;",
+    });
+
+    const graph = await buildImportGraph(
+      scope,
+      { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 2 },
+      fs,
+    );
+
+    expect(graph.edges.find((edge) => edge.specifier === "@demo/pkg/feature")).toMatchObject({
+      targetPath: "packages/pkg/src/feature.ts",
+      resolutionKind: "package-export",
+    });
+    expect(graph.diagnostics).toMatchObject({ filesScanned: 1, truncated: true });
+  });
+
+  it("prioritizes selected-source package metadata over unrelated manifests", async () => {
+    const files = {
+      "packages/consumer/src/app.ts": 'import { feature } from "@demo/consumer/feature";',
+      "packages/consumer/src/feature.ts": "export const feature = 1;",
+      "decoys/a/package.json": JSON.stringify({ name: "@decoy/a" }),
+      "decoys/b/package.json": JSON.stringify({ name: "@decoy/b" }),
+      "packages/consumer/package.json": JSON.stringify({
+        name: "@demo/consumer",
+        exports: { "./feature": "./src/feature.ts" },
+      }),
+    };
+    const { scope, fs } = makeScope(files);
+    const discovered = gatherCandidates(scope, DEFAULT_SEARCH_LIMITS, fs);
+    const orderedPaths = [
+      "packages/consumer/src/app.ts",
+      "packages/consumer/src/feature.ts",
+      "decoys/a/package.json",
+      "decoys/b/package.json",
+      "packages/consumer/package.json",
+    ];
+    const candidates = {
+      ...discovered,
+      files: orderedPaths.map((scopePath) => {
+        const file = discovered.files.find((candidate) => candidate.relativePath === scopePath);
+        if (file === undefined) throw new TypeError(`missing test candidate: ${scopePath}`);
+        return file;
+      }),
+    };
+
+    const graph = await buildImportGraphFromCandidates(
+      scope,
+      { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 3 },
+      fs,
+      candidates,
+    );
+
+    expect(graph.edges.find((edge) => edge.specifier === "@demo/consumer/feature")).toMatchObject({
+      targetPath: "packages/consumer/src/feature.ts",
+      resolutionKind: "package-export",
+    });
+    expect(graph.diagnostics).toMatchObject({ filesScanned: 2, truncated: true });
+  });
+
+  it("returns resolver capacity held by unrelated manifests to source files", async () => {
+    const decoys = Object.fromEntries(
+      Array.from({ length: 8 }, (_, index) => [
+        `decoys/package-${String(index)}/package.json`,
+        JSON.stringify({ name: `@decoy/package-${String(index)}` }),
+      ]),
+    );
+    const { scope, fs } = makeScope({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { baseUrl: ".", paths: { "@app/*": ["src/*"] } },
+      }),
+      "src/a.ts": 'import { value } from "@app/b";',
+      "src/b.ts": "export const value = 1;",
+      "src/c.ts": "export const c = 1;",
+      "src/d.ts": "export const d = 1;",
+      "src/e.ts": "export const e = 1;",
+      "src/f.ts": "export const f = 1;",
+      ...decoys,
+    });
+
+    const graph = await buildImportGraph(
+      scope,
+      { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 6 },
+      fs,
+    );
+
+    expect(graph.edges.find((edge) => edge.specifier === "@app/b")).toMatchObject({
+      targetPath: "src/b.ts",
+      resolutionKind: "tsconfig-path",
+    });
+    expect(graph.diagnostics).toMatchObject({ filesScanned: 5, truncated: true });
   });
 
   it("resolves exact aliases, package entry variants, fallbacks, and unresolved edges", async () => {
@@ -386,6 +550,7 @@ describe("buildImportGraph", () => {
     };
     const workspace: WorkspaceInfo = {
       root: MEM_ROOT,
+      selectedRoot: MEM_ROOT,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",
@@ -407,6 +572,99 @@ describe("buildImportGraph", () => {
         targetPath: "src/target.ts",
       }),
     ]);
+  });
+
+  it("does not resolve an import to a hard-linked target", async () => {
+    const { scope, fs: base } = makeScope({
+      "src/importer.ts": 'import { target } from "./target";',
+      "src/target.ts": "export const target = 1;",
+    });
+    const fs: WorkspaceFs = {
+      ...base,
+      stat: (absolutePath) => {
+        const stat = base.stat(absolutePath);
+        return absolutePath.endsWith("/src/target.ts") ? { ...stat, hardLinkCount: 2 } : stat;
+      },
+    };
+
+    const graph = await buildImportGraph(scope, DEFAULT_SEARCH_LIMITS, fs);
+
+    expect(graph.edges).toEqual([
+      expect.objectContaining({
+        importerPath: "src/importer.ts",
+        specifier: "./target",
+        targetPath: undefined,
+        resolutionKind: "unresolved",
+        confidence: 0.25,
+      }),
+    ]);
+    expect(graph.diagnostics.filesScanned).toBe(1);
+    expect(graph.diagnostics.filesSkipped).toBe(1);
+    expect(graph.diagnostics.filesScanned + graph.diagnostics.filesSkipped).toBe(2);
+  });
+
+  it("reports a resolver stat failure instead of treating an import target as safe", async () => {
+    const { scope, fs: base } = makeScope({
+      "src/importer.ts": 'import { target } from "./target";',
+      "src/target.ts": "export const target = 1;",
+    });
+    let targetStatCount = 0;
+    const fs: WorkspaceFs = {
+      ...base,
+      stat: (absolutePath) => {
+        if (absolutePath.endsWith("/src/target.ts")) {
+          targetStatCount += 1;
+          if (targetStatCount === 2) throw new Error("EIO");
+        }
+        return base.stat(absolutePath);
+      },
+    };
+
+    const graph = await buildImportGraph(scope, DEFAULT_SEARCH_LIMITS, fs);
+
+    expect(graph.edges).toEqual([
+      expect.objectContaining({
+        importerPath: "src/importer.ts",
+        specifier: "./target",
+        targetPath: undefined,
+        resolutionKind: "unresolved",
+        confidence: 0.25,
+      }),
+    ]);
+    expect(graph.diagnostics.filesSkipped).toBeGreaterThan(0);
+  });
+
+  it("reports source-file truncation at the structural scan ceiling", async () => {
+    const { scope, fs } = makeScope({
+      "src/a.ts": "export const a = 1;",
+      "src/b.vue": "<script>export const b = 2;</script>",
+      "src/c.vue": "<script>export const c = 3;</script>",
+    });
+
+    const graph = await buildImportGraph(
+      scope,
+      { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 },
+      fs,
+    );
+
+    expect(graph.diagnostics).toEqual({ filesScanned: 1, filesSkipped: 0, truncated: true });
+  });
+
+  it("reports unreadable import sources instead of claiming complete coverage", async () => {
+    const { scope, fs } = makeScope({
+      "src/oversized.ts": 'import "./target";',
+      "src/target.ts": "export const target = 1;",
+    });
+
+    const graph = await buildImportGraph(
+      scope,
+      { ...DEFAULT_SEARCH_LIMITS, maxBytesPerFileScanned: 1 },
+      fs,
+    );
+
+    expect(graph.diagnostics.filesScanned).toBe(0);
+    expect(graph.diagnostics.filesSkipped).toBe(2);
+    expect(graph.diagnostics.truncated).toBe(false);
   });
 
   it("keeps transitive traversal bounded when import relationships cycle", async () => {
@@ -457,6 +715,7 @@ describe("buildImportGraph", () => {
     };
     const workspace: WorkspaceInfo = {
       root: MEM_ROOT,
+      selectedRoot: MEM_ROOT,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",

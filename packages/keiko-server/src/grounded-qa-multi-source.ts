@@ -87,6 +87,7 @@ import {
   groundedContextAssemblyInput,
   groundedContextSummaryInput,
   groundedEvidenceRunId,
+  groundedScopeWorkspaceFs,
   internalError,
   isValidGroundedPack,
   mappedGatewayError,
@@ -644,11 +645,13 @@ function classifyPerSourceRetrieveError(
 ): { readonly skipped: SkippedScope; readonly mapped: RouteResult } | undefined {
   const mapped = mappedWorkspaceError(error);
   if (mapped === undefined) return undefined;
+  const body = mapped.body as { readonly error?: { readonly message?: unknown } };
+  const safeMessage =
+    typeof body.error?.message === "string"
+      ? body.error.message
+      : "Connected source is not readable.";
   return {
-    skipped: {
-      label,
-      message: error instanceof Error ? error.message : "Connected source is not readable.",
-    },
+    skipped: { label, message: safeMessage },
     mapped,
   };
 }
@@ -678,11 +681,13 @@ async function retrieveOneSource(
   const scope = buildSelectedScopeFrom(ctx.chat, cs, deriveScopeIdFrom(ctx.chat, cs, i));
   let out: Awaited<ReturnType<GroundedRetriever>>;
   try {
+    const workspaceFs = groundedScopeWorkspaceFs(cs);
     out = await ctx.retriever({
       scope,
       query,
       workspaceRoot: scope.workspaceRoot,
       budget,
+      ...(workspaceFs === undefined ? {} : { workspaceFs }),
     });
     ensureNotCancelled(ctx.signal);
   } catch (error) {

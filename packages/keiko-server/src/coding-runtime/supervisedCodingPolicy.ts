@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import type {
@@ -23,7 +22,11 @@ import {
   isContainedAgentPath,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { validateCodingWorkbenchEvidenceRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-evidence";
-import { containedRealPathInfo, PathEscapeError } from "@oscharko-dev/keiko-workspace";
+import {
+  containedRealPathInfo,
+  PathEscapeError,
+  type WorkspaceFs,
+} from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import type { SupervisedCodingConsumedApproval } from "./supervisedCodingApprovalStore.js";
@@ -67,6 +70,7 @@ export interface SupervisedCodingFileEditRequest extends EvidenceContext {
   // through here lets decideSupervisedFileEdit deny even when the sidecar-declared
   // allowedRelativePaths would otherwise contain the path.
   readonly targetSensitive?: boolean;
+  readonly workspaceFs?: WorkspaceFs | undefined;
 }
 
 export interface SupervisedCodingCommandRequest extends EvidenceContext {
@@ -152,11 +156,12 @@ interface ResolvedEditTarget {
 function resolveEditTargetAbsolute(
   workspaceRoot: string,
   targetPath: string,
+  fs: WorkspaceFs,
 ): ResolvedEditTarget | undefined {
   if (!candidatePathSyntaxAllowed(targetPath)) return undefined;
-  const root = realPath(workspaceRoot);
+  const root = realPath(workspaceRoot, fs);
   if (root === undefined) return undefined;
-  const target = resolveCandidatePath(root, targetPath);
+  const target = resolveCandidatePath(root, targetPath, fs);
   if (target === undefined || !pathInside(root, target)) return undefined;
   return { root, target };
 }
@@ -181,24 +186,26 @@ export interface EditTargetRealPath {
 export function resolveEditTargetRealPath(
   workspaceRoot: string,
   targetPath: string,
+  fs: WorkspaceFs = nodeWorkspaceFs,
 ): EditTargetRealPath {
   if (!candidatePathSyntaxAllowed(targetPath)) return { contained: false, realRelative: undefined };
-  const root = realPath(workspaceRoot);
+  const root = realPath(workspaceRoot, fs);
   if (root === undefined) return { contained: false, realRelative: undefined };
   const absolute = isAbsolute(targetPath) ? resolve(targetPath) : resolve(join(root, targetPath));
-  const info = containedRealPathInfoOrUndefined(root, absolute);
+  const info = containedRealPathInfoOrUndefined(root, absolute, fs);
   if (info === undefined || !pathInside(root, info.path)) {
     return { contained: false, realRelative: undefined };
   }
-  return { contained: true, realRelative: canonicalRealRelative(info, absolute) };
+  return { contained: true, realRelative: canonicalRealRelative(info, absolute, fs) };
 }
 
 function containedRealPathInfoOrUndefined(
   root: string,
   absolute: string,
+  fs: WorkspaceFs,
 ): ReturnType<typeof containedRealPathInfo> | undefined {
   try {
-    return containedRealPathInfo(nodeWorkspaceFs, root, absolute);
+    return containedRealPathInfo(fs, root, absolute);
   } catch (error) {
     if (error instanceof PathEscapeError) return undefined;
     throw error;
@@ -216,8 +223,9 @@ function containedRealPathInfoOrUndefined(
 function canonicalRealRelative(
   info: ReturnType<typeof containedRealPathInfo>,
   absolute: string,
+  fs: WorkspaceFs,
 ): string {
-  const suffix = untouchedSuffix(absolute);
+  const suffix = untouchedSuffix(absolute, fs);
   return suffix === "" ? info.realRelative : join(info.realRelative, suffix);
 }
 
@@ -226,10 +234,10 @@ function canonicalRealRelative(
 // ancestor. Empty when `absolutePath` itself exists: containedRealPathInfo's `.realRelative` is
 // already the complete resolved path in that case. Terminates at `root`, which `realPath` above
 // already proved exists, so the walk can never reach the filesystem root empty-handed.
-function untouchedSuffix(absolutePath: string): string {
+function untouchedSuffix(absolutePath: string, fs: WorkspaceFs): string {
   let current = absolutePath;
   for (;;) {
-    if (existsSync(current)) return relative(current, absolutePath);
+    if (fs.exists(current)) return relative(current, absolutePath);
     const parent = dirname(current);
     if (parent === current) return relative(current, absolutePath);
     current = parent;
@@ -237,9 +245,10 @@ function untouchedSuffix(absolutePath: string): string {
 }
 
 function resolveContainedEditTarget(request: SupervisedCodingFileEditRequest): boolean {
-  const resolved = resolveEditTargetAbsolute(request.workspaceRoot, request.targetPath);
+  const fs = request.workspaceFs ?? nodeWorkspaceFs;
+  const resolved = resolveEditTargetAbsolute(request.workspaceRoot, request.targetPath, fs);
   if (resolved === undefined) return false;
-  const scopes = resolveAllowedScopes(resolved.root, request.allowedRelativePaths);
+  const scopes = resolveAllowedScopes(resolved.root, request.allowedRelativePaths, fs);
   return scopes?.some((scope) => pathInside(scope, resolved.target)) ?? false;
 }
 
@@ -257,43 +266,48 @@ function hasAlternateDataStreamDelimiter(targetPath: string): boolean {
   return targetPath.slice(volumePrefixLength).includes(":");
 }
 
-function resolveCandidatePath(root: string, targetPath: string): string | undefined {
+function resolveCandidatePath(
+  root: string,
+  targetPath: string,
+  fs: WorkspaceFs,
+): string | undefined {
   const absolute = isAbsolute(targetPath) ? resolve(targetPath) : resolve(join(root, targetPath));
-  return containedPath(root, absolute);
+  return containedPath(root, absolute, fs);
 }
 
 function resolveAllowedScopes(
   root: string,
   paths: readonly string[],
+  fs: WorkspaceFs,
 ): readonly string[] | undefined {
   if (paths.length === 0) return [root];
   // KEIKO-0438: collapsing to `undefined` when ANY single scope fails to resolve turns one bad
   // path (typo, not-yet-existing directory) into a wholesale denial of the operator-approved
   // scope list. Keep the scopes that DID resolve; deny only when nothing survives.
   const scopes = paths
-    .map((scope) => resolveScope(root, scope))
+    .map((scope) => resolveScope(root, scope, fs))
     .filter((scope): scope is string => scope !== undefined);
   return scopes.length > 0 ? scopes : undefined;
 }
 
-function resolveScope(root: string, scope: string): string | undefined {
+function resolveScope(root: string, scope: string, fs: WorkspaceFs): string | undefined {
   if (!isContainedAgentPath(scope)) return undefined;
-  const resolved = containedPath(root, resolve(join(root, scope)));
+  const resolved = containedPath(root, resolve(join(root, scope)), fs);
   return resolved !== undefined && pathInside(root, resolved) ? resolved : undefined;
 }
 
-function containedPath(root: string, absolute: string): string | undefined {
+function containedPath(root: string, absolute: string, fs: WorkspaceFs): string | undefined {
   try {
-    return containedRealPathInfo(nodeWorkspaceFs, root, absolute).path;
+    return containedRealPathInfo(fs, root, absolute).path;
   } catch (error) {
     if (error instanceof PathEscapeError) return undefined;
     throw error;
   }
 }
 
-function realPath(path: string): string | undefined {
+function realPath(path: string, fs: WorkspaceFs): string | undefined {
   try {
-    return existsSync(path) ? realpathSync(path) : undefined;
+    return fs.exists(path) ? fs.realPath(path) : undefined;
   } catch {
     return undefined;
   }

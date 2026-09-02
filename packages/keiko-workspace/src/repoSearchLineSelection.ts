@@ -15,6 +15,7 @@ export interface LineSelectionRunner {
   readonly matcher: LineMatcher;
   readonly nowMs: () => number;
   readonly startMs: number;
+  readonly deadlineAtMs?: number | undefined;
   readonly signal?: AbortSignal | undefined;
 }
 
@@ -565,8 +566,31 @@ function enclosingRange(
   return brace;
 }
 
-function elapsed(runner: LineSelectionRunner): number {
-  return runner.nowMs() - runner.startMs;
+export interface EnclosingLineRange {
+  readonly startLine: number;
+  readonly endLine: number;
+}
+
+/**
+ * Computes the same structural windows used by live lexical matching for selected zero-based line
+ * indices. Workspace-index records call this once while they still hold the bounded file content,
+ * so a warm exact-symbol hit cannot collapse a function body to its declaration line.
+ */
+export function enclosingLineRangesForIndices(
+  text: string,
+  lineIndices: readonly number[],
+): ReadonlyMap<number, EnclosingLineRange> {
+  const lines = physicalLines(text);
+  const cache = createBraceScanCache(lines);
+  const ranges = new Map<number, EnclosingLineRange>();
+  const ordered = [...new Set(lineIndices)].sort((a, b) => a - b);
+  for (const lineIndex of ordered) {
+    if (lineIndex < 0 || lineIndex >= lines.length) continue;
+    scanBraceLinesThrough(cache, lineIndex + MAX_ENCLOSING_RANGE_LINES);
+    const range = enclosingRange(lines, cache.scans, lineIndex);
+    ranges.set(lineIndex, { startLine: range.start, endLine: range.end });
+  }
+  return ranges;
 }
 
 function markStopped(state: LineSelectionState, reason: ContextCoverageTruncationReason): true {
@@ -583,13 +607,12 @@ function lineSelectionStopped(
   if (runner.signal?.aborted === true) {
     return markStopped(state, "aborted");
   }
-  if (
-    lineIndex % LINE_TIMEOUT_CHECK_INTERVAL !== 0 ||
-    elapsed(runner) <= runner.limits.elapsedMsMax
-  ) {
-    return false;
-  }
-  return markStopped(state, "timeout");
+  if (lineIndex % LINE_TIMEOUT_CHECK_INTERVAL !== 0) return false;
+  const currentMs = runner.nowMs();
+  return (runner.deadlineAtMs !== undefined && currentMs >= runner.deadlineAtMs) ||
+    currentMs - runner.startMs > runner.limits.elapsedMsMax
+    ? markStopped(state, "timeout")
+    : false;
 }
 
 function physicalLines(text: string): string[] {

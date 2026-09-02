@@ -5,7 +5,7 @@
 // inputs (chatId + content) and enforces that the chat carries a connected scope.
 
 import { createHash, randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
+import type { IncomingMessage } from "node:http";
 import { basename } from "node:path";
 import {
   CancelledError,
@@ -24,10 +24,14 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
+  PathDeniedError,
   RepoSearchInvalidQueryError,
   RepoSearchInvalidRangeError,
   RepoSearchUnsupportedFileError,
+  WorkspaceNotFoundError,
+  type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -80,7 +84,6 @@ import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
 import { configuredContextPackRerankerFor } from "./grounded-context-pack-reranker.js";
 import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
-import { pathIsDenied } from "./files-deny.js";
 import { handleLocalKnowledgeGroundedAsk } from "./local-knowledge-grounded-qa.js";
 import {
   buildConnectedScopes,
@@ -99,6 +102,10 @@ import {
   type HybridAnswerer,
 } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import {
+  recordWorkspaceRootDenial,
+  resolveRecordedWorkspaceRoot,
+} from "./workspace-root-denial-log.js";
 import {
   uncitedMemoryContextMarker,
   type NumericEntailmentEvidence,
@@ -129,6 +136,13 @@ import {
 } from "./chat-turn-identity.js";
 import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { createRequestCancellation } from "./request-cancellation.js";
+import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
+import {
+  createOrdinaryWorkspaceRootAccess,
+  requiresConfiguredManagedWorkspaceAuthority,
+  resolveManagedWorkspaceRootAccess,
+  type WorkspaceRootAccess,
+} from "./task-workspace/workspace-root-access.js";
 import {
   readBoundedRequestBody,
   RequestBodyCancelledError,
@@ -242,7 +256,18 @@ export function mappedGatewayError(
   );
 }
 
+function pathDeniedResult(error: PathDeniedError): RouteResult {
+  return {
+    status: 400,
+    body: errorBody(error.code, "The workspace path is denied by policy."),
+  };
+}
+
 export function mappedWorkspaceError(error: unknown): RouteResult | undefined {
+  if (error instanceof PathDeniedError) return pathDeniedResult(error);
+  if (error instanceof WorkspaceNotFoundError) {
+    return badRequest("Connected scope root is not accessible.");
+  }
   if (
     error instanceof RepoSearchInvalidQueryError ||
     error instanceof RepoSearchInvalidRangeError ||
@@ -416,24 +441,84 @@ function buildSelectedScope(chat: Chat): SelectedScope | undefined {
   return buildSelectedScopeFrom(chat, cs, deriveScopeId(chat));
 }
 
-function canonicalGroundedRoot(rootInput: string, deps: UiHandlerDeps): string | RouteResult {
-  if (pathIsDenied(rootInput)) {
-    return badRequest("Connected scope is excluded from Keiko's safe read surface.");
+const GROUNDED_SCOPE_ACCESS: unique symbol = Symbol("grounded-scope-access");
+
+interface GroundedScopeAccessCarrier {
+  readonly [GROUNDED_SCOPE_ACCESS]: WorkspaceRootAccess;
+}
+
+function scopeWithWorkspaceAccess(
+  scope: ChatConnectedScope,
+  access: WorkspaceRootAccess,
+): ChatConnectedScope {
+  const canonical: ChatConnectedScope & Partial<GroundedScopeAccessCarrier> = {
+    ...scope,
+    root: access.canonicalRoot,
+  };
+  Object.defineProperty(canonical, GROUNDED_SCOPE_ACCESS, { value: access });
+  return canonical;
+}
+
+/** Returns only authority minted during this grounded operation; persisted scopes cannot forge it. */
+export function groundedScopeWorkspaceFs(scope: ChatConnectedScope): WorkspaceFs | undefined {
+  const access = (scope as Partial<GroundedScopeAccessCarrier>)[GROUNDED_SCOPE_ACCESS];
+  return access !== undefined && access.canonicalRoot === scope.root ? access.fs : undefined;
+}
+
+function managedGroundedRootAccess(
+  rootInput: string,
+  deps: UiHandlerDeps,
+  request: IncomingMessage | undefined,
+): WorkspaceRootAccess | undefined {
+  if (request === undefined || resolveAppSessionReadAuthority(deps, request) === undefined) {
+    return undefined;
   }
+  return resolveManagedWorkspaceRootAccess(deps, rootInput);
+}
+
+function deniedManagedGroundedRoot(correlationId: string | undefined): RouteResult {
+  const error = new PathDeniedError(
+    "managed workspace authority is required",
+    "[managed-task-workspace]",
+  );
+  recordWorkspaceRootDenial(error, { correlationId });
+  return pathDeniedResult(error);
+}
+
+function canonicalGroundedRoot(
+  rootInput: string,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): string | RouteResult {
   let realRoot: string;
   try {
-    realRoot = realpathSync(rootInput);
-  } catch {
+    realRoot = resolveRecordedWorkspaceRoot(nodeWorkspaceFs, rootInput, { correlationId });
+  } catch (error) {
+    if (error instanceof PathDeniedError) {
+      return pathDeniedResult(error);
+    }
     return badRequest("Connected scope root is not accessible.");
-  }
-  if (pathIsDenied(realRoot)) {
-    return badRequest("Connected scope is excluded from Keiko's safe read surface.");
   }
   const redacted = deps.redactor(realRoot);
   if (typeof redacted === "string" && redacted !== realRoot) {
     return badRequest("Connected scope root contains credential-shaped metadata.");
   }
   return realRoot;
+}
+
+function groundedRootAccess(
+  rootInput: string,
+  deps: UiHandlerDeps,
+  request: IncomingMessage | undefined,
+  correlationId: string | undefined,
+): WorkspaceRootAccess | RouteResult {
+  const managed = managedGroundedRootAccess(rootInput, deps, request);
+  if (managed !== undefined) return managed;
+  if (requiresConfiguredManagedWorkspaceAuthority(deps, rootInput)) {
+    return deniedManagedGroundedRoot(correlationId);
+  }
+  const canonical = canonicalGroundedRoot(rootInput, deps, correlationId);
+  return typeof canonical === "string" ? createOrdinaryWorkspaceRootAccess(canonical) : canonical;
 }
 
 // A scope that failed canonicalization. `reason` is the original RouteResult (preserved verbatim
@@ -460,18 +545,20 @@ function canonicalizeGroundedFolderScopes(
   chat: Chat,
   deps: UiHandlerDeps,
   scopes: readonly ChatConnectedScope[],
+  request: IncomingMessage | undefined,
+  correlationId: string | undefined,
 ): CanonicalizedFolderScopes {
   const canonical: ChatConnectedScope[] = [];
   const skipped: SkippedFolderScope[] = [];
   for (const scope of scopes) {
     const rootInput = scope.root ?? chat.projectPath;
-    const realRoot = canonicalGroundedRoot(rootInput, deps);
-    if (typeof realRoot !== "string") {
+    const access = groundedRootAccess(rootInput, deps, request, correlationId);
+    if ("status" in access) {
       const label = scope.root !== undefined ? basename(scope.root) : "project";
-      skipped.push({ label, message: skippedFolderMessage(realRoot), reason: realRoot });
+      skipped.push({ label, message: skippedFolderMessage(access), reason: access });
       continue;
     }
-    canonical.push({ ...scope, root: realRoot });
+    canonical.push(scopeWithWorkspaceAccess(scope, access));
   }
   return { canonical, skipped };
 }
@@ -1115,6 +1202,10 @@ export async function appendGroundedAnswerNumericEntailment<
 // callers omit this seam and use the Model Gateway-backed default runner.
 export type GroundedRunner = (input: OrchestratorInput) => Promise<OrchestratorOutput>;
 
+function optionalWorkspaceFs(fs: WorkspaceFs | undefined): Pick<OrchestratorInput, "workspaceFs"> {
+  return fs === undefined ? {} : { workspaceFs: fs };
+}
+
 // ─── Lookup helpers ───────────────────────────────────────────────────────────
 
 // Epic #177 audit: the grounded-ask hot path scanned every project's chat list per request
@@ -1140,6 +1231,7 @@ interface AskWorkerCtx {
   readonly contextProfile: UiHandlerDeps["contextProfile"];
   readonly deps: UiHandlerDeps;
   readonly runner: GroundedRunner;
+  readonly workspaceFs?: WorkspaceFs | undefined;
   readonly signal: AbortSignal;
   // ADR-0173 D5 — carried from PreparedGroundedAsk.correlationId so a GatewayError surfacing from
   // the runner (or a late cancellation) reaches its operator diagnostic joined to the request.
@@ -1150,6 +1242,7 @@ interface PreparedGroundedAsk {
   readonly chat: Chat;
   readonly input: AskInput;
   readonly signal: AbortSignal;
+  readonly request?: IncomingMessage | undefined;
   readonly commitTurnId?: string | undefined;
   readonly scopeIdentity?: string | undefined;
   readonly turnIdentityContent?: string | undefined;
@@ -1491,6 +1584,7 @@ async function runGroundedRunner(
       answerQuestion: answerContent,
       answerOnlyContextAvailable: workerCtx.answerOnlyContextAvailable,
       workspaceRoot: scope.workspaceRoot,
+      ...optionalWorkspaceFs(workerCtx.workspaceFs),
     });
     ensureNotCancelled(workerCtx.signal);
     return output;
@@ -1524,7 +1618,7 @@ async function prepareGroundedAsk(
   if (parsed.kind === "err") return parsed.result;
   const chat = findChatById(deps, parsed.value.chatId);
   if (chat === undefined) return notFound("Chat not found.");
-  return { chat, input: parsed.value, signal, correlationId: ctx.correlationId };
+  return { chat, input: parsed.value, signal, request: ctx.req, correlationId: ctx.correlationId };
 }
 
 function resolveGroundedRunner(
@@ -1652,6 +1746,13 @@ function singleScopeFromList(
   return buildSelectedScopeFrom(chat, cs, deriveScopeIdFrom(chat, cs, 0));
 }
 
+function firstScopeWorkspaceFs(
+  scopes: ReturnType<typeof buildConnectedScopes>,
+): WorkspaceFs | undefined {
+  const first = scopes[0];
+  return first === undefined ? undefined : groundedScopeWorkspaceFs(first);
+}
+
 // Epic #532 — the folder-only branch (0 handled by caller; 1 → single-source runner unless
 // there are pre-skipped folders, in which case multi-source carries the skip notice; 2+ → the
 // multi-source merge). Extracted so handleGroundedAsk stays the thin count-based dispatcher.
@@ -1696,14 +1797,6 @@ async function dispatchFolderAsk(
   if (scope === undefined) {
     return badRequest("Chat has no connected scope.");
   }
-  // Epic #177 audit (GAP-B) — mirror the PATCH-route deny-list check for the grounded-ask hot
-  // path. The PATCH route validates via validateFallbackProjectRoot before persisting a scope;
-  // a chat whose projectPath was created before the deny-list was added (or via the test store)
-  // could otherwise reach the orchestrator with a credential-dir workspaceRoot. Reject before
-  // calling the runner so no filesystem access occurs against a denied path.
-  if (pathIsDenied(scope.workspaceRoot)) {
-    return badRequest("Connected scope is excluded from Keiko's safe read surface.");
-  }
   const resolved = resolveGroundedRunner(
     deps,
     groundedModelId(prepared),
@@ -1713,6 +1806,7 @@ async function dispatchFolderAsk(
     prepared.correlationId,
   );
   if ("status" in resolved) return resolved;
+  const workspaceFs = firstScopeWorkspaceFs(scopes);
   return runAsk({
     chat,
     scope,
@@ -1726,6 +1820,7 @@ async function dispatchFolderAsk(
     contextProfile: resolved.contextProfile,
     deps,
     runner: resolved.runner,
+    ...optionalWorkspaceFs(workspaceFs),
     signal,
     correlationId: prepared.correlationId,
   });
@@ -1794,6 +1889,19 @@ async function dispatchHybridAsk(
 
 // ─── Public handler ───────────────────────────────────────────────────────────
 
+function canonicalizePreparedFolderScopes(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): CanonicalizedFolderScopes {
+  return canonicalizeGroundedFolderScopes(
+    prepared.chat,
+    deps,
+    buildConnectedScopes(prepared.chat),
+    prepared.request,
+    prepared.correlationId,
+  );
+}
+
 async function dispatchPreparedGroundedAsk(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
@@ -1809,9 +1917,8 @@ async function dispatchPreparedGroundedAsk(
   // Fail-soft: inaccessible/denied folders are skipped; only effective (canonical) counts drive
   // dispatch. A chat with ONLY denied/inaccessible sources still returns the original 400 so the
   // user sees a clear rejection (security preserved).
-  const folderScopes = buildConnectedScopes(chat);
   const { canonical: canonicalFolderScopes, skipped: skippedFolders } =
-    canonicalizeGroundedFolderScopes(chat, deps, folderScopes);
+    canonicalizePreparedFolderScopes(prepared, deps);
   const preparedWithCanonicalFolders: PreparedGroundedAsk = {
     ...prepared,
     chat: withCanonicalFolderScopes(chat, canonicalFolderScopes),

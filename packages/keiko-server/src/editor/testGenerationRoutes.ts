@@ -41,6 +41,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/editor-test-generation";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { newCorrelationId } from "../correlation.js";
@@ -184,6 +185,7 @@ function changedFilePaths(target: EditorTestGenerationWireTarget): readonly stri
 // RouteResult on the first failure, or undefined when every path is a contained, workspace-relative path.
 function validateTargetContainment(
   realRoot: string,
+  fs: WorkspaceFs,
   target: EditorTestGenerationWireTarget,
 ): RouteResult | undefined {
   if (target.kind === "changed-file-set" && target.documents.length > MAX_CHANGED_SET_DOCUMENTS) {
@@ -206,7 +208,7 @@ function validateTargetContainment(
       };
     }
     // Throws FilesError on escape/denied (handled by runFilesHandler).
-    resolveOverlayPath(realRoot, path);
+    resolveOverlayPath(realRoot, path, fs);
   }
   return undefined;
 }
@@ -239,27 +241,23 @@ function buildDiscoveryRequest(request: EditorTestGenerationWireRequest): Coding
 // search plus, when a capsule/connector is selected and policy-allowed, Local Knowledge and memory —
 // rather than a new editor-only collector. Records content-free evidence and returns the wire pack.
 async function assembleDiscoveryContext(
-  request: EditorTestGenerationWireRequest,
-  deps: UiHandlerDeps,
-  realRoot: string,
-  signal: AbortSignal,
-  nowMs: number,
+  ctx: OutcomeContext,
   allowEmbeddingProviders: boolean,
-  correlationId: string | undefined,
 ): Promise<{ readonly pack: CodingContextPack; readonly wire: CodingContextWirePack }> {
-  const pack = await assembleCodingContext(buildDiscoveryRequest(request), {
-    deps,
-    realRoot,
-    signal,
-    nowMs,
-    budgetBytes: contextBudgetBytes(request),
+  const pack = await assembleCodingContext(buildDiscoveryRequest(ctx.request), {
+    deps: ctx.deps,
+    realRoot: ctx.realRoot,
+    fs: ctx.fs,
+    signal: ctx.signal,
+    nowMs: ctx.nowMs,
+    budgetBytes: contextBudgetBytes(ctx.request),
     allowEmbeddingProviders,
     // The git context calls the git routes in-process; without the id their failure lines are
     // orphaned under UNKNOWN_CORRELATION_ID (AGENTS.md §8 Rule 1).
-    correlationId,
+    correlationId: ctx.correlationId,
   });
   const wire = toCodingContextWirePack(pack);
-  recordCodingContextEvidence(deps.evidenceStore, deps.redactor, wire, nowMs);
+  recordCodingContextEvidence(ctx.deps.evidenceStore, ctx.deps.redactor, wire, ctx.nowMs);
   return { pack, wire };
 }
 
@@ -269,6 +267,7 @@ interface OutcomeContext {
   readonly request: EditorTestGenerationWireRequest;
   readonly deps: UiHandlerDeps;
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   readonly signal: AbortSignal;
   readonly nowMs: number;
   readonly options: EditorTestGenerationRouteOptions;
@@ -313,6 +312,7 @@ async function produceOutcome(
       request: ctx.request,
       deps: ctx.deps,
       realRoot: ctx.realRoot,
+      fs: ctx.fs,
       signal: ctx.signal,
       nowMs: ctx.nowMs,
       contextPack: discovery.pack,
@@ -364,9 +364,17 @@ function outcomeContext(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   options: EditorTestGenerationRouteOptions,
-  resolved: Pick<OutcomeContext, "request" | "realRoot" | "signal" | "nowMs">,
+  resolved: Pick<OutcomeContext, "request" | "realRoot" | "fs" | "signal" | "nowMs">,
 ): OutcomeContext {
   return { ...resolved, deps, options, correlationId: ctx.correlationId };
+}
+
+async function discoverAndProduceOutcome(
+  ctx: OutcomeContext,
+  allowEmbeddingProviders: boolean,
+): Promise<EditorTestGenerationWireResponse> {
+  const discovery = await assembleDiscoveryContext(ctx, allowEmbeddingProviders);
+  return produceOutcome(ctx, discovery);
 }
 
 export async function handleEditorTestGeneration(
@@ -390,30 +398,26 @@ export async function handleEditorTestGeneration(
   const request = parsed.value;
   return runFilesHandler(async () => {
     const root = await resolveRequestRoot(ctx, deps, request.root);
-    const containment = validateTargetContainment(root.realRoot, request.target);
+    const { canonicalRoot, fs } = root.access;
+    const containment = validateTargetContainment(canonicalRoot, fs, request.target);
     if (containment !== undefined) {
       return containment;
     }
-    if (!(await testGenerationActivationStillActive(deps, root.realRoot))) {
+    if (!(await testGenerationActivationStillActive(deps, canonicalRoot))) {
       return { status: 200, body: deps.redactor(disabledResponse()) };
     }
     const nowMs = (options.now ?? Date.now)();
     const signal = clientAbortSignal(ctx);
     const executionEnabled = isTestGenerationExecutionEnabledByPolicy(deps.env);
-    const discovery = await assembleDiscoveryContext(
+    const operation = outcomeContext(ctx, deps, options, {
       request,
-      deps,
-      root.realRoot,
+      realRoot: canonicalRoot,
+      fs,
       signal,
       nowMs,
-      executionEnabled,
-      ctx.correlationId,
-    );
-    const outcome = await produceOutcome(
-      outcomeContext(ctx, deps, options, { request, realRoot: root.realRoot, signal, nowMs }),
-      discovery,
-    );
-    if (!(await testGenerationActivationStillActive(deps, root.realRoot))) {
+    });
+    const outcome = await discoverAndProduceOutcome(operation, executionEnabled);
+    if (!(await testGenerationActivationStillActive(deps, canonicalRoot))) {
       return { status: 200, body: deps.redactor(disabledResponse()) };
     }
     recordTestGenerationEvidence(deps.evidenceStore, deps.redactor, outcome, nowMs);

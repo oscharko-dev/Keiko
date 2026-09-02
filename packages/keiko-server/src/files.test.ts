@@ -1,4 +1,5 @@
 import {
+  link,
   mkdtemp,
   mkdir,
   readFile,
@@ -9,8 +10,9 @@ import {
   utimes,
   writeFile,
 } from "node:fs/promises";
-import { rmSync, symlinkSync } from "node:fs";
+import { renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -18,6 +20,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EDITOR_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-session";
 import type { LocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
+import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import {
+  nodeWorkspaceFs,
+  type WorkspaceHardLinkPolicy,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 
 // KEIKO-0192 regression: create/rename/delete must forward workspace/didChangeWatchedFiles to
 // pooled host LSP processes, the same way writeFilesContentRoute already does for content saves.
@@ -42,7 +49,15 @@ import {
   searchFiles,
   writeFilesContent,
 } from "./index.js";
-import { normalizeRelativePath, resolveRoot, classifyInLockRefreshFailure } from "./files.js";
+import {
+  handleFilesPreviewImage,
+  normalizeRelativePath,
+  resolveRoot,
+  classifyInLockRefreshFailure,
+  type ResolvedProjectRoot,
+} from "./files.js";
+import { STREAMING } from "./routes.js";
+import { mockRequest, mockResponse, type MockResponse } from "./_support.js";
 import type { RouteContext, UiHandlerDeps } from "./index.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { createBreakpointStore } from "./editor/dap/breakpointStore.js";
@@ -83,6 +98,52 @@ const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ax6XK0AAAAASUVORK5CYII=",
   "base64",
 );
+
+interface ImagePreviewCall {
+  readonly ctx: RouteContext;
+  readonly response: MockResponse;
+  // Raw response bytes. MockResponse.body() decodes as UTF-8, which cannot round-trip PNG bytes.
+  readonly bytes: () => Buffer;
+  readonly finished: Promise<unknown>;
+}
+
+// GET /api/files/preview/image writes to `res` itself and returns STREAMING instead of a
+// RouteResult, so its body has to be captured off the response. `mockResponse` is a real
+// PassThrough, which keeps working whether the handler pipes into it or ends it with one buffer.
+// `onWriteHead` runs at the instant the handler commits its status line — the boundary the
+// regression below stages its swap at.
+function imagePreviewCall(
+  rootInput: string,
+  relativePath: string,
+  onWriteHead: () => void,
+): ImagePreviewCall {
+  const response = mockResponse();
+  const chunks: Buffer[] = [];
+  const stream = response.res as unknown as Readable;
+  stream.on("data", (chunk: Buffer) => {
+    chunks.push(Buffer.from(chunk));
+  });
+  const commit = response.res.writeHead.bind(response.res);
+  response.res.writeHead = ((status: number, headers?: Record<string, string>): ServerResponse => {
+    onWriteHead();
+    return commit(status, headers);
+  }) as ServerResponse["writeHead"];
+  const query = new URLSearchParams({ root: rootInput, path: relativePath });
+  const url = `/api/files/preview/image?${query.toString()}`;
+  return {
+    ctx: {
+      correlationId: undefined,
+      req: mockRequest({ url }),
+      res: response.res,
+      params: {},
+      url: new URL(`http://localhost${url}`),
+    },
+    response,
+    bytes: (): Buffer => Buffer.concat(chunks),
+    // Attached eagerly: "end" can fire while the caller is still awaiting the handler.
+    finished: once(stream, "end"),
+  };
+}
 
 // Drives real filesystem round-trips on `path`, draining the event loop between them. A stat()
 // submitted before the first of these has certainly completed by the last — used to give an
@@ -711,6 +772,238 @@ describe("desktop files browser", () => {
       }),
     ).rejects.toMatchObject({ status: 409, code: "STALE_PATH" });
     expect(await readFile(victim, "utf8")).toBe("outside\n");
+  });
+
+  // #3347 consumer-boundary hardening: readContainedBytes binds a content read to the WorkspaceStat
+  // identity (device+inode) captured at admission, not just size/mtime. This proves the gap the
+  // older stat-after-read comparison could not close: a substitute file crafted with the EXACT same
+  // byte length and mtime as the admitted one is still rejected, because it is necessarily a
+  // different inode.
+  it("rejects a same-size, same-mtime substitute swapped in between admission and the content read", async () => {
+    const targetPath = join(root, "src", "app.ts");
+    const original = await readFile(targetPath);
+    const originalStat = await stat(targetPath);
+    const substitute = "y".repeat(original.byteLength);
+    let swapped = false;
+    const boundedRead = nodeWorkspaceFs.readFileBytes;
+    if (boundedRead === undefined) throw new Error("expected a bounded byte reader");
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      // The race, staged at exactly the boundary under test: admission has already captured the
+      // original's identity by the time this runs, and the substitute lands immediately before the
+      // bounded read opens its descriptor. Hooking the read (rather than counting stat calls) keeps
+      // the test bound to that ordering rather than to how many times admission happens to stat.
+      readFileBytes: async (
+        path: string,
+        maxBytes: number,
+        policy: WorkspaceHardLinkPolicy,
+        expected: WorkspaceStat,
+      ): Promise<Uint8Array> => {
+        if (path === targetPath && !swapped) {
+          swapped = true;
+          rmSync(path, { force: true });
+          writeFileSync(path, substitute, "utf8");
+          utimesSync(path, originalStat.mtime, originalStat.mtime);
+        }
+        return boundedRead.call(nodeWorkspaceFs, path, maxBytes, policy, expected);
+      },
+    };
+    const resolvedRoot: ResolvedProjectRoot = {
+      root,
+      realRoot: root,
+      access: { kind: "ordinary", canonicalRoot: root, fs },
+    };
+
+    await expect(
+      readFilesContent(store, root, "src/app.ts", buildRedactor({}), resolvedRoot),
+    ).rejects.toMatchObject({ status: 409, code: "STALE_PATH" });
+    expect(swapped).toBe(true);
+    // Same byte length and mtime as the admitted file: only the inode differs, which is precisely
+    // what the older stat-after-read comparison could not detect.
+    const onDisk = await readFile(targetPath, "utf8");
+    expect(onDisk).toBe(substitute);
+    expect(onDisk).toHaveLength(original.byteLength);
+  });
+
+  // #3367 review (Cursor): WorkspaceFs.readFileBytes compares the FULL admission-time snapshot --
+  // fileIdentity AND size/mtime/ctime/nlink -- so an ordinary in-place edit (same inode) fails the
+  // descriptor check just as hard as an inode swap. readStableEditableContent used to fold that
+  // failure into its retry budget, which could never recover: every remaining attempt compares
+  // against the same fixed snapshot and fails identically, so a legitimate concurrent save cost the
+  // full budget and two 25ms sleeps before reporting the STALE_SESSION it reports on the first
+  // attempt now. The retry loop still exists for reads that SUCCEED and then fail statsMatch.
+  it("reports an in-place edit between admission and the editable read as a stale session on the first attempt", async () => {
+    const targetPath = join(root, "src", "app.ts");
+    const before = await stat(targetPath);
+    const boundedRead = nodeWorkspaceFs.readFileBytes;
+    if (boundedRead === undefined) throw new Error("expected a bounded byte reader");
+    let reads = 0;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readFileBytes: async (
+        path: string,
+        maxBytes: number,
+        policy: WorkspaceHardLinkPolicy,
+        expected: WorkspaceStat,
+      ): Promise<Uint8Array> => {
+        reads += 1;
+        const bytes = await boundedRead.call(nodeWorkspaceFs, path, maxBytes, policy, expected);
+        // Staged AFTER the editability probe completes, so the stable-content read below is the
+        // one that meets the edited file. An ordinary truncating rewrite: same inode, no swap.
+        if (reads === 1 && path === targetPath) {
+          writeFileSync(
+            path,
+            'const value: string = "edited in place by another editor";\n',
+            "utf8",
+          );
+        }
+        return bytes;
+      },
+    };
+    const resolvedRoot: ResolvedProjectRoot = {
+      root,
+      realRoot: root,
+      access: { kind: "ordinary", canonicalRoot: root, fs },
+    };
+
+    await expect(
+      readFilesContent(store, root, "src/app.ts", buildRedactor({}), resolvedRoot),
+    ).rejects.toMatchObject({ status: 409, code: "STALE_SESSION" });
+    // Two bounded reads: the editability probe, then ONE stable-content attempt. Retrying the
+    // descriptor mismatch would make this 4 without changing the outcome.
+    expect(reads).toBe(2);
+    // The edit really was in place -- the same inode admission bound to, not a replacement.
+    expect((await stat(targetPath)).ino).toBe(before.ino);
+  });
+
+  // #3367 owner P1, reproduced on the current head: admit a root, replace that root directory with
+  // a symlink pointing OUTSIDE it before the next filesystem call, then delete. The admitted
+  // pathname never moves, so `isContained(realRoot, target.path)` -- a string comparison -- keeps
+  // answering "contained", and every stat taken after the swap sees the outside file on BOTH sides
+  // of the identity comparison. The delete then landed on the outside target while the original
+  // file survived. The re-canonicalization through the admitted capability is what refuses it.
+  it("refuses to delete through a root swapped to an outside symlink after admission", async () => {
+    extraRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-rootswap-")));
+    const workspace = join(extraRoot, "workspace");
+    const displaced = join(extraRoot, "displaced");
+    const outside = join(extraRoot, "outside");
+    await mkdir(workspace);
+    await mkdir(outside);
+    await writeFile(join(workspace, "note.txt"), "inside\n", "utf8");
+    await writeFile(join(outside, "note.txt"), "outside\n", "utf8");
+    let swapped = false;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      realPath: (path: string): string => {
+        const canonical = nodeWorkspaceFs.realPath(path);
+        // The race made deterministic: admission has resolved the canonical, contained pathname,
+        // and the root underneath it is replaced before anything stats that pathname.
+        if (!swapped) {
+          swapped = true;
+          renameSync(workspace, displaced);
+          symlinkSync(outside, workspace);
+        }
+        return canonical;
+      },
+    };
+    const resolvedRoot: ResolvedProjectRoot = {
+      root: workspace,
+      realRoot: workspace,
+      access: { kind: "ordinary", canonicalRoot: workspace, fs },
+    };
+
+    await expect(
+      deleteFilesEntry({
+        store,
+        rootInput: workspace,
+        pathInput: "note.txt",
+        redactor: buildRedactor({}),
+        resolvedRoot,
+      }),
+    ).rejects.toMatchObject({ status: 403, code: "PATH_ESCAPE" });
+    expect(swapped).toBe(true);
+    expect(await readFile(join(outside, "note.txt"), "utf8")).toBe("outside\n");
+    expect(await readFile(join(displaced, "note.txt"), "utf8")).toBe("inside\n");
+  });
+
+  // The read half of the same admission hole, and the reason the re-proof lives in
+  // resolveInsideRoot rather than only in the mutation guard: with the root swapped during
+  // admission, `identity` and `stats` BOTH describe the outside file, so the identity-bound bounded
+  // read agreed with itself and handed the caller content from outside the workspace.
+  it("refuses to read through a root swapped to an outside symlink during admission", async () => {
+    extraRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-readswap-")));
+    const workspace = join(extraRoot, "workspace");
+    const displaced = join(extraRoot, "displaced");
+    const outside = join(extraRoot, "outside");
+    await mkdir(workspace);
+    await mkdir(outside);
+    await writeFile(join(workspace, "note.txt"), "inside\n", "utf8");
+    await writeFile(join(outside, "note.txt"), "outside secret\n", "utf8");
+    let swapped = false;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      realPath: (path: string): string => {
+        const canonical = nodeWorkspaceFs.realPath(path);
+        if (!swapped) {
+          swapped = true;
+          renameSync(workspace, displaced);
+          symlinkSync(outside, workspace);
+        }
+        return canonical;
+      },
+    };
+
+    await expect(
+      readFilesPreview(store, workspace, "note.txt", buildRedactor({}), {
+        root: workspace,
+        realRoot: workspace,
+        access: { kind: "ordinary", canonicalRoot: workspace, fs },
+      }),
+    ).rejects.toMatchObject({ status: 403, code: "PATH_ESCAPE" });
+    expect(swapped).toBe(true);
+  });
+
+  // The same escape, staged at the MUTATION boundary instead of at admission, through the product's
+  // own afterConflictCheck hook (no injected WorkspaceFs at all -- the real node port answers every
+  // call). The outside file is a HARD LINK to the admitted one, so `sameFileIdentity` compares equal
+  // device+inode and waves the swap through; only re-canonicalizing the pathname sees it. Before the
+  // fix the atomic save wrote its temp file into the outside directory and renamed it over the
+  // outside entry, leaving the workspace copy untouched.
+  it("refuses to write through a root swapped to an outside symlink after the conflict check", async () => {
+    extraRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-writeswap-")));
+    const workspace = join(extraRoot, "workspace");
+    const displaced = join(extraRoot, "displaced");
+    const outside = join(extraRoot, "outside");
+    await mkdir(workspace);
+    await mkdir(outside);
+    await writeFile(join(workspace, "note.txt"), "inside\n", "utf8");
+    await link(join(workspace, "note.txt"), join(outside, "note.txt"));
+    let swapped = false;
+
+    await expect(
+      writeFilesContent({
+        store,
+        rootInput: workspace,
+        pathInput: "note.txt",
+        content: "escaped\n",
+        redactor: buildRedactor({}),
+        resolvedRoot: {
+          root: workspace,
+          realRoot: workspace,
+          access: { kind: "ordinary", canonicalRoot: workspace, fs: nodeWorkspaceFs },
+        },
+        testControl: {
+          afterConflictCheck: (): void => {
+            swapped = true;
+            renameSync(workspace, displaced);
+            symlinkSync(outside, workspace);
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ status: 403, code: "PATH_ESCAPE" });
+    expect(swapped).toBe(true);
+    expect(await readFile(join(outside, "note.txt"), "utf8")).toBe("inside\n");
+    expect(await readFile(join(displaced, "note.txt"), "utf8")).toBe("inside\n");
   });
 
   it("rejects saving when the file changed after the editor loaded it", async () => {
@@ -1408,6 +1701,68 @@ describe("desktop files browser", () => {
       expect(preview.url).toContain("path=assets%2Fpixel.png");
       expect(preview.maxBytes).toBe(3_000_000);
     }
+  });
+
+  it("serves the admitted image bytes under a Content-Length that describes them", async () => {
+    const call = imagePreviewCall(root, "assets/pixel.png", () => undefined);
+
+    const outcome = await handleFilesPreviewImage(call.ctx, {
+      store,
+      redactor: buildRedactor({}),
+    } as unknown as UiHandlerDeps);
+    await call.finished;
+
+    expect(outcome).toBe(STREAMING);
+    expect(call.response.writeHeadCalls).toEqual([
+      {
+        statusCode: 200,
+        headers: {
+          "Content-Type": "image/png",
+          "Content-Length": String(PNG_1X1.byteLength),
+          "Cache-Control": "private, max-age=60",
+        },
+      },
+    ]);
+    expect(call.bytes()).toEqual(PNG_1X1);
+  });
+
+  // #3367 owner P1, reproduced on the current head: this route wrote its 200 headers from the
+  // admission-time size and only THEN opened `target.path` with a bare createReadStream, so a
+  // parent replaced in that gap redirected the open — the response carried bytes from a different
+  // inode OUTSIDE the admitted root, under a Content-Length taken from the admitted file. The
+  // substitute here is deliberately the same LENGTH as the admitted image, so neither the header
+  // nor a downstream byte count could have noticed. Staged at writeHead: the exact instant the old
+  // code committed its headers, and the last moment before the old read began.
+  it("never streams a same-size parent swap staged at the image route's header commit", async () => {
+    extraRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-outside-")));
+    const outsideAssets = join(extraRoot, "assets");
+    await mkdir(outsideAssets);
+    const outsideBytes = Buffer.alloc(PNG_1X1.byteLength, 0x41);
+    await writeFile(join(outsideAssets, "pixel.png"), outsideBytes);
+    const deps = { store, redactor: buildRedactor({}) } as unknown as UiHandlerDeps;
+    let swapped = false;
+    const call = imagePreviewCall(root, "assets/pixel.png", () => {
+      swapped = true;
+      rmSync(join(root, "assets"), { recursive: true, force: true });
+      symlinkSync(outsideAssets, join(root, "assets"), "dir");
+    });
+
+    const outcome = await handleFilesPreviewImage(call.ctx, deps);
+    await call.finished;
+
+    expect(swapped).toBe(true);
+    expect(outcome).toBe(STREAMING);
+    expect(call.bytes()).toEqual(PNG_1X1);
+    expect(call.bytes()).not.toEqual(outsideBytes);
+    // The swap really landed, and really was indistinguishable by size from the admitted image.
+    expect(await readFile(join(root, "assets", "pixel.png"))).toEqual(outsideBytes);
+    expect(outsideBytes.byteLength).toBe(PNG_1X1.byteLength);
+    // A fresh request through the swapped parent is refused outright: the outside bytes are not
+    // reachable through this route at all, in the gap or after it.
+    const second = imagePreviewCall(root, "assets/pixel.png", () => undefined);
+    await expect(handleFilesPreviewImage(second.ctx, deps)).resolves.toMatchObject({
+      status: 403,
+    });
   });
 
   it("returns metadata for unsupported binary files", async () => {

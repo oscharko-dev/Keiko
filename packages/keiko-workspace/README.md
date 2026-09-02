@@ -7,12 +7,25 @@ Workspace detection, bounded file discovery, and repository search for Keiko.
 The export map is deliberately narrow. Anything not listed here is internal and may change without
 notice; reaching into `dist/` directly is an ADR-0019 violation and is caught by `arch:check`.
 
-| Subpath                  | What it is for                                                                                                            |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `.`                      | The barrel. Workspace detection, discovery, search, and **redacted** file reads. This is what an ordinary consumer wants. |
-| `./internal/fs`          | The filesystem seam, for callers that must inject their own `WorkspaceFs`.                                                |
-| `./internal/editor-read` | The **raw** file read. See the boundary note below — do not reach for this without reading it.                            |
-| `./testing`              | Fixture helpers for consumers' tests. Not shipped behaviour.                                                              |
+| Subpath                          | What it is for                                                                                                            |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `.`                              | The barrel. Workspace detection, discovery, search, and **redacted** file reads. This is what an ordinary consumer wants. |
+| `./internal/fs`                  | The filesystem seam, for callers that must inject their own `WorkspaceFs`.                                                |
+| `./internal/editor-read`         | The **raw** file read. See the boundary note below — do not reach for this without reading it.                            |
+| `./internal/owned-root`          | Exact-root containment for the import-policy-approved managed-workspace owners.                                           |
+| `./internal/owned-root-mint`     | Capability minting, restricted to the server lifecycle owner by `arch:check`.                                             |
+| `./internal/owned-root-preserve` | Exact-authority propagation through reviewed filesystem wrappers; never widening.                                         |
+| `./internal/realpath-policy`     | Positive canonical/deny predicates shared by server-owned read lanes without growing the public barrel.                   |
+| `./testing`                      | Fixture helpers for consumers' tests. Not shipped behaviour.                                                              |
+
+### Filesystem-port contract
+
+`WorkspaceFs` is a read-only workspace-content port. Custom adapters must keep persistence and
+writes in their owning store or tool boundary; the former optional `makeDir` and `writeFileUtf8`
+members are no longer part of this interface. Every bounded byte, prefix, range, or reusable-reader
+call also requires an explicit `WorkspaceHardLinkPolicy` (`"allow"` or `"reject"`). This is a
+deliberate trust decision at the calling lane, not an adapter default: evidence and ordinary
+workspace reads use `"reject"`; only a separately verified owning lane may choose `"allow"`.
 
 ### The two read lanes, and why they are separate
 

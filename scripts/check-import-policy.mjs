@@ -11,6 +11,40 @@ const MODEL_GATEWAY_PROVIDER_RUNTIME_INTERNAL_PATTERN =
   /^@oscharko-dev\/keiko-model-gateway\/internal\/(openai-adapter|normalize)($|\/)/;
 const MODEL_GATEWAY_PROVIDER_RUNTIME_DEEP_PATH_PATTERN =
   /^(node_modules\/@oscharko-dev\/keiko-model-gateway\/|packages\/keiko-model-gateway\/)(src|dist)\/(openai-adapter|normalize)(\.[cm]?[jt]s)?($|\/)/;
+const OWNED_ROOT_INTERNAL_PREFIX = "@oscharko-dev/keiko-workspace/internal/";
+const OWNED_ROOT_CONTAINMENT_SPECIFIER = `${OWNED_ROOT_INTERNAL_PREFIX}owned-root`;
+const OWNED_ROOT_MINT_SPECIFIER = `${OWNED_ROOT_INTERNAL_PREFIX}owned-root-mint`;
+const OWNED_ROOT_PRESERVE_SPECIFIER = `${OWNED_ROOT_INTERNAL_PREFIX}owned-root-preserve`;
+const OWNED_ROOT_LOOKUP_SPECIFIER = `${OWNED_ROOT_INTERNAL_PREFIX}owned-root-lookup`;
+const OWNED_ROOT_IMPLEMENTATION_SPECIFIER = `${OWNED_ROOT_INTERNAL_PREFIX}owned-root-authority`;
+const ownedRootDeepPathPattern = (moduleName) =>
+  new RegExp(
+    String.raw`^(node_modules/@oscharko-dev/keiko-workspace/|packages/keiko-workspace/)(src|dist)/${moduleName}(\.[cm]?[jt]s)?($|/)`,
+    "u",
+  );
+const OWNED_ROOT_CONTAINMENT_DEEP_PATH_PATTERN = ownedRootDeepPathPattern("ownedRoot");
+const OWNED_ROOT_MINT_DEEP_PATH_PATTERN = ownedRootDeepPathPattern("ownedRootMint");
+const OWNED_ROOT_PRESERVE_DEEP_PATH_PATTERN = ownedRootDeepPathPattern("ownedRootPreserve");
+const OWNED_ROOT_LOOKUP_DEEP_PATH_PATTERN = ownedRootDeepPathPattern("ownedRootLookup");
+const OWNED_ROOT_IMPLEMENTATION_DEEP_PATH_PATTERN = ownedRootDeepPathPattern("ownedRootAuthority");
+const OWNED_ROOT_CONTAINMENT_FILES = new Set([
+  "packages/keiko-server/src/task-workspace/managed-root.ts",
+  "packages/keiko-server/src/task-workspace/reconciliation.ts",
+]);
+const OWNED_ROOT_MINT_FILES = new Set([
+  "packages/keiko-server/src/task-workspace/workspace-root-access.ts",
+]);
+const OWNED_ROOT_PRESERVE_FILES = new Set([
+  "packages/keiko-server/src/grounded-orchestrator.ts",
+  "packages/keiko-workspace/src/realpath.ts",
+  "packages/keiko-workspace/src/structuralExecution.ts",
+]);
+const OWNED_ROOT_LOOKUP_FILES = new Set(["packages/keiko-workspace/src/realpath.ts"]);
+const OWNED_ROOT_IMPLEMENTATION_FILES = new Set([
+  "packages/keiko-workspace/src/ownedRootLookup.ts",
+  "packages/keiko-workspace/src/ownedRootMint.ts",
+  "packages/keiko-workspace/src/ownedRootPreserve.ts",
+]);
 const NETWORK_CORE_MODULES = [
   "child_process",
   "http",
@@ -185,6 +219,66 @@ const CLI_HEAVY_PACKAGE_PATTERN =
 const CLI_HEAVY_PACKAGE_ALLOWED_SUBPATHS = /^@oscharko-dev\/keiko-server\/credential-vault($|\/)/;
 
 const IMPORT_POLICY_RULES = [
+  {
+    name: "adr-0005-owned-root-containment-allowed-callers",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/owned-root-containment-allowed-callers/`)
+        : /^(packages\/keiko-|src\/)/.test(path) && !OWNED_ROOT_CONTAINMENT_FILES.has(path),
+    matchesSpecifier: (specifier, path) =>
+      specifier === OWNED_ROOT_CONTAINMENT_SPECIFIER ||
+      candidateImportPaths(specifier, path).some((candidate) =>
+        OWNED_ROOT_CONTAINMENT_DEEP_PATH_PATTERN.test(candidate),
+      ),
+  },
+  {
+    name: "adr-0005-owned-root-mint-allowed-callers",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/owned-root-authority-allowed-callers/`)
+        : /^(packages\/keiko-|src\/)/.test(path) && !OWNED_ROOT_MINT_FILES.has(path),
+    matchesSpecifier: (specifier, path) =>
+      specifier === OWNED_ROOT_MINT_SPECIFIER ||
+      candidateImportPaths(specifier, path).some((candidate) =>
+        OWNED_ROOT_MINT_DEEP_PATH_PATTERN.test(candidate),
+      ),
+  },
+  {
+    name: "adr-0005-owned-root-preserve-allowed-callers",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/owned-root-preserve-allowed-callers/`)
+        : /^(packages\/keiko-|src\/)/.test(path) && !OWNED_ROOT_PRESERVE_FILES.has(path),
+    matchesSpecifier: (specifier, path) =>
+      specifier === OWNED_ROOT_PRESERVE_SPECIFIER ||
+      candidateImportPaths(specifier, path).some((candidate) =>
+        OWNED_ROOT_PRESERVE_DEEP_PATH_PATTERN.test(candidate),
+      ),
+  },
+  {
+    name: "adr-0005-owned-root-lookup-allowed-callers",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/owned-root-lookup-allowed-callers/`)
+        : /^(packages\/keiko-|src\/)/.test(path) && !OWNED_ROOT_LOOKUP_FILES.has(path),
+    matchesSpecifier: (specifier, path) =>
+      specifier === OWNED_ROOT_LOOKUP_SPECIFIER ||
+      candidateImportPaths(specifier, path).some((candidate) =>
+        OWNED_ROOT_LOOKUP_DEEP_PATH_PATTERN.test(candidate),
+      ),
+  },
+  {
+    name: "adr-0005-owned-root-authority-implementation-private",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/owned-root-authority-implementation-private/`)
+        : /^(packages\/keiko-|src\/)/.test(path) && !OWNED_ROOT_IMPLEMENTATION_FILES.has(path),
+    matchesSpecifier: (specifier, path) =>
+      specifier === OWNED_ROOT_IMPLEMENTATION_SPECIFIER ||
+      candidateImportPaths(specifier, path).some((candidate) =>
+        OWNED_ROOT_IMPLEMENTATION_DEEP_PATH_PATTERN.test(candidate),
+      ),
+  },
   {
     name: "gen-perf-cli-001-cli-heavy-graphs-load-lazily",
     matchesFile: (path, mode) =>

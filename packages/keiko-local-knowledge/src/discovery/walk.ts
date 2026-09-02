@@ -23,7 +23,14 @@ import {
   isSafeStorageReference,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-paths";
 import type { IgnoreMatcher, WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
-import { compileIgnore, isDenied, isIgnored } from "@oscharko-dev/keiko-workspace";
+import {
+  compileIgnore,
+  isDenied,
+  isIgnored,
+  PathDeniedError,
+  resolveExistingAllowedWorkspaceRealRoot,
+} from "@oscharko-dev/keiko-workspace";
+import { isWorkspacePathSnapshotCurrent } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { compileGlobList, matchesAny, type CompiledGlob } from "./glob.js";
 import {
@@ -48,11 +55,13 @@ interface ScopeBounds {
   readonly excludeGlobs: readonly CompiledGlob[];
 }
 
-// On Windows, WorkspaceFs.realPath() may return backslash-separated paths
-// (e.g. C:\Users\workspace\file). Normalise both sides to forward slashes so
-// containment checks and relative-path derivation work cross-platform.
+const WINDOWS_DRIVE_PATH = /^[A-Za-z]:[\\/]/u;
+
+// WorkspaceFs fakes can model Windows roots while tests run on another platform. Detect the path
+// syntax itself rather than normalising every backslash: on POSIX a backslash is a legal literal
+// filename character and must never become an authority separator.
 function normaliseSep(p: string): string {
-  return p.replaceAll("\\", "/");
+  return WINDOWS_DRIVE_PATH.test(p) || p.startsWith("\\\\") ? p.replaceAll("\\", "/") : p;
 }
 
 function toPosixRelative(absoluteRoot: string, absolutePath: string): string {
@@ -159,10 +168,31 @@ function safeRealPath(fs: WorkspaceFs, absolutePath: string): string | undefined
   }
 }
 
+// Admits the scope's own root through the SAME deny-root policy the workspace package already
+// enforces for its own walk (workspaceFsBoundToCanonicalRoot's resolveWalkRoot in discovery.ts).
+// A plain `fs.realPath` on the root only follows symlinks — it never asks whether the resolved
+// target is itself a denied locus (e.g. a source lexically admitted as safe, then retargeted via
+// symlink to `~/.ssh` before this call runs). Only the root needs this: every descendant is
+// already re-checked against `ctx.realRootPath` and the deny list on every subsequent snapshot.
+function resolveAdmittedRealRoot(fs: WorkspaceFs, rootPath: string): string | DiscoveryError {
+  try {
+    return resolveExistingAllowedWorkspaceRealRoot(fs, rootPath);
+  } catch (error) {
+    if (error instanceof PathDeniedError) {
+      return {
+        code: "PATH_ESCAPE",
+        message: "selected source root is a denied workspace root",
+      };
+    }
+    return { code: "READ_FAILED", message: "realPath failed for selected source root" };
+  }
+}
+
 interface WalkContext {
   readonly fs: WorkspaceFs;
   readonly bounds: ScopeBounds;
   readonly realRootPath: string;
+  readonly rootStat: WorkspaceStat;
   readonly options: DiscoveryOptions;
   readonly gitIgnore: IgnoreMatcher | undefined;
   filesYielded: number;
@@ -206,26 +236,40 @@ function isGitIgnored(ctx: WalkContext, relativePath: string, isDirectory: boole
   return ctx.gitIgnore === undefined ? false : isIgnored(ctx.gitIgnore, relativePath, isDirectory);
 }
 
-function* yieldFileIfAllowed(
+function rootSnapshotIsCurrent(ctx: WalkContext): boolean {
+  return isWorkspacePathSnapshotCurrent(
+    ctx.fs,
+    ctx.bounds.rootPath,
+    ctx.realRootPath,
+    ctx.rootStat,
+  );
+}
+
+type FileSnapshotResolution =
+  | { readonly kind: "ready"; readonly realPath: string; readonly stat: WorkspaceStat }
+  | { readonly kind: "skip" }
+  | { readonly kind: "error"; readonly error: DiscoveryError };
+
+function resolveFileSnapshot(
   ctx: WalkContext,
   absolutePath: string,
   relativePath: string,
-): Generator<WalkYield> {
-  if (isDeniedRelativePath(relativePath)) {
-    return;
+): FileSnapshotResolution {
+  if (!rootSnapshotIsCurrent(ctx)) {
+    return {
+      kind: "error",
+      error: { code: "READ_FAILED", message: "selected source root changed during discovery" },
+    };
   }
-  // realpath containment gate (boundary). Skip the entry entirely on failure rather than
-  // treating a transient broken symlink as a complete enumeration.
-  const real = safeRealPath(ctx.fs, absolutePath);
-  if (real === undefined) {
-    yield {
+  const realPath = safeRealPath(ctx.fs, absolutePath);
+  if (realPath === undefined) {
+    return {
       kind: "error",
       error: { code: "READ_FAILED", message: "entry realpath failed", relativePath },
     };
-    return;
   }
-  if (!isContained(ctx.realRootPath, real)) {
-    yield {
+  if (!isContained(ctx.realRootPath, realPath)) {
+    return {
       kind: "error",
       error: {
         code: "PATH_ESCAPE",
@@ -233,26 +277,38 @@ function* yieldFileIfAllowed(
         relativePath,
       },
     };
+  }
+  if (isDeniedRelativePath(toPosixRelative(ctx.realRootPath, realPath))) return { kind: "skip" };
+  const stat = safeStatFile(ctx.fs, realPath);
+  if ("code" in stat) return { kind: "error", error: { ...stat, relativePath } };
+  return stat.isFile ? { kind: "ready", realPath, stat } : { kind: "skip" };
+}
+
+function* yieldFileIfAllowed(
+  ctx: WalkContext,
+  absolutePath: string,
+  relativePath: string,
+): Generator<WalkYield> {
+  if (isDeniedRelativePath(relativePath)) return;
+  const resolved = resolveFileSnapshot(ctx, absolutePath, relativePath);
+  if (resolved.kind === "error") {
+    yield { kind: "error", error: resolved.error };
     return;
   }
-  const realRel = toPosixRelative(ctx.realRootPath, real);
-  if (isDeniedRelativePath(realRel)) {
+  if (resolved.kind === "skip") return;
+  if (isGitIgnored(ctx, relativePath, false) || !isGlobMatched(ctx.bounds, relativePath)) return;
+  if (
+    !rootSnapshotIsCurrent(ctx) ||
+    !isWorkspacePathSnapshotCurrent(ctx.fs, absolutePath, resolved.realPath, resolved.stat)
+  ) {
+    yield {
+      kind: "error",
+      error: { code: "READ_FAILED", message: "entry changed during discovery" },
+    };
     return;
   }
-  if (isGitIgnored(ctx, relativePath, false)) {
-    return;
-  }
-  if (!isGlobMatched(ctx.bounds, relativePath)) {
-    return;
-  }
-  const stat = safeStatFile(ctx.fs, real);
-  if ("code" in stat) {
-    yield { kind: "error", error: { ...stat, relativePath } };
-    return;
-  }
-  if (!stat.isFile) return;
   ctx.filesYielded += 1;
-  yield { kind: "file", file: { relativePath, sizeBytes: stat.size } };
+  yield { kind: "file", file: { relativePath, sizeBytes: resolved.stat.size } };
 }
 
 interface WalkDirEntry {
@@ -266,14 +322,70 @@ type DirectoryRead =
   | { readonly ok: true; readonly entries: readonly WalkDirEntry[] }
   | { readonly ok: false; readonly error: DiscoveryError };
 
-function safeReadDir(fs: WorkspaceFs, absolutePath: string): DirectoryRead {
+// #3347 (owner P1): a single directory must never be fully materialized (and then sorted) before
+// `maxFiles`, abort or the elapsed budget can stop the walk -- one adversarially large directory
+// would otherwise allocate every entry first. ADR-0005 D1 gives the port a bounded
+// `readDir(path, maxEntries)` exactly for this, so the walker now always passes a finite cap.
+//
+// This is a MEMORY bound per directory, deliberately independent of `maxFiles`: a directory holds
+// subdirectories too, and those do not consume the file budget, so deriving the cap from the
+// remaining file budget would abort a legitimate walk whose root merely has more children than the
+// caller wants files (the `maxFiles: 2` pin below is exactly that case). The `+ 1` is a sentinel:
+// reading one more entry than the budget proves the directory overflows, without enumerating the
+// rest of it.
+const MAX_DIRECTORY_ENTRIES = 10_000;
+
+function directoryEntryCap(): number {
+  return MAX_DIRECTORY_ENTRIES + 1;
+}
+
+interface DirectorySnapshot {
+  readonly realPath: string;
+  readonly stat: WorkspaceStat;
+}
+
+function directorySnapshot(ctx: WalkContext, absolutePath: string): DirectorySnapshot | undefined {
+  if (!rootSnapshotIsCurrent(ctx)) return undefined;
+  const realPath = safeRealPath(ctx.fs, absolutePath);
+  if (realPath === undefined || !isContained(ctx.realRootPath, realPath)) return undefined;
+  const requestedRelative = toPosixRelative(ctx.bounds.rootPath, absolutePath);
+  const canonicalRelative = toPosixRelative(ctx.realRootPath, realPath);
+  if (requestedRelative !== canonicalRelative) return undefined;
+  const stat = safeStatFile(ctx.fs, realPath);
+  if ("code" in stat || !stat.isDirectory || stat.isSymbolicLink) return undefined;
+  return { realPath, stat };
+}
+
+function directoryReadFailure(): DirectoryRead {
+  return {
+    ok: false,
+    error: { code: "READ_FAILED", message: "directory read failed" },
+  };
+}
+
+function safeReadDir(ctx: WalkContext, absolutePath: string): DirectoryRead {
   try {
-    return { ok: true, entries: fs.readDir(absolutePath) };
+    const before = directorySnapshot(ctx, absolutePath);
+    if (before === undefined) return directoryReadFailure();
+    const cap = directoryEntryCap();
+    const entries = ctx.fs.readDir(before.realPath, cap);
+    if (
+      !rootSnapshotIsCurrent(ctx) ||
+      !isWorkspacePathSnapshotCurrent(ctx.fs, absolutePath, before.realPath, before.stat)
+    ) {
+      return directoryReadFailure();
+    }
+    // The sentinel came back: this directory holds more entries than the walk could ever yield,
+    // so stop here instead of silently discovering an arbitrary filesystem-order subset.
+    if (entries.length >= cap) {
+      return {
+        ok: false,
+        error: { code: "LIMIT_REACHED", message: "directory entry limit reached" },
+      };
+    }
+    return { ok: true, entries };
   } catch {
-    return {
-      ok: false,
-      error: { code: "READ_FAILED", message: "directory read failed" },
-    };
+    return directoryReadFailure();
   }
 }
 
@@ -321,7 +433,7 @@ function* descend(ctx: WalkContext, absoluteDir: string, depth: number): Generat
     yield limitYield("directory depth limit reached");
     return;
   }
-  const read = safeReadDir(ctx.fs, absoluteDir);
+  const read = safeReadDir(ctx, absoluteDir);
   if (!read.ok) {
     yield { kind: "error", error: read.error };
     return;
@@ -351,10 +463,24 @@ function* walkFilesScope(ctx: WalkContext, files: readonly string[]): Generator<
       return;
     }
     const abs = joinAbs(ctx.bounds.rootPath, rel);
+    if (!rootSnapshotIsCurrent(ctx)) {
+      yield {
+        kind: "error",
+        error: { code: "READ_FAILED", message: "selected source root changed during discovery" },
+      };
+      return;
+    }
     const exists = pathExists(ctx.fs, abs, "explicit entry presence check failed");
     if (typeof exists !== "boolean") {
       yield { kind: "error", error: { ...exists, relativePath: rel } };
       continue;
+    }
+    if (!rootSnapshotIsCurrent(ctx)) {
+      yield {
+        kind: "error",
+        error: { code: "READ_FAILED", message: "selected source root changed during discovery" },
+      };
+      return;
     }
     // An explicitly selected path that no longer exists is a complete, authoritative absence.
     // This lets the indexing owner prune a genuinely deleted document without mistaking a
@@ -378,13 +504,35 @@ function pathExists(
   }
 }
 
-function readGitIgnoreText(fs: WorkspaceFs, absolutePath: string): string | undefined {
+interface GitIgnoreSnapshot {
+  readonly realPath: string;
+  readonly stat: WorkspaceStat;
+}
+
+function gitIgnoreSnapshot(
+  fs: WorkspaceFs,
+  absolutePath: string,
+  realRootPath: string,
+): GitIgnoreSnapshot | undefined {
+  const realPath = safeRealPath(fs, absolutePath);
+  if (realPath === undefined || !isContained(realRootPath, realPath)) return undefined;
+  const canonicalRelative = toPosixRelative(realRootPath, realPath);
+  if (canonicalRelative !== ".gitignore" || isDeniedRelativePath(canonicalRelative)) {
+    return undefined;
+  }
+  const stat = safeStatFile(fs, realPath);
+  if ("code" in stat || !stat.isFile || stat.isSymbolicLink || stat.size > MAX_GITIGNORE_BYTES) {
+    return undefined;
+  }
+  return { realPath, stat };
+}
+
+// Bounded primitive present -> use it; absent -> ignore metadata is unavailable. Never fall back
+// to an unbounded `readFileUtf8`, which would materialize the whole file before any cap applies.
+function readGitIgnoreText(fs: WorkspaceFs, snapshot: GitIgnoreSnapshot): string | undefined {
+  if (fs.readFileUtf8Prefix === undefined) return undefined;
   try {
-    const stat = fs.stat(absolutePath);
-    if (!stat.isFile || stat.size > MAX_GITIGNORE_BYTES) return undefined;
-    return (
-      fs.readFileUtf8Prefix?.(absolutePath, MAX_GITIGNORE_BYTES) ?? fs.readFileUtf8(absolutePath)
-    );
+    return fs.readFileUtf8Prefix(snapshot.realPath, MAX_GITIGNORE_BYTES, "allow", snapshot.stat);
   } catch {
     return undefined;
   }
@@ -394,6 +542,7 @@ function readRootGitIgnore(
   fs: WorkspaceFs,
   rootPath: string,
   realRootPath: string,
+  rootStat: WorkspaceStat,
   options: DiscoveryOptions,
 ): IgnoreMatcher | DiscoveryError | undefined {
   if (options.respectGitIgnore !== true) return undefined;
@@ -401,12 +550,19 @@ function readRootGitIgnore(
   const exists = pathExists(fs, absolutePath, "repository ignore presence check failed");
   if (typeof exists !== "boolean") return exists;
   if (!exists) return compileIgnore([]);
-  const realPath = safeRealPath(fs, absolutePath);
-  if (realPath === undefined || !isContained(realRootPath, realPath)) {
+  if (!isWorkspacePathSnapshotCurrent(fs, rootPath, realRootPath, rootStat)) {
     return { code: "READ_FAILED", message: "repository ignore file failed containment" };
   }
-  const text = readGitIgnoreText(fs, absolutePath);
-  if (text === undefined) {
+  const before = gitIgnoreSnapshot(fs, absolutePath, realRootPath);
+  if (before === undefined) {
+    return { code: "READ_FAILED", message: "repository ignore file failed containment" };
+  }
+  const text = readGitIgnoreText(fs, before);
+  if (
+    text === undefined ||
+    !isWorkspacePathSnapshotCurrent(fs, rootPath, realRootPath, rootStat) ||
+    !isWorkspacePathSnapshotCurrent(fs, absolutePath, before.realPath, before.stat)
+  ) {
     return { code: "READ_FAILED", message: "repository ignore file could not be read safely" };
   }
   return compileIgnore(text.split(/\r?\n/u));
@@ -422,15 +578,21 @@ export function* walkSource(
     yield { kind: "error", error: bounds };
     return;
   }
-  const realRootPath = safeRealPath(fs, bounds.rootPath);
-  if (realRootPath === undefined) {
+  const admittedRoot = resolveAdmittedRealRoot(fs, bounds.rootPath);
+  if (typeof admittedRoot !== "string") {
+    yield { kind: "error", error: admittedRoot };
+    return;
+  }
+  const realRootPath = admittedRoot;
+  const rootStat = safeStatFile(fs, realRootPath);
+  if ("code" in rootStat || !rootStat.isDirectory || rootStat.isSymbolicLink) {
     yield {
       kind: "error",
-      error: { code: "READ_FAILED", message: "realPath failed for selected source root" },
+      error: { code: "READ_FAILED", message: "selected source root is not a stable directory" },
     };
     return;
   }
-  const gitIgnore = readRootGitIgnore(fs, bounds.rootPath, realRootPath, options);
+  const gitIgnore = readRootGitIgnore(fs, bounds.rootPath, realRootPath, rootStat, options);
   if (gitIgnore !== undefined && "code" in gitIgnore) {
     yield { kind: "error", error: gitIgnore };
     return;
@@ -439,6 +601,7 @@ export function* walkSource(
     fs,
     bounds,
     realRootPath,
+    rootStat,
     options,
     gitIgnore,
     filesYielded: 0,

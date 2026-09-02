@@ -47,6 +47,7 @@ import {
 } from "./verificationExecution.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { Project, UiStore } from "../store/index.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import {
   evidenceRetentionDiagnosticObserver,
   emitServerDiagnostic,
@@ -124,6 +125,8 @@ export interface VerificationRunnerManagerOptions {
   readonly evidenceStore?: EvidenceStore | undefined;
   readonly redactor?: ((input: string) => string) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly resolveWorkspaceRootAccess?:
+    ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
 }
 
 // ─── Project resolution (private per-module copy, established convention — command-runner.ts:94) ──
@@ -144,6 +147,11 @@ interface InFlightRun {
   terminalEmitted: boolean;
 }
 
+interface ResolvedVerificationWorkspace {
+  readonly access: WorkspaceRootAccess;
+  readonly workspace: WorkspaceInfo;
+}
+
 class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private readonly store: UiStore;
   private readonly fs: WorkspaceFs;
@@ -154,6 +162,8 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private readonly evidenceStore: EvidenceStore | undefined;
   private readonly redactor: (input: string) => string;
   private readonly diagnostics: ServerDiagnosticSink | undefined;
+  private readonly rootAccessResolver:
+    ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
   private readonly runs = new Map<string, InFlightRun>();
   private readonly subscribers = new Set<VerificationRunnerEventEmitter>();
 
@@ -167,6 +177,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.evidenceStore = opts.evidenceStore;
     this.redactor = opts.redactor ?? ((input: string): string => input);
     this.diagnostics = opts.diagnostics;
+    this.rootAccessResolver = opts.resolveWorkspaceRootAccess;
   }
 
   public readonly inFlightCount = (): number => this.runs.size;
@@ -187,8 +198,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   };
 
   public readonly discover = (projectId: string): EditorVerificationCatalogDiscovery => {
-    const workspace = this.resolveWorkspace(projectId);
-    const catalog = detectScripts(workspace, this.fs);
+    const resolved = this.resolveWorkspace(projectId);
+    const { workspace } = resolved;
+    const catalog = detectScripts(workspace, resolved.access.fs);
     const trusted = this.trustedForScripts(projectId, workspace);
     const runnable = isRunnableTestFramework(workspace);
     return {
@@ -199,8 +211,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   };
 
   public readonly execute = (input: VerificationRunInput): VerificationRunStart => {
-    const workspace = this.resolveWorkspace(input.projectId);
-    const plan = this.buildPlan(workspace, input);
+    const resolved = this.resolveWorkspace(input.projectId);
+    const { workspace } = resolved;
+    const plan = this.buildPlan(workspace, input, resolved.access.fs);
     this.assertRunnable(plan);
     this.assertWorkspaceTrustAtEffect(input, workspace);
     const runId = randomUUID();
@@ -220,7 +233,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       startedAtMs: this.now(),
       ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
     };
-    void this.runPlan(run, workspace, plan);
+    void this.runPlan(run, resolved, plan);
     return { runId, run };
   };
 
@@ -235,8 +248,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     input: VerificationRunInput,
     signal: AbortSignal,
   ): Promise<VerificationReport> => {
-    const workspace = this.resolveWorkspace(input.projectId);
-    const plan = this.buildPlan(workspace, input);
+    const resolved = this.resolveWorkspace(input.projectId);
+    const { workspace } = resolved;
+    const plan = this.buildPlan(workspace, input, resolved.access.fs);
     this.assertRunnable(plan);
     this.assertWorkspaceTrustAtEffect(input, workspace);
     const runId = randomUUID();
@@ -262,6 +276,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         workspace,
         signal: controller.signal,
         correlationId: entry.correlationId,
+        fs: resolved.access.fs,
       });
       this.emitStepCompletions(runId, report);
       // Awaited path (the agent's HTTP request awaits this promise): an evidence-write failure is
@@ -311,12 +326,16 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.emitTerminalOnce(runId, entry, report);
   }
 
-  private buildPlan(workspace: WorkspaceInfo, input: VerificationRunInput): VerificationPlan {
+  private buildPlan(
+    workspace: WorkspaceInfo,
+    input: VerificationRunInput,
+    fs: WorkspaceFs,
+  ): VerificationPlan {
     const scriptKinds = input.kinds.filter(isScriptBackedKind);
     this.assertWorkspaceTrustForScriptKinds(input.projectId, workspace, scriptKinds);
     const steps = [
-      ...this.scriptSteps(workspace, scriptKinds),
-      ...this.targetedSteps(workspace, input),
+      ...this.scriptSteps(workspace, scriptKinds, fs),
+      ...this.targetedSteps(workspace, input, fs),
     ];
     return { workspaceRoot: workspace.root, steps };
   }
@@ -347,30 +366,32 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private scriptSteps(
     workspace: WorkspaceInfo,
     scriptKinds: readonly VerificationKind[],
+    fs: WorkspaceFs,
   ): VerificationPlan["steps"] {
     if (scriptKinds.length === 0) return [];
-    const catalog = detectScripts(workspace, this.fs);
-    return buildVerificationPlan(workspace, catalog, { only: scriptKinds }, this.fs).steps;
+    const catalog = detectScripts(workspace, fs);
+    return buildVerificationPlan(workspace, catalog, { only: scriptKinds }, fs).steps;
   }
 
   private targetedSteps(
     workspace: WorkspaceInfo,
     input: VerificationRunInput,
+    fs: WorkspaceFs,
   ): VerificationPlan["steps"] {
     if (!input.kinds.includes("targeted-test") || input.targetPath === undefined) return [];
-    return planDirectTargetedTests(workspace, [input.targetPath], this.fs);
+    return planDirectTargetedTests(workspace, [input.targetPath], fs);
   }
 
   private async runPlan(
     run: EditorVerificationRun,
-    workspace: WorkspaceInfo,
+    resolved: ResolvedVerificationWorkspace,
     plan: VerificationPlan,
   ): Promise<void> {
     const entry = this.runs.get(run.runId);
     if (entry === undefined) return;
     this.emitRunStarted(run.runId, run, run.startedAtMs);
     this.emitStepsStarted(run.runId, plan);
-    await this.executeAndReport(run.runId, workspace, plan, entry, run.startedAtMs);
+    await this.executeAndReport(run.runId, resolved, plan, entry, run.startedAtMs);
   }
 
   // Shared by `execute`/`runPlan` (human path) and `runToReport` (agent path, Issue #2214/#2215
@@ -405,7 +426,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
 
   private async executeAndReport(
     runId: string,
-    workspace: WorkspaceInfo,
+    resolved: ResolvedVerificationWorkspace,
     plan: VerificationPlan,
     entry: InFlightRun,
     startedAtMs: number,
@@ -413,16 +434,17 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     try {
       const { report } = await this.executePort({
         plan,
-        workspace,
+        workspace: resolved.workspace,
         signal: entry.controller.signal,
         correlationId: entry.correlationId,
+        fs: resolved.access.fs,
       });
       this.emitStepCompletions(runId, report);
       // Fire-and-forget path (nothing awaits runPlan): an evidence-write failure must not become an
       // unhandled rejection, so it is caught and surfaced as the terminal event itself rather than
       // rethrown (mirrors TerminalExecutionManager.persistEntryOrEmitFailure's non-crashing variant).
       try {
-        this.persistEvidence(runId, workspace.root, report, startedAtMs);
+        this.persistEvidence(runId, resolved.workspace.root, report, startedAtMs);
         this.emitTerminalOnce(runId, entry, report);
       } catch {
         this.emitEvidenceWriteFailure(runId, entry);
@@ -612,21 +634,31 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     }
   }
 
-  private resolveWorkspace(projectId: string): WorkspaceInfo {
+  private resolveWorkspace(projectId: string): ResolvedVerificationWorkspace {
     const project = projectFor(this.store, projectId);
     if (project === undefined) {
       throw new VerificationRunnerError("PROJECT_NOT_FOUND", "Project not found.");
     }
-    let realRoot: string;
+    let access: WorkspaceRootAccess | undefined;
     try {
-      realRoot = this.fs.realPath(project.path);
+      access =
+        this.rootAccessResolver?.(project.path) ??
+        (this.rootAccessResolver === undefined
+          ? { kind: "ordinary", canonicalRoot: this.fs.realPath(project.path), fs: this.fs }
+          : undefined);
     } catch {
+      access = undefined;
+    }
+    if (access === undefined) {
       throw new VerificationRunnerError(
         "PROJECT_NOT_FOUND",
         "Project root path could not be resolved.",
       );
     }
-    return detectWorkspaceAt(realRoot, this.fs);
+    return {
+      access,
+      workspace: detectWorkspaceAt(access.canonicalRoot, access.fs),
+    };
   }
 
   private emit(event: EditorVerificationEvent): void {

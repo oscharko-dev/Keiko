@@ -2,7 +2,18 @@
 // temp dirs and a real symlink to prove out-of-root and symlink-escape targets are rejected.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskWorkspaceError } from "./errors.js";
@@ -11,6 +22,7 @@ import {
   assertManagedRootOwned,
   assertManagedTargetContained,
   ensureManagedWorktreeParent,
+  isManagedRootOwned,
   managedTargetExists,
 } from "./managed-root.js";
 
@@ -37,6 +49,49 @@ describe("assertManagedRootOwned (SC2)", () => {
       assertManagedRootOwned(managedRoot);
     }).not.toThrow();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "restores 0600 on the existing marker without replacing it",
+    () => {
+      assertManagedRootOwned(managedRoot);
+      const marker = join(managedRoot, MANAGED_ROOT_MARKER_FILENAME);
+      const inode = statSync(marker, { bigint: true }).ino;
+      chmodSync(marker, 0o644);
+
+      assertManagedRootOwned(managedRoot);
+
+      const hardened = statSync(marker, { bigint: true });
+      expect(hardened.ino).toBe(inode);
+      expect(hardened.mode & 0o777n).toBe(0o600n);
+    },
+  );
+
+  it("rejects an existing marker with the wrong content", () => {
+    mkdirSync(managedRoot, { recursive: true });
+    writeFileSync(join(managedRoot, MANAGED_ROOT_MARKER_FILENAME), "{}");
+
+    expect(isManagedRootOwned(managedRoot)).toBe(false);
+    expect(() => {
+      assertManagedRootOwned(managedRoot);
+    }).toThrow(TaskWorkspaceError);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a marker symlink even when its target has the expected content",
+    () => {
+      assertManagedRootOwned(managedRoot);
+      const marker = join(managedRoot, MANAGED_ROOT_MARKER_FILENAME);
+      const copiedMarker = join(outside, "copied-marker");
+      writeFileSync(copiedMarker, readFileSync(marker));
+      rmSync(marker);
+      symlinkSync(copiedMarker, marker);
+
+      expect(isManagedRootOwned(managedRoot)).toBe(false);
+      expect(() => {
+        assertManagedRootOwned(managedRoot);
+      }).toThrow(TaskWorkspaceError);
+    },
+  );
 });
 
 describe("assertManagedTargetContained (AC2)", () => {
@@ -44,6 +99,15 @@ describe("assertManagedTargetContained (AC2)", () => {
     assertManagedRootOwned(managedRoot);
     expect(() => {
       assertManagedTargetContained(managedRoot, join(managedRoot, "repo_x", "ws_y"));
+    }).not.toThrow();
+  });
+
+  it("accepts the production-shaped Keiko-owned state root", () => {
+    const keikoManagedRoot = join(base, ".keiko", "task-workspaces");
+    assertManagedRootOwned(keikoManagedRoot);
+
+    expect(() => {
+      assertManagedTargetContained(keikoManagedRoot, join(keikoManagedRoot, "repo_x", "ws_y"));
     }).not.toThrow();
   });
 

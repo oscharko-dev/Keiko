@@ -14,6 +14,8 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type {
@@ -2415,6 +2417,159 @@ describe("coding runtime manager", () => {
     });
     expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
     expect(JSON.stringify(events)).not.toContain(fixture.workspaceRoot);
+  });
+
+  it("denies a supervised edit after managed-root authority is revoked", async () => {
+    const fixture = createManagedFixture();
+    mkdirSync(join(fixture.workspaceRoot, "src"), { recursive: true });
+    writeFileSync(join(fixture.workspaceRoot, "src", "allowed.ts"), "export {};\n");
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    let access: WorkspaceRootAccess | undefined = {
+      kind: "managed-task",
+      canonicalRoot: fixture.workspaceRoot,
+      fs: nodeWorkspaceFs,
+    };
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      resolveWorkspaceRootAccess: () => access,
+      onRuntimeEvent: (event): void => {
+        events.push(event);
+      },
+    });
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    access = undefined;
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-revoked-file",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "scoped-file-edit",
+        actionKind: "file-edit",
+        scopeLabel: "workspace-scope",
+        risk: "medium",
+        policyReason: "scoped-file-edit",
+        targetPath: "src/allowed.ts",
+        allowedRelativePaths: ["src"],
+        fileCount: 1,
+        addedLines: 1,
+        deletedLines: 0,
+      }),
+    );
+    await settle();
+
+    expect(events.some((event) => event.kind === "diff-summarized")).toBe(false);
+    expect(events.find((event) => event.failureCode === "out-of-scope-file-edit")).toBeDefined();
+  });
+
+  // #3347 owner P1: the run surface proves workspace access once, before backend construction, and
+  // OpenCode/Codex preparation then awaits. Without a proof at the spawn itself, a worktree archived
+  // during that await still received a long-lived runtime tree rooted in the stale path.
+  it("starts no runtime tree when managed-root authority is revoked during OpenCode preparation", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    let access: WorkspaceRootAccess | undefined = {
+      kind: "managed-task",
+      canonicalRoot: fixture.workspaceRoot,
+      fs: nodeWorkspaceFs,
+    };
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      resolveWorkspaceRootAccess: () => access,
+      onRuntimeEvent: (event): void => {
+        events.push(event);
+      },
+      openCodeLifecycleAdapter: {
+        prepare: async () => {
+          // The deferred preparation the finding names: admission has already proved the root and
+          // the spawn has not happened yet.
+          await settle();
+          access = undefined;
+          return { ok: true, env: {} } as const;
+        },
+        handshake: () => Promise.resolve({ ok: true }),
+      },
+    });
+
+    const result = await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      failureCode: "workspace-root-denied",
+      retryable: false,
+    });
+    expect(harness.captures).toEqual([]);
+    expect(harness.children).toEqual([]);
+    expect(events.some((event) => event.kind === "runtime-started")).toBe(false);
+  });
+
+  it("starts no Codex tree when managed-root authority is revoked during Codex preparation", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    let access: WorkspaceRootAccess | undefined = {
+      kind: "managed-task",
+      canonicalRoot: fixture.workspaceRoot,
+      fs: nodeWorkspaceFs,
+    };
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(harness.spawn),
+      resolveWorkspaceRootAccess: () => access,
+      codexLifecycleAdapter: qualifiedCodexAdapter({
+        prepare: async (request): Promise<ExpectedCodexLifecyclePrepareResult> => {
+          const prepared = prepareManagedCodexStateRoot(request);
+          await settle();
+          access = undefined;
+          return prepared;
+        },
+      }),
+    });
+
+    await expect(
+      Promise.resolve(
+        manager.start(
+          codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ),
+    ).resolves.toEqual({ ok: false, failureCode: "workspace-root-denied", retryable: false });
+    expect(harness.captures).toEqual([]);
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it("spawns in the freshly proven canonical root while managed authority still holds", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task",
+        canonicalRoot: fixture.workspaceRoot,
+        fs: nodeWorkspaceFs,
+      }),
+      openCodeLifecycleAdapter: {
+        prepare: async () => {
+          await settle();
+          return { ok: true, env: {} } as const;
+        },
+        handshake: () => Promise.resolve({ ok: true }),
+      },
+    });
+
+    await expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    expect(harness.captures).toHaveLength(1);
+    expect(harness.captures[0]?.cwd).toBe(fixture.workspaceRoot);
   });
 
   // Behavioral replacement for the former KEIKO-0557 source-text-grep pin (#2906): a benign-

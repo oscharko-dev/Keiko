@@ -34,6 +34,11 @@ export interface SemanticSearchSession {
   readonly documents: SemanticSearchDocument[];
 }
 
+export interface SemanticSearchExecutionOptions {
+  readonly timeoutMs?: number | undefined;
+  readonly onTimeout?: (() => void) | undefined;
+}
+
 export interface SemanticFusionSignals {
   readonly scopePath: string;
   readonly lexicalRank: number | undefined;
@@ -48,6 +53,17 @@ export interface SemanticFusionSignals {
 interface RankedPath {
   readonly scopePath: string;
   readonly score: number;
+}
+
+interface SemanticSearchExecution {
+  readonly signal: AbortSignal;
+  readonly timeout: ReturnType<typeof setTimeout> | undefined;
+  readonly state: { timedOut: boolean };
+}
+
+interface SemanticAbortWait {
+  readonly promise: Promise<readonly SemanticSearchMatch[]>;
+  readonly removeListener: () => void;
 }
 
 function quantize(value: number): number {
@@ -139,30 +155,110 @@ export function semanticSearchTool(providerName: string): string {
   return `${SEMANTIC_SEARCH_TOOL_PREFIX}:${safeProviderName(providerName)}`;
 }
 
+function startSemanticSearchExecution(
+  signal: AbortSignal | undefined,
+  options: SemanticSearchExecutionOptions,
+): SemanticSearchExecution {
+  const controller = new AbortController();
+  const effectiveSignal =
+    signal === undefined ? controller.signal : AbortSignal.any([signal, controller.signal]);
+  const state = { timedOut: false };
+  const timeout =
+    options.timeoutMs === undefined
+      ? undefined
+      : setTimeout(
+          () => {
+            state.timedOut = true;
+            options.onTimeout?.();
+            controller.abort();
+          },
+          Math.min(Math.ceil(options.timeoutMs), 2_147_483_647),
+        );
+  timeout?.unref();
+  return { signal: effectiveSignal, timeout, state };
+}
+
+function waitForSemanticAbort(signal: AbortSignal): SemanticAbortWait {
+  let removeListener = (): void => undefined;
+  const promise = new Promise<readonly SemanticSearchMatch[]>((resolve) => {
+    const onAbort = (): void => {
+      resolve([]);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    removeListener = (): void => {
+      signal.removeEventListener("abort", onAbort);
+    };
+    if (signal.aborted) onAbort();
+  });
+  return { promise, removeListener };
+}
+
+function normalizeSemanticMatches(
+  matches: readonly SemanticSearchMatch[],
+  documents: readonly SemanticSearchDocument[],
+): readonly SemanticSearchMatch[] {
+  const documentsByPath = new Map(documents.map((document) => [document.scopePath, document]));
+  return matches
+    .filter((match) => validMatch(match, documentsByPath))
+    .map((match) => ({ ...match, score: clampUnit(match.score) }))
+    .sort(
+      (a, b) =>
+        b.score - a.score || comparePath(a.scopePath, b.scopePath) || (a.line ?? 0) - (b.line ?? 0),
+    );
+}
+
+function canRunSemanticSearch(
+  session: SemanticSearchSession | undefined,
+  signal: AbortSignal | undefined,
+): session is SemanticSearchSession {
+  return session !== undefined && session.documents.length > 0 && signal?.aborted !== true;
+}
+
+function timeoutElapsedBeforeStart(options: SemanticSearchExecutionOptions): boolean {
+  if (options.timeoutMs === undefined || options.timeoutMs > 0) {
+    return false;
+  }
+  options.onTimeout?.();
+  return true;
+}
+
+function semanticExecutionStopped(execution: SemanticSearchExecution): boolean {
+  return execution.state.timedOut || execution.signal.aborted;
+}
+
+function finishSemanticSearchExecution(
+  execution: SemanticSearchExecution,
+  abortWait: SemanticAbortWait,
+): void {
+  if (execution.timeout !== undefined) clearTimeout(execution.timeout);
+  abortWait.removeListener();
+}
+
 export async function runSemanticSearchSession(
   session: SemanticSearchSession | undefined,
   query: RetrievalQuery,
   signal: AbortSignal | undefined,
+  options: SemanticSearchExecutionOptions = {},
 ): Promise<readonly SemanticSearchMatch[]> {
-  if (session === undefined || session.documents.length === 0 || signal?.aborted === true) {
+  if (!canRunSemanticSearch(session, signal)) {
     return [];
   }
+  if (timeoutElapsedBeforeStart(options)) {
+    return [];
+  }
+  const execution = startSemanticSearchExecution(signal, options);
+  const abortWait = waitForSemanticAbort(execution.signal);
   try {
-    const documentsByPath = new Map(
-      session.documents.map((document) => [document.scopePath, document]),
-    );
-    const matches = await session.provider.search({ query, documents: session.documents, signal });
-    return matches
-      .filter((match) => validMatch(match, documentsByPath))
-      .map((match) => ({ ...match, score: clampUnit(match.score) }))
-      .sort(
-        (a, b) =>
-          b.score - a.score ||
-          comparePath(a.scopePath, b.scopePath) ||
-          (a.line ?? 0) - (b.line ?? 0),
-      );
+    const provider = session.provider
+      .search({ query, documents: session.documents, signal: execution.signal })
+      .catch(() => []);
+    const matches = await Promise.race([provider, abortWait.promise]);
+    if (semanticExecutionStopped(execution)) return [];
+    return normalizeSemanticMatches(matches, session.documents);
   } catch {
     return [];
+  } finally {
+    finishSemanticSearchExecution(execution, abortWait);
   }
 }
 

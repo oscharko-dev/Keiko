@@ -3,19 +3,33 @@
 //   - every directory descent and every read goes through resolveWithinWorkspace first;
 //   - always-on DENY patterns are applied before the optional .gitignore subset;
 //   - a symlink whose realpath escapes the root is skipped (never followed);
-//   - recursion is capped by maxDepth and total results by maxFiles.
+//   - recursion is capped by maxDepth and total results by maxFiles;
+//   - every directory read is capped, so one huge directory cannot be materialized in full.
 
 import { relative } from "node:path";
 import {
   nodeWorkspaceFs,
+  WorkspaceDescriptorReadError,
   type WorkspaceDirEntry,
+  type WorkspaceDescriptorUtf8Read,
   type WorkspaceFs,
   type WorkspaceStat,
 } from "./fs.js";
 import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
-import { containedRealPathInfo } from "./realpath.js";
-import { FileTooLargeError, PathDeniedError, WorkspaceReadError } from "./errors.js";
+import {
+  containedRealPathInfo,
+  isAllowedContainedPathParent,
+  isCanonicalAllowedContainedPath,
+  resolveExistingAllowedWorkspaceRealRoot,
+  workspaceFsBoundToCanonicalRoot,
+} from "./realpath.js";
+import {
+  FileTooLargeError,
+  PathDeniedError,
+  PathEscapeError,
+  WorkspaceReadError,
+} from "./errors.js";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
@@ -27,19 +41,56 @@ import {
   type ReadOptions,
   type WorkspaceInfo,
 } from "./types.js";
+import {
+  StructuralExecutionStoppedError,
+  structuralExecutionStopped,
+  type StructuralExecutionControl,
+} from "./structuralExecution.js";
+import {
+  workspaceDirectoryFingerprint,
+  type WorkspaceDirectorySnapshot,
+} from "./workspaceDirectorySnapshot.js";
 
 interface Walk {
   readonly fs: WorkspaceFs;
   readonly root: string;
+  readonly realRoot: string | undefined;
   readonly matcher: IgnoreMatcher;
   readonly opts: DiscoveryOptions;
   readonly applyGitignore: boolean;
   readonly out: DiscoveredFile[];
   readonly directories: string[];
+  readonly directorySnapshots: Map<string, WorkspaceDirectorySnapshot>;
+  readonly skippedSymbolicLinks: string[];
+  readonly failOnReadError: boolean;
+  readonly entryLimit?: number | undefined;
+  readonly executionControl?: StructuralExecutionControl | undefined;
+  entriesVisited: number;
   denied: number;
   ignored: number;
   depthPruned: number;
   maxFilesPruned: number;
+}
+
+function unavailableWalkRoot(error: unknown, failOnReadError: boolean): undefined {
+  if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
+    throw error;
+  }
+  if (failOnReadError) throw new WorkspaceReadError("cannot resolve workspace root", ".");
+  return undefined;
+}
+
+function resolveWalkRoot(
+  fs: WorkspaceFs,
+  root: string,
+  failOnReadError: boolean,
+): string | undefined {
+  try {
+    return resolveExistingAllowedWorkspaceRealRoot(fs, root);
+  } catch (error) {
+    unavailableWalkRoot(error, failOnReadError);
+    return undefined;
+  }
 }
 
 interface AsyncWalkState {
@@ -58,25 +109,6 @@ function toRelative(root: string, absolutePath: string): string {
   return relative(root, absolutePath).replaceAll("\\", "/");
 }
 
-function toRealRelative(fs: WorkspaceFs, root: string, absolutePath: string): string {
-  try {
-    return toRelative(fs.realPath(root), absolutePath);
-  } catch {
-    return toRelative(root, absolutePath);
-  }
-}
-
-// A benign-named workspace root that is a SYMLINK into a denied location (e.g. "~/docs" -> "~/.aws")
-// is invisible to the root-relative deny checks: they only see paths BELOW the root, never the denied
-// segment that resolving the root itself introduces. Flag it — but ONLY when the symlink ADDS the
-// denial (the real root is denied while the lexical root is not). A non-symlinked root, a benign
-// platform link (macOS "/tmp" -> "/private/tmp"), and a root that merely sits under a denied-named
-// ANCESTOR the user did not symlink into (e.g. the product's own ".claude" worktree) all keep working,
-// preserving the existing relative-only semantics for every non-attack path.
-function realRootIsDeniedViaSymlink(realRoot: string, lexicalRoot: string): boolean {
-  return isDenied(realRoot) && !isDenied(lexicalRoot);
-}
-
 // Returns false when the entry must be skipped for any security or noise reason, recording
 // which tier rejected it for the discovery stats.
 function isAllowed(walk: Walk, relPath: string, isDir: boolean): boolean {
@@ -91,38 +123,213 @@ function isAllowed(walk: Walk, relPath: string, isDir: boolean): boolean {
   return true;
 }
 
-function childRelative(root: string, absoluteDir: string, name: string): string {
-  const dirRel = toRelative(root, absoluteDir);
-  return dirRel === "" ? name : `${dirRel}/${name}`;
+function childRelative(relativeDir: string, name: string): string {
+  return relativeDir === "" ? name : `${relativeDir}/${name}`;
 }
 
-function readDirSafe(walk: Walk, absoluteDir: string): readonly WorkspaceDirEntry[] {
+function currentContainedDirectory(
+  walk: Walk,
+  absoluteDir: string,
+  relativeDir: string,
+): string | undefined {
+  const lexicalPath = resolveWithinWorkspace(walk.root, relativeDir);
+  let contained: ReturnType<typeof containedRealPathInfo>;
   try {
-    return walk.fs.readDir(absoluteDir);
-  } catch {
-    return [];
+    contained = containedRealPathInfo(walk.fs, walk.root, lexicalPath);
+  } catch (error) {
+    rejectContainedEntry(walk, relativeDir, error);
+    return undefined;
+  }
+  const realRelative = contained.realRelative.replaceAll("\\", "/");
+  if (contained.realBase !== walk.realRoot) {
+    rejectContainedEntry(walk, relativeDir, new Error("workspace root changed during discovery"));
+    return undefined;
+  }
+  if (isDenied(realRelative)) {
+    walk.denied += 1;
+    return undefined;
+  }
+  if (
+    contained.path !== absoluteDir ||
+    !isCanonicalAllowedContainedPath(contained, walk.root, relativeDir)
+  ) {
+    recordSkippedSymbolicLink(walk, relativeDir);
+    return undefined;
+  }
+  return contained.path;
+}
+
+function failedDirectoryRead(
+  walk: Walk,
+  relativeDir: string,
+  error: unknown,
+): readonly WorkspaceDirEntry[] {
+  if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
+    throw error;
+  }
+  if (!walk.failOnReadError) return [];
+  if (error instanceof PathEscapeError || error instanceof WorkspaceReadError) throw error;
+  throw new WorkspaceReadError(
+    `cannot read directory: ${relativeDir || "."} (${describe(error)})`,
+    relativeDir,
+  );
+}
+
+// #3347 (owner P1): a single directory must never be materialized (and then sorted) in full before
+// a budget can stop the walk. The port's bounded `readDir(path, maxEntries)` (ADR-0005 D1) exists
+// for exactly that, but public discovery passed `undefined` and so allocated every entry of one
+// attacker-controlled directory — synchronously, which the async walk cannot yield through. Every
+// read is capped now.
+//
+// The cap is a per-directory MEMORY bound and is deliberately NOT derived from `maxFiles`:
+// subdirectories are entries too and do not consume the file budget, so a maxFiles-derived bound
+// would abort a legitimate walk whose directory merely holds more children than the caller wants
+// files. The traversal entry budget of `discoverCandidateInventory` still applies on top when it is
+// the tighter of the two. The `+ 1` is a sentinel: reading one entry more than the bound proves the
+// directory overflows without enumerating the rest of it.
+const MAX_DIRECTORY_ENTRIES = 10_000;
+
+interface DirectoryReadCap {
+  readonly limit: number;
+  /** True when the walk's traversal entry budget, not the memory bound, set this limit. */
+  readonly fromEntryBudget: boolean;
+}
+
+function directoryReadCap(walk: Walk): DirectoryReadCap {
+  const memoryLimit = MAX_DIRECTORY_ENTRIES + 1;
+  if (walk.entryLimit === undefined) return { limit: memoryLimit, fromEntryBudget: false };
+  const remaining = Math.max(0, walk.entryLimit - walk.entriesVisited) + 1;
+  return remaining <= memoryLimit
+    ? { limit: remaining, fromEntryBudget: true }
+    : { limit: memoryLimit, fromEntryBudget: false };
+}
+
+function readDirSafe(
+  walk: Walk,
+  absoluteDir: string,
+  relativeDir: string,
+): readonly WorkspaceDirEntry[] {
+  try {
+    const current = currentContainedDirectory(walk, absoluteDir, relativeDir);
+    if (current === undefined) return [];
+    const cap = directoryReadCap(walk);
+    const entries = walk.fs.readDir(current, cap.limit);
+    if (entries.length >= cap.limit) {
+      // A capped directory read is in filesystem order, so consuming its arbitrary prefix would make
+      // retrieval nondeterministic across platforms. Reject the whole overflowing directory and mark
+      // the inventory truncated. Only a spent traversal entry budget ends the walk; a directory that
+      // merely exceeds the memory bound is skipped and its siblings are still visited.
+      walk.maxFilesPruned += entries.length;
+      if (cap.fromEntryBudget) walk.entriesVisited = walk.entryLimit ?? walk.entriesVisited;
+      return [];
+    }
+    // The shared code-unit comparator (issue #2723), not `localeCompare`: the directory
+    // fingerprint recorded below must be identical across platforms and locales.
+    const ordered = [...entries].sort((a, b) => compareStrings(a.name, b.name));
+    const after = currentContainedDirectory(walk, current, relativeDir);
+    if (after === undefined) return [];
+    walk.directorySnapshots.set(relativeDir, {
+      scopePath: relativeDir,
+      fingerprint: workspaceDirectoryFingerprint(ordered),
+    });
+    return ordered;
+  } catch (error) {
+    return failedDirectoryRead(walk, relativeDir, error);
   }
 }
 
-function statSize(walk: Walk, absolutePath: string): number {
+function entryBudgetExhausted(walk: Walk): boolean {
+  return walk.entryLimit !== undefined && walk.entriesVisited >= walk.entryLimit;
+}
+
+function currentEntryStat(
+  walk: Walk,
+  absolutePath: string,
+  relativePath: string,
+): WorkspaceStat | undefined {
   try {
-    return walk.fs.stat(absolutePath).size;
-  } catch {
-    return 0;
+    return walk.fs.stat(absolutePath);
+  } catch (error) {
+    if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
+      throw error;
+    }
+    if (walk.failOnReadError) {
+      throw new WorkspaceReadError(
+        `cannot stat discovered path: ${relativePath} (${describe(error)})`,
+        relativePath,
+      );
+    }
+    return undefined;
   }
+}
+
+function recordSkippedSymbolicLink(walk: Walk, relPath: string): void {
+  if (walk.skippedSymbolicLinks.length >= walk.opts.maxFiles) {
+    walk.maxFilesPruned += 1;
+  } else {
+    walk.skippedSymbolicLinks.push(relPath);
+  }
+}
+
+interface CurrentEntry {
+  readonly absolutePath: string;
+  readonly relativePath: string;
+  readonly stat: WorkspaceStat;
+}
+
+function rejectContainedEntry(walk: Walk, relativePath: string, error: unknown): undefined {
+  if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
+    throw error;
+  }
+  if (walk.failOnReadError) {
+    if (error instanceof PathEscapeError) throw error;
+    throw new WorkspaceReadError(
+      `cannot contain discovered path: ${relativePath} (${describe(error)})`,
+      relativePath,
+    );
+  }
+  walk.denied += 1;
+  return undefined;
+}
+
+function currentContainedEntry(walk: Walk, relativePath: string): CurrentEntry | undefined {
+  const lexicalPath = resolveWithinWorkspace(walk.root, relativePath);
+  let contained: ReturnType<typeof containedRealPathInfo>;
+  try {
+    contained = containedRealPathInfo(walk.fs, walk.root, lexicalPath);
+  } catch (error) {
+    rejectContainedEntry(walk, relativePath, error);
+    return undefined;
+  }
+  if (contained.realBase !== walk.realRoot) {
+    rejectContainedEntry(walk, relativePath, new Error("workspace root changed during discovery"));
+    return undefined;
+  }
+  const realRelative = contained.realRelative.replaceAll("\\", "/");
+  if (isDenied(realRelative)) {
+    walk.denied += 1;
+    return undefined;
+  }
+  if (!isCanonicalAllowedContainedPath(contained, walk.root, relativePath)) {
+    recordSkippedSymbolicLink(walk, relativePath);
+    return undefined;
+  }
+  const stat = currentEntryStat(walk, contained.path, relativePath);
+  if (stat === undefined) return undefined;
+  if (stat.isSymbolicLink) {
+    recordSkippedSymbolicLink(walk, relativePath);
+    return undefined;
+  }
+  return { absolutePath: contained.path, relativePath, stat };
 }
 
 function handleEntry(
   walk: Walk,
-  absoluteDir: string,
+  relativeDir: string,
   entry: WorkspaceDirEntry,
   depth: number,
 ): void {
-  const childAbs = resolveWithinWorkspace(
-    walk.root,
-    childRelative(walk.root, absoluteDir, entry.name),
-  );
-  const relPath = toRelative(walk.root, childAbs);
+  const relPath = childRelative(relativeDir, entry.name);
   if (!isAllowed(walk, relPath, entry.isDirectory)) {
     return;
   }
@@ -130,33 +337,57 @@ function handleEntry(
   // reports neither isFile nor isDirectory is likewise treated as non-traversable noise.
   // Only genuine files and directories are walked.
   if (entry.isSymbolicLink) {
+    recordSkippedSymbolicLink(walk, relPath);
     return;
   }
-  if (entry.isDirectory) {
-    descend(walk, childAbs, depth + 1);
+  const current = currentContainedEntry(walk, relPath);
+  if (current === undefined) return;
+  if (
+    current.stat.isDirectory !== entry.isDirectory &&
+    !isAllowed(walk, relPath, current.stat.isDirectory)
+  ) {
     return;
   }
-  if (entry.isFile) {
+  if (current.stat.isDirectory) {
+    descend(walk, current.absolutePath, relPath, depth + 1);
+    return;
+  }
+  if (current.stat.isFile) {
     if (walk.out.length >= walk.opts.maxFiles) {
       walk.maxFilesPruned += 1;
       return;
     }
-    walk.out.push({ relativePath: relPath, sizeBytes: statSize(walk, childAbs) });
+    walk.out.push({ relativePath: relPath, sizeBytes: current.stat.size });
   }
 }
 
-function descend(walk: Walk, absoluteDir: string, depth: number): void {
+function descend(walk: Walk, absoluteDir: string, relativeDir: string, depth: number): void {
   if (depth > walk.opts.maxDepth) {
     walk.depthPruned += 1;
     return;
   }
   if (walk.out.length >= walk.opts.maxFiles) {
+    walk.maxFilesPruned += 1;
     return;
   }
-  walk.directories.push(toRelative(walk.root, absoluteDir));
-  const entries = [...readDirSafe(walk, absoluteDir)].sort((a, b) => (a.name < b.name ? -1 : 1));
-  for (const entry of entries) {
-    handleEntry(walk, absoluteDir, entry, depth);
+  if (entryBudgetExhausted(walk)) {
+    walk.maxFilesPruned += 1;
+    return;
+  }
+  walk.directories.push(relativeDir);
+  const entries = [...readDirSafe(walk, absoluteDir, relativeDir)].sort((a, b) =>
+    a.name < b.name ? -1 : 1,
+  );
+  for (const [index, entry] of entries.entries()) {
+    if (
+      entryBudgetExhausted(walk) ||
+      (walk.executionControl !== undefined && structuralExecutionStopped(walk.executionControl))
+    ) {
+      walk.maxFilesPruned += entries.length - index;
+      break;
+    }
+    walk.entriesVisited += 1;
+    handleEntry(walk, relativeDir, entry, depth);
   }
 }
 
@@ -170,25 +401,33 @@ function yieldToEventLoop(state: AsyncWalkState): Promise<void> | undefined {
 async function handleEntryAsync(
   walk: Walk,
   state: AsyncWalkState,
-  absoluteDir: string,
+  relativeDir: string,
   entry: WorkspaceDirEntry,
   depth: number,
 ): Promise<void> {
   await yieldToEventLoop(state);
-  const childAbs = resolveWithinWorkspace(
-    walk.root,
-    childRelative(walk.root, absoluteDir, entry.name),
-  );
-  const relPath = toRelative(walk.root, childAbs);
-  if (!isAllowed(walk, relPath, entry.isDirectory) || entry.isSymbolicLink) return;
-  if (entry.isDirectory) {
-    await descendAsync(walk, state, childAbs, depth + 1);
-  } else if (entry.isFile) {
+  const relPath = childRelative(relativeDir, entry.name);
+  if (!isAllowed(walk, relPath, entry.isDirectory)) return;
+  if (entry.isSymbolicLink) {
+    recordSkippedSymbolicLink(walk, relPath);
+    return;
+  }
+  const current = currentContainedEntry(walk, relPath);
+  if (current === undefined) return;
+  if (
+    current.stat.isDirectory !== entry.isDirectory &&
+    !isAllowed(walk, relPath, current.stat.isDirectory)
+  ) {
+    return;
+  }
+  if (current.stat.isDirectory) {
+    await descendAsync(walk, state, current.absolutePath, relPath, depth + 1);
+  } else if (current.stat.isFile) {
     if (walk.out.length >= walk.opts.maxFiles) {
       walk.maxFilesPruned += 1;
       return;
     }
-    walk.out.push({ relativePath: relPath, sizeBytes: statSize(walk, childAbs) });
+    walk.out.push({ relativePath: relPath, sizeBytes: current.stat.size });
   }
 }
 
@@ -196,29 +435,62 @@ async function descendAsync(
   walk: Walk,
   state: AsyncWalkState,
   absoluteDir: string,
+  relativeDir: string,
   depth: number,
 ): Promise<void> {
   if (depth > walk.opts.maxDepth) {
     walk.depthPruned += 1;
     return;
   }
-  if (walk.out.length >= walk.opts.maxFiles) return;
-  walk.directories.push(toRelative(walk.root, absoluteDir));
-  const entries = [...readDirSafe(walk, absoluteDir)].sort((a, b) => (a.name < b.name ? -1 : 1));
-  for (const entry of entries) {
-    await handleEntryAsync(walk, state, absoluteDir, entry, depth);
+  if (walk.out.length >= walk.opts.maxFiles) {
+    walk.maxFilesPruned += 1;
+    return;
+  }
+  if (entryBudgetExhausted(walk)) {
+    walk.maxFilesPruned += 1;
+    return;
+  }
+  walk.directories.push(relativeDir);
+  const entries = [...readDirSafe(walk, absoluteDir, relativeDir)].sort((a, b) =>
+    a.name < b.name ? -1 : 1,
+  );
+  for (const [index, entry] of entries.entries()) {
+    if (
+      entryBudgetExhausted(walk) ||
+      (walk.executionControl !== undefined && structuralExecutionStopped(walk.executionControl))
+    ) {
+      walk.maxFilesPruned += entries.length - index;
+      break;
+    }
+    walk.entriesVisited += 1;
+    await handleEntryAsync(walk, state, relativeDir, entry, depth);
   }
 }
 
-function createWalk(workspace: WorkspaceInfo, opts: DiscoveryOptions, fs: WorkspaceFs): Walk {
+function createWalk(
+  workspace: WorkspaceInfo,
+  opts: DiscoveryOptions,
+  fs: WorkspaceFs,
+  failOnReadError: boolean,
+  executionControl?: StructuralExecutionControl,
+  entryLimit?: number,
+): Walk {
+  const realRoot = resolveWalkRoot(fs, workspace.root, failOnReadError);
   return {
-    fs,
-    root: workspace.root,
+    fs: realRoot === undefined ? fs : workspaceFsBoundToCanonicalRoot(fs, realRoot),
+    root: realRoot ?? workspace.root,
+    realRoot,
     matcher: compileIgnore(workspace.ignoreLines),
     opts,
     applyGitignore: opts.applyGitignore,
     out: [],
     directories: [],
+    directorySnapshots: new Map<string, WorkspaceDirectorySnapshot>(),
+    skippedSymbolicLinks: [],
+    failOnReadError,
+    ...(entryLimit === undefined ? {} : { entryLimit: Math.max(1, Math.floor(entryLimit)) }),
+    ...(executionControl === undefined ? {} : { executionControl }),
+    entriesVisited: 0,
     denied: 0,
     ignored: 0,
     depthPruned: 0,
@@ -226,25 +498,16 @@ function createWalk(workspace: WorkspaceInfo, opts: DiscoveryOptions, fs: Worksp
   };
 }
 
-function refuseDeniedSymlinkRoot(walk: Walk): boolean {
-  let realRoot: string;
-  try {
-    realRoot = walk.fs.realPath(walk.root);
-  } catch {
-    realRoot = walk.root;
-  }
-  if (!realRootIsDeniedViaSymlink(realRoot, walk.root)) return false;
-  walk.denied += 1;
-  return true;
-}
-
-function runWalk(workspace: WorkspaceInfo, opts: DiscoveryOptions, fs: WorkspaceFs): Walk {
-  const walk = createWalk(workspace, opts, fs);
-  // Refuse to walk a benign-named root that resolves into a denied location via a symlink: discovery
-  // does not realpath-contain the ROOT, so it would otherwise list a symlinked credential dir's files.
-  // Treated as denied (no throw — discovery filters rather than raises), consistent with per-entry deny.
-  if (refuseDeniedSymlinkRoot(walk)) return walk;
-  descend(walk, resolveWithinWorkspace(workspace.root, "."), 0);
+function runWalk(
+  workspace: WorkspaceInfo,
+  opts: DiscoveryOptions,
+  fs: WorkspaceFs,
+  failOnReadError = false,
+  executionControl?: StructuralExecutionControl,
+  entryLimit?: number,
+): Walk {
+  const walk = createWalk(workspace, opts, fs, failOnReadError, executionControl, entryLimit);
+  if (walk.realRoot !== undefined) descend(walk, walk.realRoot, "", 0);
   return walk;
 }
 
@@ -253,14 +516,9 @@ async function runWalkAsync(
   opts: DiscoveryOptions,
   fs: WorkspaceFs,
 ): Promise<Walk> {
-  const walk = createWalk(workspace, opts, fs);
-  if (!refuseDeniedSymlinkRoot(walk)) {
-    await descendAsync(
-      walk,
-      { entriesSinceYield: 0 },
-      resolveWithinWorkspace(workspace.root, "."),
-      0,
-    );
+  const walk = createWalk(workspace, opts, fs, false);
+  if (walk.realRoot !== undefined) {
+    await descendAsync(walk, { entriesSinceYield: 0 }, walk.realRoot, "", 0);
   }
   return walk;
 }
@@ -295,6 +553,33 @@ export function discoverWithStats(
   return discoveryResult(runWalk(workspace, opts, fs));
 }
 
+export interface CandidateDiscoveryResult extends DiscoveryResult {
+  readonly skippedSymbolicLinks: readonly string[];
+  readonly directorySnapshots: readonly WorkspaceDirectorySnapshot[];
+}
+
+/**
+ * Internal repository-search inventory. Symlink names stay out of ordinary discovery responses,
+ * but structural adapters need them to distinguish a genuinely missing convention from a path
+ * omitted at the trust boundary without probing every nonexistent candidate.
+ */
+export function discoverCandidateInventory(
+  workspace: WorkspaceInfo,
+  opts: DiscoveryOptions,
+  fs: WorkspaceFs = nodeWorkspaceFs,
+  executionControl?: StructuralExecutionControl,
+): CandidateDiscoveryResult {
+  const entryLimit = Math.max(opts.maxFiles * 2, opts.maxFiles + opts.maxDepth + 1);
+  const walk = runWalk(workspace, opts, fs, true, executionControl, entryLimit);
+  return {
+    ...discoveryResult(walk),
+    skippedSymbolicLinks: [...new Set(walk.skippedSymbolicLinks)].sort(compareStrings),
+    directorySnapshots: [...walk.directorySnapshots.values()].sort((a, b) =>
+      compareStrings(a.scopePath, b.scopePath),
+    ),
+  };
+}
+
 // Uses the same WorkspaceFs port and filtering rules as discoverWithStats, but yields after bounded
 // entry batches so the BFF can serve unrelated requests while a large workspace is being scanned.
 export async function discoverWithStatsAsync(
@@ -313,6 +598,7 @@ function statFile(fs: WorkspaceFs, absolutePath: string, relPath: string): Works
   try {
     return fs.stat(absolutePath);
   } catch (error) {
+    if (error instanceof StructuralExecutionStoppedError) throw error;
     throw new WorkspaceReadError(`cannot stat file: ${relPath} (${describe(error)})`, relPath);
   }
 }
@@ -365,58 +651,330 @@ export interface RawFileContent {
   readonly truncated: boolean;
 }
 
-function readRawContent(
+export interface InternalWorkspaceByteRead {
+  readonly bytes: Uint8Array;
+  readonly stat: WorkspaceStat;
+  readonly complete: boolean;
+}
+
+export interface InternalWorkspaceTextRead {
+  readonly content: string;
+  readonly sizeBytes: number;
+  readonly stat: WorkspaceStat;
+}
+
+interface StableRawFileContent extends RawFileContent {
+  readonly stat: WorkspaceStat;
+}
+
+interface ReadableWorkspaceFile {
+  readonly resolvedPath: string;
+  readonly normalizedRel: string;
+  readonly realBase: string;
+  readonly realRelative: string;
+  readonly stat: WorkspaceStat;
+}
+
+function mapDescriptorReadError(
+  error: WorkspaceDescriptorReadError,
+  target: ReadableWorkspaceFile,
+  maxBytes: number,
+): never {
+  if (error.reason === "too-large") {
+    const sizeBytes = error.sizeBytes ?? target.stat.size;
+    throw new FileTooLargeError(
+      `file exceeds the read cap: ${target.normalizedRel}`,
+      target.normalizedRel,
+      sizeBytes,
+      maxBytes,
+    );
+  }
+  if (
+    error.reason === "hard-link" ||
+    error.reason === "not-regular" ||
+    error.reason === "symbolic-link"
+  ) {
+    throw new PathDeniedError(
+      `refusing to read an unsafe workspace alias: ${target.normalizedRel}`,
+      target.normalizedRel,
+    );
+  }
+  throw new WorkspaceReadError(
+    `file changed during read: ${target.normalizedRel}`,
+    target.normalizedRel,
+  );
+}
+
+// Bounded primitive present -> use it; absent -> the read is unavailable. Never fall back to the
+// unbounded `readFileUtf8`, which would materialize the whole file before the size cap below ever
+// runs (the class of bug this function exists to close — see the read-lane boundary note above).
+function readDescriptor(
   fs: WorkspaceFs,
-  absolutePath: string,
+  target: ReadableWorkspaceFile,
+  opts: ReadOptions,
+): WorkspaceDescriptorUtf8Read {
+  if (fs.readFileUtf8SameDescriptor === undefined) {
+    throw new WorkspaceReadError(
+      `bounded same-descriptor read is unavailable: ${target.normalizedRel}`,
+      target.normalizedRel,
+    );
+  }
+  try {
+    return fs.readFileUtf8SameDescriptor(target.resolvedPath, opts.maxBytes, "reject", target.stat);
+  } catch (error) {
+    if (error instanceof StructuralExecutionStoppedError) throw error;
+    if (error instanceof WorkspaceDescriptorReadError) {
+      mapDescriptorReadError(error, target, opts.maxBytes);
+    }
+    throw new WorkspaceReadError(
+      `cannot read file: ${target.normalizedRel} (${describe(error)})`,
+      target.normalizedRel,
+    );
+  }
+}
+
+function sameFileSnapshot(left: WorkspaceStat, right: WorkspaceStat): boolean {
+  const sameWhenKnown = (a: unknown, b: unknown): boolean =>
+    a === undefined || b === undefined || a === b;
+  return (
+    left.size === right.size &&
+    sameWhenKnown(left.fileIdentity, right.fileIdentity) &&
+    sameWhenKnown(left.hardLinkCount, right.hardLinkCount) &&
+    sameWhenKnown(left.mtimeNs ?? left.mtimeMs, right.mtimeNs ?? right.mtimeMs) &&
+    sameWhenKnown(left.ctimeNs ?? left.ctimeMs, right.ctimeNs ?? right.ctimeMs)
+  );
+}
+
+function postReadStat(
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+  target: ReadableWorkspaceFile,
+): WorkspaceStat {
+  const contained = containedRealPathInfo(fs, workspace.root, target.resolvedPath);
+  const realRelative = contained.realRelative.replaceAll("\\", "/");
+  if (
+    contained.realBase !== target.realBase ||
+    contained.path !== target.resolvedPath ||
+    realRelative !== target.realRelative ||
+    !isCanonicalAllowedContainedPath(contained, workspace.root, target.normalizedRel)
+  ) {
+    throw new PathDeniedError(
+      `workspace path changed during read: ${target.normalizedRel}`,
+      target.normalizedRel,
+    );
+  }
+  return statFile(fs, contained.path, target.normalizedRel);
+}
+
+function readRawContent(
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+  target: ReadableWorkspaceFile,
+  opts: ReadOptions,
+): StableRawFileContent {
+  const read = readDescriptor(fs, target, opts);
+  const after = postReadStat(workspace, fs, target);
+  assertNoHardLinkAlias(after, target.normalizedRel);
+  if (!sameFileSnapshot(target.stat, read.stat) || !sameFileSnapshot(read.stat, after)) {
+    throw new WorkspaceReadError(
+      `file identity changed during read: ${target.normalizedRel}`,
+      target.normalizedRel,
+    );
+  }
+  if (read.sizeBytes > opts.maxBytes) {
+    throw new FileTooLargeError(
+      `file exceeds the read cap: ${target.normalizedRel}`,
+      target.normalizedRel,
+      read.sizeBytes,
+      opts.maxBytes,
+    );
+  }
+  return {
+    relativePath: target.normalizedRel,
+    sizeBytes: read.sizeBytes,
+    rawText: read.rawText,
+    truncated: false,
+    stat: after,
+  };
+}
+
+function resolvePrefixReadableWorkspaceFile(
+  workspace: WorkspaceInfo,
+  relPath: string,
+  maxBytes: number,
+  fs: WorkspaceFs,
+): ReadableWorkspaceFile {
+  return resolveReadableWorkspaceFile(workspace, relPath, { maxBytes }, fs, false);
+}
+
+function assertStablePrefixRead(
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+  target: ReadableWorkspaceFile,
+): WorkspaceStat {
+  const after = postReadStat(workspace, fs, target);
+  assertNoHardLinkAlias(after, target.normalizedRel);
+  if (!sameFileSnapshot(target.stat, after)) {
+    throw new WorkspaceReadError(
+      `file identity changed during prefix read: ${target.normalizedRel}`,
+      target.normalizedRel,
+    );
+  }
+  return after;
+}
+
+function mapPrefixReadFailure(
+  error: unknown,
+  target: ReadableWorkspaceFile,
+  maxBytes: number,
+): never {
+  if (error instanceof WorkspaceDescriptorReadError) {
+    mapDescriptorReadError(error, target, maxBytes);
+  }
+  if (error instanceof Error && !("code" in error)) throw error;
+  throw new WorkspaceReadError(
+    `cannot read file prefix: ${target.normalizedRel} (${describe(error)})`,
+    target.normalizedRel,
+  );
+}
+
+/** Internal raw-byte prefix seam for repository search. Never expose it from the public barrel. */
+export async function readWorkspaceFileBytesPrefixForInternalUse(
+  workspace: WorkspaceInfo,
+  relPath: string,
+  maxBytes: number,
+  fs: WorkspaceFs,
+): Promise<InternalWorkspaceByteRead> {
+  const target = resolvePrefixReadableWorkspaceFile(workspace, relPath, maxBytes, fs);
+  const readBytes = fs.readFileBytes;
+  if (readBytes === undefined) {
+    throw new WorkspaceReadError(
+      `bounded byte reads are unavailable: ${target.normalizedRel}`,
+      target.normalizedRel,
+    );
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = await readBytes(target.resolvedPath, maxBytes, "reject", target.stat);
+  } catch (error) {
+    mapPrefixReadFailure(error, target, maxBytes);
+  }
+  const stat = assertStablePrefixRead(workspace, fs, target);
+  if (bytes.byteLength > maxBytes) {
+    throw new WorkspaceReadError(
+      `filesystem exceeded the prefix cap: ${target.normalizedRel}`,
+      target.normalizedRel,
+    );
+  }
+  return { bytes, stat, complete: bytes.byteLength === stat.size };
+}
+
+/** Internal redacted prefix seam for oversized code-intelligence sources. */
+export function readWorkspaceFilePrefixForEvidence(
+  workspace: WorkspaceInfo,
+  relPath: string,
+  maxBytes: number,
+  fs: WorkspaceFs,
+): string | undefined {
+  const readPrefix = fs.readFileUtf8Prefix;
+  if (readPrefix === undefined) return undefined;
+  const target = resolvePrefixReadableWorkspaceFile(workspace, relPath, maxBytes, fs);
+  let rawText: string;
+  try {
+    rawText = readPrefix(target.resolvedPath, maxBytes, "reject", target.stat);
+  } catch (error) {
+    mapPrefixReadFailure(error, target, maxBytes);
+  }
+  assertStablePrefixRead(workspace, fs, target);
+  return redact(rawText);
+}
+
+/** Internal text seam that keeps stable read metadata attached until index persistence. */
+export function readWorkspaceFileTextForInternalUse(
+  workspace: WorkspaceInfo,
   relPath: string,
   opts: ReadOptions,
-): RawFileContent {
-  let raw: string;
-  try {
-    raw = fs.readFileUtf8(absolutePath);
-  } catch (error) {
-    throw new WorkspaceReadError(`cannot read file: ${relPath} (${describe(error)})`, relPath);
-  }
-  const rawBytes = Buffer.byteLength(raw, "utf8");
-  const truncated = rawBytes > opts.maxBytes;
-  const rawText = truncated
-    ? Buffer.from(raw, "utf8").subarray(0, opts.maxBytes).toString("utf8")
-    : raw;
-  return { relativePath: relPath, sizeBytes: rawBytes, rawText, truncated };
+  fs: WorkspaceFs,
+  lane: WorkspaceContentLane,
+): InternalWorkspaceTextRead {
+  const target = resolveReadableWorkspaceFile(workspace, relPath, opts, fs);
+  const raw = readRawContent(workspace, fs, target, opts);
+  return {
+    content: lane === "editor" ? raw.rawText : redact(raw.rawText),
+    sizeBytes: raw.sizeBytes,
+    stat: raw.stat,
+  };
 }
 
 // The shared guard chain both lanes run. Order: boundary -> deny -> realpath containment ->
-// hard-link alias -> size cap. Realpath containment is shared with the write/cwd paths via
-// assertContainedRealPath: when the path does not exist, it validates the nearest existing parent
-// and returns absolutePath, so a missing in-root file still surfaces as a WorkspaceReadError (not a
-// false PathEscapeError).
+// hard-link alias -> size cap -> same-descriptor read -> containment and identity revalidation.
+// Realpath containment is shared with the write/cwd paths via assertContainedRealPath: when the path
+// does not exist, it validates the nearest existing parent and returns absolutePath, so a missing
+// in-root file still surfaces as a WorkspaceReadError (not a false PathEscapeError).
+function isCanonicalOrSafelyMissingWorkspacePath(
+  contained: ReturnType<typeof containedRealPathInfo>,
+  workspaceRoot: string,
+  normalizedRel: string,
+  fs: WorkspaceFs,
+): boolean {
+  if (isCanonicalAllowedContainedPath(contained, workspaceRoot, normalizedRel)) return true;
+  return (
+    isAllowedContainedPathParent(contained, workspaceRoot, normalizedRel) &&
+    !fs.exists(contained.path)
+  );
+}
+
+function containedReadableWorkspacePath(
+  workspaceRoot: string,
+  normalizedRel: string,
+  absolutePath: string,
+  fs: WorkspaceFs,
+): ReturnType<typeof containedRealPathInfo> {
+  try {
+    return containedRealPathInfo(fs, workspaceRoot, absolutePath);
+  } catch (error) {
+    if (
+      error instanceof PathDeniedError ||
+      error instanceof PathEscapeError ||
+      error instanceof StructuralExecutionStoppedError
+    ) {
+      throw error;
+    }
+    throw new WorkspaceReadError(`cannot resolve workspace path: ${normalizedRel}`, normalizedRel);
+  }
+}
+
 function resolveReadableWorkspaceFile(
   workspace: WorkspaceInfo,
   relPath: string,
   opts: ReadOptions,
   fs: WorkspaceFs,
-): { readonly resolvedPath: string; readonly normalizedRel: string } {
+  requireComplete = true,
+): ReadableWorkspaceFile {
   const absolutePath = resolveWithinWorkspace(workspace.root, relPath);
   const normalizedRel = toRelative(workspace.root, absolutePath);
   if (isDenied(normalizedRel)) {
     throw new PathDeniedError(`refusing to read a denied path: ${normalizedRel}`, normalizedRel);
   }
-  const contained = containedRealPathInfo(fs, workspace.root, absolutePath);
+  const contained = containedReadableWorkspacePath(workspace.root, normalizedRel, absolutePath, fs);
   // Deny a benign-named root symlink that resolves into a protected location (e.g. "~/docs" ->
   // "~/.aws"): the deny checks here only see the path relative to the realpath'd root, so a denied
   // segment in the ROOT itself is invisible to them and the file would read through. Only the symlink
   // case is added — see realRootIsDeniedViaSymlink — so existing non-symlink reads are unchanged.
-  if (realRootIsDeniedViaSymlink(contained.realBase, workspace.root)) {
+  if (!isCanonicalOrSafelyMissingWorkspacePath(contained, workspace.root, normalizedRel, fs)) {
     throw new PathDeniedError(`refusing to read a denied path: ${normalizedRel}`, normalizedRel);
   }
   const resolvedPath = contained.path;
-  const resolvedRel = toRealRelative(fs, workspace.root, resolvedPath);
-  if (isDenied(resolvedRel)) {
-    throw new PathDeniedError(`refusing to read a denied path: ${normalizedRel}`, normalizedRel);
-  }
+  const resolvedRel = contained.realRelative.replaceAll("\\", "/");
   const stats = statFile(fs, resolvedPath, normalizedRel);
+  if (!stats.isFile || stats.isSymbolicLink) {
+    throw new PathDeniedError(
+      `refusing to read a non-regular workspace file: ${normalizedRel}`,
+      normalizedRel,
+    );
+  }
   assertNoHardLinkAlias(stats, normalizedRel);
-  if (stats.size > opts.maxBytes) {
+  if (requireComplete && stats.size > opts.maxBytes) {
     throw new FileTooLargeError(
       `file exceeds the read cap: ${normalizedRel}`,
       normalizedRel,
@@ -424,7 +982,13 @@ function resolveReadableWorkspaceFile(
       opts.maxBytes,
     );
   }
-  return { resolvedPath, normalizedRel };
+  return {
+    resolvedPath,
+    normalizedRel,
+    realBase: contained.realBase,
+    realRelative: resolvedRel,
+    stat: stats,
+  };
 }
 
 // The evidence-lane read: the guard chain, then redact() at the IO boundary.
@@ -434,7 +998,12 @@ export function readWorkspaceFile(
   opts: ReadOptions = DEFAULT_READ_OPTIONS,
   fs: WorkspaceFs = nodeWorkspaceFs,
 ): FileContent {
-  const raw = readWorkspaceFileForEditing(workspace, relPath, opts, fs);
+  const raw = readRawContent(
+    workspace,
+    fs,
+    resolveReadableWorkspaceFile(workspace, relPath, opts, fs),
+    opts,
+  );
   return {
     relativePath: raw.relativePath,
     sizeBytes: raw.sizeBytes,
@@ -452,5 +1021,11 @@ export function readWorkspaceFileForEditing(
   fs: WorkspaceFs = nodeWorkspaceFs,
 ): RawFileContent {
   const target = resolveReadableWorkspaceFile(workspace, relPath, opts, fs);
-  return readRawContent(fs, target.resolvedPath, target.normalizedRel, opts);
+  const raw = readRawContent(workspace, fs, target, opts);
+  return {
+    relativePath: raw.relativePath,
+    sizeBytes: raw.sizeBytes,
+    rawText: raw.rawText,
+    truncated: raw.truncated,
+  };
 }

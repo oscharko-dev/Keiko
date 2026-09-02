@@ -7,11 +7,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough, Readable } from "node:stream";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { IncomingMessage } from "node:http";
 
-import type { KnowledgeCapsuleId, KnowledgePodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
+import type {
+  KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
+  WorkspaceInstance,
+} from "@oscharko-dev/keiko-contracts";
 import {
   deriveContextProfileFromCapability,
   maxUtf8BytesForTokenBudget,
@@ -36,6 +41,7 @@ import {
   groundedPromptInputTokensForCapability,
   handleGroundedAsk,
   mappedGatewayError,
+  mappedWorkspaceError,
   modelWindowAwareBudget,
   modelInputPromptByteLimit,
   promptByteLength,
@@ -70,7 +76,12 @@ import {
   scriptedAdapter,
   seedCapsuleWithVectors,
 } from "@oscharko-dev/keiko-local-knowledge/testing";
-import { RepoSearchInvalidQueryError } from "@oscharko-dev/keiko-workspace";
+import {
+  PathDeniedError,
+  RepoSearchInvalidQueryError,
+  WorkspaceNotFoundError,
+  detectWorkspaceAt,
+} from "@oscharko-dev/keiko-workspace";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryUserId } from "@oscharko-dev/keiko-contracts";
@@ -86,6 +97,23 @@ import {
   CONVERSATION_MEMORY_FENCE_END,
   CONVERSATION_MEMORY_FENCE_START,
 } from "./conversation-prompt.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
+import {
+  createFakeSessionPairingPort,
+  fakePairingRequestBody,
+} from "./coding-app-session/_support.js";
+import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
+import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
+import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
+import { assertManagedRootOwned } from "./task-workspace/managed-root.js";
+import { deriveManagedWorktreePath } from "./task-workspace/naming.js";
+import { inspectManagedGitdirIdentity } from "./task-workspace/gitdir-identity.js";
+import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -127,10 +155,12 @@ function fakeRes(): RouteContext["res"] {
   return res;
 }
 
-function ctx(body: string, res: RouteContext["res"] = fakeRes()): RouteContext {
+function ctx(body: string, res: RouteContext["res"] = fakeRes(), cookie?: string): RouteContext {
+  const req = fakeReq(body);
+  req.headers = cookie === undefined ? {} : { cookie };
   return {
     correlationId: undefined,
-    req: fakeReq(body),
+    req,
     res,
     params: {},
     url: new URL("http://localhost/api/chats/messages/grounded"),
@@ -639,6 +669,26 @@ async function runHandler(
 ): Promise<RouteResult> {
   return handleGroundedAsk(ctx(body), deps(), customRunner);
 }
+
+describe("mappedWorkspaceError", () => {
+  it("maps an unavailable workspace root without exposing its path", () => {
+    const unavailablePath = "/private/customer/.aws/workspace";
+    const result = mappedWorkspaceError(
+      new WorkspaceNotFoundError("root disappeared", unavailablePath, [unavailablePath]),
+    );
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: "Connected scope root is not accessible.",
+        },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(unavailablePath);
+  });
+});
 
 describe("buildGroundedGatewayMessages", () => {
   it("derives prompt input budget from the shared capability→context profile (KEIKO-0461)", () => {
@@ -1608,6 +1658,30 @@ describe("handleGroundedAsk", () => {
     ]);
   });
 
+  it("maps a runner root denial to a path-free policy response and retains the user turn", async () => {
+    const { chatId } = await setupChatWithScope();
+    const sensitivePath = join(tmp, ".aws", "private-customer-root");
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain src/foo.ts" })),
+      deps(),
+      () =>
+        Promise.reject(
+          new PathDeniedError(`denied sensitive root: ${sensitivePath}`, sensitivePath),
+        ),
+    );
+
+    expect(result.status).toBe(400);
+    const body = result.body as { error: { code: string; message: string } };
+    expect(body.error).toEqual({
+      code: "WORKSPACE_PATH_DENIED",
+      message: "The workspace path is denied by policy.",
+    });
+    expect(JSON.stringify(result)).not.toContain(sensitivePath);
+    expect(store.listMessages(chatId)).toMatchObject([
+      { role: "user", content: "explain src/foo.ts" },
+    ]);
+  });
+
   it("rejects a grounded ask whose workspace root is on the deny-list before invoking the runner", async () => {
     // Epic #177 audit (GAP-B): a chat whose projectPath sits inside a credential directory must be
     // refused at the route — before any filesystem access — with a generic message that does not
@@ -1626,18 +1700,167 @@ describe("handleGroundedAsk", () => {
       runnerCalled = true;
       return Promise.resolve({ pack: emptyPack(), assistantContent: "ok", elapsedMs: 1 });
     };
+    const activityLog = createBufferedServerLogSink();
+    const correlationId = "grounded-direct-denied-root-corr-0001";
+    setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
 
-    const result = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId: chat.id, content: "What is in here?", modelId: CHAT_MODEL })),
-      deps(),
-      spyRunner,
+    try {
+      const result = await handleGroundedAsk(
+        {
+          ...ctx(
+            JSON.stringify({ chatId: chat.id, content: "What is in here?", modelId: CHAT_MODEL }),
+          ),
+          correlationId,
+        },
+        deps(),
+        spyRunner,
+      );
+
+      expect(result.status).toBe(400);
+      expect(runnerCalled).toBe(false);
+      const body = result.body as { error: { code: string; message: string } };
+      expect(body.error).toEqual({
+        code: "WORKSPACE_PATH_DENIED",
+        message: "The workspace path is denied by policy.",
+      });
+      expect(JSON.stringify(result)).not.toContain(".aws");
+      const denialEvents = activityLog.events.filter(
+        (event) => event.op === "workspace.root.denied",
+      );
+      expect(denialEvents).toHaveLength(1);
+      expect(denialEvents[0]).toMatchObject({
+        level: "warn",
+        category: "security",
+        op: "workspace.root.denied",
+        correlationId,
+        errorKind: "WORKSPACE_PATH_DENIED",
+        extra: { decision: "denied", reason: "denied-locus" },
+      });
+      expect(JSON.stringify(denialEvents)).not.toContain(deniedRoot);
+      expect(JSON.stringify(denialEvents)).not.toContain(".aws");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("admits a persisted managed workspace only for a paired request and threads exact root authority", async () => {
+    // A managed root may be configured outside a deny-listed `.keiko` segment. Authorization must
+    // therefore classify the configured boundary itself, never rely on the deny-list as a proxy.
+    const managedRoot = join(tmp, "managed", "task-workspaces");
+    assertManagedRootOwned(managedRoot);
+    const repositoryId = "repo_0123456789abcdef";
+    const workspaceId = "ws_0123456789abcdef01234567";
+    const managedWorktree = deriveManagedWorktreePath({
+      managedRoot,
+      repositoryId,
+      workspaceId,
+    });
+    // #3347 managed-worktree identity: resolveManagedWorkspaceRootAccess re-proves a real Git
+    // linked-worktree pointer (gitdir-identity.ts) instead of trusting a path shape, so `tmp` (the
+    // instance's repositoryRoot) and managedWorktree must be an actual `git worktree add` linkage,
+    // not a plain mkdir, for the paired branch below to reach 200 instead of a fail-closed denial.
+    execFileSync("git", ["init", "-q"], { cwd: tmp });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: tmp });
+    execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: tmp });
+    writeFileSync(join(tmp, "README.md"), "managed grounding fixture\n");
+    execFileSync("git", ["add", "README.md"], { cwd: tmp });
+    execFileSync("git", ["commit", "-qm", "fixture"], { cwd: tmp });
+    mkdirSync(dirname(managedWorktree), { recursive: true });
+    execFileSync(
+      "git",
+      [
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "keiko/task/managed-grounding-01234567",
+        managedWorktree,
+        "HEAD",
+      ],
+      { cwd: tmp },
+    );
+    writeFileSync(join(managedWorktree, "package.json"), '{"name":"managed-grounding"}\n');
+    const gitdirInspection = inspectManagedGitdirIdentity(managedWorktree, tmp);
+    if (gitdirInspection === undefined) {
+      throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+    }
+    const instance: WorkspaceInstance = {
+      schemaVersion: "1",
+      workspaceId,
+      taskId: "managed-grounding",
+      repositoryId,
+      repositoryRoot: tmp,
+      baseBranch: "dev",
+      taskBranch: "keiko/task/managed-grounding-01234567",
+      managedWorktreePath: managedWorktree,
+      gitdirIdentity: gitdirInspection.identity,
+      lifecycleState: "active",
+      health: "healthy",
+      lock: null,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      driftMarkers: [],
+      recoveryHints: [],
+      auditCorrelationId: "corr_managed_grounding",
+    };
+    const workspaceProvisioning = {
+      provision: (): never => {
+        throw new Error("not used in this test");
+      },
+      activate: (): never => {
+        throw new Error("not used in this test");
+      },
+      getInstance: (id: string): WorkspaceInstance | undefined =>
+        id === workspaceId ? instance : undefined,
+    } satisfies WorkspaceProvisioningService;
+    const codingAppSessionChannel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const paired = codingAppSessionChannel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new Error("pairing failed");
+    const project = store.createProject(managedWorktree, "managed-grounding-host");
+    const chat = store.createChat(project.path, "Managed grounding", CHAT_MODEL);
+    store.updateChat(chat.id, {
+      connectedScope: {
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs: NOW,
+      },
+    });
+    const managedDeps = deps(
+      undefined,
+      {},
+      {
+        managedTaskWorkspaceRoot: managedRoot,
+        workspaceProvisioning,
+        codingAppSessionChannel,
+      },
+    );
+    let runnerCalls = 0;
+    const captureRunner: GroundedRunner = (input): Promise<OrchestratorOutput> => {
+      runnerCalls += 1;
+      if (input.workspaceFs === undefined) throw new Error("managed authority was not threaded");
+      expect(detectWorkspaceAt(input.workspaceRoot, input.workspaceFs).name).toBe(
+        "managed-grounding",
+      );
+      return runner(emptyPack(), "managed answer")(input);
+    };
+    const body = JSON.stringify({ chatId: chat.id, content: "Inspect the managed repository" });
+
+    const unpaired = await handleGroundedAsk(ctx(body), managedDeps, captureRunner);
+    const pairedResult = await handleGroundedAsk(
+      ctx(body, fakeRes(), `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`),
+      managedDeps,
+      captureRunner,
     );
 
-    expect(result.status).toBe(400);
-    expect(runnerCalled).toBe(false);
-    const body = result.body as { error: { code: string; message: string } };
-    expect(body.error.message).toContain("safe read surface");
-    expect(JSON.stringify(result)).not.toContain(".aws");
+    expect(unpaired).toMatchObject({
+      status: 400,
+      body: { error: { code: "WORKSPACE_PATH_DENIED" } },
+    });
+    expect(pairedResult.status, JSON.stringify(pairedResult.body)).toBe(200);
+    expect(runnerCalls).toBe(1);
   });
 
   it("rejects a grounded ask when a persisted symlink root is repointed into a denied directory", async () => {
@@ -1666,18 +1889,58 @@ describe("handleGroundedAsk", () => {
       runnerCalled = true;
       return Promise.resolve({ pack: emptyPack(), assistantContent: "ok", elapsedMs: 1 });
     };
+    const activityLog = createBufferedServerLogSink();
+    const correlationId = "grounded-root-relocation-corr-0001";
+    setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
 
-    const result = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId: chat.id, content: "Inspect leak.txt", modelId: CHAT_MODEL })),
-      deps(),
-      spyRunner,
-    );
+    try {
+      const result = await handleGroundedAsk(
+        {
+          ...ctx(
+            JSON.stringify({
+              chatId: chat.id,
+              content: "Inspect leak.txt",
+              modelId: CHAT_MODEL,
+            }),
+          ),
+          correlationId,
+        },
+        deps(),
+        spyRunner,
+      );
 
-    expect(result.status).toBe(400);
-    expect(runnerCalled).toBe(false);
-    const body = result.body as { error: { message: string } };
-    expect(body.error.message).toContain("safe read surface");
-    expect(JSON.stringify(result)).not.toContain(".ssh");
+      expect(result.status).toBe(400);
+      expect(runnerCalled).toBe(false);
+      const body = result.body as { error: { code: string; message: string } };
+      expect(body.error).toEqual({
+        code: "WORKSPACE_PATH_DENIED",
+        message: "The workspace path is denied by policy.",
+      });
+      expect(JSON.stringify(result)).not.toContain(".ssh");
+      const denialEvents = activityLog.events.filter(
+        (event) => event.op === "workspace.root.denied",
+      );
+      expect(denialEvents).toHaveLength(1);
+      expect(denialEvents[0]).toMatchObject({
+        level: "warn",
+        category: "security",
+        op: "workspace.root.denied",
+        correlationId,
+        errorKind: "WORKSPACE_PATH_DENIED",
+      });
+      expect(denialEvents[0]?.extra).toMatchObject({
+        decision: "denied",
+        reason: "denied-locus",
+      });
+      const serializedEvents = JSON.stringify(denialEvents);
+      expect(serializedEvents).not.toContain(tmp);
+      expect(serializedEvents).not.toContain(linkedRoot);
+      expect(serializedEvents).not.toContain(deniedRoot);
+      expect(serializedEvents).not.toContain(".ssh");
+      expect(serializedEvents).not.toContain("leak.txt");
+    } finally {
+      resetServerLogger();
+    }
   });
 
   it("passes repository-root connectedScope kind through to the grounded runner", async () => {
@@ -1948,8 +2211,11 @@ describe("handleGroundedAsk", () => {
 
     expect(result.status).toBe(400);
     expect(seenRequests).toHaveLength(0);
-    const body = result.body as { error: { message: string } };
-    expect(body.error.message).toContain("excluded from Keiko's safe read surface");
+    const body = result.body as { error: { code: string; message: string } };
+    expect(body.error).toEqual({
+      code: "WORKSPACE_PATH_DENIED",
+      message: "The workspace path is denied by policy.",
+    });
     expect(JSON.stringify(result)).not.toContain(".ssh");
   });
 

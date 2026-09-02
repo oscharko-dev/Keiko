@@ -12,6 +12,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { CodingRuntimeEditorMutationLeaseRegistration } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
@@ -53,7 +54,109 @@ function editorSession(sessionId: string, workspaceRoot: string): EditorAgentSes
   };
 }
 
+function singleUseManagedAccess(root: string): () =>
+  | {
+      readonly kind: "managed-task";
+      readonly canonicalRoot: string;
+      readonly fs: typeof nodeWorkspaceFs;
+    }
+  | undefined {
+  let available = true;
+  return () => {
+    if (!available) return undefined;
+    available = false;
+    return { kind: "managed-task", canonicalRoot: root, fs: nodeWorkspaceFs };
+  };
+}
+
 describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
+  it("denies discovery when managed-root authority is revoked before postflight", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-coding-revoked-discover-"));
+    try {
+      writeFileSync(join(root, "package.json"), '{"name":"fixture"}\n');
+      const ports = createCodingToolReadEditPorts({
+        secureWorkspaceTextRead: { readText: vi.fn() },
+        editorAgentClient: { action: vi.fn() },
+        resolveEditorActionContext: vi.fn(),
+        resolveWorkspaceRoot: () => root,
+        resolveWorkspaceRootAccess: singleUseManagedAccess(root),
+      });
+
+      await expect(
+        ports.repositoryDiscover.execute(
+          {
+            action: "discover",
+            actionId: "discover-revoked",
+            idempotencyKey: "discover-revoked-key",
+            query: "*",
+            maxResults: 10,
+          },
+          undefined,
+          { check: (): true => true },
+        ),
+      ).resolves.toEqual({ status: "failed" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("denies a read when managed-root authority is revoked before postflight", async () => {
+    const root = "/managed/workspace";
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: {
+        readText: () => Promise.resolve({ ok: true, text: "must-not-be-returned" }),
+      },
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: vi.fn(),
+      resolveWorkspaceRoot: () => root,
+      resolveWorkspaceRootAccess: singleUseManagedAccess(root),
+    });
+
+    await expect(
+      ports.repositoryRead.execute(
+        {
+          action: "read",
+          actionId: "read-revoked",
+          idempotencyKey: "read-revoked-key",
+          relativePath: "src/a.ts",
+        },
+        undefined,
+        { check: (): true => true },
+      ),
+    ).resolves.toEqual({ status: "failed" });
+  });
+
+  it("denies an edit when managed-root authority is revoked before the effect", async () => {
+    const root = "/managed/workspace";
+    const action = vi.fn();
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn() },
+      editorAgentClient: { action },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-revoked",
+        authorityRef: { runId: "run-revoked", envelopeDigest: DIGEST },
+        origin: "agent",
+        workspaceRoot: root,
+      }),
+      resolveWorkspaceRoot: () => root,
+      resolveWorkspaceRootAccess: singleUseManagedAccess(root),
+    });
+
+    await expect(
+      ports.editorChangeset.execute(
+        {
+          action: "edit",
+          actionId: "edit-revoked",
+          idempotencyKey: "edit-revoked-key",
+          changeset: changeset(),
+        },
+        undefined,
+        { check: (): true => true },
+      ),
+    ).resolves.toEqual({ status: "failed" });
+    expect(action).not.toHaveBeenCalled();
+  });
+
   it("discovers exact governed file paths without exposing denied or unrelated entries", async (): Promise<void> => {
     const root = mkdtempSync(join(tmpdir(), "keiko-coding-discover-"));
     try {

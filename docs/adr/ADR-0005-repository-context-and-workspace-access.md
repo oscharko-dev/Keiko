@@ -4,7 +4,12 @@
 
 Accepted
 
-Accepted — module location superseded by ADR-0019 (now `packages/keiko-workspace/`, not `src/workspace/**`; the single-package model was replaced by the modular monorepo package architecture). D1–D5 remain accurate and are actively cited (e.g. by ADR-0023) as live precedent.
+Accepted — module location superseded by ADR-0019 (now `packages/keiko-workspace/`, not
+`src/workspace/**`; the single-package model was replaced by the modular monorepo package
+architecture). D1–D5 remain live precedent (for example, in ADR-0023). D1 and D2 were amended by
+issue #3347 on 2026-09-01 to record the evolved bounded-read surface, strong file identity, and the
+canonical containment checks used by the shared content-read lanes and grounded retrieval. D2 also
+records that denied workspace-root relocation through symlinks is rejected before effects run.
 
 D2's "one workspace read, always redacted" is amended by [ADR-0165](ADR-0165-editor-raw-read-lane-and-the-redacting-barrel.md): the redacting read remains the only one on the package barrel and the only lane permitted to feed evidence, manifests, diagnostics, the workspace index, or a grounded answer, but a second, raw lane now exists behind the `./internal/editor-read` subpath for the editor's write-back path, which cannot derive correct offsets from redacted text.
 
@@ -48,17 +53,36 @@ strategy, and the structured summary — must be typed interfaces defined now.
 
 ## Decision
 
-### D1 — A single injectable `WorkspaceFs` port isolates all filesystem I/O
+### D1 — A single injectable `WorkspaceFs` port isolates workspace-content reads
 
-All filesystem access goes through one port, `WorkspaceFs` (`readFileUtf8`, `stat`, `readDir`,
-`realPath`, `exists`), with a `nodeWorkspaceFs` adapter over `node:fs` (synchronous, mirroring the
-gateway's `readFileSync` usage). Detection, discovery, context-pack assembly, and reading all
-depend on the port, never on `node:fs` directly. The async discovery facade uses that same port and
-yields between bounded entry batches; it does not create a second scanner or bypass containment.
-This makes the security-relevant logic testable with an in-memory fake (no temp files), confines
-every real IO call to one auditable file, and keeps the rest of the module pure.
+Reads and enumeration of caller-controlled workspace content go through one read-only port,
+`WorkspaceFs`, with a `nodeWorkspaceFs` adapter over `node:fs`. Keiko-owned persistence stores,
+including the encrypted workspace-index store, use their own owning adapters and are outside this
+content-read port. Its synchronous core provides UTF-8 reads, metadata, directory enumeration,
+canonical paths, and existence checks. The evolved port also provides bounded directory
+enumeration, a same-descriptor UTF-8 read, optional bounded byte/prefix/range reads, and a reusable
+asynchronous file reader. Detection, discovery, structural analysis, context-pack assembly, and
+workspace-content indexing depend on this port. Async facades use the same port; they do not create
+a second scanner or bypass containment.
 
-### D2 — Lexical containment in `paths.ts`; realpath/symlink containment at the IO edge
+The production bounded reads require the owning lane's preflight `WorkspaceStat`, validate the
+pathname with `lstat`, open without following a final-component symlink where the platform supports
+it, and bind the opened descriptor to that expected device/inode/metadata snapshot. They check the
+descriptor identity again after the read, reject non-regular files, and enforce their byte caps.
+Owning guarded read lanes decide whether a stable hard link is authorized: grounded evidence
+rejects it, while a separately hash-verified local-knowledge source may accept it.
+`readDir(path, maxEntries)` allows callers to detect overflow without materializing an unbounded
+directory. Strong metadata (`fileIdentity`, nanosecond timestamps, link count, and size) lets the
+workspace index reject stale or substituted records. This keeps the security-relevant logic
+testable with an in-memory fake, confines production workspace IO to one auditable adapter, and
+keeps consumers independent of the host filesystem API.
+
+The production `stat` and `exists` operations use no-follow metadata semantics: a symlink is
+reported as a symlink entry rather than dereferenced. Detection reads manifests and ignore metadata
+only through the bounded same-descriptor lane; a custom port without that capability yields absent
+advisory metadata instead of falling back to an unbounded raw content read.
+
+### D2 — Lexical containment plus canonical identity at guarded content-read IO edges
 
 `resolveWithinWorkspace(root, candidate)` is a PURE function that rejects NUL bytes, `..` escapes,
 and absolute paths outside the root, returning the normalised absolute path inside the root.
@@ -66,11 +90,68 @@ Containment is decided by `path.relative(root, candidate)`: a result of `""` is 
 result that equals `..`, starts with `..` + separator, or is absolute is an escape. This is purely
 lexical and needs no filesystem.
 
-Symlinks cannot be judged lexically — a link inside the root can point outside it — so symlink
-containment is enforced separately at the IO edge in `discovery.ts`: any entry whose `realPath`
-resolves outside the root (or whose `realPath` cannot be resolved) is skipped, never followed. The
-returned value of `resolveWithinWorkspace` is the ONLY path handed to the filesystem, so a static
-analyser's path sanitiser (CodeQL `javascript-typescript`) sits exactly on the read boundary.
+Symlinks cannot be judged lexically — a link inside the root can point outside it — so the shared
+content-read lanes and the grounded-retrieval paths enforce canonical containment separately at
+their IO edges, not only during discovery. For an existing target, `containedRealPathInfo` resolves
+it inside the canonical workspace root, and `isCanonicalAllowedContainedPath` proves that the
+requested and canonical relative paths are identical and that neither the target nor a symlinked
+root introduces a denied segment. A missing target may pass `isAllowedContainedPathParent` only
+for an existence probe; that result does not authorize reading or enumeration. New consumers must
+compose lexical resolution with these canonical and deny checks before handing a target to IO.
+
+Where the production bounded-read lane is available, its descriptor read binds returned bytes to
+the regular-file identity selected by the owning lane's preflight snapshot and rejects symlinks,
+non-regular files, oversized inputs, and identities that change before or during the read. Guarded
+evidence lanes additionally reject hard-link aliases before content access and revalidate pathname,
+canonical containment, root identity, and the strong snapshot after the read before exposing bytes.
+Request-local canonical-root reuse in grounded retrieval may avoid repeating initial discovery, but
+the admitted root stays the authority anchor and every target is revalidated so replacement cannot
+hide behind a new root identity.
+
+`O_NOFOLLOW` protects only the final component, and Node exposes no portable `openat`-style API.
+The contained metadata lane therefore binds the admitted root, each parent component, the final
+pathname, and the opened descriptor to one lineage snapshot; general guarded lanes bind the
+preflight target snapshot and perform the post-read checks above. These checks fail closed on a
+persistent parent-component or root substitution. They cannot make several pathname syscalls atomic
+against an adversary that alternates an intermediate component between observations; eliminating
+that platform limit requires a supported directory-descriptor-relative API. Consumers that use an
+older raw port method retain responsibility for the same lexical, canonical, deny, and post-read
+validation policy. These checks preserve the static analyser's explicit sanitisation boundary while
+binding returned bytes to the validated identity under the host API's documented limit.
+
+A workspace root must not name, introduce, or relocate a denied path locus. Direct credential,
+runtime-state, cache, dependency, and VCS roots remain denied even when their lexical and canonical
+identities are equal; otherwise selecting `.aws` itself would make a root-relative `credentials`
+file appear safe. Ordinary root admission has one narrow path-shaped exception: a project below
+`.codex/worktrees/<non-empty descendant>`, because Codex stores real repository worktrees there.
+The `.codex` state root and `.codex/worktrees` container themselves remain denied, as does a second
+denied segment below an admitted worktree. Keiko also compares each normalised denied suffix at its
+exact locus, so one admitted worktree cannot redirect to a separate `.codex` store. The
+platform-defined macOS `/private` aliases for `/etc`, `/tmp`, and `/var` remain recognised; ordinary
+aliases between roots with no denied locus remain valid. Identity comparison preserves component
+case and Unicode spelling because those semantics are properties of the mounted volume, not the
+host OS; uncertain spelling fails closed. The shared realpath boundary raises a typed denial before
+any target IO; repository retrieval records that decision through the existing correlated,
+body-free server activity log instead of presenting the protected root as an empty workspace.
+
+Keiko-managed task worktrees use a separate capability path, never a second path-shape exception.
+The server lifecycle owner re-proves the configured managed-root marker as a bounded, regular,
+exact-schema file, the persisted workspace instance, deterministically derived exact path,
+containment, permitted lifecycle purpose, and the persisted Git linked-worktree identity before
+each operation. That identity binds the repository's Git common directory, worktree directory,
+`.git` pointer, Git admin directory, and reciprocal `gitdir` backpointer descriptor identities;
+deleting and recreating the same path
+therefore revokes authority instead of manufacturing a replacement workspace. The owner then
+supplies that operation with an unforgeable `WorkspaceFs` capability for the one canonical
+worktree root. Generic workspace admission still rejects the same `.keiko` path, unregistered
+siblings, aliases, and copied wrapper
+objects. Capability minting and propagation are package-internal subpaths pinned to reviewed callers
+by the import-policy gate; wrapping an authorised filesystem may preserve its exact authority but
+cannot widen or manufacture it. Long-lived consumers must refresh the capability at each governed
+effect so removal of the persisted instance or ownership proof revokes subsequent access.
+Connected-context detection uses marker-only language metadata because its request-local candidate
+inventory already performs the bounded repository walk; structural diagnostics derive additional
+observed languages from that shared inventory instead of scanning the repository twice.
 
 ### D3 — Two-tier filtering: always-on security DENY vs. best-effort `.gitignore`
 
@@ -129,8 +210,9 @@ session or call a model.
 
 ### Positive
 
-- A single boundary function gates every read; the validated path is the only one the filesystem
-  ever sees, which is both a real security property and a clear story for static analysis.
+- One shared containment policy and the `WorkspaceFs` boundary give content-read and grounded-
+  retrieval callers a single auditable route to canonical, allowed targets, which is both a real
+  security property and a clear story for static analysis.
 - Secrets are excluded by an always-on deny list that `.gitignore` cannot override, and any excerpt
   or error is redacted as defence in depth.
 - The context pack is deterministic and explainable: every selected file carries a reason and a
@@ -146,12 +228,14 @@ session or call a model.
   nuance (e.g. `**` in the middle of a segment, character classes). Files that a full git
   implementation would ignore may still be discovered; this only adds noise, never a security hole,
   because the deny tier is independent.
-- Lexical-only path containment in `paths.ts` is insufficient for symlinks; the realpath check must
-  be applied at the IO edge. The split is documented but is a place a future caller could get wrong
-  if it reads files without going through `readWorkspaceFile`.
-- Individual `WorkspaceFs` calls remain synchronous for deterministic fakes, so an unusually slow
-  directory read can still occupy one turn. The async discovery facade yields between bounded entry
-  batches, keeping unrelated BFF requests responsive throughout the full repository walk.
+- Lexical-only path containment in `paths.ts` is insufficient for aliases. Every new IO consumer
+  must compose lexical resolution, the shared canonical/deny predicate, and the appropriate
+  descriptor or bounded-enumeration operation; omitting any stage is a security defect.
+- Core metadata calls remain synchronous for deterministic fakes, while bounded byte/range readers
+  are asynchronous. A single in-flight synchronous host call cannot be pre-empted, so callers cap
+  enumeration and check their shared absolute deadline before starting each subsequent unit of
+  work. The deadline prevents new work after expiry; it cannot make an already-running syscall
+  interruptible.
 
 ### Neutral
 

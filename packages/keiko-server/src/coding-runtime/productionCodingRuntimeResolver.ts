@@ -80,6 +80,7 @@ import {
   type CodingToolApprovalBridge,
 } from "./codingToolApprovalBridge.js";
 import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCatalog.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 type MintedRuntime = Extract<CodingRuntimeMintResult, { readonly ok: true }>;
 type LaunchMaterial = Omit<
@@ -102,6 +103,7 @@ export interface ProductionRuntimeBackendInput {
   >;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly workspaceIsCurrent: () => boolean;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
 }
 
 export interface QualifiedProductionRuntimeRun {
@@ -144,6 +146,7 @@ export interface ProductionCodingRuntimeResolverInput {
   /** Explicit hermetic-test seam for the research transport. Production never supplies this. */
   readonly researchFetchImpl?: ProductionManagedWorktreeToolInput["researchFetchImpl"] | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly resolveWorkspaceRootAccess: (requestedRoot: string) => WorkspaceRootAccess | undefined;
 }
 
 interface ResolverRunRecord extends ProductionRuntimeRunRecord {
@@ -335,6 +338,7 @@ interface RunToolSurface {
   readonly explicitSkills: ReturnType<typeof createExplicitSkillInvocationTracker>;
   readonly toolFacade: ReturnType<typeof createManagedToolFacade>;
   readonly codingToolApprovals: CodingToolApprovalBridge;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
 }
 
 function createRunToolSurface(
@@ -351,6 +355,10 @@ function createRunToolSurface(
   const leases = createLeaseCoordinator(invocationRegistry);
   const skillCatalog = createServerApprovedSkillCatalog();
   const explicitSkills = createExplicitSkillInvocationTracker(skillCatalog);
+  const resolveWorkspaceRootAccess = runWorkspaceRootAccessResolver(input, context);
+  if (resolveWorkspaceRootAccess() === undefined) {
+    throw new Error("runtime-workspace-unqualified");
+  }
   explicitSkills.observeTurn(request.taskIntent);
   const toolFacade = createManagedToolFacade({
     input,
@@ -364,8 +372,16 @@ function createRunToolSurface(
     explicitSkills,
     codingToolApprovals,
     onRuntimeEvent,
+    resolveWorkspaceRootAccess,
   });
-  return { invocationRegistry, leases, explicitSkills, toolFacade, codingToolApprovals };
+  return {
+    invocationRegistry,
+    leases,
+    explicitSkills,
+    toolFacade,
+    codingToolApprovals,
+    resolveWorkspaceRootAccess,
+  };
 }
 
 function createRunRecord(
@@ -378,8 +394,16 @@ function createRunRecord(
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): ResolverRunRecord {
   const controller = new AbortController();
-  const { invocationRegistry, leases, explicitSkills, toolFacade, codingToolApprovals } =
-    createRunToolSurface(input, request, context, minted, authority, research, onRuntimeEvent);
+  const surface = createRunToolSurface(
+    input,
+    request,
+    context,
+    minted,
+    authority,
+    research,
+    onRuntimeEvent,
+  );
+  const { invocationRegistry, leases, explicitSkills, toolFacade, codingToolApprovals } = surface;
   const backend = createBackendRun({
     input,
     request,
@@ -393,8 +417,8 @@ function createRunRecord(
     leases,
     research,
     onRuntimeEvent,
+    resolveWorkspaceRootAccess: surface.resolveWorkspaceRootAccess,
   });
-  validateBackendLaunch(backend.launch, context);
   const detachLease = attachRuntimeMutationLease(input, leases, invocationRegistry);
   return {
     manager: backend.manager,
@@ -408,6 +432,18 @@ function createRunRecord(
     ...(backend.questionPort ? { questionPort: backend.questionPort } : {}),
     ...(backend.permissionPort ? { permissionPort: backend.permissionPort } : {}),
     dispose: createRunDisposer(detachLease, leases, invocationRegistry, backend),
+  };
+}
+
+function runWorkspaceRootAccessResolver(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+): () => WorkspaceRootAccess | undefined {
+  return (): WorkspaceRootAccess | undefined => {
+    const access = input.resolveWorkspaceRootAccess(context.workspaceRoot);
+    return access?.kind === "managed-task" && access.canonicalRoot === context.workspaceRoot
+      ? access
+      : undefined;
   };
 }
 
@@ -487,6 +523,7 @@ interface CreateBackendRunInput {
   readonly leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>;
   readonly research: ResearchComposition;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
 }
 
 function createBackendRun({
@@ -502,8 +539,9 @@ function createBackendRun({
   leases,
   research,
   onRuntimeEvent,
+  resolveWorkspaceRootAccess,
 }: CreateBackendRunInput): QualifiedProductionRuntimeRun {
-  return input.backend.createRun({
+  const backend = input.backend.createRun({
     request,
     context,
     minted,
@@ -521,7 +559,10 @@ function createBackendRun({
     workspaceIsCurrent: () =>
       input.workspaceAuthority.workspaceLifecycle.getActive()?.instance.workspaceId ===
       context.workspaceId,
+    resolveWorkspaceRootAccess,
   });
+  validateBackendLaunch(backend.launch, context);
+  return backend;
 }
 
 /** One parameter object: the facade needs the whole run context, not an argument list to mis-order. */
@@ -537,6 +578,7 @@ interface ManagedToolFacadeInput {
   readonly explicitSkills: ExplicitSkillInvocationTracker;
   readonly codingToolApprovals: CodingToolApprovalBridge;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
 }
 
 function createManagedToolFacade({
@@ -551,6 +593,7 @@ function createManagedToolFacade({
   explicitSkills,
   codingToolApprovals,
   onRuntimeEvent,
+  resolveWorkspaceRootAccess,
 }: ManagedToolFacadeInput): CodingToolFacade {
   const childModelId = input.childModelId?.();
   return createProductionManagedWorktreeToolFacade({
@@ -562,6 +605,7 @@ function createManagedToolFacade({
     ...(childModelId === undefined ? {} : { modelId: childModelId }),
     adapterKind: adapterKind(context),
     workspaceRoot: context.workspaceRoot,
+    resolveWorkspaceRootAccess,
     ...managedResearchOptions(input, context, minted, research, onRuntimeEvent),
     authorityExpiresAt: context.expiresAt,
     effectiveMode: minted.effectiveMode,

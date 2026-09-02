@@ -11,7 +11,7 @@ export type {
 } from "./compaction.js";
 export { compactExcerpt, nextAtomFitsBudget } from "./compaction.js";
 
-export type { RerankerAvailability, RerankerSeam } from "./reranker.js";
+export type { RerankerAvailability, RerankerExecutionContext, RerankerSeam } from "./reranker.js";
 export { disabledReranker } from "./reranker.js";
 
 export type { IndexEntry, IndexKeyInput, MicroIndex, MicroIndexOptions } from "./microIndex.js";

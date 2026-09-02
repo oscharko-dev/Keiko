@@ -52,6 +52,7 @@ import {
 } from "./diagnostics-log.js";
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
 import type { ServerLogSink } from "./observability/server-log.js";
+import type { WorkspaceRootAccess } from "./task-workspace/workspace-root-access.js";
 
 const MAX_CONCURRENT_RUNS = 8;
 const MIN_TIMEOUT_MS = 1_000;
@@ -105,6 +106,8 @@ export interface CommandRunnerManagerOptions {
   readonly runDeps?: Partial<RunCommandDeps> | undefined;
   readonly isWorkspaceTrustedForPackageScripts?: CommandRunnerWorkspaceTrustDecider | undefined;
   readonly now?: (() => number) | undefined;
+  readonly resolveWorkspaceRootAccess?:
+    ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
 }
 
 // ─── Discovery (package.json scripts → name-vetted task catalog) ─────────────────
@@ -118,9 +121,9 @@ function projectFor(store: UiStore, projectId: string): Project | undefined {
   return undefined;
 }
 
-function projectRootOrThrow(project: Project): string {
+function projectRootOrThrow(project: Project, fs: WorkspaceFs): string {
   try {
-    return nodeWorkspaceFs.realPath(project.path);
+    return fs.realPath(project.path);
   } catch {
     throw new CommandRunnerError("PROJECT_NOT_FOUND", "Project root path could not be resolved.");
   }
@@ -129,6 +132,7 @@ function projectRootOrThrow(project: Project): string {
 function buildWorkspaceInfo(projectRoot: string): WorkspaceInfo {
   return {
     root: projectRoot,
+    selectedRoot: projectRoot,
     name: undefined,
     version: undefined,
     testFramework: "unknown",
@@ -283,6 +287,11 @@ interface InFlightRun {
   cancelledByUser: boolean;
 }
 
+interface ResolvedCommandWorkspace {
+  readonly access: WorkspaceRootAccess;
+  readonly workspace: WorkspaceInfo;
+}
+
 class CommandRunnerManagerImpl implements CommandRunnerManager {
   private readonly store: UiStore;
   private readonly evidenceStore: EvidenceStore | undefined;
@@ -294,6 +303,8 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
   private readonly runDeps: Partial<RunCommandDeps>;
   private readonly isWorkspaceTrustedForPackageScripts: CommandRunnerWorkspaceTrustDecider;
   private readonly now: () => number;
+  private readonly rootAccessResolver:
+    ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
   private readonly runs = new Map<string, InFlightRun>();
   private readonly subscribers = new Set<CommandRunnerEventEmitter>();
 
@@ -309,6 +320,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     this.isWorkspaceTrustedForPackageScripts =
       opts.isWorkspaceTrustedForPackageScripts ?? ((): boolean => false);
     this.now = opts.now ?? Date.now;
+    this.rootAccessResolver = opts.resolveWorkspaceRootAccess;
   }
 
   public readonly inFlightCount = (): number => this.runs.size;
@@ -329,27 +341,29 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
   };
 
   public readonly discover = (projectId: string): CommandTaskCatalog => {
-    const workspace = this.resolveWorkspace(projectId);
+    const resolved = this.resolveWorkspace(projectId);
+    const { workspace } = resolved;
     return {
       schemaVersion: COMMAND_RUNNER_SCHEMA_VERSION,
       projectId,
       tasks: discoverTasks(
         workspace,
-        this.fs(),
+        resolved.access.fs,
         this.workspaceTrustedForPackageScripts(projectId, workspace),
       ),
     };
   };
 
   public readonly execute = async (input: CommandRunInput): Promise<CommandTaskRunResult> => {
-    const workspace = this.resolveWorkspace(input.projectId);
+    const resolved = this.resolveWorkspace(input.projectId);
+    const { workspace } = resolved;
     // Re-discover the catalog at execute time on purpose: the requested taskId is untrusted, so the
     // server re-derives the name-vetted task from the CURRENT package.json rather than trusting a
     // catalog the client fetched earlier (which may be stale or forged). The extra manifest read is a
     // deliberate security re-validation on a low-frequency, user-triggered path, not a hot loop.
     const task = discoverTasks(
       workspace,
-      this.fs(),
+      resolved.access.fs,
       this.workspaceTrustedForPackageScripts(input.projectId, workspace),
     ).find((entry) => entry.id === input.taskId);
     if (task === undefined) {
@@ -365,7 +379,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
       throw new CommandRunnerError("RUN_LIMIT_EXCEEDED", "Too many in-flight command runs.");
     }
     this.assertWorkspaceTrustAtEffect(input.projectId, workspace);
-    return this.runExecution(task, workspace, input);
+    return this.runExecution(task, resolved, input);
   };
 
   private fs(): WorkspaceFs {
@@ -388,15 +402,27 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     );
   }
 
-  private resolveWorkspace(projectId: string): WorkspaceInfo {
+  private resolveWorkspace(projectId: string): ResolvedCommandWorkspace {
     const project = projectFor(this.store, projectId);
     if (project === undefined) {
       throw new CommandRunnerError("PROJECT_NOT_FOUND", "Project not found.");
     }
-    return buildWorkspaceInfo(projectRootOrThrow(project));
+    const fallbackFs = this.fs();
+    const access =
+      this.rootAccessResolver === undefined
+        ? {
+            kind: "ordinary" as const,
+            canonicalRoot: projectRootOrThrow(project, fallbackFs),
+            fs: fallbackFs,
+          }
+        : this.rootAccessResolver(project.path);
+    if (access === undefined) {
+      throw new CommandRunnerError("PROJECT_NOT_FOUND", "Project root path could not be resolved.");
+    }
+    return { access, workspace: buildWorkspaceInfo(access.canonicalRoot) };
   }
 
-  private buildRunDeps(workspace: WorkspaceInfo): RunCommandDeps {
+  private buildRunDeps(workspace: WorkspaceInfo, fs: WorkspaceFs): RunCommandDeps {
     return {
       workspace,
       policy: this.policy,
@@ -404,10 +430,10 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
       spawn: this.runDeps.spawn ?? nodeSpawnFn,
       processEnv: this.processEnv,
       now: this.runDeps.now ?? this.now,
+      fs,
       ...(this.runDeps.resolveExecutable === undefined
         ? {}
         : { resolveExecutable: this.runDeps.resolveExecutable }),
-      ...(this.runDeps.fs === undefined ? {} : { fs: this.runDeps.fs }),
       ...(this.runDeps.home === undefined ? {} : { home: this.runDeps.home }),
       ...(this.runDeps.sandboxAvailability === undefined
         ? {}
@@ -418,7 +444,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
 
   private async runExecution(
     task: CommandTask,
-    workspace: WorkspaceInfo,
+    resolved: ResolvedCommandWorkspace,
     input: CommandRunInput,
   ): Promise<CommandTaskRunResult> {
     const runId = randomUUID();
@@ -437,7 +463,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
       payload: { taskId: task.id, kind: task.kind, startedAt, ...requestIdPayload(input) },
     });
     try {
-      return await this.invoke(runId, task, workspace, input, entry, startedAt);
+      return await this.invoke(runId, task, resolved, input, entry, startedAt);
     } finally {
       input.signal?.removeEventListener("abort", relayAbort);
       this.runs.delete(runId);
@@ -447,12 +473,12 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
   private async invoke(
     runId: string,
     task: CommandTask,
-    workspace: WorkspaceInfo,
+    resolved: ResolvedCommandWorkspace,
     input: CommandRunInput,
     entry: InFlightRun,
     startedAt: number,
   ): Promise<CommandTaskRunResult> {
-    const deps = this.buildRunDeps(workspace);
+    const deps = this.buildRunDeps(resolved.workspace, resolved.access.fs);
     const timeoutMs = clampTimeout(input.timeoutMs, this.policy.defaultTimeoutMs);
     let outcome: SettledOutcome;
     try {

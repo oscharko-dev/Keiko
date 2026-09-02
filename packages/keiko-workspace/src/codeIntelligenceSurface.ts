@@ -22,6 +22,13 @@ export {
 export { importGraphAdapter } from "./importGraph.js";
 export { testSourcePairingAdapter } from "./testSourcePairing.js";
 export type {
+  StructuralAdapterRequestContext,
+  StructuralAdapterRequestContextDeps,
+  StructuralRequestContextDiagnostics,
+  StructuralRequestSearchDeps,
+} from "./structuralAdapterRequestContext.js";
+export { createStructuralAdapterRequestContext } from "./structuralAdapterRequestContext.js";
+export type {
   AdapterError,
   RunAllResult,
   StructuralAdapter,

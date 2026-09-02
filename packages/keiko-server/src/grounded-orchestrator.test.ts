@@ -2,15 +2,19 @@
 // composition of the connected-context layers, the clarification-needed escape hatch, and
 // the budget-exhaustion → uncertainty-marker propagation produced by #183.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Buffer } from "node:buffer";
 import {
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,11 +28,15 @@ import {
   type EvidenceAtom,
   type RetrievalQuery,
   type SelectedScope,
+  type UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   gitHistoryAdapter,
   symbolGraphAdapter,
+  createWorkspaceIndex,
+  WorkspaceNotFoundError,
   type SemanticSearchProvider,
+  type SearchScope,
   type WorkspaceFs,
   type WorkspaceDirEntry,
   type WorkspaceInfo,
@@ -46,15 +54,31 @@ import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 
 import {
   ClarificationNeededError,
+  DEFAULT_SEARCH_LIMITS,
+  _RING_DISCOVERY_SENTINEL_ENTRIES_FOR_TESTS,
+  _fileStateCacheIdentityForTests,
+  _readKeptExcerptsForTests,
+  _ringDiscoveryFsForTests,
+  type ExcerptReadSummary,
   clarificationUserMessage,
   isSymbolDefinitionPath,
   retrieveConnectedContextPack,
   runGroundedExploration,
+  scanFirstSymbolLine,
   type GroundedAnswerer,
   type OrchestratorInput,
+  type RetrievalOnlyOutput,
 } from "./grounded-orchestrator.js";
+import {
+  nodeWorkspaceFs,
+  type WorkspaceDescriptorReadCompleteness,
+  type WorkspaceDescriptorUtf8Read,
+  type WorkspaceFileReader,
+  type WorkspaceHardLinkPolicy,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
 import type { GitFileHistoryEvidenceProvider } from "./grounded-git-history-evidence.js";
+import { createBufferedServerLogSink } from "./observability/index.js";
 
 const NOW = 1_700_000_000_000;
 let ROOT = "";
@@ -72,6 +96,7 @@ const echoAnswerer: GroundedAnswerer = {
 function fakeWorkspace(): WorkspaceInfo {
   return {
     root: ROOT,
+    selectedRoot: ROOT,
     name: "demo",
     version: "0.0.0",
     testFramework: "vitest",
@@ -82,21 +107,108 @@ function fakeWorkspace(): WorkspaceInfo {
   };
 }
 
-function seedRepo(): void {
-  mkdirSync(join(ROOT, "src"), { recursive: true });
-  mkdirSync(join(ROOT, "tests"), { recursive: true });
+function seedRepoAt(root: string): void {
+  mkdirSync(join(root, "src"), { recursive: true });
+  mkdirSync(join(root, "tests"), { recursive: true });
   writeFileSync(
-    join(ROOT, "src/foo.ts"),
+    join(root, "src/foo.ts"),
     "export function MyClass() {\n  return 'foo body';\n}\n// MyClass call site here\n",
   );
   writeFileSync(
-    join(ROOT, "src/bar.ts"),
+    join(root, "src/bar.ts"),
     "// unrelated content with no MyClass anchor\nexport const bar = 1;\n",
   );
   writeFileSync(
-    join(ROOT, "tests/foo.test.ts"),
+    join(root, "tests/foo.test.ts"),
     "import { MyClass } from '../src/foo';\nMyClass();\nMyClass();\nMyClass();\n",
   );
+}
+
+function seedRepo(): void {
+  seedRepoAt(ROOT);
+}
+
+function seedOverflowImplementations(root: string, count: number): void {
+  const term = "OverflowProbe";
+  for (let index = 0; index < count; index += 1) {
+    const dir = join(root, "packages", `overflow-${index.toString()}`, "src");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, `${term}.ts`),
+      `export function ${term}(): number {\n  return ${index.toString()};\n}\n`,
+    );
+  }
+}
+
+const TRAVERSAL_SYMBOLS = [
+  "TraversalAlpha",
+  "TraversalBeta",
+  "TraversalGamma",
+  "TraversalDelta",
+  "TraversalEpsilon",
+  "TraversalZeta",
+  "TraversalEta",
+  "TraversalTheta",
+] as const;
+
+function seedTraversalImplementations(root: string, count: number): void {
+  for (let index = 0; index < count; index += 1) {
+    const symbol = TRAVERSAL_SYMBOLS[index % TRAVERSAL_SYMBOLS.length] ?? "TraversalAlpha";
+    const dir = join(root, "packages", `traversal-${index.toString()}`, "src");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, `${symbol}.ts`),
+      `export function ${symbol}(): number {\n  return ${index.toString()};\n}\n`,
+    );
+  }
+  const docsDir = join(root, "docs");
+  mkdirSync(docsDir, { recursive: true });
+  for (const reference of ["ADR-1001", "ADR-1002", "RFC-2001", "RFC-2002"]) {
+    writeFileSync(join(docsDir, `${reference}.md`), `# ${reference}\n`);
+  }
+}
+
+function countFixtureDirectories(root: string): number {
+  let count = 1;
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      count += countFixtureDirectories(join(root, entry.name));
+    }
+  }
+  return count;
+}
+
+function countFixtureFiles(root: string): number {
+  let count = 0;
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    count += entry.isDirectory()
+      ? countFixtureFiles(join(root, entry.name))
+      : Number(entry.isFile());
+  }
+  return count;
+}
+
+interface FixtureByteStats {
+  readonly totalBytes: number;
+  readonly largestFileBytes: number;
+}
+
+function fixtureByteStats(root: string): FixtureByteStats {
+  let totalBytes = 0;
+  let largestFileBytes = 0;
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const absolutePath = join(root, entry.name);
+    if (entry.isDirectory()) {
+      const nested = fixtureByteStats(absolutePath);
+      totalBytes += nested.totalBytes;
+      largestFileBytes = Math.max(largestFileBytes, nested.largestFileBytes);
+    } else if (entry.isFile()) {
+      const sizeBytes = statSync(absolutePath).size;
+      totalBytes += sizeBytes;
+      largestFileBytes = Math.max(largestFileBytes, sizeBytes);
+    }
+  }
+  return { totalBytes, largestFileBytes };
 }
 
 function seedIssue672Repo(): void {
@@ -238,6 +350,30 @@ function gitHistoryAtom(scopePath: string, nowMs: number): EvidenceAtom {
   };
 }
 
+function structuralEdgeAtom(stableId: string, targetScopePath: string): EvidenceAtom {
+  return {
+    schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+    stableId,
+    scopePath: "src/foo.ts",
+    lineRange: { startLine: 1, endLine: 1 },
+    score: 1,
+    provenance: {
+      kind: "structural",
+      tool: "structural-cancellation-fixture",
+      queryFingerprint: "fp-structural-cancellation",
+    },
+    edge: {
+      kind: "import",
+      source: { scopePath: "src/foo.ts", lineRange: { startLine: 1, endLine: 1 } },
+      target: { scopePath: targetScopePath, lineRange: { startLine: 1, endLine: 1 } },
+      confidence: "resolved",
+    },
+    redactionState: "redacted",
+    emittedAtMs: NOW,
+    ledgerRef: undefined,
+  };
+}
+
 function issue672Workspace(): WorkspaceInfo {
   return {
     ...fakeWorkspace(),
@@ -269,6 +405,26 @@ function input(overrides: Partial<OrchestratorInput> = {}): OrchestratorInput {
   };
 }
 
+// A supported optional-compatible port: every bounded lane the Node port offers EXCEPT
+// `readFileUtf8SameDescriptor`, which `WorkspaceFs` declares optional. Each call to the unbounded
+// `readFileUtf8` is recorded, so a test can pin that no advisory-metadata lane falls back to it —
+// a fallback that only checks the byte cap once the whole file is already resident is not a bound
+// (ADR-0005 D1).
+function descriptorlessWorkspaceFs(unboundedReads: string[]): WorkspaceFs {
+  // Omit rather than assign undefined: `exactOptionalPropertyTypes` rejects the latter.
+  const { readFileUtf8SameDescriptor: omitted, ...withoutDescriptorRead } = nodeWorkspaceFs;
+  if (omitted === undefined) {
+    throw new Error("nodeWorkspaceFs always provides readFileUtf8SameDescriptor");
+  }
+  return {
+    ...withoutDescriptorRead,
+    readFileUtf8: (absolutePath): string => {
+      unboundedReads.push(absolutePath);
+      return nodeWorkspaceFs.readFileUtf8(absolutePath);
+    },
+  };
+}
+
 function throwingReadFs(): WorkspaceFs {
   return {
     readFileUtf8: (): never => {
@@ -287,45 +443,625 @@ function throwingReadFs(): WorkspaceFs {
   };
 }
 
-function countingNodeFs(): { readonly fs: WorkspaceFs; readonly readFileBytes: () => number } {
+interface FsOperationCounts {
+  readonly readFileUtf8: number;
+  readonly readFileUtf8SameDescriptor: number;
+  readonly readFileUtf8WithinRootSameDescriptor: number;
+  readonly readFileBytes: number;
+  readonly readFileUtf8Prefix: number;
+  readonly readFileRange: number;
+  readonly openFileReader: number;
+  readonly readerReadRange: number;
+  readonly stat: number;
+  readonly readDir: number;
+  readonly unboundedReadDir: number;
+  readonly readDirEntries: number;
+  readonly realPath: number;
+  readonly exists: number;
+  readonly contentReadBytes: number;
+}
+
+function countingNodeFs(): {
+  readonly fs: WorkspaceFs;
+  readonly counts: () => FsOperationCounts;
+} {
+  let readFileUtf8Calls = 0;
+  let descriptorUtf8Calls = 0;
+  let containedDescriptorUtf8Calls = 0;
   let readFileBytesCalls = 0;
+  let readFileUtf8PrefixCalls = 0;
+  let readFileRangeCalls = 0;
+  let openFileReaderCalls = 0;
+  let readerReadRangeCalls = 0;
+  let statCalls = 0;
+  let readDirCalls = 0;
+  let unboundedReadDirCalls = 0;
+  let readDirEntries = 0;
+  let realPathCalls = 0;
+  let existsCalls = 0;
+  let contentReadBytes = 0;
+  const descriptorUtf8 = nodeWorkspaceFs.readFileUtf8SameDescriptor;
+  const containedDescriptorUtf8 = nodeWorkspaceFs.readFileUtf8WithinRootSameDescriptor;
+  const readFileBytes = nodeWorkspaceFs.readFileBytes;
+  const readFileUtf8Prefix = nodeWorkspaceFs.readFileUtf8Prefix;
+  const readFileRange = nodeWorkspaceFs.readFileRange;
+  const openFileReader = nodeWorkspaceFs.openFileReader;
   return {
     fs: {
-      readFileUtf8: (absolutePath): string => readFileSync(absolutePath, "utf8"),
+      ...nodeWorkspaceFs,
+      readFileUtf8: (absolutePath): string => {
+        readFileUtf8Calls += 1;
+        const value = nodeWorkspaceFs.readFileUtf8(absolutePath);
+        contentReadBytes += Buffer.byteLength(value, "utf8");
+        return value;
+      },
       stat: (absolutePath): WorkspaceStat => {
-        const stat = statSync(absolutePath);
-        return {
-          size: stat.size,
-          isFile: stat.isFile(),
-          isDirectory: stat.isDirectory(),
-          isSymbolicLink: false,
-          hardLinkCount: stat.nlink,
-          mtimeMs: stat.mtimeMs,
-        };
+        statCalls += 1;
+        return nodeWorkspaceFs.stat(absolutePath);
       },
-      readDir: (absolutePath): readonly WorkspaceDirEntry[] =>
-        readdirSync(absolutePath, { withFileTypes: true }).map((entry) => ({
-          name: entry.name,
-          isDirectory: entry.isDirectory(),
-          isFile: entry.isFile(),
-          isSymbolicLink: entry.isSymbolicLink(),
-        })),
-      realPath: (absolutePath): string => realpathSync(absolutePath),
+      readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+        readDirCalls += 1;
+        if (maxEntries === undefined) unboundedReadDirCalls += 1;
+        const entries = nodeWorkspaceFs.readDir(absolutePath, maxEntries);
+        readDirEntries += entries.length;
+        return entries;
+      },
+      realPath: (absolutePath): string => {
+        realPathCalls += 1;
+        return nodeWorkspaceFs.realPath(absolutePath);
+      },
       exists: (absolutePath): boolean => {
-        try {
-          statSync(absolutePath);
-          return true;
-        } catch {
-          return false;
-        }
+        existsCalls += 1;
+        return nodeWorkspaceFs.exists(absolutePath);
       },
-      readFileBytes: (absolutePath, maxBytes): Promise<Uint8Array> => {
-        readFileBytesCalls += 1;
-        return Promise.resolve(readFileSync(absolutePath).subarray(0, maxBytes));
-      },
+      ...(descriptorUtf8 === undefined
+        ? {}
+        : {
+            readFileUtf8SameDescriptor: (
+              absolutePath: string,
+              maxBytes: number,
+              hardLinkPolicy: WorkspaceHardLinkPolicy,
+              expected: WorkspaceStat,
+            ): WorkspaceDescriptorUtf8Read => {
+              descriptorUtf8Calls += 1;
+              const value = descriptorUtf8(absolutePath, maxBytes, hardLinkPolicy, expected);
+              contentReadBytes += value.sizeBytes;
+              return value;
+            },
+          }),
+      ...(containedDescriptorUtf8 === undefined
+        ? {}
+        : {
+            readFileUtf8WithinRootSameDescriptor: (
+              canonicalRoot: string,
+              absolutePath: string,
+              maxBytes: number,
+              hardLinkPolicy: WorkspaceHardLinkPolicy,
+              completeness: WorkspaceDescriptorReadCompleteness,
+            ): WorkspaceDescriptorUtf8Read => {
+              containedDescriptorUtf8Calls += 1;
+              const value = containedDescriptorUtf8(
+                canonicalRoot,
+                absolutePath,
+                maxBytes,
+                hardLinkPolicy,
+                completeness,
+              );
+              contentReadBytes += value.sizeBytes;
+              return value;
+            },
+          }),
+      ...(readFileBytes === undefined
+        ? {}
+        : {
+            readFileBytes: async (
+              absolutePath: string,
+              maxBytes: number,
+              hardLinkPolicy: WorkspaceHardLinkPolicy,
+              expected: WorkspaceStat,
+            ): Promise<Uint8Array> => {
+              readFileBytesCalls += 1;
+              const value = await readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
+              contentReadBytes += value.byteLength;
+              return value;
+            },
+          }),
+      ...(readFileUtf8Prefix === undefined
+        ? {}
+        : {
+            readFileUtf8Prefix: (
+              absolutePath: string,
+              maxBytes: number,
+              hardLinkPolicy: WorkspaceHardLinkPolicy,
+              expected: WorkspaceStat,
+            ): string => {
+              readFileUtf8PrefixCalls += 1;
+              const value = readFileUtf8Prefix(absolutePath, maxBytes, hardLinkPolicy, expected);
+              contentReadBytes += Buffer.byteLength(value, "utf8");
+              return value;
+            },
+          }),
+      ...(readFileRange === undefined
+        ? {}
+        : {
+            readFileRange: async (
+              absolutePath: string,
+              startByte: number,
+              length: number,
+              hardLinkPolicy: WorkspaceHardLinkPolicy,
+              expected: WorkspaceStat,
+            ): Promise<Uint8Array> => {
+              readFileRangeCalls += 1;
+              const value = await readFileRange(
+                absolutePath,
+                startByte,
+                length,
+                hardLinkPolicy,
+                expected,
+              );
+              contentReadBytes += value.byteLength;
+              return value;
+            },
+          }),
+      ...(openFileReader === undefined
+        ? {}
+        : {
+            openFileReader: async (
+              absolutePath: string,
+              hardLinkPolicy: WorkspaceHardLinkPolicy,
+              expected: WorkspaceStat,
+            ): Promise<WorkspaceFileReader> => {
+              openFileReaderCalls += 1;
+              const reader = await openFileReader.call(
+                nodeWorkspaceFs,
+                absolutePath,
+                hardLinkPolicy,
+                expected,
+              );
+              return {
+                close: (): Promise<void> => reader.close(),
+                readRange: async (startByte: number, length: number): Promise<Uint8Array> => {
+                  readerReadRangeCalls += 1;
+                  const value = await reader.readRange(startByte, length);
+                  contentReadBytes += value.byteLength;
+                  return value;
+                },
+              };
+            },
+          }),
     },
-    readFileBytes: () => readFileBytesCalls,
+    counts: () => ({
+      readFileUtf8: readFileUtf8Calls,
+      readFileUtf8SameDescriptor: descriptorUtf8Calls,
+      readFileUtf8WithinRootSameDescriptor: containedDescriptorUtf8Calls,
+      readFileBytes: readFileBytesCalls,
+      readFileUtf8Prefix: readFileUtf8PrefixCalls,
+      readFileRange: readFileRangeCalls,
+      openFileReader: openFileReaderCalls,
+      readerReadRange: readerReadRangeCalls,
+      stat: statCalls,
+      readDir: readDirCalls,
+      unboundedReadDir: unboundedReadDirCalls,
+      readDirEntries,
+      realPath: realPathCalls,
+      exists: existsCalls,
+      contentReadBytes,
+    }),
   };
+}
+
+function deadlineProbeReader(reader: WorkspaceFileReader, record: () => void): WorkspaceFileReader {
+  return {
+    close: (): Promise<void> => reader.close(),
+    readRange: (startByte, length): Promise<Uint8Array> => {
+      record();
+      return reader.readRange(startByte, length);
+    },
+  };
+}
+
+function deadlineProbeOptionalReads(fs: WorkspaceFs, record: () => void): Partial<WorkspaceFs> {
+  const descriptorUtf8 = fs.readFileUtf8SameDescriptor;
+  const readFileBytes = fs.readFileBytes;
+  const readFileUtf8Prefix = fs.readFileUtf8Prefix;
+  const readFileRange = fs.readFileRange;
+  return {
+    ...(descriptorUtf8 === undefined
+      ? {}
+      : {
+          readFileUtf8SameDescriptor: (
+            path: string,
+            maxBytes: number,
+            hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
+          ): WorkspaceDescriptorUtf8Read => {
+            record();
+            return descriptorUtf8.call(fs, path, maxBytes, hardLinkPolicy, expected);
+          },
+        }),
+    ...(readFileBytes === undefined
+      ? {}
+      : {
+          readFileBytes: (
+            path: string,
+            maxBytes: number,
+            hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
+          ): Promise<Uint8Array> => {
+            record();
+            return readFileBytes.call(fs, path, maxBytes, hardLinkPolicy, expected);
+          },
+        }),
+    ...(readFileUtf8Prefix === undefined
+      ? {}
+      : {
+          readFileUtf8Prefix: (
+            path: string,
+            maxBytes: number,
+            hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
+          ): string => {
+            record();
+            return readFileUtf8Prefix.call(fs, path, maxBytes, hardLinkPolicy, expected);
+          },
+        }),
+    ...(readFileRange === undefined
+      ? {}
+      : {
+          readFileRange: (
+            path: string,
+            start: number,
+            length: number,
+            hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
+          ): Promise<Uint8Array> => {
+            record();
+            return readFileRange.call(fs, path, start, length, hardLinkPolicy, expected);
+          },
+        }),
+  };
+}
+
+function deadlineProbeOptionalWorkspace(fs: WorkspaceFs, record: () => void): Partial<WorkspaceFs> {
+  const canonicalWorkspaceRoot = fs.canonicalWorkspaceRoot;
+  const openFileReader = fs.openFileReader;
+  return {
+    ...(canonicalWorkspaceRoot === undefined
+      ? {}
+      : {
+          canonicalWorkspaceRoot: (root: string): string => {
+            record();
+            return canonicalWorkspaceRoot.call(fs, root);
+          },
+        }),
+    ...(openFileReader === undefined
+      ? {}
+      : {
+          openFileReader: async (
+            path: string,
+            hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
+          ): Promise<WorkspaceFileReader> => {
+            record();
+            return deadlineProbeReader(
+              await openFileReader.call(fs, path, hardLinkPolicy, expected),
+              record,
+            );
+          },
+        }),
+  };
+}
+
+function deadlineFsProbe(
+  fs: WorkspaceFs,
+  deadlineReached: () => boolean,
+): { readonly fs: WorkspaceFs; readonly accessesAfterDeadline: () => number } {
+  let lateAccesses = 0;
+  const record = (): void => {
+    if (deadlineReached()) lateAccesses += 1;
+  };
+  return {
+    fs: {
+      ...fs,
+      readFileUtf8: (path): string => {
+        record();
+        return fs.readFileUtf8(path);
+      },
+      stat: (path): WorkspaceStat => {
+        record();
+        return fs.stat(path);
+      },
+      readDir: (path, maxEntries): readonly WorkspaceDirEntry[] => {
+        record();
+        return fs.readDir(path, maxEntries);
+      },
+      realPath: (path): string => {
+        record();
+        return fs.realPath(path);
+      },
+      exists: (path): boolean => {
+        record();
+        return fs.exists(path);
+      },
+      ...deadlineProbeOptionalReads(fs, record),
+      ...deadlineProbeOptionalWorkspace(fs, record),
+    },
+    accessesAfterDeadline: () => lateAccesses,
+  };
+}
+
+function syntheticDirectoryEntries(
+  count: number,
+  prefix: string,
+  kind: "directory" | "file",
+): readonly WorkspaceDirEntry[] {
+  return Array.from({ length: count }, (_, index) => ({
+    name: `${prefix}-${index.toString().padStart(6, "0")}`,
+    isDirectory: kind === "directory",
+    isFile: kind === "file",
+    isSymbolicLink: false,
+  }));
+}
+
+const METADATA_DIRECTORY_READ_CAPS = new Set([17, 25, 97]);
+
+function hugeMetadataDirectoryEntries(
+  absolutePath: string,
+  maxEntries: number,
+  realRoot: string,
+): readonly WorkspaceDirEntry[] | undefined {
+  if (absolutePath === realRoot && (maxEntries === 17 || maxEntries === 25)) {
+    return syntheticDirectoryEntries(maxEntries, "root-noise", "file");
+  }
+  if (absolutePath === join(realRoot, "packages") && maxEntries === 97) {
+    return [
+      {
+        name: "service-000000",
+        isDirectory: true,
+        isFile: false,
+        isSymbolicLink: false,
+      },
+      ...syntheticDirectoryEntries(maxEntries - 1, "service", "directory"),
+    ];
+  }
+  if (absolutePath === join(realRoot, "packages/service-000000") && maxEntries === 25) {
+    return [
+      { name: "pom.xml", isDirectory: false, isFile: true, isSymbolicLink: false },
+      ...syntheticDirectoryEntries(maxEntries - 1, "manifest-noise", "file"),
+    ];
+  }
+  return undefined;
+}
+
+interface TraversalMeasurement {
+  readonly directoryCount: number;
+  readonly fileCount: number;
+  readonly fixtureContentBytes: number;
+  readonly maxReadableFixtureFileBytes: number;
+  readonly foundTraversalSymbols: readonly string[];
+  readonly searchBudgetClipped: boolean;
+  readonly packValid: boolean;
+  readonly operations: FsOperationCounts;
+  readonly workspaceIo: WorkspaceIoCounts;
+  readonly searchCalls: number;
+  readonly contextCount: number;
+  readonly candidateInventoryBuildCount: number;
+  readonly codeIndexBuildCount: number;
+  readonly symbolGraphBuildCount: number;
+  readonly importGraphBuildCount: number;
+  readonly endpointGraphBuildCount: number;
+  readonly fileSearchCount: number;
+}
+
+interface WorkspaceIoCounts {
+  readonly readDirCalls: number;
+  readonly readDirEntries: number;
+  readonly statCalls: number;
+  readonly realPathCalls: number;
+  readonly existsCalls: number;
+  readonly contentReadCalls: number;
+  readonly contentReadBytes: number;
+}
+
+type TraversalQueryShape = "single-anchor" | "multi-anchor";
+
+function traversalQueryText(shape: TraversalQueryShape): string {
+  if (shape === "single-anchor") {
+    return "Trace TraversalAlpha implementations";
+  }
+  return `Trace ${TRAVERSAL_SYMBOLS.join(" ")} ADR-1001 ADR-1002 RFC-2001 RFC-2002 implementations`;
+}
+
+function numericEventExtra(
+  extra: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): number {
+  const value = extra?.[key];
+  if (typeof value !== "number") throw new TypeError(`expected numeric activity field: ${key}`);
+  return value;
+}
+
+function recordEventExtra(
+  extra: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): Readonly<Record<string, unknown>> {
+  const value = extra?.[key];
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`expected object activity field: ${key}`);
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
+function workspaceIoCounts(extra: Readonly<Record<string, unknown>>): WorkspaceIoCounts {
+  return {
+    readDirCalls: numericEventExtra(extra, "readDirCalls"),
+    readDirEntries: numericEventExtra(extra, "readDirEntries"),
+    statCalls: numericEventExtra(extra, "statCalls"),
+    realPathCalls: numericEventExtra(extra, "realPathCalls"),
+    existsCalls: numericEventExtra(extra, "existsCalls"),
+    contentReadCalls: numericEventExtra(extra, "contentReadCalls"),
+    contentReadBytes: numericEventExtra(extra, "contentReadBytes"),
+  };
+}
+
+async function measureRetrievalTraversal(
+  entryCount: number,
+  shape: TraversalQueryShape,
+): Promise<TraversalMeasurement> {
+  const fixtureRoot = join(ROOT, `traversal-${entryCount.toString()}-${shape}`);
+  seedRepoAt(fixtureRoot);
+  seedTraversalImplementations(fixtureRoot, entryCount);
+  writeFileSync(
+    join(fixtureRoot, "package.json"),
+    JSON.stringify({ name: "retrieval-traversal-fixture", version: "1.0.0" }),
+  );
+  const fixtureBytes = fixtureByteStats(fixtureRoot);
+  const counted = countingNodeFs();
+  const activityLog = createBufferedServerLogSink();
+  const out = await retrieveConnectedContextPack(
+    input({
+      workspaceRoot: fixtureRoot,
+      scope: happyScope({
+        workspaceRoot: fixtureRoot,
+        kind: "workspace-root",
+        relativePaths: [],
+        explicitConnection: true,
+      }),
+      query: happyQuery({ text: traversalQueryText(shape) }),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, searchCallsMax: 32 },
+    }),
+    {
+      correlationId: undefined,
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      fs: counted.fs,
+      activityLog,
+    },
+  );
+  const completed = activityLog.events.find(
+    (event) => event.op === "search.connected-context.completed",
+  );
+  const structural = recordEventExtra(completed?.extra, "structural");
+  const workspaceIo = recordEventExtra(completed?.extra, "workspaceIo");
+  const packPaths = out.pack.files.map((file) => file.scopePath);
+  return {
+    directoryCount: countFixtureDirectories(fixtureRoot),
+    fileCount: countFixtureFiles(fixtureRoot),
+    fixtureContentBytes: fixtureBytes.totalBytes,
+    maxReadableFixtureFileBytes: Math.min(
+      fixtureBytes.largestFileBytes,
+      DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
+    ),
+    foundTraversalSymbols: TRAVERSAL_SYMBOLS.filter((symbol) =>
+      packPaths.some((scopePath) => scopePath.endsWith(`/${symbol}.ts`)),
+    ),
+    searchBudgetClipped: out.pack.uncertainty.some(
+      (marker) => marker.kind === "budget-clipped" && marker.claim.includes("searchCalls"),
+    ),
+    packValid: validateConnectedContextPack(out.pack).ok,
+    operations: counted.counts(),
+    workspaceIo: workspaceIoCounts(workspaceIo),
+    searchCalls: out.pack.usage.searchCalls,
+    contextCount: numericEventExtra(structural, "contextCount"),
+    candidateInventoryBuildCount: numericEventExtra(structural, "candidateInventoryBuildCount"),
+    codeIndexBuildCount: numericEventExtra(structural, "codeIndexBuildCount"),
+    symbolGraphBuildCount: numericEventExtra(structural, "symbolGraphBuildCount"),
+    importGraphBuildCount: numericEventExtra(structural, "importGraphBuildCount"),
+    endpointGraphBuildCount: numericEventExtra(structural, "endpointGraphBuildCount"),
+    fileSearchCount: numericEventExtra(structural, "fileSearchCount"),
+  };
+}
+
+function expectBoundedRetrievalProducts(measurement: TraversalMeasurement): void {
+  expect(measurement.contextCount).toBeGreaterThan(0);
+  expect(measurement.contextCount).toBeLessThanOrEqual(3);
+  expect(measurement.candidateInventoryBuildCount).toBeGreaterThan(0);
+  expect(measurement.candidateInventoryBuildCount).toBeLessThanOrEqual(3);
+  expect(measurement.codeIndexBuildCount).toBe(1);
+  expect(measurement.symbolGraphBuildCount).toBeGreaterThan(0);
+  expect(measurement.symbolGraphBuildCount).toBeLessThanOrEqual(2);
+  expect(measurement.importGraphBuildCount).toBe(1);
+  expect(measurement.endpointGraphBuildCount).toBe(1);
+  expect(measurement.workspaceIo).toEqual({
+    readDirCalls: measurement.operations.readDir,
+    readDirEntries: measurement.operations.readDirEntries,
+    statCalls: measurement.operations.stat,
+    realPathCalls: measurement.operations.realPath,
+    existsCalls: measurement.operations.exists,
+    contentReadCalls: workspaceReadOperationCount(measurement.operations),
+    contentReadBytes: measurement.operations.contentReadBytes,
+  });
+}
+
+function workspaceContentReadOperationCount(operations: FsOperationCounts): number {
+  return (
+    operations.readFileUtf8 +
+    operations.readFileUtf8SameDescriptor +
+    operations.readFileUtf8WithinRootSameDescriptor +
+    operations.readFileBytes +
+    operations.readFileUtf8Prefix +
+    operations.readFileRange +
+    operations.readerReadRange
+  );
+}
+
+function workspaceReadOperationCount(operations: FsOperationCounts): number {
+  return workspaceContentReadOperationCount(operations) + operations.openFileReader;
+}
+
+// Calibrated against the production Node adapter at both fixture sizes with roughly 30% headroom.
+// The paired size and anchor-shape checks catch query-invariant work being repeated; these ceilings
+// intentionally pin bounded growth, rather than claiming a general asymptotic proof.
+//
+// readDir/readDirEntries are pinned to (approximately) ONE full traversal, not a multiple (#3347
+// P1): this query selects both the lexical and the structural ring plus the symbol-file and trace
+// search contexts, and prior to the ring-retrieval discovery cache (grounded-orchestrator.ts's
+// `ringDiscoveryFs`) each of those rebuilt its own candidate inventory over the same workspace tree
+// — a 65-package/133-directory fixture measured readDirCalls=532 (four full traversals) instead of
+// one. Measured on the production Node adapter: readDir === directoryCount exactly at both fixture
+// sizes (37/37 and 135/135) — the additive headroom below only guards against incidental variance,
+// not a reintroduced repeated walk.
+function expectAbsoluteRetrievalIoBound(measurement: TraversalMeasurement): void {
+  const { directoryCount, fileCount, operations } = measurement;
+  const contentReadByteCeiling =
+    16 * measurement.fixtureContentBytes + 32 * measurement.maxReadableFixtureFileBytes;
+  expect(operations.unboundedReadDir).toBe(0);
+  expect(operations.readDir).toBeLessThanOrEqual(directoryCount + 16);
+  expect(operations.readDirEntries).toBeLessThanOrEqual(2 * directoryCount + 32);
+  expect(workspaceReadOperationCount(operations)).toBeLessThanOrEqual(16 * fileCount + 32);
+  expect(operations.contentReadBytes).toBeLessThanOrEqual(contentReadByteCeiling);
+  expect(operations.stat).toBeLessThanOrEqual(22 * fileCount + 14 * directoryCount);
+  expect(operations.realPath).toBeLessThanOrEqual(48 * fileCount + 14 * directoryCount);
+  expect(operations.exists).toBeLessThanOrEqual(64);
+}
+
+function expectLinearRetrievalGrowth(
+  small: TraversalMeasurement,
+  large: TraversalMeasurement,
+): void {
+  const addedDirectories = large.directoryCount - small.directoryCount;
+  const addedFiles = large.fileCount - small.fileCount;
+  const addedFixtureBytes = large.fixtureContentBytes - small.fixtureContentBytes;
+  const largestReadableFileBytes = Math.max(
+    small.maxReadableFixtureFileBytes,
+    large.maxReadableFixtureFileBytes,
+  );
+  const delta = (key: keyof FsOperationCounts): number =>
+    large.operations[key] - small.operations[key];
+  const addedReadOperations =
+    workspaceReadOperationCount(large.operations) - workspaceReadOperationCount(small.operations);
+  // #3347 P1: one shared discovery snapshot means each added directory is walked once, not once per
+  // ring — the delta tracks addedDirectories directly rather than a multiple of it.
+  expect(delta("readDir")).toBeLessThanOrEqual(addedDirectories + 16);
+  expect(delta("unboundedReadDir")).toBeLessThanOrEqual(4 * addedDirectories);
+  expect(delta("readDirEntries")).toBeLessThanOrEqual(2 * addedDirectories + 32);
+  expect(addedReadOperations).toBeLessThanOrEqual(16 * addedFiles + 16);
+  expect(delta("contentReadBytes")).toBeLessThanOrEqual(
+    16 * addedFixtureBytes + 16 * largestReadableFileBytes,
+  );
+  expect(delta("stat")).toBeLessThanOrEqual(22 * addedFiles + 14 * addedDirectories);
+  expect(delta("realPath")).toBeLessThanOrEqual(48 * addedFiles + 14 * addedDirectories);
+  expect(delta("exists")).toBe(0);
 }
 
 function recordingMicroIndex(): { index: MicroIndex; gets: () => number; sets: () => number } {
@@ -354,6 +1090,40 @@ function recordingMicroIndex(): { index: MicroIndex; gets: () => number; sets: (
     sets: (): number => setCalls,
   };
 }
+
+describe("scanFirstSymbolLine", () => {
+  it("stops inside a large synchronous scan at the absolute request deadline", () => {
+    let now = 0;
+    const result = scanFirstSymbolLine(
+      `${Array.from({ length: 20 }, (_, index) => `const line${String(index)} = 1;`).join("\n")}\n` +
+        "export function DeadlineProbe(): void {}\n",
+      "DeadlineProbe",
+      { signal: undefined, nowMs: () => now++, deadlineMs: 4 },
+    );
+
+    expect(result).toEqual({ lineNumber: undefined, deadlineReached: true });
+    expect(now).toBe(5);
+  });
+
+  it("observes cancellation between individual source lines", () => {
+    const controller = new AbortController();
+    let clockCalls = 0;
+    const nowMs = (): number => {
+      clockCalls += 1;
+      if (clockCalls === 1) controller.abort();
+      return 0;
+    };
+
+    expect(() =>
+      scanFirstSymbolLine("first line\nexport function CancelProbe(): void {}\n", "CancelProbe", {
+        signal: controller.signal,
+        nowMs,
+        deadlineMs: 100,
+      }),
+    ).toThrow(CancelledError);
+    expect(clockCalls).toBe(1);
+  });
+});
 
 describe("runGroundedExploration", () => {
   it("composes plan → search → rank → excerpts → assemble → answer deterministically", async () => {
@@ -529,7 +1299,8 @@ describe("runGroundedExploration", () => {
     const marker = out.pack.uncertainty.find(
       (entry) =>
         entry.kind === "scope-incomplete" &&
-        entry.claim.includes("structural adapter coverage was incomplete"),
+        entry.claim.includes("structural adapter coverage was incomplete") &&
+        entry.claim.includes("import-graph indexed"),
     );
     expect(marker?.claim).toContain("import-graph indexed");
     expect(marker?.claim).toContain("skipped 0 file(s)");
@@ -557,6 +1328,66 @@ describe("runGroundedExploration", () => {
       throw new Error("expected orchestrator output to expose the recorded plan");
     }
     expect(events).toEqual([`record:${plan.planId}`, "detect"]);
+  });
+
+  it("rethrows an existing WorkspaceNotFoundError from workspace-root admission instead of flattening it", async () => {
+    // #3347 P2: assertGroundedWorkspaceRootAllowed's catch block previously replaced ANY non-denial
+    // error — including one that was already a typed WorkspaceNotFoundError — with a brand new,
+    // generic WorkspaceNotFoundError. Force resolveRecordedWorkspaceRoot's underlying realPath call
+    // to throw an already-typed WorkspaceNotFoundError carrying a distinguishing marker and assert
+    // that exact error (not a replacement) is what the request rejects with.
+    const marker = "existing-workspace-not-found-marker";
+    const failingFs: WorkspaceFs = {
+      ...countingNodeFs().fs,
+      realPath: (path): never => {
+        throw new WorkspaceNotFoundError(marker, path, [path]);
+      },
+    };
+
+    const expectation = retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which package manager does this repository use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        fs: failingFs,
+      },
+    );
+
+    await expect(expectation).rejects.toBeInstanceOf(WorkspaceNotFoundError);
+    await expect(expectation).rejects.toMatchObject({ message: marker });
+  });
+
+  it("rethrows a cancellation from workspace-root admission instead of flattening it into WorkspaceNotFoundError", async () => {
+    // Same catch-block flattening bug (#3347 P2), for the CancelledError case cursor's review
+    // specifically named: any CancelledError that realPath might surface must propagate as a real
+    // cancellation, never get replaced with a generic "workspace root is unavailable" error.
+    const controller = new AbortController();
+    const failingFs: WorkspaceFs = {
+      ...countingNodeFs().fs,
+      realPath: (): never => {
+        throw new CancelledError("grounded repository request cancelled");
+      },
+    };
+
+    const expectation = retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which package manager does this repository use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        fs: failingFs,
+        signal: controller.signal,
+      },
+    );
+
+    await expect(expectation).rejects.toBeInstanceOf(CancelledError);
   });
 
   it("passes the question and the full pack to the injected answerer", async () => {
@@ -660,35 +1491,60 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
-  it("follows a handler symbol discovered only in route evidence to its definition", async () => {
+  it("follows route-discovered handlers through one workspace index on cold and warm retrieval", async () => {
     seedCrowdedHandlerTraceRepo();
-
-    const out = await retrieveConnectedContextPack(
-      input({
-        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
-        query: happyQuery({
-          text: "Welche Datei registriert POST /api/opaque/x7, welcher Handler steht dort und wo ist er definiert?",
+    const workspaceIndex = createWorkspaceIndex();
+    const activityLog = createBufferedServerLogSink();
+    let workspaceIndexFactoryCalls = 0;
+    const retrieve = (): ReturnType<typeof retrieveConnectedContextPack> =>
+      retrieveConnectedContextPack(
+        input({
+          scope: happyScope({
+            kind: "workspace-root",
+            relativePaths: [],
+            explicitConnection: true,
+          }),
+          query: happyQuery({
+            text: "Welche Datei registriert POST /api/opaque/x7, welcher Handler steht dort und wo ist er definiert?",
+          }),
         }),
-      }),
-      {
-        correlationId: undefined,
-        answerer: echoAnswerer,
-        nowMs: () => NOW,
-        detectWorkspace: () => fakeWorkspace(),
-      },
-    );
+        {
+          correlationId: undefined,
+          answerer: echoAnswerer,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+          activityLog,
+          workspaceIndexForRoot: () => {
+            workspaceIndexFactoryCalls += 1;
+            return workspaceIndex;
+          },
+        },
+      );
 
-    expect(out.pack.files.map((file) => file.scopePath)).toContain("src/service.ts");
+    const cold = await retrieve();
+    const warm = await retrieve();
+
+    for (const out of [cold, warm]) {
+      expect(out.pack.files.map((file) => file.scopePath)).toContain("src/service.ts");
+      expect(
+        out.pack.files
+          .find((file) => file.scopePath === "src/service.ts")
+          ?.excerpts.some(
+            (excerpt) =>
+              excerpt.content.includes("function dispatchWorkUnit") &&
+              excerpt.content.includes("runPipeline"),
+          ),
+      ).toBe(true);
+      expect(out.pack.files.map((file) => file.scopePath)).toContain("src/pipeline.ts");
+    }
+    const completed = activityLog.events.filter(
+      (event) => event.op === "search.connected-context.completed",
+    );
+    expect(workspaceIndexFactoryCalls).toBe(2);
+    expect(completed).toHaveLength(2);
     expect(
-      out.pack.files
-        .find((file) => file.scopePath === "src/service.ts")
-        ?.excerpts.some(
-          (excerpt) =>
-            excerpt.content.includes("function dispatchWorkUnit") &&
-            excerpt.content.includes("runPipeline"),
-        ),
-    ).toBe(true);
-    expect(out.pack.files.map((file) => file.scopePath)).toContain("src/pipeline.ts");
+      numericEventExtra(recordEventExtra(completed[1]?.extra, "structural"), "textSearchCount"),
+    ).toBeGreaterThan(1);
   });
 
   it("runs one bounded structural adapter pass for an exact route trace", async () => {
@@ -922,6 +1778,441 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("does not trust a regular-file Dirent as hardlink-safe manifest evidence", async () => {
+    writeFileSync(join(ROOT, "package.json"), JSON.stringify({ packageManager: "npm@11.16.0" }));
+    writeFileSync(join(ROOT, ".env"), "<project>private manifest bytes</project>\n");
+    const manifestPath = join(ROOT, "pom.xml");
+    linkSync(join(ROOT, ".env"), manifestPath);
+    let hardlinkDescriptorReads = 0;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readFileUtf8SameDescriptor: (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): WorkspaceDescriptorUtf8Read => {
+        if (absolutePath === realpathSync(manifestPath)) hardlinkDescriptorReads += 1;
+        const read = nodeWorkspaceFs.readFileUtf8SameDescriptor;
+        if (read === undefined) throw new Error("same-descriptor read is unavailable");
+        return read(absolutePath, maxBytes, hardLinkPolicy, expected);
+      },
+    };
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which Java version does this workspace use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        fs,
+      },
+    );
+
+    expect(hardlinkDescriptorReads).toBe(0);
+    expect(out.pack.files.map((file) => file.scopePath)).not.toContain("pom.xml");
+  });
+
+  it("reads workspace patterns through the bounded same-descriptor production port", async () => {
+    mkdirSync(join(ROOT, "custom-services/payments"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "package.json"),
+      JSON.stringify({ workspaces: ["custom-services/*"] }),
+    );
+    writeFileSync(
+      join(ROOT, "custom-services/payments/pom.xml"),
+      "<project><properties><maven.compiler.release>21</maven.compiler.release></properties></project>\n",
+    );
+    const descriptorCaps: number[] = [];
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readFileUtf8SameDescriptor: (absolutePath, maxBytes, hardLinkPolicy, expected) => {
+        if (absolutePath === realpathSync(join(ROOT, "package.json"))) {
+          descriptorCaps.push(maxBytes);
+        }
+        return (
+          nodeWorkspaceFs.readFileUtf8SameDescriptor?.(
+            absolutePath,
+            maxBytes,
+            hardLinkPolicy,
+            expected,
+          ) ?? {
+            rawText: readFileSync(absolutePath, "utf8"),
+            sizeBytes: statSync(absolutePath).size,
+            stat: nodeWorkspaceFs.stat(absolutePath),
+          }
+        );
+      },
+    };
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which Java version does the payments service use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        fs,
+      },
+    );
+
+    expect(descriptorCaps).toContain(1_048_576);
+    expect(out.pack.files.map((file) => file.scopePath)).toContain(
+      "custom-services/payments/pom.xml",
+    );
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("does not stat or read a workspace manifest alias that resolves into a denied path", async () => {
+    mkdirSync(join(ROOT, ".aws"), { recursive: true });
+    writeFileSync(join(ROOT, "package.json"), JSON.stringify({ workspaces: [] }));
+    writeFileSync(
+      join(ROOT, ".aws/credentials"),
+      JSON.stringify({ workspaces: ["private-services/*"] }),
+    );
+    const lexicalManifest = join(ROOT, "package.json");
+    const deniedTarget = realpathSync(join(ROOT, ".aws/credentials"));
+    const realRoot = realpathSync(ROOT);
+    let deniedStats = 0;
+    let deniedReads = 0;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      realPath: (absolutePath): string =>
+        absolutePath === lexicalManifest ? deniedTarget : nodeWorkspaceFs.realPath(absolutePath),
+      readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] =>
+        nodeWorkspaceFs
+          .readDir(absolutePath, maxEntries)
+          .map((entry) =>
+            absolutePath === realRoot && entry.name === "package.json"
+              ? { ...entry, isFile: false, isSymbolicLink: true }
+              : entry,
+          ),
+      stat: (absolutePath): WorkspaceStat => {
+        if (absolutePath === deniedTarget) deniedStats += 1;
+        return nodeWorkspaceFs.stat(absolutePath);
+      },
+      readFileUtf8SameDescriptor: (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): WorkspaceDescriptorUtf8Read => {
+        if (absolutePath === deniedTarget) deniedReads += 1;
+        const read = nodeWorkspaceFs.readFileUtf8SameDescriptor;
+        if (read === undefined) throw new Error("same-descriptor read is unavailable");
+        return read(absolutePath, maxBytes, hardLinkPolicy, expected);
+      },
+    };
+
+    await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which package manager does this workspace use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        fs,
+      },
+    );
+
+    expect(deniedStats).toBe(0);
+    expect(deniedReads).toBe(0);
+  });
+
+  it("does not enumerate a safe directory alias that resolves into a denied directory", async () => {
+    mkdirSync(join(ROOT, "packages"), { recursive: true });
+    mkdirSync(join(ROOT, ".aws/private-service"), { recursive: true });
+    writeFileSync(join(ROOT, ".aws/private-service/pom.xml"), "<project>private</project>\n");
+    const lexicalPackages = join(ROOT, "packages");
+    const deniedDirectory = realpathSync(join(ROOT, ".aws"));
+    let deniedStats = 0;
+    let deniedListings = 0;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      realPath: (absolutePath): string =>
+        absolutePath === lexicalPackages ? deniedDirectory : nodeWorkspaceFs.realPath(absolutePath),
+      stat: (absolutePath): WorkspaceStat => {
+        if (absolutePath === deniedDirectory) deniedStats += 1;
+        return nodeWorkspaceFs.stat(absolutePath);
+      },
+      readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+        if (absolutePath === deniedDirectory) deniedListings += 1;
+        return nodeWorkspaceFs.readDir(absolutePath, maxEntries);
+      },
+    };
+
+    await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which Java version does this workspace use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        fs,
+      },
+    );
+
+    expect(deniedStats).toBe(0);
+    expect(deniedListings).toBe(0);
+  });
+
+  it("treats genuinely missing safe metadata directories as complete", async () => {
+    writeFileSync(
+      join(ROOT, "package.json"),
+      JSON.stringify({ workspaces: ["missing-services/*"] }),
+    );
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which package manager does this workspace use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(
+      out.pack.uncertainty.some(
+        (marker) =>
+          marker.kind === "scope-incomplete" && marker.claim.includes("could not enumerate"),
+      ),
+    ).toBe(false);
+  });
+
+  // The cap this pins is the PRE-read one: `stat.size > WORKSPACE_MANIFEST_BYTES_MAX` refuses the
+  // manifest before any read primitive is chosen, so it is unaffected by ADR-0005 D1's rule that a
+  // port without the bounded same-descriptor lane yields absent advisory metadata (the case the
+  // next test covers). The compatibility port below therefore still reports the byte-limit reason.
+  it("uses the compatibility stat cap before reading a workspace manifest", async () => {
+    mkdirSync(join(ROOT, "hidden-services/payments"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "package.json"),
+      JSON.stringify({ workspaces: ["hidden-services/*"] }),
+    );
+    writeFileSync(
+      join(ROOT, "hidden-services/payments/pom.xml"),
+      "<project><properties><maven.compiler.release>99</maven.compiler.release></properties></project>\n",
+    );
+    const base = countingNodeFs();
+    const packagePath = realpathSync(join(ROOT, "package.json"));
+    const compatibilityFs: WorkspaceFs = {
+      readFileUtf8: base.fs.readFileUtf8,
+      stat: base.fs.stat,
+      readDir: base.fs.readDir,
+      realPath: base.fs.realPath,
+      exists: base.fs.exists,
+      ...(base.fs.readFileBytes === undefined ? {} : { readFileBytes: base.fs.readFileBytes }),
+    };
+    const fs: WorkspaceFs = {
+      ...compatibilityFs,
+      stat: (absolutePath): WorkspaceStat => {
+        const stat = compatibilityFs.stat(absolutePath);
+        return absolutePath === packagePath ? { ...stat, size: 1_048_577 } : stat;
+      },
+    };
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which Java version does the hidden service use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        fs,
+      },
+    );
+
+    expect(
+      out.pack.uncertainty.some(
+        (marker) =>
+          marker.kind === "scope-incomplete" &&
+          marker.claim.includes("workspace-manifest-byte-limit:1"),
+      ),
+    ).toBe(true);
+  });
+
+  it("omits manifest metadata rather than reading it unbounded without a same-descriptor lane", async () => {
+    mkdirSync(join(ROOT, "hidden-services/payments"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "package.json"),
+      JSON.stringify({ workspaces: ["hidden-services/*"] }),
+    );
+    writeFileSync(
+      join(ROOT, "hidden-services/payments/pom.xml"),
+      "<project><properties><maven.compiler.release>99</maven.compiler.release></properties></project>\n",
+    );
+    const manifestPath = realpathSync(join(ROOT, "package.json"));
+    const unboundedReads: string[] = [];
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which Java version does the hidden service use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        fs: descriptorlessWorkspaceFs(unboundedReads),
+      },
+    );
+
+    expect(unboundedReads).not.toContain(manifestPath);
+    expect(
+      out.pack.uncertainty.some(
+        (marker) =>
+          marker.kind === "scope-incomplete" &&
+          marker.claim.includes("workspace-manifest-read-unavailable:1"),
+      ),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("caps workspace patterns before normalization and reports only body-free reasons", async () => {
+    mkdirSync(join(ROOT, "custom-services/payments"), { recursive: true });
+    mkdirSync(join(ROOT, "overflow-services/hidden"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "custom-services/payments/pom.xml"),
+      "<project><properties><maven.compiler.release>21</maven.compiler.release></properties></project>\n",
+    );
+    writeFileSync(
+      join(ROOT, "overflow-services/hidden/pom.xml"),
+      "<project>overflow-secret</project>\n",
+    );
+    const workspaces: unknown[] = [
+      "custom-services/*",
+      42,
+      "sensitive-pattern".repeat(80),
+      "unsupported/**",
+      ...Array.from({ length: 28 }, () => "custom-services/*"),
+      "overflow-services/*",
+    ];
+    writeFileSync(join(ROOT, "package.json"), JSON.stringify({ workspaces }));
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which Java version does the payments service use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    const paths = out.pack.files.map((file) => file.scopePath);
+    const marker = out.pack.uncertainty.find(
+      (entry) =>
+        entry.kind === "scope-incomplete" && entry.claim.includes("workspace-pattern-count-limit"),
+    );
+    expect(paths).toContain("custom-services/payments/pom.xml");
+    expect(paths).not.toContain("overflow-services/hidden/pom.xml");
+    expect(marker?.claim).toContain("workspace-pattern-count-limit:1");
+    expect(marker?.claim).toContain("workspace-pattern-length-limit:1");
+    expect(marker?.claim).toContain("workspace-pattern-shape-unsupported:2");
+    expect(marker?.claim).not.toContain("sensitive-pattern");
+    expect(marker?.claim).not.toContain("overflow-services");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("reports unsupported workspace manifest shapes without echoing manifest content", async () => {
+    writeFileSync(
+      join(ROOT, "package.json"),
+      JSON.stringify({ workspaces: { packages: "private-workspace-pattern" } }),
+    );
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which package manager does this project use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    const marker = out.pack.uncertainty.find(
+      (entry) =>
+        entry.kind === "scope-incomplete" &&
+        entry.claim.includes("workspace-manifest-shape-unsupported"),
+    );
+    expect(marker?.claim).not.toContain("private-workspace-pattern");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("falls back to exact manifest stats and reports unavailable metadata directories", async () => {
+    writeFileSync(join(ROOT, "package.json"), JSON.stringify({ packageManager: "npm@11.16.0" }));
+    writeFileSync(
+      join(ROOT, "pom.xml"),
+      "<project><properties><maven.compiler.release>21</maven.compiler.release></properties></project>\n",
+    );
+    const rootPath = realpathSync(ROOT);
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+        if (absolutePath === rootPath && (maxEntries === 17 || maxEntries === 25)) {
+          throw new Error("simulated metadata enumeration failure");
+        }
+        return nodeWorkspaceFs.readDir(absolutePath, maxEntries);
+      },
+    };
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Which Java version and package manager does this project use?",
+        }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        fs,
+      },
+    );
+
+    expect(out.pack.files.map((file) => file.scopePath)).toEqual(
+      expect.arrayContaining(["package.json", "pom.xml"]),
+    );
+    expect(
+      out.pack.uncertainty.some(
+        (marker) =>
+          marker.kind === "scope-incomplete" &&
+          marker.claim.includes("could not enumerate") &&
+          marker.claim.includes("exact manifest probes were used"),
+      ),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
   it("retrieves the service-local Java manifest in a polyglot monorepo (not only the root manifest)", async () => {
     mkdirSync(join(ROOT, "services/payments"), { recursive: true });
     mkdirSync(join(ROOT, "services/gateway"), { recursive: true });
@@ -956,6 +2247,70 @@ describe("runGroundedExploration", () => {
     expect(paths).toContain("services/payments/pom.xml");
     // Discovery is ecosystem-aware, not package.json-only: the sibling Go service manifest is found too.
     expect(paths).toContain("services/gateway/go.mod");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("bounds huge metadata directory reads and reports truncated coverage", async () => {
+    mkdirSync(join(ROOT, "packages/service-000000"), { recursive: true });
+    writeFileSync(join(ROOT, "package.json"), JSON.stringify({ workspaces: ["packages/*"] }));
+    writeFileSync(
+      join(ROOT, "packages/service-000000/pom.xml"),
+      "<project><properties><maven.compiler.release>21</maven.compiler.release></properties></project>\n",
+    );
+    const base = countingNodeFs();
+    const realRoot = realpathSync(ROOT);
+    const requestedCaps: number[] = [];
+    let syntheticEntriesReturned = 0;
+    const activityLog = createBufferedServerLogSink();
+    const fs: WorkspaceFs = {
+      ...base.fs,
+      readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+        if (maxEntries === undefined) return base.fs.readDir(absolutePath);
+        requestedCaps.push(maxEntries);
+        const entries =
+          hugeMetadataDirectoryEntries(absolutePath, maxEntries, realRoot) ??
+          base.fs.readDir(absolutePath, maxEntries);
+        if (entries.length > maxEntries) throw new Error("fake exceeded requested directory cap");
+        if (entries.length === maxEntries && METADATA_DIRECTORY_READ_CAPS.has(maxEntries)) {
+          syntheticEntriesReturned += entries.length;
+        }
+        return entries;
+      },
+    };
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which Java version does the service use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        fs,
+        activityLog,
+      },
+    );
+
+    expect(requestedCaps).toEqual(expect.arrayContaining([17, 25, 97]));
+    expect(syntheticEntriesReturned).toBeLessThan(512);
+    expect(
+      out.pack.uncertainty.some(
+        (marker) =>
+          marker.kind === "scope-incomplete" &&
+          marker.claim.includes("project metadata discovery was truncated"),
+      ),
+    ).toBe(true);
+    const completed = activityLog.events.find(
+      (event) => event.op === "search.connected-context.completed",
+    );
+    expect(
+      numericEventExtra(
+        recordEventExtra(completed?.extra, "uncertainty"),
+        "scopeIncompleteUncertaintyCount",
+      ),
+    ).toBeGreaterThan(0);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
@@ -1142,6 +2497,118 @@ describe("runGroundedExploration", () => {
       },
     );
     expect(out.pack.files.map((file) => file.scopePath)).toContain("Service.csproj");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("reads symbol definitions through the bounded same-descriptor port", async () => {
+    writeFileSync(
+      join(ROOT, "src/DescriptorProbe.ts"),
+      "// preface\n// another line\nexport function DescriptorProbe(): number { return 1; }\n",
+    );
+    const targetPath = realpathSync(join(ROOT, "src/DescriptorProbe.ts"));
+    const descriptorCaps: number[] = [];
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readFileUtf8SameDescriptor: (absolutePath, maxBytes, hardLinkPolicy, expected) => {
+        if (absolutePath === targetPath) descriptorCaps.push(maxBytes);
+        return (
+          nodeWorkspaceFs.readFileUtf8SameDescriptor?.(
+            absolutePath,
+            maxBytes,
+            hardLinkPolicy,
+            expected,
+          ) ?? {
+            rawText: readFileSync(absolutePath, "utf8"),
+            sizeBytes: statSync(absolutePath).size,
+            stat: nodeWorkspaceFs.stat(absolutePath),
+          }
+        );
+      },
+    };
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Where is DescriptorProbe defined?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        fs,
+      },
+    );
+
+    const descriptorExcerpt = out.pack.files
+      .find((file) => file.scopePath === "src/DescriptorProbe.ts")
+      ?.excerpts.find(
+        (excerpt) =>
+          excerpt.atom.provenance.tool === "repo.symbolFileDiscovery" &&
+          excerpt.atom.lineRange?.startLine === 3,
+      );
+    expect(descriptorCaps).toContain(2_097_152);
+    expect(descriptorExcerpt).toBeDefined();
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("omits symbol-line evidence rather than reading it unbounded without a same-descriptor lane", async () => {
+    writeFileSync(
+      join(ROOT, "src/DescriptorProbe.ts"),
+      "// preface\n// another line\nexport function DescriptorProbe(): number { return 1; }\n",
+    );
+    const targetPath = realpathSync(join(ROOT, "src/DescriptorProbe.ts"));
+    const unboundedReads: string[] = [];
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Where is DescriptorProbe defined?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        fs: descriptorlessWorkspaceFs(unboundedReads),
+      },
+    );
+
+    // The symbol-line scan has no bounded lane on this port, so it contributes no evidence at all;
+    // the request still answers, and the file is simply absent from the symbol-discovery excerpts.
+    expect(unboundedReads).not.toContain(targetPath);
+    expect(
+      out.pack.files
+        .find((file) => file.scopePath === "src/DescriptorProbe.ts")
+        ?.excerpts.some((excerpt) => excerpt.atom.provenance.tool === "repo.symbolFileDiscovery"),
+    ).not.toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  // #3347 / ADR-0005 D1: `readFileUtf8SameDescriptor` is OPTIONAL on `WorkspaceFs`, so a port that
+  // implements the bounded prefix/byte lanes but not that one is a SUPPORTED shape, not a broken
+  // one. The workspace read lane reports it as an unavailable read, and every ring must degrade it
+  // to one skipped file: the request still answers, the file is absent, and the absence is stated
+  // in `uncertainty` rather than being silent. This pin is load-bearing on the excerpt lane's
+  // degrade — drop it and the read lane's error fails the whole grounded answer instead.
+  it("answers with the file absent when the port omits the optional same-descriptor lane", async () => {
+    const unboundedReads: string[] = [];
+
+    const out = await retrieveConnectedContextPack(input(), {
+      correlationId: undefined,
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+      fs: descriptorlessWorkspaceFs(unboundedReads),
+    });
+
+    expect(out.pack.files.map((file) => file.scopePath)).not.toContain("src/foo.ts");
+    expect(
+      out.pack.uncertainty.some((marker) =>
+        marker.claim.includes("excerpt unavailable for src/foo.ts"),
+      ),
+    ).toBe(true);
+    expect(unboundedReads).toEqual([]);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
@@ -1357,16 +2824,65 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
-  it("surfaces symbol line-read overflow after prioritized definition lookup", async () => {
-    const term = "OverflowProbe";
-    for (let index = 0; index < 65; index += 1) {
-      const dir = join(ROOT, "packages", `overflow-${index.toString()}`, "src");
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(
-        join(dir, `${term}.ts`),
-        `export function ${term}(): number {\n  return ${index.toString()};\n}\n`,
+  it("bounds full retrieval I/O and linear workspace growth for issue #3347", async () => {
+    const small = await measureRetrievalTraversal(16, "multi-anchor");
+    const large = await measureRetrievalTraversal(65, "multi-anchor");
+    for (const measurement of [small, large]) {
+      expect(measurement.foundTraversalSymbols).toEqual(
+        expect.arrayContaining(["TraversalAlpha", "TraversalBeta"]),
       );
+      expect(measurement.foundTraversalSymbols.length).toBeGreaterThanOrEqual(6);
+      expect(measurement.searchBudgetClipped).toBe(false);
+      expect(measurement.packValid).toBe(true);
+      expect(measurement.searchCalls).toBeLessThan(32);
+      expect(measurement.fileSearchCount).toBeGreaterThan(0);
+      expectBoundedRetrievalProducts(measurement);
+      expectAbsoluteRetrievalIoBound(measurement);
     }
+    expectLinearRetrievalGrowth(small, large);
+  });
+
+  it("prevents multi-anchor queries from multiplying workspace-boundary discovery work", async () => {
+    const single = await measureRetrievalTraversal(24, "single-anchor");
+    const multi = await measureRetrievalTraversal(24, "multi-anchor");
+    expect(single.searchBudgetClipped).toBe(false);
+    expect(multi.searchBudgetClipped).toBe(false);
+    expect(single.foundTraversalSymbols).toContain("TraversalAlpha");
+    expect(multi.foundTraversalSymbols).toEqual(
+      expect.arrayContaining(["TraversalAlpha", "TraversalBeta"]),
+    );
+    expect(multi.foundTraversalSymbols.length).toBeGreaterThanOrEqual(6);
+    expect(single.fileSearchCount).toBeGreaterThan(0);
+    expect(multi.fileSearchCount).toBeGreaterThan(single.fileSearchCount);
+    expect(multi.searchCalls).toBeGreaterThan(single.searchCalls);
+    expectBoundedRetrievalProducts(single);
+    expectBoundedRetrievalProducts(multi);
+    expect(multi.operations.readDir - single.operations.readDir).toBeLessThanOrEqual(8);
+    expect(multi.operations.readDirEntries - single.operations.readDirEntries).toBeLessThanOrEqual(
+      16,
+    );
+    expect(multi.operations.exists).toBe(single.operations.exists);
+    expect(
+      workspaceReadOperationCount(multi.operations) -
+        workspaceReadOperationCount(single.operations),
+    ).toBeLessThanOrEqual(32);
+    expect(
+      multi.operations.contentReadBytes - single.operations.contentReadBytes,
+    ).toBeLessThanOrEqual(32 * multi.maxReadableFixtureFileBytes);
+    const additionalContentReads =
+      workspaceContentReadOperationCount(multi.operations) -
+      workspaceContentReadOperationCount(single.operations);
+    // Every additional bounded read now earns one post-read stat revalidation. Keep the original
+    // discovery-work ceiling and account only for that mandatory trust check.
+    expect(multi.operations.stat - single.operations.stat).toBeLessThanOrEqual(
+      16 + additionalContentReads,
+    );
+    expect(multi.operations.realPath - single.operations.realPath).toBeLessThanOrEqual(32);
+    expect(multi.operations.unboundedReadDir - single.operations.unboundedReadDir).toBe(0);
+  });
+
+  it("surfaces symbol line-read overflow after prioritized definition lookup", async () => {
+    seedOverflowImplementations(ROOT, 65);
 
     const out = await retrieveConnectedContextPack(
       input({
@@ -1934,6 +3450,44 @@ describe("runGroundedExploration", () => {
     expect(seen.every((id) => id === "corr-orchestrated-01")).toBe(true);
   });
 
+  it("cancels a non-cooperative git-history provider at the orchestration boundary", async () => {
+    const controller = new AbortController();
+    let providerSignal: AbortSignal | undefined;
+    let rejectProvider: (error: unknown) => void = () => undefined;
+    const pending = new Promise<readonly EvidenceAtom[]>((_resolve, reject) => {
+      rejectProvider = reject;
+    });
+    const gitFileHistoryEvidence: GitFileHistoryEvidenceProvider = ({ signal }) => {
+      providerSignal = signal;
+      return pending;
+    };
+    const outcome = retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+        query: happyQuery({ text: "Investigate src/foo.ts and recent git history" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        signal: controller.signal,
+        detectWorkspace: () => fakeWorkspace(),
+        gitFileHistoryEvidence,
+      },
+    );
+    const expectation = expect(outcome).rejects.toBeInstanceOf(CancelledError);
+    await vi.waitFor(() => {
+      expect(providerSignal).toBeDefined();
+    });
+
+    controller.abort();
+
+    await expectation;
+    expect(providerSignal?.aborted).toBe(true);
+    rejectProvider(new Error("late git provider rejection"));
+    await Promise.resolve();
+  });
+
   it("uses the budget governor to stop before an over-budget retrieval ring", async () => {
     const out = await runGroundedExploration(
       input({
@@ -1954,6 +3508,408 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("starts no retrieval or assembly IO after the absolute elapsed deadline", async () => {
+    const elapsedMsMax = 100;
+    const deadlineAtMs = NOW + elapsedMsMax;
+    let nowMs = NOW;
+    const fs = deadlineFsProbe(countingNodeFs().fs, () => nowMs >= deadlineAtMs);
+    let semanticCalls = 0;
+    let gitCalls = 0;
+    let rerankerCalls = 0;
+    const semanticProvider: SemanticSearchProvider = {
+      name: "deadline fixture",
+      search: () => {
+        semanticCalls += 1;
+        nowMs = deadlineAtMs;
+        return Promise.resolve([]);
+      },
+    };
+    const reranker: RerankerSeam = {
+      name: "deadline reranker fixture",
+      isAvailable: () => {
+        rerankerCalls += 1;
+        return Promise.resolve({ available: true, modelLabel: "fixture" });
+      },
+      rerank: (candidates) => Promise.resolve(candidates),
+    };
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, elapsedMsMax },
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => nowMs,
+        detectWorkspace: () => fakeWorkspace(),
+        fs: fs.fs,
+        repoSemanticSearchProvider: semanticProvider,
+        gitFileHistoryEvidence: () => {
+          gitCalls += 1;
+          return Promise.resolve([]);
+        },
+        contextPackReranker: reranker,
+      },
+    );
+
+    expect(semanticCalls).toBe(1);
+    expect(gitCalls).toBe(0);
+    expect(rerankerCalls).toBe(0);
+    expect(fs.accessesAfterDeadline()).toBe(0);
+    expect(out.pack.usage.searchCalls).toBe(1);
+    expect(out.pack.usage.elapsedMs).toBe(elapsedMsMax);
+    expect(out.pack.uncertainty.some((marker) => marker.claim.includes("elapsedMs"))).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("starts no further metadata IO when the deadline crosses inside metadata discovery", async () => {
+    const elapsedMsMax = 100;
+    const deadlineAtMs = NOW + elapsedMsMax;
+    let nowMs = NOW;
+    const baseFs = countingNodeFs().fs;
+    const canonicalRoot = realpathSync(ROOT);
+    const crossingFs: WorkspaceFs = {
+      ...baseFs,
+      readDir: (path, maxEntries): readonly WorkspaceDirEntry[] => {
+        const entries = baseFs.readDir(path, maxEntries);
+        if (path === canonicalRoot && maxEntries === 25) nowMs = deadlineAtMs;
+        return entries;
+      },
+    };
+    const fs = deadlineFsProbe(crossingFs, () => nowMs >= deadlineAtMs);
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({
+          kind: "workspace-root",
+          relativePaths: [],
+          explicitConnection: true,
+        }),
+        query: happyQuery({ text: "Which package manager does this repository use?" }),
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, elapsedMsMax },
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => nowMs,
+        detectWorkspace: () => fakeWorkspace(),
+        fs: fs.fs,
+      },
+    );
+
+    expect(nowMs).toBe(deadlineAtMs);
+    expect(fs.accessesAfterDeadline()).toBe(0);
+    expect(out.pack.usage.elapsedMs).toBe(elapsedMsMax);
+    expect(out.pack.uncertainty.some((marker) => marker.claim.includes("elapsedMs"))).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("propagates cancellation that arrives inside metadata discovery", async () => {
+    const controller = new AbortController();
+    const baseFs = countingNodeFs().fs;
+    const canonicalRoot = realpathSync(ROOT);
+    const cancellingFs: WorkspaceFs = {
+      ...baseFs,
+      readDir: (path, maxEntries): readonly WorkspaceDirEntry[] => {
+        const entries = baseFs.readDir(path, maxEntries);
+        if (path === canonicalRoot && maxEntries === 25) controller.abort();
+        return entries;
+      },
+    };
+    const fs = deadlineFsProbe(cancellingFs, () => controller.signal.aborted);
+
+    const expectation = retrieveConnectedContextPack(
+      input({
+        scope: happyScope({
+          kind: "workspace-root",
+          relativePaths: [],
+          explicitConnection: true,
+        }),
+        query: happyQuery({ text: "Which package manager does this repository use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        fs: fs.fs,
+        signal: controller.signal,
+      },
+    );
+
+    await expect(expectation).rejects.toBeInstanceOf(CancelledError);
+    expect(controller.signal.aborted).toBe(true);
+    expect(fs.accessesAfterDeadline()).toBe(0);
+  });
+
+  it("starts no further filesystem access when the deadline crosses inside workspace detection", async () => {
+    // #3347 P2: deadlineAtMs is computed before workspace detection runs, but detection previously
+    // received the observed raw filesystem with no request signal or deadline guard — the first
+    // elapsed-budget check happened only after `detect` returned. Cross the deadline mid-detection
+    // (on the "src" directory stat, which `inspectCanonicalWorkspace` reaches only after the
+    // package.json read that precedes it, and well before the ignore-file and language-marker
+    // checks that follow it) to prove the guard trips BETWEEN detector filesystem operations, not
+    // only at detector return.
+    const elapsedMsMax = 100;
+    const deadlineAtMs = NOW + elapsedMsMax;
+    let nowMs = NOW;
+    const baseFs = countingNodeFs().fs;
+    const srcDirPath = realpathSync(join(ROOT, "src"));
+    const crossingFs: WorkspaceFs = {
+      ...baseFs,
+      stat: (path): WorkspaceStat => {
+        const stat = baseFs.stat(path);
+        if (path === srcDirPath) nowMs = deadlineAtMs;
+        return stat;
+      },
+    };
+    const fs = deadlineFsProbe(crossingFs, () => nowMs >= deadlineAtMs);
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({
+          kind: "workspace-root",
+          relativePaths: [],
+          explicitConnection: true,
+        }),
+        query: happyQuery({ text: "Which package manager does this repository use?" }),
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, elapsedMsMax },
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => nowMs,
+        // No detectWorkspace override: this test exercises the REAL detector so the deadline guard
+        // added around it is actually on the call path.
+        fs: fs.fs,
+      },
+    );
+
+    expect(nowMs).toBe(deadlineAtMs);
+    expect(fs.accessesAfterDeadline()).toBe(0);
+    expect(out.pack.usage.elapsedMs).toBe(elapsedMsMax);
+    expect(out.pack.uncertainty.some((marker) => marker.claim.includes("elapsedMs"))).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("propagates cancellation that arrives inside workspace detection", async () => {
+    const controller = new AbortController();
+    const baseFs = countingNodeFs().fs;
+    const srcDirPath = realpathSync(join(ROOT, "src"));
+    const cancellingFs: WorkspaceFs = {
+      ...baseFs,
+      stat: (path): WorkspaceStat => {
+        const stat = baseFs.stat(path);
+        if (path === srcDirPath) controller.abort();
+        return stat;
+      },
+    };
+    const fs = deadlineFsProbe(cancellingFs, () => controller.signal.aborted);
+
+    const expectation = retrieveConnectedContextPack(
+      input({
+        scope: happyScope({
+          kind: "workspace-root",
+          relativePaths: [],
+          explicitConnection: true,
+        }),
+        query: happyQuery({ text: "Which package manager does this repository use?" }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        fs: fs.fs,
+        signal: controller.signal,
+      },
+    );
+
+    await expect(expectation).rejects.toBeInstanceOf(CancelledError);
+    expect(controller.signal.aborted).toBe(true);
+    expect(fs.accessesAfterDeadline()).toBe(0);
+  });
+
+  it("starts no edge-target filesystem operation after structural filtering is cancelled", async () => {
+    const edgeDir = join(ROOT, "edge-targets");
+    mkdirSync(edgeDir);
+    writeFileSync(join(edgeDir, "first.ts"), "export const first = 1;\n");
+    writeFileSync(join(edgeDir, "second.ts"), "export const second = 2;\n");
+    const firstTarget = realpathSync(join(edgeDir, "first.ts"));
+    const controller = new AbortController();
+    const counted = countingNodeFs();
+    const cancellingFs: WorkspaceFs = {
+      ...counted.fs,
+      stat: (path): WorkspaceStat => {
+        const stat = counted.fs.stat(path);
+        if (path === firstTarget) controller.abort();
+        return stat;
+      },
+    };
+    const fs = deadlineFsProbe(cancellingFs, () => controller.signal.aborted);
+    const pairAdapter = testSourcePairingAdapter as {
+      lookup: typeof testSourcePairingAdapter.lookup;
+    };
+    const originalLookup = pairAdapter.lookup;
+    pairAdapter.lookup = (): Promise<readonly EvidenceAtom[]> =>
+      Promise.resolve([
+        structuralEdgeAtom("structural-cancel-first", "edge-targets/first.ts"),
+        structuralEdgeAtom("structural-cancel-second", "edge-targets/second.ts"),
+      ]);
+    try {
+      await expect(
+        retrieveConnectedContextPack(input(), {
+          correlationId: undefined,
+          answerer: echoAnswerer,
+          signal: controller.signal,
+          fs: fs.fs,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+        }),
+      ).rejects.toBeInstanceOf(CancelledError);
+    } finally {
+      pairAdapter.lookup = originalLookup;
+    }
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(fs.accessesAfterDeadline()).toBe(0);
+  });
+
+  it("starts no rankability filesystem operation after git-atom filtering is cancelled", async () => {
+    writeFileSync(join(ROOT, "src/recent-first.ts"), "export const recentFirst = true;\n");
+    writeFileSync(join(ROOT, "src/recent-second.ts"), "export const recentSecond = true;\n");
+    const firstTarget = realpathSync(join(ROOT, "src/recent-first.ts"));
+    const controller = new AbortController();
+    const counted = countingNodeFs();
+    let providerCompleted = false;
+    const cancellingFs: WorkspaceFs = {
+      ...counted.fs,
+      stat: (path): WorkspaceStat => {
+        const stat = counted.fs.stat(path);
+        if (providerCompleted && path === firstTarget) controller.abort();
+        return stat;
+      },
+    };
+    const fs = deadlineFsProbe(cancellingFs, () => controller.signal.aborted);
+    const gitFileHistoryEvidence: GitFileHistoryEvidenceProvider = ({ nowMs }) => {
+      providerCompleted = true;
+      return Promise.resolve([
+        gitHistoryAtom("src/recent-first.ts", nowMs()),
+        gitHistoryAtom("src/recent-second.ts", nowMs()),
+      ]);
+    };
+
+    await expect(
+      retrieveConnectedContextPack(
+        input({
+          scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+          query: happyQuery({ text: "Investigate src/foo.ts and recent git history changes" }),
+        }),
+        {
+          correlationId: undefined,
+          answerer: echoAnswerer,
+          signal: controller.signal,
+          fs: fs.fs,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+          gitFileHistoryEvidence,
+        },
+      ),
+    ).rejects.toBeInstanceOf(CancelledError);
+
+    expect(providerCompleted).toBe(true);
+    expect(controller.signal.aborted).toBe(true);
+    expect(fs.accessesAfterDeadline()).toBe(0);
+  });
+
+  it("starts no selected-file filesystem operation after scope filtering is cancelled", async () => {
+    const firstTarget = realpathSync(join(ROOT, "src/foo.ts"));
+    const canonicalSrc = realpathSync(join(ROOT, "src"));
+    const controller = new AbortController();
+    const counted = countingNodeFs();
+    let selectedDirectoryEnumerated = false;
+    const cancellingFs: WorkspaceFs = {
+      ...counted.fs,
+      readDir: (path, maxEntries): readonly WorkspaceDirEntry[] => {
+        const entries = counted.fs.readDir(path, maxEntries);
+        // The selected directory's one ring enumeration. Ring retrieval used to read it at the
+        // requesting consumer's own cap (25 for this scope) and now reads it once at the shared
+        // sentinel cap (#3347 P1), so the trigger names that enumeration through the production
+        // constant instead of the cap one consumer happened to ask for. Same event, same moment.
+        if (
+          path === canonicalSrc &&
+          maxEntries === _RING_DISCOVERY_SENTINEL_ENTRIES_FOR_TESTS + 1
+        ) {
+          selectedDirectoryEnumerated = true;
+        }
+        return entries;
+      },
+      stat: (path): WorkspaceStat => {
+        const stat = counted.fs.stat(path);
+        if (selectedDirectoryEnumerated && path === firstTarget) controller.abort();
+        return stat;
+      },
+    };
+    const fs = deadlineFsProbe(cancellingFs, () => controller.signal.aborted);
+
+    await expect(
+      retrieveConnectedContextPack(
+        input({
+          scope: happyScope({
+            kind: "files",
+            relativePaths: ["src/foo.ts", "src/bar.ts"],
+            explicitConnection: true,
+          }),
+        }),
+        {
+          correlationId: undefined,
+          answerer: echoAnswerer,
+          signal: controller.signal,
+          fs: fs.fs,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+        },
+      ),
+    ).rejects.toBeInstanceOf(CancelledError);
+
+    expect(selectedDirectoryEnumerated).toBe(true);
+    expect(controller.signal.aborted).toBe(true);
+    expect(fs.accessesAfterDeadline()).toBe(0);
+  });
+
+  it("starts no cache-identity filesystem operation after identity collection is cancelled", () => {
+    const firstTarget = realpathSync(join(ROOT, "src/foo.ts"));
+    const controller = new AbortController();
+    const counted = countingNodeFs();
+    const cancellingFs: WorkspaceFs = {
+      ...counted.fs,
+      stat: (path): WorkspaceStat => {
+        const stat = counted.fs.stat(path);
+        if (path === firstTarget) controller.abort();
+        return stat;
+      },
+    };
+    const fs = deadlineFsProbe(cancellingFs, () => controller.signal.aborted);
+    const searchScope: SearchScope = {
+      workspace: fakeWorkspace(),
+      scopeId: "cache-identity-cancellation",
+      relativePaths: ["src"],
+    };
+
+    expect(() =>
+      _fileStateCacheIdentityForTests(
+        ["src/foo.ts", "src/bar.ts"],
+        searchScope,
+        fs.fs,
+        () => NOW,
+        NOW + 1_000,
+        controller.signal,
+      ),
+    ).toThrow(CancelledError);
+    expect(controller.signal.aborted).toBe(true);
+    expect(fs.accessesAfterDeadline()).toBe(0);
+  });
+
   it("charges structural fan-out before running adapters", async () => {
     const pairAdapter = testSourcePairingAdapter as {
       lookup: typeof testSourcePairingAdapter.lookup;
@@ -1972,6 +3928,7 @@ describe("runGroundedExploration", () => {
       return originalImportLookup(...args);
     };
     try {
+      const activityLog = createBufferedServerLogSink();
       const out = await retrieveConnectedContextPack(
         input({
           query: happyQuery({
@@ -1984,10 +3941,17 @@ describe("runGroundedExploration", () => {
           answerer: echoAnswerer,
           nowMs: () => NOW,
           detectWorkspace: () => fakeWorkspace(),
+          activityLog,
         },
       );
       expect(out.pack.usage.searchCalls).toBe(2);
       expect(out.pack.uncertainty.some((u) => u.claim.includes("searchCalls"))).toBe(true);
+      const completed = activityLog.events.find(
+        (event) => event.op === "search.connected-context.completed",
+      );
+      const structural = recordEventExtra(completed?.extra, "structural");
+      expect(numericEventExtra(structural, "fileSearchCount")).toBe(0);
+      expect(numericEventExtra(structural, "textSearchCount")).toBe(0);
       expect(validateConnectedContextPack(out.pack).ok).toBe(true);
     } finally {
       pairAdapter.lookup = originalPairLookup;
@@ -1995,6 +3959,31 @@ describe("runGroundedExploration", () => {
     }
     expect(pairCalls).toBe(0);
     expect(importCalls).toBe(0);
+  });
+
+  it("charges permitted deterministic searches without exceeding the request budget", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const out = await retrieveConnectedContextPack(
+      input({
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, searchCallsMax: 11 },
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        activityLog,
+      },
+    );
+    const completed = activityLog.events.find(
+      (event) => event.op === "search.connected-context.completed",
+    );
+    const structural = recordEventExtra(completed?.extra, "structural");
+
+    expect(out.pack.usage.searchCalls).toBe(11);
+    expect(numericEventExtra(structural, "fileSearchCount")).toBe(1);
+    expect(numericEventExtra(structural, "textSearchCount")).toBe(0);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
   it("clips answer-phase budget overages into a valid pack", async () => {
@@ -2315,6 +4304,48 @@ describe("runGroundedExploration", () => {
     expect(second.pack.files).toStrictEqual(first.pack.files);
   });
 
+  it("invalidates a cached pack after a same-size atomic replacement with restored mtime", async () => {
+    const target = join(ROOT, "src/foo.ts");
+    const replacementPath = join(ROOT, "src/foo.ts.replacement");
+    const fixedTimestampSeconds = 1_650_000_000;
+    utimesSync(target, fixedTimestampSeconds, fixedTimestampSeconds);
+    const before = nodeWorkspaceFs.stat(target);
+    const original = readFileSync(target, "utf8");
+    const replacement = original.replace("foo body", "bar body");
+    expect(Buffer.byteLength(replacement, "utf8")).toBe(Buffer.byteLength(original, "utf8"));
+
+    const microIndex = recordingMicroIndex();
+    const request = input({
+      scope: happyScope({ kind: "files", relativePaths: ["src/foo.ts"] }),
+      query: happyQuery({ text: "Investigate src/foo.ts behaviour of MyClass" }),
+    });
+    const deps = {
+      correlationId: undefined,
+      answerer: echoAnswerer,
+      nowMs: (): number => NOW,
+      detectWorkspace: (): WorkspaceInfo => fakeWorkspace(),
+      microIndex: microIndex.index,
+    };
+    const first = await retrieveConnectedContextPack(request, deps);
+    expect(
+      first.pack.files[0]?.excerpts.some((excerpt) => excerpt.content.includes("foo body")),
+    ).toBe(true);
+
+    writeFileSync(replacementPath, replacement);
+    renameSync(replacementPath, target);
+    utimesSync(target, fixedTimestampSeconds, fixedTimestampSeconds);
+    const after = nodeWorkspaceFs.stat(target);
+    expect(after.size).toBe(before.size);
+    expect(after.mtimeNs).toBe(before.mtimeNs);
+    expect(after.fileIdentity).not.toBe(before.fileIdentity);
+
+    const second = await retrieveConnectedContextPack(request, deps);
+    const secondExcerpts = second.pack.files.flatMap((file) => file.excerpts);
+    expect(secondExcerpts.some((excerpt) => excerpt.content.includes("bar body"))).toBe(true);
+    expect(secondExcerpts.some((excerpt) => excerpt.content.includes("foo body"))).toBe(false);
+    expect(microIndex.sets()).toBe(2);
+  });
+
   it("does not touch workspace file IO when read budgets are zero", async () => {
     const out = await runGroundedExploration(
       input({
@@ -2326,6 +4357,358 @@ describe("runGroundedExploration", () => {
     expect(out.pack.usage.filesRead).toBe(0);
     expect(out.pack.usage.excerptBytes).toBe(0);
     expect(out.pack.uncertainty.some((u) => u.claim.includes("filesRead"))).toBe(true);
+  });
+
+  it("does not detect, cache, or rerank when the elapsed budget is already exhausted", async () => {
+    const microIndex = recordingMicroIndex();
+    let detectCalls = 0;
+    let rerankerCalls = 0;
+    const reranker: RerankerSeam = {
+      name: "unused elapsed-budget fixture",
+      isAvailable: () => {
+        rerankerCalls += 1;
+        return Promise.resolve({ available: true, modelLabel: "fixture" });
+      },
+      rerank: (candidates) => Promise.resolve(candidates),
+    };
+
+    const out = await retrieveConnectedContextPack(
+      input({ budget: { ...DEFAULT_EXPLORATION_BUDGET, elapsedMsMax: 0 } }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        fs: throwingReadFs(),
+        detectWorkspace: () => {
+          detectCalls += 1;
+          return fakeWorkspace();
+        },
+        microIndex: microIndex.index,
+        contextPackReranker: reranker,
+      },
+    );
+
+    expect(detectCalls).toBe(0);
+    expect(microIndex.gets()).toBe(0);
+    expect(microIndex.sets()).toBe(0);
+    expect(rerankerCalls).toBe(0);
+    expect(out.pack.usage.elapsedMs).toBe(0);
+    expect(out.pack.uncertainty.some((marker) => marker.claim.includes("elapsedMs"))).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("does not resolve a workspace index after detection consumes the remaining time", async () => {
+    let nowMs = NOW;
+    const deadlineAtMs = NOW + 100;
+    let indexProviderCalls = 0;
+
+    const out = await retrieveConnectedContextPack(
+      input({ budget: { ...DEFAULT_EXPLORATION_BUDGET, elapsedMsMax: 100 } }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => nowMs,
+        detectWorkspace: () => {
+          nowMs = deadlineAtMs;
+          return fakeWorkspace();
+        },
+        workspaceIndexForRoot: () => {
+          indexProviderCalls += 1;
+          return undefined;
+        },
+      },
+    );
+
+    expect(indexProviderCalls).toBe(0);
+    expect(out.pack.uncertainty.some((marker) => marker.claim.includes("elapsedMs"))).toBe(true);
+  });
+
+  it("starts no second cache lookup or reranker after a cache lookup reaches the deadline", async () => {
+    let nowMs = NOW;
+    const deadlineAtMs = NOW + 100;
+    let cacheGets = 0;
+    let cacheSets = 0;
+    let rerankerCalls = 0;
+    const microIndex: MicroIndex = {
+      get: (): undefined => {
+        cacheGets += 1;
+        nowMs = deadlineAtMs;
+        return undefined;
+      },
+      set: (): void => {
+        cacheSets += 1;
+      },
+      delete: (): void => undefined,
+      clear: (): void => undefined,
+      size: (): number => 0,
+    };
+    const reranker: RerankerSeam = {
+      name: "post-cache-deadline fixture",
+      isAvailable: () => {
+        rerankerCalls += 1;
+        return Promise.resolve({ available: true, modelLabel: "fixture" });
+      },
+      rerank: (candidates) => Promise.resolve(candidates),
+    };
+
+    const out = await retrieveConnectedContextPack(
+      input({ budget: { ...DEFAULT_EXPLORATION_BUDGET, elapsedMsMax: 100 } }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => nowMs,
+        detectWorkspace: () => fakeWorkspace(),
+        microIndex,
+        contextPackReranker: reranker,
+      },
+    );
+
+    expect(cacheGets).toBe(1);
+    expect(cacheSets).toBe(0);
+    expect(rerankerCalls).toBe(0);
+    expect(out.pack.uncertainty.some((marker) => marker.claim.includes("elapsedMs"))).toBe(true);
+  });
+
+  it("does not start reranking after availability consumes the remaining time", async () => {
+    let nowMs = NOW;
+    const deadlineAtMs = NOW + 100;
+    let availabilityCalls = 0;
+    let rerankCalls = 0;
+    const reranker: RerankerSeam = {
+      name: "availability-deadline fixture",
+      isAvailable: () => {
+        availabilityCalls += 1;
+        nowMs = deadlineAtMs;
+        return Promise.resolve({ available: true, modelLabel: "fixture" });
+      },
+      rerank: (candidates) => {
+        rerankCalls += 1;
+        return Promise.resolve(candidates);
+      },
+    };
+
+    await retrieveConnectedContextPack(
+      input({ budget: { ...DEFAULT_EXPLORATION_BUDGET, elapsedMsMax: 100 } }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => nowMs,
+        detectWorkspace: () => fakeWorkspace(),
+        contextPackReranker: reranker,
+      },
+    );
+
+    expect(availabilityCalls).toBe(1);
+    expect(rerankCalls).toBe(0);
+  });
+
+  it("falls back when reranker availability rejects at the absolute deadline", async () => {
+    let nowMs = NOW;
+    const deadlineAtMs = NOW + 100;
+    let rerankCalls = 0;
+    const reranker: RerankerSeam = {
+      name: "availability-rejection-at-deadline fixture",
+      isAvailable: () => {
+        nowMs = deadlineAtMs;
+        return Promise.reject(new Error("availability failed after the budget elapsed"));
+      },
+      rerank: (candidates) => {
+        rerankCalls += 1;
+        return Promise.resolve(candidates);
+      },
+    };
+
+    const out = await retrieveConnectedContextPack(
+      input({ budget: { ...DEFAULT_EXPLORATION_BUDGET, elapsedMsMax: 100 } }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => nowMs,
+        detectWorkspace: () => fakeWorkspace(),
+        contextPackReranker: reranker,
+      },
+    );
+
+    expect(rerankCalls).toBe(0);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("settles at the deadline when availability never settles and ignores its late result", async () => {
+    vi.useFakeTimers();
+    try {
+      type Availability = Awaited<ReturnType<RerankerSeam["isAvailable"]>>;
+      let nowMs = NOW;
+      let markStarted = (): void => undefined;
+      let resolveAvailability = (_value: Availability): void => undefined;
+      const started = new Promise<void>((resolveStarted) => {
+        markStarted = resolveStarted;
+      });
+      const availability = new Promise<Availability>((resolve) => {
+        resolveAvailability = resolve;
+      });
+      let rerankCalls = 0;
+      const reranker: RerankerSeam = {
+        name: "never-settling-availability fixture",
+        isAvailable: () => {
+          markStarted();
+          return availability;
+        },
+        rerank: (candidates) => {
+          rerankCalls += 1;
+          return Promise.resolve(candidates);
+        },
+      };
+      const pending = retrieveConnectedContextPack(
+        input({ budget: { ...DEFAULT_EXPLORATION_BUDGET, elapsedMsMax: 25 } }),
+        {
+          correlationId: undefined,
+          answerer: echoAnswerer,
+          nowMs: () => nowMs,
+          detectWorkspace: () => fakeWorkspace(),
+          contextPackReranker: reranker,
+        },
+      );
+
+      await started;
+      nowMs = NOW + 25;
+      await vi.advanceTimersByTimeAsync(25);
+      const out = await pending;
+      expect(rerankCalls).toBe(0);
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+
+      resolveAvailability({ available: true, modelLabel: "too-late" });
+      await Promise.resolve();
+      expect(rerankCalls).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses identity ordering when reranking never settles and discards its late result", async () => {
+    const request = input({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+      query: happyQuery({ text: "Investigate src/foo.ts and src/bar.ts MyClass" }),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, elapsedMsMax: 25 },
+    });
+    vi.useFakeTimers();
+    try {
+      type Candidates = Awaited<ReturnType<RerankerSeam["rerank"]>>;
+      let nowMs = NOW;
+      let markStarted = (): void => undefined;
+      let resolveRerank = (_value: Candidates): void => undefined;
+      const started = new Promise<void>((resolveStarted) => {
+        markStarted = resolveStarted;
+      });
+      const lateRerank = new Promise<Candidates>((resolve) => {
+        resolveRerank = resolve;
+      });
+      let lateOrder: Candidates = [];
+      let executionSignal: AbortSignal | undefined;
+      let executionTimeoutMs: number | undefined;
+      let candidatePaths: readonly string[] = [];
+      const reranker: RerankerSeam = {
+        name: "never-settling-rerank fixture",
+        isAvailable: () => Promise.resolve({ available: true, modelLabel: "fixture" }),
+        rerank: (candidates, _atomsByPath, _topK, context) => {
+          candidatePaths = candidates.map((candidate) => candidate.scopePath);
+          lateOrder = [...candidates].reverse();
+          executionSignal = context?.signal;
+          executionTimeoutMs = context?.timeoutMs;
+          markStarted();
+          return lateRerank;
+        },
+      };
+      const pending = retrieveConnectedContextPack(request, {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => nowMs,
+        detectWorkspace: () => fakeWorkspace(),
+        contextPackReranker: reranker,
+      });
+
+      await started;
+      expect(executionSignal?.aborted).toBe(false);
+      expect(executionTimeoutMs).toBe(25);
+      nowMs = NOW + 25;
+      await vi.advanceTimersByTimeAsync(25);
+      const out = await pending;
+      expect(executionSignal?.aborted).toBe(true);
+      expect(out.pack.files.map((file) => file.scopePath)).toEqual(candidatePaths);
+
+      resolveRerank(lateOrder);
+      await Promise.resolve();
+      expect(out.pack.files.map((file) => file.scopePath)).toEqual(candidatePaths);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses identity ordering when reranking rejects at the absolute deadline", async () => {
+    const request = input({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+      query: happyQuery({ text: "Investigate src/foo.ts and src/bar.ts MyClass" }),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, elapsedMsMax: 100 },
+    });
+    const baseline = await retrieveConnectedContextPack(request, {
+      correlationId: undefined,
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    let nowMs = NOW;
+    const deadlineAtMs = NOW + 100;
+    const reranker: RerankerSeam = {
+      name: "rerank-rejection-at-deadline fixture",
+      isAvailable: () => Promise.resolve({ available: true, modelLabel: "fixture" }),
+      rerank: () => {
+        nowMs = deadlineAtMs;
+        return Promise.reject(new Error("rerank failed after the budget elapsed"));
+      },
+    };
+
+    const out = await retrieveConnectedContextPack(request, {
+      correlationId: undefined,
+      answerer: echoAnswerer,
+      nowMs: () => nowMs,
+      detectWorkspace: () => fakeWorkspace(),
+      contextPackReranker: reranker,
+    });
+
+    expect(out.pack.files.map((file) => file.scopePath)).toEqual(
+      baseline.pack.files.map((file) => file.scopePath),
+    );
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("cancels a never-settling reranker without waiting for the elapsed deadline", async () => {
+    const controller = new AbortController();
+    let markStarted = (): void => undefined;
+    const started = new Promise<void>((resolveStarted) => {
+      markStarted = resolveStarted;
+    });
+    let executionSignal: AbortSignal | undefined;
+    const reranker: RerankerSeam = {
+      name: "cancelled-availability fixture",
+      isAvailable: (context) => {
+        executionSignal = context?.signal;
+        markStarted();
+        return new Promise<Awaited<ReturnType<RerankerSeam["isAvailable"]>>>(() => undefined);
+      },
+      rerank: (candidates) => Promise.resolve(candidates),
+    };
+    const pending = retrieveConnectedContextPack(input(), {
+      correlationId: undefined,
+      answerer: echoAnswerer,
+      signal: controller.signal,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+      contextPackReranker: reranker,
+    });
+
+    await started;
+    controller.abort();
+    await expect(pending).rejects.toBeInstanceOf(CancelledError);
+    expect(executionSignal?.aborted).toBe(true);
   });
 
   it("rejects with CancelledError before the answerer is called when the signal is already aborted", async () => {
@@ -2358,11 +4741,12 @@ describe("runGroundedExploration", () => {
     let binaryProbeReads = 0;
     const fs: WorkspaceFs = {
       ...counted.fs,
-      readFileBytes: (absolutePath, maxBytes): Promise<Uint8Array> => {
+      readFileBytes: (absolutePath, maxBytes, hardLinkPolicy, expected): Promise<Uint8Array> => {
         binaryProbeReads += 1;
         controller.abort();
         return (
-          counted.fs.readFileBytes?.(absolutePath, maxBytes) ?? Promise.resolve(new Uint8Array())
+          counted.fs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy, expected) ??
+          Promise.resolve(new Uint8Array())
         );
       },
     };
@@ -2666,5 +5050,408 @@ describe("clarificationUserMessage", () => {
       }),
     );
     expect(message).toBe("Die verbundene Quelle konnte nicht durchsucht werden.");
+  });
+});
+
+// ─── #3347 P1: one request-wide directory snapshot for ring retrieval ─────────
+
+interface RecordedDirectoryRead {
+  readonly path: string;
+  readonly maxEntries: number | undefined;
+}
+
+// A directory-only port. Ring retrieval asks the SAME directory for several different bounded
+// listings in one request, and only `readDir` is under test here — every other operation stays the
+// throwing port so an accidental widening of the wrapper surfaces as a failure. The port answers
+// exactly the way the Node port does: a bounded read returns the first `maxEntries` entries.
+function fanOutWorkspaceFs(
+  directory: string,
+  entryCount: number,
+  reads: RecordedDirectoryRead[],
+): WorkspaceFs {
+  const entryAt = (index: number): WorkspaceDirEntry => ({
+    name: `entry-${String(index)}.ts`,
+    isDirectory: false,
+    isFile: true,
+    isSymbolicLink: false,
+  });
+  return {
+    ...throwingReadFs(),
+    readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+      reads.push({ path: absolutePath, maxEntries });
+      const served = maxEntries === undefined ? entryCount : Math.min(entryCount, maxEntries);
+      return Array.from({ length: served }, (_value, index) => entryAt(index));
+    },
+  };
+}
+
+describe("ring-retrieval directory snapshot (#3347 P1)", () => {
+  const DIRECTORY = "/workspace/wide";
+  const SENTINEL = _RING_DISCOVERY_SENTINEL_ENTRIES_FOR_TESTS;
+
+  it("answers every ring cap from ONE enumeration when the fan-out reaches the smallest cap", () => {
+    const wrapped: RecordedDirectoryRead[] = [];
+    const direct: RecordedDirectoryRead[] = [];
+    // Above the smallest cap below, so the first consumer's listing comes back AT its cap — the
+    // case the previous cache discarded and every later consumer then re-enumerated.
+    const fanOut = 12_000;
+    const ringFs = _ringDiscoveryFsForTests(fanOutWorkspaceFs(DIRECTORY, fanOut, wrapped));
+    const unwrapped = fanOutWorkspaceFs(DIRECTORY, fanOut, direct);
+    const caps: readonly (number | undefined)[] = [10_001, fanOut, 30_701, 100_001, undefined];
+
+    for (const cap of caps) {
+      // The expectation is the production port's own answer for the same cap, never a restated
+      // slice rule: whatever a real read would return is what the snapshot has to return.
+      expect(ringFs.readDir(DIRECTORY, cap)).toEqual(unwrapped.readDir(DIRECTORY, cap));
+    }
+
+    expect(wrapped).toEqual([{ path: DIRECTORY, maxEntries: SENTINEL + 1 }]);
+    expect(direct).toHaveLength(caps.length);
+  });
+
+  it("re-reads rather than serving a subset when the request runs past an overflowed snapshot", () => {
+    const wrapped: RecordedDirectoryRead[] = [];
+    const ringFs = _ringDiscoveryFsForTests(fanOutWorkspaceFs(DIRECTORY, SENTINEL + 2, wrapped));
+
+    expect(ringFs.readDir(DIRECTORY, SENTINEL + 1)).toHaveLength(SENTINEL + 1);
+    // Beyond what the snapshot captured: the overflow bit says the snapshot cannot prove it holds
+    // the whole directory, so the caller gets a real read instead of a silently truncated listing.
+    expect(ringFs.readDir(DIRECTORY, undefined)).toHaveLength(SENTINEL + 2);
+    expect(ringFs.readDir(DIRECTORY, SENTINEL + 2)).toHaveLength(SENTINEL + 2);
+
+    expect(wrapped).toEqual([
+      { path: DIRECTORY, maxEntries: SENTINEL + 1 },
+      { path: DIRECTORY, maxEntries: undefined },
+      { path: DIRECTORY, maxEntries: SENTINEL + 2 },
+    ]);
+  });
+
+  // A root whose fan-out reaches the smallest per-directory cap ring retrieval requests. Every
+  // existing performance fixture spreads its entries across many low-fan-out directories, where
+  // each ring's read completes BELOW its own cap — the one case the previous cache retained — so
+  // none of them can observe the repeated walk this pins.
+  const WIDE_ROOT_ENTRY_COUNT = 12_000;
+
+  it("enumerates a high-fan-out workspace root once, not once per ring consumer", async () => {
+    const fixtureRoot = realpathSync(ROOT);
+    writeFileSync(
+      join(fixtureRoot, "package.json"),
+      JSON.stringify({ name: "wide-root-fixture", version: "1.0.0" }),
+    );
+    for (let index = 0; index < WIDE_ROOT_ENTRY_COUNT; index += 1) {
+      writeFileSync(join(fixtureRoot, `wide-${index.toString()}.txt`), "x");
+    }
+    const rootReads: (number | undefined)[] = [];
+    const countingFs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
+        if (absolutePath === fixtureRoot) rootReads.push(maxEntries);
+        return nodeWorkspaceFs.readDir(absolutePath, maxEntries);
+      },
+    };
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        workspaceRoot: fixtureRoot,
+        scope: happyScope({
+          workspaceRoot: fixtureRoot,
+          kind: "workspace-root",
+          relativePaths: [],
+          explicitConnection: true,
+        }),
+        query: happyQuery({ text: "Trace MyClass implementations" }),
+      }),
+      { correlationId: undefined, answerer: echoAnswerer, nowMs: () => NOW, fs: countingFs },
+    );
+
+    // Not vacuous: the product itself reports that enumerating this root reached a ring cap. Were a
+    // future cap change to lift every ring above this fan-out, this fails instead of passing while
+    // silently no longer exercising the case.
+    expect(out.pack.diagnostics?.coverage?.maxFilesPrunedByDiscovery ?? 0).toBeGreaterThan(0);
+    expect(rootReads).toEqual([SENTINEL + 1]);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+});
+
+// ─── #3347 P1: the pack cache key must describe the bytes that were actually read ─
+
+interface CapturingMicroIndex {
+  readonly index: MicroIndex;
+  readonly publishedKeys: () => readonly string[];
+  readonly entryFor: (key: string) => ConnectedContextPack | undefined;
+}
+
+// Records what a run publishes, and offers a seam at the exact point between the pre-read
+// cache-identity capture and the excerpt reads: `cachedGroundedPack` performs the first micro-index
+// read of a run, after the identity has been captured and before any excerpt byte is read.
+function capturingMicroIndex(onFirstGet?: () => void): CapturingMicroIndex {
+  const entries = new Map<string, ConnectedContextPack>();
+  const published: string[] = [];
+  let gets = 0;
+  return {
+    index: {
+      get: (key): ConnectedContextPack | undefined => {
+        gets += 1;
+        if (gets === 1) onFirstGet?.();
+        return entries.get(key);
+      },
+      set: (key, pack): void => {
+        published.push(key);
+        entries.set(key, pack);
+      },
+      delete: (key): void => {
+        entries.delete(key);
+      },
+      clear: (): void => {
+        entries.clear();
+      },
+      size: (): number => entries.size,
+    },
+    publishedKeys: (): readonly string[] => published,
+    entryFor: (key): ConnectedContextPack | undefined => entries.get(key),
+  };
+}
+
+describe("pack cache identity after the excerpt reads (#3347 P1)", () => {
+  const REPLACEMENT_BODY =
+    "export function MyClass() {\n  return 'replacement body';\n}\n// MyClass call site here\n";
+
+  function excerptText(pack: ConnectedContextPack, scopePath: string): string {
+    return (pack.files.find((file) => file.scopePath === scopePath)?.excerpts ?? [])
+      .map((excerpt) => excerpt.content)
+      .join("\n");
+  }
+
+  function retrieveWith(microIndex: MicroIndex): Promise<RetrievalOnlyOutput> {
+    return retrieveConnectedContextPack(input(), {
+      correlationId: undefined,
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      microIndex,
+    });
+  }
+
+  it("never publishes a replacement's excerpt under the identity proven before the read", async () => {
+    const stash = mkdtempSync(join(tmpdir(), "keiko-grounded-orch-stash-"));
+    const target = join(ROOT, "src/foo.ts");
+    const originalAside = join(stash, "original.ts");
+    const replacementAside = join(stash, "replacement.ts");
+    try {
+      // A: the run that establishes what "src/foo.ts is cached" means.
+      const clean = capturingMicroIndex();
+      const first = await retrieveWith(clean.index);
+      const identityKey = clean.publishedKeys()[0];
+      expect(identityKey).toBeDefined();
+      expect(excerptText(first.pack, "src/foo.ts")).toContain("foo body");
+
+      // B: a replacement lands after the identity was captured and before the excerpt is read.
+      // A rename gives the path a genuinely different file, exactly as a concurrent editor would.
+      writeFileSync(replacementAside, REPLACEMENT_BODY);
+      const poisoned = capturingMicroIndex(() => {
+        renameSync(target, originalAside);
+        renameSync(replacementAside, target);
+      });
+      const second = await retrieveWith(poisoned.index);
+      // The run really did assemble the replacement's bytes — without this the rest is vacuous.
+      expect(excerptText(second.pack, "src/foo.ts")).toContain("replacement body");
+      expect(identityKey).toBeDefined();
+      if (identityKey === undefined) throw new Error("unreachable");
+      // …and published nothing under the original's identity, so restoring A cannot be answered
+      // with B out of the micro-index.
+      expect(poisoned.entryFor(identityKey)).toBeUndefined();
+      expect(poisoned.publishedKeys()).not.toContain(identityKey);
+
+      // A again: the restored original reads as itself, and the poisoned key is still absent.
+      renameSync(target, replacementAside);
+      renameSync(originalAside, target);
+      const third = await retrieveWith(poisoned.index);
+      expect(excerptText(third.pack, "src/foo.ts")).toContain("foo body");
+      expect(poisoned.entryFor(identityKey)).toBeUndefined();
+    } finally {
+      rmSync(stash, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── #3347 P1: a result observed after the absolute deadline is not evidence ──
+
+const EXCERPT_DEADLINE_AT_MS = NOW + 5_000;
+
+const ZERO_EXPLORATION_USAGE = {
+  searchCalls: 0,
+  filesRead: 0,
+  excerptBytes: 0,
+  modelInputTokens: 0,
+  modelOutputTokens: 0,
+  elapsedMs: 0,
+  rerankCalls: 0,
+} as const;
+
+interface ScriptedExcerptClockOptions {
+  readonly lateMs?: number;
+  // 1-based clock read from which the request is past its deadline.
+  readonly crossAtClockRead?: number;
+  // Move the deadline while the facade still holds the file open, so it stops its own read.
+  readonly crossDuringContentRead?: boolean;
+  // Leave the crossing disabled until `arm()` — used when the clock drives a whole request and only
+  // the excerpt phase may move it.
+  readonly startArmed?: boolean;
+}
+
+interface ScriptedExcerptClock {
+  readonly fs: WorkspaceFs;
+  readonly nowMs: () => number;
+  readonly clockReads: () => number;
+  readonly arm: () => void;
+}
+
+function scriptedExcerptClock(options: ScriptedExcerptClockOptions): ScriptedExcerptClock {
+  const lateMs = options.lateMs ?? EXCERPT_DEADLINE_AT_MS + 1_000;
+  let armed = options.startArmed ?? true;
+  let reads = 0;
+  let late = false;
+  const nowMs = (): number => {
+    reads += 1;
+    if (!late && armed && options.crossAtClockRead !== undefined) {
+      late = reads >= options.crossAtClockRead;
+    }
+    return late ? lateMs : NOW;
+  };
+  const onContentRead = (): void => {
+    if (armed && options.crossDuringContentRead === true) late = true;
+  };
+  const descriptorUtf8 = nodeWorkspaceFs.readFileUtf8SameDescriptor;
+  const containedDescriptorUtf8 = nodeWorkspaceFs.readFileUtf8WithinRootSameDescriptor;
+  return {
+    nowMs,
+    clockReads: (): number => reads,
+    arm: (): void => {
+      armed = true;
+    },
+    fs: {
+      ...nodeWorkspaceFs,
+      ...(descriptorUtf8 === undefined
+        ? {}
+        : {
+            readFileUtf8SameDescriptor: (
+              absolutePath: string,
+              maxBytes: number,
+              hardLinkPolicy: WorkspaceHardLinkPolicy,
+              expected: WorkspaceStat,
+            ): WorkspaceDescriptorUtf8Read => {
+              onContentRead();
+              return descriptorUtf8(absolutePath, maxBytes, hardLinkPolicy, expected);
+            },
+          }),
+      ...(containedDescriptorUtf8 === undefined
+        ? {}
+        : {
+            readFileUtf8WithinRootSameDescriptor: (
+              canonicalRoot: string,
+              absolutePath: string,
+              maxBytes: number,
+              hardLinkPolicy: WorkspaceHardLinkPolicy,
+              completeness: WorkspaceDescriptorReadCompleteness,
+            ): WorkspaceDescriptorUtf8Read => {
+              onContentRead();
+              return containedDescriptorUtf8(
+                canonicalRoot,
+                absolutePath,
+                maxBytes,
+                hardLinkPolicy,
+                completeness,
+              );
+            },
+          }),
+    },
+  };
+}
+
+describe("excerpt reads past the absolute deadline (#3347 P1)", () => {
+  function readOneExcerpt(clock: ScriptedExcerptClock): Promise<ExcerptReadSummary> {
+    return _readKeptExcerptsForTests(["src/foo.ts"], {
+      searchScope: { workspace: fakeWorkspace(), scopeId: "scope-1", relativePaths: ["src"] },
+      fs: clock.fs,
+      budget: DEFAULT_EXPLORATION_BUDGET,
+      initialUsage: ZERO_EXPLORATION_USAGE,
+      atomsByPath: new Map(),
+      nowMs: clock.nowMs,
+      signal: undefined,
+      deadlineAtMs: EXCERPT_DEADLINE_AT_MS,
+    });
+  }
+
+  function elapsedBudgetClaims(markers: readonly UncertaintyMarker[]): readonly string[] {
+    return markers
+      .filter((marker) => marker.kind === "budget-clipped")
+      .map((marker) => marker.claim)
+      .filter((claim) => claim.includes("elapsedMs"));
+  }
+
+  it("keeps the window of a read that finished inside the deadline", async () => {
+    const summary = await readOneExcerpt(scriptedExcerptClock({}));
+
+    expect(summary.excerpts.get("src/foo.ts")).toHaveLength(1);
+    expect(summary.elapsedBudgetBlocked).toBe(false);
+    expect(elapsedBudgetClaims(summary.uncertainty)).toEqual([]);
+  });
+
+  it("drops a window whose read only came back after the deadline", async () => {
+    // Calibrated against the production step rather than a hardcoded call index: on the success
+    // path the LAST clock read of the whole step is the deadline re-check taken once the facade has
+    // already returned its result, so crossing exactly there is a read that completes just after
+    // the deadline.
+    const control = scriptedExcerptClock({});
+    const clean = await readOneExcerpt(control);
+    expect(clean.excerpts.get("src/foo.ts")).toHaveLength(1);
+
+    const summary = await readOneExcerpt(
+      scriptedExcerptClock({ crossAtClockRead: control.clockReads() }),
+    );
+
+    expect(summary.excerpts.size).toBe(0);
+    expect(summary.elapsedBudgetBlocked).toBe(true);
+    expect(elapsedBudgetClaims(summary.uncertainty).length).toBeGreaterThan(0);
+  });
+
+  it("reports a read the facade stopped on the elapsed budget as an elapsed-budget stop", async () => {
+    const summary = await readOneExcerpt(scriptedExcerptClock({ crossDuringContentRead: true }));
+
+    expect(summary.excerpts.size).toBe(0);
+    expect(summary.elapsedBudgetBlocked).toBe(true);
+    expect(elapsedBudgetClaims(summary.uncertainty).length).toBeGreaterThan(0);
+  });
+
+  it("reports the elapsed-budget stop on the completed retrieval status", async () => {
+    // End to end: the completion status the activity log carries must not claim an unblocked
+    // elapsed budget while the pack it describes lost its excerpts to that budget. The micro-index
+    // read is the seam — it happens after the ring phase and immediately before the excerpt reads —
+    // so no earlier phase can move this clock.
+    const clock = scriptedExcerptClock({
+      lateMs: NOW + DEFAULT_EXPLORATION_BUDGET.elapsedMsMax,
+      crossDuringContentRead: true,
+      startArmed: false,
+    });
+    const cache = capturingMicroIndex(() => {
+      clock.arm();
+    });
+    const activityLog = createBufferedServerLogSink();
+
+    const out = await retrieveConnectedContextPack(input(), {
+      correlationId: undefined,
+      answerer: echoAnswerer,
+      nowMs: clock.nowMs,
+      microIndex: cache.index,
+      fs: clock.fs,
+      activityLog,
+    });
+
+    expect(out.pack.files.flatMap((file) => file.excerpts)).toEqual([]);
+    expect(out.pack.usage.excerptBytes).toBe(0);
+    expect(elapsedBudgetClaims(out.pack.uncertainty).length).toBeGreaterThan(0);
+    expect(
+      activityLog.events.find((event) => event.op === "search.connected-context.completed")?.extra
+        ?.retrievalStatus,
+    ).toMatchObject({ elapsedBudgetBlocked: true });
   });
 });

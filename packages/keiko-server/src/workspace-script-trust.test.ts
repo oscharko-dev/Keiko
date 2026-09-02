@@ -843,6 +843,7 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     const stubFs: WorkspaceFs = { ...nodeWorkspaceFs, realPath: (): string => fakeRoot };
     const workspace: WorkspaceInfo = {
       root: fakeRoot,
+      selectedRoot: fakeRoot,
       name: undefined,
       version: undefined,
       testFramework: "unknown",

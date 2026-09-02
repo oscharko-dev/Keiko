@@ -29,6 +29,7 @@ const ROOT = "/ws";
 function scopeOver(relativePaths: readonly string[]): SearchScope {
   const workspace: WorkspaceInfo = {
     root: ROOT,
+    selectedRoot: ROOT,
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",

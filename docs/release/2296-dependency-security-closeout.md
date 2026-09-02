@@ -26,7 +26,7 @@ read it back. Evidence that no gate evaluates decays into a sentence that merely
   excludes it ("Out of scope: … Final #2270/#2296 closeout"), and the issue carries
   `status: triaged`. It is waiting on an upstream release that has not shipped: the newest stable
   TypeScript is 7.0.2 and there is no stable TypeScript 7 programmatic API to migrate to, while
-  `typescript-eslint@8.67.0` independently caps the API package at `<6.1.0`. The split toolchain is
+  `typescript-eslint@8.68.0` independently caps the API package at `<6.1.0`. The split toolchain is
   therefore a governed end state for now, recorded below as `major-deferred` — not a half-finished
   migration this closeout may claim.
 - This closeout re-runs the live inventory rather than restating the merged waves, because registry,
@@ -128,7 +128,7 @@ or peer graph).
 | `eslint`                      | root                  | 10.9.1  | current        | ESLint 10 lane; the `eslint-config-next` peer cap was cleared by #2777.                |
 | `eslint`                      | keiko-ui              | 10.9.1  | current        | Deduplicated onto the root node by #2777; the workspace no longer pins its own copy.   |
 | `@eslint/js`                  | root                  | 10.0.1  | current        | Realigned with the `eslint` 10 lane by #2777; one family, one major again.             |
-| `typescript-eslint`           | root                  | 8.67.0  | patch-deferred | 8.68.0 published 2026-08-24; supports the ESLint 10 lane and the TypeScript 6 API.     |
+| `typescript-eslint`           | root                  | 8.68.0  | patch-deferred | 8.69.0 published 2026-08-31; held by the reviewed seven-day update cooldown.           |
 | `next`                        | keiko-ui              | 16.3.1  | patch-deferred | 16.3.3 available; deferred to a reviewed batch with `eslint-config-next`.              |
 | `eslint-config-next`          | keiko-ui              | 16.3.1  | patch-deferred | Kept exactly aligned with `next`; the two move together or not at all.                 |
 | `react`                       | keiko-ui              | 19.2.8  | current        | React 19 runtime delivered by #2295.                                                   |
@@ -144,8 +144,8 @@ or peer graph).
 | `@types/react`                | keiko-ui              | 19.2.18 | current        | Newest release; `@types/react-dom` lags it by one patch.                               |
 | `axe-core`                    | keiko-ui              | 4.12.1  | patch-deferred | 4.13.0 changes rule output; an accessibility-evidence refresh is required first.       |
 | `@noble/hashes`               | keiko-ui              | 2.3.0   | patch-deferred | 2.4.0 available; no capability requires it.                                            |
-| `@types/node`                 | root                  | 26.2.0  | patch-deferred | Declarations only; 26.4.0 available.                                                   |
-| `@types/node`                 | keiko-ui              | 26.2.0  | patch-deferred | Deduplicated with root.                                                                |
+| `@types/node`                 | root                  | 26.3.0  | patch-deferred | Declarations only; 26.4.0 available.                                                   |
+| `@types/node`                 | keiko-ui              | 26.3.0  | patch-deferred | Deduplicated with root.                                                                |
 | `@types/react-dom`            | keiko-ui              | 19.2.4  | patch-deferred | Declarations only; 19.2.5 available.                                                   |
 | `@vitejs/plugin-react`        | keiko-ui              | 6.0.5   | patch-deferred | 6.1.1 available; UI build baseline is unchanged.                                       |
 | `@testing-library/react`      | keiko-ui              | 16.3.2  | patch-deferred | 16.3.3 available; no test capability requires it.                                      |

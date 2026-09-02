@@ -27,6 +27,9 @@ import {
 } from "./verificationRunner.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 const PACKAGE_JSON = JSON.stringify({
   name: "fixture",
@@ -78,6 +81,7 @@ function report(kinds: readonly VerificationKind[]): VerificationReport {
 interface FakePort {
   readonly port: VerificationExecutePort;
   readonly correlationIds: (string | undefined)[];
+  readonly fileSystems: (WorkspaceFs | undefined)[];
   calls: number;
 }
 
@@ -85,9 +89,11 @@ function fakePort(rep: VerificationReport, waitForAbort = false): FakePort {
   const state: FakePort = {
     calls: 0,
     correlationIds: [],
+    fileSystems: [],
     port: async (args): Promise<ExecuteVerificationResult> => {
       state.calls += 1;
       state.correlationIds.push(args.correlationId);
+      state.fileSystems.push(args.fs);
       if (waitForAbort && !args.signal.aborted) {
         await new Promise<void>((resolve) => {
           args.signal.addEventListener(
@@ -160,6 +166,28 @@ function makeManager(
 }
 
 describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
+  it("uses managed-root access for planning and execution and fails closed when denied", async () => {
+    const access: WorkspaceRootAccess = {
+      kind: "managed-task",
+      canonicalRoot: workspaceRoot,
+      fs: nodeWorkspaceFs,
+    };
+    const port = fakePort(report(["typecheck"]));
+    const manager = makeManager({
+      resolveWorkspaceRootAccess: () => access,
+      execute: port.port,
+      isWorkspaceTrustedForPackageScripts: () => true,
+    });
+    expect(manager.discover(workspaceRoot).kinds).not.toHaveLength(0);
+    const { done } = collect(manager);
+    manager.execute(input());
+    await done;
+    expect(port.fileSystems).toEqual([nodeWorkspaceFs]);
+    expect(() =>
+      makeManager({ resolveWorkspaceRootAccess: () => undefined }).discover(workspaceRoot),
+    ).toThrow(expect.objectContaining({ code: "PROJECT_NOT_FOUND" }));
+  });
+
   it("denies a script-backed kind when the workspace is untrusted, without starting a run", () => {
     const port = fakePort(report(["typecheck"]));
     const manager = makeManager({ execute: port.port });

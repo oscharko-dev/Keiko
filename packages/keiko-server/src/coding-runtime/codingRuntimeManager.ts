@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { isDenied } from "@oscharko-dev/keiko-workspace";
+import { isDenied, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { Readable } from "node:stream";
@@ -45,6 +46,7 @@ import {
   decideSupervisedVerificationCommand,
   resolveEditTargetRealPath,
   type SupervisedCodingDecision,
+  type SupervisedCodingFileEditRequest,
 } from "./supervisedCodingPolicy.js";
 import {
   createInMemorySupervisedCodingApprovalStore,
@@ -87,6 +89,7 @@ import {
   type CodingRuntimeStderrDrainer,
   type CodingRuntimeStderrSummary,
 } from "./codingRuntimeProcessIo.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 export type CodingRuntimeAdapterKind = "opencode-compatible" | "codex-cli";
 
@@ -115,7 +118,9 @@ export type CodingRuntimeFailureCode =
   | "signature-unverified"
   | "spawn-failed"
   | "start-aborted"
-  | "start-timeout";
+  | "start-timeout"
+  // The admitted managed workspace root no longer re-proves at the spawn boundary (#3347 owner P1).
+  | "workspace-root-denied";
 
 export type CodingRuntimeStatus =
   "ready" | "recovery-required" | "restart-denied" | "starting" | "stopped" | "stopping";
@@ -254,6 +259,7 @@ export interface CodingRuntimeManagerDeps {
   readonly codexLifecycleAdapter?: CodexLifecycleAdapter | undefined;
   /** Existing, server-owned local-secret root; Codex state is derived beneath it per run. */
   readonly codexLocalSecretRoot?: string | undefined;
+  readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   /**
    * Server-side egress verifier. Its receipt attests to network enforcement; environment
    * projection is configuration only and is never treated as confinement.
@@ -403,6 +409,7 @@ interface NormalizedCodingRuntimeManagerDeps {
   readonly openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined;
   readonly codexLifecycleAdapter: CodexLifecycleAdapter | undefined;
   readonly codexLocalSecretRoot: string | undefined;
+  readonly resolveWorkspaceRootAccess: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly qualifyCodexEgress:
     ((request: CodingRuntimeLaunchRequest) => ReviewedCodexEgressPolicy | undefined) | undefined;
   readonly portableRuntimeResolver:
@@ -506,6 +513,7 @@ interface ActiveRuntime {
   readonly codingToolApprovals: CodingToolApprovalBridge | undefined;
   readonly nowMs: () => number;
   readonly nowIso: () => string;
+  readonly resolveWorkspaceRootAccess: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined;
   readonly codexLifecycleAdapter: CodexLifecycleAdapter | undefined;
   startupOutput: OpenCodeStartupMailbox | undefined;
@@ -666,6 +674,7 @@ function normalizeDeps(deps: CodingRuntimeManagerDeps): NormalizedCodingRuntimeM
     openCodeLifecycleAdapter: deps.openCodeLifecycleAdapter,
     codexLifecycleAdapter: deps.codexLifecycleAdapter,
     codexLocalSecretRoot: deps.codexLocalSecretRoot,
+    resolveWorkspaceRootAccess: deps.resolveWorkspaceRootAccess,
     qualifyCodexEgress: deps.qualifyCodexEgress,
     portableRuntimeResolver: deps.portableRuntimeResolver,
     revokeRuntime: deps.revokeRuntime,
@@ -987,8 +996,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (portableAvailability !== undefined) {
       return this.recordLaunchFailure(request, portableAvailability);
     }
+    const proof = proveSpawnWorkspaceRoot(
+      this.deps.resolveWorkspaceRootAccess,
+      request.workspaceRoot,
+    );
+    if (!proof.ok)
+      return this.recordLaunchFailure(request, failure("workspace-root-denied", false));
     const launched = this.deps.supervisor.spawnOwnedTree(
-      supervisorLaunchRequest(request, executablePath, env, args),
+      supervisorLaunchRequest(request, executablePath, env, args, proof.cwd),
     );
     if (!launched.ok) {
       return this.recordLaunchFailure(
@@ -1094,8 +1109,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     const portableAvailability = portableAvailabilityFailure(portable);
     if (portableAvailability !== undefined)
       return this.recordLaunchFailure(request, portableAvailability);
+    const proof = proveSpawnWorkspaceRoot(
+      this.deps.resolveWorkspaceRootAccess,
+      request.workspaceRoot,
+    );
+    if (!proof.ok)
+      return this.recordLaunchFailure(request, failure("workspace-root-denied", false));
     const launched = this.deps.supervisor.spawnOwnedTree(
-      supervisorLaunchRequest(request, executablePath, env, FIXED_CODEX_ARGS),
+      supervisorLaunchRequest(request, executablePath, env, FIXED_CODEX_ARGS, proof.cwd),
     );
     if (!launched.ok) {
       return this.recordLaunchFailure(
@@ -1532,6 +1553,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       this.deps.approvalStore,
       this.deps.now,
       this.deps.nowIso,
+      this.deps.resolveWorkspaceRootAccess,
     );
     this.emit(
       runtimeEvent(active, this.nextSequence(active), "failure-redacted", {
@@ -2081,7 +2103,7 @@ function createActiveRuntime(
   tree: RuntimeProcessTree,
   deps: Pick<
     NormalizedCodingRuntimeManagerDeps,
-    "approvalStore" | "codingToolApprovals" | "now" | "nowIso"
+    "approvalStore" | "codingToolApprovals" | "now" | "nowIso" | "resolveWorkspaceRootAccess"
   >,
   openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined,
   codexLifecycleAdapter?: CodexLifecycleAdapter,
@@ -2096,6 +2118,7 @@ function createActiveRuntime(
     codingToolApprovals: deps.codingToolApprovals,
     nowMs: deps.now,
     nowIso: deps.nowIso,
+    resolveWorkspaceRootAccess: deps.resolveWorkspaceRootAccess,
     openCodeLifecycleAdapter,
     codexLifecycleAdapter,
     startupOutput:
@@ -2125,6 +2148,7 @@ function createInactiveRuntime(
   approvalStore: SupervisedCodingApprovalStore,
   nowMs: () => number,
   nowIso: () => string,
+  resolveWorkspaceRootAccess: (() => WorkspaceRootAccess | undefined) | undefined,
 ): ActiveRuntime {
   return {
     context: eventContext(request),
@@ -2136,6 +2160,7 @@ function createInactiveRuntime(
     codingToolApprovals: undefined,
     nowMs,
     nowIso,
+    resolveWorkspaceRootAccess,
     openCodeLifecycleAdapter: undefined,
     codexLifecycleAdapter: undefined,
     startupOutput: undefined,
@@ -2473,11 +2498,46 @@ function failure(code: CodingRuntimeFailureCode, retryable: boolean): FailureRes
   return { ok: false, failureCode: code, retryable };
 }
 
+type SpawnWorkspaceRootProof = { readonly ok: true; readonly cwd: string } | { readonly ok: false };
+
+/**
+ * The exact managed-root proof taken immediately before a runtime spawn (#3347 owner P1).
+ *
+ * The run surface proves workspace access once, before backend construction, and OpenCode/Codex
+ * preparation then awaits (qualification, prepare, egress). A worktree archived or identity-replaced
+ * during those awaits would previously still receive a long-lived runtime tree, because the resolver
+ * was only copied onto `ActiveRuntime` for later supervised file-event classification and was never
+ * consulted at the spawn itself. This re-runs it and requires the same managed-task grant for the
+ * identical admitted canonical root; the spawn then uses that proven path as its cwd.
+ *
+ * A run composed WITHOUT a resolver is not bound to a managed root (the same convention
+ * `resolveSupervisedWorkspaceFs` follows for its node-fs fallback), so it keeps the request's own
+ * root and its previous outcome.
+ */
+function proveSpawnWorkspaceRoot(
+  resolveAccess: (() => WorkspaceRootAccess | undefined) | undefined,
+  workspaceRoot: string,
+): SpawnWorkspaceRootProof {
+  if (resolveAccess === undefined) return { ok: true, cwd: workspaceRoot };
+  try {
+    const access = resolveAccess();
+    return access?.kind === "managed-task" && access.canonicalRoot === workspaceRoot
+      ? { ok: true, cwd: access.canonicalRoot }
+      : { ok: false };
+  } catch {
+    return { ok: false };
+  }
+}
+
 function supervisorLaunchRequest(
   request: CodingRuntimeLaunchRequest,
   executable: string,
   env: Record<string, string>,
   args: readonly string[],
+  // The canonical root of the capability proved immediately before this spawn (see
+  // proveSpawnWorkspaceRoot): the long-lived tree starts in the path that just re-proved, not in
+  // the request string admitted before the preparation awaits.
+  cwd: string,
 ): Parameters<RuntimeProcessSupervisor["spawnOwnedTree"]>[0] {
   return {
     runId: request.runId,
@@ -2485,7 +2545,7 @@ function supervisorLaunchRequest(
     treeBindingId: request.treeBindingId,
     executable,
     args,
-    cwd: request.workspaceRoot,
+    cwd,
     env,
     qualification: request.confinement ?? {
       platform: "win32",
@@ -2772,9 +2832,13 @@ function governedActionRuntimeEvent(
 // symlink-resolved target within the workspace. A benign-looking in-workspace symlink (e.g.
 // `src/config-alias` -> `../.env`) stays root-contained -- so the containment gate alone would
 // admit it -- while pointing at a deny-listed file the lexical name never reveals.
-function classifySupervisedTargetSensitive(workspaceRoot: string, targetPath: string): boolean {
+function classifySupervisedTargetSensitive(
+  workspaceRoot: string,
+  targetPath: string,
+  fs: WorkspaceFs,
+): boolean {
   if (isDenied(targetPath)) return true;
-  const real = resolveEditTargetRealPath(workspaceRoot, targetPath);
+  const real = resolveEditTargetRealPath(workspaceRoot, targetPath, fs);
   return real.realRelative !== undefined && isDenied(real.realRelative);
 }
 
@@ -2787,8 +2851,8 @@ function supervisedFileEditEvent(
   const decision = decideSupervisedFileEdit({
     ...supervisedEvidenceContext(active, "file-edit"),
     workspaceRoot: active.context.workspaceRoot,
+    ...supervisedFileTargetPolicy(active, targetPath),
     targetPath,
-    targetSensitive: classifySupervisedTargetSensitive(active.context.workspaceRoot, targetPath),
     allowedRelativePaths: event.allowedRelativePaths ?? [".."],
     fileCount: event.fileCount ?? 0,
     addedLines: event.addedLines ?? 0,
@@ -2800,6 +2864,33 @@ function supervisedFileEditEvent(
     addedLines: decision.evidence.addedLines ?? 0,
     deletedLines: decision.evidence.deletedLines ?? 0,
   });
+}
+
+function supervisedFileTargetPolicy(
+  active: ActiveRuntime,
+  targetPath: string,
+): Pick<SupervisedCodingFileEditRequest, "targetSensitive" | "workspaceFs"> {
+  const workspaceFs = resolveSupervisedWorkspaceFs(active);
+  if (workspaceFs === undefined) return { targetSensitive: true };
+  return {
+    workspaceFs,
+    targetSensitive: classifySupervisedTargetSensitive(
+      active.context.workspaceRoot,
+      targetPath,
+      workspaceFs,
+    ),
+  };
+}
+
+function resolveSupervisedWorkspaceFs(active: ActiveRuntime): WorkspaceFs | undefined {
+  const resolveAccess = active.resolveWorkspaceRootAccess;
+  if (resolveAccess === undefined) return nodeWorkspaceFs;
+  try {
+    const access = resolveAccess();
+    return access?.canonicalRoot === active.context.workspaceRoot ? access.fs : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function supervisedVerificationEvent(

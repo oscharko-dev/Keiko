@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_SANDBOX_POLICY, runCommand, type CommandRule } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { VerificationReport, VerificationResult } from "@oscharko-dev/keiko-verification";
 import {
   defaultPostApplyVerification,
@@ -46,6 +47,7 @@ function workspaceOf(
 ): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework,
@@ -169,6 +171,7 @@ describe("defaultPostApplyVerificationPreflight", () => {
     try {
       const result = await defaultPostApplyVerificationPreflight({
         realRoot: root,
+        fs: nodeWorkspaceFs,
         appliedTestFiles: [],
       });
       expect(result.ok).toBe(true);
@@ -193,6 +196,7 @@ describe("defaultPostApplyVerification", () => {
     try {
       const result = await defaultPostApplyVerification({
         realRoot: root,
+        fs: nodeWorkspaceFs,
         appliedTestFiles: [],
         signal: new AbortController().signal,
       });

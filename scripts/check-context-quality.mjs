@@ -8,9 +8,10 @@
 // House pattern (mirrors scripts/check-retrieval-quality.mjs + check-retrieval-latency.mjs): pure
 // exported helpers (unit-tested in scripts/__tests__/) + a runContextQualityCheck runner reading a
 // co-located *.budget.json + process.exit(1) ONLY inside the direct-invocation guard. The corpus
-// (scripts/lib/context-quality-corpus.mjs) inlines the same buildFixtureFs WorkspaceFs builder the
-// retrieval gate uses; _memfs is not importable. The summary printed to stdout is path-free and
-// secret-free; the harness writes NO report file into the repo tree.
+// (scripts/lib/context-quality-corpus.mjs) takes its WorkspaceFs fixture from the package's own
+// sanctioned `@oscharko-dev/keiko-workspace/testing` double, exactly as the retrieval gate does.
+// The summary printed to stdout is path-free and secret-free; the harness writes NO report file
+// into the repo tree.
 //
 // HONESTY (no silent caps): PR2 promotes rehydrationReadiness + compactionPreservation from
 // scaffolded to MEASURED + load-bearing — both run the REAL buildCompactionRecords +

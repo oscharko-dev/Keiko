@@ -25,11 +25,21 @@ import {
 import { MANAGED_LSP_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation";
 import { parseManagedLspSemanticTokenRequest } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
-import { containedRealPathInfo } from "@oscharko-dev/keiko-workspace";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { containedRealPathInfo, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { FilesError, readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
+import {
+  FilesError,
+  readJsonObject,
+  requestRootAccessResolver,
+  resolveRequestRoot,
+  runFilesHandler,
+} from "../files.js";
+import {
+  requiresConfiguredManagedWorkspaceAuthority,
+  resolveManagedWorkspaceRootAccess,
+  type WorkspaceRootAccess,
+} from "../task-workspace/workspace-root-access.js";
 import { DENIED_MESSAGE, pathIsDenied } from "../files-deny.js";
 import { describeLanguageCapabilities, runLanguageOperation } from "./languageService.js";
 import type { LanguageServiceOutcome } from "./languageService.js";
@@ -40,6 +50,7 @@ import {
   HOST_LSP_DISABLED_REASON,
 } from "./lsp/hostLanguageProviders.js";
 import {
+  disposeHostLspPoolEntry,
   initializeHostLanguageProvider,
   listHostLspHealthSnapshotsForRoot,
   runHostLanguageOperation,
@@ -76,6 +87,17 @@ export interface EditorLanguageRouteOptions {
         options: HostLanguageOperationOptions,
       ) => Promise<ManagedLspProcessHealthSnapshot | undefined>)
     | undefined;
+  /**
+   * Request-bound authority re-proof for the LSP effect boundary (#3347 owner P1). The routes in
+   * this file supply files.ts's `requestRootAccessResolver` closure — the same seam patchApply,
+   * workspaceSearch, managedLsp and workspaceWatch re-prove through — which re-runs admission's own
+   * prover (live app session, managed lifecycle, canonical identity) and verifies the exact admitted
+   * kind and canonical root. A caller without a request context (the completion route) leaves it
+   * undefined and gets the deps-only managed re-proof in `rootAuthorityHolds` instead.
+   */
+  readonly reproveRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
+  /** The request's correlation id, threaded onto the `workspace.root.denied` line a refusal emits. */
+  readonly correlationId?: string | undefined;
 }
 
 // Exported for reuse by the completion route (#1199), which maps the same deterministic
@@ -101,13 +123,17 @@ function isRouteResult(value: unknown): value is RouteResult {
 // Resolves the overlay's absolute path and proves it is contained in the workspace root. An absolute
 // or escaping path, a symlink that escapes, or a denied segment (.git/.ssh/credentials) is rejected
 // before any file is read. Exported for reuse by the completion route (#1199).
-export function resolveOverlayPath(realRoot: string, relativePath: string): string {
+export function resolveOverlayPath(
+  realRoot: string,
+  relativePath: string,
+  fs: WorkspaceFs,
+): string {
   if (isAbsolute(relativePath) || pathIsDenied(relativePath)) {
     throw denied();
   }
   const overlayAbsolute = resolve(realRoot, relativePath);
   try {
-    containedRealPathInfo(nodeWorkspaceFs, realRoot, overlayAbsolute);
+    containedRealPathInfo(fs, realRoot, overlayAbsolute);
   } catch {
     throw denied();
   }
@@ -118,17 +144,74 @@ export function resolveOverlayPath(realRoot: string, relativePath: string): stri
 // disconnects.
 export function clientAbortSignal(ctx: RouteContext): AbortSignal {
   const controller = new AbortController();
+  // Some route-unit doubles intentionally provide only the EventEmitter subset. Production
+  // IncomingMessage always supplies this boolean; `undefined` means the double cannot prove an
+  // already-aborted request and therefore must not manufacture cancellation.
+  const requestComplete = (): boolean | undefined =>
+    (ctx.req as unknown as { readonly complete?: boolean }).complete;
+  const abort = (): void => {
+    if (!controller.signal.aborted) controller.abort();
+  };
+  // IncomingMessage `close` also fires after a normally completed request body. Only `aborted`
+  // denotes a client disconnect before completion; treating normal close as cancellation made the
+  // outcome depend on whether root resolution happened to yield before this listener was installed.
+  ctx.req.on("aborted", abort);
   ctx.req.on("close", () => {
-    controller.abort();
+    if (requestComplete() === false) abort();
   });
   if (typeof ctx.res.on === "function") {
     ctx.res.on("close", () => {
       if (!ctx.res.writableEnded) {
-        controller.abort();
+        abort();
       }
     });
   }
+  if (
+    (ctx.req.destroyed && requestComplete() === false) ||
+    (!ctx.res.writableEnded && (ctx.res.destroyed || ctx.res.closed))
+  ) {
+    abort();
+  }
   return controller.signal;
+}
+
+/**
+ * Re-proves the admitted workspace root at an LSP effect boundary (#3347 owner P1).
+ *
+ * Admission is one point-in-time check, and every path below it awaits — the managed-LSP control
+ * read, the provider pool's serialized acquisition — before a LONG-LIVED language server is spawned
+ * or an existing one is reused. This re-runs the request-bound prover when the caller supplied one,
+ * so a managed root's lifecycle state and gitdir identity are re-checked, not just workspace script
+ * trust.
+ *
+ * Without that seam it falls back to the managed prover on `deps`, gated by the SAME classifier
+ * admission uses: a root that is not under configured managed authority keeps its previous outcome,
+ * so ordinary projects are unaffected.
+ */
+function rootAuthorityHolds(
+  deps: UiHandlerDeps,
+  realRoot: string,
+  options: EditorLanguageRouteOptions,
+): boolean {
+  const reprove = options.reproveRootAccess;
+  if (reprove !== undefined) {
+    return reprove()?.canonicalRoot === realRoot;
+  }
+  if (!requiresConfiguredManagedWorkspaceAuthority(deps, realRoot)) return true;
+  const access = resolveManagedWorkspaceRootAccess(deps, realRoot, {
+    correlationId: options.correlationId,
+  });
+  return access?.kind === "managed-task" && access.canonicalRoot === realRoot;
+}
+
+// A root whose authority no longer re-proves must not keep a warm, long-lived language server bound
+// to it. Every managed entry for that root is evicted, not only the requested language: it is the
+// ROOT that was revoked. Each disposal is the pool's own governed eviction (retained ownership
+// stays a fail-closed tombstone).
+function evictManagedLspProcessesForRoot(realRoot: string): Promise<void> {
+  return Promise.all(
+    MANAGED_LSP_LANGUAGES.map((language) => disposeHostLspPoolEntry(realRoot, language)),
+  ).then((): void => undefined);
 }
 
 function successBody(outcome: Exclude<LanguageServiceOutcome, { kind: "error" }>): unknown {
@@ -189,14 +272,20 @@ export async function handleEditorLanguage(
   const request = parsed.value;
   return runFilesHandler(async () => {
     const root = await resolveRequestRoot(ctx, deps, request.root);
-    const overlayAbsolutePath = resolveOverlayPath(root.realRoot, request.document.path);
+    const { canonicalRoot, fs } = root.access;
+    const overlayAbsolutePath = resolveOverlayPath(canonicalRoot, request.document.path, fs);
     const outcome = await runEditorLanguageOperation(
       request,
       deps,
-      root.realRoot,
+      canonicalRoot,
       overlayAbsolutePath,
       signalOverride ?? clientAbortSignal(ctx),
-      options,
+      fs,
+      {
+        ...options,
+        reproveRootAccess: options.reproveRootAccess ?? requestRootAccessResolver(ctx, deps, root),
+        correlationId: options.correlationId ?? ctx.correlationId,
+      },
     );
     return outcomeToResult(outcome, deps);
   });
@@ -224,15 +313,27 @@ export async function handleEditorLanguageSemanticTokens(
   return runFilesHandler(async () => {
     const request = parsed.value;
     const root = await resolveRequestRoot(ctx, deps, request.root);
-    const overlayAbsolutePath = resolveOverlayPath(root.realRoot, request.document.path);
+    const { canonicalRoot, fs } = root.access;
+    const overlayAbsolutePath = resolveOverlayPath(canonicalRoot, request.document.path, fs);
+    const effectOptions: EditorLanguageRouteOptions = {
+      ...options,
+      reproveRootAccess: options.reproveRootAccess ?? requestRootAccessResolver(ctx, deps, root),
+      correlationId: options.correlationId ?? ctx.correlationId,
+    };
     const authorization = await managedActivationAuthorization(
       deps,
-      root.realRoot,
+      canonicalRoot,
       request.document.languageId,
     );
+    // The control read above is an await: authority proved at admission may already be gone by the
+    // time this would spawn or reuse a long-lived server for `canonicalRoot`.
+    if (!rootAuthorityHolds(deps, canonicalRoot, effectOptions)) {
+      await evictManagedLspProcessesForRoot(canonicalRoot);
+      throw denied();
+    }
     if (authorization?.authorized !== true) return { status: 200, body: semanticFallback() };
     const result = await runHostLanguageSemanticTokens(request.document, {
-      workspace: workspaceForRoot(root.realRoot),
+      workspace: workspaceForRoot(canonicalRoot),
       processEnv: deps.env,
       commandRules: options.hostLanguageCommandRules ?? defaultHostLanguageCommandRules(),
       overlayAbsolutePath,
@@ -240,7 +341,7 @@ export async function handleEditorLanguageSemanticTokens(
       now: options.now,
       lspProcessConfig: options.hostLanguageProcessConfig,
       ...(options.hostLanguageSpawn === undefined ? {} : { spawn: options.hostLanguageSpawn }),
-      ...managedHostOptions(authorization, root.realRoot, deps),
+      ...managedHostOptions(authorization, canonicalRoot, deps, effectOptions),
     });
     const response: ManagedLspSemanticTokenResponse =
       result === undefined
@@ -255,6 +356,7 @@ function workspaceForRoot(
 ): Parameters<typeof detectHostLanguageProviderDescriptors>[0]["workspace"] {
   return {
     root: realRoot,
+    selectedRoot: realRoot,
     name: undefined,
     version: undefined,
     testFramework: "unknown",
@@ -271,6 +373,7 @@ export async function runEditorLanguageOperation(
   realRoot: string,
   overlayAbsolutePath: string,
   signal: AbortSignal,
+  fs: WorkspaceFs,
   options: EditorLanguageRouteOptions = {},
 ): Promise<LanguageServiceOutcome> {
   const authorization = await managedActivationAuthorization(
@@ -278,8 +381,22 @@ export async function runEditorLanguageOperation(
     realRoot,
     request.document.languageId,
   );
+  // Same boundary as the semantic-token route: the managed control read is an await, and what
+  // follows either spawns or reuses a long-lived server, or reads the workspace through the
+  // capability admitted before that await.
+  if (!rootAuthorityHolds(deps, realRoot, options)) {
+    await evictManagedLspProcessesForRoot(realRoot);
+    return { kind: "error", code: "DENIED", message: DENIED_MESSAGE };
+  }
   if (authorization?.authorized === false) {
-    return runInProcessLanguageOperation(request, realRoot, overlayAbsolutePath, signal, options);
+    return runInProcessLanguageOperation(
+      request,
+      realRoot,
+      overlayAbsolutePath,
+      signal,
+      fs,
+      options,
+    );
   }
   const hostOutcome = await runHostLanguageOperation(request, {
     workspace: workspaceForRoot(realRoot),
@@ -291,12 +408,12 @@ export async function runEditorLanguageOperation(
     now: options.now,
     lspProcessConfig: options.hostLanguageProcessConfig,
     ...(options.hostLanguageSpawn !== undefined ? { spawn: options.hostLanguageSpawn } : {}),
-    ...managedHostOptions(authorization, realRoot, deps),
+    ...managedHostOptions(authorization, realRoot, deps, options),
   });
   if (hostOutcome !== undefined) {
     return hostOutcome;
   }
-  return runInProcessLanguageOperation(request, realRoot, overlayAbsolutePath, signal, options);
+  return runInProcessLanguageOperation(request, realRoot, overlayAbsolutePath, signal, fs, options);
 }
 
 function runInProcessLanguageOperation(
@@ -304,10 +421,11 @@ function runInProcessLanguageOperation(
   realRoot: string,
   overlayAbsolutePath: string,
   signal: AbortSignal,
+  fs: WorkspaceFs,
   options: EditorLanguageRouteOptions,
 ): LanguageServiceOutcome {
   return runLanguageOperation(request, {
-    fs: nodeWorkspaceFs,
+    fs,
     realRoot,
     overlayAbsolutePath,
     signal,
@@ -369,10 +487,35 @@ interface ManagedActivationAuthorization {
   readonly privateRuntimeStateRoot?: string | undefined;
 }
 
+/**
+ * The pool-facing recheck the provider pool runs immediately before it may acquire or reuse a
+ * managed language server. Exported so the guarantee can be proven directly: the route call sites
+ * cannot open the window between this callback and the pool's own serialized acquisition, and the
+ * previous version answered only "is this workspace still script-trusted", never "is this still the
+ * managed root that was admitted" (#3347 owner P1).
+ */
+export function managedActivationRecheck(
+  deps: UiHandlerDeps,
+  realRoot: string,
+  options: EditorLanguageRouteOptions = {},
+): () => boolean {
+  return (): boolean => {
+    try {
+      return (
+        deps.workspaceScriptTrust?.trustLevelForRoot(realRoot) === "trusted" &&
+        rootAuthorityHolds(deps, realRoot, options)
+      );
+    } catch {
+      return false;
+    }
+  };
+}
+
 function managedHostOptions(
   authorization: ManagedActivationAuthorization | undefined,
   realRoot: string,
   deps: UiHandlerDeps,
+  options: EditorLanguageRouteOptions,
 ): Pick<
   HostLanguageOperationOptions,
   | "activationAuthorized"
@@ -388,13 +531,7 @@ function managedHostOptions(
       : managedProviderProtocolConfiguration(authorization.configuration, realRoot);
   return {
     activationAuthorized: true,
-    activationStillAuthorized: (): boolean => {
-      try {
-        return deps.workspaceScriptTrust?.trustLevelForRoot(realRoot) === "trusted";
-      } catch {
-        return false;
-      }
-    },
+    activationStillAuthorized: managedActivationRecheck(deps, realRoot, options),
     privateRuntimeStateRoot: authorization.privateRuntimeStateRoot,
     protocolConfiguration: configuration,
   };
@@ -492,6 +629,7 @@ function initializationOptions(
       },
       realRoot,
       deps,
+      options,
     ),
   };
 }
@@ -563,6 +701,16 @@ async function managedDescriptorsForRoute(
 ): Promise<readonly LanguageProviderDescriptor[]> {
   const snapshot = await deps.managedLspControl?.read(realRoot);
   if (snapshot === undefined) return [];
+  // Reading capabilities deliberately WARMS the pool (it may start a managed provider below), so
+  // the authority admitted before this control read has to still hold here.
+  //
+  // A revoked root refuses with the SAME 403 DENIED the diagnostics and semantic-token routes
+  // raise. Returning an empty descriptor list instead would answer 200 and make a governance
+  // denial indistinguishable from a workspace that simply has no managed language server.
+  if (!rootAuthorityHolds(deps, realRoot, options)) {
+    await evictManagedLspProcessesForRoot(realRoot);
+    throw denied();
+  }
   const health =
     options.listManagedHealthSnapshots?.(realRoot) ?? listHostLspHealthSnapshotsForRoot(realRoot);
   return controlledDescriptors(snapshot, health, realRoot, deps, options, signal);
@@ -582,17 +730,24 @@ export async function handleEditorLanguageCapabilitiesForRoute(
   }
   return runFilesHandler(async () => {
     const resolved = await resolveRequestRoot(ctx, deps, root);
+    const canonicalRoot = resolved.access.canonicalRoot;
+    const effectOptions: EditorLanguageRouteOptions = {
+      ...options,
+      reproveRootAccess:
+        options.reproveRootAccess ?? requestRootAccessResolver(ctx, deps, resolved),
+      correlationId: options.correlationId ?? ctx.correlationId,
+    };
     const detected =
       deps.managedLspControl === undefined
         ? detectHostLanguageProviderDescriptors({
-            workspace: workspaceForRoot(resolved.realRoot),
+            workspace: workspaceForRoot(canonicalRoot),
             processEnv: deps.env,
             commandRules: options.hostLanguageCommandRules ?? defaultHostLanguageCommandRules(),
           })
         : await managedDescriptorsForRoute(
-            resolved.realRoot,
+            canonicalRoot,
             deps,
-            options,
+            effectOptions,
             clientAbortSignal(ctx),
           );
     return {

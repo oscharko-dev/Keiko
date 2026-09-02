@@ -6,6 +6,7 @@ import type {
   EditorTestGenerationWireTarget,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   defaultTestGenerationRunner,
   type TestGenerationRunnerArgs,
@@ -70,6 +71,7 @@ function args(overrides: Partial<TestGenerationRunnerArgs> = {}): TestGeneration
     request,
     deps: deps({ config: config() }),
     realRoot: "/ws",
+    fs: nodeWorkspaceFs,
     signal: new AbortController().signal,
     nowMs: 1_000,
     contextPack: EMPTY_PACK,
@@ -105,6 +107,7 @@ describe("defaultTestGenerationRunner", () => {
     });
     // The resolved model port is forwarded as the workflow's model dependency.
     expect(mockGenerate.mock.calls[0]?.[1]).toHaveProperty("model");
+    expect(mockGenerate.mock.calls[0]?.[1]).toHaveProperty("fs", nodeWorkspaceFs);
     expect(result?.patch.files[0]?.changeKind).toBe("added");
     expect(result?.provenance.modelId).toBe("model-x");
     expect(result?.funnel.candidatesGenerated).toBe(1);

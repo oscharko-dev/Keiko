@@ -14,14 +14,20 @@ import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { RouteResult } from "../routes.js";
 import type { UiStore } from "../store/index.js";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { requestRootAccessResolver, type ResolvedProjectRoot } from "../files.js";
+import type { WorkspaceRootAccessOutcome } from "../task-workspace/workspace-root-access.js";
 import {
+  clientAbortSignal,
   handleEditorLanguage,
   handleEditorLanguageCapabilities,
   handleEditorLanguageCapabilitiesForRoute,
   handleEditorLanguageSemanticTokens,
   managedActivationAuthorization,
+  managedActivationRecheck,
   type EditorLanguageRouteOptions,
 } from "./languageRoutes.js";
+import type { ManagedLspControlSnapshot } from "./lsp/managedLspControl.js";
 import { createManagedLspActivationStore } from "./lsp/managedLspActivationStore.js";
 import { createManagedLspControlService } from "./lsp/managedLspControl.js";
 
@@ -119,6 +125,20 @@ function postContextWithResponseClose(body: unknown, writableEnded: boolean): Ro
   return { ...ctx, res };
 }
 
+describe("clientAbortSignal", () => {
+  it("does not treat a normally completed request close as client cancellation", () => {
+    const context = postContext({});
+    Object.defineProperty(context.req, "complete", { value: true, configurable: true });
+    const signal = clientAbortSignal(context);
+
+    context.req.emit("close");
+    expect(signal.aborted).toBe(false);
+
+    context.req.emit("aborted");
+    expect(signal.aborted).toBe(true);
+  });
+});
+
 let root: string;
 let store: UiStore;
 
@@ -153,6 +173,13 @@ function redactEveryString(value: unknown): unknown {
 }
 
 const stableLanguageOptions: EditorLanguageRouteOptions = { now: () => 0 };
+
+function grantedOrdinaryAccess(canonicalRoot: string): WorkspaceRootAccessOutcome {
+  return {
+    decision: "granted",
+    access: { kind: "ordinary", canonicalRoot, fs: nodeWorkspaceFs },
+  };
+}
 
 function tsconfig(): string {
   return JSON.stringify({
@@ -451,6 +478,62 @@ describe("GET /api/editor/language/capabilities", () => {
       await rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  // Reading capabilities warms the managed pool, so it re-proves root authority exactly like the
+  // diagnostics and semantic-token routes. It previously answered 200 with an empty descriptor
+  // list, which is the same body a workspace with no managed language server returns — a client
+  // could not tell a revoked root from an unconfigured one.
+  it("refuses with 403 DENIED when root authority is revoked during the managed control read", async () => {
+    const stateDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-caps-revoked-state-")));
+    try {
+      let granted = true;
+      const managedLspControl = createManagedLspControlService({
+        store: createManagedLspActivationStore({ stateDir }),
+        processEnv: {},
+        provisioning: () => true,
+        disposePoolEntry: () => Promise.resolve(),
+        workspaceTrust: () => "trusted",
+        runtimeApproved: () => true,
+        configurationSafe: () => true,
+        projectEvidence: () => "projected",
+        mutex: createWorkspaceMutexRegistry(),
+      });
+      const revokingDeps = {
+        ...deps(),
+        managedLspControl: {
+          ...managedLspControl,
+          // Revocation lands in the awaited window the route opens: the snapshot is the real one,
+          // and authority is gone by the time the descriptors would be built.
+          read: async (requestedRoot: string): Promise<ManagedLspControlSnapshot | undefined> => {
+            const snapshot = await managedLspControl.read(requestedRoot);
+            granted = false;
+            return snapshot;
+          },
+        },
+        workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+          granted ? grantedOrdinaryAccess(requestedRoot) : { decision: "denied" },
+      } as unknown as UiHandlerDeps;
+      const admitted: ResolvedProjectRoot = {
+        root,
+        realRoot: root,
+        access: { kind: "ordinary", canonicalRoot: root, fs: nodeWorkspaceFs },
+      };
+      const context = getContext(
+        `/api/editor/language/capabilities?root=${encodeURIComponent(root)}`,
+      );
+
+      const result = await handleEditorLanguageCapabilitiesForRoute(context, revokingDeps, {
+        // The production seam, not a stand-in: the closure the route builds for itself.
+        reproveRootAccess: requestRootAccessResolver(context, revokingDeps, admitted),
+      });
+
+      expect(result.status).toBe(403);
+      expect(result.body).toMatchObject({ error: { code: "DENIED" } });
+      expect(JSON.stringify(result.body)).not.toContain(root);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("POST /api/editor/language", () => {
@@ -472,6 +555,60 @@ describe("POST /api/editor/language", () => {
     );
 
     expect(result).toEqual({ status: 200, body: { schemaVersion: "1", supported: false } });
+  });
+
+  // The semantic-token route awaits the same managed control read before it may reach the provider
+  // pool. A root whose authority is revoked during that await must be refused, not answered with
+  // the ordinary "not supported" fallback that a caller cannot distinguish from a healthy workspace.
+  it("refuses semantic tokens when managed-root authority is revoked during the control read", async () => {
+    const stateDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-semantic-revoked-state-")));
+    try {
+      await mkdir(join(root, "src"), { recursive: true });
+      await writeFile(join(root, "src/lib.rs"), "fn main() {}\n", "utf8");
+      const managedLspControl = createManagedLspControlService({
+        store: createManagedLspActivationStore({ stateDir }),
+        processEnv: {},
+        provisioning: () => true,
+        disposePoolEntry: () => Promise.resolve(),
+        workspaceTrust: () => "trusted",
+        runtimeApproved: () => true,
+        configurationSafe: () => true,
+        projectEvidence: () => "projected",
+        mutex: createWorkspaceMutexRegistry(),
+      });
+      const spawn = vi.fn((): never => {
+        throw new Error("spawn must remain unreachable");
+      });
+      let granted = true;
+      const revokableDeps = {
+        ...deps(),
+        managedLspControl: {
+          ...managedLspControl,
+          read: (requestedRoot: string): Promise<ManagedLspControlSnapshot> => {
+            granted = false;
+            return managedLspControl.read(requestedRoot);
+          },
+        },
+        workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+          granted ? grantedOrdinaryAccess(requestedRoot) : { decision: "denied" },
+      } as unknown as UiHandlerDeps;
+
+      const result = await handleEditorLanguageSemanticTokens(
+        postContext({
+          schemaVersion: "1",
+          root,
+          document: { path: "src/lib.rs", languageId: "rust", text: "fn main() {}\n", version: 2 },
+        }),
+        revokableDeps,
+        { hostLanguageSpawn: spawn },
+      );
+
+      expect(result.status).toBe(403);
+      expect(result.body).toMatchObject({ error: { code: "DENIED" } });
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("rejects malformed semantic-token request fields before provider dispatch", async () => {
@@ -582,6 +719,79 @@ describe("POST /api/editor/language", () => {
       );
 
       expect(result.status).toBe(422);
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  // #3347 owner P1: the route awaits the managed-LSP control read before it may spawn or reuse a
+  // LONG-LIVED language server. Admission proved authority before that await; this proves the
+  // re-proof after it is load-bearing on its own — admission itself still succeeds here, only the
+  // follow-up resolver denies (the same isolation managedLspRoutes.test.ts uses).
+  it("fails closed when managed-root authority is revoked during the managed control read", async () => {
+    const bin = await realpath(await mkdtemp(join(tmpdir(), "keiko-route-revoked-bin-")));
+    const stateDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-route-revoked-state-")));
+    try {
+      const pyright = join(bin, "pyright-langserver");
+      await writeFile(pyright, "#!/bin/sh\n", "utf8");
+      await chmod(pyright, 0o755);
+      const managedLspControl = createManagedLspControlService({
+        store: createManagedLspActivationStore({ stateDir }),
+        processEnv: {},
+        provisioning: () => true,
+        disposePoolEntry: () => Promise.resolve(),
+        workspaceTrust: () => "trusted",
+        runtimeApproved: () => true,
+        configurationSafe: () => true,
+        projectEvidence: () => "projected",
+        mutex: createWorkspaceMutexRegistry(),
+      });
+      await managedLspControl.mutate({
+        action: "activate",
+        actorClass: "localHuman",
+        expectedRevision: 0,
+        idempotencyKey: "activate-before-revocation",
+        language: "python",
+        root,
+      });
+      const spawn = vi.fn((): never => {
+        throw new Error("spawn must remain unreachable");
+      });
+      let granted = true;
+      const revokableDeps = {
+        ...deps(buildRedactor({}), { PATH: bin }),
+        managedLspControl: {
+          ...managedLspControl,
+          read: (requestedRoot: string): Promise<ManagedLspControlSnapshot> => {
+            // The revocation lands DURING the control read: exactly the await between admission
+            // and the pooled spawn that the finding names.
+            granted = false;
+            return managedLspControl.read(requestedRoot);
+          },
+        },
+        workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+          granted ? grantedOrdinaryAccess(requestedRoot) : { decision: "denied" },
+      } as unknown as UiHandlerDeps;
+
+      const result = await handleEditorLanguage(
+        postContext({
+          operation: "diagnostics",
+          root,
+          document: { path: "src/a.py", languageId: "python", text: "value = 1\n" },
+        }),
+        revokableDeps,
+        {
+          hostLanguageCommandRules: [{ executable: "pyright-langserver" }],
+          hostLanguageSpawn: spawn,
+        },
+      );
+
+      expect(result.status).toBe(403);
+      expect(result.body).toMatchObject({ error: { code: "DENIED" } });
+      // A 403 alone would still pass with the process already started. No language server may be
+      // spawned for a root whose authority no longer re-proves.
       expect(spawn).not.toHaveBeenCalled();
     } finally {
       await rm(bin, { recursive: true, force: true });
@@ -932,6 +1142,64 @@ describe("POST /api/editor/language", () => {
     );
     expect(result.status).toBe(400);
     expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+});
+
+// #3347 owner P1: `activationStillAuthorized` is the callback the provider pool invokes immediately
+// before it may acquire or REUSE a warm, long-lived language server. It previously answered only
+// "is this workspace still script-trusted", so an archived or identity-replaced worktree kept its
+// server. These prove the recheck now carries the workspace-root proof itself — the route call
+// sites cannot open the window between this callback and the pool's acquisition, so the callback is
+// exercised directly (the same reason managedActivationAuthorization is exported).
+describe("managedActivationRecheck — the pool-facing authority recheck", () => {
+  function recheckFor(
+    granted: () => boolean,
+    trustLevel: () => "trusted" | "restricted",
+  ): () => boolean {
+    const recheckDeps = {
+      ...deps(),
+      workspaceScriptTrust: { trustLevelForRoot: trustLevel },
+      workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+        granted() ? grantedOrdinaryAccess(requestedRoot) : { decision: "denied" },
+    } as unknown as UiHandlerDeps;
+    const admitted: ResolvedProjectRoot = {
+      root,
+      realRoot: root,
+      access: { kind: "ordinary", canonicalRoot: root, fs: nodeWorkspaceFs },
+    };
+    return managedActivationRecheck(recheckDeps, root, {
+      // The production seam, not a hand-written stand-in: this is the closure the routes pass.
+      reproveRootAccess: requestRootAccessResolver(postContext({}), recheckDeps, admitted),
+    });
+  }
+
+  it("permits acquisition while the admitted root still re-proves and stays trusted", () => {
+    expect(
+      recheckFor(
+        () => true,
+        () => "trusted",
+      )(),
+    ).toBe(true);
+  });
+
+  it("refuses acquisition once workspace-root authority is revoked, with trust unchanged", () => {
+    let granted = true;
+    const recheck = recheckFor(
+      () => granted,
+      () => "trusted",
+    );
+    expect(recheck()).toBe(true);
+    granted = false;
+    expect(recheck()).toBe(false);
+  });
+
+  it("still refuses acquisition when script trust drops while the root re-proves", () => {
+    expect(
+      recheckFor(
+        () => true,
+        () => "restricted",
+      )(),
+    ).toBe(false);
   });
 });
 

@@ -8,12 +8,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import type { GitDeliveryRepoPolicyPack, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import type {
+  GitDeliveryExecutionResult,
+  GitDeliveryRepoPolicyPack,
+  WorkspaceInstance,
+} from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
-import type { GitMutationLifecycleResult } from "@oscharko-dev/keiko-tools";
+import type {
+  GitLocalMutationAdapter,
+  GitMutationLifecycleResult,
+  GitWorktreeSnapshot,
+} from "@oscharko-dev/keiko-tools";
 import type { NodeGitWorktreeReaderDeps } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { buildRedactor } from "../index.js";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -52,6 +60,7 @@ import {
   executeGovernedMutation,
   gitDeliveryMutationResponse,
   gitDeliveryTerminationHandler,
+  GitDeliveryRootAuthorityRevokedError,
   KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK,
   readStagedConflictMarkerFileCountFor,
   readStagedPathsFor,
@@ -64,6 +73,8 @@ import {
   deriveTaskBranchName,
   deriveWorkspaceId,
 } from "../task-workspace/naming.js";
+import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
+import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 
 let root: string;
 
@@ -74,6 +85,7 @@ function git(args: readonly string[]): string {
 function workspaceInfo(rootPath: string): WorkspaceInfo {
   return {
     root: rootPath,
+    selectedRoot: rootPath,
     name: undefined,
     version: undefined,
     testFramework: "unknown",
@@ -512,26 +524,76 @@ describe("resolveProjectWorkspace", () => {
 
   it("resolves a persisted managed task workspace root without legacy project registration", () => {
     const store = createInMemoryUiStore();
-    const managedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-managed-root-")));
-    const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-managed-repo-")));
-    const repositoryId = deriveRepositoryId(repoRoot);
-    const workspaceId = deriveWorkspaceId({ repositoryId, taskId: "task-443" });
-    const managedWorktreePath = deriveManagedWorktreePath({
-      managedRoot,
-      repositoryId,
-      workspaceId,
-    });
-    mkdirSync(managedWorktreePath, { recursive: true });
-    const instance: WorkspaceInstance = {
+    const fixture = createManagedWorktreeFixture("task-443");
+    try {
+      expect(
+        resolveProjectWorkspace(
+          { store, ...managedAccessDeps(fixture, () => fixture.instance) },
+          fixture.managedWorktreePath,
+        )?.root,
+      ).toBe(fixture.managedWorktreePath);
+    } finally {
+      store.close();
+      fixture.dispose();
+    }
+  });
+});
+
+// ─── #3347 owner P1: the managed-root proof must survive to the Git EFFECT ─────────────────────
+//
+// resolveProjectWorkspace admits a managed worktree through the strong prover and collapses it to a
+// path-only WorkspaceInfo. executeGovernedMutation then awaits a multi-command snapshot before it
+// builds the mutation adapter, so an archive or identity replacement during that await used to make
+// the mutation commands run against whatever now sits at the admitted path.
+
+interface ManagedWorktreeFixture {
+  readonly managedRoot: string;
+  readonly repoRoot: string;
+  readonly managedWorktreePath: string;
+  readonly workspaceId: string;
+  readonly instance: WorkspaceInstance;
+  readonly dispose: () => void;
+}
+
+// A GENUINE managed task worktree: an owned managed root, a real repository, and a real `git
+// worktree add` linkage whose gitdir identity matches the persisted instance. The #3347 prover
+// re-checks ownership, lifecycle state and gitdir identity on every call, so a plain mkdir cannot
+// stand in for this fixture.
+function createManagedWorktreeFixture(taskId: string): ManagedWorktreeFixture {
+  const managedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-managed-root-")));
+  const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-managed-repo-")));
+  assertManagedRootOwned(managedRoot);
+  execFileSync("git", ["init", "-q"], { cwd: repoRoot });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repoRoot });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: repoRoot });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: repoRoot });
+  const repositoryId = deriveRepositoryId(repoRoot);
+  const workspaceId = deriveWorkspaceId({ repositoryId, taskId });
+  const managedWorktreePath = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
+  const taskBranch = deriveTaskBranchName({ taskId });
+  mkdirSync(dirname(managedWorktreePath), { recursive: true });
+  execFileSync("git", ["worktree", "add", "-q", "-b", taskBranch, managedWorktreePath, "HEAD"], {
+    cwd: repoRoot,
+  });
+  const gitdirInspection = inspectManagedGitdirIdentity(managedWorktreePath, repoRoot);
+  if (gitdirInspection === undefined) {
+    throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+  }
+  return {
+    managedRoot,
+    repoRoot,
+    managedWorktreePath,
+    workspaceId,
+    instance: {
       schemaVersion: "1",
       workspaceId,
-      taskId: "task-443",
+      taskId,
       repositoryId,
       repositoryRoot: repoRoot,
       baseBranch: "main",
-      taskBranch: deriveTaskBranchName({ taskId: "task-443" }),
+      taskBranch,
       managedWorktreePath,
-      gitdirIdentity: "gitdir-hash",
+      gitdirIdentity: gitdirInspection.identity,
       lifecycleState: "active",
       health: "healthy",
       lock: null,
@@ -540,26 +602,195 @@ describe("resolveProjectWorkspace", () => {
       driftMarkers: [],
       recoveryHints: [],
       auditCorrelationId: workspaceId,
-    };
-    try {
-      expect(
-        resolveProjectWorkspace(
-          {
-            store,
-            managedTaskWorkspaceRoot: managedRoot,
-            workspaceProvisioning: {
-              getInstance: (id: string) => (id === workspaceId ? instance : undefined),
-              provision: () => Promise.reject(new Error("not used")),
-              activate: () => Promise.reject(new Error("not used")),
-            },
-          },
-          managedWorktreePath,
-        )?.root,
-      ).toBe(managedWorktreePath);
-    } finally {
-      store.close();
+    },
+    dispose: (): void => {
       rmSync(repoRoot, { recursive: true, force: true });
       rmSync(managedRoot, { recursive: true, force: true });
+    },
+  };
+}
+
+// The provisioning lookup reads `current()` on EVERY call, so a test can revoke the workspace
+// (archive it) between two re-proofs exactly as production lifecycle transitions do.
+function managedAccessDeps(
+  fixture: ManagedWorktreeFixture,
+  current: () => WorkspaceInstance | undefined,
+): {
+  readonly managedTaskWorkspaceRoot: string;
+  readonly workspaceProvisioning: {
+    readonly getInstance: (id: string) => WorkspaceInstance | undefined;
+    readonly provision: () => Promise<never>;
+    readonly activate: () => Promise<never>;
+  };
+} {
+  return {
+    managedTaskWorkspaceRoot: fixture.managedRoot,
+    workspaceProvisioning: {
+      getInstance: (id: string): WorkspaceInstance | undefined =>
+        id === fixture.workspaceId ? current() : undefined,
+      provision: (): Promise<never> => Promise.reject(new Error("not used")),
+      activate: (): Promise<never> => Promise.reject(new Error("not used")),
+    },
+  };
+}
+
+function recordingMutationAdapter(calls: string[]): GitLocalMutationAdapter {
+  const succeeded = (kind: string): Promise<GitDeliveryExecutionResult> => {
+    calls.push(kind);
+    return Promise.resolve({
+      schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+      outcome: "succeeded",
+      durationMs: 1,
+    });
+  };
+  return {
+    createBranch: () => succeeded("createBranch"),
+    switchBranch: () => succeeded("switchBranch"),
+    stage: () => succeeded("stage"),
+    unstage: () => succeeded("unstage"),
+    commit: () => succeeded("commit"),
+    abort: () => succeeded("abort"),
+    recover: () => succeeded("recover"),
+  };
+}
+
+const MANAGED_SNAPSHOT: GitWorktreeSnapshot = {
+  headDetached: false,
+  currentBranchName: "keiko/task-3347",
+  stagedFileCount: 0,
+  unstagedFileCount: 0,
+  untrackedFileCount: 0,
+  hasUpstream: false,
+  aheadCount: 0,
+  behindCount: 0,
+  existingLocalBranchNames: ["keiko/task-3347"],
+  remoteAliases: [],
+};
+
+const BRANCH_CREATE = {
+  kind: "branch-create",
+  branchName: "feature/after-revocation",
+  baseBranchName: "keiko/task-3347",
+  startPointRefHash: "HEAD",
+} as const;
+
+describe("executeGovernedMutation — managed-root re-proof at the spawn boundaries", () => {
+  it("starts no mutation when the root is archived while the snapshot read is in flight", async () => {
+    const fixture = createManagedWorktreeFixture("task-3347-deferred");
+    const cap = captureStore();
+    const activity = captureActivityLog();
+    const calls: string[] = [];
+    let instance: WorkspaceInstance | undefined = fixture.instance;
+    try {
+      const result = await executeGovernedMutation(
+        BRANCH_CREATE,
+        { required: false },
+        workspaceInfo(fixture.managedWorktreePath),
+        {
+          evidenceStore: cap.store,
+          redactor: buildRedactor({}),
+          ...managedAccessDeps(fixture, () => instance),
+        },
+        {
+          policyPacks: { repoPack: ALLOW_LOCAL },
+          activityLog: activity.sink,
+          adapterFactory: () => recordingMutationAdapter(calls),
+          snapshotReader: (): Promise<GitWorktreeSnapshot> => {
+            // The revocation lands during the await the finding names: admission proved the root,
+            // the multi-command snapshot read is in flight, and the adapter has not been built yet.
+            instance = { ...fixture.instance, lifecycleState: "archived" };
+            return Promise.resolve(MANAGED_SNAPSHOT);
+          },
+        },
+        "request-correlation-revoked",
+      );
+
+      expect(calls).toEqual([]);
+      expect(result.outcome).toMatchObject({
+        status: "blocked",
+        category: "policy-block",
+        blockReason: "authority-denied",
+      });
+      const noSpawn = activity.events.find((e) => e.op === "git.delivery.dispatch.no-spawn");
+      expect(noSpawn?.correlationId).toBe("request-correlation-revoked");
+      expect(noSpawn?.extra?.operation).toBe("branch-create");
+      expect(
+        activity.events.some(
+          (e) => e.op === "workspace.root.denied" && e.extra?.reason === "managed-root-lifecycle",
+        ),
+      ).toBe(true);
+      expect(JSON.stringify(activity.events)).not.toContain(fixture.managedWorktreePath);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("dispatches the same mutation while the managed root still re-proves (negative control)", async () => {
+    const fixture = createManagedWorktreeFixture("task-3347-live");
+    const cap = captureStore();
+    const calls: string[] = [];
+    try {
+      const result = await executeGovernedMutation(
+        BRANCH_CREATE,
+        { required: false },
+        workspaceInfo(fixture.managedWorktreePath),
+        {
+          evidenceStore: cap.store,
+          redactor: buildRedactor({}),
+          ...managedAccessDeps(fixture, () => fixture.instance),
+        },
+        {
+          policyPacks: { repoPack: ALLOW_LOCAL },
+          adapterFactory: () => recordingMutationAdapter(calls),
+          snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(MANAGED_SNAPSHOT),
+        },
+        "request-correlation-live",
+      );
+
+      expect(calls).toEqual(["createBranch"]);
+      expect(result.outcome.status).toBe("succeeded");
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("refuses before the snapshot read when the root was already revoked at entry", async () => {
+    const fixture = createManagedWorktreeFixture("task-3347-preflight");
+    const cap = captureStore();
+    const activity = captureActivityLog();
+    const calls: string[] = [];
+    let snapshotReads = 0;
+    try {
+      await expect(
+        executeGovernedMutation(
+          BRANCH_CREATE,
+          { required: false },
+          workspaceInfo(fixture.managedWorktreePath),
+          {
+            evidenceStore: cap.store,
+            redactor: buildRedactor({}),
+            ...managedAccessDeps(fixture, () => undefined),
+          },
+          {
+            policyPacks: { repoPack: ALLOW_LOCAL },
+            activityLog: activity.sink,
+            adapterFactory: () => recordingMutationAdapter(calls),
+            snapshotReader: (): Promise<GitWorktreeSnapshot> => {
+              snapshotReads += 1;
+              return Promise.resolve(MANAGED_SNAPSHOT);
+            },
+          },
+          "request-correlation-entry",
+        ),
+      ).rejects.toBeInstanceOf(GitDeliveryRootAuthorityRevokedError);
+
+      // Not one process: the snapshot read is itself a multi-command git spawn.
+      expect(snapshotReads).toBe(0);
+      expect(calls).toEqual([]);
+      expect(cap.count()).toBe(0);
+      expect(activity.events.some((e) => e.op === "git.delivery.dispatch.no-spawn")).toBe(true);
+    } finally {
+      fixture.dispose();
     }
   });
 });

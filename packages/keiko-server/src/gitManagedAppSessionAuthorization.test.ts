@@ -1,6 +1,8 @@
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -27,6 +29,8 @@ import {
 } from "./gitRoutes.js";
 import { handleGitHistory, handleGitSummary } from "./gitRepositoryReads.js";
 import { deriveManagedWorktreePath } from "./task-workspace/naming.js";
+import { assertManagedRootOwned } from "./task-workspace/managed-root.js";
+import { inspectManagedGitdirIdentity } from "./task-workspace/gitdir-identity.js";
 import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
 
 const REPOSITORY_ID = "repo_0123456789abcdef";
@@ -34,7 +38,36 @@ const WORKSPACE_ID = "ws_0123456789abcdef01234567";
 let root: string;
 let managedRoot: string;
 let managedWorktree: string;
+let repositoryRoot: string;
 let instance: WorkspaceInstance;
+
+function initGitRepo(dir: string): void {
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: dir });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: dir });
+}
+
+// #3347 managed-worktree identity: resolveManagedWorkspaceRootAccess re-proves a real Git
+// linked-worktree pointer (gitdir-identity.ts) instead of trusting a path shape. Builds a genuine
+// `git worktree add` linkage rooted at `sourceRepo` at `worktreePath` and returns its real gitdir
+// identity for the WorkspaceInstance fixture.
+function buildManagedGitWorktree(
+  sourceRepo: string,
+  worktreePath: string,
+  taskBranch: string,
+): string {
+  initGitRepo(sourceRepo);
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: sourceRepo });
+  mkdirSync(dirname(worktreePath), { recursive: true });
+  execFileSync("git", ["worktree", "add", "-q", "-b", taskBranch, worktreePath, "HEAD"], {
+    cwd: sourceRepo,
+  });
+  const identity = inspectManagedGitdirIdentity(worktreePath, sourceRepo);
+  if (identity === undefined) {
+    throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+  }
+  return identity.identity;
+}
 
 function ok(stdout: string): GitProcessResult {
   return { exitCode: 0, signal: null, stdout, stderr: "", truncated: false };
@@ -91,26 +124,35 @@ function pair(dependencies: UiHandlerDeps): string {
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "keiko-managed-git-auth-"));
-  const managedStorage = join(root, "managed-storage");
   managedRoot = join(root, "managed");
+  // #3347 managed-worktree identity: isManagedRootOwned now fails closed on a symlinked authority
+  // root (a symlink can be repointed after admission), so the CONFIGURED managedTaskWorkspaceRoot
+  // itself must be a real, owned directory -- assertManagedRootOwned before anything else touches
+  // it, matching the ordering buildUiHandlerDeps' own materializedManagedRoot relies on elsewhere.
+  assertManagedRootOwned(managedRoot);
   managedWorktree = deriveManagedWorktreePath({
     managedRoot,
     repositoryId: REPOSITORY_ID,
     workspaceId: WORKSPACE_ID,
   });
-  await mkdir(join(managedStorage, REPOSITORY_ID, WORKSPACE_ID), { recursive: true });
-  await symlink(managedStorage, managedRoot, "dir");
+  repositoryRoot = join(root, "source-repo");
+  mkdirSync(repositoryRoot, { recursive: true });
+  const gitdirIdentity = buildManagedGitWorktree(
+    repositoryRoot,
+    managedWorktree,
+    "keiko/task/managed-git-auth-01234567",
+  );
   const now = new Date(0).toISOString();
   instance = {
     schemaVersion: "1",
     workspaceId: WORKSPACE_ID,
     taskId: "managed-git-auth",
     repositoryId: REPOSITORY_ID,
-    repositoryRoot: root,
+    repositoryRoot,
     baseBranch: "dev",
     taskBranch: "keiko/task/managed-git-auth-01234567",
     managedWorktreePath: managedWorktree,
-    gitdirIdentity: "gitdir-identity",
+    gitdirIdentity,
     lifecycleState: "active",
     health: "healthy",
     lock: null,
@@ -212,14 +254,27 @@ describe("managed task-worktree Git read authorization (#2482)", () => {
 
   it("authorizes paired status reads for canonical variants in the production .keiko layout", async () => {
     const stateManagedRoot = join(root, ".keiko", "ui", "task-workspaces");
+    assertManagedRootOwned(stateManagedRoot);
     const stateManagedWorktree = deriveManagedWorktreePath({
       managedRoot: stateManagedRoot,
       repositoryId: REPOSITORY_ID,
       workspaceId: WORKSPACE_ID,
     });
+    const stateRepositoryRoot = join(root, "state-source-repo");
+    mkdirSync(stateRepositoryRoot, { recursive: true });
+    const stateGitdirIdentity = buildManagedGitWorktree(
+      stateRepositoryRoot,
+      stateManagedWorktree,
+      "keiko/task/managed-git-auth-01234567",
+    );
     const stateManagedSubfolder = join(stateManagedWorktree, "packages", "example");
     await mkdir(stateManagedSubfolder, { recursive: true });
-    instance = { ...instance, managedWorktreePath: stateManagedWorktree };
+    instance = {
+      ...instance,
+      repositoryRoot: stateRepositoryRoot,
+      managedWorktreePath: stateManagedWorktree,
+      gitdirIdentity: stateGitdirIdentity,
+    };
     const runner = vi.fn<GitProcessRunner>((args, options) => {
       if (args.includes("rev-parse")) {
         const prefix = options.cwd === stateManagedSubfolder ? "packages/example/" : "";

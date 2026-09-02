@@ -133,6 +133,7 @@
     "check:retrieval-quality": "node --disable-warning=ExperimentalWarning scripts/check-retrieval-quality.mjs",
     "check:grounded-retrieval-quality": "node scripts/check-grounded-retrieval-quality.mjs",
     "check:grounded-retrieval-latency": "node scripts/check-grounded-retrieval-latency.mjs",
+    "check:grounded-workspace-pattern-performance": "npm run build:packages && node scripts/check-grounded-workspace-pattern-performance.mjs",
     "check:grounded-faithfulness": "node scripts/check-grounded-faithfulness.mjs",
     "check:knowledge-m2-closeout": "node --disable-warning=ExperimentalWarning scripts/check-knowledge-m2-closeout.mjs",
     "check:grounded-entailment": "node scripts/check-grounded-entailment.mjs",

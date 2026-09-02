@@ -26,6 +26,7 @@ import type {
 import type {
   WorkspaceHealthEntry,
   WorkspaceHealthReport,
+  WorkspaceInfo,
   WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -40,6 +41,7 @@ import { isManagedRootOwned, isManagedTargetContained } from "./managed-root.js"
 import { gatherInstanceReconciliationFacts } from "./reconciliation.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import type { WorkspaceHealthService, WorkspaceHealthServiceDeps } from "./types.js";
+import { resolveLifecycleManagedWorkspaceRootAccess } from "./workspace-root-access.js";
 
 const ORPHAN_ID_PREFIX = "orph_";
 
@@ -57,20 +59,54 @@ export function deriveOrphanId(repositoryId: string, leaf: string): string {
   );
 }
 
+interface DirtyProbe {
+  readonly worktreeDirty: boolean;
+  readonly managedAccessProven: boolean;
+}
+
 // A live dirty probe through a worktree-bound adapter. Only meaningful when the worktree exists and is
-// contained; an inconclusive probe (broken pointer, unreadable tree) reports not-dirty — the structural
-// classification already surfaces a broken/missing worktree, and containment + ownership remain the
-// authoritative cleanup guards.
+// contained. Ordinary git-status failure reports not-dirty because the structural classification
+// already surfaces a broken/missing worktree. Failure to re-prove a registered managed root is
+// different: it is returned explicitly so the caller cannot classify that workspace as healthy.
 async function probeDirty(
   deps: WorkspaceHealthServiceDeps,
   worktreePath: string,
   probeable: boolean,
+  registered: boolean,
   correlationId: string,
-): Promise<boolean> {
-  if (!probeable) return false;
-  const adapter = deps.createAdapter(detectWorkspaceAt(worktreePath), correlationId);
-  const status = await adapter.worktreeStatus();
-  return status.ok && status.dirty;
+): Promise<DirtyProbe> {
+  if (!probeable) return { worktreeDirty: false, managedAccessProven: true };
+  const access = registered
+    ? resolveLifecycleManagedWorkspaceRootAccess(deps, worktreePath)
+    : undefined;
+  if (registered && access === undefined) {
+    return { worktreeDirty: false, managedAccessProven: false };
+  }
+  const workspace =
+    access === undefined
+      ? workspaceInfo(worktreePath)
+      : detectWorkspaceAt(access.canonicalRoot, access.fs);
+  try {
+    const adapter = deps.createAdapter(workspace, correlationId, access?.fs);
+    const status = await adapter.worktreeStatus();
+    return { worktreeDirty: status.ok && status.dirty, managedAccessProven: true };
+  } catch {
+    return { worktreeDirty: false, managedAccessProven: false };
+  }
+}
+
+function workspaceInfo(root: string): WorkspaceInfo {
+  return {
+    root,
+    selectedRoot: root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
 }
 
 // Classifies ONE persisted instance against pre-fetched repository worktree state, layering the live
@@ -94,15 +130,16 @@ async function evaluateInstance(
     undefined,
     correlationId,
   );
-  const worktreeDirty = await probeDirty(
+  const dirtyProbe = await probeDirty(
     deps,
     instance.managedWorktreePath,
     facts.worktreeDirExists && facts.pathContained,
+    true,
     correlationId,
   );
   const evaluation = classifyWorkspaceHealth({
-    reconciliation: facts,
-    worktreeDirty,
+    reconciliation: dirtyProbe.managedAccessProven ? facts : { ...facts, pathContained: false },
+    worktreeDirty: dirtyProbe.worktreeDirty,
     ownershipProven,
   });
   return deriveWorkspaceHealthEntry({
@@ -151,13 +188,13 @@ async function detectOrphans(
       );
       continue;
     }
-    const worktreeDirty = await probeDirty(deps, candidate, true, correlationId);
+    const dirtyProbe = await probeDirty(deps, candidate, ownershipProven, false, correlationId);
     const decision = evaluateWorkspaceCleanupSafety({
       lifecycleState: "abandoned",
       hasRecord: false,
       pathContained: true,
-      ownershipProven,
-      worktreeDirty,
+      ownershipProven: ownershipProven && dirtyProbe.managedAccessProven,
+      worktreeDirty: dirtyProbe.worktreeDirty,
       lockLive: false,
     });
     entries.push(

@@ -432,12 +432,39 @@ describe("idempotent safe retry (AC3)", () => {
     expect(store.listByRepository(first.instance.repositoryId)).toHaveLength(1);
   });
 
-  // Regression for S8786: gitdirIdentity's `.git` pointer parse used to be
+  it("fails closed instead of refreshing a mismatched persisted Git identity", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-identity-drift",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({ ...first.instance, gitdirIdentity: "mismatched-gitdir-identity" });
+
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "t-identity-drift",
+          baseBranch: "main",
+          requestedBy: "u",
+        }),
+      "POINTER_DRIFT",
+    );
+
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("recovery-required");
+    expect(persisted?.health).toBe("drifted");
+    expect(persisted?.gitdirIdentity).toBe("mismatched-gitdir-identity");
+    expect(persisted?.driftMarkers).toContain("pointer-stale");
+  });
+
+  // Regression for S8786: the formerly duplicated `.git` pointer parse used to be
   // `/^gitdir:\s*(.+)\s*$/mu`, whose leading/trailing `\s*` overlapped with `(.+)` and, under the
-  // multiline flag, made the parse quadratic on adversarial pointer content. It is now
-  // `/^gitdir:(.+)$/mu`, relying on the pre-existing `.trim()` to strip the same whitespace. This
-  // pads the real `.git` pointer with a huge, otherwise-meaningless whitespace run around the
-  // actual target and asserts the idempotent retry still resumes quickly with the SAME identity.
+  // multiline flag, made the parse quadratic on adversarial pointer content. The shared production
+  // parser now uses a literal prefix plus a bounded complete descriptor read. This pads the real
+  // pointer and asserts the idempotent retry still resumes with the SAME identity.
   it("resumes with an unchanged identity when the .git pointer is padded with adversarial whitespace", async () => {
     const service = makeService();
     const first = await service.provision({

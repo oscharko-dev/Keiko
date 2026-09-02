@@ -1,12 +1,13 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
-import { PathEscapeError } from "@oscharko-dev/keiko-security/errors/workspace";
+import { PathDeniedError, PathEscapeError } from "@oscharko-dev/keiko-security/errors/workspace";
 import { memFs } from "./_memfs.js";
-import { nodeWorkspaceFs } from "./fs.js";
+import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
 import { DEFAULT_SEARCH_LIMITS, type SearchLimits, type SearchScope } from "./repoSearch.js";
+import { createStructuralAdapterRequestContext } from "./structuralAdapterRequestContext.js";
 import { testSourcePairingAdapter } from "./testSourcePairing.js";
 import type { WorkspaceInfo } from "./types.js";
 
@@ -19,6 +20,7 @@ function makeScope(files: Readonly<Record<string, string>>): {
 } {
   const workspace: WorkspaceInfo = {
     root: MEM_ROOT,
+    selectedRoot: MEM_ROOT,
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",
@@ -376,6 +378,48 @@ describe("testSourcePairingAdapter", () => {
     expect(atoms).toEqual([]);
   });
 
+  it("reports incomplete coverage when the pairing inventory reaches its file ceiling", async () => {
+    const { scope, fs } = makeScope({
+      "src/a.ts": "export const a = 1;",
+      "tests/a.test.ts": 'import { a } from "../src/a";',
+    });
+    const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+
+    const coverage = await testSourcePairingAdapter.coverage?.(scope, limits, fs, {
+      nowMs: FIXED_NOW,
+    });
+
+    expect(coverage).toMatchObject({
+      name: "test-source-pairing",
+      candidateLimitReached: true,
+    });
+  });
+
+  it("rejects a hard-linked convention pair and reports the skipped file", async () => {
+    const { scope, fs: base } = makeScope({
+      "src/a.ts": "export const a = 1;",
+      "tests/a.test.ts": 'import { a } from "../src/a";',
+    });
+    const fs: WorkspaceFs = {
+      ...base,
+      stat: (absolutePath): ReturnType<WorkspaceFs["stat"]> => {
+        const stat = base.stat(absolutePath);
+        return absolutePath.endsWith("/tests/a.test.ts") ? { ...stat, hardLinkCount: 2 } : stat;
+      },
+    };
+
+    await expect(
+      testSourcePairingAdapter.lookup(scope, nlq("src/a.ts"), DEFAULT_SEARCH_LIMITS, fs, {
+        nowMs: FIXED_NOW,
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      testSourcePairingAdapter.coverage?.(scope, DEFAULT_SEARCH_LIMITS, fs, {
+        nowMs: FIXED_NOW,
+      }),
+    ).resolves.toMatchObject({ filesSkipped: 1 });
+  });
+
   it("produces deterministic stable IDs across two runs with the same input", async () => {
     const { scope, fs } = makeScope({
       "src/foo.ts": "x",
@@ -422,6 +466,7 @@ describe("testSourcePairingAdapter", () => {
     // lives outside the restricted scope. Only files discovered within src/ feed pathsForSymbol.
     const workspace: WorkspaceInfo = {
       root: MEM_ROOT,
+      selectedRoot: MEM_ROOT,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",
@@ -431,6 +476,7 @@ describe("testSourcePairingAdapter", () => {
       ignoreLines: [],
     };
     const fs = memFs(MEM_ROOT, {
+      "src/unrelated.ts": "x",
       // "only-in-tests" exists only in tests/ — outside the restricted scope.
       "tests/only-in-tests.ts": "x",
       // Its pair would be src/only-in-tests.ts — but since pathsForSymbol is scoped to src/
@@ -510,6 +556,7 @@ describe("testSourcePairingAdapter (real fs symlink containment)", () => {
   it("rejects escapes via a symlinked candidate directory", async () => {
     const workspace: WorkspaceInfo = {
       root,
+      selectedRoot: root,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",
@@ -530,5 +577,83 @@ describe("testSourcePairingAdapter (real fs symlink containment)", () => {
       ),
     ).rejects.toBeInstanceOf(PathEscapeError);
     void file;
+  });
+
+  it("rejects a candidate retargeted to a denied in-workspace symlink after discovery", async () => {
+    rmSync(join(root, "tests"));
+    mkdirSync(join(root, "tests"), { recursive: true });
+    writeFileSync(join(root, "tests", "foo.test.ts"), "test('foo', () => {});", "utf8");
+    mkdirSync(join(root, ".git"), { recursive: true });
+    const deniedTarget = join(root, ".git", "config");
+    writeFileSync(deniedTarget, "[credential]", "utf8");
+    const workspace: WorkspaceInfo = {
+      root,
+      selectedRoot: root,
+      name: "demo",
+      version: "1.0.0",
+      testFramework: "vitest",
+      sourceDirs: ["src"],
+      testDirs: ["tests"],
+      languages: ["typescript"],
+      ignoreLines: [],
+    };
+    const scope: SearchScope = { workspace, scopeId: "real-retarget", relativePaths: [] };
+    let deniedStatCalls = 0;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      stat: (absolutePath) => {
+        if (absolutePath === deniedTarget) deniedStatCalls += 1;
+        return nodeWorkspaceFs.stat(absolutePath);
+      },
+    };
+    const requestContext = createStructuralAdapterRequestContext(scope, DEFAULT_SEARCH_LIMITS, fs);
+    expect(requestContext.candidatePaths()).toContain("tests/foo.test.ts");
+    const candidate = join(root, "tests", "foo.test.ts");
+    unlinkSync(candidate);
+    symlinkSync(deniedTarget, candidate);
+
+    await expect(
+      testSourcePairingAdapter.lookup(scope, nlq("src/foo.ts"), DEFAULT_SEARCH_LIMITS, fs, {
+        nowMs: FIXED_NOW,
+        requestContext,
+      }),
+    ).rejects.toBeInstanceOf(PathDeniedError);
+    expect(deniedStatCalls).toBe(0);
+  });
+
+  it("treats a request-inventory candidate deleted before lookup as absent", async () => {
+    rmSync(join(root, "tests"));
+    mkdirSync(join(root, "tests"), { recursive: true });
+    const candidate = join(root, "tests", "foo.test.ts");
+    writeFileSync(candidate, "test('foo', () => {});", "utf8");
+    const workspace: WorkspaceInfo = {
+      root,
+      selectedRoot: root,
+      name: "demo",
+      version: "1.0.0",
+      testFramework: "vitest",
+      sourceDirs: ["src"],
+      testDirs: ["tests"],
+      languages: ["typescript"],
+      ignoreLines: [],
+    };
+    const scope: SearchScope = { workspace, scopeId: "real-deletion", relativePaths: [] };
+    const requestContext = createStructuralAdapterRequestContext(
+      scope,
+      DEFAULT_SEARCH_LIMITS,
+      nodeWorkspaceFs,
+    );
+    expect(requestContext.candidatePaths()).toContain("tests/foo.test.ts");
+    unlinkSync(candidate);
+
+    await expect(
+      testSourcePairingAdapter.lookup(
+        scope,
+        nlq("src/foo.ts"),
+        DEFAULT_SEARCH_LIMITS,
+        nodeWorkspaceFs,
+        { nowMs: FIXED_NOW, requestContext },
+      ),
+    ).resolves.toEqual([]);
   });
 });

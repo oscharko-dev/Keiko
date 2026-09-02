@@ -18,6 +18,7 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge";
 import { containedRealPathInfo, isDenied } from "@oscharko-dev/keiko-workspace";
 import {
+  isWorkspacePathSnapshotCurrent,
   nodeWorkspaceFs,
   type WorkspaceFileReader,
 } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -58,6 +59,10 @@ export interface PdfCitationPreviewSource {
   readonly mtimeMs?: number | undefined;
   readonly sourceId: string;
   readonly sourceRoot?: string | undefined;
+  // Descriptor-safety snapshot from the fresh stat already taken to resolve this filesystem
+  // source (session open, and every per-request re-resolve). Reused to open the reusable file
+  // reader so streaming never re-hashes the file it already verified (#3347).
+  readonly statSnapshot?: ReturnType<typeof nodeWorkspaceFs.stat> | undefined;
   readonly storageKind?: "plaintext" | "sealed" | undefined;
 }
 
@@ -209,26 +214,35 @@ async function withPreviewVerifySlot<T>(work: () => Promise<T>): Promise<T | und
 }
 
 type Sha256SourceResult =
-  | { readonly kind: "ok"; readonly hash: string }
+  | {
+      readonly kind: "ok";
+      readonly hash: string;
+      readonly snapshot: ReturnType<typeof nodeWorkspaceFs.stat>;
+    }
   | { readonly kind: "dehydrated" }
   | { readonly kind: "unreadable" };
 
 async function sha256Source(absolutePath: string, byteLength: number): Promise<Sha256SourceResult> {
   const readRange = nodeWorkspaceFs.readFileRange;
   if (readRange === undefined) return { kind: "unreadable" };
+  const expected = statSafeSource(absolutePath);
+  if (expected?.size !== byteLength) return { kind: "unreadable" };
   const hash = createHash("sha256");
   for (let offset = 0; offset < byteLength; offset += PDF_PREVIEW_HASH_CHUNK_BYTES) {
     const length = Math.min(PDF_PREVIEW_HASH_CHUNK_BYTES, byteLength - offset);
     let bytes: Uint8Array;
     try {
-      bytes = await readRange(absolutePath, offset, length);
+      bytes = await readRange(absolutePath, offset, length, "allow", expected);
     } catch {
       return { kind: "unreadable" };
     }
     if (bytes.byteLength !== length) return { kind: "dehydrated" };
     hash.update(bytes);
   }
-  return { kind: "ok", hash: hash.digest("hex") };
+  if (!isWorkspacePathSnapshotCurrent(nodeWorkspaceFs, absolutePath, absolutePath, expected)) {
+    return { kind: "unreadable" };
+  }
+  return { kind: "ok", hash: hash.digest("hex"), snapshot: expected };
 }
 
 function loadCurrentDocument(
@@ -364,6 +378,7 @@ function resolveFilesystemSource(
       ...(stat.mtimeMs === undefined ? {} : { mtimeMs: stat.mtimeMs }),
       sourceId: String(authority.citation.lineage.sourceId),
       sourceRoot: sourceRoot(source.scope),
+      statSnapshot: stat,
     },
   };
 }
@@ -379,21 +394,38 @@ function resolveCurrentSource(
   return resolveFilesystemSource(authority, document, sources);
 }
 
+async function readFilesystemSourceBytes(
+  source: PdfCitationPreviewSource,
+): Promise<Uint8Array | undefined> {
+  if (source.absolutePath === undefined) return undefined;
+  if (source.byteLength > MAX_PDF_DOCUMENT_BLOB_BYTES) return undefined;
+  const readFileBytes = nodeWorkspaceFs.readFileBytes;
+  if (readFileBytes === undefined) return undefined;
+  const expected = statSafeSource(source.absolutePath);
+  if (expected?.size !== source.byteLength) return undefined;
+  try {
+    const bytes = await readFileBytes(source.absolutePath, source.byteLength, "allow", expected);
+    if (bytes.byteLength !== source.byteLength) return undefined;
+    return isWorkspacePathSnapshotCurrent(
+      nodeWorkspaceFs,
+      source.absolutePath,
+      source.absolutePath,
+      expected,
+    )
+      ? bytes
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function captureFilesystemSourceBlob(
   store: KnowledgeStore,
   source: PdfCitationPreviewSource,
 ): Promise<PdfCitationPreviewSource | undefined> {
-  if (source.kind !== "filesystem" || source.absolutePath === undefined) return undefined;
-  if (source.byteLength > MAX_PDF_DOCUMENT_BLOB_BYTES) return undefined;
-  const readFileBytes = nodeWorkspaceFs.readFileBytes;
-  if (readFileBytes === undefined) return undefined;
-  let bytes: Uint8Array;
-  try {
-    bytes = await readFileBytes(source.absolutePath, source.byteLength);
-  } catch {
-    return undefined;
-  }
-  if (bytes.byteLength !== source.byteLength) return undefined;
+  if (source.kind !== "filesystem") return undefined;
+  const bytes = await readFilesystemSourceBytes(source);
+  if (bytes === undefined) return undefined;
   try {
     const stored = writePdfDocumentBlob(store, {
       byteLength: source.byteLength,
@@ -612,8 +644,16 @@ export async function openPdfPreviewSourceReader(
   if (source.absolutePath === undefined) return undefined;
   const openFileReader = nodeWorkspaceFs.openFileReader;
   if (openFileReader === undefined) return undefined;
+  // The content hash was already verified once for this source (session open, in
+  // loadVerifiedSource), and every subsequent request re-resolves and re-stats the source
+  // before reaching here (loadPdfPreviewSourceForSession -> resolveFilesystemSource). Reuse
+  // that already-current stat as the descriptor-safety snapshot instead of re-reading and
+  // re-hashing the whole file: openFileReader's own descriptor open re-validates it against
+  // the live file, so a genuine change since that stat still fails closed (#3347).
+  const snapshot = source.statSnapshot ?? statSafeSource(source.absolutePath);
+  if (snapshot?.size !== source.byteLength) return undefined;
   try {
-    return await openFileReader(source.absolutePath);
+    return await openFileReader(source.absolutePath, "allow", snapshot);
   } catch {
     return undefined;
   }

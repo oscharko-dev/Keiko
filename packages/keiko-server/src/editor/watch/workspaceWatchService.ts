@@ -13,8 +13,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_M7_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import { containsPath } from "@oscharko-dev/keiko-git";
+import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 
 import { pathIsDenied } from "../../files-deny.js";
+import type { WorkspaceRootAccess } from "../../task-workspace/workspace-root-access.js";
 
 export interface WorkspaceWatchRawEvent {
   readonly eventType: "rename" | "change" | "overflow";
@@ -46,10 +48,24 @@ export interface WorkspaceWatchService {
   readonly disposeAll: () => void;
 }
 
+/**
+ * Re-proves the caller's authority over the watched root and returns the FRESH capability that
+ * authorizes it; `undefined` denies (#3347 review, owner P1).
+ *
+ * A boolean re-proof was not enough for this long-lived effect: admission handed the watch session
+ * an unforgeable `WorkspaceRootAccess` and the session then performed every stat/readDir through its
+ * own configured filesystem, which in production defaults to the module-level Node filesystem. The
+ * capability was therefore discarded the moment admission succeeded. Returning the access itself
+ * lets each effect boundary run on the filesystem the re-proof just minted.
+ */
+type WorkspaceWatchRootReprover = () => WorkspaceRootAccess | undefined;
+
 interface WorkspaceWatchSubscribeArgs {
   readonly root: string;
   readonly lastSequence?: number | undefined;
   readonly onEvent: (event: EditorM7WatchEvent) => void;
+  readonly reproveRoot?: WorkspaceWatchRootReprover | undefined;
+  readonly onAuthorityRevoked?: (() => void) | undefined;
   readonly additionalExclusions?: readonly string[] | undefined;
 }
 
@@ -61,7 +77,8 @@ export type WorkspaceWatchSubscribeResult =
       readonly snapshotRequired: boolean;
       readonly unsubscribe: () => void;
     }
-  | { readonly kind: "subscriberLimit"; readonly snapshot: EditorM7WatchSnapshot };
+  | { readonly kind: "subscriberLimit"; readonly snapshot: EditorM7WatchSnapshot }
+  | { readonly kind: "rootUnavailable"; readonly snapshot: EditorM7WatchSnapshot };
 
 export interface WorkspaceWatchServiceOptions {
   readonly adapter?: WorkspaceWatchAdapter | undefined;
@@ -83,9 +100,44 @@ export interface WorkspaceWatchFileSystem {
   readonly readdir: (path: string) => Promise<readonly Dirent[]>;
 }
 
+/** The metadata this service reads, in the one shape both filesystem sources normalize to. */
+interface WatchEntryStat {
+  readonly isSymbolicLink: boolean;
+  readonly isDirectory: boolean;
+  readonly isFile: boolean;
+  readonly sizeBytes: number;
+  readonly modifiedAtMs: number;
+  readonly identity: string;
+}
+
+/**
+ * The narrow effect surface a watch session actually needs. Both the injectable
+ * `WorkspaceWatchFileSystem` seam and a re-proved `WorkspaceRootAccess.fs` capability normalize to
+ * it, so there is exactly ONE reconciliation code path and neither source can silently reach around
+ * the other.
+ */
+interface WatchEffectFileSystem {
+  readonly lstat: (path: string) => Promise<WatchEntryStat>;
+  readonly realpath: (path: string) => Promise<string>;
+  readonly stat: (path: string) => Promise<WatchEntryStat>;
+  readonly readdirNames: (path: string) => Promise<readonly string[]>;
+}
+
 interface WatchSubscriber {
   readonly id: number;
   readonly onEvent: (event: EditorM7WatchEvent) => void;
+  readonly reproveRoot: WorkspaceWatchRootReprover | undefined;
+  readonly onAuthorityRevoked: (() => void) | undefined;
+}
+
+/**
+ * One re-proof result. `granted` without an `access` means the caller supplied no reprover at all
+ * (in-process composition and tests) — the session then falls back to its configured seam; `granted`
+ * WITH an access means every effect must run on that capability's filesystem.
+ */
+interface RootAuthorityProof {
+  readonly granted: boolean;
+  readonly access: WorkspaceRootAccess | undefined;
 }
 
 interface PendingChange {
@@ -117,7 +169,7 @@ type ScanDirectoryResult = "complete" | "overflow" | "unavailable";
 
 interface WatchConfig {
   readonly adapter: WorkspaceWatchAdapter;
-  readonly fileSystem: WorkspaceWatchFileSystem;
+  readonly fileSystem: WatchEffectFileSystem;
   readonly coalesceMs: number;
   readonly idleTearDownMs: number;
   readonly fallbackPollMs: number;
@@ -135,10 +187,92 @@ const NODE_FILE_SYSTEM: WorkspaceWatchFileSystem = {
   readdir: async (path): Promise<readonly Dirent[]> => readdir(path, { withFileTypes: true }),
 };
 
+// Keeps a synchronous throw from a capability filesystem on the promise path, so every call site
+// observes one failure mode instead of two.
+function deferred<T>(read: () => T): Promise<T> {
+  try {
+    return Promise.resolve(read());
+  } catch (error) {
+    return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+  }
+}
+
+function entryStatFromNode(stats: Stats): WatchEntryStat {
+  return {
+    isSymbolicLink: stats.isSymbolicLink(),
+    isDirectory: stats.isDirectory(),
+    isFile: stats.isFile(),
+    sizeBytes: stats.size,
+    modifiedAtMs: stats.mtimeMs,
+    identity: `${String(stats.dev)}:${String(stats.ino)}`,
+  };
+}
+
+function entryStatFromWorkspace(stat: WorkspaceStat): WatchEntryStat {
+  return {
+    isSymbolicLink: stat.isSymbolicLink,
+    isDirectory: stat.isDirectory,
+    isFile: stat.isFile,
+    sizeBytes: stat.size,
+    modifiedAtMs: stat.mtimeMs ?? 0,
+    identity: stat.fileIdentity ?? "",
+  };
+}
+
+function watchEffectsFromSeam(fileSystem: WorkspaceWatchFileSystem): WatchEffectFileSystem {
+  return {
+    lstat: async (path): Promise<WatchEntryStat> => entryStatFromNode(await fileSystem.lstat(path)),
+    realpath: (path): Promise<string> => fileSystem.realpath(path),
+    stat: async (path): Promise<WatchEntryStat> => entryStatFromNode(await fileSystem.stat(path)),
+    readdirNames: async (path): Promise<readonly string[]> =>
+      (await fileSystem.readdir(path)).map((entry) => entry.name),
+  };
+}
+
+/**
+ * Runs this session's reads on the capability the re-proof minted. `WorkspaceFs.stat` is a
+ * no-follow lstat, which is exactly what `metadataFor` needs on both of its steps: link metadata
+ * from the requested pathname, target metadata from the already-canonicalised path.
+ */
+function watchEffectsFromCapability(fs: WorkspaceFs): WatchEffectFileSystem {
+  return {
+    lstat: (path): Promise<WatchEntryStat> => deferred(() => entryStatFromWorkspace(fs.stat(path))),
+    realpath: (path): Promise<string> => deferred(() => fs.realPath(path)),
+    stat: (path): Promise<WatchEntryStat> => deferred(() => entryStatFromWorkspace(fs.stat(path))),
+    readdirNames: (path): Promise<readonly string[]> =>
+      deferred(() => fs.readDir(path).map((entry) => entry.name)),
+  };
+}
+
 function configuredFileSystem(
   fileSystem: WorkspaceWatchFileSystem | undefined,
-): WorkspaceWatchFileSystem {
-  return fileSystem ?? NODE_FILE_SYSTEM;
+): WatchEffectFileSystem {
+  return watchEffectsFromSeam(fileSystem ?? NODE_FILE_SYSTEM);
+}
+
+const UNPROVED_ROOT_AUTHORITY: RootAuthorityProof = Object.freeze({
+  granted: true,
+  access: undefined,
+});
+const DENIED_ROOT_AUTHORITY: RootAuthorityProof = Object.freeze({
+  granted: false,
+  access: undefined,
+});
+
+// A capability minted for a different canonical root can never authorize THIS session: the session
+// key, the native watch target and the containment base are all `root`.
+function proveRoot(
+  reprove: WorkspaceWatchRootReprover | undefined,
+  root: string,
+): RootAuthorityProof {
+  if (reprove === undefined) return UNPROVED_ROOT_AUTHORITY;
+  try {
+    const access = reprove();
+    if (access?.canonicalRoot !== root) return DENIED_ROOT_AUTHORITY;
+    return { granted: true, access };
+  } catch {
+    return DENIED_ROOT_AUTHORITY;
+  }
 }
 
 const DEFAULT_CONFIG: Omit<WatchConfig, "adapter" | "fileSystem"> = {
@@ -221,19 +355,17 @@ function relativePathFromNative(root: string, target: string): string {
   return relative(root, target).replaceAll("\\", "/");
 }
 
-function metadataHash(kind: EditorM7WatchEntryKind, stats: Stats): string {
+function metadataHash(kind: EditorM7WatchEntryKind, stats: WatchEntryStat): string {
   return createHash("sha256")
-    .update(
-      `${kind}:${String(stats.dev)}:${String(stats.ino)}:${String(stats.size)}:${String(stats.mtimeMs)}`,
-    )
+    .update(`${kind}:${stats.identity}:${String(stats.sizeBytes)}:${String(stats.modifiedAtMs)}`)
     .digest("hex")
     .slice(0, 24);
 }
 
-function entryKind(linkStats: Stats, targetStats: Stats): EditorM7WatchEntryKind {
-  if (linkStats.isSymbolicLink()) return "symlink";
-  if (targetStats.isDirectory()) return "directory";
-  if (targetStats.isFile()) return "file";
+function entryKind(linkStats: WatchEntryStat, targetStats: WatchEntryStat): EditorM7WatchEntryKind {
+  if (linkStats.isSymbolicLink) return "symlink";
+  if (targetStats.isDirectory) return "directory";
+  if (targetStats.isFile) return "file";
   return "unknown";
 }
 
@@ -251,7 +383,7 @@ async function metadataFor(
   root: string,
   relativePath: string,
   additional: WatchExclusions,
-  fileSystem: WorkspaceWatchFileSystem,
+  fileSystem: WatchEffectFileSystem,
 ): Promise<MetadataResult> {
   if (!eventPathAllowed(relativePath, additional)) return { kind: "unsafe" };
   const candidate = relativePath.length === 0 ? root : resolve(root, ...relativePath.split("/"));
@@ -268,8 +400,8 @@ async function metadataFor(
       metadata: {
         relativePath,
         entryKind: kind,
-        sizeBytes: targetStats.size,
-        modifiedAt: targetStats.mtimeMs,
+        sizeBytes: targetStats.sizeBytes,
+        modifiedAt: targetStats.modifiedAtMs,
         metadataHash: metadataHash(kind, targetStats),
       },
     };
@@ -368,24 +500,25 @@ class WorkspaceWatchSession {
     private readonly root: string,
     private readonly config: WatchConfig,
     private readonly onIdleDispose: (root: string) => void,
+    private readonly onRevoked: (root: string) => void,
   ) {}
 
   public subscribe(args: WorkspaceWatchSubscribeArgs): WorkspaceWatchSubscribeResult {
     this.cancelIdleTimer();
-    // Exclusions are fixed at first-subscribe for the life of the session: the initial baseline
-    // scan (seedBaseline, triggered by ensureStarted below) is filtered by whatever is set here,
-    // so accepting a different value from a later subscriber would leave the seeded `known` map
-    // inconsistent with the exclusions applied to subsequent scans. All subscribers for a root
-    // resolve the same watcherExclusions setting in practice, so this only matters for the first.
-    if (!this.exclusionsInitialized) {
-      this.additionalExclusions = exclusionsFromPatterns(args.additionalExclusions ?? []);
-      this.exclusionsInitialized = true;
+    if (!proveRoot(args.reproveRoot, this.root).granted) {
+      this.revokeRoot();
+      return { kind: "rootUnavailable", snapshot: this.snapshot(true) };
     }
-    this.ensureStarted();
     if (this.subscribers.size >= this.config.maxSubscribersPerRoot) {
       return { kind: "subscriberLimit", snapshot: this.snapshot(true) };
     }
-    const subscriber = this.addSubscriber(args.onEvent);
+    this.initializeExclusions(args.additionalExclusions);
+    // The subscriber is registered BEFORE the watcher starts so that ensureStarted()'s re-proof —
+    // and every effect boundary after it — resolves authority from a subscriber set that already
+    // contains this caller, instead of from whoever happened to subscribe first (#3347 owner P2).
+    const subscriber = this.addSubscriber(args);
+    this.ensureStarted();
+    if (this.pending.size > 0) this.scheduleFlush();
     const replay = this.replayAfter(args.lastSequence);
     const snapshotRequired = this.snapshotRequired(args.lastSequence);
     return {
@@ -416,8 +549,15 @@ class WorkspaceWatchSession {
     };
   }
 
+  public isDisposed(): boolean {
+    return this.disposed;
+  }
+
   public dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      this.clearTimers();
+      return;
+    }
     this.disposed = true;
     this.clearTimers();
     this.handle?.close();
@@ -428,9 +568,25 @@ class WorkspaceWatchSession {
     this.degradedReasons.add("shutdown");
   }
 
-  private addSubscriber(onEvent: (event: EditorM7WatchEvent) => void): WatchSubscriber {
+  // Exclusions are fixed at first-subscribe for the life of the session: the initial baseline scan
+  // (seedBaseline, triggered by ensureStarted) is filtered by whatever is set here, so accepting a
+  // different value from a later subscriber would leave the seeded `known` map inconsistent with
+  // the exclusions applied to subsequent scans. All subscribers for a root resolve the same
+  // watcherExclusions setting in practice, so this only matters for the first.
+  private initializeExclusions(patterns: readonly string[] | undefined): void {
+    if (this.exclusionsInitialized) return;
+    this.additionalExclusions = exclusionsFromPatterns(patterns ?? []);
+    this.exclusionsInitialized = true;
+  }
+
+  private addSubscriber(args: WorkspaceWatchSubscribeArgs): WatchSubscriber {
     this.nextSubscriberId += 1;
-    const subscriber = { id: this.nextSubscriberId, onEvent };
+    const subscriber = {
+      id: this.nextSubscriberId,
+      onEvent: args.onEvent,
+      reproveRoot: args.reproveRoot,
+      onAuthorityRevoked: args.onAuthorityRevoked,
+    };
     this.subscribers.set(subscriber.id, subscriber);
     return subscriber;
   }
@@ -442,6 +598,10 @@ class WorkspaceWatchSession {
 
   private ensureStarted(): void {
     if (this.disposed || this.handle !== null || this.pollTimer !== null) return;
+    // The native watcher has no WorkspaceFs equivalent, so it is gated by the same fresh re-proof
+    // and bound to `this.root` — which proveRoot() has just confirmed is the capability's own
+    // canonicalRoot, so the watch cannot be started on a root nobody proved.
+    if (!this.ensureLiveRootAuthority()) return;
     try {
       this.handle = this.config.adapter.watch({
         root: this.root,
@@ -473,6 +633,15 @@ class WorkspaceWatchSession {
 
   private handleRawEvent(event: WorkspaceWatchRawEvent): void {
     if (this.disposed) return;
+    const proof = this.currentAuthority();
+    if (proof === null) {
+      this.markUnattendedChange();
+      return;
+    }
+    if (!proof.granted) {
+      this.revokeRoot();
+      return;
+    }
     if (event.eventType === "overflow") {
       this.emitRescan("event-overflow", "overflow");
       return;
@@ -514,11 +683,12 @@ class WorkspaceWatchSession {
   }
 
   private async flushPending(): Promise<void> {
-    if (this.flushing) return;
+    if (this.flushing || !this.ensureLiveRootAuthority()) return;
     this.flushing = true;
     try {
       await this.awaitBaseline();
       while (this.pending.size > 0 && !this.disposed) {
+        if (!this.ensureLiveRootAuthority()) return;
         const batch = [...this.pending.values()].slice(0, this.config.maxBatchSize);
         for (const change of batch) this.pending.delete(change.relativePath);
         for (const change of batch) await this.reconcileChange(change);
@@ -535,22 +705,28 @@ class WorkspaceWatchSession {
       await this.reconcileRename(change.oldRelativePath, change.relativePath);
       return;
     }
+    const fileSystem = this.effectFileSystem();
+    if (fileSystem === null) return;
     const current = await metadataFor(
       this.root,
       change.relativePath,
       this.additionalExclusions,
-      this.config.fileSystem,
+      fileSystem,
     );
+    if (!this.ensureLiveRootAuthority()) return;
     this.applyMetadataResult(change.relativePath, current);
   }
 
   private async reconcileRename(oldRelativePath: string, relativePath: string): Promise<void> {
+    const fileSystem = this.effectFileSystem();
+    if (fileSystem === null) return;
     const current = await metadataFor(
       this.root,
       relativePath,
       this.additionalExclusions,
-      this.config.fileSystem,
+      fileSystem,
     );
+    if (!this.ensureLiveRootAuthority()) return;
     if (current.kind !== "present") {
       const reason = current.kind === "unsafe" ? "unsafe-path" : "ambiguous-event";
       this.emitRescan(reason, "rescan");
@@ -605,17 +781,21 @@ class WorkspaceWatchSession {
 
   private async seedBaseline(): Promise<void> {
     const next = await this.scanTree();
-    if (next === null || !next.complete || this.disposed) return;
+    if (next === null || !next.complete || this.disposed || !this.ensureLiveRootAuthority()) {
+      return;
+    }
     this.known.clear();
     for (const metadata of next.entries.values()) this.known.set(metadata.relativePath, metadata);
   }
 
   private async scanAndEmitDiff(): Promise<void> {
-    if (this.scanning) return;
+    if (this.scanning || !this.ensureLiveRootAuthority()) return;
     this.scanning = true;
     try {
       const next = await this.scanTree();
-      if (next === null || !next.complete || this.disposed) return;
+      if (next === null || !next.complete || this.disposed || !this.ensureLiveRootAuthority()) {
+        return;
+      }
       for (const [path, previous] of this.known)
         if (!next.entries.has(path))
           this.emit(deletedEvent(this.nextSequence(), previous.relativePath));
@@ -627,9 +807,12 @@ class WorkspaceWatchSession {
   }
 
   private async scanTree(): Promise<ScanResult | null> {
+    const fileSystem = this.effectFileSystem();
+    if (fileSystem === null) return null;
     try {
-      const rootStats = await this.config.fileSystem.stat(this.root);
-      if (!rootStats.isDirectory()) return this.rootReplaced();
+      const rootStats = await fileSystem.stat(this.root);
+      if (!this.ensureLiveRootAuthority()) return null;
+      if (!rootStats.isDirectory) return this.rootReplaced();
       return await this.scanDirectory("");
     } catch (error) {
       if (confirmsAbsence(error)) return this.rootReplaced();
@@ -639,6 +822,12 @@ class WorkspaceWatchSession {
     }
   }
 
+  // Disk-level detection (the watched path is gone or is no longer a directory) is a distinct
+  // condition from caller-authority revocation (reproveRoot rejecting the operation-scoped
+  // authority, e.g. a managed workspace being torn down): the former asks the caller to rescan
+  // the still-subscribed session, the latter stops it outright. Routing this through revokeRoot
+  // collapsed the two and made every disk-level root replacement look like a stopped session
+  // (#3347 fallout) — keep this on the pre-existing rescanRequired path instead.
   private rootReplaced(): null {
     this.emitRescan("root-replaced", "rescan");
     return null;
@@ -668,29 +857,45 @@ class WorkspaceWatchSession {
   ): Promise<ScanDirectoryResult> {
     const directory =
       relativeDirectory.length === 0 ? this.root : join(this.root, relativeDirectory);
-    let entries: readonly Dirent[];
+    const fileSystem = this.effectFileSystem();
+    if (fileSystem === null) return "unavailable";
+    let names: readonly string[];
     try {
-      entries = await this.config.fileSystem.readdir(directory);
+      names = await fileSystem.readdirNames(directory);
     } catch {
       return "unavailable";
     }
-    for (const entry of entries) {
-      const relativePath =
-        relativeDirectory.length === 0 ? entry.name : `${relativeDirectory}/${entry.name}`;
-      if (!eventPathAllowed(relativePath, this.additionalExclusions)) continue;
-      if (found.size >= this.config.maxScanEntries) return "overflow";
-      const result = await metadataFor(
-        this.root,
-        relativePath,
-        this.additionalExclusions,
-        this.config.fileSystem,
-      );
-      if (result.kind === "unavailable") return "unavailable";
-      if (result.kind !== "present") continue;
-      found.set(relativePath, result.metadata);
-      if (result.metadata.entryKind === "directory") queue.push(relativePath);
+    if (!this.ensureLiveRootAuthority()) return "unavailable";
+    for (const name of names) {
+      const outcome = await this.scanDirectoryEntry(relativeDirectory, name, found, queue);
+      if (outcome !== "continue") return outcome;
     }
     return "complete";
+  }
+
+  private async scanDirectoryEntry(
+    relativeDirectory: string,
+    name: string,
+    found: Map<string, FileMetadata>,
+    queue: string[],
+  ): Promise<ScanDirectoryResult | "continue"> {
+    const relativePath = relativeDirectory.length === 0 ? name : `${relativeDirectory}/${name}`;
+    if (!eventPathAllowed(relativePath, this.additionalExclusions)) return "continue";
+    if (found.size >= this.config.maxScanEntries) return "overflow";
+    const fileSystem = this.effectFileSystem();
+    if (fileSystem === null) return "unavailable";
+    const result = await metadataFor(
+      this.root,
+      relativePath,
+      this.additionalExclusions,
+      fileSystem,
+    );
+    if (!this.ensureLiveRootAuthority()) return "unavailable";
+    if (result.kind === "unavailable") return "unavailable";
+    if (result.kind !== "present") return "continue";
+    found.set(relativePath, result.metadata);
+    if (result.metadata.entryKind === "directory") queue.push(relativePath);
+    return "continue";
   }
 
   private startFallbackPolling(): void {
@@ -737,11 +942,121 @@ class WorkspaceWatchSession {
   }
 
   private emit(event: EditorM7WatchEvent): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.ensureLiveRootAuthority()) return;
     this.eventCount += 1;
     this.replay.push(event);
     while (this.replay.length > this.config.replayCapacity) this.replay.shift();
-    for (const subscriber of this.subscribers.values()) subscriber.onEvent(event);
+    for (const subscriber of this.subscribers.values()) {
+      if (!proveRoot(subscriber.reproveRoot, this.root).granted) {
+        subscriber.onAuthorityRevoked?.();
+        this.subscribers.delete(subscriber.id);
+        continue;
+      }
+      subscriber.onEvent(event);
+    }
+  }
+
+  /**
+   * Resolves session authority from the CURRENT subscriber set on every effect boundary (#3347
+   * review, owner P2). Pinning the first subscriber's resolver for the life of the shared session
+   * let a departed subscriber's stale-VALID answer authorize a later subscriber's scanning, and its
+   * stale-REVOKED answer tear a later subscriber's otherwise valid watch down.
+   *
+   * `null` means no current subscriber can speak for this root at all — the idle-retention window
+   * between the last unsubscribe and idle teardown. That is an absence of a caller, not a
+   * revocation: no effect may run, and the session is left intact for a reconnect.
+   */
+  private currentAuthority(): RootAuthorityProof | null {
+    let denied = false;
+    for (const subscriber of this.subscribers.values()) {
+      const proof = proveRoot(subscriber.reproveRoot, this.root);
+      if (proof.granted) return proof;
+      denied = true;
+    }
+    return denied ? DENIED_ROOT_AUTHORITY : null;
+  }
+
+  /**
+   * The filesystem this boundary's effect must run on: the re-proved capability when the caller
+   * holds one, the injectable seam only when no capability was supplied at all. `null` means "do
+   * not touch the filesystem" — either nobody is here to authorize it, or authority was just
+   * revoked and the session torn down.
+   */
+  private effectFileSystem(): WatchEffectFileSystem | null {
+    if (this.disposed) return null;
+    const proof = this.currentAuthority();
+    if (proof === null) return null;
+    if (!proof.granted) {
+      this.revokeRoot();
+      return null;
+    }
+    return proof.access === undefined
+      ? this.config.fileSystem
+      : watchEffectsFromCapability(proof.access.fs);
+  }
+
+  private ensureLiveRootAuthority(): boolean {
+    return this.effectFileSystem() !== null;
+  }
+
+  // A native change arrived while no subscriber held authority for this root. Reconciling it under
+  // a departed subscriber's grant is exactly the defect currentAuthority() removes, so the change is
+  // not reconciled — but it is not dropped silently either: the session is marked rescanRequired so
+  // the next subscriber's first snapshot tells it to rescan rather than trust a gap it cannot see.
+  private markUnattendedChange(): void {
+    this.degradedReasons.add("ambiguous-event");
+    this.health = "rescanRequired";
+  }
+
+  private revokeRoot(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.clearTimers();
+    this.handle?.close();
+    this.handle = null;
+    this.pending.clear();
+    this.degradedReasons.add("root-replaced");
+    this.health = "rescanRequired";
+    const event: EditorM7WatchEvent = {
+      schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+      sequence: this.nextSequence(),
+      kind: "rescan",
+      relativePath: "",
+      entryKind: "unknown",
+      health: this.health,
+      reason: "root-replaced",
+    };
+    this.eventCount += 1;
+    for (const subscriber of this.subscribers.values()) {
+      subscriber.onEvent(event);
+      subscriber.onAuthorityRevoked?.();
+    }
+    // Authority is revoked and handles are closed above, but the reported health stays a
+    // terminal, tombstoned "rescanRequired" (not "stopped" -- that means deliberate shutdown, see
+    // dispose()) so a later snapshot still explains why the watch ended. Scheduling idle-dispose
+    // here would let onIdleDispose remove this session from the map after idleTearDownMs, and the
+    // next access would then construct a brand-new session defaulting to "healthy", silently
+    // erasing the very reason a client needs to see. This session now stays disposed-but-present
+    // until an explicitly valid re-subscribe (sessionFor(root, true)) replaces it.
+    this.subscribers.clear();
+    this.releaseRetainedState();
+    this.onRevoked(this.root);
+  }
+
+  /**
+   * Keeps the tombstone bounded (#3347 review, owner P2). Retaining a revoked session forever turns
+   * revocation evidence into unbounded retained state: `known` holds up to `maxScanEntries` metadata
+   * records, `replay` a full event ring, and the exclusion sets their resolved patterns. None of it
+   * is reachable once the session is terminal — every effect boundary now fails closed — and none of
+   * it is part of the explanation a client needs, which is the terminal health, the degraded reasons
+   * and the sequence/event counters kept above. So the heavy state is released here rather than held
+   * until a valid re-subscribe happens to replace the session.
+   */
+  private releaseRetainedState(): void {
+    this.known.clear();
+    this.replay.length = 0;
+    this.pending.clear();
+    this.additionalExclusions = NO_EXCLUSIONS;
   }
 
   private replayAfter(lastSequence: number | undefined): readonly EditorM7WatchEvent[] {
@@ -782,31 +1097,82 @@ class WorkspaceWatchSession {
   }
 }
 
+/**
+ * How many revoked roots may keep a tombstone at once (#3347 review, owner P2).
+ *
+ * A revoked session stays in the map so a later snapshot still explains why the watch ended, but a
+ * multi-root workspace would otherwise accumulate one retained session per revoked root forever.
+ * The durable record of every revocation is the `editor.workspace-watch.authority-revoked` activity
+ * log line, not this in-memory cache, so evicting the OLDEST tombstone loses no evidence and grants
+ * no authority: a re-subscribe re-proves the root from scratch either way.
+ */
+export const MAX_RETAINED_REVOKED_WATCH_SESSIONS = 32;
+
+interface WatchSessionRegistry {
+  readonly sessions: Map<string, WorkspaceWatchSession>;
+  readonly revokedRoots: Set<string>;
+}
+
+function forgetWatchSession(registry: WatchSessionRegistry, root: string): void {
+  registry.sessions.delete(root);
+  registry.revokedRoots.delete(root);
+}
+
+function retainRevokedWatchSession(registry: WatchSessionRegistry, root: string): void {
+  // Delete-then-add so a re-revoked root counts as the newest rather than keeping its old position.
+  registry.revokedRoots.delete(root);
+  registry.revokedRoots.add(root);
+  while (registry.revokedRoots.size > MAX_RETAINED_REVOKED_WATCH_SESSIONS) {
+    const oldest = registry.revokedRoots.values().next().value;
+    if (oldest === undefined) return;
+    registry.revokedRoots.delete(oldest);
+    if (registry.sessions.get(oldest)?.isDisposed() === true) registry.sessions.delete(oldest);
+  }
+}
+
+function watchSessionFor(
+  registry: WatchSessionRegistry,
+  config: WatchConfig,
+  root: string,
+  replaceDisposed: boolean,
+): WorkspaceWatchSession {
+  const existing = registry.sessions.get(root);
+  if (existing !== undefined && (!replaceDisposed || !existing.isDisposed())) return existing;
+  existing?.dispose();
+  forgetWatchSession(registry, root);
+  const session = new WorkspaceWatchSession(
+    root,
+    config,
+    (idleRoot) => {
+      registry.sessions.get(idleRoot)?.dispose();
+      forgetWatchSession(registry, idleRoot);
+    },
+    (revokedRoot) => {
+      retainRevokedWatchSession(registry, revokedRoot);
+    },
+  );
+  registry.sessions.set(root, session);
+  return session;
+}
+
 export function createWorkspaceWatchService(
   options: WorkspaceWatchServiceOptions = {},
 ): WorkspaceWatchService {
   const config = configFromOptions(options);
-  const sessions = new Map<string, WorkspaceWatchSession>();
-  const sessionFor = (root: string): WorkspaceWatchSession => {
-    const existing = sessions.get(root);
-    if (existing !== undefined) return existing;
-    const session = new WorkspaceWatchSession(root, config, (idleRoot) => {
-      sessions.get(idleRoot)?.dispose();
-      sessions.delete(idleRoot);
-    });
-    sessions.set(root, session);
-    return session;
-  };
+  const registry: WatchSessionRegistry = { sessions: new Map(), revokedRoots: new Set() };
   return {
-    subscribe: (args): WorkspaceWatchSubscribeResult => sessionFor(args.root).subscribe(args),
-    snapshot: (root): EditorM7WatchSnapshot => sessionFor(root).snapshot(),
+    subscribe: (args): WorkspaceWatchSubscribeResult =>
+      watchSessionFor(registry, config, args.root, true).subscribe(args),
+    snapshot: (root): EditorM7WatchSnapshot =>
+      watchSessionFor(registry, config, root, false).snapshot(),
     disposeRoot: (root): void => {
-      sessions.get(root)?.dispose();
-      sessions.delete(root);
+      registry.sessions.get(root)?.dispose();
+      forgetWatchSession(registry, root);
     },
     disposeAll: (): void => {
-      for (const session of sessions.values()) session.dispose();
-      sessions.clear();
+      for (const session of registry.sessions.values()) session.dispose();
+      registry.sessions.clear();
+      registry.revokedRoots.clear();
     },
   };
 }

@@ -1,5 +1,5 @@
-// Permanent vitest bench for `parseGitdirPointerTarget` — the `.git` linked-worktree pointer parse
-// reconciliation.ts's safeGitdirIdentity uses (mirrors provisioning.ts's gitdirIdentity; S8786).
+// Permanent vitest bench for `parseGitdirPointerTarget` — the single shared `.git` linked-worktree
+// pointer parser used by provisioning, reconciliation, and managed-root access (S8786).
 //
 // A PR #3348 review finding on reconciliation.test.ts:260 caught that this repository's ONLY existing
 // guard for this regression was a wall-clock bound on the WHOLE `reconcile()` call. That pin could never
@@ -8,7 +8,7 @@
 // was actually dominated by two real `git` subprocess spawns via the real worktree adapter, not by the
 // regex. This bench relocates the measurement to the one place a quadratic regression WOULD be visible
 // if it existed here: the parse itself, isolated from file I/O and subprocess cost, imported directly
-// from reconciliation.ts (never a hand-copied regex, so this bench can never silently drift from the
+// from gitdir-identity.ts (never a hand-copied parser, so this bench cannot silently drift from the
 // parse it measures — AGENTS.md's fixture rule).
 //
 // HONEST RESULT — read before trusting this bench as an S8786 trip-wire: this bench does NOT reliably
@@ -46,10 +46,10 @@
 // a slowdown will not surface on its own without the manual step below. It asserts nothing — `vitest
 // bench` reports timings, it does not pass/fail on them. Run manually with
 // `npm run bench:reconciliation-gitdir-pointer --workspace @oscharko-dev/keiko-server` before/after a
-// change to parseGitdirPointerTarget/safeGitdirIdentity's parse logic.
+// change to the shared `parseGitdirPointerTarget` logic.
 
 import { bench, describe } from "vitest";
-import { parseGitdirPointerTarget } from "./reconciliation.js";
+import { parseGitdirPointerTarget } from "./gitdir-identity.js";
 
 const TARGET = "/managed/root/some-repo-abc123/.git/worktrees/keiko-task-def456";
 
@@ -60,7 +60,7 @@ function paddedPointer(leadingSpaces: number, trailingSpaces: number): string {
   return `gitdir:${" ".repeat(leadingSpaces)}${TARGET}${" ".repeat(trailingSpaces)}\n`;
 }
 
-describe("parseGitdirPointerTarget bench (S8786, reconciliation.ts)", () => {
+describe("parseGitdirPointerTarget bench (S8786, shared Git identity)", () => {
   bench("5,000-char whitespace padding", () => {
     parseGitdirPointerTarget(paddedPointer(2_500, 2_500));
   });

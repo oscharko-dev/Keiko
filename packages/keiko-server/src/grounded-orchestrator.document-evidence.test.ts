@@ -69,6 +69,7 @@ const recordingAnswerer: { pack: ConnectedContextPack | null } & GroundedAnswere
 function fakeWorkspace(): WorkspaceInfo {
   return {
     root: ROOT,
+    selectedRoot: ROOT,
     name: "demo",
     version: "0.0.0",
     testFramework: "vitest",

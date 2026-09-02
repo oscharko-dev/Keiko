@@ -278,6 +278,7 @@ export function composeCodingContextConnectors(deps: UiHandlerDeps): ComposedCon
       : createGitHubCodeContextApiPort({
           workspace: {
             root: deps.preferredProjectPath,
+            selectedRoot: deps.preferredProjectPath,
             name: undefined,
             version: undefined,
             testFramework: "unknown",

@@ -34,8 +34,8 @@ import {
   searchText,
   type SymbolGraphRecord,
   type SearchScope,
+  type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 // The editor lane's UNREDACTED read (see keiko-workspace/src/editorRead.ts). Workspace search &
 // replace is editor-owned and NON-evidence: it must derive its match coordinates, its base-content
 // hash, and its replacement text from the same RAW bytes the `keiko-tools` write preflight reads.
@@ -56,8 +56,16 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { FilesError, readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
+import {
+  FilesError,
+  readJsonObject,
+  requestRootAccessResolver,
+  resolveRequestRoot,
+  runFilesHandler,
+} from "../files.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import { DENIED_MESSAGE, pathIsDenied } from "../files-deny.js";
+import { clientAbortSignal } from "./languageRoutes.js";
 
 const MAX_WORKSPACE_SEARCH_BODY_BYTES = 64 * 1024;
 const MAX_WORKSPACE_REPLACE_APPLY_BODY_BYTES = 2 * 1024 * 1024;
@@ -100,22 +108,13 @@ function rootFieldOf(body: Record<string, unknown>): string | null {
   return typeof body.root === "string" ? body.root : null;
 }
 
-function clientAbortSignal(ctx: RouteContext): AbortSignal {
-  const controller = new AbortController();
-  ctx.req.on("close", () => {
-    controller.abort();
-  });
-  if (typeof ctx.res.on === "function") {
-    ctx.res.on("close", () => {
-      if (!ctx.res.writableEnded) controller.abort();
-    });
-  }
-  return controller.signal;
-}
-
-function buildSearchScope(realRoot: string, relativePaths: readonly string[] = []): SearchScope {
+function buildSearchScope(
+  realRoot: string,
+  fs: WorkspaceFs,
+  relativePaths: readonly string[] = [],
+): SearchScope {
   return {
-    workspace: detectWorkspaceAt(realRoot, nodeWorkspaceFs),
+    workspace: detectWorkspaceAt(realRoot, fs),
     scopeId: WORKSPACE_SEARCH_SCOPE_ID,
     relativePaths,
   };
@@ -223,6 +222,7 @@ function buildMatchRegex(request: WorkspaceSearchRequest | WorkspaceReplacePrevi
 
 async function snippetForMatch(
   scope: SearchScope,
+  fs: WorkspaceFs,
   path: string,
   startLine: number,
   endLine: number,
@@ -236,19 +236,21 @@ async function snippetForMatch(
       endLine: endLine + 1,
       maxBytes: WORKSPACE_SEARCH_SNIPPET_BYTES,
     },
-    { signal, ...EDITOR_SEARCH_LANE },
+    { signal, fs, ...EDITOR_SEARCH_LANE },
   );
   return result.content;
 }
 
 async function buildSearchResponse(
   scope: SearchScope,
+  fs: WorkspaceFs,
   request: WorkspaceSearchRequest,
   signal: AbortSignal,
 ): Promise<WorkspaceSearchResponse> {
   const query = queryForRequest(request, request.maxResults);
   const result = await searchText(scope, query, DEFAULT_SEARCH_LIMITS, {
     signal,
+    fs,
     candidatePathGlobs: candidatePathGlobs(request),
     ...EDITOR_SEARCH_LANE,
   });
@@ -261,6 +263,7 @@ async function buildSearchResponse(
       lineRange: atom.lineRange,
       snippet: await snippetForMatch(
         scope,
+        fs,
         atom.scopePath,
         atom.lineRange.startLine,
         atom.lineRange.endLine,
@@ -360,17 +363,13 @@ function editsForContent(
 
 function buildReplaceFileEdit(
   scope: SearchScope,
+  fs: WorkspaceFs,
   path: string,
   regex: RegExp,
   replacement: string,
   expandCaptures: boolean,
 ): WorkspaceReplacePreviewFileEdit | undefined {
-  const content = readWorkspaceFileForEditing(
-    scope.workspace,
-    path,
-    EDITOR_READ_OPTIONS,
-    nodeWorkspaceFs,
-  );
+  const content = readWorkspaceFileForEditing(scope.workspace, path, EDITOR_READ_OPTIONS, fs);
   const edits = editsForContent(content.rawText, regex, replacement, expandCaptures);
   return edits.length === 0
     ? undefined
@@ -397,6 +396,7 @@ function collectMatchedPaths(
 
 function buildReplacePreviewFiles(
   scope: SearchScope,
+  fs: WorkspaceFs,
   request: WorkspaceReplacePreviewRequest,
   paths: readonly string[],
 ): readonly WorkspaceReplacePreviewFileEdit[] {
@@ -406,6 +406,7 @@ function buildReplacePreviewFiles(
     if (files.length >= request.maxFiles) break;
     const file = buildReplaceFileEdit(
       scope,
+      fs,
       path,
       regex,
       request.replacement,
@@ -418,17 +419,19 @@ function buildReplacePreviewFiles(
 
 async function buildReplacePreviewResponse(
   scope: SearchScope,
+  fs: WorkspaceFs,
   request: WorkspaceReplacePreviewRequest,
   signal: AbortSignal,
 ): Promise<WorkspaceReplacePreviewResponse> {
   const query = queryForRequest(request, DEFAULT_SEARCH_LIMITS.maxMatchesReturned);
   const result = await searchText(scope, query, DEFAULT_SEARCH_LIMITS, {
     signal,
+    fs,
     candidatePathGlobs: candidatePathGlobs(request),
     ...EDITOR_SEARCH_LANE,
   });
   const paths = collectMatchedPaths(result.atoms);
-  const files = buildReplacePreviewFiles(scope, request, paths);
+  const files = buildReplacePreviewFiles(scope, fs, request, paths);
   const editCount = files.reduce((total, file) => total + file.edits.length, 0);
   const omittedFileCount = Math.max(0, paths.length - files.length);
   return {
@@ -496,11 +499,12 @@ function symbolResult(
 
 async function buildSymbolSearchResponse(
   scope: SearchScope,
+  fs: WorkspaceFs,
   request: WorkspaceSymbolSearchRequest,
   signal: AbortSignal,
 ): Promise<WorkspaceSymbolSearchResponse> {
   const startedAt = Date.now();
-  const graph = await buildSymbolGraph(scope, DEFAULT_SEARCH_LIMITS, nodeWorkspaceFs, signal);
+  const graph = await buildSymbolGraph(scope, DEFAULT_SEARCH_LIMITS, fs, signal);
   const normalizedQuery = request.query.trim().toLowerCase();
   const allResults = graph.records
     .map((record) => symbolResult(record, normalizedQuery))
@@ -632,6 +636,7 @@ function validationDetail(validation: ReturnType<typeof validatePatch>): string 
 
 function validateReplacePatchPreflight(
   scope: SearchScope,
+  fs: WorkspaceFs,
   file: WorkspaceReplaceApplyFile,
   original: string,
   next: string,
@@ -642,7 +647,7 @@ function validateReplacePatchPreflight(
   // override is required — see REPLACE_APPLY_PREFLIGHT_LIMITS.
   const diff = renderFullFileModifyDiff(file.path, original, next);
   const validation = validatePatch(scope.workspace, diff, {
-    fs: nodeWorkspaceFs,
+    fs,
     limits: REPLACE_APPLY_PREFLIGHT_LIMITS,
   });
   if (!validation.ok) {
@@ -657,7 +662,7 @@ function validateReplacePatchPreflight(
       applyEnabled: true,
       signal,
       limits: REPLACE_APPLY_PREFLIGHT_LIMITS,
-      fs: nodeWorkspaceFs,
+      fs,
       writer: PREFLIGHT_WRITER,
     });
     return null;
@@ -669,42 +674,68 @@ function validateReplacePatchPreflight(
   }
 }
 
+// The read, the edit re-application and the keiko-tools preflight above all run on the capability
+// proved once at admission; the write below is the only step that leaves authorized memory, and the
+// preflight is a real window in which authority can be revoked or the root identity replaced. So the
+// writer is constructed from a capability re-proved immediately before it, and the path it is handed
+// comes from THAT proof rather than the admission-time scope — never a bare contained Node writer
+// over a root string that a mid-request revocation has already invalidated (#3347).
+function writeReplacedFile(
+  resolveAccess: () => WorkspaceRootAccess | undefined,
+  file: WorkspaceReplaceApplyFile,
+  next: string,
+): void {
+  const access = resolveAccess();
+  if (access === undefined) throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  const writer = createContainedNodeWorkspaceWriter(access.canonicalRoot);
+  writer.writeFileUtf8(join(access.canonicalRoot, file.path), next);
+}
+
 function applyReplaceFile(
   scope: SearchScope,
+  fs: WorkspaceFs,
   file: WorkspaceReplaceApplyFile,
   signal: AbortSignal,
+  resolveAccess: () => WorkspaceRootAccess | undefined,
 ): WorkspaceReplaceApplyConflict | null {
-  const content = readWorkspaceFileForEditing(
-    scope.workspace,
-    file.path,
-    EDITOR_READ_OPTIONS,
-    nodeWorkspaceFs,
-  );
+  const content = readWorkspaceFileForEditing(scope.workspace, file.path, EDITOR_READ_OPTIONS, fs);
   if (contentHash(content.rawText) !== file.baseContentHash) {
     return conflictFor(file, "file changed since preview");
   }
   const next = applyReplaceEditsToText(content.rawText, file.edits);
   if (next === null) return conflictFor(file, "preview edits no longer match current content");
-  const patchConflict = validateReplacePatchPreflight(scope, file, content.rawText, next, signal);
+  const patchConflict = validateReplacePatchPreflight(
+    scope,
+    fs,
+    file,
+    content.rawText,
+    next,
+    signal,
+  );
   if (patchConflict !== null) return patchConflict;
-  const writer = createContainedNodeWorkspaceWriter(scope.workspace.root);
-  writer.writeFileUtf8(join(scope.workspace.root, file.path), next);
+  writeReplacedFile(resolveAccess, file, next);
   return null;
 }
 
 function buildReplaceApplyResponse(
   scope: SearchScope,
+  fs: WorkspaceFs,
   request: WorkspaceReplaceApplyRequest,
   signal: AbortSignal,
+  resolveAccess: () => WorkspaceRootAccess | undefined,
 ): WorkspaceReplaceApplyResponse {
   let appliedCount = 0;
   const conflicts: WorkspaceReplaceApplyConflict[] = [];
   for (const file of request.files) {
     try {
-      const conflict = applyReplaceFile(scope, file, signal);
+      const conflict = applyReplaceFile(scope, fs, file, signal, resolveAccess);
       if (conflict === null) appliedCount += 1;
       else conflicts.push(conflict);
     } catch (error) {
+      // A revoked root is NOT one file's write conflict: it is the whole request losing the
+      // authority it was admitted under, so it must reach runFilesHandler as a 403 instead of being
+      // downgraded into a per-file `out-of-scope` entry under a 200.
+      if (error instanceof FilesError) throw error;
       conflicts.push({
         path: file.path,
         reason: "out-of-scope",
@@ -726,13 +757,15 @@ export async function handleEditorWorkspaceSearch(
   if (!validation.ok) return invalidRequest(validation.reasons.join("; "));
   return runFilesHandler(async () => {
     const root = await resolveRequestRoot(ctx, deps, request.root);
+    const { canonicalRoot, fs } = root.access;
     assertAllowedGlobScopes(request);
     const scope = buildSearchScope(
-      root.realRoot,
+      canonicalRoot,
+      fs,
       request.scopePath === undefined ? [] : [request.scopePath],
     );
     try {
-      const response = await buildSearchResponse(scope, request, clientAbortSignal(ctx));
+      const response = await buildSearchResponse(scope, fs, request, clientAbortSignal(ctx));
       return { status: 200, body: deps.redactor(response) };
     } catch (error) {
       const routeError = searchRouteErrorResult(error);
@@ -753,12 +786,14 @@ export async function handleEditorWorkspaceSymbols(
   if (!validation.ok) return invalidRequest(validation.reasons.join("; "));
   return runFilesHandler(async () => {
     const root = await resolveRequestRoot(ctx, deps, request.root);
+    const { canonicalRoot, fs } = root.access;
     assertAllowedSymbolScope(request);
     const scope = buildSearchScope(
-      root.realRoot,
+      canonicalRoot,
+      fs,
       request.scopePath === undefined ? [] : [request.scopePath],
     );
-    const response = await buildSymbolSearchResponse(scope, request, clientAbortSignal(ctx));
+    const response = await buildSymbolSearchResponse(scope, fs, request, clientAbortSignal(ctx));
     return { status: 200, body: deps.redactor(response) };
   });
 }
@@ -808,10 +843,16 @@ export async function handleEditorWorkspaceReplacePreview(
   if (!validation.ok) return invalidRequest(validation.reasons.join("; "));
   return runFilesHandler(async () => {
     const root = await resolveRequestRoot(ctx, deps, request.root);
+    const { canonicalRoot, fs } = root.access;
     assertAllowedGlobScopes(request);
-    const scope = buildSearchScope(root.realRoot);
+    const scope = buildSearchScope(canonicalRoot, fs);
     try {
-      const response = await buildReplacePreviewResponse(scope, request, clientAbortSignal(ctx));
+      const response = await buildReplacePreviewResponse(
+        scope,
+        fs,
+        request,
+        clientAbortSignal(ctx),
+      );
       return { status: 200, body: response };
     } catch (error) {
       const routeError = searchRouteErrorResult(error);
@@ -832,10 +873,18 @@ export async function handleEditorWorkspaceReplaceApply(
   if (!validation.ok) return invalidRequest(validation.reasons.join("; "));
   return runFilesHandler(async () => {
     const root = await resolveRequestRoot(ctx, deps, request.root);
+    const { canonicalRoot, fs } = root.access;
+    const resolveAccess = requestRootAccessResolver(ctx, deps, root);
     try {
       assertAllowedApplyFiles(request);
-      const scope = buildSearchScope(root.realRoot);
-      const response = buildReplaceApplyResponse(scope, request, clientAbortSignal(ctx));
+      const scope = buildSearchScope(canonicalRoot, fs);
+      const response = buildReplaceApplyResponse(
+        scope,
+        fs,
+        request,
+        clientAbortSignal(ctx),
+        resolveAccess,
+      );
       return { status: 200, body: deps.redactor(response) };
     } catch (error) {
       const routeError = searchRouteErrorResult(error);

@@ -14,13 +14,11 @@
 // instance to `failed`/`recovery-required`, rolls the partial worktree back, and emits the matching
 // content-free evidence.
 
-import { readFileSync, statSync } from "node:fs";
-import { createHash } from "node:crypto";
-import { join } from "node:path";
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import { isSafeGitRefName } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type {
+  TaskWorkspaceDriftMarker,
   TaskWorkspaceLifecycleState,
   WorkspaceEventType,
   WorkspaceInfo,
@@ -48,6 +46,7 @@ import {
   managedTargetExists,
 } from "./managed-root.js";
 import { TaskWorkspaceError } from "./errors.js";
+import { inspectManagedGitdirIdentity } from "./gitdir-identity.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import {
   recordWorkspaceLifecycle,
@@ -133,28 +132,19 @@ function isoFrom(nowMs: number): string {
   return new Date(nowMs).toISOString();
 }
 
-function gitdirIdentity(worktreePath: string): string {
-  let raw: string;
-  try {
-    const dotGit = join(worktreePath, ".git");
-    if (statSync(dotGit).isDirectory()) {
-      throw new Error("`.git` is a directory, not a linked-worktree pointer");
-    }
-    raw = readFileSync(dotGit, "utf8");
-  } catch {
-    throw new TaskWorkspaceError("POINTER_DRIFT", "managed worktree git pointer is missing");
+function observedGitdirIdentity(worktreePath: string, repositoryRoot: string): string | undefined {
+  return inspectManagedGitdirIdentity(worktreePath, repositoryRoot)?.identity;
+}
+
+function requiredGitdirIdentity(worktreePath: string, repositoryRoot: string): string {
+  const identity = observedGitdirIdentity(worktreePath, repositoryRoot);
+  if (identity === undefined) {
+    throw new TaskWorkspaceError(
+      "POINTER_DRIFT",
+      "managed worktree git identity could not be proven",
+    );
   }
-  // The leading/trailing `\s*` around the capture is intentionally NOT part of the pattern: it
-  // overlapped with `(.+)` (both can match plain spaces), and combined with the multiline flag
-  // that let the engine retry the split at every line, made this quadratic on adversarial pointer
-  // content (S8786). The capture now takes the whole line as-is; `.trim()` below strips the same
-  // leading/trailing whitespace the removed `\s*` used to, so the recognized value is unchanged.
-  const match = /^gitdir:(.+)$/mu.exec(raw);
-  if (match?.[1] === undefined || match[1].length === 0) {
-    throw new TaskWorkspaceError("POINTER_DRIFT", "managed worktree git pointer is malformed");
-  }
-  // Content-free, stable identity of the worktree's admin dir. The raw target stays in-process.
-  return createHash("sha256").update(match[1].trim(), "utf8").digest("hex").slice(0, 32);
+  return identity;
 }
 
 function assertPersistedManagedPath(ctx: ProvisioningCtx, instance: WorkspaceInstance): void {
@@ -494,12 +484,21 @@ function resumeExisting(
   correlationId: string | undefined,
 ): WorkspaceProvisionResult {
   assertPersistedManagedPath(ctx, existing);
-  const identity = gitdirIdentity(repo.worktreePath);
+  const identity = observedGitdirIdentity(repo.worktreePath, repo.repositoryRoot);
+  if (identity === undefined || identity !== existing.gitdirIdentity) {
+    return flagResumableDrift(
+      ctx,
+      existing,
+      nowMs,
+      correlationId,
+      "pointer-stale",
+      "managed worktree git identity changed",
+    );
+  }
   ensureManagedWorkspaceIdentity(ctx, existing, true);
   const refreshed = ctx.deps.store.upsert({
     ...existing,
     health: "healthy",
-    gitdirIdentity: identity,
     lastVerifiedAt: isoFrom(nowMs),
     updatedAt: isoFrom(nowMs),
   });
@@ -516,22 +515,24 @@ function resumeExisting(
   return { instance: refreshed, binding: buildBinding(refreshed), created: false };
 }
 
-// An active/paused workspace whose managed worktree has vanished is drift, not a re-provision: the
-// contract forbids re-entering `provisioning`, so it transitions to `recovery-required` (a legal move)
+// An active/paused workspace whose managed worktree vanished or changed identity is drift, not a
+// re-provision: the contract forbids re-entering `provisioning`, so it moves to `recovery-required`
 // and #447 owns the repair.
 function flagResumableDrift(
   ctx: ProvisioningCtx,
   existing: WorkspaceInstance,
   nowMs: number,
   correlationId: string | undefined,
+  marker: TaskWorkspaceDriftMarker = "worktree-missing",
+  message = "managed worktree is missing",
 ): never {
   const drifted = ctx.deps.store.upsert({
     ...existing,
     lifecycleState: "recovery-required",
-    health: "missing",
+    health: marker === "worktree-missing" ? "missing" : "drifted",
     lock: null,
     updatedAt: isoFrom(nowMs),
-    driftMarkers: ["worktree-missing"],
+    driftMarkers: [marker],
   });
   emit(ctx, {
     operation: "provision",
@@ -545,7 +546,7 @@ function flagResumableDrift(
     toState: "recovery-required",
     errorCode: "POINTER_DRIFT",
   });
-  throw new TaskWorkspaceError("POINTER_DRIFT", "managed worktree is missing");
+  throw new TaskWorkspaceError("POINTER_DRIFT", message);
 }
 
 function reuseExistingOrUndefined(
@@ -581,7 +582,7 @@ async function runWorktreeMutation(
   let identity: string;
   try {
     created = await materializeWorktree(repo, request);
-    identity = gitdirIdentity(repo.worktreePath);
+    identity = requiredGitdirIdentity(repo.worktreePath, repo.repositoryRoot);
     ensureManagedWorkspaceIdentity(ctx, provisioning, true);
   } catch (error) {
     const failure =

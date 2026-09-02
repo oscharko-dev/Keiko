@@ -1,14 +1,33 @@
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { DEFAULT_SEARCH_LIMITS, detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
+import {
+  createFakeSessionPairingPort,
+  fakePairingRequestBody,
+} from "../coding-app-session/_support.js";
+import { createCodingAppSessionChannel } from "../coding-app-session/sessionChannel.js";
+import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js";
+import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js";
 import type { UiStore } from "../store/index.js";
+import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
+import { deriveManagedWorktreePath } from "../task-workspace/naming.js";
+import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
+import {
+  createOrdinaryWorkspaceRootAccess,
+  grantedWorkspaceRootAccess,
+  type WorkspaceRootAccessOutcome,
+} from "../task-workspace/workspace-root-access.js";
+import type { WorkspaceProvisioningService } from "../task-workspace/types.js";
 import {
   handleEditorWorkspaceReplaceApply,
   handleEditorWorkspaceReplacePreview,
@@ -34,13 +53,15 @@ function postContext(body: unknown, path = "/api/editor/workspace-search"): Rout
 }
 
 let root: string;
+let managedSourceRoot: string | undefined;
 let store: UiStore;
 
-function deps(): UiHandlerDeps {
+function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   return {
     store,
     redactor: buildRedactor({}),
     evidenceStore: createInMemoryEvidenceStore(),
+    ...overrides,
   } as unknown as UiHandlerDeps;
 }
 
@@ -77,6 +98,94 @@ function symbolBody(overrides: Record<string, unknown> = {}): Record<string, unk
     query: "parse",
     maxResults: 20,
     ...overrides,
+  };
+}
+
+async function managedSearchFixture(): Promise<{
+  readonly managedWorktree: string;
+  readonly cookie: string;
+  readonly deps: UiHandlerDeps;
+}> {
+  const managedRoot = join(root, ".keiko", "task-workspaces");
+  assertManagedRootOwned(managedRoot);
+  const repositoryId = "repo_0123456789abcdef";
+  const workspaceId = "ws_0123456789abcdef01234567";
+  const managedWorktree = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
+  // #3347 managed-worktree identity: resolveManagedWorkspaceRootAccess re-proves a real Git
+  // linked-worktree pointer instead of trusting a path shape, so this fixture needs an actual
+  // `git worktree add` linkage -- a separate, independently-cleaned-up repositoryRoot, not the
+  // shared search-fixture `root` (which dozens of unrelated tests scan directly and must not gain
+  // a `.git` directory).
+  const repositoryRoot = await mkdtemp(join(tmpdir(), "keiko-workspace-search-managed-source-"));
+  managedSourceRoot = repositoryRoot;
+  execFileSync("git", ["init", "-q"], { cwd: repositoryRoot });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repositoryRoot });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: repositoryRoot });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: repositoryRoot });
+  mkdirSync(dirname(managedWorktree), { recursive: true });
+  execFileSync(
+    "git",
+    [
+      "worktree",
+      "add",
+      "-q",
+      "-b",
+      "keiko/task/workspace-search-01234567",
+      managedWorktree,
+      "HEAD",
+    ],
+    { cwd: repositoryRoot },
+  );
+  const gitdirInspection = inspectManagedGitdirIdentity(managedWorktree, repositoryRoot);
+  if (gitdirInspection === undefined) {
+    throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+  }
+  await mkdir(join(managedWorktree, "src"), { recursive: true });
+  await writeFile(join(managedWorktree, "src", "managed.ts"), "export const managedNeedle = 1;\n");
+  const timestamp = new Date(0).toISOString();
+  const instance: WorkspaceInstance = {
+    schemaVersion: "1",
+    workspaceId,
+    taskId: "workspace-search",
+    repositoryId,
+    repositoryRoot,
+    baseBranch: "dev",
+    taskBranch: "keiko/task/workspace-search-01234567",
+    managedWorktreePath: managedWorktree,
+    gitdirIdentity: gitdirInspection.identity,
+    lifecycleState: "active",
+    health: "healthy",
+    lock: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    driftMarkers: [],
+    recoveryHints: [],
+    auditCorrelationId: "corr_workspace_search",
+  };
+  const workspaceProvisioning = {
+    provision: (): never => {
+      throw new Error("not used in this test");
+    },
+    activate: (): never => {
+      throw new Error("not used in this test");
+    },
+    getInstance: (id: string): WorkspaceInstance | undefined =>
+      id === workspaceId ? instance : undefined,
+  } satisfies WorkspaceProvisioningService;
+  const channel = createCodingAppSessionChannel({
+    registry: createSessionRegistry(),
+    pairingPort: createFakeSessionPairingPort(),
+  });
+  const paired = channel.pair(fakePairingRequestBody());
+  if (!paired.paired) throw new Error("pairing failed");
+  return {
+    managedWorktree,
+    cookie: `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`,
+    deps: deps({
+      managedTaskWorkspaceRoot: managedRoot,
+      workspaceProvisioning,
+      codingAppSessionChannel: channel,
+    }),
   };
 }
 
@@ -118,11 +227,15 @@ beforeEach(async () => {
   await writeFile(join(root, "src", "case.ts"), "Alpha\nalpha\n", "utf8");
   store = createInMemoryUiStore();
   store.createProject(root, "fixture");
+  managedSourceRoot = undefined;
 });
 
 afterEach(async () => {
   store.close();
   await rm(root, { recursive: true, force: true });
+  if (managedSourceRoot !== undefined) {
+    await rm(managedSourceRoot, { recursive: true, force: true });
+  }
 });
 
 // Qodo review on #2869: the raw editor read reaches this route through the package's
@@ -146,6 +259,21 @@ describe("the editor read lane is reachable through its published export subpath
 });
 
 describe("POST /api/editor/workspace-search", () => {
+  it("uses request-scoped owned-root access for a paired managed worktree", async () => {
+    const fixture = await managedSearchFixture();
+    const request = postContext(
+      searchBody({ root: fixture.managedWorktree, query: "managedNeedle" }),
+    );
+    request.req.headers = { cookie: fixture.cookie };
+
+    const result = await handleEditorWorkspaceSearch(request, fixture.deps);
+
+    expect(result.status).toBe(200);
+    const body = result.body as { readonly results: readonly { path: string; snippet: string }[] };
+    expect(body.results[0]?.path, JSON.stringify(body)).toBe("src/managed.ts");
+    expect(body.results[0]?.snippet).toContain("managedNeedle");
+  });
+
   it("returns literal search results with bounded snippets", async () => {
     const result = await handleEditorWorkspaceSearch(postContext(searchBody()), deps());
 
@@ -905,6 +1033,61 @@ describe("POST /api/editor/workspace-search/replace-apply", () => {
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ appliedCount: 1, conflictCount: 0, conflicts: [] });
     expect(content).toContain('export const marker = readConfig("large-file");');
+  });
+
+  // #3347 write-boundary re-proof. Admission, the closed-file read and the keiko-tools preflight all
+  // run on the capability proved once, at the top of the request; the WRITE is the only effect that
+  // leaves authorized memory. Authority can be revoked — or the managed root replaced — inside that
+  // window, so the writer is constructed from a capability re-proved immediately before it, and a
+  // denial is a route-level 403 rather than a per-file conflict: the request never reached bytes it
+  // was allowed to change. Verified red by hand: with the writer built from the admission-time root,
+  // the revoked apply returned 200 with appliedCount 1 and rewrote the file on disk.
+  it("leaves disk untouched when authority is revoked before the governed write", async () => {
+    const file = await previewForApply();
+    const before = await readFile(join(root, "src", "a.ts"), "utf8");
+
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+      deps({
+        workspaceRootAccessResolver: (): WorkspaceRootAccessOutcome => ({ decision: "denied" }),
+      }),
+    );
+
+    expect(result.status).toBe(403);
+    expect(result.body).toMatchObject({ error: { code: "DENIED" } });
+    expect(await readFile(join(root, "src", "a.ts"), "utf8")).toBe(before);
+    expect(before).toContain("parseConfig");
+  });
+
+  it("re-proves authority once per governed write, not once per admitted request", async () => {
+    const preview = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({ includeGlobs: ["src/a.ts", "src/b.ts"] }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+    const previewed = (
+      preview.body as {
+        files: { path: string; baseContentHash: string; edits: readonly unknown[] }[];
+      }
+    ).files;
+    expect(previewed).toHaveLength(2);
+    const proofs: string[] = [];
+
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: previewed }, "/api/editor/workspace-search/replace-apply"),
+      deps({
+        workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome => {
+          proofs.push(requestedRoot);
+          return grantedWorkspaceRootAccess(createOrdinaryWorkspaceRootAccess(requestedRoot));
+        },
+      }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ appliedCount: 2, conflictCount: 0 });
+    expect(proofs).toEqual([root, root]);
   });
 });
 

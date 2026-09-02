@@ -71,6 +71,7 @@ function releaseAdapterRuntime(handle: ReturnType<LspSpawnFn>): void {
 function makeWorkspace(root: string): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework: "unknown",

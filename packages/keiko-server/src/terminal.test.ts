@@ -2,7 +2,15 @@
 // manager exercises the real allowlist + cwd containment + redaction passthrough without a real
 // child process. Route-level coverage lives in terminal-routes.test.ts.
 
-import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
@@ -11,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listEvidence, loadEvidence } from "@oscharko-dev/keiko-evidence";
 import {
   createTerminalExecutionManager,
+  listDirectories,
   type TerminalEventEnvelope,
   type TerminalExecutionManager,
 } from "./terminal.js";
@@ -18,7 +27,20 @@ import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/k
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { TerminalToolError } from "./terminal-errors.js";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
-import type { ServerLogEvent } from "./observability/server-log.js";
+import type { ServerLogEvent, ServerLogSink } from "./observability/server-log.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import {
+  grantedWorkspaceRootAccess,
+  type WorkspaceRootAccess,
+  type WorkspaceRootAccessOutcome,
+} from "./task-workspace/workspace-root-access.js";
+import { forwardWorkspaceFs, nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 // ── Fake spawn helpers ─────────────────────────────────────────────────────────
 
@@ -135,12 +157,23 @@ afterEach(() => {
 
 function makeManager(
   spawnImpl: SpawnFn = makeSpawn(),
-  extra: { processEnv?: NodeJS.ProcessEnv } = {},
+  extra: {
+    processEnv?: NodeJS.ProcessEnv;
+    activityLog?: ServerLogSink;
+    resolveWorkspaceRootAccess?: (
+      root: string,
+      correlationId?: string,
+    ) => WorkspaceRootAccessOutcome;
+  } = {},
 ): TerminalExecutionManager {
   return createTerminalExecutionManager({
     store,
     evidenceStore,
     processEnv: extra.processEnv ?? { PATH: "/usr/bin" },
+    ...(extra.activityLog === undefined ? {} : { activityLog: extra.activityLog }),
+    ...(extra.resolveWorkspaceRootAccess === undefined
+      ? {}
+      : { resolveWorkspaceRootAccess: extra.resolveWorkspaceRootAccess }),
     runDeps: {
       spawn: spawnImpl,
       resolveExecutable: (command: string) => command,
@@ -172,7 +205,204 @@ async function waitForCondition(
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
+// #3347 owner P2 (reproduced): the picker's checks were containment-only, so `isDenied` — the
+// always-on read-surface deny vocabulary the rest of this module already applies to a cwd and to
+// command operands — never ran on it. A root listing offered node_modules/.git/.keiko/.aws/.ssh and
+// navigating straight into one returned its contents.
+describe("listDirectories — deny vocabulary (#3347)", () => {
+  const DENIED_CHILDREN = ["node_modules", ".git", ".keiko", ".aws", ".ssh"] as const;
+
+  function spiedAccess(): { access: WorkspaceRootAccess; fs: WorkspaceFs } {
+    const fs = forwardWorkspaceFs(nodeWorkspaceFs);
+    return { access: { kind: "ordinary", canonicalRoot: workspaceRoot, fs }, fs };
+  }
+
+  // listDirectories validates before it returns its promise, so a refusal surfaces as a synchronous
+  // throw here and as a rejection through the route's async handler. Capture either shape.
+  async function refusal(...args: Parameters<typeof listDirectories>): Promise<unknown> {
+    try {
+      await listDirectories(...args);
+    } catch (error) {
+      return error;
+    }
+    throw new Error("expected listDirectories to refuse the request");
+  }
+
+  it("omits every denied child from a root listing", async () => {
+    for (const name of [...DENIED_CHILDREN, "src", "docs"]) {
+      mkdirSync(join(workspaceRoot, name), { recursive: true });
+    }
+    const { access } = spiedAccess();
+
+    const listing = await listDirectories(store, workspaceRoot, undefined, undefined, access);
+
+    expect(listing.entries.map((entry) => entry.name)).toEqual(["docs", "src"]);
+  });
+
+  it("omits a denied child nested below the listed directory", async () => {
+    mkdirSync(join(workspaceRoot, "packages", "node_modules"), { recursive: true });
+    mkdirSync(join(workspaceRoot, "packages", "keiko-ui"), { recursive: true });
+    const { access } = spiedAccess();
+
+    const listing = await listDirectories(
+      store,
+      workspaceRoot,
+      join(workspaceRoot, "packages"),
+      undefined,
+      access,
+    );
+
+    expect(listing.entries.map((entry) => entry.name)).toEqual(["keiko-ui"]);
+  });
+
+  it("refuses a denied target before any filesystem read", async () => {
+    mkdirSync(join(workspaceRoot, "node_modules", "pkg"), { recursive: true });
+    const { access, fs } = spiedAccess();
+    const readDir = vi.spyOn(fs, "readDir");
+    const realPath = vi.spyOn(fs, "realPath");
+    const stat = vi.spyOn(fs, "stat");
+
+    const error = await refusal(
+      store,
+      workspaceRoot,
+      join(workspaceRoot, "node_modules"),
+      undefined,
+      access,
+    );
+
+    expect(error).toMatchObject({ code: "CWD_DENIED" });
+    expect(readDir).not.toHaveBeenCalled();
+    expect(realPath).not.toHaveBeenCalled();
+    expect(stat).not.toHaveBeenCalled();
+  });
+
+  it("refuses a benign-named symlink that resolves into a denied directory", async () => {
+    mkdirSync(join(workspaceRoot, ".keiko", "state"), { recursive: true });
+    symlinkSync(join(workspaceRoot, ".keiko", "state"), join(workspaceRoot, "shortcut"), "dir");
+    const { access } = spiedAccess();
+
+    const error = await refusal(
+      store,
+      workspaceRoot,
+      join(workspaceRoot, "shortcut"),
+      undefined,
+      access,
+    );
+
+    expect(error).toMatchObject({ code: "CWD_DENIED" });
+  });
+
+  it("records the refusal as a correlated, body-free denial event", async () => {
+    mkdirSync(join(workspaceRoot, ".aws"), { recursive: true });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const { access } = spiedAccess();
+
+    let error: unknown;
+    try {
+      error = await refusal(
+        store,
+        workspaceRoot,
+        join(workspaceRoot, ".aws"),
+        "terminal-picker-correlation-0001",
+        access,
+      );
+    } finally {
+      resetServerLogger();
+    }
+
+    expect(error).toMatchObject({ code: "CWD_DENIED" });
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      op: "workspace.root.denied",
+      correlationId: "terminal-picker-correlation-0001",
+      errorKind: "WORKSPACE_PATH_DENIED",
+      extra: { decision: "denied" },
+    });
+    expect(JSON.stringify(sink.events)).not.toContain(workspaceRoot);
+  });
+});
+
 describe("TerminalExecutionManager — happy path", () => {
+  it("uses the resolved root access for directory inspection", async () => {
+    mkdirSync(join(workspaceRoot, "managed-directory"));
+    const fs = forwardWorkspaceFs(nodeWorkspaceFs);
+    const readDir = vi.spyOn(fs, "readDir");
+    const access: WorkspaceRootAccess = {
+      kind: "managed-task",
+      canonicalRoot: workspaceRoot,
+      fs,
+    };
+
+    const listing = await listDirectories(store, workspaceRoot, undefined, undefined, access);
+
+    expect(readDir).toHaveBeenCalledExactlyOnceWith(workspaceRoot);
+    expect(listing.entries).toContainEqual({
+      name: "managed-directory",
+      path: join(workspaceRoot, "managed-directory"),
+    });
+  });
+
+  it("uses a centrally resolved managed-root access and fails closed when it is absent", async () => {
+    const spawn = vi.fn(makeSpawn({ stdout: "ok" }));
+    const access: WorkspaceRootAccess = {
+      kind: "managed-task",
+      canonicalRoot: workspaceRoot,
+      fs: nodeWorkspaceFs,
+    };
+    const admitted = makeManager(spawn, {
+      resolveWorkspaceRootAccess: () => grantedWorkspaceRootAccess(access),
+    });
+    await expect(
+      admitted.execute({ projectId: workspaceRoot, command: "pwd", args: [] }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+
+    const deniedSpawn = vi.fn(makeSpawn());
+    const denied = makeManager(deniedSpawn, {
+      resolveWorkspaceRootAccess: () => ({ decision: "denied" }),
+    });
+    await expect(
+      denied.execute({ projectId: workspaceRoot, command: "pwd", args: [] }),
+    ).rejects.toMatchObject({ code: "CWD_DENIED" });
+    expect(deniedSpawn).not.toHaveBeenCalled();
+  });
+
+  // #3347 (cursor): the injected resolver IS the production composition, so this branch answers
+  // every real request. It used to map both refusal decisions onto CWD_DENIED, which made
+  // projectRootOrThrow's PROJECT_NOT_FOUND branch dead code in production. A missing or unreadable
+  // root must not be reported to the user as a policy denial.
+  it("reports an unresolvable root as PROJECT_NOT_FOUND, not as a policy denial", async () => {
+    const spawn = vi.fn(makeSpawn());
+    const manager = makeManager(spawn, {
+      resolveWorkspaceRootAccess: () => ({ decision: "unresolved" }),
+    });
+
+    await expect(
+      manager.execute({ projectId: workspaceRoot, command: "pwd", args: [] }),
+    ).rejects.toMatchObject({ code: "PROJECT_NOT_FOUND" });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("threads the request correlation id into the injected root resolver", async () => {
+    const seen: (string | undefined)[] = [];
+    const manager = makeManager(makeSpawn(), {
+      resolveWorkspaceRootAccess: (_root, correlationId) => {
+        seen.push(correlationId);
+        return { decision: "denied" };
+      },
+    });
+
+    await expect(
+      manager.execute({
+        projectId: workspaceRoot,
+        command: "pwd",
+        args: [],
+        correlationId: "terminal-exec-correlation-0001",
+      }),
+    ).rejects.toMatchObject({ code: "CWD_DENIED" });
+    expect(seen).toEqual(["terminal-exec-correlation-0001"]);
+  });
+
   it("runs an allowed command, returns redacted output, emits start+complete events", async () => {
     const manager = makeManager(makeSpawn({ stdout: "hello\n", exitCode: 0 }));
     const events = collect(manager);
@@ -228,6 +458,68 @@ describe("TerminalExecutionManager — happy path", () => {
 });
 
 describe("TerminalExecutionManager — denials and validation", () => {
+  it("rejects a registered project alias relocated into a denied root before spawn", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "keiko-term-denied-root-"));
+    outsideRoots.push(fixture);
+    const deniedTarget = join(fixture, ".aws", "workspace");
+    const linkedRoot = join(fixture, "selected-project");
+    mkdirSync(linkedRoot);
+    store.createProject(linkedRoot, "denied-root");
+    rmSync(linkedRoot, { recursive: true });
+    mkdirSync(deniedTarget, { recursive: true });
+    symlinkSync(deniedTarget, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+    const spawn = vi.fn<SpawnFn>(makeSpawn());
+    const activityEvents: ServerLogEvent[] = [];
+    const manager = makeManager(spawn, {
+      activityLog: { write: (event): void => void activityEvents.push(event) },
+    });
+    const events = collect(manager);
+    const correlationId = "terminal-root-correlation-0001";
+
+    await expect(
+      manager.execute({
+        projectId: linkedRoot,
+        command: "ls",
+        args: [],
+        correlationId,
+      }),
+    ).rejects.toMatchObject({ code: "CWD_DENIED" });
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+    expect(activityEvents).toHaveLength(1);
+    expect(activityEvents[0]).toMatchObject({
+      op: "workspace.root.denied",
+      correlationId,
+      errorKind: "WORKSPACE_PATH_DENIED",
+    });
+    expect(activityEvents[0]?.extra).toMatchObject({
+      decision: "denied",
+      reason: "denied-locus",
+    });
+    expect(JSON.stringify(activityEvents)).not.toContain(fixture);
+  });
+
+  it("keeps an ordinary registered project alias usable with its canonical cwd", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "keiko-term-safe-root-"));
+    outsideRoots.push(fixture);
+    const linkedRoot = join(fixture, "selected-project");
+    const safeTarget = join(fixture, "physical-project");
+    mkdirSync(linkedRoot);
+    store.createProject(linkedRoot, "safe-alias");
+    renameSync(linkedRoot, safeTarget);
+    symlinkSync(safeTarget, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+    const spawn = vi.fn<SpawnFn>(makeSpawn());
+    const manager = makeManager(spawn);
+
+    await expect(
+      manager.execute({ projectId: linkedRoot, command: "ls", args: [] }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(spawn.mock.calls[0]?.[2]?.cwd).toBe(realpathSync(safeTarget));
+  });
+
   it("rejects a command not on the allowlist (COMMAND_DENIED)", async () => {
     const manager = makeManager();
     await expect(

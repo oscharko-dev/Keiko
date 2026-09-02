@@ -1,16 +1,23 @@
-import { detectWorkspaceAt, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import {
+  detectWorkspaceAt,
+  type WorkspaceFs,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
 import { resolveRequestRoot, runFilesHandler } from "../files.js";
-import { resolveManagedTaskWorkspaceRoot } from "../task-workspace/authorization.js";
+import { resolveManagedTaskWorkspaceRoot } from "../task-workspace/workspace-root-access.js";
 import {
   detectRuntimeCapabilities,
   type RuntimeCapabilityDetectorOptions,
 } from "./capabilityDetector.js";
 
-export type RuntimeCapabilityRouteOptions = Omit<RuntimeCapabilityDetectorOptions, "workspace"> & {
-  readonly detectWorkspace?: ((root: string) => WorkspaceInfo) | undefined;
+export type RuntimeCapabilityRouteOptions = Omit<
+  RuntimeCapabilityDetectorOptions,
+  "workspace" | "fs"
+> & {
+  readonly detectWorkspace?: ((root: string, fs: WorkspaceFs) => WorkspaceInfo) | undefined;
 };
 
 function badRoot(): RouteResult {
@@ -63,11 +70,15 @@ export async function handleRuntimeCapabilities(
     if (!registered && resolveManagedTaskWorkspaceRoot(deps, root) === undefined) {
       return workspaceNotRegistered();
     }
-    const workspace = (options.detectWorkspace ?? detectWorkspaceAt)(resolved.realRoot);
+    const workspace = (options.detectWorkspace ?? detectWorkspaceAt)(
+      resolved.access.canonicalRoot,
+      resolved.access.fs,
+    );
     const body = detectRuntimeCapabilities({
       env: deps.env,
       ...options,
       workspace,
+      fs: resolved.access.fs,
     });
     return { status: 200, body: deps.redactor(body) };
   });

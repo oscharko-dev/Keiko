@@ -21,6 +21,7 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { applyPatch, inspectPatch } from "@oscharko-dev/keiko-tools";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { createOpenCodeGatewayReadinessRegistry } from "../../coding-sidecar-gateway.js";
 import {
@@ -180,6 +181,10 @@ export function createFunctionalRuntimeResolver(
     secureWorkspaceTextRead: functionalWorkspaceRead(activeRoot, input.diagnostics),
     editorAgentClient: functionalEditorAgentClient(activeRoot),
     verificationRunner: input.verificationRunner,
+    resolveWorkspaceRootAccess: (requestedRoot) =>
+      requestedRoot === activeRoot()
+        ? { kind: "managed-task", canonicalRoot: requestedRoot, fs: nodeWorkspaceFs }
+        : undefined,
     confirmationConsumer: createAuthenticatedSessionStartConfirmationPlane(),
   });
   return {
@@ -497,6 +502,7 @@ function sameFile(left: BigIntStats, right: BigIntStats): boolean {
 function workspace(root: string): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework: "unknown",

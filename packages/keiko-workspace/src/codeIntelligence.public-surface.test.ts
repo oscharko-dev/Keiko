@@ -2,7 +2,12 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 import * as codeIntelligence from "./codeIntelligenceSurface.js";
+import type { StructuralAdapterRequestContextDeps } from "./codeIntelligenceSurface.js";
 import * as workspaceRoot from "./index.js";
+
+const PUBLIC_REQUEST_CONTEXT_DEPS = {
+  deadlineAtMs: 1,
+} satisfies StructuralAdapterRequestContextDeps;
 
 const TYPE_SCRIPT_BACKED_RUNTIME_EXPORTS = [
   "buildCodeIntelligenceIndex",
@@ -43,5 +48,8 @@ describe("code-intelligence public surface", () => {
     expect(workspaceRoot.createEcosystemStructureAdapters).toBe(
       codeIntelligence.createEcosystemStructureAdapters,
     );
+    expect(typeof codeIntelligence.createStructuralAdapterRequestContext).toBe("function");
+    expect(workspaceRoot).not.toHaveProperty("createStructuralAdapterRequestContext");
+    expect(PUBLIC_REQUEST_CONTEXT_DEPS.deadlineAtMs).toBe(1);
   });
 });

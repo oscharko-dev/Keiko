@@ -109,6 +109,7 @@ export function nowIso(now: () => number): string {
 export function workspaceFor(root: string): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework: "unknown",

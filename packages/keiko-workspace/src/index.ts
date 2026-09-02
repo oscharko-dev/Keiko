@@ -54,7 +54,11 @@ export { type WorkspaceDirEntry, type WorkspaceFs, type WorkspaceStat } from "./
 
 export { isWithinWorkspace, resolveWithinWorkspace } from "./paths.js";
 
-export { assertContainedRealPath, containedRealPathInfo } from "./realpath.js";
+export {
+  assertContainedRealPath,
+  containedRealPathInfo,
+  resolveExistingAllowedWorkspaceRealRoot,
+} from "./realpath.js";
 
 export {
   compileIgnore,

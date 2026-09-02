@@ -671,6 +671,7 @@ const BLOCK_ALL_PR_PACK: GitDeliveryRepoPolicyPack = {
 function testWorkspace(root: string): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework: "unknown",

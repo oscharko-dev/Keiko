@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
@@ -16,6 +16,7 @@ import type {
 import { createServerApprovedSkillCatalog } from "./skillCatalog.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import { createExplicitSkillInvocationTracker } from "./explicitSkillInvocation.js";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 const AUTHORITY_EXPIRES_AT = "2026-07-20T01:00:00.000Z";
 
@@ -42,7 +43,7 @@ const PARENT_AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
   actionClasses: ["workspace-read"],
   connectorScopes: [],
   modelProfile: {
-    profileId: "coding-safe-openai-compatible",
+    profileId: "local-codex",
     source: "keiko-model-gateway",
     supportsStreaming: false,
     supportsToolCalling: true,
@@ -56,12 +57,17 @@ const PARENT_AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
   },
   networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
   gates: ["human-approval"],
-  budget: { maxRuntimeMs: 120_000, maxToolCalls: 12, maxPromptTokens: 24_000, maxPatchBytes: 0 },
+  budget: {
+    maxRuntimeMs: 120_000,
+    maxToolCalls: 12,
+    maxPromptTokens: 24_000,
+    maxPatchBytes: 32_768,
+  },
   expiresAt: AUTHORITY_EXPIRES_AT,
   approvalProofDigest: "b".repeat(64),
 };
 
-function response(): NormalizedResponse {
+function response(overrides: Partial<NormalizedResponse> = {}): NormalizedResponse {
   return {
     modelId: "gpt-coding-safe",
     content: "Inspected",
@@ -75,6 +81,7 @@ function response(): NormalizedResponse {
       latencyMs: 1,
       costClass: "low",
     },
+    ...overrides,
   };
 }
 
@@ -84,6 +91,9 @@ interface PortsOptions {
     ProductionAuxiliaryPortInput["researchGrantRegistry"] | undefined;
   readonly readText?:
     ProductionAuxiliaryPortInput["secureWorkspaceTextRead"]["readText"] | undefined;
+  readonly modelCall?: (() => Promise<NormalizedResponse>) | undefined;
+  readonly resolveWorkspaceRootAccess?:
+    ProductionAuxiliaryPortInput["resolveWorkspaceRootAccess"] | undefined;
 }
 
 function ports(
@@ -107,13 +117,22 @@ function ports(
     runId: "run-2387",
     workspaceId: () => "workspace-2387",
     workspaceRoot: "/workspace",
+    resolveWorkspaceRootAccess:
+      options.resolveWorkspaceRootAccess ??
+      ((): ReturnType<ProductionAuxiliaryPortInput["resolveWorkspaceRootAccess"]> => ({
+        kind: "managed-task",
+        canonicalRoot: "/workspace",
+        fs: nodeWorkspaceFs,
+      })),
     modelId,
     authorityExpiresAt: AUTHORITY_EXPIRES_AT,
     catalog,
     explicitSkills: createExplicitSkillInvocationTracker(catalog),
     modelPortFactory: (requested): ModelPort | undefined => {
       observed.push(requested);
-      return { call: (): Promise<NormalizedResponse> => Promise.resolve(response()) };
+      return {
+        call: options.modelCall ?? ((): Promise<NormalizedResponse> => Promise.resolve(response())),
+      };
     },
     secureWorkspaceTextRead: {
       readText:
@@ -126,6 +145,25 @@ function ports(
       ? {}
       : { researchGrantRegistry: options.researchGrantRegistry }),
   });
+}
+
+function toolThenFinish(
+  name: string,
+  args: Record<string, unknown>,
+): () => Promise<NormalizedResponse> {
+  let turn = 0;
+  return (): Promise<NormalizedResponse> => {
+    turn += 1;
+    return Promise.resolve(
+      turn === 1
+        ? response({
+            content: "",
+            finishReason: "tool_calls",
+            toolCalls: [{ id: `call-${String(turn)}`, name, arguments: args }],
+          })
+        : response(),
+    );
+  };
 }
 
 const LIVE_GUARD: CodingToolMutationGuard = {
@@ -188,6 +226,65 @@ describe("createProductionAuxiliaryPorts", () => {
     // The audited event is content-free: it never carries the file text the skill read.
     expect(JSON.stringify(events)).not.toContain("scripts");
   });
+
+  it("re-proves the exact managed workspace before and after a skill read", async () => {
+    const readText = vi.fn(() => Promise.resolve({ ok: true as const, text: '{"scripts":{}}' }));
+    const resolveWorkspaceRootAccess = vi.fn(() => ({
+      kind: "managed-task" as const,
+      canonicalRoot: "/workspace",
+      fs: nodeWorkspaceFs,
+    }));
+    const surface = ports("gpt-coding-safe", [], { readText, resolveWorkspaceRootAccess });
+
+    const result = await surface.skillAuthority.execute(
+      skillAction("skl_repo-structure-summary@1"),
+      undefined,
+      LIVE_GUARD,
+    );
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(readText).toHaveBeenCalledOnce();
+    expect(resolveWorkspaceRootAccess).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["revoked", "replaced"] as const)(
+    "fails a skill read closed when managed workspace authority is %s after the effect",
+    async (outcome) => {
+      let proofCount = 0;
+      const readText = vi.fn(() =>
+        Promise.resolve({ ok: true as const, text: '{"scripts":{"sentinel":"secret"}}' }),
+      );
+      const resolveWorkspaceRootAccess = vi.fn(() => {
+        proofCount += 1;
+        if (proofCount === 1) {
+          return {
+            kind: "managed-task" as const,
+            canonicalRoot: "/workspace",
+            fs: nodeWorkspaceFs,
+          };
+        }
+        return outcome === "revoked"
+          ? undefined
+          : {
+              kind: "managed-task" as const,
+              canonicalRoot: "/workspace-replacement",
+              fs: nodeWorkspaceFs,
+            };
+      });
+      const surface = ports("gpt-coding-safe", [], { readText, resolveWorkspaceRootAccess });
+
+      const result = await surface.skillAuthority.execute(
+        skillAction("skl_repo-structure-summary@1"),
+        undefined,
+        LIVE_GUARD,
+      );
+
+      expect(readText).toHaveBeenCalledOnce();
+      expect(resolveWorkspaceRootAccess).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(result)).toContain("skill-source-unavailable");
+      expect(JSON.stringify(result)).not.toContain("sentinel");
+    },
+  );
 
   it("digests package scripts in codepoint order, independent of key order and host locale", async () => {
     // The digest must be identical on every host. `localeCompare()` without a fixed locale sorts by
@@ -262,6 +359,45 @@ describe("createProductionAuxiliaryPorts", () => {
     expect(result).toMatchObject({ status: "completed" });
     // Child lifecycle is surfaced content-free: the objective text never reaches an event.
     expect(JSON.stringify(events)).not.toContain("Inspect the repository entry point");
+  });
+
+  it("fails a child read closed when managed workspace authority is revoked after the effect", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-20T00:30:00.000Z"));
+    let proofCount = 0;
+    const readText = vi.fn(() =>
+      Promise.resolve({ ok: true as const, text: "sentinel-child-text" }),
+    );
+    const resolveWorkspaceRootAccess = vi.fn(() => {
+      proofCount += 1;
+      return proofCount === 1
+        ? { kind: "managed-task" as const, canonicalRoot: "/workspace", fs: nodeWorkspaceFs }
+        : undefined;
+    });
+    const modelCall = vi.fn(toolThenFinish("read_file", { relativePath: "src/index.ts" }));
+    const surface = ports("gpt-coding-safe", [], {
+      readText,
+      resolveWorkspaceRootAccess,
+      modelCall,
+    });
+
+    try {
+      const result = await surface.childAgentAuthority?.execute(
+        childAction(),
+        undefined,
+        LIVE_GUARD,
+      );
+
+      expect(modelCall).toHaveBeenCalledTimes(2);
+      expect(resolveWorkspaceRootAccess).toHaveBeenCalledTimes(2);
+      expect(readText).toHaveBeenCalledOnce();
+      expect(JSON.stringify(result)).not.toContain("sentinel-child-text");
+      expect(result).toMatchObject({
+        auxiliary: { childResultCount: { outcome: "known", value: 0 } },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("passes the run's live research scope to the child, content-free", async () => {

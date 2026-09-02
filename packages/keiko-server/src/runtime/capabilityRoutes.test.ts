@@ -1,6 +1,8 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -20,12 +22,15 @@ import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js"
 import { createCodingAppSessionChannel } from "../coding-app-session/sessionChannel.js";
 import type { RouteContext } from "../routes.js";
 import type { UiStore } from "../store/index.js";
+import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
 import { deriveManagedWorktreePath } from "../task-workspace/naming.js";
+import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 import type { WorkspaceProvisioningService } from "../task-workspace/types.js";
 import { handleRuntimeCapabilities } from "./capabilityRoutes.js";
 import { type HostExecutableProbe, type HostExecutableProbeResult } from "./capabilityDetector.js";
 
 let root: string;
+let managedSourceRoot: string | undefined;
 let store: UiStore;
 
 class EmptyProbe implements HostExecutableProbe {
@@ -69,11 +74,15 @@ beforeEach(async () => {
   );
   store = createInMemoryUiStore();
   store.createProject(root, "fixture");
+  managedSourceRoot = undefined;
 });
 
 afterEach(async () => {
   store.close();
   await rm(root, { recursive: true, force: true });
+  if (managedSourceRoot !== undefined) {
+    await rm(managedSourceRoot, { recursive: true, force: true });
+  }
 });
 
 describe("GET /api/runtime/capabilities", () => {
@@ -120,7 +129,11 @@ describe("GET /api/runtime/capabilities", () => {
   });
 
   it("admits only launcher-paired, persisted managed task worktrees", async (): Promise<void> => {
-    const managedRoot = join(root, "managed-task-workspaces");
+    // Production managed worktrees live below `.keiko`, which ordinary workspace admission denies.
+    // The paired request must therefore carry its request-scoped owned-root filesystem all the way
+    // through manifest discovery; a route that falls back to the node filesystem fails this proof.
+    const managedRoot = join(root, ".keiko", "managed-task-workspaces");
+    assertManagedRootOwned(managedRoot);
     const repositoryId = "repo_0123456789abcdef";
     const workspaceId = "ws_0123456789abcdef01234567";
     const managedWorktree = deriveManagedWorktreePath({
@@ -128,7 +141,36 @@ describe("GET /api/runtime/capabilities", () => {
       repositoryId,
       workspaceId,
     });
-    await mkdir(managedWorktree, { recursive: true });
+    // #3347 managed-worktree identity: resolveManagedWorkspaceRootAccess re-proves a real Git
+    // linked-worktree pointer instead of trusting a path shape, so this fixture needs an actual
+    // `git worktree add` linkage -- a dedicated repositoryRoot (tracked in managedSourceRoot and
+    // cleaned up by afterEach below), not the shared `root` fixture.
+    const repositoryRoot = await mkdtemp(join(tmpdir(), "keiko-runtime-route-managed-source-"));
+    managedSourceRoot = repositoryRoot;
+    execFileSync("git", ["init", "-q"], { cwd: repositoryRoot });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repositoryRoot });
+    execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: repositoryRoot });
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], {
+      cwd: repositoryRoot,
+    });
+    mkdirSync(dirname(managedWorktree), { recursive: true });
+    execFileSync(
+      "git",
+      [
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "keiko/task/runtime-capabilities-01234567",
+        managedWorktree,
+        "HEAD",
+      ],
+      { cwd: repositoryRoot },
+    );
+    const gitdirInspection = inspectManagedGitdirIdentity(managedWorktree, repositoryRoot);
+    if (gitdirInspection === undefined) {
+      throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+    }
     await writeFile(join(managedWorktree, "package.json"), '{"name":"managed-fixture"}\n');
     const now = new Date(0).toISOString();
     const instance: WorkspaceInstance = {
@@ -136,11 +178,11 @@ describe("GET /api/runtime/capabilities", () => {
       workspaceId,
       taskId: "runtime-capabilities",
       repositoryId,
-      repositoryRoot: root,
+      repositoryRoot,
       baseBranch: "dev",
       taskBranch: "keiko/task/runtime-capabilities-01234567",
       managedWorktreePath: managedWorktree,
-      gitdirIdentity: "gitdir-identity",
+      gitdirIdentity: gitdirInspection.identity,
       lifecycleState: "active",
       health: "healthy",
       lock: null,
@@ -189,5 +231,6 @@ describe("GET /api/runtime/capabilities", () => {
       body: { error: { code: "WORKSPACE_NOT_REGISTERED" } },
     });
     expect(pairedResult.status).toBe(200);
+    expect(JSON.stringify(pairedResult.body)).toContain('"path":"package.json"');
   });
 });

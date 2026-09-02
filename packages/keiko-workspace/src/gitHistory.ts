@@ -1,22 +1,27 @@
 // Git-history adapter (Epic #177, Issue #180). Reads `.git/HEAD` and `.git/logs/HEAD` directly
 // via the WorkspaceFs port — never spawns `git` and never imports `child_process`. The shared
-// always-on deny list refuses `.git`; this adapter is the SOLE legitimate consumer of those
-// paths and therefore goes through the lower-level `fs.readFileUtf8` after `assertContainedRealPath`,
-// applies an explicit stat-based size cap, and redacts the contents. This workspace adapter stays
-// repo-level; grounded chat adds per-file recency/churn evidence in the server layer where spawning
-// bounded `git log` commands is already governed.
+// always-on deny list refuses `.git`; this adapter is the SOLE legitimate consumer of those paths.
+// It authorizes the canonical `<workspace>/.git` base, an allowed contained pointer target, or an
+// exact external `.git/worktrees/<name>` gitdir. Reads stay constrained to HEAD and logs/HEAD, with
+// a size cap and redaction. This adapter stays repo-level; grounded chat adds per-file evidence in
+// the server layer where spawning bounded `git log` commands is already governed.
 // Stays within ADR-0019 rule 3b: imports only @oscharko-dev/keiko-contracts, sibling workspace
 // modules, and Node stdlib (node:crypto). Limitation: unavailable when scope.relativePaths is
 // non-empty because git-history is a repo-level signal that cannot meaningfully scope to a
 // sub-folder.
 
 import { createHash } from "node:crypto";
-import { isAbsolute, normalize } from "node:path";
+import { basename, dirname, isAbsolute, normalize, relative } from "node:path";
 import type { EvidenceAtom, RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { redact } from "@oscharko-dev/keiko-security";
-import type { WorkspaceFs } from "./fs.js";
+import type { WorkspaceDescriptorReadCompleteness, WorkspaceFs } from "./fs.js";
 import { resolveWithinWorkspace } from "./paths.js";
-import { assertContainedRealPath } from "./realpath.js";
+import {
+  assertContainedRealPath,
+  containedRealPathInfo,
+  isCanonicalAllowedContainedPath,
+  resolveExistingAllowedWorkspaceRealRoot,
+} from "./realpath.js";
 import { buildAtom } from "./repoSearchScan.js";
 import type { SearchLimits, SearchScope } from "./repoSearch.js";
 import type { StructuralAdapter, StructuralAdapterDeps } from "./structuralAdapters.js";
@@ -32,64 +37,183 @@ const GIT_POINTER_MAX_BYTES = 4096;
 const REFLOG_MAX_BYTES = 1_048_576;
 const REFLOG_MAX_LINES = 10_000;
 
-function isAllowedExternalGitdir(candidate: string): boolean {
-  return candidate.replaceAll("\\", "/").includes("/.git/worktrees/");
+interface AuthorizedGitMetadataBase {
+  readonly path: string;
+}
+
+interface CanonicalWorkspaceGitLocation {
+  readonly dotGit: string;
+  readonly workspaceRoot: string;
+}
+
+const AUTHORIZED_GIT_METADATA_FILES = new Set(["HEAD", "gitdir", "logs/HEAD"]);
+
+function normalizedPath(path: string): string {
+  return normalize(path).replaceAll("\\", "/");
+}
+
+function sameCanonicalPath(left: string, right: string): boolean {
+  return normalizedPath(left) === normalizedPath(right);
+}
+
+function isCanonicalWorktreeGitdir(candidate: string): boolean {
+  if (!isAbsolute(candidate) || candidate.includes("\u0000")) return false;
+  const segments = normalizedPath(candidate)
+    .split("/")
+    .filter((segment) => segment.length > 0);
+  return (
+    segments.length >= 3 &&
+    segments.at(-3) === ".git" &&
+    segments.at(-2) === "worktrees" &&
+    (segments.at(-1)?.length ?? 0) > 0
+  );
+}
+
+function worktreeRepositoryRoot(candidate: string): string {
+  return dirname(dirname(dirname(candidate)));
 }
 
 function containsParentTraversal(candidate: string): boolean {
   return candidate.split(/[\\/]+/).includes("..");
 }
 
-async function readGuardedAbsolute(
+function readGuardedContainedRaw(
   fs: WorkspaceFs,
   base: string,
-  absolutePath: string,
-  label: string,
+  relativePath: string,
   maxBytes: number,
-): Promise<string | undefined> {
+  completeness: WorkspaceDescriptorReadCompleteness,
+): string | undefined {
+  const read = fs.readFileUtf8WithinRootSameDescriptor;
+  if (read === undefined) return undefined;
   try {
-    assertContainedRealPath(fs, base, absolutePath, label);
+    const absolutePath = resolveWithinWorkspace(base, relativePath);
+    return read.call(fs, base, absolutePath, maxBytes, "reject", completeness).rawText;
   } catch {
     return undefined;
   }
-  if (!fs.exists(absolutePath)) {
+}
+
+function readGuardedGitMetadata(
+  fs: WorkspaceFs,
+  base: AuthorizedGitMetadataBase,
+  relativePath: string,
+  maxBytes: number,
+  completeness: WorkspaceDescriptorReadCompleteness,
+): string | undefined {
+  const normalizedRelative = relativePath.replaceAll("\\", "/");
+  if (!AUTHORIZED_GIT_METADATA_FILES.has(normalizedRelative)) return undefined;
+  const raw = readGuardedContainedRaw(fs, base.path, normalizedRelative, maxBytes, completeness);
+  return raw === undefined ? undefined : redact(raw);
+}
+
+function canonicalWorkspaceDotGit(
+  fs: WorkspaceFs,
+  workspaceRoot: string,
+): CanonicalWorkspaceGitLocation | undefined {
+  try {
+    const canonicalRoot = resolveExistingAllowedWorkspaceRealRoot(fs, workspaceRoot);
+    const requested = resolveWithinWorkspace(workspaceRoot, ".git");
+    const canonical = assertContainedRealPath(fs, canonicalRoot, requested, ".git metadata base");
+    const expected = resolveWithinWorkspace(canonicalRoot, ".git");
+    return sameCanonicalPath(canonical, expected)
+      ? { dotGit: canonical, workspaceRoot: canonicalRoot }
+      : undefined;
+  } catch {
     return undefined;
   }
-  const stat = fs.stat(absolutePath);
-  if (!stat.isFile) {
+}
+
+function singleAbsolutePath(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  return trimmed.length > 0 &&
+    !trimmed.includes("\n") &&
+    !trimmed.includes("\u0000") &&
+    isAbsolute(trimmed)
+    ? normalize(trimmed)
+    : undefined;
+}
+
+function hasReciprocalWorktreePointer(
+  fs: WorkspaceFs,
+  base: AuthorizedGitMetadataBase,
+  workspaceRoot: string,
+  canonicalDotGit: string,
+): boolean {
+  const raw = readGuardedContainedRaw(fs, base.path, "gitdir", GIT_POINTER_MAX_BYTES, "complete");
+  if (raw === undefined) return false;
+  const target = singleAbsolutePath(raw);
+  if (target === undefined) return false;
+  const lexicalDotGit = resolveWithinWorkspace(workspaceRoot, ".git");
+  return sameCanonicalPath(target, lexicalDotGit) || sameCanonicalPath(target, canonicalDotGit);
+}
+
+function authorizeWorktreeGitdir(
+  fs: WorkspaceFs,
+  candidate: string,
+  workspaceRoot: string,
+  canonicalDotGit: string,
+): AuthorizedGitMetadataBase | undefined {
+  try {
+    const requested = normalize(candidate);
+    if (!isCanonicalWorktreeGitdir(requested)) return undefined;
+    const repositoryRoot = worktreeRepositoryRoot(requested);
+    const canonicalRepositoryRoot = resolveExistingAllowedWorkspaceRealRoot(fs, repositoryRoot);
+    const expected = resolveWithinWorkspace(
+      canonicalRepositoryRoot,
+      `.git/worktrees/${basename(requested)}`,
+    );
+    const canonical = fs.realPath(requested);
+    if (!sameCanonicalPath(canonical, expected)) return undefined;
+    const contained = assertContainedRealPath(
+      fs,
+      canonicalRepositoryRoot,
+      canonical,
+      ".git/worktrees metadata base",
+    );
+    if (!sameCanonicalPath(contained, canonical)) return undefined;
+    const stat = fs.stat(canonical);
+    if (!stat.isDirectory || stat.isSymbolicLink) return undefined;
+    const base = { path: canonical };
+    return hasReciprocalWorktreePointer(fs, base, workspaceRoot, canonicalDotGit)
+      ? base
+      : undefined;
+  } catch {
     return undefined;
   }
-  if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) {
-    return undefined;
-  }
-  // Enforce the size cap BEFORE reading to avoid loading multi-megabyte files into memory
-  // (matches the probeBinary pattern from repoSearchScan.ts).
-  if (stat.size > maxBytes) {
-    if (fs.readFileBytes !== undefined) {
-      let bytes: Uint8Array;
-      try {
-        bytes = await fs.readFileBytes(absolutePath, maxBytes);
-      } catch {
-        return undefined;
-      }
-      return redact(new TextDecoder("utf-8", { fatal: false }).decode(bytes));
+}
+
+function authorizeContainedGitdir(
+  fs: WorkspaceFs,
+  workspaceRoot: string,
+  candidate: string,
+): AuthorizedGitMetadataBase | undefined {
+  try {
+    const requested = resolveWithinWorkspace(workspaceRoot, candidate);
+    const requestedRelative = relative(normalize(workspaceRoot), requested).replaceAll("\\", "/");
+    if (requestedRelative.length === 0) return undefined;
+    const contained = containedRealPathInfo(fs, workspaceRoot, requested);
+    if (!isCanonicalAllowedContainedPath(contained, workspaceRoot, requestedRelative)) {
+      return undefined;
     }
-    return undefined;
-  }
-  let raw: string;
-  try {
-    raw = fs.readFileUtf8(absolutePath);
+    const stat = fs.stat(contained.path);
+    return stat.isDirectory && !stat.isSymbolicLink ? { path: contained.path } : undefined;
   } catch {
     return undefined;
   }
-  return redact(raw);
 }
 
 function statOrUndefined(
   fs: WorkspaceFs,
   abs: string,
 ):
-  | { size: number; isFile: boolean; isDirectory: boolean; hardLinkCount?: number | undefined }
+  | {
+      size: number;
+      isFile: boolean;
+      isDirectory: boolean;
+      isSymbolicLink: boolean;
+      hardLinkCount?: number | undefined;
+    }
   | undefined {
   try {
     const stat = fs.stat(abs);
@@ -97,6 +221,7 @@ function statOrUndefined(
       size: stat.size,
       isFile: stat.isFile,
       isDirectory: stat.isDirectory,
+      isSymbolicLink: stat.isSymbolicLink,
       hardLinkCount: stat.hardLinkCount,
     };
   } catch {
@@ -104,41 +229,18 @@ function statOrUndefined(
   }
 }
 
-async function readSmallUtf8File(
+function readWorktreePointerTarget(
   fs: WorkspaceFs,
-  abs: string,
-  maxBytes: number,
-): Promise<string | undefined> {
-  const stat = statOrUndefined(fs, abs);
-  if (!stat?.isFile) {
-    return undefined;
-  }
-  if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) {
-    return undefined;
-  }
-  if (stat.size > maxBytes) {
-    return undefined;
-  }
-  if (fs.readFileBytes !== undefined) {
-    try {
-      const bytes = await fs.readFileBytes(abs, maxBytes);
-      return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-    } catch {
-      return undefined;
-    }
-  }
-  try {
-    return fs.readFileUtf8(abs);
-  } catch {
-    return undefined;
-  }
-}
-
-async function readWorktreePointerTarget(
-  fs: WorkspaceFs,
+  workspaceRoot: string,
   dotGit: string,
-): Promise<string | undefined> {
-  const raw = await readSmallUtf8File(fs, dotGit, GIT_POINTER_MAX_BYTES);
+): string | undefined {
+  const raw = readGuardedContainedRaw(
+    fs,
+    workspaceRoot,
+    relative(workspaceRoot, dotGit),
+    GIT_POINTER_MAX_BYTES,
+    "complete",
+  );
   if (raw === undefined) {
     return undefined;
   }
@@ -153,54 +255,25 @@ async function readWorktreePointerTarget(
   return target;
 }
 
-function containedPathIfPresent(
-  fs: WorkspaceFs,
-  base: string,
-  abs: string,
-  label: string,
-): string | undefined {
-  try {
-    const contained = assertContainedRealPath(fs, base, abs, label);
-    if (!fs.exists(contained)) {
-      return undefined;
-    }
-    return contained;
-  } catch {
-    return undefined;
-  }
-}
-
-function isContainedAndPresent(fs: WorkspaceFs, base: string, abs: string, label: string): boolean {
-  return containedPathIfPresent(fs, base, abs, label) !== undefined;
-}
-
 function resolvePointedGitdir(
   fs: WorkspaceFs,
   root: string,
+  canonicalDotGit: string,
   target: string,
   candidate: string,
-): string | undefined {
-  if (!isAbsolute(target)) {
-    try {
-      return assertContainedRealPath(fs, root, candidate, ".git pointer");
-    } catch {
-      return undefined;
-    }
-  }
-  if (containsParentTraversal(target)) {
-    return undefined;
-  }
-  const contained = containedPathIfPresent(fs, root, candidate, ".git pointer");
-  if (contained !== undefined) {
-    return contained;
-  }
-  let canonical: string;
+): AuthorizedGitMetadataBase | undefined {
+  const contained = authorizeContainedGitdir(fs, root, candidate);
+  if (contained !== undefined) return contained;
+  if (containsParentTraversal(target)) return undefined;
+  return authorizeWorktreeGitdir(fs, candidate, root, canonicalDotGit);
+}
+
+function pointedGitdirCandidate(root: string, target: string): string | undefined {
   try {
-    canonical = fs.realPath(candidate);
+    return isAbsolute(target) ? normalize(target) : resolveWithinWorkspace(root, target);
   } catch {
     return undefined;
   }
-  return isAllowedExternalGitdir(canonical) ? canonical : undefined;
 }
 
 function isAsciiDigitCode(code: number): boolean {
@@ -278,46 +351,42 @@ function gitHeadAtom(scope: SearchScope, fingerprint: string, nowMs: number): Ev
   });
 }
 
+function standardGitdir(fs: WorkspaceFs, dotGit: string): AuthorizedGitMetadataBase | undefined {
+  const stat = statOrUndefined(fs, dotGit);
+  if (stat?.isDirectory !== true || stat.isSymbolicLink) return undefined;
+  return { path: dotGit };
+}
+
+function pointedGitdir(
+  fs: WorkspaceFs,
+  root: string,
+  location: CanonicalWorkspaceGitLocation,
+): AuthorizedGitMetadataBase | undefined {
+  const { dotGit, workspaceRoot } = location;
+  const stat = statOrUndefined(fs, dotGit);
+  if (stat?.isFile !== true || stat.isSymbolicLink) return undefined;
+  const target = readWorktreePointerTarget(fs, workspaceRoot, dotGit);
+  if (target === undefined) return undefined;
+  const candidate = pointedGitdirCandidate(root, target);
+  if (candidate === undefined) return undefined;
+  return resolvePointedGitdir(fs, root, dotGit, target, candidate);
+}
+
 // Resolve the gitdir root: for a plain repo it is `workspace.root/.git/`; for a worktree
 // it is the path pointed at by the `.git` pointer file. Returns undefined when unavailable.
 // Strategy: check whether HEAD lives directly at `.git/HEAD` first (covers the normal case AND
 // the memFs directory simulation where only child keys are recorded); fall back to treating
 // `.git` as a worktree-pointer file only when that leaf check fails.
-async function resolveGitdir(fs: WorkspaceFs, root: string): Promise<string | undefined> {
-  const dotGit = resolveWithinWorkspace(root, ".git");
-  const headDirect = `${dotGit}/HEAD`;
-  // Fast path: HEAD exists directly under .git — this is the standard directory layout.
-  // We do NOT require .git itself to appear as a stat entry (some WorkspaceFs impls, notably
-  // the test memFs, only record leaf file paths, not implicit parent directories).
-  if (isContainedAndPresent(fs, root, headDirect, ".git/HEAD")) {
-    return dotGit;
-  }
-  // Slow path: .git must be a regular file (worktree pointer). It must exist AND be readable.
-  if (!isContainedAndPresent(fs, root, dotGit, ".git")) {
-    return undefined;
-  }
-  const s = statOrUndefined(fs, dotGit);
-  if (!s?.isFile) {
-    return undefined;
-  }
-  // Worktree-pointer: read the `gitdir: <path>` value, validate containment once.
-  const target = await readWorktreePointerTarget(fs, dotGit);
-  if (target === undefined) {
-    return undefined;
-  }
-  const candidate = isAbsolute(target) ? normalize(target) : resolveWithinWorkspace(root, target);
-  // Real git worktrees usually point outside the checkout root to `.git/worktrees/<name>`.
-  // Allow that one narrow shape, but still constrain the actual reads to files whose realpaths
-  // stay inside the resolved gitdir itself.
-  const gitdir = resolvePointedGitdir(fs, root, target, candidate);
-  if (gitdir === undefined) {
-    return undefined;
-  }
-  const pointedHead = `${gitdir}/HEAD`;
-  if (!isContainedAndPresent(fs, gitdir, pointedHead, ".git-pointer/HEAD")) {
-    return undefined;
-  }
-  return gitdir;
+function resolveGitdir(
+  fs: WorkspaceFs,
+  root: string,
+): Promise<AuthorizedGitMetadataBase | undefined> {
+  const location = canonicalWorkspaceDotGit(fs, root);
+  return Promise.resolve(
+    location === undefined
+      ? undefined
+      : (standardGitdir(fs, location.dotGit) ?? pointedGitdir(fs, root, location)),
+  );
 }
 
 async function isAvailableForScope(scope: SearchScope, fs: WorkspaceFs): Promise<boolean> {
@@ -332,8 +401,7 @@ async function isAvailableForScope(scope: SearchScope, fs: WorkspaceFs): Promise
     return false;
   }
   // HEAD must exist inside the resolved gitdir.
-  const headAbs = `${gitdir}/HEAD`;
-  return isContainedAndPresent(fs, gitdir, headAbs, ".git/HEAD");
+  return readGuardedGitMetadata(fs, gitdir, "HEAD", HEAD_MAX_BYTES, "complete") !== undefined;
 }
 
 export const gitHistoryAdapter: StructuralAdapter = {
@@ -363,23 +431,11 @@ export const gitHistoryAdapter: StructuralAdapter = {
     if (gitdir === undefined) {
       return [];
     }
-    const head = await readGuardedAbsolute(
-      fs,
-      gitdir,
-      `${gitdir}/HEAD`,
-      ".git/HEAD",
-      HEAD_MAX_BYTES,
-    );
+    const head = readGuardedGitMetadata(fs, gitdir, "HEAD", HEAD_MAX_BYTES, "complete");
     if (head === undefined) {
       return [];
     }
-    const reflog = await readGuardedAbsolute(
-      fs,
-      gitdir,
-      `${gitdir}/logs/HEAD`,
-      ".git/logs/HEAD",
-      REFLOG_MAX_BYTES,
-    );
+    const reflog = readGuardedGitMetadata(fs, gitdir, "logs/HEAD", REFLOG_MAX_BYTES, "prefix");
     if (reflog === undefined || reflog.length === 0) {
       return [];
     }

@@ -40,8 +40,8 @@ import {
   readExcerpt,
   searchText,
   type SearchScope,
+  type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { readCitationExcerpt } from "@oscharko-dev/keiko-local-knowledge";
 import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
 import type { UiHandlerDeps } from "../deps.js";
@@ -90,6 +90,7 @@ export interface ProviderOutcome {
 export interface ProviderContext {
   readonly deps: UiHandlerDeps;
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   readonly signal: AbortSignal;
   readonly maxBytesPerExcerpt: number;
   // Request metadata keeps the stable `nowMs`; lease decisions use this live clock at consumption.
@@ -232,9 +233,13 @@ function omission(
   return { sourceKind, reason };
 }
 
-function buildScope(realRoot: string, relativePaths: readonly string[]): SearchScope {
+function buildScope(
+  realRoot: string,
+  relativePaths: readonly string[],
+  fs: WorkspaceFs,
+): SearchScope {
   return {
-    workspace: detectWorkspaceAt(realRoot, nodeWorkspaceFs),
+    workspace: detectWorkspaceAt(realRoot, fs),
     scopeId: "editor-coding-context",
     relativePaths,
   };
@@ -253,6 +258,7 @@ function buildQuery(text: string, symbol: string | undefined, nowMs: number): Re
 async function readHitExcerpt(
   signal: AbortSignal,
   scope: SearchScope,
+  fs: WorkspaceFs,
   atom: { scopePath: string; lineRange: { startLine: number; endLine: number } | undefined },
   maxBytes: number,
 ): Promise<{ content: string; truncated: boolean } | undefined> {
@@ -267,7 +273,7 @@ async function readHitExcerpt(
         endLine,
         maxBytes,
       },
-      { signal },
+      { signal, fs },
     );
     return { content: result.content, truncated: result.truncated };
   } catch {
@@ -687,7 +693,7 @@ async function readFocusExcerpt(
         endLine: FILES_FOCUS_MAX_LINES,
         maxBytes: ctx.maxBytesPerExcerpt,
       },
-      { signal: ctx.signal },
+      { signal: ctx.signal, fs: ctx.fs },
     );
     return prepareExcerpt(ctx, {
       sourceKind: "files-focus",
@@ -712,6 +718,7 @@ async function searchHitExcerpts(
   try {
     hits = await searchText(scope, buildQuery(term, symbol, ctx.nowMs), DEFAULT_SEARCH_LIMITS, {
       signal: ctx.signal,
+      fs: ctx.fs,
       ...(ctx.deps.workspaceIndexForRoot === undefined
         ? {}
         : { workspaceIndex: ctx.deps.workspaceIndexForRoot(scope.workspace.root) }),
@@ -724,7 +731,7 @@ async function searchHitExcerpts(
     if (isAborted(ctx.signal)) {
       break;
     }
-    const hit = await readHitExcerpt(ctx.signal, scope, atom, ctx.maxBytesPerExcerpt);
+    const hit = await readHitExcerpt(ctx.signal, scope, ctx.fs, atom, ctx.maxBytesPerExcerpt);
     if (hit === undefined) {
       continue;
     }
@@ -779,8 +786,8 @@ export async function runRepoSearchProvider(
     return { excerpts: [], omission: omission("repo-search", "unavailable") };
   }
   const focusPaths = [input.documentPath, ...(input.changedFiles ?? [])];
-  const focusScope = buildScope(ctx.realRoot, focusPaths);
-  const searchScope = buildScope(ctx.realRoot, []);
+  const focusScope = buildScope(ctx.realRoot, focusPaths, ctx.fs);
+  const searchScope = buildScope(ctx.realRoot, [], ctx.fs);
   const excerpts = await readFocusExcerpts(ctx, focusScope, input.documentPath, input.changedFiles);
   if (excerpts === "denied") {
     return { excerpts: [], omission: omission("files-focus", "denied") };

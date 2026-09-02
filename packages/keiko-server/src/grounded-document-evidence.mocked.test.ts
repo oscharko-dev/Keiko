@@ -9,7 +9,12 @@ import type {
   SelectedScope,
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { SearchScope, WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import type {
+  SearchScope,
+  WorkspaceFs,
+  WorkspaceInfo,
+  WorkspaceStat,
+} from "@oscharko-dev/keiko-workspace";
 
 const { extractMock } = vi.hoisted(() => ({ extractMock: vi.fn() }));
 
@@ -23,6 +28,20 @@ const { collectConnectedDocumentEvidence, MAX_DOCUMENT_EXTRACTED_BYTES } =
 
 const WORKSPACE_ROOT = "/ws";
 const SOME_BYTES = new Uint8Array([1, 2, 3, 4]);
+
+function workspace(): WorkspaceInfo {
+  return {
+    root: WORKSPACE_ROOT,
+    selectedRoot: WORKSPACE_ROOT,
+    name: "fixture",
+    version: "0.0.0",
+    testFramework: "vitest",
+    sourceDirs: ["src"],
+    testDirs: ["tests"],
+    languages: ["typescript"],
+    ignoreLines: [],
+  };
+}
 
 function fs(): WorkspaceFs {
   return {
@@ -69,10 +88,10 @@ function run(
   relativePaths: readonly string[],
 ): ReturnType<typeof collectConnectedDocumentEvidence> {
   const searchScope: SearchScope = {
-    workspace: { root: WORKSPACE_ROOT },
+    workspace: workspace(),
     scopeId: "scope-docs",
     relativePaths,
-  } as SearchScope;
+  };
   return collectConnectedDocumentEvidence({
     scope: scope(relativePaths),
     query: query(),
@@ -151,6 +170,94 @@ describe("collectConnectedDocumentEvidence with a mocked extractor", () => {
     expect(result.uncertainty[0]?.kind).toBe("scope-incomplete");
     // Per-document cap is respected: each extracted document carries at most the per-document max.
     expect(MAX_DOCUMENT_EXTRACTED_BYTES).toBeGreaterThan(0);
+  });
+
+  it("starts a fresh parser timeout for each document within the parent request deadline", async () => {
+    const paths = ["docs/a.docx", "docs/b.docx", "docs/c.docx"];
+    let nowMs = 1_000;
+    const parserTimeouts: number[] = [];
+    extractMock.mockImplementation((_input: unknown, options: { readonly timeoutMs: number }) => {
+      parserTimeouts.push(options.timeoutMs);
+      nowMs += 2_000;
+      return Promise.resolve({
+        outcome: "extracted",
+        format: "docx",
+        text: "bounded document text",
+        extractedBytes: 21,
+        truncated: false,
+        diagnostics: [],
+      });
+    });
+    const searchScope: SearchScope = {
+      workspace: workspace(),
+      scopeId: "scope-docs",
+      relativePaths: paths,
+    };
+
+    const result = await collectConnectedDocumentEvidence({
+      scope: scope(paths),
+      query: query(),
+      searchScope,
+      fs: fs(),
+      nowMs: () => nowMs,
+      deadlineAtMs: 31_000,
+    });
+
+    expect(nowMs).toBe(7_000);
+    expect(parserTimeouts).toEqual([5_000, 5_000, 5_000]);
+    expect(result.candidates).toHaveLength(3);
+    expect(result.omitted).toEqual([]);
+  });
+
+  // Cursor Bugbot (PR #3367): flagged this as "successful extraction discarded after deadline" and
+  // proposed keeping late-arriving successful results. Rejected as a matter of policy -- the
+  // absolute per-document deadline stays authoritative regardless of whether the racing work
+  // technically succeeded (grounded-document-evidence.ts processDocument, the comment directly
+  // above its post-extraction documentDeadlineReached check). This pins the semantic the git-history
+  // sibling (grounded-git-history-evidence.test.ts, "does not validate history paths after the
+  // history read consumes the remaining time") already covers on its own side.
+  it("discards a successful extraction that completes at or after the absolute deadline", async () => {
+    let nowMs = 1_000;
+    const deadlineAtMs = 3_000;
+    extractMock.mockImplementation(() => {
+      // The synchronous parser overruns its timer and only reaches the deadline once its own work
+      // is already done -- extraction itself reports success.
+      nowMs = deadlineAtMs;
+      return Promise.resolve({
+        outcome: "extracted",
+        format: "docx",
+        text: "this text must never enter the evidence pack",
+        extractedBytes: 21,
+        truncated: false,
+        diagnostics: [],
+      });
+    });
+    const paths = ["docs/exact-deadline.docx"];
+    const searchScope: SearchScope = {
+      workspace: workspace(),
+      scopeId: "scope-docs",
+      relativePaths: paths,
+    };
+
+    const result = await collectConnectedDocumentEvidence({
+      scope: scope(paths),
+      query: query(),
+      searchScope,
+      fs: fs(),
+      nowMs: () => nowMs,
+      deadlineAtMs,
+    });
+
+    expect(result.candidates).toHaveLength(0);
+    expect(result.omitted).toEqual([
+      { scopePath: "docs/exact-deadline.docx", reason: "budget-exhausted", omittedAtMs: 3_000 },
+    ]);
+    const content =
+      result.excerpts
+        .get("docs/exact-deadline.docx")
+        ?.map((window) => window.content)
+        .join("\n") ?? "";
+    expect(content).not.toContain("this text must never enter the evidence pack");
   });
 
   it("discloses a truncation uncertainty marker when a document is clipped", async () => {

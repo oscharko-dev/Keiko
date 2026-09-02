@@ -76,6 +76,11 @@ step "lint (keiko-ui)" npm run lint --workspace @oscharko-dev/keiko-ui
 step "format:check" npm run format:check
 step "arch:check" npm run arch:check
 step "adr-index" npm run check:adr-index
+# #3347: the consolidated 1000 ms S8786 regression pin is intentionally local-only. This runner is
+# the controlled container path; ordinary Vitest and hosted required CI keep the same spec behavioral.
+# Typecheck above already built the package graph, so avoid rebuilding it inside the standalone npm
+# convenience command.
+step "grounded workspace-pattern performance" node scripts/check-grounded-workspace-pattern-performance.mjs
 # KEIKO-0477: the Lift icon geometry is duplicated between design-system/lift-icons.jsx (the JSX
 # spec mirror) and design-system/lift-glyphs.js (the renderer every doc page loads). This gate
 # fails when the two disagree on any shared icon. Cheap and dependency-free, so it belongs in the

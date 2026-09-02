@@ -51,6 +51,7 @@ function hostWorkspace(workspace: WorkspaceInfo | undefined): WorkspaceInfo {
   }
   return {
     root: process.cwd(),
+    selectedRoot: process.cwd(),
     name: undefined,
     version: undefined,
     testFramework: "unknown",

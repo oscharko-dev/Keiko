@@ -39,7 +39,15 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 import { isSafeScopePath } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-paths";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
-import { isDenied } from "@oscharko-dev/keiko-workspace";
+import {
+  isDenied,
+  PathDeniedError,
+  resolveExistingAllowedWorkspaceRealRoot,
+} from "@oscharko-dev/keiko-workspace";
+import {
+  isWorkspacePathSnapshotCurrent,
+  type WorkspaceFileReader,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
   type AsyncParserAdapter,
@@ -65,6 +73,7 @@ import {
 } from "../document-blob-store.js";
 import {
   extractDocumentProgressive,
+  PinnedGenerationChangedError,
   selectProgressiveExtractor,
   type ProgressiveExtractContext,
 } from "./extract-progressive.js";
@@ -628,6 +637,37 @@ function resolveRealPathTarget(
   }
 }
 
+// Admits the SCOPE ROOT itself through the deny-root policy before trusting it as the containment
+// base for this read. A plain `deps.fs.realPath(root)` only follows symlinks — it never asks
+// whether the resolved target is itself a denied locus, so a source lexically admitted as safe and
+// then symlink-retargeted (e.g. to `~/.ssh`) between admission and this call would otherwise read
+// through. Every consumer of `extractDocument()` re-resolves the root independently (defence in
+// depth against a caller bypassing the walker), so this admission must run on every call, not once.
+function resolveRootRealPath(
+  deps: ExtractDocumentDeps,
+  root: string,
+  relativePath: string,
+): string | TargetResolution {
+  try {
+    return resolveExistingAllowedWorkspaceRealRoot(deps.fs, root);
+  } catch (error) {
+    if (error instanceof PathDeniedError) {
+      return targetError(
+        {
+          code: "PATH_ESCAPE",
+          message: "selected source root is a denied workspace root",
+          relativePath,
+        },
+        true,
+      );
+    }
+    return targetError(
+      { code: "READ_FAILED", message: "realPath failed for selected source root", relativePath },
+      true,
+    );
+  }
+}
+
 function containedRealFileTarget(
   realRoot: string,
   real: string,
@@ -671,12 +711,7 @@ function resolveTargetPath(
   }
   const root = policy.rootPath;
   const absolute = joinAbs(root, relativePath);
-  const realRoot = resolveRealPathTarget(
-    deps,
-    root,
-    relativePath,
-    "realPath failed for selected source root",
-  );
+  const realRoot = resolveRootRealPath(deps, root, relativePath);
   if (typeof realRoot !== "string") return realRoot;
   const real = resolveRealPathTarget(
     deps,
@@ -733,15 +768,6 @@ function statResolvedTarget(
   }
 }
 
-function validateResolvedTarget(
-  deps: ExtractDocumentDeps,
-  params: ExtractDocumentParams,
-  target: ResolvedTarget,
-): DiscoveryError | undefined {
-  const resolvedStat = statResolvedTarget(deps, params, target);
-  return "code" in resolvedStat ? resolvedStat : undefined;
-}
-
 async function readBytes(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
@@ -758,10 +784,22 @@ async function readBytes(
   }
   const requestedError = validateRequestedTarget(deps, params, target);
   if (requestedError !== undefined) return requestedError;
-  const resolvedError = validateResolvedTarget(deps, params, target);
-  if (resolvedError !== undefined) return resolvedError;
+  const expected = statResolvedTarget(deps, params, target);
+  if ("code" in expected) return expected;
   try {
-    return await reader(target.absolutePath, maxBytes);
+    const bytes = await reader(target.absolutePath, maxBytes, "allow", expected);
+    return isWorkspacePathSnapshotCurrent(
+      deps.fs,
+      target.requestedAbsolutePath,
+      target.absolutePath,
+      expected,
+    )
+      ? bytes
+      : {
+          code: "READ_FAILED",
+          message: "selected file changed during read",
+          relativePath: params.file.relativePath,
+        };
   } catch {
     return {
       code: "READ_FAILED",
@@ -841,56 +879,124 @@ function largeDocumentContextFor(
 
 const PROGRESSIVE_HASH_CHUNK_BYTES = 4 * 1024 * 1024;
 
-async function readRange(
+// ─── Pinned-generation progressive source ────────────────────────────────────
+// One progressive extraction reads the same file many times: once per hash chunk, then once per
+// parser window. Deriving the expected identity separately per read validates each one in
+// isolation, so a same-size atomic A->B replacement between two of them passes every individual
+// check while the run persists a hash for A beside units from B. The snapshot captured before the
+// first hash chunk is therefore the ONLY identity every later read of this extraction is validated
+// against — through a single held descriptor when the port offers `openFileReader`, otherwise by
+// re-presenting that same snapshot as the expected identity of each range read — and it is
+// revalidated once more before the extraction commits its first row. Detection is exactly as
+// strong as the port's own change reporting: a replacement is caught when `realPath`/`stat` report
+// a different canonical target or a different `WorkspaceStat` for the pinned snapshot.
+interface PinnedProgressiveSource {
+  readonly source: ProgressiveExtractionSource;
+  // Whether the requested path still resolves to the pinned generation with an unchanged snapshot.
+  readonly isPinnedGenerationCurrent: () => boolean;
+  readonly close: () => Promise<void>;
+}
+
+function pinnedGenerationCurrent(
+  deps: ExtractDocumentDeps,
+  target: ResolvedTarget,
+  pinned: WorkspaceStat,
+): boolean {
+  return isWorkspacePathSnapshotCurrent(
+    deps.fs,
+    target.requestedAbsolutePath,
+    target.absolutePath,
+    pinned,
+  );
+}
+
+// Fallback pin for ports without `openFileReader`: every range read re-presents the one pinned
+// snapshot, so the port's own expected-identity check sees the generation the hash started on.
+function pinnedRangeReader(
+  deps: ExtractDocumentDeps,
+  target: ResolvedTarget,
+  pinned: WorkspaceStat,
+): WorkspaceFileReader | undefined {
+  const readFileRange = deps.fs.readFileRange;
+  if (readFileRange === undefined) return undefined;
+  return {
+    readRange: (startByte: number, length: number): Promise<Uint8Array> =>
+      readFileRange(target.absolutePath, startByte, length, "allow", pinned),
+    close: (): Promise<void> => Promise.resolve(),
+  };
+}
+
+async function openPinnedReader(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
   target: ResolvedTarget,
-  startByte: number,
-  length: number,
-): Promise<Uint8Array | DiscoveryError> {
-  const reader = deps.fs.readFileRange;
-  if (reader === undefined) {
-    return {
-      code: "READ_FAILED",
-      message: "WorkspaceFs.readFileRange is unavailable",
-      relativePath: params.file.relativePath,
-    };
-  }
-  const requestedError = validateRequestedTarget(deps, params, target);
-  if (requestedError !== undefined) return requestedError;
-  const resolvedError = validateResolvedTarget(deps, params, target);
-  if (resolvedError !== undefined) return resolvedError;
+  pinned: WorkspaceStat,
+): Promise<WorkspaceFileReader | DiscoveryError> {
+  const openFileReader = deps.fs.openFileReader;
   try {
-    return await reader(target.absolutePath, startByte, length);
+    const reader =
+      openFileReader === undefined
+        ? pinnedRangeReader(deps, target, pinned)
+        : await openFileReader(target.absolutePath, "allow", pinned);
+    return (
+      reader ?? {
+        code: "READ_FAILED",
+        message: "WorkspaceFs.readFileRange is unavailable",
+        relativePath: params.file.relativePath,
+      }
+    );
   } catch {
     return {
       code: "READ_FAILED",
-      message: "readFileRange failed for selected file",
+      message: "openFileReader failed for selected file",
       relativePath: params.file.relativePath,
     };
   }
 }
 
-function progressiveRangeSource(
+function pinnedWindowRead(
+  deps: ExtractDocumentDeps,
+  target: ResolvedTarget,
+  pinned: WorkspaceStat,
+  reader: WorkspaceFileReader,
+): (startByte: number, length: number) => Promise<Uint8Array> {
+  return async (startByte: number, length: number): Promise<Uint8Array> => {
+    const bytes = await reader.readRange(startByte, length);
+    if (!pinnedGenerationCurrent(deps, target, pinned)) {
+      throw new PinnedGenerationChangedError();
+    }
+    return bytes;
+  };
+}
+
+async function openPinnedProgressiveSource(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
   target: ResolvedTarget,
-): ProgressiveExtractionSource | DiscoveryError {
-  if (deps.fs.readFileRange === undefined) {
-    return {
-      code: "READ_FAILED",
-      message: "WorkspaceFs.readFileRange is unavailable",
-      relativePath: params.file.relativePath,
-    };
-  }
+): Promise<PinnedProgressiveSource | DiscoveryError> {
+  const requestedError = validateRequestedTarget(deps, params, target);
+  if (requestedError !== undefined) return requestedError;
+  const pinned = statResolvedTarget(deps, params, target);
+  if ("code" in pinned) return pinned;
+  const reader = await openPinnedReader(deps, params, target, pinned);
+  if ("code" in reader) return reader;
   return {
-    totalBytes: params.file.sizeBytes,
-    readWindow: async (startByte, length): Promise<Uint8Array> => {
-      const bytes = await readRange(deps, params, target, startByte, length);
-      if (bytes instanceof Uint8Array) return bytes;
-      throw new Error(bytes.message);
+    source: {
+      totalBytes: params.file.sizeBytes,
+      readWindow: pinnedWindowRead(deps, target, pinned, reader),
     },
+    isPinnedGenerationCurrent: (): boolean => pinnedGenerationCurrent(deps, target, pinned),
+    close: (): Promise<void> => reader.close(),
   };
+}
+
+async function closePinnedProgressiveSource(pinned: PinnedProgressiveSource): Promise<void> {
+  try {
+    await pinned.close();
+  } catch {
+    // Releasing the pin cannot change bytes that were already read and validated against it, so a
+    // close failure must not replace the extraction outcome the caller is about to receive.
+  }
 }
 
 async function hashProgressiveSource(source: ProgressiveExtractionSource): Promise<string> {
@@ -1391,6 +1497,48 @@ async function parseAndPersistDocument(
   return parserExtractionResult(params, document, redactedParserResult, status);
 }
 
+async function runPinnedProgressiveExtraction(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  context: ProgressiveExtractContext,
+  documentId: DocumentId,
+  pinned: PinnedProgressiveSource,
+  extractor: ProgressiveExtractor,
+): Promise<ExtractionResult> {
+  let contentHash: string;
+  try {
+    contentHash = await hashProgressiveSource(pinned.source);
+  } catch (cause) {
+    return buildFailureResult(deps, params, documentId, {
+      code: "READ_FAILED",
+      message:
+        cause instanceof PinnedGenerationChangedError
+          ? "selected file changed while the extraction hashed it"
+          : "readFileRange failed for selected file",
+      relativePath: params.file.relativePath,
+    });
+  }
+  const fast = readUnchangedFastPath(deps, params, documentId, contentHash);
+  if (fast !== undefined) return fast;
+  // The persisted hash and every persisted unit must describe ONE generation, so confirm the pin
+  // still holds before the extraction writes its first row.
+  if (!pinned.isPinnedGenerationCurrent()) {
+    return buildFailureResult(deps, params, documentId, {
+      code: "READ_FAILED",
+      message: "selected file changed before the extraction was committed",
+      relativePath: params.file.relativePath,
+    });
+  }
+  return await extractDocumentProgressive(
+    deps,
+    params,
+    context,
+    pinned.source,
+    contentHash,
+    extractor,
+  );
+}
+
 async function progressiveExtractionResult(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
@@ -1417,23 +1565,20 @@ async function progressiveExtractionResult(
       : undefined;
   if (!usesProgressivePath(preflight) && extractor === undefined) return undefined;
   if (extractor === undefined) return undefined;
-  const source = progressiveRangeSource(deps, params, resolved);
-  if (!("totalBytes" in source)) return buildFailureResult(deps, params, documentId, source);
-  let contentHash: string;
+  const pinned = await openPinnedProgressiveSource(deps, params, resolved);
+  if ("code" in pinned) return buildFailureResult(deps, params, documentId, pinned);
   try {
-    contentHash = await hashProgressiveSource(source);
-  } catch {
-    return buildFailureResult(deps, params, documentId, {
-      code: "READ_FAILED",
-      message: "readFileRange failed for selected file",
-      relativePath: params.file.relativePath,
-    });
+    return await runPinnedProgressiveExtraction(
+      deps,
+      params,
+      context,
+      documentId,
+      pinned,
+      extractor,
+    );
+  } finally {
+    await closePinnedProgressiveSource(pinned);
   }
-  const fast = readUnchangedFastPath(deps, params, documentId, contentHash);
-  return (
-    fast ??
-    (await extractDocumentProgressive(deps, params, context, source, contentHash, extractor))
-  );
 }
 
 async function standardExtractionResult(

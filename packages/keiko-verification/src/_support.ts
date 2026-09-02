@@ -120,6 +120,7 @@ export function makeWorkspace(opts?: {
   writeFileSync(join(root, "package.json"), JSON.stringify(pkg, null, 2), "utf8");
   const info: WorkspaceInfo = {
     root,
+    selectedRoot: root,
     name: pkg.name,
     version: undefined,
     testFramework: opts?.testFramework ?? "vitest",

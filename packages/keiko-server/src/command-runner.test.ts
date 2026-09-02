@@ -25,6 +25,8 @@ import { CommandRunnerError } from "./command-runner-errors.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
 import { redactLogFields } from "./observability/log-redaction.js";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { WorkspaceRootAccess } from "./task-workspace/workspace-root-access.js";
 
 // ── Fake spawn helpers (mirrors terminal.test.ts) ────────────────────────────────
 
@@ -165,6 +167,23 @@ function collect(manager: CommandRunnerManager): CommandRunnerEvent[] {
 // ── Discovery ─────────────────────────────────────────────────────────────────────
 
 describe("CommandRunnerManager — discovery", () => {
+  it("uses managed-root access and fails closed when central resolution denies it", () => {
+    const access: WorkspaceRootAccess = {
+      kind: "managed-task",
+      canonicalRoot: workspaceRoot,
+      fs: nodeWorkspaceFs,
+    };
+    expect(
+      makeManager(makeSpawn(), { resolveWorkspaceRootAccess: () => access }).discover(workspaceRoot)
+        .tasks,
+    ).not.toHaveLength(0);
+    expect(() =>
+      makeManager(makeSpawn(), { resolveWorkspaceRootAccess: () => undefined }).discover(
+        workspaceRoot,
+      ),
+    ).toThrow(expect.objectContaining({ code: "PROJECT_NOT_FOUND" }));
+  });
+
   // eslint-disable-next-line complexity -- single discovery assertion covers the command kind/trust matrix.
   it("discovers package.json scripts and classifies kinds", () => {
     const catalog = makeManager().discover(workspaceRoot);

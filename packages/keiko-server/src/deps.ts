@@ -75,7 +75,12 @@ import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/cod
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type { IncomingMessage } from "node:http";
 import type { DatabaseSync } from "node:sqlite";
-import { detectWorkspaceAt, isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
+import {
+  detectWorkspaceAt,
+  isWithinWorkspace,
+  PathDeniedError,
+  resolveExistingAllowedWorkspaceRealRoot,
+} from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
@@ -103,6 +108,7 @@ import {
 } from "./diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
+import { recordWorkspaceRootDenial } from "./workspace-root-denial-log.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
   assertUiDbOutsideProject,
@@ -118,6 +124,15 @@ import {
   createVerificationRunnerManager,
   type VerificationRunnerManager,
 } from "./editor/verificationRunner.js";
+import {
+  createOrdinaryWorkspaceRootAccess,
+  grantedWorkspaceRootAccess,
+  requiresConfiguredManagedWorkspaceAuthority,
+  resolveManagedWorkspaceRootAccess,
+  workspaceRootAccessOrUndefined,
+  type WorkspaceRootAccess,
+  type WorkspaceRootAccessOutcome,
+} from "./task-workspace/workspace-root-access.js";
 import {
   createWorkspaceScriptTrustService,
   type WorkspaceScriptTrustService,
@@ -194,11 +209,12 @@ function logWorktreeTermination(
 function createGitWorktreeAdapterFactory(
   processEnv: NodeJS.ProcessEnv | undefined,
 ): WorkspaceProvisioningServiceDeps["createAdapter"] {
-  return (workspace, correlationId) =>
+  return (workspace, correlationId, fs) =>
     createNodeGitWorktreeAdapter({
       workspace,
       processEnv,
       onTerminated: logWorktreeTermination(correlationId),
+      ...(fs === undefined ? {} : { fs }),
     });
 }
 
@@ -804,6 +820,13 @@ export interface UiHandlerDeps {
   // The Keiko-owned managed worktree root that backs workspaceProvisioning. Routes that accept a
   // task-bound activeRoot as their execution root use this to re-prove containment before authorizing.
   readonly managedTaskWorkspaceRoot?: string | undefined;
+  // Re-proves exact ordinary or managed workspace authority at an operation's effect boundary, and
+  // returns the TYPED outcome so a caller that maps a failure onto an HTTP status can tell a policy
+  // refusal from a root that is merely missing or unreadable (#3347). The optional correlationId
+  // lets a caller that has one in scope thread it into the body-free workspace.root.denied
+  // activity-log line a denial emits; callers that omit it still compile and still get the event,
+  // logged under UNKNOWN_CORRELATION_ID.
+  readonly workspaceRootAccessResolver?: WorkspaceRootAccessResolver | undefined;
   // Issue #446 (Epic #443, ADR-0090) — active task-workspace binding + lifecycle service. Owns the
   // singleton active pointer and the switch/pause/resume/handoff actions surfaces consume. Optional so
   // legacy tests that do not exercise the active-binding routes keep their fixtures unchanged;
@@ -1598,17 +1621,32 @@ function buildTerminalManager(options: {
   readonly env: EnvSource;
   readonly liveRedactor: Redactor;
   readonly diagnostics: ServerDiagnosticSink | undefined;
+  readonly resolveWorkspaceRootAccess: WorkspaceRootAccessResolver;
 }): TerminalExecutionManager {
   return createTerminalExecutionManager({
     store: options.store,
     evidenceStore: options.evidenceStore,
     processEnv: options.env,
     diagnostics: options.diagnostics,
+    resolveWorkspaceRootAccess: options.resolveWorkspaceRootAccess,
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
     },
   });
+}
+
+// Adapter for the managers whose own error vocabulary has exactly ONE answer for both refusal
+// decisions — the command runner and the verification runner each map any resolution failure onto
+// PROJECT_NOT_FOUND and have no denied-specific code to reach, and the coding runtime only ever
+// asks whether a managed root re-proved. The collapse is stated HERE, at the injection point that
+// owns it, instead of inside the resolver: the surface that can tell the two decisions apart (the
+// terminal manager, which answers 403 vs 404) consumes the undiluted outcome (#3347).
+function collapsedWorkspaceRootAccessResolver(
+  resolveAccess: WorkspaceRootAccessResolver,
+): (requestedRoot: string) => WorkspaceRootAccess | undefined {
+  return (requestedRoot): WorkspaceRootAccess | undefined =>
+    workspaceRootAccessOrUndefined(resolveAccess(requestedRoot));
 }
 
 // Issue #1387 — the command runner reuses the same store + evidence + live-redactor wiring as the
@@ -1621,12 +1659,16 @@ function buildCommandRunner(options: {
   readonly liveRedactor: Redactor;
   readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly workspaceScriptTrust: WorkspaceScriptTrustService;
+  readonly resolveWorkspaceRootAccess: WorkspaceRootAccessResolver;
 }): CommandRunnerManager {
   return createCommandRunnerManager({
     store: options.store,
     evidenceStore: options.evidenceStore,
     processEnv: options.env,
     diagnostics: options.diagnostics,
+    resolveWorkspaceRootAccess: collapsedWorkspaceRootAccessResolver(
+      options.resolveWorkspaceRootAccess,
+    ),
     isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
       options.workspaceScriptTrust.isTrusted(projectId, workspace),
     redactor: (value: string): string => {
@@ -1649,11 +1691,15 @@ function buildVerificationRunner(options: {
   readonly liveRedactor: Redactor;
   readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly workspaceScriptTrust: WorkspaceScriptTrustService;
+  readonly resolveWorkspaceRootAccess: WorkspaceRootAccessResolver;
 }): VerificationRunnerManager {
   return createVerificationRunnerManager({
     store: options.store,
     evidenceStore: options.evidenceStore,
     diagnostics: options.diagnostics,
+    resolveWorkspaceRootAccess: collapsedWorkspaceRootAccessResolver(
+      options.resolveWorkspaceRootAccess,
+    ),
     isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
       options.workspaceScriptTrust.isTrusted(projectId, workspace),
     redactor: (value: string): string => {
@@ -2415,6 +2461,7 @@ interface BuildPeripheralsArgs {
   readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
   readonly runtimeStateDir: string;
   readonly dapRuntime: DapRuntimeReference;
+  readonly resolveWorkspaceRootAccess: WorkspaceRootAccessResolver;
 }
 
 function unavailableDebugDeploymentPolicy(): DebugDeploymentPolicy {
@@ -2884,6 +2931,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       env: args.options.env,
       liveRedactor: args.liveRedactor,
       diagnostics: args.options.diagnostics,
+      resolveWorkspaceRootAccess: args.resolveWorkspaceRootAccess,
     }),
     commandRunner: buildCommandRunner({
       store: args.uiStore,
@@ -2892,6 +2940,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       liveRedactor: args.liveRedactor,
       diagnostics: args.options.diagnostics,
       workspaceScriptTrust,
+      resolveWorkspaceRootAccess: args.resolveWorkspaceRootAccess,
     }),
     verificationRunner: buildVerificationRunner({
       store: args.uiStore,
@@ -2899,6 +2948,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       liveRedactor: args.liveRedactor,
       diagnostics: args.options.diagnostics,
       workspaceScriptTrust,
+      resolveWorkspaceRootAccess: args.resolveWorkspaceRootAccess,
     }),
     workspaceScriptTrust,
     disposeTrustLspBridge,
@@ -3042,6 +3092,49 @@ interface PersistenceBundle {
   readonly managedTaskWorkspaceRoot: string | undefined;
   readonly preferredProjectPath: string | undefined;
   readonly codingRuntimeSnapshotStore: CodingRuntimeSnapshotStore | undefined;
+}
+
+// The optional correlationId is forward-compatible plumbing: no current caller of this resolver
+// type threads one through yet (TerminalManager.resolveWorkspaceRootAccess and the editor/files
+// route seams still call it with one argument), but every resolution failure below is reported
+// under UNKNOWN_CORRELATION_ID until one is. An extra optional trailing parameter is always a valid
+// substitute wherever the narrower one-argument shape is expected, so this stays a non-breaking
+// widening (#3347).
+type WorkspaceRootAccessResolver = (
+  requestedRoot: string,
+  correlationId?: string,
+) => WorkspaceRootAccessOutcome;
+
+function createWorkspaceRootAccessResolver(
+  bundle: Pick<PersistenceBundle, "managedTaskWorkspaceRoot" | "workspaceProvisioning">,
+): WorkspaceRootAccessResolver {
+  return (requestedRoot, correlationId): WorkspaceRootAccessOutcome => {
+    const logging = { activityLog: processServerLogSink(), correlationId };
+    const managed = resolveManagedWorkspaceRootAccess(bundle, requestedRoot, logging);
+    if (managed !== undefined) return grantedWorkspaceRootAccess(managed);
+    // A root the configured managed authority owns but could not re-prove is a policy refusal, not
+    // a missing directory: fail closed with "denied" so no caller can answer it 404.
+    if (requiresConfiguredManagedWorkspaceAuthority(bundle, requestedRoot)) {
+      return { decision: "denied" };
+    }
+    try {
+      const canonicalRoot = resolveExistingAllowedWorkspaceRealRoot(nodeWorkspaceFs, requestedRoot);
+      return grantedWorkspaceRootAccess(createOrdinaryWorkspaceRootAccess(canonicalRoot));
+    } catch (error) {
+      // Distinguish a genuinely DENIED root (a security-relevant event that must reach the activity
+      // log with correlation, via the same recordWorkspaceRootDenial path every other denial site
+      // uses) from a MISSING or unreadable one, which is an ordinary outcome and must never be
+      // misreported as a denial (#3347 P1). The split is the same one projectRootOrThrow already
+      // applies — PathDeniedError is a refusal, everything else is an unresolvable root — and it
+      // now travels out of this resolver in the RETURN TYPE, so a caller that maps the failure to
+      // an HTTP status can no longer report a missing root as denied.
+      if (error instanceof PathDeniedError) {
+        recordWorkspaceRootDenial(error, logging);
+        return { decision: "denied" };
+      }
+      return { decision: "unresolved" };
+    }
+  };
 }
 
 // The #445–#448 task-workspace services, composed over the shared instance/active-pointer stores. Each
@@ -3233,6 +3326,7 @@ function buildPersistenceBundle(
 // the corresponding routes to degrade to 503, exactly as before.
 function optionalPersistenceServices(bundle: PersistenceBundle): Partial<UiHandlerDeps> {
   return {
+    workspaceRootAccessResolver: createWorkspaceRootAccessResolver(bundle),
     ...(bundle.relationship === undefined ? {} : { relationship: bundle.relationship }),
     ...(bundle.workspaceProvisioning === undefined
       ? {}
@@ -3377,6 +3471,7 @@ function buildAssemblyPeripherals(
   args: UiHandlerDepsAssemblyArgs,
   dapRuntime: DapRuntimeReference,
 ): PeripheralManagers {
+  const resolveWorkspaceRootAccess = createWorkspaceRootAccessResolver(args.bundle);
   return buildPeripherals({
     options: args.options,
     uiStore: args.bundle.uiStore,
@@ -3388,6 +3483,7 @@ function buildAssemblyPeripherals(
     localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     dapRuntime,
+    resolveWorkspaceRootAccess,
   });
 }
 
@@ -3944,6 +4040,7 @@ function buildCodingContextPortsDependency(
       : createGitHubCodeContextApiPort({
           workspace: {
             root: args.bundle.preferredProjectPath,
+            selectedRoot: args.bundle.preferredProjectPath,
             name: undefined,
             version: undefined,
             testFramework: "unknown",
@@ -4284,6 +4381,7 @@ function qualifiedRuntimeResolver(
 ): ProductionCodingRuntimeResolver {
   const { args } = input;
   const confirmationConsumer = runtimeStartConfirmationConsumer(args, input.activated);
+  const resolveWorkspaceRootAccess = createWorkspaceRootAccessResolver(args.bundle);
   return createProductionCodingRuntimeResolver({
     workspaceAuthority: runtimeWorkspaceAuthority(
       args,
@@ -4295,6 +4393,7 @@ function qualifiedRuntimeResolver(
     commandRunner: input.commandRunner,
     verificationRunner: input.verificationRunner,
     runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker,
+    resolveWorkspaceRootAccess: collapsedWorkspaceRootAccessResolver(resolveWorkspaceRootAccess),
     gatewayEgress: () => args.runtimeConfig.current()?.egress ?? args.egress,
     childModelPortFactory:
       args.options.modelPortFactory ?? defaultModelPortFactory(args.runtimeConfig),

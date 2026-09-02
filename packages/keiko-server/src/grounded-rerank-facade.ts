@@ -35,6 +35,7 @@ export interface RerankSelectionInput<T> {
   readonly documentFor: (candidate: T) => string;
   readonly topN: number;
   readonly signal?: AbortSignal | undefined;
+  readonly timeoutMs?: number | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
   readonly policy?: RerankSelectionPolicy | undefined;
   readonly applyScore?: ((candidate: T, result: RerankResult) => T) | undefined;
@@ -61,6 +62,7 @@ interface MaterializedRerankInput {
   readonly documents: readonly string[];
   readonly topN: number;
   readonly signal?: AbortSignal | undefined;
+  readonly timeoutMs?: number | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
   readonly gatewayConfig?: GatewayConfig | undefined;
 }
@@ -69,6 +71,12 @@ interface SafeRerankTransportResult {
   readonly outcome?: RerankOutcome | undefined;
   readonly thrownKind?: RerankErrorKind | undefined;
   readonly latencyMs: number;
+}
+
+function rerankTimeoutMs(configuredMs: number, remainingMs: number | undefined): number {
+  if (remainingMs === undefined) return configuredMs;
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return 1;
+  return Math.max(1, Math.min(configuredMs, Math.floor(remainingMs)));
 }
 
 export function fallbackRerankSelection<T>(
@@ -196,7 +204,7 @@ function buildRerankRequest(
     query: input.query,
     documents: input.documents,
     topN: input.topN,
-    timeoutMs: reranker.timeoutMs,
+    timeoutMs: rerankTimeoutMs(reranker.timeoutMs, input.timeoutMs),
     ...(egress === undefined ? {} : { egress }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
     ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
@@ -282,6 +290,7 @@ async function configuredSelection<T>(
     documents: providerCandidates.map(input.documentFor),
     topN: input.topN,
     ...(input.signal === undefined ? {} : { signal: input.signal }),
+    ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
     ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
     gatewayConfig,
   };

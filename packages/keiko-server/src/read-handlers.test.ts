@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -88,7 +88,17 @@ function createWorkspaceFixture(): string {
   );
   writeFileSync(join(root, "src", "index.ts"), "export const x = 1;\n", "utf8");
   writeFileSync(join(root, "tests", "index.test.ts"), "it('ok', () => {});\n", "utf8");
+  // Deliberately NOT realpath'd: a user selects the path the platform hands them, and on macOS
+  // `os.tmpdir()` lives under the `/var` -> `/private/var` alias. Keeping the fixture lexical is
+  // what proves an ordinary alias-reached project is still admitted rather than answered 403.
   return root;
+}
+
+// The workspace layer admits a root through realpath, so the detected root — the value every
+// response reports and the key the walk cache uses — is the canonical one. Derive it from the
+// production entry point instead of restating the platform alias rule as a second formula here.
+function canonicalRootOf(dir: string): string {
+  return keikoWorkspaceModule.detectWorkspace(dir).root;
 }
 
 function depsWith(overrides: Partial<UiHandlerDeps>): UiHandlerDeps {
@@ -543,15 +553,16 @@ describe("GET /api/workspace — walk cache (KEIKO-0253)", () => {
     const root = createWorkspaceFixture();
     try {
       const deps = depsWithRegisteredProject(root);
+      const cacheKey = canonicalRootOf(root);
       await handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
       // Cache populated after the first call.
       expect(__workspaceWalkCacheSizeForTests()).toBe(1);
-      const firstWalk = __workspaceWalkCacheEntryForTests(root);
+      const firstWalk = __workspaceWalkCacheEntryForTests(cacheKey);
       expect(firstWalk).toBeDefined();
       await handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
       // The second call must not repopulate the cache with a new walk — its cached entry stays
       // referentially identical, which is only true when the fs walk was skipped.
-      const secondWalk = __workspaceWalkCacheEntryForTests(root);
+      const secondWalk = __workspaceWalkCacheEntryForTests(cacheKey);
       expect(secondWalk).toBe(firstWalk);
       expect(__workspaceWalkCacheSizeForTests()).toBe(1);
     } finally {
@@ -645,12 +656,50 @@ describe("GET /api/workspace", () => {
           context?: { entries: { path: string; excerpt: string }[] };
         };
       };
+      // The summary is the client-facing projection, so it reports the path the caller registered
+      // — the value a client may hand straight back as `dir` — not the canonical root that only
+      // filesystem effects bind to.
       expect(body.summary.root).toBe(root);
       expect(body.summary.name).toBe("[REDACTED]");
       expect(body.summary.context).toBeUndefined();
       expect(JSON.stringify(result.body)).not.toContain("topsecret");
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // A user registers the path the platform handed them, which routinely differs from its realpath:
+  // macOS resolves `/var` and `/tmp` under `/private`, and any project reached through a symlinked
+  // parent behaves the same on every platform. The symlink here is explicit so the case is
+  // falsifiable on Linux too, where `os.tmpdir()` is usually not aliased and the assertion would
+  // otherwise be inert exactly where CI runs it.
+  it("keeps the registered identity for a project reached through a symlinked root", async () => {
+    const real = createWorkspaceFixture();
+    const alias = `${real}-alias`;
+    symlinkSync(real, alias, "dir");
+    try {
+      const deps = depsWithRegisteredProject(alias);
+      // Guard against a silently inert case: the aliased root MUST differ from its canonical form,
+      // otherwise the assertions below prove nothing about the two identities.
+      expect(canonicalRootOf(alias)).not.toBe(alias);
+      const result = await handleWorkspace(
+        ctx(`/api/workspace?dir=${encodeURIComponent(alias)}`),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      const body = result.body as { summary: { root: string } };
+      expect(body.summary.root).toBe(alias);
+      // The identity the response reports has to survive a round trip: a client that hands
+      // `summary.root` straight back as `dir` must still be a registered project, which the
+      // canonical root never is.
+      const echoed = await handleWorkspace(
+        ctx(`/api/workspace?dir=${encodeURIComponent(body.summary.root)}`),
+        deps,
+      );
+      expect(echoed.status).toBe(200);
+    } finally {
+      rmSync(alias, { force: true });
+      rmSync(real, { recursive: true, force: true });
     }
   });
 
@@ -761,6 +810,31 @@ describe("GET /api/workspace", () => {
       });
       expect(JSON.stringify(result.body)).not.toContain(root);
       expect(JSON.stringify(result.body)).not.toContain("context");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Registration is a structural path check, so a user can register a directory that sits under an
+  // always-denied segment. Root admission — not the registration record — decides that case, and it
+  // must answer PATH_DENIED instead of summarizing the tree.
+  it("denies a registered root that lives under an always-denied segment", async () => {
+    const root = createWorkspaceFixture();
+    const denied = join(root, "node_modules");
+    mkdirSync(denied, { recursive: true });
+    try {
+      const result = await handleWorkspace(
+        ctx(`/api/workspace?dir=${encodeURIComponent(denied)}`),
+        depsWithRegisteredProject(denied),
+      );
+      expect(result.status).toBe(400);
+      expect(result.body).toMatchObject({
+        error: {
+          code: "WORKSPACE_PATH_DENIED",
+          message: "The workspace path is denied by policy.",
+        },
+      });
+      expect(JSON.stringify(result.body)).not.toContain(root);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

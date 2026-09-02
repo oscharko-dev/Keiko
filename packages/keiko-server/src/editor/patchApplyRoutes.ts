@@ -42,12 +42,19 @@ import {
   type PatchRejection,
   type PatchValidation,
 } from "@oscharko-dev/keiko-tools";
-import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { detectWorkspaceAt, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
+import {
+  FilesError,
+  readJsonObject,
+  requestRootAccessResolver,
+  resolveRequestRoot,
+  runFilesHandler,
+} from "../files.js";
+import { DENIED_MESSAGE } from "../files-deny.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import { clientAbortSignal } from "./languageRoutes.js";
 import {
   captureEditorLocalHistorySafely,
@@ -261,12 +268,18 @@ interface ApplyContext {
   readonly request: EditorPatchApplyWireRequest;
   readonly deps: UiHandlerDeps;
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   readonly signal: AbortSignal;
   readonly nowMs: number;
   readonly options: EditorPatchApplyRouteOptions;
   // The request's own correlation id (ADR-0173 D5 / g12), threaded down so a local-history
   // capture failure joins the SAME id as the rest of this request's trail.
   readonly correlationId: string | undefined;
+  // The operation-scoped root prover bound to THIS request's admission (#3347). `realRoot`/`fs`
+  // above are the admission-time capability and are correct for validation and preflight; the
+  // mutation re-proves through this seam instead, so a root revoked or replaced during the
+  // preflight await cannot be written on stale authority.
+  readonly resolveAccess: () => WorkspaceRootAccess | undefined;
 }
 
 async function runVerificationPhase(
@@ -279,6 +292,7 @@ async function runVerificationPhase(
   const port = ctx.options.verification ?? defaultPostApplyVerification;
   return port({
     realRoot: ctx.realRoot,
+    fs: ctx.fs,
     appliedTestFiles: verifiableFiles(result),
     signal: ctx.signal,
     correlationId: ctx.correlationId,
@@ -332,6 +346,7 @@ async function verificationPreflightOutcome(
   const port = ctx.options.verificationPreflight ?? defaultPostApplyVerificationPreflight;
   const preflight = await port({
     realRoot: ctx.realRoot,
+    fs: ctx.fs,
     appliedTestFiles: verifiableValidationFiles(validation.files),
   });
   if (preflight.ok) {
@@ -407,8 +422,11 @@ async function appliedOutcome(
 
 async function handleApply(ctx: ApplyContext): Promise<EditorPatchApplyWireResponse> {
   const allowOverwrite = ctx.request.allowOverwrite === true;
-  const workspace = detectWorkspaceAt(ctx.realRoot, nodeWorkspaceFs);
-  const validation = validatePatch(workspace, ctx.request.diff, { allowOverwrite });
+  const workspace = detectWorkspaceAt(ctx.realRoot, ctx.fs);
+  const validation = validatePatch(workspace, ctx.request.diff, {
+    fs: ctx.fs,
+    allowOverwrite,
+  });
   if (!validation.ok) {
     return conflictOutcome(ctx, validation);
   }
@@ -425,9 +443,28 @@ async function handleApply(ctx: ApplyContext): Promise<EditorPatchApplyWireRespo
   if (!stillActive) {
     return disabledResponse();
   }
+  return mutateThroughReprovedRoot(ctx, validation);
+}
+
+// Everything above ran on the capability proved once, at admission, and both the verification
+// preflight and the activation re-check are real async gaps. Editor AI activation is not the root's
+// authority: a managed root revoked, archived or identity-replaced inside that window still had a
+// live `patchApply` setting, so re-checking activation alone left the write on stale path authority
+// (#3347). Re-prove the root here and run the restore-patch build AND the apply through that fresh
+// capability. A denial fails closed as a 403 before any workspace is detected, any restore patch is
+// built, or any writer is constructed.
+async function mutateThroughReprovedRoot(
+  ctx: ApplyContext,
+  validation: PatchValidation,
+): Promise<EditorPatchApplyWireResponse> {
+  const access = ctx.resolveAccess();
+  if (access === undefined) throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  const allowOverwrite = ctx.request.allowOverwrite === true;
+  const workspace = detectWorkspaceAt(access.canonicalRoot, access.fs);
   let restoreDiff: string | undefined;
   try {
     restoreDiff = buildRestorePatch(workspace, validation.normalizedDiff ?? ctx.request.diff, {
+      fs: access.fs,
       allowOverwrite,
     });
   } catch {
@@ -439,6 +476,7 @@ async function handleApply(ctx: ApplyContext): Promise<EditorPatchApplyWireRespo
       applyEnabled: true,
       signal: ctx.signal,
       allowOverwrite,
+      fs: access.fs,
     });
   } catch {
     return failureOutcome(ctx);
@@ -490,7 +528,9 @@ export async function handleEditorPatchApply(
   const request = parsed.value;
   return runFilesHandler(async () => {
     const root = await resolveRequestRoot(ctx, deps, request.root);
-    const activation = await resolveEditorAiAssistStatusForRoot(deps, root.realRoot, "patchApply");
+    const { canonicalRoot, fs } = root.access;
+    const resolveAccess = requestRootAccessResolver(ctx, deps, root);
+    const activation = await resolveEditorAiAssistStatusForRoot(deps, canonicalRoot, "patchApply");
     if (!editorAiStatusActive(activation)) {
       return { status: 200, body: deps.redactor(disabledResponse()) };
     }
@@ -502,11 +542,13 @@ export async function handleEditorPatchApply(
     const response = await handleApply({
       request,
       deps,
-      realRoot: root.realRoot,
+      realRoot: canonicalRoot,
+      fs,
       signal,
       nowMs,
       options,
       correlationId: ctx.correlationId,
+      resolveAccess,
     });
     return { status: 200, body: deps.redactor(response) };
   });

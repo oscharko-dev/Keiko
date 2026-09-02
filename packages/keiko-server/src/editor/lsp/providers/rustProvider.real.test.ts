@@ -105,6 +105,7 @@ describe.skipIf(!provisioned)(suiteName, () => {
   function workspace(): WorkspaceInfo {
     return {
       root,
+      selectedRoot: root,
       name: undefined,
       version: undefined,
       testFramework: "unknown",

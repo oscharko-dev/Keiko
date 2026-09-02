@@ -31,6 +31,7 @@ afterEach(async () => {
 function workspace(): WorkspaceInfo {
   return {
     root: workspaceRoot,
+    selectedRoot: workspaceRoot,
     name: undefined,
     version: undefined,
     testFramework: "unknown",

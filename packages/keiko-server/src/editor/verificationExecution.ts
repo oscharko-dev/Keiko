@@ -18,7 +18,7 @@ import {
   type VerificationReport,
 } from "@oscharko-dev/keiko-verification";
 import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/server-log.js";
@@ -60,6 +60,7 @@ export interface ExecuteVerificationArgs {
   // processServerLogSink() so production logging needs no wiring; tests inject a capture sink —
   // without this seam the evidence line was unobservable to any test in this file.
   readonly activityLog?: ServerLogSink | undefined;
+  readonly fs?: WorkspaceFs | undefined;
 }
 
 export interface ExecuteVerificationResult {
@@ -91,6 +92,7 @@ export async function executeVerificationEnforced(
   const activityLog = args.activityLog ?? processServerLogSink();
   const report = await runVerification(args.plan, {
     workspace: args.workspace,
+    ...(args.fs === undefined ? {} : { fs: args.fs }),
     signal: args.signal,
     networkEnforcement: "enforce-or-fail-closed",
     enforcedNetworkAvailable: probe.available,

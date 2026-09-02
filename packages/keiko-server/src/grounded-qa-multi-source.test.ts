@@ -58,7 +58,11 @@ import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
 import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
-import { RepoSearchUnsupportedFileError } from "@oscharko-dev/keiko-workspace";
+import {
+  PathDeniedError,
+  RepoSearchUnsupportedFileError,
+  WorkspaceNotFoundError,
+} from "@oscharko-dev/keiko-workspace";
 import {
   ContextOverflowError,
   type GatewayCallRequest,
@@ -890,6 +894,89 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       .join(" | ");
     expect(skippedClaims).toContain("gone");
     expect(skippedClaims).toContain("not readable");
+  });
+
+  it("keeps a skipped source root denial path-free while healthy sources answer", async () => {
+    const healthy: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/a.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("healthy"),
+    };
+    const denied: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/denied.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("denied"),
+    };
+    const secondHealthy: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/c.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("second-healthy"),
+    };
+    const chatId = makeChat([healthy, denied, secondHealthy]);
+    const sensitivePath = join(tmp, ".aws", "customer-root");
+    const byPath = new Map<string, ConnectedContextPack>([
+      ["src/a.ts", scopePack("src/a.ts", 0.8, "a")],
+      ["src/c.ts", scopePack("src/c.ts", 0.7, "c")],
+    ]);
+    const retriever: GroundedRetriever = (input) =>
+      input.scope.relativePaths[0] === "src/denied.ts"
+        ? Promise.reject(new PathDeniedError(`denied source root: ${sensitivePath}`, sensitivePath))
+        : packPerScope(byPath)(input);
+
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain all" })),
+      recordingDeps([]),
+      undefined,
+      seam(retriever, constAnswerer("partial answer [src/a.ts] [src/c.ts]", { count: 0 })),
+    );
+
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    const serialized = JSON.stringify(answer);
+    expect(serialized).toContain("The workspace path is denied by policy.");
+    expect(serialized).not.toContain(sensitivePath);
+    expect(serialized).not.toContain("customer-root");
+  });
+
+  it("skips a root that disappears after admission while a healthy source answers", async () => {
+    const healthy: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/a.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("healthy-after-admission"),
+    };
+    const disappeared: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/gone.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("gone-after-admission"),
+    };
+    const chatId = makeChat([healthy, disappeared]);
+    const sensitivePath = join(tmp, ".aws", "gone-after-admission");
+    const healthyPack = scopePack("src/a.ts", 0.8, "a");
+    const retriever: GroundedRetriever = (input) =>
+      input.scope.relativePaths[0] === "src/gone.ts"
+        ? Promise.reject(
+            new WorkspaceNotFoundError("root disappeared", sensitivePath, [sensitivePath]),
+          )
+        : Promise.resolve({ pack: healthyPack, elapsedMs: 11, plan: { state: "ready" } as never });
+
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain all" })),
+      recordingDeps([]),
+      undefined,
+      seam(retriever, constAnswerer("healthy answer [src/a.ts]", { count: 0 })),
+    );
+
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    const serialized = JSON.stringify(answer);
+    expect(serialized).toContain("Connected scope root is not accessible.");
+    expect(serialized).not.toContain(sensitivePath);
+    expect(serialized).not.toContain(".aws");
   });
 
   it("merges two sources: citations carry BOTH labels, omitted/usage/budget are summed", async () => {

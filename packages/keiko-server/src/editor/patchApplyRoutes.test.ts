@@ -22,6 +22,11 @@ import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { UiStore } from "../store/index.js";
 import {
+  createOrdinaryWorkspaceRootAccess,
+  grantedWorkspaceRootAccess,
+  type WorkspaceRootAccessOutcome,
+} from "../task-workspace/workspace-root-access.js";
+import {
   handleEditorPatchApply,
   isPatchApplyEnabledByPolicy,
   isPatchApplyVerificationEnabledByPolicy,
@@ -361,6 +366,60 @@ describe("POST /api/editor/patch-apply — explicit decision (AC1)", () => {
     expect(response.status).toBe("disabled");
     expect(await exists("src/a.test.ts")).toBe(false);
     expect(reads).toBeGreaterThanOrEqual(2);
+  });
+
+  // #3347: the activation re-check above closes the M7 half of the preflight window only. The ROOT
+  // capability itself is proved once, at admission, and the whole verification preflight runs before
+  // the mutation — so a managed root revoked or replaced inside that window could still be patched
+  // through the admission-time fs. The route now re-proves the root immediately before
+  // buildRestorePatch/applyPatch and runs both through THAT capability. Revoking from inside the
+  // preflight port puts the revocation exactly in the gap the finding describes.
+  it("denies the patch and constructs no writer when the root is revoked during verification preflight", async () => {
+    let revoked = false;
+    const revokingPreflight: PostApplyVerificationPreflightPort = () => {
+      revoked = true;
+      return Promise.resolve({ ok: true });
+    };
+    const proofs: string[] = [];
+    const revocableDeps = {
+      ...deps({ env: ENABLED }),
+      workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome => {
+        proofs.push(requestedRoot);
+        return revoked
+          ? { decision: "denied" }
+          : grantedWorkspaceRootAccess(createOrdinaryWorkspaceRootAccess(requestedRoot));
+      },
+    } as unknown as UiHandlerDeps;
+
+    const result = await handleEditorPatchApply(
+      postContext(body()),
+      revocableDeps,
+      options(summary(), revokingPreflight),
+    );
+
+    expect(result.status).toBe(403);
+    expect(result.body).toMatchObject({ error: { code: "DENIED" } });
+    // No writer was constructed and no bytes were written: the create-diff's target never appears.
+    expect(await exists("src/a.test.ts")).toBe(false);
+    // The re-proof ran after the preflight, not merely at admission (admission never consults it).
+    expect(proofs).toEqual([root]);
+  });
+
+  it("applies through a root capability re-proved after the preflight window", async () => {
+    const proofs: string[] = [];
+    const provingDeps = {
+      ...deps({ env: ENABLED }),
+      workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome => {
+        proofs.push(requestedRoot);
+        return grantedWorkspaceRootAccess(createOrdinaryWorkspaceRootAccess(requestedRoot));
+      },
+    } as unknown as UiHandlerDeps;
+
+    const result = await handleEditorPatchApply(postContext(body()), provingDeps, options());
+
+    expect(wire(result).status).toBe("applied");
+    expect(await readFile(join(root, "src/a.test.ts"), "utf8")).toBe("it('x', () => {});\n");
+    expect(proofs).toEqual([root]);
   });
 });
 

@@ -131,6 +131,11 @@ describe("checkArchitectureImportPolicy", () => {
     );
 
     expect(Object.fromEntries([...counts.entries()].sort())).toEqual({
+      "adr-0005-owned-root-authority-implementation-private": 1,
+      "adr-0005-owned-root-containment-allowed-callers": 1,
+      "adr-0005-owned-root-lookup-allowed-callers": 1,
+      "adr-0005-owned-root-mint-allowed-callers": 1,
+      "adr-0005-owned-root-preserve-allowed-callers": 1,
       "adr-0019-trust-1-provider-sdk-isolation": 1,
       "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
       "adr-0019-trust-5-patch-routes-through-tools": 1,

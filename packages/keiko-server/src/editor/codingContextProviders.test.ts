@@ -17,6 +17,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/git-editor";
 import { GIT_REPOSITORY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type {
   MemoryId,
   MemoryRecord,
@@ -99,6 +100,7 @@ function providerCtx(overrides: Partial<ProviderContext> = {}): ProviderContext 
   return {
     deps: baseDeps(),
     realRoot: "/tmp/does-not-exist",
+    fs: nodeWorkspaceFs,
     signal: new AbortController().signal,
     maxBytesPerExcerpt: 8192,
     currentTimeMs: () => nowMs,
@@ -802,7 +804,9 @@ describe("runRepoSearchProvider", () => {
   });
 
   it("omits files-focus as denied when the active document cannot be read", async () => {
-    const outcome = await runRepoSearchProvider(providerCtx(), {
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-cc-missing-focus-"));
+    tmpDirs.push(dir);
+    const outcome = await runRepoSearchProvider(providerCtx({ realRoot: dir }), {
       documentPath: "src/missing.ts",
       symbol: undefined,
       queryText: undefined,

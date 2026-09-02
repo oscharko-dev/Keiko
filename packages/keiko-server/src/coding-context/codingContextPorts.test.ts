@@ -13,6 +13,7 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 
 const WORKSPACE: WorkspaceInfo = {
   root: process.cwd(),
+  selectedRoot: process.cwd(),
   name: undefined,
   version: undefined,
   testFramework: "unknown",

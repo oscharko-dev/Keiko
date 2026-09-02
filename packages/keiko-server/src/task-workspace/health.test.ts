@@ -7,10 +7,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type {
   TaskWorkspaceLifecycleState,
@@ -31,6 +32,7 @@ import { createWorkspaceProvisioningService } from "./provisioning.js";
 import { createWorkspaceHealthService } from "./health.js";
 import type { WorkspaceHealthService, WorkspaceProvisioningService } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
+import { MANAGED_ROOT_MARKER_FILENAME } from "./naming.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -42,7 +44,11 @@ let pointerStore: ActiveWorkspacePointerStore;
 let idCounter: number;
 let nowMs: number;
 
-type AdapterFactory = (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
+type AdapterFactory = (
+  workspace: WorkspaceInfo,
+  correlationId: string,
+  fs?: WorkspaceFs,
+) => GitWorktreeAdapter;
 
 function git(args: readonly string[], cwd = repoRoot): string {
   return execFileSync("git", [...args], { cwd, encoding: "utf8" });
@@ -57,8 +63,16 @@ function noopEvidence(): EvidenceStore {
   };
 }
 
-function realAdapter(workspace: WorkspaceInfo): GitWorktreeAdapter {
-  return createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } });
+function realAdapter(
+  workspace: WorkspaceInfo,
+  _correlationId?: string,
+  fs?: WorkspaceFs,
+): GitWorktreeAdapter {
+  return createNodeGitWorktreeAdapter({
+    workspace,
+    processEnv: { PATH: process.env.PATH ?? "" },
+    ...(fs === undefined ? {} : { fs }),
+  });
 }
 
 function provisioning(): WorkspaceProvisioningService {
@@ -140,9 +154,9 @@ describe("operational health classification (AC1)", () => {
   it("normalizes a malformed correlationId before every health adapter call", async () => {
     await provisionTask("t-correlation-boundary");
     const received: string[] = [];
-    const adapterFactory: AdapterFactory = (workspace, correlationId) => {
+    const adapterFactory: AdapterFactory = (workspace, correlationId, fs) => {
       received.push(correlationId);
-      return realAdapter(workspace);
+      return realAdapter(workspace, correlationId, fs);
     };
     await health(adapterFactory).report(repoRoot, "req corr\ncontrol");
     expect(received.length).toBeGreaterThan(0);
@@ -159,6 +173,25 @@ describe("operational health classification (AC1)", () => {
     // content-free: no path / repo root leaks
     expect(JSON.stringify(report)).not.toContain(managedRoot);
     expect(JSON.stringify(report)).not.toContain(repoRoot);
+  });
+
+  it("probes an exact registered workspace below the default denied state directory", async () => {
+    managedRoot = join(dirname(managedRoot), ".keiko", "task-workspaces");
+    const instance = await provisionTask("t-owned-denied-root");
+
+    const report = await health().report(repoRoot);
+
+    expect(entryFor(report, instance.workspaceId)?.classification).toBe("healthy");
+  });
+
+  it("does not report healthy when registered managed-root access cannot be re-proved", async () => {
+    const instance = await provisionTask("t-access-revoked");
+    rmSync(join(managedRoot, MANAGED_ROOT_MARKER_FILENAME));
+
+    const report = await health().report(repoRoot);
+
+    expect(entryFor(report, instance.workspaceId)?.classification).toBe("recovery-required");
+    expect(entryFor(report, instance.workspaceId)?.cleanupEligible).toBe(false);
   });
 
   it("classifies a worktree with uncommitted/untracked changes as dirty (live probe)", async () => {
@@ -195,6 +228,18 @@ describe("operational health classification (AC1)", () => {
 });
 
 describe("orphan detection", () => {
+  it("probes a contained orphan below the denied state directory without persisted authority", async () => {
+    managedRoot = join(dirname(managedRoot), ".keiko", "task-workspaces");
+    const instance = await provisionTask("t-owned-denied-orphan");
+    store.delete(instance.workspaceId);
+
+    const report = await health().report(repoRoot);
+    const orphan = report.entries.find((entry) => entry.kind === "orphan-worktree");
+
+    expect(orphan?.classification).toBe("orphaned");
+    expect(orphan?.cleanupEligible).toBe(false);
+  });
+
   it("surfaces an orphaned managed worktree (directory with no persisted record)", async () => {
     const instance = await provisionTask("t-orphan");
     store.delete(instance.workspaceId);
