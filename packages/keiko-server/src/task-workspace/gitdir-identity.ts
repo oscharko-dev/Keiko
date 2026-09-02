@@ -114,15 +114,38 @@ function fileIdentity(read: WorkspaceDescriptorUtf8Read): IdentityPair | undefin
  * `schema-retired` still refuses. A v2 identity is forgeable by exactly the inode reuse v3 closes, so
  * it is recognised and never accepted.
  */
-export type ManagedIdentityDrift = "matches" | "schema-retired" | "changed";
+export type ManagedIdentityDrift = "matches" | "schema-retired" | "unsupported" | "changed";
 
+/**
+ * Four outcomes, because three of them need different operator actions and collapsing any pair
+ * sends the operator to the wrong one:
+ *   matches         — nothing to do.
+ *   schema-retired  — the workspace is intact; re-register to reissue the proof.
+ *   unsupported     — this filesystem reports no creation time; relocate the root (ADR-0155).
+ *   changed         — the worktree really is not the one that was registered.
+ *
+ * `unsupported` is NOT `changed`: nothing about the customer's disk changed, and reporting a
+ * platform limitation as a replaced worktree is a false statement that sends them hunting an attack.
+ */
+export function managedIdentityDriftFor(
+  outcome: ManagedGitdirIdentityOutcome,
+  persisted: string,
+): ManagedIdentityDrift {
+  if (outcome.kind === "unsupported") return "unsupported";
+  if (outcome.kind === "unproven") return "changed";
+  if (outcome.inspection.identity === persisted) return "matches";
+  return outcome.inspection.legacyIdentity === persisted ? "schema-retired" : "changed";
+}
+
+/** Convenience for the callers that already hold an inspection rather than a full outcome. */
 export function managedIdentityDrift(
   inspection: ManagedGitdirIdentityInspection | undefined,
   persisted: string,
 ): ManagedIdentityDrift {
-  if (inspection === undefined) return "changed";
-  if (inspection.identity === persisted) return "matches";
-  return inspection.legacyIdentity === persisted ? "schema-retired" : "changed";
+  return managedIdentityDriftFor(
+    inspection === undefined ? { kind: "unproven" } : { kind: "identified", inspection },
+    persisted,
+  );
 }
 
 /**

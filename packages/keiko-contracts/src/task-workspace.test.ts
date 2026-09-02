@@ -401,7 +401,7 @@ describe("enum vocab + guards", () => {
   });
 
   it("drift markers", () => {
-    expect(TASK_WORKSPACE_DRIFT_MARKERS).toHaveLength(9);
+    expect(TASK_WORKSPACE_DRIFT_MARKERS).toHaveLength(10);
     for (const marker of TASK_WORKSPACE_DRIFT_MARKERS) {
       expect(isTaskWorkspaceDriftMarker(marker)).toBe(true);
     }

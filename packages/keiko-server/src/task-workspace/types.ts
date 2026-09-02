@@ -37,6 +37,16 @@ export interface WorkspaceProvisionRequest {
   // internal repair re-materialization not driven by a fresh HTTP call) — the evidence layer falls
   // back to UNKNOWN_CORRELATION_ID in that case, never a silently reused workspace identity.
   readonly correlationId?: string | undefined;
+  /**
+   * This call IS the operator-approved recovery repair, not an ordinary provision.
+   *
+   * Only that path may reissue the identity of a worktree that already exists on disk. An ordinary
+   * request must never do it: `recovery-required` is a completable state, so without the
+   * distinction the very next identical request would silently upgrade an identity a guard just
+   * refused — including a genuinely replaced worktree. Set exclusively by the repair service, which
+   * requires `operatorApproved`.
+   */
+  readonly operatorApprovedRepair?: boolean | undefined;
 }
 
 export interface WorkspaceProvisionResult {

@@ -40,7 +40,8 @@ does not accept the retired proof even once. Accepting a forgeable identity is p
 let an already-replaced worktree be reissued as a trusted one, so the one-time "self-healing upgrade"
 that looks convenient here is the one option that must not be taken.
 
-`managed-root-identity-unsupported` is this document's condition reached through a managed worktree.
+`managed-root-identity-unsupported`, and the `identity-unsupported` drift marker, are this
+document's condition reached through a managed worktree.
 Every component of that identity — the worktree root, the Git common and admin directories, and the
 two pointer files — carries its creation time, so a volume that cannot report one produces no
 identity at all and the workspace is refused. The resolution above applies unchanged: the managed
@@ -59,3 +60,15 @@ Grep the activity log for `decision: "denied"` and read the `reason` discriminat
 are body-free by contract: they carry the reason, the correlation id, and counts — never the
 workspace path, the repository path, or the stored identity. A correlation id ties the refusal to the
 request that triggered it.
+
+## What this guard is, and is not
+
+It is **not** a security boundary against a local attacker running as the same user. Creation time is
+writable on Windows (`SetFileTime`) and on macOS (`setattrlist`, `ATTR_CMN_CRTIME`), and Windows
+documents that file identifiers may be reused after deletion. An attacker with local write access can
+also read or rewrite anything Keiko itself records, so neither a stat-metadata scheme nor a
+Keiko-written nonce closes that case.
+
+What it does close is the accidental and the cheap replacement: on ordinary Linux filesystems a
+deleted-and-recreated directory is handed the same inode by default, which required no privileges at
+all. Binding creation time removes that, and it is defence in depth rather than proof.

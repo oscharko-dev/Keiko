@@ -271,6 +271,9 @@ async function applyProvisioningRepair(
     baseBranch: instance.baseBranch,
     requestedBy,
     correlationId,
+    // Reaching here already required `operatorApproved`; this is what lets the re-materialization
+    // reissue an identity that the ordinary provision path refuses.
+    operatorApprovedRepair: true,
   });
   return result.instance;
 }

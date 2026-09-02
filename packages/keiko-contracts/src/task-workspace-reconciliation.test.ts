@@ -195,6 +195,11 @@ describe("planWorkspaceRecoveryHints", () => {
       strategy: "operator-repair",
       operatorActionRequired: true,
     },
+    "identity-unsupported": {
+      marker: "identity-unsupported",
+      strategy: "operator-repair",
+      operatorActionRequired: true,
+    },
     "head-moved": {
       marker: "head-moved",
       strategy: "operator-repair",

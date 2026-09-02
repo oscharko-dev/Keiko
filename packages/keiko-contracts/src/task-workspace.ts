@@ -333,7 +333,11 @@ export type TaskWorkspaceDriftMarker =
   // The worktree is intact, but its stored identity predates the current identity rule. A distinct
   // marker because it is a MIGRATION, not a defect on the customer's disk: an export that cannot
   // separate it from a real pointer change sends an operator to the wrong incident.
-  | "identity-schema-retired";
+  | "identity-schema-retired"
+  // This filesystem reports no durable creation time, so no identity can be derived at all
+  // (ADR-0155's FILESYSTEM_IDENTITY_UNSUPPORTED at the managed boundary). Nothing about the
+  // customer's disk changed; reporting it as a replaced worktree sends them to the wrong action.
+  | "identity-unsupported";
 
 export const TASK_WORKSPACE_DRIFT_MARKERS: readonly TaskWorkspaceDriftMarker[] = [
   "worktree-missing",
@@ -345,6 +349,7 @@ export const TASK_WORKSPACE_DRIFT_MARKERS: readonly TaskWorkspaceDriftMarker[] =
   "path-escape",
   "pointer-stale",
   "identity-schema-retired",
+  "identity-unsupported",
 ] as const;
 
 export function isTaskWorkspaceDriftMarker(value: unknown): value is TaskWorkspaceDriftMarker {
@@ -1237,6 +1242,8 @@ export interface WorkspaceReconciliationFacts {
    * reconcile instead of the operator re-registration the retired proof requires.
    */
   readonly gitdirIdentitySchemaRetired?: boolean;
+  /** This filesystem cannot report a creation time, so no identity exists to compare. */
+  readonly gitdirIdentityUnsupported?: boolean;
   // the dedicated task branch still exists / the worktree is still bound to it.
   readonly taskBranchPresent: boolean;
   // the worktree HEAD equals the persisted `lastVerifiedHead` (true when no baseline was recorded).
@@ -1286,6 +1293,9 @@ const DRIFT_MARKER_RECOVERY: Readonly<
   // retired proof is forgeable by the inode reuse the current rule closes, so it is never accepted
   // automatically — doing so would reissue an already-replaced worktree as a trusted one.
   "identity-schema-retired": { strategy: "operator-repair", operatorActionRequired: true },
+  // Relocating the workspace root is the documented resolution; no automatic repair can create a
+  // creation time the filesystem does not keep.
+  "identity-unsupported": { strategy: "operator-repair", operatorActionRequired: true },
   "head-moved": { strategy: "operator-repair", operatorActionRequired: true },
   // A deleted local branch cannot be safely re-created by the narrow worktree adapter without risking
   // loss of the worktree's commits, so reattachment is operator-guided, never automatic.
@@ -1344,6 +1354,14 @@ function partialCreationMarkers(
 // mismatch → branch/HEAD/dirty), in the same fixed precedence as classifyWorkspaceReconciliation.
 // Returns null when the worktree is fully in sync, so the caller falls through to the remaining
 // (non-disk) checks.
+// Each identity outcome keeps its own marker: a migration, a platform limitation and a replaced
+// worktree need three different operator actions, and recovery reads the marker, not a message.
+function identityDriftMarker(facts: WorkspaceReconciliationFacts): TaskWorkspaceDriftMarker {
+  if (facts.gitdirIdentityUnsupported === true) return "identity-unsupported";
+  if (facts.gitdirIdentitySchemaRetired === true) return "identity-schema-retired";
+  return "gitdir-mismatch";
+}
+
 function classifyOnDiskDrift(
   facts: WorkspaceReconciliationFacts,
 ): WorkspaceReconciliationOutcome | null {
@@ -1352,9 +1370,7 @@ function classifyOnDiskDrift(
   if (!facts.gitPointerPresent)
     return outcome("stale-pointer", withStaleLock(["pointer-stale"], facts));
   if (!facts.gitdirIdentityMatches) {
-    const marker =
-      facts.gitdirIdentitySchemaRetired === true ? "identity-schema-retired" : "gitdir-mismatch";
-    return outcome("stale-pointer", withStaleLock([marker], facts));
+    return outcome("stale-pointer", withStaleLock([identityDriftMarker(facts)], facts));
   }
   if (!facts.taskBranchPresent) return outcome("drifted", withStaleLock(["branch-deleted"], facts));
   if (!facts.headMatches) return outcome("drifted", withStaleLock(["head-moved"], facts));

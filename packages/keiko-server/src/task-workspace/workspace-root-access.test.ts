@@ -504,6 +504,11 @@ describe("resolveManagedWorkspaceRootAccess", () => {
     expect(JSON.stringify(denialEvents(activityLog)[0])).not.toContain(inspection.legacyIdentity);
   });
 
+  // An empty requested root must never reach the managed classifier as a valid path.
+  it("refuses an empty requested root before any identity work", () => {
+    expect(resolveAccess("")).toBeUndefined();
+  });
+
   it("logs one correlated ownership denial when the managed-root marker is gone", () => {
     rmSync(join(managedRoot, MANAGED_ROOT_MARKER_FILENAME), { force: true });
     const activityLog = createBufferedServerLogSink();

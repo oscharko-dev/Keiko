@@ -46,7 +46,12 @@ import {
   managedTargetExists,
 } from "./managed-root.js";
 import { TaskWorkspaceError } from "./errors.js";
-import { inspectManagedGitdirIdentity, managedIdentityDrift } from "./gitdir-identity.js";
+import {
+  inspectManagedGitdirIdentity,
+  inspectManagedGitdirIdentityOutcome,
+  managedIdentityDriftFor,
+  type ManagedIdentityDrift,
+} from "./gitdir-identity.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import {
   recordWorkspaceLifecycle,
@@ -77,6 +82,22 @@ const RESUMABLE_STATES: ReadonlySet<TaskWorkspaceLifecycleState> = new Set([
 // the same instruction whether the refusal came from the first attempt or a later retry.
 const RETIRED_IDENTITY_SCHEMA_MESSAGE =
   "managed worktree identity predates the current identity rule; re-register to reissue it";
+const UNSUPPORTED_IDENTITY_MESSAGE =
+  "managed worktree filesystem cannot report a durable creation time; relocate the workspace root";
+
+// One mapping from the verdict to what is persisted and what the operator is told. Each outcome asks
+// for a different action, so none of them may borrow another's marker or sentence.
+function driftMarkerFor(drift: ManagedIdentityDrift): TaskWorkspaceDriftMarker {
+  if (drift === "schema-retired") return "identity-schema-retired";
+  if (drift === "unsupported") return "identity-unsupported";
+  return "pointer-stale";
+}
+
+function driftMessageFor(drift: ManagedIdentityDrift): string {
+  if (drift === "schema-retired") return RETIRED_IDENTITY_SCHEMA_MESSAGE;
+  if (drift === "unsupported") return UNSUPPORTED_IDENTITY_MESSAGE;
+  return "managed worktree git identity changed";
+}
 
 const COMPLETABLE_STATES: ReadonlySet<TaskWorkspaceLifecycleState> = new Set([
   "provisioning",
@@ -489,8 +510,10 @@ function resumeExisting(
   correlationId: string | undefined,
 ): WorkspaceProvisionResult {
   assertPersistedManagedPath(ctx, existing);
-  const inspection = inspectManagedGitdirIdentity(repo.worktreePath, repo.repositoryRoot);
-  const drift = managedIdentityDrift(inspection, existing.gitdirIdentity);
+  const drift = managedIdentityDriftFor(
+    inspectManagedGitdirIdentityOutcome(repo.worktreePath, repo.repositoryRoot),
+    existing.gitdirIdentity,
+  );
   if (drift !== "matches") {
     // Both outcomes refuse and both need the same pointer reconciliation, but they are not the same
     // event and must not carry the same sentence: a workspace registered before the identity rule
@@ -501,10 +524,8 @@ function resumeExisting(
       existing,
       nowMs,
       correlationId,
-      drift === "schema-retired" ? "identity-schema-retired" : "pointer-stale",
-      drift === "schema-retired"
-        ? RETIRED_IDENTITY_SCHEMA_MESSAGE
-        : "managed worktree git identity changed",
+      driftMarkerFor(drift),
+      driftMessageFor(drift),
     );
   }
   ensureManagedWorkspaceIdentity(ctx, existing, true);
@@ -567,6 +588,7 @@ function reuseExistingOrUndefined(
   existing: WorkspaceInstance | undefined,
   nowMs: number,
   correlationId: string | undefined,
+  operatorApprovedRepair: boolean,
 ): WorkspaceProvisionResult | undefined {
   if (existing === undefined) return undefined;
   if (RESUMABLE_STATES.has(existing.lifecycleState)) {
@@ -581,19 +603,31 @@ function reuseExistingOrUndefined(
     assertPersistedManagedPath(ctx, existing);
     return { instance: existing, binding: buildBinding(existing), created: false };
   }
-  // A refused retired-schema row is persisted as `recovery-required`, which IS in
-  // COMPLETABLE_STATES. Without this the next identical provision() falls straight through to the
-  // completion path, recomputes a current identity and finalizes it — reissuing the very proof the
-  // refusal withheld, with no operator approval anywhere. Reproduced in review (#3372 P1).
-  if (existing.driftMarkers.includes("identity-schema-retired")) {
-    return flagResumableDrift(
-      ctx,
-      existing,
-      nowMs,
-      correlationId,
-      "identity-schema-retired",
-      RETIRED_IDENTITY_SCHEMA_MESSAGE,
+  // The completion path recomputes an identity and finalizes it. For a worktree that ALREADY EXISTS
+  // on disk that is an identity reissue, and it must never happen without an operator-approved
+  // repair: `recovery-required` is in COMPLETABLE_STATES, so a refused row would otherwise be
+  // upgraded by the very next identical request. Reproduced in review.
+  //
+  // The check is on the live verdict, not on a persisted marker. A marker can be absent, stale, or
+  // cleared by a repair that did not fix anything, and gating on it left the leak open for exactly
+  // those rows — including a genuinely CHANGED v3 identity, which needs approval just as much as a
+  // retired one. Only "matches" may proceed; a worktree that does not exist yet is a real
+  // completion and falls through untouched.
+  if (!operatorApprovedRepair && managedTargetExists(repo.worktreePath)) {
+    const drift = managedIdentityDriftFor(
+      inspectManagedGitdirIdentityOutcome(repo.worktreePath, repo.repositoryRoot),
+      existing.gitdirIdentity,
     );
+    if (drift !== "matches") {
+      return flagResumableDrift(
+        ctx,
+        existing,
+        nowMs,
+        correlationId,
+        driftMarkerFor(drift),
+        driftMessageFor(drift),
+      );
+    }
   }
   return undefined; // COMPLETABLE: fall through to (re)provision/complete.
 }
@@ -657,7 +691,14 @@ async function provisionLocked(
 
   const nowMs = ctx.deps.now();
   const existing = ctx.deps.store.findByRepositoryAndTask(repo.repositoryId, request.taskId);
-  const reused = reuseExistingOrUndefined(ctx, repo, existing, nowMs, request.correlationId);
+  const reused = reuseExistingOrUndefined(
+    ctx,
+    repo,
+    existing,
+    nowMs,
+    request.correlationId,
+    request.operatorApprovedRepair === true,
+  );
   if (reused !== undefined) return reused;
 
   try {

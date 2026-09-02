@@ -534,6 +534,41 @@ describe("idempotent safe retry (AC3)", () => {
     expect(persisted?.gitdirIdentity).toBe(inspection.legacyIdentity);
   });
 
+  // The completion path is what reissues an identity, and `recovery-required` is completable — so a
+  // refused row would otherwise be upgraded by the very next identical request. The guard is on the
+  // LIVE verdict, not on a persisted marker, so a genuinely changed v3 identity is refused too.
+  it("refuses to reissue a changed identity for an existing worktree without operator approval", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-no-silent-reissue",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({
+      ...first.instance,
+      gitdirIdentity: "0000000000000000deadbeefdeadbeef",
+      lifecycleState: "recovery-required",
+    });
+    const request = {
+      repositoryRequestPath: repoRoot,
+      taskId: "t-no-silent-reissue",
+      baseBranch: "main",
+      requestedBy: "u",
+    };
+
+    await rejectsWithCode(() => service.provision(request), "POINTER_DRIFT");
+    await rejectsWithCode(() => service.provision(request), "POINTER_DRIFT");
+    expect(store.getById(first.instance.workspaceId)?.gitdirIdentity).toBe(
+      "0000000000000000deadbeefdeadbeef",
+    );
+
+    // The operator-approved repair is the one path that MAY reissue it — otherwise the refusal
+    // would have no exit and the workspace would be stranded.
+    const repaired = await service.provision({ ...request, operatorApprovedRepair: true });
+    expect(repaired.instance.gitdirIdentity).not.toBe("0000000000000000deadbeefdeadbeef");
+  });
+
   // Regression for S8786: the formerly duplicated `.git` pointer parse used to be
   // `/^gitdir:\s*(.+)\s*$/mu`, whose leading/trailing `\s*` overlapped with `(.+)` and, under the
   // multiline flag, made the parse quadratic on adversarial pointer content. The shared production

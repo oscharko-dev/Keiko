@@ -48,7 +48,7 @@ import {
   validateTaskWorkspaceTransition,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { deriveRepositoryId } from "./naming.js";
-import { inspectManagedGitdirIdentity, managedIdentityDrift } from "./gitdir-identity.js";
+import { inspectManagedGitdirIdentityOutcome, managedIdentityDriftFor } from "./gitdir-identity.js";
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import { correlationIdOrUnknown } from "../correlation.js";
@@ -169,13 +169,15 @@ async function gatherFacts(
 ): Promise<FactsAndHead> {
   const pathContained = isContained(ctx.deps.managedRoot, instance.managedWorktreePath);
   const worktreeDirExists = pathContained && existsSync(instance.managedWorktreePath);
-  const inspection = worktreeDirExists
-    ? inspectManagedGitdirIdentity(instance.managedWorktreePath, instance.repositoryRoot)
-    : undefined;
-  const identity = inspection?.identity;
-  // The same three-way verdict the access boundary and the provisioning resume use, so live
-  // reconciliation cannot re-label a migration as a replaced pointer and overwrite the marker.
-  const drift = managedIdentityDrift(inspection, instance.gitdirIdentity);
+  const identityOutcome = worktreeDirExists
+    ? inspectManagedGitdirIdentityOutcome(instance.managedWorktreePath, instance.repositoryRoot)
+    : ({ kind: "unproven" } as const);
+  const identity =
+    identityOutcome.kind === "identified" ? identityOutcome.inspection.identity : undefined;
+  // The same verdict the access boundary and the provisioning resume use, so live reconciliation
+  // cannot re-label a migration or a platform limitation as a replaced pointer and overwrite the
+  // marker provisioning persisted.
+  const drift = managedIdentityDriftFor(identityOutcome, instance.gitdirIdentity);
   const taskBranchPresent = worktreeDirExists
     ? await adapter.localBranchExists(instance.taskBranch)
     : false;
@@ -193,6 +195,7 @@ async function gatherFacts(
       gitPointerPresent: identity !== undefined,
       gitdirIdentityMatches: identity !== undefined && identity === instance.gitdirIdentity,
       gitdirIdentitySchemaRetired: drift === "schema-retired",
+      gitdirIdentityUnsupported: drift === "unsupported",
       taskBranchPresent,
       headMatches:
         instance.lastVerifiedHead === undefined || instance.lastVerifiedHead === observedHead,

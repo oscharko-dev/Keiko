@@ -10,6 +10,7 @@
 // `inspectManagedGitdirIdentity`, through an injected port whose stat values are written by hand,
 // so "the inode was reused" is an input rather than something the test hopes for.
 import { join, resolve, sep } from "node:path";
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type {
   WorkspaceDescriptorUtf8Read,
@@ -237,7 +238,26 @@ describe("legacy identity — recognises a superseded registration without trust
   // this fixture's inode values. If the legacy composition ever drifts from what v2 actually wrote,
   // the schema-retired classification silently stops firing and every upgrading operator is told
   // their worktree was replaced. Only a value derived outside this file can catch that.
-  const V2_GOLDEN_IDENTITY = "43c278d63f268dea2f726cdbef803cda";
+  // Recomputed here with the retired v2 algorithm, transcribed verbatim, over this platform's own
+  // path spelling — a hard-coded hash would be tied to POSIX and would fail on Windows for the
+  // spelling rather than for a real drift. This is still an EXTERNAL anchor: it is the old formula,
+  // not a call into the new one.
+  const V2_GOLDEN_IDENTITY = createHash("sha256")
+    .update(
+      JSON.stringify([
+        "managed-linked-worktree-v2",
+        ADMIN_DIRECTORY,
+        COMMON_DIRECTORY,
+        "1:11",
+        "1:15",
+        "1:16",
+        "1:13",
+        "1:14",
+      ]),
+      "utf8",
+    )
+    .digest("hex")
+    .slice(0, 32);
 
   it("reproduces the retired v2 composition exactly", () => {
     expect(inspect(authenticTree())?.legacyIdentity).toBe(V2_GOLDEN_IDENTITY);
