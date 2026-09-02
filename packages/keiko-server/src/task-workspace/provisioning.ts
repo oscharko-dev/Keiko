@@ -558,13 +558,16 @@ async function failProvisioning(
     try {
       await repo.adapter.removeWorktree({ worktreePath: repo.worktreePath, force: true });
       await repo.adapter.pruneWorktrees();
+      // A partial tree git never registered, or could not remove, is still this call's: the target
+      // did not exist before the add. The SC1 choke point keeps the removal inside the managed root,
+      // and its refusal stays inside this best-effort block: the classified error below, the
+      // persisted failed row, and the lock release must never be displaced by a rollback failure
+      // (#3376 review).
+      if (managedTargetExists(repo.worktreePath)) {
+        safelyRemoveManagedPath(ctx.deps.managedRoot, repo.worktreePath);
+      }
     } catch {
       // Rollback is best-effort; the visible state plus drift markers drive #447 repair.
-    }
-    // A partial tree git never registered, or could not remove, is still this call's: the target
-    // did not exist before the add. The SC1 choke point keeps the removal inside the managed root.
-    if (managedTargetExists(repo.worktreePath)) {
-      safelyRemoveManagedPath(ctx.deps.managedRoot, repo.worktreePath);
     }
   }
   const driftMarker = error.code === "POINTER_DRIFT" ? driftMarkerFromError(error) : undefined;

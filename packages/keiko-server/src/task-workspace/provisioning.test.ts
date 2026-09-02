@@ -35,6 +35,7 @@ import {
   deriveRepositoryId,
   deriveTaskBranchName,
   deriveWorkspaceId,
+  MANAGED_ROOT_MARKER_FILENAME,
 } from "./naming.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
 import {
@@ -1121,6 +1122,59 @@ describe("drift + partial failure leave a visible classified state (SC4)", () =>
     expect(git(["worktree", "list", "--porcelain"])).not.toContain(attempted[0] ?? "\u0000");
     const row = store.getById(
       deriveWorkspaceId({ repositoryId: deriveRepositoryId(repoRoot), taskId: "t-partial-add" }),
+    );
+    expect(row?.lifecycleState).toBe("failed");
+    expect(row?.lock).toBeNull();
+  });
+
+  // The rollback is best-effort all the way down: when the SC1 choke point refuses the leftover
+  // directory (here: the managed-root ownership marker vanished during the add), the classified
+  // provisioning error still surfaces, the row is still persisted as failed with the lock released,
+  // and nothing is deleted (#3376 review).
+  it("keeps the classified error and the failed row when the leftover-directory rollback is refused", async () => {
+    const attempted: string[] = [];
+    const partialAddWithoutMarker: AdapterFactory = (workspace) => {
+      const real = realAdapter(workspace);
+      const partial = (worktreePath: string): Promise<WorktreeOperationResult> => {
+        attempted.push(worktreePath);
+        mkdirSync(worktreePath, { recursive: true });
+        writeFileSync(join(worktreePath, "partial.txt"), "left behind by a failed add\n");
+        rmSync(join(managedRoot, MANAGED_ROOT_MARKER_FILENAME));
+        return Promise.resolve({
+          ok: false,
+          exitCode: 128,
+          durationMs: 0,
+          timedOut: false,
+          truncated: false,
+        });
+      };
+      return {
+        ...real,
+        addWorktree: (input): Promise<WorktreeOperationResult> => partial(input.worktreePath),
+        addWorktreeForExistingBranch: (input): Promise<WorktreeOperationResult> =>
+          partial(input.worktreePath),
+      };
+    };
+
+    await rejectsWithCode(
+      () =>
+        makeService(partialAddWithoutMarker).provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "t-partial-add-unowned",
+          baseBranch: "main",
+          requestedBy: "u",
+        }),
+      "PROVISIONING_FAILED",
+    );
+
+    expect(attempted).toHaveLength(1);
+    // Refused by the choke point, so the leftover survives — and that refusal displaced nothing.
+    expect(existsSync(join(attempted[0] ?? "", "partial.txt"))).toBe(true);
+    const row = store.getById(
+      deriveWorkspaceId({
+        repositoryId: deriveRepositoryId(repoRoot),
+        taskId: "t-partial-add-unowned",
+      }),
     );
     expect(row?.lifecycleState).toBe("failed");
     expect(row?.lock).toBeNull();
