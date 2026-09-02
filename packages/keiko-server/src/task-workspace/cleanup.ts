@@ -395,12 +395,16 @@ async function removeManagedWorktree(
     const removal = await adapter.removeWorktree({ worktreePath, force: false });
     await adapter.pruneWorktrees();
     if (existsSync(worktreePath)) {
-      // git refused (modified or untracked files arrived after the gate), or the directory git no
-      // longer tracks survived: the surviving tree is re-probed on the terms it was admitted on.
-      const probe = await probeCleanupDirty(ctx, worktreePath, true, true, true);
+      // git refused (modified or untracked files arrived after the gate): the surviving tree is
+      // re-probed on the terms it was admitted on and reported dirty. A tree that survives a
+      // SUCCESSFUL removal is git's leftover or another actor's replacement, and the fallback deletes
+      // it only when ownership is proven again — never on the unproven fallback, which would hand a
+      // clean replacement to the recursive delete (#3376 review).
+      const probe = await probeCleanupDirty(ctx, worktreePath, true, true, !removal.ok);
       if (!removal.ok || probe.worktreeDirty) {
         return { removed: false, refusalReason: "worktree-dirty" };
       }
+      if (!probe.proven) return { removed: false, refusalReason: "ownership-unproven" };
       safelyRemoveManagedPath(ctx.deps.managedRoot, worktreePath);
     }
     return { removed: true };

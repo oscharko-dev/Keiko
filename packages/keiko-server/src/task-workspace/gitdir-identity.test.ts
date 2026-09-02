@@ -656,3 +656,39 @@ describe("inspectManagedGitdirIdentityOutcome — I/O failures keep their cause"
     );
   });
 });
+
+// The volume proof must observe the common git directory the identity hashed. For a repository root
+// that is itself a linked worktree (or a separate-git-dir layout) `<root>/.git` is a pointer, and a
+// stat of it would prove the pointer's volume instead of the gitdir's; the inspection therefore
+// carries the directory it resolved, and the mint proves that one (#3376 review).
+describe("the inspection carries the common directory it hashed", () => {
+  it("names the real `.git` directory of an ordinary repository root", () => {
+    expect(inspect(authenticTree())?.commonDirectory).toBe(COMMON_DIRECTORY);
+  });
+
+  it("follows a linked worktree's gitfile when the repository root is itself a linked worktree", () => {
+    // A second linked worktree registered under the same common directory, provisioned from the
+    // FIRST linked worktree as its repository root: `/work/ws/.git` is a gitfile, not the gitdir.
+    const secondRoot = resolve(sep, "work", "ws2");
+    const secondAdmin = join(WORKTREES_DIRECTORY, "ws2");
+    const tree = authenticTree();
+    tree.set(secondAdmin, directory("1:17"));
+    tree.set(join(secondAdmin, "gitdir"), file("1:18", "108", `${join(secondRoot, ".git")}\n`));
+    tree.set(secondRoot, directory("1:19"));
+    tree.set(join(secondRoot, ".git"), file("1:20", "110", `gitdir: ${secondAdmin}\n`));
+
+    const fs = portFor(tree);
+    // The fixture itself is authentic: the second worktree is identified under the ordinary root.
+    expect(inspectManagedGitdirIdentityOutcome(secondRoot, REPOSITORY_ROOT, fs)).toMatchObject({
+      kind: "identified",
+      inspection: { commonDirectory: COMMON_DIRECTORY },
+    });
+
+    const outcome = inspectManagedGitdirIdentityOutcome(secondRoot, WORKTREE_ROOT, fs);
+
+    expect(outcome).toMatchObject({
+      kind: "identified",
+      inspection: { commonDirectory: COMMON_DIRECTORY },
+    });
+  });
+});

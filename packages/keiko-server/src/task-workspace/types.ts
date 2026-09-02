@@ -112,10 +112,12 @@ export interface WorkspaceProvisioningServiceDeps extends WorkspaceActivityLogSe
   readonly newId: () => string;
   // Optional, tests only: whether every volume the identity hashes keeps a durable creation time.
   // Production uses the real proof (`proveCreationTimeSupport`): the managed root by probe, the
-  // repository read-only; an identity is never minted on a volume whose "creation time" is the
-  // ctime under another name (#3376 review P2).
+  // repository read-only at the common git directory the identity hashes (resolved through the
+  // pointer a linked worktree or a separate-git-dir layout leaves at `<root>/.git`); an identity is
+  // never minted on a volume whose "creation time" is the ctime under another name (#3376 review P2).
   readonly proveCreationTimeSupport?:
-    ((managedRoot: string, repositoryRoot: string) => ProvenCreationTimeSupport) | undefined;
+    | ((managedRoot: string, repositoryCommonDirectory: string) => ProvenCreationTimeSupport)
+    | undefined;
   // The server-owned Project → single-root manifest identity for a managed worktree. Production
   // supplies the existing UiStore paired-write owner; tests may omit it when trust/catalog behavior
   // is outside their scope. Explicit provision may initialize exact trust; resume, activate, and

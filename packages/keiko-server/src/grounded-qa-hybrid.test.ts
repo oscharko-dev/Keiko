@@ -1412,6 +1412,68 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
 
 // ─── Case 3: Not-ready connector skipped, others answer ──────────────────────
 
+// ─── Case 2b: every folder denied + 2 connectors ─────────────────────────────
+//
+// Canonicalization skips a denied folder; the hybrid merge (2+ connectors) must then answer from the
+// connectors ALONE. Before the fix, `withCanonicalFolderScopes(chat, [])` returned the ORIGINAL chat,
+// so `capSourcesToLimits` re-read the denied legacy `connectedScope` through `buildConnectedScopes`
+// and retrieved it without the authority canonicalization had withheld (#3376 review P1).
+
+describe("hybrid grounded ask — every folder denied + 2 connectors", () => {
+  it("answers from the connectors alone and never retrieves the denied folder", async () => {
+    // Arrange — the folder resolves to the chat's project path, which sits inside a credential
+    // directory (deny-listed locus; the store refuses an explicit deny-listed `root`, so the denial
+    // is reached the way the route reaches it). It is stored in the LEGACY single-scope field so the
+    // exact bypass the review named is on the table.
+    const { capsuleId: capA, label: labelA } = await seedReadyCapsule("Denied Folder Docs A");
+    const { capsuleId: capB, label: labelB } = await seedReadyCapsule("Denied Folder Docs B");
+    const deniedRoot = join(tmp, ".aws", "project");
+    mkdirSync(deniedRoot, { recursive: true });
+    const project = store.createProject(deniedRoot, "denied");
+    const chat = store.createChat(project.path, "Denied folder + 2 connectors", CHAT_MODEL);
+    store.updateChat(chat.id, {
+      connectedScope: { kind: "directory", relativePaths: ["src/secret.ts"], connectedAtMs: NOW },
+      localKnowledgeScopes: [
+        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+      ],
+    });
+    const folderRetrievals = { count: 0 };
+    const hybrid: HybridSeam = {
+      folderRetriever: (): Promise<RetrievalOnlyOutput> => {
+        folderRetrievals.count += 1;
+        return Promise.reject(new Error("a denied folder must never be retrieved"));
+      },
+      connectorRetrieve: dualConnectorRetrieve(capA, capB),
+      answer: sentinelAnswerer(),
+    };
+
+    // Act
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId: chat.id, content: "What do the connectors say?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      hybrid,
+    );
+
+    // Assert — the ask proceeds from the connectors; the denied folder is skipped, never retrieved.
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(folderRetrievals.count).toBe(0);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.citations).toHaveLength(0);
+    expect(answer.contextPack.folderSourceCount).toBe(0);
+    expect(answer.contextPack.connectorSourceCount).toBe(2);
+    const kciLabels = answer.knowledgeCitations.map((kc) => kc.source);
+    expect(kciLabels.some((label) => label?.startsWith(`${labelA} / `))).toBe(true);
+    expect(kciLabels.some((label) => label?.startsWith(`${labelB} / `))).toBe(true);
+    // The skip is visible as uncertainty (the hybrid path keys it by its reason) and never echoes
+    // the denied path (CWE-209).
+    expect(answer.uncertainty.some((u) => u.kind === "not-accessible")).toBe(true);
+    expect(JSON.stringify(result.body)).not.toContain(".aws");
+  });
+});
+
 describe("hybrid grounded ask — not-ready connector is skipped", () => {
   it("skips the indexing connector, surfaces uncertainty naming it, and the ready connector's citations are present", async () => {
     // Arrange: one ready connector + one indexing (not-ready) connector.

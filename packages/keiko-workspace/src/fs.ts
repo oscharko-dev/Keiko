@@ -5,7 +5,6 @@
 
 import {
   closeSync,
-  existsSync,
   constants as fsConstants,
   fstatSync,
   lstatSync,
@@ -975,9 +974,10 @@ export function probeCreationTimeSupport(directory: string): CreationTimeSupport
 // backpointer under the repository. Proving the managed root alone would mint from a repository
 // volume that aliases its "creation time" to the ctime (#3376 review). The repository volume is a
 // user's data: nothing is written into it, so it is corroborated read-only from entries that are
-// older than one timestamp granule — the repository root and its `.git` — with the same rule the
-// parent corroboration uses: on an aliasing volume every entry reports birthtime === ctime, so one
-// entry whose creation time differs from its ctime disproves aliasing for the volume.
+// older than one timestamp granule — the common git directory the identity hashes and its parent —
+// with the same rule the parent corroboration uses: on an aliasing volume every entry reports
+// birthtime === ctime, so one entry whose creation time differs from its ctime disproves aliasing
+// for the volume.
 export type RepositoryCreationTimeSupport = CreationTimeSupport | "same-volume";
 
 export interface ProvenCreationTimeSupport {
@@ -993,29 +993,28 @@ export function classifyVolumeCorroboration(
   return entries.some((entry) => entry.birthtimeNs !== entry.ctimeNs) ? "durable" : "inconclusive";
 }
 
-function repositoryCommonDirectory(repositoryRoot: string): string {
-  const candidate = join(repositoryRoot, ".git");
-  return existsSync(candidate) ? candidate : repositoryRoot;
-}
-
 /**
  * Proves every volume a managed identity would hash: the managed root by probe (Keiko owns it), the
  * repository read-only, or `same-volume` when both share one device and the probe already covers it.
  * Anything but `durable` / `same-volume` must refuse to mint.
+ *
+ * The repository is proven at `repositoryCommonDirectory` — the common git directory the identity
+ * hashes, which the caller resolves through the gitfile or symlink a linked worktree or a
+ * separate-git-dir layout leaves at `<root>/.git`. A stat of that pointer would prove the pointer's
+ * volume, not the one the identity binds (#3376 review).
  */
 export function proveCreationTimeSupport(
   managedRoot: string,
-  repositoryRoot: string,
+  repositoryCommonDirectory: string,
 ): ProvenCreationTimeSupport {
   const managed = probeCreationTimeSupport(managedRoot);
-  const common = repositoryCommonDirectory(repositoryRoot);
-  const commonStats = observeCreationTime(common);
+  const commonStats = observeCreationTime(repositoryCommonDirectory);
   if (commonStats.dev === observeCreationTime(managedRoot).dev) {
     return { managedRoot: managed, repository: "same-volume" };
   }
-  const entries = [
-    commonStats,
-    ...(common === repositoryRoot ? [] : [observeCreationTime(repositoryRoot)]),
-  ];
+  // The common directory's parent corroborates only when it sits on the same device: a directory
+  // mounted from another volume would report that volume's creation-time behaviour, not this one's.
+  const parentStats = observeCreationTime(dirname(repositoryCommonDirectory));
+  const entries = [commonStats, ...(parentStats.dev === commonStats.dev ? [parentStats] : [])];
   return { managedRoot: managed, repository: classifyVolumeCorroboration(entries) };
 }

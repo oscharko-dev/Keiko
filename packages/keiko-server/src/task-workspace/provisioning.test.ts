@@ -152,7 +152,7 @@ function makeService(
   activityLog?: ServerLogSink,
   proveCreationTimeSupport?: (
     managedRoot: string,
-    repositoryRoot: string,
+    repositoryCommonDirectory: string,
   ) => ProvenCreationTimeSupport,
 ): WorkspaceProvisioningService {
   return createWorkspaceProvisioningService({
@@ -1076,6 +1076,55 @@ describe("drift + partial failure leave a visible classified state (SC4)", () =>
     expect(failed?.lifecycleState).toBe("failed");
     expect(failed?.lock).toBeNull();
   });
+
+  // A `git worktree add` that fails halfway leaves a partial target directory git never registered.
+  // The rollback covers everything this call set out to create — decided before the add, not after
+  // it returned — so the next provision does not resume over a partial tree or reject it as an
+  // unmanaged path (#3376 review).
+  it("rolls back the partial tree a failed `git worktree add` leaves behind", async () => {
+    const attempted: string[] = [];
+    const partialAdd: AdapterFactory = (workspace) => {
+      const real = realAdapter(workspace);
+      const partial = (worktreePath: string): Promise<WorktreeOperationResult> => {
+        attempted.push(worktreePath);
+        mkdirSync(worktreePath, { recursive: true });
+        writeFileSync(join(worktreePath, "partial.txt"), "left behind by a failed add\n");
+        return Promise.resolve({
+          ok: false,
+          exitCode: 128,
+          durationMs: 0,
+          timedOut: false,
+          truncated: false,
+        });
+      };
+      return {
+        ...real,
+        addWorktree: (input): Promise<WorktreeOperationResult> => partial(input.worktreePath),
+        addWorktreeForExistingBranch: (input): Promise<WorktreeOperationResult> =>
+          partial(input.worktreePath),
+      };
+    };
+
+    await rejectsWithCode(
+      () =>
+        makeService(partialAdd).provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "t-partial-add",
+          baseBranch: "main",
+          requestedBy: "u",
+        }),
+      "PROVISIONING_FAILED",
+    );
+
+    expect(attempted).toHaveLength(1);
+    expect(existsSync(attempted[0] ?? "")).toBe(false);
+    expect(git(["worktree", "list", "--porcelain"])).not.toContain(attempted[0] ?? "\u0000");
+    const row = store.getById(
+      deriveWorkspaceId({ repositoryId: deriveRepositoryId(repoRoot), taskId: "t-partial-add" }),
+    );
+    expect(row?.lifecycleState).toBe("failed");
+    expect(row?.lock).toBeNull();
+  });
 });
 
 describe("activate", () => {
@@ -1430,6 +1479,30 @@ describe("mint-time creation-time probe", () => {
       });
     },
   );
+
+  // The repository volume is proven at the common git directory the identity hashes — never at the
+  // repository root or its `.git` pointer, which a linked worktree or a separate-git-dir layout may
+  // keep on a different volume from the gitdir (#3376 review).
+  it("proves the repository at the resolved common git directory, not at the root's pointer", async () => {
+    const proven: { managedRoot: string; repositoryCommonDirectory: string }[] = [];
+    const service = makeService(undefined, undefined, undefined, (root, commonDirectory) => {
+      proven.push({ managedRoot: root, repositoryCommonDirectory: commonDirectory });
+      return { managedRoot: "durable", repository: "same-volume" };
+    });
+
+    const result = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-mint-common-dir",
+      baseBranch: "main",
+      requestedBy: "u",
+      correlationId: "mint-probe-0004",
+    });
+
+    expect(result.instance.lifecycleState).toBe("active");
+    expect(proven).toEqual([
+      { managedRoot, repositoryCommonDirectory: realpathSync(join(repoRoot, ".git")) },
+    ]);
+  });
 
   it("mints on a durable root and records the probe verdict", async () => {
     const activityLog = createBufferedServerLogSink();

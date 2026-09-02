@@ -13,8 +13,10 @@ import fs, {
   writeFileSync,
 } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
@@ -676,7 +678,7 @@ describe("every volume an identity hashes", () => {
     fs.mkdirSync(managedRoot);
     fs.mkdirSync(join(repositoryRoot, ".git"), { recursive: true });
 
-    const proven = proveCreationTimeSupport(managedRoot, repositoryRoot);
+    const proven = proveCreationTimeSupport(managedRoot, join(repositoryRoot, ".git"));
 
     expect(proven.repository).toBe("same-volume");
     expect(["durable", "inconclusive", "absent"]).toContain(proven.managedRoot);
@@ -685,13 +687,35 @@ describe("every volume an identity hashes", () => {
 
   // Concurrent provisions probe the same managed root; each probe compares the directory's own two
   // observations, so interleaved probes cannot flip each other's verdict or leave entries behind.
+  // The probe is synchronous, so genuine concurrency needs separate threads: four workers load the
+  // built module and probe the same root at once (#3376 review).
   it("stays stable and leaves nothing behind under concurrent probes", async () => {
     const { root } = workspaceFixture();
-    const verdicts = await Promise.all(
-      Array.from({ length: 4 }, () => Promise.resolve().then(() => probeCreationTimeSupport(root))),
-    );
+    const moduleUrl = new URL("../dist/fs.js", import.meta.url);
+    expect(
+      fs.existsSync(moduleUrl),
+      "the built module is required: run `npm run build:packages` first",
+    ).toBe(true);
+    const probeInWorker = async (): Promise<unknown> => {
+      const worker = new Worker(
+        [
+          'const { parentPort, workerData } = require("node:worker_threads");',
+          "import(workerData.moduleUrl).then((module) => {",
+          "  parentPort.postMessage(module.probeCreationTimeSupport(workerData.root));",
+          "});",
+        ].join("\n"),
+        { eval: true, workerData: { moduleUrl: moduleUrl.href, root } },
+      );
+      const [verdict] = (await once(worker, "message")) as [unknown];
+      await once(worker, "exit");
+      return verdict;
+    };
 
+    const verdicts = await Promise.all(Array.from({ length: 4 }, probeInWorker));
+
+    expect(verdicts).toHaveLength(4);
     expect(new Set(verdicts).size).toBe(1);
+    expect(["durable", "inconclusive", "absent", "aliased"]).toContain(verdicts[0]);
     expect(
       fs.readdirSync(root).filter((name) => name.startsWith(".keiko-creation-time-probe-")),
     ).toEqual([]);

@@ -49,6 +49,7 @@ import {
   managedTargetExists,
 } from "./managed-root.js";
 import { TaskWorkspaceError } from "./errors.js";
+import { safelyRemoveManagedPath } from "./cleanup.js";
 import {
   inspectManagedGitdirIdentityOutcome,
   liveManagedIdentityDrift,
@@ -177,19 +178,18 @@ function unprovenVolume(
 const INCONCLUSIVE_IDENTITY_MESSAGE =
   "managed worktree filesystem could not prove a durable creation time; retry once the workspace root is older than one timestamp granule, or relocate it";
 
-// Mints the identity of a freshly materialized worktree. The managed root's creation-time support is
-// probed first: a nonzero birthtime is not proof of a kept creation time (Node may report the ctime
-// under that name), and an identity minted from a ctime would read as a replaced worktree after the
-// first ordinary metadata write. Every refusal names its own reason — platform limitation, I/O
-// failure, or an unprovable pointer — because they lead to three different operator actions.
-function requiredGitdirIdentity(
+// Every volume the identity hashes is proven before a mint. The repository is proven at the common
+// git directory the identity actually hashed — the inspection resolves it through the gitfile or
+// symlink a linked worktree or a separate-git-dir layout leaves at `<root>/.git`. A stat of that
+// pointer would prove the pointer's volume, and a durable managed root would mint against an
+// unproven — possibly aliasing — gitdir volume (#3376 review).
+function proveIdentityVolumes(
   ctx: ProvisioningCtx,
-  worktreePath: string,
-  repositoryRoot: string,
+  commonDirectory: string,
   correlationId: string | undefined,
-): string {
+): void {
   const prove = ctx.deps.proveCreationTimeSupport ?? proveCreationTimeSupport;
-  const support = prove(ctx.deps.managedRoot, repositoryRoot);
+  const support = prove(ctx.deps.managedRoot, commonDirectory);
   logWorkspaceIdentityProbe(ctx.deps, { correlationId, support });
   // Only PROVEN durable volumes mint: the managed root by probe, the repository read-only (its
   // metadata is a user's data; nothing is written there) or shared with the managed root. An
@@ -198,9 +198,24 @@ function requiredGitdirIdentity(
   // (#3376 review).
   const unproven = unprovenVolume(support);
   if (unproven !== undefined) throw unsupportedIdentityError(unproven);
+}
+
+// Mints the identity of a freshly materialized worktree. Once the pointer is identified, the
+// creation-time support of every volume it hashed is proven: a nonzero birthtime is not proof of a
+// kept creation time (Node may report the ctime under that name), and an identity minted from a
+// ctime would read as a replaced worktree after the first ordinary metadata write. Every refusal
+// names its own reason — platform limitation, I/O failure, or an unprovable pointer — because they
+// lead to three different operator actions.
+function requiredGitdirIdentity(
+  ctx: ProvisioningCtx,
+  worktreePath: string,
+  repositoryRoot: string,
+  correlationId: string | undefined,
+): string {
   const outcome = inspectManagedGitdirIdentityOutcome(worktreePath, repositoryRoot);
   switch (outcome.kind) {
     case "identified":
+      proveIdentityVolumes(ctx, outcome.inspection.commonDirectory, correlationId);
       return outcome.inspection.identity;
     case "unsupported":
       throw unsupportedIdentityError();
@@ -494,9 +509,9 @@ async function assertProvisionable(
 async function materializeWorktree(
   repo: RepositoryContext,
   request: WorkspaceProvisionRequest,
-): Promise<boolean> {
+): Promise<void> {
   if (managedTargetExists(repo.worktreePath)) {
-    return false; // our managed worktree already present — resume-complete without re-adding
+    return; // our managed worktree already present — resume-complete without re-adding
   }
   ensureManagedWorktreeParent(repo.worktreePath);
   const branchExists = await repo.adapter.localBranchExists(repo.taskBranch);
@@ -513,7 +528,6 @@ async function materializeWorktree(
   if (!result.ok) {
     throw new TaskWorkspaceError("PROVISIONING_FAILED", "git worktree add failed");
   }
-  return true;
 }
 
 // Persists the partial-failure state visibly (SC4): the instance moves to `failed`/`recovery-required`
@@ -532,19 +546,25 @@ async function failProvisioning(
   error: TaskWorkspaceError,
   nowMs: number,
   correlationId: string | undefined,
-  // Only a worktree THIS call materialized is rolled back. A completion or an operator-approved
-  // repair runs over an existing worktree, and a transient proof failure there must never delete
-  // it (#3376 review).
-  createdHere: boolean,
+  // Only what THIS call set out to create is rolled back: a target that was absent before its add,
+  // including the partial tree and stale registration a failed `git worktree add` leaves behind. A
+  // completion or an operator-approved repair runs over an existing worktree, and a transient proof
+  // failure there must never delete it (#3376 review).
+  attemptedHere: boolean,
 ): Promise<never> {
   const target: TaskWorkspaceLifecycleState =
     error.outcome === "retry-required" ? "recovery-required" : "failed";
-  if (createdHere) {
+  if (attemptedHere) {
     try {
       await repo.adapter.removeWorktree({ worktreePath: repo.worktreePath, force: true });
       await repo.adapter.pruneWorktrees();
     } catch {
       // Rollback is best-effort; the visible state plus drift markers drive #447 repair.
+    }
+    // A partial tree git never registered, or could not remove, is still this call's: the target
+    // did not exist before the add. The SC1 choke point keeps the removal inside the managed root.
+    if (managedTargetExists(repo.worktreePath)) {
+      safelyRemoveManagedPath(ctx.deps.managedRoot, repo.worktreePath);
     }
   }
   const driftMarker = error.code === "POINTER_DRIFT" ? driftMarkerFromError(error) : undefined;
@@ -721,10 +741,12 @@ async function runWorktreeMutation(
   request: WorkspaceProvisionRequest,
   provisioning: WorkspaceInstance,
 ): Promise<WorkspaceProvisionResult> {
-  let created = false;
+  // Decided BEFORE the add: a target absent now is this call's to roll back, whether the add
+  // succeeds, fails halfway, or the proof after it fails (#3376 review).
+  const attemptedHere = !managedTargetExists(repo.worktreePath);
   let identity: string;
   try {
-    created = await materializeWorktree(repo, request);
+    await materializeWorktree(repo, request);
     identity = requiredGitdirIdentity(
       ctx,
       repo.worktreePath,
@@ -744,7 +766,7 @@ async function runWorktreeMutation(
       failure,
       ctx.deps.now(),
       request.correlationId,
-      created,
+      attemptedHere,
     );
   }
   const active = finalizeActive(ctx, provisioning, identity, ctx.deps.now());
@@ -759,7 +781,7 @@ async function runWorktreeMutation(
     fromState: "provisioning",
     toState: "active",
   });
-  return { instance: active, binding: buildBinding(active), created };
+  return { instance: active, binding: buildBinding(active), created: attemptedHere };
 }
 
 // The gated provisioning critical section. Runs under the `prov:<repositoryId>:<taskId>` mutex key

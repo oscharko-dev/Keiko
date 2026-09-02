@@ -564,8 +564,11 @@ function canonicalizeGroundedFolderScopes(
   return { canonical, skipped };
 }
 
+// The canonical list is authoritative even when it is EMPTY. With every folder denied or
+// inaccessible, returning the original chat would let its legacy single `connectedScope` resurface
+// through `buildConnectedScopes` on the hybrid path (2+ connectors) and be retrieved without the
+// authority canonicalization withheld (#3376 review P1).
 function withCanonicalFolderScopes(chat: Chat, scopes: readonly ChatConnectedScope[]): Chat {
-  if (scopes.length === 0) return chat;
   return { ...chat, connectedScopes: scopes, connectedScope: scopes[0] };
 }
 

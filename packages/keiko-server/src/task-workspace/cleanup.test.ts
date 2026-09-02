@@ -827,6 +827,43 @@ describe("removal re-checks cleanliness through git, never --force", () => {
     expect(existsSync(lateFile)).toBe(true);
     expect(store.getById(instance.workspaceId)).toBeDefined();
   });
+
+  // A tree that survives a SUCCESSFUL removal is not ours to delete on the unproven fallback: another
+  // actor may have recreated a clean worktree at the path between git's removal and the fallback,
+  // and ownership of the replacement can no longer be proven (#3376 review).
+  it("refuses to delete a replacement recreated after git removed the worktree", async () => {
+    const instance = await provisionTask("t-replaced-after-removal");
+    setState(instance, "cleanup-pending");
+    const replacementPointer = join(instance.managedWorktreePath, ".git");
+    const racing: AdapterFactory = (workspace, correlationId, fs) => {
+      const real = realAdapter(workspace, correlationId, fs);
+      return {
+        ...real,
+        removeWorktree: async (operands): Promise<WorktreeOperationResult> => {
+          const removal = await real.removeWorktree(operands);
+          expect(removal.ok).toBe(true);
+          expect(existsSync(operands.worktreePath)).toBe(false);
+          // Recreated by another actor before the fallback looks at the path: a CLEAN git worktree
+          // on the task branch, which a status probe alone would wave through.
+          git(["worktree", "add", operands.worktreePath, instance.taskBranch]);
+          expect(existsSync(replacementPointer)).toBe(true);
+          return removal;
+        },
+      };
+    };
+
+    const result = await cleanup(store, racing).cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+
+    expect(result.outcome).toBe("refused");
+    expect(result.refusalReason).toBe("ownership-unproven");
+    expect(existsSync(replacementPointer)).toBe(true);
+    expect(store.getById(instance.workspaceId)).toBeDefined();
+  });
 });
 
 describe("cleanup approval + eligibility gates", () => {

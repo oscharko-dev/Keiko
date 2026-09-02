@@ -71,8 +71,11 @@ it is an unproven identity, and retrying will not change it. The activity-log li
 chain and frames.
 
 Before an identity is minted, every volume it hashes is proven to keep a durable creation time: the
-managed root by a probe entry Keiko creates and removes, the repository volume read-only from its
-long-lived entries (or `same-volume` when both share one device). The verdicts are on the
+managed root by a probe entry Keiko creates and removes, the repository volume read-only from the
+common git directory the identity hashes and its parent — resolved through the pointer a linked
+worktree or a separate-git-dir layout leaves at `<root>/.git`, so the volume that is proven is the
+one the identity binds, not the pointer's (or `same-volume` when both share one device). The verdicts
+are on the
 `task-workspace.identity.creation-time-probe` line; anything but durable refuses the mint with
 `identity-unsupported`, and an `inconclusive` verdict says to retry once the roots are older than one
 timestamp granule.

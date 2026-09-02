@@ -59,6 +59,12 @@ export interface ManagedGitdirIdentityInspection {
    * incident — from an identity that matches nothing.
    */
   readonly legacyIdentity: string;
+  /**
+   * The common git directory the identity hashed, resolved through the pointer a linked worktree or
+   * a separate-git-dir layout leaves at `<root>/.git`. The volume proof observes THIS directory: a
+   * stat of the pointer would prove the pointer's volume, not the gitdir's (#3376 review).
+   */
+  readonly commonDirectory: string;
 }
 
 // `fileIdentity` is `device:inode`, and an inode number is a SLOT, not an object: deleting a path
@@ -494,6 +500,7 @@ function identitiesFor(
       paths,
       pairs.map((pair) => pair.inodeOnly),
     ),
+    commonDirectory: commonDirectory.path,
   };
 }
 
