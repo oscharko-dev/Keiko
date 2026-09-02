@@ -93,6 +93,95 @@ describe("nodeWorkspaceFs", () => {
     },
   );
 
+  // A same-inode replacement can match size, link count, mtime and ctime within one timestamp
+  // granule; the creation time is the field it cannot carry over, so every snapshot comparison
+  // binds it where both sides have it (#3376 review, CWE-367).
+  it("treats a birth-time-only change as a changed path snapshot", () => {
+    const withoutBirthtime: WorkspaceStat = {
+      size: 1,
+      isFile: true,
+      isDirectory: false,
+      isSymbolicLink: false,
+      fileIdentity: "fixture:1",
+    };
+    const base: WorkspaceStat = { ...withoutBirthtime, birthtimeNs: "100" };
+    const port = (observed: WorkspaceStat): WorkspaceFs => ({
+      readFileUtf8: (): string => "x",
+      stat: (): WorkspaceStat => observed,
+      readDir: (): readonly [] => [],
+      realPath: (): string => "/workspace/a/b",
+      exists: (): boolean => true,
+    });
+
+    expect(
+      isWorkspacePathSnapshotCurrent(port(base), "/workspace/in", "/workspace/a/b", base),
+    ).toBe(true);
+    expect(
+      isWorkspacePathSnapshotCurrent(
+        port({ ...base, birthtimeNs: "200" }),
+        "/workspace/in",
+        "/workspace/a/b",
+        base,
+      ),
+    ).toBe(false);
+    // A side without a creation time compares on the remaining fields, as before.
+    expect(
+      isWorkspacePathSnapshotCurrent(
+        port(withoutBirthtime),
+        "/workspace/in",
+        "/workspace/a/b",
+        base,
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses a same-descriptor read whose preflight creation time no longer matches", () => {
+    const { file } = workspaceFixture();
+    const expected = nodeWorkspaceFs.stat(file);
+    if (expected.birthtimeNs === undefined) return; // the volume keeps no creation time
+    const forged = { ...expected, birthtimeNs: String(BigInt(expected.birthtimeNs) + 1n) };
+
+    expect(() => nodeWorkspaceFs.readFileUtf8SameDescriptor?.(file, 64, "reject", forged)).toThrow(
+      expect.objectContaining({ reason: "changed" }),
+    );
+    expect(nodeWorkspaceFs.readFileUtf8SameDescriptor?.(file, 64, "reject", expected).rawText).toBe(
+      "alpha🙂omega",
+    );
+  });
+
+  it("refuses a same-descriptor read when the path's creation time moves during the read", () => {
+    const { file } = workspaceFixture();
+    const expected = nodeWorkspaceFs.stat(file);
+    if (expected.birthtimeNs === undefined) return; // the volume keeps no creation time
+    const originalLstat = fs.lstatSync;
+    let pathStats = 0;
+    const spy = vi
+      .spyOn(fs, "lstatSync")
+      .mockImplementation((path: fs.PathLike, options?: unknown) => {
+        const stats: unknown = originalLstat(path, options as never);
+        if (String(path) !== file || typeof stats !== "object" || stats === null)
+          return stats as never;
+        pathStats += 1;
+        const bigint = stats as { birthtimeNs?: bigint };
+        if (pathStats !== 2 || typeof bigint.birthtimeNs !== "bigint") return stats as never;
+        // The second path stat is the post-read re-check: same inode, size, mtime, ctime — but a
+        // creation time that moved, which only a replacement object can produce.
+        return Object.assign(Object.create(Object.getPrototypeOf(stats) as object), stats, {
+          birthtimeNs: bigint.birthtimeNs + 1n,
+        }) as never;
+      });
+    syncBuiltinESMExports();
+    try {
+      expect(() =>
+        nodeWorkspaceFs.readFileUtf8SameDescriptor?.(file, 64, "reject", expected),
+      ).toThrow(expect.objectContaining({ reason: "changed" }));
+    } finally {
+      spy.mockRestore();
+      syncBuiltinESMExports();
+    }
+    expect(pathStats).toBeGreaterThanOrEqual(2);
+  });
+
   it("requires every bounded read lane to declare its hard-link policy", () => {
     type ByteReader = NonNullable<WorkspaceFs["readFileBytes"]>;
     type ContainedReader = NonNullable<WorkspaceFs["readFileUtf8WithinRootSameDescriptor"]>;

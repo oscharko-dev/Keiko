@@ -281,6 +281,12 @@ function workspaceStat(stats: BigIntStats, isSymbolicLink: boolean): WorkspaceSt
   };
 }
 
+// Every snapshot comparison below binds the creation time where both sides carry it. An inode is a
+// slot, not an object: a delete-and-recreate can hand the replacement the same `device:inode`, and
+// size, mode, link count, mtime and ctime can all coincide within one timestamp granule — the
+// birthtime is the one field the replacement cannot carry over (#3376 review, CWE-367). A side
+// without a creation time (a volume that does not keep one, or an older snapshot) compares on the
+// remaining fields, as before.
 function sameWorkspaceStat(left: WorkspaceStat, right: WorkspaceStat): boolean {
   return [
     left.size === right.size,
@@ -291,6 +297,7 @@ function sameWorkspaceStat(left: WorkspaceStat, right: WorkspaceStat): boolean {
     left.fileIdentity === right.fileIdentity,
     (left.mtimeNs ?? left.mtimeMs) === (right.mtimeNs ?? right.mtimeMs),
     (left.ctimeNs ?? left.ctimeMs) === (right.ctimeNs ?? right.ctimeMs),
+    sameKnownSnapshotValue(left.birthtimeNs, right.birthtimeNs),
   ].every(Boolean);
 }
 
@@ -348,6 +355,7 @@ function expectedDescriptorSnapshotMatches(expected: WorkspaceStat, actual: BigI
       expected.ctimeNs ?? expected.ctimeMs,
       expected.ctimeNs === undefined ? observed.ctimeMs : observed.ctimeNs,
     ),
+    sameKnownSnapshotValue(expected.birthtimeNs, observed.birthtimeNs),
   ].every(Boolean);
 }
 
@@ -365,7 +373,9 @@ function sameDescriptorSnapshot(left: BigIntStats, right: BigIntStats): boolean 
     left.nlink === right.nlink &&
     left.size === right.size &&
     left.mtimeNs === right.mtimeNs &&
-    left.ctimeNs === right.ctimeNs
+    left.ctimeNs === right.ctimeNs &&
+    // `0n` (or negative) is Node's "no creation time" — see `workspaceStat` — never a value to bind.
+    (left.birthtimeNs <= 0n || right.birthtimeNs <= 0n || left.birthtimeNs === right.birthtimeNs)
   );
 }
 

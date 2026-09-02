@@ -412,7 +412,7 @@ async function removeManagedWorktree(
     // only once git no longer lists the worktree, or the row would be deleted over partial admin
     // metadata that prune could not clear — a locked entry, for one (#3376 review). The row stays
     // in cleanup-pending for a retry.
-    if (!removal.ok && (await stillRegistered(adapter, worktreePath))) {
+    if (!removal.ok && !(await registrationReleased(adapter, worktreePath))) {
       throw new TaskWorkspaceError(
         "CLEANUP_FAILED",
         "git did not release the worktree registration",
@@ -425,12 +425,18 @@ async function removeManagedWorktree(
   }
 }
 
-async function stillRegistered(
+// Positive evidence only: the adapter answers `[]` for a listing git refused, and a listing git
+// produced always names the main worktree, so an empty answer is "unknown" and never "released"
+// (#3376 review). The row then stays in cleanup-pending for a retry instead of being deleted over
+// admin metadata git may still hold.
+async function registrationReleased(
   adapter: GitWorktreeAdapter,
   worktreePath: string,
 ): Promise<boolean> {
+  const entries = await adapter.listWorktrees();
+  if (entries.length === 0) return false;
   const target = resolve(worktreePath);
-  return (await adapter.listWorktrees()).some((entry) => resolve(entry.path) === target);
+  return !entries.some((entry) => resolve(entry.path) === target);
 }
 
 function cleanupLock(ctx: CleanupCtx, requestedBy: string, nowMs: number): WorkspaceLock {

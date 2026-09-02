@@ -935,6 +935,40 @@ describe("removal re-checks cleanliness through git, never --force", () => {
       false,
     );
   });
+
+  it("keeps the row when git exits nonzero and the worktree listing itself fails", async () => {
+    const instance = await provisionTask("t-nonzero-list-failed");
+    setState(instance, "cleanup-pending");
+    const listingFails: AdapterFactory = (workspace, correlationId, fs) => {
+      const real = realAdapter(workspace, correlationId, fs);
+      return {
+        ...real,
+        removeWorktree: async (operands): Promise<WorktreeOperationResult> => ({
+          ...(await real.removeWorktree(operands)),
+          ok: false,
+          exitCode: 1,
+        }),
+        // What the adapter answers for a `git worktree list` that exited nonzero: no evidence at all.
+        listWorktrees: (): Promise<readonly never[]> => Promise.resolve([]),
+      };
+    };
+
+    await expect(
+      cleanup(store, listingFails).cleanup({
+        workspaceId: instance.workspaceId,
+        requestedBy: "u",
+        operatorApproved: true,
+        mode: "complete",
+      }),
+    ).rejects.toMatchObject({ code: "CLEANUP_FAILED" });
+
+    expect(store.getById(instance.workspaceId)).toMatchObject({
+      lifecycleState: "cleanup-pending",
+    });
+    expect(evidence.some((entry) => parseEvent(entry.json).outcome === "cleanup-completed")).toBe(
+      false,
+    );
+  });
 });
 
 describe("cleanup approval + eligibility gates", () => {
