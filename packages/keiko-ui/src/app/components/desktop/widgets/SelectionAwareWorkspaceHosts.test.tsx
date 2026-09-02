@@ -880,6 +880,23 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(sessionB.openChat).not.toHaveBeenCalled();
   });
 
+  // The bind is asynchronous, and until this state was named it rendered an unlabeled "Loading…"
+  // that a screen reader, an operator and a journey could not tell from a bound chat with an empty
+  // transcript. A grounded-ask e2e journey reported a missing composer because of exactly that.
+  it("names the binding state instead of rendering an anonymous placeholder", async (): Promise<void> => {
+    useChatSessionMock.mockReturnValueOnce({ ...chatSessionState, loading: true });
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "chat-a", title: "Pending" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    const pending = await screen.findByRole("status");
+    expect(pending).toHaveAttribute("data-chat-bind", "opening");
+    expect(screen.queryByTestId("chat-window")).toBeNull();
+  });
+
   it("rejects empty and whitespace-only titles at the owning normalization boundary", (): void => {
     expect(normalizedChatTitle("")).toBeUndefined();
     expect(normalizedChatTitle(" \t\n ")).toBeUndefined();

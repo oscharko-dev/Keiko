@@ -30,9 +30,9 @@ import { BoundRootTarget, type BoundRootSurfaceType } from "./BoundRootTarget";
 function WindowChunkFallback(): ReactNode {
   const t = useTranslate();
   return (
-    <div className="lk-loading" role="status" data-window-chunk="loading">
+    <output className="lk-loading" data-window-chunk="loading">
       {t("common.loading")}
-    </div>
+    </output>
   );
 }
 

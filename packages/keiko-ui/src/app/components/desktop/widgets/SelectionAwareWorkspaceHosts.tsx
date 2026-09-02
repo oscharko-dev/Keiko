@@ -1062,9 +1062,9 @@ function ChatNotFound(): ReactNode {
 function ChatBindPending(): ReactNode {
   const agentT = useEditorAgentTranslate();
   return (
-    <div className="lk-loading" role="status" data-chat-bind="opening">
+    <output className="lk-loading" data-chat-bind="opening">
       {agentT("chat.restoration.opening")}
-    </div>
+    </output>
   );
 }
 
@@ -1081,7 +1081,6 @@ function BoundChatBody({
   readonly targetMissing: boolean;
   readonly waiting: boolean;
 }): ReactNode {
-  const agentT = useEditorAgentTranslate();
   const openRunResult = useCallback(
     (message: ChatMessage): void => {
       if (message.runId === undefined) return;
