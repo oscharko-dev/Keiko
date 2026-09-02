@@ -502,6 +502,38 @@ describe("idempotent safe retry (AC3)", () => {
     expect(persisted?.gitdirIdentity).toBe(inspection.legacyIdentity);
   });
 
+  // The refusal above persists `recovery-required`, which is in COMPLETABLE_STATES. Without an
+  // explicit guard the NEXT identical request falls through to the completion path, recomputes a
+  // current identity and finalizes it — reissuing the proof the refusal withheld, with no operator
+  // approval anywhere.
+  it("keeps refusing a retired identity on every retry instead of completing it", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-identity-retry",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    const inspection = inspectManagedGitdirIdentity(first.instance.managedWorktreePath, repoRoot);
+    if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
+    store.upsert({ ...first.instance, gitdirIdentity: inspection.legacyIdentity });
+
+    const request = {
+      repositoryRequestPath: repoRoot,
+      taskId: "t-identity-retry",
+      baseBranch: "main",
+      requestedBy: "u",
+    };
+    await rejectsWithCode(() => service.provision(request), "POINTER_DRIFT");
+    await rejectsWithCode(() => service.provision(request), "POINTER_DRIFT");
+
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("recovery-required");
+    expect(persisted?.driftMarkers).toEqual(["identity-schema-retired"]);
+    // The retired value is never promoted into a current one, on any attempt.
+    expect(persisted?.gitdirIdentity).toBe(inspection.legacyIdentity);
+  });
+
   // Regression for S8786: the formerly duplicated `.git` pointer parse used to be
   // `/^gitdir:\s*(.+)\s*$/mu`, whose leading/trailing `\s*` overlapped with `(.+)` and, under the
   // multiline flag, made the parse quadratic on adversarial pointer content. The shared production

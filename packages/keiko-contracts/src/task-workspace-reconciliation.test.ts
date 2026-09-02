@@ -128,6 +128,17 @@ describe("classifyWorkspaceReconciliation precedence", () => {
   it("classifies a missing/malformed or moved git pointer as stale-pointer", () => {
     expect(markers(healthyFacts({ gitPointerPresent: false }))).toEqual(["pointer-stale"]);
     expect(markers(healthyFacts({ gitdirIdentityMatches: false }))).toEqual(["gitdir-mismatch"]);
+    // A workspace registered under the retired identity rule is the same STATUS with a different
+    // reason: without its own marker the next reconcile overwrites what provisioning persisted, and
+    // recovery then recommends an automatic pointer reconcile instead of operator re-registration.
+    expect(
+      markers(healthyFacts({ gitdirIdentityMatches: false, gitdirIdentitySchemaRetired: true })),
+    ).toEqual(["identity-schema-retired"]);
+    expect(
+      classifyWorkspaceReconciliation(
+        healthyFacts({ gitdirIdentityMatches: false, gitdirIdentitySchemaRetired: true }),
+      ).status,
+    ).toBe("stale-pointer");
     expect(classifyWorkspaceReconciliation(healthyFacts({ gitPointerPresent: false })).status).toBe(
       "stale-pointer",
     );

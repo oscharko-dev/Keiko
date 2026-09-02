@@ -1228,6 +1228,15 @@ export interface WorkspaceReconciliationFacts {
   readonly gitPointerPresent: boolean;
   // the pointer's content-free gitdir identity equals the persisted `gitdirIdentity`.
   readonly gitdirIdentityMatches: boolean;
+  /**
+   * The stored identity is this worktree's own, composed under the retired rule. Optional so every
+   * existing fact construction stays valid; absent means "not a migration".
+   *
+   * Without it a v2 registration reconciles as `gitdir-mismatch`, and the next reconcile overwrites
+   * the marker provisioning persisted — recovery would then recommend an automatic pointer
+   * reconcile instead of the operator re-registration the retired proof requires.
+   */
+  readonly gitdirIdentitySchemaRetired?: boolean;
   // the dedicated task branch still exists / the worktree is still bound to it.
   readonly taskBranchPresent: boolean;
   // the worktree HEAD equals the persisted `lastVerifiedHead` (true when no baseline was recorded).
@@ -1343,7 +1352,9 @@ function classifyOnDiskDrift(
   if (!facts.gitPointerPresent)
     return outcome("stale-pointer", withStaleLock(["pointer-stale"], facts));
   if (!facts.gitdirIdentityMatches) {
-    return outcome("stale-pointer", withStaleLock(["gitdir-mismatch"], facts));
+    const marker =
+      facts.gitdirIdentitySchemaRetired === true ? "identity-schema-retired" : "gitdir-mismatch";
+    return outcome("stale-pointer", withStaleLock([marker], facts));
   }
   if (!facts.taskBranchPresent) return outcome("drifted", withStaleLock(["branch-deleted"], facts));
   if (!facts.headMatches) return outcome("drifted", withStaleLock(["head-moved"], facts));

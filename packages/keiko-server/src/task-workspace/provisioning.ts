@@ -73,6 +73,11 @@ const RESUMABLE_STATES: ReadonlySet<TaskWorkspaceLifecycleState> = new Set([
   "paused",
   "handoff-ready",
 ]);
+// One sentence for the migration refusal, shared by every path that refuses it, so an operator sees
+// the same instruction whether the refusal came from the first attempt or a later retry.
+const RETIRED_IDENTITY_SCHEMA_MESSAGE =
+  "managed worktree identity predates the current identity rule; re-register to reissue it";
+
 const COMPLETABLE_STATES: ReadonlySet<TaskWorkspaceLifecycleState> = new Set([
   "provisioning",
   "failed",
@@ -498,7 +503,7 @@ function resumeExisting(
       correlationId,
       drift === "schema-retired" ? "identity-schema-retired" : "pointer-stale",
       drift === "schema-retired"
-        ? "managed worktree identity predates the current identity rule; re-register to reissue it"
+        ? RETIRED_IDENTITY_SCHEMA_MESSAGE
         : "managed worktree git identity changed",
     );
   }
@@ -571,8 +576,24 @@ function reuseExistingOrUndefined(
   }
   if (!COMPLETABLE_STATES.has(existing.lifecycleState)) {
     // Terminal state (archived/merged/abandoned/cleanup-pending): idempotent no-op, return as-is.
+    // A retired-schema marker is deliberately NOT consulted here — a terminal row still has to be
+    // archivable and removable, and refusing it would strand it (#3372 review P2).
     assertPersistedManagedPath(ctx, existing);
     return { instance: existing, binding: buildBinding(existing), created: false };
+  }
+  // A refused retired-schema row is persisted as `recovery-required`, which IS in
+  // COMPLETABLE_STATES. Without this the next identical provision() falls straight through to the
+  // completion path, recomputes a current identity and finalizes it — reissuing the very proof the
+  // refusal withheld, with no operator approval anywhere. Reproduced in review (#3372 P1).
+  if (existing.driftMarkers.includes("identity-schema-retired")) {
+    return flagResumableDrift(
+      ctx,
+      existing,
+      nowMs,
+      correlationId,
+      "identity-schema-retired",
+      RETIRED_IDENTITY_SCHEMA_MESSAGE,
+    );
   }
   return undefined; // COMPLETABLE: fall through to (re)provision/complete.
 }

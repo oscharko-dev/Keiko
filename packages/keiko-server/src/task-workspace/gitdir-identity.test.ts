@@ -9,6 +9,7 @@
 // These pins take the filesystem out of the verdict. They drive the real production entry point,
 // `inspectManagedGitdirIdentity`, through an injected port whose stat values are written by hand,
 // so "the inode was reused" is an input rather than something the test hopes for.
+import { join, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import type {
   WorkspaceDescriptorUtf8Read,
@@ -24,12 +25,17 @@ import {
   type ManagedGitdirIdentityInspection,
 } from "./gitdir-identity.js";
 
-const REPOSITORY_ROOT = "/repo";
-const COMMON_DIRECTORY = "/repo/.git";
-const ADMIN_DIRECTORY = "/repo/.git/worktrees/ws";
-const WORKTREE_ROOT = "/work/ws";
-const WORKTREE_POINTER = `${WORKTREE_ROOT}/.git`;
-const ADMIN_BACKPOINTER = `${ADMIN_DIRECTORY}/gitdir`;
+// Keys are built with the same `node:path` API the production code uses. Spelling them as POSIX
+// literals would make the fixture Unix-only: on Windows `join(WORKTREE_ROOT, ".git")` yields a
+// backslash path this Map could not resolve, so even the authentic tree would read as unproven and
+// this file would silently stop guarding the identity boundary on a platform Keiko ships.
+const REPOSITORY_ROOT = resolve(sep, "repo");
+const COMMON_DIRECTORY = join(REPOSITORY_ROOT, ".git");
+const WORKTREES_DIRECTORY = join(COMMON_DIRECTORY, "worktrees");
+const ADMIN_DIRECTORY = join(WORKTREES_DIRECTORY, "ws");
+const WORKTREE_ROOT = resolve(sep, "work", "ws");
+const WORKTREE_POINTER = join(WORKTREE_ROOT, ".git");
+const ADMIN_BACKPOINTER = join(ADMIN_DIRECTORY, "gitdir");
 
 interface Node {
   readonly kind: "directory" | "file";
@@ -52,9 +58,9 @@ function authenticTree(): Map<string, Node> {
   return new Map<string, Node>([
     [REPOSITORY_ROOT, directory("1:10")],
     [COMMON_DIRECTORY, directory("1:11")],
-    ["/repo/.git/worktrees", directory("1:12")],
+    [WORKTREES_DIRECTORY, directory("1:12")],
     [ADMIN_DIRECTORY, directory("1:13")],
-    [ADMIN_BACKPOINTER, file("1:14", "104", `${WORKTREE_ROOT}/.git\n`)],
+    [ADMIN_BACKPOINTER, file("1:14", "104", `${WORKTREE_POINTER}\n`)],
     [WORKTREE_ROOT, directory("1:15")],
     [WORKTREE_POINTER, file("1:16", "106", `gitdir: ${ADMIN_DIRECTORY}\n`)],
   ]);
@@ -216,7 +222,7 @@ describe("inspectManagedGitdirIdentity — a reused inode no longer replays an i
   // green. This pins that a malformed pointer is refused on its own merits, ctime available.
   it("refuses a malformed pointer on its own merits, not for a missing stamp", () => {
     const malformed = mutate(authenticTree(), WORKTREE_POINTER, {
-      text: "gitdir: relative/admin-dir\n",
+      text: `gitdir: ${join("relative", "admin-dir")}\n`,
     });
 
     expect(identityOf(malformed)).toBeUndefined();
@@ -317,14 +323,16 @@ describe("inspectManagedGitdirIdentityOutcome", () => {
   // The other half: a refusal that is NOT the platform's fault must not be excused as one.
   it("reports unproven for a malformed pointer while every stamp is present", () => {
     const malformed = mutate(authenticTree(), WORKTREE_POINTER, {
-      text: "gitdir: relative/admin-dir\n",
+      text: `gitdir: ${join("relative", "admin-dir")}\n`,
     });
 
     expect(outcomeOf(malformed)).toBe("unproven");
   });
 
   it("reports unproven when the backpointer does not point back", () => {
-    const broken = mutate(authenticTree(), ADMIN_BACKPOINTER, { text: "/elsewhere/ws/.git\n" });
+    const broken = mutate(authenticTree(), ADMIN_BACKPOINTER, {
+      text: `${join(resolve(sep, "elsewhere"), "ws", ".git")}\n`,
+    });
 
     expect(outcomeOf(broken)).toBe("unproven");
   });
