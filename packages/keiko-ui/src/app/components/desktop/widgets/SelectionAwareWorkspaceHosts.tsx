@@ -1055,6 +1055,19 @@ function ChatNotFound(): ReactNode {
   );
 }
 
+// The chat bind is asynchronous: a lazy chunk, then a sequential session bootstrap. Named so an
+// operator, a screen reader and a journey can each tell "still binding" from "bound with an empty
+// transcript" — the two render identically otherwise, which is what made a stalled bind surface as a
+// composer that was simply never found.
+function ChatBindPending(): ReactNode {
+  const agentT = useEditorAgentTranslate();
+  return (
+    <div className="lk-loading" role="status" data-chat-bind="opening">
+      {agentT("chat.restoration.opening")}
+    </div>
+  );
+}
+
 function BoundChatBody({
   activeProjectPath,
   ctx,
@@ -1083,7 +1096,7 @@ function BoundChatBody({
   );
   if (targetLookupFailed) return null;
   if (targetMissing) return <ChatNotFound />;
-  if (waiting) return <div className="lk-loading">{agentT("chat.restoration.opening")}</div>;
+  if (waiting) return <ChatBindPending />;
   return (
     <ChatWindow
       windowId={ctx.windowId}
