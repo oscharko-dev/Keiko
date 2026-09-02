@@ -6,7 +6,7 @@
 import { mkdtempSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   fileWriteKeys,
   activePointerKey,
@@ -166,28 +166,51 @@ describe("fileWriteKeys identity (#3200 review)", () => {
   // every save, letting a request that resolves mid-rename derive a different key and enter the
   // critical section concurrently.
   //
-  // This used to be asserted as `fileWriteKeys(p) === fileWriteKeys(p)`, which is `f(x) === f(x)` —
-  // true for every pure implementation, an inode-based one included, so it could not fail for the
-  // design it names. The invariant is RELOCATED to the two places it can actually be falsified.
-  it("derives the key from the path alone, so no filesystem state can move it", () => {
-    // Structural half: the signature is the guarantee. An implementation that wanted an inode would
-    // have to take something other than a path, and this fails the moment it does.
-    expectTypeOf<Parameters<typeof fileWriteKeys>>().toEqualTypeOf<[string]>();
+  // This used to be asserted as `fileWriteKeys(p) === fileWriteKeys(p)` — `f(x) === f(x)`, true for
+  // every pure implementation including the inode-based one it names, so it could not fail for the
+  // design it forbids. The invariant is RELOCATED to two places where it can be falsified.
+  //
+  // Not a signature assertion: `Parameters<>` constrains only what CALLERS pass, and
+  // `fileWriteKeys(realPath: string)` could still call `statSync(realPath)` internally while keeping
+  // exactly `[string]`. Observed instead — a path that does not exist still yields keys, and the
+  // same path yields the same keys once the file appears. A filesystem-dependent implementation
+  // would throw ENOENT on the first call or answer differently on the second.
+  it("derives the key without consulting the filesystem, so a missing path still yields keys", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-mutex-absent-"));
+    try {
+      const absent = join(root, "never-created.ts");
+      const whileAbsent = fileWriteKeys(absent);
+      expect(whileAbsent).toHaveLength(2);
+
+      writeFileSync(absent, "now it exists", "utf8");
+      expect(fileWriteKeys(absent)).toEqual(whileAbsent);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
-  it("keeps the key of a real file across the atomic rename a save performs", () => {
+  it("keeps a real file's saves serialized across the atomic rename a save performs", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-mutex-rename-"));
     try {
       const target = join(root, "app.ts");
       const replacement = join(root, "app.ts.tmp");
       writeFileSync(target, "before", "utf8");
-      const before = fileWriteKeys(target);
       writeFileSync(replacement, "after", "utf8");
-      // The save path's own move: a different inode now answers to the same name.
+      // Prove the fixture rather than assume it: the two objects really are distinct while both
+      // exist, so the rename below genuinely changes which one answers to `target`. Asserting a
+      // nonzero inode instead would check only the survivor, and would impose a product requirement
+      // on filesystems that report no usable 64-bit file id.
+      const original = statSync(target, { bigint: true });
+      const incoming = statSync(replacement, { bigint: true });
+      expect([incoming.dev, incoming.ino]).not.toEqual([original.dev, original.ino]);
+
+      const before = fileWriteKeys(target);
       renameSync(replacement, target);
 
-      expect(statSync(target).ino).not.toBe(0);
-      expect(fileWriteKeys(target)).toEqual(before);
+      // The invariant is that the two saves still SERIALIZE — `runExclusive` queues on any shared
+      // key, as `serializesWith` states. Demanding identical arrays would reject a safe
+      // strengthening that keeps the stable path key and adds a generation-scoped alias beside it.
+      expect(serializesWith(before, fileWriteKeys(target))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
