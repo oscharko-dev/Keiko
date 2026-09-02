@@ -19,6 +19,7 @@ import type {
 
 import {
   inspectManagedGitdirIdentity,
+  inspectManagedGitdirIdentityOutcome,
   managedIdentityDrift,
   type ManagedGitdirIdentityInspection,
 } from "./gitdir-identity.js";
@@ -121,18 +122,31 @@ describe("inspectManagedGitdirIdentity — a reused inode no longer replays an i
 
   // The defect this file exists for. The worktree root and its `.git` pointer both keep their exact
   // inode — the replacement won the slot back, which is the ordinary case on ext4/overlayfs — and
-  // the pointer bytes are copied verbatim. The one thing the attacker cannot carry over is the
-  // pointer's creation time, because the file had to be created to exist at all.
+  // the pointer bytes are copied verbatim.
   it("separates a same-path replacement that reuses the inode and copies the pointer bytes", () => {
     const authentic = identityOf(authenticTree());
-    const replaced = mutate(authenticTree(), WORKTREE_POINTER, { birthtimeNs: "900" });
+    const replaced = authenticTree();
+    mutate(replaced, WORKTREE_ROOT, { birthtimeNs: "900" });
+    mutate(replaced, WORKTREE_POINTER, { birthtimeNs: "901" });
 
     expect(authentic).toBeDefined();
     expect(identityOf(replaced)).not.toBe(authentic);
   });
 
-  // Replacing the Git admin directory means recreating the backpointer inside it, so the same stamp
-  // catches it even though the directory itself is identified by inode alone.
+  // The RELOCATION attack, reported by review against the pointer-only version of this guard and
+  // reproduced on Linux before this pin was written. The attacker never creates a pointer: they move
+  // the original `.git` out, recreate the directory until the inode is handed back, then move the
+  // same file in again. `rename` preserves both the inode and the birthtime, so every pointer
+  // component still matches and only the ROOT DIRECTORY's creation time betrays the new generation.
+  it("separates a replacement that moves the ORIGINAL pointer back into a recreated root", () => {
+    const authentic = identityOf(authenticTree());
+    // Pointer untouched — same inode, same birthtime, same bytes, exactly as `rename` leaves it.
+    const relocated = mutate(authenticTree(), WORKTREE_ROOT, { birthtimeNs: "900" });
+
+    expect(relocated.get(WORKTREE_POINTER)).toEqual(authenticTree().get(WORKTREE_POINTER));
+    expect(identityOf(relocated)).not.toBe(authentic);
+  });
+
   it("separates a replaced admin directory through its recreated backpointer", () => {
     const authentic = identityOf(authenticTree());
     const replaced = mutate(authenticTree(), ADMIN_BACKPOINTER, { birthtimeNs: "900" });
@@ -152,17 +166,6 @@ describe("inspectManagedGitdirIdentity — a reused inode no longer replays an i
     });
 
     expect(identityOf(padded)).toBe(authentic);
-  });
-
-  // Volumes with no creation time (ext4 formatted with 128-byte inodes, for one) fall back to ctime.
-  // That is stricter, never weaker: it still separates the generations, it just also moves on an
-  // in-place rewrite. What it must never do is silently drop back to comparing inodes.
-  it("falls back to ctime when the platform reports no creation time", () => {
-    const withoutBirthtime = (created: string): Map<string, Node> =>
-      mutate(authenticTree(), WORKTREE_POINTER, { birthtimeNs: undefined, ctimeNs: created });
-
-    expect(identityOf(withoutBirthtime("1000"))).toBeDefined();
-    expect(identityOf(withoutBirthtime("900"))).not.toBe(identityOf(withoutBirthtime("1000")));
   });
 
   // Inode binding is kept, not replaced: a replacement that does NOT win the old inode back is
@@ -197,10 +200,13 @@ describe("inspectManagedGitdirIdentity — a reused inode no longer replays an i
   // A port that cannot stamp its pointer files must not be served a weaker identity silently: that
   // is exactly the inode-only comparison this change removed.
   it.each([
+    { label: "worktree root", path: WORKTREE_ROOT },
     { label: "worktree .git pointer", path: WORKTREE_POINTER },
+    { label: "Git admin directory", path: ADMIN_DIRECTORY },
     { label: "admin gitdir backpointer", path: ADMIN_BACKPOINTER },
-  ])("fails closed when the $label carries neither stamp", ({ path }) => {
-    const unstamped = mutate(authenticTree(), path, { birthtimeNs: undefined, ctimeNs: undefined });
+    { label: "Git common directory", path: COMMON_DIRECTORY },
+  ])("fails closed when the $label reports no creation time", ({ path }) => {
+    const unstamped = mutate(authenticTree(), path, { birthtimeNs: undefined });
 
     expect(identityOf(unstamped)).toBeUndefined();
   });
@@ -212,10 +218,9 @@ describe("inspectManagedGitdirIdentity — a reused inode no longer replays an i
     const malformed = mutate(authenticTree(), WORKTREE_POINTER, {
       text: "gitdir: relative/admin-dir\n",
     });
-    const pointer = malformed.get(WORKTREE_POINTER);
 
     expect(identityOf(malformed)).toBeUndefined();
-    expect(pointer?.birthtimeNs).toBeDefined();
+    expect([...malformed.values()].every((node) => node.birthtimeNs !== undefined)).toBe(true);
   });
 });
 
@@ -282,5 +287,45 @@ describe("managedIdentityDrift", () => {
   // compare against, the only honest verdict is the one that refuses without excusing it.
   it("reports changed when the worktree proves no identity at all", () => {
     expect(managedIdentityDrift(undefined, "anything")).toBe("changed");
+  });
+});
+
+// A refusal caused by the platform and a refusal caused by a replaced worktree need different
+// operator actions, so the reason has to come out of the pass that failed. An earlier version probed
+// two of the five hashed objects separately and mislabelled the rest; these hold the classification
+// to every component the inspection actually consults.
+describe("inspectManagedGitdirIdentityOutcome", () => {
+  const outcomeOf = (tree: Map<string, Node>): string =>
+    inspectManagedGitdirIdentityOutcome(WORKTREE_ROOT, REPOSITORY_ROOT, portFor(tree)).kind;
+
+  it("identifies an authentic worktree", () => {
+    expect(outcomeOf(authenticTree())).toBe("identified");
+  });
+
+  it.each([
+    { label: "worktree root", path: WORKTREE_ROOT },
+    { label: "worktree .git pointer", path: WORKTREE_POINTER },
+    { label: "Git admin directory", path: ADMIN_DIRECTORY },
+    { label: "admin gitdir backpointer", path: ADMIN_BACKPOINTER },
+    { label: "Git common directory", path: COMMON_DIRECTORY },
+  ])("reports a platform limit when the $label reports no creation time", ({ path }) => {
+    expect(outcomeOf(mutate(authenticTree(), path, { birthtimeNs: undefined }))).toBe(
+      "unsupported",
+    );
+  });
+
+  // The other half: a refusal that is NOT the platform's fault must not be excused as one.
+  it("reports unproven for a malformed pointer while every stamp is present", () => {
+    const malformed = mutate(authenticTree(), WORKTREE_POINTER, {
+      text: "gitdir: relative/admin-dir\n",
+    });
+
+    expect(outcomeOf(malformed)).toBe("unproven");
+  });
+
+  it("reports unproven when the backpointer does not point back", () => {
+    const broken = mutate(authenticTree(), ADMIN_BACKPOINTER, { text: "/elsewhere/ws/.git\n" });
+
+    expect(outcomeOf(broken)).toBe("unproven");
   });
 });

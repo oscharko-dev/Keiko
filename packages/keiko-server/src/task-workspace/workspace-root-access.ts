@@ -21,7 +21,11 @@ import {
 } from "./authorization.js";
 import { isManagedRootOwned } from "./managed-root.js";
 import { deriveManagedWorktreePath } from "./naming.js";
-import { inspectManagedGitdirIdentity, managedIdentityDrift } from "./gitdir-identity.js";
+import {
+  inspectManagedGitdirIdentity,
+  inspectManagedGitdirIdentityOutcome,
+  managedIdentityDrift,
+} from "./gitdir-identity.js";
 
 export interface WorkspaceRootAccess {
   readonly kind: "ordinary" | "managed-task";
@@ -134,8 +138,10 @@ function classifyIdentityDenial(
   instance: WorkspaceInstance,
   canonicalRoot: string,
 ): ManagedRootDenialReason {
-  const gitdir = inspectManagedGitdirIdentity(canonicalRoot, instance.repositoryRoot);
-  return managedIdentityDrift(gitdir, instance.gitdirIdentity) === "schema-retired"
+  const outcome = inspectManagedGitdirIdentityOutcome(canonicalRoot, instance.repositoryRoot);
+  if (outcome.kind === "unsupported") return "managed-root-identity-unsupported";
+  const inspection = outcome.kind === "identified" ? outcome.inspection : undefined;
+  return managedIdentityDrift(inspection, instance.gitdirIdentity) === "schema-retired"
     ? "managed-root-identity-schema-retired"
     : "managed-root-identity";
 }
@@ -185,6 +191,11 @@ type ManagedRootDenialReason =
   // it needs an operator-approved re-registration, not an incident response. The old value is
   // never accepted, since accepting a forgeable identity once would mint a trusted v3 one from it.
   | "managed-root-identity-schema-retired"
+  // This filesystem reports no creation time, so no identity can be derived at all — an ext4 volume
+  // formatted with 128-byte inodes is a real example. The outcome ADR-0155 names
+  // FILESYSTEM_IDENTITY_UNSUPPORTED at the workspace-root boundary; a separate reason here so an
+  // operator sees a platform limitation instead of a replaced worktree.
+  | "managed-root-identity-unsupported"
   // The interactive re-proof threw (vanished worktree, stat race, exotic IO fault).
   | "managed-root-resolution-failed"
   // The same throw on the lifecycle-maintenance twin. A distinct reason on purpose: a background

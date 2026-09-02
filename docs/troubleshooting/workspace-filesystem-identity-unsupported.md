@@ -40,11 +40,18 @@ does not accept the retired proof even once. Accepting a forgeable identity is p
 let an already-replaced worktree be reissued as a trusted one, so the one-time "self-healing upgrade"
 that looks convenient here is the one option that must not be taken.
 
-That boundary does not report this document's unsupported-filesystem condition, because it does not
-depend on a creation time being available: it stamps its two pointer files with the creation time
-where the platform reports one and falls back to the change time where it does not. The fallback is
-stricter, never weaker — both stamps change when a file is recreated, and neither can be set from
-userland.
+`managed-root-identity-unsupported` is this document's condition reached through a managed worktree.
+Every component of that identity — the worktree root, the Git common and admin directories, and the
+two pointer files — carries its creation time, so a volume that cannot report one produces no
+identity at all and the workspace is refused. The resolution above applies unchanged: the managed
+root and the repository it links to may sit on different filesystems, and either one being unable to
+answer is enough.
+
+The root directory has to be included, not just the pointer files. A local process that can replace
+the worktree does not have to create a new pointer: it can move the original `.git` out, recreate the
+directory until the inode is handed back, then move the same file in again. A rename preserves both
+the inode and the creation time, so a pointer-only identity still matches. The root directory's
+creation time is the one component that cannot be relocated.
 
 ## Diagnostic Steps for the managed boundary
 

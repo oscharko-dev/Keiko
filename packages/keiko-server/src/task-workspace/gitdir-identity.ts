@@ -8,7 +8,8 @@ import {
 } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 const MAX_GIT_METADATA_BYTES = 64 * 1024;
-// v3 binds each pointer FILE to its ctime as well as its inode (see fileIdentityPair).
+// v3 binds every component, the worktree root directory included, to its creation time as well as
+// its inode (see identityPair).
 // The schema string is part of the hashed input, so bumping it is what makes the composition change
 // explicit instead of silently reinterpreting identities persisted under the weaker v2 rule.
 const IDENTITY_SCHEMA = "managed-linked-worktree-v3";
@@ -62,29 +63,29 @@ export interface ManagedGitdirIdentityInspection {
 // macOS and fails on Linux). An identity built from it alone therefore cannot distinguish an
 // authentic managed worktree from a same-path replacement that copies the Git pointer.
 //
-// The two POINTER FILES close that gap: every replacement of any component has to materialise a
-// pointer, so stamping those two files is enough to catch all of them.
+// EVERY component is bound to its creation time, the worktree ROOT DIRECTORY included, and
+// `birthtimeNs` is the only field that can carry it.
 //
-// `birthtimeNs` is the stamp, with `ctimeNs` as the fallback, and the ORDER matters in both
-// directions:
-//   * Creation time is preferred because it survives an IN-PLACE rewrite of the same file. Padding
-//     the `.git` pointer with whitespace leaves the target unchanged and must not invalidate a
-//     healthy workspace — otherwise anyone who can write one byte into it can force every workspace
-//     into recovery. Measured on Linux and macOS: an in-place rewrite keeps the inode and the
-//     birthtime while moving ctime; a delete-and-recreate changes birthtime 40/40.
-//   * ctime is a sound fallback, never a weaker one. Some volumes report no creation time at all (an
-//     ext4 filesystem formatted with 128-byte inodes is a real example), and ctime is STRICTER
-//     there: it also moves on an in-place rewrite. Both change when the file is recreated, and
-//     neither can be set from userland — `utimes` moves atime and mtime and BUMPS ctime.
-// Only when a port offers neither does this fail closed.
+// Stamping just the pointer files is not enough, and assuming otherwise is a hole with a working
+// exploit. A local process that can replace the worktree does not have to CREATE a new pointer: it
+// can move the original `.git` out, delete and recreate the directory until the inode is handed
+// back, then move the same file in again. `rename` preserves both the inode and the birthtime, so
+// every pointer component still matches. Reproduced on Linux: root inode reused, pointer inode and
+// birthtime both preserved, and only the root directory's birthtime changed. That is why the root
+// directory has to be part of the identity — it is the one component an attacker cannot relocate.
 //
-// DIRECTORIES are deliberately still identified by inode alone. A directory's ctime and mtime move
-// whenever an entry is created or removed inside it, so binding a long-lived worktree root to either
-// would deny every healthy workspace the moment a user saves a file at its root — and binding it to
-// birthtime would fail closed on exactly the volumes that cannot report one.
-function fileIdentityPair(stat: WorkspaceStat): IdentityPair | undefined {
+// `ctimeNs` is NOT a usable substitute here. A directory's ctime and mtime move whenever an entry is
+// created or removed inside it, so binding the root to either would refuse every healthy workspace
+// the moment a user saved a file at its root.
+//
+// Absent creation time FAILS CLOSED, and that is a real, reachable outcome rather than a
+// theoretical one: an ext4 volume formatted with 128-byte inodes reports none. Measured on such a
+// volume, Node returns birthtimeNs `0` — an honest "unavailable" rather than a substituted ctime —
+// which `workspaceStat` maps to absent, so the refusal is correct and is reported as a platform
+// limitation, never as a replaced worktree.
+function identityPair(stat: WorkspaceStat): IdentityPair | undefined {
   const inode = stat.fileIdentity;
-  const created = stat.birthtimeNs ?? stat.ctimeNs;
+  const created = stat.birthtimeNs;
   if (inode === undefined || inode.length === 0) return undefined;
   if (created === undefined || created.length === 0) return undefined;
   return { inodeOnly: inode, withCreation: `${inode}@${created}` };
@@ -92,15 +93,12 @@ function fileIdentityPair(stat: WorkspaceStat): IdentityPair | undefined {
 
 function directoryIdentity(stat: WorkspaceStat): IdentityPair | undefined {
   if (!stat.isDirectory || stat.isSymbolicLink) return undefined;
-  const inode = stat.fileIdentity;
-  if (inode === undefined || inode.length === 0) return undefined;
-  // Unchanged between v2 and v3: a directory contributes the same value to both compositions.
-  return { inodeOnly: inode, withCreation: inode };
+  return identityPair(stat);
 }
 
 function fileIdentity(read: WorkspaceDescriptorUtf8Read): IdentityPair | undefined {
   if (!read.stat.isFile || read.stat.isSymbolicLink) return undefined;
-  return fileIdentityPair(read.stat);
+  return identityPair(read.stat);
 }
 
 /**
@@ -124,6 +122,81 @@ export function managedIdentityDrift(
   if (inspection === undefined) return "changed";
   if (inspection.identity === persisted) return "matches";
   return inspection.legacyIdentity === persisted ? "schema-retired" : "changed";
+}
+
+/**
+ * Why one inspection produced no identity.
+ *
+ * A refusal caused by the platform is not the same incident as a refusal caused by a replaced
+ * worktree, and reporting both as an identity mismatch sends an operator hunting an attack that never
+ * happened. ADR-0155 already names this outcome at the workspace-root boundary
+ * (`FILESYSTEM_IDENTITY_UNSUPPORTED`); this keeps the managed-worktree boundary symmetric with it.
+ */
+export type ManagedGitdirIdentityOutcome =
+  | { readonly kind: "identified"; readonly inspection: ManagedGitdirIdentityInspection }
+  | { readonly kind: "unsupported" }
+  | { readonly kind: "unproven" };
+
+/**
+ * Wraps a port so one inspection can report whether any component it actually consulted lacked a
+ * creation time.
+ *
+ * Deliberately not a second probe. An independent re-stat would look at a different set of objects at
+ * a different moment and could contradict the very failure it is explaining — an earlier version of
+ * this classification probed two of the five hashed objects and mislabelled the rest, which review
+ * caught. Answering from inside the failing pass cannot drift from it.
+ */
+function creationTimeWitness(fs: WorkspaceFs): {
+  readonly fs: WorkspaceFs;
+  readonly sawMissingCreationTime: () => boolean;
+} {
+  let missing = false;
+  const note = (stat: WorkspaceStat): WorkspaceStat => {
+    if (stat.birthtimeNs === undefined || stat.birthtimeNs.length === 0) missing = true;
+    return stat;
+  };
+  const containedRead = fs.readFileUtf8WithinRootSameDescriptor;
+  return {
+    fs: {
+      ...fs,
+      stat: (absolutePath: string): WorkspaceStat => note(fs.stat(absolutePath)),
+      ...(containedRead === undefined
+        ? {}
+        : {
+            readFileUtf8WithinRootSameDescriptor: (
+              canonicalRoot: string,
+              absolutePath: string,
+              maxBytes: number,
+              hardLinkPolicy: Parameters<typeof containedRead>[3],
+              completeness: Parameters<typeof containedRead>[4],
+            ): WorkspaceDescriptorUtf8Read => {
+              const result = containedRead.call(
+                fs,
+                canonicalRoot,
+                absolutePath,
+                maxBytes,
+                hardLinkPolicy,
+                completeness,
+              );
+              note(result.stat);
+              return result;
+            },
+          }),
+    },
+    sawMissingCreationTime: (): boolean => missing,
+  };
+}
+
+/** The identity plus, when there is none, the reason an operator needs to act on the right thing. */
+export function inspectManagedGitdirIdentityOutcome(
+  worktreePath: string,
+  repositoryRoot: string,
+  fs: WorkspaceFs = nodeWorkspaceFs,
+): ManagedGitdirIdentityOutcome {
+  const witness = creationTimeWitness(fs);
+  const inspection = inspectManagedGitdirIdentity(worktreePath, repositoryRoot, witness.fs);
+  if (inspection !== undefined) return { kind: "identified", inspection };
+  return witness.sawMissingCreationTime() ? { kind: "unsupported" } : { kind: "unproven" };
 }
 
 function readStableContainedFile(
