@@ -170,6 +170,55 @@ describe("nodeWorkspaceFs", () => {
     ).toThrow(WorkspaceDescriptorReadError);
   });
 
+  // Every term of the admission-time snapshot comparison, proven ONE AT A TIME.
+  //
+  // The consumer-level pin for this guard (files.test.ts, "rejects a same-size, same-mtime
+  // substitute swapped in between admission and the content read") cannot carry it. A substitute
+  // file has to be created, and creating it moves `ctime`, which userland cannot set back — so that
+  // test is refused on the ctime term no matter what the inode term does. Verified by deleting
+  // `expected.fileIdentity === observed.fileIdentity` from the comparator: the consumer pin stayed
+  // green while the binding it is named after was gone.
+  //
+  // Mutating exactly one field of `expected` is the only way to hold each term individually
+  // falsifiable, and it goes through the production read rather than reaching for the private
+  // comparator, so the pin cannot drift away from the code path callers actually use.
+  it.each([
+    { term: "file identity (device:inode)", change: { fileIdentity: "0:0" } },
+    { term: "size", change: { size: 1 } },
+    { term: "hard link count", change: { hardLinkCount: 99 } },
+    { term: "modification time", change: { mtimeNs: "1" } },
+    { term: "change time", change: { ctimeNs: "1" } },
+    { term: "regular-file kind", change: { isFile: false } },
+    { term: "directory kind", change: { isDirectory: true } },
+    { term: "symbolic-link kind", change: { isSymbolicLink: true } },
+  ])("refuses a bounded read whose admitted $term no longer matches", async ({ change }) => {
+    const { file } = workspaceFixture();
+    const admitted = nodeWorkspaceFs.stat(file);
+
+    await expect(
+      nodeWorkspaceFs.readFileBytes?.(file, 64, "reject", { ...admitted, ...change }),
+    ).rejects.toThrow(WorkspaceDescriptorReadError);
+    // The unmutated snapshot still reads, so each rejection above is the mutated term and not a
+    // fixture that could never be admitted in the first place.
+    await expect(
+      nodeWorkspaceFs.readFileBytes?.(file, 64, "reject", admitted),
+    ).resolves.toBeInstanceOf(Uint8Array);
+  });
+
+  // An admission that never captured an identity cannot be re-proved against one. Fails closed
+  // rather than treating "nothing to compare" as "nothing changed".
+  it("refuses a bounded read admitted without a file identity", async () => {
+    const { file } = workspaceFixture();
+    const withoutIdentity: WorkspaceStat = {
+      ...nodeWorkspaceFs.stat(file),
+      fileIdentity: undefined,
+    };
+
+    await expect(
+      nodeWorkspaceFs.readFileBytes?.(file, 64, "reject", withoutIdentity),
+    ).rejects.toThrow(WorkspaceDescriptorReadError);
+  });
+
   it("caps byte, prefix, and range reads without over-reading", async () => {
     const { file } = workspaceFixture();
     const expected = nodeWorkspaceFs.stat(file);

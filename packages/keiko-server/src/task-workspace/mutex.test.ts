@@ -3,7 +3,10 @@
 // keys run concurrently, errors are isolated (do not poison the key), multi-key acquisition serializes
 // against any overlapping key, and the canonical key order makes deadlock structurally impossible.
 
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   fileWriteKeys,
   activePointerKey,
@@ -159,11 +162,35 @@ function serializesWith(a: readonly string[], b: readonly string[]): boolean {
 }
 
 describe("fileWriteKeys identity (#3200 review)", () => {
-  it("stays stable across the atomic rename every save performs", () => {
-    // The key must not change when the write replaces the target: an inode-based key would shift
-    // on every save, letting a request that resolves mid-rename derive a different key and enter
-    // the critical section concurrently. The path does not move.
-    expect(fileWriteKeys("/tmp/project/app.ts")).toEqual(fileWriteKeys("/tmp/project/app.ts"));
+  // The key must not change when the write replaces the target: an inode-based key would shift on
+  // every save, letting a request that resolves mid-rename derive a different key and enter the
+  // critical section concurrently.
+  //
+  // This used to be asserted as `fileWriteKeys(p) === fileWriteKeys(p)`, which is `f(x) === f(x)` —
+  // true for every pure implementation, an inode-based one included, so it could not fail for the
+  // design it names. The invariant is RELOCATED to the two places it can actually be falsified.
+  it("derives the key from the path alone, so no filesystem state can move it", () => {
+    // Structural half: the signature is the guarantee. An implementation that wanted an inode would
+    // have to take something other than a path, and this fails the moment it does.
+    expectTypeOf<Parameters<typeof fileWriteKeys>>().toEqualTypeOf<[string]>();
+  });
+
+  it("keeps the key of a real file across the atomic rename a save performs", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-mutex-rename-"));
+    try {
+      const target = join(root, "app.ts");
+      const replacement = join(root, "app.ts.tmp");
+      writeFileSync(target, "before", "utf8");
+      const before = fileWriteKeys(target);
+      writeFileSync(replacement, "after", "utf8");
+      // The save path's own move: a different inode now answers to the same name.
+      renameSync(replacement, target);
+
+      expect(statSync(target).ino).not.toBe(0);
+      expect(fileWriteKeys(target)).toEqual(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("folds case- and normalization-equivalent spellings on every platform", () => {
