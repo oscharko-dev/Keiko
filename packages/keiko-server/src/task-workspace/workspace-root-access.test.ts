@@ -53,6 +53,11 @@ vi.mock("./gitdir-identity.js", async (importOriginal) => {
     inspectManagedGitdirIdentityOutcome: vi.fn(actual.inspectManagedGitdirIdentityOutcome),
   };
 });
+
+// A queued classifier outcome must never leak into the next test.
+afterEach(() => {
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockReset();
+});
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,

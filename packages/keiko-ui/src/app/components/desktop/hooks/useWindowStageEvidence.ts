@@ -9,7 +9,8 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 // diagnostic sink (AGENTS.md §8): a `started` line when the placeholder mounts and a
 // `settled after Nms` line when it unmounts. A stage that started and never settled is the
 // reconstruction of a stall; a chunk that failed to load surfaces separately as a page error.
-export type WindowStage = "window chunk" | "chat window chunk" | "chat bind";
+export type WindowStage =
+  "window chunk" | "chat window chunk" | "editor widget chunk" | "files widget chunk" | "chat bind";
 
 export function useWindowStageEvidence(stage: WindowStage): void {
   useEffect((): (() => void) => {

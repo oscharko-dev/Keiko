@@ -7,7 +7,7 @@
 // (SC3); and the safelyRemoveManagedPath choke point refuses every out-of-root / symlink-escape /
 // unowned / non-leaf target (SC1). No generic git runner; the single governed spawn boundary throughout.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -54,7 +54,26 @@ import {
   type ServerLogEvent,
   type ServerLogSink,
 } from "../observability/index.js";
-import { inspectManagedGitdirIdentity } from "./gitdir-identity.js";
+import {
+  inspectManagedGitdirIdentity,
+  inspectManagedGitdirIdentityOutcome,
+} from "./gitdir-identity.js";
+
+// A volume without creation times, or an I/O failure inside the proof, cannot be produced on a real
+// filesystem from a test, so the one identity classifier is wrapped (never replaced) and answers a
+// queued outcome exactly once where a pin needs it; every other call reaches the real proof.
+vi.mock("./gitdir-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./gitdir-identity.js")>();
+  return {
+    ...actual,
+    inspectManagedGitdirIdentityOutcome: vi.fn(actual.inspectManagedGitdirIdentityOutcome),
+  };
+});
+
+// A queued classifier outcome must never leak into the next test.
+afterEach(() => {
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockReset();
+});
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -743,6 +762,32 @@ describe("identity-denied terminal rows stay removable (#3376 review P1)", () =>
     expect(result.refusalReason).toBe("worktree-dirty");
     expect(existsSync(join(instance.managedWorktreePath, "wip.txt"))).toBe(true);
     expect(store.getById(instance.workspaceId)).toBeDefined();
+  });
+});
+
+// A proof that could not run is not a denial: a destructive operation fails closed on the classified,
+// retryable IDENTITY_PROOF_FAILED instead of proceeding on the orphan path or reporting "dirty"
+// (Cursor review on f50133b95).
+describe("identity proof failure fails cleanup closed", () => {
+  it("rejects with IDENTITY_PROOF_FAILED and leaves the row and directory untouched", async () => {
+    const instance = await provisionTask("t-proof-failed");
+    setState(instance, "cleanup-pending");
+    vi.mocked(inspectManagedGitdirIdentityOutcome).mockReturnValueOnce({
+      kind: "failed",
+      cause: new Error("EIO: input/output error"),
+    });
+
+    await expect(
+      cleanup().cleanup({
+        workspaceId: instance.workspaceId,
+        requestedBy: "u",
+        operatorApproved: true,
+        mode: "complete",
+      }),
+    ).rejects.toMatchObject({ code: "IDENTITY_PROOF_FAILED" });
+
+    expect(existsSync(instance.managedWorktreePath)).toBe(true);
+    expect(store.getById(instance.workspaceId)?.lifecycleState).toBe("cleanup-pending");
   });
 });
 

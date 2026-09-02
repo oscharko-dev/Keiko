@@ -150,10 +150,20 @@ export function managedIdentityDriftFor(
   return outcome.inspection.legacyIdentity === persisted ? "schema-retired" : "changed";
 }
 
-function proofFailure(cause: unknown): Error {
-  return cause instanceof Error
-    ? cause
-    : new Error("managed worktree identity proof failed", { cause });
+/**
+ * Thrown by the drift classifier when the proof itself could not run (EIO, EACCES, a vanished path).
+ * `cause` is the I/O failure. Callers narrow on this class: a read path answers it as a classified
+ * retryable error, a batch path isolates it per instance, a destructive path fails closed on it.
+ */
+export class ManagedIdentityProofError extends Error {
+  public constructor(cause: unknown) {
+    super("managed worktree identity proof failed", { cause });
+    this.name = "ManagedIdentityProofError";
+  }
+}
+
+function proofFailure(cause: unknown): ManagedIdentityProofError {
+  return new ManagedIdentityProofError(cause);
 }
 
 export const RETIRED_IDENTITY_SCHEMA_MESSAGE =

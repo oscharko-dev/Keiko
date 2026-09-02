@@ -35,7 +35,7 @@ import {
   type ServerLogSink,
 } from "../observability/index.js";
 import { runWithWorkspaceLifecycleFailureLogging } from "./activity-log.js";
-import type { ManagedIdentityDrift } from "./gitdir-identity.js";
+import { ManagedIdentityProofError, type ManagedIdentityDrift } from "./gitdir-identity.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -687,6 +687,36 @@ describe("identity proof before bindings and readiness", () => {
       });
     },
   );
+
+  // A proof that could not run is answered as the classified, retryable IDENTITY_PROOF_FAILED: the
+  // read does not pretend the application is unbound (the pointer stays), and a readiness transition
+  // neither flags nor moves the row (Cursor review on f50133b95).
+  it("answers a failed proof on the active read and on handoff with IDENTITY_PROOF_FAILED, keeping state", async () => {
+    const provisioning = fakeProvisioning();
+    const trusted = lifecycleWith(provisioning);
+    const inst = store.upsert(instance("a"));
+    await trusted.setActive({
+      workspaceId: inst.workspaceId,
+      requestedBy: "op",
+      acquireLock: false,
+    });
+    const failing = lifecycleWith(provisioning, undefined, capturingEvidence(), () => {
+      throw new ManagedIdentityProofError(new Error("EIO: input/output error"));
+    });
+
+    expect(() => failing.getActive()).toThrow(
+      expect.objectContaining({ code: "IDENTITY_PROOF_FAILED" }),
+    );
+    expect(pointerStore.get()?.workspaceId).toBe(inst.workspaceId);
+
+    await rejectsWithCode(
+      () => failing.prepareHandoff({ workspaceId: inst.workspaceId, requestedBy: "op" }),
+      "IDENTITY_PROOF_FAILED",
+    );
+    const persisted = store.getById(inst.workspaceId);
+    expect(persisted?.lifecycleState).toBe("active");
+    expect(persisted?.driftMarkers).toEqual([]);
+  });
 
   it("still pauses a workspace whose identity is not current (pause exposes nothing)", async () => {
     const pausing = lifecycleWith(

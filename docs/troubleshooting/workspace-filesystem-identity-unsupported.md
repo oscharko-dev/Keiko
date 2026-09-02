@@ -60,6 +60,13 @@ directory until the inode is handed back, then move the same file in again. A re
 the inode and the creation time, so a pointer-only identity still matches. The root directory's
 creation time is the one component that cannot be relocated.
 
+`IDENTITY_PROOF_FAILED` is neither of these. It means the proof itself could not run — an I/O
+failure such as `EIO` or `EACCES` on one of the identity's components — and it is retryable (HTTP
+503). The active-workspace read answers it instead of silently unbinding the application; health and
+reconciliation carry that one workspace forward unverified (health `unknown`, `recovery-required`,
+not cleanup-eligible) and keep working on the others; governed cleanup and repair fail closed on it.
+The activity-log line carries the cause chain and frames.
+
 ## Diagnostic Steps for the managed boundary
 
 Grep the activity log for `decision: "denied"` and read the `reason` discriminator. The denial lines

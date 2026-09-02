@@ -41,6 +41,7 @@ import {
   liveManagedIdentityDrift,
   managedIdentityDriftMarker,
   managedIdentityDriftMessage,
+  ManagedIdentityProofError,
   type ManagedIdentityDrift,
 } from "./gitdir-identity.js";
 import { correlationIdOrUnknown } from "../correlation.js";
@@ -198,14 +199,32 @@ function canExposeBinding(ctx: LifecycleCtx, instance: WorkspaceInstance): boole
   return false;
 }
 
+// A proof that could not run is not a verdict. On the active read and on a readiness transition it
+// surfaces as the classified, retryable IDENTITY_PROOF_FAILED with its cause — never as an unbound
+// application (that would drop the pointer on a transient EIO) and never as a raw 500 (Cursor review
+// on f50133b95). The pointer and the row are left exactly as they were.
 function identityDriftOf(ctx: LifecycleCtx, instance: WorkspaceInstance): ManagedIdentityDrift {
-  const prove = ctx.deps.identityDrift;
-  if (prove !== undefined) return prove(instance);
-  return liveManagedIdentityDrift(
-    instance.managedWorktreePath,
-    instance.repositoryRoot,
-    instance.gitdirIdentity,
-  );
+  try {
+    const prove = ctx.deps.identityDrift;
+    if (prove !== undefined) return prove(instance);
+    return liveManagedIdentityDrift(
+      instance.managedWorktreePath,
+      instance.repositoryRoot,
+      instance.gitdirIdentity,
+    );
+  } catch (error) {
+    if (error instanceof ManagedIdentityProofError) {
+      throw new TaskWorkspaceError("IDENTITY_PROOF_FAILED", error.message, [], {
+        cause: error.cause,
+      });
+    }
+    if (error instanceof ManagedIdentityProofError) {
+      throw new TaskWorkspaceError("IDENTITY_PROOF_FAILED", error.message, [], {
+        cause: error.cause,
+      });
+    }
+    throw error;
+  }
 }
 
 function assertIdentityCurrentFor(

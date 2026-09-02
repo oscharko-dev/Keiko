@@ -26,6 +26,7 @@ import {
   inspectManagedGitdirIdentityOutcome,
   managedIdentityDrift,
   managedIdentityDriftFor,
+  ManagedIdentityProofError,
   type ManagedGitdirIdentityInspection,
 } from "./gitdir-identity.js";
 
@@ -321,10 +322,16 @@ describe("managedIdentityDrift", () => {
   it("rethrows a failed proof's cause instead of calling the worktree changed", () => {
     const cause = new Error("EACCES: permission denied");
 
-    expect(() => managedIdentityDriftFor({ kind: "failed", cause }, "anything")).toThrow(cause);
-    expect(() => managedIdentityDriftFor({ kind: "failed", cause: "EIO" }, "anything")).toThrow(
-      "managed worktree identity proof failed",
-    );
+    for (const failed of [cause, "EIO"]) {
+      let thrown: unknown;
+      try {
+        managedIdentityDriftFor({ kind: "failed", cause: failed }, "anything");
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(ManagedIdentityProofError);
+      expect((thrown as ManagedIdentityProofError).cause).toBe(failed);
+    }
   });
 
   it("reports changed when the worktree proves no identity at all", () => {

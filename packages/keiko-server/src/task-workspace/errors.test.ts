@@ -36,6 +36,7 @@ const EXPECTED: Readonly<Record<TaskWorkspaceErrorCode, WorkspaceFailureClass>> 
   REPAIR_FAILED: "terminal",
   CLEANUP_NOT_ELIGIBLE: "blocked",
   CLEANUP_FAILED: "terminal",
+  IDENTITY_PROOF_FAILED: "retryable",
 };
 
 describe("classifyTaskWorkspaceError", () => {
@@ -90,6 +91,7 @@ const EXPECTED_STATUS: Readonly<Record<TaskWorkspaceErrorCode, number>> = {
   REPAIR_FAILED: 500,
   CLEANUP_NOT_ELIGIBLE: 409,
   CLEANUP_FAILED: 500,
+  IDENTITY_PROOF_FAILED: 503,
 };
 
 const EXPECTED_OUTCOME: Readonly<Record<TaskWorkspaceErrorCode, WorkspaceFailureOutcome>> = {
@@ -109,6 +111,7 @@ const EXPECTED_OUTCOME: Readonly<Record<TaskWorkspaceErrorCode, WorkspaceFailure
   REPAIR_FAILED: "failed",
   CLEANUP_NOT_ELIGIBLE: "blocked",
   CLEANUP_FAILED: "failed",
+  IDENTITY_PROOF_FAILED: "retry-required",
 };
 
 describe("TaskWorkspaceError status + outcome (GEN-DUP-NEAR-008)", () => {

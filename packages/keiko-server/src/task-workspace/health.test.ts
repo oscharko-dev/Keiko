@@ -3,7 +3,7 @@
 // health classification over live signals (healthy, dirty, missing, archived, cleanup-ready), orphan
 // detection by cross-referencing the managed root with the store, and the content-free report (SC3).
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,7 +33,26 @@ import { createWorkspaceHealthService } from "./health.js";
 import type { WorkspaceHealthService, WorkspaceProvisioningService } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
 import { MANAGED_ROOT_MARKER_FILENAME } from "./naming.js";
-import { inspectManagedGitdirIdentity } from "./gitdir-identity.js";
+import {
+  inspectManagedGitdirIdentity,
+  inspectManagedGitdirIdentityOutcome,
+} from "./gitdir-identity.js";
+
+// A volume without creation times, or an I/O failure inside the proof, cannot be produced on a real
+// filesystem from a test, so the one identity classifier is wrapped (never replaced) and answers a
+// queued outcome exactly once where a pin needs it; every other call reaches the real proof.
+vi.mock("./gitdir-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./gitdir-identity.js")>();
+  return {
+    ...actual,
+    inspectManagedGitdirIdentityOutcome: vi.fn(actual.inspectManagedGitdirIdentityOutcome),
+  };
+});
+
+// A queued classifier outcome must never leak into the next test.
+afterEach(() => {
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockReset();
+});
 import { createBufferedServerLogSink, type ServerLogSink } from "../observability/server-log.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
@@ -244,6 +263,35 @@ describe("operational health classification (AC1)", () => {
     const entry = entryFor(report, instance.workspaceId);
     expect(entry?.cleanupEligible).toBe(true);
     expect(entry?.driftMarkers).not.toContain("path-escape");
+  });
+
+  // A proof that could not run is not a verdict: the report carries that one workspace forward as
+  // unverified, logs the failure with its cause under the report's correlation, and still evaluates
+  // every other workspace (Cursor review on f50133b95).
+  it("carries a workspace whose identity proof failed forward as unverified and keeps reporting the others", async () => {
+    const failing = await provisionTask("t-proof-failed");
+    const other = await provisionTask("t-proof-ok");
+    const activityLog = createBufferedServerLogSink();
+    vi.mocked(inspectManagedGitdirIdentityOutcome).mockReturnValueOnce({
+      kind: "failed",
+      cause: new Error("EACCES: permission denied"),
+    });
+
+    const report = await health(realAdapter, activityLog).report(repoRoot, "health-proof-0001");
+
+    const carried = entryFor(report, failing.workspaceId);
+    expect(carried?.classification).toBe("recovery-required");
+    expect(carried?.health).toBe("unknown");
+    expect(carried?.cleanupEligible).toBe(false);
+    expect(carried?.driftMarkers).toEqual([]);
+    expect(entryFor(report, other.workspaceId)?.classification).toBe("healthy");
+    expect(validateWorkspaceHealthReport(report).ok).toBe(true);
+    const line = activityLog.events.find((event) => event.errorKind === "IDENTITY_PROOF_FAILED");
+    expect(line?.correlationId).toBe("health-proof-0001");
+    // Body-free by contract: the cause travels as a class chain, never as its message.
+    expect(line?.extra).toMatchObject({ operation: "reconcile" });
+    expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
+    expect(JSON.stringify(report)).not.toContain(managedRoot);
   });
 
   it("classifies a worktree with uncommitted/untracked changes as dirty (live probe)", async () => {

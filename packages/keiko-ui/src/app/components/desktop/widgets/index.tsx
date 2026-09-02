@@ -5,7 +5,6 @@ import type {
   QualityIntelligenceInlineSource,
   QualityIntelligenceUiRegenerateResult,
 } from "@oscharko-dev/keiko-contracts";
-import { useTranslate } from "@/lib/i18n";
 import type { Chat } from "@/lib/types";
 import { registerWindowRender } from "../windows/WindowsRegistry";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
@@ -22,23 +21,9 @@ import type { AgentRunCfg } from "./cards/AgentRunWidget";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
 import { workspaceRootTargets } from "../workspaceRootTargets";
 import { BoundRootTarget, type BoundRootSurfaceType } from "./BoundRootTarget";
-import { useWindowStageEvidence } from "../hooks/useWindowStageEvidence";
+import { createWindowChunkFallback } from "./WindowChunkFallback";
 
-// Named, not just styled. A window body chunk and the chat bind that follows it both render a
-// "Loading…" placeholder, and while they were indistinguishable a stalled chunk, a stalled bind and a
-// bound-but-empty body all presented as the same absent locator — which is what made the grounded-ask
-// journey report a missing composer instead of the state it was actually stuck in.
-function WindowChunkFallback(): ReactNode {
-  const t = useTranslate();
-  useWindowStageEvidence("window chunk");
-  return (
-    <output className="lk-loading" data-window-chunk="loading" style={{ display: "block" }}>
-      {t("common.loading")}
-    </output>
-  );
-}
-
-const windowChunkFallback = WindowChunkFallback;
+const windowChunkFallback = createWindowChunkFallback("window chunk");
 const ChatWindowSessionHost = dynamic(
   () => import("./SelectionAwareWorkspaceHosts").then((mod) => mod.ChatWindowSessionHost),
   { ssr: false, loading: windowChunkFallback },

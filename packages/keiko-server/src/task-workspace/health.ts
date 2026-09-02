@@ -42,6 +42,8 @@ import { gatherInstanceReconciliationFacts } from "./reconciliation.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import type { WorkspaceHealthService, WorkspaceHealthServiceDeps } from "./types.js";
 import { resolveLifecycleManagedWorkspaceRootAccess } from "./workspace-root-access.js";
+import { runWithWorkspaceLifecycleFailureLogging } from "./activity-log.js";
+import { TaskWorkspaceError } from "./errors.js";
 
 const ORPHAN_ID_PREFIX = "orph_";
 
@@ -160,6 +162,54 @@ async function evaluateInstance(
   });
 }
 
+// A proof that could not run (EIO, EACCES) is not a verdict on the worktree, and it must not abort
+// the report for every other workspace. The failure is logged with its frames under this report's
+// correlation, and the entry carries the persisted row forward as UNVERIFIED: health `unknown`,
+// `recovery-required` because an operator has to look at a worktree the product cannot read, and
+// never cleanup-eligible (Cursor review on f50133b95).
+async function evaluateInstanceOrCarryForward(
+  deps: WorkspaceHealthServiceDeps,
+  adapter: GitWorktreeAdapter,
+  worktrees: readonly WorktreeListEntry[],
+  instance: WorkspaceInstance,
+  ownershipProven: boolean,
+  correlationId: string,
+): Promise<WorkspaceHealthEntry> {
+  try {
+    return await runWithWorkspaceLifecycleFailureLogging(
+      deps,
+      { operation: "reconcile", workspaceIdentitySeed: instance.workspaceId, correlationId },
+      () =>
+        evaluateInstance(
+          deps,
+          adapter,
+          worktrees,
+          instance,
+          ownershipProven,
+          deps.now(),
+          correlationId,
+        ),
+    );
+  } catch (error) {
+    if (!(error instanceof TaskWorkspaceError) || error.code !== "IDENTITY_PROOF_FAILED")
+      if (!(error instanceof TaskWorkspaceError) || error.code !== "IDENTITY_PROOF_FAILED")
+        throw error;
+    return deriveWorkspaceHealthEntry({
+      workspaceId: instance.workspaceId,
+      taskId: instance.taskId,
+      lifecycleState: instance.lifecycleState,
+      health: "unknown",
+      evaluation: {
+        classification: "recovery-required",
+        driftMarkers: instance.driftMarkers,
+        recoveryHints: instance.recoveryHints,
+        cleanupEligible: false,
+      },
+      ...(instance.lastVerifiedAt !== undefined ? { lastVerifiedAt: instance.lastVerifiedAt } : {}),
+    });
+  }
+}
+
 // Detects orphaned managed worktrees for one repository: directories under `<managedRoot>/<repoId>`
 // that no persisted instance references. Each candidate is realpath-contained before it is reported,
 // and its live cleanup-eligibility is evaluated (owned + contained + clean; orphans hold no lock).
@@ -256,13 +306,12 @@ async function reportImpl(
     const knownPaths = new Set(group.map((instance) => instance.managedWorktreePath));
     for (const instance of group) {
       entries.push(
-        await evaluateInstance(
+        await evaluateInstanceOrCarryForward(
           deps,
           adapter,
           worktrees,
           instance,
           ownershipProven,
-          deps.now(),
           correlationId,
         ),
       );

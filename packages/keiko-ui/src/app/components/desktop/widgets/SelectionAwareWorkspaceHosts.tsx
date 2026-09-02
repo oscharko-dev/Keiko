@@ -39,34 +39,23 @@ import {
   type EditorSelectionHandoffMetadata,
 } from "./cards/editorSelectionHandoff";
 import { useWindowStageEvidence } from "../hooks/useWindowStageEvidence";
+import { createWindowChunkFallback } from "./WindowChunkFallback";
 
 // Named for the same reason as the outer window chunk: `ChatWindow` is its own lazy chunk behind
 // the session bind, and an anonymous "Loading…" here would let a journey read "both named
 // placeholders are gone" as "the composer has mounted" while this chunk is still in flight — the
-// original flake, one hop later. `output` carries the status role natively; it is inline by default
-// and `.lk-loading` sets no display, so the block layout the previous div had is kept explicitly.
-function WindowChunkFallback(): ReactNode {
-  const t = useTranslate();
-  useWindowStageEvidence("chat window chunk");
-  return (
-    <output className="lk-loading" data-window-chunk="loading" style={{ display: "block" }}>
-      {t("common.loading")}
-    </output>
-  );
-}
-
-const windowChunkFallback = WindowChunkFallback;
+// original flake, one hop later. Each lazy chunk names its own stage on the diagnostic sink.
 const ChatWindow = dynamic(() => import("../ChatWindow").then((mod) => mod.ChatWindow), {
   ssr: false,
-  loading: windowChunkFallback,
+  loading: createWindowChunkFallback("chat window chunk"),
 });
 const EditorWidget = dynamic<EditorWidgetProps>(
   () => import("./cards/EditorWidget").then((mod) => mod.EditorWidget),
-  { ssr: false, loading: windowChunkFallback },
+  { ssr: false, loading: createWindowChunkFallback("editor widget chunk") },
 );
 const FilesWidget = dynamic(() => import("./cards/FilesWidget").then((mod) => mod.FilesWidget), {
   ssr: false,
-  loading: windowChunkFallback,
+  loading: createWindowChunkFallback("files widget chunk"),
 });
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const value = cfg[key];

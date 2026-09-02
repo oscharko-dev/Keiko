@@ -43,6 +43,11 @@ vi.mock("./gitdir-identity.js", async (importOriginal) => {
     inspectManagedGitdirIdentityOutcome: vi.fn(actual.inspectManagedGitdirIdentityOutcome),
   };
 });
+
+// A queued classifier outcome must never leak into the next test.
+afterEach(() => {
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockReset();
+});
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   createBufferedServerLogSink,
@@ -402,20 +407,33 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
   });
 
   // An I/O failure inside the proof says nothing about the worktree. It used to be swallowed into
-  // "unproven" and PERSISTED as a stale pointer with `recovery-required`; now it surfaces as the
-  // error it is, with its cause, and writes nothing to the row (#3376 review P2).
-  it("surfaces a failed identity proof as its own error and persists no drift", async () => {
-    const instance = await provisionTask("t1");
+  // "unproven" and PERSISTED as a stale pointer with `recovery-required`. Now that one instance is
+  // carried forward unchanged, the failure is on the activity log as the classified, retryable
+  // IDENTITY_PROOF_FAILED with its cause, and every other instance is still reconciled (#3376 review;
+  // Cursor review on f50133b95).
+  it("isolates a failed identity proof to its instance, logs it, and keeps reconciling the others", async () => {
+    const failing = await provisionTask("t1");
+    const other = await provisionTask("t2");
+    const activityLog = createBufferedServerLogSink();
     vi.mocked(inspectManagedGitdirIdentityOutcome).mockReturnValueOnce({
       kind: "failed",
       cause: new Error("EIO: input/output error"),
     });
 
-    await expect(reconciliation().reconcile()).rejects.toThrow("EIO: input/output error");
+    const report = await reconciliation(activityLog).reconcile(repoRoot, "proof-failed-0001");
 
-    const persisted = store.getById(instance.workspaceId);
+    const carried = report.entries.find((e) => e.workspaceId === failing.workspaceId);
+    expect(carried?.status).toBe("healthy");
+    expect(carried?.driftMarkers).toEqual([]);
+    expect(report.entries.find((e) => e.workspaceId === other.workspaceId)?.status).toBe("healthy");
+    const persisted = store.getById(failing.workspaceId);
     expect(persisted?.lifecycleState).toBe("active");
     expect(persisted?.driftMarkers).toEqual([]);
+    const line = activityLog.events.find((event) => event.errorKind === "IDENTITY_PROOF_FAILED");
+    expect(line?.correlationId).toBe("proof-failed-0001");
+    // Body-free by contract: the cause travels as a class chain, never as its message.
+    expect(line?.extra).toMatchObject({ operation: "reconcile" });
+    expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
   });
 
   // S8786 pointer-drift regression: the shared production parser replaced both formerly duplicated
