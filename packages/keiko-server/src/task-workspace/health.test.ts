@@ -3,7 +3,7 @@
 // health classification over live signals (healthy, dirty, missing, archived, cleanup-ready), orphan
 // detection by cross-referencing the managed root with the store, and the content-free report (SC3).
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,6 +33,37 @@ import { createWorkspaceHealthService } from "./health.js";
 import type { WorkspaceHealthService, WorkspaceProvisioningService } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
 import { MANAGED_ROOT_MARKER_FILENAME } from "./naming.js";
+import {
+  inspectManagedGitdirIdentity,
+  inspectManagedGitdirIdentityOutcome,
+} from "./gitdir-identity.js";
+
+// A volume without creation times, or an I/O failure inside the proof, cannot be produced on a real
+// filesystem from a test, so the one identity classifier is wrapped (never replaced) and answers a
+// queued outcome exactly once where a pin needs it; every other call reaches the real proof.
+vi.mock("./gitdir-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./gitdir-identity.js")>();
+  return {
+    ...actual,
+    inspectManagedGitdirIdentityOutcome: vi.fn(actual.inspectManagedGitdirIdentityOutcome),
+  };
+});
+
+// A queued classifier outcome must never leak into the next test.
+afterEach(() => {
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockReset();
+});
+
+// Makes the identity proof fail for ONE worktree path, targeted by path rather than by call order —
+// the store does not promise an evaluation order — while every other path reaches the real proof.
+function failProofFor(worktreePath: string, cause: Error): void {
+  const real = vi.mocked(inspectManagedGitdirIdentityOutcome).getMockImplementation();
+  if (real === undefined) throw new Error("classifier wrapper lost its implementation");
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockImplementation((candidate, ...rest) =>
+    candidate === worktreePath ? { kind: "failed", cause } : real(candidate, ...rest),
+  );
+}
+import { createBufferedServerLogSink, type ServerLogSink } from "../observability/server-log.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -88,7 +119,10 @@ function provisioning(): WorkspaceProvisioningService {
   });
 }
 
-function health(adapterFactory: AdapterFactory = realAdapter): WorkspaceHealthService {
+function health(
+  adapterFactory: AdapterFactory = realAdapter,
+  activityLog?: ServerLogSink,
+): WorkspaceHealthService {
   return createWorkspaceHealthService({
     store,
     activePointerStore: pointerStore,
@@ -99,7 +133,14 @@ function health(adapterFactory: AdapterFactory = realAdapter): WorkspaceHealthSe
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
     mutex: __twMutex,
+    ...(activityLog === undefined ? {} : { activityLog }),
   });
+}
+
+function retireIdentity(instance: WorkspaceInstance): void {
+  const inspection = inspectManagedGitdirIdentity(instance.managedWorktreePath, repoRoot);
+  if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
+  store.upsert({ ...instance, gitdirIdentity: inspection.legacyIdentity });
 }
 
 async function provisionTask(taskId: string): Promise<WorkspaceInstance> {
@@ -192,6 +233,72 @@ describe("operational health classification (AC1)", () => {
 
     expect(entryFor(report, instance.workspaceId)?.classification).toBe("recovery-required");
     expect(entryFor(report, instance.workspaceId)?.cleanupEligible).toBe(false);
+  });
+
+  // A managed-access denial is an ownership/identity finding, never a containment one. Health used
+  // to rewrite the reconciliation facts to `pathContained: false` on every denial, so a workspace
+  // registered under the retired identity schema was reported as a PATH ESCAPE and sent an operator
+  // into containment incident response for a migration (#3376 review P2).
+  it("reports a retired-schema active workspace as identity drift, never as a path escape", async () => {
+    const instance = await provisionTask("t-retired-active");
+    retireIdentity(instance);
+    const activityLog = createBufferedServerLogSink();
+
+    const report = await health(realAdapter, activityLog).report(repoRoot, "health-retired-0001");
+
+    const entry = entryFor(report, instance.workspaceId);
+    expect(entry?.driftMarkers).toContain("identity-schema-retired");
+    expect(entry?.driftMarkers).not.toContain("path-escape");
+    expect(entry?.classification).toBe("stale-pointer");
+    expect(entry?.cleanupEligible).toBe(false);
+    // The denial itself is evidence on the activity log, joined to this report's correlation.
+    const denials = activityLog.events.filter((event) => event.op === "workspace.root.denied");
+    expect(denials).toHaveLength(1);
+    expect(denials[0]).toMatchObject({
+      correlationId: "health-retired-0001",
+      extra: { decision: "denied", reason: "managed-root-identity-schema-retired" },
+    });
+  });
+
+  // The report has to predict what governed cleanup will decide: a clean terminal row whose identity
+  // can no longer be re-proven is still removable (cleanup probes it on the orphan-style contained
+  // path), so health must not mark it ineligible on the denial alone (#3376 review P1).
+  it("keeps a clean retired-schema terminal workspace cleanup-eligible", async () => {
+    const instance = await provisionTask("t-retired-terminal");
+    retireIdentity(instance);
+    setState(store.getById(instance.workspaceId) ?? instance, "cleanup-pending");
+
+    const report = await health().report(repoRoot);
+
+    const entry = entryFor(report, instance.workspaceId);
+    expect(entry?.cleanupEligible).toBe(true);
+    expect(entry?.driftMarkers).not.toContain("path-escape");
+  });
+
+  // A proof that could not run is not a verdict: the report carries that one workspace forward as
+  // unverified, logs the failure with its cause under the report's correlation, and still evaluates
+  // every other workspace (Cursor review on f50133b95).
+  it("carries a workspace whose identity proof failed forward as unverified and keeps reporting the others", async () => {
+    const failing = await provisionTask("t-proof-failed");
+    const other = await provisionTask("t-proof-ok");
+    const activityLog = createBufferedServerLogSink();
+    failProofFor(failing.managedWorktreePath, new Error("EACCES: permission denied"));
+
+    const report = await health(realAdapter, activityLog).report(repoRoot, "health-proof-0001");
+
+    const carried = entryFor(report, failing.workspaceId);
+    expect(carried?.classification).toBe("recovery-required");
+    expect(carried?.health).toBe("unknown");
+    expect(carried?.cleanupEligible).toBe(false);
+    expect(carried?.driftMarkers).toEqual([]);
+    expect(entryFor(report, other.workspaceId)?.classification).toBe("healthy");
+    expect(validateWorkspaceHealthReport(report).ok).toBe(true);
+    const line = activityLog.events.find((event) => event.errorKind === "IDENTITY_PROOF_FAILED");
+    expect(line?.correlationId).toBe("health-proof-0001");
+    // Body-free by contract: the cause travels as a class chain, never as its message.
+    expect(line?.extra).toMatchObject({ operation: "health" });
+    expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
+    expect(JSON.stringify(report)).not.toContain(managedRoot);
   });
 
   it("classifies a worktree with uncommitted/untracked changes as dirty (live probe)", async () => {

@@ -469,11 +469,12 @@ function managedGroundedRootAccess(
   rootInput: string,
   deps: UiHandlerDeps,
   request: IncomingMessage | undefined,
+  correlationId: string | undefined,
 ): WorkspaceRootAccess | undefined {
   if (request === undefined || resolveAppSessionReadAuthority(deps, request) === undefined) {
     return undefined;
   }
-  return resolveManagedWorkspaceRootAccess(deps, rootInput);
+  return resolveManagedWorkspaceRootAccess(deps, rootInput, { correlationId });
 }
 
 function deniedManagedGroundedRoot(correlationId: string | undefined): RouteResult {
@@ -512,7 +513,7 @@ function groundedRootAccess(
   request: IncomingMessage | undefined,
   correlationId: string | undefined,
 ): WorkspaceRootAccess | RouteResult {
-  const managed = managedGroundedRootAccess(rootInput, deps, request);
+  const managed = managedGroundedRootAccess(rootInput, deps, request, correlationId);
   if (managed !== undefined) return managed;
   if (requiresConfiguredManagedWorkspaceAuthority(deps, rootInput)) {
     return deniedManagedGroundedRoot(correlationId);
@@ -563,8 +564,11 @@ function canonicalizeGroundedFolderScopes(
   return { canonical, skipped };
 }
 
+// The canonical list is authoritative even when it is EMPTY. With every folder denied or
+// inaccessible, returning the original chat would let its legacy single `connectedScope` resurface
+// through `buildConnectedScopes` on the hybrid path (2+ connectors) and be retrieved without the
+// authority canonicalization withheld (#3376 review P1).
 function withCanonicalFolderScopes(chat: Chat, scopes: readonly ChatConnectedScope[]): Chat {
-  if (scopes.length === 0) return chat;
   return { ...chat, connectedScopes: scopes, connectedScope: scopes[0] };
 }
 

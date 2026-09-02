@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -18,11 +20,18 @@ import {
   executeChatCreationRequest,
   EditorWindowSessionHost,
   FilesWindowSessionHost,
+  HOST_CHUNK_FALLBACKS,
   normalizedChatTitle,
   useChatCreationCoordinator,
 } from "./SelectionAwareWorkspaceHosts";
 import { subText } from "../windows/connectionUtils";
 import { chatWindowRuntimeTarget } from "../windows/chatWindowActivity";
+
+const reportClientDiagnosticMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/client-diagnostics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/client-diagnostics")>()),
+  reportClientDiagnostic: reportClientDiagnosticMock,
+}));
 
 const addRoot = vi.hoisted(() => vi.fn());
 const disposeRoot = vi.hoisted(() => vi.fn());
@@ -878,6 +887,133 @@ describe("ChatWindowSessionHost target missing", () => {
     ]);
     expect(sessionA.openChat).not.toHaveBeenCalled();
     expect(sessionB.openChat).not.toHaveBeenCalled();
+  });
+
+  // The bind is asynchronous, and until this state was named it rendered an unlabeled "Loading…"
+  // that a screen reader, an operator and a journey could not tell from a bound chat with an empty
+  // transcript. A grounded-ask e2e journey reported a missing composer because of exactly that.
+  it("names the binding state instead of rendering an anonymous placeholder", async (): Promise<void> => {
+    useChatSessionMock.mockReturnValueOnce({ ...chatSessionState, loading: true });
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "chat-a", title: "Pending" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    const pending = await screen.findByRole("status");
+    expect(pending).toHaveAttribute("data-chat-bind", "opening");
+    expect(screen.queryByTestId("chat-window")).toBeNull();
+  });
+
+  // The DOM marker is live-locator state only. What a customer's support export can reconstruct is
+  // the client diagnostic sink, so the binding stage leaves a body-free start line when it appears
+  // and a settled line, with the elapsed time and nothing else, when it goes away (#3376 review).
+  it("leaves body-free start and settled evidence for the binding stage on the diagnostic sink", async (): Promise<void> => {
+    // Pending for the whole test (not only the first render) with the target chat known, so the
+    // settlement observed below is the unmount and nothing else — neither a bound window nor a
+    // not-found body; the suite-level beforeEach reinstalls the default session.
+    const pending = chatFixture("chat-a", "Pending", 1);
+    useChatSessionMock.mockImplementation(() => ({
+      ...chatSessionState,
+      loading: true,
+      activeChat: pending,
+      chats: [pending],
+    }));
+    // The previous test's tree is unmounted by the library's own cleanup AFTER the suite's
+    // afterEach cleared the mocks, so its settlement line would otherwise be counted here.
+    reportClientDiagnosticMock.mockClear();
+
+    const { unmount } = render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "chat-a", title: "Pending" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    await screen.findByRole("status");
+    expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+      expect.stringMatching(/^desktop chat bind #\d+: started$/),
+    );
+    const settledBefore = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
+      /^desktop chat bind #\d+: settled/.test(String(message)),
+    );
+    expect(settledBefore).toHaveLength(0);
+
+    unmount();
+
+    const messages = reportClientDiagnosticMock.mock.calls.map(([message]) => String(message));
+    expect(messages).toContainEqual(
+      expect.stringMatching(/^desktop chat bind #\d+: settled after \d+ms$/),
+    );
+    for (const message of messages) {
+      expect(message).not.toContain("chat-a");
+      expect(message).not.toContain("Pending");
+    }
+  });
+
+  // The other side of the boundary: a bound chat with an EMPTY transcript is exactly the state the
+  // unlabeled placeholder used to be indistinguishable from, so it must render the window and no
+  // binding marker at all.
+  it("renders the bound window and no binding placeholder for an empty transcript", async (): Promise<void> => {
+    const bound = chatFixture("chat-a", "Bound", 1);
+    useChatSessionMock.mockImplementation(() => ({
+      ...chatSessionState,
+      activeChat: bound,
+      chats: [bound],
+    }));
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "chat-a", title: "Bound" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByTestId("chat-window")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(document.querySelector("[data-chat-bind]")).toBeNull();
+  });
+
+  // The three lazy chunks behind the hosts must each report THEIR stage from the wiring itself: the
+  // test renders exactly the fallback component each `dynamic()` call is given and reads the source
+  // to prove those are the ones wired — a swap between the editor and files labels, or a fallback
+  // reverted to a shared one, is invisible to the factory's own test (#3376 review).
+  it("wires each lazy chunk to a fallback that reports the chunk's own stage", () => {
+    const expected = {
+      chatWindow: "desktop chat window chunk",
+      editorWidget: "desktop editor widget chunk",
+      filesWidget: "desktop files widget chunk",
+    } as const;
+    for (const [key, Fallback] of Object.entries(HOST_CHUNK_FALLBACKS) as [
+      keyof typeof HOST_CHUNK_FALLBACKS,
+      () => ReactNode,
+    ][]) {
+      reportClientDiagnosticMock.mockClear();
+      const view = render(
+        <I18nProvider>
+          <Fallback />
+        </I18nProvider>,
+      );
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.stringMatching(new RegExp(`^${expected[key]} #\\d+: started$`)),
+      );
+      view.unmount();
+    }
+    // The workspace lane runs from packages/keiko-ui, the root lane from the repository root.
+    const relative = "src/app/components/desktop/widgets/SelectionAwareWorkspaceHosts.tsx";
+    const candidate = resolve(process.cwd(), relative);
+    const source = readFileSync(
+      existsSync(candidate) ? candidate : resolve(process.cwd(), "packages/keiko-ui", relative),
+      "utf8",
+    );
+    expect(source).toMatch(
+      /import\("\.\.\/ChatWindow"\)[^;]*loading: HOST_CHUNK_FALLBACKS\.chatWindow/s,
+    );
+    expect(source).toMatch(
+      /import\("\.\/cards\/EditorWidget"\)[^;]*loading: HOST_CHUNK_FALLBACKS\.editorWidget/s,
+    );
+    expect(source).toMatch(
+      /import\("\.\/cards\/FilesWidget"\)[^;]*loading: HOST_CHUNK_FALLBACKS\.filesWidget/s,
+    );
   });
 
   it("rejects empty and whitespace-only titles at the owning normalization boundary", (): void => {

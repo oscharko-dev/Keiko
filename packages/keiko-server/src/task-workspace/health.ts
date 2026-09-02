@@ -41,7 +41,12 @@ import { isManagedRootOwned, isManagedTargetContained } from "./managed-root.js"
 import { gatherInstanceReconciliationFacts } from "./reconciliation.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import type { WorkspaceHealthService, WorkspaceHealthServiceDeps } from "./types.js";
-import { resolveLifecycleManagedWorkspaceRootAccess } from "./workspace-root-access.js";
+import {
+  resolveLifecycleManagedWorkspaceRootAccess,
+  type WorkspaceRootAccess,
+} from "./workspace-root-access.js";
+import { runWithWorkspaceLifecycleFailureLogging } from "./activity-log.js";
+import { isIdentityProofFailure } from "./errors.js";
 
 const ORPHAN_ID_PREFIX = "orph_";
 
@@ -59,29 +64,52 @@ export function deriveOrphanId(repositoryId: string, leaf: string): string {
   );
 }
 
+// `probed` is false when the status adapter threw, or when a registered row's identity was DISPROVEN
+// (replaced tree, path or kind failure): the report then cannot claim to know the tree, so the entry
+// is held as ownership-unproven rather than as clean.
 interface DirtyProbe {
   readonly worktreeDirty: boolean;
-  readonly managedAccessProven: boolean;
+  readonly probed: boolean;
 }
 
 // A live dirty probe through a worktree-bound adapter. Only meaningful when the worktree exists and is
 // contained. Ordinary git-status failure reports not-dirty because the structural classification
 // already surfaces a broken/missing worktree. Failure to re-prove a registered managed root is
 // different: it is returned explicitly so the caller cannot classify that workspace as healthy.
+// `unprovenNotDisproven` is true only for the two verdicts that leave the worktree's authenticity
+// open — a registration under the retired identity rule, or a volume without creation times. A
+// replaced tree (`changed`), a path or kind failure are DISPROVEN or malformed registrations and stay
+// fail-closed: probed on nothing, reported as ownership unproven (#3376 review).
 async function probeDirty(
   deps: WorkspaceHealthServiceDeps,
   worktreePath: string,
   probeable: boolean,
   registered: boolean,
   correlationId: string,
+  unprovenNotDisproven = false,
 ): Promise<DirtyProbe> {
-  if (!probeable) return { worktreeDirty: false, managedAccessProven: true };
+  if (!probeable) return { worktreeDirty: false, probed: true };
   const access = registered
-    ? resolveLifecycleManagedWorkspaceRootAccess(deps, worktreePath)
+    ? resolveLifecycleManagedWorkspaceRootAccess(deps, worktreePath, {
+        activityLog: deps.activityLog,
+        correlationId,
+      })
     : undefined;
-  if (registered && access === undefined) {
-    return { worktreeDirty: false, managedAccessProven: false };
+  if (registered && access === undefined && !unprovenNotDisproven) {
+    return { worktreeDirty: false, probed: false };
   }
+  // A retired or unsupported identity is evidence (logged above under this report's correlation),
+  // not a containment or ownership finding: the probe falls back to the orphan-style contained path
+  // so the report predicts what governed cleanup will actually decide (#3376 review P1/P2).
+  return statusProbe(deps, worktreePath, access, correlationId);
+}
+
+async function statusProbe(
+  deps: WorkspaceHealthServiceDeps,
+  worktreePath: string,
+  access: WorkspaceRootAccess | undefined,
+  correlationId: string,
+): Promise<DirtyProbe> {
   const workspace =
     access === undefined
       ? workspaceInfo(worktreePath)
@@ -89,9 +117,9 @@ async function probeDirty(
   try {
     const adapter = deps.createAdapter(workspace, correlationId, access?.fs);
     const status = await adapter.worktreeStatus();
-    return { worktreeDirty: status.ok && status.dirty, managedAccessProven: true };
+    return { worktreeDirty: status.ok && status.dirty, probed: true };
   } catch {
-    return { worktreeDirty: false, managedAccessProven: false };
+    return { worktreeDirty: false, probed: false };
   }
 }
 
@@ -136,11 +164,15 @@ async function evaluateInstance(
     facts.worktreeDirExists && facts.pathContained,
     true,
     correlationId,
+    facts.gitdirIdentitySchemaRetired === true || facts.gitdirIdentityUnsupported === true,
   );
+  // A managed-access denial is an ownership finding, never a containment one: `pathContained` was
+  // proven from the real path by reconciliation, and the identity markers already ride in `facts`.
+  // Rewriting it to `false` here reported a path escape that had not happened (#3376 review).
   const evaluation = classifyWorkspaceHealth({
-    reconciliation: dirtyProbe.managedAccessProven ? facts : { ...facts, pathContained: false },
+    reconciliation: facts,
     worktreeDirty: dirtyProbe.worktreeDirty,
-    ownershipProven,
+    ownershipProven: ownershipProven && dirtyProbe.probed,
   });
   return deriveWorkspaceHealthEntry({
     workspaceId: instance.workspaceId,
@@ -150,6 +182,54 @@ async function evaluateInstance(
     evaluation,
     ...(instance.lastVerifiedAt !== undefined ? { lastVerifiedAt: instance.lastVerifiedAt } : {}),
   });
+}
+
+// A proof that could not run (EIO, EACCES) is not a verdict on the worktree, and it must not abort
+// the report for every other workspace. The failure is logged with its frames under this report's
+// correlation, and the entry carries the persisted row forward as UNVERIFIED: health `unknown`,
+// `recovery-required` because an operator has to look at a worktree the product cannot read, and
+// never cleanup-eligible (Cursor review on f50133b95).
+async function evaluateInstanceOrCarryForward(
+  deps: WorkspaceHealthServiceDeps,
+  adapter: GitWorktreeAdapter,
+  worktrees: readonly WorktreeListEntry[],
+  instance: WorkspaceInstance,
+  ownershipProven: boolean,
+  correlationId: string,
+): Promise<WorkspaceHealthEntry> {
+  try {
+    return await runWithWorkspaceLifecycleFailureLogging(
+      deps,
+      { operation: "health", workspaceIdentitySeed: instance.workspaceId, correlationId },
+      () =>
+        evaluateInstance(
+          deps,
+          adapter,
+          worktrees,
+          instance,
+          ownershipProven,
+          deps.now(),
+          correlationId,
+        ),
+    );
+  } catch (error) {
+    if (!isIdentityProofFailure(error)) throw error;
+    // Markers and hints are the last VERIFIED classification; `unknown` and `recovery-required` say
+    // this pass could not verify them, and cleanup stays off the table.
+    return deriveWorkspaceHealthEntry({
+      workspaceId: instance.workspaceId,
+      taskId: instance.taskId,
+      lifecycleState: instance.lifecycleState,
+      health: "unknown",
+      evaluation: {
+        classification: "recovery-required",
+        driftMarkers: instance.driftMarkers,
+        recoveryHints: instance.recoveryHints,
+        cleanupEligible: false,
+      },
+      ...(instance.lastVerifiedAt !== undefined ? { lastVerifiedAt: instance.lastVerifiedAt } : {}),
+    });
+  }
 }
 
 // Detects orphaned managed worktrees for one repository: directories under `<managedRoot>/<repoId>`
@@ -193,7 +273,7 @@ async function detectOrphans(
       lifecycleState: "abandoned",
       hasRecord: false,
       pathContained: true,
-      ownershipProven: ownershipProven && dirtyProbe.managedAccessProven,
+      ownershipProven: ownershipProven && dirtyProbe.probed,
       worktreeDirty: dirtyProbe.worktreeDirty,
       lockLive: false,
     });
@@ -248,13 +328,12 @@ async function reportImpl(
     const knownPaths = new Set(group.map((instance) => instance.managedWorktreePath));
     for (const instance of group) {
       entries.push(
-        await evaluateInstance(
+        await evaluateInstanceOrCarryForward(
           deps,
           adapter,
           worktrees,
           instance,
           ownershipProven,
-          deps.now(),
           correlationId,
         ),
       );

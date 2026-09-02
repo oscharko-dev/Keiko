@@ -35,6 +35,7 @@ import type {
 } from "./codingRuntimeSnapshotStore.js";
 import { reviewableResearchAsk } from "./researchApprovalIssuance.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
+import { isIdentityProofFailure } from "../task-workspace/errors.js";
 import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoordinator.js";
 import {
   auxiliaryEventFacts,
@@ -944,6 +945,17 @@ export class CodingRuntimeOrchestrator {
     return Promise.resolve({ ok: true, snapshot: this.projection.idle() });
   }
 
+  // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) is an authority the
+  // start cannot resolve right now — fail closed, never launch against an unproven workspace.
+  private activeWorkspaceOrUndefined(): ActiveWorkspaceView | undefined {
+    try {
+      return this.deps.workspaceLifecycle.getActive();
+    } catch (error) {
+      if (isIdentityProofFailure(error)) return undefined;
+      throw error;
+    }
+  }
+
   private async startFresh(
     input: unknown,
     predecessorRunId?: string,
@@ -951,7 +963,9 @@ export class CodingRuntimeOrchestrator {
     const parsed = parseCodingWorkbenchRuntimeStartRequest(input);
     if (!parsed.ok || this.activeRunId)
       return this.fail(parsed.ok ? "active-run-conflict" : "invalid-intent");
-    const active = this.deps.workspaceLifecycle.getActive();
+    // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) is an authority the
+    // start cannot resolve right now — fail closed, never launch against an unproven workspace.
+    const active = this.activeWorkspaceOrUndefined();
     const principal = this.deps.serverPrincipal();
     if (!active || !principal) return this.fail("authority-resolution-failed");
     const runId = this.newRunId();

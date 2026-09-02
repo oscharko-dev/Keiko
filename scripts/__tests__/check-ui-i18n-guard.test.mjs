@@ -5,17 +5,18 @@ import { dirname, join } from "node:path";
 import { expect, test } from "vitest";
 
 import {
-  DE_CATALOG,
-  EN_CATALOG,
-  I18N_EXEMPT_MIN_REASON,
-  LITERAL_BASELINE,
   changedFilesFromGit,
   changedFilesFromInput,
   checkUiI18nGuard,
+  DE_CATALOG,
+  EN_CATALOG,
   hasI18nRelevantAddedLine,
+  hasNewI18nSignature,
   hasUserFacingTextLine,
+  I18N_EXEMPT_MIN_REASON,
   isTranslatableCopy,
   isUiProductionSource,
+  LITERAL_BASELINE,
   untranslatedLiteralsInLine,
   untranslatedLiteralsInSource,
 } from "../check-ui-i18n-guard.mjs";
@@ -2300,4 +2301,78 @@ test("treats a registry label literal as an i18n-relevant added line", () => {
   expect(hasI18nRelevantAddedLine('  { id: "files", label: "Files" },')).toBe(true);
   expect(hasI18nRelevantAddedLine('  label: t("window.field.folder"),')).toBe(true);
   expect(hasI18nRelevantAddedLine("  const total = left + right;")).toBe(false);
+});
+
+// A translated value moving between files is not new text (#3376): a `t("key")` whose key both shared
+// catalogs already hold, and the i18n API adopted alongside only such keys, must not force a catalog
+// touch — while an unknown key, or the API adopted with no literal key at all, stays relevant.
+test("hasNewI18nSignature: a known key moving into a file is not a new signature", () => {
+  const known = new Set(["common.loading"]);
+  expect(hasNewI18nSignature(['      {t("common.loading")}'], [], known)).toBe(false);
+  expect(
+    hasNewI18nSignature(["  const t = useTranslate();", '  {t("common.loading")}'], [], known),
+  ).toBe(false);
+});
+
+test("hasNewI18nSignature: an unknown key, or the API with no literal key, is new", () => {
+  const known = new Set(["common.loading"]);
+  expect(hasNewI18nSignature(['      {t("brand.new")}'], [], known)).toBe(true);
+  expect(hasNewI18nSignature(["  const t = useTranslate();"], [], known)).toBe(true);
+  // The same patch removing the signature from this file keeps the old rule.
+  expect(hasNewI18nSignature(['{t("brand.new")}'], ['{t("brand.new")}'], known)).toBe(false);
+});
+
+// One usage line per i18n API the guard recognises. Relevance and the change signature must agree
+// for EVERY one of them: a usage that is relevant but yields no signature is a new i18n adoption the
+// guard would accept without catalog evidence — which is exactly what happened for the feature-scoped
+// hooks before the two lists became one table (#3376 review).
+const I18N_API_USAGE_LINES = [
+  "  const t = useTranslate();",
+  "  const t = useOptionalWidgetTranslate();",
+  "  const t = useCodingWorkbenchTranslate();",
+  "  const { locale } = useI18n();",
+  '  return <I18nTranslate id="x" />;',
+  "  return <OptionalWidgetTranslate id={id} />;",
+  "export function labelFor(t: I18nTranslate): string {",
+  "export function labelFor(t: CodingWorkbenchTranslate): string {",
+  '  return translateOptionalWidget(locale, "x");',
+  '  return localizedWindowTitle(t, "files");',
+  "  const t = useProblemsTranslate();",
+];
+
+test("every recognised i18n API usage is both relevant and a new signature when adopted alone", () => {
+  const known = new Set(["common.loading"]);
+  for (const line of I18N_API_USAGE_LINES) {
+    expect(hasI18nRelevantAddedLine(line), line).toBe(true);
+    // Adopted with no key at all: new, so a catalog touch is demanded.
+    expect(hasNewI18nSignature([line], [], known), line).toBe(true);
+    // The same patch removing the identical usage from this file: a move, not an adoption.
+    expect(hasNewI18nSignature([line], [line], known), line).toBe(false);
+    // Adopted alongside only a key both catalogs already hold: the translated value moved.
+    expect(hasNewI18nSignature([line, '  {t("common.loading")}'], [], known), line).toBe(false);
+  }
+});
+
+test("hasNewI18nSignature: empty, whitespace and non-i18n input introduces nothing", () => {
+  expect(hasNewI18nSignature([], [], new Set())).toBe(false);
+  expect(hasNewI18nSignature(["", "   ", "\t"], [], new Set())).toBe(false);
+  expect(hasNewI18nSignature(["  const total = left + right;"], [], new Set())).toBe(false);
+  // A look-alike identifier is not the API: no word boundary, no call.
+  expect(hasNewI18nSignature(["  const t = myuseTranslate();"], [], new Set())).toBe(false);
+  expect(hasNewI18nSignature(["  const useTranslateCount = 1;"], [], new Set())).toBe(false);
+});
+
+test("hasNewI18nSignature: a key missing from the EN/DE intersection stays new even next to the API", () => {
+  // The caller passes the intersection of both catalogs; a key present in only one of them is not in
+  // it, so it must demand a catalog touch — hostile input included.
+  const known = new Set(["common.loading"]);
+  expect(
+    hasNewI18nSignature(
+      ["  const t = useProblemsTranslate();", '  {t("problems.only-en")}'],
+      [],
+      known,
+    ),
+  ).toBe(true);
+  expect(hasNewI18nSignature(['  {t("../../etc/passwd")}'], [], known)).toBe(true);
+  expect(hasNewI18nSignature(['  {t("<script>alert(1)</script>")}'], [], known)).toBe(true);
 });

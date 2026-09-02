@@ -329,7 +329,17 @@ export type TaskWorkspaceDriftMarker =
   | "uncommitted-changes"
   | "lock-stale"
   | "path-escape"
-  | "pointer-stale";
+  | "pointer-stale"
+  // The stored identity predates the current identity rule, under which the worktree's authenticity
+  // is unproven — not disproven, and not proven intact either. A distinct marker because it is a
+  // MIGRATION to resolve by inspection and re-registration, not evidence of a defect on the
+  // customer's disk: an export that cannot separate it from a real pointer change sends an operator
+  // to the wrong incident.
+  | "identity-schema-retired"
+  // This filesystem reports no durable creation time, so no identity can be derived at all
+  // (ADR-0155's FILESYSTEM_IDENTITY_UNSUPPORTED at the managed boundary). Nothing about the
+  // customer's disk changed; reporting it as a replaced worktree sends them to the wrong action.
+  | "identity-unsupported";
 
 export const TASK_WORKSPACE_DRIFT_MARKERS: readonly TaskWorkspaceDriftMarker[] = [
   "worktree-missing",
@@ -340,6 +350,8 @@ export const TASK_WORKSPACE_DRIFT_MARKERS: readonly TaskWorkspaceDriftMarker[] =
   "lock-stale",
   "path-escape",
   "pointer-stale",
+  "identity-schema-retired",
+  "identity-unsupported",
 ] as const;
 
 export function isTaskWorkspaceDriftMarker(value: unknown): value is TaskWorkspaceDriftMarker {
@@ -1223,6 +1235,17 @@ export interface WorkspaceReconciliationFacts {
   readonly gitPointerPresent: boolean;
   // the pointer's content-free gitdir identity equals the persisted `gitdirIdentity`.
   readonly gitdirIdentityMatches: boolean;
+  /**
+   * The stored identity is this worktree's own, composed under the retired rule. Optional so every
+   * existing fact construction stays valid; absent means "not a migration".
+   *
+   * Without it a v2 registration reconciles as `gitdir-mismatch`, and the next reconcile overwrites
+   * the marker provisioning persisted — recovery would then recommend an automatic pointer
+   * reconcile instead of the operator re-registration the retired proof requires.
+   */
+  readonly gitdirIdentitySchemaRetired?: boolean;
+  /** This filesystem cannot report a creation time, so no identity exists to compare. */
+  readonly gitdirIdentityUnsupported?: boolean;
   // the dedicated task branch still exists / the worktree is still bound to it.
   readonly taskBranchPresent: boolean;
   // the worktree HEAD equals the persisted `lastVerifiedHead` (true when no baseline was recorded).
@@ -1268,6 +1291,17 @@ const DRIFT_MARKER_RECOVERY: Readonly<
   // loss of the worktree's uncommitted work, so it is operator-guided.
   "gitdir-mismatch": { strategy: "reconcile-pointer", operatorActionRequired: false },
   "pointer-stale": { strategy: "operator-repair", operatorActionRequired: true },
+  // Re-registration reissues the proof under the current rule, and it has to be REACHABLE: the
+  // ordinary provision path refuses to reissue an identity for an existing worktree, so without an
+  // executable strategy a refused row is stranded. `reconcile-pointer` is that strategy; it only
+  // re-materialises the existing worktree (no recreate, no data loss) and it runs only under the
+  // repair service's `operatorApproved` gate. The retired proof is still never accepted
+  // automatically — accepting a forgeable identity unattended would reissue an already-replaced
+  // worktree as a trusted one — approval is what stands in for that judgement.
+  "identity-schema-retired": { strategy: "reconcile-pointer", operatorActionRequired: false },
+  // Relocating the workspace root is the documented resolution; no automatic repair can create a
+  // creation time the filesystem does not keep.
+  "identity-unsupported": { strategy: "operator-repair", operatorActionRequired: true },
   "head-moved": { strategy: "operator-repair", operatorActionRequired: true },
   // A deleted local branch cannot be safely re-created by the narrow worktree adapter without risking
   // loss of the worktree's commits, so reattachment is operator-guided, never automatic.
@@ -1326,6 +1360,14 @@ function partialCreationMarkers(
 // mismatch → branch/HEAD/dirty), in the same fixed precedence as classifyWorkspaceReconciliation.
 // Returns null when the worktree is fully in sync, so the caller falls through to the remaining
 // (non-disk) checks.
+// Each identity outcome keeps its own marker: a migration, a platform limitation and a replaced
+// worktree need three different operator actions, and recovery reads the marker, not a message.
+function identityDriftMarker(facts: WorkspaceReconciliationFacts): TaskWorkspaceDriftMarker {
+  if (facts.gitdirIdentityUnsupported === true) return "identity-unsupported";
+  if (facts.gitdirIdentitySchemaRetired === true) return "identity-schema-retired";
+  return "gitdir-mismatch";
+}
+
 function classifyOnDiskDrift(
   facts: WorkspaceReconciliationFacts,
 ): WorkspaceReconciliationOutcome | null {
@@ -1334,7 +1376,7 @@ function classifyOnDiskDrift(
   if (!facts.gitPointerPresent)
     return outcome("stale-pointer", withStaleLock(["pointer-stale"], facts));
   if (!facts.gitdirIdentityMatches) {
-    return outcome("stale-pointer", withStaleLock(["gitdir-mismatch"], facts));
+    return outcome("stale-pointer", withStaleLock([identityDriftMarker(facts)], facts));
   }
   if (!facts.taskBranchPresent) return outcome("drifted", withStaleLock(["branch-deleted"], facts));
   if (!facts.headMatches) return outcome("drifted", withStaleLock(["head-moved"], facts));
@@ -1424,7 +1466,12 @@ export function reconciliationStatusFromInstance(input: {
   if (TERMINAL_LIFECYCLE_STATES.includes(input.lifecycleState)) return "healthy";
   if (PARTIAL_LIFECYCLE_STATES.includes(input.lifecycleState)) return "partially-created";
   if (markers.includes("worktree-missing")) return "missing";
-  if (markers.includes("pointer-stale") || markers.includes("gitdir-mismatch")) {
+  if (
+    markers.includes("pointer-stale") ||
+    markers.includes("gitdir-mismatch") ||
+    markers.includes("identity-schema-retired") ||
+    markers.includes("identity-unsupported")
+  ) {
     return "stale-pointer";
   }
   if (
@@ -1881,16 +1928,35 @@ export function classifyWorkspaceHealth(
     lockLive: facts.lockLive,
   });
   return {
-    classification: healthClassificationFor(
-      recon.status,
-      facts.lifecycleState,
-      signals.worktreeDirty,
-      decision.allowed,
+    classification: withOwnershipVerdict(
+      healthClassificationFor(
+        recon.status,
+        facts.lifecycleState,
+        signals.worktreeDirty,
+        decision.allowed,
+      ),
+      signals.ownershipProven,
     ),
     driftMarkers: recon.driftMarkers,
     recoveryHints: recon.recoveryHints,
     cleanupEligible: decision.allowed,
   };
+}
+
+// A workspace on a managed root Keiko cannot prove it owns cannot be called healthy, and it must be
+// said so on the ownership signal itself: the health service used to say it by rewriting the
+// reconciliation facts to a containment escape, which reported an incident that had not happened
+// (#3376 review). Structural findings (missing, stale pointer, drift, a foreign lock) stay in front
+// because they are the more specific truth; a settled `archived` disposition is still true of the
+// record. Only the two verdicts that vouch for the tree — `healthy` and `dirty` — are withdrawn.
+function withOwnershipVerdict(
+  classification: WorkspaceHealthClassification,
+  ownershipProven: boolean,
+): WorkspaceHealthClassification {
+  if (ownershipProven) return classification;
+  return classification === "healthy" || classification === "dirty"
+    ? "recovery-required"
+    : classification;
 }
 
 // A health report entry is either a persisted `instance` (carries workspace/task ids, lifecycle, and

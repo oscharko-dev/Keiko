@@ -5,7 +5,6 @@ import type {
   QualityIntelligenceInlineSource,
   QualityIntelligenceUiRegenerateResult,
 } from "@oscharko-dev/keiko-contracts";
-import { useTranslate } from "@/lib/i18n";
 import type { Chat } from "@/lib/types";
 import { registerWindowRender } from "../windows/WindowsRegistry";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
@@ -22,13 +21,9 @@ import type { AgentRunCfg } from "./cards/AgentRunWidget";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
 import { workspaceRootTargets } from "../workspaceRootTargets";
 import { BoundRootTarget, type BoundRootSurfaceType } from "./BoundRootTarget";
+import { createWindowChunkFallback } from "./WindowChunkFallback";
 
-function WindowChunkFallback(): ReactNode {
-  const t = useTranslate();
-  return <div className="lk-loading">{t("common.loading")}</div>;
-}
-
-const windowChunkFallback = WindowChunkFallback;
+const windowChunkFallback = createWindowChunkFallback("window chunk"); // i18n-exempt: diagnostic stage id, never rendered
 const ChatWindowSessionHost = dynamic(
   () => import("./SelectionAwareWorkspaceHosts").then((mod) => mod.ChatWindowSessionHost),
   { ssr: false, loading: windowChunkFallback },

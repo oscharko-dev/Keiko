@@ -774,12 +774,18 @@ describe("desktop files browser", () => {
     expect(await readFile(victim, "utf8")).toBe("outside\n");
   });
 
-  // #3347 consumer-boundary hardening: readContainedBytes binds a content read to the WorkspaceStat
-  // identity (device+inode) captured at admission, not just size/mtime. This proves the gap the
-  // older stat-after-read comparison could not close: a substitute file crafted with the EXACT same
-  // byte length and mtime as the admitted one is still rejected, because it is necessarily a
-  // different inode.
-  it("rejects a same-size, same-mtime substitute swapped in between admission and the content read", async () => {
+  // #3347 consumer-boundary hardening: readContainedBytes re-proves the WorkspaceStat snapshot
+  // captured at admission before it returns bytes, so a substitute crafted with the EXACT same byte
+  // length and mtime as the admitted file is still rejected.
+  //
+  // What this does NOT prove is the device+inode term specifically, and it used to claim it did
+  // ("only the inode differs"). It cannot: staging a substitute requires creating a file, creating a
+  // file moves `ctime`, and userland cannot set `ctime` back — so the read is refused on the ctime
+  // term regardless of what the inode term does. Deleting
+  // `expected.fileIdentity === observed.fileIdentity` from the comparator leaves this test green.
+  // The device+inode guarantee lives in fs.test.ts, which varies one snapshot field at a time and
+  // pins the producer's inode semantics directly.
+  it("rejects a same-size, same-mtime substitute on the full admitted snapshot", async () => {
     const targetPath = join(root, "src", "app.ts");
     const original = await readFile(targetPath);
     const originalStat = await stat(targetPath);
@@ -818,8 +824,8 @@ describe("desktop files browser", () => {
       readFilesContent(store, root, "src/app.ts", buildRedactor({}), resolvedRoot),
     ).rejects.toMatchObject({ status: 409, code: "STALE_PATH" });
     expect(swapped).toBe(true);
-    // Same byte length and mtime as the admitted file: only the inode differs, which is precisely
-    // what the older stat-after-read comparison could not detect.
+    // Same byte length and mtime as the admitted file, so the older size/mtime-only comparison
+    // would have served these bytes.
     const onDisk = await readFile(targetPath, "utf8");
     expect(onDisk).toBe(substitute);
     expect(onDisk).toHaveLength(original.byteLength);

@@ -21,6 +21,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { runMigrations } from "../store/schema.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
+import { inspectManagedGitdirIdentity } from "./gitdir-identity.js";
 import {
   buildActiveWorkspacePointerStoreOverDatabase,
   type ActiveWorkspacePointerStore,
@@ -220,6 +221,35 @@ describe("recreate-worktree (AC3: retry provisioning)", () => {
 });
 
 describe("reconcile-pointer (relink known managed worktree)", () => {
+  // The migration's only exit. The ordinary provision path refuses to reissue an identity for an
+  // existing worktree, so a workspace registered under the retired rule would be stranded unless an
+  // executable, approval-gated strategy reaches the re-materialisation. This is that strategy, and
+  // the approval is what stands in for the judgement that the retired proof is genuine.
+  it("reissues a retired-schema identity only under operator approval", async () => {
+    const instance = await provisionTask("t1");
+    const inspection = inspectManagedGitdirIdentity(instance.managedWorktreePath, repoRoot);
+    if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
+    store.upsert({
+      ...instance,
+      gitdirIdentity: inspection.legacyIdentity,
+      lifecycleState: "recovery-required",
+      health: "drifted",
+      driftMarkers: ["identity-schema-retired"],
+    });
+
+    await expect(repair(instance.workspaceId, "reconcile-pointer", false)).rejects.toMatchObject({
+      code: "OPERATOR_APPROVAL_REQUIRED",
+    });
+    expect(store.getById(instance.workspaceId)?.gitdirIdentity).toBe(inspection.legacyIdentity);
+
+    const result = await repair(instance.workspaceId, "reconcile-pointer", true);
+    expect(result.applied).toBe(true);
+    expect(result.status).toBe("healthy");
+    const persisted = store.getById(instance.workspaceId);
+    expect(persisted?.gitdirIdentity).toBe(inspection.identity);
+    expect(persisted?.driftMarkers).not.toContain("identity-schema-retired");
+  });
+
   it("refreshes a mismatched gitdir identity back to healthy", async () => {
     const instance = await provisionTask("t1");
     store.upsert({ ...instance, gitdirIdentity: "0000000000000000deadbeefdeadbeef" });

@@ -29,7 +29,10 @@ export type TaskWorkspaceErrorCode =
   // removal errored after the safety gate authorized it. (A safety REFUSAL is NOT an error — it is a
   // successful `cleanup-refused` result the service returns, never throws.)
   | "CLEANUP_NOT_ELIGIBLE"
-  | "CLEANUP_FAILED";
+  | "CLEANUP_FAILED"
+  // The managed-identity proof itself could not run (EIO, EACCES, a vanished path). Not a verdict on
+  // the worktree: retryable, cause preserved, and never reported as drift (#3376 review).
+  | "IDENTITY_PROOF_FAILED";
 
 import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts/runtime/http-error";
 import type { WorkspaceFailureClass } from "@oscharko-dev/keiko-contracts";
@@ -61,6 +64,7 @@ const ERROR_SPECS: Readonly<Record<TaskWorkspaceErrorCode, TaskWorkspaceErrorSpe
   REPAIR_FAILED: { status: 500, outcome: "failed" },
   CLEANUP_NOT_ELIGIBLE: { status: 409, outcome: "blocked" },
   CLEANUP_FAILED: { status: 500, outcome: "failed" },
+  IDENTITY_PROOF_FAILED: { status: 503, outcome: "retry-required" },
 };
 
 // The status half of the taxonomy, lifted so TaskWorkspaceError derives its HTTP status through the
@@ -85,6 +89,7 @@ const STATUS_MAP: Readonly<Record<TaskWorkspaceErrorCode, number>> = {
   REPAIR_FAILED: ERROR_SPECS.REPAIR_FAILED.status,
   CLEANUP_NOT_ELIGIBLE: ERROR_SPECS.CLEANUP_NOT_ELIGIBLE.status,
   CLEANUP_FAILED: ERROR_SPECS.CLEANUP_FAILED.status,
+  IDENTITY_PROOF_FAILED: ERROR_SPECS.IDENTITY_PROOF_FAILED.status,
 };
 
 // The caller-facing failure classification (Issue #449, ADR-0093 D3). This is a DISTINCT axis from the
@@ -95,6 +100,7 @@ const STATUS_MAP: Readonly<Record<TaskWorkspaceErrorCode, number>> = {
 // taxonomy can never silently fall out of date.
 //
 //   retryable     — LOCK_CONTENTION: a live advisory lock held by another actor is TTL-bounded; retry.
+//                   IDENTITY_PROOF_FAILED: the identity proof could not run (EIO/EACCES); retry.
 //   repairable    — POINTER_DRIFT: a stale/missing pointer re-fails a bare retry; route to #447 repair.
 //   blocked       — a precondition/validation/conflict/applicability gate: change inputs or state.
 //   policy-denied — OPERATOR_APPROVAL_REQUIRED: needs governance approval, not a retry.
@@ -118,10 +124,16 @@ const WORKSPACE_FAILURE_CLASS_BY_CODE: Readonly<
   REPAIR_FAILED: "terminal",
   CLEANUP_NOT_ELIGIBLE: "blocked",
   CLEANUP_FAILED: "terminal",
+  IDENTITY_PROOF_FAILED: "retryable",
 };
 
 export function classifyTaskWorkspaceError(code: TaskWorkspaceErrorCode): WorkspaceFailureClass {
   return WORKSPACE_FAILURE_CLASS_BY_CODE[code];
+}
+
+/** A proof that could not run — retryable, never a verdict on the worktree (#3376). */
+export function isIdentityProofFailure(error: unknown): error is TaskWorkspaceError {
+  return error instanceof TaskWorkspaceError && error.code === "IDENTITY_PROOF_FAILED";
 }
 
 export class TaskWorkspaceError extends CodedHttpError {

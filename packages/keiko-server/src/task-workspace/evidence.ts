@@ -32,7 +32,16 @@ export const WORKSPACE_LIFECYCLE_EVIDENCE_KIND = "task-workspace-lifecycle" as c
 // orphan removal). The union is additive — the evidence document stays content-free regardless of which
 // operation produced it.
 export type WorkspaceLifecycleOperation =
-  "provision" | "activate" | "pause" | "resume" | "handoff" | "reconcile" | "repair" | "cleanup";
+  | "provision"
+  | "activate"
+  | "pause"
+  | "resume"
+  | "handoff"
+  | "reconcile"
+  | "repair"
+  | "cleanup"
+  // The read-only health report: its failures must not read as a reconciliation write (#3376).
+  | "health";
 
 export type WorkspaceLifecycleOutcome =
   | "provisioned"

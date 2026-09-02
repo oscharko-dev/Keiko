@@ -7,7 +7,7 @@
 // (SC3); and the safelyRemoveManagedPath choke point refuses every out-of-root / symlink-escape /
 // unowned / non-leaf target (SC1). No generic git runner; the single governed spawn boundary throughout.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -54,6 +54,26 @@ import {
   type ServerLogEvent,
   type ServerLogSink,
 } from "../observability/index.js";
+import {
+  inspectManagedGitdirIdentity,
+  inspectManagedGitdirIdentityOutcome,
+} from "./gitdir-identity.js";
+
+// A volume without creation times, or an I/O failure inside the proof, cannot be produced on a real
+// filesystem from a test, so the one identity classifier is wrapped (never replaced) and answers a
+// queued outcome exactly once where a pin needs it; every other call reaches the real proof.
+vi.mock("./gitdir-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./gitdir-identity.js")>();
+  return {
+    ...actual,
+    inspectManagedGitdirIdentityOutcome: vi.fn(actual.inspectManagedGitdirIdentityOutcome),
+  };
+});
+
+// A queued classifier outcome must never leak into the next test.
+afterEach(() => {
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockReset();
+});
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -582,7 +602,10 @@ describe("cleanup safety refusals (SC4 — refusal is a successful outcome, neve
       mode: "complete",
     });
     expect(result.outcome).toBe("refused");
-    expect(result.refusalReason).toBe("worktree-dirty");
+    // A corrupt pointer is a DISPROVEN registration, not a migration: the row is refused because Keiko
+    // cannot vouch for the tree at all (ownership-unproven), never probed on the orphan path — and the
+    // uncommitted work stays exactly where it is (#3376 review).
+    expect(result.refusalReason).toBe("ownership-unproven");
     expect(existsSync(join(instance.managedWorktreePath, "wip.txt"))).toBe(true);
     expect(store.getById(instance.workspaceId)).toBeDefined();
   });
@@ -687,6 +710,264 @@ describe("cleanup safety refusals (SC4 — refusal is a successful outcome, neve
     expect(result.outcome).toBe("refused");
     expect(result.refusalReason).toBe("path-escape");
     expect(existsSync(join(escapeTarget, "keep.txt"))).toBe(true);
+  });
+});
+
+// A terminal row whose managed identity can no longer be re-proven — registered under the retired
+// inode-only schema here; a replaced tree or a volume without creation times deny the same way —
+// is still Keiko's to remove: it is contained, the managed root is owned, the operator approved.
+// Converting the identity denial into "dirty" refused it forever without ever running `git status`
+// (#3376 review P1). The probe now falls back to the orphan-style contained path and the denial is
+// evidence on the activity log under the cleanup's own correlation, not a verdict.
+describe("identity-denied terminal rows stay removable (#3376 review P1)", () => {
+  function retireIdentity(instance: WorkspaceInstance): WorkspaceInstance {
+    const inspection = inspectManagedGitdirIdentity(instance.managedWorktreePath, repoRoot);
+    if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
+    return setState(instance, "cleanup-pending", { gitdirIdentity: inspection.legacyIdentity });
+  }
+
+  it("removes a clean retired-schema row and logs the denial under the cleanup's correlation", async () => {
+    const instance = retireIdentity(await provisionTask("t-retired-clean"));
+    const activityLog = createBufferedServerLogSink();
+
+    const result = await cleanup(store, realAdapter, undefined, activityLog).cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+      correlationId: "cleanup-retired-0001",
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(existsSync(instance.managedWorktreePath)).toBe(false);
+    expect(store.getById(instance.workspaceId)).toBeUndefined();
+    const denials = activityLog.events.filter((event) => event.op === "workspace.root.denied");
+    expect(denials).toHaveLength(1);
+    expect(denials[0]).toMatchObject({
+      correlationId: "cleanup-retired-0001",
+      extra: { decision: "denied", reason: "managed-root-identity-schema-retired" },
+    });
+    expect(JSON.stringify(denials[0])).not.toContain(managedRoot);
+  });
+
+  it("refuses a DIRTY retired-schema row on a real Git status, not on the denial", async () => {
+    const instance = retireIdentity(await provisionTask("t-retired-dirty"));
+    writeFileSync(join(instance.managedWorktreePath, "wip.txt"), "uncommitted\n");
+
+    const result = await cleanup().cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+
+    expect(result.outcome).toBe("refused");
+    expect(result.refusalReason).toBe("worktree-dirty");
+    expect(existsSync(join(instance.managedWorktreePath, "wip.txt"))).toBe(true);
+    expect(store.getById(instance.workspaceId)).toBeDefined();
+  });
+});
+
+// A proof that could not run is not a denial: a destructive operation fails closed on the classified,
+// retryable IDENTITY_PROOF_FAILED instead of proceeding on the orphan path or reporting "dirty"
+// (Cursor review on f50133b95).
+describe("identity proof failure fails cleanup closed", () => {
+  it("rejects with IDENTITY_PROOF_FAILED and leaves the row and directory untouched", async () => {
+    const instance = await provisionTask("t-proof-failed");
+    setState(instance, "cleanup-pending");
+    vi.mocked(inspectManagedGitdirIdentityOutcome).mockReturnValueOnce({
+      kind: "failed",
+      cause: new Error("EIO: input/output error"),
+    });
+
+    await expect(
+      cleanup().cleanup({
+        workspaceId: instance.workspaceId,
+        requestedBy: "u",
+        operatorApproved: true,
+        mode: "complete",
+      }),
+    ).rejects.toMatchObject({ code: "IDENTITY_PROOF_FAILED" });
+
+    expect(existsSync(instance.managedWorktreePath)).toBe(true);
+    expect(store.getById(instance.workspaceId)?.lifecycleState).toBe("cleanup-pending");
+  });
+});
+
+// The gap between the safety gate's clean verdict and the removal is closed by git itself: the
+// removal is never forced, so a file written into the tree after the gate makes git refuse, and
+// the refusal is a `worktree-dirty` outcome with the tree untouched (#3376 review).
+describe("removal re-checks cleanliness through git, never --force", () => {
+  it("refuses a worktree that turned dirty after the safety gate and keeps the file", async () => {
+    const instance = await provisionTask("t-late-dirty");
+    setState(instance, "cleanup-pending");
+    const lateFile = join(instance.managedWorktreePath, "late.txt");
+    const racing: AdapterFactory = (workspace, correlationId, fs) => {
+      const real = realAdapter(workspace, correlationId, fs);
+      return {
+        ...real,
+        removeWorktree: (operands): Promise<WorktreeOperationResult> => {
+          // Written after the gate proved the tree clean, before git removes it.
+          writeFileSync(lateFile, "written after the safety gate\n");
+          expect(operands.force).toBe(false);
+          return real.removeWorktree(operands);
+        },
+      };
+    };
+
+    const result = await cleanup(store, racing).cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+
+    expect(result.outcome).toBe("refused");
+    expect(result.refusalReason).toBe("worktree-dirty");
+    expect(existsSync(lateFile)).toBe(true);
+    expect(store.getById(instance.workspaceId)).toBeDefined();
+  });
+
+  // A tree that survives a SUCCESSFUL removal is not ours to delete on the unproven fallback: another
+  // actor may have recreated a clean worktree at the path between git's removal and the fallback,
+  // and ownership of the replacement can no longer be proven (#3376 review).
+  it("refuses to delete a replacement recreated after git removed the worktree", async () => {
+    const instance = await provisionTask("t-replaced-after-removal");
+    setState(instance, "cleanup-pending");
+    const replacementPointer = join(instance.managedWorktreePath, ".git");
+    const racing: AdapterFactory = (workspace, correlationId, fs) => {
+      const real = realAdapter(workspace, correlationId, fs);
+      return {
+        ...real,
+        removeWorktree: async (operands): Promise<WorktreeOperationResult> => {
+          const removal = await real.removeWorktree(operands);
+          expect(removal.ok).toBe(true);
+          expect(existsSync(operands.worktreePath)).toBe(false);
+          // Recreated by another actor before the fallback looks at the path: a CLEAN git worktree
+          // on the task branch, which a status probe alone would wave through.
+          git(["worktree", "add", operands.worktreePath, instance.taskBranch]);
+          expect(existsSync(replacementPointer)).toBe(true);
+          return removal;
+        },
+      };
+    };
+
+    const result = await cleanup(store, racing).cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+
+    expect(result.outcome).toBe("refused");
+    expect(result.refusalReason).toBe("ownership-unproven");
+    expect(existsSync(replacementPointer)).toBe(true);
+    expect(store.getById(instance.workspaceId)).toBeDefined();
+  });
+
+  // A nonzero git exit with the directory already gone is not a completed cleanup by itself: the
+  // row may only be deleted once git no longer lists the worktree, or partial admin metadata that
+  // prune could not clear would be orphaned behind a deleted row (#3376 review).
+  it("completes a nonzero removal only when git no longer lists the worktree", async () => {
+    const instance = await provisionTask("t-nonzero-removed");
+    setState(instance, "cleanup-pending");
+    const nonzeroAfterRemoval: AdapterFactory = (workspace, correlationId, fs) => {
+      const real = realAdapter(workspace, correlationId, fs);
+      return {
+        ...real,
+        removeWorktree: async (operands): Promise<WorktreeOperationResult> => {
+          const removal = await real.removeWorktree(operands);
+          expect(existsSync(operands.worktreePath)).toBe(false);
+          // The directory and the registration are gone; git still reported a failure.
+          return { ...removal, ok: false, exitCode: 1 };
+        },
+      };
+    };
+
+    const result = await cleanup(store, nonzeroAfterRemoval).cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(store.getById(instance.workspaceId)).toBeUndefined();
+    expect(git(["worktree", "list", "--porcelain"])).not.toContain(instance.managedWorktreePath);
+  });
+
+  it("keeps the row when git exits nonzero and still lists the worktree after prune", async () => {
+    const instance = await provisionTask("t-nonzero-registered");
+    setState(instance, "cleanup-pending");
+    const registrationKept: AdapterFactory = (workspace, correlationId, fs) => {
+      const real = realAdapter(workspace, correlationId, fs);
+      return {
+        ...real,
+        removeWorktree: (operands): Promise<WorktreeOperationResult> => {
+          // A locked entry survives `git worktree prune`; the directory vanished regardless.
+          git(["worktree", "lock", operands.worktreePath]);
+          rmSync(operands.worktreePath, { recursive: true, force: true });
+          return Promise.resolve({
+            ok: false,
+            exitCode: 128,
+            durationMs: 0,
+            timedOut: false,
+            truncated: false,
+          });
+        },
+      };
+    };
+
+    await expect(
+      cleanup(store, registrationKept).cleanup({
+        workspaceId: instance.workspaceId,
+        requestedBy: "u",
+        operatorApproved: true,
+        mode: "complete",
+      }),
+    ).rejects.toMatchObject({ code: "CLEANUP_FAILED" });
+
+    expect(store.getById(instance.workspaceId)).toMatchObject({
+      lifecycleState: "cleanup-pending",
+    });
+    expect(git(["worktree", "list", "--porcelain"])).toContain(instance.managedWorktreePath);
+    expect(evidence.some((entry) => parseEvent(entry.json).outcome === "cleanup-completed")).toBe(
+      false,
+    );
+  });
+
+  it("keeps the row when git exits nonzero and the worktree listing itself fails", async () => {
+    const instance = await provisionTask("t-nonzero-list-failed");
+    setState(instance, "cleanup-pending");
+    const listingFails: AdapterFactory = (workspace, correlationId, fs) => {
+      const real = realAdapter(workspace, correlationId, fs);
+      return {
+        ...real,
+        removeWorktree: async (operands): Promise<WorktreeOperationResult> => ({
+          ...(await real.removeWorktree(operands)),
+          ok: false,
+          exitCode: 1,
+        }),
+        // What the adapter answers for a `git worktree list` that exited nonzero: no evidence at all.
+        listWorktrees: (): Promise<readonly never[]> => Promise.resolve([]),
+      };
+    };
+
+    await expect(
+      cleanup(store, listingFails).cleanup({
+        workspaceId: instance.workspaceId,
+        requestedBy: "u",
+        operatorApproved: true,
+        mode: "complete",
+      }),
+    ).rejects.toMatchObject({ code: "CLEANUP_FAILED" });
+
+    expect(store.getById(instance.workspaceId)).toMatchObject({
+      lifecycleState: "cleanup-pending",
+    });
+    expect(evidence.some((entry) => parseEvent(entry.json).outcome === "cleanup-completed")).toBe(
+      false,
+    );
   });
 });
 

@@ -4,20 +4,22 @@
 // its own store adapters. The core metadata surface stays synchronous for deterministic fakes.
 
 import {
+  closeSync,
   constants as fsConstants,
   fstatSync,
   lstatSync,
-  closeSync,
+  mkdtempSync,
   opendirSync,
   openSync,
   readdirSync,
   readFileSync,
   readSync,
   realpathSync,
+  rmSync,
   type BigIntStats,
 } from "node:fs";
 import { lstat, open, type FileHandle } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
 export interface WorkspaceStat {
@@ -31,6 +33,16 @@ export interface WorkspaceStat {
   readonly fileIdentity?: string | undefined;
   readonly mtimeNs?: string | undefined;
   readonly ctimeNs?: string | undefined;
+  /**
+   * Creation time in nanoseconds, where the platform reports one; absent otherwise.
+   *
+   * `fileIdentity` is a `device:inode` pair, and an inode number is a slot that gets REUSED:
+   * deleting a path and recreating it hands the new object the old number (measured 50/50 on Linux
+   * ext4/overlayfs). Creation time is what separates the two generations. Unlike `ctimeNs` it also
+   * survives an in-place rewrite of the same file, so a caller can tell "this file was replaced"
+   * apart from "this file was edited".
+   */
+  readonly birthtimeNs?: string | undefined;
 }
 
 export type WorkspaceDescriptorReadFailureReason =
@@ -258,9 +270,23 @@ function workspaceStat(stats: BigIntStats, isSymbolicLink: boolean): WorkspaceSt
     fileIdentity: `${String(stats.dev)}:${String(stats.ino)}`,
     mtimeNs: String(stats.mtimeNs),
     ctimeNs: String(stats.ctimeNs),
+    // Reported as 0 where the platform has no creation time — an ext4 volume formatted with 128-byte
+    // inodes is one real example — and never legitimately negative; both are surfaced as absent, the
+    // same rule workspace-root-identity applies, so a caller sees "unavailable" instead of a constant
+    // that compares equal for every object on the volume. Node also documents that a platform may
+    // report ctime in place of an unavailable birthtime; that cannot be told apart per stat (a fresh
+    // object legitimately has equal ctime and birthtime), which is one reason the managed-root
+    // identity built on this field is defence in depth rather than a proof.
+    ...(stats.birthtimeNs <= 0n ? {} : { birthtimeNs: String(stats.birthtimeNs) }),
   };
 }
 
+// Every snapshot comparison below binds the creation time where both sides carry it. An inode is a
+// slot, not an object: a delete-and-recreate can hand the replacement the same `device:inode`, and
+// size, mode, link count, mtime and ctime can all coincide within one timestamp granule — the
+// birthtime is the one field the replacement cannot carry over (#3376 review, CWE-367). A side
+// without a creation time (a volume that does not keep one, or an older snapshot) compares on the
+// remaining fields, as before.
 function sameWorkspaceStat(left: WorkspaceStat, right: WorkspaceStat): boolean {
   return [
     left.size === right.size,
@@ -271,6 +297,7 @@ function sameWorkspaceStat(left: WorkspaceStat, right: WorkspaceStat): boolean {
     left.fileIdentity === right.fileIdentity,
     (left.mtimeNs ?? left.mtimeMs) === (right.mtimeNs ?? right.mtimeMs),
     (left.ctimeNs ?? left.ctimeMs) === (right.ctimeNs ?? right.ctimeMs),
+    sameKnownSnapshotValue(left.birthtimeNs, right.birthtimeNs),
   ].every(Boolean);
 }
 
@@ -328,6 +355,7 @@ function expectedDescriptorSnapshotMatches(expected: WorkspaceStat, actual: BigI
       expected.ctimeNs ?? expected.ctimeMs,
       expected.ctimeNs === undefined ? observed.ctimeMs : observed.ctimeNs,
     ),
+    sameKnownSnapshotValue(expected.birthtimeNs, observed.birthtimeNs),
   ].every(Boolean);
 }
 
@@ -345,7 +373,9 @@ function sameDescriptorSnapshot(left: BigIntStats, right: BigIntStats): boolean 
     left.nlink === right.nlink &&
     left.size === right.size &&
     left.mtimeNs === right.mtimeNs &&
-    left.ctimeNs === right.ctimeNs
+    left.ctimeNs === right.ctimeNs &&
+    // `0n` (or negative) is Node's "no creation time" — see `workspaceStat` — never a value to bind.
+    (left.birthtimeNs <= 0n || right.birthtimeNs <= 0n || left.birthtimeNs === right.birthtimeNs)
   );
 }
 
@@ -868,3 +898,133 @@ export const nodeWorkspaceFs: WorkspaceFs = {
     readFileRangeSameDescriptor(absolutePath, startByte, length, hardLinkPolicy, expected),
   openFileReader: openValidatedFileReader,
 };
+
+// ─── creation-time durability ───────────────────────────────────────────────────────────────────
+//
+// A nonzero `birthtimeNs` is not proof that the filesystem keeps a creation time. Node documents that
+// where creation time is unavailable the field may hold the ctime instead (libuv's non-statx stat
+// fallback copies it), and a ctime-backed "creation time" mutates on every directory-entry write —
+// an identity minted from it would then read as a replaced worktree after the first ordinary change
+// (#3376 review). The probe below settles the question per directory with one metadata write: on an
+// aliasing filesystem the parent's birthtime follows its ctime, on a durable one it stays put.
+export type CreationTimeSupport = "durable" | "aliased" | "absent" | "inconclusive";
+
+export interface CreationTimeObservation {
+  readonly birthtimeNs: bigint;
+  readonly ctimeNs: bigint;
+}
+
+/**
+ * Pure classification of two observations of one directory, taken before and after an entry was
+ * created inside it (which moves the directory's ctime):
+ *   absent       — no creation time at all (epoch or negative), before or after.
+ *   durable      — the creation time stayed exactly while the ctime moved: a real, kept creation time.
+ *   aliased      — the "creation time" moved across the metadata write: whatever it tracks, it is
+ *                  not a creation time (the ctime under another name, or something equally unstable).
+ *   inconclusive — the ctime did not move (the directory was created within the same timestamp
+ *                  granule as the probe), so the two cannot be told apart yet.
+ */
+export function classifyCreationTimeProbe(
+  before: CreationTimeObservation,
+  after: CreationTimeObservation,
+): CreationTimeSupport {
+  if (before.birthtimeNs <= 0n || after.birthtimeNs <= 0n) return "absent";
+  if (after.ctimeNs === before.ctimeNs) return "inconclusive";
+  return after.birthtimeNs === before.birthtimeNs ? "durable" : "aliased";
+}
+
+interface CreationTimeWitness extends CreationTimeObservation {
+  readonly dev: bigint;
+}
+
+function observeCreationTime(directory: string): CreationTimeWitness {
+  const stats = lstatSync(directory, { bigint: true });
+  return { birthtimeNs: stats.birthtimeNs, ctimeNs: stats.ctimeNs, dev: stats.dev };
+}
+
+/**
+ * Settles a same-granule probe from an OLDER entry on the same volume. On an aliasing filesystem every
+ * entry reports birthtime === ctime, so one entry whose creation time differs from its ctime disproves
+ * aliasing for that volume; the directory's parent is that entry whenever it shares the device —
+ * creating the directory inside it moved the parent's ctime while the parent's creation time stayed.
+ * A parent on another device, without a creation time, or itself same-granule settles nothing, and
+ * the caller fails closed on `inconclusive` (#3376 review).
+ */
+export function corroborateCreationTimeSupport(
+  child: { readonly dev: bigint },
+  parent: CreationTimeObservation & { readonly dev: bigint },
+): CreationTimeSupport {
+  if (parent.dev !== child.dev || parent.birthtimeNs <= 0n) return "inconclusive";
+  return parent.birthtimeNs !== parent.ctimeNs ? "durable" : "inconclusive";
+}
+
+/**
+ * Probes whether `directory` sits on a filesystem that keeps a durable creation time, by creating
+ * and removing one empty probe directory inside it. Only call it on a directory Keiko owns.
+ */
+export function probeCreationTimeSupport(directory: string): CreationTimeSupport {
+  const before = observeCreationTime(directory);
+  const probe = mkdtempSync(join(directory, ".keiko-creation-time-probe-"));
+  let verdict: CreationTimeSupport;
+  try {
+    verdict = classifyCreationTimeProbe(before, observeCreationTime(directory));
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+  if (verdict !== "inconclusive") return verdict;
+  const parent = dirname(directory);
+  if (parent === directory) return verdict;
+  return corroborateCreationTimeSupport(before, observeCreationTime(parent));
+}
+
+// ─── every volume an identity hashes ────────────────────────────────────────────────────────────
+//
+// A managed worktree identity binds creation times on TWO volumes: the worktree root and its `.git`
+// pointer under the managed root, and the repository's common and admin directories with the
+// backpointer under the repository. Proving the managed root alone would mint from a repository
+// volume that aliases its "creation time" to the ctime (#3376 review). The repository volume is a
+// user's data: nothing is written into it, so it is corroborated read-only from entries that are
+// older than one timestamp granule — the common git directory the identity hashes and its parent —
+// with the same rule the parent corroboration uses: on an aliasing volume every entry reports
+// birthtime === ctime, so one entry whose creation time differs from its ctime disproves aliasing
+// for the volume.
+export type RepositoryCreationTimeSupport = CreationTimeSupport | "same-volume";
+
+export interface ProvenCreationTimeSupport {
+  readonly managedRoot: CreationTimeSupport;
+  readonly repository: RepositoryCreationTimeSupport;
+}
+
+/** Pure: the volume verdict from read-only observations of long-lived entries on it. */
+export function classifyVolumeCorroboration(
+  entries: readonly CreationTimeObservation[],
+): CreationTimeSupport {
+  if (entries.some((entry) => entry.birthtimeNs <= 0n)) return "absent";
+  return entries.some((entry) => entry.birthtimeNs !== entry.ctimeNs) ? "durable" : "inconclusive";
+}
+
+/**
+ * Proves every volume a managed identity would hash: the managed root by probe (Keiko owns it), the
+ * repository read-only, or `same-volume` when both share one device and the probe already covers it.
+ * Anything but `durable` / `same-volume` must refuse to mint.
+ *
+ * The repository is proven at `repositoryCommonDirectory` — the common git directory the identity
+ * hashes, which the caller resolves through the gitfile or symlink a linked worktree or a
+ * separate-git-dir layout leaves at `<root>/.git`. A stat of that pointer would prove the pointer's
+ * volume, not the one the identity binds (#3376 review).
+ */
+export function proveCreationTimeSupport(
+  managedRoot: string,
+  repositoryCommonDirectory: string,
+): ProvenCreationTimeSupport {
+  const managed = probeCreationTimeSupport(managedRoot);
+  const commonStats = observeCreationTime(repositoryCommonDirectory);
+  if (commonStats.dev === observeCreationTime(managedRoot).dev) {
+    return { managedRoot: managed, repository: "same-volume" };
+  }
+  // The common directory's parent corroborates only when it sits on the same device: a directory
+  // mounted from another volume would report that volume's creation-time behaviour, not this one's.
+  const parentStats = observeCreationTime(dirname(repositoryCommonDirectory));
+  const entries = [commonStats, ...(parentStats.dev === commonStats.dev ? [parentStats] : [])];
+  return { managedRoot: managed, repository: classifyVolumeCorroboration(entries) };
+}

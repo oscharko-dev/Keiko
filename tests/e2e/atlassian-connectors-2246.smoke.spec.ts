@@ -374,23 +374,59 @@ test.describe("Atlassian connectors cross-cutting @smoke", () => {
     test.use({ viewport: { width: 1280, height: 960 } });
 
     test("grounded ask cites synced connector content", async ({ page }) => {
+      // Parity with the sibling journey in this file: without it a chunk-load rejection or a
+      // hydration error in this path is swallowed and surfaces only as an absent locator.
+      const assertNoPageErrors = collectPageErrors(page);
       await seedGroundedChatWindow(page);
       await installGroundedStubs(page);
-      await page.goto("/");
-
-      // The seeded chat carries a connector pod scope, so the send auto-routes to the grounded path.
-      const chat = page.getByRole("region", { name: `Chat — ${GROUNDED_CHAT.title}` });
-      await expect(chat).toBeVisible();
-      const composer = chat.getByRole("textbox", { name: "Chat message" });
-      await expect(composer).toBeVisible();
-      await composer.fill("How many approvals are needed?");
-      await chat.getByRole("button", { name: "Send message" }).click();
-
-      // The connector citation renders under the collapsed "Knowledge evidence" disclosure; open it.
-      await chat.getByText("Knowledge evidence").click();
-      await expect(
-        chat.locator('ul.grounded-citations[aria-label="Knowledge citations"] .grounded-citation'),
-      ).toContainText(CONNECTOR_CITATION_SOURCE);
+      // The chat surface binds through a lazy chunk and a SEQUENTIAL session bootstrap, and every one
+      // of those requests is intercepted by installGroundedStubs — so each is a driver round trip
+      // rather than a loopback hop. Await them explicitly, or the whole bootstrap is charged to the
+      // budget of the single composer assertion below.
+      const bootstrapped = Promise.all(
+        ["/api/models", "/api/projects", "/api/chats", "/api/chats/messages"].map((pathname) =>
+          page.waitForResponse((response) => new URL(response.url()).pathname === pathname),
+        ),
+      );
+      // Page errors have to be checked on the FAILURE path too: if navigation, the bootstrap, the
+      // chunk, the bind, the composer lookup or the citation assertion fails first, an assertion at
+      // the end never runs and the real page error is hidden behind an absent locator or a timeout —
+      // the exact symptom this spec repairs.
+      try {
+        await page.goto("/");
+        await bootstrapped;
+        await runGroundedAsk(page);
+      } finally {
+        assertNoPageErrors();
+      }
     });
   });
 });
+
+// The journey body, so the caller can guarantee the page-error assertion runs whatever fails.
+async function runGroundedAsk(page: Page): Promise<void> {
+  // The seeded chat carries a connector pod scope, so the send auto-routes to the grounded path.
+  const chat = page.getByRole("region", { name: `Chat — ${GROUNDED_CHAT.title}` });
+  await expect(chat).toBeVisible();
+  // The region's accessible name is built from the SEEDED localStorage entry alone, so it is on
+  // screen before the chat chunk is fetched and before any response arrives — it says nothing
+  // about the chat being bound. From the first paint of the frame until ChatWindow itself mounts
+  // the host keeps exactly one named placeholder in the region: the session-host chunk and the
+  // inner ChatWindow chunk both render `[data-window-chunk='loading']`, and the session bootstrap
+  // between them renders `[data-chat-bind='opening']`. Their absence is therefore the real
+  // readiness condition, and asserting it makes a stalled chunk or bind fail AS that stage,
+  // instead of as a composer that was never found.
+  await expect(
+    chat.locator("[data-window-chunk='loading'], [data-chat-bind='opening']"),
+  ).toHaveCount(0);
+  const composer = chat.getByRole("textbox", { name: "Chat message" });
+  await expect(composer).toBeVisible();
+  await composer.fill("How many approvals are needed?");
+  await chat.getByRole("button", { name: "Send message" }).click();
+
+  // The connector citation renders under the collapsed "Knowledge evidence" disclosure; open it.
+  await chat.getByText("Knowledge evidence").click();
+  await expect(
+    chat.locator('ul.grounded-citations[aria-label="Knowledge citations"] .grounded-citation'),
+  ).toContainText(CONNECTOR_CITATION_SOURCE);
+}

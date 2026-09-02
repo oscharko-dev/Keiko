@@ -277,6 +277,9 @@ function projectedBranch(
   };
 }
 
+// Fail closed on every failure, including a proof that could not run (IDENTITY_PROOF_FAILED): the
+// lifecycle service logs that one at its source with its cause, so "does not match" here is never
+// the only evidence of a transient disk failure (#3376 review).
 export function productionWorkspaceMatches(
   input: ProductionWorkspaceAuthorityInput,
   context: CodingRuntimeTrustedContext,

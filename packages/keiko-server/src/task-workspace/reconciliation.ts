@@ -48,11 +48,15 @@ import {
   validateTaskWorkspaceTransition,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { deriveRepositoryId } from "./naming.js";
-import { inspectManagedGitdirIdentity } from "./gitdir-identity.js";
+import { inspectManagedGitdirIdentityOutcome, managedIdentityDriftFor } from "./gitdir-identity.js";
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import { correlationIdOrUnknown } from "../correlation.js";
-import { recordWorkspaceLifecycle } from "./activity-log.js";
+import {
+  recordWorkspaceLifecycle,
+  runWithWorkspaceLifecycleFailureLogging,
+} from "./activity-log.js";
+import { isIdentityProofFailure } from "./errors.js";
 import { buildWorkspaceEvent, WORKSPACE_LIFECYCLE_EVIDENCE_KIND } from "./evidence.js";
 import type {
   WorkspaceReconciliationService,
@@ -169,9 +173,17 @@ async function gatherFacts(
 ): Promise<FactsAndHead> {
   const pathContained = isContained(ctx.deps.managedRoot, instance.managedWorktreePath);
   const worktreeDirExists = pathContained && existsSync(instance.managedWorktreePath);
-  const identity = worktreeDirExists
-    ? inspectManagedGitdirIdentity(instance.managedWorktreePath, instance.repositoryRoot)?.identity
-    : undefined;
+  const identityOutcome = worktreeDirExists
+    ? inspectManagedGitdirIdentityOutcome(instance.managedWorktreePath, instance.repositoryRoot)
+    : ({ kind: "unproven" } as const);
+  const identity =
+    identityOutcome.kind === "identified" ? identityOutcome.inspection.identity : undefined;
+  // The same verdict the access boundary and the provisioning resume use, so live reconciliation
+  // cannot re-label a migration or a platform limitation as a replaced pointer and overwrite the
+  // marker provisioning persisted.
+  // A proof that could not run throws the classified IDENTITY_PROOF_FAILED here; the live pass and
+  // the health report isolate it per instance, repair and cleanup fail closed on it.
+  const drift = managedIdentityDriftFor(identityOutcome, instance.gitdirIdentity);
   const taskBranchPresent = worktreeDirExists
     ? await adapter.localBranchExists(instance.taskBranch)
     : false;
@@ -186,8 +198,13 @@ async function gatherFacts(
       lifecycleState: instance.lifecycleState,
       pathContained,
       worktreeDirExists,
-      gitPointerPresent: identity !== undefined,
+      // A pointer that IS there but sits on a volume without creation time is present; only a
+      // missing or malformed pointer is not. Without this the platform limitation collapses into
+      // `pointer-stale` one branch earlier and its own marker never fires.
+      gitPointerPresent: identityOutcome.kind !== "unproven",
       gitdirIdentityMatches: identity !== undefined && identity === instance.gitdirIdentity,
+      gitdirIdentitySchemaRetired: drift === "schema-retired",
+      gitdirIdentityUnsupported: drift === "unsupported",
       taskBranchPresent,
       headMatches:
         instance.lastVerifiedHead === undefined || instance.lastVerifiedHead === observedHead,
@@ -239,6 +256,9 @@ function emitReconcileEvidence(
   });
   recordWorkspaceLifecycle(ctx.deps, {
     evidenceStore: ctx.deps.evidenceStore,
+    // The primary marker rides on the activity-log line too, so `server.log` alone tells a
+    // migration, a platform limitation and a replacement apart (#3376 review).
+    ...(outcome.driftMarkers[0] === undefined ? {} : { driftMarker: outcome.driftMarkers[0] }),
     record: {
       kind: WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
       schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
@@ -453,27 +473,55 @@ async function reconcileImpl(
       // its whole operation and re-enters reconcileSingleInstance inside it (locking there would
       // self-deadlock), and that path already fetches its worktree list fresh immediately before use with
       // no intervening await, so it has no equivalent staleness gap to close.
-      const result = await ctx.deps.mutex.runExclusive(
-        [workspaceKey(instance.workspaceId)],
-        async (): Promise<ReconcileInstanceResult | undefined> => {
-          const fresh = ctx.deps.store.getById(instance.workspaceId);
-          if (fresh === undefined) return undefined;
-          const nowMs = ctx.deps.now();
-          const { facts, observedHead } = await gatherFacts(
-            ctx,
-            adapter,
-            () => adapter.listWorktrees(),
-            fresh,
-            nowMs,
-            undefined,
-          );
-          return reconcileWithContext(ctx, facts, observedHead, fresh, nowMs, correlationId);
-        },
-      );
-      if (result !== undefined) reconciled.push(result.instance);
+      const result = await reconcileOneOrCarryForward(ctx, adapter, instance, correlationId);
+      if (result !== undefined) reconciled.push(result);
     }
   }
   return buildReport(ctx, reconciled, ctx.deps.now(), true);
+}
+
+// One instance of the live pass. A proof that could not run (IDENTITY_PROOF_FAILED) is logged with
+// its frames under this run's correlation and the persisted row is carried forward unchanged — the
+// last classification stands until a proof can run again — so one unreadable worktree never aborts
+// the reconciliation of every other workspace (Cursor review on f50133b95).
+async function reconcileOneOrCarryForward(
+  ctx: ReconcileCtx,
+  adapter: GitWorktreeAdapter,
+  instance: WorkspaceInstance,
+  correlationId: string | undefined,
+): Promise<WorkspaceInstance | undefined> {
+  try {
+    const result = await runWithWorkspaceLifecycleFailureLogging(
+      ctx.deps,
+      { operation: "reconcile", workspaceIdentitySeed: instance.workspaceId, correlationId },
+      () =>
+        ctx.deps.mutex.runExclusive(
+          [workspaceKey(instance.workspaceId)],
+          async (): Promise<ReconcileInstanceResult | undefined> => {
+            const fresh = ctx.deps.store.getById(instance.workspaceId);
+            if (fresh === undefined) return undefined;
+            const nowMs = ctx.deps.now();
+            const { facts, observedHead } = await gatherFacts(
+              ctx,
+              adapter,
+              () => adapter.listWorktrees(),
+              fresh,
+              nowMs,
+              undefined,
+            );
+            return reconcileWithContext(ctx, facts, observedHead, fresh, nowMs, correlationId);
+          },
+        ),
+    );
+    return result?.instance;
+  } catch (error) {
+    if (!isIdentityProofFailure(error)) throw error;
+    // The persisted classification stands (nothing is written), but THIS report says so honestly:
+    // the carried entry reports health `unknown` — this pass could not verify the row — without
+    // persisting a drift that was not observed (#3376 review).
+    const persisted = ctx.deps.store.getById(instance.workspaceId);
+    return persisted === undefined ? undefined : { ...persisted, health: "unknown" };
+  }
 }
 
 export function createWorkspaceReconciliationService(

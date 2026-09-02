@@ -57,6 +57,11 @@ function writeToBrowserConsole(message: string): void {
 // failing transport, retry the same failing POST on every diagnostic: a reporting loop.
 const DIAGNOSTIC_DELIVERY_FAILURE_NOTICE =
   "[keiko] diagnostic delivery to the server failed; the diagnostic above (if any) was not recorded server-side.";
+// Same reasoning as the failure notice: a throttled drop must leave a trace in the console, or the
+// busiest boot — the one most likely to hold a real stall — is the one whose evidence vanishes silently.
+// Written once per throttled window, never per dropped diagnostic.
+const DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE =
+  "[keiko] diagnostic delivery to the server is throttled; further diagnostics in this window stay console-only.";
 
 // Mirrors the server's SAFE_CORRELATION_ID predicate (packages/keiko-server/src/correlation.ts).
 // keiko-ui may only depend on the server through the shared contract types (AGENTS.md §4), never on
@@ -131,11 +136,16 @@ let postWindowStartedAtMs = 0;
 let postCountInWindow = 0;
 let postFailureCount = 0;
 let postThrottledCount = 0;
+// Drops in the CURRENT window, reset with it: the throttle notice is written on the first drop of
+// every window, so a burst in a later window leaves its own trace instead of vanishing behind a
+// process-lifetime counter (#3376 review).
+let postThrottledInWindow = 0;
 
 function admittedByClientPostRateLimit(nowMs: number): boolean {
   if (nowMs - postWindowStartedAtMs >= CLIENT_DIAGNOSTIC_POST_WINDOW_MS) {
     postWindowStartedAtMs = nowMs;
     postCountInWindow = 0;
+    postThrottledInWindow = 0;
   }
   if (postCountInWindow >= CLIENT_DIAGNOSTIC_POST_LIMIT_PER_WINDOW) return false;
   postCountInWindow += 1;
@@ -158,6 +168,7 @@ export function resetClientDiagnosticPostStateForTests(): void {
   postCountInWindow = 0;
   postFailureCount = 0;
   postThrottledCount = 0;
+  postThrottledInWindow = 0;
 }
 
 // Best-effort POST to the server activity log. Never awaited by a call site and never lets a
@@ -172,6 +183,8 @@ export function resetClientDiagnosticPostStateForTests(): void {
 function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMeta): void {
   if (!admittedByClientPostRateLimit(Date.now())) {
     postThrottledCount += 1;
+    postThrottledInWindow += 1;
+    if (postThrottledInWindow === 1) writeToBrowserConsole(DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE);
     return;
   }
   try {

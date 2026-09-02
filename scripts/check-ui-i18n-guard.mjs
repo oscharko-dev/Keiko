@@ -24,33 +24,39 @@ export const OPTIONAL_WIDGET_EN_CATALOG = "packages/keiko-ui/src/lib/i18n-messag
 export const OPTIONAL_WIDGET_DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts";
 
 const UI_SOURCE_PREFIXES = ["packages/keiko-ui/src/app/", "packages/keiko-ui/src/lib/"];
-const I18N_USAGE_PATTERNS = [
-  /\buseTranslate\s*\(/,
-  /\buseOptionalWidgetTranslate\s*\(/,
+// ONE table answers both questions the guard asks about the i18n API — "does this added line use
+// it?" (relevance) and "which usage did this patch introduce?" (the `api:<name>` change signature).
+// They were two hand-maintained lists once, and the lists drifted: a diff adding only
+// `useProblemsTranslate()` was relevant but produced no signature, so the guard accepted a new i18n
+// usage without catalog evidence (#3376 review). Every entry here yields both.
+const I18N_USAGE_APIS = [
+  { name: "useTranslate", pattern: /\buseTranslate\s*\(/ },
+  { name: "useOptionalWidgetTranslate", pattern: /\buseOptionalWidgetTranslate\s*\(/ },
   // Feature-scoped catalog hook for the dynamically loaded Coding Workbench (#2257 boundary).
-  /\buseCodingWorkbenchTranslate\s*\(/,
-  /\buseI18n\s*\(/,
-  /<\s*I18nTranslate\b/,
-  /\bOptionalWidgetTranslate\b/,
+  { name: "useCodingWorkbenchTranslate", pattern: /\buseCodingWorkbenchTranslate\s*\(/ },
+  { name: "useI18n", pattern: /\buseI18n\s*\(/ },
+  { name: "I18nTranslate", pattern: /<\s*I18nTranslate\b/ },
+  { name: "OptionalWidgetTranslate", pattern: /\bOptionalWidgetTranslate\b/ },
   // Non-hook seams. A module that is not a component cannot call a hook, so it takes the translate
   // function as a parameter (`I18nTranslate`) or calls the pure `translate`/`translateOptionalWidget`
   // entry points. Before these three patterns existed, the guard classified exactly those modules —
   // the window-type registry among them — as "does not use the i18n API", which is one half of why
   // hardcoded English in a `.ts` registry was invisible to it.
-  /\bI18nTranslate\b/,
+  { name: "I18nTranslate-type", pattern: /\bI18nTranslate\b/ },
   // The feature-scoped analogue of `I18nTranslate`, for the same reason: a non-component module in
   // the Coding Workbench takes its catalog's translate function as a parameter rather than calling
   // the hook. The hook was listed above but the type was not, so a label module that routes every
   // string through `t(...)` was still reported as "does not use the i18n API".
-  /\bCodingWorkbenchTranslate\b/,
-  /\btranslateOptionalWidget\s*\(/,
-  /\blocalizedWindow[A-Za-z]*\s*\(/,
+  { name: "CodingWorkbenchTranslate-type", pattern: /\bCodingWorkbenchTranslate\b/ },
+  { name: "translateOptionalWidget", pattern: /\btranslateOptionalWidget\s*\(/ },
+  { name: "localizedWindow", pattern: /\blocalizedWindow[A-Za-z]*\s*\(/ },
   // Feature-scoped catalog hooks for the Problems panel (Issue #2213) and other panels that
   // ship their own EN/DE catalog under `packages/keiko-ui/src/app/components/desktop/widgets/panels/*-i18n.ts`.
   // These follow the same shape as `useTranslate` / `useCodingWorkbenchTranslate` above:
   // a hook that returns `(key, values?) => string`, backed by a matching-key EN and DE map.
-  /\buseProblemsTranslate\s*\(/,
+  { name: "useProblemsTranslate", pattern: /\buseProblemsTranslate\s*\(/ },
 ];
+const I18N_USAGE_PATTERNS = I18N_USAGE_APIS.map((api) => api.pattern);
 // Each quoted alternative used to open with an unbounded [^"]* that overlaps the required
 // [A-Za-z] pivot and the unbounded [^"]* that follows it, so a quote-less run of letters made
 // the engine explore every way to split the run between the two — O(n^2) worst case. Excluding
@@ -1717,23 +1723,44 @@ function collectI18nChangeSignatures(lines) {
   for (const line of lines) {
     const keyMatches = line.matchAll(/\bt\s*\(\s*(["'`])([^"'`]+)\1/gu);
     for (const match of keyMatches) signatures.add(`key:${match[2]}`);
-    if (/\buseTranslate\s*\(/u.test(line)) signatures.add("api:useTranslate");
-    if (/\buseOptionalWidgetTranslate\s*\(/u.test(line)) {
-      signatures.add("api:useOptionalWidgetTranslate");
-    }
-    if (/\buseI18n\s*\(/u.test(line)) signatures.add("api:useI18n");
-    if (/<\s*I18nTranslate\b/u.test(line)) signatures.add("api:I18nTranslate");
-    if (/\bOptionalWidgetTranslate\b/u.test(line)) {
-      signatures.add("api:OptionalWidgetTranslate");
+    for (const api of I18N_USAGE_APIS) {
+      if (api.pattern.test(line)) signatures.add(`api:${api.name}`);
     }
   }
   return signatures;
 }
 
-function hasNewI18nSignature(addedLines, removedLines) {
+// A signature is new when the SAME patch did not remove it from this file — with one refinement
+// (#3376): a `t("key")` whose key already exists in BOTH shared catalogs is a translated value
+// moving between files, not new text, and the i18n API adopted alongside only such keys is the same
+// move. The catalogs are complete for those keys by construction, so forcing a catalog touch there
+// contradicts the intent stated above; a key missing from either catalog, or the API adopted with
+// no literal key at all (a computed key the regex cannot see), stays relevant.
+export function hasNewI18nSignature(addedLines, removedLines, knownCatalogKeys = new Set()) {
   const added = collectI18nChangeSignatures(addedLines);
   const removed = collectI18nChangeSignatures(removedLines);
-  return Array.from(added).some((signature) => !removed.has(signature));
+  const introduced = Array.from(added).filter((signature) => !removed.has(signature));
+  const keys = introduced.filter((signature) => signature.startsWith("key:"));
+  if (keys.some((signature) => !knownCatalogKeys.has(signature.slice("key:".length)))) return true;
+  const apis = introduced.filter((signature) => signature.startsWith("api:"));
+  return apis.length > 0 && keys.length === 0 && !hasKeySignature(added);
+}
+
+function hasKeySignature(signatures) {
+  return Array.from(signatures).some((signature) => signature.startsWith("key:"));
+}
+
+const knownCatalogKeysCache = new Map();
+
+// The keys present in BOTH shared catalogs — the only keys a moved `t("key")` can rely on.
+function knownCatalogKeys(repoRoot) {
+  const cached = knownCatalogKeysCache.get(repoRoot);
+  if (cached !== undefined) return cached;
+  const en = extractCatalogKeys(readText(repoRoot, EN_CATALOG));
+  const de = extractCatalogKeys(readText(repoRoot, DE_CATALOG));
+  const known = new Set(Array.from(en).filter((key) => de.has(key)));
+  knownCatalogKeysCache.set(repoRoot, known);
+  return known;
 }
 
 function sourceHasUserFacingText(source) {
@@ -1759,7 +1786,11 @@ function hasI18nRelevantChange(repoRoot, file) {
   if (changedLines !== null) {
     if (!changedLines.added.some(hasI18nRelevantAddedLine)) return false;
     if (changedLines.added.some(hasUnexemptedUserFacingTextLine)) return true;
-    return hasNewI18nSignature(changedLines.added, changedLines.removed);
+    return hasNewI18nSignature(
+      changedLines.added,
+      changedLines.removed,
+      knownCatalogKeys(repoRoot),
+    );
   }
   const source = readText(repoRoot, file);
   return hasI18nUsage(repoRoot, file) || sourceHasUserFacingText(source);

@@ -37,7 +37,27 @@ import {
 } from "../observability/index.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { assertManagedRootOwned } from "./managed-root.js";
-import { inspectManagedGitdirIdentity, parseGitdirPointerTarget } from "./gitdir-identity.js";
+import {
+  inspectManagedGitdirIdentity,
+  inspectManagedGitdirIdentityOutcome,
+  parseGitdirPointerTarget,
+} from "./gitdir-identity.js";
+
+// The one identity classifier is wrapped, never replaced: every call reaches the real proof unless a
+// test queues one answer a real filesystem cannot produce here (no creation time, an I/O failure).
+// The wrapper also lets the empty-root pin prove that no identity work happens at all.
+vi.mock("./gitdir-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./gitdir-identity.js")>();
+  return {
+    ...actual,
+    inspectManagedGitdirIdentityOutcome: vi.fn(actual.inspectManagedGitdirIdentityOutcome),
+  };
+});
+
+// A queued classifier outcome must never leak into the next test.
+afterEach(() => {
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockReset();
+});
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,
@@ -481,6 +501,71 @@ describe("resolveManagedWorkspaceRootAccess", () => {
     expect(JSON.stringify(denialEvents(activityLog)[0])).not.toContain(
       "mismatched-gitdir-identity",
     );
+  });
+
+  // An identity persisted under the retired v2 composition is still refused — accepting a forgeable
+  // identity even once would mint a trusted v3 one from it. What changes is only what the operator
+  // is told: this workspace needs re-registration, not an incident response.
+  it("names the retired identity schema instead of reporting a replacement", () => {
+    const inspection = inspectManagedGitdirIdentity(workspaceRoot, repositoryRoot);
+    if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
+    registered = instanceAt(workspaceRoot, inspection.legacyIdentity);
+    const activityLog = createBufferedServerLogSink();
+
+    expect(resolveAccessLogged(activityLog, "wra-schema-0001")).toBeUndefined();
+    expect(denialEvents(activityLog)).toHaveLength(1);
+    expect(denialEvents(activityLog)[0]).toMatchObject({
+      level: "warn",
+      category: "security",
+      correlationId: "wra-schema-0001",
+      extra: { decision: "denied", reason: "managed-root-identity-schema-retired" },
+    });
+    // The legacy value is a filesystem fingerprint; it must not travel into the log.
+    expect(JSON.stringify(denialEvents(activityLog)[0])).not.toContain(inspection.legacyIdentity);
+  });
+
+  // A volume that keeps no creation time is refused with its OWN reason — a platform limitation with
+  // a documented relocation, not an incident and not a migration. The fact cannot be produced on a
+  // real filesystem here, so the classifier answers it once; removing the mapping fails this pin.
+  it("names the unsupported filesystem instead of reporting an identity mismatch", () => {
+    vi.mocked(inspectManagedGitdirIdentityOutcome).mockReturnValueOnce({ kind: "unsupported" });
+    const activityLog = createBufferedServerLogSink();
+
+    expect(resolveAccessLogged(activityLog, "wra-unsupported-0001")).toBeUndefined();
+    expect(denialEvents(activityLog)).toHaveLength(1);
+    expect(denialEvents(activityLog)[0]).toMatchObject({
+      correlationId: "wra-unsupported-0001",
+      extra: { decision: "denied", reason: "managed-root-identity-unsupported" },
+    });
+  });
+
+  // An I/O failure inside the proof is a resolution failure with its cause, on the same op the
+  // thrown-failure catch already used — never an identity denial that sends an operator after a
+  // replacement that did not happen (#3376 review P2).
+  it("records an I/O failure inside the proof as a resolution failure, not an identity denial", () => {
+    vi.mocked(inspectManagedGitdirIdentityOutcome).mockReturnValueOnce({
+      kind: "failed",
+      cause: new Error("EIO: input/output error"),
+    });
+    const activityLog = createBufferedServerLogSink();
+
+    expect(resolveAccessLogged(activityLog, "wra-failed-0001")).toBeUndefined();
+    expect(denialEvents(activityLog)).toHaveLength(1);
+    expect(denialEvents(activityLog)[0]).toMatchObject({
+      correlationId: "wra-failed-0001",
+      extra: { decision: "denied", reason: "managed-root-resolution-failed" },
+    });
+    expect(JSON.stringify(denialEvents(activityLog)[0])).not.toContain("managed-root-identity");
+  });
+
+  // An empty requested root must never reach the managed classifier as a valid path — proven by the
+  // classifier never being asked, not merely by the refusal.
+  it("refuses an empty requested root before any identity work", () => {
+    vi.mocked(inspectManagedGitdirIdentityOutcome).mockClear();
+
+    expect(resolveAccess("")).toBeUndefined();
+
+    expect(inspectManagedGitdirIdentityOutcome).not.toHaveBeenCalled();
   });
 
   it("logs one correlated ownership denial when the managed-root marker is gone", () => {

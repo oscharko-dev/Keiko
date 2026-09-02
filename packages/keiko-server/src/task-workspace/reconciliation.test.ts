@@ -7,7 +7,7 @@
 // branch/head drift, partial provisioning, stale lock, ambiguous active binding, unmanaged-path
 // collision. The single governed spawn boundary is reused throughout; no generic git runner.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,6 +32,32 @@ import { createWorkspaceProvisioningService } from "./provisioning.js";
 import { createWorkspaceReconciliationService } from "./reconciliation.js";
 import type { WorkspaceProvisioningService, WorkspaceReconciliationService } from "./types.js";
 import { createWorkspaceMutexRegistry, workspaceKey } from "./mutex.js";
+
+// A volume without creation times cannot be produced on a real filesystem from a test, so the one
+// identity classifier is wrapped (never replaced) and answers `unsupported` exactly once where the
+// pin below needs it; every other call reaches the real proof.
+vi.mock("./gitdir-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./gitdir-identity.js")>();
+  return {
+    ...actual,
+    inspectManagedGitdirIdentityOutcome: vi.fn(actual.inspectManagedGitdirIdentityOutcome),
+  };
+});
+
+// A queued classifier outcome must never leak into the next test.
+afterEach(() => {
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockReset();
+});
+
+// Makes the identity proof fail for ONE worktree path, targeted by path rather than by call order —
+// the store does not promise an evaluation order — while every other path reaches the real proof.
+function failProofFor(worktreePath: string, cause: Error): void {
+  const real = vi.mocked(inspectManagedGitdirIdentityOutcome).getMockImplementation();
+  if (real === undefined) throw new Error("classifier wrapper lost its implementation");
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockImplementation((candidate, ...rest) =>
+    candidate === worktreePath ? { kind: "failed", cause } : real(candidate, ...rest),
+  );
+}
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   createBufferedServerLogSink,
@@ -39,6 +65,7 @@ import {
   type ServerLogEvent,
   type ServerLogSink,
 } from "../observability/index.js";
+import { inspectManagedGitdirIdentityOutcome } from "./gitdir-identity.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -368,6 +395,52 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     const reportEntry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
     expect(reportEntry?.status).toBe("stale-pointer");
     expect(reportEntry?.driftMarkers).toContain("gitdir-mismatch");
+  });
+
+  // A pointer that IS there but sits on a volume without creation time is present. Reporting it as
+  // absent collapsed the platform limitation into `pointer-stale` one branch earlier, so its own
+  // marker — and the operator-only resolution it maps to — never fired (#3376 review).
+  it("classifies an unsupported-filesystem identity by its own marker, never as a missing pointer", async () => {
+    const instance = await provisionTask("t1");
+    vi.mocked(inspectManagedGitdirIdentityOutcome).mockReturnValueOnce({ kind: "unsupported" });
+
+    const report = await reconciliation().reconcile();
+
+    const reportEntry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
+    expect(reportEntry?.status).toBe("stale-pointer");
+    expect(reportEntry?.driftMarkers).toEqual(["identity-unsupported"]);
+    expect(reportEntry?.driftMarkers).not.toContain("pointer-stale");
+    expect(reportEntry?.recoveryHints).toContainEqual(
+      expect.objectContaining({ strategy: "operator-repair", operatorActionRequired: true }),
+    );
+    expect(store.getById(instance.workspaceId)?.driftMarkers).toEqual(["identity-unsupported"]);
+  });
+
+  // An I/O failure inside the proof says nothing about the worktree. It used to be swallowed into
+  // "unproven" and PERSISTED as a stale pointer with `recovery-required`. Now that one instance is
+  // carried forward unchanged, the failure is on the activity log as the classified, retryable
+  // IDENTITY_PROOF_FAILED with its cause, and every other instance is still reconciled (#3376 review;
+  // Cursor review on f50133b95).
+  it("isolates a failed identity proof to its instance, logs it, and keeps reconciling the others", async () => {
+    const failing = await provisionTask("t1");
+    const other = await provisionTask("t2");
+    const activityLog = createBufferedServerLogSink();
+    failProofFor(failing.managedWorktreePath, new Error("EIO: input/output error"));
+
+    const report = await reconciliation(activityLog).reconcile(repoRoot, "proof-failed-0001");
+
+    const carried = report.entries.find((e) => e.workspaceId === failing.workspaceId);
+    expect(carried?.status).toBe("healthy");
+    expect(carried?.driftMarkers).toEqual([]);
+    expect(report.entries.find((e) => e.workspaceId === other.workspaceId)?.status).toBe("healthy");
+    const persisted = store.getById(failing.workspaceId);
+    expect(persisted?.lifecycleState).toBe("active");
+    expect(persisted?.driftMarkers).toEqual([]);
+    const line = activityLog.events.find((event) => event.errorKind === "IDENTITY_PROOF_FAILED");
+    expect(line?.correlationId).toBe("proof-failed-0001");
+    // Body-free by contract: the cause travels as a class chain, never as its message.
+    expect(line?.extra).toMatchObject({ operation: "reconcile" });
+    expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
   });
 
   // S8786 pointer-drift regression: the shared production parser replaced both formerly duplicated

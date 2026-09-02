@@ -119,13 +119,22 @@ healthy | degraded | drifted | locked-out | missing | unknown
 
 `TASK_WORKSPACE_HEALTH_STATES`, `TaskWorkspaceHealth`, `isTaskWorkspaceHealth`.
 
-**Entity 3 — Drift markers.** Eight markers classify the specific drift condition when health is
+**Entity 3 — Drift markers.** Ten markers classify the specific drift condition when health is
 `drifted` or `missing`:
 
-```
+```text
 worktree-missing | gitdir-mismatch | head-moved | branch-deleted
 uncommitted-changes | lock-stale | path-escape | pointer-stale
+identity-schema-retired | identity-unsupported
 ```
+
+The last two were added with the creation-time-bound managed identity (#3376): `identity-schema-retired`
+names a workspace registered under the retired inode-only identity rule, whose authenticity is unproven
+under the current rule (a migration to resolve by operator-approved re-registration, not a defect on the
+customer's disk); `identity-unsupported` names a filesystem that reports no durable creation time, so no
+identity can be derived at all (ADR-0155's `FILESYSTEM_IDENTITY_UNSUPPORTED` at the managed boundary,
+resolved by relocating the root). Neither is a `gitdir-mismatch`, because both send an operator to a
+different action than a replaced worktree does.
 
 `TASK_WORKSPACE_DRIFT_MARKERS`, `TaskWorkspaceDriftMarker`, `isTaskWorkspaceDriftMarker`.
 

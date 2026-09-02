@@ -23,6 +23,8 @@ import type { ActiveWorkspacePointer, ActiveWorkspacePointerStore } from "./acti
 import type { WorkspaceActivityLogSeam } from "./activity-log.js";
 import type { WorkspaceInstanceStore } from "./store.js";
 import type { WorkspaceMutexRegistry } from "./mutex.js";
+import type { ProvenCreationTimeSupport } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { ManagedIdentityDrift } from "./gitdir-identity.js";
 
 export interface WorkspaceProvisionRequest {
   // The repository request path the route already resolved (realpath'd project/arbitrary root). The
@@ -37,6 +39,16 @@ export interface WorkspaceProvisionRequest {
   // internal repair re-materialization not driven by a fresh HTTP call) — the evidence layer falls
   // back to UNKNOWN_CORRELATION_ID in that case, never a silently reused workspace identity.
   readonly correlationId?: string | undefined;
+  /**
+   * This call IS the operator-approved recovery repair, not an ordinary provision.
+   *
+   * Only that path may reissue the identity of a worktree that already exists on disk. An ordinary
+   * request must never do it: `recovery-required` is a completable state, so without the
+   * distinction the very next identical request would silently upgrade an identity a guard just
+   * refused — including a genuinely replaced worktree. Set exclusively by the repair service, which
+   * requires `operatorApproved`.
+   */
+  readonly operatorApprovedRepair?: boolean | undefined;
 }
 
 export interface WorkspaceProvisionResult {
@@ -98,6 +110,14 @@ export interface WorkspaceProvisioningServiceDeps extends WorkspaceActivityLogSe
   // Clock + id generator, injected for deterministic tests. `now` is epoch ms.
   readonly now: () => number;
   readonly newId: () => string;
+  // Optional, tests only: whether every volume the identity hashes keeps a durable creation time.
+  // Production uses the real proof (`proveCreationTimeSupport`): the managed root by probe, the
+  // repository read-only at the common git directory the identity hashes (resolved through the
+  // pointer a linked worktree or a separate-git-dir layout leaves at `<root>/.git`); an identity is
+  // never minted on a volume whose "creation time" is the ctime under another name (#3376 review P2).
+  readonly proveCreationTimeSupport?:
+    | ((managedRoot: string, repositoryCommonDirectory: string) => ProvenCreationTimeSupport)
+    | undefined;
   // The server-owned Project → single-root manifest identity for a managed worktree. Production
   // supplies the existing UiStore paired-write owner; tests may omit it when trust/catalog behavior
   // is outside their scope. Explicit provision may initialize exact trust; resume, activate, and
@@ -153,7 +173,9 @@ export interface WorkspaceLifecycleService {
   // List the persisted instances for an already-resolved repository root (switcher inventory).
   readonly list: (repositoryRoot: string) => readonly WorkspaceInstance[];
   // Current active instance + derived binding + pointer, or undefined in unbound mode.
-  readonly getActive: () => ActiveWorkspaceView | undefined;
+  // The request's correlation id, so a refused or unprovable binding on the read path joins the
+  // request timeline; a proof that cannot run throws the classified IDENTITY_PROOF_FAILED (#3376).
+  readonly getActive: (correlationId?: string) => ActiveWorkspaceView | undefined;
   // ATOMIC SWITCH: activate/resume the target via the #445 service, then persist it as the pointer.
   readonly setActive: (request: SetActiveWorkspaceRequest) => Promise<ActiveWorkspaceView>;
   // Clear the pointer → unbound mode. Does not change any instance lifecycle state. Idempotent.
@@ -184,6 +206,9 @@ export interface WorkspaceLifecycleServiceDeps extends WorkspaceActivityLogSeam 
   readonly redactString: (input: string) => string;
   readonly now: () => number;
   readonly newId: () => string;
+  // Optional, tests only: the live managed-identity verdict for one instance. Production proves it
+  // on disk (`liveManagedIdentityDrift`) before any binding or readiness state is exposed.
+  readonly identityDrift?: ((instance: WorkspaceInstance) => ManagedIdentityDrift) | undefined;
   // Optional: how long a mutation lock stays valid before it is treated as stale. Mirrors provisioning.
   readonly lockTtlMs?: number | undefined;
   // The SAME shared in-process serializer the provisioning service holds (#449, ADR-0093 D1): pause /

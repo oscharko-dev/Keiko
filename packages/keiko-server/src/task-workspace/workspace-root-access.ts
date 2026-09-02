@@ -21,7 +21,11 @@ import {
 } from "./authorization.js";
 import { isManagedRootOwned } from "./managed-root.js";
 import { deriveManagedWorktreePath } from "./naming.js";
-import { inspectManagedGitdirIdentity } from "./gitdir-identity.js";
+import {
+  inspectManagedGitdirIdentityOutcome,
+  managedIdentityDriftFor,
+  type ManagedIdentityDrift,
+} from "./gitdir-identity.js";
 
 export interface WorkspaceRootAccess {
   readonly kind: "ordinary" | "managed-task";
@@ -127,28 +131,53 @@ function lifecyclePermits(instance: WorkspaceInstance, purpose: ManagedAccessPur
   );
 }
 
-function managedIdentityMatches(
+// Every identity denial refuses. This only decides WHICH denial an operator is told about, so a
+// workspace that merely predates the current identity rule is not reported as a possible
+// replacement — the two need different operator actions and are different incidents.
+// ONE full proof, returning what failed. A second, independent inspection run only to explain a
+// refusal could observe a different filesystem state than the one that was refused, and it could
+// not tell a path or directory-kind failure from an identity failure at all — both were reported as
+// identity findings (review). `matched` is the grant; every other value is the exact reason.
+type ManagedIdentityVerdict =
+  | { readonly kind: "matched" }
+  | { readonly kind: "path" }
+  | { readonly kind: "not-a-directory" }
+  | { readonly kind: "identity"; readonly drift: ManagedIdentityDrift }
+  | { readonly kind: "failed"; readonly cause: unknown };
+
+function proveManagedIdentity(
   instance: WorkspaceInstance,
   canonicalManagedRoot: string,
   canonicalRoot: string,
-): boolean {
+): ManagedIdentityVerdict {
   const expectedCanonicalRoot = deriveManagedWorktreePath({
     managedRoot: canonicalManagedRoot,
     repositoryId: instance.repositoryId,
     workspaceId: instance.workspaceId,
   });
+  if (canonicalRoot !== expectedCanonicalRoot) return { kind: "path" };
   const stat = nodeWorkspaceFs.stat(canonicalRoot);
+  if (!stat.isDirectory || stat.isSymbolicLink) return { kind: "not-a-directory" };
   // Proves gitdir identity against the CANONICAL root just verified above, never the persisted
   // lexical instance.managedWorktreePath: the capability this returns must be bound to the identity
   // actually re-checked this call, not re-derived from a potentially-stale persisted string (#3347
   // cursor finding).
-  const gitdir = inspectManagedGitdirIdentity(canonicalRoot, instance.repositoryRoot);
-  return (
-    canonicalRoot === expectedCanonicalRoot &&
-    stat.isDirectory &&
-    !stat.isSymbolicLink &&
-    gitdir?.identity === instance.gitdirIdentity
-  );
+  const outcome = inspectManagedGitdirIdentityOutcome(canonicalRoot, instance.repositoryRoot);
+  if (outcome.kind === "failed") return { kind: "failed", cause: outcome.cause };
+  const drift = managedIdentityDriftFor(outcome, instance.gitdirIdentity);
+  return drift === "matches" ? { kind: "matched" } : { kind: "identity", drift };
+}
+
+function denialReasonFor(
+  verdict: Exclude<ManagedIdentityVerdict, { kind: "matched" }>,
+): ManagedRootDenialReason {
+  if (verdict.kind === "identity" && verdict.drift === "schema-retired") {
+    return "managed-root-identity-schema-retired";
+  }
+  if (verdict.kind === "identity" && verdict.drift === "unsupported") {
+    return "managed-root-identity-unsupported";
+  }
+  return "managed-root-identity";
 }
 
 // ONE denial-logging vocabulary for the managed-root boundary — same `op`, same category, same
@@ -166,6 +195,17 @@ type ManagedRootDenialReason =
   | "managed-root-lifecycle"
   // Canonical path, directory kind, or re-verified gitdir identity disagrees with the instance.
   | "managed-root-identity"
+  // The instance's identity was persisted under the retired v2 composition, which bound only the
+  // inode and so could not tell an authentic worktree from a same-path replacement that won the
+  // inode back. Distinct from `managed-root-identity` because nothing is wrong with the worktree:
+  // it needs an operator-approved re-registration, not an incident response. The old value is
+  // never accepted, since accepting a forgeable identity once would mint a trusted v3 one from it.
+  | "managed-root-identity-schema-retired"
+  // This filesystem reports no creation time, so no identity can be derived at all — an ext4 volume
+  // formatted with 128-byte inodes is a real example. The outcome ADR-0155 names
+  // FILESYSTEM_IDENTITY_UNSUPPORTED at the workspace-root boundary; a separate reason here so an
+  // operator sees a platform limitation instead of a replaced worktree.
+  | "managed-root-identity-unsupported"
   // The interactive re-proof threw (vanished worktree, stat race, exotic IO fault).
   | "managed-root-resolution-failed"
   // The same throw on the lifecycle-maintenance twin. A distinct reason on purpose: a background
@@ -214,6 +254,14 @@ function recordManagedRootDenial(
   });
 }
 
+// The thrown-failure catches below choose the same reason per purpose; the in-proof `failed`
+// outcome must land on the identical activity-log vocabulary so one purpose has one failure op.
+function resolutionFailureReasonFor(purpose: ManagedAccessPurpose): ManagedRootDenialReason {
+  return purpose === "lifecycle-maintenance"
+    ? "managed-root-lifecycle-resolution-failed"
+    : "managed-root-resolution-failed";
+}
+
 function canonicalManagedRootAccess(
   lookup: ManagedTaskWorkspaceLookup,
   requestedRoot: string,
@@ -237,8 +285,19 @@ function canonicalManagedRootAccess(
   }
   const canonicalManagedRoot = nodeWorkspaceFs.realPath(managedRoot);
   const canonicalRoot = nodeWorkspaceFs.realPath(instance.managedWorktreePath);
-  if (!managedIdentityMatches(instance, canonicalManagedRoot, canonicalRoot)) {
-    recordManagedRootDenial("managed-root-identity", denial);
+  const verdict = proveManagedIdentity(instance, canonicalManagedRoot, canonicalRoot);
+  if (verdict.kind === "failed") {
+    // An I/O failure inside the proof is a resolution failure, with its cause and frames, not an
+    // identity finding dressed up as one.
+    recordManagedRootResolutionFailure(
+      verdict.cause,
+      denial.logging,
+      resolutionFailureReasonFor(purpose),
+    );
+    return undefined;
+  }
+  if (verdict.kind !== "matched") {
+    recordManagedRootDenial(denialReasonFor(verdict), denial);
     return undefined;
   }
   return {

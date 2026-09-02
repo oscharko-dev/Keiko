@@ -19,12 +19,15 @@
 // adapter allowlist widening). Live re-verification of cleanliness is #447/#448's responsibility.
 
 import type {
+  TaskWorkspaceDriftMarker,
   TaskWorkspaceLifecycleState,
   TaskWorkspaceTransitionContext,
   WorkspaceEventType,
   WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  isLegalTaskWorkspaceTransition,
+  planWorkspaceRecoveryHints,
   TASK_WORKSPACE_SCHEMA_VERSION,
   validateTaskWorkspaceTransition,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
@@ -35,8 +38,16 @@ import { isManagedTargetContained, managedTargetExists } from "./managed-root.js
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { activePointerKey, workspaceKey } from "./mutex.js";
 import { TaskWorkspaceError } from "./errors.js";
+import {
+  liveManagedIdentityDrift,
+  managedIdentityDriftMarker,
+  managedIdentityDriftMessage,
+  type ManagedIdentityDrift,
+} from "./gitdir-identity.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import {
+  logWorkspaceLifecycle,
+  logWorkspaceLifecycleFailure,
   recordWorkspaceLifecycle,
   runWithWorkspaceLifecycleFailureLogging,
 } from "./activity-log.js";
@@ -70,6 +81,9 @@ interface DirectTransitionSpec {
   readonly outcome: WorkspaceLifecycleOutcome;
   readonly eventType: WorkspaceEventType;
   readonly clearPointerIfActive: boolean;
+  // Exposing a readiness state (handoff-ready) re-proves the managed identity first; pausing a
+  // drifted workspace must stay possible, so it does not.
+  readonly requiresIdentityProof: boolean;
 }
 
 function isBoundedNonEmpty(value: unknown): value is string {
@@ -93,6 +107,8 @@ function emit(
     // Falls back to UNKNOWN_CORRELATION_ID — never the workspace's own identity, which would make
     // every event across this workspace's whole life look like the SAME operation (AGENTS.md §8).
     readonly correlationId?: string | undefined;
+    readonly errorCode?: string | undefined;
+    readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
   },
 ): void {
   const correlationId = correlationIdOrUnknown(input.correlationId);
@@ -120,6 +136,8 @@ function emit(
       event,
     },
     redactString: ctx.deps.redactString,
+    errorCode: input.errorCode,
+    driftMarker: input.driftMarker,
   });
 }
 
@@ -151,7 +169,11 @@ function assertBindableManagedPath(ctx: LifecycleCtx, instance: WorkspaceInstanc
   }
 }
 
-function canExposeBinding(ctx: LifecycleCtx, instance: WorkspaceInstance): boolean {
+function canExposeBinding(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  correlationId: string | undefined,
+): boolean {
   if (instance.lifecycleState !== "active" && instance.lifecycleState !== "handoff-ready") {
     return false;
   }
@@ -160,7 +182,133 @@ function canExposeBinding(ctx: LifecycleCtx, instance: WorkspaceInstance): boole
   } catch {
     return false;
   }
-  return managedTargetExists(instance.managedWorktreePath);
+  if (!managedTargetExists(instance.managedWorktreePath)) return false;
+  // The persisted pointer may predate the current identity rule (an upgrade window before the
+  // detached reconcile has run) or point at a replaced tree: no binding leaves this service on
+  // path existence alone (#3376 review P1). The refusal is logged; the pointer is cleared by the
+  // caller exactly as for any other non-bindable instance.
+  const drift = identityDriftOf(ctx, instance);
+  if (drift === "matches") return true;
+  // A synchronous read-time check: `attempt`, `durationMs` and `worktreeCount` are the line's
+  // required shape, not measurements of this refusal.
+  logWorkspaceLifecycle(ctx.deps, {
+    operation: "activate",
+    outcome: "retry-required",
+    workspaceId: instance.workspaceId,
+    taskId: instance.taskId,
+    correlationId,
+    attempt: 1,
+    durationMs: 0,
+    worktreeCount: 0,
+    errorCode: "POINTER_DRIFT",
+    driftMarker: managedIdentityDriftMarker(drift),
+  });
+  return false;
+}
+
+// The live four-way verdict, or the injected one in tests. A proof that could not run arrives as the
+// classified, retryable IDENTITY_PROOF_FAILED (thrown by the classifier itself) and is left alone:
+// the active read answers it — never an unbound application, which would drop the pointer on a
+// transient EIO, and never a raw 500 — and a readiness transition refuses without touching the row.
+// The read path is synchronous and not wrapped by the lifecycle failure logger, so a proof that could
+// not run is logged here once — errorKind, frames, cause chain, the request's correlation — before
+// it is rethrown for the route's classified 503 (#3376 review).
+function exposableOrThrow(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  correlationId: string | undefined,
+): boolean {
+  try {
+    return canExposeBinding(ctx, instance, correlationId);
+  } catch (error) {
+    if (error instanceof TaskWorkspaceError) {
+      logWorkspaceLifecycleFailure(
+        ctx.deps,
+        { operation: "activate", workspaceIdentitySeed: instance.workspaceId, correlationId },
+        error,
+      );
+    }
+    throw error;
+  }
+}
+
+function identityDriftOf(ctx: LifecycleCtx, instance: WorkspaceInstance): ManagedIdentityDrift {
+  const prove = ctx.deps.identityDrift;
+  if (prove !== undefined) return prove(instance);
+  return liveManagedIdentityDrift(
+    instance.managedWorktreePath,
+    instance.repositoryRoot,
+    instance.gitdirIdentity,
+  );
+}
+
+// The admission order matters (#3376 review): legality first — a transition the contract forbids
+// (a terminal workspace cannot hand off) is refused as ILLEGAL_TRANSITION before any proof could move
+// the row; then the live lock — another actor's lock refuses as LOCK_CONTENTION before the proof
+// could flag the row and clear that lock; only then the identity proof.
+function admitTransition(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  spec: DirectTransitionSpec,
+  request: WorkspaceLifecycleActionRequest,
+  nowMs: number,
+): TaskWorkspaceTransitionContext {
+  if (!isLegalTaskWorkspaceTransition(instance.lifecycleState, spec.to)) {
+    throw new TaskWorkspaceError(
+      "ILLEGAL_TRANSITION",
+      `cannot ${spec.operation} workspace from ${instance.lifecycleState}`,
+    );
+  }
+  const context = resolveTransitionContext(ctx, instance, request.requestedBy, nowMs);
+  assertIdentityCurrentFor(ctx, instance, spec, nowMs, request.correlationId);
+  return context;
+}
+
+function assertIdentityCurrentFor(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  spec: DirectTransitionSpec,
+  nowMs: number,
+  correlationId: string | undefined,
+): void {
+  if (!spec.requiresIdentityProof) return;
+  const drift = identityDriftOf(ctx, instance);
+  if (drift !== "matches") flagTransitionDrift(ctx, instance, spec, nowMs, correlationId, drift);
+}
+
+// A readiness transition found a retired, unsupported or changed identity: the row is flagged for
+// recovery with the classified marker and its hint, the event carries the marker, and the request
+// is refused — the same shape provisioning's activation gives the same finding.
+function flagTransitionDrift(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  spec: DirectTransitionSpec,
+  nowMs: number,
+  correlationId: string | undefined,
+  drift: ManagedIdentityDrift,
+): never {
+  const marker = managedIdentityDriftMarker(drift);
+  const drifted = ctx.deps.store.upsert({
+    ...instance,
+    lifecycleState: "recovery-required",
+    health: marker === "worktree-missing" ? "missing" : "drifted",
+    lock: null,
+    updatedAt: isoFrom(nowMs),
+    driftMarkers: [marker],
+    recoveryHints: planWorkspaceRecoveryHints([marker]),
+  });
+  emit(ctx, {
+    operation: spec.operation,
+    outcome: "retry-required",
+    type: "drift-detected",
+    instance: drifted,
+    fromState: instance.lifecycleState,
+    nowMs,
+    correlationId,
+    errorCode: "POINTER_DRIFT",
+    driftMarker: marker,
+  });
+  throw new TaskWorkspaceError("POINTER_DRIFT", managedIdentityDriftMessage(drift));
 }
 
 function activeIdentityAvailable(ctx: LifecycleCtx, instance: WorkspaceInstance): boolean {
@@ -210,7 +358,7 @@ function runDirectTransition(
   assertSafeFieldValue(request.requestedBy, "requestedBy");
   const instance = loadInstance(ctx, request.workspaceId);
   const nowMs = ctx.deps.now();
-  const context = resolveTransitionContext(ctx, instance, request.requestedBy, nowMs);
+  const context = admitTransition(ctx, instance, spec, request, nowMs);
   const validation = validateTaskWorkspaceTransition({
     from: instance.lifecycleState,
     to: spec.to,
@@ -300,7 +448,10 @@ async function setActiveImpl(
   return { instance: result.instance, binding: result.binding, pointer };
 }
 
-function getActiveImpl(ctx: LifecycleCtx): ActiveWorkspaceView | undefined {
+function getActiveImpl(
+  ctx: LifecycleCtx,
+  correlationId: string | undefined,
+): ActiveWorkspaceView | undefined {
   const pointer = ctx.deps.activePointerStore.get();
   if (pointer === undefined) return undefined;
   const instance = ctx.deps.store.getById(pointer.workspaceId);
@@ -310,7 +461,7 @@ function getActiveImpl(ctx: LifecycleCtx): ActiveWorkspaceView | undefined {
     ctx.deps.activePointerStore.clear();
     return undefined;
   }
-  if (!canExposeBinding(ctx, instance)) {
+  if (!exposableOrThrow(ctx, instance, correlationId)) {
     ctx.deps.activePointerStore.clear();
     return undefined;
   }
@@ -351,6 +502,7 @@ const PAUSE_SPEC: DirectTransitionSpec = {
   outcome: "paused",
   eventType: "paused",
   clearPointerIfActive: true,
+  requiresIdentityProof: false,
 };
 
 const HANDOFF_SPEC: DirectTransitionSpec = {
@@ -359,6 +511,7 @@ const HANDOFF_SPEC: DirectTransitionSpec = {
   outcome: "handoff-prepared",
   eventType: "handoff-prepared",
   clearPointerIfActive: false,
+  requiresIdentityProof: true,
 };
 
 function runLoggedSetActive(
@@ -416,7 +569,8 @@ export function createWorkspaceLifecycleService(
   const ctx: LifecycleCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
   return {
     list: (repositoryRoot: string): readonly WorkspaceInstance[] => listImpl(ctx, repositoryRoot),
-    getActive: (): ActiveWorkspaceView | undefined => getActiveImpl(ctx),
+    getActive: (correlationId?: string): ActiveWorkspaceView | undefined =>
+      getActiveImpl(ctx, correlationId),
     setActive: (request: SetActiveWorkspaceRequest): Promise<ActiveWorkspaceView> =>
       runLoggedSetActive(ctx, request),
     clearActive: (): void => {

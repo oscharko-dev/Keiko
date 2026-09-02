@@ -163,8 +163,40 @@ describe("fanOutClientDiagnostic", () => {
     }
 
     expect(fetchMock).toHaveBeenCalledTimes(20);
-    expect(consoleWarn).toHaveBeenCalledTimes(21);
+    // 21 diagnostics reach the console, plus ONE throttle notice for the dropped POST — a throttled
+    // drop must not be silent (#3376 review).
+    expect(consoleWarn).toHaveBeenCalledTimes(22);
+    expect(consoleWarn).toHaveBeenLastCalledWith(
+      expect.stringContaining("diagnostic delivery to the server is throttled"),
+    );
     expect(clientDiagnosticPostThrottledCount()).toBe(1);
+  });
+
+  it("writes the throttle notice once per throttled window, not once per process", () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse()));
+    const now = vi.spyOn(Date, "now");
+    const throttleNotices = (): number =>
+      consoleWarn.mock.calls.filter(([message]) =>
+        String(message).includes("diagnostic delivery to the server is throttled"),
+      ).length;
+
+    now.mockReturnValue(1_700_000_000_000);
+    for (let index = 0; index < 22; index += 1) {
+      fanOutClientDiagnostic(`first window ${String(index)}`);
+    }
+    // Two drops in the first window share ONE notice.
+    expect(clientDiagnosticPostThrottledCount()).toBe(2);
+    expect(throttleNotices()).toBe(1);
+
+    // The limiter resets after a minute; a burst in the next window must leave its own trace
+    // (#3376 review) — a process-lifetime "first drop" check would stay silent here.
+    now.mockReturnValue(1_700_000_000_000 + 60_000);
+    for (let index = 0; index < 21; index += 1) {
+      fanOutClientDiagnostic(`second window ${String(index)}`);
+    }
+    expect(clientDiagnosticPostThrottledCount()).toBe(3);
+    expect(throttleNotices()).toBe(2);
   });
 });
 

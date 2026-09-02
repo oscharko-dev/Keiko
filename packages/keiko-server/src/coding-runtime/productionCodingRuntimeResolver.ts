@@ -81,6 +81,7 @@ import {
 } from "./codingToolApprovalBridge.js";
 import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCatalog.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
+import { isIdentityProofFailure } from "../task-workspace/errors.js";
 
 type MintedRuntime = Extract<CodingRuntimeMintResult, { readonly ok: true }>;
 type LaunchMaterial = Omit<
@@ -556,9 +557,19 @@ function createBackendRun({
       () => runtimeNow(input),
     ),
     onRuntimeEvent,
-    workspaceIsCurrent: () =>
-      input.workspaceAuthority.workspaceLifecycle.getActive()?.instance.workspaceId ===
-      context.workspaceId,
+    // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) reads as "not
+    // current": the runtime must not keep acting on a workspace the product cannot verify.
+    workspaceIsCurrent: (): boolean => {
+      try {
+        return (
+          input.workspaceAuthority.workspaceLifecycle.getActive()?.instance.workspaceId ===
+          context.workspaceId
+        );
+      } catch (error) {
+        if (isIdentityProofFailure(error)) return false;
+        throw error;
+      }
+    },
     resolveWorkspaceRootAccess,
   });
   validateBackendLaunch(backend.launch, context);
