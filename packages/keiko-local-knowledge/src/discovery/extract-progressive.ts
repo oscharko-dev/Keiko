@@ -52,7 +52,7 @@ import {
   insertParsedUnitRow,
   updateDocumentStatusRow,
 } from "./persist.js";
-import { documentIdFor, type ExtractionResult } from "./types.js";
+import { documentIdFor, type DiscoveryErrorCode, type ExtractionResult } from "./types.js";
 import type { ExtractDocumentDeps, ExtractDocumentParams } from "./extract.js";
 import { redactDiagnosticMessage } from "../privacy/diagnostic-redactor.js";
 
@@ -292,6 +292,31 @@ function parserFailureDiagnostic(documentId: DocumentId): ParserDiagnostic {
   );
 }
 
+// A read left the generation the extraction pinned before its first byte. Exported because the pin
+// is established in extract.ts's progressive source while the failure it produces is persisted
+// here; the two modules must agree on the type, and this direction is the existing import edge.
+//
+// It is a distinct class on purpose. A pin break is a property of the SOURCE — the file was
+// replaced under an in-flight extraction — and it can surface from a hash chunk OR from a parser
+// window. Mapping only the hash path and letting the parser path fall into the generic
+// parser-failure catch below records a healthy document as MALFORMED_INPUT and destroys the only
+// evidence that a replacement happened.
+export class PinnedGenerationChangedError extends Error {
+  public constructor() {
+    super("selected file changed during range read");
+    this.name = "PinnedGenerationChangedError";
+  }
+}
+
+function pinnedGenerationChangedDiagnostic(documentId: DocumentId): ParserDiagnostic {
+  return parserDiagnostic(
+    LARGE_DOCUMENT_DIAGNOSTIC_CODES.SOURCE_CHANGED_DURING_EXTRACTION,
+    "selected file changed while the extraction read it; no window from another generation was persisted",
+    documentId,
+    "error",
+  );
+}
+
 function multimodalCapabilityDiagnostic(documentId: DocumentId): ParserDiagnostic {
   return parserDiagnostic(
     LARGE_DOCUMENT_DIAGNOSTIC_CODES.MULTIMODAL_CAPABILITY_UNAVAILABLE,
@@ -516,13 +541,26 @@ function insertProgressiveFailureRows(
   return redactedDiagnostic;
 }
 
+// What ended a progressive extraction, carried as one value so the persisted diagnostic and the
+// returned DiscoveryError describe the SAME cause. A parser that rejects the document and a source
+// that was replaced under the parser are different failures and must not share a classification.
+interface ProgressiveFailure {
+  readonly diagnostic: ParserDiagnostic;
+  readonly code: DiscoveryErrorCode;
+}
+
+function parserFailure(diagnostic: ParserDiagnostic): ProgressiveFailure {
+  return { diagnostic, code: "PARSER_FAILED" };
+}
+
 function progressiveFailureResult(
   deps: SinkDeps,
   params: ExtractDocumentParams,
   extractor: ProgressiveExtractor,
   contentHash: string,
-  diagnostic: ParserDiagnostic,
+  failure: ProgressiveFailure,
 ): ExtractionResult {
+  const { diagnostic } = failure;
   const document = progressiveDocumentRecord(
     params,
     deps.documentId,
@@ -539,7 +577,7 @@ function progressiveFailureResult(
       kind: "failed",
       document,
       error: {
-        code: "PARSER_FAILED",
+        code: failure.code,
         message: diagnostic.message,
         relativePath: params.file.relativePath,
       },
@@ -554,7 +592,7 @@ function persistProgressiveFailure(
   extractor: ProgressiveExtractor,
   contentHash: string,
   state: SinkState,
-  diagnostic: ParserDiagnostic,
+  failure: ProgressiveFailure,
 ): ExtractionResult {
   const redactedDiagnostic = insertProgressiveFailureRows(
     deps,
@@ -562,9 +600,12 @@ function persistProgressiveFailure(
     extractor,
     contentHash,
     state,
-    diagnostic,
+    failure.diagnostic,
   );
-  return progressiveFailureResult(deps, params, extractor, contentHash, redactedDiagnostic);
+  return progressiveFailureResult(deps, params, extractor, contentHash, {
+    ...failure,
+    diagnostic: redactedDiagnostic,
+  });
 }
 
 function extractionOptionsFor(
@@ -730,7 +771,7 @@ function retryExceededPlan(options: RetryExceededPlanOptions): ExistingCheckpoin
       extractor,
       contentHash,
       state,
-      retryLimitDiagnostic(provisional.documentId),
+      parserFailure(retryLimitDiagnostic(provisional.documentId)),
     ),
   };
 }
@@ -807,21 +848,42 @@ function persistProgressiveStartup(
   }
 }
 
+// The window reads below are pinned to one file generation, so this catch has to tell the two
+// failure causes apart: the parser rejecting the document, and the document being replaced under
+// the parser. Both end the extraction, but they are diagnosed — and acted on — differently.
+type ProgressiveRunOutcome =
+  | { readonly kind: "summary"; readonly summary: ProgressiveExtractionSummary }
+  | { readonly kind: "failed"; readonly pinnedGenerationChanged: boolean };
+
+// A pin break gets the SAME classification the hash path already returns for this cause: the file
+// left the pinned generation, which is a read-surface failure, not a malformed document.
+function progressiveRunFailure(
+  pinnedGenerationChanged: boolean,
+  documentId: DocumentId,
+): ProgressiveFailure {
+  if (!pinnedGenerationChanged) return parserFailure(parserFailureDiagnostic(documentId));
+  return { diagnostic: pinnedGenerationChangedDiagnostic(documentId), code: "READ_FAILED" };
+}
+
 async function tryRunProgressiveExtraction(
   extractor: ProgressiveExtractor,
   source: ProgressiveExtractionSource,
   options: ProgressiveExtractionOptions,
   sinkDeps: SinkDeps,
   state: SinkState,
-): Promise<ProgressiveExtractionSummary | undefined> {
+): Promise<ProgressiveRunOutcome> {
   try {
-    return await runProgressiveExtraction(extractor, source, options, {
+    const summary = await runProgressiveExtraction(extractor, source, options, {
       onWindow: (window): void => {
         persistWindow(sinkDeps, state, window);
       },
     });
-  } catch {
-    return undefined;
+    return { kind: "summary", summary };
+  } catch (cause) {
+    return {
+      kind: "failed",
+      pinnedGenerationChanged: cause instanceof PinnedGenerationChangedError,
+    };
   }
 }
 
@@ -979,7 +1041,7 @@ async function runPlannedProgressiveExtraction(
   plan: ExistingCheckpointPlan,
 ): Promise<ExtractionResult> {
   persistProgressiveStartup(sinkDeps, params, extractor, contentHash, plan);
-  const summary = await tryRunProgressiveExtraction(
+  const outcome = await tryRunProgressiveExtraction(
     extractor,
     source,
     extractionOptionsFor(
@@ -993,14 +1055,14 @@ async function runPlannedProgressiveExtraction(
     sinkDeps,
     plan.state,
   );
-  if (summary === undefined) {
+  if (outcome.kind === "failed") {
     return persistProgressiveFailure(
       sinkDeps,
       params,
       extractor,
       contentHash,
       plan.state,
-      parserFailureDiagnostic(sinkDeps.documentId),
+      progressiveRunFailure(outcome.pinnedGenerationChanged, sinkDeps.documentId),
     );
   }
   return finalizeProgressiveSuccess(
@@ -1010,7 +1072,7 @@ async function runPlannedProgressiveExtraction(
     contentHash,
     extractor,
     plan,
-    summary,
+    outcome.summary,
   );
 }
 

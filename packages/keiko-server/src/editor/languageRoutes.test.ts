@@ -478,6 +478,62 @@ describe("GET /api/editor/language/capabilities", () => {
       await rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  // Reading capabilities warms the managed pool, so it re-proves root authority exactly like the
+  // diagnostics and semantic-token routes. It previously answered 200 with an empty descriptor
+  // list, which is the same body a workspace with no managed language server returns — a client
+  // could not tell a revoked root from an unconfigured one.
+  it("refuses with 403 DENIED when root authority is revoked during the managed control read", async () => {
+    const stateDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-caps-revoked-state-")));
+    try {
+      let granted = true;
+      const managedLspControl = createManagedLspControlService({
+        store: createManagedLspActivationStore({ stateDir }),
+        processEnv: {},
+        provisioning: () => true,
+        disposePoolEntry: () => Promise.resolve(),
+        workspaceTrust: () => "trusted",
+        runtimeApproved: () => true,
+        configurationSafe: () => true,
+        projectEvidence: () => "projected",
+        mutex: createWorkspaceMutexRegistry(),
+      });
+      const revokingDeps = {
+        ...deps(),
+        managedLspControl: {
+          ...managedLspControl,
+          // Revocation lands in the awaited window the route opens: the snapshot is the real one,
+          // and authority is gone by the time the descriptors would be built.
+          read: async (requestedRoot: string): Promise<ManagedLspControlSnapshot | undefined> => {
+            const snapshot = await managedLspControl.read(requestedRoot);
+            granted = false;
+            return snapshot;
+          },
+        },
+        workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+          granted ? grantedOrdinaryAccess(requestedRoot) : { decision: "denied" },
+      } as unknown as UiHandlerDeps;
+      const admitted: ResolvedProjectRoot = {
+        root,
+        realRoot: root,
+        access: { kind: "ordinary", canonicalRoot: root, fs: nodeWorkspaceFs },
+      };
+      const context = getContext(
+        `/api/editor/language/capabilities?root=${encodeURIComponent(root)}`,
+      );
+
+      const result = await handleEditorLanguageCapabilitiesForRoute(context, revokingDeps, {
+        // The production seam, not a stand-in: the closure the route builds for itself.
+        reproveRootAccess: requestRootAccessResolver(context, revokingDeps, admitted),
+      });
+
+      expect(result.status).toBe(403);
+      expect(result.body).toMatchObject({ error: { code: "DENIED" } });
+      expect(JSON.stringify(result.body)).not.toContain(root);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("POST /api/editor/language", () => {

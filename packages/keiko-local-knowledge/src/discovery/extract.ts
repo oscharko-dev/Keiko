@@ -73,6 +73,7 @@ import {
 } from "../document-blob-store.js";
 import {
   extractDocumentProgressive,
+  PinnedGenerationChangedError,
   selectProgressiveExtractor,
   type ProgressiveExtractContext,
 } from "./extract-progressive.js";
@@ -894,15 +895,6 @@ interface PinnedProgressiveSource {
   // Whether the requested path still resolves to the pinned generation with an unchanged snapshot.
   readonly isPinnedGenerationCurrent: () => boolean;
   readonly close: () => Promise<void>;
-}
-
-// A window read left the pinned generation. Typed so the failure the caller persists names the pin
-// rather than flattening into the generic read failure — the two are diagnosed differently.
-class PinnedGenerationChangedError extends Error {
-  public constructor() {
-    super("selected file changed during range read");
-    this.name = "PinnedGenerationChangedError";
-  }
 }
 
 function pinnedGenerationCurrent(

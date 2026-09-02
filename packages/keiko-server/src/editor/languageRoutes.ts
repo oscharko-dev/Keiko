@@ -703,9 +703,13 @@ async function managedDescriptorsForRoute(
   if (snapshot === undefined) return [];
   // Reading capabilities deliberately WARMS the pool (it may start a managed provider below), so
   // the authority admitted before this control read has to still hold here.
+  //
+  // A revoked root refuses with the SAME 403 DENIED the diagnostics and semantic-token routes
+  // raise. Returning an empty descriptor list instead would answer 200 and make a governance
+  // denial indistinguishable from a workspace that simply has no managed language server.
   if (!rootAuthorityHolds(deps, realRoot, options)) {
     await evictManagedLspProcessesForRoot(realRoot);
-    return [];
+    throw denied();
   }
   const health =
     options.listManagedHealthSnapshots?.(realRoot) ?? listHostLspHealthSnapshotsForRoot(realRoot);

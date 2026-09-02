@@ -426,6 +426,36 @@ describe("extractDocument — progressive extraction is pinned to one file gener
     expect(rowCount("document_text_windows")).toBe(0);
   });
 
+  // A pin break can surface from a PARSER window, not only from a hash chunk. Both are the same
+  // cause — the file left the pinned generation — so both must be classified as a read-surface
+  // failure. Flattening the parser path into the generic parser catch recorded a healthy document
+  // as MALFORMED_INPUT/PARSER_FAILED and destroyed the only evidence a replacement had happened.
+  // The permissive port is what puts the break inside the parser: it serves the replaced bytes, so
+  // the refusal can only come from the extraction revalidating its own pin.
+  it("names the pin, not the parser, when the replacement lands between two parser windows", async () => {
+    const harness = replacingFs({
+      replaceAfterRead: 3,
+      holdDescriptor: false,
+      ignoresExpectedIdentity: true,
+    });
+    const result = await runExtraction(harness.fs);
+
+    expect(harness.replaced()).toBe(true);
+    expect(result.outcome.kind).toBe("failed");
+    if (result.outcome.kind !== "failed") return;
+    expect(result.outcome.error.code).toBe("READ_FAILED");
+    expect(result.outcome.error.message).toBe(
+      "selected file changed while the extraction read it; no window from another generation was persisted",
+    );
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      "SOURCE_CHANGED_DURING_EXTRACTION",
+    );
+    expect(documentRow()?.status).toBe("failed");
+    // The window read before the replacement came from the pinned generation, and the window that
+    // would have carried generation B was refused — so nothing from B was persisted.
+    expect(rowCount("document_text_windows")).toBe(1);
+  });
+
   it("fails closed when the requested path can no longer be stat'ed", async () => {
     const harness = replacingFs({ holdDescriptor: false });
     const result = await runExtraction(withFailingStat(harness.fs));
