@@ -1558,6 +1558,37 @@ describe("mint-time creation-time probe", () => {
     ]);
   });
 
+  // An I/O failure inside the probe is the retryable IDENTITY_PROOF_FAILED, like every other proof
+  // that could not run: the row is recovery-required with health unknown and no drift marker, and
+  // the worktree this call created is rolled back (#3376 review).
+  it("classifies a probe I/O failure as IDENTITY_PROOF_FAILED and rolls the mint back", async () => {
+    const probeFailure = new Error("EIO: input/output error");
+    const service = makeService(undefined, undefined, undefined, () => {
+      throw probeFailure;
+    });
+
+    await expect(
+      service.provision({
+        repositoryRequestPath: repoRoot,
+        taskId: "t-mint-probe-io",
+        baseBranch: "main",
+        requestedBy: "u",
+        correlationId: "mint-probe-0005",
+      }),
+    ).rejects.toMatchObject({ code: "IDENTITY_PROOF_FAILED", cause: probeFailure });
+
+    const row = store
+      .listByRepository(deriveRepositoryId(repoRoot))
+      .find((candidate) => candidate.taskId === "t-mint-probe-io");
+    expect(row).toMatchObject({
+      lifecycleState: "recovery-required",
+      health: "unknown",
+      driftMarkers: [],
+      lock: null,
+    });
+    expect(existsSync(row?.managedWorktreePath ?? "")).toBe(false);
+  });
+
   it("mints on a durable root and records the probe verdict", async () => {
     const activityLog = createBufferedServerLogSink();
     const service = makeService(undefined, undefined, activityLog);

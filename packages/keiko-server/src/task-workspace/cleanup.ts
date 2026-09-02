@@ -15,7 +15,7 @@
 // lifecycle evidence as provisioning/reconciliation/repair.
 
 import { existsSync, readdirSync, realpathSync, rmSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import type {
   TaskWorkspaceLifecycleState,
@@ -42,6 +42,7 @@ import { assertSafeFieldValue } from "./field-safety.js";
 import { gatherInstanceReconciliationFacts } from "./reconciliation.js";
 import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
+import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { TaskWorkspaceError } from "./errors.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import {
@@ -407,11 +408,29 @@ async function removeManagedWorktree(
       if (!probe.proven) return { removed: false, refusalReason: "ownership-unproven" };
       safelyRemoveManagedPath(ctx.deps.managedRoot, worktreePath);
     }
+    // git exited nonzero after the directory was gone (or never existed): the removal is complete
+    // only once git no longer lists the worktree, or the row would be deleted over partial admin
+    // metadata that prune could not clear — a locked entry, for one (#3376 review). The row stays
+    // in cleanup-pending for a retry.
+    if (!removal.ok && (await stillRegistered(adapter, worktreePath))) {
+      throw new TaskWorkspaceError(
+        "CLEANUP_FAILED",
+        "git did not release the worktree registration",
+      );
+    }
     return { removed: true };
   } catch (error) {
     if (error instanceof TaskWorkspaceError) throw error;
     throw new TaskWorkspaceError("CLEANUP_FAILED", "governed worktree removal failed");
   }
+}
+
+async function stillRegistered(
+  adapter: GitWorktreeAdapter,
+  worktreePath: string,
+): Promise<boolean> {
+  const target = resolve(worktreePath);
+  return (await adapter.listWorktrees()).some((entry) => resolve(entry.path) === target);
 }
 
 function cleanupLock(ctx: CleanupCtx, requestedBy: string, nowMs: number): WorkspaceLock {

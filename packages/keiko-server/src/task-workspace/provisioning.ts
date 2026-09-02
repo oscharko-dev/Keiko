@@ -189,7 +189,20 @@ function proveIdentityVolumes(
   correlationId: string | undefined,
 ): void {
   const prove = ctx.deps.proveCreationTimeSupport ?? proveCreationTimeSupport;
-  const support = prove(ctx.deps.managedRoot, commonDirectory);
+  let support: ProvenCreationTimeSupport;
+  try {
+    support = prove(ctx.deps.managedRoot, commonDirectory);
+  } catch (cause) {
+    // The probe reads and writes both volumes; an I/O failure there says nothing about the
+    // identity and is the same retryable, non-destructive outcome every other proof path
+    // classifies (#3376 review).
+    throw new TaskWorkspaceError(
+      "IDENTITY_PROOF_FAILED",
+      "managed worktree creation-time proof failed",
+      [],
+      { cause },
+    );
+  }
   logWorkspaceIdentityProbe(ctx.deps, { correlationId, support });
   // Only PROVEN durable volumes mint: the managed root by probe, the repository read-only (its
   // metadata is a user's data; nothing is written there) or shared with the managed root. An

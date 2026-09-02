@@ -864,6 +864,77 @@ describe("removal re-checks cleanliness through git, never --force", () => {
     expect(existsSync(replacementPointer)).toBe(true);
     expect(store.getById(instance.workspaceId)).toBeDefined();
   });
+
+  // A nonzero git exit with the directory already gone is not a completed cleanup by itself: the
+  // row may only be deleted once git no longer lists the worktree, or partial admin metadata that
+  // prune could not clear would be orphaned behind a deleted row (#3376 review).
+  it("completes a nonzero removal only when git no longer lists the worktree", async () => {
+    const instance = await provisionTask("t-nonzero-removed");
+    setState(instance, "cleanup-pending");
+    const nonzeroAfterRemoval: AdapterFactory = (workspace, correlationId, fs) => {
+      const real = realAdapter(workspace, correlationId, fs);
+      return {
+        ...real,
+        removeWorktree: async (operands): Promise<WorktreeOperationResult> => {
+          const removal = await real.removeWorktree(operands);
+          expect(existsSync(operands.worktreePath)).toBe(false);
+          // The directory and the registration are gone; git still reported a failure.
+          return { ...removal, ok: false, exitCode: 1 };
+        },
+      };
+    };
+
+    const result = await cleanup(store, nonzeroAfterRemoval).cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(store.getById(instance.workspaceId)).toBeUndefined();
+    expect(git(["worktree", "list", "--porcelain"])).not.toContain(instance.managedWorktreePath);
+  });
+
+  it("keeps the row when git exits nonzero and still lists the worktree after prune", async () => {
+    const instance = await provisionTask("t-nonzero-registered");
+    setState(instance, "cleanup-pending");
+    const registrationKept: AdapterFactory = (workspace, correlationId, fs) => {
+      const real = realAdapter(workspace, correlationId, fs);
+      return {
+        ...real,
+        removeWorktree: (operands): Promise<WorktreeOperationResult> => {
+          // A locked entry survives `git worktree prune`; the directory vanished regardless.
+          git(["worktree", "lock", operands.worktreePath]);
+          rmSync(operands.worktreePath, { recursive: true, force: true });
+          return Promise.resolve({
+            ok: false,
+            exitCode: 128,
+            durationMs: 0,
+            timedOut: false,
+            truncated: false,
+          });
+        },
+      };
+    };
+
+    await expect(
+      cleanup(store, registrationKept).cleanup({
+        workspaceId: instance.workspaceId,
+        requestedBy: "u",
+        operatorApproved: true,
+        mode: "complete",
+      }),
+    ).rejects.toMatchObject({ code: "CLEANUP_FAILED" });
+
+    expect(store.getById(instance.workspaceId)).toMatchObject({
+      lifecycleState: "cleanup-pending",
+    });
+    expect(git(["worktree", "list", "--porcelain"])).toContain(instance.managedWorktreePath);
+    expect(evidence.some((entry) => parseEvent(entry.json).outcome === "cleanup-completed")).toBe(
+      false,
+    );
+  });
 });
 
 describe("cleanup approval + eligibility gates", () => {
