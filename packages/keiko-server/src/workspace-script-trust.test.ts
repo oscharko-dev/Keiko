@@ -85,13 +85,28 @@ function isMutatedBinding(value: unknown): value is MutatedBinding {
     typeof value.manifestRevision === "number"
   );
 }
-// Wrap the two-step realpath+inspect chain so the intermediate `string` type is explicit at the
+// Wraps the two-step realpath+inspect chain so the intermediate `string` type is explicit at the
 // call site. Even though nodeWorkspaceFs.realPath is typed by @oscharko-dev/keiko-workspace,
-// type-aware ESLint's no-unsafe-* rules can surface `error`-typed views of an isolated call —
-// the local binding pins the type and keeps the callers unambiguous.
-function identityDigestFor(fsPath: string): string {
+// type-aware ESLint's no-unsafe-* rules can surface `error`-typed views of an isolated call — the
+// local binding pins the type and keeps the callers unambiguous.
+/**
+ * The proof that a replacement really produced a DIFFERENT filesystem object.
+ *
+ * Not `identityDigest`: that is `H(path, dev, ino, mode, uid)`, and across a same-path replacement
+ * the path, device and uid are constant — so it reduces to `(ino, mode)`, which is the inode
+ * comparison with a permission bit bolted on rather than something stronger than it. Measured on
+ * Linux across 50 delete-and-recreate cycles: the inode is reused 50/50 in both cases, and the mode
+ * changes only because `mkdtempSync` creates at 0700 while `mkdirSync` inherits the umask. At
+ * `umask 022` the digest therefore changes for the permission bit alone; at `umask 077` it is
+ * unchanged 50/50 and the proof-of-swap assertion fails deterministically ON A CORRECT PRODUCT, for
+ * every developer or image with a hardened umask.
+ *
+ * `objectIdentityDigest` is `H(dev, ino, birthtimeNs)`. Creation time is what a recreated directory
+ * cannot inherit, so this holds on any umask.
+ */
+function objectIdentityDigestFor(fsPath: string): string | undefined {
   const canonical: string = nodeWorkspaceFs.realPath(fsPath);
-  return inspectWorkspaceRootIdentity(canonical).identityDigest;
+  return inspectWorkspaceRootIdentity(canonical).objectIdentityDigest;
 }
 
 // A store whose project is registered under `projectPath` verbatim, for the cases that need the
@@ -614,16 +629,16 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     const trust = createWorkspaceScriptTrustService({ store });
     trust.grant(root);
     expect(typecheckTrustState(trust)).toBe("trusted");
-    // Use the SUT's own identity digest as the proof-of-swap. Inode comparison is unreliable on
-    // ext4 (recycled after rmSync+mkdirSync), while identityDigest is the same key the trust
-    // decision compares — if it changes, the SUT is guaranteed to observe a different object.
-    const originalIdentityDigest = identityDigestFor(root);
+    // Proof of swap, on the one key a recreated directory cannot reproduce: creation time. See
+    // objectIdentityDigestFor — the path/mode digest reduces to (inode, mode) here and is unchanged
+    // under a hardened umask, which would make this row a deterministic false red.
+    const originalObjectIdentity = objectIdentityDigestFor(root);
+    expect(originalObjectIdentity).toBeDefined();
 
     rmSync(root, { recursive: true, force: true });
-    mkdirSync(root, { recursive: true });
+    mkdirSync(root, { recursive: true, mode: 0o700 });
     writeFileSync(join(root, "package.json"), MANIFEST, "utf8");
-    const newIdentityDigest = identityDigestFor(root);
-    expect(newIdentityDigest).not.toBe(originalIdentityDigest);
+    expect(objectIdentityDigestFor(root)).not.toBe(originalObjectIdentity);
 
     expect(typecheckTrustState(trust)).toBe("approval-required");
     const row = store.readWorkspaceTrustRecord(rootReference());
@@ -706,11 +721,14 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
       expect(trust.grant(bare)).toEqual({ trusted: true });
       expect(trust.trustLevelForRoot(bare)).toBe("trusted");
 
-      const originalIdentityDigest = identityDigestFor(bare);
+      // Same proof-of-swap key as the sibling row, and for the same reason: the path/mode digest is
+      // unchanged under a hardened umask and would fail here on a correct product.
+      const originalObjectIdentity = objectIdentityDigestFor(bare);
+      expect(originalObjectIdentity).toBeDefined();
       rmSync(bare, { recursive: true, force: true });
-      mkdirSync(bare, { recursive: true });
+      mkdirSync(bare, { recursive: true, mode: 0o700 });
       // Still no package.json: the basis stays `absent` across the swap, which is the whole point.
-      expect(identityDigestFor(bare)).not.toBe(originalIdentityDigest);
+      expect(objectIdentityDigestFor(bare)).not.toBe(originalObjectIdentity);
 
       expect(trust.trustLevelForRoot(bare)).toBe("restricted");
       const row = store.readWorkspaceTrustRecord(bareRef);
