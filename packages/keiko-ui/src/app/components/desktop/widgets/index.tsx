@@ -23,9 +23,17 @@ import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
 import { workspaceRootTargets } from "../workspaceRootTargets";
 import { BoundRootTarget, type BoundRootSurfaceType } from "./BoundRootTarget";
 
+// Named, not just styled. A window body chunk and the chat bind that follows it both render a
+// "Loading…" placeholder, and while they were indistinguishable a stalled chunk, a stalled bind and a
+// bound-but-empty body all presented as the same absent locator — which is what made the grounded-ask
+// journey report a missing composer instead of the state it was actually stuck in.
 function WindowChunkFallback(): ReactNode {
   const t = useTranslate();
-  return <div className="lk-loading">{t("common.loading")}</div>;
+  return (
+    <output className="lk-loading" data-window-chunk="loading">
+      {t("common.loading")}
+    </output>
+  );
 }
 
 const windowChunkFallback = WindowChunkFallback;

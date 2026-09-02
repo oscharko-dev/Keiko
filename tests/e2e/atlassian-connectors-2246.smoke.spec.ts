@@ -374,13 +374,35 @@ test.describe("Atlassian connectors cross-cutting @smoke", () => {
     test.use({ viewport: { width: 1280, height: 960 } });
 
     test("grounded ask cites synced connector content", async ({ page }) => {
+      // Parity with the sibling journey in this file: without it a chunk-load rejection or a
+      // hydration error in this path is swallowed and surfaces only as an absent locator.
+      const assertNoPageErrors = collectPageErrors(page);
       await seedGroundedChatWindow(page);
       await installGroundedStubs(page);
+      // The chat surface binds through a lazy chunk and a SEQUENTIAL session bootstrap, and every one
+      // of those requests is intercepted by installGroundedStubs — so each is a driver round trip
+      // rather than a loopback hop. Await them explicitly, or the whole bootstrap is charged to the
+      // budget of the single composer assertion below.
+      const bootstrapped = Promise.all(
+        ["/api/models", "/api/projects", "/api/chats", "/api/chats/messages"].map((pathname) =>
+          page.waitForResponse((response) => new URL(response.url()).pathname === pathname),
+        ),
+      );
       await page.goto("/");
+      await bootstrapped;
 
       // The seeded chat carries a connector pod scope, so the send auto-routes to the grounded path.
       const chat = page.getByRole("region", { name: `Chat — ${GROUNDED_CHAT.title}` });
       await expect(chat).toBeVisible();
+      // The region's accessible name is built from the SEEDED localStorage entry alone, so it is on
+      // screen before the chat chunk is fetched and before any response arrives — it says nothing
+      // about the chat being bound. The host renders one of these two placeholders continuously from
+      // the first paint of the frame until ChatWindow mounts, so their absence is the real readiness
+      // condition. Asserting it here makes a stalled bind fail AS a stalled bind, naming which of the
+      // two stages is stuck, instead of as a composer that was never found.
+      await expect(
+        chat.locator("[data-window-chunk='loading'], [data-chat-bind='opening']"),
+      ).toHaveCount(0);
       const composer = chat.getByRole("textbox", { name: "Chat message" });
       await expect(composer).toBeVisible();
       await composer.fill("How many approvals are needed?");
@@ -391,6 +413,7 @@ test.describe("Atlassian connectors cross-cutting @smoke", () => {
       await expect(
         chat.locator('ul.grounded-citations[aria-label="Knowledge citations"] .grounded-citation'),
       ).toContainText(CONNECTOR_CITATION_SOURCE);
+      assertNoPageErrors();
     });
   });
 });
