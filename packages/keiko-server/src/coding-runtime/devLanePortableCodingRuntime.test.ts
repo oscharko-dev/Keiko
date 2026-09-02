@@ -19,16 +19,17 @@ import {
   devLaneEnvEnabled,
   KEIKO_CODING_RUNTIME_DEV_LANE_ENV,
   type DevLaneOpenCodeDiscovery,
+  type DevLaneOpenCodeTarget,
 } from "./devLanePortableCodingRuntime.js";
 import { OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256 } from "./opencodeProtocolSurface.js";
 import { stageDevLaneFixture, type DevLaneFixture } from "./devLaneFixture/_support.js";
 
 const roots: string[] = [];
 
-function fixture(): DevLaneFixture {
+function fixture(target: DevLaneOpenCodeTarget = "macos-arm64"): DevLaneFixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-dev-lane-")));
   roots.push(root);
-  return stageDevLaneFixture(root);
+  return stageDevLaneFixture(root, target);
 }
 
 function discover(
@@ -100,10 +101,28 @@ describe("dev-lane OpenCode discovery", () => {
     });
   });
 
-  it("refuses every non-macOS platform and unknown architecture", () => {
+  it("activates Windows-x64 through the same verified dev lane", () => {
+    const staged = fixture("windows-x64");
+    const discovery = discover(staged, { platform: "win32", arch: "x64" });
+    expect(discovery.outcome).toBe("activated");
+    if (discovery.outcome !== "activated") return;
+    expect(discovery.runtime).toMatchObject({
+      target: "windows-x64",
+      qualification: { platform: "win32", arch: "x64", backend: "windows-job-object" },
+      secureRead: {
+        artifact: {
+          target: "win32-x64",
+          installRelativePath: "runtime/native/keiko-secure-workspace-read.exe",
+        },
+      },
+    });
+    expect(discovery.runtime.nativeHelperPath).toContain("keiko-runtime-supervisor.exe");
+  });
+
+  it("refuses unsupported platforms and unknown architectures", () => {
     const staged = fixture();
     expectRefusal(discover(staged, { platform: "linux" }), "platform-unsupported");
-    expectRefusal(discover(staged, { platform: "win32", arch: "x64" }), "platform-unsupported");
+    expectRefusal(discover(staged, { platform: "win32", arch: "arm64" }), "platform-unsupported");
     expectRefusal(discover(staged, { arch: "ppc64" }), "platform-unsupported");
     expect(discover(staged, { arch: "x64" })).toMatchObject({ outcome: "refused" });
   });

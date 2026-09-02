@@ -80,7 +80,7 @@ export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbe
  * How much evidence backs an AVAILABLE runtime. `platform-qualified` is the release-signed,
  * notarized/Authenticode-attested packaged artifact. `functional-not-platform-qualified` covers
  * every runtime whose integrity is proven by recomputed digests alone and that carries no platform
- * signature chain — the macOS dev lane (ADR-0140) and the packaged evaluation lane (ADR-0163 D9).
+ * signature chain — the supported dev lane (ADR-0140) and the packaged evaluation lane (ADR-0163 D9).
  */
 export type CodingWorkbenchRuntimeEvidenceClass =
   "platform-qualified" | "functional-not-platform-qualified";
@@ -614,7 +614,7 @@ function validateRuntimeUnavailableReason(value: Record<string, unknown>, errors
 /**
  * The exact mirror of the unavailable reason, bound to the AVAILABLE branch. Requiring it there is
  * the load-bearing half: an optional field whose absence reads as "verified" would let an
- * unverified evaluation runtime render as plain green.
+ * unverified runtime render as plain green.
  */
 function validateRuntimeEvidenceClass(value: Record<string, unknown>, errors: string[]): void {
   const evidenceClass = value.runtimeEvidenceClass;

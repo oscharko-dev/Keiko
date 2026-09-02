@@ -144,6 +144,7 @@ function schemaV2Fixture() {
   runtime.adapterCompatibility.transport = "http-sse";
   for (const archive of Object.values(runtime.archives)) {
     archive.executableTreeSha256 = "a".repeat(64);
+    archive.sbomSha256 = "b".repeat(64);
   }
   return approvals;
 }
@@ -247,6 +248,14 @@ describe("portable runtime approvals validation", () => {
     expect(summary.sidecarRuntimes).toContain("opencode-compatible");
   });
 
+  it("anchors the generated sidecar SBOM for every supported target", () => {
+    const approvals = loadPortableRuntimeApprovals(repoRoot);
+    const runtime = approvals.sidecarRuntimes[0];
+    for (const archive of Object.values(runtime.archives)) {
+      expect(archive.sbomSha256).toMatch(/^[a-f0-9]{64}$/u);
+    }
+  });
+
   it("rejects non-https and unapproved hosts", () => {
     const approvals = approvedFixture();
     approvals.node.archives["windows-x64"].url =
@@ -318,6 +327,12 @@ describe("prepare approved sidecar payloads", () => {
       sizeBytes: zip.length,
       executableTreeSha256: executableTreeSha256("opencode", binary),
     };
+    runtime.archives["macos-arm64"].sbomSha256 = sha256Hex(
+      Buffer.from(
+        `${JSON.stringify(sidecarSbomDocument(runtime, "macos-arm64", sha256Hex(binary)), null, 2)}\n`,
+        "utf8",
+      ),
+    );
     runtime.license = { ...runtime.license, sha256: sha256Hex(license) };
     return approvals;
   }
@@ -347,6 +362,21 @@ describe("prepare approved sidecar payloads", () => {
     expect(spec.platformTarget).toBe("macos-arm64");
     expect(spec.executablePath).toBe("bin/opencode");
     expect(spec.expectedPayloadSha256).toBe(hashDirectoryTree(payloadRoot));
+  });
+
+  it("refuses staging when the freshly generated SBOM is not the catalog-approved document", async () => {
+    const { archivePath, binary, licensePath, zip, license } = localInputs();
+    const approvals = approvalsForLocal(zip, license, binary);
+    approvals.sidecarRuntimes[0].archives["macos-arm64"].sbomSha256 = "0".repeat(64);
+    const fakeRepoRoot = fixtureRepoRoot(approvals);
+
+    await expect(
+      prepareApprovedSidecarPayloadsForTest(
+        ["--target", "macos-arm64", "--output-root", join(tempRoot(), "out")],
+        { archivePath, licensePath },
+        fakeRepoRoot,
+      ),
+    ).rejects.toThrow(/generated sidecar SBOM digest does not match approved catalog/u);
   });
 
   it("fails closed on digest mismatch and multi-entry archives", async () => {

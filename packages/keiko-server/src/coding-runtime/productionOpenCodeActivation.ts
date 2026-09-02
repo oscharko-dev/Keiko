@@ -70,7 +70,7 @@ export type ProductionOpenCodeActivationResult =
 
 /**
  * Assembles the production OpenCode runtime ports from a discovered runtime: the attested
- * packaged portable artifact where one exists, otherwise the explicitly opted-in macOS dev-lane
+ * packaged portable artifact where one exists, otherwise the explicitly opted-in supported dev-lane
  * payload. Every prerequisite is mandatory; the first missing one names the content-free
  * unavailability reason and keeps the runtime host unqualified and the Code surface unavailable.
  */
@@ -116,7 +116,7 @@ export function resolveProductionOpenCodeActivation(
 /**
  * The single junction where all three runtime union members converge into ports, and therefore the
  * one place the readiness evidence class is derived. ONLY the release-signed packaged artifact is
- * platform-qualified; the packaged evaluation lane, the macOS dev lane and the functional-harness
+ * platform-qualified; the packaged evaluation lane, supported dev lane and functional-harness
  * stand-in all report the honest weaker class (ADR-0140 D1, ADR-0163 D9).
  */
 function runtimeEvidenceClass(

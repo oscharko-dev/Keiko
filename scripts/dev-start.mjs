@@ -348,7 +348,7 @@ export async function codingRuntimeHealth(baseUrl, fetchFn = globalThis.fetch) {
     // beside the status instead.
     return body?.runtimeEvidenceClass === "platform-qualified"
       ? "ok"
-      : "ok · unverified evaluation runtime (no platform signature)";
+      : "ok · local runtime integrity verified (no platform signature)";
   }
   const reason =
     typeof body?.runtimeUnavailableReason === "string"
@@ -367,10 +367,10 @@ function healthError(name, error) {
 }
 
 // Exported for test: the gate that consumes codingRuntimeHealth. It went untested, which is how an
-// honest status string could break every macOS `dev:start` while the suite stayed green.
+// honest status string could break every supported `dev:start` while the suite stayed green.
 export async function requiredRuntimeHealth(baseUrl, required = codingRuntimeRequired()) {
   // `required` is a parameter so the gate is assertable on any host: codingRuntimeRequired() is
-  // true only where a dev-lane target exists (darwin), so a test that let it default would take
+  // true only where a dev-lane target exists, so a test that let it default would take
   // the short-circuit on Linux CI and pass without ever reaching the code under test.
   if (!required) return "ok";
   try {

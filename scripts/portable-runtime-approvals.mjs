@@ -88,7 +88,7 @@ function validateApprovedUrl(rawUrl, allowedHosts, context) {
 
 function validateArchiveEntry(entry, allowedHosts, context, sidecar) {
   const keys = sidecar
-    ? ["url", "sha256", "sizeBytes", "executableName", "executableTreeSha256"]
+    ? ["url", "sha256", "sizeBytes", "executableName", "executableTreeSha256", "sbomSha256"]
     : ["url", "sha256"];
   exactKeys(entry, keys, context);
   const result = {
@@ -116,6 +116,10 @@ function validateArchiveEntry(entry, allowedHosts, context, sidecar) {
     executableTreeSha256: validateSha256(
       requiredString(entry, "executableTreeSha256", context),
       `${context}.executableTreeSha256`,
+    ),
+    sbomSha256: validateSha256(
+      requiredString(entry, "sbomSha256", context),
+      `${context}.sbomSha256`,
     ),
   };
 }

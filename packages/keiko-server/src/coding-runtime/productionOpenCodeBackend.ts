@@ -380,7 +380,9 @@ function runtimeSupervisor(
   if (input.createSupervisor) {
     return input.createSupervisor({ workspaceRoot, portable: input.portable });
   }
-  if (isDevLaneRuntime(input.portable)) return appSandboxSupervisor(input.portable);
+  if (isDevLaneRuntime(input.portable)) {
+    return devLaneSupervisor(input.portable, workspaceRoot);
+  }
   if (isEvaluationLaneRuntime(input.portable) && input.portable.target !== "windows-x64") {
     return appSandboxSupervisor(input.portable);
   }
@@ -395,11 +397,29 @@ function runtimeSupervisor(
   });
 }
 
+function devLaneSupervisor(
+  portable: DevLanePortableOpenCodeRuntime,
+  workspaceRoot: string,
+): RuntimeProcessSupervisor {
+  if (portable.target !== "windows-x64") return appSandboxSupervisor(portable);
+  if (portable.nativeHelperPath === undefined) throw new Error("dev-lane-supervisor-missing");
+  return createRuntimeProcessSupervisor({
+    backend: createNativeRuntimeProcessBackend({
+      helperPath: portable.nativeHelperPath,
+      runtimeRoots: [join(portable.installRoot, portable.sidecar.payloadRootPath)],
+      workspaceRoot,
+      identity: portable.qualification,
+    }),
+    qualifications: [portable.qualification],
+  });
+}
+
 /**
- * The weaker, honestly declared macOS app-sandbox supervision, shared by the two lanes that cannot
- * have the real thing. It spawns the verified staged payload directly and terminates its POSIX
+ * The weaker, honestly declared macOS app-sandbox supervision for the lanes that cannot have the
+ * release supervisor. It spawns the verified staged payload directly and terminates its POSIX
  * process group; it carries none of the release-qualified descendant-containment or orphan-reaping
- * guarantees, and each lane's evidence class records that posture.
+ * guarantees, and each lane's evidence class records that posture. Windows dev-lane runs use the
+ * native Job Object supervisor through devLaneSupervisor instead.
  *
  * Dev lane (#2475, ADR-0140): no packaged install exists to supervise natively.
  * Evaluation lane (ADR-0163 D9): the native supervisor connects to the runtime monitor socket served

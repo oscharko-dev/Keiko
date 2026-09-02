@@ -146,6 +146,7 @@ async function approvedOpencodeArchives(version, existingArchives, deps) {
       sizeBytes: payload.byteLength,
       executableName: target === "windows-x64" ? "opencode.exe" : "opencode",
       executableTreeSha256: previous.executableTreeSha256,
+      sbomSha256: previous.sbomSha256,
     };
   }
   return archives;

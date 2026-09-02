@@ -157,9 +157,11 @@ describe("dev-start coding runtime lifecycle", () => {
     vi.restoreAllMocks();
   });
 
-  it("requires coding-runtime readiness on supported macOS hosts only", () => {
+  it("requires coding-runtime readiness on every supported dev host", () => {
     expect(codingRuntimeRequired("darwin", "arm64")).toBe(true);
     expect(codingRuntimeRequired("darwin", "x64")).toBe(true);
+    expect(codingRuntimeRequired("win32", "x64")).toBe(true);
+    expect(codingRuntimeRequired("win32", "arm64")).toBe(false);
     expect(codingRuntimeRequired("darwin", "ppc64")).toBe(false);
     expect(codingRuntimeRequired("linux", "x64")).toBe(false);
   });
@@ -210,14 +212,14 @@ describe("dev-start coding runtime lifecycle", () => {
             runtimeEvidenceClass: "functional-not-platform-qualified",
           }),
       },
-      expected: "ok · unverified evaluation runtime (no platform signature)",
+      expected: "ok · local runtime integrity verified (no platform signature)",
     },
     {
       response: {
         ok: true,
         json: () => Promise.resolve({ runtimeAvailable: true }),
       },
-      expected: "ok · unverified evaluation runtime (no platform signature)",
+      expected: "ok · local runtime integrity verified (no platform signature)",
     },
     {
       response: {
@@ -288,6 +290,22 @@ describe("dev-start coding runtime lifecycle", () => {
     ).resolves.toBe(true);
     expect(stageRepair).toHaveBeenCalledOnce();
     expect(discoverRepair).toHaveBeenCalledTimes(2);
+
+    const discoverWindows = vi.fn().mockResolvedValue(activated);
+    await expect(
+      ensureDevCodingRuntime({
+        platform: "win32",
+        arch: "x64",
+        env: {},
+        discover: discoverWindows,
+        stage: vi.fn(),
+      }),
+    ).resolves.toBe(true);
+    expect(discoverWindows).toHaveBeenCalledWith({
+      env: { KEIKO_CODING_RUNTIME_DEV_LANE: "1" },
+      platform: "win32",
+      arch: "x64",
+    });
   });
 
   it("fails closed when staging cannot produce an activated runtime", async () => {
