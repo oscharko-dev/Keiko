@@ -905,13 +905,13 @@
     {
       "op": "coding-runtime.run.settled",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:168",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:169",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.run.started",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:145",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:146",
       "package": "keiko-server"
     },
     {
@@ -1157,7 +1157,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:1892",
+      "site": "packages/keiko-server/src/deps.ts:1893",
       "package": "keiko-server"
     },
     {
@@ -1307,7 +1307,7 @@
     {
       "op": "task-workspace.identity.creation-time-probe",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/task-workspace/activity-log.ts:302",
+      "site": "packages/keiko-server/src/task-workspace/activity-log.ts:306",
       "package": "keiko-server"
     },
     {

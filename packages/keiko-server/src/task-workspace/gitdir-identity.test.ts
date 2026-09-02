@@ -20,13 +20,12 @@ import type {
   WorkspaceHardLinkPolicy,
   WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
   inspectManagedGitdirIdentity,
   inspectManagedGitdirIdentityOutcome,
-  managedIdentityDrift,
   managedIdentityDriftFor,
-  ManagedIdentityProofError,
   type ManagedGitdirIdentityInspection,
 } from "./gitdir-identity.js";
 
@@ -298,28 +297,37 @@ describe("legacy identity — recognises a superseded registration without trust
 // One owner for the three-way verdict. The access boundary, the provisioning resume and
 // reconciliation all compare a persisted identity, and they have to agree — a site that reduces this
 // to a boolean is how "registered under the old rule" gets reported as "your worktree was replaced".
-describe("managedIdentityDrift", () => {
+describe("managedIdentityDriftFor", () => {
+  const driftOf = (
+    inspection: ManagedGitdirIdentityInspection | undefined,
+    persisted: string,
+  ): string =>
+    managedIdentityDriftFor(
+      inspection === undefined ? { kind: "unproven" } : { kind: "identified", inspection },
+      persisted,
+    );
+
   it("matches a current identity", () => {
     const inspection = inspect(authenticTree());
     if (inspection === undefined) throw new Error("fixture produced no identity");
 
-    expect(managedIdentityDrift(inspection, inspection.identity)).toBe("matches");
+    expect(driftOf(inspection, inspection.identity)).toBe("matches");
   });
 
   it("recognises an identity persisted under the retired rule", () => {
     const inspection = inspect(authenticTree());
     if (inspection === undefined) throw new Error("fixture produced no identity");
 
-    expect(managedIdentityDrift(inspection, inspection.legacyIdentity)).toBe("schema-retired");
+    expect(driftOf(inspection, inspection.legacyIdentity)).toBe("schema-retired");
   });
 
   it("reports anything else as changed", () => {
-    expect(managedIdentityDrift(inspect(authenticTree()), "not-an-identity")).toBe("changed");
+    expect(driftOf(inspect(authenticTree()), "not-an-identity")).toBe("changed");
   });
 
   // An unreadable or unprovable worktree is never "just an old registration": with nothing to
   // compare against, the only honest verdict is the one that refuses without excusing it.
-  it("rethrows a failed proof's cause instead of calling the worktree changed", () => {
+  it('throws the classified retryable proof failure with its cause, never "changed"', () => {
     const cause = new Error("EACCES: permission denied");
 
     for (const failed of [cause, "EIO"]) {
@@ -329,13 +337,13 @@ describe("managedIdentityDrift", () => {
       } catch (error) {
         thrown = error;
       }
-      expect(thrown).toBeInstanceOf(ManagedIdentityProofError);
-      expect((thrown as ManagedIdentityProofError).cause).toBe(failed);
+      expect(thrown).toMatchObject({ code: "IDENTITY_PROOF_FAILED", outcome: "retry-required" });
+      expect((thrown as Error).cause).toBe(failed);
     }
   });
 
   it("reports changed when the worktree proves no identity at all", () => {
-    expect(managedIdentityDrift(undefined, "anything")).toBe("changed");
+    expect(driftOf(undefined, "anything")).toBe("changed");
   });
 });
 
@@ -601,5 +609,50 @@ describe("inspectManagedGitdirIdentityOutcome — I/O failures keep their cause"
     expect(outcome.kind === "failed" ? outcome.cause : undefined).toBe(failure);
     // The yes/no wrapper stays fail-closed for callers that only need a verdict.
     expect(inspectManagedGitdirIdentity(WORKTREE_ROOT, REPOSITORY_ROOT, port)).toBeUndefined();
+  });
+
+  // The content reads are the other I/O the proof performs; an EIO there keeps its cause the same way.
+  it.each([
+    { label: "worktree .git pointer", path: WORKTREE_POINTER },
+    { label: "admin gitdir backpointer", path: ADMIN_BACKPOINTER },
+  ])("reports failed, with the thrown cause, when the $label read throws", ({ path }) => {
+    const inner = portFor(authenticTree());
+    const read = inner.readFileUtf8WithinRootSameDescriptor;
+    if (read === undefined) throw new Error("fixture port lost its descriptor read");
+    const failure = new Error("EIO: input/output error");
+    const port: WorkspaceFs = {
+      ...inner,
+      readFileUtf8WithinRootSameDescriptor: (canonicalRoot, absolutePath, ...rest) => {
+        if (absolutePath === path) throw failure;
+        return read.call(inner, canonicalRoot, absolutePath, ...rest);
+      },
+    };
+
+    const outcome = inspectManagedGitdirIdentityOutcome(WORKTREE_ROOT, REPOSITORY_ROOT, port);
+
+    expect(outcome.kind).toBe("failed");
+    expect(outcome.kind === "failed" ? outcome.cause : undefined).toBe(failure);
+  });
+
+  // A descriptor-safe read REFUSING the pointer (symlink, hard link, oversized, lineage change) is a
+  // deterministic verdict, not an I/O failure: unproven, never retryable (#3376 review).
+  it.each([
+    { label: "worktree .git pointer", path: WORKTREE_POINTER },
+    { label: "admin gitdir backpointer", path: ADMIN_BACKPOINTER },
+  ])("reports unproven when the $label read is refused by descriptor policy", ({ path }) => {
+    const inner = portFor(authenticTree());
+    const read = inner.readFileUtf8WithinRootSameDescriptor;
+    if (read === undefined) throw new Error("fixture port lost its descriptor read");
+    const port: WorkspaceFs = {
+      ...inner,
+      readFileUtf8WithinRootSameDescriptor: (canonicalRoot, absolutePath, ...rest) => {
+        if (absolutePath === path) throw new WorkspaceDescriptorReadError("hard-link");
+        return read.call(inner, canonicalRoot, absolutePath, ...rest);
+      },
+    };
+
+    expect(inspectManagedGitdirIdentityOutcome(WORKTREE_ROOT, REPOSITORY_ROOT, port).kind).toBe(
+      "unproven",
+    );
   });
 });

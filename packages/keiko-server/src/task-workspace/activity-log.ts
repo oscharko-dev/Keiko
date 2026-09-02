@@ -46,7 +46,7 @@ import { correlationIdOrUnknown } from "../correlation.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import type { TaskWorkspaceDriftMarker } from "@oscharko-dev/keiko-contracts";
-import type { CreationTimeSupport } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { ProvenCreationTimeSupport } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { processServerLogSink } from "../process-log-sink.js";
 import { TaskWorkspaceError } from "./errors.js";
 import {
@@ -225,7 +225,7 @@ export function recordWorkspaceLifecycle(
   });
 }
 
-function logWorkspaceLifecycleFailure(
+export function logWorkspaceLifecycleFailure(
   seam: WorkspaceActivityLogSeam,
   input: WorkspaceLifecycleFailureInput,
   error: TaskWorkspaceError,
@@ -286,22 +286,26 @@ export async function runWithWorkspaceLifecycleFailureLogging<T>(
   }
 }
 
-// The managed-identity mint probes the managed root's creation-time support once per provision.
-// Its verdict is evidence of its own: a later `identity-unsupported` or a spurious `pointer-stale`
-// on an aliasing volume is reconstructed from this line, not guessed (#3376 review P2).
+// The managed-identity mint proves every volume the identity hashes once per provision: the managed
+// root by probe, the repository read-only (or `same-volume`). The verdicts are evidence of their
+// own: a later `identity-unsupported` or a spurious `pointer-stale` on an aliasing volume is
+// reconstructed from this line, not guessed (#3376 review P2).
 export function logWorkspaceIdentityProbe(
   seam: WorkspaceActivityLogSeam,
   input: {
     readonly correlationId: string | undefined;
-    readonly support: CreationTimeSupport;
+    readonly support: ProvenCreationTimeSupport;
   },
 ): void {
   const sink = seam.activityLog ?? processServerLogSink();
+  const durable =
+    input.support.managedRoot === "durable" &&
+    (input.support.repository === "durable" || input.support.repository === "same-volume");
   sink.write({
     category: "diagnostic",
     op: "task-workspace.identity.creation-time-probe",
-    level: input.support === "durable" ? "info" : "warn",
+    level: durable ? "info" : "warn",
     correlationId: correlationIdOrUnknown(input.correlationId),
-    extra: { volume: "managed-root", support: input.support },
+    extra: { managedRoot: input.support.managedRoot, repository: input.support.repository },
   });
 }

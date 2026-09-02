@@ -19,7 +19,9 @@ import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
   classifyCreationTimeProbe,
+  classifyVolumeCorroboration,
   corroborateCreationTimeSupport,
+  proveCreationTimeSupport,
   isWorkspacePathSnapshotCurrent,
   nodeWorkspaceFs,
   probeCreationTimeSupport,
@@ -586,6 +588,14 @@ describe("creation-time durability probe", () => {
         { birthtimeNs: 20n, ctimeNs: 20n },
       ),
     ).toBe("aliased");
+    // Durable requires the creation time to stay EXACTLY while the ctime moves: a value that moved at
+    // all across the write is not a creation time, even when it does not equal the ctime (#3376).
+    expect(
+      classifyCreationTimeProbe(
+        { birthtimeNs: 5n, ctimeNs: 10n },
+        { birthtimeNs: 6n, ctimeNs: 20n },
+      ),
+    ).toBe("aliased");
     // The ctime did not move (same timestamp granule), so nothing can be told yet.
     expect(
       classifyCreationTimeProbe(
@@ -635,6 +645,53 @@ describe("creation-time durability probe", () => {
     } else {
       expect(verdict).toBe(fromOs);
     }
+    expect(
+      fs.readdirSync(root).filter((name) => name.startsWith(".keiko-creation-time-probe-")),
+    ).toEqual([]);
+  });
+});
+
+describe("every volume an identity hashes", () => {
+  it("corroborates a volume from its long-lived entries, read-only", () => {
+    expect(
+      classifyVolumeCorroboration([
+        { birthtimeNs: 5n, ctimeNs: 5n },
+        { birthtimeNs: 7n, ctimeNs: 9n },
+      ]),
+    ).toBe("durable");
+    expect(classifyVolumeCorroboration([{ birthtimeNs: 5n, ctimeNs: 5n }])).toBe("inconclusive");
+    expect(
+      classifyVolumeCorroboration([
+        { birthtimeNs: 0n, ctimeNs: 5n },
+        { birthtimeNs: 7n, ctimeNs: 9n },
+      ]),
+    ).toBe("absent");
+    expect(classifyVolumeCorroboration([])).toBe("inconclusive");
+  });
+
+  it("reports the repository as the same volume when it shares the managed root's device", () => {
+    const { root } = workspaceFixture();
+    const managedRoot = join(root, "task-workspaces");
+    const repositoryRoot = join(root, "repo");
+    fs.mkdirSync(managedRoot);
+    fs.mkdirSync(join(repositoryRoot, ".git"), { recursive: true });
+
+    const proven = proveCreationTimeSupport(managedRoot, repositoryRoot);
+
+    expect(proven.repository).toBe("same-volume");
+    expect(["durable", "inconclusive", "absent"]).toContain(proven.managedRoot);
+    expect(fs.readdirSync(repositoryRoot).sort()).toEqual([".git"]);
+  });
+
+  // Concurrent provisions probe the same managed root; each probe compares the directory's own two
+  // observations, so interleaved probes cannot flip each other's verdict or leave entries behind.
+  it("stays stable and leaves nothing behind under concurrent probes", async () => {
+    const { root } = workspaceFixture();
+    const verdicts = await Promise.all(
+      Array.from({ length: 4 }, () => Promise.resolve().then(() => probeCreationTimeSupport(root))),
+    );
+
+    expect(new Set(verdicts).size).toBe(1);
     expect(
       fs.readdirSync(root).filter((name) => name.startsWith(".keiko-creation-time-probe-")),
     ).toEqual([]);

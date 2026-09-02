@@ -48,13 +48,7 @@ import {
   validateTaskWorkspaceTransition,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { deriveRepositoryId } from "./naming.js";
-import {
-  inspectManagedGitdirIdentityOutcome,
-  managedIdentityDriftFor,
-  ManagedIdentityProofError,
-  type ManagedGitdirIdentityOutcome,
-  type ManagedIdentityDrift,
-} from "./gitdir-identity.js";
+import { inspectManagedGitdirIdentityOutcome, managedIdentityDriftFor } from "./gitdir-identity.js";
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import { correlationIdOrUnknown } from "../correlation.js";
@@ -62,7 +56,7 @@ import {
   recordWorkspaceLifecycle,
   runWithWorkspaceLifecycleFailureLogging,
 } from "./activity-log.js";
-import { TaskWorkspaceError } from "./errors.js";
+import { isIdentityProofFailure } from "./errors.js";
 import { buildWorkspaceEvent, WORKSPACE_LIFECYCLE_EVIDENCE_KIND } from "./evidence.js";
 import type {
   WorkspaceReconciliationService,
@@ -187,7 +181,9 @@ async function gatherFacts(
   // The same verdict the access boundary and the provisioning resume use, so live reconciliation
   // cannot re-label a migration or a platform limitation as a replaced pointer and overwrite the
   // marker provisioning persisted.
-  const drift = identityDriftOrThrow(identityOutcome, instance.gitdirIdentity);
+  // A proof that could not run throws the classified IDENTITY_PROOF_FAILED here; the live pass and
+  // the health report isolate it per instance, repair and cleanup fail closed on it.
+  const drift = managedIdentityDriftFor(identityOutcome, instance.gitdirIdentity);
   const taskBranchPresent = worktreeDirExists
     ? await adapter.localBranchExists(instance.taskBranch)
     : false;
@@ -260,6 +256,9 @@ function emitReconcileEvidence(
   });
   recordWorkspaceLifecycle(ctx.deps, {
     evidenceStore: ctx.deps.evidenceStore,
+    // The primary marker rides on the activity-log line too, so `server.log` alone tells a
+    // migration, a platform limitation and a replacement apart (#3376 review).
+    ...(outcome.driftMarkers[0] === undefined ? {} : { driftMarker: outcome.driftMarkers[0] }),
     record: {
       kind: WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
       schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
@@ -344,26 +343,6 @@ function reconcileWithContext(
 // worktree list, WITHOUT persisting or classifying. Exported so the #448 health service can build the
 // same WorkspaceReconciliationFacts the reconciler uses (no second containment/git engine) and then
 // layer its live dirty + ownership signals on top.
-// An I/O failure inside the proof is not a drift verdict. It leaves here as the classified, retryable
-// IDENTITY_PROOF_FAILED (cause preserved) so the live pass and the health report isolate it per
-// instance, while repair and cleanup fail closed on a diagnosable code — never a stale pointer, never
-// a raw EIO that aborts every other workspace (Cursor review on f50133b95).
-function identityDriftOrThrow(
-  outcome: ManagedGitdirIdentityOutcome,
-  persisted: string,
-): ManagedIdentityDrift {
-  try {
-    return managedIdentityDriftFor(outcome, persisted);
-  } catch (error) {
-    if (error instanceof ManagedIdentityProofError) {
-      throw new TaskWorkspaceError("IDENTITY_PROOF_FAILED", error.message, [], {
-        cause: error.cause,
-      });
-    }
-    throw error;
-  }
-}
-
 export function gatherInstanceReconciliationFacts(
   deps: WorkspaceReconciliationServiceDeps,
   adapter: GitWorktreeAdapter,
@@ -536,10 +515,12 @@ async function reconcileOneOrCarryForward(
     );
     return result?.instance;
   } catch (error) {
-    if (!(error instanceof TaskWorkspaceError) || error.code !== "IDENTITY_PROOF_FAILED") {
-      throw error;
-    }
-    return ctx.deps.store.getById(instance.workspaceId);
+    if (!isIdentityProofFailure(error)) throw error;
+    // The persisted classification stands (nothing is written), but THIS report says so honestly:
+    // the carried entry reports health `unknown` — this pass could not verify the row — without
+    // persisting a drift that was not observed (#3376 review).
+    const persisted = ctx.deps.store.getById(instance.workspaceId);
+    return persisted === undefined ? undefined : { ...persisted, health: "unknown" };
   }
 }
 

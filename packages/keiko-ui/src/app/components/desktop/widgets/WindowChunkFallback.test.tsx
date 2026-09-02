@@ -26,12 +26,14 @@ describe("createWindowChunkFallback", () => {
     const placeholder = screen.getByRole("status");
     expect(placeholder).toHaveAttribute("data-window-chunk", "loading");
     expect(placeholder).toHaveStyle({ display: "block" });
-    expect(reportClientDiagnostic).toHaveBeenLastCalledWith("desktop editor widget chunk: started");
+    expect(reportClientDiagnostic).toHaveBeenLastCalledWith(
+      expect.stringMatching(/^desktop editor widget chunk #\d+: started$/),
+    );
 
     unmount();
 
     expect(reportClientDiagnostic).toHaveBeenLastCalledWith(
-      expect.stringMatching(/^desktop editor widget chunk: settled after \d+ms$/),
+      expect.stringMatching(/^desktop editor widget chunk #\d+: settled after \d+ms$/),
     );
   });
 
@@ -45,6 +47,8 @@ describe("createWindowChunkFallback", () => {
       </I18nProvider>,
     );
 
-    expect(reportClientDiagnostic).toHaveBeenLastCalledWith("desktop files widget chunk: started");
+    expect(reportClientDiagnostic).toHaveBeenLastCalledWith(
+      expect.stringMatching(/^desktop files widget chunk #\d+: started$/),
+    );
   });
 });

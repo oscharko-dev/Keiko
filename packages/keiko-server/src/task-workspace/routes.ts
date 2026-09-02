@@ -336,10 +336,22 @@ export async function handleListTaskWorkspaces(
 }
 
 // GET /api/task-workspaces/active — the current active binding, or null in unbound mode.
-export function handleGetActiveTaskWorkspace(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+export function handleGetActiveTaskWorkspace(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const guard = requireLifecycle(deps);
   if (isRouteResult(guard)) return guard;
-  return { status: 200, body: redacted(deps, { active: guard.getActive() ?? null }) };
+  // The read threads the request's correlation into the lifecycle service and maps its classified
+  // failures (a proof that could not run is a retryable 503, never the top-level 500) like every
+  // mutation route does through runHandler (#3376 review).
+  try {
+    return {
+      status: 200,
+      body: redacted(deps, { active: guard.getActive(ctx.correlationId) ?? null }),
+    };
+  } catch (error) {
+    const mapped = mapError(error);
+    if (mapped === undefined) throw error;
+    return { status: mapped.status, body: redacted(deps, mapped.body) };
+  }
 }
 
 // POST /api/task-workspaces/active — atomic switch: activate/resume the target and set it active.

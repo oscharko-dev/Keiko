@@ -131,6 +131,11 @@ export function classifyTaskWorkspaceError(code: TaskWorkspaceErrorCode): Worksp
   return WORKSPACE_FAILURE_CLASS_BY_CODE[code];
 }
 
+/** A proof that could not run — retryable, never a verdict on the worktree (#3376). */
+export function isIdentityProofFailure(error: unknown): error is TaskWorkspaceError {
+  return error instanceof TaskWorkspaceError && error.code === "IDENTITY_PROOF_FAILED";
+}
+
 export class TaskWorkspaceError extends CodedHttpError {
   public readonly code: TaskWorkspaceErrorCode;
   public readonly outcome: WorkspaceFailureOutcome;

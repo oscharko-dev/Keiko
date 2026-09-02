@@ -64,15 +64,27 @@ creation time is the one component that cannot be relocated.
 failure such as `EIO` or `EACCES` on one of the identity's components — and it is retryable (HTTP
 503). The active-workspace read answers it instead of silently unbinding the application; health and
 reconciliation carry that one workspace forward unverified (health `unknown`, `recovery-required`,
-not cleanup-eligible) and keep working on the others; governed cleanup and repair fail closed on it.
-The activity-log line carries the cause chain and frames.
+not cleanup-eligible) and keep working on the others; governed cleanup and repair fail closed on it;
+provisioning refuses without deleting a worktree it did not create. A deterministic refusal of the
+pointer file by the descriptor-safe read (a symlink, a hard link, an oversized file) is not this case —
+it is an unproven identity, and retrying will not change it. The activity-log line carries the cause
+chain and frames.
+
+Before an identity is minted, every volume it hashes is proven to keep a durable creation time: the
+managed root by a probe entry Keiko creates and removes, the repository volume read-only from its
+long-lived entries (or `same-volume` when both share one device). The verdicts are on the
+`task-workspace.identity.creation-time-probe` line; anything but durable refuses the mint with
+`identity-unsupported`, and an `inconclusive` verdict says to retry once the roots are older than one
+timestamp granule.
 
 ## Diagnostic Steps for the managed boundary
 
-Grep the activity log for `decision: "denied"` and read the `reason` discriminator. The denial lines
-are body-free by contract: `extra` carries exactly `decision` and `reason`, the line carries the
-`errorKind` `WORKSPACE_MANAGED_AUTHORITY_DENIED` and the correlation id — never the workspace path,
-the repository path, or the stored identity. The correlation id ties the refusal to the request or
+Grep the activity log for `decision: "denied"` and read the `reason` discriminator. The
+`workspace.root.denied` line has two body-free shapes: a classified denial carries `errorKind`
+`WORKSPACE_MANAGED_AUTHORITY_DENIED` with `extra: { decision, reason }`; a resolution failure (the proof
+itself threw) carries the caught error's classified `errorKind` with `extra: { decision, reason, frames?,
+causeChain? }` — dist-anchored frames and error class names, never messages. Neither shape ever carries
+the workspace path, the repository path, or the stored identity. The correlation id ties the refusal to the request or
 lifecycle operation that triggered it: health reports and governed cleanup pass their own, so the
 denial sits in that operation's timeline.
 

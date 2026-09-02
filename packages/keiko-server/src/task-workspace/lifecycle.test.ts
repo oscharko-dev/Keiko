@@ -35,7 +35,7 @@ import {
   type ServerLogSink,
 } from "../observability/index.js";
 import { runWithWorkspaceLifecycleFailureLogging } from "./activity-log.js";
-import { ManagedIdentityProofError, type ManagedIdentityDrift } from "./gitdir-identity.js";
+import type { ManagedIdentityDrift } from "./gitdir-identity.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -701,7 +701,9 @@ describe("identity proof before bindings and readiness", () => {
       acquireLock: false,
     });
     const failing = lifecycleWith(provisioning, undefined, capturingEvidence(), () => {
-      throw new ManagedIdentityProofError(new Error("EIO: input/output error"));
+      throw new TaskWorkspaceError("IDENTITY_PROOF_FAILED", "proof failed", [], {
+        cause: new Error("EIO: input/output error"),
+      });
     });
 
     expect(() => failing.getActive()).toThrow(
@@ -715,6 +717,59 @@ describe("identity proof before bindings and readiness", () => {
     );
     const persisted = store.getById(inst.workspaceId);
     expect(persisted?.lifecycleState).toBe("active");
+    expect(persisted?.driftMarkers).toEqual([]);
+  });
+
+  // The contract's legality comes first: a terminal workspace cannot hand off, and no proof may move
+  // it to recovery-required on the way to that refusal (#3376 review).
+  it.each(["archived", "merged", "abandoned"] as const)(
+    "refuses handoff from %s as ILLEGAL_TRANSITION before any identity proof runs",
+    async (lifecycleState) => {
+      const refusing = lifecycleWith(
+        fakeProvisioning(),
+        undefined,
+        capturingEvidence(),
+        () => "changed",
+      );
+      const inst = store.upsert(instance("a", { lifecycleState }));
+
+      await rejectsWithCode(
+        () => refusing.prepareHandoff({ workspaceId: inst.workspaceId, requestedBy: "op" }),
+        "ILLEGAL_TRANSITION",
+      );
+
+      const persisted = store.getById(inst.workspaceId);
+      expect(persisted?.lifecycleState).toBe(lifecycleState);
+      expect(persisted?.driftMarkers).toEqual([]);
+    },
+  );
+
+  // Another actor's live lock refuses as LOCK_CONTENTION before the proof could flag the row and
+  // clear that lock (#3376 review).
+  it("refuses handoff under another actor's live lock before the identity proof can touch the row", async () => {
+    const refusing = lifecycleWith(
+      fakeProvisioning(),
+      undefined,
+      capturingEvidence(),
+      () => "changed",
+    );
+    const lock = {
+      lockId: "L-other",
+      owner: "someone-else",
+      reason: "mutation" as const,
+      acquiredAt: new Date(1_700_000_000_000).toISOString(),
+      expiresAt: new Date(1_700_000_000_000 + 60_000).toISOString(),
+    };
+    const inst = store.upsert(instance("a", { lock }));
+
+    await rejectsWithCode(
+      () => refusing.prepareHandoff({ workspaceId: inst.workspaceId, requestedBy: "op" }),
+      "LOCK_CONTENTION",
+    );
+
+    const persisted = store.getById(inst.workspaceId);
+    expect(persisted?.lifecycleState).toBe("active");
+    expect(persisted?.lock?.lockId).toBe("L-other");
     expect(persisted?.driftMarkers).toEqual([]);
   });
 

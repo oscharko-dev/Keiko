@@ -163,7 +163,12 @@ describe("fanOutClientDiagnostic", () => {
     }
 
     expect(fetchMock).toHaveBeenCalledTimes(20);
-    expect(consoleWarn).toHaveBeenCalledTimes(21);
+    // 21 diagnostics reach the console, plus ONE throttle notice for the dropped POST — a throttled
+    // drop must not be silent (#3376 review).
+    expect(consoleWarn).toHaveBeenCalledTimes(22);
+    expect(consoleWarn).toHaveBeenLastCalledWith(
+      expect.stringContaining("diagnostic delivery to the server is throttled"),
+    );
     expect(clientDiagnosticPostThrottledCount()).toBe(1);
   });
 });

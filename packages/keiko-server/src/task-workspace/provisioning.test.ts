@@ -4,7 +4,7 @@
 // idempotent safe retry (AC3), durable bindable instance (AC4), and the visible classified failure
 // states (SC4). The single governed spawn boundary is reused throughout; no generic git runner.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -39,8 +39,52 @@ import {
 import { createWorkspaceMutexRegistry } from "./mutex.js";
 import {
   inspectManagedGitdirIdentity,
+  inspectManagedGitdirIdentityOutcome,
+  liveManagedIdentityDrift,
   RETIRED_IDENTITY_SCHEMA_MESSAGE,
 } from "./gitdir-identity.js";
+
+// An I/O failure inside the proof cannot be produced on a real filesystem from a test, so the one
+// identity classifier is wrapped (never replaced) and made to fail for ONE worktree path where a
+// pin needs it; every other call reaches the real proof.
+vi.mock("./gitdir-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./gitdir-identity.js")>();
+  return {
+    ...actual,
+    inspectManagedGitdirIdentityOutcome: vi.fn(actual.inspectManagedGitdirIdentityOutcome),
+    // Activation proves through this entry point, which calls the classifier module-internally, so
+    // it is wrapped too — the wrapped classifier alone would not reach it.
+    liveManagedIdentityDrift: vi.fn(actual.liveManagedIdentityDrift),
+  };
+});
+
+afterEach(() => {
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockReset();
+  vi.mocked(liveManagedIdentityDrift).mockReset();
+});
+
+function failProofFor(worktreePath: string, cause: Error): void {
+  const real = vi.mocked(inspectManagedGitdirIdentityOutcome).getMockImplementation();
+  const realLive = vi.mocked(liveManagedIdentityDrift).getMockImplementation();
+  if (real === undefined || realLive === undefined) {
+    throw new Error("classifier wrapper lost its implementation");
+  }
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockImplementation((candidate, ...rest) =>
+    candidate === worktreePath ? { kind: "failed", cause } : real(candidate, ...rest),
+  );
+  vi.mocked(liveManagedIdentityDrift).mockImplementation((candidate, ...rest) => {
+    if (candidate !== worktreePath) return realLive(candidate, ...rest);
+    throw new TaskWorkspaceError(
+      "IDENTITY_PROOF_FAILED",
+      "managed worktree identity proof failed",
+      [],
+      {
+        cause,
+      },
+    );
+  });
+}
+
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   createBufferedServerLogSink,
@@ -48,7 +92,7 @@ import {
   type ServerLogEvent,
   type ServerLogSink,
 } from "../observability/index.js";
-import type { CreationTimeSupport } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { ProvenCreationTimeSupport } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -106,7 +150,10 @@ function makeService(
   adapterFactory?: AdapterFactory,
   ensureManagedWorkspaceIdentity?: (instance: WorkspaceInstance, initializeTrust: boolean) => void,
   activityLog?: ServerLogSink,
-  probeCreationTimeSupport?: (directory: string) => CreationTimeSupport,
+  proveCreationTimeSupport?: (
+    managedRoot: string,
+    repositoryRoot: string,
+  ) => ProvenCreationTimeSupport,
 ): WorkspaceProvisioningService {
   return createWorkspaceProvisioningService({
     store,
@@ -119,7 +166,7 @@ function makeService(
     ...(ensureManagedWorkspaceIdentity === undefined ? {} : { ensureManagedWorkspaceIdentity }),
     mutex: __twMutex,
     ...(activityLog === undefined ? {} : { activityLog }),
-    ...(probeCreationTimeSupport === undefined ? {} : { probeCreationTimeSupport }),
+    ...(proveCreationTimeSupport === undefined ? {} : { proveCreationTimeSupport }),
   });
 }
 
@@ -1310,7 +1357,10 @@ describe("mint-time creation-time probe", () => {
     "refuses to mint an identity when the managed root's creation time is %s",
     async (support) => {
       const activityLog = createBufferedServerLogSink();
-      const service = makeService(undefined, undefined, activityLog, () => support);
+      const service = makeService(undefined, undefined, activityLog, () => ({
+        managedRoot: support,
+        repository: "same-volume",
+      }));
 
       await rejectsWithCode(
         () =>
@@ -1339,7 +1389,44 @@ describe("mint-time creation-time probe", () => {
       expect(probeLine).toMatchObject({
         level: "warn",
         correlationId: "mint-probe-0001",
-        extra: { volume: "managed-root", support },
+        extra: { managedRoot: support, repository: "same-volume" },
+      });
+    },
+  );
+
+  it.each(["aliased", "absent", "inconclusive"] as const)(
+    "refuses to mint when the repository volume's creation time is %s",
+    async (repository) => {
+      const activityLog = createBufferedServerLogSink();
+      const service = makeService(undefined, undefined, activityLog, () => ({
+        managedRoot: "durable",
+        repository,
+      }));
+
+      await rejectsWithCode(
+        () =>
+          service.provision({
+            repositoryRequestPath: repoRoot,
+            taskId: "t-mint-repo-volume",
+            baseBranch: "main",
+            requestedBy: "u",
+            correlationId: "mint-probe-0003",
+          }),
+        "POINTER_DRIFT",
+      );
+
+      const row = store
+        .listByRepository(deriveRepositoryId(repoRoot))
+        .find((candidate) => candidate.taskId === "t-mint-repo-volume");
+      expect(row?.driftMarkers).toEqual(["identity-unsupported"]);
+      expect(existsSync(row?.managedWorktreePath ?? "")).toBe(false);
+      const probeLine = activityLog.events.find(
+        (event) => event.op === "task-workspace.identity.creation-time-probe",
+      );
+      expect(probeLine).toMatchObject({
+        level: "warn",
+        correlationId: "mint-probe-0003",
+        extra: { managedRoot: "durable", repository },
       });
     },
   );
@@ -1363,7 +1450,125 @@ describe("mint-time creation-time probe", () => {
     expect(probeLine).toMatchObject({
       level: "info",
       correlationId: "mint-probe-0002",
-      extra: { volume: "managed-root", support: "durable" },
+      extra: { managedRoot: "durable", repository: "same-volume" },
     });
+  });
+});
+
+// A proof that could not run is answered as the classified, retryable IDENTITY_PROOF_FAILED on
+// every provisioning path — resume, the completion guard, activation — and never persisted as a
+// drift or, at mint time, allowed to delete a worktree this call did not create (#3376 review).
+describe("proof failures on the provisioning paths", () => {
+  it("answers a failed proof on resume without flagging the row", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-proof-resume",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    failProofFor(first.instance.managedWorktreePath, new Error("EIO: input/output error"));
+
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "t-proof-resume",
+          baseBranch: "main",
+          requestedBy: "u",
+        }),
+      "IDENTITY_PROOF_FAILED",
+    );
+
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("active");
+    expect(persisted?.driftMarkers).toEqual([]);
+  });
+
+  it("answers a failed proof on the completion guard without reissuing or flagging", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-proof-complete",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({ ...first.instance, lifecycleState: "recovery-required" });
+    failProofFor(first.instance.managedWorktreePath, new Error("EACCES: permission denied"));
+
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "t-proof-complete",
+          baseBranch: "main",
+          requestedBy: "u",
+        }),
+      "IDENTITY_PROOF_FAILED",
+    );
+
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("recovery-required");
+    expect(persisted?.gitdirIdentity).toBe(first.instance.gitdirIdentity);
+  });
+
+  it("answers a failed proof on activation without flagging the row", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-proof-activate",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    failProofFor(first.instance.managedWorktreePath, new Error("EIO: input/output error"));
+
+    await rejectsWithCode(
+      () =>
+        service.activate({
+          workspaceId: first.instance.workspaceId,
+          taskId: "",
+          requestedBy: "u",
+          acquireLock: false,
+        }),
+      "IDENTITY_PROOF_FAILED",
+    );
+
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("active");
+    expect(persisted?.driftMarkers).toEqual([]);
+  });
+
+  // The mint over an EXISTING worktree (the operator-approved repair path): a transient proof failure
+  // is retryable, the worktree this call did not create stays, and the row says the proof could not
+  // run — never that the tree drifted.
+  it("keeps an existing worktree when the mint's proof fails under an approved repair", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-proof-mint-existing",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({ ...first.instance, lifecycleState: "recovery-required" });
+    failProofFor(first.instance.managedWorktreePath, new Error("EIO: input/output error"));
+
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "t-proof-mint-existing",
+          baseBranch: "main",
+          requestedBy: "u",
+          operatorApprovedRepair: true,
+        }),
+      "IDENTITY_PROOF_FAILED",
+    );
+
+    expect(existsSync(first.instance.managedWorktreePath)).toBe(true);
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("recovery-required");
+    expect(persisted?.health).toBe("unknown");
+    expect(persisted?.driftMarkers).toEqual([]);
+    expect(persisted?.gitdirIdentity).toBe(first.instance.gitdirIdentity);
   });
 });

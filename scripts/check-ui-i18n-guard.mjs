@@ -1730,10 +1730,37 @@ function collectI18nChangeSignatures(lines) {
   return signatures;
 }
 
-function hasNewI18nSignature(addedLines, removedLines) {
+// A signature is new when the SAME patch did not remove it from this file — with one refinement
+// (#3376): a `t("key")` whose key already exists in BOTH shared catalogs is a translated value
+// moving between files, not new text, and the i18n API adopted alongside only such keys is the same
+// move. The catalogs are complete for those keys by construction, so forcing a catalog touch there
+// contradicts the intent stated above; a key missing from either catalog, or the API adopted with
+// no literal key at all (a computed key the regex cannot see), stays relevant.
+export function hasNewI18nSignature(addedLines, removedLines, knownCatalogKeys = new Set()) {
   const added = collectI18nChangeSignatures(addedLines);
   const removed = collectI18nChangeSignatures(removedLines);
-  return Array.from(added).some((signature) => !removed.has(signature));
+  const introduced = Array.from(added).filter((signature) => !removed.has(signature));
+  const keys = introduced.filter((signature) => signature.startsWith("key:"));
+  if (keys.some((signature) => !knownCatalogKeys.has(signature.slice("key:".length)))) return true;
+  const apis = introduced.filter((signature) => signature.startsWith("api:"));
+  return apis.length > 0 && keys.length === 0 && !hasKeySignature(added);
+}
+
+function hasKeySignature(signatures) {
+  return Array.from(signatures).some((signature) => signature.startsWith("key:"));
+}
+
+const knownCatalogKeysCache = new Map();
+
+// The keys present in BOTH shared catalogs — the only keys a moved `t("key")` can rely on.
+function knownCatalogKeys(repoRoot) {
+  const cached = knownCatalogKeysCache.get(repoRoot);
+  if (cached !== undefined) return cached;
+  const en = extractCatalogKeys(readText(repoRoot, EN_CATALOG));
+  const de = extractCatalogKeys(readText(repoRoot, DE_CATALOG));
+  const known = new Set(Array.from(en).filter((key) => de.has(key)));
+  knownCatalogKeysCache.set(repoRoot, known);
+  return known;
 }
 
 function sourceHasUserFacingText(source) {
@@ -1759,7 +1786,11 @@ function hasI18nRelevantChange(repoRoot, file) {
   if (changedLines !== null) {
     if (!changedLines.added.some(hasI18nRelevantAddedLine)) return false;
     if (changedLines.added.some(hasUnexemptedUserFacingTextLine)) return true;
-    return hasNewI18nSignature(changedLines.added, changedLines.removed);
+    return hasNewI18nSignature(
+      changedLines.added,
+      changedLines.removed,
+      knownCatalogKeys(repoRoot),
+    );
   }
   const source = readText(repoRoot, file);
   return hasI18nUsage(repoRoot, file) || sourceHasUserFacingText(source);

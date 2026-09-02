@@ -368,6 +368,7 @@ import {
   createWorkspaceSnippetsService,
   type WorkspaceSnippetsService,
 } from "./editor/snippets/workspaceSnippetsService.js";
+import { isIdentityProofFailure } from "./task-workspace/errors.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -4230,7 +4231,16 @@ function resolveProductionRuntimePorts(
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     runtimeEvidence,
     gatewayReadiness: readiness,
-    resolveWorkspaceRoot: () => workspaceLifecycle.getActive()?.binding.activeRoot,
+    // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) yields no root: the
+    // activation stays unavailable rather than crashing the resolution or trusting an unproven tree.
+    resolveWorkspaceRoot: (): string | undefined => {
+      try {
+        return workspaceLifecycle.getActive()?.binding.activeRoot;
+      } catch (error) {
+        if (isIdentityProofFailure(error)) return undefined;
+        throw error;
+      }
+    },
   });
   return {
     ports: activation.ports,

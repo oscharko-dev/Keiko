@@ -296,7 +296,7 @@ describe("operational health classification (AC1)", () => {
     const line = activityLog.events.find((event) => event.errorKind === "IDENTITY_PROOF_FAILED");
     expect(line?.correlationId).toBe("health-proof-0001");
     // Body-free by contract: the cause travels as a class chain, never as its message.
-    expect(line?.extra).toMatchObject({ operation: "reconcile" });
+    expect(line?.extra).toMatchObject({ operation: "health" });
     expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
     expect(JSON.stringify(report)).not.toContain(managedRoot);
   });

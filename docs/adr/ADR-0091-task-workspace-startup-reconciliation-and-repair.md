@@ -16,7 +16,7 @@ Accepted
 
 Epic #443 introduces task-scoped isolated workspaces backed by Git worktrees.
 ADR-0088 (#444) delivered the leaf-pure domain contract: 10-state lifecycle,
-8 drift markers, 6 health states, lock model, recovery hints, content-free audit
+10 drift markers, 6 health states, lock model, recovery hints, content-free audit
 events, the durable `WorkspaceInstance`, and the no-duplicate-subsystem delegation
 table. ADR-0089 (#445) provisioned those workspaces: the narrow keiko-tools
 `GIT_WORKTREE_COMMAND_RULES` worktree adapter, the `WorkspaceInstanceStore` over
@@ -545,7 +545,7 @@ interface WorkspaceRepairRequest {
 interface WorkspaceRepairResult {
   readonly workspaceId: string;
   readonly strategy: WorkspaceRecoveryStrategy;
-  readonly outcome: "repaired" | "operator-action-required" | "no-op";
+  readonly outcome: "repaired" | "operator-required" | "no-op";
   readonly instance: WorkspaceInstance;
 }
 
@@ -570,7 +570,7 @@ Each strategy maps to exactly one action, using only existing subsystems:
 `requiresOperatorApproval: true` in the ADR-0088 D4 operation authority table.
 Every repair invocation acquires the workspace lock first (using the existing
 `WorkspaceInstanceStore` lock acquire path) and releases it on completion or
-error. Every repair — including `operator-action-required` outcomes — appends a
+error. Every repair — including `operator-required` outcomes — appends a
 content-free `WorkspaceEvent` of type `repaired` or `recovery-flagged` via
 `appendWorkspaceLifecycleEvidence`. No repair strategy introduces a new git
 engine, a new containment engine, or a new terminal spawn boundary.
@@ -647,7 +647,7 @@ before returning to the browser.
   same `WorkspaceReconciliationStatus` and `planWorkspaceRecoveryHints` vocabulary
   without discovering or inventing their own (AC5).
 - Every repair strategy either reuses an existing path (#445 provisioning, #445
-  store, #446 pointer store) or explicitly returns `operator-action-required` —
+  store, #446 pointer store) or explicitly returns `operator-required` —
   the set of things a repair can change is closed and auditable.
 - No new table, no new store, no new git engine. The system footprint is smaller
   than the feature it delivers.
@@ -678,11 +678,11 @@ before returning to the browser.
 ### Neutral
 
 - `reattach-branch`, `commit-or-stash-required`, and `operator-repair` strategies
-  return `outcome: "operator-action-required"` with no mutation. This means repair
+  return `outcome: "operator-required"` with no mutation. This means repair
   is not a universal cure — three of the seven strategies explicitly require
   operator action via a different surface. The repair route returning a result
   rather than throwing is the correct boundary: the caller (UI or CLI) decides how
-  to surface the `operator-action-required` outcome.
+  to surface the `operator-required` outcome.
 - The `abandon-and-cleanup` strategy transitions to `abandoned` but defers physical
   worktree cleanup to #448. This leaves the `managedWorktreePath` on disk until
   the cleanup controls (#448) remove it. The instance is clearly in `abandoned`

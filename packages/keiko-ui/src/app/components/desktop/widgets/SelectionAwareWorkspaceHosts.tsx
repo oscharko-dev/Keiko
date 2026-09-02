@@ -38,24 +38,31 @@ import {
   type EditorSelectionHandoff,
   type EditorSelectionHandoffMetadata,
 } from "./cards/editorSelectionHandoff";
-import { useWindowStageEvidence } from "../hooks/useWindowStageEvidence";
 import { createWindowChunkFallback } from "./WindowChunkFallback";
+import { StagePlaceholder } from "./StagePlaceholder";
 
 // Named for the same reason as the outer window chunk: `ChatWindow` is its own lazy chunk behind
 // the session bind, and an anonymous "Loading…" here would let a journey read "both named
 // placeholders are gone" as "the composer has mounted" while this chunk is still in flight — the
 // original flake, one hop later. Each lazy chunk names its own stage on the diagnostic sink.
+// Exported so the wiring itself is pinned: the test renders exactly the fallback each lazy chunk is
+// given here and asserts the stage it reports.
+export const HOST_CHUNK_FALLBACKS = {
+  chatWindow: createWindowChunkFallback("chat window chunk"), // i18n-exempt: diagnostic stage id, never rendered
+  editorWidget: createWindowChunkFallback("editor widget chunk"), // i18n-exempt: diagnostic stage id, never rendered
+  filesWidget: createWindowChunkFallback("files widget chunk"), // i18n-exempt: diagnostic stage id, never rendered
+} as const;
 const ChatWindow = dynamic(() => import("../ChatWindow").then((mod) => mod.ChatWindow), {
   ssr: false,
-  loading: createWindowChunkFallback("chat window chunk"),
+  loading: HOST_CHUNK_FALLBACKS.chatWindow,
 });
 const EditorWidget = dynamic<EditorWidgetProps>(
   () => import("./cards/EditorWidget").then((mod) => mod.EditorWidget),
-  { ssr: false, loading: createWindowChunkFallback("editor widget chunk") },
+  { ssr: false, loading: HOST_CHUNK_FALLBACKS.editorWidget },
 );
 const FilesWidget = dynamic(() => import("./cards/FilesWidget").then((mod) => mod.FilesWidget), {
   ssr: false,
-  loading: createWindowChunkFallback("files widget chunk"),
+  loading: HOST_CHUNK_FALLBACKS.filesWidget,
 });
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const value = cfg[key];
@@ -1061,11 +1068,13 @@ function ChatNotFound(): ReactNode {
 // composer that was simply never found.
 function ChatBindPending(): ReactNode {
   const agentT = useEditorAgentTranslate();
-  useWindowStageEvidence("chat bind");
   return (
-    <output className="lk-loading" data-chat-bind="opening" style={{ display: "block" }}>
+    <StagePlaceholder
+      stage="chat bind" /* i18n-exempt: diagnostic stage id, never rendered */
+      marker={{ "data-chat-bind": "opening" }} /* i18n-exempt: DOM state marker, never rendered */
+    >
       {agentT("chat.restoration.opening")}
-    </output>
+    </StagePlaceholder>
   );
 }
 

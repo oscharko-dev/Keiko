@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -18,6 +20,7 @@ import {
   executeChatCreationRequest,
   EditorWindowSessionHost,
   FilesWindowSessionHost,
+  HOST_CHUNK_FALLBACKS,
   normalizedChatTitle,
   useChatCreationCoordinator,
 } from "./SelectionAwareWorkspaceHosts";
@@ -928,9 +931,11 @@ describe("ChatWindowSessionHost target missing", () => {
     );
 
     await screen.findByRole("status");
-    expect(reportClientDiagnosticMock).toHaveBeenCalledWith("desktop chat bind: started");
+    expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+      expect.stringMatching(/^desktop chat bind #\d+: started$/),
+    );
     const settledBefore = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
-      String(message).startsWith("desktop chat bind: settled"),
+      /^desktop chat bind #\d+: settled/.test(String(message)),
     );
     expect(settledBefore).toHaveLength(0);
 
@@ -938,7 +943,7 @@ describe("ChatWindowSessionHost target missing", () => {
 
     const messages = reportClientDiagnosticMock.mock.calls.map(([message]) => String(message));
     expect(messages).toContainEqual(
-      expect.stringMatching(/^desktop chat bind: settled after \d+ms$/),
+      expect.stringMatching(/^desktop chat bind #\d+: settled after \d+ms$/),
     );
     for (const message of messages) {
       expect(message).not.toContain("chat-a");
@@ -966,6 +971,49 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(await screen.findByTestId("chat-window")).toBeInTheDocument();
     expect(screen.queryByRole("status")).toBeNull();
     expect(document.querySelector("[data-chat-bind]")).toBeNull();
+  });
+
+  // The three lazy chunks behind the hosts must each report THEIR stage from the wiring itself: the
+  // test renders exactly the fallback component each `dynamic()` call is given and reads the source
+  // to prove those are the ones wired — a swap between the editor and files labels, or a fallback
+  // reverted to a shared one, is invisible to the factory's own test (#3376 review).
+  it("wires each lazy chunk to a fallback that reports the chunk's own stage", () => {
+    const expected = {
+      chatWindow: "desktop chat window chunk",
+      editorWidget: "desktop editor widget chunk",
+      filesWidget: "desktop files widget chunk",
+    } as const;
+    for (const [key, Fallback] of Object.entries(HOST_CHUNK_FALLBACKS) as [
+      keyof typeof HOST_CHUNK_FALLBACKS,
+      () => ReactNode,
+    ][]) {
+      reportClientDiagnosticMock.mockClear();
+      const view = render(
+        <I18nProvider>
+          <Fallback />
+        </I18nProvider>,
+      );
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.stringMatching(new RegExp(`^${expected[key]} #\\d+: started$`)),
+      );
+      view.unmount();
+    }
+    // The workspace lane runs from packages/keiko-ui, the root lane from the repository root.
+    const relative = "src/app/components/desktop/widgets/SelectionAwareWorkspaceHosts.tsx";
+    const candidate = resolve(process.cwd(), relative);
+    const source = readFileSync(
+      existsSync(candidate) ? candidate : resolve(process.cwd(), "packages/keiko-ui", relative),
+      "utf8",
+    );
+    expect(source).toMatch(
+      /import\("\.\.\/ChatWindow"\)[^;]*loading: HOST_CHUNK_FALLBACKS\.chatWindow/s,
+    );
+    expect(source).toMatch(
+      /import\("\.\/cards\/EditorWidget"\)[^;]*loading: HOST_CHUNK_FALLBACKS\.editorWidget/s,
+    );
+    expect(source).toMatch(
+      /import\("\.\/cards\/FilesWidget"\)[^;]*loading: HOST_CHUNK_FALLBACKS\.filesWidget/s,
+    );
   });
 
   it("rejects empty and whitespace-only titles at the owning normalization boundary", (): void => {

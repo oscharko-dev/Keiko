@@ -23,7 +23,7 @@ import { workspaceRootTargets } from "../workspaceRootTargets";
 import { BoundRootTarget, type BoundRootSurfaceType } from "./BoundRootTarget";
 import { createWindowChunkFallback } from "./WindowChunkFallback";
 
-const windowChunkFallback = createWindowChunkFallback("window chunk");
+const windowChunkFallback = createWindowChunkFallback("window chunk"); // i18n-exempt: diagnostic stage id, never rendered
 const ChatWindowSessionHost = dynamic(
   () => import("./SelectionAwareWorkspaceHosts").then((mod) => mod.ChatWindowSessionHost),
   { ssr: false, loading: windowChunkFallback },

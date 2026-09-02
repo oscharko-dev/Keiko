@@ -602,7 +602,10 @@ describe("cleanup safety refusals (SC4 — refusal is a successful outcome, neve
       mode: "complete",
     });
     expect(result.outcome).toBe("refused");
-    expect(result.refusalReason).toBe("worktree-dirty");
+    // A corrupt pointer is a DISPROVEN registration, not a migration: the row is refused because Keiko
+    // cannot vouch for the tree at all (ownership-unproven), never probed on the orphan path — and the
+    // uncommitted work stays exactly where it is (#3376 review).
+    expect(result.refusalReason).toBe("ownership-unproven");
     expect(existsSync(join(instance.managedWorktreePath, "wip.txt"))).toBe(true);
     expect(store.getById(instance.workspaceId)).toBeDefined();
   });
@@ -788,6 +791,41 @@ describe("identity proof failure fails cleanup closed", () => {
 
     expect(existsSync(instance.managedWorktreePath)).toBe(true);
     expect(store.getById(instance.workspaceId)?.lifecycleState).toBe("cleanup-pending");
+  });
+});
+
+// The gap between the safety gate's clean verdict and the removal is closed by git itself: the
+// removal is never forced, so a file written into the tree after the gate makes git refuse, and
+// the refusal is a `worktree-dirty` outcome with the tree untouched (#3376 review).
+describe("removal re-checks cleanliness through git, never --force", () => {
+  it("refuses a worktree that turned dirty after the safety gate and keeps the file", async () => {
+    const instance = await provisionTask("t-late-dirty");
+    setState(instance, "cleanup-pending");
+    const lateFile = join(instance.managedWorktreePath, "late.txt");
+    const racing: AdapterFactory = (workspace, correlationId, fs) => {
+      const real = realAdapter(workspace, correlationId, fs);
+      return {
+        ...real,
+        removeWorktree: (operands): Promise<WorktreeOperationResult> => {
+          // Written after the gate proved the tree clean, before git removes it.
+          writeFileSync(lateFile, "written after the safety gate\n");
+          expect(operands.force).toBe(false);
+          return real.removeWorktree(operands);
+        },
+      };
+    };
+
+    const result = await cleanup(store, racing).cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+
+    expect(result.outcome).toBe("refused");
+    expect(result.refusalReason).toBe("worktree-dirty");
+    expect(existsSync(lateFile)).toBe(true);
+    expect(store.getById(instance.workspaceId)).toBeDefined();
   });
 });
 

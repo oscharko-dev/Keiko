@@ -62,7 +62,10 @@ import type {
   WorkspaceOrphanCleanupResult,
   WorkspaceOrphanRefusal,
 } from "./types.js";
-import { resolveLifecycleManagedWorkspaceRootAccess } from "./workspace-root-access.js";
+import {
+  resolveLifecycleManagedWorkspaceRootAccess,
+  type WorkspaceRootAccess,
+} from "./workspace-root-access.js";
 
 const MAX_FIELD_LENGTH = 512;
 
@@ -274,28 +277,45 @@ function requestCleanupImpl(
 // leaves the directory and its uncommitted/untracked files on disk while git refuses to read it) is
 // treated as DIRTY. A structurally-broken tree that may still hold real work is therefore refused
 // rather than force-removed (SC4). A missing worktree (nothing to lose) probes not-dirty.
-// The dirty probe is a REAL `git status`, never a denial in disguise. A registered row is probed
-// through the re-proven managed authority when the identity proof holds; when it does not (a
-// registration under the retired schema, a filesystem without creation times, a replaced tree),
-// the denial is logged with this cleanup's correlation and the probe falls back to the same
-// contained, ownership-gated path an orphan directory is probed on. Converting the denial into
-// "dirty" stranded every such terminal row for good: cleanup refused forever without ever obtaining
-// a Git status (#3376 review P1). Containment, ownership, the lock and the operator approval are
-// still proven by the safety gate; only the identity-bound read authority is absent, exactly as it
-// is for an orphan.
+// The dirty probe is a REAL `git status`, never a denial in disguise — but only for the two verdicts
+// that leave the worktree's authenticity OPEN: a registration under the retired identity rule, or a
+// volume without creation times. Those rows are probed on the same contained, ownership-gated path
+// an orphan directory is probed on, and the denial is logged with this cleanup's correlation.
+// Converting the denial into "dirty" had stranded every such terminal row for good (#3376 review
+// P1). A DISPROVEN identity — a replaced tree, a path or kind failure — stays fail-closed: the row
+// is refused as ownership-unproven, because deleting whatever now occupies the registered path would
+// spend this row's operator approval on a tree Keiko has proven is not the one it registered.
+interface CleanupDirtyProbe {
+  readonly worktreeDirty: boolean;
+  // False when Keiko cannot vouch for the tree at all (disproven identity, adapter failure).
+  readonly proven: boolean;
+}
+
 async function probeCleanupDirty(
   ctx: CleanupCtx,
   worktreePath: string,
   probeable: boolean,
   registered: boolean,
-): Promise<boolean> {
-  if (!probeable) return false;
+  unprovenNotDisproven = false,
+): Promise<CleanupDirtyProbe> {
+  if (!probeable) return { worktreeDirty: false, proven: true };
   const access = registered
     ? resolveLifecycleManagedWorkspaceRootAccess(ctx.deps, worktreePath, {
         activityLog: ctx.deps.activityLog,
         correlationId: ctx.correlationId,
       })
     : undefined;
+  if (registered && access === undefined && !unprovenNotDisproven) {
+    return { worktreeDirty: false, proven: false };
+  }
+  return statusProbe(ctx, worktreePath, access);
+}
+
+async function statusProbe(
+  ctx: CleanupCtx,
+  worktreePath: string,
+  access: WorkspaceRootAccess | undefined,
+): Promise<CleanupDirtyProbe> {
   const workspace =
     access === undefined
       ? workspaceInfo(worktreePath)
@@ -304,9 +324,9 @@ async function probeCleanupDirty(
     const status = await ctx.deps
       .createAdapter(workspace, ctx.correlationId, access?.fs)
       .worktreeStatus();
-    return !status.ok || status.dirty;
+    return { worktreeDirty: !status.ok || status.dirty, proven: true };
   } catch {
-    return true;
+    return { worktreeDirty: true, proven: true };
   }
 }
 
@@ -340,18 +360,19 @@ async function evaluateLiveCleanupSafety(
     instance,
     ctx.deps.now(),
   );
-  const worktreeDirty = await probeCleanupDirty(
+  const probe = await probeCleanupDirty(
     ctx,
     instance.managedWorktreePath,
     facts.worktreeDirExists && facts.pathContained,
     true,
+    facts.gitdirIdentitySchemaRetired === true || facts.gitdirIdentityUnsupported === true,
   );
   return evaluateWorkspaceCleanupSafety({
     lifecycleState: instance.lifecycleState,
     hasRecord: true,
     pathContained: facts.pathContained,
-    ownershipProven: isManagedRootOwned(ctx.deps.managedRoot),
-    worktreeDirty,
+    ownershipProven: isManagedRootOwned(ctx.deps.managedRoot) && probe.proven,
+    worktreeDirty: probe.worktreeDirty,
     lockLive: facts.lockLive,
   });
 }
@@ -367,11 +388,17 @@ async function removeManagedWorktree(
 ): Promise<RemovalOutcome> {
   try {
     const adapter = ctx.deps.createAdapter(detectWorkspaceAt(repositoryRoot), ctx.correlationId);
-    const removal = await adapter.removeWorktree({ worktreePath, force: true });
+    // Never `--force`: the safety gate proved the tree clean a moment ago, and git's own refusal of
+    // a worktree that holds modified or untracked files is the re-check that closes the gap between
+    // that proof and the removal (#3376 review). A refusal here is a `worktree-dirty` outcome, and
+    // the tree stays exactly as it is.
+    const removal = await adapter.removeWorktree({ worktreePath, force: false });
     await adapter.pruneWorktrees();
     if (existsSync(worktreePath)) {
-      const dirty = await probeCleanupDirty(ctx, worktreePath, true, true);
-      if (dirty || !removal.ok) {
+      // git refused (modified or untracked files arrived after the gate), or the directory git no
+      // longer tracks survived: the surviving tree is re-probed on the terms it was admitted on.
+      const probe = await probeCleanupDirty(ctx, worktreePath, true, true, true);
+      if (!removal.ok || probe.worktreeDirty) {
         return { removed: false, refusalReason: "worktree-dirty" };
       }
       safelyRemoveManagedPath(ctx.deps.managedRoot, worktreePath);
@@ -539,7 +566,7 @@ async function cleanupOneOrphan(
   // Fail closed: an orphan whose `git status` is inconclusive (broken pointer) is treated as dirty and
   // refused, never force-removed (SC4) — it may still hold uncommitted work.
   const probeable = pathContained && ownershipProven;
-  const worktreeDirty = await probeCleanupDirty(ctx, candidate, probeable, false);
+  const worktreeDirty = (await probeCleanupDirty(ctx, candidate, probeable, false)).worktreeDirty;
   const decision = evaluateWorkspaceCleanupSafety({
     lifecycleState: "abandoned",
     hasRecord: false,
@@ -554,7 +581,7 @@ async function cleanupOneOrphan(
       refusal: { orphanId, refusalReason: decision.refusalReason ?? "path-escape" },
     };
   }
-  const stillDirty = await probeCleanupDirty(ctx, candidate, probeable, false);
+  const stillDirty = (await probeCleanupDirty(ctx, candidate, probeable, false)).worktreeDirty;
   if (stillDirty) {
     return {
       removed: false,

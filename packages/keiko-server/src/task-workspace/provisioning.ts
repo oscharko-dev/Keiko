@@ -19,6 +19,7 @@ import { isSafeGitRefName } from "@oscharko-dev/keiko-tools/internal/git-mutatio
 import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type {
   TaskWorkspaceDriftMarker,
+  TaskWorkspaceHealth,
   TaskWorkspaceLifecycleState,
   WorkspaceEventType,
   WorkspaceInfo,
@@ -62,8 +63,9 @@ import {
   runWithWorkspaceLifecycleFailureLogging,
 } from "./activity-log.js";
 import {
-  probeCreationTimeSupport,
-  type CreationTimeSupport,
+  proveCreationTimeSupport,
+  type ProvenCreationTimeSupport,
+  type RepositoryCreationTimeSupport,
 } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { correlationIdOrUnknown } from "../correlation.js";
 import {
@@ -150,12 +152,26 @@ function isoFrom(nowMs: number): string {
   return new Date(nowMs).toISOString();
 }
 
-function unsupportedIdentityError(support: CreationTimeSupport = "absent"): TaskWorkspaceError {
+function unsupportedIdentityError(
+  support: RepositoryCreationTimeSupport = "absent",
+): TaskWorkspaceError {
   return new TaskWorkspaceError(
     "POINTER_DRIFT",
     support === "inconclusive" ? INCONCLUSIVE_IDENTITY_MESSAGE : UNSUPPORTED_IDENTITY_MESSAGE,
     ["identity-unsupported"],
   );
+}
+
+// Every volume the identity hashes must be proven: the managed root by probe, the repository
+// read-only or shared with the managed root. The first verdict that is not durable names the reason.
+function unprovenVolume(
+  support: ProvenCreationTimeSupport,
+): RepositoryCreationTimeSupport | undefined {
+  if (support.managedRoot !== "durable") return support.managedRoot;
+  if (support.repository !== "durable" && support.repository !== "same-volume") {
+    return support.repository;
+  }
+  return undefined;
 }
 
 const INCONCLUSIVE_IDENTITY_MESSAGE =
@@ -172,13 +188,16 @@ function requiredGitdirIdentity(
   repositoryRoot: string,
   correlationId: string | undefined,
 ): string {
-  const probe = ctx.deps.probeCreationTimeSupport ?? probeCreationTimeSupport;
-  const support = probe(ctx.deps.managedRoot);
+  const prove = ctx.deps.proveCreationTimeSupport ?? proveCreationTimeSupport;
+  const support = prove(ctx.deps.managedRoot, repositoryRoot);
   logWorkspaceIdentityProbe(ctx.deps, { correlationId, support });
-  // Only a PROVEN durable creation time mints: an inconclusive probe (the root and its parent both
-  // created within one timestamp granule) fails closed too, with a message that says retry, rather
-  // than minting an identity the invariant has no evidence for (#3376 review).
-  if (support !== "durable") throw unsupportedIdentityError(support);
+  // Only PROVEN durable volumes mint: the managed root by probe, the repository read-only (its
+  // metadata is a user's data; nothing is written there) or shared with the managed root. An
+  // inconclusive verdict (everything created within one timestamp granule) fails closed too, with a
+  // message that says retry, rather than minting an identity the invariant has no evidence for
+  // (#3376 review).
+  const unproven = unprovenVolume(support);
+  if (unproven !== undefined) throw unsupportedIdentityError(unproven);
   const outcome = inspectManagedGitdirIdentityOutcome(worktreePath, repositoryRoot);
   switch (outcome.kind) {
     case "identified":
@@ -186,11 +205,16 @@ function requiredGitdirIdentity(
     case "unsupported":
       throw unsupportedIdentityError();
     case "failed":
+      // Retryable and non-destructive: the same proof-could-not-run outcome every other path
+      // classifies as IDENTITY_PROOF_FAILED; failProvisioning rolls back only a worktree this call
+      // created (#3376 review).
       throw new TaskWorkspaceError(
-        "PROVISIONING_FAILED",
+        "IDENTITY_PROOF_FAILED",
         "managed worktree identity proof failed",
         [],
-        { cause: outcome.cause },
+        {
+          cause: outcome.cause,
+        },
       );
     case "unproven":
       throw new TaskWorkspaceError(
@@ -495,6 +519,12 @@ async function materializeWorktree(
 // Persists the partial-failure state visibly (SC4): the instance moves to `failed`/`recovery-required`
 // with the lock released so a retry is unblocked, and a best-effort rollback removes the half-created
 // worktree.
+// A proof that could not run says nothing about the worktree: `unknown`, not `drifted`.
+function failedProvisioningHealth(error: TaskWorkspaceError): TaskWorkspaceHealth {
+  if (error.code === "IDENTITY_PROOF_FAILED") return "unknown";
+  return error.outcome === "retry-required" ? "drifted" : "degraded";
+}
+
 async function failProvisioning(
   repo: RepositoryContext,
   ctx: ProvisioningCtx,
@@ -502,20 +532,26 @@ async function failProvisioning(
   error: TaskWorkspaceError,
   nowMs: number,
   correlationId: string | undefined,
+  // Only a worktree THIS call materialized is rolled back. A completion or an operator-approved
+  // repair runs over an existing worktree, and a transient proof failure there must never delete
+  // it (#3376 review).
+  createdHere: boolean,
 ): Promise<never> {
   const target: TaskWorkspaceLifecycleState =
     error.outcome === "retry-required" ? "recovery-required" : "failed";
-  try {
-    await repo.adapter.removeWorktree({ worktreePath: repo.worktreePath, force: true });
-    await repo.adapter.pruneWorktrees();
-  } catch {
-    // Rollback is best-effort; the visible state plus drift markers drive #447 repair.
+  if (createdHere) {
+    try {
+      await repo.adapter.removeWorktree({ worktreePath: repo.worktreePath, force: true });
+      await repo.adapter.pruneWorktrees();
+    } catch {
+      // Rollback is best-effort; the visible state plus drift markers drive #447 repair.
+    }
   }
   const driftMarker = error.code === "POINTER_DRIFT" ? driftMarkerFromError(error) : undefined;
   ctx.deps.store.upsert({
     ...provisioning,
     lifecycleState: target,
-    health: error.outcome === "retry-required" ? "drifted" : "degraded",
+    health: failedProvisioningHealth(error),
     lock: null,
     updatedAt: isoFrom(nowMs),
     driftMarkers: driftMarker === undefined ? [] : [driftMarker],
@@ -557,8 +593,9 @@ function resumeExisting(
     // bound the pointer stamps is UNPROVEN under a proof that cannot see a replacement — not proven
     // replaced — and telling an operator it changed sends them after an incident the evidence does
     // not show. (Nor is it proven intact: the retired proof cannot tell either way.)
-    return flagResumableDrift(
+    return flagDrift(
       ctx,
+      "provision",
       existing,
       nowMs,
       correlationId,
@@ -586,11 +623,14 @@ function resumeExisting(
   return { instance: refreshed, binding: buildBinding(refreshed), created: false };
 }
 
-// An active/paused workspace whose managed worktree vanished or changed identity is drift, not a
-// re-provision: the contract forbids re-entering `provisioning`, so it moves to `recovery-required`
-// and #447 owns the repair.
-function flagResumableDrift(
+// A workspace whose managed worktree vanished, was replaced, predates the identity rule or sits on a
+// volume without creation times is drift, not a re-provision: the contract forbids re-entering
+// `provisioning`, so the row moves to `recovery-required` with the classified marker and its hint,
+// the event carries the marker, and the request is refused. One helper for the provision and the
+// activation paths — the two used to be near-identical copies (#3376 review).
+function flagDrift(
   ctx: ProvisioningCtx,
+  operation: WorkspaceLifecycleOperation,
   existing: WorkspaceInstance,
   nowMs: number,
   correlationId: string | undefined,
@@ -607,7 +647,7 @@ function flagResumableDrift(
     recoveryHints: planWorkspaceRecoveryHints([marker]),
   });
   emit(ctx, {
-    operation: "provision",
+    operation,
     outcome: "retry-required",
     type: "drift-detected",
     workspaceId: drifted.workspaceId,
@@ -634,7 +674,7 @@ function reuseExistingOrUndefined(
   if (RESUMABLE_STATES.has(existing.lifecycleState)) {
     return managedTargetExists(repo.worktreePath)
       ? resumeExisting(ctx, repo, existing, nowMs, correlationId)
-      : flagResumableDrift(ctx, existing, nowMs, correlationId);
+      : flagDrift(ctx, "provision", existing, nowMs, correlationId);
   }
   if (!COMPLETABLE_STATES.has(existing.lifecycleState)) {
     // Terminal state (archived/merged/abandoned/cleanup-pending): idempotent no-op, return as-is.
@@ -659,8 +699,9 @@ function reuseExistingOrUndefined(
       existing.gitdirIdentity,
     );
     if (drift !== "matches") {
-      return flagResumableDrift(
+      return flagDrift(
         ctx,
+        "provision",
         existing,
         nowMs,
         correlationId,
@@ -680,7 +721,7 @@ async function runWorktreeMutation(
   request: WorkspaceProvisionRequest,
   provisioning: WorkspaceInstance,
 ): Promise<WorkspaceProvisionResult> {
-  let created: boolean;
+  let created = false;
   let identity: string;
   try {
     created = await materializeWorktree(repo, request);
@@ -703,6 +744,7 @@ async function runWorktreeMutation(
       failure,
       ctx.deps.now(),
       request.correlationId,
+      created,
     );
   }
   const active = finalizeActive(ctx, provisioning, identity, ctx.deps.now());
@@ -843,39 +885,6 @@ function assertActivatable(
   }
 }
 
-function flagActivateDrift(
-  ctx: ProvisioningCtx,
-  instance: WorkspaceInstance,
-  nowMs: number,
-  correlationId: string | undefined,
-  marker: TaskWorkspaceDriftMarker = "worktree-missing",
-  message = "managed worktree is missing",
-): never {
-  const drifted = ctx.deps.store.upsert({
-    ...instance,
-    lifecycleState: "recovery-required",
-    health: marker === "worktree-missing" ? "missing" : "drifted",
-    lock: null,
-    updatedAt: isoFrom(nowMs),
-    driftMarkers: [marker],
-    recoveryHints: planWorkspaceRecoveryHints([marker]),
-  });
-  emit(ctx, {
-    operation: "activate",
-    outcome: "retry-required",
-    type: "drift-detected",
-    workspaceId: drifted.workspaceId,
-    taskId: drifted.taskId,
-    nowMs,
-    correlationId,
-    fromState: instance.lifecycleState,
-    toState: "recovery-required",
-    errorCode: "POINTER_DRIFT",
-    driftMarker: marker,
-  });
-  throw new TaskWorkspaceError("POINTER_DRIFT", message);
-}
-
 // The gated activation critical section, run under the `ws:<workspaceId>` mutex key (#449, ADR-0093 D1)
 // so a concurrent activate/pause/repair/cleanup of the same workspace serializes. The advisory
 // cross-actor LOCK_CONTENTION check (assertActivatable) stays INSIDE.
@@ -894,8 +903,9 @@ function assertActivationIdentityCurrent(
     instance.gitdirIdentity,
   );
   if (drift === "matches") return;
-  flagActivateDrift(
+  flagDrift(
     ctx,
+    "activate",
     instance,
     nowMs,
     correlationId,
@@ -916,7 +926,7 @@ function activateLocked(
   assertActivatable(ctx, instance, request, nowMs);
   assertPersistedManagedPath(ctx, instance);
   if (!managedTargetExists(instance.managedWorktreePath)) {
-    flagActivateDrift(ctx, instance, nowMs, request.correlationId);
+    flagDrift(ctx, "activate", instance, nowMs, request.correlationId);
   }
   assertActivationIdentityCurrent(ctx, instance, nowMs, request.correlationId);
   ensureManagedWorkspaceIdentity(ctx, instance, false);

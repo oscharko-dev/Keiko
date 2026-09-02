@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
+import { TaskWorkspaceError } from "./errors.js";
 import type { TaskWorkspaceDriftMarker } from "@oscharko-dev/keiko-contracts";
 import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 import {
   forwardWorkspaceFs,
   nodeWorkspaceFs,
+  WorkspaceDescriptorReadError,
   type WorkspaceDescriptorUtf8Read,
   type WorkspaceFs,
   type WorkspaceStat,
@@ -136,8 +138,8 @@ export type ManagedIdentityDrift = "matches" | "schema-retired" | "unsupported" 
  * platform limitation as a replaced worktree is a false statement that sends them hunting an attack.
  *
  * A `failed` proof is not a drift verdict at all: an EIO or EACCES says nothing about the worktree,
- * so it is rethrown with its cause for the caller's error path (frames, correlation) rather than
- * folded into `changed` — which would persist a false replacement on the row.
+ * so it is thrown as the classified, retryable IDENTITY_PROOF_FAILED (cause preserved) for the
+ * caller's error path rather than folded into `changed` — which would persist a false replacement.
  */
 export function managedIdentityDriftFor(
   outcome: ManagedGitdirIdentityOutcome,
@@ -150,20 +152,18 @@ export function managedIdentityDriftFor(
   return outcome.inspection.legacyIdentity === persisted ? "schema-retired" : "changed";
 }
 
-/**
- * Thrown by the drift classifier when the proof itself could not run (EIO, EACCES, a vanished path).
- * `cause` is the I/O failure. Callers narrow on this class: a read path answers it as a classified
- * retryable error, a batch path isolates it per instance, a destructive path fails closed on it.
- */
-export class ManagedIdentityProofError extends Error {
-  public constructor(cause: unknown) {
-    super("managed worktree identity proof failed", { cause });
-    this.name = "ManagedIdentityProofError";
-  }
-}
-
-function proofFailure(cause: unknown): ManagedIdentityProofError {
-  return new ManagedIdentityProofError(cause);
+// A proof that could not run (EIO, EACCES, a vanished path) leaves here as the classified, retryable
+// IDENTITY_PROOF_FAILED with its cause — one vocabulary for every caller: a read path answers it, a
+// batch path isolates it per instance, a destructive path fails closed on it.
+function proofFailure(cause: unknown): TaskWorkspaceError {
+  return new TaskWorkspaceError(
+    "IDENTITY_PROOF_FAILED",
+    "managed worktree identity proof failed",
+    [],
+    {
+      cause,
+    },
+  );
 }
 
 export const RETIRED_IDENTITY_SCHEMA_MESSAGE =
@@ -196,17 +196,6 @@ export function liveManagedIdentityDrift(
 ): ManagedIdentityDrift {
   return managedIdentityDriftFor(
     inspectManagedGitdirIdentityOutcome(worktreePath, repositoryRoot, fs),
-    persisted,
-  );
-}
-
-/** Convenience for the callers that already hold an inspection rather than a full outcome. */
-export function managedIdentityDrift(
-  inspection: ManagedGitdirIdentityInspection | undefined,
-  persisted: string,
-): ManagedIdentityDrift {
-  return managedIdentityDriftFor(
-    inspection === undefined ? { kind: "unproven" } : { kind: "identified", inspection },
     persisted,
   );
 }
@@ -295,6 +284,11 @@ export function inspectManagedGitdirIdentityOutcome(
   try {
     inspection = inspectManagedGitdirIdentityOrThrow(worktreePath, repositoryRoot, witness.fs);
   } catch (cause) {
+    // A descriptor-safe read REFUSING a pointer — a symlink, a hard link, an oversized file, a lineage
+    // that changed under the read — is a deterministic verdict about the pointer, not an I/O failure:
+    // the identity is unproven, and retrying will not change that (#3376 review). Only a real I/O
+    // failure is `failed`.
+    if (cause instanceof WorkspaceDescriptorReadError) return { kind: "unproven" };
     return { kind: "failed", cause };
   }
   if (inspection !== undefined) return { kind: "identified", inspection };
@@ -464,10 +458,6 @@ function stillCurrent(
   );
 }
 
-function underCommonWorktrees(adminDirectory: string, commonDirectory: string): boolean {
-  return samePath(dirname(adminDirectory), join(commonDirectory, "worktrees"));
-}
-
 function composeIdentity(
   schema: string,
   paths: readonly string[],
@@ -539,7 +529,8 @@ function inspectManagedGitdirIdentityOrThrow(
   if (
     commonDirectory === undefined ||
     pointer === undefined ||
-    !underCommonWorktrees(pointer.canonicalAdminDirectory, commonDirectory.path) ||
+    // The admin directory's parent is enforced inside resolveAdminDirectory (raw and canonical); a
+    // second check here would be provably redundant, so the proof does not repeat it.
     !stillCurrent(fs, worktreePath, pointer, commonDirectory)
   ) {
     return undefined;

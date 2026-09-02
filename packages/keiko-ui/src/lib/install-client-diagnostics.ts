@@ -57,6 +57,11 @@ function writeToBrowserConsole(message: string): void {
 // failing transport, retry the same failing POST on every diagnostic: a reporting loop.
 const DIAGNOSTIC_DELIVERY_FAILURE_NOTICE =
   "[keiko] diagnostic delivery to the server failed; the diagnostic above (if any) was not recorded server-side.";
+// Same reasoning as the failure notice: a throttled drop must leave a trace in the console, or the
+// busiest boot — the one most likely to hold a real stall — is the one whose evidence vanishes silently.
+// Written once per throttled window, never per dropped diagnostic.
+const DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE =
+  "[keiko] diagnostic delivery to the server is throttled; further diagnostics in this window stay console-only.";
 
 // Mirrors the server's SAFE_CORRELATION_ID predicate (packages/keiko-server/src/correlation.ts).
 // keiko-ui may only depend on the server through the shared contract types (AGENTS.md §4), never on
@@ -172,6 +177,7 @@ export function resetClientDiagnosticPostStateForTests(): void {
 function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMeta): void {
   if (!admittedByClientPostRateLimit(Date.now())) {
     postThrottledCount += 1;
+    if (postThrottledCount === 1) writeToBrowserConsole(DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE);
     return;
   }
   try {

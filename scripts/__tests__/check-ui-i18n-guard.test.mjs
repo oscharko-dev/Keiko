@@ -5,17 +5,18 @@ import { dirname, join } from "node:path";
 import { expect, test } from "vitest";
 
 import {
-  DE_CATALOG,
-  EN_CATALOG,
-  I18N_EXEMPT_MIN_REASON,
-  LITERAL_BASELINE,
   changedFilesFromGit,
   changedFilesFromInput,
   checkUiI18nGuard,
+  DE_CATALOG,
+  EN_CATALOG,
   hasI18nRelevantAddedLine,
+  hasNewI18nSignature,
   hasUserFacingTextLine,
+  I18N_EXEMPT_MIN_REASON,
   isTranslatableCopy,
   isUiProductionSource,
+  LITERAL_BASELINE,
   untranslatedLiteralsInLine,
   untranslatedLiteralsInSource,
 } from "../check-ui-i18n-guard.mjs";
@@ -2300,4 +2301,23 @@ test("treats a registry label literal as an i18n-relevant added line", () => {
   expect(hasI18nRelevantAddedLine('  { id: "files", label: "Files" },')).toBe(true);
   expect(hasI18nRelevantAddedLine('  label: t("window.field.folder"),')).toBe(true);
   expect(hasI18nRelevantAddedLine("  const total = left + right;")).toBe(false);
+});
+
+// A translated value moving between files is not new text (#3376): a `t("key")` whose key both shared
+// catalogs already hold, and the i18n API adopted alongside only such keys, must not force a catalog
+// touch — while an unknown key, or the API adopted with no literal key at all, stays relevant.
+test("hasNewI18nSignature: a known key moving into a file is not a new signature", () => {
+  const known = new Set(["common.loading"]);
+  expect(hasNewI18nSignature(['      {t("common.loading")}'], [], known)).toBe(false);
+  expect(
+    hasNewI18nSignature(["  const t = useTranslate();", '  {t("common.loading")}'], [], known),
+  ).toBe(false);
+});
+
+test("hasNewI18nSignature: an unknown key, or the API with no literal key, is new", () => {
+  const known = new Set(["common.loading"]);
+  expect(hasNewI18nSignature(['      {t("brand.new")}'], [], known)).toBe(true);
+  expect(hasNewI18nSignature(["  const t = useTranslate();"], [], known)).toBe(true);
+  // The same patch removing the signature from this file keeps the old rule.
+  expect(hasNewI18nSignature(['{t("brand.new")}'], ['{t("brand.new")}'], known)).toBe(false);
 });

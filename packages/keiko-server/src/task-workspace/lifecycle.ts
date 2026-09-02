@@ -26,6 +26,7 @@ import type {
   WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  isLegalTaskWorkspaceTransition,
   planWorkspaceRecoveryHints,
   TASK_WORKSPACE_SCHEMA_VERSION,
   validateTaskWorkspaceTransition,
@@ -41,12 +42,12 @@ import {
   liveManagedIdentityDrift,
   managedIdentityDriftMarker,
   managedIdentityDriftMessage,
-  ManagedIdentityProofError,
   type ManagedIdentityDrift,
 } from "./gitdir-identity.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import {
   logWorkspaceLifecycle,
+  logWorkspaceLifecycleFailure,
   recordWorkspaceLifecycle,
   runWithWorkspaceLifecycleFailureLogging,
 } from "./activity-log.js";
@@ -168,7 +169,11 @@ function assertBindableManagedPath(ctx: LifecycleCtx, instance: WorkspaceInstanc
   }
 }
 
-function canExposeBinding(ctx: LifecycleCtx, instance: WorkspaceInstance): boolean {
+function canExposeBinding(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  correlationId: string | undefined,
+): boolean {
   if (instance.lifecycleState !== "active" && instance.lifecycleState !== "handoff-ready") {
     return false;
   }
@@ -184,12 +189,14 @@ function canExposeBinding(ctx: LifecycleCtx, instance: WorkspaceInstance): boole
   // caller exactly as for any other non-bindable instance.
   const drift = identityDriftOf(ctx, instance);
   if (drift === "matches") return true;
+  // A synchronous read-time check: `attempt`, `durationMs` and `worktreeCount` are the line's
+  // required shape, not measurements of this refusal.
   logWorkspaceLifecycle(ctx.deps, {
     operation: "activate",
     outcome: "retry-required",
     workspaceId: instance.workspaceId,
     taskId: instance.taskId,
-    correlationId: undefined,
+    correlationId,
     attempt: 1,
     durationMs: 0,
     worktreeCount: 0,
@@ -199,27 +206,62 @@ function canExposeBinding(ctx: LifecycleCtx, instance: WorkspaceInstance): boole
   return false;
 }
 
-// A proof that could not run is not a verdict. On the active read and on a readiness transition it
-// surfaces as the classified, retryable IDENTITY_PROOF_FAILED with its cause — never as an unbound
-// application (that would drop the pointer on a transient EIO) and never as a raw 500 (Cursor review
-// on f50133b95). The pointer and the row are left exactly as they were.
-function identityDriftOf(ctx: LifecycleCtx, instance: WorkspaceInstance): ManagedIdentityDrift {
+// The live four-way verdict, or the injected one in tests. A proof that could not run arrives as the
+// classified, retryable IDENTITY_PROOF_FAILED (thrown by the classifier itself) and is left alone:
+// the active read answers it — never an unbound application, which would drop the pointer on a
+// transient EIO, and never a raw 500 — and a readiness transition refuses without touching the row.
+// The read path is synchronous and not wrapped by the lifecycle failure logger, so a proof that could
+// not run is logged here once — errorKind, frames, cause chain, the request's correlation — before
+// it is rethrown for the route's classified 503 (#3376 review).
+function exposableOrThrow(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  correlationId: string | undefined,
+): boolean {
   try {
-    const prove = ctx.deps.identityDrift;
-    if (prove !== undefined) return prove(instance);
-    return liveManagedIdentityDrift(
-      instance.managedWorktreePath,
-      instance.repositoryRoot,
-      instance.gitdirIdentity,
-    );
+    return canExposeBinding(ctx, instance, correlationId);
   } catch (error) {
-    if (error instanceof ManagedIdentityProofError) {
-      throw new TaskWorkspaceError("IDENTITY_PROOF_FAILED", error.message, [], {
-        cause: error.cause,
-      });
+    if (error instanceof TaskWorkspaceError) {
+      logWorkspaceLifecycleFailure(
+        ctx.deps,
+        { operation: "activate", workspaceIdentitySeed: instance.workspaceId, correlationId },
+        error,
+      );
     }
     throw error;
   }
+}
+
+function identityDriftOf(ctx: LifecycleCtx, instance: WorkspaceInstance): ManagedIdentityDrift {
+  const prove = ctx.deps.identityDrift;
+  if (prove !== undefined) return prove(instance);
+  return liveManagedIdentityDrift(
+    instance.managedWorktreePath,
+    instance.repositoryRoot,
+    instance.gitdirIdentity,
+  );
+}
+
+// The admission order matters (#3376 review): legality first — a transition the contract forbids
+// (a terminal workspace cannot hand off) is refused as ILLEGAL_TRANSITION before any proof could move
+// the row; then the live lock — another actor's lock refuses as LOCK_CONTENTION before the proof
+// could flag the row and clear that lock; only then the identity proof.
+function admitTransition(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  spec: DirectTransitionSpec,
+  request: WorkspaceLifecycleActionRequest,
+  nowMs: number,
+): TaskWorkspaceTransitionContext {
+  if (!isLegalTaskWorkspaceTransition(instance.lifecycleState, spec.to)) {
+    throw new TaskWorkspaceError(
+      "ILLEGAL_TRANSITION",
+      `cannot ${spec.operation} workspace from ${instance.lifecycleState}`,
+    );
+  }
+  const context = resolveTransitionContext(ctx, instance, request.requestedBy, nowMs);
+  assertIdentityCurrentFor(ctx, instance, spec, nowMs, request.correlationId);
+  return context;
 }
 
 function assertIdentityCurrentFor(
@@ -249,7 +291,7 @@ function flagTransitionDrift(
   const drifted = ctx.deps.store.upsert({
     ...instance,
     lifecycleState: "recovery-required",
-    health: "drifted",
+    health: marker === "worktree-missing" ? "missing" : "drifted",
     lock: null,
     updatedAt: isoFrom(nowMs),
     driftMarkers: [marker],
@@ -316,8 +358,7 @@ function runDirectTransition(
   assertSafeFieldValue(request.requestedBy, "requestedBy");
   const instance = loadInstance(ctx, request.workspaceId);
   const nowMs = ctx.deps.now();
-  assertIdentityCurrentFor(ctx, instance, spec, nowMs, request.correlationId);
-  const context = resolveTransitionContext(ctx, instance, request.requestedBy, nowMs);
+  const context = admitTransition(ctx, instance, spec, request, nowMs);
   const validation = validateTaskWorkspaceTransition({
     from: instance.lifecycleState,
     to: spec.to,
@@ -407,7 +448,10 @@ async function setActiveImpl(
   return { instance: result.instance, binding: result.binding, pointer };
 }
 
-function getActiveImpl(ctx: LifecycleCtx): ActiveWorkspaceView | undefined {
+function getActiveImpl(
+  ctx: LifecycleCtx,
+  correlationId: string | undefined,
+): ActiveWorkspaceView | undefined {
   const pointer = ctx.deps.activePointerStore.get();
   if (pointer === undefined) return undefined;
   const instance = ctx.deps.store.getById(pointer.workspaceId);
@@ -417,7 +461,7 @@ function getActiveImpl(ctx: LifecycleCtx): ActiveWorkspaceView | undefined {
     ctx.deps.activePointerStore.clear();
     return undefined;
   }
-  if (!canExposeBinding(ctx, instance)) {
+  if (!exposableOrThrow(ctx, instance, correlationId)) {
     ctx.deps.activePointerStore.clear();
     return undefined;
   }
@@ -525,7 +569,8 @@ export function createWorkspaceLifecycleService(
   const ctx: LifecycleCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
   return {
     list: (repositoryRoot: string): readonly WorkspaceInstance[] => listImpl(ctx, repositoryRoot),
-    getActive: (): ActiveWorkspaceView | undefined => getActiveImpl(ctx),
+    getActive: (correlationId?: string): ActiveWorkspaceView | undefined =>
+      getActiveImpl(ctx, correlationId),
     setActive: (request: SetActiveWorkspaceRequest): Promise<ActiveWorkspaceView> =>
       runLoggedSetActive(ctx, request),
     clearActive: (): void => {

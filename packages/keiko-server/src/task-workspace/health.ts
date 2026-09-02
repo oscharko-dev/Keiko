@@ -41,9 +41,12 @@ import { isManagedRootOwned, isManagedTargetContained } from "./managed-root.js"
 import { gatherInstanceReconciliationFacts } from "./reconciliation.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import type { WorkspaceHealthService, WorkspaceHealthServiceDeps } from "./types.js";
-import { resolveLifecycleManagedWorkspaceRootAccess } from "./workspace-root-access.js";
+import {
+  resolveLifecycleManagedWorkspaceRootAccess,
+  type WorkspaceRootAccess,
+} from "./workspace-root-access.js";
 import { runWithWorkspaceLifecycleFailureLogging } from "./activity-log.js";
-import { TaskWorkspaceError } from "./errors.js";
+import { isIdentityProofFailure } from "./errors.js";
 
 const ORPHAN_ID_PREFIX = "orph_";
 
@@ -61,8 +64,9 @@ export function deriveOrphanId(repositoryId: string, leaf: string): string {
   );
 }
 
-// `probed` is false only when the status adapter itself threw: the report then cannot claim to know
-// the tree, so the entry is held as ownership-unproven rather than as clean.
+// `probed` is false when the status adapter threw, or when a registered row's identity was DISPROVEN
+// (replaced tree, path or kind failure): the report then cannot claim to know the tree, so the entry
+// is held as ownership-unproven rather than as clean.
 interface DirtyProbe {
   readonly worktreeDirty: boolean;
   readonly probed: boolean;
@@ -72,12 +76,17 @@ interface DirtyProbe {
 // contained. Ordinary git-status failure reports not-dirty because the structural classification
 // already surfaces a broken/missing worktree. Failure to re-prove a registered managed root is
 // different: it is returned explicitly so the caller cannot classify that workspace as healthy.
+// `unprovenNotDisproven` is true only for the two verdicts that leave the worktree's authenticity
+// open — a registration under the retired identity rule, or a volume without creation times. A
+// replaced tree (`changed`), a path or kind failure are DISPROVEN or malformed registrations and stay
+// fail-closed: probed on nothing, reported as ownership unproven (#3376 review).
 async function probeDirty(
   deps: WorkspaceHealthServiceDeps,
   worktreePath: string,
   probeable: boolean,
   registered: boolean,
   correlationId: string,
+  unprovenNotDisproven = false,
 ): Promise<DirtyProbe> {
   if (!probeable) return { worktreeDirty: false, probed: true };
   const access = registered
@@ -86,9 +95,21 @@ async function probeDirty(
         correlationId,
       })
     : undefined;
-  // A denied identity proof is evidence (logged above under this report's correlation), not a
-  // containment or ownership finding: the probe falls back to the orphan-style contained path so
-  // the report predicts what governed cleanup will actually decide (#3376 review P1/P2).
+  if (registered && access === undefined && !unprovenNotDisproven) {
+    return { worktreeDirty: false, probed: false };
+  }
+  // A retired or unsupported identity is evidence (logged above under this report's correlation),
+  // not a containment or ownership finding: the probe falls back to the orphan-style contained path
+  // so the report predicts what governed cleanup will actually decide (#3376 review P1/P2).
+  return statusProbe(deps, worktreePath, access, correlationId);
+}
+
+async function statusProbe(
+  deps: WorkspaceHealthServiceDeps,
+  worktreePath: string,
+  access: WorkspaceRootAccess | undefined,
+  correlationId: string,
+): Promise<DirtyProbe> {
   const workspace =
     access === undefined
       ? workspaceInfo(worktreePath)
@@ -143,6 +164,7 @@ async function evaluateInstance(
     facts.worktreeDirExists && facts.pathContained,
     true,
     correlationId,
+    facts.gitdirIdentitySchemaRetired === true || facts.gitdirIdentityUnsupported === true,
   );
   // A managed-access denial is an ownership finding, never a containment one: `pathContained` was
   // proven from the real path by reconciliation, and the identity markers already ride in `facts`.
@@ -178,7 +200,7 @@ async function evaluateInstanceOrCarryForward(
   try {
     return await runWithWorkspaceLifecycleFailureLogging(
       deps,
-      { operation: "reconcile", workspaceIdentitySeed: instance.workspaceId, correlationId },
+      { operation: "health", workspaceIdentitySeed: instance.workspaceId, correlationId },
       () =>
         evaluateInstance(
           deps,
@@ -191,9 +213,9 @@ async function evaluateInstanceOrCarryForward(
         ),
     );
   } catch (error) {
-    if (!(error instanceof TaskWorkspaceError) || error.code !== "IDENTITY_PROOF_FAILED") {
-      throw error;
-    }
+    if (!isIdentityProofFailure(error)) throw error;
+    // Markers and hints are the last VERIFIED classification; `unknown` and `recovery-required` say
+    // this pass could not verify them, and cleanup stays off the table.
     return deriveWorkspaceHealthEntry({
       workspaceId: instance.workspaceId,
       taskId: instance.taskId,

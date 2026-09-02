@@ -5,6 +5,7 @@
 
 import {
   closeSync,
+  existsSync,
   constants as fsConstants,
   fstatSync,
   lstatSync,
@@ -908,8 +909,9 @@ export interface CreationTimeObservation {
  * Pure classification of two observations of one directory, taken before and after an entry was
  * created inside it (which moves the directory's ctime):
  *   absent       — no creation time at all (epoch or negative), before or after.
- *   durable      — the creation time stayed while the ctime moved: a real, kept creation time.
- *   aliased      — the "creation time" moved WITH the ctime: it is the ctime under another name.
+ *   durable      — the creation time stayed exactly while the ctime moved: a real, kept creation time.
+ *   aliased      — the "creation time" moved across the metadata write: whatever it tracks, it is
+ *                  not a creation time (the ctime under another name, or something equally unstable).
  *   inconclusive — the ctime did not move (the directory was created within the same timestamp
  *                  granule as the probe), so the two cannot be told apart yet.
  */
@@ -918,9 +920,8 @@ export function classifyCreationTimeProbe(
   after: CreationTimeObservation,
 ): CreationTimeSupport {
   if (before.birthtimeNs <= 0n || after.birthtimeNs <= 0n) return "absent";
-  if (after.birthtimeNs !== after.ctimeNs) return "durable";
-  if (after.ctimeNs !== before.ctimeNs) return "aliased";
-  return "inconclusive";
+  if (after.ctimeNs === before.ctimeNs) return "inconclusive";
+  return after.birthtimeNs === before.birthtimeNs ? "durable" : "aliased";
 }
 
 interface CreationTimeWitness extends CreationTimeObservation {
@@ -965,4 +966,56 @@ export function probeCreationTimeSupport(directory: string): CreationTimeSupport
   const parent = dirname(directory);
   if (parent === directory) return verdict;
   return corroborateCreationTimeSupport(before, observeCreationTime(parent));
+}
+
+// ─── every volume an identity hashes ────────────────────────────────────────────────────────────
+//
+// A managed worktree identity binds creation times on TWO volumes: the worktree root and its `.git`
+// pointer under the managed root, and the repository's common and admin directories with the
+// backpointer under the repository. Proving the managed root alone would mint from a repository
+// volume that aliases its "creation time" to the ctime (#3376 review). The repository volume is a
+// user's data: nothing is written into it, so it is corroborated read-only from entries that are
+// older than one timestamp granule — the repository root and its `.git` — with the same rule the
+// parent corroboration uses: on an aliasing volume every entry reports birthtime === ctime, so one
+// entry whose creation time differs from its ctime disproves aliasing for the volume.
+export type RepositoryCreationTimeSupport = CreationTimeSupport | "same-volume";
+
+export interface ProvenCreationTimeSupport {
+  readonly managedRoot: CreationTimeSupport;
+  readonly repository: RepositoryCreationTimeSupport;
+}
+
+/** Pure: the volume verdict from read-only observations of long-lived entries on it. */
+export function classifyVolumeCorroboration(
+  entries: readonly CreationTimeObservation[],
+): CreationTimeSupport {
+  if (entries.some((entry) => entry.birthtimeNs <= 0n)) return "absent";
+  return entries.some((entry) => entry.birthtimeNs !== entry.ctimeNs) ? "durable" : "inconclusive";
+}
+
+function repositoryCommonDirectory(repositoryRoot: string): string {
+  const candidate = join(repositoryRoot, ".git");
+  return existsSync(candidate) ? candidate : repositoryRoot;
+}
+
+/**
+ * Proves every volume a managed identity would hash: the managed root by probe (Keiko owns it), the
+ * repository read-only, or `same-volume` when both share one device and the probe already covers it.
+ * Anything but `durable` / `same-volume` must refuse to mint.
+ */
+export function proveCreationTimeSupport(
+  managedRoot: string,
+  repositoryRoot: string,
+): ProvenCreationTimeSupport {
+  const managed = probeCreationTimeSupport(managedRoot);
+  const common = repositoryCommonDirectory(repositoryRoot);
+  const commonStats = observeCreationTime(common);
+  if (commonStats.dev === observeCreationTime(managedRoot).dev) {
+    return { managedRoot: managed, repository: "same-volume" };
+  }
+  const entries = [
+    commonStats,
+    ...(common === repositoryRoot ? [] : [observeCreationTime(repositoryRoot)]),
+  ];
+  return { managedRoot: managed, repository: classifyVolumeCorroboration(entries) };
 }

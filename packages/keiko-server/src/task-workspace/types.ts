@@ -23,7 +23,7 @@ import type { ActiveWorkspacePointer, ActiveWorkspacePointerStore } from "./acti
 import type { WorkspaceActivityLogSeam } from "./activity-log.js";
 import type { WorkspaceInstanceStore } from "./store.js";
 import type { WorkspaceMutexRegistry } from "./mutex.js";
-import type { CreationTimeSupport } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { ProvenCreationTimeSupport } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { ManagedIdentityDrift } from "./gitdir-identity.js";
 
 export interface WorkspaceProvisionRequest {
@@ -110,10 +110,12 @@ export interface WorkspaceProvisioningServiceDeps extends WorkspaceActivityLogSe
   // Clock + id generator, injected for deterministic tests. `now` is epoch ms.
   readonly now: () => number;
   readonly newId: () => string;
-  // Optional, tests only: whether the managed root keeps a durable creation time. Production uses
-  // the real probe (`probeCreationTimeSupport`); an identity is never minted on a volume whose
-  // "creation time" is the ctime under another name (#3376 review P2).
-  readonly probeCreationTimeSupport?: ((directory: string) => CreationTimeSupport) | undefined;
+  // Optional, tests only: whether every volume the identity hashes keeps a durable creation time.
+  // Production uses the real proof (`proveCreationTimeSupport`): the managed root by probe, the
+  // repository read-only; an identity is never minted on a volume whose "creation time" is the
+  // ctime under another name (#3376 review P2).
+  readonly proveCreationTimeSupport?:
+    ((managedRoot: string, repositoryRoot: string) => ProvenCreationTimeSupport) | undefined;
   // The server-owned Project → single-root manifest identity for a managed worktree. Production
   // supplies the existing UiStore paired-write owner; tests may omit it when trust/catalog behavior
   // is outside their scope. Explicit provision may initialize exact trust; resume, activate, and
@@ -169,7 +171,9 @@ export interface WorkspaceLifecycleService {
   // List the persisted instances for an already-resolved repository root (switcher inventory).
   readonly list: (repositoryRoot: string) => readonly WorkspaceInstance[];
   // Current active instance + derived binding + pointer, or undefined in unbound mode.
-  readonly getActive: () => ActiveWorkspaceView | undefined;
+  // The request's correlation id, so a refused or unprovable binding on the read path joins the
+  // request timeline; a proof that cannot run throws the classified IDENTITY_PROOF_FAILED (#3376).
+  readonly getActive: (correlationId?: string) => ActiveWorkspaceView | undefined;
   // ATOMIC SWITCH: activate/resume the target via the #445 service, then persist it as the pointer.
   readonly setActive: (request: SetActiveWorkspaceRequest) => Promise<ActiveWorkspaceView>;
   // Clear the pointer → unbound mode. Does not change any instance lifecycle state. Idempotent.
