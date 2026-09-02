@@ -37,6 +37,7 @@ import {
   deriveWorkspaceId,
 } from "./naming.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
+import { inspectManagedGitdirIdentity } from "./gitdir-identity.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   createBufferedServerLogSink,
@@ -458,6 +459,44 @@ describe("idempotent safe retry (AC3)", () => {
     expect(persisted?.health).toBe("drifted");
     expect(persisted?.gitdirIdentity).toBe("mismatched-gitdir-identity");
     expect(persisted?.driftMarkers).toContain("pointer-stale");
+  });
+
+  // A workspace registered before the identity bound its pointer stamps is refused exactly like any
+  // other mismatch — accepting the retired proof even once would reissue a replaced worktree as a
+  // trusted one. What must differ is the sentence: telling an operator the Git identity CHANGED is a
+  // false statement about their disk and sends them hunting a replacement that never happened.
+  it("names the retired identity rule instead of claiming the Git identity changed", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-identity-schema",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    const inspection = inspectManagedGitdirIdentity(first.instance.managedWorktreePath, repoRoot);
+    if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
+    store.upsert({ ...first.instance, gitdirIdentity: inspection.legacyIdentity });
+
+    const failure = await service
+      .provision({
+        repositoryRequestPath: repoRoot,
+        taskId: "t-identity-schema",
+        baseBranch: "main",
+        requestedBy: "u",
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain("predates the current identity rule");
+    expect((failure as Error).message).not.toContain("git identity changed");
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("recovery-required");
+    expect(persisted?.driftMarkers).toContain("pointer-stale");
+    // The retired value is never promoted into a current one.
+    expect(persisted?.gitdirIdentity).toBe(inspection.legacyIdentity);
   });
 
   // Regression for S8786: the formerly duplicated `.git` pointer parse used to be

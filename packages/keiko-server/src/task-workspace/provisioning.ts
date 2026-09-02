@@ -46,7 +46,7 @@ import {
   managedTargetExists,
 } from "./managed-root.js";
 import { TaskWorkspaceError } from "./errors.js";
-import { inspectManagedGitdirIdentity } from "./gitdir-identity.js";
+import { inspectManagedGitdirIdentity, managedIdentityDrift } from "./gitdir-identity.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import {
   recordWorkspaceLifecycle,
@@ -484,15 +484,22 @@ function resumeExisting(
   correlationId: string | undefined,
 ): WorkspaceProvisionResult {
   assertPersistedManagedPath(ctx, existing);
-  const identity = observedGitdirIdentity(repo.worktreePath, repo.repositoryRoot);
-  if (identity === undefined || identity !== existing.gitdirIdentity) {
+  const inspection = inspectManagedGitdirIdentity(repo.worktreePath, repo.repositoryRoot);
+  const drift = managedIdentityDrift(inspection, existing.gitdirIdentity);
+  if (drift !== "matches") {
+    // Both outcomes refuse and both need the same pointer reconciliation, but they are not the same
+    // event and must not carry the same sentence: a workspace registered before the identity rule
+    // bound the pointer stamps has NOT changed on disk, and telling an operator it did sends them
+    // looking for a replacement that never happened.
     return flagResumableDrift(
       ctx,
       existing,
       nowMs,
       correlationId,
       "pointer-stale",
-      "managed worktree git identity changed",
+      drift === "schema-retired"
+        ? "managed worktree identity predates the current identity rule; re-register to reissue it"
+        : "managed worktree git identity changed",
     );
   }
   ensureManagedWorkspaceIdentity(ctx, existing, true);

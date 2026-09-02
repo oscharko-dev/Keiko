@@ -8,43 +8,122 @@ import {
 } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 const MAX_GIT_METADATA_BYTES = 64 * 1024;
-const IDENTITY_SCHEMA = "managed-linked-worktree-v2";
+// v3 binds each pointer FILE to its ctime as well as its inode (see fileIdentityPair).
+// The schema string is part of the hashed input, so bumping it is what makes the composition change
+// explicit instead of silently reinterpreting identities persisted under the weaker v2 rule.
+const IDENTITY_SCHEMA = "managed-linked-worktree-v3";
+// The retired composition, kept only to recognise identities persisted before v3. Never granted.
+const LEGACY_IDENTITY_SCHEMA = "managed-linked-worktree-v2";
+
+// Two compositions of the SAME observed components. `withCreation` is what v3 binds and the only one
+// that ever grants access. `inodeOnly` reproduces the v2 composition byte-for-byte and exists solely
+// so a stale persisted value can be RECOGNISED as "registered under the old schema" instead of being
+// reported as a replacement attempt. It is compared, never trusted: a v2 identity is forgeable by
+// the very inode reuse v3 closes, so accepting one — even once, even to "upgrade" it — would mint a
+// trusted v3 identity for an attacker's directory.
+interface IdentityPair {
+  readonly inodeOnly: string;
+  readonly withCreation: string;
+}
 
 interface StableContainedRead {
   readonly rawText: string;
-  readonly rootIdentity: string;
-  readonly fileIdentity: string;
+  readonly rootIdentity: IdentityPair;
+  readonly fileIdentity: IdentityPair;
 }
 
 interface LinkedWorktreePointer {
   readonly canonicalAdminDirectory: string;
-  readonly worktreeIdentity: string;
-  readonly pointerIdentity: string;
-  readonly adminDirectoryIdentity: string;
-  readonly backpointerIdentity: string;
+  readonly worktreeIdentity: IdentityPair;
+  readonly pointerIdentity: IdentityPair;
+  readonly adminDirectoryIdentity: IdentityPair;
+  readonly backpointerIdentity: IdentityPair;
 }
 
 interface GitCommonDirectory {
   readonly path: string;
-  readonly identity: string;
+  readonly identity: IdentityPair;
 }
 
 export interface ManagedGitdirIdentityInspection {
   readonly identity: string;
+  /**
+   * The same components composed under the retired v2 rule. For CLASSIFYING a persisted value only:
+   * a match means this workspace was registered before creation time was bound and needs an
+   * operator-approved re-registration, which is a different operator action — and a different
+   * incident — from an identity that matches nothing.
+   */
+  readonly legacyIdentity: string;
 }
 
-function directoryIdentity(stat: WorkspaceStat): string | undefined {
+// `fileIdentity` is `device:inode`, and an inode number is a SLOT, not an object: deleting a path
+// and recreating it at once hands the new object the same number (measured 50/50 on Linux
+// ext4/overlayfs; effectively never on APFS, which is why a filesystem-level pin for this passes on
+// macOS and fails on Linux). An identity built from it alone therefore cannot distinguish an
+// authentic managed worktree from a same-path replacement that copies the Git pointer.
+//
+// The two POINTER FILES close that gap: every replacement of any component has to materialise a
+// pointer, so stamping those two files is enough to catch all of them.
+//
+// `birthtimeNs` is the stamp, with `ctimeNs` as the fallback, and the ORDER matters in both
+// directions:
+//   * Creation time is preferred because it survives an IN-PLACE rewrite of the same file. Padding
+//     the `.git` pointer with whitespace leaves the target unchanged and must not invalidate a
+//     healthy workspace — otherwise anyone who can write one byte into it can force every workspace
+//     into recovery. Measured on Linux and macOS: an in-place rewrite keeps the inode and the
+//     birthtime while moving ctime; a delete-and-recreate changes birthtime 40/40.
+//   * ctime is a sound fallback, never a weaker one. Some volumes report no creation time at all (an
+//     ext4 filesystem formatted with 128-byte inodes is a real example), and ctime is STRICTER
+//     there: it also moves on an in-place rewrite. Both change when the file is recreated, and
+//     neither can be set from userland — `utimes` moves atime and mtime and BUMPS ctime.
+// Only when a port offers neither does this fail closed.
+//
+// DIRECTORIES are deliberately still identified by inode alone. A directory's ctime and mtime move
+// whenever an entry is created or removed inside it, so binding a long-lived worktree root to either
+// would deny every healthy workspace the moment a user saves a file at its root — and binding it to
+// birthtime would fail closed on exactly the volumes that cannot report one.
+function fileIdentityPair(stat: WorkspaceStat): IdentityPair | undefined {
+  const inode = stat.fileIdentity;
+  const created = stat.birthtimeNs ?? stat.ctimeNs;
+  if (inode === undefined || inode.length === 0) return undefined;
+  if (created === undefined || created.length === 0) return undefined;
+  return { inodeOnly: inode, withCreation: `${inode}@${created}` };
+}
+
+function directoryIdentity(stat: WorkspaceStat): IdentityPair | undefined {
   if (!stat.isDirectory || stat.isSymbolicLink) return undefined;
-  return stat.fileIdentity === undefined || stat.fileIdentity.length === 0
-    ? undefined
-    : stat.fileIdentity;
+  const inode = stat.fileIdentity;
+  if (inode === undefined || inode.length === 0) return undefined;
+  // Unchanged between v2 and v3: a directory contributes the same value to both compositions.
+  return { inodeOnly: inode, withCreation: inode };
 }
 
-function fileIdentity(read: WorkspaceDescriptorUtf8Read): string | undefined {
+function fileIdentity(read: WorkspaceDescriptorUtf8Read): IdentityPair | undefined {
   if (!read.stat.isFile || read.stat.isSymbolicLink) return undefined;
-  return read.stat.fileIdentity === undefined || read.stat.fileIdentity.length === 0
-    ? undefined
-    : read.stat.fileIdentity;
+  return fileIdentityPair(read.stat);
+}
+
+/**
+ * How a persisted identity relates to what this worktree proves right now.
+ *
+ * ONE owner for the three-way decision, because every site that compares a persisted identity has to
+ * reach the same verdict: the access boundary, the provisioning resume, and reconciliation. Splitting
+ * it produced the defect this exists to avoid — a workspace registered before the identity rule
+ * changed being reported as a replaced worktree, which is a false statement about the customer's
+ * disk and sends them to the wrong recovery.
+ *
+ * `schema-retired` still refuses. A v2 identity is forgeable by exactly the inode reuse v3 closes, so
+ * it is recognised and never accepted.
+ */
+export type ManagedIdentityDrift = "matches" | "schema-retired" | "changed";
+
+export function managedIdentityDrift(
+  inspection: ManagedGitdirIdentityInspection | undefined,
+  persisted: string,
+): ManagedIdentityDrift {
+  if (inspection === undefined) return "changed";
+  if (inspection.identity === persisted) return "matches";
+  return inspection.legacyIdentity === persisted ? "schema-retired" : "changed";
 }
 
 function readStableContainedFile(
@@ -66,7 +145,7 @@ function readStableContainedFile(
   );
   const after = directoryIdentity(fs.stat(canonicalRoot));
   const targetIdentity = fileIdentity(result);
-  if (after !== before || targetIdentity === undefined) return undefined;
+  if (after?.withCreation !== before.withCreation || targetIdentity === undefined) return undefined;
   return { rawText: result.rawText, rootIdentity: before, fileIdentity: targetIdentity };
 }
 
@@ -178,18 +257,43 @@ function underCommonWorktrees(adminDirectory: string, commonDirectory: string): 
   return samePath(dirname(adminDirectory), join(commonDirectory, "worktrees"));
 }
 
-function identityFor(pointer: LinkedWorktreePointer, commonDirectory: GitCommonDirectory): string {
-  const fields = [
-    IDENTITY_SCHEMA,
-    pointer.canonicalAdminDirectory,
-    commonDirectory.path,
+function composeIdentity(
+  schema: string,
+  paths: readonly string[],
+  components: readonly string[],
+): string {
+  const fields = [schema, ...paths, ...components];
+  return createHash("sha256").update(JSON.stringify(fields), "utf8").digest("hex").slice(0, 32);
+}
+
+// Both compositions are produced from ONE set of observations, so the legacy value can never drift
+// into describing a different filesystem state than the current one it is compared against.
+function identitiesFor(
+  pointer: LinkedWorktreePointer,
+  commonDirectory: GitCommonDirectory,
+): ManagedGitdirIdentityInspection {
+  const paths = [pointer.canonicalAdminDirectory, commonDirectory.path];
+  // Order is load-bearing: LEGACY_IDENTITY_SCHEMA only reproduces a persisted v2 value while this
+  // sequence stays exactly as v2 hashed it.
+  const pairs = [
     commonDirectory.identity,
     pointer.worktreeIdentity,
     pointer.pointerIdentity,
     pointer.adminDirectoryIdentity,
     pointer.backpointerIdentity,
   ];
-  return createHash("sha256").update(JSON.stringify(fields), "utf8").digest("hex").slice(0, 32);
+  return {
+    identity: composeIdentity(
+      IDENTITY_SCHEMA,
+      paths,
+      pairs.map((pair) => pair.withCreation),
+    ),
+    legacyIdentity: composeIdentity(
+      LEGACY_IDENTITY_SCHEMA,
+      paths,
+      pairs.map((pair) => pair.inodeOnly),
+    ),
+  };
 }
 
 /**
@@ -213,12 +317,12 @@ export function inspectManagedGitdirIdentity(
     if (
       commonDirectory === undefined ||
       pointer === undefined ||
-      commonIdentityAfter !== commonDirectory.identity ||
+      commonIdentityAfter?.withCreation !== commonDirectory.identity.withCreation ||
       !underCommonWorktrees(pointer.canonicalAdminDirectory, commonDirectory.path)
     ) {
       return undefined;
     }
-    return { identity: identityFor(pointer, commonDirectory) };
+    return identitiesFor(pointer, commonDirectory);
   } catch {
     return undefined;
   }

@@ -21,7 +21,7 @@ import {
 } from "./authorization.js";
 import { isManagedRootOwned } from "./managed-root.js";
 import { deriveManagedWorktreePath } from "./naming.js";
-import { inspectManagedGitdirIdentity } from "./gitdir-identity.js";
+import { inspectManagedGitdirIdentity, managedIdentityDrift } from "./gitdir-identity.js";
 
 export interface WorkspaceRootAccess {
   readonly kind: "ordinary" | "managed-task";
@@ -127,6 +127,19 @@ function lifecyclePermits(instance: WorkspaceInstance, purpose: ManagedAccessPur
   );
 }
 
+// Every identity denial refuses. This only decides WHICH denial an operator is told about, so a
+// workspace that merely predates the current identity rule is not reported as a possible
+// replacement — the two need different operator actions and are different incidents.
+function classifyIdentityDenial(
+  instance: WorkspaceInstance,
+  canonicalRoot: string,
+): ManagedRootDenialReason {
+  const gitdir = inspectManagedGitdirIdentity(canonicalRoot, instance.repositoryRoot);
+  return managedIdentityDrift(gitdir, instance.gitdirIdentity) === "schema-retired"
+    ? "managed-root-identity-schema-retired"
+    : "managed-root-identity";
+}
+
 function managedIdentityMatches(
   instance: WorkspaceInstance,
   canonicalManagedRoot: string,
@@ -166,6 +179,12 @@ type ManagedRootDenialReason =
   | "managed-root-lifecycle"
   // Canonical path, directory kind, or re-verified gitdir identity disagrees with the instance.
   | "managed-root-identity"
+  // The instance's identity was persisted under the retired v2 composition, which bound only the
+  // inode and so could not tell an authentic worktree from a same-path replacement that won the
+  // inode back. Distinct from `managed-root-identity` because nothing is wrong with the worktree:
+  // it needs an operator-approved re-registration, not an incident response. The old value is
+  // never accepted, since accepting a forgeable identity once would mint a trusted v3 one from it.
+  | "managed-root-identity-schema-retired"
   // The interactive re-proof threw (vanished worktree, stat race, exotic IO fault).
   | "managed-root-resolution-failed"
   // The same throw on the lifecycle-maintenance twin. A distinct reason on purpose: a background
@@ -238,7 +257,7 @@ function canonicalManagedRootAccess(
   const canonicalManagedRoot = nodeWorkspaceFs.realPath(managedRoot);
   const canonicalRoot = nodeWorkspaceFs.realPath(instance.managedWorktreePath);
   if (!managedIdentityMatches(instance, canonicalManagedRoot, canonicalRoot)) {
-    recordManagedRootDenial("managed-root-identity", denial);
+    recordManagedRootDenial(classifyIdentityDenial(instance, canonicalRoot), denial);
     return undefined;
   }
   return {

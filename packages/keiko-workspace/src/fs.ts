@@ -31,6 +31,16 @@ export interface WorkspaceStat {
   readonly fileIdentity?: string | undefined;
   readonly mtimeNs?: string | undefined;
   readonly ctimeNs?: string | undefined;
+  /**
+   * Creation time in nanoseconds, where the platform reports one; absent otherwise.
+   *
+   * `fileIdentity` is a `device:inode` pair, and an inode number is a slot that gets REUSED:
+   * deleting a path and recreating it hands the new object the old number (measured 50/50 on Linux
+   * ext4/overlayfs). Creation time is what separates the two generations. Unlike `ctimeNs` it also
+   * survives an in-place rewrite of the same file, so a caller can tell "this file was replaced"
+   * apart from "this file was edited".
+   */
+  readonly birthtimeNs?: string | undefined;
 }
 
 export type WorkspaceDescriptorReadFailureReason =
@@ -258,6 +268,10 @@ function workspaceStat(stats: BigIntStats, isSymbolicLink: boolean): WorkspaceSt
     fileIdentity: `${String(stats.dev)}:${String(stats.ino)}`,
     mtimeNs: String(stats.mtimeNs),
     ctimeNs: String(stats.ctimeNs),
+    // Reported as 0 where the platform has no creation time — an ext4 volume formatted with 128-byte
+    // inodes is one real example. Surface that as absent so a caller sees "unavailable" instead of a
+    // constant that compares equal for every object on the volume.
+    ...(stats.birthtimeNs === 0n ? {} : { birthtimeNs: String(stats.birthtimeNs) }),
   };
 }
 

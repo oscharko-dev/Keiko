@@ -1343,13 +1343,13 @@
     {
       "op": "workspace.root.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/task-workspace/workspace-root-access.ts:210",
+      "site": "packages/keiko-server/src/task-workspace/workspace-root-access.ts:229",
       "package": "keiko-server"
     },
     {
       "op": "workspace.root.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/task-workspace/workspace-root-access.ts:268",
+      "site": "packages/keiko-server/src/task-workspace/workspace-root-access.ts:287",
       "package": "keiko-server"
     },
     {

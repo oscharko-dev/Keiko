@@ -483,6 +483,27 @@ describe("resolveManagedWorkspaceRootAccess", () => {
     );
   });
 
+  // An identity persisted under the retired v2 composition is still refused — accepting a forgeable
+  // identity even once would mint a trusted v3 one from it. What changes is only what the operator
+  // is told: this workspace needs re-registration, not an incident response.
+  it("names the retired identity schema instead of reporting a replacement", () => {
+    const inspection = inspectManagedGitdirIdentity(workspaceRoot, repositoryRoot);
+    if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
+    registered = instanceAt(workspaceRoot, inspection.legacyIdentity);
+    const activityLog = createBufferedServerLogSink();
+
+    expect(resolveAccessLogged(activityLog, "wra-schema-0001")).toBeUndefined();
+    expect(denialEvents(activityLog)).toHaveLength(1);
+    expect(denialEvents(activityLog)[0]).toMatchObject({
+      level: "warn",
+      category: "security",
+      correlationId: "wra-schema-0001",
+      extra: { decision: "denied", reason: "managed-root-identity-schema-retired" },
+    });
+    // The legacy value is a filesystem fingerprint; it must not travel into the log.
+    expect(JSON.stringify(denialEvents(activityLog)[0])).not.toContain(inspection.legacyIdentity);
+  });
+
   it("logs one correlated ownership denial when the managed-root marker is gone", () => {
     rmSync(join(managedRoot, MANAGED_ROOT_MARKER_FILENAME), { force: true });
     const activityLog = createBufferedServerLogSink();
