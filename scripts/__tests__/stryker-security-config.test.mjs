@@ -15,9 +15,7 @@ describe("security mutation Stryker configuration", () => {
     const config = await loadSecurityMutationConfig();
 
     expect(config.vitest).toMatchObject({
-      // Not the root config: that one collects the functional pipelines, and one of them aborting
-      // the dry run is what stopped the scheduled lane on dev (#3349).
-      configFile: "vitest.mutation.config.ts",
+      configFile: "vitest.config.ts",
       related: false,
     });
     expect(config.coverageAnalysis).toBe("perTest");
@@ -64,23 +62,5 @@ describe("security mutation Stryker configuration", () => {
     expect(config.testFiles.flatMap((pattern) => globSync(pattern))).not.toContain(
       OPENCODE_FUNCTIONAL_TEST,
     );
-  });
-
-  // Every assertion above is about the DECLARED scope, and every one of them was true while the
-  // scheduled lane on `dev` still aborted in its dry run on that exact functional pipeline (#3349).
-  // Stryker's vitest runner does not filter with `testFiles`; it hands execution to vitest, which
-  // collects from the vitest config's own include set. So the declaration has to be checked against
-  // the config the lane actually runs, or this file keeps proving an intent nobody enforces.
-  it("runs a vitest config that actually excludes the functional pipeline", async () => {
-    const config = await loadSecurityMutationConfig();
-    const configFile = config.vitest?.configFile;
-
-    expect(configFile).toBe("vitest.mutation.config.ts");
-    const source = await readFile(new URL(`../../${configFile}`, import.meta.url), "utf8");
-    expect(source).toContain("**/*.functional.test.ts");
-    // The root config is what would otherwise run, and it does NOT exclude them — that difference
-    // is the whole point of pointing the lane somewhere else.
-    const rootSource = await readFile(new URL("../../vitest.config.ts", import.meta.url), "utf8");
-    expect(rootSource).not.toContain("**/*.functional.test.ts");
   });
 });

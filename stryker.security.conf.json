@@ -3,7 +3,7 @@
   "testRunner": "vitest",
   "plugins": ["@stryker-mutator/vitest-runner"],
   "vitest": {
-    "configFile": "vitest.mutation.config.ts",
+    "configFile": "vitest.config.ts",
     "related": false
   },
   "testFiles": [
