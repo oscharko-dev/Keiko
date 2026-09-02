@@ -329,7 +329,11 @@ export type TaskWorkspaceDriftMarker =
   | "uncommitted-changes"
   | "lock-stale"
   | "path-escape"
-  | "pointer-stale";
+  | "pointer-stale"
+  // The worktree is intact, but its stored identity predates the current identity rule. A distinct
+  // marker because it is a MIGRATION, not a defect on the customer's disk: an export that cannot
+  // separate it from a real pointer change sends an operator to the wrong incident.
+  | "identity-schema-retired";
 
 export const TASK_WORKSPACE_DRIFT_MARKERS: readonly TaskWorkspaceDriftMarker[] = [
   "worktree-missing",
@@ -340,6 +344,7 @@ export const TASK_WORKSPACE_DRIFT_MARKERS: readonly TaskWorkspaceDriftMarker[] =
   "lock-stale",
   "path-escape",
   "pointer-stale",
+  "identity-schema-retired",
 ] as const;
 
 export function isTaskWorkspaceDriftMarker(value: unknown): value is TaskWorkspaceDriftMarker {
@@ -1268,6 +1273,10 @@ const DRIFT_MARKER_RECOVERY: Readonly<
   // loss of the worktree's uncommitted work, so it is operator-guided.
   "gitdir-mismatch": { strategy: "reconcile-pointer", operatorActionRequired: false },
   "pointer-stale": { strategy: "operator-repair", operatorActionRequired: true },
+  // Re-registration reissues the proof under the current rule. Operator-guided on purpose: the
+  // retired proof is forgeable by the inode reuse the current rule closes, so it is never accepted
+  // automatically — doing so would reissue an already-replaced worktree as a trusted one.
+  "identity-schema-retired": { strategy: "operator-repair", operatorActionRequired: true },
   "head-moved": { strategy: "operator-repair", operatorActionRequired: true },
   // A deleted local branch cannot be safely re-created by the narrow worktree adapter without risking
   // loss of the worktree's commits, so reattachment is operator-guided, never automatic.
@@ -1424,7 +1433,11 @@ export function reconciliationStatusFromInstance(input: {
   if (TERMINAL_LIFECYCLE_STATES.includes(input.lifecycleState)) return "healthy";
   if (PARTIAL_LIFECYCLE_STATES.includes(input.lifecycleState)) return "partially-created";
   if (markers.includes("worktree-missing")) return "missing";
-  if (markers.includes("pointer-stale") || markers.includes("gitdir-mismatch")) {
+  if (
+    markers.includes("pointer-stale") ||
+    markers.includes("gitdir-mismatch") ||
+    markers.includes("identity-schema-retired")
+  ) {
     return "stale-pointer";
   }
   if (

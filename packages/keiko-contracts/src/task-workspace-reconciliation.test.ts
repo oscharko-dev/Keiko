@@ -179,6 +179,11 @@ describe("planWorkspaceRecoveryHints", () => {
       strategy: "operator-repair",
       operatorActionRequired: true,
     },
+    "identity-schema-retired": {
+      marker: "identity-schema-retired",
+      strategy: "operator-repair",
+      operatorActionRequired: true,
+    },
     "head-moved": {
       marker: "head-moved",
       strategy: "operator-repair",

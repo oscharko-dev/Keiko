@@ -494,7 +494,10 @@ describe("idempotent safe retry (AC3)", () => {
     expect((failure as Error).message).not.toContain("git identity changed");
     const persisted = store.getById(first.instance.workspaceId);
     expect(persisted?.lifecycleState).toBe("recovery-required");
-    expect(persisted?.driftMarkers).toContain("pointer-stale");
+    // A closed, body-free marker, so a support export can separate this migration from a real
+    // pointer change without reading the thrown message.
+    expect(persisted?.driftMarkers).toEqual(["identity-schema-retired"]);
+    expect(persisted?.driftMarkers).not.toContain("pointer-stale");
     // The retired value is never promoted into a current one.
     expect(persisted?.gitdirIdentity).toBe(inspection.legacyIdentity);
   });

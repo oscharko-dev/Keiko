@@ -496,7 +496,7 @@ function resumeExisting(
       existing,
       nowMs,
       correlationId,
-      "pointer-stale",
+      drift === "schema-retired" ? "identity-schema-retired" : "pointer-stale",
       drift === "schema-retired"
         ? "managed worktree identity predates the current identity rule; re-register to reissue it"
         : "managed worktree git identity changed",
