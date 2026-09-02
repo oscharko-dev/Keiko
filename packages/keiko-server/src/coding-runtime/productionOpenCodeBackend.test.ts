@@ -125,22 +125,13 @@ function runInput(root: string): ProductionRuntimeBackendInput {
 function launchRequest(workspaceRoot: string): ProductionRuntimeBackendInput["request"] {
   return {
     runId: "run-windows",
-    treeBindingId: "b".repeat(64),
-    taskRef: "task-windows",
-    adapterKind: "opencode-compatible",
-    runtimeSource: "keiko-sidecar",
-    modelSource: "keiko-model-gateway",
+    requestId: "request-windows",
+    taskIntent: "compose the Windows runtime",
     requestedMode: "supervised-coding",
-    effectiveMode: "supervised-coding",
+    runtimePreference: "managed-gateway",
+    workspaceId: "workspace-windows",
     workspaceRoot,
-    executablePath: "unused-before-start",
-    managedRoot: workspaceRoot,
-    gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
-    modelProfileId: "profile-windows",
-    args: [],
-    inheritedEnvAllowlist: [],
-    shutdownTimeoutMs: 5_000,
-    startTimeoutMs: 120_000,
+    serverPrincipal: "operator-windows",
   };
 }
 
