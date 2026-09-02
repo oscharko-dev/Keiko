@@ -61,7 +61,10 @@ import {
   recordWorkspaceLifecycle,
   runWithWorkspaceLifecycleFailureLogging,
 } from "./activity-log.js";
-import { probeCreationTimeSupport } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  probeCreationTimeSupport,
+  type CreationTimeSupport,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 import { correlationIdOrUnknown } from "../correlation.js";
 import {
   buildWorkspaceEvent,
@@ -147,11 +150,16 @@ function isoFrom(nowMs: number): string {
   return new Date(nowMs).toISOString();
 }
 
-function unsupportedIdentityError(): TaskWorkspaceError {
-  return new TaskWorkspaceError("POINTER_DRIFT", UNSUPPORTED_IDENTITY_MESSAGE, [
-    "identity-unsupported",
-  ]);
+function unsupportedIdentityError(support: CreationTimeSupport = "absent"): TaskWorkspaceError {
+  return new TaskWorkspaceError(
+    "POINTER_DRIFT",
+    support === "inconclusive" ? INCONCLUSIVE_IDENTITY_MESSAGE : UNSUPPORTED_IDENTITY_MESSAGE,
+    ["identity-unsupported"],
+  );
 }
+
+const INCONCLUSIVE_IDENTITY_MESSAGE =
+  "managed worktree filesystem could not prove a durable creation time; retry once the workspace root is older than one timestamp granule, or relocate it";
 
 // Mints the identity of a freshly materialized worktree. The managed root's creation-time support is
 // probed first: a nonzero birthtime is not proof of a kept creation time (Node may report the ctime
@@ -167,7 +175,10 @@ function requiredGitdirIdentity(
   const probe = ctx.deps.probeCreationTimeSupport ?? probeCreationTimeSupport;
   const support = probe(ctx.deps.managedRoot);
   logWorkspaceIdentityProbe(ctx.deps, { correlationId, support });
-  if (support === "aliased" || support === "absent") throw unsupportedIdentityError();
+  // Only a PROVEN durable creation time mints: an inconclusive probe (the root and its parent both
+  // created within one timestamp granule) fails closed too, with a message that says retry, rather
+  // than minting an identity the invariant has no evidence for (#3376 review).
+  if (support !== "durable") throw unsupportedIdentityError(support);
   const outcome = inspectManagedGitdirIdentityOutcome(worktreePath, repositoryRoot);
   switch (outcome.kind) {
     case "identified":

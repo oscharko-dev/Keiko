@@ -48,6 +48,16 @@ vi.mock("./gitdir-identity.js", async (importOriginal) => {
 afterEach(() => {
   vi.mocked(inspectManagedGitdirIdentityOutcome).mockReset();
 });
+
+// Makes the identity proof fail for ONE worktree path, targeted by path rather than by call order —
+// the store does not promise an evaluation order — while every other path reaches the real proof.
+function failProofFor(worktreePath: string, cause: Error): void {
+  const real = vi.mocked(inspectManagedGitdirIdentityOutcome).getMockImplementation();
+  if (real === undefined) throw new Error("classifier wrapper lost its implementation");
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockImplementation((candidate, ...rest) =>
+    candidate === worktreePath ? { kind: "failed", cause } : real(candidate, ...rest),
+  );
+}
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   createBufferedServerLogSink,
@@ -415,10 +425,7 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     const failing = await provisionTask("t1");
     const other = await provisionTask("t2");
     const activityLog = createBufferedServerLogSink();
-    vi.mocked(inspectManagedGitdirIdentityOutcome).mockReturnValueOnce({
-      kind: "failed",
-      cause: new Error("EIO: input/output error"),
-    });
+    failProofFor(failing.managedWorktreePath, new Error("EIO: input/output error"));
 
     const report = await reconciliation(activityLog).reconcile(repoRoot, "proof-failed-0001");
 

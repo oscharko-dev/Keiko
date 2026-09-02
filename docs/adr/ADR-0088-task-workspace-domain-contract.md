@@ -122,7 +122,7 @@ healthy | degraded | drifted | locked-out | missing | unknown
 **Entity 3 — Drift markers.** Ten markers classify the specific drift condition when health is
 `drifted` or `missing`:
 
-```
+```text
 worktree-missing | gitdir-mismatch | head-moved | branch-deleted
 uncommitted-changes | lock-stale | path-escape | pointer-stale
 identity-schema-retired | identity-unsupported

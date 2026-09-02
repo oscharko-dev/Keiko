@@ -388,13 +388,13 @@ test.describe("Atlassian connectors cross-cutting @smoke", () => {
           page.waitForResponse((response) => new URL(response.url()).pathname === pathname),
         ),
       );
-      await page.goto("/");
-      await bootstrapped;
-
-      // Page errors have to be checked on the FAILURE path too: if the chunk, the bind, the composer
-      // lookup or the citation assertion fails first, an assertion at the end never runs and the
-      // real page error is hidden behind an absent locator — the exact symptom this spec repairs.
+      // Page errors have to be checked on the FAILURE path too: if navigation, the bootstrap, the
+      // chunk, the bind, the composer lookup or the citation assertion fails first, an assertion at
+      // the end never runs and the real page error is hidden behind an absent locator or a timeout —
+      // the exact symptom this spec repairs.
       try {
+        await page.goto("/");
+        await bootstrapped;
         await runGroundedAsk(page);
       } finally {
         assertNoPageErrors();

@@ -218,11 +218,6 @@ function identityDriftOf(ctx: LifecycleCtx, instance: WorkspaceInstance): Manage
         cause: error.cause,
       });
     }
-    if (error instanceof ManagedIdentityProofError) {
-      throw new TaskWorkspaceError("IDENTITY_PROOF_FAILED", error.message, [], {
-        cause: error.cause,
-      });
-    }
     throw error;
   }
 }

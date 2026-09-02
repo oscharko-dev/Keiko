@@ -19,6 +19,7 @@ import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
   classifyCreationTimeProbe,
+  corroborateCreationTimeSupport,
   isWorkspacePathSnapshotCurrent,
   nodeWorkspaceFs,
   probeCreationTimeSupport,
@@ -594,11 +595,46 @@ describe("creation-time durability probe", () => {
     ).toBe("inconclusive");
   });
 
-  it("proves this host's managed-root capability and leaves nothing behind", () => {
-    const { root } = workspaceFixture();
-    const expected = nodeWorkspaceFs.stat(root).birthtimeNs === undefined ? "absent" : "durable";
+  it("settles a same-granule probe from an older entry on the same volume, and only from one", () => {
+    const child = { dev: 1n };
+    expect(corroborateCreationTimeSupport(child, { birthtimeNs: 5n, ctimeNs: 9n, dev: 1n })).toBe(
+      "durable",
+    );
+    // The parent is itself same-granule, on another device, or without a creation time: nothing proven.
+    expect(corroborateCreationTimeSupport(child, { birthtimeNs: 5n, ctimeNs: 5n, dev: 1n })).toBe(
+      "inconclusive",
+    );
+    expect(corroborateCreationTimeSupport(child, { birthtimeNs: 5n, ctimeNs: 9n, dev: 2n })).toBe(
+      "inconclusive",
+    );
+    expect(corroborateCreationTimeSupport(child, { birthtimeNs: 0n, ctimeNs: 9n, dev: 1n })).toBe(
+      "inconclusive",
+    );
+  });
 
-    expect(probeCreationTimeSupport(root)).toBe(expected);
+  // The expectation is derived from the operating system's own observations of the same directory,
+  // not from a platform assumption: whatever this host does, the producer must report exactly that.
+  it("reports what this host's filesystem actually does, and leaves nothing behind", () => {
+    const { root } = workspaceFixture();
+    const observe = (path: string): { birthtimeNs: bigint; ctimeNs: bigint } => {
+      const stats = fs.lstatSync(path, { bigint: true });
+      return { birthtimeNs: stats.birthtimeNs, ctimeNs: stats.ctimeNs };
+    };
+    const before = observe(root);
+    const witness = join(root, "granule-witness");
+    fs.mkdirSync(witness);
+    const after = observe(root);
+    fs.rmSync(witness, { recursive: true, force: true });
+    const fromOs = classifyCreationTimeProbe(before, after);
+
+    const verdict = probeCreationTimeSupport(root);
+
+    if (fromOs === "inconclusive") {
+      // The parent may settle a same-granule observation; it can never make it worse.
+      expect(["durable", "inconclusive"]).toContain(verdict);
+    } else {
+      expect(verdict).toBe(fromOs);
+    }
     expect(
       fs.readdirSync(root).filter((name) => name.startsWith(".keiko-creation-time-probe-")),
     ).toEqual([]);

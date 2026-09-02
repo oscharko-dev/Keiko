@@ -191,9 +191,9 @@ async function evaluateInstanceOrCarryForward(
         ),
     );
   } catch (error) {
-    if (!(error instanceof TaskWorkspaceError) || error.code !== "IDENTITY_PROOF_FAILED")
-      if (!(error instanceof TaskWorkspaceError) || error.code !== "IDENTITY_PROOF_FAILED")
-        throw error;
+    if (!(error instanceof TaskWorkspaceError) || error.code !== "IDENTITY_PROOF_FAILED") {
+      throw error;
+    }
     return deriveWorkspaceHealthEntry({
       workspaceId: instance.workspaceId,
       taskId: instance.taskId,

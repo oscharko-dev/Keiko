@@ -1306,7 +1306,7 @@ describe("activation re-proves the managed identity", () => {
 // name, an identity minted from it would read as a replaced worktree after the first metadata write.
 // The mint probes the managed root first and refuses with the platform's own marker (#3376 review P2).
 describe("mint-time creation-time probe", () => {
-  it.each(["aliased", "absent"] as const)(
+  it.each(["aliased", "absent", "inconclusive"] as const)(
     "refuses to mint an identity when the managed root's creation time is %s",
     async (support) => {
       const activityLog = createBufferedServerLogSink();

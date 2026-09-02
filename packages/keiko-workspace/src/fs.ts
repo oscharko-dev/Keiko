@@ -19,7 +19,7 @@ import {
   type BigIntStats,
 } from "node:fs";
 import { lstat, open, type FileHandle } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
 export interface WorkspaceStat {
@@ -923,9 +923,29 @@ export function classifyCreationTimeProbe(
   return "inconclusive";
 }
 
-function observeCreationTime(directory: string): CreationTimeObservation {
+interface CreationTimeWitness extends CreationTimeObservation {
+  readonly dev: bigint;
+}
+
+function observeCreationTime(directory: string): CreationTimeWitness {
   const stats = lstatSync(directory, { bigint: true });
-  return { birthtimeNs: stats.birthtimeNs, ctimeNs: stats.ctimeNs };
+  return { birthtimeNs: stats.birthtimeNs, ctimeNs: stats.ctimeNs, dev: stats.dev };
+}
+
+/**
+ * Settles a same-granule probe from an OLDER entry on the same volume. On an aliasing filesystem every
+ * entry reports birthtime === ctime, so one entry whose creation time differs from its ctime disproves
+ * aliasing for that volume; the directory's parent is that entry whenever it shares the device —
+ * creating the directory inside it moved the parent's ctime while the parent's creation time stayed.
+ * A parent on another device, without a creation time, or itself same-granule settles nothing, and
+ * the caller fails closed on `inconclusive` (#3376 review).
+ */
+export function corroborateCreationTimeSupport(
+  child: { readonly dev: bigint },
+  parent: CreationTimeObservation & { readonly dev: bigint },
+): CreationTimeSupport {
+  if (parent.dev !== child.dev || parent.birthtimeNs <= 0n) return "inconclusive";
+  return parent.birthtimeNs !== parent.ctimeNs ? "durable" : "inconclusive";
 }
 
 /**
@@ -935,9 +955,14 @@ function observeCreationTime(directory: string): CreationTimeObservation {
 export function probeCreationTimeSupport(directory: string): CreationTimeSupport {
   const before = observeCreationTime(directory);
   const probe = mkdtempSync(join(directory, ".keiko-creation-time-probe-"));
+  let verdict: CreationTimeSupport;
   try {
-    return classifyCreationTimeProbe(before, observeCreationTime(directory));
+    verdict = classifyCreationTimeProbe(before, observeCreationTime(directory));
   } finally {
     rmSync(probe, { recursive: true, force: true });
   }
+  if (verdict !== "inconclusive") return verdict;
+  const parent = dirname(directory);
+  if (parent === directory) return verdict;
+  return corroborateCreationTimeSupport(before, observeCreationTime(parent));
 }

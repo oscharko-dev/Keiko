@@ -536,9 +536,9 @@ async function reconcileOneOrCarryForward(
     );
     return result?.instance;
   } catch (error) {
-    if (!(error instanceof TaskWorkspaceError) || error.code !== "IDENTITY_PROOF_FAILED")
-      if (!(error instanceof TaskWorkspaceError) || error.code !== "IDENTITY_PROOF_FAILED")
-        throw error;
+    if (!(error instanceof TaskWorkspaceError) || error.code !== "IDENTITY_PROOF_FAILED") {
+      throw error;
+    }
     return ctx.deps.store.getById(instance.workspaceId);
   }
 }

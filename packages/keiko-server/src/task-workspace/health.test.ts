@@ -53,6 +53,16 @@ vi.mock("./gitdir-identity.js", async (importOriginal) => {
 afterEach(() => {
   vi.mocked(inspectManagedGitdirIdentityOutcome).mockReset();
 });
+
+// Makes the identity proof fail for ONE worktree path, targeted by path rather than by call order —
+// the store does not promise an evaluation order — while every other path reaches the real proof.
+function failProofFor(worktreePath: string, cause: Error): void {
+  const real = vi.mocked(inspectManagedGitdirIdentityOutcome).getMockImplementation();
+  if (real === undefined) throw new Error("classifier wrapper lost its implementation");
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockImplementation((candidate, ...rest) =>
+    candidate === worktreePath ? { kind: "failed", cause } : real(candidate, ...rest),
+  );
+}
 import { createBufferedServerLogSink, type ServerLogSink } from "../observability/server-log.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
@@ -272,10 +282,7 @@ describe("operational health classification (AC1)", () => {
     const failing = await provisionTask("t-proof-failed");
     const other = await provisionTask("t-proof-ok");
     const activityLog = createBufferedServerLogSink();
-    vi.mocked(inspectManagedGitdirIdentityOutcome).mockReturnValueOnce({
-      kind: "failed",
-      cause: new Error("EACCES: permission denied"),
-    });
+    failProofFor(failing.managedWorktreePath, new Error("EACCES: permission denied"));
 
     const report = await health(realAdapter, activityLog).report(repoRoot, "health-proof-0001");
 
