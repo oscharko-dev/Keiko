@@ -45,6 +45,8 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { correlationIdOrUnknown } from "../correlation.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import type { TaskWorkspaceDriftMarker } from "@oscharko-dev/keiko-contracts";
+import type { CreationTimeSupport } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { processServerLogSink } from "../process-log-sink.js";
 import { TaskWorkspaceError } from "./errors.js";
 import {
@@ -103,6 +105,10 @@ export interface WorkspaceLifecycleLogInput {
   // `outcome` itself, but only when `outcome` is failure-classified — a plain success never invents an
   // `errorKind` out of nothing.
   readonly errorCode?: string | undefined;
+  // The classified drift marker when the outcome is a drift verdict, so the log can tell a migration
+  // (`identity-schema-retired`), a platform limitation (`identity-unsupported`) and a replacement
+  // (`pointer-stale`) apart without the evidence store (#3376 review P2).
+  readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
 }
 
 export interface WorkspaceLifecycleFailureInput {
@@ -119,6 +125,7 @@ export interface RecordWorkspaceLifecycleInput {
   readonly record: WorkspaceLifecycleEvidenceRecord;
   readonly redactString: (input: string) => string;
   readonly errorCode?: string | undefined;
+  readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
 }
 
 interface WorkspaceErrorTrace {
@@ -157,6 +164,7 @@ export function logWorkspaceLifecycle(
       workspaceId: input.workspaceId,
       attempt: input.attempt,
       worktreeCount: input.worktreeCount,
+      ...(input.driftMarker === undefined ? {} : { driftMarker: input.driftMarker }),
     },
   });
 }
@@ -213,6 +221,7 @@ export function recordWorkspaceLifecycle(
     durationMs: record.durationMs,
     worktreeCount: record.worktreeCount,
     errorCode: input.errorCode,
+    driftMarker: input.driftMarker,
   });
 }
 
@@ -275,4 +284,24 @@ export async function runWithWorkspaceLifecycleFailureLogging<T>(
     }
     throw error;
   }
+}
+
+// The managed-identity mint probes the managed root's creation-time support once per provision.
+// Its verdict is evidence of its own: a later `identity-unsupported` or a spurious `pointer-stale`
+// on an aliasing volume is reconstructed from this line, not guessed (#3376 review P2).
+export function logWorkspaceIdentityProbe(
+  seam: WorkspaceActivityLogSeam,
+  input: {
+    readonly correlationId: string | undefined;
+    readonly support: CreationTimeSupport;
+  },
+): void {
+  const sink = seam.activityLog ?? processServerLogSink();
+  sink.write({
+    category: "diagnostic",
+    op: "task-workspace.identity.creation-time-probe",
+    level: input.support === "durable" ? "info" : "warn",
+    correlationId: correlationIdOrUnknown(input.correlationId),
+    extra: { volume: "managed-root", support: input.support },
+  });
 }

@@ -18,10 +18,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
+  classifyCreationTimeProbe,
   isWorkspacePathSnapshotCurrent,
   nodeWorkspaceFs,
-  WorkspaceDescriptorReadError,
+  probeCreationTimeSupport,
   type WorkspaceDescriptorReadCompleteness,
+  WorkspaceDescriptorReadError,
   type WorkspaceFs,
   type WorkspaceHardLinkPolicy,
   type WorkspaceStat,
@@ -244,6 +246,32 @@ describe("nodeWorkspaceFs", () => {
     expect(after.mtimeNs).not.toBe(before.mtimeNs);
     expect(after.ctimeNs).not.toBe(before.ctimeNs);
     expect(after.fileIdentity).toBe(before.fileIdentity);
+  });
+
+  // `birthtimeNs` is the field the managed-worktree identity is built on, and this is the only place
+  // it is produced from a real stat; every consumer test hands it in as a string literal. Pin the
+  // producer's two load-bearing properties on a real file: it survives an in-place rewrite that
+  // moves every other timestamp, and it does not survive the file being recreated.
+  it("keeps birthtimeNs across an in-place rewrite and drops it across a recreate", () => {
+    const { file } = workspaceFixture();
+    const before = nodeWorkspaceFs.stat(file);
+    // Where the platform reports no creation time the field is absent by contract, and there is
+    // nothing further to prove on this host.
+    if (before.birthtimeNs === undefined) return;
+
+    writeFileSync(file, "rewritten in place", "utf8");
+    // A LATER timestamp on purpose: on macOS (APFS keeps the creation time at or before the
+    // modification time) a utimes to a time before the file was created moves the creation time
+    // back with it — to the epoch here, which the producer then reports as absent. Measured in
+    // review; the guard under test is the in-place rewrite, not that platform rule.
+    utimesSync(file, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
+    const rewritten = nodeWorkspaceFs.stat(file);
+    expect(rewritten.ctimeNs).not.toBe(before.ctimeNs);
+    expect(rewritten.birthtimeNs).toBe(before.birthtimeNs);
+
+    rmSync(file);
+    writeFileSync(file, "recreated", "utf8");
+    expect(nodeWorkspaceFs.stat(file).birthtimeNs).not.toBe(before.birthtimeNs);
   });
 
   it("distinguishes two files that exist at the same moment", () => {
@@ -523,5 +551,56 @@ describe("nodeWorkspaceFs", () => {
     await expect(reader.readRange(0, 64)).rejects.toMatchObject({ reason: "changed" });
     await expect(reader.close()).resolves.toBeUndefined();
     await expect(reader.close()).resolves.toBeUndefined();
+  });
+});
+
+// A nonzero birthtime is not proof of a kept creation time: Node may report the ctime under that name
+// where the filesystem has none (libuv's non-statx stat fallback), and an identity minted from it
+// would read as a replaced worktree after the first metadata write (#3376 review P2). The pure
+// classifier is pinned on every verdict; the real probe is pinned against this host's own capability.
+describe("creation-time durability probe", () => {
+  it("classifies absent, durable, aliased and inconclusive observations", () => {
+    expect(
+      classifyCreationTimeProbe(
+        { birthtimeNs: 0n, ctimeNs: 10n },
+        { birthtimeNs: 0n, ctimeNs: 20n },
+      ),
+    ).toBe("absent");
+    expect(
+      classifyCreationTimeProbe(
+        { birthtimeNs: 5n, ctimeNs: 10n },
+        { birthtimeNs: -1n, ctimeNs: 20n },
+      ),
+    ).toBe("absent");
+    expect(
+      classifyCreationTimeProbe(
+        { birthtimeNs: 5n, ctimeNs: 10n },
+        { birthtimeNs: 5n, ctimeNs: 20n },
+      ),
+    ).toBe("durable");
+    // The "creation time" moved with the ctime: it is the ctime under another name.
+    expect(
+      classifyCreationTimeProbe(
+        { birthtimeNs: 10n, ctimeNs: 10n },
+        { birthtimeNs: 20n, ctimeNs: 20n },
+      ),
+    ).toBe("aliased");
+    // The ctime did not move (same timestamp granule), so nothing can be told yet.
+    expect(
+      classifyCreationTimeProbe(
+        { birthtimeNs: 10n, ctimeNs: 10n },
+        { birthtimeNs: 10n, ctimeNs: 10n },
+      ),
+    ).toBe("inconclusive");
+  });
+
+  it("proves this host's managed-root capability and leaves nothing behind", () => {
+    const { root } = workspaceFixture();
+    const expected = nodeWorkspaceFs.stat(root).birthtimeNs === undefined ? "absent" : "durable";
+
+    expect(probeCreationTimeSupport(root)).toBe(expected);
+    expect(
+      fs.readdirSync(root).filter((name) => name.startsWith(".keiko-creation-time-probe-")),
+    ).toEqual([]);
   });
 });

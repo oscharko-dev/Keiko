@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -92,19 +92,26 @@ describe("workspace root membership", (): void => {
   //
   // These two rows move exactly one term each, so each is individually falsifiable on every
   // platform.
-  it("drifts on the path-and-mode digest alone, with the object identity untouched", (): void => {
-    const before = inspectWorkspaceRootIdentity(rootA);
-    // Mode is part of the path/mode digest and of nothing else: device, inode and creation time are
-    // all unchanged by a chmod.
-    chmodSync(rootA, 0o700);
-    const after = inspectWorkspaceRootIdentity(rootA);
+  it.skipIf(process.platform === "win32")(
+    "drifts on the path-and-mode digest alone, with the object identity untouched",
+    (): void => {
+      const before = inspectWorkspaceRootIdentity(rootA);
+      // Mode is part of the path/mode digest and of nothing else: device, inode and creation time are
+      // all unchanged by a chmod. The target mode is chosen against the CURRENT mode rather than
+      // hard-coded: `mkdtempSync` honours the process umask, so under `umask 077` the root is already
+      // 0700 and a chmod to 0700 would be a no-op that leaves the digest unchanged — a false red on a
+      // correct product, reproduced in review.
+      const currentMode = statSync(rootA).mode & 0o777;
+      chmodSync(rootA, currentMode === 0o700 ? 0o750 : 0o700);
+      const after = inspectWorkspaceRootIdentity(rootA);
 
-    expect(after.identityDigest).not.toBe(before.identityDigest);
-    expect(after.objectIdentityDigest).toBe(before.objectIdentityDigest);
-    expect((): unknown => resolveCurrentWorkspaceRootMembership(store, rootA)).toThrow(
-      expect.objectContaining({ failure: "IDENTITY_DRIFT" }),
-    );
-  });
+      expect(after.identityDigest).not.toBe(before.identityDigest);
+      expect(after.objectIdentityDigest).toBe(before.objectIdentityDigest);
+      expect((): unknown => resolveCurrentWorkspaceRootMembership(store, rootA)).toThrow(
+        expect.objectContaining({ failure: "IDENTITY_DRIFT" }),
+      );
+    },
+  );
 
   it("drifts on the object identity alone, with the root untouched on disk", (): void => {
     // The filesystem is not asked to cooperate here: the STORED digest is what differs, so the live

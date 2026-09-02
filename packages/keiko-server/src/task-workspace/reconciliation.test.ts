@@ -7,7 +7,7 @@
 // branch/head drift, partial provisioning, stale lock, ambiguous active binding, unmanaged-path
 // collision. The single governed spawn boundary is reused throughout; no generic git runner.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,6 +32,17 @@ import { createWorkspaceProvisioningService } from "./provisioning.js";
 import { createWorkspaceReconciliationService } from "./reconciliation.js";
 import type { WorkspaceProvisioningService, WorkspaceReconciliationService } from "./types.js";
 import { createWorkspaceMutexRegistry, workspaceKey } from "./mutex.js";
+
+// A volume without creation times cannot be produced on a real filesystem from a test, so the one
+// identity classifier is wrapped (never replaced) and answers `unsupported` exactly once where the
+// pin below needs it; every other call reaches the real proof.
+vi.mock("./gitdir-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./gitdir-identity.js")>();
+  return {
+    ...actual,
+    inspectManagedGitdirIdentityOutcome: vi.fn(actual.inspectManagedGitdirIdentityOutcome),
+  };
+});
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   createBufferedServerLogSink,
@@ -39,6 +50,7 @@ import {
   type ServerLogEvent,
   type ServerLogSink,
 } from "../observability/index.js";
+import { inspectManagedGitdirIdentityOutcome } from "./gitdir-identity.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -368,6 +380,42 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     const reportEntry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
     expect(reportEntry?.status).toBe("stale-pointer");
     expect(reportEntry?.driftMarkers).toContain("gitdir-mismatch");
+  });
+
+  // A pointer that IS there but sits on a volume without creation time is present. Reporting it as
+  // absent collapsed the platform limitation into `pointer-stale` one branch earlier, so its own
+  // marker — and the operator-only resolution it maps to — never fired (#3376 review).
+  it("classifies an unsupported-filesystem identity by its own marker, never as a missing pointer", async () => {
+    const instance = await provisionTask("t1");
+    vi.mocked(inspectManagedGitdirIdentityOutcome).mockReturnValueOnce({ kind: "unsupported" });
+
+    const report = await reconciliation().reconcile();
+
+    const reportEntry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
+    expect(reportEntry?.status).toBe("stale-pointer");
+    expect(reportEntry?.driftMarkers).toEqual(["identity-unsupported"]);
+    expect(reportEntry?.driftMarkers).not.toContain("pointer-stale");
+    expect(reportEntry?.recoveryHints).toContainEqual(
+      expect.objectContaining({ strategy: "operator-repair", operatorActionRequired: true }),
+    );
+    expect(store.getById(instance.workspaceId)?.driftMarkers).toEqual(["identity-unsupported"]);
+  });
+
+  // An I/O failure inside the proof says nothing about the worktree. It used to be swallowed into
+  // "unproven" and PERSISTED as a stale pointer with `recovery-required`; now it surfaces as the
+  // error it is, with its cause, and writes nothing to the row (#3376 review P2).
+  it("surfaces a failed identity proof as its own error and persists no drift", async () => {
+    const instance = await provisionTask("t1");
+    vi.mocked(inspectManagedGitdirIdentityOutcome).mockReturnValueOnce({
+      kind: "failed",
+      cause: new Error("EIO: input/output error"),
+    });
+
+    await expect(reconciliation().reconcile()).rejects.toThrow("EIO: input/output error");
+
+    const persisted = store.getById(instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("active");
+    expect(persisted?.driftMarkers).toEqual([]);
   });
 
   // S8786 pointer-drift regression: the shared production parser replaced both formerly duplicated

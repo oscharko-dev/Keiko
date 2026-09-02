@@ -4,16 +4,18 @@
 // its own store adapters. The core metadata surface stays synchronous for deterministic fakes.
 
 import {
+  closeSync,
   constants as fsConstants,
   fstatSync,
   lstatSync,
-  closeSync,
+  mkdtempSync,
   opendirSync,
   openSync,
   readdirSync,
   readFileSync,
   readSync,
   realpathSync,
+  rmSync,
   type BigIntStats,
 } from "node:fs";
 import { lstat, open, type FileHandle } from "node:fs/promises";
@@ -269,9 +271,13 @@ function workspaceStat(stats: BigIntStats, isSymbolicLink: boolean): WorkspaceSt
     mtimeNs: String(stats.mtimeNs),
     ctimeNs: String(stats.ctimeNs),
     // Reported as 0 where the platform has no creation time — an ext4 volume formatted with 128-byte
-    // inodes is one real example. Surface that as absent so a caller sees "unavailable" instead of a
-    // constant that compares equal for every object on the volume.
-    ...(stats.birthtimeNs === 0n ? {} : { birthtimeNs: String(stats.birthtimeNs) }),
+    // inodes is one real example — and never legitimately negative; both are surfaced as absent, the
+    // same rule workspace-root-identity applies, so a caller sees "unavailable" instead of a constant
+    // that compares equal for every object on the volume. Node also documents that a platform may
+    // report ctime in place of an unavailable birthtime; that cannot be told apart per stat (a fresh
+    // object legitimately has equal ctime and birthtime), which is one reason the managed-root
+    // identity built on this field is defence in depth rather than a proof.
+    ...(stats.birthtimeNs <= 0n ? {} : { birthtimeNs: String(stats.birthtimeNs) }),
   };
 }
 
@@ -882,3 +888,56 @@ export const nodeWorkspaceFs: WorkspaceFs = {
     readFileRangeSameDescriptor(absolutePath, startByte, length, hardLinkPolicy, expected),
   openFileReader: openValidatedFileReader,
 };
+
+// ─── creation-time durability ───────────────────────────────────────────────────────────────────
+//
+// A nonzero `birthtimeNs` is not proof that the filesystem keeps a creation time. Node documents that
+// where creation time is unavailable the field may hold the ctime instead (libuv's non-statx stat
+// fallback copies it), and a ctime-backed "creation time" mutates on every directory-entry write —
+// an identity minted from it would then read as a replaced worktree after the first ordinary change
+// (#3376 review). The probe below settles the question per directory with one metadata write: on an
+// aliasing filesystem the parent's birthtime follows its ctime, on a durable one it stays put.
+export type CreationTimeSupport = "durable" | "aliased" | "absent" | "inconclusive";
+
+export interface CreationTimeObservation {
+  readonly birthtimeNs: bigint;
+  readonly ctimeNs: bigint;
+}
+
+/**
+ * Pure classification of two observations of one directory, taken before and after an entry was
+ * created inside it (which moves the directory's ctime):
+ *   absent       — no creation time at all (epoch or negative), before or after.
+ *   durable      — the creation time stayed while the ctime moved: a real, kept creation time.
+ *   aliased      — the "creation time" moved WITH the ctime: it is the ctime under another name.
+ *   inconclusive — the ctime did not move (the directory was created within the same timestamp
+ *                  granule as the probe), so the two cannot be told apart yet.
+ */
+export function classifyCreationTimeProbe(
+  before: CreationTimeObservation,
+  after: CreationTimeObservation,
+): CreationTimeSupport {
+  if (before.birthtimeNs <= 0n || after.birthtimeNs <= 0n) return "absent";
+  if (after.birthtimeNs !== after.ctimeNs) return "durable";
+  if (after.ctimeNs !== before.ctimeNs) return "aliased";
+  return "inconclusive";
+}
+
+function observeCreationTime(directory: string): CreationTimeObservation {
+  const stats = lstatSync(directory, { bigint: true });
+  return { birthtimeNs: stats.birthtimeNs, ctimeNs: stats.ctimeNs };
+}
+
+/**
+ * Probes whether `directory` sits on a filesystem that keeps a durable creation time, by creating
+ * and removing one empty probe directory inside it. Only call it on a directory Keiko owns.
+ */
+export function probeCreationTimeSupport(directory: string): CreationTimeSupport {
+  const before = observeCreationTime(directory);
+  const probe = mkdtempSync(join(directory, ".keiko-creation-time-probe-"));
+  try {
+    return classifyCreationTimeProbe(before, observeCreationTime(directory));
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}

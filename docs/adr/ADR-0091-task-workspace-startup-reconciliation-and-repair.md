@@ -143,7 +143,7 @@ Each maps to an unambiguous action:
 | `drifted` | Worktree present **and usable** but HEAD moved, branch deleted, uncommitted work, or a stale lock | Keep lifecycle, set health `drifted`, flag the marker + recovery hint (surface, do not force recovery) |
 | `locked` | A live lock is held by another actor | Defer — leave the instance unchanged (no flag) |
 | `partially-created` | Instance row is in `provisioning`/`failed` lifecycle — provisioning never completed | Leave for the provisioning retry path; flag `worktree-missing`/`pointer-stale` if the partial worktree is gone |
-| `stale-pointer` | Worktree present but its `.git` pointer is missing/corrupt or its gitdir identity moved | Mark `recovery-required`, flag `pointer-stale`/`gitdir-mismatch` |
+| `stale-pointer` | Worktree present but its `.git` pointer is missing/corrupt, its gitdir identity moved, its identity was registered under the retired inode-only rule, or its filesystem reports no durable creation time | Mark `recovery-required`, flag `pointer-stale`/`gitdir-mismatch`/`identity-schema-retired`/`identity-unsupported` |
 | `unmanaged-path` | Stored `managedWorktreePath` resolves outside the Keiko-owned managed root (path-escape condition) | Mark `recovery-required`, flag `path-escape` |
 | `recovery-required` | Instance is already in `recovery-required` lifecycle state — no fresh disk drift; carry-forward | Keep `recovery-required` |
 
@@ -164,6 +164,12 @@ interface WorkspaceReconciliationFacts {
   readonly gitPointerPresent: boolean;
   // the pointer's content-free gitdir identity equals the persisted `gitdirIdentity`.
   readonly gitdirIdentityMatches: boolean;
+  // the persisted identity reproduces the RETIRED inode-only composition (#3376): a migration,
+  // reported by its own marker, never as a replaced pointer.
+  readonly gitdirIdentitySchemaRetired?: boolean;
+  // the filesystem reports no durable creation time, so no current identity can be derived at
+  // all; its own marker, never `pointer-stale` (the pointer IS present).
+  readonly gitdirIdentityUnsupported?: boolean;
   // the dedicated task branch still exists / the worktree is still bound to it.
   readonly taskBranchPresent: boolean;
   // the worktree HEAD equals the persisted `lastVerifiedHead`
@@ -229,8 +235,10 @@ otherwise-healthy workspace):
    - `!worktreeDirExists` → status `missing`, marker `worktree-missing`, hint
      `recreate-worktree`. If additionally `!taskBranchPresent`, append marker
      `branch-deleted` and hint `reattach-branch` (`operatorActionRequired: true`).
-   - `!gitPointerPresent || !gitdirIdentityMatches` → status `stale-pointer`,
-     marker `pointer-stale`, hint `reconcile-pointer`.
+   - `!gitPointerPresent` → status `stale-pointer`, marker `pointer-stale`, hint
+     `operator-repair`; otherwise `!gitdirIdentityMatches` → status `stale-pointer` with the
+     identity marker the facts name — `identity-unsupported` first, then
+     `identity-schema-retired`, else `gitdir-mismatch` — and that marker's hint.
    - `!taskBranchPresent` → status `drifted`, marker `branch-deleted`, hint
      `reattach-branch` (`operatorActionRequired: true`).
    - `!headMatches` → status `drifted`, marker `head-moved`, hint `operator-repair`
@@ -284,12 +292,18 @@ The mapping (closed, derived from the ADR-0088 Entity 5 recovery strategy union)
 | `lock-stale` | `release-stale-lock` | `false` |
 | `path-escape` | `operator-repair` | `true` |
 | `pointer-stale` | `operator-repair` | `true` |
+| `identity-schema-retired` | `reconcile-pointer` | `false` |
+| `identity-unsupported` | `operator-repair` | `true` |
 
-Only `recreate-worktree`, `reconcile-pointer` (a moved-but-readable gitdir), and
-`release-stale-lock` are applied automatically; a missing/corrupt `.git` pointer
-(`pointer-stale`), a moved HEAD, a deleted branch, and uncommitted work require an
-operator, because the narrow worktree adapter cannot repair them without risking
-loss of the worktree's work.
+Only `recreate-worktree`, `reconcile-pointer` (a moved-but-readable gitdir, or a
+registration under the retired identity rule), and `release-stale-lock` are
+executable by the repair service; a missing/corrupt `.git` pointer (`pointer-stale`),
+a moved HEAD, a deleted branch, uncommitted work, and a filesystem without creation
+times require an operator, because the narrow worktree adapter cannot repair them
+without risking loss of the worktree's work. `operatorActionRequired: false` means the
+strategy has an executable path, not that it runs unattended: every repair request
+still carries `operatorApproved`, and reissuing a managed identity for an existing
+worktree happens only on that approved path (#3376).
 
 **`WorkspaceReconciliationEntry` and `WorkspaceReconciliationReport` — content-free result types.**
 
@@ -545,7 +559,7 @@ Each strategy maps to exactly one action, using only existing subsystems:
 | Strategy | Action | Reuse |
 |---|---|---|
 | `recreate-worktree` | Call `WorkspaceProvisioningService.provision()` re-materialization path (ADR-0089 D7: handles `provisioning`/`failed`/`recovery-required`, prunes the stale worktree admin entry, rebuilds the missing worktree via the adapter, rolls back partial state, emits evidence) | #445 provisioning |
-| `reconcile-pointer` | Re-run the `WorkspaceProvisioningService.provision()` resume path: it resume-completes the still-present worktree and recomputes the content-free `gitdirIdentity` from the live `.git` pointer, refreshing a moved-but-readable gitdir. Applies to `gitdir-mismatch` only (a missing/corrupt pointer is `operator-repair`). | #445 provisioning |
+| `reconcile-pointer` | Re-run the `WorkspaceProvisioningService.provision()` path with `operatorApprovedRepair: true`: it resume-completes the still-present worktree and recomputes the content-free `gitdirIdentity` from the live `.git` pointer, refreshing a moved-but-readable gitdir or reissuing a proof registered under the retired identity rule. Applies to `gitdir-mismatch` and `identity-schema-retired` (a missing/corrupt pointer is `operator-repair`); without the approval flag the provisioning path refuses to reissue an identity for an existing worktree (#3376). | #445 provisioning |
 | `reattach-branch` | Return `outcome: "operator-required"` with no mutation (recreating a deleted branch is a Git delivery operation — ADR-0080; the operator must act via the #470 surface, not via a workspace repair route) | None (no mutation) |
 | `release-stale-lock` | `WorkspaceInstanceStore.upsert` clearing `lock: null`, then re-reconcile so the classification drops the `lock-stale` marker | #445 store |
 | `commit-or-stash-required` | Return `outcome: "operator-required"` with no mutation (uncommitted-changes disposition is a Git delivery decision — ADR-0084; the operator must act via the #470 surface) | None (no mutation) |

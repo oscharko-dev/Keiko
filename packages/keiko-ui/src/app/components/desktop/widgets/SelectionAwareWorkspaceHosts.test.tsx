@@ -24,6 +24,12 @@ import {
 import { subText } from "../windows/connectionUtils";
 import { chatWindowRuntimeTarget } from "../windows/chatWindowActivity";
 
+const reportClientDiagnosticMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/client-diagnostics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/client-diagnostics")>()),
+  reportClientDiagnostic: reportClientDiagnosticMock,
+}));
+
 const addRoot = vi.hoisted(() => vi.fn());
 const disposeRoot = vi.hoisted(() => vi.fn());
 const manifestRef = vi.hoisted(() => ({ current: null as WorkspaceManifest | null }));
@@ -895,6 +901,71 @@ describe("ChatWindowSessionHost target missing", () => {
     const pending = await screen.findByRole("status");
     expect(pending).toHaveAttribute("data-chat-bind", "opening");
     expect(screen.queryByTestId("chat-window")).toBeNull();
+  });
+
+  // The DOM marker is live-locator state only. What a customer's support export can reconstruct is
+  // the client diagnostic sink, so the binding stage leaves a body-free start line when it appears
+  // and a settled line, with the elapsed time and nothing else, when it goes away (#3376 review).
+  it("leaves body-free start and settled evidence for the binding stage on the diagnostic sink", async (): Promise<void> => {
+    // Pending for the whole test (not only the first render) with the target chat known, so the
+    // settlement observed below is the unmount and nothing else — neither a bound window nor a
+    // not-found body; the suite-level beforeEach reinstalls the default session.
+    const pending = chatFixture("chat-a", "Pending", 1);
+    useChatSessionMock.mockImplementation(() => ({
+      ...chatSessionState,
+      loading: true,
+      activeChat: pending,
+      chats: [pending],
+    }));
+    // The previous test's tree is unmounted by the library's own cleanup AFTER the suite's
+    // afterEach cleared the mocks, so its settlement line would otherwise be counted here.
+    reportClientDiagnosticMock.mockClear();
+
+    const { unmount } = render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "chat-a", title: "Pending" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    await screen.findByRole("status");
+    expect(reportClientDiagnosticMock).toHaveBeenCalledWith("desktop chat bind: started");
+    const settledBefore = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
+      String(message).startsWith("desktop chat bind: settled"),
+    );
+    expect(settledBefore).toHaveLength(0);
+
+    unmount();
+
+    const messages = reportClientDiagnosticMock.mock.calls.map(([message]) => String(message));
+    expect(messages).toContainEqual(
+      expect.stringMatching(/^desktop chat bind: settled after \d+ms$/),
+    );
+    for (const message of messages) {
+      expect(message).not.toContain("chat-a");
+      expect(message).not.toContain("Pending");
+    }
+  });
+
+  // The other side of the boundary: a bound chat with an EMPTY transcript is exactly the state the
+  // unlabeled placeholder used to be indistinguishable from, so it must render the window and no
+  // binding marker at all.
+  it("renders the bound window and no binding placeholder for an empty transcript", async (): Promise<void> => {
+    const bound = chatFixture("chat-a", "Bound", 1);
+    useChatSessionMock.mockImplementation(() => ({
+      ...chatSessionState,
+      activeChat: bound,
+      chats: [bound],
+    }));
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "chat-a", title: "Bound" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByTestId("chat-window")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(document.querySelector("[data-chat-bind]")).toBeNull();
   });
 
   it("rejects empty and whitespace-only titles at the owning normalization boundary", (): void => {

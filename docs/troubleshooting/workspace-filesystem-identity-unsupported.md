@@ -30,13 +30,19 @@ mistake for an attack when it is really a migration.
 
 `managed-root-identity-schema-retired` on the activity log — or, from the provisioning path, the
 drift message "managed worktree identity predates the current identity rule; re-register to reissue
-it" — means the workspace is intact but was registered before the identity bound its Git pointer
-files. The stored proof was built from the device and inode alone, and an inode number is REUSED:
-deleting a directory and recreating it at the same path hands the new directory the old number, so
-that older proof could not separate an authentic worktree from a same-path replacement.
+it" — means the workspace was registered under the retired identity rule, and under that rule its
+authenticity is unproven: not disproven, but not established either. That proof was built from the
+device and inode numbers of the worktree's Git pointer files and directories alone; it lacked the
+creation time the current rule binds to each of them and to the worktree root. An inode number is
+REUSED: deleting a directory and recreating it at the same path hands the new directory the old
+number, so the retired proof cannot separate an authentic worktree from a same-path replacement —
+which is why a matching retired proof is never read as "the worktree is intact". Inspect the tree
+before re-registering it, or recreate it.
 
-Re-register the workspace through the operator-approved pointer repair to reissue the proof. Keiko
-does not accept the retired proof even once. Accepting a forgeable identity is precisely what would
+Re-register the workspace through the `reconcile-pointer` repair with operator approval
+(`operatorApproved: true` on the repair request) to reissue the proof; it re-materialises the
+existing worktree in place and recreates nothing. Keiko does not accept the retired proof even once
+without that approval. Accepting a forgeable identity is precisely what would
 let an already-replaced worktree be reissued as a trusted one, so the one-time "self-healing upgrade"
 that looks convenient here is the one option that must not be taken.
 
@@ -57,9 +63,11 @@ creation time is the one component that cannot be relocated.
 ## Diagnostic Steps for the managed boundary
 
 Grep the activity log for `decision: "denied"` and read the `reason` discriminator. The denial lines
-are body-free by contract: they carry the reason, the correlation id, and counts — never the
-workspace path, the repository path, or the stored identity. A correlation id ties the refusal to the
-request that triggered it.
+are body-free by contract: `extra` carries exactly `decision` and `reason`, the line carries the
+`errorKind` `WORKSPACE_MANAGED_AUTHORITY_DENIED` and the correlation id — never the workspace path,
+the repository path, or the stored identity. The correlation id ties the refusal to the request or
+lifecycle operation that triggered it: health reports and governed cleanup pass their own, so the
+denial sits in that operation's timeline.
 
 ## What this guard is, and is not
 

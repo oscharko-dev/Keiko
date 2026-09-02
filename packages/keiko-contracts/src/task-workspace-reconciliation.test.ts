@@ -139,6 +139,26 @@ describe("classifyWorkspaceReconciliation precedence", () => {
         healthyFacts({ gitdirIdentityMatches: false, gitdirIdentitySchemaRetired: true }),
       ).status,
     ).toBe("stale-pointer");
+    // A volume that keeps no creation time is a platform limitation with its own marker and an
+    // operator-only resolution; it must never be reported as a stale pointer or a retired schema,
+    // and it wins over both when the facts carry more than one identity finding.
+    expect(
+      markers(healthyFacts({ gitdirIdentityMatches: false, gitdirIdentityUnsupported: true })),
+    ).toEqual(["identity-unsupported"]);
+    expect(
+      markers(
+        healthyFacts({
+          gitdirIdentityMatches: false,
+          gitdirIdentitySchemaRetired: true,
+          gitdirIdentityUnsupported: true,
+        }),
+      ),
+    ).toEqual(["identity-unsupported"]);
+    expect(
+      classifyWorkspaceReconciliation(
+        healthyFacts({ gitdirIdentityMatches: false, gitdirIdentityUnsupported: true }),
+      ).status,
+    ).toBe("stale-pointer");
     expect(classifyWorkspaceReconciliation(healthyFacts({ gitPointerPresent: false })).status).toBe(
       "stale-pointer",
     );
@@ -192,8 +212,8 @@ describe("planWorkspaceRecoveryHints", () => {
     },
     "identity-schema-retired": {
       marker: "identity-schema-retired",
-      strategy: "operator-repair",
-      operatorActionRequired: true,
+      strategy: "reconcile-pointer",
+      operatorActionRequired: false,
     },
     "identity-unsupported": {
       marker: "identity-unsupported",
@@ -309,6 +329,20 @@ describe("status/health/recovery-flag derivations", () => {
         lifecycleState: "recovery-required",
         health: "drifted",
         driftMarkers: ["gitdir-mismatch"],
+      }),
+    ).toBe("stale-pointer");
+    expect(
+      reconciliationStatusFromInstance({
+        lifecycleState: "recovery-required",
+        health: "drifted",
+        driftMarkers: ["identity-schema-retired"],
+      }),
+    ).toBe("stale-pointer");
+    expect(
+      reconciliationStatusFromInstance({
+        lifecycleState: "recovery-required",
+        health: "drifted",
+        driftMarkers: ["identity-unsupported"],
       }),
     ).toBe("stale-pointer");
     expect(

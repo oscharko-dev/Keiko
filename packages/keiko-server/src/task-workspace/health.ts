@@ -59,9 +59,11 @@ export function deriveOrphanId(repositoryId: string, leaf: string): string {
   );
 }
 
+// `probed` is false only when the status adapter itself threw: the report then cannot claim to know
+// the tree, so the entry is held as ownership-unproven rather than as clean.
 interface DirtyProbe {
   readonly worktreeDirty: boolean;
-  readonly managedAccessProven: boolean;
+  readonly probed: boolean;
 }
 
 // A live dirty probe through a worktree-bound adapter. Only meaningful when the worktree exists and is
@@ -75,13 +77,16 @@ async function probeDirty(
   registered: boolean,
   correlationId: string,
 ): Promise<DirtyProbe> {
-  if (!probeable) return { worktreeDirty: false, managedAccessProven: true };
+  if (!probeable) return { worktreeDirty: false, probed: true };
   const access = registered
-    ? resolveLifecycleManagedWorkspaceRootAccess(deps, worktreePath)
+    ? resolveLifecycleManagedWorkspaceRootAccess(deps, worktreePath, {
+        activityLog: deps.activityLog,
+        correlationId,
+      })
     : undefined;
-  if (registered && access === undefined) {
-    return { worktreeDirty: false, managedAccessProven: false };
-  }
+  // A denied identity proof is evidence (logged above under this report's correlation), not a
+  // containment or ownership finding: the probe falls back to the orphan-style contained path so
+  // the report predicts what governed cleanup will actually decide (#3376 review P1/P2).
   const workspace =
     access === undefined
       ? workspaceInfo(worktreePath)
@@ -89,9 +94,9 @@ async function probeDirty(
   try {
     const adapter = deps.createAdapter(workspace, correlationId, access?.fs);
     const status = await adapter.worktreeStatus();
-    return { worktreeDirty: status.ok && status.dirty, managedAccessProven: true };
+    return { worktreeDirty: status.ok && status.dirty, probed: true };
   } catch {
-    return { worktreeDirty: false, managedAccessProven: false };
+    return { worktreeDirty: false, probed: false };
   }
 }
 
@@ -137,10 +142,13 @@ async function evaluateInstance(
     true,
     correlationId,
   );
+  // A managed-access denial is an ownership finding, never a containment one: `pathContained` was
+  // proven from the real path by reconciliation, and the identity markers already ride in `facts`.
+  // Rewriting it to `false` here reported a path escape that had not happened (#3376 review).
   const evaluation = classifyWorkspaceHealth({
-    reconciliation: dirtyProbe.managedAccessProven ? facts : { ...facts, pathContained: false },
+    reconciliation: facts,
     worktreeDirty: dirtyProbe.worktreeDirty,
-    ownershipProven,
+    ownershipProven: ownershipProven && dirtyProbe.probed,
   });
   return deriveWorkspaceHealthEntry({
     workspaceId: instance.workspaceId,
@@ -193,7 +201,7 @@ async function detectOrphans(
       lifecycleState: "abandoned",
       hasRecord: false,
       pathContained: true,
-      ownershipProven: ownershipProven && dirtyProbe.managedAccessProven,
+      ownershipProven: ownershipProven && dirtyProbe.probed,
       worktreeDirty: dirtyProbe.worktreeDirty,
       lockLive: false,
     });

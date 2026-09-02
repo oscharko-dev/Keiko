@@ -38,10 +38,21 @@ import {
   type EditorSelectionHandoff,
   type EditorSelectionHandoffMetadata,
 } from "./cards/editorSelectionHandoff";
+import { useWindowStageEvidence } from "../hooks/useWindowStageEvidence";
 
+// Named for the same reason as the outer window chunk: `ChatWindow` is its own lazy chunk behind
+// the session bind, and an anonymous "Loading…" here would let a journey read "both named
+// placeholders are gone" as "the composer has mounted" while this chunk is still in flight — the
+// original flake, one hop later. `output` carries the status role natively; it is inline by default
+// and `.lk-loading` sets no display, so the block layout the previous div had is kept explicitly.
 function WindowChunkFallback(): ReactNode {
   const t = useTranslate();
-  return <div className="lk-loading">{t("common.loading")}</div>;
+  useWindowStageEvidence("chat window chunk");
+  return (
+    <output className="lk-loading" data-window-chunk="loading" style={{ display: "block" }}>
+      {t("common.loading")}
+    </output>
+  );
 }
 
 const windowChunkFallback = WindowChunkFallback;
@@ -1061,8 +1072,9 @@ function ChatNotFound(): ReactNode {
 // composer that was simply never found.
 function ChatBindPending(): ReactNode {
   const agentT = useEditorAgentTranslate();
+  useWindowStageEvidence("chat bind");
   return (
-    <output className="lk-loading" data-chat-bind="opening">
+    <output className="lk-loading" data-chat-bind="opening" style={{ display: "block" }}>
       {agentT("chat.restoration.opening")}
     </output>
   );

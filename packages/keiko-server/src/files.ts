@@ -263,7 +263,9 @@ export async function resolveRequestRoot(
   if (rootInput === null) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  const access = resolveManagedWorkspaceRootAccess(deps, rootInput);
+  const access = resolveManagedWorkspaceRootAccess(deps, rootInput, {
+    correlationId: ctx.correlationId,
+  });
   if (access === undefined) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
@@ -297,7 +299,7 @@ export function requestRootAccessResolver(
       const resolved =
         workspaceRootAccessOrUndefined(
           deps.workspaceRootAccessResolver?.(expected.access.canonicalRoot),
-        ) ?? fallbackRequestRootAccess(deps, expected);
+        ) ?? fallbackRequestRootAccess(deps, expected, ctx.correlationId);
       return resolved?.kind === expected.access.kind &&
         resolved.canonicalRoot === expected.access.canonicalRoot
         ? resolved
@@ -311,10 +313,11 @@ export function requestRootAccessResolver(
 function fallbackRequestRootAccess(
   deps: UiHandlerDeps,
   expected: ResolvedProjectRoot,
+  correlationId: string | undefined,
 ): WorkspaceRootAccess | undefined {
   if (deps.workspaceRootAccessResolver !== undefined) return undefined;
   return expected.access.kind === "managed-task"
-    ? resolveManagedWorkspaceRootAccess(deps, expected.access.canonicalRoot)
+    ? resolveManagedWorkspaceRootAccess(deps, expected.access.canonicalRoot, { correlationId })
     : expected.access;
 }
 

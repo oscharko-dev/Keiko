@@ -54,6 +54,7 @@ import {
   type ServerLogEvent,
   type ServerLogSink,
 } from "../observability/index.js";
+import { inspectManagedGitdirIdentity } from "./gitdir-identity.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -687,6 +688,61 @@ describe("cleanup safety refusals (SC4 — refusal is a successful outcome, neve
     expect(result.outcome).toBe("refused");
     expect(result.refusalReason).toBe("path-escape");
     expect(existsSync(join(escapeTarget, "keep.txt"))).toBe(true);
+  });
+});
+
+// A terminal row whose managed identity can no longer be re-proven — registered under the retired
+// inode-only schema here; a replaced tree or a volume without creation times deny the same way —
+// is still Keiko's to remove: it is contained, the managed root is owned, the operator approved.
+// Converting the identity denial into "dirty" refused it forever without ever running `git status`
+// (#3376 review P1). The probe now falls back to the orphan-style contained path and the denial is
+// evidence on the activity log under the cleanup's own correlation, not a verdict.
+describe("identity-denied terminal rows stay removable (#3376 review P1)", () => {
+  function retireIdentity(instance: WorkspaceInstance): WorkspaceInstance {
+    const inspection = inspectManagedGitdirIdentity(instance.managedWorktreePath, repoRoot);
+    if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
+    return setState(instance, "cleanup-pending", { gitdirIdentity: inspection.legacyIdentity });
+  }
+
+  it("removes a clean retired-schema row and logs the denial under the cleanup's correlation", async () => {
+    const instance = retireIdentity(await provisionTask("t-retired-clean"));
+    const activityLog = createBufferedServerLogSink();
+
+    const result = await cleanup(store, realAdapter, undefined, activityLog).cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+      correlationId: "cleanup-retired-0001",
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(existsSync(instance.managedWorktreePath)).toBe(false);
+    expect(store.getById(instance.workspaceId)).toBeUndefined();
+    const denials = activityLog.events.filter((event) => event.op === "workspace.root.denied");
+    expect(denials).toHaveLength(1);
+    expect(denials[0]).toMatchObject({
+      correlationId: "cleanup-retired-0001",
+      extra: { decision: "denied", reason: "managed-root-identity-schema-retired" },
+    });
+    expect(JSON.stringify(denials[0])).not.toContain(managedRoot);
+  });
+
+  it("refuses a DIRTY retired-schema row on a real Git status, not on the denial", async () => {
+    const instance = retireIdentity(await provisionTask("t-retired-dirty"));
+    writeFileSync(join(instance.managedWorktreePath, "wip.txt"), "uncommitted\n");
+
+    const result = await cleanup().cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+
+    expect(result.outcome).toBe("refused");
+    expect(result.refusalReason).toBe("worktree-dirty");
+    expect(existsSync(join(instance.managedWorktreePath, "wip.txt"))).toBe(true);
+    expect(store.getById(instance.workspaceId)).toBeDefined();
   });
 });
 

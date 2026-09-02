@@ -23,6 +23,8 @@ import type { ActiveWorkspacePointer, ActiveWorkspacePointerStore } from "./acti
 import type { WorkspaceActivityLogSeam } from "./activity-log.js";
 import type { WorkspaceInstanceStore } from "./store.js";
 import type { WorkspaceMutexRegistry } from "./mutex.js";
+import type { CreationTimeSupport } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { ManagedIdentityDrift } from "./gitdir-identity.js";
 
 export interface WorkspaceProvisionRequest {
   // The repository request path the route already resolved (realpath'd project/arbitrary root). The
@@ -108,6 +110,10 @@ export interface WorkspaceProvisioningServiceDeps extends WorkspaceActivityLogSe
   // Clock + id generator, injected for deterministic tests. `now` is epoch ms.
   readonly now: () => number;
   readonly newId: () => string;
+  // Optional, tests only: whether the managed root keeps a durable creation time. Production uses
+  // the real probe (`probeCreationTimeSupport`); an identity is never minted on a volume whose
+  // "creation time" is the ctime under another name (#3376 review P2).
+  readonly probeCreationTimeSupport?: ((directory: string) => CreationTimeSupport) | undefined;
   // The server-owned Project → single-root manifest identity for a managed worktree. Production
   // supplies the existing UiStore paired-write owner; tests may omit it when trust/catalog behavior
   // is outside their scope. Explicit provision may initialize exact trust; resume, activate, and
@@ -194,6 +200,9 @@ export interface WorkspaceLifecycleServiceDeps extends WorkspaceActivityLogSeam 
   readonly redactString: (input: string) => string;
   readonly now: () => number;
   readonly newId: () => string;
+  // Optional, tests only: the live managed-identity verdict for one instance. Production proves it
+  // on disk (`liveManagedIdentityDrift`) before any binding or readiness state is exposed.
+  readonly identityDrift?: ((instance: WorkspaceInstance) => ManagedIdentityDrift) | undefined;
   // Optional: how long a mutation lock stays valid before it is treated as stale. Mirrors provisioning.
   readonly lockTtlMs?: number | undefined;
   // The SAME shared in-process serializer the provisioning service holds (#449, ADR-0093 D1): pause /

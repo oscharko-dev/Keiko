@@ -13,9 +13,11 @@ import { join, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type {
+  WorkspaceDescriptorReadCompleteness,
   WorkspaceDescriptorUtf8Read,
   WorkspaceDirEntry,
   WorkspaceFs,
+  WorkspaceHardLinkPolicy,
   WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace/internal/fs";
 
@@ -23,6 +25,7 @@ import {
   inspectManagedGitdirIdentity,
   inspectManagedGitdirIdentityOutcome,
   managedIdentityDrift,
+  managedIdentityDriftFor,
   type ManagedGitdirIdentityInspection,
 } from "./gitdir-identity.js";
 
@@ -44,6 +47,10 @@ interface Node {
   birthtimeNs: string | undefined;
   ctimeNs: string | undefined;
   text: string;
+  // A symlink is reported the way `lstat` reports it: the link itself, never its target. Without
+  // this field the fixture could not represent one, and the three `isSymbolicLink` guards in the
+  // production file were untestable here — removing all three left this suite green (review).
+  symlink?: boolean;
 }
 
 function directory(identity: string): Node {
@@ -70,9 +77,9 @@ function authenticTree(): Map<string, Node> {
 function statOf(node: Node): WorkspaceStat {
   return {
     size: node.text.length,
-    isFile: node.kind === "file",
-    isDirectory: node.kind === "directory",
-    isSymbolicLink: false,
+    isFile: node.symlink === true ? false : node.kind === "file",
+    isDirectory: node.symlink === true ? false : node.kind === "directory",
+    isSymbolicLink: node.symlink === true,
     hardLinkCount: 1,
     fileIdentity: node.identity,
     mtimeNs: node.ctimeNs,
@@ -311,6 +318,15 @@ describe("managedIdentityDrift", () => {
 
   // An unreadable or unprovable worktree is never "just an old registration": with nothing to
   // compare against, the only honest verdict is the one that refuses without excusing it.
+  it("rethrows a failed proof's cause instead of calling the worktree changed", () => {
+    const cause = new Error("EACCES: permission denied");
+
+    expect(() => managedIdentityDriftFor({ kind: "failed", cause }, "anything")).toThrow(cause);
+    expect(() => managedIdentityDriftFor({ kind: "failed", cause: "EIO" }, "anything")).toThrow(
+      "managed worktree identity proof failed",
+    );
+  });
+
   it("reports changed when the worktree proves no identity at all", () => {
     expect(managedIdentityDrift(undefined, "anything")).toBe("changed");
   });
@@ -413,5 +429,170 @@ describe("port shape — a prototype-backed WorkspaceFs keeps its methods", () =
 
     expect(identityOfPort(authentic)).toBeDefined();
     expect(identityOfPort(replaced)).not.toBe(identityOfPort(authentic));
+  });
+});
+
+// The `lstat` view is the only one this proof may trust: a symlink at any of these positions is a
+// path an attacker chooses, not an object Keiko created. Each row flips exactly one component to a
+// link; removing the production guard for that component is what makes its row fail.
+describe("symlinks are refused at every component", () => {
+  it.each([
+    { label: "the worktree root", path: WORKTREE_ROOT },
+    { label: "the worktree .git pointer", path: WORKTREE_POINTER },
+    { label: "the Git admin directory", path: ADMIN_DIRECTORY },
+    { label: "the admin gitdir backpointer", path: ADMIN_BACKPOINTER },
+    { label: "the Git common directory", path: COMMON_DIRECTORY },
+  ])("refuses when $label is a symlink", ({ path }) => {
+    expect(identityOf(mutate(authenticTree(), path, { symlink: true }))).toBeUndefined();
+  });
+});
+
+// The two descriptor reads (the worktree `.git` pointer, then the admin `gitdir` backpointer) are
+// the last time the proof looks at the bytes; everything the identity binds is re-statted once more
+// at the very end. A port that swaps a component AFTER the final read models the window an earlier
+// version left open: only the common directory was re-checked, so a worktree root, pointer, admin
+// directory or backpointer replaced after its own stat still produced a granted, path-only identity
+// (#3376 review P1). Measured by sabotage: with the final re-proof removed, the five cases in the
+// first table pass as "identified"; the admin directory and its backpointer are ALSO caught by the
+// backpointer read's own root/target re-stat, so they sit in a table of their own.
+describe("the proof is re-checked after the last read", () => {
+  const DESCRIPTOR_READS_PER_PROOF = 2;
+
+  function portReplacingAfterLastRead(
+    tree: Map<string, Node>,
+    path: string,
+    change: Partial<Node>,
+  ): { readonly port: WorkspaceFs; readonly reads: () => number } {
+    const inner = portFor(tree);
+    const read = inner.readFileUtf8WithinRootSameDescriptor;
+    if (read === undefined) throw new Error("fixture port lost its descriptor read");
+    let reads = 0;
+    return {
+      reads: (): number => reads,
+      port: {
+        ...inner,
+        readFileUtf8WithinRootSameDescriptor: (
+          canonicalRoot: string,
+          absolutePath: string,
+          maxBytes: number,
+          hardLinkPolicy: WorkspaceHardLinkPolicy,
+          completeness: WorkspaceDescriptorReadCompleteness,
+        ): WorkspaceDescriptorUtf8Read => {
+          const result = read.call(
+            inner,
+            canonicalRoot,
+            absolutePath,
+            maxBytes,
+            hardLinkPolicy,
+            completeness,
+          );
+          reads += 1;
+          if (reads === DESCRIPTOR_READS_PER_PROOF) mutate(tree, path, change);
+          return result;
+        },
+      },
+    };
+  }
+
+  it("performs exactly the two descriptor reads the swap below is timed against", () => {
+    const { port, reads } = portReplacingAfterLastRead(authenticTree(), WORKTREE_ROOT, {});
+    expect(inspectManagedGitdirIdentityOutcome(WORKTREE_ROOT, REPOSITORY_ROOT, port).kind).toBe(
+      "identified",
+    );
+    expect(reads()).toBe(DESCRIPTOR_READS_PER_PROOF);
+  });
+
+  it.each([
+    { label: "worktree root", path: WORKTREE_ROOT, change: { identity: "1:95" } },
+    { label: "worktree .git pointer", path: WORKTREE_POINTER, change: { identity: "1:96" } },
+    { label: "Git common directory", path: COMMON_DIRECTORY, change: { identity: "1:91" } },
+    {
+      label: "recreated worktree root (same inode)",
+      path: WORKTREE_ROOT,
+      change: { birthtimeNs: "777" },
+    },
+    { label: "worktree root turned symlink", path: WORKTREE_ROOT, change: { symlink: true } },
+  ])("refuses a $label replaced after the last read", ({ path, change }) => {
+    const { port } = portReplacingAfterLastRead(authenticTree(), path, change);
+
+    expect(inspectManagedGitdirIdentityOutcome(WORKTREE_ROOT, REPOSITORY_ROOT, port).kind).toBe(
+      "unproven",
+    );
+  });
+
+  // The last read is the backpointer's own, so a swap of its directory or of the file itself lands
+  // inside that read's root-before/after and target re-stat as well as in the final re-proof.
+  it.each([
+    { label: "Git admin directory", path: ADMIN_DIRECTORY, change: { identity: "1:93" } },
+    { label: "admin gitdir backpointer", path: ADMIN_BACKPOINTER, change: { identity: "1:94" } },
+  ])("refuses a $label replaced as its own read completes", ({ path, change }) => {
+    const { port } = portReplacingAfterLastRead(authenticTree(), path, change);
+
+    expect(inspectManagedGitdirIdentityOutcome(WORKTREE_ROOT, REPOSITORY_ROOT, port).kind).toBe(
+      "unproven",
+    );
+  });
+
+  // The bytes of a same-descriptor read come from the file that was open; the pathname is re-statted
+  // afterwards so a pointer swapped DURING the read cannot pair authentic stale bytes with a path that
+  // now points at something else.
+  it("refuses a pointer replaced between its descriptor read and the re-stat", () => {
+    const tree = authenticTree();
+    const inner = portFor(tree);
+    const read = inner.readFileUtf8WithinRootSameDescriptor;
+    if (read === undefined) throw new Error("fixture port lost its descriptor read");
+    const port: WorkspaceFs = {
+      ...inner,
+      readFileUtf8WithinRootSameDescriptor: (
+        canonicalRoot: string,
+        absolutePath: string,
+        maxBytes: number,
+        hardLinkPolicy: WorkspaceHardLinkPolicy,
+        completeness: WorkspaceDescriptorReadCompleteness,
+      ): WorkspaceDescriptorUtf8Read => {
+        const result = read.call(
+          inner,
+          canonicalRoot,
+          absolutePath,
+          maxBytes,
+          hardLinkPolicy,
+          completeness,
+        );
+        if (absolutePath === WORKTREE_POINTER) mutate(tree, WORKTREE_POINTER, { identity: "1:97" });
+        return result;
+      },
+    };
+
+    expect(inspectManagedGitdirIdentityOutcome(WORKTREE_ROOT, REPOSITORY_ROOT, port).kind).toBe(
+      "unproven",
+    );
+  });
+});
+
+// An I/O failure inside the proof (EIO, EACCES, EMFILE, a vanished path) is not a verdict about the
+// worktree. It used to be swallowed into "unproven" and logged as an identity denial; the outcome now
+// carries the cause so the access boundary can record a resolution failure with its frames instead.
+describe("inspectManagedGitdirIdentityOutcome — I/O failures keep their cause", () => {
+  it.each([
+    { label: "worktree root", path: WORKTREE_ROOT },
+    { label: "Git common directory", path: COMMON_DIRECTORY },
+    { label: "Git admin directory", path: ADMIN_DIRECTORY },
+  ])("reports failed, with the thrown cause, when the $label stat throws", ({ path }) => {
+    const inner = portFor(authenticTree());
+    const failure = new Error("EIO: input/output error");
+    const port: WorkspaceFs = {
+      ...inner,
+      stat: (candidate: string): WorkspaceStat => {
+        if (candidate === path) throw failure;
+        return inner.stat(candidate);
+      },
+    };
+
+    const outcome = inspectManagedGitdirIdentityOutcome(WORKTREE_ROOT, REPOSITORY_ROOT, port);
+
+    expect(outcome.kind).toBe("failed");
+    expect(outcome.kind === "failed" ? outcome.cause : undefined).toBe(failure);
+    // The yes/no wrapper stays fail-closed for callers that only need a verdict.
+    expect(inspectManagedGitdirIdentity(WORKTREE_ROOT, REPOSITORY_ROOT, port)).toBeUndefined();
   });
 });

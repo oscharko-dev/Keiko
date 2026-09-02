@@ -37,7 +37,10 @@ import {
   deriveWorkspaceId,
 } from "./naming.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
-import { inspectManagedGitdirIdentity } from "./gitdir-identity.js";
+import {
+  inspectManagedGitdirIdentity,
+  RETIRED_IDENTITY_SCHEMA_MESSAGE,
+} from "./gitdir-identity.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   createBufferedServerLogSink,
@@ -45,6 +48,7 @@ import {
   type ServerLogEvent,
   type ServerLogSink,
 } from "../observability/index.js";
+import type { CreationTimeSupport } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -102,6 +106,7 @@ function makeService(
   adapterFactory?: AdapterFactory,
   ensureManagedWorkspaceIdentity?: (instance: WorkspaceInstance, initializeTrust: boolean) => void,
   activityLog?: ServerLogSink,
+  probeCreationTimeSupport?: (directory: string) => CreationTimeSupport,
 ): WorkspaceProvisioningService {
   return createWorkspaceProvisioningService({
     store,
@@ -114,6 +119,7 @@ function makeService(
     ...(ensureManagedWorkspaceIdentity === undefined ? {} : { ensureManagedWorkspaceIdentity }),
     mutex: __twMutex,
     ...(activityLog === undefined ? {} : { activityLog }),
+    ...(probeCreationTimeSupport === undefined ? {} : { probeCreationTimeSupport }),
   });
 }
 
@@ -568,6 +574,62 @@ describe("idempotent safe retry (AC3)", () => {
     const repaired = await service.provision({ ...request, operatorApprovedRepair: true });
     expect(repaired.instance.gitdirIdentity).not.toBe("0000000000000000deadbeefdeadbeef");
   });
+
+  // The persisted value is untrusted input to the verdict. An EMPTY identity cannot even be
+  // persisted — the store refuses it at the write boundary — and anything else that is not the
+  // live identity is "changed" like any other non-match: refused on every retry, reissued only
+  // under approval, and marked with the provisioning path's pointer-drift marker.
+  it("refuses to persist an empty identity at the store boundary", async () => {
+    const first = await makeService().provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-empty-identity",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+
+    expect(() => store.upsert({ ...first.instance, gitdirIdentity: "" })).toThrow(
+      /gitdirIdentity must be a non-empty string/,
+    );
+    expect(store.getById(first.instance.workspaceId)?.gitdirIdentity).toBe(
+      first.instance.gitdirIdentity,
+    );
+  });
+
+  it.each([
+    { label: "a malformed", persisted: "not-a-digest" },
+    { label: "a whitespace-only", persisted: " \t\n" },
+    { label: "a single-character", persisted: "0" },
+  ])(
+    "keeps refusing $label persisted identity until an operator-approved repair",
+    async ({ persisted }) => {
+      const service = makeService();
+      const first = await service.provision({
+        repositoryRequestPath: repoRoot,
+        taskId: "t-bad-identity",
+        baseBranch: "main",
+        requestedBy: "u",
+      });
+      store.upsert({
+        ...first.instance,
+        gitdirIdentity: persisted,
+        lifecycleState: "recovery-required",
+      });
+      const request = {
+        repositoryRequestPath: repoRoot,
+        taskId: "t-bad-identity",
+        baseBranch: "main",
+        requestedBy: "u",
+      };
+
+      await rejectsWithCode(() => service.provision(request), "POINTER_DRIFT");
+      await rejectsWithCode(() => service.provision(request), "POINTER_DRIFT");
+      expect(store.getById(first.instance.workspaceId)?.gitdirIdentity).toBe(persisted);
+      expect(store.getById(first.instance.workspaceId)?.driftMarkers).toEqual(["pointer-stale"]);
+
+      const repaired = await service.provision({ ...request, operatorApprovedRepair: true });
+      expect(repaired.instance.gitdirIdentity).toBe(first.instance.gitdirIdentity);
+    },
+  );
 
   // Regression for S8786: the formerly duplicated `.git` pointer parse used to be
   // `/^gitdir:\s*(.+)\s*$/mu`, whose leading/trailing `\s*` overlapped with `(.+)` and, under the
@@ -1147,5 +1209,161 @@ describe("activate", () => {
         }),
       "LOCK_CONTENTION",
     );
+  });
+});
+
+// Activation exposes an operational binding, so it runs the same live four-way proof as resume. Before
+// this it marked a row healthy on path existence alone, so a persisted v2 registration — or a replaced
+// tree — became the active workspace without ever being proven (#3376 review P1).
+describe("activation re-proves the managed identity", () => {
+  async function activate(
+    service: WorkspaceProvisioningService,
+    workspaceId: string,
+    correlationId: string,
+  ): Promise<unknown> {
+    return service.activate({
+      workspaceId,
+      taskId: "",
+      requestedBy: "u",
+      acquireLock: false,
+      correlationId,
+    });
+  }
+
+  it("refuses a retired-schema identity, flags the row with its own marker and hint, and logs the marker", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(undefined, undefined, activityLog);
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-activate-retired",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    const inspection = inspectManagedGitdirIdentity(first.instance.managedWorktreePath, repoRoot);
+    if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
+    store.upsert({ ...first.instance, gitdirIdentity: inspection.legacyIdentity });
+
+    await expect(
+      activate(service, first.instance.workspaceId, "activate-retired-0001"),
+    ).rejects.toMatchObject({ code: "POINTER_DRIFT", message: RETIRED_IDENTITY_SCHEMA_MESSAGE });
+
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("recovery-required");
+    expect(persisted?.driftMarkers).toEqual(["identity-schema-retired"]);
+    expect(persisted?.recoveryHints).toContainEqual(
+      expect.objectContaining({ strategy: "reconcile-pointer", operatorActionRequired: false }),
+    );
+    // The retired value is never promoted by an activation either.
+    expect(persisted?.gitdirIdentity).toBe(inspection.legacyIdentity);
+    const line = activityLog.events.find(
+      (event) =>
+        event.correlationId === "activate-retired-0001" && event.errorKind === "POINTER_DRIFT",
+    );
+    expect(line?.extra).toMatchObject({
+      operation: "activate",
+      outcome: "retry-required",
+      driftMarker: "identity-schema-retired",
+    });
+  });
+
+  it("refuses a changed identity with the pointer-drift marker", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-activate-changed",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({ ...first.instance, gitdirIdentity: "0000000000000000deadbeefdeadbeef" });
+
+    await expect(
+      activate(service, first.instance.workspaceId, "activate-changed-0001"),
+    ).rejects.toMatchObject({
+      code: "POINTER_DRIFT",
+      message: "managed worktree git identity changed",
+    });
+    expect(store.getById(first.instance.workspaceId)?.driftMarkers).toEqual(["pointer-stale"]);
+  });
+
+  it("activates an authentic workspace as before", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-activate-ok",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+
+    await expect(
+      activate(service, first.instance.workspaceId, "activate-ok-0001"),
+    ).resolves.toMatchObject({
+      instance: { lifecycleState: "active", health: "healthy" },
+    });
+  });
+});
+
+// A nonzero birthtime is not proof of a kept creation time: where Node reports the ctime under that
+// name, an identity minted from it would read as a replaced worktree after the first metadata write.
+// The mint probes the managed root first and refuses with the platform's own marker (#3376 review P2).
+describe("mint-time creation-time probe", () => {
+  it.each(["aliased", "absent"] as const)(
+    "refuses to mint an identity when the managed root's creation time is %s",
+    async (support) => {
+      const activityLog = createBufferedServerLogSink();
+      const service = makeService(undefined, undefined, activityLog, () => support);
+
+      await rejectsWithCode(
+        () =>
+          service.provision({
+            repositoryRequestPath: repoRoot,
+            taskId: "t-mint-unsupported",
+            baseBranch: "main",
+            requestedBy: "u",
+            correlationId: "mint-probe-0001",
+          }),
+        "POINTER_DRIFT",
+      );
+
+      const rows = store.listByRepository(deriveRepositoryId(repoRoot));
+      const row = rows.find((candidate) => candidate.taskId === "t-mint-unsupported");
+      expect(row?.lifecycleState).toBe("recovery-required");
+      expect(row?.driftMarkers).toEqual(["identity-unsupported"]);
+      expect(row?.recoveryHints).toContainEqual(
+        expect.objectContaining({ strategy: "operator-repair", operatorActionRequired: true }),
+      );
+      // The partial worktree is rolled back, and the probe verdict is on the activity log.
+      expect(existsSync(row?.managedWorktreePath ?? "")).toBe(false);
+      const probeLine = activityLog.events.find(
+        (event) => event.op === "task-workspace.identity.creation-time-probe",
+      );
+      expect(probeLine).toMatchObject({
+        level: "warn",
+        correlationId: "mint-probe-0001",
+        extra: { volume: "managed-root", support },
+      });
+    },
+  );
+
+  it("mints on a durable root and records the probe verdict", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(undefined, undefined, activityLog);
+
+    const result = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-mint-durable",
+      baseBranch: "main",
+      requestedBy: "u",
+      correlationId: "mint-probe-0002",
+    });
+
+    expect(result.instance.lifecycleState).toBe("active");
+    const probeLine = activityLog.events.find(
+      (event) => event.op === "task-workspace.identity.creation-time-probe",
+    );
+    expect(probeLine).toMatchObject({
+      level: "info",
+      correlationId: "mint-probe-0002",
+      extra: { volume: "managed-root", support: "durable" },
+    });
   });
 });

@@ -33,6 +33,8 @@ import { createWorkspaceHealthService } from "./health.js";
 import type { WorkspaceHealthService, WorkspaceProvisioningService } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
 import { MANAGED_ROOT_MARKER_FILENAME } from "./naming.js";
+import { inspectManagedGitdirIdentity } from "./gitdir-identity.js";
+import { createBufferedServerLogSink, type ServerLogSink } from "../observability/server-log.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -88,7 +90,10 @@ function provisioning(): WorkspaceProvisioningService {
   });
 }
 
-function health(adapterFactory: AdapterFactory = realAdapter): WorkspaceHealthService {
+function health(
+  adapterFactory: AdapterFactory = realAdapter,
+  activityLog?: ServerLogSink,
+): WorkspaceHealthService {
   return createWorkspaceHealthService({
     store,
     activePointerStore: pointerStore,
@@ -99,7 +104,14 @@ function health(adapterFactory: AdapterFactory = realAdapter): WorkspaceHealthSe
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
     mutex: __twMutex,
+    ...(activityLog === undefined ? {} : { activityLog }),
   });
+}
+
+function retireIdentity(instance: WorkspaceInstance): void {
+  const inspection = inspectManagedGitdirIdentity(instance.managedWorktreePath, repoRoot);
+  if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
+  store.upsert({ ...instance, gitdirIdentity: inspection.legacyIdentity });
 }
 
 async function provisionTask(taskId: string): Promise<WorkspaceInstance> {
@@ -192,6 +204,46 @@ describe("operational health classification (AC1)", () => {
 
     expect(entryFor(report, instance.workspaceId)?.classification).toBe("recovery-required");
     expect(entryFor(report, instance.workspaceId)?.cleanupEligible).toBe(false);
+  });
+
+  // A managed-access denial is an ownership/identity finding, never a containment one. Health used
+  // to rewrite the reconciliation facts to `pathContained: false` on every denial, so a workspace
+  // registered under the retired identity schema was reported as a PATH ESCAPE and sent an operator
+  // into containment incident response for a migration (#3376 review P2).
+  it("reports a retired-schema active workspace as identity drift, never as a path escape", async () => {
+    const instance = await provisionTask("t-retired-active");
+    retireIdentity(instance);
+    const activityLog = createBufferedServerLogSink();
+
+    const report = await health(realAdapter, activityLog).report(repoRoot, "health-retired-0001");
+
+    const entry = entryFor(report, instance.workspaceId);
+    expect(entry?.driftMarkers).toContain("identity-schema-retired");
+    expect(entry?.driftMarkers).not.toContain("path-escape");
+    expect(entry?.classification).toBe("stale-pointer");
+    expect(entry?.cleanupEligible).toBe(false);
+    // The denial itself is evidence on the activity log, joined to this report's correlation.
+    const denials = activityLog.events.filter((event) => event.op === "workspace.root.denied");
+    expect(denials).toHaveLength(1);
+    expect(denials[0]).toMatchObject({
+      correlationId: "health-retired-0001",
+      extra: { decision: "denied", reason: "managed-root-identity-schema-retired" },
+    });
+  });
+
+  // The report has to predict what governed cleanup will decide: a clean terminal row whose identity
+  // can no longer be re-proven is still removable (cleanup probes it on the orphan-style contained
+  // path), so health must not mark it ineligible on the denial alone (#3376 review P1).
+  it("keeps a clean retired-schema terminal workspace cleanup-eligible", async () => {
+    const instance = await provisionTask("t-retired-terminal");
+    retireIdentity(instance);
+    setState(store.getById(instance.workspaceId) ?? instance, "cleanup-pending");
+
+    const report = await health().report(repoRoot);
+
+    const entry = entryFor(report, instance.workspaceId);
+    expect(entry?.cleanupEligible).toBe(true);
+    expect(entry?.driftMarkers).not.toContain("path-escape");
   });
 
   it("classifies a worktree with uncommitted/untracked changes as dirty (live probe)", async () => {

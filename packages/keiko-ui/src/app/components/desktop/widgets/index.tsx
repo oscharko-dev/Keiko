@@ -22,6 +22,7 @@ import type { AgentRunCfg } from "./cards/AgentRunWidget";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
 import { workspaceRootTargets } from "../workspaceRootTargets";
 import { BoundRootTarget, type BoundRootSurfaceType } from "./BoundRootTarget";
+import { useWindowStageEvidence } from "../hooks/useWindowStageEvidence";
 
 // Named, not just styled. A window body chunk and the chat bind that follows it both render a
 // "Loading…" placeholder, and while they were indistinguishable a stalled chunk, a stalled bind and a
@@ -29,8 +30,9 @@ import { BoundRootTarget, type BoundRootSurfaceType } from "./BoundRootTarget";
 // journey report a missing composer instead of the state it was actually stuck in.
 function WindowChunkFallback(): ReactNode {
   const t = useTranslate();
+  useWindowStageEvidence("window chunk");
   return (
-    <output className="lk-loading" data-window-chunk="loading">
+    <output className="lk-loading" data-window-chunk="loading" style={{ display: "block" }}>
       {t("common.loading")}
     </output>
   );

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { TaskWorkspaceDriftMarker } from "@oscharko-dev/keiko-contracts";
 import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 import {
   forwardWorkspaceFs,
@@ -67,13 +68,19 @@ export interface ManagedGitdirIdentityInspection {
 // EVERY component is bound to its creation time, the worktree ROOT DIRECTORY included, and
 // `birthtimeNs` is the only field that can carry it.
 //
+// What this is NOT: a nonce, or a security boundary against a local attacker running as the same
+// user. Creation time is settable — `SetFileTime` on Windows, `setattrlist`/`utimensat` on macOS —
+// and such an attacker can rewrite anything Keiko records anyway. It closes the accidental and the
+// cheap replacement, the one an ordinary Linux filesystem hands out by default. Defence in depth.
+//
 // Stamping just the pointer files is not enough, and assuming otherwise is a hole with a working
 // exploit. A local process that can replace the worktree does not have to CREATE a new pointer: it
 // can move the original `.git` out, delete and recreate the directory until the inode is handed
 // back, then move the same file in again. `rename` preserves both the inode and the birthtime, so
 // every pointer component still matches. Reproduced on Linux: root inode reused, pointer inode and
 // birthtime both preserved, and only the root directory's birthtime changed. That is why the root
-// directory has to be part of the identity — it is the one component an attacker cannot relocate.
+// directory has to be part of the identity — a rename cannot carry it over, so a replacement that
+// only shuffles existing objects is caught.
 //
 // `ctimeNs` is NOT a usable substitute here. A directory's ctime and mtime move whenever an entry is
 // created or removed inside it, so binding the root to either would refuse every healthy workspace
@@ -120,21 +127,67 @@ export type ManagedIdentityDrift = "matches" | "schema-retired" | "unsupported" 
  * Four outcomes, because three of them need different operator actions and collapsing any pair
  * sends the operator to the wrong one:
  *   matches         — nothing to do.
- *   schema-retired  — the workspace is intact; re-register to reissue the proof.
+ *   schema-retired  — authenticity is unproven under the retired rule (a same-path replacement
+ *                     can reproduce every inode-only term); re-register to reissue the proof.
  *   unsupported     — this filesystem reports no creation time; relocate the root (ADR-0155).
  *   changed         — the worktree really is not the one that was registered.
  *
  * `unsupported` is NOT `changed`: nothing about the customer's disk changed, and reporting a
  * platform limitation as a replaced worktree is a false statement that sends them hunting an attack.
+ *
+ * A `failed` proof is not a drift verdict at all: an EIO or EACCES says nothing about the worktree,
+ * so it is rethrown with its cause for the caller's error path (frames, correlation) rather than
+ * folded into `changed` — which would persist a false replacement on the row.
  */
 export function managedIdentityDriftFor(
   outcome: ManagedGitdirIdentityOutcome,
   persisted: string,
 ): ManagedIdentityDrift {
+  if (outcome.kind === "failed") throw proofFailure(outcome.cause);
   if (outcome.kind === "unsupported") return "unsupported";
   if (outcome.kind === "unproven") return "changed";
   if (outcome.inspection.identity === persisted) return "matches";
   return outcome.inspection.legacyIdentity === persisted ? "schema-retired" : "changed";
+}
+
+function proofFailure(cause: unknown): Error {
+  return cause instanceof Error
+    ? cause
+    : new Error("managed worktree identity proof failed", { cause });
+}
+
+export const RETIRED_IDENTITY_SCHEMA_MESSAGE =
+  "managed worktree identity predates the current identity rule; re-register to reissue it";
+export const UNSUPPORTED_IDENTITY_MESSAGE =
+  "managed worktree filesystem cannot report a durable creation time; relocate the workspace root";
+
+// One mapping from the verdict to what is persisted and what the operator is told, shared by every
+// path that may expose an operational binding or readiness state — provisioning resume and
+// completion, activation, handoff, the active-pointer read — so no path can re-label a migration or
+// a platform limitation as a replaced pointer (#3376 review P1).
+export function managedIdentityDriftMarker(drift: ManagedIdentityDrift): TaskWorkspaceDriftMarker {
+  if (drift === "schema-retired") return "identity-schema-retired";
+  if (drift === "unsupported") return "identity-unsupported";
+  return "pointer-stale";
+}
+
+export function managedIdentityDriftMessage(drift: ManagedIdentityDrift): string {
+  if (drift === "schema-retired") return RETIRED_IDENTITY_SCHEMA_MESSAGE;
+  if (drift === "unsupported") return UNSUPPORTED_IDENTITY_MESSAGE;
+  return "managed worktree git identity changed";
+}
+
+/** The live four-way verdict for one persisted registration; an I/O failure inside the proof throws. */
+export function liveManagedIdentityDrift(
+  worktreePath: string,
+  repositoryRoot: string,
+  persisted: string,
+  fs: WorkspaceFs = nodeWorkspaceFs,
+): ManagedIdentityDrift {
+  return managedIdentityDriftFor(
+    inspectManagedGitdirIdentityOutcome(worktreePath, repositoryRoot, fs),
+    persisted,
+  );
 }
 
 /** Convenience for the callers that already hold an inspection rather than a full outcome. */
@@ -159,7 +212,10 @@ export function managedIdentityDrift(
 export type ManagedGitdirIdentityOutcome =
   | { readonly kind: "identified"; readonly inspection: ManagedGitdirIdentityInspection }
   | { readonly kind: "unsupported" }
-  | { readonly kind: "unproven" };
+  | { readonly kind: "unproven" }
+  // The port threw (EIO, EACCES, EMFILE, a stat race). Kept apart from `unproven` so the denial that
+  // follows can carry `errorKind`, frames and cause instead of looking like a malformed pointer.
+  | { readonly kind: "failed"; readonly cause: unknown };
 
 /**
  * Wraps a port so one inspection can report whether any component it actually consulted lacked a
@@ -225,7 +281,12 @@ export function inspectManagedGitdirIdentityOutcome(
   fs: WorkspaceFs = nodeWorkspaceFs,
 ): ManagedGitdirIdentityOutcome {
   const witness = creationTimeWitness(fs);
-  const inspection = inspectManagedGitdirIdentity(worktreePath, repositoryRoot, witness.fs);
+  let inspection: ManagedGitdirIdentityInspection | undefined;
+  try {
+    inspection = inspectManagedGitdirIdentityOrThrow(worktreePath, repositoryRoot, witness.fs);
+  } catch (cause) {
+    return { kind: "failed", cause };
+  }
   if (inspection !== undefined) return { kind: "identified", inspection };
   return witness.sawMissingCreationTime() ? { kind: "unsupported" } : { kind: "unproven" };
 }
@@ -250,6 +311,12 @@ function readStableContainedFile(
   const after = directoryIdentity(fs.stat(canonicalRoot));
   const targetIdentity = fileIdentity(result);
   if (after?.withCreation !== before.withCreation || targetIdentity === undefined) return undefined;
+  // The bytes came from a descriptor opened on the OLD file; re-stat the pathname after the read so a
+  // pointer replaced between the read and here cannot pair authentic stale bytes with a path that
+  // now points elsewhere. Same generation, or nothing.
+  const current = fs.stat(absolutePath);
+  if (!current.isFile || current.isSymbolicLink) return undefined;
+  if (identityPair(current)?.withCreation !== targetIdentity.withCreation) return undefined;
   return { rawText: result.rawText, rootIdentity: before, fileIdentity: targetIdentity };
 }
 
@@ -357,6 +424,36 @@ function repositoryCommonDirectory(
   return commonDirectoryAt(fs, dirname(dirname(pointer.canonicalAdminDirectory)));
 }
 
+// The walk proved each component at a different moment. Before the identity is handed out, every
+// one of them is re-stat'ed and must still be the generation that was proven — otherwise a root or
+// pointer swapped after its own check but before this point would be hashed from stale, authentic
+// observations while the authority granted on the pathname lands on the replacement. This is still a
+// point-in-time proof; the effect that follows must re-prove at its own boundary.
+function stillCurrent(
+  fs: WorkspaceFs,
+  worktreePath: string,
+  pointer: LinkedWorktreePointer,
+  commonDirectory: GitCommonDirectory,
+): boolean {
+  const canonicalWorktree = fs.realPath(worktreePath);
+  const same = (path: string, expected: IdentityPair, kind: "directory" | "file"): boolean => {
+    const stat = fs.stat(path);
+    const pair = kind === "directory" ? directoryIdentity(stat) : identityPair(stat);
+    return (
+      pair?.withCreation === expected.withCreation &&
+      !stat.isSymbolicLink &&
+      (kind === "directory" ? stat.isDirectory : stat.isFile)
+    );
+  };
+  return (
+    same(commonDirectory.path, commonDirectory.identity, "directory") &&
+    same(canonicalWorktree, pointer.worktreeIdentity, "directory") &&
+    same(join(canonicalWorktree, ".git"), pointer.pointerIdentity, "file") &&
+    same(pointer.canonicalAdminDirectory, pointer.adminDirectoryIdentity, "directory") &&
+    same(join(pointer.canonicalAdminDirectory, "gitdir"), pointer.backpointerIdentity, "file")
+  );
+}
+
 function underCommonWorktrees(adminDirectory: string, commonDirectory: string): boolean {
   return samePath(dirname(adminDirectory), join(commonDirectory, "worktrees"));
 }
@@ -411,23 +508,31 @@ export function inspectManagedGitdirIdentity(
   fs: WorkspaceFs = nodeWorkspaceFs,
 ): ManagedGitdirIdentityInspection | undefined {
   try {
-    const commonDirectory = repositoryCommonDirectory(fs, repositoryRoot);
-    const pointer =
-      commonDirectory === undefined
-        ? undefined
-        : inspectLinkedWorktreePointer(fs, worktreePath, join(commonDirectory.path, "worktrees"));
-    const commonIdentityAfter =
-      commonDirectory === undefined ? undefined : directoryIdentity(fs.stat(commonDirectory.path));
-    if (
-      commonDirectory === undefined ||
-      pointer === undefined ||
-      commonIdentityAfter?.withCreation !== commonDirectory.identity.withCreation ||
-      !underCommonWorktrees(pointer.canonicalAdminDirectory, commonDirectory.path)
-    ) {
-      return undefined;
-    }
-    return identitiesFor(pointer, commonDirectory);
+    return inspectManagedGitdirIdentityOrThrow(worktreePath, repositoryRoot, fs);
   } catch {
     return undefined;
   }
+}
+
+// The proof itself. Throws on an I/O failure so `inspectManagedGitdirIdentityOutcome` can report the
+// cause; `inspectManagedGitdirIdentity` is the fail-closed wrapper for callers that only need yes/no.
+function inspectManagedGitdirIdentityOrThrow(
+  worktreePath: string,
+  repositoryRoot: string,
+  fs: WorkspaceFs,
+): ManagedGitdirIdentityInspection | undefined {
+  const commonDirectory = repositoryCommonDirectory(fs, repositoryRoot);
+  const pointer =
+    commonDirectory === undefined
+      ? undefined
+      : inspectLinkedWorktreePointer(fs, worktreePath, join(commonDirectory.path, "worktrees"));
+  if (
+    commonDirectory === undefined ||
+    pointer === undefined ||
+    !underCommonWorktrees(pointer.canonicalAdminDirectory, commonDirectory.path) ||
+    !stillCurrent(fs, worktreePath, pointer, commonDirectory)
+  ) {
+    return undefined;
+  }
+  return identitiesFor(pointer, commonDirectory);
 }

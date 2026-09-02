@@ -274,6 +274,15 @@ function requestCleanupImpl(
 // leaves the directory and its uncommitted/untracked files on disk while git refuses to read it) is
 // treated as DIRTY. A structurally-broken tree that may still hold real work is therefore refused
 // rather than force-removed (SC4). A missing worktree (nothing to lose) probes not-dirty.
+// The dirty probe is a REAL `git status`, never a denial in disguise. A registered row is probed
+// through the re-proven managed authority when the identity proof holds; when it does not (a
+// registration under the retired schema, a filesystem without creation times, a replaced tree),
+// the denial is logged with this cleanup's correlation and the probe falls back to the same
+// contained, ownership-gated path an orphan directory is probed on. Converting the denial into
+// "dirty" stranded every such terminal row for good: cleanup refused forever without ever obtaining
+// a Git status (#3376 review P1). Containment, ownership, the lock and the operator approval are
+// still proven by the safety gate; only the identity-bound read authority is absent, exactly as it
+// is for an orphan.
 async function probeCleanupDirty(
   ctx: CleanupCtx,
   worktreePath: string,
@@ -282,9 +291,11 @@ async function probeCleanupDirty(
 ): Promise<boolean> {
   if (!probeable) return false;
   const access = registered
-    ? resolveLifecycleManagedWorkspaceRootAccess(ctx.deps, worktreePath)
+    ? resolveLifecycleManagedWorkspaceRootAccess(ctx.deps, worktreePath, {
+        activityLog: ctx.deps.activityLog,
+        correlationId: ctx.correlationId,
+      })
     : undefined;
-  if (registered && access === undefined) return true;
   const workspace =
     access === undefined
       ? workspaceInfo(worktreePath)

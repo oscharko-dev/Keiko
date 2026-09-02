@@ -35,6 +35,7 @@ import {
   type ServerLogSink,
 } from "../observability/index.js";
 import { runWithWorkspaceLifecycleFailureLogging } from "./activity-log.js";
+import type { ManagedIdentityDrift } from "./gitdir-identity.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -111,10 +112,14 @@ function fakeProvisioning(
   };
 }
 
+// The fixture worktrees are plain directories, not linked Git worktrees, so the live identity proof
+// is injected: `matches` by default, and one of the refusing verdicts where a pin needs it.
 function lifecycleWith(
   provisioning: WorkspaceProvisioningService,
   activityLog?: ServerLogSink,
   evidenceStore: EvidenceStore = capturingEvidence(),
+  identityDrift: (instance: WorkspaceInstance) => ManagedIdentityDrift = (): ManagedIdentityDrift =>
+    "matches",
 ): WorkspaceLifecycleService {
   return createWorkspaceLifecycleService({
     store,
@@ -126,6 +131,7 @@ function lifecycleWith(
     now: (): number => 1_700_000_000_000,
     newId: (): string => `id-${String(idCounter++)}`,
     mutex: __twMutex,
+    identityDrift,
     ...(activityLog === undefined ? {} : { activityLog }),
   });
 }
@@ -604,5 +610,95 @@ describe("clearActive", () => {
     });
     service.clearActive();
     expect(service.getActive()).toBeUndefined();
+  });
+});
+
+// No path exposes an operational binding or readiness state on path existence alone: the active
+// pointer read and the handoff transition run the same four-way identity verdict activation and
+// resume run, and a retired, unsupported or changed identity is refused with its own marker
+// (#3376 review P1).
+describe("identity proof before bindings and readiness", () => {
+  it("clears an active pointer whose registration is under the retired identity rule, and logs why", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const provisioning = fakeProvisioning();
+    const trusted = lifecycleWith(provisioning, activityLog);
+    const inst = store.upsert(instance("a"));
+    await trusted.setActive({
+      workspaceId: inst.workspaceId,
+      requestedBy: "op",
+      acquireLock: false,
+    });
+    expect(trusted.getActive()?.instance.workspaceId).toBe(inst.workspaceId);
+
+    // The same persisted pointer, read by a server whose identity rule has moved on.
+    const upgraded = lifecycleWith(
+      provisioning,
+      activityLog,
+      capturingEvidence(),
+      () => "schema-retired",
+    );
+
+    expect(upgraded.getActive()).toBeUndefined();
+    expect(pointerStore.get()).toBeUndefined();
+    const line = activityLog.events.find((event) => event.errorKind === "POINTER_DRIFT");
+    expect(line?.extra).toMatchObject({
+      operation: "activate",
+      outcome: "retry-required",
+      workspaceId: inst.workspaceId,
+      driftMarker: "identity-schema-retired",
+    });
+  });
+
+  it.each([
+    { drift: "schema-retired", marker: "identity-schema-retired", strategy: "reconcile-pointer" },
+    { drift: "unsupported", marker: "identity-unsupported", strategy: "operator-repair" },
+    { drift: "changed", marker: "pointer-stale", strategy: "operator-repair" },
+  ] as const)(
+    "refuses handoff on a $drift identity and flags the row with $marker",
+    async ({ drift, marker, strategy }) => {
+      const activityLog = createBufferedServerLogSink();
+      const refusing = lifecycleWith(
+        fakeProvisioning(),
+        activityLog,
+        capturingEvidence(),
+        () => drift,
+      );
+      const inst = store.upsert(instance("a"));
+
+      await rejectsWithCode(
+        () =>
+          refusing.prepareHandoff({
+            workspaceId: inst.workspaceId,
+            requestedBy: "op",
+            correlationId: "handoff-drift-0001",
+          }),
+        "POINTER_DRIFT",
+      );
+
+      const persisted = store.getById(inst.workspaceId);
+      expect(persisted?.lifecycleState).toBe("recovery-required");
+      expect(persisted?.driftMarkers).toEqual([marker]);
+      expect(persisted?.recoveryHints).toContainEqual(expect.objectContaining({ strategy }));
+      const line = activityLog.events.find((event) => event.correlationId === "handoff-drift-0001");
+      expect(line?.extra).toMatchObject({
+        operation: "handoff",
+        outcome: "retry-required",
+        driftMarker: marker,
+      });
+    },
+  );
+
+  it("still pauses a workspace whose identity is not current (pause exposes nothing)", async () => {
+    const pausing = lifecycleWith(
+      fakeProvisioning(),
+      undefined,
+      capturingEvidence(),
+      () => "changed",
+    );
+    const inst = store.upsert(instance("a"));
+
+    const result = await pausing.pause({ workspaceId: inst.workspaceId, requestedBy: "op" });
+
+    expect(result.instance.lifecycleState).toBe("paused");
   });
 });

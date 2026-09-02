@@ -391,29 +391,42 @@ test.describe("Atlassian connectors cross-cutting @smoke", () => {
       await page.goto("/");
       await bootstrapped;
 
-      // The seeded chat carries a connector pod scope, so the send auto-routes to the grounded path.
-      const chat = page.getByRole("region", { name: `Chat — ${GROUNDED_CHAT.title}` });
-      await expect(chat).toBeVisible();
-      // The region's accessible name is built from the SEEDED localStorage entry alone, so it is on
-      // screen before the chat chunk is fetched and before any response arrives — it says nothing
-      // about the chat being bound. The host renders one of these two placeholders continuously from
-      // the first paint of the frame until ChatWindow mounts, so their absence is the real readiness
-      // condition. Asserting it here makes a stalled bind fail AS a stalled bind, naming which of the
-      // two stages is stuck, instead of as a composer that was never found.
-      await expect(
-        chat.locator("[data-window-chunk='loading'], [data-chat-bind='opening']"),
-      ).toHaveCount(0);
-      const composer = chat.getByRole("textbox", { name: "Chat message" });
-      await expect(composer).toBeVisible();
-      await composer.fill("How many approvals are needed?");
-      await chat.getByRole("button", { name: "Send message" }).click();
-
-      // The connector citation renders under the collapsed "Knowledge evidence" disclosure; open it.
-      await chat.getByText("Knowledge evidence").click();
-      await expect(
-        chat.locator('ul.grounded-citations[aria-label="Knowledge citations"] .grounded-citation'),
-      ).toContainText(CONNECTOR_CITATION_SOURCE);
-      assertNoPageErrors();
+      // Page errors have to be checked on the FAILURE path too: if the chunk, the bind, the composer
+      // lookup or the citation assertion fails first, an assertion at the end never runs and the
+      // real page error is hidden behind an absent locator — the exact symptom this spec repairs.
+      try {
+        await runGroundedAsk(page);
+      } finally {
+        assertNoPageErrors();
+      }
     });
   });
 });
+
+// The journey body, so the caller can guarantee the page-error assertion runs whatever fails.
+async function runGroundedAsk(page: Page): Promise<void> {
+  // The seeded chat carries a connector pod scope, so the send auto-routes to the grounded path.
+  const chat = page.getByRole("region", { name: `Chat — ${GROUNDED_CHAT.title}` });
+  await expect(chat).toBeVisible();
+  // The region's accessible name is built from the SEEDED localStorage entry alone, so it is on
+  // screen before the chat chunk is fetched and before any response arrives — it says nothing
+  // about the chat being bound. From the first paint of the frame until ChatWindow itself mounts
+  // the host keeps exactly one named placeholder in the region: the session-host chunk and the
+  // inner ChatWindow chunk both render `[data-window-chunk='loading']`, and the session bootstrap
+  // between them renders `[data-chat-bind='opening']`. Their absence is therefore the real
+  // readiness condition, and asserting it makes a stalled chunk or bind fail AS that stage,
+  // instead of as a composer that was never found.
+  await expect(
+    chat.locator("[data-window-chunk='loading'], [data-chat-bind='opening']"),
+  ).toHaveCount(0);
+  const composer = chat.getByRole("textbox", { name: "Chat message" });
+  await expect(composer).toBeVisible();
+  await composer.fill("How many approvals are needed?");
+  await chat.getByRole("button", { name: "Send message" }).click();
+
+  // The connector citation renders under the collapsed "Knowledge evidence" disclosure; open it.
+  await chat.getByText("Knowledge evidence").click();
+  await expect(
+    chat.locator('ul.grounded-citations[aria-label="Knowledge citations"] .grounded-citation'),
+  ).toContainText(CONNECTOR_CITATION_SOURCE);
+}

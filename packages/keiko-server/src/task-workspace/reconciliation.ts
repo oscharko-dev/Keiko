@@ -192,7 +192,10 @@ async function gatherFacts(
       lifecycleState: instance.lifecycleState,
       pathContained,
       worktreeDirExists,
-      gitPointerPresent: identity !== undefined,
+      // A pointer that IS there but sits on a volume without creation time is present; only a
+      // missing or malformed pointer is not. Without this the platform limitation collapses into
+      // `pointer-stale` one branch earlier and its own marker never fires.
+      gitPointerPresent: identityOutcome.kind !== "unproven",
       gitdirIdentityMatches: identity !== undefined && identity === instance.gitdirIdentity,
       gitdirIdentitySchemaRetired: drift === "schema-retired",
       gitdirIdentityUnsupported: drift === "unsupported",

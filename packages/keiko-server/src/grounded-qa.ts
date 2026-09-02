@@ -469,11 +469,12 @@ function managedGroundedRootAccess(
   rootInput: string,
   deps: UiHandlerDeps,
   request: IncomingMessage | undefined,
+  correlationId: string | undefined,
 ): WorkspaceRootAccess | undefined {
   if (request === undefined || resolveAppSessionReadAuthority(deps, request) === undefined) {
     return undefined;
   }
-  return resolveManagedWorkspaceRootAccess(deps, rootInput);
+  return resolveManagedWorkspaceRootAccess(deps, rootInput, { correlationId });
 }
 
 function deniedManagedGroundedRoot(correlationId: string | undefined): RouteResult {
@@ -512,7 +513,7 @@ function groundedRootAccess(
   request: IncomingMessage | undefined,
   correlationId: string | undefined,
 ): WorkspaceRootAccess | RouteResult {
-  const managed = managedGroundedRootAccess(rootInput, deps, request);
+  const managed = managedGroundedRootAccess(rootInput, deps, request, correlationId);
   if (managed !== undefined) return managed;
   if (requiresConfiguredManagedWorkspaceAuthority(deps, rootInput)) {
     return deniedManagedGroundedRoot(correlationId);
