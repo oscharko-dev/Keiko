@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 import {
+  forwardWorkspaceFs,
   nodeWorkspaceFs,
   type WorkspaceDescriptorUtf8Read,
   type WorkspaceFs,
@@ -156,9 +157,16 @@ function creationTimeWitness(fs: WorkspaceFs): {
     return stat;
   };
   const containedRead = fs.readFileUtf8WithinRootSameDescriptor;
+  // Built on the port's OWN forwarder, not on `{ ...fs }`. A class-based port keeps its methods on
+  // the prototype, and a spread copies only own enumerable properties — measured on a
+  // prototype-backed WorkspaceFs: ZERO methods survive. The wrapper would then throw inside the
+  // inspection, whose catch reports the tree as unproven: a fail-closed for a reason that has
+  // nothing to do with the worktree, which is the exact confusion this classification removes.
+  // `forwardWorkspaceFs` already delegates every method with the right receiver.
+  const forwarded = forwardWorkspaceFs(fs);
   return {
     fs: {
-      ...fs,
+      ...forwarded,
       stat: (absolutePath: string): WorkspaceStat => note(fs.stat(absolutePath)),
       ...(containedRead === undefined
         ? {}

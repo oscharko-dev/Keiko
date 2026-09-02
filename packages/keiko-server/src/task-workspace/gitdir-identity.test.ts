@@ -329,3 +329,61 @@ describe("inspectManagedGitdirIdentityOutcome", () => {
     expect(outcomeOf(broken)).toBe("unproven");
   });
 });
+
+// A `WorkspaceFs` may be a class instance, and its methods then live on the prototype. The outcome
+// classifier wraps the port to observe one pass; a `{ ...fs }` spread would copy only own enumerable
+// properties — measured on a prototype-backed port: zero methods survive — and the inspection would
+// throw, be swallowed by its own catch, and report an authentic worktree as unproven. That is a
+// fail-closed for a reason that has nothing to do with the worktree.
+describe("port shape — a prototype-backed WorkspaceFs keeps its methods", () => {
+  class PrototypeBackedPort implements WorkspaceFs {
+    public constructor(private readonly tree: Map<string, Node>) {}
+    private nodeAt(path: string): Node {
+      const node = this.tree.get(path);
+      if (node === undefined) throw new Error(`ENOENT: ${path}`);
+      return node;
+    }
+    public readFileUtf8(path: string): string {
+      return this.nodeAt(path).text;
+    }
+    public stat(path: string): WorkspaceStat {
+      return statOf(this.nodeAt(path));
+    }
+    public readDir(): readonly WorkspaceDirEntry[] {
+      return [];
+    }
+    public realPath(path: string): string {
+      return path;
+    }
+    public exists(path: string): boolean {
+      return this.tree.has(path);
+    }
+    public readFileUtf8WithinRootSameDescriptor(
+      _canonicalRoot: string,
+      absolutePath: string,
+    ): WorkspaceDescriptorUtf8Read {
+      const node = this.nodeAt(absolutePath);
+      return { rawText: node.text, sizeBytes: node.text.length, stat: statOf(node) };
+    }
+  }
+
+  it("identifies an authentic worktree through a class-based port", () => {
+    const port = new PrototypeBackedPort(authenticTree());
+
+    expect(inspectManagedGitdirIdentityOutcome(WORKTREE_ROOT, REPOSITORY_ROOT, port).kind).toBe(
+      "identified",
+    );
+  });
+
+  it("still separates a replacement seen through a class-based port", () => {
+    const authentic = new PrototypeBackedPort(authenticTree());
+    const replaced = new PrototypeBackedPort(
+      mutate(authenticTree(), WORKTREE_ROOT, { birthtimeNs: "900" }),
+    );
+    const identityOfPort = (port: WorkspaceFs): string | undefined =>
+      inspectManagedGitdirIdentity(WORKTREE_ROOT, REPOSITORY_ROOT, port)?.identity;
+
+    expect(identityOfPort(authentic)).toBeDefined();
+    expect(identityOfPort(replaced)).not.toBe(identityOfPort(authentic));
+  });
+});
