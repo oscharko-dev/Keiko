@@ -20,6 +20,12 @@ const mutationScope = readFileSync(resolve(root, "scripts/check-mutation-scope.m
 const localSonar = readFileSync(resolve(root, "docker/gates/run-sonar.sh"), "utf8");
 const localSonarCompose = readFileSync(resolve(root, "docker/gates/sonar-compose.yml"), "utf8");
 const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+const devDispatchCoverageJobs = new Set([
+  "coverage-packages",
+  "coverage-ui",
+  "coverage-scripts",
+  "coverage-sonar",
+]);
 
 describe("dev quality workflows", () => {
   it("runs full mutation on a daily or explicit bounded lane, never on the PR critical path", () => {
@@ -159,12 +165,73 @@ describe("dev quality workflows", () => {
     expect(ci).toContain("SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}");
     expect(ci).toContain("Verify changed production sources are mapped into LCOV");
     expect(ci).toContain(
-      "ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.ref }}",
+      "ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}",
     );
     expect(ci).toContain("Verify manual analysis is bound to remote dev");
     expect(ci).toContain('expected="$(git rev-parse refs/remotes/origin/dev)"');
     expect(ci).toContain("SONAR_HEAD_SHA: ${{ steps.sonar-head.outputs.sha }}");
     expect(ci).toContain("node scripts/check-sonar-main-quality-gate.mjs");
+  });
+
+  it("binds every full-tree quality lane to the same immutable merge candidate", () => {
+    const candidateJobs = [
+      "core-quality",
+      "coverage-packages",
+      "coverage-ui",
+      "coverage-scripts",
+      "coverage-sonar",
+      "build-scan-sbom-smoke",
+      "cross-platform-smoke",
+      "ui",
+    ];
+
+    for (const jobName of candidateJobs) {
+      const job = ciWorkflow.jobs[jobName];
+      const steps = job.steps;
+      const checkoutAt = steps.findIndex((step) => step.uses?.startsWith("actions/checkout@"));
+      const setupNodeAt = steps.findIndex((step) => step.uses?.startsWith("actions/setup-node@"));
+      const candidateCheckAt = steps.findIndex(
+        (step) => step.name === "Verify pull-request merge candidate consistency",
+      );
+      const checkout = steps[checkoutAt];
+      const candidateCheck = steps[candidateCheckAt];
+
+      expect(job["timeout-minutes"], `${jobName} must have a bounded timeout`).toBeGreaterThan(0);
+      expect(checkout, `${jobName} checkout must exist`).toBeDefined();
+      expect(checkout.with.ref, `${jobName} must pin the run revision`).toBe(
+        devDispatchCoverageJobs.has(jobName)
+          ? "${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}"
+          : "${{ github.sha }}",
+      );
+      expect(candidateCheck, `${jobName} must verify its candidate`).toMatchObject({
+        if: "${{ github.event_name == 'pull_request' }}",
+        env: {
+          KEIKO_CANDIDATE_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+          KEIKO_CANDIDATE_HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+        },
+        run: "node scripts/check-ci-merge-candidate.mjs",
+      });
+      expect(setupNodeAt, `${jobName} must set up the trusted action runtime`).toBeGreaterThan(
+        checkoutAt,
+      );
+      expect(
+        candidateCheckAt,
+        `${jobName} must verify before another action or candidate command runs`,
+      ).toBe(setupNodeAt + 1);
+      expect(steps.some((step) => step.name === "Verify candidate tree remains immutable")).toBe(
+        false,
+      );
+    }
+
+    const sonarEvidence = ciWorkflow.jobs["coverage-sonar"].steps.find(
+      (step) => step.name === "Verify Sonar full-analysis evidence",
+    );
+    expect(sonarEvidence).toMatchObject({
+      if: "${{ always() && steps.sonar-scan.outcome != 'skipped' }}",
+      run: 'node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log" --require-full-analysis',
+    });
+    expect(ci).not.toContain("oscharko-dev/Keiko/.github/actions/verify-");
+    expect(ciWorkflow.jobs["coverage-sonar"]["timeout-minutes"]).toBe(50);
   });
 
   it("isolates local Sonar state by repository and selectable loopback port", () => {
@@ -230,16 +297,18 @@ describe("dev quality workflows", () => {
     // Pin the analysis revision to the pull-request head so the merge-ref checkout does not trip the
     // SonarCloud "detected as changed but without having changed lines" SCM warning.
     expect(ci).toContain('-Dsonar.scm.revision="${SONAR_HEAD_SHA}"');
+    expect(ci).toContain("-Dsonar.analysisCache.enabled=false");
+    expect(ci).toContain("-Dsonar.sensor.cache.enable=false");
     expect(ci).toContain(
       "SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.sonar-head.outputs.sha || github.sha }}",
     );
     expect(ci).toContain('tee "$RUNNER_TEMP/sonar-scanner.log"');
     expect(ci).toContain("scanner_status=${PIPESTATUS[0]}");
-    expect(ci).toContain(
-      'node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log"',
-    );
     expect(ci).toContain('exit "$scanner_status"');
-    expect(ci).toContain('if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]');
+    expect(ci).toContain("node scripts/check-sonar-analysis-log.mjs");
+    expect(ci).toContain('--log "$RUNNER_TEMP/sonar-scanner.log"');
+    expect(ci).toContain("--require-full-analysis");
+    expect(ci).not.toContain("SONAR_SCANNER_STATUS:");
     expect(ci).toContain("if: ${{ always() && github.event_name == 'workflow_dispatch' }}");
   });
 

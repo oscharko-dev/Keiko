@@ -53,6 +53,18 @@ const ANCHOR_SUBJECT = new Map([
     },
   ],
   [
+    "ref-version-mismatch",
+    {
+      description: "a repository-owned action pinned to a full commit SHA",
+      // The ignored finding concerns only the human audit label after the pin. Keep the anchor on
+      // the two reviewed internal gate actions so it cannot slide onto an unrelated or mutable use.
+      matches: (line) =>
+        /uses:\s*oscharko-dev\/Keiko\/\.github\/actions\/verify-(?:ci-merge-candidate|sonar-analysis-log)@[0-9a-f]{40}\s*#/u.test(
+          line,
+        ),
+    },
+  ],
+  [
     "misfeature",
     {
       description: "a step's shell declaration",

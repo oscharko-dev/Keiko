@@ -9,7 +9,9 @@ ADR-0168 for conditional CodeRabbit settlement; amended 2026-08-02 by ADR-0169 t
 CodSpeed and Greptile and fix the protected set at ten checks; and amended 2026-08-02 by
 [ADR-0170](ADR-0170-keiko-for-quality-as-an-external-reviewer.md), which reintroduces Keiko for
 Quality as an external SHA-pinned reviewer and adds the bounded auto-merge arming interlock (D5)
-to this decision's delivery rules. The protected set is unchanged by that amendment.
+to this decision's delivery rules; and amended 2026-09-03 so the PR Sonar check must analyze the
+full candidate tree with the same cache posture as the `dev` push. The protected set is unchanged
+by those amendments.
 
 ## Amends
 
@@ -79,6 +81,27 @@ and every review conversation is resolved.
 No required check may depend on another required check to repair or publish itself. Missing or
 pending required evidence remains blocking through GitHub's native semantics; it is never converted
 to a terminal failure by a second aggregate.
+
+An exact-head check is merge authority only when its analysis surface also represents the complete
+candidate integration. In particular, the required Sonar run for a `dev` pull request disables the
+target-branch sensor cache and proves full-project breadth from its own scanner log. A changed-files
+or cache-restored PR analysis cannot authorize integration merely because the same workflow performs
+a fresh scan after merge. This closes incident #3377, where an already-red `dev` was followed by a
+green incremental PR verdict and another red post-merge scan.
+
+On pull-request runs, every full-tree CI lane checks out the workflow run's immutable `github.sha`,
+never the moving `refs/pull/<number>/merge` name. Manual runs instead bind the Sonar job and its
+three coverage producers to `dev` as defined by ADR-0134 D3. Immediately after the trusted checkout
+and Node setup, and before executing another repository command, each lane's direct consistency
+script verifies that a pull-request checkout is clean and is a two-parent merge commit whose first
+parent is the event's exact base SHA and whose second parent is its exact head SHA. Because the
+candidate also controls the workflow and script, this assertion is not represented as an independent
+trust boundary;
+workflow review, CODEOWNERS, branch protection, and exact-current-head required checks own that
+boundary. Repository branch protection keeps strict status checks enabled, so a concurrent `dev`
+integration invalidates the old candidate and GitHub must produce and check a new one. Agent
+instructions to inspect `dev` after their own merge are not a substitute for this pre-merge
+invariant.
 
 ### D4 — Availability and runtime bounds are quality properties
 

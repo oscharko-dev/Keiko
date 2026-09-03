@@ -40,16 +40,15 @@ export async function installLiveCodingWorkbenchRuntime(
   return {
     open: async (): Promise<void> => {
       await page.goto("/");
-      const launcher = page.getByRole("button", { name: "Coding Workbench" });
-      const heading = page.getByRole("heading", { name: "Coding Workbench" });
-      // The launcher is a toggle and can render just before the workspace viewport is ready. A
-      // cold WebKit click in that gap is ignored by the layout-owned toggle action. Retry only
-      // while aria-pressed proves the window is still closed; a blind retry could close a window
-      // whose lazy chunk mounted between attempts.
+      const launcher = page.getByRole("button", { name: "Coding Workbench", exact: true });
+      const heading = page.getByRole("heading", { name: "Coding Workbench", exact: true });
+      // Exact names avoid the window controls; retry only while a pre-hydration click is ignored.
+      await expect(launcher).toBeVisible();
       await expect(async () => {
         if ((await launcher.getAttribute("aria-pressed")) !== "true") await launcher.click();
-        await expect(heading).toBeVisible({ timeout: 2_000 });
+        await expect(launcher).toHaveAttribute("aria-pressed", "true", { timeout: 2_000 });
       }).toPass({ timeout: 15_000 });
+      await expect(heading).toBeVisible({ timeout: 15_000 });
     },
     // #2644 moved the product-wide autonomy modes out of the Workbench into Settings → Security.
     // A request made here must still be answered by the server's clamp, never by the surface that

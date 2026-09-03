@@ -52,15 +52,29 @@ export const DECLARED_ERROR_CLASS_SHAPE = /^[A-Z][A-Za-z0-9]{0,63}$/;
  */
 export const MACHINE_TOKEN_SHAPE = /^[A-Za-z0-9._-]{1,128}$/;
 
+type UnknownPropertyReceiver = Readonly<Record<string, unknown>>;
+
+function isPropertyReceiver(value: unknown): value is UnknownPropertyReceiver {
+  return (typeof value === "object" && value !== null) || typeof value === "function";
+}
+
+function constructorShape(): void {
+  return undefined;
+}
+
+// SonarCloud's TypeScript architecture serializer currently folds the literal "constructor" on
+// an unknown object to the native Object function and emits an unreadable UDG. Deriving the same
+// standard key from a code-owned prototype preserves the runtime lookup without putting that
+// literal into the reflective call. The hosted full-analysis evidence gate pins the workaround.
+const CONSTRUCTOR_KEY = Object.getOwnPropertyNames(constructorShape.prototype).at(0) ?? "";
+
 // Reflective reads from a thrown value are hostile-input reads: accessors and proxy traps may
 // throw. Every optional machine field, and every field this module reads off an unknown error,
 // goes through this helper and degrades to absence.
 export function safeProperty(value: unknown, property: string): unknown {
-  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
-    return undefined;
-  }
+  if (!isPropertyReceiver(value)) return undefined;
   try {
-    return Reflect.get(value, property);
+    return value[property];
   } catch {
     return undefined;
   }
@@ -80,22 +94,20 @@ export function machineToken(value: unknown): string | undefined {
 // `diagnostics-log.ts` verbatim as part of the ADR-0173 D11 leaf extraction and that module
 // re-exports it; no producer outside `contentFreeErrorClass` has a use for it on its own.
 export function declaredErrorClassName(error: Error): string | undefined {
-  let proto: object | null;
   try {
-    proto = Reflect.getPrototypeOf(error);
+    const proto = Reflect.getPrototypeOf(error);
+    if (proto === null) return undefined;
+
+    const ctor = safeProperty(proto, CONSTRUCTOR_KEY);
+    const name = safeProperty(ctor, "name");
+    if (typeof ctor !== "function" || typeof name !== "string") return undefined;
+    if (!DECLARED_ERROR_CLASS_SHAPE.test(name)) return undefined;
+    return name;
   } catch {
-    // A hostile `getPrototypeOf` trap must degrade to absence, like every other reflective read
-    // in this module — this function is exported and on the package surface, so it cannot rely on
-    // `contentFreeErrorClass`'s outer `try` to absorb the throw for it.
+    // Every reflection point above may be trapped by hostile input. This function is exported and
+    // cannot rely on `contentFreeErrorClass`'s outer try/catch to absorb the throw for it.
     return undefined;
   }
-  const ctor = safeProperty(proto, "constructor");
-  const name = safeProperty(ctor, "name");
-  if (typeof ctor !== "function" || typeof name !== "string") return undefined;
-  if (!DECLARED_ERROR_CLASS_SHAPE.test(name)) {
-    return undefined;
-  }
-  return name;
 }
 
 // Resolves the content-free class of an unknown thrown value: a specific built-in error name, else
