@@ -54,6 +54,10 @@ const UDG_CACHE_SOURCE_SUFFIX = " source file(s) without a UDG";
 const SONARJASMIN_SOURCE_SUFFIX = " file(s) will be analysed by SonarJasmin.";
 const UDG_RECEIPT_PREFIX = 'Files successfully loaded: "';
 const UDG_RECEIPT_SEPARATOR = '" out of "';
+// Sonar indexes repository material that is not eligible for its JavaScript/TypeScript program.
+// Hosted full scans currently cover about 87% of that inventory. An 80% committed floor leaves
+// room for those exclusions while rejecting a narrow self-consistent changed-file analysis.
+const MINIMUM_FULL_ANALYSIS_RATIO = 0.8;
 
 function decimalInteger(token) {
   const value = Number(token);
@@ -179,14 +183,14 @@ function architectureUdgEvidence(lines) {
   const sonarJasminExpected = largestCount(SONARJASMIN_SOURCE_SUFFIX);
   const expected = sonarJasminExpected ?? largestCount(UDG_CACHE_SOURCE_SUFFIX) ?? 0;
   const receipts = lines.flatMap((line) => architectureUdgReceipt(line) ?? []);
-  return receipts.reduce(
+  const totals = receipts.reduce(
     (evidence, receipt) => ({
-      expected,
       loaded: evidence.loaded + receipt.loaded,
       total: evidence.total + receipt.total,
     }),
-    { expected, loaded: 0, total: 0 },
+    { loaded: 0, total: 0 },
   );
+  return { ...totals, expected, receipts };
 }
 
 function architectureUdgEvidenceFailures(lines) {
@@ -194,7 +198,7 @@ function architectureUdgEvidenceFailures(lines) {
   const isIncomplete =
     evidence.expected === 0 ||
     evidence.total === 0 ||
-    evidence.loaded !== evidence.total ||
+    evidence.receipts.some((receipt) => receipt.loaded !== receipt.total) ||
     evidence.total !== evidence.expected;
   return isIncomplete
     ? [
@@ -204,34 +208,57 @@ function architectureUdgEvidenceFailures(lines) {
     : [];
 }
 
+function isConsistentCompletedSourceSet(indexedSourceCount, analyzed) {
+  return (
+    indexedSourceCount > 0 &&
+    analyzed.total > 0 &&
+    analyzed.analyzed === analyzed.total &&
+    analyzed.total <= indexedSourceCount
+  );
+}
+
+function meetsFullAnalysisBreadth(indexedSourceCount, analyzedTotal, cacheMissTotal) {
+  const minimumFreshCount = Math.ceil(indexedSourceCount * MINIMUM_FULL_ANALYSIS_RATIO);
+  return (
+    indexedSourceCount > 0 &&
+    analyzedTotal >= minimumFreshCount &&
+    cacheMissTotal >= minimumFreshCount
+  );
+}
+
 // A PR analysis may index the whole repository but restore almost every JS/TS result from dev's
 // sensor cache. That is not equivalent to the fresh analysis a push to dev receives: #3377 was
 // green after analyzing 91 files, then the merged revision failed while freshly analyzing 4,844.
 // Sonar's JavaScript sensor reports its own exclusion-aware eligible inventory as the denominator
 // of both cache receipts. Require exactly zero hits and one miss receipt covering that entire
-// inventory. Generic source-progress receipts remain a consistency check only: other sensors own
-// them, so they may cover fewer files, but they may never claim more files than were indexed.
+// inventory. Generic source-progress receipts remain a consistency check. Both eligible totals
+// must also clear the committed inventory-ratio floor, so a narrow but self-consistent scan cannot
+// present three freshly analyzed files as full-project evidence.
 export function fullAnalysisEvidenceFailures(contents) {
   const lines = contents.split(/\r?\n/u);
   const failures = [];
-  if (lines.some((line) => /Sensor cache enabled/iu.test(line))) {
-    failures.push("sensor cache remained enabled");
-  }
+  const cacheEvidence = javascriptAnalysisCacheEvidence(lines);
   failures.push(...javascriptAnalysisCacheFailures(lines));
   const indexedSourceCount = lines.reduce((largest, line) => {
     const match = line.match(/(?:^|\s)(\d+) files indexed(?:\s|$)/iu);
-    return match === null ? largest : Math.max(largest, Number(match[1]));
+    const count = match === null ? undefined : decimalInteger(match[1]);
+    return count === undefined ? largest : Math.max(largest, count);
   }, 0);
   const analyzed = largestAnalyzedSourceSet(lines);
-  if (
-    indexedSourceCount === 0 ||
-    analyzed.total === 0 ||
-    analyzed.analyzed !== analyzed.total ||
-    analyzed.total > indexedSourceCount
-  ) {
+  if (!isConsistentCompletedSourceSet(indexedSourceCount, analyzed)) {
     failures.push(
       `completed source set ${analyzed.analyzed}/${analyzed.total} against ` +
         `${indexedSourceCount} indexed files is inconsistent`,
+    );
+  }
+  const cacheMissTotal = isExactFreshJavascriptAnalysis(cacheEvidence)
+    ? (cacheEvidence.misses[0]?.total ?? 0)
+    : 0;
+  if (!meetsFullAnalysisBreadth(indexedSourceCount, analyzed.total, cacheMissTotal)) {
+    failures.push(
+      `fresh JavaScript/TypeScript breadth ${cacheMissTotal} eligible and ` +
+        `${analyzed.total} analyzed against ${indexedSourceCount} indexed files is below the ` +
+        `${String(MINIMUM_FULL_ANALYSIS_RATIO * 100)}% floor`,
     );
   }
   failures.push(...architectureUdgEvidenceFailures(lines));

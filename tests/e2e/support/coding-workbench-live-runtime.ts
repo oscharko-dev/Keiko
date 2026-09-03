@@ -41,18 +41,12 @@ export async function installLiveCodingWorkbenchRuntime(
     open: async (): Promise<void> => {
       await page.goto("/");
       const launcher = page.getByRole("button", { name: "Coding Workbench", exact: true });
-      const heading = page.getByRole("heading", { name: "Coding Workbench" });
-      await expect(page.locator("main.workspace")).toBeVisible();
-      // Treat toggle activation and lazy-window rendering as two separate lifecycle boundaries.
-      // The server-rendered launcher can become visible before hydration makes its click effective,
-      // while a cold WebKit load can acknowledge the toggle before the lazy Workbench chunk mounts.
-      // Retry only until aria-pressed proves the toggle was accepted; retrying after that point
-      // could close the window whose chunk is still loading.
-      await expect(async () => {
-        if ((await launcher.getAttribute("aria-pressed")) !== "true") await launcher.click();
-        await expect(launcher).toHaveAttribute("aria-pressed", "true", { timeout: 2_000 });
-      }).toPass({ timeout: 15_000 });
-      await expect(heading).toBeVisible({ timeout: 30_000 });
+      // Exact accessible names avoid matching the Workbench window-frame controls once it opens.
+      await expect(launcher).toBeVisible();
+      await launcher.click();
+      await expect(
+        page.getByRole("heading", { name: "Coding Workbench", exact: true }),
+      ).toBeVisible({ timeout: 15_000 });
     },
     // #2644 moved the product-wide autonomy modes out of the Workbench into Settings → Security.
     // A request made here must still be answered by the server's clamp, never by the surface that

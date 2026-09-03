@@ -95,10 +95,12 @@ against those two as well.
 So read a clean run as _"no known rule violation on my diff"_ — which is exactly the local question
 you need answered before pushing — and never as _"SonarCloud will be green"_. Required PR CI uses
 the cloud profile and, since incidents #3377 and #3380, disables both the analysis cache and
-Cloud's injected sensor cache. A Runner-hosted immutable validator requires zero cache hits, an
-exact miss receipt for Sonar's complete eligible JS/TS inventory, and architecture-UDG receipts
-whose total exactly matches SonarJasmin's own planned-file count, so the pre-merge result has the
-same fresh source surface as the following `dev` scan.
+Cloud's injected sensor cache. The direct repository validator requires zero cache hits, an exact
+miss receipt for Sonar's eligible JS/TS inventory, and completed fresh inventories covering at
+least 80 percent of all indexed files. It also requires every architecture-UDG receipt to be
+complete and their combined total to match SonarJasmin's own planned-file count. That hosted-only
+proof closes the incremental-analysis gap; the local analyzer still cannot reproduce the Cloud
+architecture sensor or authorize a merge.
 
 ## When it disagrees with CI
 

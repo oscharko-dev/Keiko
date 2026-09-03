@@ -173,33 +173,28 @@ current. Cross-check individual root devDependencies before claiming a clean swe
 ## GitHub Actions baseline
 
 Every action is pinned to a full 40-character commit SHA with a version comment. All 14 external
-action repositories resolve their documented tag to exactly the pinned commit. Keiko's two trusted
-gate actions instead use the non-tag audit label `gate-snapshot-3` and resolve to the separately
-reviewed repository commit recorded below; the line-scoped `ref-version-mismatch` dispositions in
-`.github/zizmor.yml` suppress only the inapplicable online tag lookup and leave immutable-pin
-analysis active.
+action repositories resolve their documented tag to exactly the pinned commit.
 `check:dependency-currency` enforces the table against the workflow files, in both directions, and
 additionally rejects an action repository whose sub-actions have drifted onto different refs —
 `github/codeql-action/init` and `/analyze` are not grouped by Dependabot and a one-sided bump is a
 guaranteed version-mismatch failure.
 
-| Action                             | Version         | Commit                                   | Disposition    |
-| ---------------------------------- | --------------- | ---------------------------------------- | -------------- |
-| `actions/checkout`                 | v7.0.0          | 9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 | patch-deferred |
-| `actions/setup-node`               | v7.0.0          | 820762786026740c76f36085b0efc47a31fe5020 | current        |
-| `actions/upload-artifact`          | v7.0.1          | 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a | current        |
-| `actions/download-artifact`        | v8.0.1          | 3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c | current        |
-| `actions/cache`                    | v6.1.0          | 55cc8345863c7cc4c66a329aec7e433d2d1c52a9 | current        |
-| `actions/attest`                   | v4.2.0          | f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 | patch-deferred |
-| `actions/setup-dotnet`             | v6.0.0          | a98b56852c35b8e3190ac28c8c2271da59106c68 | current        |
-| `actions/dependency-review-action` | v5.0.0          | a1d282b36b6f3519aa1f3fc636f609c47dddb294 | current        |
-| `github/codeql-action`             | v4.37.7         | ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd | patch-deferred |
-| `google/osv-scanner-action`        | v2.5.1          | 6e4298ebc4db23e847df9b2e2de2939d6f066c67 | current        |
-| `zizmorcore/zizmor-action`         | v0.6.2          | 3dc1ecc9bcb9e94e9b2c709687979e1298497054 | current        |
-| `Azure/login`                      | v3.0.0          | 532459ea530d8321f2fb9bb10d1e0bcf23869a43 | patch-deferred |
-| `Azure/artifact-signing-action`    | v2.0.0          | c7ab2a863ab5f9a846ddb8265964877ef296ee82 | current        |
-| `oscharko-dev/Keiko-for-Quality`   | v0.25.0         | f1117fb2b56a62bcbec22afbc149d5bd1474060c | current        |
-| `oscharko-dev/Keiko`               | gate-snapshot-3 | d2e2233b666824133ee0ed8bbbf252ad24c7b80d | current        |
+| Action                             | Version | Commit                                   | Disposition    |
+| ---------------------------------- | ------- | ---------------------------------------- | -------------- |
+| `actions/checkout`                 | v7.0.0  | 9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 | patch-deferred |
+| `actions/setup-node`               | v7.0.0  | 820762786026740c76f36085b0efc47a31fe5020 | current        |
+| `actions/upload-artifact`          | v7.0.1  | 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a | current        |
+| `actions/download-artifact`        | v8.0.1  | 3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c | current        |
+| `actions/cache`                    | v6.1.0  | 55cc8345863c7cc4c66a329aec7e433d2d1c52a9 | current        |
+| `actions/attest`                   | v4.2.0  | f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 | patch-deferred |
+| `actions/setup-dotnet`             | v6.0.0  | a98b56852c35b8e3190ac28c8c2271da59106c68 | current        |
+| `actions/dependency-review-action` | v5.0.0  | a1d282b36b6f3519aa1f3fc636f609c47dddb294 | current        |
+| `github/codeql-action`             | v4.37.7 | ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd | patch-deferred |
+| `google/osv-scanner-action`        | v2.5.1  | 6e4298ebc4db23e847df9b2e2de2939d6f066c67 | current        |
+| `zizmorcore/zizmor-action`         | v0.6.2  | 3dc1ecc9bcb9e94e9b2c709687979e1298497054 | current        |
+| `Azure/login`                      | v3.0.0  | 532459ea530d8321f2fb9bb10d1e0bcf23869a43 | patch-deferred |
+| `Azure/artifact-signing-action`    | v2.0.0  | c7ab2a863ab5f9a846ddb8265964877ef296ee82 | current        |
+| `oscharko-dev/Keiko-for-Quality`   | v0.25.0 | f1117fb2b56a62bcbec22afbc149d5bd1474060c | current        |
 
 The four `patch-deferred` actions have newer upstream tags (checkout v7.0.1, attest v4.2.2,
 codeql-action v4.37.9, Azure/login v3.0.2). They are left to Dependabot rather than hand-bumped
@@ -363,7 +358,7 @@ platform-authoritative evidence.
 | `npm run check:knip`                                        | pass                                                     |
 | `npm run check:eslint-lane`                                 | pass — `npm ls eslint` exits 0 (#2777)                   |
 | `npm run check:perf-evidence`                               | pass — both documents within budget and internally sound |
-| `npm run check:dependency-currency`                         | pass — 37 dependency rows, 15 action rows                |
+| `npm run check:dependency-currency`                         | pass — 37 dependency rows, 14 action rows                |
 | `npm run check:secret-scanning-queue`                       | pass — 0 open alerts; both prior findings closed         |
 | `npm run check:runtime-toolchain`                           | pass — Node 24.18.0; npm 11.16.0; 25 workspaces          |
 | `npm run check:typescript-toolchain`                        | pass — compiler 7.0.2; API 6.0.3                         |
@@ -372,7 +367,7 @@ platform-authoritative evidence.
 | `npm run check:dependency-hygiene`                          | pass — 26 manifests, 6006 tracked paths                  |
 | `npm run check:workspace-supply-chain`                      | pass                                                     |
 | `npm run check:adr-index`                                   | pass — 158 ADRs indexed                                  |
-| `npm run check:zizmor-anchors`                              | pass — 17 anchors still on the step they document        |
+| `npm run check:zizmor-anchors`                              | pass — 8 anchors still on the step they document         |
 | `npm run check:release-impact`                              | pass                                                     |
 | `npm run gates:sonar`                                       | pass — no unresolved finding on the changed files        |
 

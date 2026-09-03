@@ -91,12 +91,15 @@ green incremental PR verdict and another red post-merge scan.
 
 Every full-tree CI lane checks out the workflow run's immutable `github.sha`, never the moving
 `refs/pull/<number>/merge` name. Immediately after the trusted checkout and Node setup, and before
-executing any module from that checkout, each lane's Runner-hosted immutable action verifies that a
-pull-request checkout is a two-parent merge commit whose first parent is the event's exact base SHA
-and whose second parent is its exact head SHA. Repository branch protection keeps strict status
-checks enabled, so a concurrent `dev` integration invalidates the old candidate and GitHub must
-produce and check a new one. Agent instructions to inspect `dev` after their own merge are not a
-substitute for this pre-merge invariant.
+executing another repository command, each lane's direct consistency script verifies that a
+pull-request checkout is clean and is a two-parent merge commit whose first parent is the event's
+exact base SHA and whose second parent is its exact head SHA. Because the candidate also controls
+the workflow and script, this assertion is not represented as an independent trust boundary;
+workflow review, CODEOWNERS, branch protection, and exact-current-head required checks own that
+boundary. Repository branch protection keeps strict status checks enabled, so a concurrent `dev`
+integration invalidates the old candidate and GitHub must produce and check a new one. Agent
+instructions to inspect `dev` after their own merge are not a substitute for this pre-merge
+invariant.
 
 ### D4 — Availability and runtime bounds are quality properties
 

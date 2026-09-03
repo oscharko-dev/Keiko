@@ -61,9 +61,10 @@ pull-request scan take approximately as long as the subsequent `dev` scan: a cac
 analysis is not integration evidence. Incident #3377 demonstrated the mismatch directly: its green
 pull-request scan freshly analyzed 91 JavaScript/TypeScript files and restored 4,753 cached results,
 while the merged `dev` revision freshly analyzed 4,844 files and failed on an architecture-graph
-warning in an unchanged source. `check-sonar-analysis-log.mjs` now verifies both warning-free output
-and full-project analysis breadth derived from the scanner's own indexed/analyzed counts. A cached
-or narrowly incremental scan therefore fails the required PR context before GitHub can integrate it.
+warning in an unchanged source. `check-sonar-analysis-log.mjs` now verifies warning-free output,
+exact fresh-cache receipts, an 80-percent breadth floor against the scanner's indexed inventory,
+and individually complete architecture receipts bound to SonarJasmin's plan. A cached or narrowly
+incremental scan therefore fails the required PR context before GitHub can integrate it.
 
 ### D2 — Native gate plus commit-bound fail-closed verification
 

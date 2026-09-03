@@ -1,9 +1,0 @@
-name: Verify Sonar analysis log
-description: Validate scanner evidence using code from an immutable repository revision.
-inputs:
-  log-path:
-    description: Absolute path to the scanner log produced by the candidate analysis.
-    required: true
-runs:
-  using: node24
-  main: main.mjs

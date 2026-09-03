@@ -74,8 +74,8 @@ describe("Sonar scanner warning gate", () => {
     ].join("\n");
 
     expect(fullAnalysisEvidenceFailures(incremental)).toEqual([
-      "sensor cache remained enabled",
       "JavaScript/TypeScript cache evidence 4753/4788 hit and 35/4788 missed does not prove an exact fresh analysis",
+      "fresh JavaScript/TypeScript breadth 0 eligible and 91 analyzed against 5525 indexed files is below the 80% floor",
       "architecture UDG receipts 14/14 for 2276 source files do not prove a full-project graph",
     ]);
   });
@@ -129,6 +129,20 @@ describe("Sonar scanner warning gate", () => {
     ].join("\n");
 
     expect(fullAnalysisEvidenceFailures(exclusionAware)).toEqual([]);
+  });
+
+  it("rejects a narrow analysis even when its cache and progress receipts are self-consistent", () => {
+    const narrow = [
+      "INFO 5531 files indexed (done)",
+      ...freshJavascriptAnalysis(3),
+      "INFO 3/3 source files have been analyzed",
+      "INFO 3 file(s) will be analysed by SonarJasmin.",
+      'INFO * Files successfully loaded: "3" out of "3"',
+    ].join("\n");
+
+    expect(fullAnalysisEvidenceFailures(narrow)).toEqual([
+      "fresh JavaScript/TypeScript breadth 3 eligible and 3 analyzed against 5531 indexed files is below the 80% floor",
+    ]);
   });
 
   it("accepts GitHub-prefixed full-analysis receipts from the hosted scanner", () => {
@@ -225,6 +239,21 @@ describe("Sonar scanner warning gate", () => {
 
     expect(fullAnalysisEvidenceFailures(incompleteArchitecture)).toEqual([
       "architecture UDG receipts 2271/2272 for 2272 source files do not prove a full-project graph",
+    ]);
+  });
+
+  it("requires every architecture receipt to be complete before summing the inventory", () => {
+    const offsettingReceipts = [
+      "INFO 100 files indexed (done)",
+      ...freshJavascriptAnalysis(100),
+      "INFO 100/100 source files have been analyzed",
+      "INFO 100 file(s) will be analysed by SonarJasmin.",
+      'INFO * Files successfully loaded: "51" out of "50"',
+      'INFO * Files successfully loaded: "49" out of "50"',
+    ].join("\n");
+
+    expect(fullAnalysisEvidenceFailures(offsettingReceipts)).toEqual([
+      "architecture UDG receipts 100/100 for 100 source files do not prove a full-project graph",
     ]);
   });
 

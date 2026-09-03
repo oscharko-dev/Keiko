@@ -6,22 +6,6 @@ import { parse } from "yaml";
 const root = resolve(import.meta.dirname, "..", "..");
 const mutation = readFileSync(resolve(root, ".github/workflows/mutation-security.yml"), "utf8");
 const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
-const mergeCandidateAction = parse(
-  readFileSync(resolve(root, ".github/actions/verify-ci-merge-candidate/action.yml"), "utf8"),
-  { maxAliasCount: 0 },
-);
-const sonarAnalysisAction = parse(
-  readFileSync(resolve(root, ".github/actions/verify-sonar-analysis-log/action.yml"), "utf8"),
-  { maxAliasCount: 0 },
-);
-const mergeCandidateActionMain = readFileSync(
-  resolve(root, ".github/actions/verify-ci-merge-candidate/main.mjs"),
-  "utf8",
-);
-const sonarAnalysisActionMain = readFileSync(
-  resolve(root, ".github/actions/verify-sonar-analysis-log/main.mjs"),
-  "utf8",
-);
 const nightlyPerfEvidence = readFileSync(
   resolve(root, ".github/workflows/nightly-perf-evidence.yml"),
   "utf8",
@@ -36,7 +20,6 @@ const mutationScope = readFileSync(resolve(root, "scripts/check-mutation-scope.m
 const localSonar = readFileSync(resolve(root, "docker/gates/run-sonar.sh"), "utf8");
 const localSonarCompose = readFileSync(resolve(root, "docker/gates/sonar-compose.yml"), "utf8");
 const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
-const trustedGateRevision = "d2e2233b666824133ee0ed8bbbf252ad24c7b80d";
 
 describe("dev quality workflows", () => {
   it("runs full mutation on a daily or explicit bounded lane, never on the PR critical path", () => {
@@ -202,46 +185,26 @@ describe("dev quality workflows", () => {
       const checkoutAt = steps.findIndex((step) => step.uses?.startsWith("actions/checkout@"));
       const setupNodeAt = steps.findIndex((step) => step.uses?.startsWith("actions/setup-node@"));
       const candidateCheckAt = steps.findIndex(
-        (step) => step.name === "Verify immutable pull-request merge candidate",
-      );
-      const toolchainCheckAt = steps.findIndex(
-        (step) => step.name === "Verify governed Node.js and npm toolchain",
-      );
-      const postToolchainCheckAt = steps.findIndex(
-        (step) => step.name === "Verify candidate tree remains immutable",
+        (step) => step.name === "Verify pull-request merge candidate consistency",
       );
       const checkout = steps[checkoutAt];
       const candidateCheck = steps[candidateCheckAt];
-      const postToolchainCheck = steps[postToolchainCheckAt];
 
       expect(job["timeout-minutes"], `${jobName} must have a bounded timeout`).toBeGreaterThan(0);
       expect(checkout, `${jobName} checkout must exist`).toBeDefined();
       expect(checkout.with.ref, `${jobName} must pin the run revision`).toBe(
-        "${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}",
+        jobName === "coverage-sonar"
+          ? "${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}"
+          : "${{ github.sha }}",
       );
       expect(candidateCheck, `${jobName} must verify its candidate`).toMatchObject({
         if: "${{ github.event_name == 'pull_request' }}",
-        with: {
-          "base-sha": "${{ github.event.pull_request.base.sha }}",
-          "head-sha": "${{ github.event.pull_request.head.sha }}",
+        env: {
+          KEIKO_CANDIDATE_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+          KEIKO_CANDIDATE_HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
         },
+        run: "node scripts/check-ci-merge-candidate.mjs",
       });
-      expect(candidateCheck.uses).toBe(
-        `oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@${trustedGateRevision}`,
-      );
-      expect(
-        postToolchainCheck,
-        `${jobName} must re-verify after candidate code runs`,
-      ).toMatchObject({
-        if: "${{ github.event_name == 'pull_request' }}",
-        with: {
-          "base-sha": "${{ github.event.pull_request.base.sha }}",
-          "head-sha": "${{ github.event.pull_request.head.sha }}",
-        },
-      });
-      expect(postToolchainCheck.uses).toBe(
-        `oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@${trustedGateRevision}`,
-      );
       expect(setupNodeAt, `${jobName} must set up the trusted action runtime`).toBeGreaterThan(
         checkoutAt,
       );
@@ -249,30 +212,20 @@ describe("dev quality workflows", () => {
         candidateCheckAt,
         `${jobName} must verify before another action or candidate command runs`,
       ).toBe(setupNodeAt + 1);
-      expect(
-        postToolchainCheckAt,
-        `${jobName} must re-verify immediately after the candidate-owned toolchain check`,
-      ).toBe(toolchainCheckAt + 1);
+      expect(steps.some((step) => step.name === "Verify candidate tree remains immutable")).toBe(
+        false,
+      );
     }
 
     const sonarEvidence = ciWorkflow.jobs["coverage-sonar"].steps.find(
-      (step) => step.name === "Verify trusted Sonar full-analysis evidence",
+      (step) => step.name === "Verify Sonar full-analysis evidence",
     );
     expect(sonarEvidence).toMatchObject({
       if: "${{ always() && steps.sonar-scan.outcome != 'skipped' }}",
-      with: { "log-path": "${{ runner.temp }}/sonar-scanner.log" },
+      run: 'node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log" --require-full-analysis',
     });
-    expect(sonarEvidence.uses).toBe(
-      `oscharko-dev/Keiko/.github/actions/verify-sonar-analysis-log@${trustedGateRevision}`,
-    );
-    expect(mergeCandidateAction.runs).toEqual({ main: "main.mjs", using: "node24" });
-    expect(sonarAnalysisAction.runs).toEqual({ main: "main.mjs", using: "node24" });
-    expect(mergeCandidateActionMain).toContain("runCiMergeCandidateCheck");
-    expect(mergeCandidateActionMain).toContain('process.env["INPUT_BASE-SHA"]');
-    expect(sonarAnalysisActionMain).toContain("runSonarLogCheck");
-    expect(sonarAnalysisActionMain).toContain("requireFullAnalysis: true");
-    expect(mergeCandidateActionMain).not.toMatch(/\b(?:exec|spawn)(?:File|Sync)?\b/u);
-    expect(sonarAnalysisActionMain).not.toMatch(/\b(?:exec|spawn)(?:File|Sync)?\b/u);
+    expect(ci).not.toContain("oscharko-dev/Keiko/.github/actions/verify-");
+    expect(ciWorkflow.jobs["coverage-sonar"]["timeout-minutes"]).toBe(50);
   });
 
   it("isolates local Sonar state by repository and selectable loopback port", () => {
@@ -345,9 +298,11 @@ describe("dev quality workflows", () => {
     );
     expect(ci).toContain('tee "$RUNNER_TEMP/sonar-scanner.log"');
     expect(ci).toContain("scanner_status=${PIPESTATUS[0]}");
-    expect(ci).not.toContain("node scripts/check-sonar-analysis-log.mjs");
-    expect(ci).toContain("SONAR_SCANNER_STATUS: ${{ steps.sonar-scan.outputs.status }}");
-    expect(ci).toContain('exit "$SONAR_SCANNER_STATUS"');
+    expect(ci).toContain('exit "$scanner_status"');
+    expect(ci).toContain("node scripts/check-sonar-analysis-log.mjs");
+    expect(ci).toContain('--log "$RUNNER_TEMP/sonar-scanner.log"');
+    expect(ci).toContain("--require-full-analysis");
+    expect(ci).not.toContain("SONAR_SCANNER_STATUS:");
     expect(ci).toContain("if: ${{ always() && github.event_name == 'workflow_dispatch' }}");
   });
 

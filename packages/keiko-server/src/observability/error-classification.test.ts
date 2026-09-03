@@ -82,70 +82,46 @@ describe("machineToken", () => {
 });
 
 describe("declaredErrorClassName", () => {
-  it("does not read an inherited descriptor value under prototype pollution", () => {
-    class PollutedDescriptorError extends Error {}
-    let inheritedValueReads = 0;
-    Object.defineProperty(PollutedDescriptorError.prototype, "constructor", {
+  it("preserves a class exposed through a legitimate constructor accessor", () => {
+    class AccessorConstructorError extends Error {}
+    Object.defineProperty(AccessorConstructorError.prototype, "constructor", {
       configurable: true,
-      get: () => PollutedDescriptorError,
-    });
-    Object.defineProperty(Object.prototype, "value", {
-      configurable: true,
-      get: () => {
-        inheritedValueReads += 1;
-        return PollutedDescriptorError;
-      },
+      get: () => AccessorConstructorError,
     });
 
-    let declaredName: string | undefined;
+    expect(declaredErrorClassName(new AccessorConstructorError("x"))).toBe(
+      "AccessorConstructorError",
+    );
+  });
+
+  it("preserves a bounded code-owned accessor class name", () => {
+    class AccessorNameError extends Error {}
+    Object.defineProperty(AccessorNameError, "name", {
+      configurable: true,
+      get: () => "DeclaredAccessorError",
+    });
+
+    expect(declaredErrorClassName(new AccessorNameError("x"))).toBe("DeclaredAccessorError");
+  });
+
+  it("preserves the inherited declaration across an intermediate prototype", () => {
+    class ParentError extends Error {}
+    class IntermediateError extends ParentError {}
+    Reflect.deleteProperty(IntermediateError.prototype, "constructor");
+
+    expect(declaredErrorClassName(new IntermediateError("x"))).toBe("ParentError");
+  });
+
+  it("preserves Node ERR_* constructor accessors", () => {
+    let nodeError: unknown;
     try {
-      declaredName = declaredErrorClassName(new PollutedDescriptorError("x"));
-    } finally {
-      Reflect.deleteProperty(Object.prototype, "value");
+      Buffer.from(1 as unknown as string);
+    } catch (error) {
+      nodeError = error;
     }
 
-    expect(declaredName).toBeUndefined();
-    expect(inheritedValueReads).toBe(0);
-  });
-
-  it("rejects a foreign native constructor planted on an Error prototype", () => {
-    class ForeignConstructorError extends Error {}
-    Object.defineProperty(ForeignConstructorError.prototype, "constructor", {
-      configurable: true,
-      value: Object,
-    });
-
-    expect(declaredErrorClassName(new ForeignConstructorError("x"))).toBeUndefined();
-  });
-
-  it("does not execute a constructor accessor planted on the prototype", () => {
-    class HostileConstructorError extends Error {}
-    let accessorReads = 0;
-    Object.defineProperty(HostileConstructorError.prototype, "constructor", {
-      configurable: true,
-      get: () => {
-        accessorReads += 1;
-        return HostileConstructorError;
-      },
-    });
-
-    expect(declaredErrorClassName(new HostileConstructorError("x"))).toBeUndefined();
-    expect(accessorReads).toBe(0);
-  });
-
-  it("does not execute a name accessor planted on the declared constructor", () => {
-    class HostileNameError extends Error {}
-    let accessorReads = 0;
-    Object.defineProperty(HostileNameError, "name", {
-      configurable: true,
-      get: () => {
-        accessorReads += 1;
-        return "LeakedName";
-      },
-    });
-
-    expect(declaredErrorClassName(new HostileNameError("x"))).toBeUndefined();
-    expect(accessorReads).toBe(0);
+    expect(nodeError).toBeInstanceOf(TypeError);
+    expect(declaredErrorClassName(nodeError as Error)).toBe("TypeError");
   });
 
   it("degrades to undefined instead of throwing when getPrototypeOf traps", () => {

@@ -87,7 +87,7 @@ async function openWorkbench(page: Page, pairingFragment?: string): Promise<void
     // before the workbench is even opened.
     await expect.poll(() => page.url()).not.toContain("keiko-app-session");
   }
-  await page.getByRole("button", { name: "Coding Workbench" }).click();
+  await page.getByRole("button", { name: "Coding Workbench", exact: true }).click();
   await expect(workbench(page)).toBeVisible();
 }
 
