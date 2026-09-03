@@ -39,6 +39,23 @@ rules:
       # coverage-sonar: npm download cache (the one job that saves it), Sonar Scanner CLI archive
       - ci.yml:739
       - ci.yml:825
+  ref-version-mismatch:
+    ignore:
+      # These two repository-owned gate actions are pinned to the exact reviewed commit that
+      # introduced them. `gate-snapshot-1` is an audit label recorded by the dependency-currency
+      # gate, not a mutable Git tag, so zizmor's online ref lookup cannot resolve it by design.
+      # The executable reference remains a full 40-character SHA, and
+      # `dev-quality-workflows.test.mjs` pins the same SHA for all nine invocations. Suppress only
+      # zizmor's version-comment lookup finding; its immutable-pin check remains active.
+      - ci.yml:264
+      - ci.yml:458
+      - ci.yml:564
+      - ci.yml:634
+      - ci.yml:732
+      - ci.yml:890
+      - ci.yml:987
+      - ci.yml:1111
+      - ci.yml:1228
   dangerous-triggers:
     ignore:
       # ADR-0161: the infrastructure-signature observer must see runs that have already completed, and

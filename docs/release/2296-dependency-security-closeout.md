@@ -173,8 +173,11 @@ current. Cross-check individual root devDependencies before claiming a clean swe
 ## GitHub Actions baseline
 
 Every action is pinned to a full 40-character commit SHA with a version comment. All 14 external
-action repositories resolve their documented tag to exactly the pinned commit; Keiko's two trusted
-gate actions resolve to the separately reviewed repository commit recorded below.
+action repositories resolve their documented tag to exactly the pinned commit. Keiko's two trusted
+gate actions instead use the non-tag audit label `gate-snapshot-1` and resolve to the separately
+reviewed repository commit recorded below; the line-scoped `ref-version-mismatch` dispositions in
+`.github/zizmor.yml` suppress only the inapplicable online tag lookup and leave immutable-pin
+analysis active.
 `check:dependency-currency` enforces the table against the workflow files, in both directions, and
 additionally rejects an action repository whose sub-actions have drifted onto different refs —
 `github/codeql-action/init` and `/analyze` are not grouped by Dependabot and a one-sided bump is a
@@ -360,7 +363,7 @@ platform-authoritative evidence.
 | `npm run check:knip`                                        | pass                                                     |
 | `npm run check:eslint-lane`                                 | pass — `npm ls eslint` exits 0 (#2777)                   |
 | `npm run check:perf-evidence`                               | pass — both documents within budget and internally sound |
-| `npm run check:dependency-currency`                         | pass — 37 dependency rows, 14 action rows                |
+| `npm run check:dependency-currency`                         | pass — 37 dependency rows, 15 action rows                |
 | `npm run check:secret-scanning-queue`                       | pass — 0 open alerts; both prior findings closed         |
 | `npm run check:runtime-toolchain`                           | pass — Node 24.18.0; npm 11.16.0; 25 workspaces          |
 | `npm run check:typescript-toolchain`                        | pass — compiler 7.0.2; API 6.0.3                         |
@@ -369,7 +372,7 @@ platform-authoritative evidence.
 | `npm run check:dependency-hygiene`                          | pass — 26 manifests, 6006 tracked paths                  |
 | `npm run check:workspace-supply-chain`                      | pass                                                     |
 | `npm run check:adr-index`                                   | pass — 158 ADRs indexed                                  |
-| `npm run check:zizmor-anchors`                              | pass — 8 anchors still on the step they document         |
+| `npm run check:zizmor-anchors`                              | pass — 17 anchors still on the step they document        |
 | `npm run check:release-impact`                              | pass                                                     |
 | `npm run gates:sonar`                                       | pass — no unresolved finding on the changed files        |
 

@@ -19,6 +19,9 @@ const CONFIG = `rules:
   adhoc-packages:
     ignore:
       - ci.yml:6
+  ref-version-mismatch:
+    ignore:
+      - ci.yml:7
 `;
 
 const CI = [
@@ -28,6 +31,7 @@ const CI = [
   "        shell: cmd",
   "      run: echo",
   "      run: npm install --global npm@11.16.0",
+  "      uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa # gate-snapshot-1",
 ].join("\n");
 const OTHER = ["      uses: actions/cache@abc # v6"].join("\n");
 
@@ -40,6 +44,7 @@ describe("zizmor ignore anchors", () => {
       { rule: "cache-poisoning", file: "other.yml", line: 1 },
       { rule: "misfeature", file: "ci.yml", line: 4 },
       { rule: "adhoc-packages", file: "ci.yml", line: 6 },
+      { rule: "ref-version-mismatch", file: "ci.yml", line: 7 },
     ]);
   });
 
@@ -107,6 +112,15 @@ describe("zizmor ignore anchors", () => {
       file === "ci.yml" ? shifted : read(file),
     );
     expect(failures).toEqual([expect.stringContaining("update the anchor to ci.yml:5")]);
+  });
+
+  it("rejects a ref-version ignore that drifts away from the pinned internal gate action", () => {
+    const shifted = ["# inserted above the internal action", ...CI.split("\n")].join("\n");
+    const failures = anchorFailures(
+      [{ rule: "ref-version-mismatch", file: "ci.yml", line: 7 }],
+      (file) => (file === "ci.yml" ? shifted : read(file)),
+    );
+    expect(failures).toEqual([expect.stringContaining("update the anchor to ci.yml:8")]);
   });
 
   // Reality guard: the committed configuration must satisfy its own checker.
