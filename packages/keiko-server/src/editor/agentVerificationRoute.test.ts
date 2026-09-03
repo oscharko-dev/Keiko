@@ -899,6 +899,49 @@ describe("handleEditorAgentVerificationRun root-binding guards (#2624)", () => {
     expect(manager.calls).toBe(1);
   });
 
+  // A reservation that fails AFTER the policy allowed the run ends the request before
+  // `runAndRespond` too, so its refusal has to be recorded the same way (CodeRabbit, PR #3381).
+  it("records an exhausted authority budget as a body-free refusal diagnostic", async () => {
+    const manager = new FakeManager();
+    const authorityRef = registerAuthority(undefined, {
+      budget: {
+        maxRuntimeMs: 3_600_000,
+        maxToolCalls: 1,
+        maxPromptTokens: 10_000,
+        maxPatchBytes: 65_536,
+      },
+    });
+    const request = { schemaVersion: "1", sessionId: SESSION_ID, kind: "typecheck", authorityRef };
+    const records: unknown[] = [];
+    const allow = (): EditorAgentActionPolicyDecision => ({
+      disposition: "allowed",
+      effectClass: "execution",
+      origin: "agent",
+    });
+
+    await handleEditorAgentVerificationRun(ctx(request), deps(manager), { decide: allow });
+    const exhausted = await handleEditorAgentVerificationRun(
+      ctx(request, "request-correlation-6e"),
+      { ...deps(manager), diagnostics: { record: (record): void => void records.push(record) } },
+      { decide: allow },
+    );
+
+    expect(resultBody(exhausted)).toMatchObject({
+      outcome: "not-run",
+      disposition: "denied",
+      reason: "authority-budget-exceeded",
+    });
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "request-correlation-6e",
+        operation: "editor.verification.execute",
+        source: "editor.agent-verification-route",
+        errorClass: "authority-budget-exceeded",
+        message: "verification-refused",
+      }),
+    ]);
+  });
+
   it("fails closed when a boundary denial cannot be audited", async () => {
     const manager = new FakeManager();
     const authorityRef = registerAuthority();

@@ -38,7 +38,7 @@ import {
   workspaceEntryOperatorActionRequired,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { buildBinding } from "./binding.js";
-import { TaskWorkspaceError } from "./errors.js";
+import { asRepositoryUnreachable, TaskWorkspaceError } from "./errors.js";
 import { assertSafeFieldValue } from "./field-safety.js";
 import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
@@ -301,7 +301,30 @@ interface MovedHeadAcceptance {
   readonly worktreeDirty: boolean;
 }
 
+// Every adapter build and every adapter call on this path is classified. `reconcileSingleInstance`
+// has already returned by the time this runs, so its own `consultRepository` classification does not
+// cover these three spawns: an unmounted volume, a vanished root or a denied path would reject with a
+// PLAIN error, `runWithWorkspaceLifecycleFailureLogging` only logs a TaskWorkspaceError, and the
+// route's `mapped === undefined` branch would turn it into a generic 500 with no lifecycle line at
+// all (CodeRabbit, PR #3381). Wrapped, it is the same retryable REPOSITORY_UNREACHABLE — with frames
+// and cause chain — that ADR-0091 D4 documents for every pass; a classified error
+// (`IDENTITY_PROOF_FAILED` from the identity proof inside the fact-gathering) passes through
+// unchanged.
 async function gatherMovedHeadAcceptance(
+  ctx: RepairCtx,
+  instance: WorkspaceInstance,
+  requestedBy: string,
+  nowMs: number,
+  correlationId: string | undefined,
+): Promise<MovedHeadAcceptance> {
+  try {
+    return await consultMovedHeadFacts(ctx, instance, requestedBy, nowMs, correlationId);
+  } catch (error) {
+    throw asRepositoryUnreachable(error, "accept-moved-head could not consult the repository");
+  }
+}
+
+async function consultMovedHeadFacts(
   ctx: RepairCtx,
   instance: WorkspaceInstance,
   requestedBy: string,

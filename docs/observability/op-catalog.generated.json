@@ -1025,19 +1025,19 @@
     {
       "op": "git.delivery.dispatch.no-spawn",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:329",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:350",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:647",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:668",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:678",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:699",
       "package": "keiko-server"
     },
     {

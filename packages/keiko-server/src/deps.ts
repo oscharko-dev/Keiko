@@ -2143,6 +2143,14 @@ function withManagedWorkspaceIdentity(
       provisioning.ensureIdentity?.(instance);
       ensureManagedTaskWorkspaceIdentity({ uiStore, workspaceScriptTrust, instance });
     },
+    // Forwarded, not re-implemented: this wrapper adds Project/Manifest identity around an INJECTED
+    // provisioning service, and it owns no store or mutex of its own. A wrapper that silently
+    // dropped the seam would leave every injected composition (the e2e coding-runtime servers, an
+    // `options.workspaceProvisioning` test bed) without the #3382 restamp, so a governed commit
+    // there would still strand its workspace — the exact defect, reintroduced by omission.
+    ...(provisioning.recordVerifiedHead === undefined
+      ? {}
+      : { recordVerifiedHead: provisioning.recordVerifiedHead }),
   };
 }
 

@@ -28,6 +28,7 @@ import { logWorkspaceLifecycleFailure, recordWorkspaceLifecycle } from "./activi
 import { resolveManagedTaskWorkspaceInstanceFromLookup } from "./authorization.js";
 import { TaskWorkspaceError } from "./errors.js";
 import { buildWorkspaceEvent, WORKSPACE_LIFECYCLE_EVIDENCE_KIND } from "./evidence.js";
+import { workspaceKey } from "./mutex.js";
 import { observeManagedWorktreeHead } from "./reconciliation.js";
 import type { RecordVerifiedHeadInput, WorkspaceProvisioningServiceDeps } from "./types.js";
 
@@ -40,6 +41,10 @@ type VerifiedHeadDeps = Pick<
   | "redactString"
   | "now"
   | "newId"
+  // The SAME shared in-process serializer every other mutating workspace flow holds (#449,
+  // ADR-0093 D1). Already required on `WorkspaceProvisioningServiceDeps`, so the composition that
+  // builds this port passes it unchanged.
+  | "mutex"
   | "activityLog"
 >;
 
@@ -111,15 +116,25 @@ function emitRestamp(
   });
 }
 
-async function restamp(
+// The head this restamp records, observed against the row as it stands INSIDE the critical section.
+// Re-proving the path chain here (not just re-reading by id) keeps the write bound to the root the
+// caller was admitted for: a concurrent re-materialization that moved `managedWorktreePath` must not
+// have this call record the head of a different worktree onto the same row.
+async function observeHeadForFreshRow(
   deps: VerifiedHeadDeps,
-  instance: WorkspaceInstance,
   input: RecordVerifiedHeadInput,
-  startedAtMs: number,
-): Promise<boolean> {
+  expectedWorkspaceId: string,
+): Promise<string> {
+  const fresh = resolveInstance(deps, input.managedWorktreePath);
+  if (fresh?.workspaceId !== expectedWorkspaceId) {
+    throw new TaskWorkspaceError(
+      "WORKSPACE_NOT_FOUND",
+      "the managed workspace no longer resolves this root",
+    );
+  }
   const head = await observeManagedWorktreeHead(
     deps,
-    instance,
+    fresh,
     correlationIdOrUnknown(input.correlationId),
   );
   if (head === undefined) {
@@ -131,10 +146,36 @@ async function restamp(
       "the repository lists no worktree entry for the managed workspace",
     );
   }
+  return head;
+}
+
+// The whole critical section, under the workspace's own `ws:<workspaceId>` key.
+//
+// The row is re-read TWICE and the snapshot the caller admitted is never written back. Observing the
+// head is a git spawn, so the previous version's `upsert({ ...instance, … })` replayed a snapshot
+// captured before that await: it could resurrect a lock a concurrent repair had just taken, or undo
+// lifecycle and drift state a concurrent reconcile had just persisted (CodeRabbit, PR #3381). The
+// mutex closes the in-process race, and merging onto the row read immediately BEFORE the write keeps
+// this a single-field update — `lastVerifiedHead` plus its timestamps — for any writer the mutex
+// cannot serialize.
+async function restampLocked(
+  deps: VerifiedHeadDeps,
+  input: RecordVerifiedHeadInput,
+  expectedWorkspaceId: string,
+  startedAtMs: number,
+): Promise<boolean> {
+  const head = await observeHeadForFreshRow(deps, input, expectedWorkspaceId);
+  const current = deps.store.getById(expectedWorkspaceId);
+  if (current === undefined) {
+    throw new TaskWorkspaceError(
+      "WORKSPACE_NOT_FOUND",
+      "the managed workspace row was removed while its head was observed",
+    );
+  }
   const nowMs = deps.now();
   const iso = isoFrom(nowMs);
   const persisted = deps.store.upsert({
-    ...instance,
+    ...current,
     lastVerifiedHead: head,
     lastVerifiedAt: iso,
     updatedAt: iso,
@@ -150,6 +191,10 @@ async function restamp(
  * happened, so a failure here must never turn a successful governed mutation into an error — but
  * NEVER silent: every refusal and every thrown failure leaves one classified `task-workspace.lifecycle`
  * line under the caller's correlation id.
+ *
+ * The admission lookup below runs OUTSIDE the lock and yields only the key to lock on; the
+ * authoritative row is re-proved and re-read inside it (`restampLocked`). Only the git-delivery
+ * commit path calls this, and that path holds no `ws:` key, so the acquisition cannot self-deadlock.
  */
 export async function recordVerifiedManagedHead(
   deps: VerifiedHeadDeps,
@@ -167,7 +212,9 @@ export async function recordVerifiedManagedHead(
     return false;
   }
   try {
-    return await restamp(deps, instance, input, startedAtMs);
+    return await deps.mutex.runExclusive([workspaceKey(instance.workspaceId)], () =>
+      restampLocked(deps, input, instance.workspaceId, startedAtMs),
+    );
   } catch (error) {
     logFailure(
       deps,

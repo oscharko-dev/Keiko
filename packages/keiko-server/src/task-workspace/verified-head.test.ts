@@ -18,9 +18,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
-import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type {
+  GitWorktreeAdapter,
+  WorktreeListEntry,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { WorkspaceInfo, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import type {
+  WorkspaceInfo,
+  WorkspaceInstance,
+  WorkspaceLock,
+} from "@oscharko-dev/keiko-contracts";
 import { runMigrations } from "../store/schema.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
 import {
@@ -30,7 +37,7 @@ import {
 import { createWorkspaceProvisioningService } from "./provisioning.js";
 import { createWorkspaceReconciliationService } from "./reconciliation.js";
 import { recordVerifiedManagedHead } from "./verified-head.js";
-import { createWorkspaceMutexRegistry } from "./mutex.js";
+import { createWorkspaceMutexRegistry, workspaceKey } from "./mutex.js";
 import type { WorkspaceProvisioningServiceDeps, WorkspaceReconciliationService } from "./types.js";
 import {
   createBufferedServerLogSink,
@@ -222,6 +229,91 @@ describe("recordVerifiedManagedHead (#3382)", () => {
       { marker: "head-moved", strategy: "accept-moved-head", operatorActionRequired: false },
     ]);
     expect(entry?.repairable).toBe(true);
+  });
+
+  // CodeRabbit, PR #3381: the row was captured BEFORE the head observation (a git spawn) and the
+  // whole snapshot was written back afterwards, so anything a concurrent repair, reconcile or cleanup
+  // persisted during that await was silently replayed away — a live repair lock resurrected as
+  // `null`, newer drift state undone. The restamp now runs under the workspace's own `ws:` key and
+  // merges onto the row read immediately BEFORE the write, so it is a single-field update. The lock
+  // here is written from inside `listWorktrees`, i.e. strictly between the two reads, which is the
+  // window the mutex alone cannot close.
+  it("preserves state written while the head observation is in flight", async () => {
+    const instance = await provisionTask("t-interleaved");
+    await reconciliation().reconcile();
+    const head = commitInWorktree(instance.managedWorktreePath, "interleaved.txt");
+    const lock: WorkspaceLock = {
+      lockId: "lock-concurrent-repair",
+      owner: "other-actor",
+      reason: "repair",
+      acquiredAt: new Date(nowMs).toISOString(),
+      expiresAt: new Date(nowMs + 60_000).toISOString(),
+    };
+    const activityLog = createBufferedServerLogSink();
+    let listings = 0;
+
+    await expect(
+      recordVerifiedManagedHead(
+        verifiedHeadDeps(activityLog, (workspace) => {
+          const adapter = realAdapter(workspace);
+          return {
+            ...adapter,
+            listWorktrees: async (): Promise<readonly WorktreeListEntry[]> => {
+              const listed = await adapter.listWorktrees();
+              listings += 1;
+              const current = persisted(instance.workspaceId);
+              store.upsert({ ...current, lock, driftMarkers: ["uncommitted-changes"] });
+              return listed;
+            },
+          };
+        }),
+        {
+          managedWorktreePath: instance.managedWorktreePath,
+          correlationId: "req-restamp-interleaved",
+        },
+      ),
+    ).resolves.toBe(true);
+
+    expect(listings).toBe(1);
+    const after = persisted(instance.workspaceId);
+    // The head IS recorded…
+    expect(after.lastVerifiedHead).toBe(head);
+    // …and nothing the concurrent writer persisted during the await was replayed away.
+    expect(after.lock).toEqual(lock);
+    expect(after.driftMarkers).toEqual(["uncommitted-changes"]);
+  });
+
+  // Serialization proper: while the restamp holds the workspace key, no other `ws:` holder runs.
+  it("holds the workspace mutex for the whole restamp", async () => {
+    const instance = await provisionTask("t-serialized");
+    await reconciliation().reconcile();
+    commitInWorktree(instance.managedWorktreePath, "serialized.txt");
+    const order: string[] = [];
+    const activityLog = createBufferedServerLogSink();
+
+    const restamp = recordVerifiedManagedHead(
+      verifiedHeadDeps(activityLog, (workspace) => {
+        const adapter = realAdapter(workspace);
+        return {
+          ...adapter,
+          listWorktrees: async (): Promise<readonly WorktreeListEntry[]> => {
+            order.push("observe:start");
+            const listed = await adapter.listWorktrees();
+            order.push("observe:end");
+            return listed;
+          },
+        };
+      }),
+      { managedWorktreePath: instance.managedWorktreePath },
+    );
+    const contender = __twMutex.runExclusive([workspaceKey(instance.workspaceId)], () => {
+      order.push("contender");
+      return Promise.resolve();
+    });
+
+    await expect(restamp).resolves.toBe(true);
+    await contender;
+    expect(order).toEqual(["observe:start", "observe:end", "contender"]);
   });
 
   it("refuses and logs when no managed row resolves the requested root", async () => {

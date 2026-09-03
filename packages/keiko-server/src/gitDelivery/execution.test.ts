@@ -937,6 +937,58 @@ describe("executeGovernedMutation — verified-head restamp (#3382)", () => {
 
   // An ordinary registered project is not a managed task worktree, so it has no row to restamp and
   // the prover is never even consulted for it.
+  // CodeRabbit, PR #3381: the restamp is documented best-effort, but the `await` was unguarded, so a
+  // port that rejects turned a COMMITTED, already-evidenced mutation into a rejected call — the
+  // caller's route then answered 409 GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE for a commit that is in
+  // the operator's history. The rejection is contained at this seam and reported instead.
+  it("keeps a rejecting restamp port from failing a commit that already succeeded", async () => {
+    const fixture = createManagedWorktreeFixture("task-3382-restamp-rejects");
+    const cap = captureStore();
+    const activity = captureActivityLog();
+    try {
+      const base = managedAccessDeps(fixture, () => fixture.instance);
+      const result = await executeGovernedMutation(
+        COMMIT,
+        { required: false },
+        workspaceInfo(fixture.managedWorktreePath),
+        {
+          evidenceStore: cap.store,
+          redactor: buildRedactor({}),
+          ...base,
+          workspaceProvisioning: {
+            ...base.workspaceProvisioning,
+            recordVerifiedHead: (): Promise<boolean> =>
+              Promise.reject(new Error("restamp port exploded")),
+          },
+        },
+        {
+          policyPacks: { repoPack: ALLOW_LOCAL },
+          activityLog: activity.sink,
+          adapterFactory: () => recordingMutationAdapter([]),
+          snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(MANAGED_SNAPSHOT),
+        },
+        "request-correlation-restamp-rejects",
+      );
+
+      // The commit's own result is untouched, and its evidence line still says `succeeded`.
+      expect(result.outcome.status).toBe("succeeded");
+      expect(
+        activity.events.find((e) => e.op === "git.delivery.mutation.completed")?.extra?.status,
+      ).toBe("succeeded");
+
+      // Exactly one classified line for the failed restamp — not silent, and body-free.
+      const failures = activity.events.filter((e) => e.op === "task-workspace.lifecycle");
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.errorKind).toBe("REPOSITORY_UNREACHABLE");
+      expect(failures[0]?.correlationId).toBe("request-correlation-restamp-rejects");
+      expect(failures[0]?.extra?.operation).toBe("verify-head");
+      expect(failures[0]?.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
+      expect(JSON.stringify(activity.events)).not.toContain(fixture.managedWorktreePath);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
   it("records nothing for an ordinary registered project", async () => {
     const cap = captureStore();
     const calls: RestampCall[] = [];

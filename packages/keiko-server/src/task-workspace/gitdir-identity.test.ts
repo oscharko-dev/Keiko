@@ -1042,6 +1042,25 @@ describe("real Git linked worktrees, absolute and relative pointers", () => {
     return realpathSync(target);
   }
 
+  // A forward pointer Git spelled ABSOLUTELY: root-anchored on a POSIX separator, a Windows
+  // separator, or a drive qualifier (`C:/…`, `C:\…`). Stated once so the positive and the negative
+  // assertion below can never encode two different notions of "absolute".
+  const ABSOLUTE_GITDIR_POINTER = /^gitdir: (?:[/\\]|[A-Za-z]:[/\\])/u;
+
+  // The real-worktree assertions below only ever see the spelling of the platform they run on, so the
+  // Windows half of `ABSOLUTE_GITDIR_POINTER` would be unexercised on every lane CI actually runs.
+  // Pinned here directly, on every platform.
+  it("treats a drive-qualified pointer as absolute and a dot-relative one as not", () => {
+    for (const absolute of ["gitdir: /repo/.git/worktrees/x", "gitdir: C:/repo/.git/worktrees/x"]) {
+      expect(absolute).toMatch(ABSOLUTE_GITDIR_POINTER);
+    }
+    expect("gitdir: C:\\repo\\.git\\worktrees\\x").toMatch(ABSOLUTE_GITDIR_POINTER);
+    expect("gitdir: \\\\server\\share\\.git").toMatch(ABSOLUTE_GITDIR_POINTER);
+    for (const relative of ["gitdir: ../repo/.git/worktrees/x", "gitdir: repo/.git/worktrees/x"]) {
+      expect(relative).not.toMatch(ABSOLUTE_GITDIR_POINTER);
+    }
+  });
+
   it.skipIf(!RELATIVE_WORKTREE_PATHS_SUPPORTED)(
     "identifies a worktree Git created with worktree.useRelativePaths (needs Git >= 2.48)",
     () => {
@@ -1051,12 +1070,14 @@ describe("real Git linked worktrees, absolute and relative pointers", () => {
 
       // The fixture is real: Git wrote a relative forward pointer for the second worktree and an
       // absolute one for the first. BOTH halves are asserted by SHAPE — the absolute one anchored on
-      // the leading separator, because `/^gitdir: /u` also matches `gitdir: ../../repo/.git/...` and
-      // would pass on two identical relative layouts, proving nothing (CodeRabbit, PR #3381).
+      // a ROOT, because `/^gitdir: /u` also matches `gitdir: ../../repo/.git/...` and would pass on
+      // two identical relative layouts, proving nothing (CodeRabbit, PR #3381). "Root-anchored" is
+      // `/`, `\`, or a drive letter: Git for Windows writes `gitdir: C:/…` for an absolute pointer,
+      // which a separator-only anchor would reject on the Windows lane (CodeRabbit, PR #3381).
       expect(readFileSync(join(relativePaths, ".git"), "utf8").trim()).not.toMatch(
-        /^gitdir: [/\\]/u,
+        ABSOLUTE_GITDIR_POINTER,
       );
-      expect(readFileSync(join(absolute, ".git"), "utf8").trim()).toMatch(/^gitdir: [/\\]/u);
+      expect(readFileSync(join(absolute, ".git"), "utf8").trim()).toMatch(ABSOLUTE_GITDIR_POINTER);
 
       expect(inspectManagedGitdirIdentityOutcome(absolute, repository).kind).toBe("identified");
       expect(inspectManagedGitdirIdentityOutcome(relativePaths, repository).kind).toBe(

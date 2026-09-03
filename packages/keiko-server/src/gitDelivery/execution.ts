@@ -36,6 +36,8 @@ import {
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { logWorkspaceLifecycleFailure } from "../task-workspace/activity-log.js";
+import { asRepositoryUnreachable } from "../task-workspace/errors.js";
 import {
   requiresConfiguredManagedWorkspaceAuthority,
   resolveManagedWorkspaceRootAccess,
@@ -191,9 +193,14 @@ function managedTaskWorktreeRoot(
  * the baseline untouched and still classifies as drift, which the operator-approved
  * `accept-moved-head` repair is the exit for.
  *
- * Best-effort and awaited: the commit has already happened, so a failed restamp must not turn a
- * successful mutation into an error. It is never silent — the task-workspace layer logs every refusal
- * and failure on the existing `task-workspace.lifecycle` line under this correlation id.
+ * Best-effort and awaited: the commit has already happened AND its lifecycle evidence is already
+ * persisted, so a failed restamp must never turn a successful mutation into an error. `recordVerifiedHead`
+ * is a PORT — the production implementation resolves its own failures internally, but an injected or
+ * future one may reject, and an unguarded `await` here would report a committed, evidenced mutation as
+ * failed (CodeRabbit, PR #3381). The rejection is therefore contained HERE, at the seam that documents
+ * the contract, and it is never silent: it lands on the same body-free `task-workspace.lifecycle`
+ * failure line the task-workspace layer uses, classified, with frames + cause chain, under this
+ * mutation's correlation id.
  */
 async function restampManagedTaskWorkspaceHead(
   deps: GitDeliveryMutationDeps,
@@ -207,10 +214,24 @@ async function restampManagedTaskWorkspaceHead(
   if (command.kind !== "commit" || lifecycle.outcome.status !== "succeeded") return;
   const managedWorktreePath = managedTaskWorktreeRoot(deps, workspace, logging);
   if (managedWorktreePath === undefined) return;
-  await deps.workspaceProvisioning?.recordVerifiedHead?.({
-    managedWorktreePath,
-    ...(logging.correlationId === undefined ? {} : { correlationId: logging.correlationId }),
-  });
+  try {
+    await deps.workspaceProvisioning?.recordVerifiedHead?.({
+      managedWorktreePath,
+      ...(logging.correlationId === undefined ? {} : { correlationId: logging.correlationId }),
+    });
+  } catch (error) {
+    // The seed is hashed before it reaches the log (`workspaceLogIdentity`), so the path never
+    // leaves this frame; an already-classified TaskWorkspaceError passes through unchanged.
+    logWorkspaceLifecycleFailure(
+      logging,
+      {
+        operation: "verify-head",
+        workspaceIdentitySeed: managedWorktreePath,
+        correlationId: logging.correlationId,
+      },
+      asRepositoryUnreachable(error, "the verified-head restamp port rejected"),
+    );
+  }
 }
 
 // One refusal record per governed mutation: it writes the no-spawn marker the instant the guard

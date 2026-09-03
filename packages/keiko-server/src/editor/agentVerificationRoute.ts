@@ -464,6 +464,9 @@ async function admitAndRun(
   }
   if (!reserveVerification(request, snapshot, deps)) {
     const denied = denyByAuthority(decision, "authority-budget-exceeded");
+    // Same rule as the policy refusal above: a request that ends here never reaches
+    // `runAndRespond`, so the refusal is recorded on its timeline before the audit row.
+    emitPolicyRefusalDiagnostic(deps.diagnostics, lifecycle, request, denied);
     return auditVerification(request, snapshot, denied, "conflict", audit)
       ? notRunResult(denied)
       : auditFailure();

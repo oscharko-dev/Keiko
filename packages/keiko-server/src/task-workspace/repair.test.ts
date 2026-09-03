@@ -217,6 +217,13 @@ function lastActivityLogEvent(sink: BufferedServerLogSink): ServerLogEvent {
   return line;
 }
 
+// The same single-narrowing-point rule for a searched log line.
+function activityLogEventWithKind(sink: BufferedServerLogSink, errorKind: string): ServerLogEvent {
+  const line = sink.events.find((event) => event.errorKind === errorKind);
+  if (line === undefined) throw new Error(`no activity-log event with errorKind ${errorKind}`);
+  return line;
+}
+
 function lastEventCorrelationId(): string {
   const last = evidence.at(-1);
   if (last === undefined) throw new Error("no evidence recorded");
@@ -515,6 +522,52 @@ describe("accept-moved-head (adopt an out-of-band commit as the verified head)",
       "REPAIR_NOT_APPLICABLE",
     );
     expect(branchLookups).toBeGreaterThan(1);
+    expect(store.getById(instance.workspaceId)?.driftMarkers).toEqual(["head-moved"]);
+  });
+
+  // CodeRabbit, PR #3381: `reconcileSingleInstance` has already returned by the time the acceptance
+  // gathers its own facts, so the three spawns it makes (the adapter build, `listWorktrees`,
+  // `worktreeStatus`) were outside every classification. A plain rejection there reached
+  // `runWithWorkspaceLifecycleFailureLogging`, which only logs a TaskWorkspaceError, and the route's
+  // `mapped === undefined` branch turned it into a generic 500 with no lifecycle line at all.
+  it("classifies a repository it cannot consult during the acceptance", async () => {
+    const { instance } = await driftedByMovedHead("t-moved-unreachable");
+    const activityLog = createBufferedServerLogSink();
+    let gathers = 0;
+    // The FIRST consultation is the repair's own `reconcileSingleInstance` (it must still classify
+    // the row as `head-moved`, or the applicability gate would refuse first and this would pin
+    // nothing); the acceptance's own listing is the one that fails.
+    const service = repairService(activityLog, (workspace: WorkspaceInfo): GitWorktreeAdapter => {
+      const adapter = realAdapter(workspace);
+      return {
+        ...adapter,
+        listWorktrees: (): Promise<readonly WorktreeListEntry[]> => {
+          gathers += 1;
+          return gathers === 1
+            ? adapter.listWorktrees()
+            : Promise.reject(new Error("spawn git ENOENT"));
+        },
+      };
+    });
+
+    const error = await rejectionOf(() =>
+      service.repair({
+        workspaceId: instance.workspaceId,
+        requestedBy: "u",
+        strategy: "accept-moved-head",
+        operatorApproved: true,
+      }),
+    );
+
+    expect(error.code).toBe("REPOSITORY_UNREACHABLE");
+    expect(error.outcome).toBe("retry-required");
+    expect(causeMessageOf(error)).toBe("spawn git ENOENT");
+    expect(gathers).toBeGreaterThan(1);
+    const line = activityLogEventWithKind(activityLog, "REPOSITORY_UNREACHABLE");
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.extra?.operation).toBe("repair");
+    expect(Array.isArray(line.extra?.frames)).toBe(true);
+    // The baseline is untouched: a repair that could not consult the repository mutates nothing.
     expect(store.getById(instance.workspaceId)?.driftMarkers).toEqual(["head-moved"]);
   });
 
