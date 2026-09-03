@@ -81,6 +81,51 @@ describe("Sonar scanner warning gate", () => {
     expect(fullAnalysisEvidenceFailures(full)).toEqual([]);
   });
 
+  it("uses the completed snapshot when Sonar reports progress for one source set", () => {
+    const full = [
+      "INFO 100 files indexed (done)",
+      "INFO Architecture JS/TS UDG cache: 100 source file(s) without a UDG",
+      "INFO 10/100 source files have been analyzed",
+      "INFO 100/100 source files have been analyzed",
+      'INFO * Files successfully loaded: "100" out of "100"',
+    ].join("\n");
+
+    expect(fullAnalysisEvidenceFailures(full)).toEqual([]);
+  });
+
+  it.each([
+    ["an empty log", ""],
+    [
+      "malformed source progress",
+      [
+        "INFO 100 files indexed (done)",
+        "INFO Architecture JS/TS UDG cache: 100 source file(s) without a UDG",
+        "INFO 100//100 source files have been analyzed",
+        'INFO * Files successfully loaded: "100" out of "100"',
+      ].join("\n"),
+    ],
+    [
+      "a malformed architecture receipt",
+      [
+        "INFO 100 files indexed (done)",
+        "INFO Architecture JS/TS UDG cache: 100 source file(s) without a UDG",
+        "INFO 100/100 source files have been analyzed",
+        'INFO * Files successfully loaded: "100" of "100"',
+      ].join("\n"),
+    ],
+    [
+      "hostile numeric values",
+      [
+        "INFO 9007199254740992 files indexed (done)",
+        "INFO Architecture JS/TS UDG cache: 9007199254740992 source file(s) without a UDG",
+        "INFO 9007199254740992/9007199254740992 source files have been analyzed",
+        'INFO * Files successfully loaded: "9007199254740992" out of "9007199254740992"',
+      ].join("\n"),
+    ],
+  ])("rejects %s as full-analysis evidence", (_name, contents) => {
+    expect(fullAnalysisEvidenceFailures(contents)).not.toEqual([]);
+  });
+
   it("accepts Sonar's singular analyzed-source progress without an ambiguous parser", () => {
     expect(
       fullAnalysisEvidenceFailures(

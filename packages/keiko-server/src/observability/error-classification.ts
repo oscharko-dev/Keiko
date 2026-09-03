@@ -56,7 +56,9 @@ export const MACHINE_TOKEN_SHAPE = /^[A-Za-z0-9._-]{1,128}$/;
 // throw. Every optional machine field, and every field this module reads off an unknown error,
 // goes through this helper and degrades to absence.
 export function safeProperty(value: unknown, property: string): unknown {
-  if (typeof value !== "object" || value === null) return undefined;
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
+    return undefined;
+  }
   try {
     return Reflect.get(value, property);
   } catch {

@@ -21,6 +21,12 @@ describe("safeProperty", () => {
     expect(safeProperty(new TypeError("x"), "name")).toBe("TypeError");
   });
 
+  it("preserves machine metadata carried by a callable error value", () => {
+    const callable = Object.assign(() => undefined, { code: "CALLABLE_FAILURE" });
+
+    expect(safeProperty(callable, "code")).toBe("CALLABLE_FAILURE");
+  });
+
   it("degrades to undefined for a non-object, non-function receiver", () => {
     expect(safeProperty("a string", "code")).toBeUndefined();
     expect(safeProperty(42, "code")).toBeUndefined();

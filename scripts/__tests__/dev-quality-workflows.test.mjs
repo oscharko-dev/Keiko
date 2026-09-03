@@ -180,12 +180,14 @@ describe("dev quality workflows", () => {
     ];
 
     for (const jobName of candidateJobs) {
-      const steps = ciWorkflow.jobs[jobName].steps;
+      const job = ciWorkflow.jobs[jobName];
+      const steps = job.steps;
       const checkout = steps.find((step) => step.uses?.startsWith("actions/checkout@"));
       const candidateCheck = steps.find(
         (step) => step.name === "Verify immutable pull-request merge candidate",
       );
 
+      expect(job["timeout-minutes"], `${jobName} must have a bounded timeout`).toBeGreaterThan(0);
       expect(checkout, `${jobName} checkout must exist`).toBeDefined();
       expect(checkout.with.ref, `${jobName} must pin the run revision`).toBe(
         "${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}",

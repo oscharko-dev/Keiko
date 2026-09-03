@@ -56,6 +56,34 @@ describe("CI merge candidate", () => {
     ]);
   });
 
+  it("rejects empty candidate metadata", () => {
+    expect(
+      mergeCandidateFailures({
+        actualSha: "",
+        baseSha: "",
+        eventName: "pull_request",
+        headSha: "",
+        parents: [],
+        ref: "",
+        runSha: "",
+      }),
+    ).not.toEqual([]);
+  });
+
+  it("rejects a candidate with surplus parents", () => {
+    expect(
+      mergeCandidateFailures({
+        actualSha: mergeSha,
+        baseSha,
+        eventName: "pull_request",
+        headSha,
+        parents: [baseSha, headSha, "d".repeat(40)],
+        ref: "refs/pull/3378/merge",
+        runSha: mergeSha,
+      }),
+    ).toEqual(["candidate is not a two-parent merge commit"]);
+  });
+
   it("fails closed before quality work and skips non-pull-request events", () => {
     const log = vi.fn();
     expect(

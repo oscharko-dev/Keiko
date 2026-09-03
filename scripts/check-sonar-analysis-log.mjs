@@ -80,7 +80,11 @@ function largestAnalyzedSourceSet(lines) {
   return lines.reduce(
     (largest, line) => {
       const progress = analyzedSourceProgress(line);
-      return progress !== undefined && progress.total > largest.total ? progress : largest;
+      const isLarger =
+        progress !== undefined &&
+        (progress.total > largest.total ||
+          (progress.total === largest.total && progress.analyzed > largest.analyzed));
+      return isLarger ? progress : largest;
     },
     { analyzed: 0, total: 0 },
   );

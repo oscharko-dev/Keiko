@@ -428,6 +428,7 @@ jobs:
   coverage-packages:
     name: Coverage shard (packages ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     strategy:
@@ -539,6 +540,7 @@ jobs:
   coverage-ui:
     name: Coverage suite (keiko-ui)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -608,6 +610,7 @@ jobs:
   coverage-scripts:
     name: Coverage suite (scripts)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -684,6 +687,7 @@ jobs:
       - coverage-scripts
       - coverage-ui
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -952,6 +956,7 @@ jobs:
     # feat/keiko-editor, on dev/release PRs, and on manual workflow_dispatch runs.
     if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       attestations: write
       contents: read
@@ -1073,6 +1078,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
