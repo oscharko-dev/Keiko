@@ -1514,9 +1514,12 @@ function hasPointerOrIdentityMarker(markers: readonly TaskWorkspaceDriftMarker[]
   return markers.some((marker) => POINTER_OR_IDENTITY_MARKERS.has(marker));
 }
 
-const UNPROVEN_NOT_DISPROVEN_MARKERS: ReadonlySet<TaskWorkspaceDriftMarker> = new Set([
-  "identity-schema-retired",
-  "identity-unsupported",
+// The two markers that state the pointer is absent or proves ANOTHER identity — the only two the
+// governed removal refuses on a cleanup-pending row; a retired or unsupported identity is unproven,
+// not disproven, and stays removable (`unprovenNotDisprovenIdentity` in the live classifier).
+const POINTER_DISPROOF_MARKERS: ReadonlySet<TaskWorkspaceDriftMarker> = new Set([
+  "pointer-stale",
+  "gitdir-mismatch",
 ]);
 
 // The persisted-marker mirror of cleanupPendingDrift, for the same reasons stated there: a retired
@@ -1527,8 +1530,11 @@ const UNPROVEN_NOT_DISPROVEN_MARKERS: ReadonlySet<TaskWorkspaceDriftMarker> = ne
 function cleanupPendingStatusFromMarkers(
   markers: readonly TaskWorkspaceDriftMarker[],
 ): WorkspaceReconciliationStatus {
-  if (markers.some((marker) => UNPROVEN_NOT_DISPROVEN_MARKERS.has(marker))) return "healthy";
-  if (hasPointerOrIdentityMarker(markers)) return "stale-pointer";
+  // A persisted list may carry BOTH an unproven identity and a pointer disproof. The disproof wins:
+  // the governed removal refuses an absent or disproven pointer as `ownership-unproven` whatever
+  // else the row retains, so reporting such a row settled would hide the cleanup recovery flag it
+  // needs (CodeRabbit, PR #3381). Only an unproven-but-not-disproven identity keeps the row settled.
+  if (markers.some((marker) => POINTER_DISPROOF_MARKERS.has(marker))) return "stale-pointer";
   return "healthy";
 }
 

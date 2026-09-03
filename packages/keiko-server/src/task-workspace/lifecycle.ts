@@ -152,14 +152,24 @@ function loadInstance(ctx: LifecycleCtx, workspaceId: string): WorkspaceInstance
   return instance;
 }
 
-function assertBindableManagedPath(ctx: LifecycleCtx, instance: WorkspaceInstance): void {
+// The persisted path must be the one this workspace identity derives. Containment is checked
+// separately and first (a path outside the managed root is the contract's `path-escape` fact and is
+// persisted as such); this is the residual lexical check for a contained path.
+function isDerivedManagedPath(ctx: LifecycleCtx, instance: WorkspaceInstance): boolean {
   const expected = deriveManagedWorktreePath({
     managedRoot: ctx.deps.managedRoot,
     repositoryId: instance.repositoryId,
     workspaceId: instance.workspaceId,
   });
+  return instance.managedWorktreePath === expected;
+}
+
+// Readiness transitions refuse a row whose persisted path is not contained or not the derived one
+// before any proof moves it; the active READ classifies the same facts marker by marker instead
+// (see canExposeBinding).
+function assertBindableManagedPath(ctx: LifecycleCtx, instance: WorkspaceInstance): void {
   if (
-    instance.managedWorktreePath !== expected ||
+    !isDerivedManagedPath(ctx, instance) ||
     !isManagedTargetContained(ctx.deps.managedRoot, instance.managedWorktreePath)
   ) {
     throw new TaskWorkspaceError(
@@ -192,13 +202,13 @@ function canExposeBinding(
     });
     return false;
   }
-  try {
-    assertBindableManagedPath(ctx, instance);
-  } catch {
-    // The one refusal with no marker to persist: a persisted path that is not the one this
-    // workspace identity derives is not a containment escape, and borrowing `path-escape` for it
-    // would report an incident that did not happen (#3376 review). It gets the line, not a row.
-    logReadTimeRefusal(ctx, instance, correlationId, "POINTER_DRIFT");
+  // Classifying checks first, in the order reconciliation persists the same facts: a persisted path
+  // outside the managed root is the contract's `path-escape` (what a live pass writes for
+  // `!pathContained`), a vanished tree is `worktree-missing`, and the identity verdict carries its
+  // own marker — so a row that cannot be bound never stays `active`/`healthy` with no hint for the
+  // operator (CodeRabbit, PR #3381).
+  if (!isManagedTargetContained(ctx.deps.managedRoot, instance.managedWorktreePath)) {
+    flagReadTimeDrift(ctx, instance, "path-escape", correlationId);
     return false;
   }
   if (!managedTargetExists(instance.managedWorktreePath)) {
@@ -210,9 +220,19 @@ function canExposeBinding(
   // path existence alone (#3376 review P1). The refusal is flagged on the row and logged; the
   // pointer is cleared by the caller exactly as for any other non-bindable instance.
   const drift = identityDriftOf(ctx, instance);
-  if (drift === "matches") return true;
-  flagReadTimeDrift(ctx, instance, managedIdentityDriftMarker(drift), correlationId);
-  return false;
+  if (drift !== "matches") {
+    flagReadTimeDrift(ctx, instance, managedIdentityDriftMarker(drift), correlationId);
+    return false;
+  }
+  // The residual: a contained tree that exists and proves THIS identity, persisted under a path the
+  // identity does not derive. No marker in the closed vocabulary describes a spelling, and a live
+  // pass would call the row healthy, so borrowing one would report an incident that did not happen
+  // (#3376 review). It gets the line, not a row — and the binding is still refused.
+  if (!isDerivedManagedPath(ctx, instance)) {
+    logReadTimeRefusal(ctx, instance, correlationId, "POINTER_DRIFT");
+    return false;
+  }
+  return true;
 }
 
 // A read-time refusal with no drift marker of its own. A synchronous read-time check: `attempt`,

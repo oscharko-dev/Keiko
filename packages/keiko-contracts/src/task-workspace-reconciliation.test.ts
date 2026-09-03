@@ -429,6 +429,28 @@ describe("status/health/recovery-flag derivations", () => {
     }
   });
 
+  // A persisted marker list can carry a retained unproven identity NEXT TO a pointer disproof. The
+  // disproof must win, or the row loses the cleanup recovery flag although the governed removal
+  // refuses it as `ownership-unproven` (CodeRabbit, PR #3381).
+  it("lets a pointer disproof outrank a retained unproven identity on a cleanup-pending row", () => {
+    for (const unproven of ["identity-schema-retired", "identity-unsupported"] as const) {
+      for (const disproof of ["pointer-stale", "gitdir-mismatch"] as const) {
+        for (const driftMarkers of [
+          [unproven, disproof],
+          [disproof, unproven],
+        ]) {
+          expect(
+            reconciliationStatusFromInstance({
+              lifecycleState: "cleanup-pending",
+              health: "drifted",
+              driftMarkers,
+            }),
+          ).toBe("stale-pointer");
+        }
+      }
+    }
+  });
+
   // A row a pass could not verify carries health `unknown`. resolveActiveRestoration reads THIS
   // status, so reporting it `healthy` let the workbench claim an unverified binding as verified
   // (PR #3381 review P2). Settled and partial rows keep their disposition: `abandoned` with health

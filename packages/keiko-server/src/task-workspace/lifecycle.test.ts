@@ -222,9 +222,14 @@ describe("getActive / list", () => {
     expect(pointerStore.get()).toBeUndefined();
   });
 
-  it("self-heals an active pointer whose persisted path no longer contains to the managed root", () => {
+  // Relocated (PR #3381, CodeRabbit): this pin encodes the MARKER-FREE refusal — a contained tree
+  // that exists and proves its identity under a path the identity does not derive. Its fixture used
+  // to sit outside the managed root, which is the contract's `path-escape` fact and now persists that
+  // marker (see the path-escape pin below); the invariant here is unchanged: a line, no row.
+  it("refuses a contained tree under a non-derived path with a line and no drift row", () => {
     const inst = store.upsert(instance("a"));
-    const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-lifecycle-escape-")));
+    const outside = join(managedRoot, REPO_ID, "not-the-derived-spelling");
+    mkdirSync(outside, { recursive: true });
     const activityLog = createBufferedServerLogSink();
     const reading = lifecycleWith(fakeProvisioning(), activityLog);
     try {
@@ -763,6 +768,59 @@ describe("identity proof before bindings and readiness", () => {
 
   // The other structural refusal on the read path: the worktree directory is gone. It used to
   // return false with no line and no row at all.
+  // A persisted path outside the managed root is the contract's `path-escape` fact — the marker a
+  // live pass persists for `!pathContained` — so the read-time refusal persists the same one instead
+  // of leaving the row `active`/`healthy` with no recovery hint (CodeRabbit, PR #3381).
+  it("flags a persisted path outside the managed root as path-escape on the active read", () => {
+    const escaped = realpathSync(mkdtempSync(join(tmpdir(), "keiko-lifecycle-escape-")));
+    try {
+      const inst = store.upsert(instance("read-escape", { managedWorktreePath: escaped }));
+      pointerStore.set({
+        workspaceId: inst.workspaceId,
+        setBy: "op",
+        atIso: "2026-06-26T00:00:00.000Z",
+      });
+      const activityLog = createBufferedServerLogSink();
+      const reading = lifecycleWith(fakeProvisioning(), activityLog);
+
+      expect(reading.getActive("active-read-escape")).toBeUndefined();
+      expect(pointerStore.get()).toBeUndefined();
+
+      const flagged = store.getById(inst.workspaceId);
+      expect(flagged?.lifecycleState).toBe("recovery-required");
+      expect(flagged?.driftMarkers).toEqual(["path-escape"]);
+      expect(flagged?.recoveryHints.map((hint) => hint.strategy)).toEqual(["operator-repair"]);
+      const line = activityLog.events.find((event) => event.errorKind === "POINTER_DRIFT");
+      expect(line?.correlationId).toBe("active-read-escape");
+      expect(line?.extra).toMatchObject({
+        operation: "activate",
+        workspaceId: inst.workspaceId,
+        driftMarker: "path-escape",
+      });
+    } finally {
+      rmSync(escaped, { recursive: true, force: true });
+    }
+  });
+
+  // A contained, non-derived path that points at NO tree is classified by the existence check —
+  // `worktree-missing` on the row — rather than refused with a line only.
+  it("classifies a contained but non-derived path through the same checks as a derived one", () => {
+    const inst = store.upsert(
+      instance("read-nonderived", {
+        managedWorktreePath: join(managedRoot, REPO_ID, "not-the-derived-directory"),
+      }),
+    );
+    pointerStore.set({
+      workspaceId: inst.workspaceId,
+      setBy: "op",
+      atIso: "2026-06-26T00:00:00.000Z",
+    });
+    const reading = lifecycleWith(fakeProvisioning(), createBufferedServerLogSink());
+
+    expect(reading.getActive("active-read-nonderived")).toBeUndefined();
+    expect(store.getById(inst.workspaceId)?.driftMarkers).toEqual(["worktree-missing"]);
+  });
+
   it("flags a vanished worktree on the active read instead of refusing silently", () => {
     const inst = store.upsert(instance("read-missing"));
     pointerStore.set({
