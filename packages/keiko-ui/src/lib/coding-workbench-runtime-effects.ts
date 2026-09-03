@@ -1,4 +1,8 @@
 import { useEffect, type Dispatch, type RefObject, type SetStateAction } from "react";
+import {
+  GATEWAY_CONFIG_UPDATED_EVENT,
+  GATEWAY_MODEL_READINESS_UPDATED_EVENT,
+} from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
 import type { CodingWorkbenchRuntimeStateName } from "@oscharko-dev/keiko-contracts";
 import type { ActiveWorkspaceApi } from "@/app/components/desktop/context/ActiveWorkspaceContext";
 import { logRuntimeActivityEvents } from "@/app/components/desktop/widgets/shared/activityBus";
@@ -49,6 +53,22 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
   useEffect(() => {
     void refreshSource();
   }, [state.runtimePreference, refreshSource]);
+  // Settings replaces the gateway configuration (a saved setup, an applied verified capability)
+  // and records readiness verdicts without this window knowing: the source stayed "unavailable"
+  // after the operator had just verified tool calling, until a reload (workbench end-to-end run,
+  // 2026-09-03). Both announcements re-read the source and the runtime posture.
+  useEffect(() => {
+    const refresh = (): void => {
+      void refreshSource();
+      void refreshRuntime();
+    };
+    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refresh);
+    window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, refresh);
+    return (): void => {
+      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refresh);
+      window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, refresh);
+    };
+  }, [refreshRuntime, refreshSource]);
   useEffect(() => {
     void refreshRun();
   }, [refreshRun]);

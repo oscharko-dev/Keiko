@@ -569,6 +569,32 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  // The verification runner's own closed codes reach the model: a refusal (no project, missing
+  // trust, nothing runnable) must be told apart from a red run (end-to-end run, 2026-09-03).
+  it.each([
+    "PROJECT_NOT_FOUND",
+    "WORKSPACE_TRUST_REQUIRED",
+    "NO_RUNNABLE_STEPS",
+    "RUN_LIMIT_EXCEEDED",
+    "EVIDENCE_WRITE_FAILED",
+    "VERIFICATION_FAILED",
+  ])("forwards the verification runner's closed %s refusal", async (code) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "failed", reasonCode: code }));
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({ action: "verification", verifierId: "unit" }),
+      capability,
+    });
+
+    expect(result).toEqual({
+      status: "failed",
+      reasonCode: code,
+      evidence: [{ kind: "governed-delegate", code }],
+    });
+  });
+
   it("fails closed for blocked, denied, and malformed delegate outcomes", async () => {
     const ports = facade();
     const subject = createCodingToolFacade(ports);

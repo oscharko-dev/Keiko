@@ -58,6 +58,15 @@ const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set([
   "git-authority-revoked",
   "delivery-authority-revoked",
   "connector-authority-revoked",
+  // The verification runner's own closed codes (editor/verificationRunner.ts). A verification the
+  // runner refused used to reach the model as a bare "failed", indistinguishable from a red test
+  // run, so the agent re-ran it instead of reporting the blocker (end-to-end run, 2026-09-03).
+  "PROJECT_NOT_FOUND",
+  "WORKSPACE_TRUST_REQUIRED",
+  "NO_RUNNABLE_STEPS",
+  "RUN_LIMIT_EXCEEDED",
+  "EVIDENCE_WRITE_FAILED",
+  "VERIFICATION_FAILED",
 ]);
 import type {
   CodingToolInvocationRegistry,

@@ -10,7 +10,11 @@ import type {
 import { editorAgentRootBindingDenyReason } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
 import { isContainedAgentPath } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
-import { containedRealPathInfo, isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
+import {
+  containedRealPathInfo,
+  isWithinWorkspace,
+  type WorkspaceFs,
+} from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { UiStore, WorkspaceManifestRecordRow } from "../store/index.js";
 import { inspectWorkspaceRootIdentity } from "../workspace-root-identity.js";
@@ -273,9 +277,16 @@ function belongsToOtherRoot(root: EditorAgentResolvedRoot, candidate: string): b
   );
 }
 
+// `fs` is the filesystem port the root's own authority resolved — for a Keiko-managed task worktree
+// the owned-root port the managed access minted (workspace-root-access.ts). The check answers "does
+// the path leave the resolved root"; with the plain node port that answer re-admitted the root under
+// the user-workspace rules, and a worktree below the state directory's always-denied segment
+// (`~/.keiko/…/task-workspaces`) refused every path inside it as an escape, which denied every
+// governed coding edit (workbench end-to-end run, 2026-09-03).
 export function editorAgentPathBoundaryReason(
   root: EditorAgentResolvedRoot,
   paths: readonly string[],
+  fs: WorkspaceFs = nodeWorkspaceFs,
 ): Extract<
   EditorAgentRootBoundaryReason,
   "decompose-per-root" | "workspace-boundary-escape"
@@ -285,7 +296,7 @@ export function editorAgentPathBoundaryReason(
     const absolute = isAbsolute(path) ? resolve(path) : resolve(root.workspaceRoot, path);
     try {
       if (!isContainedAgentPath(path)) throw new Error("lexical escape");
-      containedRealPathInfo(nodeWorkspaceFs, root.workspaceRoot, absolute);
+      containedRealPathInfo(fs, root.workspaceRoot, absolute);
     } catch {
       return belongsToOtherRoot(root, realCandidate(absolute))
         ? "decompose-per-root"

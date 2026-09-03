@@ -74,6 +74,50 @@ describe("modelSourceLabel", () => {
   });
 });
 
+describe("lifecycleAnnouncement source reason", () => {
+  // "Model source unavailable." alone left the operator with no way to learn that a readiness
+  // check would have fixed it (workbench end-to-end run, 2026-09-03).
+  it("names the sidecar's unavailable reason next to the source announcement", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway"),
+      source: {
+        status: "ready",
+        error: null,
+        value: {
+          runtimePreference: "managed-gateway",
+          modelSource: "keiko-model-gateway",
+          runtimeSource: "keiko-sidecar",
+          available: false,
+          unavailableReason: "no-tool-calling",
+          verification: "unverified",
+        },
+      },
+    };
+    const announcement = lifecycleAnnouncement(state, t);
+    expect(announcement).toContain("codingWorkbench.announcement.modelSource.unavailable");
+    expect(announcement).toContain("codingWorkbench.source.unavailableReason.no-tool-calling");
+  });
+
+  it("stays silent about a reason the catalog does not know", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway"),
+      source: {
+        status: "ready",
+        error: null,
+        value: {
+          runtimePreference: "managed-gateway",
+          modelSource: "keiko-model-gateway",
+          runtimeSource: "keiko-sidecar",
+          available: false,
+          unavailableReason: "something-new",
+          verification: "unverified",
+        },
+      },
+    };
+    expect(lifecycleAnnouncement(state, t)).not.toContain("unavailableReason");
+  });
+});
+
 describe("lifecycleAnnouncement authentication truth", () => {
   it("announces authentication as not selected outside the codex preference", () => {
     const state = createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway");

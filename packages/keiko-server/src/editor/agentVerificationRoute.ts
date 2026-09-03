@@ -59,6 +59,9 @@ import {
   resolveEditorAgentActionRoot,
   type EditorAgentRootBoundaryReason,
 } from "./agentRootBoundary.js";
+import { workspaceRootAccessOrUndefined } from "../task-workspace/workspace-root-access.js";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
 const MAX_AGENT_VERIFICATION_BODY_BYTES = 8_000;
 
@@ -330,7 +333,7 @@ async function admitAndRun(
   lifecycle: RequestLifecycle,
   ports: AgentVerificationRoutePorts,
 ): Promise<RouteResult> {
-  const rooted = bindVerificationRoot(request, snapshot, deps.store);
+  const rooted = bindVerificationRoot(request, snapshot, deps);
   const audit = ports.audit ?? recordEditorAgentActionAudit;
   if (!rooted.ok) return rejectVerificationRoot(request, snapshot, rooted.reason, audit);
   request = rooted.request;
@@ -346,7 +349,7 @@ async function admitAndRun(
       ? notRunResult(denied)
       : auditFailure();
   }
-  const finalRoot = bindVerificationRoot(request, snapshot, deps.store);
+  const finalRoot = bindVerificationRoot(request, snapshot, deps);
   if (!finalRoot.ok) {
     rollbackVerificationReservation(request);
     return rejectVerificationRoot(request, snapshot, finalRoot.reason, audit);
@@ -359,16 +362,32 @@ async function admitAndRun(
   return runAndRespond(runner, request, snapshot, lifecycle.signal);
 }
 
+// The filesystem port the root's own authority resolved (see agentRoutes.ts `containmentFs`).
+function containmentFs(
+  deps: Pick<UiHandlerDeps, "workspaceRootAccessResolver">,
+  workspaceRoot: string,
+): WorkspaceFs {
+  try {
+    return (
+      workspaceRootAccessOrUndefined(deps.workspaceRootAccessResolver?.(workspaceRoot))?.fs ??
+      nodeWorkspaceFs
+    );
+  } catch {
+    return nodeWorkspaceFs;
+  }
+}
+
 function bindVerificationRoot(
   request: EditorAgentVerificationRunRequest,
   snapshot: EditorAgentSessionSnapshot,
-  store: UiHandlerDeps["store"],
+  deps: Pick<UiHandlerDeps, "store" | "workspaceRootAccessResolver">,
 ): RootedVerificationRequest {
-  const root = resolveEditorAgentActionRoot(snapshot, request.rootBinding, store);
+  const root = resolveEditorAgentActionRoot(snapshot, request.rootBinding, deps.store);
   if (!root.ok) return root;
   const reason = editorAgentPathBoundaryReason(
     root.root,
     request.targetPath === undefined ? [] : [request.targetPath],
+    containmentFs(deps, root.root.workspaceRoot),
   );
   if (reason !== null) return { ok: false, reason };
   return {

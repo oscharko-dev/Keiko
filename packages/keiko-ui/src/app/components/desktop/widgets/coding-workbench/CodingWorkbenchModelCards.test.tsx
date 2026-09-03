@@ -175,6 +175,25 @@ describe("ModelRuntimeStatus source cards", () => {
     expect(actions.refreshSource).toHaveBeenCalledTimes(1);
   });
 
+  // "Unavailable" alone left the operator with no way to learn that a readiness check would have
+  // fixed it (workbench end-to-end run, 2026-09-03).
+  it("names the reason and the next step for an unavailable gateway source", () => {
+    renderStatus(
+      codexState({
+        source: ready({
+          runtimePreference: "managed-gateway" as const,
+          modelSource: "keiko-model-gateway" as const,
+          runtimeSource: "keiko-sidecar" as const,
+          available: false,
+          unavailableReason: "no-tool-calling",
+          verification: UNVERIFIED_GATEWAY,
+        }),
+      }),
+    );
+    expect(screen.getByText(/No chat model has verified tool calling/u)).toBeInTheDocument();
+    expect(screen.getByText(/Run the readiness check in Settings/u)).toBeInTheDocument();
+  });
+
   it("hides the confirmed-source row until the server has answered", () => {
     renderStatus(codexState({ source: { status: "loading", value: null, error: null } }));
     expect(screen.queryByText("Server-confirmed source")).not.toBeInTheDocument();

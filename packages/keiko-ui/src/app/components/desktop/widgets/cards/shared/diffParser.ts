@@ -59,6 +59,13 @@ interface MutableHunk {
   oldCount: number;
   newStart: number;
   newCount: number;
+  // Lines the header still announces. A hunk ends when both reach zero; a line arriving after
+  // that is not hunk content, so a following `--- a/…` / `+++ b/…` pair opens the next file
+  // instead of being rendered as a deleted and an added source line (workbench change review,
+  // 2026-09-03: a two-file changeset without `diff --git` headers showed its second file's
+  // header as content and lost the second file).
+  oldRemaining: number;
+  newRemaining: number;
   lines: DiffLine[];
   truncated: boolean;
 }
@@ -175,62 +182,72 @@ function handleDiffGitLine(line: string, state: ParserState): boolean {
   return true;
 }
 
+function isFileHeaderLine(line: string): boolean {
+  return line.startsWith("--- ") || line.startsWith("+++ ") || line.startsWith("diff --git ");
+}
+
 // Hunk content lines must be recognized before ---/+++ file headers: valid
 // added or deleted source text can begin with those header-like prefixes.
 function handleHunkContentLine(line: string, state: ParserState): boolean {
-  if (state.currentHunk === null) return false;
   const hunk = state.currentHunk;
+  if (hunk === null) return false;
+  // Past its announced counts a hunk stays open for tolerance (hand-written diffs miscount), but a
+  // file header arriving after the counts are exhausted belongs to the next file, not to the hunk.
+  if (hunk.oldRemaining <= 0 && hunk.newRemaining <= 0 && isFileHeaderLine(line)) {
+    flushHunk(state);
+    return false;
+  }
+  const dl = hunkContentLine(line, state);
+  if (dl === null) return false;
+  recordHunkLine(state, hunk, dl);
+  return true;
+}
+
+function hunkContentLine(line: string, state: ParserState): DiffLine | null {
   if (line.startsWith("+")) {
-    const dl: DiffLine = {
-      kind: "add",
-      oldLine: null,
-      newLine: state.newLine,
-      text: line.slice(1),
-    };
-    hunk.lines.push(dl);
-    if (state.current !== null) state.current.addedLines++;
-    state.newLine++;
-    return true;
+    return { kind: "add", oldLine: null, newLine: state.newLine, text: line.slice(1) };
   }
   if (line.startsWith("-")) {
-    const dl: DiffLine = {
-      kind: "del",
-      oldLine: state.oldLine,
-      newLine: null,
-      text: line.slice(1),
-    };
-    hunk.lines.push(dl);
-    if (state.current !== null) state.current.removedLines++;
-    state.oldLine++;
-    return true;
+    return { kind: "del", oldLine: state.oldLine, newLine: null, text: line.slice(1) };
   }
   if (line.startsWith(String.raw`\ `)) {
     // "\ No newline at end of file"
-    const dl: DiffLine = { kind: "meta", oldLine: null, newLine: null, text: line };
-    hunk.lines.push(dl);
-    return true;
+    return { kind: "meta", oldLine: null, newLine: null, text: line };
   }
   // Context line (space prefix) or empty line within hunk
   if (line.startsWith(" ") || line === "") {
-    const dl: DiffLine = {
+    return {
       kind: "ctx",
       oldLine: state.oldLine,
       newLine: state.newLine,
       text: line.startsWith(" ") ? line.slice(1) : line,
     };
-    hunk.lines.push(dl);
-    state.oldLine++;
-    state.newLine++;
-    return true;
   }
-  return false;
+  return null;
+}
+
+// Appends one hunk line and advances the per-side line cursors and remaining counts it consumes.
+function recordHunkLine(state: ParserState, hunk: MutableHunk, dl: DiffLine): void {
+  hunk.lines.push(dl);
+  if (dl.kind === "add" || dl.kind === "ctx") {
+    hunk.newRemaining--;
+    state.newLine++;
+  }
+  if (dl.kind === "del" || dl.kind === "ctx") {
+    hunk.oldRemaining--;
+    state.oldLine++;
+  }
+  if (state.current === null) return;
+  if (dl.kind === "add") state.current.addedLines++;
+  if (dl.kind === "del") state.current.removedLines++;
 }
 
 // --- a/path line (may start a file when no diff --git header)
 function handleFileHeaderMinusLine(line: string, state: ParserState): boolean {
   if (!line.startsWith("--- ")) return false;
   const rest = line.slice(4);
-  if (rest !== "/dev/null" && state.current === null) {
+  if (rest !== "/dev/null" && (state.current === null || state.current.hunks.length > 0)) {
+    // No open file, or a file whose hunks are complete: this header opens the next file.
     flushFile(state);
     const path = stripGitPrefix(rest);
     state.current = mutableFile(path);
@@ -269,14 +286,20 @@ function handleHunkHeaderLine(line: string, state: ParserState): boolean {
   state.current ??= mutableFile("(unknown)");
   flushHunk(state);
   const pos = parseHunkHeader(line);
-  state.oldLine = pos?.oldStart ?? 1;
-  state.newLine = pos?.newStart ?? 1;
+  const oldStart = pos?.oldStart ?? 1;
+  const newStart = pos?.newStart ?? 1;
+  const oldCount = pos?.oldCount ?? 1;
+  const newCount = pos?.newCount ?? 1;
+  state.oldLine = oldStart;
+  state.newLine = newStart;
   state.currentHunk = {
     header: line,
-    oldStart: pos?.oldStart ?? 1,
-    oldCount: pos?.oldCount ?? 1,
-    newStart: pos?.newStart ?? 1,
-    newCount: pos?.newCount ?? 1,
+    oldStart,
+    oldCount,
+    newStart,
+    newCount,
+    oldRemaining: oldCount,
+    newRemaining: newCount,
     lines: [],
     truncated: false,
   };

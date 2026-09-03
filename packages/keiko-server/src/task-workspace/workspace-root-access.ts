@@ -31,6 +31,9 @@ export interface WorkspaceRootAccess {
   readonly kind: "ordinary" | "managed-task";
   readonly canonicalRoot: string;
   readonly fs: WorkspaceFs;
+  // The repository a managed task worktree was bound from. A worktree is not a registered project
+  // of its own: standing decisions about its repository — workspace script trust — apply to it.
+  readonly repositoryRoot?: string | undefined;
 }
 
 /**
@@ -304,6 +307,7 @@ function canonicalManagedRootAccess(
     kind: "managed-task",
     canonicalRoot,
     fs: workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, canonicalRoot),
+    repositoryRoot: instance.repositoryRoot,
   };
 }
 

@@ -10,6 +10,8 @@ import type { GatewayFetchOptions } from "@oscharko-dev/keiko-model-gateway/inte
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
+import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { createProductionManagedWorktreeToolFacade } from "./productionManagedWorktreeTools.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
@@ -313,6 +315,79 @@ describe("production managed worktree tools", () => {
         timeoutMs: 10_000,
       }),
     );
+  });
+
+  // A refusal by the verification runner (no project row, missing script trust, nothing runnable)
+  // reaches the model under the runner's own closed code and leaves a body-free diagnostic; a bare
+  // "failed" made the agent re-run the verifier instead of reporting the blocker (workbench
+  // end-to-end run, 2026-09-03).
+  it("forwards a verification runner refusal as its closed reason code with a diagnostic", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const runToReport = vi.fn(() =>
+      Promise.reject(
+        new VerificationRunnerError(
+          "WORKSPACE_TRUST_REQUIRED",
+          "Repository package scripts require server-side workspace trust before execution.",
+        ),
+      ),
+    );
+    const liveFacts: CodingWorkbenchRuntimeAuthorityFacts = {
+      ...FACTS,
+      actionClasses: ["workspace-read", "workspace-write", "verification", "command-execution"],
+    };
+    const facade = createProductionManagedWorktreeToolFacade({
+      authority: {
+        revalidateCapabilityForMutation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(true),
+        }),
+        resolveCapabilityForDelegation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(true),
+        }),
+      },
+      authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+      workspaceRoot: "/managed/worktree",
+      resolveWorkspaceRootAccess,
+      authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+      effectiveMode: "autonomous-delivery",
+      deploymentCeiling: "autonomous-delivery",
+      liveFacts: () => liveFacts,
+      secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: false, reason: "denied" }) },
+      editorAgentClient: {
+        action: () =>
+          Promise.resolve({
+            ok: false as const,
+            error: { kind: "route" as const, code: "denied", message: "denied" },
+          }),
+      },
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      verificationRunner: { runToReport },
+      diagnostics: { record: (record): void => void records.push(record) },
+      onRuntimeEvent: vi.fn(),
+    });
+
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-1",
+          idempotencyKey: "verification-key",
+          verifierId: "test",
+        }),
+      }),
+    ).resolves.toMatchObject({ status: "failed", reasonCode: "WORKSPACE_TRUST_REQUIRED" });
+    expect(runToReport).toHaveBeenCalledOnce();
+    expect(records).toEqual([
+      expect.objectContaining({
+        operation: "coding-runtime.verification",
+        message: "verification-refused",
+        errorClass: "WORKSPACE_TRUST_REQUIRED",
+        correlationId: "unknown-correlation-id",
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("server-side workspace trust");
   });
 
   it("revokes liveness the instant resolveWorkspaceRootAccess stops proving managed authority, even before expiry (#3347)", async () => {

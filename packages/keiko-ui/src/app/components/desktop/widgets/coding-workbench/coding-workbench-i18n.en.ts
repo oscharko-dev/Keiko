@@ -229,6 +229,24 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.verificationHint":
     "The last gateway readiness check could not reach this source, so runs stay blocked. Re-run the readiness check in Settings.",
   "codingWorkbench.source.retry": "Retry source",
+  "codingWorkbench.source.unavailableReason.missing-config":
+    "No gateway is configured. Configure the Keiko Gateway in Settings → Models.",
+  "codingWorkbench.source.unavailableReason.missing-provider":
+    "The gateway configuration names no model provider. Add one in Settings → Models.",
+  "codingWorkbench.source.unavailableReason.missing-credentials":
+    "The configured provider has no credentials. Update them in Settings → Models.",
+  "codingWorkbench.source.unavailableReason.non-chat":
+    "No configured model is a chat model. Add a chat-capable model in Settings → Models.",
+  "codingWorkbench.source.unavailableReason.no-tool-calling":
+    "No chat model has verified tool calling. Run the readiness check in Settings → Models and apply the verified values.",
+  "codingWorkbench.source.unavailableReason.non-workflow-eligible":
+    "The tool-calling chat model is not workflow-eligible. Enable workflow eligibility in Settings → Models.",
+  "codingWorkbench.source.unavailableReason.non-coding-capable":
+    "The configured chat model is not coding-capable.",
+  "codingWorkbench.source.unavailableReason.deployment-policy-disabled":
+    "The deployment policy disables the coding runtime's gateway source.",
+  "codingWorkbench.source.unavailableReason.subscription-source":
+    "The subscription source is selected; the gateway is not in use.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI through Gateway",
   "codingWorkbench.modelSource.codexSubscription": "ChatGPT/Codex subscription",

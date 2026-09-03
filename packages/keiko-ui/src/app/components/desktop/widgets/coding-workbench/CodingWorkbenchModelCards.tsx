@@ -19,6 +19,7 @@ import {
   resourceStatusLabel,
   resourceStatusSymbol,
   resourceTone,
+  sourceUnavailableReasonText,
   sourceVerificationLabel,
 } from "./codingWorkbenchLabels";
 import { PanelTitle } from "./CodingWorkbenchSections";
@@ -183,6 +184,7 @@ function SourceTruth({
   const source = state.source.value;
   if (source === null) return null;
   const probeFailed = gatewayVerificationContradictsReadiness(source.verification);
+  const reasonText = sourceUnavailableReasonText(source, t);
   return (
     <div className={styles.truthRow} data-status={sourceTruthStatus(source)}>
       <div>
@@ -199,6 +201,7 @@ function SourceTruth({
         {probeFailed ? (
           <p className={styles.helpText}>{t("codingWorkbench.source.verificationHint")}</p>
         ) : null}
+        {reasonText === null ? null : <p className={styles.helpText}>{reasonText}</p>}
       </div>
       {!source.available ? (
         <button className={styles.button} type="button" onClick={() => void onRetry()}>

@@ -517,6 +517,58 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     expect(adapterSignal).toBeInstanceOf(AbortSignal);
   });
 
+  // A refused edit used to leave no trace outside the in-memory editor audit feed; the activity
+  // log must carry the refusal with its closed-vocabulary reason (end-to-end run, 2026-09-03).
+  it("emits a body-free refusal diagnostic when the editor route rejects the changeset", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const editorAction = vi.fn((_action: EditorAgentAction, _signal: AbortSignal) =>
+      Promise.resolve({
+        ok: true as const,
+        value: {
+          result: {
+            schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+            actionId: "edit-refused-1",
+            sessionId: "session-2332",
+            status: "conflict" as const,
+            conflict: { code: "OUT_OF_SCOPE" as const, message: "The target escapes the root." },
+          },
+        },
+      }),
+    );
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn() },
+      editorAgentClient: { action: editorAction },
+      diagnostics: { record: (record): void => void records.push(record) },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-2332",
+        authorityRef: { runId: "run-2332", envelopeDigest: DIGEST },
+        origin: "agent",
+      }),
+    });
+
+    await expect(
+      ports.editorChangeset.execute(
+        {
+          action: "edit",
+          actionId: "edit-refused-1",
+          idempotencyKey: "edit-refused-key",
+          changeset: changeset(),
+        },
+        undefined,
+        { check: (): true => true },
+      ),
+    ).resolves.toEqual({ status: "failed", reasonCode: "OUT_OF_SCOPE" });
+    expect(records).toEqual([
+      expect.objectContaining({
+        operation: "coding-runtime.editor-changeset",
+        source: "coding-tool-read-edit-ports.edit",
+        message: "edit-refused",
+        errorClass: "OUT_OF_SCOPE",
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("escapes the root");
+  });
+
   it("normalizes the real single-file raw-index model patch before editor validation", async () => {
     const editorAction = vi.fn(() =>
       Promise.resolve({

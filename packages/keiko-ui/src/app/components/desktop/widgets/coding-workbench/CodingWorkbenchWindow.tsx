@@ -504,9 +504,13 @@ function WorkbenchColumns({
   );
   const resumeModes = pausedRun?.effectiveMode ? resumableModes(pausedRun.effectiveMode) : [];
   const runIsActive = activeRunState(state.run.value?.state);
+  // The composer acts on the bound task workspace, not on the folder selected elsewhere in the
+  // Workbench: before a run it names the repository that workspace was bound from, during a run
+  // the worktree the run edits. Showing the selected folder next to the bound branch misled the
+  // operator about where the run would work (workbench end-to-end run, 2026-09-03).
   const repositoryRoot = runIsActive
     ? (activeWorkspace.activeBinding?.activeRoot ?? selectedRoot ?? null)
-    : (selectedRoot ?? null);
+    : (activeWorkspace.activeInstance?.repositoryRoot ?? selectedRoot ?? null);
   const taskComposer = (
     <TaskStartSection
       taskIntent={taskIntent}

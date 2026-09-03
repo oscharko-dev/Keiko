@@ -103,11 +103,11 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import {
   detectWorkspaceAt,
-  containedRealPathInfo,
   isDenied,
   readWorkspaceFile,
   type WorkspaceFs,
   type WorkspaceInfo,
+  containedRealPathInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { workspaceRootAccessOrUndefined } from "../task-workspace/workspace-root-access.js";
@@ -161,6 +161,10 @@ type EditorAgentRouteDeps = Pick<
 > & { readonly store?: UiHandlerDeps["store"] | undefined };
 
 type EditorAgentActionRouteDeps = UiHandlerDeps;
+
+// The helpers both route families share (root binding, path containment, policy decisions) accept
+// either dependency shape; naming the union once keeps their signatures in step.
+type EditorAgentEitherRouteDeps = EditorAgentActionRouteDeps | EditorAgentRouteDeps;
 
 const MAX_AGENT_BODY_BYTES = 1_048_576;
 const DEFAULT_SNAPSHOT_TEXT_BUDGET_BYTES = EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES;
@@ -1204,7 +1208,11 @@ function registerBridgeSnapshot(
 ): RouteResult {
   const root = resolveEditorAgentSessionRoot(request.snapshot, deps?.store);
   if (!root.ok) return rootBoundaryError(root.reason);
-  const pathReason = editorAgentPathBoundaryReason(root.root, snapshotRootPaths(request.snapshot));
+  const pathReason = editorAgentPathBoundaryReason(
+    root.root,
+    snapshotRootPaths(request.snapshot),
+    containmentFs(deps, root.root.workspaceRoot),
+  );
   if (pathReason !== null) return rootBoundaryError(pathReason);
   const snapshot =
     root.root.workspaceRoot === request.snapshot.workspaceRoot
@@ -1439,9 +1447,27 @@ function serverResolvedPathIssue(path: string): EditorAgentActionDenyReason | nu
   return isDenied(path) ? "denied-sensitive-path" : null;
 }
 
+// The filesystem port the root's own authority resolved: the owned-root port for a managed task
+// worktree, the plain node port otherwise. Containment checks run through it so a managed root is
+// not re-admitted under the user-workspace rules (see agentRootBoundary.ts).
+function containmentFs(
+  deps: EditorAgentEitherRouteDeps | undefined,
+  workspaceRoot: string,
+): WorkspaceFs {
+  try {
+    return (
+      workspaceRootAccessOrUndefined(deps?.workspaceRootAccessResolver?.(workspaceRoot))?.fs ??
+      nodeWorkspaceFs
+    );
+  } catch {
+    return nodeWorkspaceFs;
+  }
+}
+
 function queryGitPathIssue(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentActionRouteDeps | undefined,
 ): EditorAgentActionDenyReason | null {
   if (action.type !== "queryGit" || action.queryGit === undefined) return null;
   const queryPath = normalizeWorkspaceRelativePath(action.queryGit.path);
@@ -1451,7 +1477,7 @@ function queryGitPathIssue(
   }
   try {
     containedRealPathInfo(
-      nodeWorkspaceFs,
+      containmentFs(deps, snapshot.workspaceRoot),
       snapshot.workspaceRoot,
       resolve(snapshot.workspaceRoot, queryPath),
     );
@@ -1464,6 +1490,7 @@ function queryGitPathIssue(
 function serverResolvedPathIssues(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentActionRouteDeps | undefined,
 ): EditorAgentActionDenyReason | null {
   const paths = serverResolvedActionPaths(action);
   for (const path of paths) {
@@ -1471,7 +1498,7 @@ function serverResolvedPathIssues(
     const issue = serverResolvedPathIssue(path);
     if (issue !== null) return issue;
   }
-  return queryGitPathIssue(action, snapshot);
+  return queryGitPathIssue(action, snapshot, deps);
 }
 
 // `correlationId` is the ACTION's own id, not a request id: these contexts are synthesized to run
@@ -1637,7 +1664,11 @@ function reserveActionAuthority(
   }
   const rooted = resolveEditorAgentActionRoot(snapshot, action.rootBinding, deps?.store);
   if (!rooted.ok) return denyByAuthority(decision, rooted.reason);
-  const pathReason = editorAgentPathBoundaryReason(rooted.root, actionRootPaths(action, snapshot));
+  const pathReason = editorAgentPathBoundaryReason(
+    rooted.root,
+    actionRootPaths(action, snapshot),
+    containmentFs(deps, rooted.root.workspaceRoot),
+  );
   if (pathReason !== null) return denyByAuthority(decision, pathReason);
   const reservation = editorAgentAuthorityRegistry.reserveForAction(
     action.authorityRef,
@@ -1672,7 +1703,11 @@ function validateActionAuthority(
   }
   const rooted = resolveEditorAgentActionRoot(snapshot, action.rootBinding, deps?.store);
   if (!rooted.ok) return denyByAuthority(decision, rooted.reason);
-  const pathReason = editorAgentPathBoundaryReason(rooted.root, actionRootPaths(action, snapshot));
+  const pathReason = editorAgentPathBoundaryReason(
+    rooted.root,
+    actionRootPaths(action, snapshot),
+    containmentFs(deps, rooted.root.workspaceRoot),
+  );
   if (pathReason !== null) return denyByAuthority(decision, pathReason);
   const resolution = editorAgentAuthorityRegistry.resolveForAction(
     action.authorityRef,
@@ -3423,7 +3458,7 @@ function rejectServerResolvedPath(
   requestHash: string,
   deps: EditorAgentActionRouteDeps,
 ): RouteResult | null {
-  const pathIssue = serverResolvedPathIssues(action, snapshot);
+  const pathIssue = serverResolvedPathIssues(action, snapshot, deps);
   return pathIssue === null
     ? null
     : serverResolvedFailure(
@@ -3506,7 +3541,7 @@ function rootBoundaryDecision(
 function bindActionRoot(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
-  deps: EditorAgentActionRouteDeps | EditorAgentRouteDeps | undefined,
+  deps: EditorAgentEitherRouteDeps | undefined,
 ): RootBoundAction {
   const resolution = resolveEditorAgentActionRoot(snapshot, action.rootBinding, deps?.store);
   if (!resolution.ok) {
@@ -3523,6 +3558,7 @@ function bindActionRoot(
   const pathReason = editorAgentPathBoundaryReason(
     resolution.root,
     actionRootPaths(action, snapshot),
+    containmentFs(deps, resolution.root.workspaceRoot),
   );
   if (pathReason !== null) {
     return {
@@ -3645,7 +3681,7 @@ async function admitEditorAction(
 
 export async function handleEditorAgentActions(
   ctx: RouteContext,
-  deps?: EditorAgentActionRouteDeps | EditorAgentRouteDeps,
+  deps?: EditorAgentEitherRouteDeps,
 ): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req, MAX_AGENT_BODY_BYTES);
   if (isRouteResult(body)) return body;
@@ -3680,7 +3716,7 @@ export async function handleEditorAgentActions(
 }
 
 function fullEditorActionDeps(
-  deps: EditorAgentActionRouteDeps | EditorAgentRouteDeps | undefined,
+  deps: EditorAgentEitherRouteDeps | undefined,
 ): EditorAgentActionRouteDeps | undefined {
   return deps !== undefined && "redactor" in deps && "env" in deps ? deps : undefined;
 }

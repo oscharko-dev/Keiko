@@ -150,6 +150,12 @@ interface InFlightRun {
 interface ResolvedVerificationWorkspace {
   readonly access: WorkspaceRootAccess;
   readonly workspace: WorkspaceInfo;
+  // The project whose standing script trust governs this workspace, and that project's own
+  // workspace facts: the project itself, or for a managed task worktree the repository it was bound
+  // from (the trust decider checks the workspace root against the project root, so a worktree's
+  // facts would never match its repository's grant).
+  readonly trustProjectId: string;
+  readonly trustWorkspace: WorkspaceInfo;
 }
 
 class VerificationRunnerManagerImpl implements VerificationRunnerManager {
@@ -201,7 +207,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     const resolved = this.resolveWorkspace(projectId);
     const { workspace } = resolved;
     const catalog = detectScripts(workspace, resolved.access.fs);
-    const trusted = this.trustedForScripts(projectId, workspace);
+    const trusted = this.trustedForScripts(resolved);
     const runnable = isRunnableTestFramework(workspace);
     return {
       schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
@@ -212,10 +218,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
 
   public readonly execute = (input: VerificationRunInput): VerificationRunStart => {
     const resolved = this.resolveWorkspace(input.projectId);
-    const { workspace } = resolved;
-    const plan = this.buildPlan(workspace, input, resolved.access.fs);
+    const plan = this.buildPlan(resolved, input);
     this.assertRunnable(plan);
-    this.assertWorkspaceTrustAtEffect(input, workspace);
+    this.assertWorkspaceTrustAtEffect(resolved, input);
     const runId = randomUUID();
     const controller = new AbortController();
     this.runs.set(runId, {
@@ -250,9 +255,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   ): Promise<VerificationReport> => {
     const resolved = this.resolveWorkspace(input.projectId);
     const { workspace } = resolved;
-    const plan = this.buildPlan(workspace, input, resolved.access.fs);
+    const plan = this.buildPlan(resolved, input);
     this.assertRunnable(plan);
-    this.assertWorkspaceTrustAtEffect(input, workspace);
+    this.assertWorkspaceTrustAtEffect(resolved, input);
     const runId = randomUUID();
     const controller = new AbortController();
     const forwardAbort = (): void => {
@@ -327,12 +332,13 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   }
 
   private buildPlan(
-    workspace: WorkspaceInfo,
+    resolved: ResolvedVerificationWorkspace,
     input: VerificationRunInput,
-    fs: WorkspaceFs,
   ): VerificationPlan {
+    const { workspace } = resolved;
+    const fs = resolved.access.fs;
     const scriptKinds = input.kinds.filter(isScriptBackedKind);
-    this.assertWorkspaceTrustForScriptKinds(input.projectId, workspace, scriptKinds);
+    this.assertWorkspaceTrustForScriptKinds(resolved, scriptKinds);
     const steps = [
       ...this.scriptSteps(workspace, scriptKinds, fs),
       ...this.targetedSteps(workspace, input, fs),
@@ -341,22 +347,17 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   }
 
   private assertWorkspaceTrustAtEffect(
+    resolved: ResolvedVerificationWorkspace,
     input: VerificationRunInput,
-    workspace: WorkspaceInfo,
   ): void {
-    this.assertWorkspaceTrustForScriptKinds(
-      input.projectId,
-      workspace,
-      input.kinds.filter(isScriptBackedKind),
-    );
+    this.assertWorkspaceTrustForScriptKinds(resolved, input.kinds.filter(isScriptBackedKind));
   }
 
   private assertWorkspaceTrustForScriptKinds(
-    projectId: string,
-    workspace: WorkspaceInfo,
+    resolved: ResolvedVerificationWorkspace,
     scriptKinds: readonly VerificationKind[],
   ): void {
-    if (scriptKinds.length === 0 || this.trustedForScripts(projectId, workspace)) return;
+    if (scriptKinds.length === 0 || this.trustedForScripts(resolved)) return;
     throw new VerificationRunnerError(
       "WORKSPACE_TRUST_REQUIRED",
       "Repository package scripts require server-side workspace trust before execution.",
@@ -626,9 +627,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     });
   }
 
-  private trustedForScripts(projectId: string, workspace: WorkspaceInfo): boolean {
+  private trustedForScripts(resolved: ResolvedVerificationWorkspace): boolean {
     try {
-      return this.isTrusted(projectId, workspace);
+      return this.isTrusted(resolved.trustProjectId, resolved.trustWorkspace);
     } catch {
       return false;
     }
@@ -636,29 +637,52 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
 
   private resolveWorkspace(projectId: string): ResolvedVerificationWorkspace {
     const project = projectFor(this.store, projectId);
-    if (project === undefined) {
-      throw new VerificationRunnerError("PROJECT_NOT_FOUND", "Project not found.");
-    }
-    let access: WorkspaceRootAccess | undefined;
-    try {
-      access =
-        this.rootAccessResolver?.(project.path) ??
-        (this.rootAccessResolver === undefined
-          ? { kind: "ordinary", canonicalRoot: this.fs.realPath(project.path), fs: this.fs }
-          : undefined);
-    } catch {
-      access = undefined;
-    }
+    // A managed task worktree is never a registered project of its own: the root access resolver
+    // proves it (lifecycle row, identity, containment) and names the repository whose script trust
+    // governs it. Before this branch every governed verification inside a task workspace failed as
+    // PROJECT_NOT_FOUND (workbench end-to-end run, 2026-09-03). An unregistered ORDINARY root still
+    // fails closed here.
+    const access =
+      project === undefined ? this.managedAccessFor(projectId) : this.accessFor(project.path);
     if (access === undefined) {
       throw new VerificationRunnerError(
         "PROJECT_NOT_FOUND",
-        "Project root path could not be resolved.",
+        project === undefined ? "Project not found." : "Project root path could not be resolved.",
       );
     }
+    const workspace = detectWorkspaceAt(access.canonicalRoot, access.fs);
+    const repositoryRoot = access.kind === "managed-task" ? access.repositoryRoot : undefined;
     return {
       access,
-      workspace: detectWorkspaceAt(access.canonicalRoot, access.fs),
+      workspace,
+      trustProjectId: repositoryRoot ?? projectId,
+      trustWorkspace:
+        repositoryRoot === undefined
+          ? workspace
+          : detectWorkspaceAt(repositoryRoot, this.fs, { scanSourceFilesForLanguages: false }),
     };
+  }
+
+  private accessFor(projectPath: string): WorkspaceRootAccess | undefined {
+    try {
+      return (
+        this.rootAccessResolver?.(projectPath) ??
+        (this.rootAccessResolver === undefined
+          ? { kind: "ordinary", canonicalRoot: this.fs.realPath(projectPath), fs: this.fs }
+          : undefined)
+      );
+    } catch {
+      return undefined;
+    }
+  }
+
+  private managedAccessFor(root: string): WorkspaceRootAccess | undefined {
+    try {
+      const access = this.rootAccessResolver?.(root);
+      return access?.kind === "managed-task" ? access : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private emit(event: EditorVerificationEvent): void {

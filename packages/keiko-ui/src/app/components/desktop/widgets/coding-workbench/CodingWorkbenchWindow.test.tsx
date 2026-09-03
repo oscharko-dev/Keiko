@@ -405,6 +405,22 @@ describe("CodingWorkbenchWindow", () => {
   // The crash-recovery Retry consumes the draft exactly like Start; a successful retry that left
   // the recovery text in the re-enabled composer made it resubmittable as a brand-new follow-up
   // (review of ec04288dc).
+  // The composer acts on the bound task workspace: before a run its chip names the repository the
+  // workspace was bound from, not the folder selected elsewhere in the Workbench (end-to-end run,
+  // 2026-09-03: the chip read "pr-3355-code-review-fdaabd · main" over a workspace bound from
+  // "e2e-project").
+  it("names the bound repository in the composer before a run starts", () => {
+    renderWorkbench(
+      liveState(),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/e2e-project", "/wt/e2e-project-task"),
+    );
+
+    expect(screen.getByText("e2e-project")).toBeInTheDocument();
+    expect(screen.queryByText("e2e-project-task")).not.toBeInTheDocument();
+  });
+
   it("clears the composer draft once a crash-recovery retry succeeds", async () => {
     const user = userEvent.setup();
     const liveActions = actions();

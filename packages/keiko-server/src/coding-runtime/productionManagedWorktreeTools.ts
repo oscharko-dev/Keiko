@@ -16,7 +16,9 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 
 import type { CommandRunnerManager } from "../command-runner.js";
 import type { VerificationRunnerManager } from "../editor/verificationRunner.js";
-import type { ServerDiagnosticSink } from "../diagnostics-log.js";
+import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
+import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
+import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { createRuntimeCodingToolFacade } from "./codingToolAuthorityPort.js";
 import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
@@ -273,30 +275,58 @@ function auxiliaryPorts(
 
 // Liveness is re-checked both before the run and after the report lands, so a verification that
 // completes after the authority expired is reported failed rather than completed.
+type VerificationPortResult =
+  | { readonly status: "completed" }
+  | { readonly status: "failed"; readonly reasonCode?: string | undefined };
+
+// A verification the runner REFUSED (no resolvable project, missing script trust, no runnable
+// step) is not a red test run. Both used to reach the model as the same bare "failed" and left no
+// log line, so the agent re-ran the verifier instead of reporting the blocker (workbench end-to-end
+// run, 2026-09-03). The runner's closed error codes are forwarded and logged; a run that executed
+// and did not pass says so with its own code.
 function buildVerificationRunner(
   input: ProductionManagedWorktreeToolInput,
 ): CodingToolGovernedPorts["verificationRunner"] {
   let verificationSequence = 0;
   return {
-    execute: async (
-      request,
-      signal,
-      guard,
-    ): Promise<{ readonly status: "completed" | "failed" }> => {
+    execute: async (request, signal, guard): Promise<VerificationPortResult> => {
       if (!guard.check() || !live(input)) return { status: "failed" };
       const kind = verificationKind(request.verifierId);
       if (kind === undefined) return { status: "failed" };
-      const report = await input.verificationRunner.runToReport(
-        { projectId: input.workspaceRoot, kinds: [kind], requestId: request.actionId },
-        signal ?? new AbortController().signal,
-      );
+      let report: VerificationReport;
+      try {
+        report = await input.verificationRunner.runToReport(
+          { projectId: input.workspaceRoot, kinds: [kind], requestId: request.actionId },
+          signal ?? new AbortController().signal,
+        );
+      } catch (error) {
+        return verificationRefused(input, error);
+      }
       verificationSequence += 1;
       publishVerification(input, verificationSequence, report);
-      return {
-        status: report.overallStatus === "passed" && live(input) ? "completed" : "failed",
-      };
+      if (report.overallStatus === "passed" && live(input)) return { status: "completed" };
+      return { status: "failed", reasonCode: "VERIFICATION_FAILED" };
     },
   };
+}
+
+function verificationRefused(
+  input: ProductionManagedWorktreeToolInput,
+  error: unknown,
+): VerificationPortResult {
+  const code = error instanceof VerificationRunnerError ? error.code : undefined;
+  const runId = input.authorityRef.runId;
+  emitServerDiagnostic(input.diagnostics, {
+    // The run id is the timeline this refusal belongs to; the tool action id carries the sidecar's
+    // `session:call` shape, which is not a correlation id.
+    correlationId: isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.verification",
+    source: "production-managed-worktree-tools.verification",
+    errorClass: code ?? (error instanceof Error ? error.name : "unknown"),
+    message: code === undefined ? "verification-failed" : "verification-refused",
+  });
+  return code === undefined ? { status: "failed" } : { status: "failed", reasonCode: code };
 }
 
 // Mounts the real research-egress executor only when the run activated read-only research (registry

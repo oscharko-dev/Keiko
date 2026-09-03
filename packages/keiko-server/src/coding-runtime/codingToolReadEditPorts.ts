@@ -18,6 +18,7 @@ import {
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
+import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
 import { isExactEditorAgentChangeset, type CodingToolReadResult } from "./codingToolIpc.js";
 import type { CodingToolActionOf, GovernedCodingToolPort } from "./codingToolGovernedDelegate.js";
@@ -418,10 +419,12 @@ async function executeEdit(
     const completed = result.ok && editorStatusCompleted(result.value.result.status);
     if (completed) return { status: "completed" };
     discardMutationLease(deps, prepared.leaseRequest);
-    return { status: "failed", reasonCode: editFailureReasonCode(result) };
+    const reasonCode = editFailureReasonCode(result);
+    emitEditRefusedDiagnostic(deps.diagnostics, editCorrelationId(prepared.action), reasonCode);
+    return { status: "failed", reasonCode };
   } catch (error) {
     discardMutationLease(deps, prepared.leaseRequest);
-    emitEditFailureDiagnostic(deps.diagnostics, prepared.action.actionId, error);
+    emitEditFailureDiagnostic(deps.diagnostics, editCorrelationId(prepared.action), error);
     return { status: "failed", reasonCode: "EDIT_TRANSPORT_ERROR" };
   }
 }
@@ -438,18 +441,45 @@ function editFailureReasonCode(
   return outcome.conflict?.code ?? outcome.failure?.code;
 }
 
+// The run id is the timeline an edit failure belongs to; the tool action id carries the sidecar's
+// `session:call` shape, which the diagnostics sink rejects as a correlation id (it wrote
+// "invalid-correlation-id" on every edit diagnostic before this, end-to-end run 2026-09-03).
+function editCorrelationId(action: EditorAgentAction): string {
+  const runId = action.authorityRef?.runId;
+  return runId !== undefined && isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID;
+}
+
 function emitEditFailureDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
-  actionId: string,
+  correlationId: string,
   error: unknown,
 ): void {
   emitServerDiagnostic(diagnostics, {
-    correlationId: SAFE_DISCOVERY_CORRELATION_ID.test(actionId) ? actionId : "coding-edit-failure",
+    correlationId,
     timestamp: new Date().toISOString(),
     operation: "coding-runtime.editor-changeset",
     source: "coding-tool-read-edit-ports.edit",
     errorClass: contentFreeErrorClass(error),
     message: "edit-transport-failed",
+  });
+}
+
+// A governed edit the editor route refused (a policy denial, a conflict, a failed apply) is a
+// decision the activity log must be able to reconstruct: before this line the only trace was the
+// in-memory audit feed, and a workbench run that could never edit a file left an empty log
+// (end-to-end run, 2026-09-03). The reason is the closed editor-agent vocabulary, never content.
+function emitEditRefusedDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string,
+  reasonCode: string | undefined,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.editor-changeset",
+    source: "coding-tool-read-edit-ports.edit",
+    errorClass: reasonCode ?? "unclassified",
+    message: "edit-refused",
   });
 }
 

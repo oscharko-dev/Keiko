@@ -235,6 +235,24 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.verificationHint":
     "Die letzte Gateway-Bereitschaftsprüfung hat diese Quelle nicht erreicht, daher bleiben Läufe blockiert. Führe die Bereitschaftsprüfung in den Einstellungen erneut aus.",
   "codingWorkbench.source.retry": "Quelle erneut versuchen",
+  "codingWorkbench.source.unavailableReason.missing-config":
+    "Es ist kein Gateway konfiguriert. Konfiguriere das Keiko Gateway unter Einstellungen → Modelle.",
+  "codingWorkbench.source.unavailableReason.missing-provider":
+    "Die Gateway-Konfiguration nennt keinen Modellanbieter. Ergänze einen unter Einstellungen → Modelle.",
+  "codingWorkbench.source.unavailableReason.missing-credentials":
+    "Der konfigurierte Anbieter hat keine Zugangsdaten. Aktualisiere sie unter Einstellungen → Modelle.",
+  "codingWorkbench.source.unavailableReason.non-chat":
+    "Kein konfiguriertes Modell ist ein Chat-Modell. Ergänze ein chatfähiges Modell unter Einstellungen → Modelle.",
+  "codingWorkbench.source.unavailableReason.no-tool-calling":
+    "Für kein Chat-Modell ist Tool-Calling verifiziert. Führe den Readiness-Check unter Einstellungen → Modelle aus und übernimm die verifizierten Werte.",
+  "codingWorkbench.source.unavailableReason.non-workflow-eligible":
+    "Das Chat-Modell mit Tool-Calling ist nicht workflow-fähig. Aktiviere die Workflow-Eignung unter Einstellungen → Modelle.",
+  "codingWorkbench.source.unavailableReason.non-coding-capable":
+    "Das konfigurierte Chat-Modell ist nicht codingfähig.",
+  "codingWorkbench.source.unavailableReason.deployment-policy-disabled":
+    "Die Bereitstellungsrichtlinie deaktiviert die Gateway-Quelle der Coding-Runtime.",
+  "codingWorkbench.source.unavailableReason.subscription-source":
+    "Die Abo-Quelle ist ausgewählt; das Gateway wird nicht verwendet.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI über Gateway",
   "codingWorkbench.modelSource.codexSubscription": "ChatGPT/Codex-Abonnement",

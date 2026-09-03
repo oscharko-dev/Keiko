@@ -125,6 +125,41 @@ describe("parseUnifiedDiff", () => {
     expect(beta.removedLines).toBe(1);
   });
 
+  // A model-authored changeset carries no `diff --git` headers; the parser used to keep the first
+  // hunk open past its announced line counts, so the second file's `--- a/…` / `+++ b/…` header
+  // rendered as a deleted and an added line and the second file vanished from the change review
+  // (workbench end-to-end run, 2026-09-03).
+  it("ends a hunk after its announced lines so a headerless second file starts a new file", () => {
+    const raw = [
+      "--- a/src/math.mjs",
+      "+++ b/src/math.mjs",
+      "@@ -1,3 +1,4 @@",
+      " export function add(a, b) {",
+      "+export function subtract(a, b) {",
+      "   return a + b;",
+      " }",
+      "--- a/test/math.test.mjs",
+      "+++ b/test/math.test.mjs",
+      "@@ -1,2 +1,3 @@",
+      ' import { test } from "node:test";',
+      '-import { add } from "../src/math.mjs";',
+      '+import { add, subtract } from "../src/math.mjs";',
+      '+test("subtract", () => {});',
+      "",
+    ].join("\n");
+
+    const result = parseUnifiedDiff(raw);
+
+    expect(result.files.map((file) => file.path)).toEqual(["src/math.mjs", "test/math.test.mjs"]);
+    const first = assertDefined(result.files[0], "first");
+    expect(first.addedLines).toBe(1);
+    expect(first.removedLines).toBe(0);
+    expect(first.hunks[0]?.lines.map((line) => line.kind)).toEqual(["ctx", "add", "ctx", "ctx"]);
+    const second = assertDefined(result.files[1], "second");
+    expect(second.addedLines).toBe(2);
+    expect(second.removedLines).toBe(1);
+  });
+
   it("reflects rename in path and oldPath", () => {
     const raw = [
       "diff --git a/old.ts b/new.ts",

@@ -46,6 +46,32 @@ export function sourceVerificationLabel(
   return t(`codingWorkbench.source.verification.${verification}`);
 }
 
+// The sidecar gateway's closed unavailable reasons (coding-workbench-provider-api.ts allow-list),
+// each with the operator's next step. "Model source unavailable." alone left the operator with no
+// way to learn that a readiness check would have fixed it (workbench end-to-end run, 2026-09-03).
+const SOURCE_UNAVAILABLE_REASON_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey>> = {
+  "missing-config": "codingWorkbench.source.unavailableReason.missing-config",
+  "missing-provider": "codingWorkbench.source.unavailableReason.missing-provider",
+  "missing-credentials": "codingWorkbench.source.unavailableReason.missing-credentials",
+  "non-chat": "codingWorkbench.source.unavailableReason.non-chat",
+  "no-tool-calling": "codingWorkbench.source.unavailableReason.no-tool-calling",
+  "non-workflow-eligible": "codingWorkbench.source.unavailableReason.non-workflow-eligible",
+  "non-coding-capable": "codingWorkbench.source.unavailableReason.non-coding-capable",
+  "deployment-policy-disabled":
+    "codingWorkbench.source.unavailableReason.deployment-policy-disabled",
+  "subscription-source": "codingWorkbench.source.unavailableReason.subscription-source",
+};
+
+/** The operator-facing sentence for an unavailable source's reason, or null when it has none. */
+export function sourceUnavailableReasonText(
+  source: CodingWorkbenchRuntimeState["source"]["value"],
+  t: CodingWorkbenchTranslate,
+): string | null {
+  if (source === null || source.available || source.unavailableReason === undefined) return null;
+  const key = SOURCE_UNAVAILABLE_REASON_KEYS[source.unavailableReason];
+  return key === undefined ? null : t(key);
+}
+
 function runStateLabel(
   state: CodingWorkbenchRuntimeStateName,
   t: CodingWorkbenchTranslate,
@@ -132,6 +158,7 @@ export function lifecycleAnnouncement(
     runAnnouncement(state, t),
     pairingAnnouncement(state, t),
     readinessAnnouncement("modelSource", state.source.status, sourceAvailable, t),
+    sourceReasonAnnouncement(state, t),
     authenticationAnnouncement(state, t),
     readinessAnnouncement("workspace", state.workspace.status, workspaceAvailable, t),
     runtimeAssuranceAnnouncement(state, runtimeAvailable, t),
@@ -147,6 +174,13 @@ export function lifecycleAnnouncement(
 // resolution (ADR-0141), so the narration must name pairing as the missing input instead of
 // narrating "Workspace ready. Runtime ready." over a start that can never succeed. Silent while
 // pairing is unconfirmed — the narration never claims a truth the workspaces read has not answered.
+function sourceReasonAnnouncement(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string {
+  return sourceUnavailableReasonText(state.source.value, t) ?? "";
+}
+
 function pairingAnnouncement(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,

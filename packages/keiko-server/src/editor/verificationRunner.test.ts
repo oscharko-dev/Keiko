@@ -3,7 +3,7 @@
 // content-free lifecycle streaming without a real spawn. Route-level coverage lives in
 // verificationRoutes.test.ts.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -186,6 +186,53 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
     expect(() =>
       makeManager({ resolveWorkspaceRootAccess: () => undefined }).discover(workspaceRoot),
     ).toThrow(expect.objectContaining({ code: "PROJECT_NOT_FOUND" }));
+  });
+
+  // A managed task worktree is not a registered project; the root access resolver proves it and
+  // names the repository whose script trust it inherits. Every governed verification inside a task
+  // workspace used to fail as PROJECT_NOT_FOUND (workbench end-to-end run, 2026-09-03).
+  it("resolves a managed task worktree without a project row and takes script trust from its repository", async () => {
+    const worktreeRoot = mkdtempSync(join(tmpdir(), "keiko-verify-worktree-"));
+    try {
+      writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
+      mkdirSync(join(worktreeRoot, "src"), { recursive: true });
+      writeFileSync(join(worktreeRoot, "src", "a.test.ts"), "test('x', () => {});\n", "utf8");
+      const port = fakePort(report(["typecheck"]));
+      const trustChecks: string[] = [];
+      const manager = makeManager({
+        resolveWorkspaceRootAccess: (root): WorkspaceRootAccess | undefined =>
+          root === worktreeRoot
+            ? {
+                kind: "managed-task",
+                canonicalRoot: worktreeRoot,
+                fs: nodeWorkspaceFs,
+                repositoryRoot: workspaceRoot,
+              }
+            : undefined,
+        execute: port.port,
+        isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean => {
+          trustChecks.push(`${projectId}|${workspace.root}`);
+          return projectId === workspaceRoot;
+        },
+      });
+
+      const catalog = manager.discover(worktreeRoot);
+      expect(catalog.kinds.find((entry) => entry.kind === "typecheck")?.trustState).toBe("trusted");
+      const { done } = collect(manager);
+      manager.execute(input({ projectId: worktreeRoot }));
+      await done;
+      expect(port.calls).toBe(1);
+      // The decider sees the repository's own (canonical) workspace, never the worktree's.
+      expect(new Set(trustChecks)).toEqual(
+        new Set([`${workspaceRoot}|${realpathSync(workspaceRoot)}`]),
+      );
+      // An unregistered ORDINARY root is still no project.
+      expect(() => manager.discover(join(worktreeRoot, "..", "elsewhere"))).toThrow(
+        expect.objectContaining({ code: "PROJECT_NOT_FOUND" }),
+      );
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
   });
 
   it("denies a script-backed kind when the workspace is untrusted, without starting a run", () => {
