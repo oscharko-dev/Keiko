@@ -382,15 +382,60 @@ function flagTransitionDrift(
   throw new TaskWorkspaceError("POINTER_DRIFT", managedIdentityDriftMessage(drift));
 }
 
-function activeIdentityAvailable(ctx: LifecycleCtx, instance: WorkspaceInstance): boolean {
+// The LAST refusal on the active read that clears the pointer, and the one that stayed silent after
+// the three inside `canExposeBinding` were given lines: the server-owned identity repair seam is not
+// wired, or it threw. Either way the caller drops the binding and the application goes unbound, so an
+// operator's "my active workspace vanished after the restart" needs the same trace here as everywhere
+// else — the bare `catch { return false; }` lost the reason for good (AGENTS.md §7/§8, PR #3381
+// review). A classified failure keeps its own code, frames and cause chain; nothing else about the
+// read changes: it still fails closed rather than exposing a root verification cannot authorize.
+function activeIdentityAvailable(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  correlationId: string | undefined,
+): boolean {
   const ensureIdentity = ctx.deps.provisioning.ensureIdentity;
-  if (ensureIdentity === undefined) return false;
+  if (ensureIdentity === undefined) {
+    logIdentityRepairFailure(ctx, instance, correlationId, identityRepairUnavailable());
+    return false;
+  }
   try {
     ensureIdentity(instance);
     return true;
-  } catch {
+  } catch (error) {
+    logIdentityRepairFailure(ctx, instance, correlationId, error);
     return false;
   }
+}
+
+// A seam this server does not carry cannot repair anything: the same code the provisioning seam
+// itself raises when an identity registration cannot be completed, so the log keeps one vocabulary
+// for "the managed identity could not be established" regardless of which half was missing.
+function identityRepairUnavailable(): TaskWorkspaceError {
+  return new TaskWorkspaceError(
+    "PROVISIONING_FAILED",
+    "managed workspace identity repair is unavailable",
+  );
+}
+
+function logIdentityRepairFailure(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  correlationId: string | undefined,
+  error: unknown,
+): void {
+  logWorkspaceLifecycleFailure(
+    ctx.deps,
+    { operation: "activate", workspaceIdentitySeed: instance.workspaceId, correlationId },
+    error instanceof TaskWorkspaceError
+      ? error
+      : new TaskWorkspaceError(
+          "PROVISIONING_FAILED",
+          "managed workspace identity repair failed",
+          [],
+          { cause: error },
+        ),
+  );
 }
 
 // Resolves the #444 transition context for a direct (pause / handoff) action. The actor holds the
@@ -540,7 +585,7 @@ function getActiveImpl(
   // Project/Manifest identity. Repair that server-owned identity before any surface receives the
   // binding; this seam deliberately cannot initialize trust. Failure clears the pointer and leaves
   // the application unbound instead of exposing a root that verification cannot authorize.
-  if (!activeIdentityAvailable(ctx, instance)) {
+  if (!activeIdentityAvailable(ctx, instance, correlationId)) {
     ctx.deps.activePointerStore.clear();
     return undefined;
   }

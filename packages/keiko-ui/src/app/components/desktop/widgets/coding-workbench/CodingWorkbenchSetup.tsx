@@ -292,7 +292,16 @@ interface TargetBranchState {
 // The repository's checked-out branch as the default base branch. A value the operator typed wins
 // over any lookup, including one that resolves later; a lookup that cannot answer (not a
 // repository, detached HEAD) keeps the previous default, and only a transport failure is reported.
-function useTargetBranchDefault(selectedRoot: string | undefined): TargetBranchState {
+//
+// The default belongs to the repository in the PATH FIELD — the one a bind would actually
+// provision — not to the workbench-wide selection. Re-arming on every selection change read the
+// branch of a repository that is not being bound and overwrote a branch the operator had typed for
+// the one that is (#3381 review): with a typed path the field does not follow the switcher, so the
+// bind still targeted the typed path while the branch had silently become the other checkout's.
+function useTargetBranchDefault(
+  selectedRoot: string | undefined,
+  repositoryPath: string,
+): TargetBranchState {
   const [targetBranch, setTargetBranch] = useState(DEFAULT_TARGET_BRANCH);
   const touchedRef = useRef(false);
   const lookupSeqRef = useRef(0);
@@ -313,12 +322,20 @@ function useTargetBranchDefault(selectedRoot: string | undefined): TargetBranchS
       },
     );
   }, []);
-  // A branch typed for one repository is not a choice for the next: a new workbench-wide selection
-  // re-arms the default the way the path field follows it.
+  // A branch typed for one repository is not a choice for the next, and "the next" is decided by
+  // the path field: re-arm only once it has FOLLOWED the new selection. A selection the field does
+  // not follow (the operator typed a different path) leaves both the branch and the touched state
+  // alone, and a path being typed is not settled — its own blur handler drives that lookup, so
+  // this never fires a request per keystroke.
+  const armedRootRef = useRef<string | null>(null);
   useEffect(() => {
+    const selected = selectedRoot ?? "";
+    if (selected.trim() === "" || repositoryPath !== selected) return;
+    if (armedRootRef.current === selected) return;
+    armedRootRef.current = selected;
     touchedRef.current = false;
-    if (selectedRoot !== undefined) lookupFor(selectedRoot);
-  }, [lookupFor, selectedRoot]);
+    lookupFor(selected);
+  }, [lookupFor, repositoryPath, selectedRoot]);
   // A lookup that lands after unmount must not write into a surface that no longer exists.
   useEffect(
     () => (): void => {
@@ -518,14 +535,16 @@ export function CodingWorkbenchSetup({
 }: CodingWorkbenchSetupProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [repositoryPath, setRepositoryPath] = useRepositoryPathDefault(selectedRoot);
-  const branch = useTargetBranchDefault(selectedRoot);
+  const branch = useTargetBranchDefault(selectedRoot, repositoryPath);
   const [status, setStatus] = useState<SetupStatus>({ kind: "idle" });
-  // A refusal — and the repair offer it may carry — belongs to the path it was answered for. When
-  // the path moves on (typed, or following a new workbench-wide selection) the offer must not
-  // survive it, or "Repair and bind" would apply the old workspace's repair under the new path.
+  // A refusal — and the repair offer it may carry — belongs to BOTH inputs it was answered for:
+  // the path, and the target branch the refused task id is derived from
+  // (`codingWorkbenchSetupTaskId`). When either moves on (typed, or following a new workbench-wide
+  // selection) the offer must not survive it, or "Repair and bind" would repair, verify and
+  // activate the previous branch's workspace while the card displays the new one (#3381 review).
   useEffect(() => {
     setStatus((current) => (current.kind === "error" ? { kind: "idle" } : current));
-  }, [repositoryPath]);
+  }, [repositoryPath, branch.targetBranch]);
   const pending = status.kind === "pending";
   const submitDisabled =
     pending || repositoryPath.trim() === "" || branch.targetBranch.trim() === "";

@@ -79,6 +79,25 @@ describe("Coding Workbench translations", () => {
     );
   });
 
+  // The retired identity bound only the inode, so a same-path replacement reproduces it exactly:
+  // the operator's approval — not a proof Keiko holds — is what re-registers the tree. The card is
+  // the only place that judgement is made, so both catalogs must state the caveat the
+  // task-workspace-identity-rule-retired troubleshooting entry already carries (#3381 review).
+  it.each(["en", "de"] as const)(
+    "states in %s that repairing re-registers whatever is on disk at that path",
+    (locale) => {
+      const text = translateCodingWorkbench(locale, "codingWorkbench.setup.repairRequired", {
+        finding: "F",
+        effect: "E",
+      });
+      expect(text).toContain(locale === "en" ? "at the same path" : "am selben Pfad");
+      expect(text).toContain(
+        locale === "en" ? "whatever is on disk" : "was dort auf der Festplatte",
+      );
+      expect(text).toContain(locale === "en" ? "Task workspaces" : "Task Workspaces");
+    },
+  );
+
   it("localizes the #2387 research grant, revoke, and auxiliary-outcome vocabulary", () => {
     const keys = [
       "codingWorkbench.research.chipLabel",

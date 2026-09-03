@@ -54,6 +54,8 @@ import {
   verificationAuthorityDenyReason,
 } from "./agentVerificationRoute.js";
 import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
+import { VerificationRunnerError } from "./verificationRunnerErrors.js";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 
 const ROOT = "/repo";
 const SESSION_ID = "session-1";
@@ -245,13 +247,13 @@ function fakeReq(body: Record<string, unknown>): IncomingMessage {
   return req;
 }
 
-function routeContext(body: Record<string, unknown>): RouteContext {
+function routeContext(body: Record<string, unknown>, correlationId?: string): RouteContext {
   const res = Object.assign(new EventEmitter(), {
     writableEnded: false,
     destroyed: false,
   }) as unknown as ServerResponse;
   return {
-    correlationId: undefined,
+    correlationId,
     req: fakeReq(body),
     res,
     params: {},
@@ -259,8 +261,8 @@ function routeContext(body: Record<string, unknown>): RouteContext {
   };
 }
 
-function ctx(body: Record<string, unknown>): RouteContext {
-  return routeContext(body);
+function ctx(body: Record<string, unknown>, correlationId?: string): RouteContext {
+  return routeContext(body, correlationId);
 }
 
 function resultBody(result: { status: number; body: unknown }): Record<string, unknown> {
@@ -558,6 +560,42 @@ describe("handleEditorAgentVerificationRun audit (AC5)", () => {
     expect(listEditorAgentActionAudit(SESSION_ID)).toMatchObject([
       { actionType: "requestVerification", disposition: "allowed", outcome: "queued" },
     ]);
+  });
+
+  // A runner refusal answered 403/404/422/429 out of an error body and left NOTHING on the operator
+  // side: only the coding-tool port (a different entry point) ever logged one, so
+  // `keiko support analyze --correlation-id <request>` showed the request and no refusal at all
+  // (PR #3381 review). The request correlation is also what the run itself is filed under, so the
+  // runner's own lifecycle evidence and the workspace resolver's denial line join the same id.
+  it("emits a body-free refusal diagnostic under the request correlation when the runner refuses", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const manager = new FakeManager();
+    manager.failWith = new VerificationRunnerError(
+      "WORKSPACE_TRUST_REQUIRED",
+      "Repository package scripts require server-side workspace trust before execution.",
+    );
+    const authorityRef = registerAuthority();
+
+    const result = await handleEditorAgentVerificationRun(
+      ctx(
+        { schemaVersion: "1", sessionId: SESSION_ID, kind: "typecheck", authorityRef },
+        "request-correlation-7b",
+      ),
+      { ...deps(manager), diagnostics: { record: (record): void => void records.push(record) } },
+    );
+
+    expect(result).toMatchObject({ status: 403 });
+    expect(manager.lastInput?.correlationId).toBe("request-correlation-7b");
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "request-correlation-7b",
+        operation: "editor.verification.execute",
+        source: "editor.agent-verification-route",
+        errorClass: "WORKSPACE_TRUST_REQUIRED",
+        message: "verification-refused",
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("server-side workspace trust");
   });
 
   it("records exactly one audit entry for a denied request", async () => {
@@ -1013,8 +1051,9 @@ describe("verificationAuthorityDenyReason", () => {
 //  - P3/[41]: containment must run through the port the managed access minted. The sibling wiring
 //    in agentRoutes.ts was pinned; this one was not, so reverting the hunk left the suite green.
 //  - Medium/[9]: script trust must be resolved against the repository the worktree was bound from
-//    (a worktree is never a registered project, so its own root is always `restricted` and the
-//    execution-class request was denied `workspace-restricted` before the runner ever ran), and
+//    (a worktree carries no standing grant of its own — its project row is not a trust decision —
+//    so its root is always `restricted` and the execution-class request was denied
+//    `workspace-restricted` before the runner ever ran), and
 //    only while the worktree's own package manifest is still the repository's trust basis.
 const MANAGED_SESSION_ID = "session-managed";
 

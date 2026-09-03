@@ -61,7 +61,8 @@ import {
   type EditorAgentRootBoundaryReason,
 } from "./agentRootBoundary.js";
 import { workspaceRootAccessOrUndefined } from "../task-workspace/workspace-root-access.js";
-import { isValidCorrelationId } from "../correlation.js";
+import { correlationIdOrUnknown, isValidCorrelationId } from "../correlation.js";
+import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 const MAX_AGENT_VERIFICATION_BODY_BYTES = 8_000;
@@ -75,6 +76,11 @@ export interface AgentVerificationRoutePorts {
 
 interface RequestLifecycle {
   readonly signal: AbortSignal;
+  // The request's own correlation id (`RouteContext.correlationId`), carried here because the
+  // lifecycle is the one value already built from the RouteContext and threaded to the run. It
+  // becomes `VerificationRunInput.correlationId`, so the runner's lifecycle evidence, the workspace
+  // resolver's `workspace.root.denied` line and this route's refusal diagnostic all join on one id.
+  readonly correlationId: string | undefined;
   readonly dispose: () => void;
 }
 
@@ -153,12 +159,14 @@ type VerificationTrustDeps = Pick<
   "workspaceScriptTrust" | "workspaceRootAccessResolver"
 >;
 
-// A managed task worktree is never a registered project of its own, so `trustLevelForRoot` on the
-// worktree path always answers "restricted" and an execution-class request was denied
-// `workspace-restricted` here BEFORE the runner's repository-trust lookup could ever run. The
-// workbench facade calls `verificationRunner.runToReport` directly and bypasses this route, which is
-// why the owner's end-to-end run could pass while `POST /api/editor/verification/agent-runs` (the
-// sidecar / docked-agent entry point) stayed denied (cursor review, PR #3381).
+// A managed task worktree carries no standing script-trust grant of its own — production registers
+// it as a project row (deps.ts `ensureManagedTaskWorkspaceIdentity`) but that row is not a trust
+// decision — so `trustLevelForRoot` on the worktree path answers "restricted" and an
+// execution-class request was denied `workspace-restricted` here BEFORE the runner's
+// repository-trust lookup could ever run. The workbench facade calls
+// `verificationRunner.runToReport` directly and bypasses this route, which is why the owner's
+// end-to-end run could pass while `POST /api/editor/verification/agent-runs` (the sidecar /
+// docked-agent entry point) stayed denied (cursor review, PR #3381).
 //
 // Standing script trust belongs to the repository the worktree was bound from, and applies to the
 // worktree only while the worktree's own `package.json` is that same fact — asked of
@@ -322,21 +330,51 @@ async function runAndRespond(
   runner: VerificationRunnerManager,
   request: EditorAgentVerificationRunRequest,
   snapshot: EditorAgentSessionSnapshot,
-  signal: AbortSignal,
+  lifecycle: RequestLifecycle,
+  deps: Pick<UiHandlerDeps, "diagnostics">,
 ): Promise<RouteResult> {
+  const correlationId = correlationIdOrUnknown(
+    lifecycle.correlationId ?? verificationCorrelationId(request),
+  );
   try {
-    const input = { ...verificationRunInput(request), projectId: snapshot.workspaceRoot };
-    const report = await runner.runToReport(input, signal);
+    const input: VerificationRunInput = {
+      ...verificationRunInput(request),
+      projectId: snapshot.workspaceRoot,
+      correlationId,
+    };
+    const report = await runner.runToReport(input, lifecycle.signal);
     return {
       status: 200,
       body: { result: { outcome: "completed", report: toRedactedVerificationReport(report) } },
     };
   } catch (error) {
     if (error instanceof VerificationRunnerError) {
+      emitVerificationRefusalDiagnostic(deps.diagnostics, correlationId, error);
       return { status: error.status, body: errorBody(error.code, error.message) };
     }
     throw error;
   }
+}
+
+// A runner refusal used to leave NOTHING behind at this layer: the route answered 403/404/422/429
+// from an error body and only the coding-tool port — a different entry point — ever logged one, so
+// `keiko support analyze --correlation-id <request>` showed the request and no refusal at all
+// (PR #3381 review). Body-free by construction: the closed runner code as `errorClass` and a
+// catalogued summary as `message`; the error's own text (which names no path, but is still free
+// prose) never reaches the record.
+function emitVerificationRefusalDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string,
+  error: VerificationRunnerError,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId,
+    timestamp: new Date().toISOString(),
+    operation: "editor.verification.execute",
+    source: "editor.agent-verification-route",
+    errorClass: error.code,
+    message: "verification-refused",
+  });
 }
 
 function requestLifecycle(ctx: RouteContext): RequestLifecycle {
@@ -353,6 +391,7 @@ function requestLifecycle(ctx: RouteContext): RequestLifecycle {
   if (ctx.res.destroyed && !ctx.res.writableEnded) abort();
   return {
     signal: controller.signal,
+    correlationId: ctx.correlationId,
     dispose: (): void => {
       ctx.req.removeListener("aborted", abort);
       ctx.res.removeListener("close", onResponseClose);
@@ -394,7 +433,7 @@ async function admitAndRun(
     rollbackVerificationReservation(request);
     return auditFailure();
   }
-  return runAndRespond(runner, request, snapshot, lifecycle.signal);
+  return runAndRespond(runner, request, snapshot, lifecycle, deps);
 }
 
 // The correlation the containment port's own denial line is recorded under; the synthetic action id

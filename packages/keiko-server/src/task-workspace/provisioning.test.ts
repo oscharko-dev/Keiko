@@ -1775,8 +1775,9 @@ describe("activation re-proves the managed identity", () => {
 
   // Relocated pin (was `pointer-stale`): a readable pointer proving another identity carries the
   // contract's `gitdir-mismatch` marker, whose `reconcile-pointer` hint is the executable exit.
-  it("refuses a changed identity with the readable-mismatch marker", async () => {
-    const service = makeService();
+  it("refuses a changed identity with the readable-mismatch marker, and logs that marker", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(undefined, undefined, activityLog);
     const first = await service.provision({
       repositoryRequestPath: repoRoot,
       taskId: "t-activate-changed",
@@ -1792,6 +1793,19 @@ describe("activation re-proves the managed identity", () => {
       message: "managed worktree git identity changed",
     });
     expect(store.getById(first.instance.workspaceId)?.driftMarkers).toEqual(["gitdir-mismatch"]);
+    // The persisted row alone is not the pin: the marker the refusal EMITS is what tells an operator
+    // reading `server.log` that a readable pointer proved another identity (executable exit:
+    // `reconcile-pointer`) rather than that the pointer is unreadable. A marker dropped on the emit
+    // path while the row keeps it would otherwise stay invisible (PR #3381 review).
+    const line = activityLog.events.find(
+      (event) =>
+        event.correlationId === "activate-changed-0001" && event.errorKind === "POINTER_DRIFT",
+    );
+    expect(line?.extra).toMatchObject({
+      operation: "activate",
+      outcome: "retry-required",
+      driftMarker: "gitdir-mismatch",
+    });
   });
 
   it("activates an authentic workspace as before", async () => {

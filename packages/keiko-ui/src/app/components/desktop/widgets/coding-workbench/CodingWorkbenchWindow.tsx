@@ -68,7 +68,12 @@ import {
   CodingWorkbenchSetup,
   type CodingWorkbenchSetupRuntimePosture,
 } from "./CodingWorkbenchSetup";
-import { CodingWorkbenchChanges, diffLabels } from "./CodingWorkbenchChanges";
+import {
+  CodingWorkbenchChanges,
+  diffLabels,
+  RetryMessage,
+  type RetryMessageProps,
+} from "./CodingWorkbenchChanges";
 import { CodexSubscriptionAuthCard } from "./CodingWorkbenchModelCards";
 import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
 import { requestGatewayModelCatalogRefresh } from "../shared/gatewaySetupBus";
@@ -983,51 +988,6 @@ function ChangesetReviewPanel({
   );
 }
 
-/**
- * The destination of a pending research fetch (#2387). Both values are model-chosen and therefore
- * untrusted: they are rendered as plain text nodes, never as markup or as a live link, so reviewing
- * an ask can never itself navigate anywhere. While the read is in flight, or when the window is not
- * paired, the panel says so rather than implying there is no destination.
- */
-/**
- * The reviewable body of a `file-edit` approval (#2802): the workspace-relative files the change
- * would write and its magnitude. Without this the card carries only vocabulary — kind, class, risk
- * — and a human cannot exercise control over a change they are not shown (ADR-0129 D1).
- *
- * The paths arrive over the authenticated approval-review channel and are model-selected: they are
- * rendered as plain text, never as markup or a link, and no patch byte reaches this component.
- */
-// A genuinely UNAVAILABLE read (a transient failure while the approval is still open) is the
-// operator's dead end without a retry — nothing else re-triggers a fetch while they are still
-// deciding (workbench audit, 2026-09-03). A LOADING read is not a failure and gets no button;
-// mirrors `CodingWorkbenchChanges`'s `RetryMessage`. Shared by both approval detail channels.
-function RetryableDetailMessage({
-  status,
-  retry,
-  t,
-  keys,
-}: {
-  readonly status: CodingWorkbenchApprovalReviewStatus | CodingWorkbenchResearchStatus;
-  readonly retry: () => void;
-  readonly t: CodingWorkbenchTranslate;
-  readonly keys: {
-    readonly loading: CodingWorkbenchMessageKey;
-    readonly unavailable: CodingWorkbenchMessageKey;
-    readonly retry: CodingWorkbenchMessageKey;
-  };
-}): ReactNode {
-  const text = t(status === "loading" ? keys.loading : keys.unavailable);
-  if (status !== "unavailable") return <p className={styles.approvalResearchDetail}>{text}</p>;
-  return (
-    <div className={styles.approvalResearchDetail}>
-      <p>{text}</p>
-      <button className={styles.button} type="button" onClick={retry}>
-        {t(keys.retry)}
-      </button>
-    </div>
-  );
-}
-
 const APPROVAL_CHANGES_MESSAGE_KEYS = {
   loading: "codingWorkbench.approval.changes.loading",
   unavailable: "codingWorkbench.approval.changes.unavailable",
@@ -1039,6 +999,35 @@ const RESEARCH_DESTINATION_MESSAGE_KEYS = {
   unavailable: "codingWorkbench.approval.research.unavailable",
   retry: "codingWorkbench.approval.research.retry",
 } as const;
+
+interface DetailMessageKeys {
+  readonly loading: CodingWorkbenchMessageKey;
+  readonly unavailable: CodingWorkbenchMessageKey;
+  readonly retry: CodingWorkbenchMessageKey;
+}
+
+// The props of the SHARED `RetryMessage` (CodingWorkbenchChanges) for an approval detail channel.
+// A genuinely UNAVAILABLE read — a transient failure while the approval is still open — is the
+// operator's dead end without a retry, because nothing else re-triggers a fetch while they are
+// still deciding (workbench audit, 2026-09-03); a LOADING read is not a failure and carries none.
+// Only these two facts differ per channel, so the markup itself lives in one component (#3381
+// review: this file previously held a second copy of it, `RetryableDetailMessage`).
+function detailMessageProps(
+  state: {
+    readonly status: CodingWorkbenchApprovalReviewStatus | CodingWorkbenchResearchStatus;
+    readonly retry: () => void;
+  },
+  t: CodingWorkbenchTranslate,
+  keys: DetailMessageKeys,
+): RetryMessageProps {
+  return {
+    text: t(state.status === "loading" ? keys.loading : keys.unavailable),
+    className: styles.approvalResearchDetail,
+    ...(state.status === "unavailable"
+      ? { retry: { label: t(keys.retry), onRetry: state.retry } }
+      : {}),
+  };
+}
 
 // The reviewable facts of a changeset the operator is deciding about: the counts, the file list,
 // and the honest note when the list is truncated. Extracted from `ApprovalChangedFiles` so that
@@ -1084,6 +1073,14 @@ function ApprovalReviewBody({
   );
 }
 
+/**
+ * The reviewable body of a `file-edit` approval (#2802): the workspace-relative files the change
+ * would write and its magnitude. Without this the card carries only vocabulary — kind, class, risk
+ * — and a human cannot exercise control over a change they are not shown (ADR-0129 D1).
+ *
+ * The paths arrive over the authenticated approval-review channel and are model-selected: they are
+ * rendered as plain text, never as markup or a link, and no patch byte reaches this component.
+ */
 function ApprovalChangedFiles({
   state,
   t,
@@ -1100,12 +1097,7 @@ function ApprovalChangedFiles({
     >
       <p className={styles.approvalResearchTitle}>{t("codingWorkbench.approval.changes.title")}</p>
       {review === null ? (
-        <RetryableDetailMessage
-          status={state.status}
-          retry={state.retry}
-          t={t}
-          keys={APPROVAL_CHANGES_MESSAGE_KEYS}
-        />
+        <RetryMessage {...detailMessageProps(state, t, APPROVAL_CHANGES_MESSAGE_KEYS)} />
       ) : (
         <ApprovalReviewBody review={review} t={t} />
       )}
@@ -1113,6 +1105,12 @@ function ApprovalChangedFiles({
   );
 }
 
+/**
+ * The destination of a pending research fetch (#2387). Both values are model-chosen and therefore
+ * untrusted: they are rendered as plain text nodes, never as markup or as a live link, so reviewing
+ * an ask can never itself navigate anywhere. While the read is in flight, or when the window is not
+ * paired, the panel says so rather than implying there is no destination.
+ */
 function ResearchDestination({
   state,
   t,
@@ -1129,12 +1127,7 @@ function ResearchDestination({
     >
       <p className={styles.approvalResearchTitle}>{t("codingWorkbench.approval.research.title")}</p>
       {ask === null ? (
-        <RetryableDetailMessage
-          status={state.status}
-          retry={state.retry}
-          t={t}
-          keys={RESEARCH_DESTINATION_MESSAGE_KEYS}
-        />
+        <RetryMessage {...detailMessageProps(state, t, RESEARCH_DESTINATION_MESSAGE_KEYS)} />
       ) : (
         <dl className={styles.approvalFacts}>
           <ApprovalFact label={t("codingWorkbench.approval.research.host")} value={ask.host} />

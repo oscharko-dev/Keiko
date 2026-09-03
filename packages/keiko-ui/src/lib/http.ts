@@ -33,6 +33,8 @@
 
 import { ApiError } from "./api";
 import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
+import { reportClientDiagnostic } from "./client-diagnostics";
+import { clientErrorSummary } from "./client-error-summary";
 
 // Re-exported for the existing consumers that import these two from "./http"
 // (AppShell.tsx, RepositoryFolderSwitcher.tsx, SelectionAwareWorkspaceHosts.tsx,
@@ -90,6 +92,35 @@ function isBffErrorEnvelope(value: unknown): value is BffErrorEnvelope {
   );
 }
 
+interface BffErrorBody {
+  readonly code: string;
+  readonly message: string;
+  readonly envelope: BffErrorEnvelope | undefined;
+}
+
+// The `{ error: { code, message } }` envelope of a non-2xx body, or the classified fallback when
+// the body is not one. A body that is JSON but not the envelope (an empty object, a bare string) is
+// a parse failure too: it must never be read as one, or the read itself throws a TypeError that
+// replaces the classified error the caller is about to render. The body itself never leaves here.
+async function parseBffErrorBody<T>(
+  res: Response,
+  opts: BffFetchOptions<T> | undefined,
+): Promise<BffErrorBody> {
+  const fallback: BffErrorBody = {
+    code: "INTERNAL",
+    message: (opts?.parseFailureMessage ?? defaultParseFailureMessage)(res.status),
+    envelope: undefined,
+  };
+  try {
+    const parsed: unknown = await res.json();
+    if (!isBffErrorEnvelope(parsed)) return fallback;
+    return { code: parsed.error.code, message: parsed.error.message, envelope: parsed };
+  } catch {
+    // parse failure — keep the (possibly friendly) fallback message, never log the body
+    return fallback;
+  }
+}
+
 export async function bffFetchJson<T>(
   path: string,
   init?: RequestInit,
@@ -102,22 +133,7 @@ export async function bffFetchJson<T>(
   });
 
   if (!res.ok) {
-    let code = "INTERNAL";
-    let message = (opts?.parseFailureMessage ?? defaultParseFailureMessage)(res.status);
-    let envelope: BffErrorEnvelope | undefined;
-    try {
-      const parsed: unknown = await res.json();
-      // A body that is JSON but not the envelope (an empty object, a bare string) is a parse
-      // failure too: it must never be read as one, or the read itself throws a TypeError that
-      // replaces the classified error the caller is about to render.
-      if (isBffErrorEnvelope(parsed)) {
-        envelope = parsed;
-        code = parsed.error.code;
-        message = parsed.error.message;
-      }
-    } catch {
-      // parse failure — keep the (possibly friendly) fallback message, never log the body
-    }
+    const { code, message, envelope } = await parseBffErrorBody(res, opts);
     const error = new ApiError(code, message, res.status);
     // RB-6: attach the correlation id the failure is traceable by — prefer the server's echoed id
     // (header or envelope), else the client id we sent (the server honours it). Surfaces as a
@@ -130,8 +146,18 @@ export async function bffFetchJson<T>(
     // must not replace that error with its own — the caller would then render a raw TypeError.
     try {
       opts?.enrichError?.(error, envelope);
-    } catch {
-      // The ApiError below already carries code, status and correlation id; the hook added nothing.
+    } catch (hookError) {
+      // The ApiError below already carries code, status and correlation id, so the request stays
+      // renderable — but the CLASSIFICATION step failed, and the hook is the only place
+      // `failureClass` is attached. Swallowing that silently made every refusal of a broken hook
+      // degrade to an unclassified error with nothing recording why (AGENTS.md §7/§8, #3381
+      // review). Body-free: the hook's error class and the failed request's correlation id.
+      reportClientDiagnostic(
+        `[keiko] bff error enrichment failed: ${clientErrorSummary(hookError)}`,
+        {
+          correlationId: error.correlationId,
+        },
+      );
     }
     throw error;
   }

@@ -200,9 +200,12 @@ A package-script consumer projects `trusted` only when canonical trust is truste
 binding dimension and current trust-basis digest matches. Every other cell projects to today's
 `CommandTaskTrustState = "approval-required"`. A digest/root mismatch immediately persists a
 restricted invalidation at a newer revision. Restoring the old `package.json` bytes therefore does
-not resurrect the prior grant; a new explicit grant is required. The existing command,
-verification, and debug decider seams remain the only consumer path until #2521 migrates their
-implementation.
+not resurrect the prior grant; a new explicit grant is required. A managed task worktree is a
+registered project row but never a package-script trust basis of its own: its script decision is
+resolved from the repository it was bound from, and holds only while the worktree's `package.json`
+is byte-identical to that repository's — the same trust-basis digest this decision already binds
+(PR #3381). The existing command, verification, and debug decider seams remain the only consumer
+path until #2521 migrates their implementation.
 
 Every durable trust or effect resolution also compares the manifest row's server-private
 filesystem-object digest with a fresh inspection. The public V1 identity remains necessary for

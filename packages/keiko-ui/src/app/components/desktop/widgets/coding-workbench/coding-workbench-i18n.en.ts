@@ -107,7 +107,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.provisioningUnavailable":
     "Managed task workspaces are not configured on this installation, so no workspace can be bound.",
   "codingWorkbench.setup.repairRequired":
-    "A managed workspace for this repository and branch already exists, but Keiko could not re-verify it: {finding}. Repairing {effect}.",
+    "A managed workspace for this repository and branch already exists, but Keiko could not re-verify it: {finding}. Repairing {effect}. Keiko cannot tell the original worktree from a replacement at the same path, so approving re-registers whatever is on disk there — inspect the tree in Task workspaces first if its provenance is in doubt.",
   "codingWorkbench.setup.repairEffect.reconcilePointer":
     "re-registers the existing worktree in place; nothing is deleted",
   "codingWorkbench.setup.repairEffect.recreateWorktree":

@@ -126,9 +126,19 @@ export interface VerificationRunnerManagerOptions {
   readonly evidenceStore?: EvidenceStore | undefined;
   readonly redactor?: ((input: string) => string) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
-  readonly resolveWorkspaceRootAccess?:
-    ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
+  readonly resolveWorkspaceRootAccess?: VerificationWorkspaceRootAccessResolver | undefined;
 }
+
+// The resolver carries the run's own correlation id so ITS refusal line (`workspace.root.denied`,
+// emitted inside the production resolver) joins the run that asked for it. Without the second
+// argument every denial that refused a verification landed under UNKNOWN_CORRELATION_ID and
+// `keiko support analyze --correlation-id <run>` showed the refusal nowhere (PR #3381 review). The
+// parameter is optional, so a one-argument resolver (every existing test fake) is still a valid
+// substitute.
+export type VerificationWorkspaceRootAccessResolver = (
+  requestedRoot: string,
+  correlationId?: string,
+) => WorkspaceRootAccess | undefined;
 
 // ─── Project resolution (private per-module copy, established convention — command-runner.ts:94) ──
 
@@ -175,8 +185,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private readonly evidenceStore: EvidenceStore | undefined;
   private readonly redactor: (input: string) => string;
   private readonly diagnostics: ServerDiagnosticSink | undefined;
-  private readonly rootAccessResolver:
-    ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
+  private readonly rootAccessResolver: VerificationWorkspaceRootAccessResolver | undefined;
   private readonly runs = new Map<string, InFlightRun>();
   private readonly subscribers = new Set<VerificationRunnerEventEmitter>();
 
@@ -224,7 +233,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   };
 
   public readonly execute = (input: VerificationRunInput): VerificationRunStart => {
-    const resolved = this.resolveWorkspace(input.projectId);
+    const resolved = this.resolveWorkspace(input.projectId, input.correlationId);
     const plan = this.buildPlan(resolved, input);
     this.assertRunnable(plan);
     this.assertWorkspaceTrustAtEffect(resolved, input);
@@ -260,7 +269,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     input: VerificationRunInput,
     signal: AbortSignal,
   ): Promise<VerificationReport> => {
-    const resolved = this.resolveWorkspace(input.projectId);
+    const resolved = this.resolveWorkspace(input.projectId, input.correlationId);
     const { workspace } = resolved;
     const plan = this.buildPlan(resolved, input);
     this.assertRunnable(plan);
@@ -645,15 +654,25 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     }
   }
 
-  private resolveWorkspace(projectId: string): ResolvedVerificationWorkspace {
+  private resolveWorkspace(
+    projectId: string,
+    correlationId?: string,
+  ): ResolvedVerificationWorkspace {
     const project = projectFor(this.store, projectId);
-    // A managed task worktree is never a registered project of its own: the root access resolver
-    // proves it (lifecycle row, identity, containment) and names the repository whose script trust
-    // governs it. Before this branch every governed verification inside a task workspace failed as
-    // PROJECT_NOT_FOUND (workbench end-to-end run, 2026-09-03). An unregistered ORDINARY root still
-    // fails closed here.
+    // A managed task worktree's package-script decision is never taken from its OWN row. Production
+    // does register the worktree as a project (deps.ts `ensureManagedTaskWorkspaceIdentity` calls
+    // `createProject(managedWorktreePath)` on provision/activate), so `project` is usually defined
+    // here and `accessFor` returns the managed grant; the branch below covers the case where no row
+    // resolves for the requested root. Either way the root access resolver is what proves the root
+    // (lifecycle row, identity, containment) and names the repository whose script trust governs
+    // it, valid only while the worktree manifest is that same trust-basis fact (ADR-0147 D3).
+    // Before this, script trust was looked up for the worktree's own unregistered root and every
+    // governed verification inside a task workspace was refused (workbench end-to-end run,
+    // 2026-09-03). An unregistered ORDINARY root still fails closed here.
     const access =
-      project === undefined ? this.managedAccessFor(projectId) : this.accessFor(project.path);
+      project === undefined
+        ? this.managedAccessFor(projectId, correlationId)
+        : this.accessFor(project.path, correlationId);
     if (access === undefined) {
       throw new VerificationRunnerError(
         "PROJECT_NOT_FOUND",
@@ -688,10 +707,13 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     };
   }
 
-  private accessFor(projectPath: string): WorkspaceRootAccess | undefined {
+  private accessFor(
+    projectPath: string,
+    correlationId: string | undefined,
+  ): WorkspaceRootAccess | undefined {
     try {
       return (
-        this.rootAccessResolver?.(projectPath) ??
+        this.rootAccessResolver?.(projectPath, correlationId) ??
         (this.rootAccessResolver === undefined
           ? { kind: "ordinary", canonicalRoot: this.fs.realPath(projectPath), fs: this.fs }
           : undefined)
@@ -701,9 +723,12 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     }
   }
 
-  private managedAccessFor(root: string): WorkspaceRootAccess | undefined {
+  private managedAccessFor(
+    root: string,
+    correlationId: string | undefined,
+  ): WorkspaceRootAccess | undefined {
     try {
-      const access = this.rootAccessResolver?.(root);
+      const access = this.rootAccessResolver?.(root, correlationId);
       return access?.kind === "managed-task" ? access : undefined;
     } catch {
       return undefined;

@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -21,6 +22,7 @@ function lastInit(fetchMock: ReturnType<typeof vi.fn>): RequestInit {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  resetClientDiagnosticWriter();
 });
 
 describe("bffFetchJson — header union", () => {
@@ -222,9 +224,18 @@ describe("bffFetchJson — error handling", () => {
   });
 
   it("keeps the classified ApiError when opts.enrichError throws", async () => {
+    const diagnostics: { message: string; correlationId?: string | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      diagnostics.push({ message, correlationId: meta?.correlationId });
+    });
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({ error: { code: "C", message: "m" } }, 409)),
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: { code: "C", message: "m" } }), {
+          status: 409,
+          headers: { "Content-Type": "application/json", "X-Keiko-Correlation-Id": "corr-9" },
+        }),
+      ),
     );
     await expect(
       bffFetchJson("/api/x", undefined, {
@@ -233,6 +244,15 @@ describe("bffFetchJson — error handling", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "C", status: 409 });
+
+    // The hook is the only place `failureClass` is attached, so a hook that throws degrades every
+    // refusal to an unclassified error. Swallowing that silently left neither the console nor a
+    // support bundle with a record of it (AGENTS.md §7/§8, #3381 review). Body-free: the hook's
+    // error CLASS, and the failed request's correlation id as report metadata.
+    expect(diagnostics).toEqual([
+      { message: "[keiko] bff error enrichment failed: TypeError", correlationId: "corr-9" },
+    ]);
+    expect(diagnostics[0]?.message).not.toContain("unexpected envelope");
   });
 
   it("runs opts.enrichError with an undefined envelope on a parse failure", async () => {

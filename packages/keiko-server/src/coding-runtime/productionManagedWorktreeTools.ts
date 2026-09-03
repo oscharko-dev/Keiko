@@ -6,6 +6,7 @@ import type {
   EditorAgentGovernedAuthorityReference,
   VerificationKind,
   VerificationReport,
+  VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { codingWorkbenchPolicyEffectFor } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
@@ -20,9 +21,14 @@ import type {
   VerificationRunnerManager,
 } from "../editor/verificationRunner.js";
 import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
-import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { createRuntimeCodingToolFacade } from "./codingToolAuthorityPort.js";
+import type { GovernedVerificationReasonCode } from "./codingToolFacade.js";
 import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
 import type {
@@ -282,14 +288,31 @@ type VerificationPortResult =
   | { readonly status: "completed" }
   | { readonly status: "failed"; readonly reasonCode?: string | undefined };
 
+// What a finished run that did not pass tells the model. Exhaustive by TYPE, not by convention:
+// `Record<Exclude<VerificationStatus, "passed">, …>` stops compiling the day the contract gains an
+// eighth status, so a new outcome can never silently inherit VERIFICATION_FAILED. Only a run that
+// executed and went red is a red run — a wall-clock timeout and a resource ceiling name their own
+// cause, and skipped/denied/cancelled never executed at all, so reporting them as a test failure
+// sends the model back to code that is fine (PR #3381 review).
+const VERIFICATION_OUTCOME_REASON_CODES: Readonly<
+  Record<Exclude<VerificationStatus, "passed">, GovernedVerificationReasonCode>
+> = {
+  failed: "VERIFICATION_FAILED",
+  "timed-out": "VERIFICATION_TIMED_OUT",
+  "resource-exceeded": "VERIFICATION_RESOURCE_EXCEEDED",
+  skipped: "VERIFICATION_NOT_RUN",
+  denied: "VERIFICATION_NOT_RUN",
+  cancelled: "VERIFICATION_NOT_RUN",
+};
+
 // A verification the runner REFUSED (no resolvable project, missing script trust, no runnable
 // step) is not a red test run. Both used to reach the model as the same bare "failed" and left no
 // log line, so the agent re-ran the verifier instead of reporting the blocker (workbench end-to-end
 // run, 2026-09-03). The runner's closed error codes are forwarded and logged; a run that executed
-// and did not pass says so with its own code. The two refusals BEFORE the runner is even called —
-// authority or managed-workspace liveness already gone, and a verifier this server does not
-// implement — carry their own codes for the same reason (cursor review, PR #3381): the model cannot
-// tell "do not retry, report this" from "try again" out of a bare status.
+// and did not pass says so with the code its own outcome earned. The two refusals BEFORE the runner
+// is even called — authority or managed-workspace liveness already gone, and a verifier this server
+// does not implement — carry their own codes for the same reason (cursor review, PR #3381): the
+// model cannot tell "do not retry, report this" from "try again" out of a bare status.
 function buildVerificationRunner(
   input: ProductionManagedWorktreeToolInput,
 ): CodingToolGovernedPorts["verificationRunner"] {
@@ -315,7 +338,10 @@ function buildVerificationRunner(
       verificationSequence += 1;
       publishVerification(input, verificationSequence, report);
       if (report.overallStatus !== "passed") {
-        return { status: "failed", reasonCode: "VERIFICATION_FAILED" };
+        return {
+          status: "failed",
+          reasonCode: VERIFICATION_OUTCOME_REASON_CODES[report.overallStatus],
+        };
       }
       // The run passed and only the authority behind it lapsed. Calling that VERIFICATION_FAILED
       // would send the model back to the code over a green verification, so the revocation keeps
@@ -377,6 +403,12 @@ function emitVerificationDiagnostic(
   });
 }
 
+// `errorClass` reaches the `[keiko-server:diagnostic]` stderr line and the activity log's
+// `errorKind` unredacted, and `Error.name` is a writable own property any library may assign a
+// message or a path to. The repository already owns the hardening for that — `contentFreeErrorClass`
+// admits a `.name` only from the specific built-in error names and otherwise falls back to the
+// class declared in code — so a non-runner throw is classified through it rather than through raw
+// `.name`, which is what the sibling read/edit port already does (PR #3381 review).
 function verificationRefused(
   input: ProductionManagedWorktreeToolInput,
   error: unknown,
@@ -384,7 +416,7 @@ function verificationRefused(
   const code = error instanceof VerificationRunnerError ? error.code : undefined;
   emitVerificationDiagnostic(
     input,
-    code ?? (error instanceof Error ? error.name : "unknown"),
+    code ?? contentFreeErrorClass(error),
     code === undefined ? "verification-failed" : "verification-refused",
   );
   return code === undefined ? { status: "failed" } : { status: "failed", reasonCode: code };

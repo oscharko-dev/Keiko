@@ -429,10 +429,35 @@ export async function reconcileSingleInstance(
     lockTtlMs: resolveLockTtl(deps.lockTtlMs),
     correlationId: correlationIdOrUnknown(correlationId),
   };
-  const adapter = deps.createAdapter(detectWorkspaceAt(instance.repositoryRoot), ctx.correlationId);
-  const worktrees = await adapter.listWorktrees();
+  const { adapter, worktrees } = await consultRepository(ctx, instance.repositoryRoot);
   const gathered = await gatherFacts(ctx, adapter, worktrees, instance, nowMs, actor);
   return reconcileWithContext(ctx, gathered, instance, nowMs, correlationId);
+}
+
+interface RepositoryConsultation {
+  readonly adapter: GitWorktreeAdapter;
+  readonly worktrees: readonly WorktreeListEntry[];
+}
+
+// The single-instance path's repository consultation, classified by the SAME rule the pass and the
+// health report apply. An operator-approved repair runs against a repository root that can be exactly
+// as unavailable as the pass's — an unmounted network volume, a root that vanished, a denied path —
+// and the adapter build plus the worktree listing are the two calls that meet it. Left bare, that
+// failure reached `runWithWorkspaceLifecycleFailureLogging` (which logs only a TaskWorkspaceError)
+// unclassified: no `task-workspace.lifecycle` line for the repair's correlation id, and the route's
+// `mapped === undefined` branch turned it into a generic 500 (PR #3381 review). Classified here it is
+// the same retryable REPOSITORY_UNREACHABLE, with its frames and cause chain, that ADR-0091 D4
+// documents for every pass.
+async function consultRepository(
+  ctx: ReconcileCtx,
+  repositoryRoot: string,
+): Promise<RepositoryConsultation> {
+  try {
+    const adapter = ctx.deps.createAdapter(detectWorkspaceAt(repositoryRoot), ctx.correlationId);
+    return { adapter, worktrees: await adapter.listWorktrees() };
+  } catch (error) {
+    throw repositoryUnreachable(error);
+  }
 }
 
 function entryFromInstance(instance: WorkspaceInstance): WorkspaceReconciliationEntry {
@@ -503,35 +528,91 @@ async function reconcileImpl(
       reconciled.push(...group.map(carriedForward));
       continue;
     }
-    for (const instance of group) {
-      // Serialize the WHOLE per-instance critical section — re-read, fact-gathering, classification, and
-      // the persisted write — under the SAME `ws:<workspaceId>` key every other mutating workspace flow
-      // uses (#449, ADR-0093 D1), matching repair.ts's "advisory check -> live reconcile -> lock acquire
-      // -> strategy mutation" and cleanup.ts's "re-check persisted liveness inside the critical section"
-      // (KEIKO-0996, #3339). Both facts this pass classifies against are read AFTER the lock is held,
-      // never before it: `fresh` re-reads the store row from inside the callback (a concurrent
-      // activate/pause/repair/cleanup that mutated or deleted the workspace while this pass awaited the
-      // lock is observed, not clobbered — and a deleted row is skipped rather than resurrected), and
-      // `gatherFacts` is handed a LAZY `() => adapter.listWorktrees()` factory instead of a pre-fetched
-      // snapshot. A PR #3348 review finding caught that the first version of this fix widened the lock
-      // around fact-gathering but still fed it the SAME worktree list captured once per repository BEFORE
-      // any instance in the group acquired its lock, so `observedHead`/`headMatches` could still be
-      // classified against pre-mutation git state for an instance further down the group. gatherFacts only
-      // invokes the factory when THIS instance's worktree still exists on disk (worktreeDirExists is
-      // itself always live), so the documented common case — a backlog of paused instances whose worktree
-      // is already gone — costs zero `listWorktrees` spawns, and a live worktree costs exactly one FRESH
-      // spawn, taken under its own lock. ADR-0093 D4 bounds live worktrees to single digits per repository
-      // in the realistic operating envelope (not the N=200 backlog scale that scale.test.ts seeds), so
-      // this cannot reintroduce the O(N) `listWorktrees` blow-up the repository-grouping guard catches.
-      // Deliberately NOT applied to reconcileSingleInstance: repair.ts already holds this exact key for
-      // its whole operation and re-enters reconcileSingleInstance inside it (locking there would
-      // self-deadlock), and that path already fetches its worktree list fresh immediately before use with
-      // no intervening await, so it has no equivalent staleness gap to close.
-      const result = await reconcileOneOrCarryForward(ctx, adapter, instance, correlationId);
-      if (result !== undefined) reconciled.push(result);
-    }
+    reconciled.push(...(await reconcileRepositoryGroup(ctx, adapter, group, correlationId)));
   }
   return buildReport(ctx, reconciled, ctx.deps.now(), true);
+}
+
+// A repository the adapter cannot consult AT ALL is ONE fact about that repository, not one fact per
+// row. This latch is the group-scoped memory of it: the first UNCLASSIFIED gathering failure sets it,
+// and every remaining row of the group is carried forward without a second git spawn and without a
+// duplicate line — so ADR-0091 D4's "logged once as the retryable `REPOSITORY_UNREACHABLE`" is what a
+// 20-workspace repository actually produces, the shape `health.ts`'s `evaluateRepositoryGroup` already
+// had. Before this, a vanished root wrote N warn lines and spawned git N times for the same fact,
+// while the health report wrote one (PR #3381 review).
+//
+// A CLASSIFIED failure never latches: `IDENTITY_PROOF_FAILED` is a fact about ONE worktree, so the
+// next row of the same repository is still gathered, classified and persisted.
+//
+// The SUCCESSFUL listing is deliberately NOT memoized, and this is the whole reason the latch carries
+// the failure rather than the list: the PR #3348 review finding requires every row to classify against
+// the worktree list observed AFTER its own `ws:<workspaceId>` lock, so a snapshot shared across the
+// group would reintroduce exactly the staleness that fix closed for every instance after the first.
+// A repository that cannot be consulted has no fresh observation to lose.
+interface RepositoryReachability {
+  readonly unreachable: () => boolean;
+  readonly markUnreachable: () => void;
+}
+
+function repositoryReachability(): RepositoryReachability {
+  let unreachable = false;
+  return {
+    unreachable: (): boolean => unreachable,
+    markUnreachable: (): void => {
+      unreachable = true;
+    },
+  };
+}
+
+// Every row of one repository, in order, against that repository's already-built adapter.
+async function reconcileRepositoryGroup(
+  ctx: ReconcileCtx,
+  adapter: GitWorktreeAdapter,
+  group: readonly WorkspaceInstance[],
+  correlationId: string | undefined,
+): Promise<readonly WorkspaceInstance[]> {
+  const reachability = repositoryReachability();
+  const reconciled: WorkspaceInstance[] = [];
+  for (const instance of group) {
+    if (reachability.unreachable()) {
+      // The repository is already known unreachable for this pass: nothing here can be verified, so
+      // the row is carried forward exactly as the adapter-build failure above carries its group.
+      reconciled.push(carriedForward(instance));
+      continue;
+    }
+    // Serialize the WHOLE per-instance critical section — re-read, fact-gathering, classification, and
+    // the persisted write — under the SAME `ws:<workspaceId>` key every other mutating workspace flow
+    // uses (#449, ADR-0093 D1), matching repair.ts's "advisory check -> live reconcile -> lock acquire
+    // -> strategy mutation" and cleanup.ts's "re-check persisted liveness inside the critical section"
+    // (KEIKO-0996, #3339). Both facts this pass classifies against are read AFTER the lock is held,
+    // never before it: `fresh` re-reads the store row from inside the callback (a concurrent
+    // activate/pause/repair/cleanup that mutated or deleted the workspace while this pass awaited the
+    // lock is observed, not clobbered — and a deleted row is skipped rather than resurrected), and
+    // `gatherFacts` is handed a LAZY `() => adapter.listWorktrees()` factory instead of a pre-fetched
+    // snapshot. A PR #3348 review finding caught that the first version of this fix widened the lock
+    // around fact-gathering but still fed it the SAME worktree list captured once per repository BEFORE
+    // any instance in the group acquired its lock, so `observedHead`/`headMatches` could still be
+    // classified against pre-mutation git state for an instance further down the group. gatherFacts only
+    // invokes the factory when THIS instance's worktree still exists on disk (worktreeDirExists is
+    // itself always live), so the documented common case — a backlog of paused instances whose worktree
+    // is already gone — costs zero `listWorktrees` spawns, and a live worktree costs exactly one FRESH
+    // spawn, taken under its own lock. ADR-0093 D4 bounds live worktrees to single digits per repository
+    // in the realistic operating envelope (not the N=200 backlog scale that scale.test.ts seeds), so
+    // this cannot reintroduce the O(N) `listWorktrees` blow-up the repository-grouping guard catches.
+    // Deliberately NOT applied to reconcileSingleInstance: repair.ts already holds this exact key for
+    // its whole operation and re-enters reconcileSingleInstance inside it (locking there would
+    // self-deadlock), and that path already fetches its worktree list fresh immediately before use with
+    // no intervening await, so it has no equivalent staleness gap to close.
+    const result = await reconcileOneOrCarryForward(
+      ctx,
+      adapter,
+      reachability,
+      instance,
+      correlationId,
+    );
+    if (result !== undefined) reconciled.push(result);
+  }
+  return reconciled;
 }
 
 // The pass reports a row it could not verify as itself with health `unknown`: nothing is written,
@@ -592,6 +673,7 @@ function adapterForRepository(
 async function reconcileOneOrCarryForward(
   ctx: ReconcileCtx,
   adapter: GitWorktreeAdapter,
+  reachability: RepositoryReachability,
   instance: WorkspaceInstance,
   correlationId: string | undefined,
 ): Promise<WorkspaceInstance | undefined> {
@@ -605,7 +687,14 @@ async function reconcileOneOrCarryForward(
           const fresh = ctx.deps.store.getById(instance.workspaceId);
           if (fresh === undefined) return undefined;
           const nowMs = ctx.deps.now();
-          const gathered = await gatherFactsOrLogFailure(ctx, adapter, fresh, nowMs, correlationId);
+          const gathered = await gatherFactsOrLogFailure(
+            ctx,
+            adapter,
+            reachability,
+            fresh,
+            nowMs,
+            correlationId,
+          );
           // The persisted classification stands (nothing is written), but THIS report says so
           // honestly: the carried entry reports health `unknown` — this pass could not verify the
           // row — without persisting a drift that was not observed (#3376 review).
@@ -622,6 +711,7 @@ async function reconcileOneOrCarryForward(
 async function gatherFactsOrLogFailure(
   ctx: ReconcileCtx,
   adapter: GitWorktreeAdapter,
+  reachability: RepositoryReachability,
   instance: WorkspaceInstance,
   nowMs: number,
   correlationId: string | undefined,
@@ -636,10 +726,16 @@ async function gatherFactsOrLogFailure(
       undefined,
     );
   } catch (error) {
+    const classified = error instanceof TaskWorkspaceError ? error : repositoryUnreachable(error);
+    // An unclassified failure of the adapter and filesystem reads can only mean the repository
+    // itself could not be consulted, which is a fact about the whole GROUP: latch it, so the rows
+    // after this one are carried forward without a second spawn and without a duplicate line.
+    // A classified failure (IDENTITY_PROOF_FAILED) is a fact about this ROW and never latches.
+    if (classified.code === "REPOSITORY_UNREACHABLE") reachability.markUnreachable();
     logWorkspaceLifecycleFailure(
       ctx.deps,
       { operation: "reconcile", workspaceIdentitySeed: instance.workspaceId, correlationId },
-      error instanceof TaskWorkspaceError ? error : repositoryUnreachable(error),
+      classified,
     );
     return undefined;
   }

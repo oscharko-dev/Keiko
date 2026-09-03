@@ -12,7 +12,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
-import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type {
+  GitWorktreeAdapter,
+  WorktreeListEntry,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type {
   WorkspaceInfo,
@@ -31,8 +34,13 @@ import {
 } from "./active-store.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";
 import { createWorkspaceRepairService } from "./repair.js";
+import { createWorkspaceReconciliationService } from "./reconciliation.js";
 import { TaskWorkspaceError, type TaskWorkspaceErrorCode } from "./errors.js";
-import type { WorkspaceProvisioningService, WorkspaceRepairService } from "./types.js";
+import type {
+  WorkspaceProvisioningService,
+  WorkspaceReconciliationService,
+  WorkspaceRepairService,
+} from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
@@ -93,6 +101,51 @@ function rejectingAdapterFactory(received: string[]): AdapterFactory {
 function expectOnlyAdapterCorrelation(received: readonly string[], expected: string): void {
   expect(received.length).toBeGreaterThan(0);
   expect(new Set(received)).toEqual(new Set([expected]));
+}
+
+// The real adapter with ONLY `listWorktrees` rejecting, the way an unmounted repository root or a
+// denied path does — the second bare call on the repair path, after the adapter build.
+function listFailingAdapterFactory(): AdapterFactory {
+  return (workspace: WorkspaceInfo): GitWorktreeAdapter => ({
+    ...realAdapter(workspace),
+    listWorktrees: (): Promise<readonly WorktreeListEntry[]> =>
+      Promise.reject(new Error("spawn git ENOENT")),
+  });
+}
+
+// The live #447 classifier the repair path re-enters, built over the same fixtures, so a test can
+// assert what reconciliation ACTUALLY classifies a row as instead of seeding the verdict itself.
+function reconciliation(): WorkspaceReconciliationService {
+  return createWorkspaceReconciliationService({
+    store,
+    activePointerStore: pointerStore,
+    evidenceStore: capturingEvidence(),
+    managedRoot,
+    createAdapter: realAdapter,
+    redactString: (s: string): string => s,
+    now: (): number => nowMs,
+    newId: (): string => `id-${String(idCounter++)}`,
+    mutex: __twMutex,
+  });
+}
+
+// Single narrowing point for a captured rejection, so the assertions on it stay linear.
+async function rejectionOf(thunk: () => Promise<unknown>): Promise<TaskWorkspaceError> {
+  let caught: unknown;
+  try {
+    await thunk();
+  } catch (error) {
+    caught = error;
+  }
+  if (!(caught instanceof TaskWorkspaceError)) {
+    throw new Error("expected a classified TaskWorkspaceError rejection");
+  }
+  return caught;
+}
+
+function causeMessageOf(error: Error): string | undefined {
+  const cause: unknown = error.cause;
+  return cause instanceof Error ? cause.message : undefined;
 }
 
 function repairService(
@@ -247,13 +300,26 @@ describe("reconcile-pointer (relink known managed worktree)", () => {
       if (inspection === undefined)
         throw new Error("real linked-worktree identity was not resolved");
       const retiredIdentity = retired(inspection);
-      store.upsert({
-        ...instance,
-        gitdirIdentity: retiredIdentity,
-        lifecycleState: "recovery-required",
-        health: "drifted",
-        driftMarkers: ["identity-schema-retired"],
-      });
+      // ONLY the retired value is seeded. The marker is NOT: pre-seeding
+      // `driftMarkers: ["identity-schema-retired"]` made both variants pass with and without
+      // `isRetiredIdentity` recognising the composition under test, because an approved
+      // reconcile-pointer also refreshes a plain `gitdir-mismatch` row (PR #3381 review). The live
+      // classification below is what distinguishes the two, so dropping either retired composition
+      // from the recogniser turns THIS case red.
+      store.upsert({ ...instance, gitdirIdentity: retiredIdentity });
+
+      await reconciliation().reconcile(repoRoot, "retired-schema-0001");
+
+      const classified = store.getById(instance.workspaceId);
+      expect(classified?.driftMarkers).toEqual(["identity-schema-retired"]);
+      expect(classified?.recoveryHints).toEqual([
+        {
+          marker: "identity-schema-retired",
+          strategy: "reconcile-pointer",
+          operatorActionRequired: false,
+        },
+      ]);
+      expect(classified?.lifecycleState).toBe("recovery-required");
 
       await expect(repair(instance.workspaceId, "reconcile-pointer", false)).rejects.toMatchObject({
         code: "OPERATOR_APPROVAL_REQUIRED",
@@ -402,7 +468,7 @@ describe("release-stale-lock (clear stale lock)", () => {
       async (_label, input) => {
         const received: string[] = [];
         const instance = await provisionTask(`t-adapter-${_label.replaceAll(" ", "-")}`);
-        await expect(
+        const rejection = await rejectionOf(() =>
           repairService(undefined, rejectingAdapterFactory(received)).repair({
             workspaceId: instance.workspaceId,
             strategy: "release-stale-lock",
@@ -410,10 +476,48 @@ describe("release-stale-lock (clear stale lock)", () => {
             requestedBy: "u",
             correlationId: input,
           }),
-        ).rejects.toThrow("captured adapter correlation");
+        );
+        // Strengthened, not relaxed (PR #3381 review): the adapter build inside the repair's live
+        // re-reconcile is now CLASSIFIED, so the same throw arrives as the retryable
+        // REPOSITORY_UNREACHABLE — and the original still rides as its cause, which is what proves
+        // the adapter was actually constructed with the value asserted below.
+        expect(rejection.code).toBe("REPOSITORY_UNREACHABLE");
+        expect(causeMessageOf(rejection)).toBe("captured adapter correlation");
         expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
       },
     );
+
+    // reconcileSingleInstance — the path EVERY operator-approved repair re-enters (repair.ts:201,
+    // :453) — used to call `createAdapter` and `listWorktrees` bare. An operator clicking
+    // "Repair and bind" while the repository root was unavailable therefore got an UNCLASSIFIED
+    // rejection: `runWithWorkspaceLifecycleFailureLogging` logs only a TaskWorkspaceError, so
+    // server.log carried no `task-workspace.lifecycle` line for the repair's correlation id and
+    // routes.ts's `mapped === undefined` branch turned it into a generic 500 (PR #3381 review).
+    it("classifies and logs an unreachable repository during a repair, not a bare 500", async () => {
+      const instance = await provisionTask("t-repair-unreachable");
+      const activityLog = createBufferedServerLogSink();
+
+      const rejection = await rejectionOf(() =>
+        repairService(activityLog, listFailingAdapterFactory()).repair({
+          workspaceId: instance.workspaceId,
+          strategy: "reconcile-pointer",
+          operatorApproved: true,
+          requestedBy: "u",
+          correlationId: "repair-unreachable-0001",
+        }),
+      );
+
+      expect(rejection.code).toBe("REPOSITORY_UNREACHABLE");
+      // Retryable and 503, the same verdict the pass and the health report give the same fact.
+      expect(rejection.status).toBe(503);
+      expect(rejection.failureClass).toBe("retryable");
+      const line = activityLog.events.find((event) => event.errorKind === "REPOSITORY_UNREACHABLE");
+      expect(line?.correlationId).toBe("repair-unreachable-0001");
+      expect(line?.extra).toMatchObject({ operation: "repair" });
+      expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
+      // Body-free: the unreachable root never reaches the line.
+      expect(JSON.stringify(line)).not.toContain(repoRoot);
+    });
   });
 
   // IDX51: the same normalization that protects adapter termination evidence also protects lifecycle

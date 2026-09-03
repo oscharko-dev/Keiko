@@ -109,7 +109,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.provisioningUnavailable":
     "Verwaltete Task Workspaces sind auf dieser Installation nicht konfiguriert, daher kann kein Workspace gebunden werden.",
   "codingWorkbench.setup.repairRequired":
-    "Für dieses Repository und diesen Branch existiert bereits ein verwalteter Workspace, den Keiko nicht erneut verifizieren konnte: {finding}. Die Reparatur {effect}.",
+    "Für dieses Repository und diesen Branch existiert bereits ein verwalteter Workspace, den Keiko nicht erneut verifizieren konnte: {finding}. Die Reparatur {effect}. Keiko kann den ursprünglichen Worktree nicht von einem Ersatz am selben Pfad unterscheiden; die Freigabe registriert also, was dort auf der Festplatte liegt — prüfe den Worktree zuerst unter „Task Workspaces“, wenn seine Herkunft unklar ist.",
   "codingWorkbench.setup.repairEffect.reconcilePointer":
     "registriert den vorhandenen Worktree an Ort und Stelle neu; nichts wird gelöscht",
   "codingWorkbench.setup.repairEffect.recreateWorktree":

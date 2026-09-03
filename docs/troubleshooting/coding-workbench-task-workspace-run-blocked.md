@@ -31,9 +31,11 @@ editor audit feed (`GET /api/editor/agent/audit`) carried `disposition: "denied"
 Managed task worktrees live below the state directory's always-denied segment
 (`~/.keiko/ui/task-workspaces/…`, `.keiko/dev/ui/task-workspaces/…` in the dev lane). Three
 consumers re-admitted that root with the user-workspace rules instead of asking whether a path
-stays inside it: the editor-agent path boundary refused every edit as an escape, the verification
-runner required a registered project row for the worktree and answered `PROJECT_NOT_FOUND`, and
-script trust was looked up for the worktree instead of the repository it was bound from. Separately,
+stays inside it: the editor-agent path boundary refused every edit as an escape, and the
+verification runner treated the worktree as an ordinary project — without a project row it answered
+`PROJECT_NOT_FOUND`, and with the row production registers at provisioning it took package-script
+trust from the worktree's own record (derived once at provisioning, never on a later activation) and
+answered `WORKSPACE_TRUST_REQUIRED` instead of asking the repository it was bound from. Separately,
 a gateway capability saved before tool-calling verification existed is downgraded to
 `toolCalling: false` until a readiness check records a fresh verification, and the Coding Workbench
 did not name that reason.

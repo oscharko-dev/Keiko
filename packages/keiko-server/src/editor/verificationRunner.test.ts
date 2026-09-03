@@ -224,11 +224,24 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
     expect(port.fileSystems).toEqual([nodeWorkspaceFs]);
   });
 
-  // A managed task worktree is not a registered project; the root access resolver proves it and
-  // names the repository whose script trust it inherits. Every governed verification inside a task
-  // workspace used to fail as PROJECT_NOT_FOUND (workbench end-to-end run, 2026-09-03).
+  // A managed task worktree carries no script-trust grant of its own (production DOES register it
+  // as a project row — deps.ts `ensureManagedTaskWorkspaceIdentity` — but a row is not a trust
+  // decision); the root access resolver proves the root and names the repository whose grant
+  // governs it. This exercises the no-row shape, where `managedAccessFor` answers instead of
+  // `accessFor`; either way the decision comes from the repository, never the worktree's own root,
+  // which is what refused every governed verification inside a task workspace before this
+  // (workbench end-to-end run, 2026-09-03).
   it("resolves a managed task worktree without a project row and takes script trust from its repository", async () => {
     const worktreeRoot = mkdtempSync(join(tmpdir(), "keiko-verify-worktree-"));
+    // A REAL, resolvable directory the production resolver would grant ORDINARY access to. The
+    // fake mirrors that grant instead of answering `undefined`, so the `managed-task` kind filter
+    // in `managedAccessFor` is the ONLY thing that still produces PROJECT_NOT_FOUND below. With a
+    // fake that refuses the root outright the assertion passed with the filter deleted
+    // (`return access;`) and pinned nothing (PR #3381 review) — and the filter is what keeps the
+    // production resolver's ordinary grant for ANY existing allowed directory out of the
+    // unregistered path, where `targeted-test` is not trust-gated.
+    const elsewhereRoot = mkdtempSync(join(tmpdir(), "keiko-verify-elsewhere-"));
+    writeFileSync(join(elsewhereRoot, "package.json"), PACKAGE_JSON, "utf8");
     try {
       writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
       mkdirSync(join(worktreeRoot, "src"), { recursive: true });
@@ -244,7 +257,7 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
                 fs: nodeWorkspaceFs,
                 repositoryRoot: workspaceRoot,
               }
-            : undefined,
+            : { kind: "ordinary", canonicalRoot: root, fs: nodeWorkspaceFs },
         execute: port.port,
         isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean => {
           trustChecks.push(`${projectId}|${workspace.root}`);
@@ -262,13 +275,46 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
       expect(new Set(trustChecks)).toEqual(
         new Set([`${workspaceRoot}|${realpathSync(workspaceRoot)}`]),
       );
-      // An unregistered ORDINARY root is still no project.
-      expect(() => manager.discover(join(worktreeRoot, "..", "elsewhere"))).toThrow(
+      // An unregistered ORDINARY root is still no project — even though the resolver grants it.
+      expect(() => manager.discover(elsewhereRoot)).toThrow(
         expect.objectContaining({ code: "PROJECT_NOT_FOUND" }),
       );
+      expect(() =>
+        manager.execute(input({ projectId: elsewhereRoot, kinds: ["targeted-test"] })),
+      ).toThrow(expect.objectContaining({ code: "PROJECT_NOT_FOUND" }));
     } finally {
+      rmSync(elsewhereRoot, { recursive: true, force: true });
       rmSync(worktreeRoot, { recursive: true, force: true });
     }
+  });
+
+  // The resolver's OWN refusal line (`workspace.root.denied`, emitted inside the production
+  // resolver) landed under UNKNOWN_CORRELATION_ID because the runner called it with one argument,
+  // so a denial that blocked a verification could not be joined to the run that asked for it
+  // (PR #3381 review). Both run entry points hand the resolver the run's correlation; `discover`
+  // has no run and passes none, which the third row pins so the parameter stays optional.
+  it("hands the run's correlation id to the workspace root access resolver", async () => {
+    const seen: (string | undefined)[] = [];
+    const port = fakePort(report(["typecheck"]));
+    const manager = makeManager({
+      resolveWorkspaceRootAccess: (root, correlationId): WorkspaceRootAccess => {
+        seen.push(correlationId);
+        return { kind: "ordinary", canonicalRoot: root, fs: nodeWorkspaceFs };
+      },
+      execute: port.port,
+      isWorkspaceTrustedForPackageScripts: () => true,
+    });
+
+    const { done } = collect(manager);
+    manager.execute(input({ correlationId: "run-correlation-a" }));
+    await done;
+    await manager.runToReport(
+      input({ correlationId: "run-correlation-b" }),
+      new AbortController().signal,
+    );
+    manager.discover(workspaceRoot);
+
+    expect(seen).toEqual(["run-correlation-a", "run-correlation-b", undefined]);
   });
 
   // ADR-0147 D3 binds the grant to exact `package.json` bytes. A governed run can rewrite its own

@@ -29,6 +29,25 @@ const admittedBinding = {
   expiresAt: "2026-07-12T12:00:00.000Z",
 };
 
+// A producer binding whose authority is still live at the moment the test runs, so the discovery
+// preflight admits it and the failure diagnostic is filed under this run id rather than the
+// no-binding fallback. Derived from the clock, never a fixed future date that silently expires.
+function liveDiscoveryBinding(): {
+  readonly runId: string;
+  readonly envelopeDigest: string;
+  readonly workspaceId: string;
+  readonly workspaceRootDigest: string;
+  readonly expiresAt: string;
+} {
+  return {
+    runId: "run-discovery-live",
+    envelopeDigest: DIGEST,
+    workspaceId: "workspace-discovery-live",
+    workspaceRootDigest: DIGEST,
+    expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+  };
+}
+
 function changeset(): EditorAgentChangeset {
   return {
     patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
@@ -271,46 +290,62 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     }
   });
 
-  it("emits a redacted, correlated diagnostic when workspace discovery throws", async (): Promise<void> => {
-    const records: ServerDiagnosticRecord[] = [];
-    const ports = createCodingToolReadEditPorts({
-      secureWorkspaceTextRead: { readText: vi.fn() },
-      editorAgentClient: { action: vi.fn() },
-      resolveEditorActionContext: () => ({
-        sessionId: "session-discover",
-        authorityRef: { runId: "run-discover", envelopeDigest: DIGEST },
-        origin: "agent",
-      }),
-      resolveWorkspaceRoot: (): never => {
-        throw new Error(SENTINEL);
-      },
-      diagnostics: { record: (record): void => void records.push(record) },
-    });
+  // The correlation a discovery failure is filed under is the RUN's, and the only sanctioned
+  // stand-in when no producer binding is in scope is UNKNOWN_CORRELATION_ID. The tool action id is
+  // never it: the `session:call` shape the sidecar mints is rewritten to "invalid-correlation-id"
+  // by the sink, so admitting it made an honestly-absent id indistinguishable from a hostile one
+  // (PR #3381 review). Both rows run the same failure through one table so the fallback cannot be
+  // fixed by re-adding a second, laxer id shape for one of them.
+  it.each([
+    ["no producer binding", undefined, "unknown-correlation-id"],
+    ["a live producer binding", liveDiscoveryBinding(), "run-discovery-live"],
+  ] as const)(
+    "emits a redacted diagnostic under the run's correlation when workspace discovery throws (%s)",
+    async (_label, binding, expectedCorrelationId): Promise<void> => {
+      const records: ServerDiagnosticRecord[] = [];
+      const ports = createCodingToolReadEditPorts({
+        secureWorkspaceTextRead: { readText: vi.fn() },
+        editorAgentClient: { action: vi.fn() },
+        resolveEditorActionContext: () => ({
+          sessionId: "session-discover",
+          authorityRef: { runId: "run-discover", envelopeDigest: DIGEST },
+          origin: "agent",
+        }),
+        ...(binding === undefined
+          ? {}
+          : { resolveRepositoryReadContext: (): typeof binding => binding }),
+        resolveWorkspaceRoot: (): never => {
+          throw new Error(SENTINEL);
+        },
+        diagnostics: { record: (record): void => void records.push(record) },
+      });
 
-    const result = await ports.repositoryDiscover.execute(
-      {
-        action: "discover",
-        actionId: "discover-failure",
-        idempotencyKey: "discover-failure-key",
-        query: "*",
-        maxResults: 10,
-      },
-      undefined,
-      { check: (): true => true },
-    );
+      const result = await ports.repositoryDiscover.execute(
+        {
+          action: "discover",
+          actionId: "discover-failure",
+          idempotencyKey: "discover-failure-key",
+          query: "*",
+          maxResults: 10,
+        },
+        undefined,
+        binding === undefined ? { check: (): true => true } : { check: (): true => true, binding },
+      );
 
-    expect(result).toEqual({ status: "failed" });
-    expect(records).toEqual([
-      expect.objectContaining({
-        correlationId: "discover-failure",
-        operation: "coding-runtime.workspace-discovery",
-        source: "coding-tool-read-edit-ports.discover",
-        errorClass: "Error",
-        message: "workspace-discovery-failed",
-      }),
-    ]);
-    expect(JSON.stringify(records)).not.toContain(SENTINEL);
-  });
+      expect(result).toEqual({ status: "failed" });
+      expect(records).toEqual([
+        expect.objectContaining({
+          correlationId: expectedCorrelationId,
+          operation: "coding-runtime.workspace-discovery",
+          source: "coding-tool-read-edit-ports.discover",
+          errorClass: "Error",
+          message: "workspace-discovery-failed",
+        }),
+      ]);
+      expect(JSON.stringify(records)).not.toContain("discover-failure");
+      expect(JSON.stringify(records)).not.toContain(SENTINEL);
+    },
+  );
 
   it("uses only SecureWorkspaceTextReadPort and exposes the sole bounded content-bearing read result", async () => {
     const readText = vi.fn(() =>

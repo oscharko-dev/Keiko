@@ -18,7 +18,11 @@ import {
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
-import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  correlationIdOrUnknown,
+  isValidCorrelationId,
+  UNKNOWN_CORRELATION_ID,
+} from "../correlation.js";
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
 import { isExactEditorAgentChangeset, type CodingToolReadResult } from "./codingToolIpc.js";
 import type { CodingToolActionOf, GovernedCodingToolPort } from "./codingToolGovernedDelegate.js";
@@ -166,7 +170,7 @@ function executeDiscoverSync(
     }
     return { status: "completed", read: discoveryReadResult(text) };
   } catch (error) {
-    emitDiscoveryFailureDiagnostic(deps.diagnostics, binding, request.actionId, error);
+    emitDiscoveryFailureDiagnostic(deps.diagnostics, binding, error);
     return { status: "failed" };
   }
 }
@@ -185,19 +189,19 @@ function discoveryWorkspace(deps: CodingToolReadEditPortDeps): DiscoveryWorkspac
   return root === undefined ? undefined : { root };
 }
 
-const SAFE_DISCOVERY_CORRELATION_ID = /^[A-Za-z0-9:._-]{1,128}$/u;
-
+// Same rule as `editCorrelationId`/`editContextCorrelationId` below: the run id is the timeline a
+// discovery failure belongs to, and the ONE sanctioned stand-in when there is no run in scope is
+// UNKNOWN_CORRELATION_ID (correlation.ts, AGENTS.md §8). The local `[A-Za-z0-9:._-]{1,128}` regex
+// this replaced admitted the tool action id — a `session:call` shape the sink rewrites to
+// "invalid-correlation-id" — and otherwise fell back to an ad-hoc literal, so a wiring with no
+// producer binding logged a line indistinguishable from a hostile id (PR #3381 review).
 function emitDiscoveryFailureDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
   binding: RuntimeProducerBinding | undefined,
-  actionId: string,
   error: unknown,
 ): void {
-  const candidate = binding?.runId ?? actionId;
   emitServerDiagnostic(diagnostics, {
-    correlationId: SAFE_DISCOVERY_CORRELATION_ID.test(candidate)
-      ? candidate
-      : "coding-discovery-failure",
+    correlationId: correlationIdOrUnknown(binding?.runId),
     timestamp: new Date().toISOString(),
     operation: "coding-runtime.workspace-discovery",
     source: "coding-tool-read-edit-ports.discover",

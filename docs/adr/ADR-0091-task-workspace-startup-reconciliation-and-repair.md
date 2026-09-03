@@ -548,7 +548,17 @@ adapter cannot consult at all (a vanished root, a denied path, a spawn failure)
 is logged once as the retryable `REPOSITORY_UNREACHABLE` with its frames and
 cause chain, its rows are carried forward unverified (health `unknown`, nothing
 persisted), and the pass continues with every other repository — the health
-report applies the same rule. Only the gathering is isolated: a failure to
+report applies the same rule. Once per repository is literal: the first
+unclassified gathering failure latches that repository for the remainder of the
+pass, so twenty rows of a vanished root produce one line and one `git` spawn, not
+twenty of each. A CLASSIFIED failure (`IDENTITY_PROOF_FAILED`) is a fact about one
+worktree and never latches, and a SUCCESSFUL worktree listing is never memoized —
+the freshness rule above requires each row to classify against the list observed
+after its own `ws:<workspaceId>` lock. `reconcileSingleInstance`, which every
+operator-approved repair re-enters, classifies its own adapter build and worktree
+listing under the same code, so a repair attempted while the repository root is
+unavailable is a logged, retryable refusal rather than an unclassified 500. Only
+the gathering is isolated: a failure to
 persist or evidence a verdict is not a fact about the repository, is never
 relabelled as one, and propagates under its own name. Before 2026-09-03 a
 gathering failure escaped the per-instance boundary and silently aborted the

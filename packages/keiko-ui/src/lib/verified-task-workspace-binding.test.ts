@@ -95,6 +95,8 @@ describe("bindVerifiedTaskWorkspace", () => {
   });
 
   it("fails closed when reconciliation does not confirm the provisioned workspace", async () => {
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
     api.provision.mockResolvedValue({ instance: { workspaceId: "ws-1" } });
     api.reconcile.mockResolvedValue({
       entries: [{ workspaceId: "ws-other", status: "healthy" }],
@@ -105,6 +107,12 @@ describe("bindVerifiedTaskWorkspace", () => {
       stage: "verify",
     });
     expect(api.activate).not.toHaveBeenCalled();
+    // The refusal names the verdict it saw, exactly as the restore path does: a report that never
+    // mentioned the workspace is a different defect from one that classified it, and the generic
+    // verify sentence cannot tell them apart (AGENTS.md §8, #3381 review).
+    expect(diagnostics).toContain(
+      "[keiko] task workspace bind verify failed: status=missing-report-entry",
+    );
   });
 
   it.each([
@@ -259,6 +267,10 @@ describe("repairAndBindVerifiedTaskWorkspace", () => {
     api.repair.mockReset();
   });
 
+  afterEach(() => {
+    resetClientDiagnosticWriter();
+  });
+
   it("repairs with explicit operator approval, then verifies and only then activates", async () => {
     const order: string[] = [];
     api.repair.mockImplementation(() => {
@@ -310,6 +322,8 @@ describe("repairAndBindVerifiedTaskWorkspace", () => {
   });
 
   it("fails closed when the repaired workspace does not reconcile healthy", async () => {
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
     api.repair.mockResolvedValue({ applied: true, driftMarkers: [] });
     api.reconcile.mockResolvedValue({
       entries: [{ workspaceId: "ws-refused", status: "drifted" }],
@@ -320,6 +334,9 @@ describe("repairAndBindVerifiedTaskWorkspace", () => {
       stage: "verify",
     });
     expect(api.activate).not.toHaveBeenCalled();
+    // The repair APPLIED and the post-repair pass still refused: without the status the operator
+    // cannot tell `drifted` (uncommitted work) from a workspace the report never mentioned.
+    expect(diagnostics).toContain("[keiko] task workspace bind verify failed: status=drifted");
   });
 
   it("returns the bounded repair failure when the route rejects", async () => {

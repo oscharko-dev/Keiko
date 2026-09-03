@@ -27,6 +27,10 @@ import type {
   CodingToolFacadeOptions,
   CodingToolFacadePorts,
 } from "./codingToolFacadePorts.js";
+import {
+  VERIFICATION_RUNNER_ERROR_CODES,
+  type VerificationRunnerErrorCode,
+} from "../editor/verificationRunnerErrors.js";
 
 const READ_DIGEST = /^[a-f0-9]{64}$/u;
 
@@ -58,7 +62,36 @@ const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   ...EDIT_TRANSPORT_REASON_CODES,
   ...EDIT_PORT_REFUSAL_REASON_CODES,
 ]);
-const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set([
+// The verification PORT's own closed markers (productionManagedWorktreeTools.ts), as opposed to the
+// runner vocabulary sourced below. The first two are raised BEFORE the runner is called: the run's
+// authority or managed-workspace liveness was already gone when the tool call arrived, or the
+// sidecar named a verifier this server does not implement (cursor review, PR #3381). The rest
+// describe a run the runner actually finished — and only a RED run says VERIFICATION_FAILED: a
+// timeout and a resource ceiling name their own cause, and a run that never executed
+// (skipped/denied/cancelled) says so, because telling the model its tests failed when they did not
+// run sends it back to code that is fine (PR #3381 review). The status→code mapping is exhaustive
+// by type at the producer; this list is the vocabulary it may draw from.
+const GOVERNED_VERIFICATION_REASON_CODES = [
+  "verification-authority-revoked",
+  "verification-verifier-unsupported",
+  "VERIFICATION_FAILED",
+  "VERIFICATION_TIMED_OUT",
+  "VERIFICATION_RESOURCE_EXCEEDED",
+  "VERIFICATION_NOT_RUN",
+] as const;
+export type GovernedVerificationReasonCode = (typeof GOVERNED_VERIFICATION_REASON_CODES)[number];
+// The three runner codes that can only be minted at the HTTP boundary from the request envelope
+// itself (verificationRoutes.ts: a malformed body, an oversized body, a run id naming no in-flight
+// run). `runToReport` — the only runner entry point the governed verification port calls — cannot
+// answer one, so they stay out of the model-facing set. Everything else in the closed runner
+// vocabulary is forwarded, INCLUDING future additions: restating the codes here let a new runner
+// refusal collapse back to a bare "failed" with no test failing (PR #3381 review).
+const HTTP_ONLY_VERIFICATION_RUNNER_CODES: ReadonlySet<VerificationRunnerErrorCode> = new Set([
+  VERIFICATION_RUNNER_ERROR_CODES.BAD_REQUEST,
+  VERIFICATION_RUNNER_ERROR_CODES.PAYLOAD_TOO_LARGE,
+  VERIFICATION_RUNNER_ERROR_CODES.RUN_NOT_FOUND,
+]);
+const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   "capability-backend-unavailable",
   "command-backend-unavailable",
   "command-authority-revoked",
@@ -66,21 +99,14 @@ const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set([
   "git-authority-revoked",
   "delivery-authority-revoked",
   "connector-authority-revoked",
-  // The verification port's own pre-run refusals: the run's authority or managed-workspace liveness
-  // was already gone when the tool call arrived, or the sidecar named a verifier this server does
-  // not implement. Neither is a red test run and neither is retryable, but both used to return a
-  // bare "failed" (cursor review, PR #3381).
-  "verification-authority-revoked",
-  "verification-verifier-unsupported",
-  // The verification runner's own closed codes (editor/verificationRunner.ts). A verification the
-  // runner refused used to reach the model as a bare "failed", indistinguishable from a red test
-  // run, so the agent re-ran it instead of reporting the blocker (end-to-end run, 2026-09-03).
-  "PROJECT_NOT_FOUND",
-  "WORKSPACE_TRUST_REQUIRED",
-  "NO_RUNNABLE_STEPS",
-  "RUN_LIMIT_EXCEEDED",
-  "EVIDENCE_WRITE_FAILED",
-  "VERIFICATION_FAILED",
+  ...GOVERNED_VERIFICATION_REASON_CODES,
+  // The verification runner's own closed codes (editor/verificationRunnerErrors.ts), sourced rather
+  // than restated for the same reason the two contract enums above are. A verification the runner
+  // refused used to reach the model as a bare "failed", indistinguishable from a red test run, so
+  // the agent re-ran it instead of reporting the blocker (end-to-end run, 2026-09-03).
+  ...Object.values(VERIFICATION_RUNNER_ERROR_CODES).filter(
+    (code) => !HTTP_ONLY_VERIFICATION_RUNNER_CODES.has(code),
+  ),
 ]);
 import type {
   CodingToolInvocationRegistry,

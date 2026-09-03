@@ -1643,11 +1643,16 @@ function buildTerminalManager(options: {
 // asks whether a managed root re-proved. The collapse is stated HERE, at the injection point that
 // owns it, instead of inside the resolver: the surface that can tell the two decisions apart (the
 // terminal manager, which answers 403 vs 404) consumes the undiluted outcome (#3347).
+// The optional correlation id travels through the collapse as well: only the DECISION is flattened
+// here, never the operation it belongs to. A caller that knows the run/request id (the verification
+// runner threads `VerificationRunInput.correlationId`) makes the resolver's own
+// `workspace.root.denied` line joinable to that run instead of landing under
+// UNKNOWN_CORRELATION_ID (PR #3381 review); a caller with none in scope still passes one argument.
 function collapsedWorkspaceRootAccessResolver(
   resolveAccess: WorkspaceRootAccessResolver,
-): (requestedRoot: string) => WorkspaceRootAccess | undefined {
-  return (requestedRoot): WorkspaceRootAccess | undefined =>
-    workspaceRootAccessOrUndefined(resolveAccess(requestedRoot));
+): (requestedRoot: string, correlationId?: string) => WorkspaceRootAccess | undefined {
+  return (requestedRoot, correlationId): WorkspaceRootAccess | undefined =>
+    workspaceRootAccessOrUndefined(resolveAccess(requestedRoot, correlationId));
 }
 
 // Issue #1387 — the command runner reuses the same store + evidence + live-redactor wiring as the
@@ -3095,12 +3100,13 @@ interface PersistenceBundle {
   readonly codingRuntimeSnapshotStore: CodingRuntimeSnapshotStore | undefined;
 }
 
-// The optional correlationId is forward-compatible plumbing: no current caller of this resolver
-// type threads one through yet (TerminalManager.resolveWorkspaceRootAccess and the editor/files
-// route seams still call it with one argument), but every resolution failure below is reported
-// under UNKNOWN_CORRELATION_ID until one is. An extra optional trailing parameter is always a valid
-// substitute wherever the narrower one-argument shape is expected, so this stays a non-breaking
-// widening (#3347).
+// The optional correlationId is threaded by the callers that have one in scope — the verification
+// runner passes `VerificationRunInput.correlationId` through
+// `collapsedWorkspaceRootAccessResolver` (PR #3381 review) — while the remaining seams
+// (TerminalManager.resolveWorkspaceRootAccess, the editor/files routes) still call it with one
+// argument and have every resolution failure below reported under UNKNOWN_CORRELATION_ID. An extra
+// optional trailing parameter is always a valid substitute wherever the narrower one-argument shape
+// is expected, so this stays a non-breaking widening (#3347).
 type WorkspaceRootAccessResolver = (
   requestedRoot: string,
   correlationId?: string,

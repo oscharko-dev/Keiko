@@ -4,6 +4,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { describe, expect, it, vi } from "vitest";
 
+import { VERIFICATION_RUNNER_ERROR_CODES } from "../editor/verificationRunnerErrors.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import type { CodingToolAuthorityPort, CodingToolDelegatePort } from "./codingToolFacadePorts.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
@@ -17,6 +18,19 @@ const changeset = {
 function requestBody(value: Readonly<Record<string, unknown>>): string {
   return JSON.stringify({ actionId: "action-1", idempotencyKey: "idempotency-1", ...value });
 }
+
+// The three runner codes only the HTTP verification routes can mint (a malformed body, an oversized
+// body, a run id naming no in-flight run). `runToReport` — the single runner entry point the
+// governed verification port calls — cannot answer one, so the facade deliberately keeps them out
+// of the model-facing vocabulary.
+const HTTP_ONLY_VERIFICATION_RUNNER_CODES = ["BAD_REQUEST", "PAYLOAD_TOO_LARGE", "RUN_NOT_FOUND"];
+// Derived from the runner's OWN closed vocabulary, never a restated copy: the whole point of the
+// facade sourcing `VERIFICATION_RUNNER_ERROR_CODES` is that a code added there reaches the model
+// without a coordinated edit, and a fixture that restated the five known codes could not fail for
+// the sixth (AGENTS.md §7; PR #3381 review).
+const FORWARDED_VERIFICATION_RUNNER_CODES = Object.values(VERIFICATION_RUNNER_ERROR_CODES).filter(
+  (code) => !HTTP_ONLY_VERIFICATION_RUNNER_CODES.includes(code),
+);
 
 interface MutableFacadePorts {
   authority: { admit: CodingToolAuthorityPort["admit"] };
@@ -599,12 +613,14 @@ describe("CodingToolFacade", () => {
   // authority or managed-workspace liveness already gone, and an unimplemented verifier id — which
   // returned a bare "failed" until the cursor review of PR #3381.
   it.each([
-    "PROJECT_NOT_FOUND",
-    "WORKSPACE_TRUST_REQUIRED",
-    "NO_RUNNABLE_STEPS",
-    "RUN_LIMIT_EXCEEDED",
-    "EVIDENCE_WRITE_FAILED",
+    ...FORWARDED_VERIFICATION_RUNNER_CODES,
+    // The port's own markers: two pre-run refusals, and the four codes a finished run earns —
+    // VERIFICATION_FAILED is reserved for a RED run, so a timeout, a resource ceiling and a run
+    // that never executed each keep their own signal (PR #3381 review).
     "VERIFICATION_FAILED",
+    "VERIFICATION_TIMED_OUT",
+    "VERIFICATION_RESOURCE_EXCEEDED",
+    "VERIFICATION_NOT_RUN",
     "verification-authority-revoked",
     "verification-verifier-unsupported",
   ])("forwards the closed verification %s refusal", async (code) => {
@@ -623,6 +639,30 @@ describe("CodingToolFacade", () => {
       evidence: [{ kind: "governed-delegate", code }],
     });
   });
+
+  // The other half of sourcing the runner vocabulary: the exclusion is a decision, not an accident.
+  // A route-only code has no meaning for a tool call, so it collapses to the bare status instead of
+  // being handed to the model as if the runner had refused.
+  it.each(HTTP_ONLY_VERIFICATION_RUNNER_CODES)(
+    "never forwards the HTTP-only runner code %s",
+    async (code) => {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() =>
+        Promise.resolve({ outcome: "failed", reasonCode: code }),
+      );
+      const subject = createCodingToolFacade(ports);
+
+      const result = await subject.execute({
+        body: requestBody({ action: "verification", verifierId: "unit" }),
+        capability,
+      });
+
+      expect(result).toEqual({
+        status: "failed",
+        evidence: [{ kind: "governed-delegate", code: "failed" }],
+      });
+    },
+  );
 
   it("fails closed for blocked, denied, and malformed delegate outcomes", async () => {
     const ports = facade();

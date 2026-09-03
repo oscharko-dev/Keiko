@@ -223,15 +223,22 @@ function makeRepo(prefix: string): string {
 
 // The real adapter for every repository except `failingRoot`, whose worktree listing rejects with a
 // PLAIN error — the shape a vanished repository root or a denied path produces, not one of the
-// module's classified errors.
-function adapterFailingFor(failingRoot: string): AdapterFactory {
+// module's classified errors. `attempts` counts how often the failing repository was actually
+// consulted, so a test can prove the pass spawns git ONCE for a repository it cannot reach rather
+// than once per row (ADR-0091 D4's "logged once").
+function adapterFailingFor(
+  failingRoot: string,
+  attempts: { count: number } = { count: 0 },
+): AdapterFactory {
   return (workspace: WorkspaceInfo): GitWorktreeAdapter => {
     const adapter = realAdapter(workspace);
     if (workspace.root !== failingRoot) return adapter;
     return {
       ...adapter,
-      listWorktrees: (): Promise<readonly WorktreeListEntry[]> =>
-        Promise.reject(new Error("spawn git ENOENT")),
+      listWorktrees: (): Promise<readonly WorktreeListEntry[]> => {
+        attempts.count += 1;
+        return Promise.reject(new Error("spawn git ENOENT"));
+      },
     };
   };
 }
@@ -455,11 +462,23 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
 
   it("classifies a mismatched gitdir identity as stale-pointer (gitdir-mismatch)", async () => {
     const instance = await provisionTask("t1");
+    const activityLog = createBufferedServerLogSink();
     store.upsert({ ...instance, gitdirIdentity: "0000000000000000deadbeefdeadbeef" });
-    const report = await reconciliation().reconcile();
+    const report = await reconciliation(activityLog).reconcile(undefined, "gitdir-mismatch-0001");
     const reportEntry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
     expect(reportEntry?.status).toBe("stale-pointer");
     expect(reportEntry?.driftMarkers).toContain("gitdir-mismatch");
+    // The marker has to reach `server.log` too, not just the persisted row: without this the emit
+    // path could regress to `pointer-stale` for a READABLE mismatch (a dropped marker argument)
+    // while every row assertion stayed green, and the operator would be told a pointer is stale for
+    // a fact whose executable exit is `reconcile-pointer` (PR #3381 review).
+    const line = activityLogEventWithKind(activityLog, "stale-pointer");
+    expect(line.correlationId).toBe("gitdir-mismatch-0001");
+    expect(line.extra).toMatchObject({
+      operation: "reconcile",
+      workspaceId: instance.workspaceId,
+      driftMarker: "gitdir-mismatch",
+    });
   });
 
   // A workspace provisioned before #3367 carries the pointer-text identity provisioning.ts minted
@@ -474,8 +493,9 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
       .trim();
     const retired = createHash("sha256").update(pointerText, "utf8").digest("hex").slice(0, 32);
     store.upsert({ ...instance, gitdirIdentity: retired });
+    const activityLog = createBufferedServerLogSink();
 
-    const report = await reconciliation().reconcile();
+    const report = await reconciliation(activityLog).reconcile();
 
     const reportEntry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
     expect(reportEntry?.status).toBe("stale-pointer");
@@ -492,6 +512,12 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     expect(persisted?.lifecycleState).toBe("recovery-required");
     // Recognised, never promoted: the retired value stays until an operator-approved repair.
     expect(persisted?.gitdirIdentity).toBe(retired);
+    // …and the migration is named on the activity log, so the operator is not sent after a
+    // replaced worktree for a registration that only predates the rule.
+    expect(activityLogEventWithKind(activityLog, "stale-pointer").extra).toMatchObject({
+      operation: "reconcile",
+      driftMarker: "identity-schema-retired",
+    });
   });
 
   // A pointer that IS there but sits on a volume without creation time is present. Reporting it as
@@ -526,14 +552,22 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     const other = makeRepo("keiko-recon-other-");
     const healthy = await provisionTask("t-reachable");
     const stranded = await provisionTaskInRepo(other, "t-unreachable");
+    // Two more rows in the SAME unreachable repository. ADR-0091 D4 documents ONE line and one
+    // consultation for a repository the adapter cannot consult, and the pass used to emit one of
+    // each PER ROW: with `.find(...)` alone this test could not see the difference, so a
+    // 20-workspace repository wrote 20 warn lines and spawned git 20 times for one fact while
+    // health.ts wrote one (PR #3381 review).
+    const alsoStranded = await provisionTaskInRepo(other, "t-unreachable-2");
+    const thirdStranded = await provisionTaskInRepo(other, "t-unreachable-3");
     pointerStore.set({
       workspaceId: stranded.workspaceId,
       setBy: "u",
       atIso: "2026-01-01T00:00:00Z",
     });
     const activityLog = createBufferedServerLogSink();
+    const attempts = { count: 0 };
 
-    const report = await reconciliation(activityLog, adapterFailingFor(other)).reconcile(
+    const report = await reconciliation(activityLog, adapterFailingFor(other, attempts)).reconcile(
       undefined,
       "unreachable-0001",
     );
@@ -556,11 +590,26 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
       health: "healthy",
       driftMarkers: [],
     });
+    // Every row of the unreachable repository is carried forward unverified, not just the first.
+    for (const row of [alsoStranded, thirdStranded]) {
+      expect(entryFor(report, row.workspaceId).health).toBe("unknown");
+      expect(store.getById(row.workspaceId)).toMatchObject({
+        lifecycleState: "active",
+        health: "healthy",
+        driftMarkers: [],
+      });
+    }
     const line = activityLogEventWithKind(activityLog, "REPOSITORY_UNREACHABLE");
     expect(line.correlationId).toBe("unreachable-0001");
     expect(line.extra).toMatchObject({ operation: "reconcile" });
     expect(Array.isArray(line.extra?.causeChain)).toBe(true);
     expect(JSON.stringify(line)).not.toContain(other);
+    // ONE line and ONE consultation for three rows of one unreachable repository — the shape the
+    // ADR documents and the operator reads.
+    expect(
+      activityLog.events.filter((event) => event.errorKind === "REPOSITORY_UNREACHABLE"),
+    ).toHaveLength(1);
+    expect(attempts.count).toBe(1);
   });
 
   // Only the GATHERING of a row's live facts is isolated. A failure to persist the verdict is not a

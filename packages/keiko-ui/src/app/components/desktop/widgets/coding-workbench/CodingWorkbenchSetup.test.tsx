@@ -467,6 +467,40 @@ describe("CodingWorkbenchSetup", () => {
     expect(baseBranchMock).toHaveBeenCalledWith("/repos/other");
   });
 
+  // …but "the next repository" is the one in the PATH FIELD, not the workbench-wide selection. A
+  // typed path does not follow the switcher, so re-arming on the selection alone re-read the
+  // branch of a repository that was not being bound and overwrote the branch typed for the one
+  // that was: Bind then provisioned /repos/A with /repos/B's checked-out branch (#3381 review).
+  it("keeps a typed path and its typed branch when the workbench selection changes", async () => {
+    const user = userEvent.setup();
+    baseBranchMock.mockResolvedValue("dev");
+    const api = workspaceApi();
+    const view = renderWorkbench(api, liveState(), "/repos/selected");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("dev");
+    });
+
+    await user.clear(screen.getByLabelText("Repository path"));
+    await user.type(screen.getByLabelText("Repository path"), "/repos/A");
+    await user.clear(screen.getByLabelText("Target branch"));
+    await user.type(screen.getByLabelText("Target branch"), "release/1");
+    baseBranchMock.mockResolvedValue("trunk");
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={api}>
+        <CodingWorkbenchWindow selectedRoot="/repos/B" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    // Flush whatever the selection change could have started before reading the fields back: the
+    // overwrite this pins is the lookup's RESOLUTION, not the render that follows the rerender.
+    await waitFor(() => {
+      expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/A");
+    });
+    expect(screen.getByLabelText("Target branch")).toHaveValue("release/1");
+    expect(baseBranchMock).not.toHaveBeenCalledWith("/repos/B");
+  });
+
   it("keeps a branch the operator typed even when the lookup resolves later", async () => {
     const user = userEvent.setup();
     let resolveLookup: (branch: string | null) => void = () => undefined;
@@ -588,6 +622,29 @@ describe("CodingWorkbenchSetup", () => {
     expect(repairMock).not.toHaveBeenCalled();
   });
 
+  // The offer is resolved for the taskId `executeBind` derives from the TARGET BRANCH, so an
+  // edited branch field withdraws it exactly as an edited path does. Keeping it let "Repair and
+  // bind" repair, verify and activate the PREVIOUS branch's workspace while the card displayed the
+  // new one (#3381 review).
+  it("withdraws a repair offer when the target branch changes", async () => {
+    const user = userEvent.setup();
+    provisionMock.mockRejectedValue(pointerDrift());
+    listMock.mockResolvedValue([
+      refusedWorkspace({ strategy: "reconcile-pointer", operatorActionRequired: false }),
+    ]);
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+    expect(await screen.findByRole("button", { name: "Repair and bind" })).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Target branch"), "-next");
+
+    expect(screen.getByLabelText("Target branch")).toHaveValue("main-next");
+    expect(screen.queryByRole("button", { name: "Repair and bind" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(repairMock).not.toHaveBeenCalled();
+  });
+
   // The 2026-09-03 defect: an existing managed workspace the server could not re-verify was
   // refused with 409 POINTER_DRIFT, the card blamed the path and branch, and the row had no exit.
   it("offers the operator-approved repair for a refused existing workspace, then verifies and activates", async () => {
@@ -607,6 +664,10 @@ describe("CodingWorkbenchSetup", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Keiko could not re-verify it");
     expect(alert).toHaveTextContent("nothing is deleted");
+    // The approver, not Keiko, supplies the provenance proof here: the retired identity cannot
+    // separate the original worktree from a same-path replacement (#3381 review).
+    expect(alert).toHaveTextContent("re-registers whatever is on disk there");
+    expect(alert).toHaveTextContent("inspect the tree in Task workspaces first");
     expect(alert).not.toHaveTextContent("Review the repository path and target branch.");
     expect(alert).not.toHaveTextContent("sensitive worktree detail");
     expect(listMock).toHaveBeenCalledWith("/repos/selected");

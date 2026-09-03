@@ -138,7 +138,15 @@ async function verifyAndActivate(
 ): Promise<VerifiedTaskWorkspaceBindResult> {
   try {
     const report = await reconcileTaskWorkspaces({ root });
-    if (report.entries.find((entry) => entry.workspaceId === workspaceId)?.status !== "healthy") {
+    const entry = report.entries.find((item) => item.workspaceId === workspaceId);
+    if (entry?.status !== "healthy") {
+      // The same closed, content-free verdict the restore path names. Without it a repair that
+      // APPLIED and was then refused by the post-repair pass left the console with nothing saying
+      // which status refused it — `drifted` and a missing report entry surfaced identically behind
+      // the one generic verify sentence (#3381 review).
+      reportClientDiagnostic(
+        `[keiko] task workspace bind verify failed: status=${entry?.status ?? "missing-report-entry"}`,
+      );
       return { ok: false, stage: "verify" };
     }
   } catch (error) {

@@ -225,6 +225,8 @@ describe("getActive / list", () => {
   it("self-heals an active pointer whose persisted path no longer contains to the managed root", () => {
     const inst = store.upsert(instance("a"));
     const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-lifecycle-escape-")));
+    const activityLog = createBufferedServerLogSink();
+    const reading = lifecycleWith(fakeProvisioning(), activityLog);
     try {
       store.upsert({ ...inst, managedWorktreePath: outside });
       pointerStore.set({
@@ -232,8 +234,21 @@ describe("getActive / list", () => {
         setBy: "op",
         atIso: "2026-06-26T00:00:00.000Z",
       });
-      expect(service.getActive()).toBeUndefined();
+      expect(reading.getActive("active-read-unbindable")).toBeUndefined();
       expect(pointerStore.get()).toBeUndefined();
+      // The refusal that carries no marker of its own still carries a LINE: a persisted path that
+      // is not the one this identity derives is not a containment incident, so it gets the line and
+      // no drift row (#3376 review) — but never silence, because the caller drops the binding here
+      // exactly as it does for the other refusals (PR #3381 review).
+      const line = activityLog.events.find((event) => event.errorKind === "POINTER_DRIFT");
+      expect(line?.correlationId).toBe("active-read-unbindable");
+      expect(line?.extra).toMatchObject({
+        operation: "activate",
+        outcome: "blocked",
+        workspaceId: inst.workspaceId,
+      });
+      // No row was written for it: the marker-free refusal reports itself and nothing else.
+      expect(store.getById(inst.workspaceId)?.driftMarkers).toEqual([]);
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
@@ -257,21 +272,32 @@ describe("getActive / list", () => {
     expect(observed).toEqual([inst.managedWorktreePath]);
   });
 
-  it("fails closed when persisted active identity cannot be repaired after restart", () => {
+  it("fails closed when persisted active identity cannot be repaired after restart, and logs why", () => {
     const inst = store.upsert(instance("restart-failure"));
     pointerStore.set({
       workspaceId: inst.workspaceId,
       setBy: "op",
       atIso: "2026-06-26T00:00:00.000Z",
     });
+    const activityLog = createBufferedServerLogSink();
     const restarted = lifecycleWith(
       fakeProvisioning(() => {
         throw new Error("identity store unavailable");
       }),
+      activityLog,
     );
 
-    expect(restarted.getActive()).toBeUndefined();
+    expect(restarted.getActive("active-read-identity-failed")).toBeUndefined();
     expect(pointerStore.get()).toBeUndefined();
+    // The last refusal on this read that clears the pointer. It used to swallow the cause in a bare
+    // `catch { return false; }`, so the operator's binding disappeared with nothing in `server.log`
+    // to tie it to — the same gap the three refusals inside canExposeBinding had (PR #3381 review).
+    const line = activityLog.events.find((event) => event.errorKind === "PROVISIONING_FAILED");
+    expect(line?.correlationId).toBe("active-read-identity-failed");
+    expect(line?.extra).toMatchObject({ operation: "activate" });
+    expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
+    // Body-free: the seam's own message never reaches the line.
+    expect(activityLog.lines().join("\n")).not.toContain("identity store unavailable");
   });
 
   // Observed live on 2026-09-03: a startup reconcile had flagged the pointed-at workspace
@@ -298,17 +324,23 @@ describe("getActive / list", () => {
     });
   });
 
-  it("fails closed and clears the active pointer when identity repair is unavailable", () => {
+  it("fails closed and logs when the identity-repair seam is not wired at all", () => {
     const inst = store.upsert(instance("restart-without-identity-hook"));
     pointerStore.set({
       workspaceId: inst.workspaceId,
       setBy: "op",
       atIso: "2026-06-26T00:00:00.000Z",
     });
-    const restarted = lifecycleWith(fakeProvisioning("omit"));
+    const activityLog = createBufferedServerLogSink();
+    const restarted = lifecycleWith(fakeProvisioning("omit"), activityLog);
 
-    expect(restarted.getActive()).toBeUndefined();
+    expect(restarted.getActive("active-read-identity-unwired")).toBeUndefined();
     expect(pointerStore.get()).toBeUndefined();
+    // A missing seam is the same operator symptom as a seam that threw, so it gets the same line
+    // rather than an unexplained unbound application.
+    const line = activityLog.events.find((event) => event.errorKind === "PROVISIONING_FAILED");
+    expect(line?.correlationId).toBe("active-read-identity-unwired");
+    expect(line?.extra).toMatchObject({ operation: "activate" });
   });
 });
 
