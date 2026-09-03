@@ -159,12 +159,46 @@ describe("dev quality workflows", () => {
     expect(ci).toContain("SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}");
     expect(ci).toContain("Verify changed production sources are mapped into LCOV");
     expect(ci).toContain(
-      "ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.ref }}",
+      "ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}",
     );
     expect(ci).toContain("Verify manual analysis is bound to remote dev");
     expect(ci).toContain('expected="$(git rev-parse refs/remotes/origin/dev)"');
     expect(ci).toContain("SONAR_HEAD_SHA: ${{ steps.sonar-head.outputs.sha }}");
     expect(ci).toContain("node scripts/check-sonar-main-quality-gate.mjs");
+  });
+
+  it("binds every full-tree quality lane to the same immutable merge candidate", () => {
+    const candidateJobs = [
+      "core-quality",
+      "coverage-packages",
+      "coverage-ui",
+      "coverage-scripts",
+      "coverage-sonar",
+      "build-scan-sbom-smoke",
+      "cross-platform-smoke",
+      "ui",
+    ];
+
+    for (const jobName of candidateJobs) {
+      const steps = ciWorkflow.jobs[jobName].steps;
+      const checkout = steps.find((step) => step.uses?.startsWith("actions/checkout@"));
+      const candidateCheck = steps.find(
+        (step) => step.name === "Verify immutable pull-request merge candidate",
+      );
+
+      expect(checkout, `${jobName} checkout must exist`).toBeDefined();
+      expect(checkout.with.ref, `${jobName} must pin the run revision`).toBe(
+        "${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}",
+      );
+      expect(candidateCheck, `${jobName} must verify its candidate`).toMatchObject({
+        env: {
+          KEIKO_CANDIDATE_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+          KEIKO_CANDIDATE_HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+        },
+        if: "${{ github.event_name == 'pull_request' }}",
+        run: "node scripts/check-ci-merge-candidate.mjs",
+      });
+    }
   });
 
   it("isolates local Sonar state by repository and selectable loopback port", () => {
@@ -230,13 +264,14 @@ describe("dev quality workflows", () => {
     // Pin the analysis revision to the pull-request head so the merge-ref checkout does not trip the
     // SonarCloud "detected as changed but without having changed lines" SCM warning.
     expect(ci).toContain('-Dsonar.scm.revision="${SONAR_HEAD_SHA}"');
+    expect(ci).toContain("-Dsonar.analysisCache.enabled=false");
     expect(ci).toContain(
       "SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.sonar-head.outputs.sha || github.sha }}",
     );
     expect(ci).toContain('tee "$RUNNER_TEMP/sonar-scanner.log"');
     expect(ci).toContain("scanner_status=${PIPESTATUS[0]}");
     expect(ci).toContain(
-      'node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log"',
+      'node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log" --require-full-analysis',
     );
     expect(ci).toContain('exit "$scanner_status"');
     expect(ci).toContain('if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]');

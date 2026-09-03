@@ -92,8 +92,10 @@ against those two as well.
 - **coverage is not imported**, on purpose — coverage has its own gate
   (`npm run check:coverage:new-code`) and importing it here would double the runtime for no signal.
 
-So read a clean run as _"no known rule violation on my diff"_ — which is exactly the question you
-need answered before pushing — and never as _"SonarCloud will be green"_.
+So read a clean run as _"no known rule violation on my diff"_ — which is exactly the local question
+you need answered before pushing — and never as _"SonarCloud will be green"_. Required PR CI uses
+the cloud profile and, since incident #3377, disables the sensor cache and proves full-project
+analysis breadth so the pre-merge result has the same source surface as the following `dev` scan.
 
 ## When it disagrees with CI
 

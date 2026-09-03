@@ -75,6 +75,36 @@ describe("machineToken", () => {
 });
 
 describe("declaredErrorClassName", () => {
+  it("does not execute a constructor accessor planted on the prototype", () => {
+    class HostileConstructorError extends Error {}
+    let accessorReads = 0;
+    Object.defineProperty(HostileConstructorError.prototype, "constructor", {
+      configurable: true,
+      get: () => {
+        accessorReads += 1;
+        return HostileConstructorError;
+      },
+    });
+
+    expect(declaredErrorClassName(new HostileConstructorError("x"))).toBeUndefined();
+    expect(accessorReads).toBe(0);
+  });
+
+  it("does not execute a name accessor planted on the declared constructor", () => {
+    class HostileNameError extends Error {}
+    let accessorReads = 0;
+    Object.defineProperty(HostileNameError, "name", {
+      configurable: true,
+      get: () => {
+        accessorReads += 1;
+        return "LeakedName";
+      },
+    });
+
+    expect(declaredErrorClassName(new HostileNameError("x"))).toBeUndefined();
+    expect(accessorReads).toBe(0);
+  });
+
   it("degrades to undefined instead of throwing when getPrototypeOf traps", () => {
     const hostile = new Proxy(
       {},

@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (2026-07-16); amended for the local-only #3347 diagnostic on 2026-09-01.
+Accepted (2026-07-16); amended for the local-only #3347 diagnostic on 2026-09-01; amended
+2026-09-03 to make required pull-request Sonar analysis dev-equivalent and non-incremental.
 
 ## Amends
 
@@ -117,6 +118,17 @@ starts cold, so content addressing alone still paid the full matrix once per ses
 makes the first run proportional to the change as well. `--full` restores the complete sequence,
 and the required CI run on the pull request remains the authoritative full matrix — scoping moves
 local verification effort, never the enforcement bar.
+
+"Full matrix" includes the analysis surface inside each required check. SonarCloud's default PR
+sensor cache previously made that sentence false: the workflow ran, but its JavaScript/TypeScript
+analyzer freshly processed only changed files and could miss a full-tree warning that appeared on
+the subsequent `dev` push. Required Sonar scans therefore disable the analysis cache and the
+scanner-log validator proves full-project breadth before accepting the result.
+
+The matrix also shares one immutable integration subject. Full-tree lanes check out `github.sha`
+and verify that the PR merge commit's parents exactly match the event base and head before they run.
+Combined with strict required-status-check branch protection, concurrent agents are serialized by
+GitHub's candidate invalidation and re-check semantics rather than by post-merge agent monitoring.
 
 ### D5 — Static guards prefer precision to suppression
 

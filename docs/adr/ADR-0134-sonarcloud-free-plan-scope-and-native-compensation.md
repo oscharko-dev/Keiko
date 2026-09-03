@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-07-13).
+Accepted (2026-07-13); amended 2026-09-03 to make pull-request and `dev` scanner breadth identical.
 
 ## Context
 
@@ -60,6 +60,16 @@ are excluded. The scanner archive, installation, working directory, and full log
 
 Scanner warnings are blocking. A future exception requires an exact, documented signature and a
 bounded count with a regression test. Wildcard warning suppression is forbidden.
+
+Required scans also run with `sonar.analysisCache.enabled=false`. The scanner-log gate rejects an
+enabled sensor cache and rejects analysis whose largest completed source set is narrower than 75%
+of that same run's indexed files. The ratio is run-derived, not a repository file-count snapshot;
+it distinguishes a full Keiko analysis (4,844 of 5,525 in incident #3377) from the incremental PR
+analysis that missed the failure (91 of 5,525). It separately requires every emitted JS/TS
+architecture UDG to load successfully and bounds the difference between the graph receipts and the
+scanner's own eligible-source count; this prevents a broad unrelated sensor from masquerading as a
+full architecture run. This makes unchanged production sources part of the pre-merge
+scanner-warning verdict while retaining Sonar's PR-scoped issue and coverage evaluation.
 
 ### D3 — Manual analysis always means the remote `dev` revision
 

@@ -56,11 +56,23 @@ export const MACHINE_TOKEN_SHAPE = /^[A-Za-z0-9._-]{1,128}$/;
 // throw. Every optional machine field, and every field this module reads off an unknown error,
 // goes through this helper and degrades to absence.
 export function safeProperty(value: unknown, property: string): unknown {
-  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
-    return undefined;
-  }
+  if (typeof value !== "object" || value === null) return undefined;
   try {
     return Reflect.get(value, property);
+  } catch {
+    return undefined;
+  }
+}
+
+// Constructor metadata is read only from own DATA properties. Using the generic Reflect.get path
+// here would execute a hostile prototype/name accessor while merely trying to classify a failure;
+// it also makes Sonar's whole-project architecture graph serialize a callable Object attribute and
+// drop this source's UDG. A descriptor read avoids both outcomes and still recovers normal class
+// declarations, whose prototype constructor and function name are own data properties.
+function safeOwnDataProperty(value: object, property: string): unknown {
+  try {
+    const descriptor = Reflect.getOwnPropertyDescriptor(value, property);
+    return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
   } catch {
     return undefined;
   }
@@ -89,9 +101,11 @@ export function declaredErrorClassName(error: Error): string | undefined {
     // `contentFreeErrorClass`'s outer `try` to absorb the throw for it.
     return undefined;
   }
-  const ctor = safeProperty(proto, "constructor");
-  const name = safeProperty(ctor, "name");
-  if (typeof ctor !== "function" || typeof name !== "string") return undefined;
+  if (proto === null) return undefined;
+  const ctor = safeOwnDataProperty(proto, "constructor");
+  if (typeof ctor !== "function") return undefined;
+  const name = safeOwnDataProperty(ctor, "name");
+  if (typeof name !== "string") return undefined;
   if (!DECLARED_ERROR_CLASS_SHAPE.test(name)) {
     return undefined;
   }

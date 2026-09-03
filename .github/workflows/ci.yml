@@ -252,13 +252,19 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Verify immutable pull-request merge candidate
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - run: npm ci --ignore-scripts
       # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor; bubblewrap (and the
       # unshare fallback) need them to create the network namespace. Relax it for the runner so
@@ -446,6 +452,12 @@ jobs:
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Verify immutable pull-request merge candidate
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Restore the npm download cache
         # Restore-only. The measuring jobs sit on the critical path, and on a cold key all five
         # would otherwise tar and compress a several-hundred-megabyte `~/.npm` in their post-job
@@ -545,6 +557,12 @@ jobs:
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Verify immutable pull-request merge candidate
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Restore the npm download cache
         # Restore-only; `coverage-sonar` owns the save. See the note in `coverage-packages`.
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -608,6 +626,12 @@ jobs:
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Verify immutable pull-request merge candidate
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Restore the npm download cache
         # Restore-only; `coverage-sonar` owns the save. See the note in `coverage-packages`.
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -699,6 +723,12 @@ jobs:
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Verify immutable pull-request merge candidate
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Restore and maintain the npm download cache
         # The one job that also SAVES. It runs after the measuring jobs, so a cold key costs exactly
         # one post-job compression instead of six racing ones.
@@ -832,6 +862,7 @@ jobs:
               -Dsonar.projectBaseDir="$GITHUB_WORKSPACE" \
               -Dsonar.projectVersion="${STEPS_SONAR_VERSION_OUTPUTS_VERSION}" \
               -Dsonar.scm.revision="${SONAR_HEAD_SHA}" \
+              -Dsonar.analysisCache.enabled=false \
               -Dsonar.qualitygate.wait=true \
               -Dsonar.working.directory="$RUNNER_TEMP/sonar-work" \
               2>&1 | tee "$RUNNER_TEMP/sonar-scanner.log"
@@ -848,7 +879,7 @@ jobs:
               sleep $((attempt * 30))
             fi
           done
-          node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log"
+          node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log" --require-full-analysis
           echo "status=$scanner_status" >> "$GITHUB_OUTPUT"
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             exit 0
@@ -928,12 +959,19 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Verify immutable pull-request merge candidate
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - run: npm ci --ignore-scripts
       - name: Build
         run: npm run build
@@ -1040,6 +1078,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
@@ -1050,6 +1089,12 @@ jobs:
           dotnet-version: "8.0.x"
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Verify immutable pull-request merge candidate
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - run: npm ci --ignore-scripts
       # The spawn smoke imports `packages/keiko-tools/src/windows-shell.ts` as SOURCE (Node type
       # stripping) so the escaping it exercises cannot drift from what ships. That source now
@@ -1154,12 +1199,19 @@ jobs:
           # Keep that commit reachable instead of relying on the default single-commit checkout.
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Verify immutable pull-request merge candidate
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Install workspaces (single root lockfile after #167)
         run: npm ci --ignore-scripts
       # The #2215 real-BFF E2E executes verification commands through the same mandatory

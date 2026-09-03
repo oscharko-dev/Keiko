@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   executeSonarLogCli,
+  fullAnalysisEvidenceFailures,
   runSonarLogCheck,
   sonarLogFailures,
 } from "../check-sonar-analysis-log.mjs";
@@ -49,6 +50,78 @@ describe("Sonar scanner warning gate", () => {
     expect(sonarLogFailures("WARN SCM revision is missing\n")).not.toEqual([]);
   });
 
+  it("rejects the incremental PR analysis that missed the dev-only architecture failure", () => {
+    const incremental = [
+      "INFO 5525 files indexed (done)",
+      "INFO Sensor cache enabled",
+      "INFO Architecture JS/TS UDG cache: 2276 source file(s) without a UDG",
+      "INFO 91/91 source files have been analyzed",
+      "INFO Hit the cache for 4753 out of 4788",
+      'INFO * Files successfully loaded: "8" out of "8"',
+      'INFO * Files successfully loaded: "6" out of "6"',
+    ].join("\n");
+
+    expect(fullAnalysisEvidenceFailures(incremental)).toEqual([
+      "sensor cache remained enabled",
+      "largest analyzed source set 91/5525 is not a full-project analysis",
+      "architecture UDG receipts 14/14 for 2276 source files do not prove a full-project graph",
+    ]);
+  });
+
+  it("accepts the full-project source breadth emitted by a dev-equivalent analysis", () => {
+    const full = [
+      "INFO 5525 files indexed (done)",
+      "INFO Architecture JS/TS UDG cache: 2276 source file(s) without a UDG",
+      "INFO 16/16 source files have been analyzed",
+      "INFO 4844/4844 source files have been analyzed",
+      'INFO * Files successfully loaded: "189" out of "189"',
+      'INFO * Files successfully loaded: "2083" out of "2083"',
+    ].join("\n");
+
+    expect(fullAnalysisEvidenceFailures(full)).toEqual([]);
+  });
+
+  it("accepts Sonar's singular analyzed-source progress without an ambiguous parser", () => {
+    expect(
+      fullAnalysisEvidenceFailures(
+        [
+          "INFO 1 files indexed (done)",
+          "INFO Architecture JS/TS UDG cache: 1 source file(s) without a UDG",
+          "INFO 1/1 source file has been analyzed",
+          'INFO * Files successfully loaded: "1" out of "1"',
+        ].join("\n"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects a broad unrelated sensor when the architecture graph remains incremental", () => {
+    const narrowArchitecture = [
+      "INFO 5525 files indexed (done)",
+      "INFO 5044/5044 source files have been analyzed for the text and secrets analysis",
+      "INFO Architecture JS/TS UDG cache: 2276 source file(s) without a UDG",
+      'INFO * Files successfully loaded: "8" out of "8"',
+      'INFO * Files successfully loaded: "6" out of "6"',
+    ].join("\n");
+
+    expect(fullAnalysisEvidenceFailures(narrowArchitecture)).toEqual([
+      "architecture UDG receipts 14/14 for 2276 source files do not prove a full-project graph",
+    ]);
+  });
+
+  it("rejects an incomplete architecture receipt even at full breadth", () => {
+    const incompleteArchitecture = [
+      "INFO 5525 files indexed (done)",
+      "INFO 4844/4844 source files have been analyzed",
+      "INFO Architecture JS/TS UDG cache: 2276 source file(s) without a UDG",
+      'INFO * Files successfully loaded: "189" out of "189"',
+      'INFO * Files successfully loaded: "2082" out of "2083"',
+    ].join("\n");
+
+    expect(fullAnalysisEvidenceFailures(incompleteArchitecture)).toEqual([
+      "architecture UDG receipts 2271/2272 for 2276 source files do not prove a full-project graph",
+    ]);
+  });
+
   it("rejects dangerous analyzer states even when the scanner logs them as INFO", () => {
     expect(
       sonarLogFailures(
@@ -85,6 +158,13 @@ describe("Sonar scanner warning gate", () => {
     expect(() =>
       runSonarLogCheck({ path: "/tmp/sonar.log", read: () => "WARN missing LCOV\n" }),
     ).toThrow("scanner warning");
+    expect(() =>
+      runSonarLogCheck({
+        path: "/tmp/sonar.log",
+        read: () => "INFO 12 files indexed\nINFO 1/1 source files have been analyzed\n",
+        requireFullAnalysis: true,
+      }),
+    ).toThrow("not a full-project analysis");
     expect(() => runSonarLogCheck({})).toThrow("--log is required");
   });
 
@@ -95,6 +175,11 @@ describe("Sonar scanner warning gate", () => {
       run: (input) => runs.push(input),
     });
     expect(runs).toEqual([{ path: "/tmp/sonar.log" }]);
+    executeSonarLogCli({
+      argv: ["--log", "/tmp/sonar.log", "--require-full-analysis"],
+      run: (input) => runs.push(input),
+    });
+    expect(runs.at(-1)).toEqual({ path: "/tmp/sonar.log", requireFullAnalysis: true });
     const errors = [];
     const exitCodes = [];
     executeSonarLogCli({
