@@ -36,7 +36,7 @@ const mutationScope = readFileSync(resolve(root, "scripts/check-mutation-scope.m
 const localSonar = readFileSync(resolve(root, "docker/gates/run-sonar.sh"), "utf8");
 const localSonarCompose = readFileSync(resolve(root, "docker/gates/sonar-compose.yml"), "utf8");
 const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
-const trustedGateRevision = "2cd863fa0e0b912658042fc2e2fda0c23b981ac8";
+const trustedGateRevision = "d2e2233b666824133ee0ed8bbbf252ad24c7b80d";
 
 describe("dev quality workflows", () => {
   it("runs full mutation on a daily or explicit bounded lane, never on the PR critical path", () => {
@@ -204,8 +204,15 @@ describe("dev quality workflows", () => {
       const candidateCheckAt = steps.findIndex(
         (step) => step.name === "Verify immutable pull-request merge candidate",
       );
+      const toolchainCheckAt = steps.findIndex(
+        (step) => step.name === "Verify governed Node.js and npm toolchain",
+      );
+      const postToolchainCheckAt = steps.findIndex(
+        (step) => step.name === "Verify candidate tree remains immutable",
+      );
       const checkout = steps[checkoutAt];
       const candidateCheck = steps[candidateCheckAt];
+      const postToolchainCheck = steps[postToolchainCheckAt];
 
       expect(job["timeout-minutes"], `${jobName} must have a bounded timeout`).toBeGreaterThan(0);
       expect(checkout, `${jobName} checkout must exist`).toBeDefined();
@@ -222,6 +229,19 @@ describe("dev quality workflows", () => {
       expect(candidateCheck.uses).toBe(
         `oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@${trustedGateRevision}`,
       );
+      expect(
+        postToolchainCheck,
+        `${jobName} must re-verify after candidate code runs`,
+      ).toMatchObject({
+        if: "${{ github.event_name == 'pull_request' }}",
+        with: {
+          "base-sha": "${{ github.event.pull_request.base.sha }}",
+          "head-sha": "${{ github.event.pull_request.head.sha }}",
+        },
+      });
+      expect(postToolchainCheck.uses).toBe(
+        `oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@${trustedGateRevision}`,
+      );
       expect(setupNodeAt, `${jobName} must set up the trusted action runtime`).toBeGreaterThan(
         checkoutAt,
       );
@@ -229,6 +249,10 @@ describe("dev quality workflows", () => {
         candidateCheckAt,
         `${jobName} must verify before another action or candidate command runs`,
       ).toBe(setupNodeAt + 1);
+      expect(
+        postToolchainCheckAt,
+        `${jobName} must re-verify immediately after the candidate-owned toolchain check`,
+      ).toBe(toolchainCheckAt + 1);
     }
 
     const sonarEvidence = ciWorkflow.jobs["coverage-sonar"].steps.find(

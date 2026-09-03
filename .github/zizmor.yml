@@ -33,29 +33,37 @@ rules:
       # before removal: `zizmor` reports zero cache-poisoning findings for the pre-#2704 ci.yml with
       # no ignore list at all.
       # USearch runtime: coverage-packages, coverage-ui, coverage-scripts
-      - ci.yml:484
-      - ci.yml:578
-      - ci.yml:648
+      - ci.yml:496
+      - ci.yml:596
+      - ci.yml:672
       # coverage-sonar: npm download cache (the one job that saves it), Sonar Scanner CLI archive
-      - ci.yml:739
-      - ci.yml:825
+      - ci.yml:769
+      - ci.yml:855
   ref-version-mismatch:
     ignore:
       # These two repository-owned gate actions are pinned to the exact reviewed commit that
-      # introduced them. `gate-snapshot-2` is an audit label recorded by the dependency-currency
+      # introduced them. `gate-snapshot-3` is an audit label recorded by the dependency-currency
       # gate, not a mutable Git tag, so zizmor's online ref lookup cannot resolve it by design.
       # The executable reference remains a full 40-character SHA, and
-      # `dev-quality-workflows.test.mjs` pins the same SHA for all nine invocations. Suppress only
+      # `dev-quality-workflows.test.mjs` pins the same SHA for all seventeen invocations. Suppress only
       # zizmor's version-comment lookup finding; its immutable-pin check remains active.
       - ci.yml:262
-      - ci.yml:456
-      - ci.yml:562
-      - ci.yml:632
-      - ci.yml:730
-      - ci.yml:890
-      - ci.yml:985
-      - ci.yml:1105
-      - ci.yml:1226
+      - ci.yml:270
+      - ci.yml:462
+      - ci.yml:470
+      - ci.yml:574
+      - ci.yml:582
+      - ci.yml:650
+      - ci.yml:658
+      - ci.yml:754
+      - ci.yml:762
+      - ci.yml:920
+      - ci.yml:1015
+      - ci.yml:1023
+      - ci.yml:1141
+      - ci.yml:1153
+      - ci.yml:1268
+      - ci.yml:1276
   dangerous-triggers:
     ignore:
       # ADR-0161: the infrastructure-signature observer must see runs that have already completed, and
