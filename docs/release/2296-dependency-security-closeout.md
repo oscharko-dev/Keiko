@@ -174,7 +174,7 @@ current. Cross-check individual root devDependencies before claiming a clean swe
 
 Every action is pinned to a full 40-character commit SHA with a version comment. All 14 external
 action repositories resolve their documented tag to exactly the pinned commit. Keiko's two trusted
-gate actions instead use the non-tag audit label `gate-snapshot-1` and resolve to the separately
+gate actions instead use the non-tag audit label `gate-snapshot-2` and resolve to the separately
 reviewed repository commit recorded below; the line-scoped `ref-version-mismatch` dispositions in
 `.github/zizmor.yml` suppress only the inapplicable online tag lookup and leave immutable-pin
 analysis active.
@@ -199,7 +199,7 @@ guaranteed version-mismatch failure.
 | `Azure/login`                      | v3.0.0          | 532459ea530d8321f2fb9bb10d1e0bcf23869a43 | patch-deferred |
 | `Azure/artifact-signing-action`    | v2.0.0          | c7ab2a863ab5f9a846ddb8265964877ef296ee82 | current        |
 | `oscharko-dev/Keiko-for-Quality`   | v0.25.0         | f1117fb2b56a62bcbec22afbc149d5bd1474060c | current        |
-| `oscharko-dev/Keiko`               | gate-snapshot-1 | 8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 | current        |
+| `oscharko-dev/Keiko`               | gate-snapshot-2 | 2cd863fa0e0b912658042fc2e2fda0c23b981ac8 | current        |
 
 The four `patch-deferred` actions have newer upstream tags (checkout v7.0.1, attest v4.2.2,
 codeql-action v4.37.9, Azure/login v3.0.2). They are left to Dependabot rather than hand-bumped

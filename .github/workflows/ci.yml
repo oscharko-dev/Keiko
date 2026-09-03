@@ -257,14 +257,14 @@ jobs:
         with:
           node-version: "24.18.0"
           package-manager-cache: false
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Verify immutable pull-request merge candidate
         if: ${{ github.event_name == 'pull_request' }}
-        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@2cd863fa0e0b912658042fc2e2fda0c23b981ac8 # gate-snapshot-2
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}
           head-sha: ${{ github.event.pull_request.head.sha }}
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - run: npm ci --ignore-scripts
       # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor; bubblewrap (and the
       # unshare fallback) need them to create the network namespace. Relax it for the runner so
@@ -451,14 +451,14 @@ jobs:
         with:
           node-version: "24.18.0"
           package-manager-cache: false
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Verify immutable pull-request merge candidate
         if: ${{ github.event_name == 'pull_request' }}
-        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@2cd863fa0e0b912658042fc2e2fda0c23b981ac8 # gate-snapshot-2
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}
           head-sha: ${{ github.event.pull_request.head.sha }}
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Restore the npm download cache
         # Restore-only. The measuring jobs sit on the critical path, and on a cold key all five
         # would otherwise tar and compress a several-hundred-megabyte `~/.npm` in their post-job
@@ -557,14 +557,14 @@ jobs:
         with:
           node-version: "24.18.0"
           package-manager-cache: false
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Verify immutable pull-request merge candidate
         if: ${{ github.event_name == 'pull_request' }}
-        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@2cd863fa0e0b912658042fc2e2fda0c23b981ac8 # gate-snapshot-2
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}
           head-sha: ${{ github.event.pull_request.head.sha }}
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Restore the npm download cache
         # Restore-only; `coverage-sonar` owns the save. See the note in `coverage-packages`.
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -627,14 +627,14 @@ jobs:
         with:
           node-version: "24.18.0"
           package-manager-cache: false
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Verify immutable pull-request merge candidate
         if: ${{ github.event_name == 'pull_request' }}
-        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@2cd863fa0e0b912658042fc2e2fda0c23b981ac8 # gate-snapshot-2
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}
           head-sha: ${{ github.event.pull_request.head.sha }}
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Restore the npm download cache
         # Restore-only; `coverage-sonar` owns the save. See the note in `coverage-packages`.
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -725,14 +725,14 @@ jobs:
         with:
           node-version: "24.18.0"
           package-manager-cache: false
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Verify immutable pull-request merge candidate
         if: ${{ github.event_name == 'pull_request' }}
-        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@2cd863fa0e0b912658042fc2e2fda0c23b981ac8 # gate-snapshot-2
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}
           head-sha: ${{ github.event.pull_request.head.sha }}
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Restore and maintain the npm download cache
         # The one job that also SAVES. It runs after the measuring jobs, so a cold key costs exactly
         # one post-job compression instead of six racing ones.
@@ -887,7 +887,7 @@ jobs:
           echo "status=$scanner_status" >> "$GITHUB_OUTPUT"
       - name: Verify trusted Sonar full-analysis evidence
         if: ${{ always() && steps.sonar-scan.outcome != 'skipped' }}
-        uses: oscharko-dev/Keiko/.github/actions/verify-sonar-analysis-log@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        uses: oscharko-dev/Keiko/.github/actions/verify-sonar-analysis-log@2cd863fa0e0b912658042fc2e2fda0c23b981ac8 # gate-snapshot-2
         with:
           log-path: ${{ runner.temp }}/sonar-scanner.log
       - name: Fail the lane when the Sonar scanner failed
@@ -980,14 +980,14 @@ jobs:
         with:
           node-version: "24.18.0"
           package-manager-cache: false
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Verify immutable pull-request merge candidate
         if: ${{ github.event_name == 'pull_request' }}
-        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@2cd863fa0e0b912658042fc2e2fda0c23b981ac8 # gate-snapshot-2
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}
           head-sha: ${{ github.event.pull_request.head.sha }}
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - run: npm ci --ignore-scripts
       - name: Build
         run: npm run build
@@ -1100,18 +1100,18 @@ jobs:
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify immutable pull-request merge candidate
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@2cd863fa0e0b912658042fc2e2fda0c23b981ac8 # gate-snapshot-2
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         if: runner.os == 'Windows'
         with:
           dotnet-version: "8.0.x"
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
-      - name: Verify immutable pull-request merge candidate
-        if: ${{ github.event_name == 'pull_request' }}
-        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
-        with:
-          base-sha: ${{ github.event.pull_request.base.sha }}
-          head-sha: ${{ github.event.pull_request.head.sha }}
       - run: npm ci --ignore-scripts
       # The spawn smoke imports `packages/keiko-tools/src/windows-shell.ts` as SOURCE (Node type
       # stripping) so the escaping it exercises cannot drift from what ships. That source now
@@ -1221,14 +1221,14 @@ jobs:
         with:
           node-version: "24.18.0"
           package-manager-cache: false
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Verify immutable pull-request merge candidate
         if: ${{ github.event_name == 'pull_request' }}
-        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@2cd863fa0e0b912658042fc2e2fda0c23b981ac8 # gate-snapshot-2
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}
           head-sha: ${{ github.event.pull_request.head.sha }}
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install workspaces (single root lockfile after #167)
         run: npm ci --ignore-scripts
       # The #2215 real-BFF E2E executes verification commands through the same mandatory

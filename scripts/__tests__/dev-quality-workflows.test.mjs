@@ -14,6 +14,14 @@ const sonarAnalysisAction = parse(
   readFileSync(resolve(root, ".github/actions/verify-sonar-analysis-log/action.yml"), "utf8"),
   { maxAliasCount: 0 },
 );
+const mergeCandidateActionMain = readFileSync(
+  resolve(root, ".github/actions/verify-ci-merge-candidate/main.mjs"),
+  "utf8",
+);
+const sonarAnalysisActionMain = readFileSync(
+  resolve(root, ".github/actions/verify-sonar-analysis-log/main.mjs"),
+  "utf8",
+);
 const nightlyPerfEvidence = readFileSync(
   resolve(root, ".github/workflows/nightly-perf-evidence.yml"),
   "utf8",
@@ -28,7 +36,7 @@ const mutationScope = readFileSync(resolve(root, "scripts/check-mutation-scope.m
 const localSonar = readFileSync(resolve(root, "docker/gates/run-sonar.sh"), "utf8");
 const localSonarCompose = readFileSync(resolve(root, "docker/gates/sonar-compose.yml"), "utf8");
 const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
-const trustedGateRevision = "8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6";
+const trustedGateRevision = "2cd863fa0e0b912658042fc2e2fda0c23b981ac8";
 
 describe("dev quality workflows", () => {
   it("runs full mutation on a daily or explicit bounded lane, never on the PR critical path", () => {
@@ -191,10 +199,13 @@ describe("dev quality workflows", () => {
     for (const jobName of candidateJobs) {
       const job = ciWorkflow.jobs[jobName];
       const steps = job.steps;
-      const checkout = steps.find((step) => step.uses?.startsWith("actions/checkout@"));
-      const candidateCheck = steps.find(
+      const checkoutAt = steps.findIndex((step) => step.uses?.startsWith("actions/checkout@"));
+      const setupNodeAt = steps.findIndex((step) => step.uses?.startsWith("actions/setup-node@"));
+      const candidateCheckAt = steps.findIndex(
         (step) => step.name === "Verify immutable pull-request merge candidate",
       );
+      const checkout = steps[checkoutAt];
+      const candidateCheck = steps[candidateCheckAt];
 
       expect(job["timeout-minutes"], `${jobName} must have a bounded timeout`).toBeGreaterThan(0);
       expect(checkout, `${jobName} checkout must exist`).toBeDefined();
@@ -211,6 +222,13 @@ describe("dev quality workflows", () => {
       expect(candidateCheck.uses).toBe(
         `oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@${trustedGateRevision}`,
       );
+      expect(setupNodeAt, `${jobName} must set up the trusted action runtime`).toBeGreaterThan(
+        checkoutAt,
+      );
+      expect(
+        candidateCheckAt,
+        `${jobName} must verify before another action or candidate command runs`,
+      ).toBe(setupNodeAt + 1);
     }
 
     const sonarEvidence = ciWorkflow.jobs["coverage-sonar"].steps.find(
@@ -223,21 +241,14 @@ describe("dev quality workflows", () => {
     expect(sonarEvidence.uses).toBe(
       `oscharko-dev/Keiko/.github/actions/verify-sonar-analysis-log@${trustedGateRevision}`,
     );
-    expect(mergeCandidateAction.runs.steps).toEqual([
-      {
-        env: {
-          KEIKO_CANDIDATE_BASE_SHA: "${{ inputs.base-sha }}",
-          KEIKO_CANDIDATE_HEAD_SHA: "${{ inputs.head-sha }}",
-        },
-        name: "Verify exact GitHub merge revision",
-        run: 'node "$GITHUB_ACTION_PATH/../../../scripts/check-ci-merge-candidate.mjs"',
-        shell: "bash",
-      },
-    ]);
-    expect(sonarAnalysisAction.runs.steps[0].run).toContain(
-      'node "$GITHUB_ACTION_PATH/../../../scripts/check-sonar-analysis-log.mjs"',
-    );
-    expect(sonarAnalysisAction.runs.steps[0].run).toContain("--require-full-analysis");
+    expect(mergeCandidateAction.runs).toEqual({ main: "main.mjs", using: "node24" });
+    expect(sonarAnalysisAction.runs).toEqual({ main: "main.mjs", using: "node24" });
+    expect(mergeCandidateActionMain).toContain("runCiMergeCandidateCheck");
+    expect(mergeCandidateActionMain).toContain('process.env["INPUT_BASE-SHA"]');
+    expect(sonarAnalysisActionMain).toContain("runSonarLogCheck");
+    expect(sonarAnalysisActionMain).toContain("requireFullAnalysis: true");
+    expect(mergeCandidateActionMain).not.toMatch(/\b(?:exec|spawn)(?:File|Sync)?\b/u);
+    expect(sonarAnalysisActionMain).not.toMatch(/\b(?:exec|spawn)(?:File|Sync)?\b/u);
   });
 
   it("isolates local Sonar state by repository and selectable loopback port", () => {
