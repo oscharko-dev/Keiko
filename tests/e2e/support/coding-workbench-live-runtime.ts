@@ -41,12 +41,14 @@ export async function installLiveCodingWorkbenchRuntime(
     open: async (): Promise<void> => {
       await page.goto("/");
       const launcher = page.getByRole("button", { name: "Coding Workbench", exact: true });
-      // Exact accessible names avoid matching the Workbench window-frame controls once it opens.
+      const heading = page.getByRole("heading", { name: "Coding Workbench", exact: true });
+      // Exact names avoid the window controls; retry only while a pre-hydration click is ignored.
       await expect(launcher).toBeVisible();
-      await launcher.click();
-      await expect(
-        page.getByRole("heading", { name: "Coding Workbench", exact: true }),
-      ).toBeVisible({ timeout: 15_000 });
+      await expect(async () => {
+        if ((await launcher.getAttribute("aria-pressed")) !== "true") await launcher.click();
+        await expect(launcher).toHaveAttribute("aria-pressed", "true", { timeout: 2_000 });
+      }).toPass({ timeout: 15_000 });
+      await expect(heading).toBeVisible({ timeout: 15_000 });
     },
     // #2644 moved the product-wide autonomy modes out of the Workbench into Settings → Security.
     // A request made here must still be answered by the server's clamp, never by the surface that

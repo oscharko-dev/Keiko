@@ -442,11 +442,9 @@ jobs:
           # Unchanged from the serial job: package tests read real repository history.
           fetch-depth: 0
           persist-credentials: false
-          # Pinned to the run's immutable commit, not the moving ref the single job could safely
-          # use: five checkouts now feed one merged verdict, and `refs/pull/N/merge` is rewritten
-          # whenever the head or base moves. Skew would have the shards measure one tree while the
-          # gates and the scanner judge another, with nothing to detect it (Issue #2704).
-          ref: ${{ github.sha }}
+          # PR/push runs use their immutable commit. Manual Sonar runs bind this producer to `dev`
+          # so its coverage cannot be mixed with a scanner checkout from another revision.
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
@@ -548,11 +546,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          # Pinned to the run's immutable commit, not the moving ref the single job could safely
-          # use: five checkouts now feed one merged verdict, and `refs/pull/N/merge` is rewritten
-          # whenever the head or base moves. Skew would have the shards measure one tree while the
-          # gates and the scanner judge another, with nothing to detect it (Issue #2704).
-          ref: ${{ github.sha }}
+          # PR/push runs use their immutable commit. Manual Sonar runs bind this producer to `dev`
+          # so its coverage cannot be mixed with a scanner checkout from another revision.
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
@@ -618,11 +614,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          # Pinned to the run's immutable commit, not the moving ref the single job could safely
-          # use: five checkouts now feed one merged verdict, and `refs/pull/N/merge` is rewritten
-          # whenever the head or base moves. Skew would have the shards measure one tree while the
-          # gates and the scanner judge another, with nothing to detect it (Issue #2704).
-          ref: ${{ github.sha }}
+          # PR/push runs use their immutable commit. Manual Sonar runs bind this producer to `dev`
+          # so its coverage cannot be mixed with a scanner checkout from another revision.
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"

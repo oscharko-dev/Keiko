@@ -20,6 +20,12 @@ const mutationScope = readFileSync(resolve(root, "scripts/check-mutation-scope.m
 const localSonar = readFileSync(resolve(root, "docker/gates/run-sonar.sh"), "utf8");
 const localSonarCompose = readFileSync(resolve(root, "docker/gates/sonar-compose.yml"), "utf8");
 const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+const devDispatchCoverageJobs = new Set([
+  "coverage-packages",
+  "coverage-ui",
+  "coverage-scripts",
+  "coverage-sonar",
+]);
 
 describe("dev quality workflows", () => {
   it("runs full mutation on a daily or explicit bounded lane, never on the PR critical path", () => {
@@ -193,7 +199,7 @@ describe("dev quality workflows", () => {
       expect(job["timeout-minutes"], `${jobName} must have a bounded timeout`).toBeGreaterThan(0);
       expect(checkout, `${jobName} checkout must exist`).toBeDefined();
       expect(checkout.with.ref, `${jobName} must pin the run revision`).toBe(
-        jobName === "coverage-sonar"
+        devDispatchCoverageJobs.has(jobName)
           ? "${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}"
           : "${{ github.sha }}",
       );

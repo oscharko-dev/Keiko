@@ -89,12 +89,12 @@ verdict while retaining Sonar's PR-scoped issue and coverage evaluation.
 
 ### D3 — Manual analysis always means the remote `dev` revision
 
-For `workflow_dispatch`, only the coverage/Sonar job checks out `dev` independently of the branch
-selected in the GitHub UI. It fetches and compares the checked-out SHA with `origin/dev`, runs
-coverage and scope checks, performs a main-branch scan, verifies scanner warnings, and evaluates
-the resulting main analysis against the exact SHA. Every other manually dispatched lane keeps the
-selected immutable `github.sha`; dispatching the Sonar repair lane must not silently retarget the
-rest of the matrix. The New Code Definition remains `previous_version`; neither
+For `workflow_dispatch`, the coverage/Sonar job and its three coverage-producer jobs check out
+`dev` independently of the branch selected in the GitHub UI. This keeps every LCOV and blob
+artifact on the same revision that the scanner checks, compares with `origin/dev`, and analyzes.
+Every unrelated manually dispatched lane keeps the selected immutable `github.sha`; dispatching the
+Sonar repair lane must not silently retarget the rest of the matrix. The New Code Definition remains
+`previous_version`; neither
 `sonar.projectVersion` nor the leak period may be manipulated to hide findings.
 
 ### D4 — LCOV covers the complete instrumentable production scope
