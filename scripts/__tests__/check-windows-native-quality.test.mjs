@@ -70,11 +70,11 @@ function derivationAccepts({
     `$secureReadCompileRequired = @('"/MT"')`,
     `$secureReadLinkRequired = @('"/DEPENDENTLOADFLAG:0x800"')`,
     "try {",
-    "  Assert-NativeProducerLinkFlags -Source $launcherSource -FunctionName 'compileWindowsLauncher' -EndMarker 'function requireWindowsLauncherIconSource(' -ProducerPath 'scripts/stage-portable-runtime.mjs' -RequiredFlagLiterals $required",
-    "  Assert-NativeProducerLinkFlags -Source $setupSource -FunctionName 'compileSetupBootstrap' -EndMarker 'function fsyncFile(' -ProducerPath 'scripts/build-windows-portable-setup.mjs' -RequiredFlagLiterals $required",
-    "  Assert-NativeProducerLinkFlags -Source $secureReadSource -FunctionName 'windowsCompilerFlags' -EndMarker 'const supported =' -ProducerPath 'scripts/build-secure-workspace-read.mjs' -RequiredFlagLiterals $secureReadCompileRequired",
-    "  Assert-NativeProducerLinkFlags -Source $secureReadSource -FunctionName 'compilerInvocation' -EndMarker 'export async function runSecureWorkspaceReadBuild(' -ProducerPath 'scripts/build-secure-workspace-read.mjs' -RequiredFlagLiterals $secureReadLinkRequired",
-    "  Assert-NativeProducerLinkFlags -Source $supervisorSource -FunctionName 'compilerInvocation' -EndMarker 'function macosComponentInvocations(' -ProducerPath 'scripts/build-runtime-supervisor.mjs' -RequiredFlagLiterals $required",
+    "  Assert-NativeProducerLinkFlags -Source $launcherSource -FunctionName 'compileWindowsLauncher' -EndMarker 'function requireWindowsLauncherIconSource(' -ProducerPath 'scripts/stage-portable-runtime.mjs' -ArgumentListStartMarker 'windowsToolFromPath(env.PATH, \"cl.exe\"),' -RequiredFlagLiterals $required",
+    "  Assert-NativeProducerLinkFlags -Source $setupSource -FunctionName 'compileSetupBootstrap' -EndMarker 'function fsyncFile(' -ProducerPath 'scripts/build-windows-portable-setup.mjs' -ArgumentListStartMarker 'windowsToolFromPath(env.PATH, \"cl.exe\"),' -RequiredFlagLiterals $required",
+    "  Assert-NativeProducerLinkFlags -Source $secureReadSource -FunctionName 'windowsCompilerFlags' -EndMarker 'const supported =' -ProducerPath 'scripts/build-secure-workspace-read.mjs' -ArgumentListStartMarker 'return' -RequiredFlagLiterals $secureReadCompileRequired",
+    "  Assert-NativeProducerLinkFlags -Source $secureReadSource -FunctionName 'compilerInvocation' -EndMarker 'export async function runSecureWorkspaceReadBuild(' -ProducerPath 'scripts/build-secure-workspace-read.mjs' -ArgumentListStartMarker 'target === \"windows-x64\"' -RequiredFlagLiterals $secureReadLinkRequired",
+    "  Assert-NativeProducerLinkFlags -Source $supervisorSource -FunctionName 'compilerInvocation' -EndMarker 'function macosComponentInvocations(' -ProducerPath 'scripts/build-runtime-supervisor.mjs' -ArgumentListStartMarker 'if (target === \"windows-x64\")' -RequiredFlagLiterals $required",
     "  'ACCEPTED'",
     "} catch { 'REJECTED: ' + $_.Exception.Message }",
   ].join("\n");
@@ -327,6 +327,18 @@ describe.skipIf(!hasPwsh())("check-windows-native-quality flag derivation", () =
   ])("rejects a %s", (_description, sourcePathName, copySource, original, replacement) => {
     const sourcePath = copySource((source) => source.replace(original, replacement));
     expect(derivationAccepts({ [sourcePathName]: sourcePath })).toContain("REJECTED");
+  });
+
+  it("rejects an unused hardening flag outside the launcher argument list", () => {
+    const launcherSourcePath = copyLauncherWith((source) =>
+      source
+        .replace('        "/MT",\n', '        "/REMOVED",\n')
+        .replace(
+          "      { env },\n    );\n  } finally {",
+          '      { env },\n    );\n    const unrelatedHardeningFlag = "/MT";\n  } finally {',
+        ),
+    );
+    expect(derivationAccepts({ launcherSourcePath })).toContain("REJECTED");
   });
 
   it("rejects a launcher flag hidden inside an interior block-comment line", () => {

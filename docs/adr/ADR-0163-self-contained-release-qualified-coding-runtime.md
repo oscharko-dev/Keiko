@@ -437,3 +437,10 @@ green. This is the class audit finding F-01 closed, and it must not be reintrodu
   in a shipped bundle learns nothing about evaluation. The machinery is reused; the lane is not.
 - **Auto-select Full access after successful setup.** Installation state is not human authorization
   and may never widen the deployment ceiling.
+
+## Version History
+
+| Version | Date       | Change |
+| ------- | ---------- | ------ |
+| 1.0     | 2026-07-27 | Accepted the self-contained release-qualified Coding Workbench runtime. |
+| 1.1     | 2026-09-03 | Recorded the D1 Windows native-helper packaging amendment: `/MT` statically links the CRT while `/DEPENDENTLOADFLAG:0x800` and fail-closed DLL-directory initialization retain the DLL-planting defense. |

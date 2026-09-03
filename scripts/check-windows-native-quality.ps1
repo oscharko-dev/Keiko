@@ -18,12 +18,36 @@ function Get-ActiveNativeProducerSource {
   )
 }
 
+function Get-NativeProducerArgumentList {
+  param(
+    [Parameter(Mandatory = $true)][string] $ActiveSource,
+    [Parameter(Mandatory = $true)][string] $ArgumentListStartMarker,
+    [Parameter(Mandatory = $true)][string] $ProducerPath,
+    [Parameter(Mandatory = $true)][string] $FunctionName
+  )
+
+  $markerStart = $ActiveSource.IndexOf($ArgumentListStartMarker)
+  if ($markerStart -lt 0) {
+    throw "could not locate the target compiler invocation in $ProducerPath $FunctionName()"
+  }
+  $argumentListStart = $ActiveSource.IndexOf("[", $markerStart + $ArgumentListStartMarker.Length)
+  if ($argumentListStart -lt 0) {
+    throw "could not locate the target compiler argument list in $ProducerPath $FunctionName()"
+  }
+  $argumentListEnd = $ActiveSource.IndexOf("]", $argumentListStart)
+  if ($argumentListEnd -lt $argumentListStart) {
+    throw "could not locate the target compiler argument list in $ProducerPath $FunctionName()"
+  }
+  return $ActiveSource.Substring($argumentListStart, $argumentListEnd - $argumentListStart + 1)
+}
+
 function Assert-NativeProducerLinkFlags {
   param(
     [Parameter(Mandatory = $true)][string] $Source,
     [Parameter(Mandatory = $true)][string] $FunctionName,
     [Parameter(Mandatory = $true)][string] $EndMarker,
     [Parameter(Mandatory = $true)][string] $ProducerPath,
+    [Parameter(Mandatory = $true)][string] $ArgumentListStartMarker,
     [Parameter(Mandatory = $true)][string[]] $RequiredFlagLiterals
   )
 
@@ -34,9 +58,14 @@ function Assert-NativeProducerLinkFlags {
   }
   $functionSource = $Source.Substring($functionStart, $functionEnd - $functionStart)
   $activeSource = Get-ActiveNativeProducerSource -FunctionSource $functionSource
+  $argumentList = Get-NativeProducerArgumentList `
+    -ActiveSource $activeSource `
+    -ArgumentListStartMarker $ArgumentListStartMarker `
+    -ProducerPath $ProducerPath `
+    -FunctionName $FunctionName
   foreach ($requiredFlagLiteral in $RequiredFlagLiterals) {
-    if (-not $activeSource.Contains($requiredFlagLiteral)) {
-      throw ("$ProducerPath $FunctionName() no longer contains the hardened flag " +
+    if (-not $argumentList.Contains($requiredFlagLiteral)) {
+      throw ("$ProducerPath $FunctionName() no longer passes the hardened flag " +
         "$requiredFlagLiteral -- update this gate deliberately if the hardening posture " +
         "changed, do not let it silently keep proving a configuration the product no longer ships")
     }
@@ -94,26 +123,31 @@ try {
     -FunctionName "compileWindowsLauncher" `
     -EndMarker "function requireWindowsLauncherIconSource(" `
     -ProducerPath "scripts/stage-portable-runtime.mjs" `
+    -ArgumentListStartMarker 'windowsToolFromPath(env.PATH, "cl.exe"),' `
     -RequiredFlagLiterals $requiredNativeLinkFlagLiterals
   Assert-NativeProducerLinkFlags -Source $setupBuildScriptSource `
     -FunctionName "compileSetupBootstrap" `
     -EndMarker "function fsyncFile(" `
     -ProducerPath "scripts/build-windows-portable-setup.mjs" `
+    -ArgumentListStartMarker 'windowsToolFromPath(env.PATH, "cl.exe"),' `
     -RequiredFlagLiterals $requiredNativeLinkFlagLiterals
   Assert-NativeProducerLinkFlags -Source $secureReadBuildScriptSource `
     -FunctionName "windowsCompilerFlags" `
     -EndMarker "const supported =" `
     -ProducerPath "scripts/build-secure-workspace-read.mjs" `
+    -ArgumentListStartMarker "return" `
     -RequiredFlagLiterals @('"/MT"')
   Assert-NativeProducerLinkFlags -Source $secureReadBuildScriptSource `
     -FunctionName "compilerInvocation" `
     -EndMarker "export async function runSecureWorkspaceReadBuild(" `
     -ProducerPath "scripts/build-secure-workspace-read.mjs" `
+    -ArgumentListStartMarker 'target === "windows-x64"' `
     -RequiredFlagLiterals @('"/DEPENDENTLOADFLAG:0x800"')
   Assert-NativeProducerLinkFlags -Source $supervisorBuildScriptSource `
     -FunctionName "compilerInvocation" `
     -EndMarker "function macosComponentInvocations(" `
     -ProducerPath "scripts/build-runtime-supervisor.mjs" `
+    -ArgumentListStartMarker 'if (target === "windows-x64")' `
     -RequiredFlagLiterals $requiredNativeLinkFlagLiterals
 
   # Proven present above, byte-for-byte, in the production entry point -- not an independent guess.
