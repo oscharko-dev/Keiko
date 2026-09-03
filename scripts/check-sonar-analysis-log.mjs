@@ -50,10 +50,8 @@ const ANALYZED_SOURCE_SUFFIXES = [
 const JAVASCRIPT_ANALYSIS_SENSOR = "Sensor JavaScript/TypeScript/CSS analysis [javascript]";
 const JAVASCRIPT_CACHE_HIT_PREFIX = "Hit the cache for ";
 const JAVASCRIPT_CACHE_MISS_PREFIX = "Miss the cache for ";
-const UDG_SOURCE_SUFFIXES = [
-  " source file(s) without a UDG",
-  " file(s) will be analysed by SonarJasmin.",
-];
+const UDG_CACHE_SOURCE_SUFFIX = " source file(s) without a UDG";
+const SONARJASMIN_SOURCE_SUFFIX = " file(s) will be analysed by SonarJasmin.";
 const UDG_RECEIPT_PREFIX = 'Files successfully loaded: "';
 const UDG_RECEIPT_SEPARATOR = '" out of "';
 
@@ -169,12 +167,13 @@ function architectureUdgReceipt(line) {
 }
 
 function architectureUdgEvidence(lines) {
-  const expected = lines.reduce((largest, line) => {
-    const candidates = UDG_SOURCE_SUFFIXES.flatMap(
-      (suffix) => integerBeforeSuffix(line, suffix) ?? [],
-    );
-    return candidates.reduce((current, candidate) => Math.max(current, candidate), largest);
-  }, 0);
+  const largestCount = (suffix) =>
+    lines.reduce((largest, line) => Math.max(largest, integerBeforeSuffix(line, suffix) ?? 0), 0);
+  // The UDG-cache inventory is measured before SonarJasmin decides which files it will load, so
+  // the two values may legitimately differ. Bind the receipts to SonarJasmin's own plan when the
+  // current analyzer emits it; retain the cache inventory only as a legacy-log fallback.
+  const sonarJasminExpected = largestCount(SONARJASMIN_SOURCE_SUFFIX);
+  const expected = sonarJasminExpected || largestCount(UDG_CACHE_SOURCE_SUFFIX);
   const receipts = lines.flatMap((line) => architectureUdgReceipt(line) ?? []);
   return receipts.reduce(
     (evidence, receipt) => ({

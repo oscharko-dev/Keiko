@@ -61,10 +61,12 @@ are excluded. The scanner archive, installation, working directory, and full log
 Scanner warnings are blocking. A future exception requires an exact, documented signature and a
 bounded count with a regression test. Wildcard warning suppression is forbidden.
 
-The merge-candidate and scanner-log validators execute through repository actions pinned to an
-exact reviewed commit, not from the pull-request checkout. The candidate contributes only the
-checked-out Git object and the scanner log being inspected; changing either validator in a pull
-request cannot change the code that authorizes that same pull request.
+The merge-candidate and scanner-log validators execute as JavaScript repository actions pinned to
+an exact reviewed commit, not from the pull-request checkout. GitHub Runner starts their `node24`
+entry points with its action runtime rather than resolving a candidate-influenced `node` from
+`PATH`. The candidate contributes only the checked-out Git object and the scanner log being
+inspected; changing either validator in a pull request cannot change the code that authorizes that
+same pull request.
 
 Required scans also run with both the documented `sonar.analysisCache.enabled=false` control and
 SonarQube Cloud's effective `sonar.sensor.cache.enable=false` control. Incident #3380 proved the
@@ -75,10 +77,11 @@ receipt covering that entire inventory are required; generic source-progress rec
 fewer files because they belong to other sensors, but may never exceed the scanner's indexed
 inventory. Incident #3377's incremental PR analysis (4,753 cache hits out of 4,788 eligible files)
 therefore cannot masquerade as the fresh analysis that `dev` performs. The gate separately requires
-the SonarJasmin eligible-file count to equal the combined JS/TS architecture receipt totals and
-requires every emitted UDG to load successfully. This makes unchanged production sources part of
-the pre-merge scanner-warning verdict while retaining Sonar's PR-scoped issue and coverage
-evaluation.
+SonarJasmin's own planned-file count to equal the combined JS/TS architecture receipt totals and
+requires every emitted UDG to load successfully. The earlier UDG-cache inventory is not the same
+denominator and is used only as a legacy-log fallback when the analyzer emits no SonarJasmin plan.
+This makes unchanged production sources part of the pre-merge scanner-warning verdict while
+retaining Sonar's PR-scoped issue and coverage evaluation.
 
 ### D3 — Manual analysis always means the remote `dev` revision
 

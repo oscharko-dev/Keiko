@@ -90,7 +90,8 @@ a fresh scan after merge. This closes incident #3377, where an already-red `dev`
 green incremental PR verdict and another red post-merge scan.
 
 Every full-tree CI lane checks out the workflow run's immutable `github.sha`, never the moving
-`refs/pull/<number>/merge` name. Before executing quality work, each lane verifies that a
+`refs/pull/<number>/merge` name. Immediately after the trusted checkout and Node setup, and before
+executing any module from that checkout, each lane's Runner-hosted immutable action verifies that a
 pull-request checkout is a two-parent merge commit whose first parent is the event's exact base SHA
 and whose second parent is its exact head SHA. Repository branch protection keeps strict status
 checks enabled, so a concurrent `dev` integration invalidates the old candidate and GitHub must

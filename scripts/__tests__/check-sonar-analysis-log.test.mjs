@@ -139,6 +139,7 @@ describe("Sonar scanner warning gate", () => {
       "2026-09-03T06:24:27Z 06:24:27 INFO Miss the cache for 4790 out of 4790: FILE_CHANGED [4790/4790]",
       "2026-09-03T06:24:27Z 06:24:27 INFO Sensor JavaScript/TypeScript/CSS analysis [javascript] (done)",
       "2026-09-03T06:24:27Z 06:24:27 INFO 4846/4846 source files have been analyzed",
+      "2026-09-03T06:24:27Z 06:24:27 INFO Architecture JS/TS UDG cache: 2277 source file(s) without a UDG",
       "2026-09-03T06:24:27Z 06:24:27 INFO 2273 file(s) will be analysed by SonarJasmin.",
       '2026-09-03T06:27:07Z 06:27:07 INFO Files successfully loaded: "190" out of "190"',
       '2026-09-03T06:27:11Z 06:27:11 INFO Files successfully loaded: "2083" out of "2083"',

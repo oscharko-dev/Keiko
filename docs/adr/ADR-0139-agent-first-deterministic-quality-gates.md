@@ -126,9 +126,10 @@ the subsequent `dev` push. Required Sonar scans therefore disable the analysis c
 scanner-log validator proves full-project breadth before accepting the result.
 
 The matrix also shares one immutable integration subject. Full-tree lanes check out `github.sha`
-and verify that the PR merge commit's parents exactly match the event base and head before they run.
-Combined with strict required-status-check branch protection, concurrent agents are serialized by
-GitHub's candidate invalidation and re-check semantics rather than by post-merge agent monitoring.
+and use a Runner-hosted immutable action to verify that the PR merge commit's parents exactly match
+the event base and head before any candidate module runs. Combined with strict
+required-status-check branch protection, concurrent agents are serialized by GitHub's candidate
+invalidation and re-check semantics rather than by post-merge agent monitoring.
 
 ### D5 — Static guards prefer precision to suppression
 

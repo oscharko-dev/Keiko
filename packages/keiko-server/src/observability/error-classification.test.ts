@@ -66,6 +66,7 @@ describe("machineToken", () => {
 
   it("rejects a prose-shaped value (spaces disqualify it)", () => {
     expect(machineToken("the request body was rejected")).toBeUndefined();
+    expect(machineToken("")).toBeUndefined();
   });
 
   it("rejects a value over the 128-character bound", () => {
