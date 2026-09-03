@@ -66,20 +66,12 @@ export function safeProperty(value: unknown, property: string): unknown {
   }
 }
 
-// Constructor metadata is read only from own DATA properties. Using the generic Reflect.get path
-// here would execute a hostile prototype/name accessor while merely trying to classify a failure;
-// it also makes Sonar's whole-project architecture graph serialize a callable Object attribute and
-// drop this source's UDG. A descriptor read avoids both outcomes and still recovers normal class
-// declarations, whose prototype constructor and function name are own data properties.
-function safeOwnDataProperty(value: object, property: string): unknown {
-  try {
-    const descriptor = Reflect.getOwnPropertyDescriptor(value, property);
-    if (descriptor === undefined) return undefined;
-    const ownValue = Reflect.getOwnPropertyDescriptor(descriptor, "value");
-    return ownValue?.value;
-  } catch {
-    return undefined;
-  }
+// Property descriptors returned by the runtime are fresh plain records. Inspect their OWN data
+// slot rather than reading `descriptor.value` directly: a hostile Object.prototype accessor must
+// not turn an accessor descriptor into a data descriptor or execute while an error is classified.
+function dataDescriptorValue(descriptor: PropertyDescriptor | undefined): unknown {
+  if (descriptor === undefined) return undefined;
+  return Reflect.getOwnPropertyDescriptor(descriptor, "value")?.value;
 }
 
 // Forwards a `code`/`requestId` style value only when it is a bounded machine token: the charset
@@ -96,25 +88,29 @@ export function machineToken(value: unknown): string | undefined {
 // `diagnostics-log.ts` verbatim as part of the ADR-0173 D11 leaf extraction and that module
 // re-exports it; no producer outside `contentFreeErrorClass` has a use for it on its own.
 export function declaredErrorClassName(error: Error): string | undefined {
-  let proto: object | null;
   try {
-    proto = Reflect.getPrototypeOf(error);
+    const proto = Reflect.getPrototypeOf(error);
+    if (proto === null) return undefined;
+
+    // Keep constructor reflection local and descriptor-based. Passing a callable constructor
+    // through the generic `safeProperty`/`safeOwnDataProperty` path made Sonar's whole-project
+    // architecture serializer emit an invalid callable value key and discard this source's UDG.
+    // Direct descriptors also avoid executing hostile constructor, prototype, or name accessors.
+    const ctor = dataDescriptorValue(Reflect.getOwnPropertyDescriptor(proto, "constructor"));
+    if (typeof ctor !== "function") return undefined;
+    const declaredPrototype = dataDescriptorValue(
+      Reflect.getOwnPropertyDescriptor(ctor, "prototype"),
+    );
+    if (declaredPrototype !== proto) return undefined;
+    const name = dataDescriptorValue(Reflect.getOwnPropertyDescriptor(ctor, "name"));
+    if (typeof name !== "string") return undefined;
+    if (!DECLARED_ERROR_CLASS_SHAPE.test(name)) return undefined;
+    return name;
   } catch {
-    // A hostile `getPrototypeOf` trap must degrade to absence, like every other reflective read
-    // in this module — this function is exported and on the package surface, so it cannot rely on
-    // `contentFreeErrorClass`'s outer `try` to absorb the throw for it.
+    // Every reflection point above may be trapped by hostile input. This function is exported and
+    // cannot rely on `contentFreeErrorClass`'s outer try/catch to absorb the throw for it.
     return undefined;
   }
-  if (proto === null) return undefined;
-  const ctor = safeOwnDataProperty(proto, "constructor");
-  if (typeof ctor !== "function") return undefined;
-  if (safeOwnDataProperty(ctor, "prototype") !== proto) return undefined;
-  const name = safeOwnDataProperty(ctor, "name");
-  if (typeof name !== "string") return undefined;
-  if (!DECLARED_ERROR_CLASS_SHAPE.test(name)) {
-    return undefined;
-  }
-  return name;
 }
 
 // Resolves the content-free class of an unknown thrown value: a specific built-in error name, else
