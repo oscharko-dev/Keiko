@@ -320,7 +320,9 @@ function parseLifecycleActionBody(
   return { workspaceId, requestedBy, correlationId };
 }
 
-// GET /api/task-workspaces?root=<repoRoot> — list the persisted instances for a repository root.
+// GET /api/task-workspaces[?root=<repoRoot>] — list the persisted instances: every repository's
+// when no root is given (the switcher's inventory — the active pointer is global, so a switch may
+// target any repository), or one repository's for a resolved root.
 export async function handleListTaskWorkspaces(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -329,6 +331,9 @@ export async function handleListTaskWorkspaces(
   if (isRouteResult(guard)) return guard;
   return runHandler(deps, async () => {
     const rootInput = ctx.url.searchParams.get("root");
+    if (rootInput === null || rootInput.trim().length === 0) {
+      return { status: 200, body: redacted(deps, { instances: guard.listAll() }) };
+    }
     const resolvedRoot = await resolveRoot(deps.store, rootInput, deps.redactor);
     const instances = guard.list(resolvedRoot.realRoot);
     return { status: 200, body: redacted(deps, { instances }) };

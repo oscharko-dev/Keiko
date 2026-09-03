@@ -1386,8 +1386,29 @@ function classifyOnDiskDrift(
   return null;
 }
 
+// A `cleanup-pending` row is settled only while its worktree is gone (the expected end state) or
+// still the registered one. A tree that is present but no longer proves its identity can never pass
+// the governed removal's ownership gate, and reporting it "healthy" left the row with no exit: no
+// repair applies to a healthy status, the terminal branch refuses re-provisioning, and the orphan
+// sweep skips a directory that still has a record. Classifying it as the stale-pointer fact it is
+// lets the pass flag it (`cleanup-pending -> recovery-required` is a legal, precondition-free
+// transition) so the operator-approved re-registration can reach it (audit finding, 2026-09-03).
+function cleanupPendingDrift(
+  facts: WorkspaceReconciliationFacts,
+): WorkspaceReconciliationOutcome | null {
+  if (facts.lifecycleState !== "cleanup-pending" || !facts.worktreeDirExists) return null;
+  if (!facts.gitPointerPresent) {
+    return outcome("stale-pointer", withStaleLock(["pointer-stale"], facts));
+  }
+  if (!facts.gitdirIdentityMatches) {
+    return outcome("stale-pointer", withStaleLock([identityDriftMarker(facts)], facts));
+  }
+  return null;
+}
+
 // Pure deterministic classifier with a fixed precedence (most severe first): a containment escape and
-// a live foreign lock short-circuit before any disk classification; terminal lifecycles are settled;
+// a live foreign lock short-circuit before any disk classification; terminal lifecycles are settled
+// (except a cleanup-pending tree that no longer proves its identity, see cleanupPendingDrift);
 // then partial-creation, then on-disk drift (missing → stale pointer → branch/HEAD/dirty), then a
 // lingering recovery-required flag, then a stale lock on an otherwise-healthy workspace.
 export function classifyWorkspaceReconciliation(
@@ -1395,6 +1416,8 @@ export function classifyWorkspaceReconciliation(
 ): WorkspaceReconciliationOutcome {
   if (!facts.pathContained) return outcome("unmanaged-path", ["path-escape"]);
   if (facts.lockedByOtherActor) return outcome("locked", []);
+  const pendingDrift = cleanupPendingDrift(facts);
+  if (pendingDrift) return pendingDrift;
   if (TERMINAL_LIFECYCLE_STATES.includes(facts.lifecycleState)) return outcome("healthy", []);
   if (PARTIAL_LIFECYCLE_STATES.includes(facts.lifecycleState)) {
     return outcome("partially-created", withStaleLock(partialCreationMarkers(facts), facts));
@@ -1441,6 +1464,9 @@ export function reconciliationRequiresRecoveryFlag(
   status: WorkspaceReconciliationStatus,
   lifecycleState: TaskWorkspaceLifecycleState,
 ): boolean {
+  // A cleanup-pending tree that is present but unproven is flagged so re-registration can reach
+  // it; a MISSING one is the expected end state of a cleanup and stays settled.
+  if (lifecycleState === "cleanup-pending") return status === "stale-pointer";
   if (
     lifecycleState !== "active" &&
     lifecycleState !== "paused" &&
@@ -1449,6 +1475,17 @@ export function reconciliationRequiresRecoveryFlag(
     return false;
   }
   return status === "missing" || status === "stale-pointer" || status === "unmanaged-path";
+}
+
+const POINTER_OR_IDENTITY_MARKERS: ReadonlySet<TaskWorkspaceDriftMarker> = new Set([
+  "pointer-stale",
+  "gitdir-mismatch",
+  "identity-schema-retired",
+  "identity-unsupported",
+]);
+
+function hasPointerOrIdentityMarker(markers: readonly TaskWorkspaceDriftMarker[]): boolean {
+  return markers.some((marker) => POINTER_OR_IDENTITY_MARKERS.has(marker));
 }
 
 // Pure: reconstruct the reconciliation status from the CONTENT-FREE persisted instance fields, so a
@@ -1463,17 +1500,15 @@ export function reconciliationStatusFromInstance(input: {
   const markers = input.driftMarkers;
   if (markers.includes("path-escape")) return "unmanaged-path";
   if (input.health === "locked-out") return "locked";
+  // Mirrors cleanupPendingDrift: a cleanup-pending row that a live pass marked with a pointer or
+  // identity finding is stale, not settled.
+  if (input.lifecycleState === "cleanup-pending" && hasPointerOrIdentityMarker(markers)) {
+    return "stale-pointer";
+  }
   if (TERMINAL_LIFECYCLE_STATES.includes(input.lifecycleState)) return "healthy";
   if (PARTIAL_LIFECYCLE_STATES.includes(input.lifecycleState)) return "partially-created";
   if (markers.includes("worktree-missing")) return "missing";
-  if (
-    markers.includes("pointer-stale") ||
-    markers.includes("gitdir-mismatch") ||
-    markers.includes("identity-schema-retired") ||
-    markers.includes("identity-unsupported")
-  ) {
-    return "stale-pointer";
-  }
+  if (hasPointerOrIdentityMarker(markers)) return "stale-pointer";
   if (
     markers.includes("branch-deleted") ||
     markers.includes("head-moved") ||

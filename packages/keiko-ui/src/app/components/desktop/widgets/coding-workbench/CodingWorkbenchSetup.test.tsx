@@ -25,6 +25,9 @@ const runtimeHookMock = vi.hoisted(() => vi.fn());
 const provisionMock = vi.hoisted(() => vi.fn());
 const reconcileMock = vi.hoisted(() => vi.fn());
 const setActiveMock = vi.hoisted(() => vi.fn());
+const listMock = vi.hoisted(() => vi.fn());
+const repairMock = vi.hoisted(() => vi.fn());
+const baseBranchMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
@@ -34,7 +37,31 @@ vi.mock("@/lib/task-workspace-api", () => ({
   provisionTaskWorkspace: provisionMock,
   reconcileTaskWorkspaces: reconcileMock,
   setActiveTaskWorkspace: setActiveMock,
+  listTaskWorkspaces: listMock,
+  repairTaskWorkspace: repairMock,
+  fetchRepositoryBaseBranch: baseBranchMock,
 }));
+
+// The persisted row provisioning refused for the (repository, task) pair the setup card derives
+// from the target branch, carrying the classified finding and the server's recovery hint.
+function refusedWorkspace(
+  hint: { readonly strategy: string; readonly operatorActionRequired: boolean },
+  marker = "identity-schema-retired",
+): unknown {
+  return {
+    workspaceId: "ws-refused",
+    taskId: codingWorkbenchSetupTaskId("main"),
+    driftMarkers: [marker],
+    recoveryHints: [{ marker, ...hint }],
+  };
+}
+
+function pointerDrift(): Error {
+  return Object.assign(new Error("sensitive worktree detail"), {
+    code: "POINTER_DRIFT",
+    failureClass: "repairable",
+  });
+}
 
 // A content-free reconciliation report whose single entry classifies the just-provisioned workspace.
 // `verifyBoundWorkspace` reads only `entries[].workspaceId` and `.status`, so the minimal shape suffices.
@@ -67,12 +94,13 @@ function workspaceApi(overrides: Partial<ActiveWorkspaceApi> = {}): ActiveWorksp
     switching: false,
     error: null,
     refresh: vi.fn(() => Promise.resolve(true)),
-    switchTo: vi.fn(() => Promise.resolve()),
-    clearActive: vi.fn(() => Promise.resolve()),
-    pause: vi.fn(() => Promise.resolve()),
-    resume: vi.fn(() => Promise.resolve()),
-    prepareHandoff: vi.fn(() => Promise.resolve()),
-    provision: vi.fn(() => Promise.resolve()),
+    switchTo: vi.fn(() => Promise.resolve(true)),
+    clearActive: vi.fn(() => Promise.resolve(true)),
+    pause: vi.fn(() => Promise.resolve(true)),
+    resume: vi.fn(() => Promise.resolve(true)),
+    prepareHandoff: vi.fn(() => Promise.resolve(true)),
+    repair: vi.fn(() => Promise.resolve(true)),
+    provision: vi.fn(() => Promise.resolve(true)),
     ...overrides,
   };
 }
@@ -144,6 +172,10 @@ describe("CodingWorkbenchSetup", () => {
     provisionMock.mockReset();
     reconcileMock.mockReset();
     setActiveMock.mockReset();
+    listMock.mockReset();
+    repairMock.mockReset();
+    baseBranchMock.mockReset();
+    baseBranchMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -222,7 +254,7 @@ describe("CodingWorkbenchSetup", () => {
     await user.click(screen.getByRole("button", { name: "Bind workspace" }));
 
     await waitFor(() => {
-      expect(api.refresh).toHaveBeenCalledWith("/repos/keiko-checkout");
+      expect(api.refresh).toHaveBeenCalledTimes(1);
     });
     expect(provisionMock).toHaveBeenCalledWith({
       root: "/repos/keiko-checkout",
@@ -314,7 +346,7 @@ describe("CodingWorkbenchSetup", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "The workspace could not be bound. Review the repository path and target branch.",
     );
-    expect(api.refresh).toHaveBeenCalledWith("/repos/x");
+    expect(api.refresh).toHaveBeenCalledTimes(1);
     expect(diagnostics).toContain("[keiko] coding workbench workspace refresh did not settle");
   });
 
@@ -362,6 +394,260 @@ describe("CodingWorkbenchSetup", () => {
     renderWorkbench(workspaceApi({ activeBinding: binding() }));
 
     expect(setupSection()).not.toBeInTheDocument();
+  });
+
+  // A checkout whose integration branch is `dev` was offered `main`, which does not resolve there
+  // and refused the bind with INVALID_BASE_BRANCH behind the generic sentence (2026-09-03 dev log).
+  it("defaults the target branch to the selected repository's checked-out branch", async () => {
+    baseBranchMock.mockResolvedValue("dev");
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("dev");
+    });
+    expect(baseBranchMock).toHaveBeenCalledWith("/repos/selected");
+  });
+
+  // A branch typed for one repository is not a choice for the next: a new workbench-wide selection
+  // re-arms the default the way the path field follows it (review of ec04288dc).
+  it("re-arms the branch default when the selected repository changes", async () => {
+    const user = userEvent.setup();
+    baseBranchMock.mockResolvedValue("dev");
+    const api = workspaceApi();
+    const view = renderWorkbench(api, liveState(), "/repos/selected");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("dev");
+    });
+    await user.clear(screen.getByLabelText("Target branch"));
+    await user.type(screen.getByLabelText("Target branch"), "release/1.0");
+    baseBranchMock.mockResolvedValue("trunk");
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={api}>
+        <CodingWorkbenchWindow selectedRoot="/repos/other" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("trunk");
+    });
+    expect(baseBranchMock).toHaveBeenCalledWith("/repos/other");
+  });
+
+  it("keeps a branch the operator typed even when the lookup resolves later", async () => {
+    const user = userEvent.setup();
+    let resolveLookup: (branch: string | null) => void = () => undefined;
+    baseBranchMock.mockImplementation(
+      () =>
+        new Promise<string | null>((resolve) => {
+          resolveLookup = resolve;
+        }),
+    );
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await user.clear(screen.getByLabelText("Target branch"));
+    await user.type(screen.getByLabelText("Target branch"), "release/1.0");
+    resolveLookup("dev");
+
+    await waitFor(() => {
+      expect(baseBranchMock).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByLabelText("Target branch")).toHaveValue("release/1.0");
+  });
+
+  it("re-reads the branch default when the operator leaves a typed repository path", async () => {
+    const user = userEvent.setup();
+    baseBranchMock.mockResolvedValue("trunk");
+    renderWorkbench(workspaceApi());
+
+    await user.type(screen.getByLabelText("Repository path"), "/repos/typed");
+    await user.tab();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("trunk");
+    });
+    expect(baseBranchMock).toHaveBeenCalledWith("/repos/typed");
+  });
+
+  it("keeps the previous default when the branch lookup fails and leaves a diagnostic", async () => {
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+    baseBranchMock.mockRejectedValue(new Error("HTTP 500 /repos/selected"));
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await waitFor(() => {
+      expect(diagnostics.some((line) => line.includes("base branch lookup failed"))).toBe(true);
+    });
+    expect(screen.getByLabelText("Target branch")).toHaveValue("main");
+    expect(diagnostics.join("\n")).not.toContain("/repos/selected");
+  });
+
+  it.each([
+    {
+      code: "INVALID_BASE_BRANCH",
+      failureClass: "blocked",
+      text: "The target branch does not exist in this repository.",
+    },
+    {
+      code: "MISSING_REPOSITORY",
+      failureClass: "blocked",
+      text: "The repository path is not inside a local Git repository.",
+    },
+    {
+      code: "UNSAFE_PATH",
+      failureClass: "blocked",
+      text: "The repository path is outside the folders this installation may bind.",
+    },
+    {
+      code: "LOCK_CONTENTION",
+      failureClass: "retryable",
+      text: "Another action currently holds this task workspace.",
+    },
+    {
+      code: "WORKSPACE_PROVISIONING_UNAVAILABLE",
+      failureClass: undefined,
+      text: "Managed task workspaces are not configured on this installation",
+    },
+  ])(
+    "names a $code refusal instead of the generic sentence",
+    async ({ code, failureClass, text }) => {
+      const user = userEvent.setup();
+      provisionMock.mockRejectedValue(
+        Object.assign(new Error("sensitive detail"), { code, failureClass }),
+      );
+      renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+      await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(text);
+      expect(alert).not.toHaveTextContent("Review the repository path and target branch.");
+      expect(alert).not.toHaveTextContent("sensitive detail");
+      expect(reconcileMock).not.toHaveBeenCalled();
+      expect(setActiveMock).not.toHaveBeenCalled();
+    },
+  );
+
+  // A refusal and its repair offer belong to the path they were answered for. Switching the
+  // workbench-wide selection moves the path field on; the stale offer must go with it, or "Repair
+  // and bind" would apply the old workspace's repair under the new path (review of ec04288dc).
+  it("withdraws a repair offer when the selected repository changes", async () => {
+    const user = userEvent.setup();
+    const api = workspaceApi();
+    provisionMock.mockRejectedValue(pointerDrift());
+    listMock.mockResolvedValue([
+      refusedWorkspace({ strategy: "reconcile-pointer", operatorActionRequired: false }),
+    ]);
+    const view = renderWorkbench(api, liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+    expect(await screen.findByRole("button", { name: "Repair and bind" })).toBeInTheDocument();
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={api}>
+        <CodingWorkbenchWindow selectedRoot="/repos/other" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/other");
+    expect(screen.queryByRole("button", { name: "Repair and bind" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(repairMock).not.toHaveBeenCalled();
+  });
+
+  // The 2026-09-03 defect: an existing managed workspace the server could not re-verify was
+  // refused with 409 POINTER_DRIFT, the card blamed the path and branch, and the row had no exit.
+  it("offers the operator-approved repair for a refused existing workspace, then verifies and activates", async () => {
+    const user = userEvent.setup();
+    const api = workspaceApi();
+    provisionMock.mockRejectedValue(pointerDrift());
+    listMock.mockResolvedValue([
+      refusedWorkspace({ strategy: "reconcile-pointer", operatorActionRequired: false }),
+    ]);
+    repairMock.mockResolvedValue({ applied: true, driftMarkers: [] });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-refused", "healthy"));
+    setActiveMock.mockResolvedValue({});
+    renderWorkbench(api, liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Keiko could not re-verify it");
+    expect(alert).toHaveTextContent("nothing is deleted");
+    expect(alert).not.toHaveTextContent("Review the repository path and target branch.");
+    expect(alert).not.toHaveTextContent("sensitive worktree detail");
+    expect(listMock).toHaveBeenCalledWith("/repos/selected");
+    expect(setActiveMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Repair and bind" }));
+
+    await waitFor(() => {
+      expect(api.refresh).toHaveBeenCalledTimes(1);
+    });
+    // The click is the approval, and it names the strategy the server recommended.
+    expect(repairMock).toHaveBeenCalledWith({
+      workspaceId: "ws-refused",
+      requestedBy: "studio-operator",
+      strategy: "reconcile-pointer",
+      operatorApproved: true,
+    });
+    expect(reconcileMock).toHaveBeenCalledWith({ root: "/repos/selected" });
+    expect(setActiveMock).toHaveBeenCalledWith({
+      workspaceId: "ws-refused",
+      requestedBy: "studio-operator",
+    });
+  });
+
+  it("names an operator-required finding without offering a repair", async () => {
+    const user = userEvent.setup();
+    provisionMock.mockRejectedValue(pointerDrift());
+    listMock.mockResolvedValue([
+      refusedWorkspace({ strategy: "operator-repair", operatorActionRequired: true }, "head-moved"),
+    ]);
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Keiko cannot repair it automatically");
+    expect(screen.queryByRole("button", { name: "Repair and bind" })).not.toBeInTheDocument();
+    expect(repairMock).not.toHaveBeenCalled();
+    expect(setActiveMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a repair the server did not apply and never activates", async () => {
+    const user = userEvent.setup();
+    provisionMock.mockRejectedValue(pointerDrift());
+    listMock.mockResolvedValue([
+      refusedWorkspace({ strategy: "recreate-worktree", operatorActionRequired: false }),
+    ]);
+    repairMock.mockResolvedValue({ applied: false, driftMarkers: ["branch-deleted"] });
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+    await user.click(await screen.findByRole("button", { name: "Repair and bind" }));
+
+    const alert = await screen.findByRole("alert");
+    await waitFor(() => {
+      expect(alert).toHaveTextContent("Keiko cannot repair it automatically");
+    });
+    expect(screen.queryByRole("button", { name: "Repair and bind" })).not.toBeInTheDocument();
+    expect(reconcileMock).not.toHaveBeenCalled();
+    expect(setActiveMock).not.toHaveBeenCalled();
+    expect(setupSection()).toBeInTheDocument();
+  });
+
+  it("falls back to the finding-free operator sentence when the refused row cannot be listed", async () => {
+    const user = userEvent.setup();
+    provisionMock.mockRejectedValue(pointerDrift());
+    listMock.mockRejectedValue(new Error("HTTP 503"));
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("its state could not be re-verified");
+    expect(screen.queryByRole("button", { name: "Repair and bind" })).not.toBeInTheDocument();
   });
 
   it("stays reachable with an honest note when the runtime is not confirmed available", () => {

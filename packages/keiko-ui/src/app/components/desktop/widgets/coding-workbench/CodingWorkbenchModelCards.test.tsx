@@ -13,7 +13,7 @@ import {
   type CodingWorkbenchResourceState,
   type CodingWorkbenchRuntimeState,
 } from "@/lib/coding-workbench-live-state";
-import { ModelRuntimeStatus } from "./CodingWorkbenchModelCards";
+import { CodexSubscriptionAuthCard, ModelRuntimeStatus } from "./CodingWorkbenchModelCards";
 
 type ModelActions = Pick<
   CodingWorkbenchRuntimeActions,
@@ -312,5 +312,68 @@ describe("ModelRuntimeStatus codex setup", () => {
   it("renders the ready plan without secret input", () => {
     renderStatus(codexState({ profile: ready(profile()), codexSetup: ready(setupPlan()) }));
     expect(screen.getByText(/browser login .* not required/u)).toBeInTheDocument();
+  });
+});
+
+// The window's only mount of the subscription sign-in surface: selecting the subscription in the
+// composer's source select must lead somewhere when the sign-in is missing, expired, revoked or
+// failed (audit finding, 2026-09-03 — `ModelRuntimeStatus` had lost its mount, so Start stayed
+// disabled with no explanation and no way to authenticate).
+describe("CodexSubscriptionAuthCard", () => {
+  it("renders the sign-in status and the refresh control while the subscription is not connected", async () => {
+    const user = userEvent.setup();
+    const actions = modelActions();
+    render(
+      <CodexSubscriptionAuthCard
+        state={codexState({ profile: ready(profile({ status: "missing" })) })}
+        actions={actions}
+      />,
+    );
+
+    expect(screen.getByTestId("coding-workbench-codex-auth")).toBeInTheDocument();
+    expect(screen.getByText("Sign in to the Codex subscription")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Refresh authentication" }));
+
+    expect(actions.refreshProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the server-approved setup methods for an actionable sign-in status", async () => {
+    const user = userEvent.setup();
+    const actions = modelActions();
+    render(
+      <CodexSubscriptionAuthCard
+        state={codexState({ profile: ready(profile({ status: "expired" })) })}
+        actions={actions}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Prepare browser login" }));
+
+    expect(actions.prepareCodexSetup).toHaveBeenCalledWith("chatgpt-browser-login");
+  });
+
+  it("renders nothing once the subscription is connected", () => {
+    render(
+      <CodexSubscriptionAuthCard
+        state={codexState({ profile: ready(profile({ status: "connected" })) })}
+        actions={modelActions()}
+      />,
+    );
+
+    expect(screen.queryByTestId("coding-workbench-codex-auth")).not.toBeInTheDocument();
+  });
+
+  it("renders nothing for the managed gateway source", () => {
+    render(
+      <CodexSubscriptionAuthCard
+        state={{
+          ...codexState({ profile: ready(profile({ status: "missing" })) }),
+          runtimePreference: "managed-gateway",
+        }}
+        actions={modelActions()}
+      />,
+    );
+
+    expect(screen.queryByTestId("coding-workbench-codex-auth")).not.toBeInTheDocument();
   });
 });

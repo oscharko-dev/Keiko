@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { CodingWorkbenchRuntimePendingApprovalReview } from "@oscharko-dev/keiko-contracts";
 
 import { codingAppSessionPairingSettled } from "./coding-app-session-client";
@@ -13,6 +13,16 @@ export type CodingWorkbenchApprovalReviewStatus = "idle" | "loading" | "ready" |
 export interface CodingWorkbenchApprovalReviewState {
   readonly status: CodingWorkbenchApprovalReviewStatus;
   readonly review: CodingWorkbenchRuntimePendingApprovalReview | null;
+}
+
+export interface UseCodingWorkbenchApprovalReviewResult extends CodingWorkbenchApprovalReviewState {
+  /**
+   * Re-reads the approval-review channel on demand, without waiting for `runId`/
+   * `permissionRequestId` to change (workbench audit, 2026-09-03) — the operator's only recourse after a
+   * transient failure while a `file-edit` approval decision is still open, mirroring
+   * `useCodingWorkbenchChanges`/`useCodingWorkbenchQuestions`.
+   */
+  readonly retry: () => void;
 }
 
 export interface UseCodingWorkbenchApprovalReviewInput {
@@ -38,11 +48,15 @@ interface ScopedApprovalReviewState extends UseCodingWorkbenchApprovalReviewInpu
  */
 export function useCodingWorkbenchApprovalReview(
   input: UseCodingWorkbenchApprovalReviewInput,
-): CodingWorkbenchApprovalReviewState {
+): UseCodingWorkbenchApprovalReviewResult {
   const { runId, permissionRequestId } = input;
   const [scoped, setScoped] = useState<ScopedApprovalReviewState>(() =>
     scopeState(runId, permissionRequestId, inputState(input)),
   );
+  // Bumped only by `retry()`; not read inside the effect. Its sole job is to force the effect
+  // below to re-run — including its `setScoped(...LOADING)` — on demand.
+  const [epoch, setEpoch] = useState(0);
+  const retry = useCallback((): void => setEpoch((value) => value + 1), []);
 
   useEffect(() => {
     if (runId === undefined || permissionRequestId === undefined) {
@@ -51,9 +65,10 @@ export function useCodingWorkbenchApprovalReview(
     }
     setScoped(scopeState(runId, permissionRequestId, LOADING));
     return startApprovalReviewSync(runId, permissionRequestId, setScoped);
-  }, [runId, permissionRequestId]);
+  }, [runId, permissionRequestId, epoch]);
 
-  return sameInput(scoped, input) ? scoped.value : inputState(input);
+  const value = sameInput(scoped, input) ? scoped.value : inputState(input);
+  return { ...value, retry };
 }
 
 function startApprovalReviewSync(

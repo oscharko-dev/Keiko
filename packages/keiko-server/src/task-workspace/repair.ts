@@ -67,6 +67,8 @@ interface RepairCtx {
   // in each helper's signature: the ctx is already threaded everywhere the adapter is built, so this
   // needed no new parameter on any private function (PR #3355 review, P2).
   readonly correlationId: string;
+  // When this repair began, so its evidence carries a measured duration (audit finding, 2026-09-03).
+  readonly startedAtMs: number;
 }
 
 function isBoundedNonEmpty(value: unknown): value is string {
@@ -155,8 +157,9 @@ function emitRepair(
       operation: "repair",
       outcome,
       attempt: 1,
-      durationMs: 0,
-      worktreeCount: 0,
+      durationMs: Math.max(0, nowMs - ctx.startedAtMs),
+      // A repair acts on exactly the one managed worktree it was asked about.
+      worktreeCount: outcome === "repaired" ? 1 : 0,
       event,
     },
     redactString: ctx.deps.redactString,
@@ -502,7 +505,12 @@ export function createWorkspaceRepairService(
         },
         () =>
           repairImpl(
-            { deps, lockTtlMs, correlationId: correlationIdOrUnknown(request.correlationId) },
+            {
+              deps,
+              lockTtlMs,
+              correlationId: correlationIdOrUnknown(request.correlationId),
+              startedAtMs: deps.now(),
+            },
             request,
           ),
       ),

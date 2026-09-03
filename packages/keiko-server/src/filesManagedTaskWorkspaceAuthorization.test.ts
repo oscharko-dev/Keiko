@@ -14,6 +14,13 @@ import {
 } from "./index.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+} from "./observability/index.js";
+import {
   createFakeSessionPairingPort,
   fakePairingRequestBody,
 } from "./coding-app-session/_support.js";
@@ -161,9 +168,18 @@ beforeEach(async (): Promise<void> => {
 });
 
 afterEach(async (): Promise<void> => {
+  resetServerLogger();
   dependencies.store.close();
   await rm(fixtureRoot, { recursive: true, force: true });
 });
+
+// The managed-root gate logs through the process sink (route deps carry no per-request sink), so
+// the pin captures the server logger itself.
+function captureServerLog(): BufferedServerLogSink {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  return sink;
+}
 
 describe("managed task-workspace Files authorization", (): void => {
   it("denies existing and absent managed roots identically before consulting persistence", async (): Promise<void> => {
@@ -176,12 +192,25 @@ describe("managed task-workspace Files authorization", (): void => {
       workspaceId: "ws_ffffffffffffffffffffffff",
     });
 
+    const sink = captureServerLog();
+
     const existing = await handleFilesTree(route(treePath(managedWorktree)), dependencies);
     const absent = await handleFilesTree(route(treePath(missing)), dependencies);
 
     expect(existing).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
     expect(absent).toEqual(existing);
     expect(getInstance).not.toHaveBeenCalled();
+    // Every unpaired refusal leaves one body-free security line naming why (an unpaired browser
+    // tab reading an active managed worktree's settings used to produce a 403 with no trace at
+    // all, observed live 2026-09-03); the managed path itself never travels into the log.
+    const denials = sink.events.filter((event) => event.op === "workspace.root.denied");
+    expect(denials).toHaveLength(2);
+    expect(denials[0]).toMatchObject({
+      category: "security",
+      errorKind: "DENIED",
+      extra: { decision: "denied", reason: "managed-root-session-authority-missing" },
+    });
+    expect(JSON.stringify(denials)).not.toContain(managedWorktree);
   });
 
   it("denies an unpaired symlink alias that resolves into a managed workspace", async (): Promise<void> => {

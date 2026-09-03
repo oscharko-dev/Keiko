@@ -73,6 +73,8 @@ export interface WorkspaceLifecycleEvidenceRecord {
   readonly outcome: WorkspaceLifecycleOutcome;
   readonly attempt: number;
   readonly durationMs: number;
+  // Operation-dependent: the managed worktrees the operation touched (0 or 1 for provision,
+  // activate, repair and cleanup) or, for a reconcile, the worktrees the repository listed.
   readonly worktreeCount: number;
   readonly event: WorkspaceEvent;
 }

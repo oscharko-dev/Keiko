@@ -447,3 +447,68 @@ describe("useCodingWorkbenchEditorBridge — applyChangeset", () => {
     expect(result.current.pendingReview).toBeNull();
   });
 });
+
+// Workbench audit, 2026-09-03: before this lock, the headless bridge re-registered its session against
+// whatever workspace the shell's active binding happened to point at, so an unrelated workspace
+// switch mid-run silently re-targeted a still-live run's file edits at the wrong root.
+describe("useCodingWorkbenchEditorBridge — run-bound root", () => {
+  it("keeps the session bound to the run's original root when the active workspace switches mid-run", async () => {
+    const { rerender } = renderHook(
+      (props: { root: string; bindingPending: boolean }) =>
+        useCodingWorkbenchEditorBridge({
+          root: props.root,
+          runId: "run-1",
+          active: true,
+          bindingPending: props.bindingPending,
+        }),
+      { initialProps: { root: "/repo/task-1", bindingPending: false } },
+    );
+    await flushMicrotasks();
+    expect(postSnapshotSpy).toHaveBeenCalledTimes(1);
+    const [firstSnapshot] = postSnapshotSpy.mock.calls[0] as [{ workspaceRoot: string }];
+    expect(firstSnapshot.workspaceRoot).toBe("/repo/task-1");
+
+    // The operator switches the desktop's active workspace to an unrelated repository while this
+    // run is still live — an ordinary, reachable action nothing warns them not to take.
+    rerender({ root: "/repo/other-workspace", bindingPending: false });
+    await flushMicrotasks();
+    // The re-registration this new (unlocked) `root` would otherwise trigger is itself debounced
+    // (EDITOR_SNAPSHOT_DEBOUNCE_MS, a REAL 300ms timer) — flushing only microtasks would let this
+    // assertion pass even without the fix, since that timer never gets to fire. Wait past it for
+    // real so a still-unlocked root has every chance to prove itself.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+
+    // No further registration ever names the new root: the session stays bound to the run's
+    // original root (or goes inert) — it must never pick up "/repo/other-workspace", and no new
+    // registration call for ANY root happens at all once the binding is lost.
+    expect(postSnapshotSpy).toHaveBeenCalledTimes(1);
+    for (const call of postSnapshotSpy.mock.calls) {
+      const [snapshot] = call as [{ workspaceRoot: string }];
+      expect(snapshot.workspaceRoot).toBe("/repo/task-1");
+    }
+  });
+
+  it("re-registers a fresh session once a new run starts after a workspace switch", async () => {
+    const { rerender } = renderHook(
+      (props: { root: string; runId: string }) =>
+        useCodingWorkbenchEditorBridge({
+          root: props.root,
+          runId: props.runId,
+          active: true,
+          bindingPending: false,
+        }),
+      { initialProps: { root: "/repo/task-1", runId: "run-1" } },
+    );
+    await flushMicrotasks();
+
+    // Workspace switch mid-run: the session must not follow it (asserted above). A brand new run
+    // starting in the now-active workspace is a different story — it re-arms the lock from scratch.
+    rerender({ root: "/repo/other-workspace", runId: "run-2" });
+    await flushMicrotasks();
+
+    const [latestSnapshot] = postSnapshotSpy.mock.calls.at(-1) as [{ workspaceRoot: string }];
+    expect(latestSnapshot.workspaceRoot).toBe("/repo/other-workspace");
+  });
+});

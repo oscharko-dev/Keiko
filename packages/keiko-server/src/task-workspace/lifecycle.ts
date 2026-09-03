@@ -175,6 +175,21 @@ function canExposeBinding(
   correlationId: string | undefined,
 ): boolean {
   if (instance.lifecycleState !== "active" && instance.lifecycleState !== "handoff-ready") {
+    // A persisted pointer can name a workspace a later pass moved out of the bindable states (a
+    // startup reconcile flagged it `recovery-required`). The caller clears the pointer; without a
+    // line here the operator's "my active workspace vanished after the restart" had no trace in
+    // the log at all (observed live, 2026-09-03).
+    logWorkspaceLifecycle(ctx.deps, {
+      operation: "activate",
+      outcome: "blocked",
+      workspaceId: instance.workspaceId,
+      taskId: instance.taskId,
+      correlationId,
+      attempt: 1,
+      durationMs: 0,
+      worktreeCount: 0,
+      errorCode: "ILLEGAL_TRANSITION",
+    });
     return false;
   }
   try {
@@ -569,6 +584,7 @@ export function createWorkspaceLifecycleService(
   const ctx: LifecycleCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
   return {
     list: (repositoryRoot: string): readonly WorkspaceInstance[] => listImpl(ctx, repositoryRoot),
+    listAll: (): readonly WorkspaceInstance[] => deps.store.listAll(),
     getActive: (correlationId?: string): ActiveWorkspaceView | undefined =>
       getActiveImpl(ctx, correlationId),
     setActive: (request: SetActiveWorkspaceRequest): Promise<ActiveWorkspaceView> =>

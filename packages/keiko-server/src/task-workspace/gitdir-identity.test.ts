@@ -23,10 +23,17 @@ import type {
 import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
+  classifyWorkspaceReconciliation,
+  type WorkspaceReconciliationFacts,
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import {
   inspectManagedGitdirIdentity,
   inspectManagedGitdirIdentityOutcome,
   managedIdentityDriftFor,
+  managedIdentityDriftMarker,
+  managedIdentityDriftMessage,
   type ManagedGitdirIdentityInspection,
+  type ManagedIdentityDrift,
 } from "./gitdir-identity.js";
 
 // Keys are built with the same `node:path` API the production code uses. Spelling them as POSIX
@@ -294,6 +301,62 @@ describe("legacy identity — recognises a superseded registration without trust
   });
 });
 
+describe("pointer-text identity — recognises a registration made before the identity rule", () => {
+  // EXTERNAL anchor: the composition every workspace provisioned before #3367 carries, transcribed
+  // from the retired `gitdirIdentity` in provisioning.ts (`git show bbfe47b13^:…/provisioning.ts`):
+  // the `.git` pointer's target text, trimmed, hashed bare — no schema string, no inode, no
+  // creation time. Two real workspaces registered on 2026-08-23 carried exactly this value and were
+  // reported as REPLACED worktrees on every start after the upgrade, with an operator-repair hint
+  // that no strategy could execute. If this composition ever drifts from what the old code wrote,
+  // the migration diagnosis silently stops firing again; only a value derived outside the
+  // production file can catch that.
+  const V1_GOLDEN_IDENTITY = createHash("sha256")
+    .update(ADMIN_DIRECTORY, "utf8")
+    .digest("hex")
+    .slice(0, 32);
+
+  it("reproduces the retired pointer-text composition exactly", () => {
+    expect(inspect(authenticTree())?.legacyPointerIdentity).toBe(V1_GOLDEN_IDENTITY);
+  });
+
+  it("is neither the identity that grants access nor the v2 composition", () => {
+    const inspection = inspect(authenticTree());
+
+    expect(inspection?.legacyPointerIdentity).toEqual(expect.any(String));
+    expect(inspection?.legacyPointerIdentity).not.toBe(inspection?.identity);
+    expect(inspection?.legacyPointerIdentity).not.toBe(inspection?.legacyIdentity);
+  });
+
+  // The property that lets it recognise a pre-#3367 record: it is blind to every filesystem
+  // component, exactly as the retired rule was.
+  it("ignores every inode and creation time the current identity binds", () => {
+    const tree = authenticTree();
+    for (const path of tree.keys()) {
+      mutate(tree, path, { identity: `7:${String(path.length)}`, birthtimeNs: "999" });
+    }
+
+    expect(inspect(tree)?.legacyPointerIdentity).toBe(V1_GOLDEN_IDENTITY);
+    expect(inspect(tree)?.identity).not.toBe(inspect(authenticTree())?.identity);
+  });
+
+  it("hashes the target text as written, whitespace trimmed", () => {
+    const padded = mutate(authenticTree(), WORKTREE_POINTER, {
+      text: `gitdir:   ${ADMIN_DIRECTORY}   \n`,
+    });
+
+    expect(inspect(padded)?.legacyPointerIdentity).toBe(V1_GOLDEN_IDENTITY);
+  });
+
+  it("is recognised as a retired registration, not as a replaced worktree", () => {
+    const inspection = inspect(authenticTree());
+    if (inspection === undefined) throw new Error("fixture produced no identity");
+
+    expect(
+      managedIdentityDriftFor({ kind: "identified", inspection }, inspection.legacyPointerIdentity),
+    ).toBe("schema-retired");
+  });
+});
+
 // One owner for the three-way verdict. The access boundary, the provisioning resume and
 // reconciliation all compare a persisted identity, and they have to agree — a site that reduces this
 // to a boolean is how "registered under the old rule" gets reported as "your worktree was replaced".
@@ -321,7 +384,7 @@ describe("managedIdentityDriftFor", () => {
     expect(driftOf(inspection, inspection.legacyIdentity)).toBe("schema-retired");
   });
 
-  it("reports anything else as changed", () => {
+  it("reports a readable pointer proving a different identity as changed", () => {
     expect(driftOf(inspect(authenticTree()), "not-an-identity")).toBe("changed");
   });
 
@@ -342,8 +405,72 @@ describe("managedIdentityDriftFor", () => {
     }
   });
 
-  it("reports changed when the worktree proves no identity at all", () => {
-    expect(driftOf(undefined, "anything")).toBe("changed");
+  // Relocated pin: this used to expect "changed". A worktree that proves NO identity — missing,
+  // malformed or non-reciprocal pointer — is refused exactly as before, but as its own verdict:
+  // the contract keeps a corrupt pointer operator-guided (`pointer-stale`) and a readable
+  // mismatch automatically re-linkable (`gitdir-mismatch`), and collapsing the two let one row's
+  // persisted recovery hint flip between those strategies depending on which path saw it last.
+  it("reports unproven when the worktree proves no identity at all", () => {
+    expect(driftOf(undefined, "anything")).toBe("unproven");
+  });
+});
+
+// The refusal paths (provisioning resume/completion/activation, lifecycle handoff, the active read)
+// persist the marker this mapping returns; reconciliation persists the marker the contract's
+// classifier returns for the same on-disk fact. They must agree, or the recovery hint a row carries
+// depends on which path observed it last — the 2026-09-03 dev log showed one row alternating
+// between `gitdir-mismatch` (reconcile-pointer, executable) and `pointer-stale` (operator-repair,
+// nothing executable) on every provision attempt.
+describe("managedIdentityDriftMarker — one marker per fact, the same one reconciliation persists", () => {
+  const healthyFacts: WorkspaceReconciliationFacts = {
+    lifecycleState: "active",
+    pathContained: true,
+    worktreeDirExists: true,
+    gitPointerPresent: true,
+    gitdirIdentityMatches: true,
+    taskBranchPresent: true,
+    headMatches: true,
+    uncommittedChanges: false,
+    lockPresent: false,
+    lockLive: false,
+    lockedByOtherActor: false,
+  };
+  const classifierMarker = (facts: Partial<WorkspaceReconciliationFacts>): string | undefined =>
+    classifyWorkspaceReconciliation({ ...healthyFacts, ...facts }).driftMarkers[0];
+
+  it.each([
+    {
+      drift: "changed",
+      facts: { gitdirIdentityMatches: false },
+    },
+    {
+      drift: "unproven",
+      facts: { gitPointerPresent: false, gitdirIdentityMatches: false },
+    },
+    {
+      drift: "schema-retired",
+      facts: { gitdirIdentityMatches: false, gitdirIdentitySchemaRetired: true },
+    },
+    {
+      drift: "unsupported",
+      facts: { gitdirIdentityMatches: false, gitdirIdentityUnsupported: true },
+    },
+  ] satisfies readonly {
+    drift: ManagedIdentityDrift;
+    facts: Partial<WorkspaceReconciliationFacts>;
+  }[])("persists the classifier's marker for a $drift verdict", ({ drift, facts }) => {
+    expect(managedIdentityDriftMarker(drift)).toBe(classifierMarker(facts));
+  });
+
+  it("maps a readable mismatch to the executable reconcile-pointer marker, never operator-repair", () => {
+    expect(managedIdentityDriftMarker("changed")).toBe("gitdir-mismatch");
+    expect(managedIdentityDriftMarker("unproven")).toBe("pointer-stale");
+  });
+
+  it("tells an operator which of the two happened", () => {
+    expect(managedIdentityDriftMessage("changed")).toContain("identity changed");
+    expect(managedIdentityDriftMessage("unproven")).toContain("could not be proven");
+    expect(managedIdentityDriftMessage("unproven")).not.toContain("changed");
   });
 });
 

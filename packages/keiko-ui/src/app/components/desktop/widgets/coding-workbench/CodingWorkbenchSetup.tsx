@@ -11,17 +11,34 @@
 // refresh the shared active-workspace context so the task-start flow unlocks. Reconciliation progress
 // and failure surface as bounded, content-free states with an in-place retry; a workspace that
 // reconciliation cannot verify is NEVER activated, so the run stays unstartable (#2476 AC3).
+//
+// A refused bind names its actual cause. The server's structured failure codes map to distinct
+// operator sentences (a base branch that does not resolve, a path outside a repository, a held lock,
+// an installation without managed workspaces), and a refusal of the EXISTING managed workspace for
+// this repository and branch (POINTER_DRIFT) surfaces the persisted finding together with the one
+// executable exit: an operator-approved repair through the #447 route, followed by the same
+// verify-then-activate sequence a fresh bind runs. Before that, every one of these read "review the
+// repository path and target branch" — a sentence about the wrong thing — and the refused row had no
+// exit in the product (2026-09-03 dev log). The target branch defaults to the repository's
+// checked-out branch: a checkout whose integration branch is `dev` must not be offered `main`.
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   bindVerifiedTaskWorkspace,
+  repairAndBindVerifiedTaskWorkspace,
   type VerifiedTaskWorkspaceBindFailure,
+  type VerifiedTaskWorkspaceRepairOffer,
 } from "@/lib/verified-task-workspace-binding";
+import { fetchRepositoryBaseBranch } from "@/lib/task-workspace-api";
+import { TASK_WORKSPACE_MARKER_MESSAGE_KEYS } from "@/lib/task-workspace-marker-labels";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
+import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import { PanelTitle } from "./CodingWorkbenchPanelTitle";
 import { cx } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -30,18 +47,31 @@ import styles from "./CodingWorkbenchWindow.module.css";
 // it as an opaque id only — never a credential.
 const STUDIO_OPERATOR = "studio-operator";
 
+// The fallback when the repository's checked-out branch cannot be read (no repository at the path
+// yet, a detached HEAD, a transport failure).
 const DEFAULT_TARGET_BRANCH = "main";
 
-type SetupPhase = "binding" | "verifying";
-type SetupErrorReason = "bind" | "verify" | "branch-conflict";
+type SetupPhase = "binding" | "repairing" | "verifying";
+type SetupErrorReason =
+  | "bind"
+  | "verify"
+  | "branch-conflict"
+  | "invalid-base-branch"
+  | "missing-repository"
+  | "unsafe-path"
+  | "lock-contention"
+  | "unavailable"
+  | "repair-required"
+  | "operator-required"
+  | "repair-failed";
+type SetupError = {
+  readonly kind: "error";
+  readonly reason: SetupErrorReason;
+  // The refused workspace and what the server can do about it, when the failure named one.
+  readonly repair?: VerifiedTaskWorkspaceRepairOffer | undefined;
+};
 type SetupStatus =
-  | { readonly kind: "idle" }
-  | { readonly kind: "pending"; readonly phase: SetupPhase }
-  | { readonly kind: "error"; readonly reason: SetupErrorReason };
-
-// The outcome of the end-to-end bind sequence stays content-free. A server branch conflict is the
-// only domain reason surfaced beyond the bounded stage because it has a concrete operator remedy.
-type BindOutcome = "ok" | SetupErrorReason;
+  { readonly kind: "idle" } | { readonly kind: "pending"; readonly phase: SetupPhase } | SetupError;
 
 export interface CodingWorkbenchSetupProps {
   // The Workbench-wide selected folder/repository is a convenience default only. It does not become
@@ -49,7 +79,7 @@ export interface CodingWorkbenchSetupProps {
   readonly selectedRoot?: string | undefined;
   // ActiveWorkspaceApi.refresh from the shared context — re-reads the active binding after the
   // workbench-initiated bind so every bound surface flips to the new workspace atomically.
-  readonly refreshWorkspace: (root: string) => Promise<boolean>;
+  readonly refreshWorkspace: () => Promise<boolean>;
   // The honest pre-activation posture. "unavailable" only once readiness has RESOLVED as
   // unavailable, "evaluation" once it has resolved as available over an unverified evaluation
   // runtime, "verified" otherwise — a still-pending readiness check stays "verified" so neither
@@ -83,75 +113,265 @@ export function codingWorkbenchSetupTaskId(targetBranch: string): string {
   return slug.length === 0 ? "coding-workbench" : `coding-workbench-${slug}`;
 }
 
+// The server's structured codes that have a distinct operator remedy on this surface. Anything
+// else stays the bounded generic sentence, which is honest for an unclassified failure.
+const REASON_BY_CODE: Readonly<Partial<Record<string, SetupErrorReason>>> = {
+  INVALID_BASE_BRANCH: "invalid-base-branch",
+  MISSING_REPOSITORY: "missing-repository",
+  UNSAFE_PATH: "unsafe-path",
+  LOCK_CONTENTION: "lock-contention",
+  WORKSPACE_PROVISIONING_UNAVAILABLE: "unavailable",
+};
+
+// A refused EXISTING workspace: repairable in place when reconciliation recommended an automatic
+// strategy, otherwise an operator has to look first. A repair that itself errored (a held lock, a
+// state that moved underneath it) is neither.
+function repairReason(failure: VerifiedTaskWorkspaceBindFailure): SetupErrorReason {
+  if ((failure.repair?.strategy ?? null) !== null) return "repair-required";
+  if (failure.repair !== undefined) return "operator-required";
+  if (failure.code === "LOCK_CONTENTION") return "lock-contention";
+  return failure.stage === "repair" ? "repair-failed" : "operator-required";
+}
+
 function setupErrorReason(failure: VerifiedTaskWorkspaceBindFailure): SetupErrorReason {
-  if (
-    failure.stage === "provision" &&
-    failure.reason === "branch-conflict" &&
-    failure.failureClass === "blocked"
-  ) {
+  if (failure.stage === "verify") return "verify";
+  if (failure.reason === "branch-conflict" && failure.failureClass === "blocked") {
     return "branch-conflict";
   }
-  return failure.stage === "verify" ? "verify" : "bind";
+  if (failure.code === "POINTER_DRIFT" || failure.stage === "repair") return repairReason(failure);
+  const mapped = failure.code === undefined ? undefined : REASON_BY_CODE[failure.code];
+  return mapped ?? "bind";
+}
+
+function failureStatus(failure: VerifiedTaskWorkspaceBindFailure): SetupError {
+  return { kind: "error", reason: setupErrorReason(failure), repair: failure.repair };
+}
+
+// The bound workspace becomes the surfaces' truth only through the shared context refresh; a
+// refresh that does not settle (a newer operation superseded it) or fails leaves the setup surface
+// in place with a bounded retry, diagnosable in the console.
+async function settleBoundWorkspace(
+  refreshWorkspace: () => Promise<boolean>,
+): Promise<SetupStatus> {
+  try {
+    if (await refreshWorkspace()) return { kind: "idle" };
+    reportClientDiagnostic("[keiko] coding workbench workspace refresh did not settle");
+  } catch (error) {
+    reportClientDiagnostic(
+      `[keiko] coding workbench workspace refresh failed: ${clientErrorSummary(error)}`,
+      { correlationId: correlationIdOf(error) },
+    );
+  }
+  return { kind: "error", reason: "bind" };
+}
+
+interface BindInput {
+  readonly root: string;
+  readonly baseBranch: string;
+  readonly refreshWorkspace: () => Promise<boolean>;
+  readonly onPhase: (phase: SetupPhase) => void;
 }
 
 // Drive provision → reconcile → activate as one operator action. `onPhase` advances the surfaced
-// pending phase from binding to verifying; every server error maps to a bounded, content-free outcome.
-async function executeBind(input: {
-  readonly root: string;
-  readonly baseBranch: string;
-  readonly refreshWorkspace: (root: string) => Promise<boolean>;
-  readonly onPhase: (phase: SetupPhase) => void;
-}): Promise<BindOutcome> {
+// pending phase from binding to verifying; every server error maps to a bounded outcome.
+async function executeBind(input: BindInput): Promise<SetupStatus> {
   const result = await bindVerifiedTaskWorkspace({
     root: input.root,
     taskId: codingWorkbenchSetupTaskId(input.baseBranch),
     baseBranch: input.baseBranch,
     requestedBy: STUDIO_OPERATOR,
-    onProvisioned: () => input.onPhase("verifying"),
+    onProvisioned: () => {
+      input.onPhase("verifying");
+    },
   });
-  if (!result.ok) return setupErrorReason(result);
-  try {
-    if (await input.refreshWorkspace(input.root)) return "ok";
-    reportClientDiagnostic("[keiko] coding workbench workspace refresh did not settle");
-    return "bind";
-  } catch {
-    return "bind";
-  }
+  if (!result.ok) return failureStatus(result);
+  return settleBoundWorkspace(input.refreshWorkspace);
 }
 
-function createBindSubmitHandler(params: {
+interface RepairInput extends Omit<BindInput, "baseBranch"> {
+  readonly workspaceId: string;
+  readonly strategy: NonNullable<VerifiedTaskWorkspaceRepairOffer["strategy"]>;
+}
+
+// The operator's click on the named repair IS the approval the #447 route requires; the sequence
+// then verifies and activates exactly as a fresh bind does.
+async function executeRepairAndBind(input: RepairInput): Promise<SetupStatus> {
+  const result = await repairAndBindVerifiedTaskWorkspace({
+    root: input.root,
+    workspaceId: input.workspaceId,
+    strategy: input.strategy,
+    requestedBy: STUDIO_OPERATOR,
+    onRepaired: () => {
+      input.onPhase("verifying");
+    },
+  });
+  if (!result.ok) return failureStatus(result);
+  return settleBoundWorkspace(input.refreshWorkspace);
+}
+
+// A sequence that rejects outside its own bounded outcomes is a defect, not an operator state; it
+// still settles the surface (never a stuck "Binding…") and leaves a diagnosable line.
+function settleOutcome(
+  outcome: Promise<SetupStatus>,
+  setStatus: (status: SetupStatus) => void,
+): void {
+  outcome.then(setStatus, (error: unknown) => {
+    reportClientDiagnostic(
+      `[keiko] coding workbench bind sequence rejected: ${clientErrorSummary(error)}`,
+      { correlationId: correlationIdOf(error) },
+    );
+    setStatus({ kind: "error", reason: "bind" });
+  });
+}
+
+interface SetupActions {
+  readonly onSubmit: (event: { preventDefault: () => void }) => void;
+  readonly onRepair: () => void;
+}
+
+function useSetupActions(params: {
   readonly repositoryPath: string;
   readonly targetBranch: string;
-  readonly submitDisabled: boolean;
-  readonly refreshWorkspace: (root: string) => Promise<boolean>;
+  readonly refreshWorkspace: () => Promise<boolean>;
+  readonly status: SetupStatus;
   readonly setStatus: (status: SetupStatus) => void;
-}): (event: { preventDefault: () => void }) => void {
-  return (event) => {
-    event.preventDefault();
-    if (params.submitDisabled) return;
-    params.setStatus({ kind: "pending", phase: "binding" });
-    void executeBind({
-      root: params.repositoryPath.trim(),
-      baseBranch: params.targetBranch.trim(),
-      refreshWorkspace: params.refreshWorkspace,
-      onPhase: (phase) => params.setStatus({ kind: "pending", phase }),
-    }).then((outcome) => {
-      params.setStatus(outcome === "ok" ? { kind: "idle" } : { kind: "error", reason: outcome });
-    });
+}): SetupActions {
+  const { repositoryPath, targetBranch, refreshWorkspace, status, setStatus } = params;
+  const root = repositoryPath.trim();
+  const baseBranch = targetBranch.trim();
+  const pending = status.kind === "pending";
+  const onPhase = (phase: SetupPhase): void => {
+    setStatus({ kind: "pending", phase });
   };
+  const onSubmit = (event: { preventDefault: () => void }): void => {
+    event.preventDefault();
+    if (pending || root === "" || baseBranch === "") return;
+    setStatus({ kind: "pending", phase: "binding" });
+    settleOutcome(executeBind({ root, baseBranch, refreshWorkspace, onPhase }), setStatus);
+  };
+  const onRepair = (): void => {
+    const offer = status.kind === "error" ? status.repair : undefined;
+    const strategy = offer?.strategy ?? null;
+    if (pending || root === "" || offer === undefined || strategy === null) return;
+    setStatus({ kind: "pending", phase: "repairing" });
+    settleOutcome(
+      executeRepairAndBind({
+        root,
+        workspaceId: offer.workspaceId,
+        strategy,
+        refreshWorkspace,
+        onPhase,
+      }),
+      setStatus,
+    );
+  };
+  return { onSubmit, onRepair };
 }
 
-function alertMessage(reason: SetupErrorReason, t: CodingWorkbenchTranslate): string {
-  if (reason === "verify") return t("codingWorkbench.setup.reconcileFailed");
-  if (reason === "branch-conflict") return t("codingWorkbench.setup.branchConflict");
+interface TargetBranchState {
+  readonly targetBranch: string;
+  // The operator's own choice; it wins over every lookup from here on.
+  readonly chooseTargetBranch: (value: string) => void;
+  // Re-read the checked-out branch of `root` unless the operator already chose a branch.
+  readonly lookupFor: (root: string) => void;
+}
+
+// The repository's checked-out branch as the default base branch. A value the operator typed wins
+// over any lookup, including one that resolves later; a lookup that cannot answer (not a
+// repository, detached HEAD) keeps the previous default, and only a transport failure is reported.
+function useTargetBranchDefault(selectedRoot: string | undefined): TargetBranchState {
+  const [targetBranch, setTargetBranch] = useState(DEFAULT_TARGET_BRANCH);
+  const touchedRef = useRef(false);
+  const lookupSeqRef = useRef(0);
+  const lookupFor = useCallback((root: string): void => {
+    const trimmed = root.trim();
+    if (trimmed === "" || touchedRef.current) return;
+    const seq = (lookupSeqRef.current += 1);
+    fetchRepositoryBaseBranch(trimmed).then(
+      (branch) => {
+        if (seq !== lookupSeqRef.current || touchedRef.current || branch === null) return;
+        setTargetBranch(branch);
+      },
+      (error: unknown) => {
+        reportClientDiagnostic(
+          `[keiko] coding workbench base branch lookup failed: ${clientErrorSummary(error)}`,
+          { correlationId: correlationIdOf(error) },
+        );
+      },
+    );
+  }, []);
+  // A branch typed for one repository is not a choice for the next: a new workbench-wide selection
+  // re-arms the default the way the path field follows it.
+  useEffect(() => {
+    touchedRef.current = false;
+    if (selectedRoot !== undefined) lookupFor(selectedRoot);
+  }, [lookupFor, selectedRoot]);
+  // A lookup that lands after unmount must not write into a surface that no longer exists.
+  useEffect(
+    () => (): void => {
+      lookupSeqRef.current += 1;
+    },
+    [],
+  );
+  const chooseTargetBranch = useCallback((value: string): void => {
+    touchedRef.current = true;
+    setTargetBranch(value);
+  }, []);
+  return { targetBranch, chooseTargetBranch, lookupFor };
+}
+
+// The failure reasons whose sentence needs no interpolation.
+const PLAIN_ALERT_KEYS: Readonly<Partial<Record<SetupErrorReason, CodingWorkbenchMessageKey>>> = {
+  verify: "codingWorkbench.setup.reconcileFailed",
+  "branch-conflict": "codingWorkbench.setup.branchConflict",
+  "invalid-base-branch": "codingWorkbench.setup.invalidBaseBranch",
+  "missing-repository": "codingWorkbench.setup.missingRepository",
+  "unsafe-path": "codingWorkbench.setup.unsafePath",
+  "lock-contention": "codingWorkbench.setup.lockContention",
+  unavailable: "codingWorkbench.setup.provisioningUnavailable",
+  "repair-failed": "codingWorkbench.setup.repairFailed",
+};
+
+// The primary persisted finding of a refused workspace, in the same words the Task Workspace
+// manager uses for the same marker.
+function findingLabel(
+  repair: VerifiedTaskWorkspaceRepairOffer | undefined,
+  t: CodingWorkbenchTranslate,
+  tGlobal: I18nTranslate,
+): string {
+  const marker = repair?.driftMarkers[0];
+  return marker === undefined
+    ? t("codingWorkbench.setup.findingUnknown")
+    : tGlobal(TASK_WORKSPACE_MARKER_MESSAGE_KEYS[marker]);
+}
+
+function alertMessage(
+  status: SetupError,
+  t: CodingWorkbenchTranslate,
+  tGlobal: I18nTranslate,
+): string {
+  const plain = PLAIN_ALERT_KEYS[status.reason];
+  if (plain !== undefined) return t(plain);
+  if (status.reason === "repair-required" || status.reason === "operator-required") {
+    const key =
+      status.reason === "repair-required"
+        ? "codingWorkbench.setup.repairRequired"
+        : "codingWorkbench.setup.operatorRequired";
+    return t(key, { finding: findingLabel(status.repair, t, tGlobal) });
+  }
   return t("codingWorkbench.alert.workspaceBindFailed");
 }
 
+const PHASE_LABEL_KEYS: Readonly<Record<SetupPhase, CodingWorkbenchMessageKey>> = {
+  binding: "codingWorkbench.setup.binding",
+  repairing: "codingWorkbench.setup.repairing",
+  verifying: "codingWorkbench.setup.verifying",
+};
+
 function submitLabel(status: SetupStatus, t: CodingWorkbenchTranslate): string {
-  if (status.kind !== "pending") return t("codingWorkbench.setup.submit");
-  return status.phase === "verifying"
-    ? t("codingWorkbench.setup.verifying")
-    : t("codingWorkbench.setup.binding");
+  return status.kind === "pending"
+    ? t(PHASE_LABEL_KEYS[status.phase])
+    : t("codingWorkbench.setup.submit");
 }
 
 function SetupNotices({
@@ -163,6 +383,7 @@ function SetupNotices({
   readonly status: SetupStatus;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
+  const tGlobal = useTranslate();
   return (
     <>
       {runtimePosture === "unavailable" ? (
@@ -179,34 +400,61 @@ function SetupNotices({
         </p>
       ) : null}
       {status.kind === "error" ? (
-        <p className={styles.alert} role="alert">
-          <span aria-hidden="true">!</span> {alertMessage(status.reason, t)}
+        <p className={styles.alert} role="alert" id="coding-workbench-setup-alert">
+          <span aria-hidden="true">!</span> {alertMessage(status, t, tGlobal)}
         </p>
       ) : null}
     </>
   );
 }
 
-export function CodingWorkbenchSetup({
-  selectedRoot,
-  refreshWorkspace,
-  runtimePosture,
-}: CodingWorkbenchSetupProps): ReactNode {
-  const t = useCodingWorkbenchTranslate();
+function repairOffered(status: SetupStatus): boolean {
+  return status.kind === "error" && (status.repair?.strategy ?? null) !== null;
+}
+
+function SetupActionRow({
+  status,
+  submitDisabled,
+  onRepair,
+  t,
+}: {
+  readonly status: SetupStatus;
+  readonly submitDisabled: boolean;
+  readonly onRepair: () => void;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <div className={styles.setupActions}>
+      <button
+        className={cx(styles.button, styles.buttonPrimary)}
+        type="submit"
+        disabled={submitDisabled}
+        aria-describedby="coding-workbench-setup-help"
+      >
+        {submitLabel(status, t)}
+      </button>
+      {repairOffered(status) ? (
+        <button
+          className={styles.button}
+          type="button"
+          onClick={onRepair}
+          aria-describedby="coding-workbench-setup-alert"
+        >
+          {t("codingWorkbench.setup.repairAndBind")}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+// The Workbench-wide selected folder is the path field's default: it follows a new selection only
+// while the operator has not typed a different path (an empty field, or one still showing the
+// previous selection, is not an operator's choice).
+function useRepositoryPathDefault(
+  selectedRoot: string | undefined,
+): readonly [string, (value: string) => void] {
   const [repositoryPath, setRepositoryPath] = useState(selectedRoot ?? "");
   const previousSelectedRootRef = useRef(selectedRoot ?? "");
-  const [targetBranch, setTargetBranch] = useState(DEFAULT_TARGET_BRANCH);
-  const [status, setStatus] = useState<SetupStatus>({ kind: "idle" });
-  const pending = status.kind === "pending";
-  const submitDisabled = pending || repositoryPath.trim() === "" || targetBranch.trim() === "";
-  const onSubmit = createBindSubmitHandler({
-    repositoryPath,
-    targetBranch,
-    submitDisabled,
-    refreshWorkspace,
-    setStatus,
-  });
-
   useEffect(() => {
     const previousSelectedRoot = previousSelectedRootRef.current;
     const nextSelectedRoot = selectedRoot ?? "";
@@ -215,6 +463,34 @@ export function CodingWorkbenchSetup({
       current.trim() === "" || current === previousSelectedRoot ? nextSelectedRoot : current,
     );
   }, [selectedRoot]);
+  return [repositoryPath, setRepositoryPath];
+}
+
+export function CodingWorkbenchSetup({
+  selectedRoot,
+  refreshWorkspace,
+  runtimePosture,
+}: CodingWorkbenchSetupProps): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const [repositoryPath, setRepositoryPath] = useRepositoryPathDefault(selectedRoot);
+  const branch = useTargetBranchDefault(selectedRoot);
+  const [status, setStatus] = useState<SetupStatus>({ kind: "idle" });
+  // A refusal — and the repair offer it may carry — belongs to the path it was answered for. When
+  // the path moves on (typed, or following a new workbench-wide selection) the offer must not
+  // survive it, or "Repair and bind" would apply the old workspace's repair under the new path.
+  useEffect(() => {
+    setStatus((current) => (current.kind === "error" ? { kind: "idle" } : current));
+  }, [repositoryPath]);
+  const pending = status.kind === "pending";
+  const submitDisabled =
+    pending || repositoryPath.trim() === "" || branch.targetBranch.trim() === "";
+  const actions = useSetupActions({
+    repositoryPath,
+    targetBranch: branch.targetBranch,
+    refreshWorkspace,
+    status,
+    setStatus,
+  });
 
   return (
     <section className={styles.card} aria-label={t("codingWorkbench.setup.title")}>
@@ -222,25 +498,24 @@ export function CodingWorkbenchSetup({
         {t("codingWorkbench.setup.title")}
       </PanelTitle>
       <SetupNotices runtimePosture={runtimePosture} status={status} t={t} />
-      <form onSubmit={onSubmit}>
+      <form onSubmit={actions.onSubmit}>
         <SetupFields
           repositoryPath={repositoryPath}
-          targetBranch={targetBranch}
+          targetBranch={branch.targetBranch}
           pending={pending}
           onRepositoryPathChange={setRepositoryPath}
-          onTargetBranchChange={setTargetBranch}
+          onRepositoryPathSettled={branch.lookupFor}
+          onTargetBranchChange={branch.chooseTargetBranch}
         />
         <p id="coding-workbench-setup-help" className={styles.helpText}>
           {t("codingWorkbench.setup.help")}
         </p>
-        <button
-          className={cx(styles.button, styles.buttonPrimary)}
-          type="submit"
-          disabled={submitDisabled}
-          aria-describedby="coding-workbench-setup-help"
-        >
-          {submitLabel(status, t)}
-        </button>
+        <SetupActionRow
+          status={status}
+          submitDisabled={submitDisabled}
+          onRepair={actions.onRepair}
+          t={t}
+        />
       </form>
     </section>
   );
@@ -251,13 +526,41 @@ function SetupFields({
   targetBranch,
   pending,
   onRepositoryPathChange,
+  onRepositoryPathSettled,
   onTargetBranchChange,
 }: {
   readonly repositoryPath: string;
   readonly targetBranch: string;
   readonly pending: boolean;
   readonly onRepositoryPathChange: (value: string) => void;
+  // Fired when the operator leaves the path field, so the branch default follows a typed path
+  // without a request per keystroke.
+  readonly onRepositoryPathSettled: (value: string) => void;
   readonly onTargetBranchChange: (value: string) => void;
+}): ReactNode {
+  return (
+    <>
+      <RepositoryPathField
+        value={repositoryPath}
+        pending={pending}
+        onChange={onRepositoryPathChange}
+        onSettled={onRepositoryPathSettled}
+      />
+      <TargetBranchField value={targetBranch} pending={pending} onChange={onTargetBranchChange} />
+    </>
+  );
+}
+
+function RepositoryPathField({
+  value,
+  pending,
+  onChange,
+  onSettled,
+}: {
+  readonly value: string;
+  readonly pending: boolean;
+  readonly onChange: (value: string) => void;
+  readonly onSettled: (value: string) => void;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   return (
@@ -269,13 +572,32 @@ function SetupFields({
         id="coding-workbench-setup-path"
         className={styles.setupInput}
         type="text"
-        value={repositoryPath}
+        value={value}
         disabled={pending}
         placeholder={t("codingWorkbench.setup.repositoryPathPlaceholder")}
         onChange={(event) => {
-          onRepositoryPathChange(event.target.value);
+          onChange(event.target.value);
+        }}
+        onBlur={(event) => {
+          onSettled(event.target.value);
         }}
       />
+    </>
+  );
+}
+
+function TargetBranchField({
+  value,
+  pending,
+  onChange,
+}: {
+  readonly value: string;
+  readonly pending: boolean;
+  readonly onChange: (value: string) => void;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  return (
+    <>
       <label className={styles.fieldLabel} htmlFor="coding-workbench-setup-branch">
         {t("codingWorkbench.setup.targetBranch")}
       </label>
@@ -283,11 +605,11 @@ function SetupFields({
         id="coding-workbench-setup-branch"
         className={styles.setupInput}
         type="text"
-        value={targetBranch}
+        value={value}
         disabled={pending}
         placeholder={t("codingWorkbench.setup.targetBranchPlaceholder")}
         onChange={(event) => {
-          onTargetBranchChange(event.target.value);
+          onChange(event.target.value);
         }}
       />
     </>

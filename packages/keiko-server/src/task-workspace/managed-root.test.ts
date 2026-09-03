@@ -23,6 +23,7 @@ import {
   assertManagedTargetContained,
   ensureManagedWorktreeParent,
   isManagedRootOwned,
+  listManagedRepositoryIds,
   managedTargetExists,
 } from "./managed-root.js";
 
@@ -142,5 +143,27 @@ describe("worktree parent + existence", () => {
     ensureManagedWorktreeParent(target);
     expect(existsSync(join(managedRoot, "repo_x"))).toBe(true);
     expect(managedTargetExists(target)).toBe(false);
+  });
+});
+
+describe("listManagedRepositoryIds", () => {
+  it("lists nothing for a managed root that does not exist yet", () => {
+    expect(listManagedRepositoryIds(join(base, "absent"))).toEqual([]);
+  });
+
+  it("lists the repository directories and skips loose files", () => {
+    mkdirSync(join(managedRoot, "repo-a"), { recursive: true });
+    mkdirSync(join(managedRoot, "repo-b"), { recursive: true });
+    writeFileSync(join(managedRoot, "stray.txt"), "");
+    expect([...listManagedRepositoryIds(managedRoot)].sort()).toEqual(["repo-a", "repo-b"]);
+  });
+
+  // A root that exists but cannot be read is not an empty inventory: the health report and the
+  // orphan sweep must fail instead of claiming a complete scan they could not take (review of
+  // ec04288dc; the previous silent catch reported "no repositories" for an unreadable root).
+  it("throws instead of listing nothing when the managed root cannot be read", () => {
+    const notADirectory = join(base, "managed-as-file");
+    writeFileSync(notADirectory, "");
+    expect(() => listManagedRepositoryIds(notADirectory)).toThrow();
   });
 });

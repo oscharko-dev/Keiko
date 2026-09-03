@@ -104,6 +104,48 @@ describe("classifyWorkspaceReconciliation precedence", () => {
     }
   });
 
+  // A cleanup-pending tree that is present but no longer proves its identity can never pass the
+  // governed removal's ownership gate; reporting it settled left the row with no exit — no repair
+  // applies to a healthy status, the terminal branch refuses re-provisioning, and the orphan sweep
+  // skips a directory that still has a record (audit finding, 2026-09-03).
+  it("classifies a present but unproven cleanup-pending worktree as stale, never as settled", () => {
+    expect(
+      classifyWorkspaceReconciliation(
+        healthyFacts({ lifecycleState: "cleanup-pending", gitdirIdentityMatches: false }),
+      ),
+    ).toMatchObject({ status: "stale-pointer", driftMarkers: ["gitdir-mismatch"] });
+    expect(
+      classifyWorkspaceReconciliation(
+        healthyFacts({
+          lifecycleState: "cleanup-pending",
+          gitdirIdentityMatches: false,
+          gitdirIdentitySchemaRetired: true,
+        }),
+      ),
+    ).toMatchObject({ status: "stale-pointer", driftMarkers: ["identity-schema-retired"] });
+    expect(
+      classifyWorkspaceReconciliation(
+        healthyFacts({
+          lifecycleState: "cleanup-pending",
+          gitPointerPresent: false,
+          gitdirIdentityMatches: false,
+        }),
+      ),
+    ).toMatchObject({ status: "stale-pointer", driftMarkers: ["pointer-stale"] });
+    // The registered tree, still present and proven, is settled; so is a tree that is already gone.
+    expect(
+      classifyWorkspaceReconciliation(healthyFacts({ lifecycleState: "cleanup-pending" })).status,
+    ).toBe("healthy");
+    // The other terminal states never re-enter activity, so their disk state stays irrelevant.
+    for (const lifecycleState of ["merged", "archived", "abandoned"] as const) {
+      expect(
+        classifyWorkspaceReconciliation(
+          healthyFacts({ lifecycleState, gitdirIdentityMatches: false }),
+        ).status,
+      ).toBe("healthy");
+    }
+  });
+
   it("classifies a never-completed provisioning/failed workspace as partially-created", () => {
     expect(
       classifyWorkspaceReconciliation(
@@ -286,6 +328,41 @@ describe("status/health/recovery-flag derivations", () => {
     expect(reconciliationRequiresRecoveryFlag("locked", "active")).toBe(false);
     expect(reconciliationRequiresRecoveryFlag("missing", "provisioning")).toBe(false);
     expect(reconciliationRequiresRecoveryFlag("missing", "recovery-required")).toBe(false);
+  });
+
+  it("flags a cleanup-pending row only for a present but unproven worktree", () => {
+    // cleanup-pending -> recovery-required is a legal, precondition-free transition.
+    expect(reconciliationRequiresRecoveryFlag("stale-pointer", "cleanup-pending")).toBe(true);
+    // A missing worktree is the expected end state of a cleanup, not a drift.
+    expect(reconciliationRequiresRecoveryFlag("missing", "cleanup-pending")).toBe(false);
+    expect(reconciliationRequiresRecoveryFlag("healthy", "cleanup-pending")).toBe(false);
+    for (const lifecycleState of ["merged", "archived", "abandoned"] as const) {
+      expect(reconciliationRequiresRecoveryFlag("stale-pointer", lifecycleState)).toBe(false);
+    }
+  });
+
+  it("reconstructs a cleanup-pending row marked with an identity finding as stale", () => {
+    expect(
+      reconciliationStatusFromInstance({
+        lifecycleState: "cleanup-pending",
+        health: "drifted",
+        driftMarkers: ["gitdir-mismatch"],
+      }),
+    ).toBe("stale-pointer");
+    expect(
+      reconciliationStatusFromInstance({
+        lifecycleState: "cleanup-pending",
+        health: "healthy",
+        driftMarkers: [],
+      }),
+    ).toBe("healthy");
+    expect(
+      reconciliationStatusFromInstance({
+        lifecycleState: "abandoned",
+        health: "healthy",
+        driftMarkers: ["gitdir-mismatch"],
+      }),
+    ).toBe("healthy");
   });
 
   it("reconstructs the status from persisted content-free fields", () => {

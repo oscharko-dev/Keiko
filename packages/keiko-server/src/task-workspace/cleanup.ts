@@ -36,6 +36,7 @@ import {
   assertManagedTargetContained,
   isManagedRootOwned,
   isManagedTargetContained,
+  listManagedRepositoryIds,
 } from "./managed-root.js";
 import { deriveOrphanId } from "./health.js";
 import { assertSafeFieldValue } from "./field-safety.js";
@@ -660,7 +661,7 @@ function resolveOrphanRepositoryIds(
     return new Set([deriveRepositoryId(request.repositoryRoot)]);
   }
   const ids = new Set(knownByRepo.keys());
-  for (const onDisk of managedRepoDirs(ctx)) ids.add(onDisk);
+  for (const onDisk of listManagedRepositoryIds(ctx.deps.managedRoot)) ids.add(onDisk);
   return ids;
 }
 
@@ -707,17 +708,6 @@ async function cleanupOrphansImpl(
     }
   }
   return { removed, refused };
-}
-
-function managedRepoDirs(ctx: CleanupCtx): readonly string[] {
-  if (!existsSync(ctx.deps.managedRoot)) return [];
-  try {
-    return readdirSync(ctx.deps.managedRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-  } catch {
-    return [];
-  }
 }
 
 export function createWorkspaceCleanupService(

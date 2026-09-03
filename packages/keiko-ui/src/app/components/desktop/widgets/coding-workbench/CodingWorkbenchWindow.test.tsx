@@ -260,12 +260,13 @@ function activeWorkspaceWithBinding(
     switching: false,
     error: null,
     refresh: vi.fn(() => Promise.resolve(true)),
-    switchTo: vi.fn(() => Promise.resolve()),
-    clearActive: vi.fn(() => Promise.resolve()),
-    pause: vi.fn(() => Promise.resolve()),
-    resume: vi.fn(() => Promise.resolve()),
-    prepareHandoff: vi.fn(() => Promise.resolve()),
-    provision: vi.fn(() => Promise.resolve()),
+    switchTo: vi.fn(() => Promise.resolve(true)),
+    clearActive: vi.fn(() => Promise.resolve(true)),
+    pause: vi.fn(() => Promise.resolve(true)),
+    resume: vi.fn(() => Promise.resolve(true)),
+    prepareHandoff: vi.fn(() => Promise.resolve(true)),
+    repair: vi.fn(() => Promise.resolve(true)),
+    provision: vi.fn(() => Promise.resolve(true)),
   };
 }
 
@@ -275,8 +276,8 @@ describe("CodingWorkbenchWindow", () => {
     chatCatalogMock.projects = [];
     questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
     activityHookMock.mockReturnValue(IDLE_ACTIVITY);
-    approvalReviewHookMock.mockReturnValue({ status: "idle", review: null });
-    researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null });
+    approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });
+    researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
     editorBridgeHookMock.mockReset();
     editorBridgeHookMock.mockReturnValue({
       pendingReview: null,
@@ -393,6 +394,90 @@ describe("CodingWorkbenchWindow", () => {
     await user.type(taskInput, "Investigate the failing test");
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
     expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test");
+  });
+
+  // Workbench audit, 2026-09-03: the draft used to persist after Start succeeded — indistinguishable
+  // from an unsent draft, and re-submittable as a brand-new follow-up by mistake if the operator
+  // later paused and clicked Send instead of Resume. `actions.start`'s own returned promise always
+  // resolves (the mutation queue swallows a failure into `state.mutation` and never rejects), so
+  // this drives the mutation through the real pending -> settled transitions the reducer produces,
+  // rather than trusting the promise to tell success from failure.
+  // The crash-recovery Retry consumes the draft exactly like Start; a successful retry that left
+  // the recovery text in the re-enabled composer made it resubmittable as a brand-new follow-up
+  // (review of ec04288dc).
+  it("clears the composer draft once a crash-recovery retry succeeds", async () => {
+    const user = userEvent.setup();
+    const liveActions = actions();
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    const taskInput = screen.getByLabelText("Task instructions");
+    await user.type(taskInput, "Resume where the run crashed");
+
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        mutation: { status: "pending", kind: "retry", requestId: "req-r", error: null },
+      }),
+      actions: liveActions,
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    expect(taskInput).toHaveValue("Resume where the run crashed");
+
+    runtimeHookMock.mockReturnValue({
+      state: liveState({ mutation: { status: "idle", kind: null, requestId: null, error: null } }),
+      actions: liveActions,
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    expect(taskInput).toHaveValue("");
+  });
+
+  it("clears the composer draft once Start succeeds, but keeps it after a failed Start", async () => {
+    const user = userEvent.setup();
+    const liveActions = actions();
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    const taskInput = screen.getByLabelText("Task instructions");
+    await user.type(taskInput, "Investigate the failing test");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test");
+
+    // The mutation queue starts the "start" mutation…
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        mutation: { status: "pending", kind: "start", requestId: "req-1", error: null },
+      }),
+      actions: liveActions,
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    expect(taskInput).toHaveValue("Investigate the failing test");
+
+    // …and fails. The draft must survive so the operator can fix and resend it.
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        mutation: {
+          status: "error",
+          kind: "start",
+          requestId: "req-1",
+          error: { code: "START_FAILED", message: "redacted", retryable: true },
+        },
+      }),
+      actions: liveActions,
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    expect(taskInput).toHaveValue("Investigate the failing test");
+
+    // A second attempt: pending again, then this time succeeds — the draft is cleared.
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        mutation: { status: "pending", kind: "start", requestId: "req-2", error: null },
+      }),
+      actions: liveActions,
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    expect(taskInput).toHaveValue("");
   });
 
   it("opens Git for the selected repository from the composer context", async (): Promise<void> => {
@@ -797,6 +882,155 @@ describe("CodingWorkbenchWindow", () => {
         screen.getByText("Platform-verified — signed and notarized runtime"),
       ).toBeInTheDocument();
     });
+
+    // Workbench audit, 2026-09-03: before this fix, a completely unavailable runtime (no evaluation
+    // runtime exists at all) rendered the SAME "Unverified evaluation runtime" text as a genuinely
+    // running evaluation build — the chip only ever distinguished platform-qualified from
+    // everything else, so "unavailable" and "evaluation" were indistinguishable to the operator.
+    it("names the runtime unavailable instead of implying an evaluation runtime exists", (): void => {
+      renderWorkbench(
+        liveState({
+          canStart: false,
+          runtime: {
+            status: "ready",
+            error: null,
+            value: {
+              schemaVersion: "1",
+              requestedMode: "governed-assist",
+              deploymentCeiling: "supervised-coding",
+              effectiveMode: "governed-assist",
+              runtimeAvailable: false,
+              runtimeUnavailableReason: "runtime-disabled",
+            },
+          },
+        }),
+      );
+
+      expect(screen.getByText("Coding runtime unavailable")).toBeInTheDocument();
+      expect(
+        screen.queryByText("Unverified evaluation runtime — no platform signature"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("Platform-verified — signed and notarized runtime"),
+      ).not.toBeInTheDocument();
+    });
+
+    // Finding 3: while readiness has not yet resolved, the chip must not flash the "evaluation"
+    // text — nothing has been confirmed yet. Mirrors the bootstrap setup card's own posture.
+    // Every mode switch re-reads readiness; a known-unavailable runtime must not flash "verified"
+    // for the duration of that read (review of ec04288dc).
+    it("keeps naming the runtime unavailable while readiness is re-read", (): void => {
+      const liveActions = actions();
+      runtimeHookMock.mockReturnValue({
+        state: liveState({
+          canStart: false,
+          runtime: {
+            status: "ready",
+            error: null,
+            value: {
+              schemaVersion: "1",
+              requestedMode: "governed-assist",
+              deploymentCeiling: "supervised-coding",
+              effectiveMode: "governed-assist",
+              runtimeAvailable: false,
+              runtimeUnavailableReason: "runtime-disabled",
+            },
+          },
+        }),
+        actions: liveActions,
+      });
+      const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+      expect(screen.getByText("Coding runtime unavailable")).toBeInTheDocument();
+
+      runtimeHookMock.mockReturnValue({
+        state: liveState({
+          canStart: false,
+          runtime: { status: "loading", value: null, error: null },
+        }),
+        actions: liveActions,
+      });
+      view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+      expect(screen.getByText("Coding runtime unavailable")).toBeInTheDocument();
+      expect(
+        screen.queryByText("Platform-verified — signed and notarized runtime"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("names the runtime unavailable when the readiness read failed", (): void => {
+      renderWorkbench(
+        liveState({
+          canStart: false,
+          runtime: {
+            status: "error",
+            value: null,
+            error: { code: "RUNTIME_READ_FAILED", message: "redacted", retryable: true },
+          },
+        }),
+      );
+
+      expect(screen.getByText("Coding runtime unavailable")).toBeInTheDocument();
+    });
+
+    it("does not flash the evaluation text while runtime readiness is still loading", (): void => {
+      renderWorkbench(liveState({ runtime: { status: "loading", value: null, error: null } }));
+
+      expect(
+        screen.queryByText("Unverified evaluation runtime — no platform signature"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByText("Platform-verified — signed and notarized runtime"),
+      ).toBeInTheDocument();
+    });
+  });
+
+  // Workbench audit, 2026-09-03: every truncatable header chip carries a `title` equal to its OWN
+  // rendered value — before this fix, three of the four chips had no `title` at all, and the
+  // fourth (Task workspace) pointed at an unrelated raw filesystem path instead of its own text.
+  it("titles every header chip with its own rendered text", (): void => {
+    renderWorkbench(liveState());
+    const itemClass = styles.contextItem;
+    const valueClass = styles.contextValue;
+    if (itemClass === undefined || valueClass === undefined) {
+      throw new Error("Coding Workbench context-bar classes are unavailable");
+    }
+    const items = Array.from(document.querySelectorAll(`.${itemClass}`));
+    expect(items).toHaveLength(4);
+    for (const item of items) {
+      const value = item.querySelector(`.${valueClass}`);
+      expect(value).not.toBeNull();
+      expect(item).toHaveAttribute("title", value?.textContent ?? "");
+    }
+  });
+
+  // Finding 5: the workspace chip's `title` used to be wired to `activeBinding.activeRoot` — a
+  // raw filesystem path never shown anywhere else on the chip — instead of the composite text
+  // (`taskId · taskBranch · health`) actually rendered and truncated.
+  it("titles the workspace chip with its rendered text, not the raw root path", (): void => {
+    renderWorkbench(
+      liveState(),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko", "/worktrees/active-task"),
+    );
+
+    const value = screen.getByText("task-1 · issue/2257 · healthy");
+    const itemClass = styles.contextItem;
+    if (itemClass === undefined) throw new Error("Coding Workbench context-item class unavailable");
+    const workspaceItem = value.closest(`.${itemClass}`);
+    expect(workspaceItem).toHaveAttribute("title", "task-1 · issue/2257 · healthy");
+    expect(workspaceItem).not.toHaveAttribute("title", "/worktrees/active-task");
+  });
+
+  // Finding 5: the reported screenshot's exact unbound case — no `title` at all used to exist
+  // over the very text ("No active task workspace") the CSS ellipsis was clipping.
+  it("titles the workspace chip even when no workspace is bound", (): void => {
+    renderWorkbench(createInitialCodingWorkbenchRuntimeState());
+
+    const value = screen.getByText("No active task workspace");
+    const itemClass = styles.contextItem;
+    if (itemClass === undefined) throw new Error("Coding Workbench context-item class unavailable");
+    expect(value.closest(`.${itemClass}`)).toHaveAttribute("title", "No active task workspace");
   });
 
   it("keeps a drifted worktree visible in the session context", (): void => {
@@ -853,6 +1087,48 @@ describe("CodingWorkbenchWindow", () => {
     expect(liveActions.decideApproval).toHaveBeenNthCalledWith(2, "denied");
   });
 
+  // Workbench audit, 2026-09-03: on the governance-critical permission-approval screen, `request.kind`,
+  // `request.actionClass`, and `request.risk` used to render as raw, untranslated kebab-case slugs
+  // — the only three facts on this fully-localized screen left unlocalized.
+  it("localizes the approval kind, action class, and risk instead of raw slugs", (): void => {
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "awaiting-approval",
+            runId: "run-1",
+            pendingPermission: {
+              requestId: "permission-2",
+              kind: "network-egress",
+              actionClass: "connector-access",
+              actionKind: "push",
+              policyReason: "out-of-scope-file-edit",
+              connectorScopes: ["source-control.write", "issue-tracker.read"],
+              reasonCode: "approval-required",
+              risk: "critical",
+              expiresAt: "2026-07-13T12:05:00.000Z",
+            },
+          }),
+        },
+      }),
+    );
+
+    expect(screen.getByText("Network egress")).toBeInTheDocument();
+    expect(screen.getByText("Connector access")).toBeInTheDocument();
+    expect(screen.getByText("Critical")).toBeInTheDocument();
+    // The three remaining closed-union facts on the same screen (review of ec04288dc).
+    expect(screen.getByText("Push")).toBeInTheDocument();
+    expect(screen.getByText("File edit outside the task scope")).toBeInTheDocument();
+    expect(screen.getByText("Source control (write), Issue tracker (read)")).toBeInTheDocument();
+    expect(screen.queryByText("out-of-scope-file-edit")).not.toBeInTheDocument();
+    expect(screen.queryByText("source-control.write")).not.toBeInTheDocument();
+    expect(screen.queryByText("network-egress")).not.toBeInTheDocument();
+    expect(screen.queryByText("connector-access")).not.toBeInTheDocument();
+    expect(screen.queryByText("critical")).not.toBeInTheDocument();
+  });
+
   it("#2387: shows the research destination the operator is about to approve", async () => {
     researchHookMock.mockReturnValue({
       status: "ready",
@@ -863,6 +1139,7 @@ describe("CodingWorkbenchWindow", () => {
         requestLine: "/docs/latest/api/stream.html backpressure",
         expiresAt: "2026-07-13T12:02:00.000Z",
       },
+      retry: vi.fn(),
     });
     renderWorkbench(egressApprovalState());
 
@@ -874,16 +1151,32 @@ describe("CodingWorkbenchWindow", () => {
     expect(await axe(document.body)).toHaveNoViolations();
   });
 
-  it("#2387: says the destination is unavailable rather than implying there is none", () => {
-    researchHookMock.mockReturnValue({ status: "unavailable", ask: null, grant: null });
+  // Workbench audit, 2026-09-03: a transient failure while the operator is deciding a network-egress
+  // request left them with no way to see the destination other than cancelling out entirely.
+  it("#2387/finding 7: offers a retry for an unavailable destination and calls it on click", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn();
+    researchHookMock.mockReturnValue({ status: "unavailable", ask: null, grant: null, retry });
     renderWorkbench(egressApprovalState());
 
     expect(screen.getByText(/Destination unavailable\. Re-pair this window/u)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve once" })).toBeInTheDocument();
+    expect(await axe(document.body)).toHaveNoViolations();
+    await user.click(screen.getByRole("button", { name: "Retry loading the destination" }));
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
+  it("#2387: offers no retry control while the destination read is only loading", () => {
+    researchHookMock.mockReturnValue({ status: "loading", ask: null, grant: null, retry: vi.fn() });
+    renderWorkbench(egressApprovalState());
+
+    expect(
+      screen.queryByRole("button", { name: "Retry loading the destination" }),
+    ).not.toBeInTheDocument();
   });
 
   it("#2387: shows no destination block for an approval that is not network egress", () => {
-    researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null });
+    researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
     renderWorkbench(egressApprovalState("delivery-substrate"));
 
     expect(screen.queryByText("Research destination")).not.toBeInTheDocument();
@@ -900,6 +1193,7 @@ describe("CodingWorkbenchWindow", () => {
         addedLines: 12,
         deletedLines: 4,
       },
+      retry: vi.fn(),
     });
     renderWorkbench(editApprovalState());
 
@@ -924,6 +1218,7 @@ describe("CodingWorkbenchWindow", () => {
         addedLines: 30,
         deletedLines: 0,
       },
+      retry: vi.fn(),
     });
     renderWorkbench(editApprovalState());
 
@@ -932,18 +1227,33 @@ describe("CodingWorkbenchWindow", () => {
     expect(changes).toHaveTextContent("9");
   });
 
-  it("#2802: says the changed files are unavailable rather than implying there are none", () => {
-    approvalReviewHookMock.mockReturnValue({ status: "unavailable", review: null });
+  // Workbench audit, 2026-09-03: a transient failure while the operator is deciding a file-edit
+  // approval left them with no way to see which files would be written other than denying blind.
+  it("#2802/finding 7: offers a retry for unavailable changed files and calls it on click", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn();
+    approvalReviewHookMock.mockReturnValue({ status: "unavailable", review: null, retry });
     renderWorkbench(editApprovalState());
 
     expect(
       screen.getByText(/Changed files unavailable\. Re-pair this window/u),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve once" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry loading the changed files" }));
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
+  it("#2802: offers no retry control while the changed-files read is only loading", () => {
+    approvalReviewHookMock.mockReturnValue({ status: "loading", review: null, retry: vi.fn() });
+    renderWorkbench(editApprovalState());
+
+    expect(
+      screen.queryByRole("button", { name: "Retry loading the changed files" }),
+    ).not.toBeInTheDocument();
   });
 
   it("#2802: shows no changed-file block for an approval that writes no file", () => {
-    approvalReviewHookMock.mockReturnValue({ status: "idle", review: null });
+    approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });
     renderWorkbench(egressApprovalState());
 
     expect(screen.queryByText("Files this change would write")).not.toBeInTheDocument();
@@ -1137,6 +1447,35 @@ describe("CodingWorkbenchWindow", () => {
     expect(liveActions.setRequestedMode).not.toHaveBeenCalled();
   });
 
+  // Workbench audit, 2026-09-03: the editor bridge's `root` and `bindingPending` must come from the
+  // SAME live workspace signal `CodingWorkbenchChanges` uses — the actual root-locking behavior is
+  // pinned at the hook level (useCodingWorkbenchEditorBridge.test.ts); this proves the wiring at
+  // the boundary this file owns, so the two consumers can never observe a different workspace.
+  it("wires the editor bridge to the same live workspace root and binding-pending signal as CodingWorkbenchChanges", (): void => {
+    const binding = activeWorkspaceWithBinding("/repos/keiko", "/worktrees/active-task");
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "running", runId: "run-1" }),
+        },
+      }),
+      actions(),
+      undefined,
+      binding,
+    );
+
+    expect(editorBridgeHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        root: "/worktrees/active-task",
+        runId: "run-1",
+        active: true,
+        bindingPending: false,
+      }),
+    );
+  });
+
   it("announces an unavailable authentication setup plan in the single live status", () => {
     renderWorkbench(
       liveState({
@@ -1243,7 +1582,7 @@ describe("CodingWorkbenchWindow", () => {
       domains: ["developer.mozilla.org", "nodejs.org"],
       expiresAt: "2026-07-13T12:30:00.000Z",
     } as const;
-    researchHookMock.mockReturnValue({ status: "ready", ask: null, grant });
+    researchHookMock.mockReturnValue({ status: "ready", ask: null, grant, retry: vi.fn() });
     const liveActions = renderWorkbench(
       liveState({
         run: {
@@ -1274,8 +1613,8 @@ describe("CodingWorkbenchWindow live stream follows the newest activity", () => 
     chatCatalogMock.activeProject = undefined;
     chatCatalogMock.projects = [];
     questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
-    approvalReviewHookMock.mockReturnValue({ status: "idle", review: null });
-    researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null });
+    approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });
+    researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
     editorBridgeHookMock.mockReturnValue({
       pendingReview: null,
       approve: vi.fn(),
@@ -1434,3 +1773,44 @@ function activityFeed(): AvailableCodingSafeActivityFeed {
     droppedEventCount: 0,
   };
 }
+
+describe("Codex subscription sign-in surface", () => {
+  it("mounts the sign-in card above the composer while the subscription is selected and not connected", async () => {
+    renderWorkbench(
+      liveState({
+        runtimePreference: "codex-subscription",
+        profile: {
+          status: "ready",
+          value: {
+            schemaVersion: "1",
+            profileId: "profile-1",
+            modelSource: "chatgpt-codex-subscription-profile",
+            runtimeSource: "codex-cli-adapter",
+            status: "missing",
+            credentialStore: "file",
+            stateScope: "keiko-owned-state",
+            stateRoot: "keiko-codex-runtime-state",
+            usesGlobalCodexHome: false,
+            runtimeBinarySources: ["managed-sidecar-runtime"],
+            supportsBrowserLogin: true,
+            supportsDeviceCode: false,
+            supportsAccessToken: false,
+            deploymentPolicyDisabled: false,
+            headless: false,
+          },
+          error: null,
+        },
+      }),
+    );
+
+    expect(screen.getByTestId("coding-workbench-codex-auth")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh authentication" })).toBeInTheDocument();
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it("stays absent for the managed gateway source", () => {
+    renderWorkbench(liveState());
+
+    expect(screen.queryByTestId("coding-workbench-codex-auth")).not.toBeInTheDocument();
+  });
+});

@@ -7,6 +7,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceBinding, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { useActiveWorkspaceState } from "./useActiveWorkspaceState";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 
 function instance(workspaceId: string, root: string): WorkspaceInstance {
   return {
@@ -66,6 +67,8 @@ function deferred<T>(): {
 interface RouterState {
   active: { instance: WorkspaceInstance; binding: WorkspaceBinding; pointer: unknown } | null;
   instances: readonly WorkspaceInstance[];
+  // The inventory read answers 503 while the binding read still succeeds.
+  inventoryUnavailable?: boolean;
 }
 
 // Content-free reconciliation report for the routed active workspace (F-09b: every active binding
@@ -119,7 +122,13 @@ function workspaceReadResponse(
   if (url === "/api/task-workspaces/reconciliation" && method === "POST") {
     return Promise.resolve(json(reconciliationReport(state, reconcileStatus)));
   }
-  if (url.startsWith("/api/task-workspaces?") && method === "GET") {
+  if (
+    (url === "/api/task-workspaces" || url.startsWith("/api/task-workspaces?")) &&
+    method === "GET"
+  ) {
+    if (state.inventoryUnavailable === true) {
+      return Promise.resolve(json({ error: { code: "INTERNAL", message: "redacted" } }, 503));
+    }
     return Promise.resolve(json({ instances: state.instances }));
   }
   return undefined;
@@ -165,6 +174,7 @@ function installRouter(
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  resetClientDiagnosticWriter();
 });
 
 describe("useActiveWorkspaceState", () => {
@@ -172,11 +182,82 @@ describe("useActiveWorkspaceState", () => {
     installRouter({ active: null, instances: [instance("ws-1", "/wt/1")] });
     const { result } = renderHook(() => useActiveWorkspaceState());
     await act(async (): Promise<void> => {
-      await result.current.refresh("/repo");
+      await result.current.refresh();
     });
     expect(result.current.instances).toHaveLength(1);
     expect(result.current.activeRoot).toBeNull();
     expect(result.current.loading).toBe(false);
+  });
+
+  // An inventory the server could not list is a diagnostic, never a silent empty panel: the
+  // binding read stands, the list is empty, and the log names the failure (AGENTS.md §8).
+  it("reports a failed inventory read as a diagnostic and keeps the active binding", async () => {
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+    const bound = instance("ws-1", "/wt/1");
+    installRouter({
+      active: { instance: bound, binding: binding("ws-1", "/wt/1"), pointer: {} },
+      instances: [bound],
+      inventoryUnavailable: true,
+    });
+    const { result } = renderHook(() => useActiveWorkspaceState());
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.activeRoot).toBe("/wt/1");
+    expect(result.current.instances).toEqual([]);
+    expect(result.current.error).toBeNull();
+    expect(
+      diagnostics.some((line) => line.includes("task workspace inventory refresh failed")),
+    ).toBe(true);
+  });
+
+  // The inventory is every managed workspace: the pointer is global, a switch may target any
+  // repository, and a workspace paused in one repository must stay resumable from this panel
+  // whatever folder is selected (observed live, 2026-09-03: the folder-scoped list said "no
+  // managed task workspaces yet" under a bound workspace after a reload, and hid a paused one).
+  it("lists every managed workspace regardless of the selected folder", async () => {
+    const bound = { ...instance("ws-1", "/wt/1"), repositoryRoot: "/repo-bound" };
+    const elsewhere = { ...instance("ws-2", "/wt/2"), repositoryRoot: "/repo-other" };
+    const state: RouterState = {
+      active: { instance: bound, binding: binding("ws-1", "/wt/1"), pointer: {} },
+      instances: [bound, elsewhere],
+    };
+    const fetchMock = installRouter(state);
+    const { result } = renderHook(() => useActiveWorkspaceState());
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    const listCalls = fetchMock.mock.calls
+      .filter((call: readonly unknown[]) => requestMethod(call[1] as RequestInit) === "GET")
+      .map((call: readonly unknown[]) => call[0] as string)
+      .filter((url) => url === "/api/task-workspaces" || url.startsWith("/api/task-workspaces?"));
+    expect(listCalls).toEqual(["/api/task-workspaces"]);
+    expect(result.current.instances.map((item) => item.workspaceId)).toEqual(["ws-1", "ws-2"]);
+  });
+
+  it("keeps every workspace listed after the binding is released", async () => {
+    const bound = { ...instance("ws-1", "/wt/1"), repositoryRoot: "/repo-bound" };
+    const state: RouterState = {
+      active: { instance: bound, binding: binding("ws-1", "/wt/1"), pointer: {} },
+      instances: [bound],
+    };
+    installRouter(state);
+    const { result } = renderHook(() => useActiveWorkspaceState());
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    await act(async () => {
+      await result.current.clearActive();
+    });
+
+    expect(result.current.activeInstance).toBeNull();
+    expect(result.current.instances).toHaveLength(1);
   });
 
   it("switchTo binds the active root atomically after the reload settles", async () => {
@@ -186,7 +267,7 @@ describe("useActiveWorkspaceState", () => {
     });
     const { result } = renderHook(() => useActiveWorkspaceState());
     await act(async (): Promise<void> => {
-      await result.current.refresh("/repo");
+      await result.current.refresh();
     });
     await act(async (): Promise<void> => {
       await result.current.switchTo("ws-2");
@@ -196,19 +277,18 @@ describe("useActiveWorkspaceState", () => {
     expect(result.current.switching).toBe(false);
   });
 
-  it("ignores a stale refresh response after a newer root has settled", async () => {
-    const repoA = deferred<Response>();
-    const repoB = deferred<Response>();
+  // Two refreshes issued back to back: the first is superseded before it lists the inventory, so
+  // it performs no inventory request at all and reports `false`; only the newer one settles the
+  // state. (Before the inventory went global this pin raced two root-scoped list responses; the
+  // early exit now makes the stale response impossible instead of merely ignored.)
+  it("drops a superseded refresh before it lists the inventory and settles the newer one", async () => {
+    let listCalls = 0;
+    const state: RouterState = { active: null, instances: [instance("ws-b", "/wt/b")] };
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      const method = (init?.method ?? "GET").toUpperCase();
-      if (url.startsWith("/api/task-workspaces/active") && method === "GET") {
-        return Promise.resolve(json({ active: null }));
-      }
-      if (url.startsWith("/api/task-workspaces?") && method === "GET") {
-        const root = new URL(url, "http://keiko.local").searchParams.get("root");
-        if (root === "/repo-a") return repoA.promise;
-        if (root === "/repo-b") return repoB.promise;
-      }
+      const method = requestMethod(init);
+      if (url === "/api/task-workspaces" && method === "GET") listCalls += 1;
+      const read = workspaceReadResponse(state, url, method);
+      if (read !== undefined) return read;
       return Promise.resolve(json({}, 404));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -217,22 +297,17 @@ describe("useActiveWorkspaceState", () => {
     let first!: Promise<boolean>;
     let second!: Promise<boolean>;
     act(() => {
-      first = result.current.refresh("/repo-a");
+      first = result.current.refresh();
     });
     act(() => {
-      second = result.current.refresh("/repo-b");
+      second = result.current.refresh();
     });
 
     await act(async (): Promise<void> => {
-      repoB.resolve(json({ instances: [instance("ws-b", "/wt/b")] }));
-      await second;
+      expect(await second).toBe(true);
+      expect(await first).toBe(false);
     });
-    expect(result.current.instances.map((item) => item.workspaceId)).toEqual(["ws-b"]);
-
-    await act(async (): Promise<void> => {
-      repoA.resolve(json({ instances: [instance("ws-a", "/wt/a")] }));
-      await first;
-    });
+    expect(listCalls).toBe(1);
     expect(result.current.instances.map((item) => item.workspaceId)).toEqual(["ws-b"]);
   });
 
@@ -261,11 +336,11 @@ describe("useActiveWorkspaceState", () => {
     vi.stubGlobal("fetch", fetchMock);
     const { result } = renderHook(() => useActiveWorkspaceState());
     await act(async (): Promise<void> => {
-      await result.current.refresh("/repo");
+      await result.current.refresh();
     });
 
-    let first!: Promise<void>;
-    let second!: Promise<void>;
+    let first!: Promise<boolean>;
+    let second!: Promise<boolean>;
     act(() => {
       first = result.current.switchTo("ws-1");
     });
@@ -308,15 +383,15 @@ describe("useActiveWorkspaceState", () => {
     vi.stubGlobal("fetch", fetchMock);
     const { result } = renderHook(() => useActiveWorkspaceState());
     await act(async (): Promise<void> => {
-      await result.current.refresh("/repo");
+      await result.current.refresh();
     });
 
-    let mutation!: Promise<void>;
+    let mutation!: Promise<boolean>;
     act(() => {
       mutation = result.current.switchTo("ws-1");
     });
     await act(async (): Promise<void> => {
-      expect(await result.current.refresh("/repo")).toBe(true);
+      expect(await result.current.refresh()).toBe(true);
     });
     expect(result.current.activeRoot).toBeNull();
 
@@ -332,7 +407,7 @@ describe("useActiveWorkspaceState", () => {
     installRouter({ active: null, instances: [instance("ws-1", "/wt/1")] });
     const { result } = renderHook(() => useActiveWorkspaceState());
     await act(async (): Promise<void> => {
-      await result.current.refresh("/repo");
+      await result.current.refresh();
       await result.current.switchTo("ws-1");
     });
     expect(result.current.activeRoot).toBe("/wt/1");
@@ -356,7 +431,7 @@ describe("useActiveWorkspaceState", () => {
     vi.stubGlobal("fetch", fetchMock);
     const { result } = renderHook(() => useActiveWorkspaceState());
     await act(async (): Promise<void> => {
-      await result.current.refresh("/repo");
+      await result.current.refresh();
     });
     await act(async (): Promise<void> => {
       await result.current.pause("ws-1");
@@ -365,6 +440,82 @@ describe("useActiveWorkspaceState", () => {
       expect(result.current.error).toBe("locked");
     });
     expect(result.current.switching).toBe(false);
+  });
+
+  describe("repair", () => {
+    // `applied` is mutated by the second half of the test below to flip the same route from a
+    // completed repair to an operator-required refusal, on the same bound workspace.
+    it("posts the approved strategy and reloads on success, then preserves the binding on an operator-required refusal", async () => {
+      const target = instance("ws-1", "/wt/1");
+      const state: RouterState = {
+        active: { instance: target, binding: binding("ws-1", "/wt/1"), pointer: {} },
+        instances: [target],
+      };
+      let applied = true;
+      const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+        const method = requestMethod(init);
+        const read = workspaceReadResponse(state, url, method);
+        if (read !== undefined) return read;
+        if (url === "/api/task-workspaces/ws-1/repair" && method === "POST") {
+          return Promise.resolve(
+            json({
+              instance: state.active?.instance,
+              binding: state.active?.binding,
+              strategy: "reconcile-pointer",
+              applied,
+              outcome: applied ? "repaired" : "operator-required",
+              status: applied ? "healthy" : "stale-pointer",
+              driftMarkers: applied ? [] : ["identity-schema-retired"],
+              operatorActionRequired: !applied,
+            }),
+          );
+        }
+        return Promise.resolve(json({}, 404));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const activeGetCount = (): number =>
+        fetchMock.mock.calls.filter(
+          (call: readonly unknown[]) =>
+            call[0] === "/api/task-workspaces/active" &&
+            requestMethod(call[1] as RequestInit | undefined) === "GET",
+        ).length;
+
+      const { result } = renderHook(() => useActiveWorkspaceState());
+      await act(async (): Promise<void> => {
+        await result.current.refresh();
+      });
+      expect(result.current.activeRoot).toBe("/wt/1");
+      const activeGetsBeforeRepair = activeGetCount();
+
+      await act(async (): Promise<void> => {
+        await result.current.repair("ws-1", "reconcile-pointer");
+      });
+      const repairCalls = fetchMock.mock.calls.filter(
+        (call: readonly unknown[]) => call[0] === "/api/task-workspaces/ws-1/repair",
+      );
+      expect(repairCalls).toHaveLength(1);
+      const body = JSON.parse((repairCalls[0]?.[1] as RequestInit).body as string) as {
+        readonly strategy: string;
+        readonly operatorApproved: boolean;
+      };
+      expect(body.strategy).toBe("reconcile-pointer");
+      expect(body.operatorApproved).toBe(true);
+      expect(result.current.error).toBeNull();
+      expect(result.current.activeRoot).toBe("/wt/1");
+      // "then reloads": the post-mutation reload re-reads the active binding, so the GET count
+      // strictly increases beyond the repair POST itself.
+      expect(activeGetCount()).toBeGreaterThan(activeGetsBeforeRepair);
+
+      applied = false;
+      await act(async (): Promise<void> => {
+        await result.current.repair("ws-1", "reconcile-pointer");
+      });
+      expect(result.current.error).toBe(
+        "This recovery needs an operator first. Inspect the managed worktree, then retry the repair.",
+      );
+      expect(result.current.activeRoot).toBe("/wt/1");
+      expect(result.current.activeInstance?.workspaceId).toBe("ws-1");
+    });
   });
 
   // Release-audit F-09b: a persisted active pointer restored after a page reload is not runtime
@@ -384,7 +535,7 @@ describe("useActiveWorkspaceState", () => {
       const fetchMock = installRouter(boundState());
       const { result } = renderHook(() => useActiveWorkspaceState());
       await act(async (): Promise<void> => {
-        await result.current.refresh("/repo");
+        await result.current.refresh();
       });
       expect(reconciliationCount(fetchMock)).toBeGreaterThanOrEqual(1);
       expect(result.current.activeRoot).toBe("/wt/1");
@@ -395,10 +546,10 @@ describe("useActiveWorkspaceState", () => {
       const fetchMock = installRouter(boundState());
       const { result } = renderHook(() => useActiveWorkspaceState());
       await act(async (): Promise<void> => {
-        await result.current.refresh("/repo");
+        await result.current.refresh();
       });
       await act(async (): Promise<void> => {
-        await result.current.refresh("/repo");
+        await result.current.refresh();
       });
       // Verification is scoped to the ACTIVE WORKSPACE IDENTITY, not to a reload: repeated
       // refreshes of an already-verified binding must read state without the heavy
@@ -422,10 +573,10 @@ describe("useActiveWorkspaceState", () => {
       const fetchMock = installRouter(state);
       const { result } = renderHook(() => useActiveWorkspaceState());
       await act(async (): Promise<void> => {
-        await result.current.refresh("/repo");
+        await result.current.refresh();
       });
       await act(async (): Promise<void> => {
-        await result.current.refresh("/repo");
+        await result.current.refresh();
       });
       expect(reconciliationCount(fetchMock)).toBe(1);
 
@@ -457,7 +608,7 @@ describe("useActiveWorkspaceState", () => {
       );
       const { result } = renderHook(() => useActiveWorkspaceState());
       await act(async (): Promise<void> => {
-        await result.current.refresh("/repo");
+        await result.current.refresh();
       });
       expect(result.current.activeRoot).toBe("/wt/1");
 
@@ -494,7 +645,7 @@ describe("useActiveWorkspaceState", () => {
       });
       const { result } = renderHook(() => useActiveWorkspaceState());
       await act(async (): Promise<void> => {
-        await result.current.refresh("/repo");
+        await result.current.refresh();
       });
       expect(result.current.activeBinding).toBeNull();
       expect(result.current.error).toContain("re-verification");
@@ -523,7 +674,7 @@ describe("useActiveWorkspaceState", () => {
       });
       const { result } = renderHook(() => useActiveWorkspaceState());
       await act(async (): Promise<void> => {
-        await result.current.refresh("/repo");
+        await result.current.refresh();
       });
       // Drifted worktrees stay visible (#1990) — readiness is blocked by the non-healthy health,
       // not by hiding the binding.
@@ -551,7 +702,7 @@ describe("useActiveWorkspaceState", () => {
       });
       const { result } = renderHook(() => useActiveWorkspaceState());
       await act(async (): Promise<void> => {
-        await result.current.refresh("/repo");
+        await result.current.refresh();
       });
       expect(result.current.activeBinding).toBeNull();
       expect(result.current.error).toBe("reconciliation unavailable");

@@ -1284,11 +1284,6 @@
       "count": 3
     }
   },
-  "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchSetup.tsx": {
-    "max-lines-per-function": {
-      "count": 1
-    }
-  },
   "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchStartFailure.test.tsx": {
     "complexity": {
       "count": 1

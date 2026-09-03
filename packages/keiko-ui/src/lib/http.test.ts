@@ -179,6 +179,36 @@ describe("bffFetchJson — error handling", () => {
     ).rejects.toMatchObject({ code: "C", failureClass: "retryable", status: 409 });
   });
 
+  // The hook decorates the classified error; it must never replace it. A hook that throws on an
+  // unexpected envelope shape used to surface as its own TypeError, hiding the server's code and
+  // the correlation id the operator needs (workbench audit, 2026-09-03).
+  // JSON that is not the envelope (an empty object, a bare string) used to be read as one: the
+  // read threw a TypeError outside the parse guard and the caller rendered that instead of the
+  // classified error (workbench audit, 2026-09-03).
+  it("maps a JSON body without an error envelope to the fallback ApiError", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({}, 500)));
+    const enrichError = vi.fn();
+    await expect(bffFetchJson("/api/x", undefined, { enrichError })).rejects.toMatchObject({
+      code: "INTERNAL",
+      status: 500,
+    });
+    expect(enrichError).toHaveBeenCalledWith(expect.any(ApiError), undefined);
+  });
+
+  it("keeps the classified ApiError when opts.enrichError throws", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({ error: { code: "C", message: "m" } }, 409)),
+    );
+    await expect(
+      bffFetchJson("/api/x", undefined, {
+        enrichError: () => {
+          throw new TypeError("unexpected envelope");
+        },
+      }),
+    ).rejects.toMatchObject({ code: "C", status: 409 });
+  });
+
   it("runs opts.enrichError with an undefined envelope on a parse failure", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("raw", { status: 500 })));
     const enrichError = vi.fn();

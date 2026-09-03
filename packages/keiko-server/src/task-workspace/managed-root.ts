@@ -16,6 +16,7 @@ import {
   fstatSync,
   mkdirSync,
   openSync,
+  readdirSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -151,4 +152,18 @@ export function isManagedTargetContained(managedRoot: string, target: string): b
   } catch {
     return false;
   }
+}
+
+// The repository-id directories currently under the managed root — the on-disk half of the managed
+// inventory, which the persisted rows alone cannot enumerate once every row of a repository is gone.
+// ONE listing shared by the health report and the orphan sweep, so the two global scans cannot
+// disagree about which repositories exist on disk (audit finding, 2026-09-03: the report only knew
+// repositories with a persisted row and never surfaced a leftover directory without one). A missing
+// root lists nothing; a root that exists but cannot be read throws, because neither caller may
+// claim a complete inventory it could not take.
+export function listManagedRepositoryIds(managedRoot: string): readonly string[] {
+  if (!existsSync(managedRoot)) return [];
+  return readdirSync(managedRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
 }

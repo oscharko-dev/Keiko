@@ -37,7 +37,11 @@ import {
   evaluateWorkspaceCleanupSafety,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { deriveRepositoryId } from "./naming.js";
-import { isManagedRootOwned, isManagedTargetContained } from "./managed-root.js";
+import {
+  isManagedRootOwned,
+  isManagedTargetContained,
+  listManagedRepositoryIds,
+} from "./managed-root.js";
 import { gatherInstanceReconciliationFacts } from "./reconciliation.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import type { WorkspaceHealthService, WorkspaceHealthServiceDeps } from "./types.js";
@@ -45,8 +49,11 @@ import {
   resolveLifecycleManagedWorkspaceRootAccess,
   type WorkspaceRootAccess,
 } from "./workspace-root-access.js";
-import { runWithWorkspaceLifecycleFailureLogging } from "./activity-log.js";
-import { isIdentityProofFailure } from "./errors.js";
+import {
+  logWorkspaceLifecycleFailure,
+  runWithWorkspaceLifecycleFailureLogging,
+} from "./activity-log.js";
+import { asRepositoryUnreachable, TaskWorkspaceError } from "./errors.js";
 
 const ORPHAN_ID_PREFIX = "orph_";
 
@@ -184,11 +191,37 @@ async function evaluateInstance(
   });
 }
 
+// The entry for a row this report could not verify: health `unknown`, `recovery-required` because
+// an operator has to look at a worktree the product cannot read, never cleanup-eligible, and the
+// markers and hints as the last VERIFIED classification left them.
+function carriedForwardEntry(instance: WorkspaceInstance): WorkspaceHealthEntry {
+  return deriveWorkspaceHealthEntry({
+    workspaceId: instance.workspaceId,
+    taskId: instance.taskId,
+    lifecycleState: instance.lifecycleState,
+    health: "unknown",
+    evaluation: {
+      classification: "recovery-required",
+      driftMarkers: instance.driftMarkers,
+      recoveryHints: instance.recoveryHints,
+      cleanupEligible: false,
+    },
+    ...(instance.lastVerifiedAt !== undefined ? { lastVerifiedAt: instance.lastVerifiedAt } : {}),
+  });
+}
+
+function repositoryUnreachable(error: unknown): TaskWorkspaceError {
+  return asRepositoryUnreachable(error, "health report could not consult the repository");
+}
+
 // A proof that could not run (EIO, EACCES) is not a verdict on the worktree, and it must not abort
-// the report for every other workspace. The failure is logged with its frames under this report's
-// correlation, and the entry carries the persisted row forward as UNVERIFIED: health `unknown`,
-// `recovery-required` because an operator has to look at a worktree the product cannot read, and
-// never cleanup-eligible (Cursor review on f50133b95).
+// the report for every other workspace — nor may any other failure of ONE row's evaluation (an
+// adapter that could not spawn, a denied path, a dirty probe that could not run). The evaluation
+// only reads the repository and the worktree and writes nothing, so an unclassified failure here
+// can only mean the repository could not be consulted: a classified failure is logged by the
+// wrapper, an unclassified one here as REPOSITORY_UNREACHABLE, both with frames under this
+// report's correlation, and the entry carries the persisted row forward as UNVERIFIED (Cursor
+// review on f50133b95; widened from the identity-proof failure alone by the 2026-09-03 audit).
 async function evaluateInstanceOrCarryForward(
   deps: WorkspaceHealthServiceDeps,
   adapter: GitWorktreeAdapter,
@@ -213,23 +246,77 @@ async function evaluateInstanceOrCarryForward(
         ),
     );
   } catch (error) {
-    if (!isIdentityProofFailure(error)) throw error;
-    // Markers and hints are the last VERIFIED classification; `unknown` and `recovery-required` say
-    // this pass could not verify them, and cleanup stays off the table.
-    return deriveWorkspaceHealthEntry({
-      workspaceId: instance.workspaceId,
-      taskId: instance.taskId,
-      lifecycleState: instance.lifecycleState,
-      health: "unknown",
-      evaluation: {
-        classification: "recovery-required",
-        driftMarkers: instance.driftMarkers,
-        recoveryHints: instance.recoveryHints,
-        cleanupEligible: false,
-      },
-      ...(instance.lastVerifiedAt !== undefined ? { lastVerifiedAt: instance.lastVerifiedAt } : {}),
-    });
+    if (!(error instanceof TaskWorkspaceError)) {
+      logWorkspaceLifecycleFailure(
+        deps,
+        { operation: "health", workspaceIdentitySeed: instance.workspaceId, correlationId },
+        repositoryUnreachable(error),
+      );
+    }
+    return carriedForwardEntry(instance);
   }
+}
+
+// Builds one repository's adapter and worktree list, then evaluates every row of that repository.
+// A repository that cannot be consulted at all — its root vanished, a denied path, a spawn failure
+// — is logged once and every one of its rows is carried forward unverified, so the report still
+// covers every OTHER repository (audit finding, 2026-09-03: the bare `await listWorktrees()` here
+// used to abort the whole report on the first unreachable repository).
+async function evaluateRepositoryGroup(
+  deps: WorkspaceHealthServiceDeps,
+  root: string,
+  group: readonly WorkspaceInstance[],
+  ownershipProven: boolean,
+  correlationId: string,
+): Promise<WorkspaceHealthEntry[]> {
+  let adapter: GitWorktreeAdapter;
+  let worktrees: readonly WorktreeListEntry[];
+  try {
+    adapter = deps.createAdapter(detectWorkspaceAt(root), correlationId);
+    worktrees = await adapter.listWorktrees();
+  } catch (error) {
+    logWorkspaceLifecycleFailure(
+      deps,
+      {
+        operation: "health",
+        workspaceIdentitySeed: group[0]?.workspaceId ?? deriveRepositoryId(root),
+        correlationId,
+      },
+      repositoryUnreachable(error),
+    );
+    return group.map(carriedForwardEntry);
+  }
+  const entries: WorkspaceHealthEntry[] = [];
+  for (const instance of group) {
+    entries.push(
+      await evaluateInstanceOrCarryForward(
+        deps,
+        adapter,
+        worktrees,
+        instance,
+        ownershipProven,
+        correlationId,
+      ),
+    );
+  }
+  return entries;
+}
+
+// The repository-id directories whose orphans this report must still consider after the persisted
+// rows were walked: for a scoped report the requested repository when it has no persisted instance,
+// for the global report every repository-id directory on disk without one — the same on-disk half
+// the orphan sweep unions in. Without it a leftover directory of a repository whose every row was
+// already cleaned up never appeared in the "everything" report (audit finding, 2026-09-03).
+function unseenRepositoryIds(
+  deps: WorkspaceHealthServiceDeps,
+  repositoryRoot: string | undefined,
+  seen: ReadonlySet<string>,
+): readonly string[] {
+  const candidates =
+    repositoryRoot !== undefined && repositoryRoot.length > 0
+      ? [deriveRepositoryId(repositoryRoot)]
+      : listManagedRepositoryIds(deps.managedRoot);
+  return candidates.filter((repositoryId) => !seen.has(repositoryId));
 }
 
 // Detects orphaned managed worktrees for one repository: directories under `<managedRoot>/<repoId>`
@@ -323,33 +410,29 @@ async function reportImpl(
   for (const [root, group] of byRepo) {
     const repositoryId = deriveRepositoryId(root);
     seenRepoIds.add(repositoryId);
-    const adapter = deps.createAdapter(detectWorkspaceAt(root), correlationId);
-    const worktrees = await adapter.listWorktrees();
     const knownPaths = new Set(group.map((instance) => instance.managedWorktreePath));
-    for (const instance of group) {
-      entries.push(
-        await evaluateInstanceOrCarryForward(
-          deps,
-          adapter,
-          worktrees,
-          instance,
-          ownershipProven,
-          correlationId,
-        ),
-      );
-    }
-    entries.push(
-      ...(await detectOrphans(deps, repositoryId, knownPaths, ownershipProven, correlationId)),
+    const evaluated = await evaluateRepositoryGroup(
+      deps,
+      root,
+      group,
+      ownershipProven,
+      correlationId,
     );
+    const orphans = await detectOrphans(
+      deps,
+      repositoryId,
+      knownPaths,
+      ownershipProven,
+      correlationId,
+    );
+    entries.push(...evaluated, ...orphans);
   }
-  // A scoped report whose repository has no persisted instances still surfaces its orphans.
-  if (repositoryRoot !== undefined && repositoryRoot.length > 0) {
-    const repositoryId = deriveRepositoryId(repositoryRoot);
-    if (!seenRepoIds.has(repositoryId)) {
-      entries.push(
-        ...(await detectOrphans(deps, repositoryId, new Set(), ownershipProven, correlationId)),
-      );
-    }
+  // A repository with no persisted instance — the requested one, or on the global report every
+  // repository-id directory still on disk — still surfaces its orphans.
+  for (const repositoryId of unseenRepositoryIds(deps, repositoryRoot, seenRepoIds)) {
+    entries.push(
+      ...(await detectOrphans(deps, repositoryId, new Set(), ownershipProven, correlationId)),
+    );
   }
   return {
     schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,

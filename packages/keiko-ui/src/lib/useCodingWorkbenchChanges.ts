@@ -235,7 +235,26 @@ function useSelectedDiff(input: {
   }, [client, epoch, path, root, setState, state.status]);
 }
 
-function useRunBoundRoot(input: UseCodingWorkbenchChangesInput): string | null {
+/** The minimal shape `useRunBoundRoot` needs. Any hook whose input carries these three fields —
+ * `UseCodingWorkbenchChangesInput` and `UseCodingWorkbenchEditorBridgeInput` both do — can pass
+ * itself straight through; extra fields are ignored structurally. */
+export interface RunBoundRootInput {
+  readonly runId: string | undefined;
+  readonly root: string | null;
+  readonly bindingPending: boolean;
+}
+
+/**
+ * Locks a workspace root to the run that is using it, for that run's entire lifetime (workbench audit, 2026-09-03
+ * finding 2). A Coding Workbench run keeps operating against the workspace it started in even if
+ * the operator later switches the shell's active workspace/repository to something else — an
+ * ordinary, reachable UI action nothing warns them not to take. Once a root is bound for a
+ * `runId`, it is reported back only for as long as the live `root` keeps matching it; the moment
+ * the live root diverges (a different workspace now active) this returns `null` — "binding lost"
+ * — instead of silently continuing to report the stale bound root, and it never re-binds to the
+ * new root while the same `runId` is still current. A new `runId` re-arms the lock from scratch.
+ */
+export function useRunBoundRoot(input: RunBoundRootInput): string | null {
   const bound = useRef<{ readonly runId: string; readonly root: string | null } | null>(null);
   if (input.runId === undefined) {
     bound.current = null;

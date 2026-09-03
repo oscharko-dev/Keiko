@@ -9,6 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -77,6 +78,7 @@ let pointerStore: ActiveWorkspacePointerStore;
 let evidence: { id: string; json: string }[];
 let idCounter: number;
 let nowMs: number;
+let extraRepos: string[];
 
 type AdapterFactory = (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
 
@@ -167,13 +169,50 @@ function reconciliation(
 }
 
 async function provisionTask(taskId: string): Promise<WorkspaceInstance> {
+  return provisionTaskInRepo(repoRoot, taskId);
+}
+
+async function provisionTaskInRepo(
+  repositoryRequestPath: string,
+  taskId: string,
+): Promise<WorkspaceInstance> {
   const result = await provisioning().provision({
-    repositoryRequestPath: repoRoot,
+    repositoryRequestPath,
     taskId,
     baseBranch: "main",
     requestedBy: "u",
   });
   return result.instance;
+}
+
+// A second disposable git repository, removed in afterEach, so a pass over more than one
+// repository can be exercised.
+function makeRepo(prefix: string): string {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  extraRepos.push(root);
+  git(["init", "-q", "-b", "main"], root);
+  git(["config", "user.email", "test@keiko.example"], root);
+  git(["config", "user.name", "Keiko Test"], root);
+  git(["config", "commit.gpgsign", "false"], root);
+  writeFileSync(join(root, "README.md"), "# demo\n");
+  git(["add", "README.md"], root);
+  git(["commit", "-q", "-m", "initial"], root);
+  return root;
+}
+
+// The real adapter for every repository except `failingRoot`, whose worktree listing rejects with a
+// PLAIN error — the shape a vanished repository root or a denied path produces, not one of the
+// module's classified errors.
+function adapterFailingFor(failingRoot: string): AdapterFactory {
+  return (workspace: WorkspaceInfo): GitWorktreeAdapter => {
+    const adapter = realAdapter(workspace);
+    if (workspace.root !== failingRoot) return adapter;
+    return {
+      ...adapter,
+      listWorktrees: (): Promise<readonly WorktreeListEntry[]> =>
+        Promise.reject(new Error("spawn git ENOENT")),
+    };
+  };
 }
 
 beforeEach(() => {
@@ -196,12 +235,14 @@ beforeEach(() => {
   evidence = [];
   idCounter = 0;
   nowMs = 1_700_000_000_000;
+  extraRepos = [];
 });
 
 afterEach(() => {
   db.close();
   rmSync(repoRoot, { recursive: true, force: true });
   rmSync(managedRoot, { recursive: true, force: true });
+  for (const extra of extraRepos) rmSync(extra, { recursive: true, force: true });
 });
 
 describe("healthy reconciliation (AC4)", () => {
@@ -262,7 +303,9 @@ describe("healthy reconciliation (AC4)", () => {
   // The adapter's `onTerminated` callback writes directly to the activity log, so an unshaped id
   // must be normalized before adapter construction. This capture-only adapter throws immediately:
   // the assertion therefore observes the exact value at that boundary without pinning any later
-  // EvidenceStore behavior as part of the adapter contract.
+  // EvidenceStore behavior as part of the adapter contract. The pass itself no longer rejects on
+  // that throw — an unreachable repository is isolated and carried forward (2026-09-03 audit) —
+  // so the pin awaits the settled pass and asserts only the captured id.
   describe("adapter correlation-ID boundary", () => {
     it.each([
       ["empty", ""],
@@ -274,9 +317,10 @@ describe("healthy reconciliation (AC4)", () => {
       async (_label, input) => {
         const received: string[] = [];
         await provisionTask(`t-adapter-${_label.replaceAll(" ", "-")}`);
-        await expect(
-          reconciliation(undefined, rejectingAdapterFactory(received)).reconcile(undefined, input),
-        ).rejects.toThrow("captured adapter correlation");
+        await reconciliation(undefined, rejectingAdapterFactory(received)).reconcile(
+          undefined,
+          input,
+        );
         expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
       },
     );
@@ -397,6 +441,38 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     expect(reportEntry?.driftMarkers).toContain("gitdir-mismatch");
   });
 
+  // A workspace provisioned before #3367 carries the pointer-text identity provisioning.ts minted
+  // itself. The startup pass reported two such rows as `gitdir-mismatch` on every start, and the
+  // bind attempt that followed re-labelled them `pointer-stale` with an operator-repair hint that
+  // no strategy executes (2026-09-03 dev log). It is a retired registration: same refusal, its own
+  // marker, and the executable re-registration hint.
+  it("classifies a registration made before the identity rule as identity-schema-retired, never as replaced", async () => {
+    const instance = await provisionTask("t1");
+    const pointerText = readFileSync(join(instance.managedWorktreePath, ".git"), "utf8")
+      .replace(/^gitdir:/u, "")
+      .trim();
+    const retired = createHash("sha256").update(pointerText, "utf8").digest("hex").slice(0, 32);
+    store.upsert({ ...instance, gitdirIdentity: retired });
+
+    const report = await reconciliation().reconcile();
+
+    const reportEntry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
+    expect(reportEntry?.status).toBe("stale-pointer");
+    expect(reportEntry?.driftMarkers).toEqual(["identity-schema-retired"]);
+    expect(reportEntry?.recoveryHints).toEqual([
+      {
+        marker: "identity-schema-retired",
+        strategy: "reconcile-pointer",
+        operatorActionRequired: false,
+      },
+    ]);
+    expect(reportEntry?.operatorActionRequired).toBe(false);
+    const persisted = store.getById(instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("recovery-required");
+    // Recognised, never promoted: the retired value stays until an operator-approved repair.
+    expect(persisted?.gitdirIdentity).toBe(retired);
+  });
+
   // A pointer that IS there but sits on a volume without creation time is present. Reporting it as
   // absent collapsed the platform limitation into `pointer-stale` one branch earlier, so its own
   // marker — and the operator-only resolution it maps to — never fired (#3376 review).
@@ -421,6 +497,86 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
   // carried forward unchanged, the failure is on the activity log as the classified, retryable
   // IDENTITY_PROOF_FAILED with its cause, and every other instance is still reconciled (#3376 review;
   // Cursor review on f50133b95).
+  // The isolation above only recognised IDENTITY_PROOF_FAILED; any other failure of one row's pass
+  // — here a worktree listing that rejects the way a vanished repository root does — escaped the
+  // per-instance boundary and aborted the whole pass, so every repository after the failing one was
+  // silently never reconciled (audit finding, 2026-09-03).
+  it("isolates an unreachable repository to its own rows and keeps reconciling every other repository", async () => {
+    const other = makeRepo("keiko-recon-other-");
+    const healthy = await provisionTask("t-reachable");
+    const stranded = await provisionTaskInRepo(other, "t-unreachable");
+    const activityLog = createBufferedServerLogSink();
+
+    const report = await reconciliation(activityLog, adapterFailingFor(other)).reconcile(
+      undefined,
+      "unreachable-0001",
+    );
+
+    expect(report.entries.find((e) => e.workspaceId === healthy.workspaceId)?.status).toBe(
+      "healthy",
+    );
+    const carried = report.entries.find((e) => e.workspaceId === stranded.workspaceId);
+    expect(carried).toBeDefined();
+    // Nothing was written for the row the pass could not verify: the last classification stands.
+    const persisted = store.getById(stranded.workspaceId);
+    expect(persisted?.lifecycleState).toBe("active");
+    expect(persisted?.health).toBe("healthy");
+    expect(persisted?.driftMarkers).toEqual([]);
+    const line = activityLog.events.find((event) => event.errorKind === "REPOSITORY_UNREACHABLE");
+    expect(line?.correlationId).toBe("unreachable-0001");
+    expect(line?.extra).toMatchObject({ operation: "reconcile" });
+    expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
+    expect(JSON.stringify(line)).not.toContain(other);
+  });
+
+  // Only the GATHERING of a row's live facts is isolated. A failure to persist the verdict is not a
+  // fact about the repository: it propagates under its own name instead of being relabelled as an
+  // unreachable repository, which would send an operator after the wrong subsystem (review of
+  // ec04288dc).
+  it("lets a persistence failure surface instead of reporting it as an unreachable repository", async () => {
+    await provisionTask("t-persist");
+    const activityLog = createBufferedServerLogSink();
+    const failingStore: WorkspaceInstanceStore = {
+      ...store,
+      upsert: (): never => {
+        throw new Error("disk I/O error");
+      },
+    };
+    const svc = createWorkspaceReconciliationService({
+      store: failingStore,
+      activePointerStore: pointerStore,
+      evidenceStore: capturingEvidence(),
+      managedRoot,
+      createAdapter: realAdapter,
+      redactString: (value: string): string => value,
+      now: (): number => nowMs,
+      newId: (): string => `id-${String(idCounter++)}`,
+      mutex: __twMutex,
+      activityLog,
+    });
+
+    await expect(svc.reconcile(repoRoot, "persist-0001")).rejects.toThrow("disk I/O error");
+    expect(activityLog.events.some((event) => event.errorKind === "REPOSITORY_UNREACHABLE")).toBe(
+      false,
+    );
+  });
+
+  // The evidence line carried placeholder zeros for both measurements (audit finding, 2026-09-03).
+  it("records the repository's listed worktree count on the reconcile evidence line", async () => {
+    const first = await provisionTask("t-count-1");
+    await provisionTask("t-count-2");
+    const activityLog = createBufferedServerLogSink();
+
+    await reconciliation(activityLog).reconcile(repoRoot, "count-0001");
+
+    const line = activityLog.events.find(
+      (event) =>
+        event.correlationId === "count-0001" && event.extra?.workspaceId === first.workspaceId,
+    );
+    // The main worktree plus the two managed ones.
+    expect(line?.extra?.worktreeCount).toBe(3);
+  });
+
   it("isolates a failed identity proof to its instance, logs it, and keeps reconciling the others", async () => {
     const failing = await provisionTask("t1");
     const other = await provisionTask("t2");
@@ -478,6 +634,46 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     const reportEntry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
     expect(reportEntry?.status).toBe("healthy");
     expect(reportEntry?.driftMarkers).toEqual([]);
+  });
+});
+
+// A cleanup-pending row is settled only while its worktree is gone or still the registered one. A
+// tree that is present but no longer proves its identity can never pass the governed removal's
+// ownership gate, and reporting it "healthy" left it with no exit: no repair applies to a healthy
+// status, the terminal branch refuses re-provisioning, and the orphan sweep skips a directory that
+// still has a record (audit finding, 2026-09-03).
+describe("cleanup-pending rows whose worktree no longer proves its identity", () => {
+  it("flags a present but unproven cleanup-pending worktree for recovery with the executable hint", async () => {
+    const instance = await provisionTask("t-pending");
+    store.upsert({
+      ...instance,
+      lifecycleState: "cleanup-pending",
+      gitdirIdentity: "0000000000000000deadbeefdeadbeef",
+    });
+
+    const report = await reconciliation().reconcile();
+
+    const entry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
+    expect(entry?.status).toBe("stale-pointer");
+    expect(entry?.driftMarkers).toEqual(["gitdir-mismatch"]);
+    expect(entry?.recoveryHints).toContainEqual({
+      marker: "gitdir-mismatch",
+      strategy: "reconcile-pointer",
+      operatorActionRequired: false,
+    });
+    expect(store.getById(instance.workspaceId)?.lifecycleState).toBe("recovery-required");
+  });
+
+  it("keeps a cleanup-pending row whose worktree is already gone settled", async () => {
+    const instance = await provisionTask("t-pending-gone");
+    store.upsert({ ...instance, lifecycleState: "cleanup-pending" });
+    rmSync(instance.managedWorktreePath, { recursive: true, force: true });
+
+    const report = await reconciliation().reconcile();
+
+    const entry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
+    expect(entry?.status).toBe("healthy");
+    expect(store.getById(instance.workspaceId)?.lifecycleState).toBe("cleanup-pending");
   });
 });
 

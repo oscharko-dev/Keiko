@@ -10,7 +10,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
-import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type {
+  GitWorktreeAdapter,
+  WorktreeListEntry,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type {
@@ -74,6 +77,7 @@ let store: WorkspaceInstanceStore;
 let pointerStore: ActiveWorkspacePointerStore;
 let idCounter: number;
 let nowMs: number;
+let extraRepos: string[];
 
 type AdapterFactory = (
   workspace: WorkspaceInfo,
@@ -143,6 +147,52 @@ function retireIdentity(instance: WorkspaceInstance): void {
   store.upsert({ ...instance, gitdirIdentity: inspection.legacyIdentity });
 }
 
+// A second disposable git repository, removed in afterEach, so a report over more than one
+// repository can be exercised.
+function makeRepo(prefix: string): string {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  extraRepos.push(root);
+  git(["init", "-q", "-b", "main"], root);
+  git(["config", "user.email", "test@keiko.example"], root);
+  git(["config", "user.name", "Keiko Test"], root);
+  git(["config", "commit.gpgsign", "false"], root);
+  writeFileSync(join(root, "README.md"), "# demo\n");
+  git(["add", "README.md"], root);
+  git(["commit", "-q", "-m", "initial"], root);
+  return root;
+}
+
+async function provisionTaskInRepo(
+  repositoryRequestPath: string,
+  taskId: string,
+): Promise<WorkspaceInstance> {
+  const result = await provisioning().provision({
+    repositoryRequestPath,
+    taskId,
+    baseBranch: "main",
+    requestedBy: "u",
+  });
+  return result.instance;
+}
+
+// The real adapter for every repository except `failingRoot`, whose worktree listing rejects with a
+// PLAIN error — the shape a vanished repository root or a denied path produces.
+function adapterFailingFor(failingRoot: string): AdapterFactory {
+  return (
+    workspace: WorkspaceInfo,
+    correlationId: string,
+    fs?: WorkspaceFs,
+  ): GitWorktreeAdapter => {
+    const adapter = realAdapter(workspace, correlationId, fs);
+    if (workspace.root !== failingRoot) return adapter;
+    return {
+      ...adapter,
+      listWorktrees: (): Promise<readonly WorktreeListEntry[]> =>
+        Promise.reject(new Error("spawn git ENOENT")),
+    };
+  };
+}
+
 async function provisionTask(taskId: string): Promise<WorkspaceInstance> {
   const result = await provisioning().provision({
     repositoryRequestPath: repoRoot,
@@ -176,12 +226,14 @@ beforeEach(() => {
   pointerStore = buildActiveWorkspacePointerStoreOverDatabase(db);
   idCounter = 0;
   nowMs = 1_700_000_000_000;
+  extraRepos = [];
 });
 
 afterEach(() => {
   db.close();
   rmSync(repoRoot, { recursive: true, force: true });
   rmSync(managedRoot, { recursive: true, force: true });
+  for (const extra of extraRepos) rmSync(extra, { recursive: true, force: true });
 });
 
 function entryFor(
@@ -370,5 +422,49 @@ describe("orphan detection", () => {
     const report = await health().report();
     expect(entryFor(report, a.workspaceId)).toBeDefined();
     expect(entryFor(report, b.workspaceId)).toBeDefined();
+  });
+});
+
+// One unreachable repository must never abort the report for every other one: the bare
+// `await adapter.listWorktrees()` per repository used to escape every boundary, so a deleted or
+// moved checkout blanked the whole health surface (audit finding, 2026-09-03).
+describe("an unreachable repository is isolated to its own rows", () => {
+  it("reports every other repository and carries the unreachable one forward unverified", async () => {
+    const other = makeRepo("keiko-health-other-");
+    const reachable = await provisionTask("t-reachable");
+    const stranded = await provisionTaskInRepo(other, "t-unreachable");
+    const activityLog = createBufferedServerLogSink();
+
+    const report = await health(adapterFailingFor(other), activityLog).report(
+      undefined,
+      "health-unreachable-0001",
+    );
+
+    expect(entryFor(report, reachable.workspaceId)?.classification).toBe("healthy");
+    const carried = entryFor(report, stranded.workspaceId);
+    expect(carried?.classification).toBe("recovery-required");
+    expect(carried?.cleanupEligible).toBe(false);
+    // Nothing was written: the last classification stands until the repository is reachable.
+    expect(store.getById(stranded.workspaceId)?.health).toBe("healthy");
+    const line = activityLog.events.find((event) => event.errorKind === "REPOSITORY_UNREACHABLE");
+    expect(line?.correlationId).toBe("health-unreachable-0001");
+    expect(line?.extra).toMatchObject({ operation: "health" });
+    expect(JSON.stringify(line)).not.toContain(other);
+  });
+});
+
+// The global report only knew repositories with a persisted row; a leftover directory of a
+// repository whose every row was already cleaned up never appeared in it, while the orphan sweep's
+// global scan did union the on-disk directories in (audit finding, 2026-09-03).
+describe("a global report surfaces orphans of repositories without persisted rows", () => {
+  it("lists the orphaned managed worktree of a repository that has no instance left", async () => {
+    const instance = await provisionTask("t-orphan-global");
+    store.delete(instance.workspaceId);
+
+    const report = await health().report();
+
+    const orphans = report.entries.filter((entry) => entry.kind === "orphan-worktree");
+    expect(orphans).toHaveLength(1);
+    expect(orphans[0]?.classification).toBe("orphaned");
   });
 });

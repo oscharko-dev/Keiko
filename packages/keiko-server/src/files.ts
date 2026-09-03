@@ -4,6 +4,7 @@
 
 import type { IncomingMessage } from "node:http";
 import { createWorkspaceMutexRegistry, fileWriteKeys } from "./task-workspace/mutex.js";
+import { recordManagedRootRequestDenial } from "./workspace-root-denial-log.js";
 
 // One registry per server process: same-process turn order for the verify→write region below
 // (KEIKO-0495). It composes with, never replaces, the persisted advisory WorkspaceLock.
@@ -258,9 +259,15 @@ export async function resolveRequestRoot(
     return resolveRoot(deps.store, rootInput, deps.redactor);
   }
   if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    recordManagedRootRequestDenial("managed-root-session-authority-missing", {
+      correlationId: ctx.correlationId,
+    });
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   if (rootInput === null) {
+    recordManagedRootRequestDenial("managed-root-unspecified", {
+      correlationId: ctx.correlationId,
+    });
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   const access = resolveManagedWorkspaceRootAccess(deps, rootInput, {

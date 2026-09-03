@@ -784,5 +784,6 @@ well as setting `KEIKO_QUALITY_ENABLED`. The cost arithmetic itself is in
 - [Native OS file/folder dialog runbook](./native-file-dialog.md) — unsupported platforms, macOS privacy (TCC) read limits, and Windows interactive-session requirements for Browse.
 - [macOS portable first-launch runbook](./macos-portable-first-launch.md) — the "damaged" Gatekeeper verdict, silent double-click exits, and same-path adoption for hand-moved bundles.
 - [Windows portable first-launch runbook](./windows-portable-first-launch.md) — the console flash-and-exit, the three native bootstrap dialogs, and the detached UI server that outlives the setup companion.
+- [Task workspace identity rule retired](./task-workspace-identity-rule-retired.md) — the Coding Workbench refuses to bind a previously bound repository because its managed workspace was registered under a retired identity rule; re-register it through the operator-approved repair.
 
 For new entries, follow the [troubleshooting entry template](./_template.md).

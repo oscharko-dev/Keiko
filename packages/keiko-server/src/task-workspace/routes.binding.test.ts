@@ -219,6 +219,15 @@ describe("active binding lifecycle over HTTP", () => {
     expect(body.instances).toHaveLength(2);
   });
 
+  it("lists every managed workspace when no root is given (the switcher's inventory)", async () => {
+    await provision("t1");
+    await provision("t2");
+    const res = await fetch(`${baseUrl()}/api/task-workspaces`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { instances: readonly WorkspaceInstance[] };
+    expect(body.instances.map((item) => item.taskId).sort()).toEqual(["t1", "t2"]);
+  });
+
   it("getActive is null before any switch (unbound mode)", async () => {
     const body = await getActive();
     expect(body.active).toBeNull();

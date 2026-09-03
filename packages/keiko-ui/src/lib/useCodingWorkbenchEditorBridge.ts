@@ -28,6 +28,7 @@ import {
   type DiffParseResult,
 } from "@/app/components/desktop/widgets/cards/shared/diffParser";
 import { ApiError, postEditorAgentSessionSnapshot } from "./api";
+import { useRunBoundRoot } from "./useCodingWorkbenchChanges";
 import type {
   EditorAgentAction,
   EditorAgentActionResultRequest,
@@ -153,11 +154,19 @@ async function submitDecisionWithRetry(
 const FORCE_RECONNECT_SETTLE_MS = 120;
 
 export interface UseCodingWorkbenchEditorBridgeInput {
-  /** The bound task workspace's absolute root, or null when no workspace is bound. */
+  /** The task workspace's currently active absolute root, or null when none is bound. This is the
+   * shell's LIVE root, not necessarily the run's own — the hook locks onto the run's root itself
+   * (workbench audit, 2026-09-03) via `useRunBoundRoot`, the same way `CodingWorkbenchChanges` does. */
   readonly root: string | null;
   readonly runId: string | undefined;
   /** True only while a run is live enough to receive tool-call actions. */
   readonly active: boolean;
+  /**
+   * True while the active workspace binding itself is still resolving (loading or switching).
+   * Optional so existing callers with no such transitional state default to `false` — the same
+   * "already resolved" assumption `root` carried before this hook started locking it to the run.
+   */
+  readonly bindingPending?: boolean | undefined;
 }
 
 export interface UseCodingWorkbenchEditorBridgeResult {
@@ -222,7 +231,15 @@ interface PendingChangeset {
 export function useCodingWorkbenchEditorBridge(
   input: UseCodingWorkbenchEditorBridgeInput,
 ): UseCodingWorkbenchEditorBridgeResult {
-  const { root, runId, active } = input;
+  const { runId, active } = input;
+  // Workbench audit, 2026-09-03: lock to the run's own workspace root for its entire lifetime rather
+  // than following whatever workspace the shell's active binding drifts to later — an unrelated
+  // workspace switch mid-run must never re-register this session against another root.
+  const root = useRunBoundRoot({
+    runId: input.runId,
+    root: input.root,
+    bindingPending: input.bindingPending ?? false,
+  });
   const [pending, setPending] = useState<PendingChangeset | null>(null);
   const pendingRef = useRef(pending);
   pendingRef.current = pending;

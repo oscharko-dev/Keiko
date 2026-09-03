@@ -202,6 +202,14 @@ describe("getActive / list", () => {
     expect(() => service.list("")).toThrow(TaskWorkspaceError);
   });
 
+  // The switcher's inventory: the pointer is global, so it spans every repository.
+  it("lists every persisted instance across repositories", () => {
+    store.upsert(instance("a"));
+    store.upsert(instance("b", { repositoryId: "repo_other", repositoryRoot: "/other" }));
+    expect(service.listAll()).toHaveLength(2);
+    expect(service.list(REPO_ROOT)).toHaveLength(1);
+  });
+
   it("self-heals a dangling pointer (instance gone) to unbound mode", () => {
     const inst = store.upsert(instance("a"));
     pointerStore.set({
@@ -264,6 +272,30 @@ describe("getActive / list", () => {
 
     expect(restarted.getActive()).toBeUndefined();
     expect(pointerStore.get()).toBeUndefined();
+  });
+
+  // Observed live on 2026-09-03: a startup reconcile had flagged the pointed-at workspace
+  // `recovery-required`, the read cleared the pointer, and the log carried nothing an operator could
+  // tie their vanished binding to.
+  it("logs why a pointer to a non-bindable lifecycle is cleared on the active read", () => {
+    const inst = store.upsert(instance("restart-flagged", { lifecycleState: "recovery-required" }));
+    pointerStore.set({
+      workspaceId: inst.workspaceId,
+      setBy: "op",
+      atIso: "2026-06-26T00:00:00.000Z",
+    });
+    const activityLog = createBufferedServerLogSink();
+    const restarted = lifecycleWith(fakeProvisioning(), activityLog);
+
+    expect(restarted.getActive("active-read-0001")).toBeUndefined();
+    expect(pointerStore.get()).toBeUndefined();
+    const line = activityLog.events.find((event) => event.errorKind === "ILLEGAL_TRANSITION");
+    expect(line?.correlationId).toBe("active-read-0001");
+    expect(line?.extra).toMatchObject({
+      operation: "activate",
+      outcome: "blocked",
+      workspaceId: inst.workspaceId,
+    });
   });
 
   it("fails closed and clears the active pointer when identity repair is unavailable", () => {
@@ -649,10 +681,15 @@ describe("identity proof before bindings and readiness", () => {
     });
   });
 
+  // `changed` (a readable pointer proving another identity) carries the contract's
+  // `gitdir-mismatch` marker — the SAME marker reconciliation persists for that fact, with the
+  // executable `reconcile-pointer` strategy; `unproven` (no readable pointer at all) keeps the
+  // operator-guided `pointer-stale`. Relocated pin: `changed` used to map to `pointer-stale`.
   it.each([
     { drift: "schema-retired", marker: "identity-schema-retired", strategy: "reconcile-pointer" },
     { drift: "unsupported", marker: "identity-unsupported", strategy: "operator-repair" },
-    { drift: "changed", marker: "pointer-stale", strategy: "operator-repair" },
+    { drift: "changed", marker: "gitdir-mismatch", strategy: "reconcile-pointer" },
+    { drift: "unproven", marker: "pointer-stale", strategy: "operator-repair" },
   ] as const)(
     "refuses handoff on a $drift identity and flags the row with $marker",
     async ({ drift, marker, strategy }) => {

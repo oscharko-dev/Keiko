@@ -10,12 +10,17 @@
 // binding lands; on error the previous binding is preserved and the error surfaced.
 
 import { useCallback, useMemo, useReducer, useRef } from "react";
-import type { WorkspaceBinding, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import type {
+  WorkspaceBinding,
+  WorkspaceInstance,
+  WorkspaceRecoveryStrategy,
+} from "@oscharko-dev/keiko-contracts";
 import {
   clearActiveTaskWorkspace,
   listTaskWorkspaces,
   pauseTaskWorkspace,
   prepareHandoffTaskWorkspace,
+  repairTaskWorkspace,
   resumeTaskWorkspace,
   setActiveTaskWorkspace,
   type ActiveWorkspaceView,
@@ -26,6 +31,8 @@ import {
   TaskWorkspaceRestoreVerificationError,
 } from "@/lib/verified-task-workspace-binding";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import type { ActiveWorkspaceApi } from "../context/ActiveWorkspaceContext";
 
 // The opaque actor identity for this single-operator Studio session. Held constant so lock ownership
@@ -80,11 +87,45 @@ function reducer(state: State, action: Action): State {
   }
 }
 
+// UI-authored outcomes of the bind and repair sequences. Like the restore-verification sentinel,
+// each is a typed error whose message is only a non-localized safety net: `messageFor` maps the
+// class to the operator's locale, so no surface renders the fallback text verbatim.
+class TaskWorkspaceProvisionError extends Error {
+  public constructor() {
+    super("The task workspace could not be verified and activated.");
+    this.name = "TaskWorkspaceProvisionError";
+  }
+}
+
+class TaskWorkspaceRepairOperatorRequiredError extends Error {
+  public constructor() {
+    super("The recovery needs an operator before this workspace can be repaired automatically.");
+    this.name = "TaskWorkspaceRepairOperatorRequiredError";
+  }
+}
+
+// The inventory degrades to empty so a listing failure never hides the active binding, but the
+// failure itself is not silent: an empty list from a 503 must be distinguishable in the console
+// from a repository that genuinely has no managed workspaces (AGENTS.md §7/§8).
+function inventoryUnavailable(error: unknown): readonly WorkspaceInstance[] {
+  reportClientDiagnostic(
+    `[keiko] task workspace inventory refresh failed: ${clientErrorSummary(error)}`,
+    { correlationId: correlationIdOf(error) },
+  );
+  return [];
+}
+
 function messageFor(error: unknown, t: I18nTranslate): string {
   // The restore-verification sentinel is UI-authored text and must speak the operator's locale;
   // its Error message is only a non-localized safety net (review finding on #2841).
   if (error instanceof TaskWorkspaceRestoreVerificationError) {
     return t("workspace.binding.restoreVerificationFailed");
+  }
+  if (error instanceof TaskWorkspaceProvisionError) {
+    return t("workspace.binding.provisionFailed");
+  }
+  if (error instanceof TaskWorkspaceRepairOperatorRequiredError) {
+    return t("workspace.binding.repairOperatorRequired");
   }
   // ApiError extends Error and already carries the redacted server message, so a single Error check
   // covers it. Avoids importing ApiError here so AppShell's import graph does not require the @/lib/api
@@ -96,9 +137,6 @@ function messageFor(error: unknown, t: I18nTranslate): string {
 export function useActiveWorkspaceState(): ActiveWorkspaceApi {
   const [state, dispatch] = useReducer(reducer, INITIAL);
   const t = useTranslate();
-  // The repository root the inventory is listed for. Updated by refresh(root); reused by post-mutation
-  // refreshes so they re-list the same repository without the caller re-supplying it.
-  const rootRef = useRef<string | null>(null);
   const operationSeqRef = useRef(0);
   const mutationSeqRef = useRef(0);
   // The workspace identity whose restore verification this session holds — NOT a per-session "has
@@ -110,15 +148,14 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
   // every newly activated binding is verified before a surface claims it.
   const verifiedWorkspaceIdRef = useRef<string | null>(null);
 
-  // Re-reads the active binding plus (when a repository root is known) the inventory, committing both
-  // in one settle. An inventory failure never hides the active binding — the list degrades to empty.
+  // Re-reads the active binding plus the inventory, committing both in one settle. An inventory
+  // failure never hides the active binding — the list degrades to empty (and leaves a diagnostic).
   // Every active view whose workspace identity this session has not already verified is RE-VERIFIED
   // through the shared reconciliation sequence before it is claimed (release-audit F-09b): neither a
   // persisted nor a freshly activated pointer is runtime start authority by itself, so a binding that
   // fails re-verification surfaces as an error instead of a ready-looking workspace. Reloads of an
   // already-verified identity read state without re-running the pass.
   const reload = useCallback(async (operationSeq: number): Promise<void> => {
-    const root = rootRef.current;
     // The held identity is consumed and cleared around every attempt, so only a view the pass has
     // actually granted is cached: a rejected or failed verification leaves nothing held and the next
     // load re-verifies whatever is active (fail closed). Switching away and back therefore verifies
@@ -130,26 +167,53 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
       verifiedWorkspaceIdRef.current = verified?.instance.workspaceId ?? null;
       return verified;
     };
-    const [active, instances] = await Promise.all([
-      readActive(),
-      root === null || root.length === 0
-        ? Promise.resolve<readonly WorkspaceInstance[]>([])
-        : listTaskWorkspaces(root).catch(() => [] as readonly WorkspaceInstance[]),
-    ]);
+    const active = await readActive();
+    // A superseded operation stops here: its inventory would be discarded anyway.
+    if (operationSeqRef.current !== operationSeq) return;
+    // The inventory is EVERY managed workspace, not the selected folder's: the active pointer is
+    // global, so a switch may target any repository, and a workspace paused in one repository
+    // must stay resumable from this panel whatever folder is selected. Scoping the list to the
+    // folder left the panel saying "no managed task workspaces yet" right under a bound or
+    // just-paused workspace whenever the two differed (observed live, 2026-09-03).
+    const instances = await listTaskWorkspaces().catch(inventoryUnavailable);
     if (operationSeqRef.current !== operationSeq) return;
     dispatch({ kind: "settle", instances, active });
   }, []);
 
-  const refresh = useCallback(
-    async (root?: string): Promise<boolean> => {
-      if (root !== undefined) rootRef.current = root;
-      const operationSeq = (operationSeqRef.current += 1);
-      dispatch({ kind: "load-start" });
+  const refresh = useCallback(async (): Promise<boolean> => {
+    const operationSeq = (operationSeqRef.current += 1);
+    dispatch({ kind: "load-start" });
+    try {
+      await reload(operationSeq);
+      return operationSeqRef.current === operationSeq;
+    } catch (error) {
+      if (operationSeqRef.current !== operationSeq) return false;
+      dispatch({ kind: "fail", error: messageFor(error, t) });
+      return false;
+    }
+  }, [reload, t]);
+
+  // Shared mutation envelope: guard with `switching`, run the wire call, then reload + commit
+  // atomically. Surfaces keep the previous active root until reload lands (no mixed transient state).
+  // Resolves `true` only when both the action and the reload settled for THIS mutation; a failure
+  // is dispatched as the redacted `error` and reported as `false`, never thrown — a caller that
+  // must not proceed on a refused mutation reads the outcome (audit finding, 2026-09-03: the folder
+  // switcher awaited `clearActive()` and could not observe that the clear had been refused).
+  const mutate = useCallback(
+    async (action: () => Promise<unknown>): Promise<boolean> => {
+      const mutationSeq = (mutationSeqRef.current += 1);
+      let operationSeq = (operationSeqRef.current += 1);
+      dispatch({ kind: "mutate-start" });
       try {
+        await action();
+        if (mutationSeqRef.current !== mutationSeq) return false;
+        operationSeq = operationSeqRef.current += 1;
         await reload(operationSeq);
         return operationSeqRef.current === operationSeq;
       } catch (error) {
-        if (operationSeqRef.current !== operationSeq) return false;
+        if (mutationSeqRef.current !== mutationSeq || operationSeqRef.current !== operationSeq) {
+          return false;
+        }
         dispatch({ kind: "fail", error: messageFor(error, t) });
         return false;
       }
@@ -157,68 +221,60 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
     [reload, t],
   );
 
-  // Shared mutation envelope: guard with `switching`, run the wire call, then reload + commit
-  // atomically. Surfaces keep the previous active root until reload lands (no mixed transient state).
-  const mutate = useCallback(
-    async (action: () => Promise<unknown>): Promise<void> => {
-      const mutationSeq = (mutationSeqRef.current += 1);
-      let operationSeq = (operationSeqRef.current += 1);
-      dispatch({ kind: "mutate-start" });
-      try {
-        await action();
-        if (mutationSeqRef.current !== mutationSeq) return;
-        operationSeq = operationSeqRef.current += 1;
-        await reload(operationSeq);
-      } catch (error) {
-        if (mutationSeqRef.current !== mutationSeq || operationSeqRef.current !== operationSeq) {
-          return;
-        }
-        dispatch({ kind: "fail", error: messageFor(error, t) });
-      }
-    },
-    [reload, t],
-  );
-
   const switchTo = useCallback(
-    (workspaceId: string): Promise<void> =>
+    (workspaceId: string): Promise<boolean> =>
       mutate(() => setActiveTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR })),
     [mutate],
   );
 
   const clearActive = useCallback(
-    (): Promise<void> => mutate(() => clearActiveTaskWorkspace()),
+    (): Promise<boolean> => mutate(() => clearActiveTaskWorkspace()),
     [mutate],
   );
 
   const pause = useCallback(
-    (workspaceId: string): Promise<void> =>
+    (workspaceId: string): Promise<boolean> =>
       mutate(() => pauseTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR })),
     [mutate],
   );
 
   const resume = useCallback(
-    (workspaceId: string): Promise<void> =>
+    (workspaceId: string): Promise<boolean> =>
       mutate(() => resumeTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR })),
     [mutate],
   );
 
   const prepareHandoff = useCallback(
-    (workspaceId: string): Promise<void> =>
+    (workspaceId: string): Promise<boolean> =>
       mutate(() => prepareHandoffTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR })),
     [mutate],
   );
 
-  const provision = useCallback(
-    (input: { root: string; taskId: string; baseBranch: string }): Promise<void> =>
+  // A repair that the server answers with `applied: false` is a successful, audited no-mutation
+  // outcome on the wire ("operator-required"), but for the surface it is the same as any other
+  // refusal: the row is unchanged and the operator has to act, so it is surfaced as an error.
+  const repair = useCallback(
+    (workspaceId: string, strategy: WorkspaceRecoveryStrategy): Promise<boolean> =>
       mutate(async () => {
-        rootRef.current = input.root;
+        const result = await repairTaskWorkspace({
+          workspaceId,
+          requestedBy: STUDIO_OPERATOR,
+          strategy,
+          operatorApproved: true,
+        });
+        if (!result.applied) throw new TaskWorkspaceRepairOperatorRequiredError();
+      }),
+    [mutate],
+  );
+
+  const provision = useCallback(
+    (input: { root: string; taskId: string; baseBranch: string }): Promise<boolean> =>
+      mutate(async () => {
         const result = await bindVerifiedTaskWorkspace({
           ...input,
           requestedBy: STUDIO_OPERATOR,
         });
-        if (!result.ok) {
-          throw new Error("The task workspace could not be verified and activated.");
-        }
+        if (!result.ok) throw new TaskWorkspaceProvisionError();
       }),
     [mutate],
   );
@@ -241,6 +297,7 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
       pause,
       resume,
       prepareHandoff,
+      repair,
       provision,
     }),
     [
@@ -256,6 +313,7 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
       pause,
       resume,
       prepareHandoff,
+      repair,
       provision,
     ],
   );

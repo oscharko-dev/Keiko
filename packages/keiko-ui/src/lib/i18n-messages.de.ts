@@ -254,6 +254,10 @@ export const DE_MESSAGES = {
   "workspace.selection.none": "Keine Arbeitsbereichsfenster ausgewählt",
   "workspace.binding.restoreVerificationFailed":
     "Der aktive Task-Workspace hat die erneute Verifizierung nicht bestanden. Binden Sie ihn neu, bevor Sie einen Coding-Lauf starten.",
+  "workspace.binding.provisionFailed":
+    "Der Task Workspace konnte nicht verifiziert und aktiviert werden. Prüfe das Repository und versuche es erneut.",
+  "workspace.binding.repairOperatorRequired":
+    "Diese Wiederherstellung braucht zuerst einen Operator. Prüfe den verwalteten Worktree und wiederhole dann die Reparatur.",
   "workspace.selection.one": "1 Arbeitsbereichsfenster ausgewählt",
   "workspace.selection.many": "{count} Arbeitsbereichsfenster ausgewählt",
   "workspace.clipboard.copied.one": "1 Fenster kopiert",
@@ -1417,6 +1421,16 @@ export const DE_MESSAGES = {
   "taskWorkspace.updatedAt": "Aktualisiert: {value}",
   "taskWorkspace.recoveryHints": "Hinweise zur Wiederherstellung ({count})",
   "taskWorkspace.operatorActionRequired": " (Aktion durch Operator erforderlich)",
+  "taskWorkspace.marker.worktree-missing": "Worktree fehlt",
+  "taskWorkspace.marker.gitdir-mismatch": "Git-Zeiger-Abweichung",
+  "taskWorkspace.marker.pointer-stale": "Git-Zeiger fehlt",
+  "taskWorkspace.marker.identity-schema-retired": "Identitätsschema veraltet",
+  "taskWorkspace.marker.identity-unsupported": "Erstellungszeit nicht unterstützt",
+  "taskWorkspace.marker.head-moved": "HEAD verschoben",
+  "taskWorkspace.marker.branch-deleted": "Branch gelöscht",
+  "taskWorkspace.marker.uncommitted-changes": "Uncommittete Änderungen",
+  "taskWorkspace.marker.lock-stale": "Veraltete Sperre",
+  "taskWorkspace.marker.path-escape": "Pfad verlässt verwalteten Bereich",
   "taskWorkspace.status.none": "Kein aktiver Task Workspace",
   "taskWorkspace.status.active": "Aktiv: {taskId} auf {branch} ({lifecycle}, {health})",
   "taskWorkspace.trigger.noActive": "Task-Workspaces: kein aktiver Workspace",
@@ -1431,6 +1445,7 @@ export const DE_MESSAGES = {
   "taskWorkspace.action.refresh": "Aktualisieren",
   "taskWorkspace.action.active": "Aktiv",
   "taskWorkspace.action.switch": "Wechseln",
+  "taskWorkspace.action.repair": "Reparieren",
   "taskWorkspace.empty.title": "Kein aktiver Task Workspace",
   "taskWorkspace.empty.openProject":
     "Öffne zuerst ein Projekt, bevor du einen verwalteten Task Workspace erstellst.",
@@ -1442,7 +1457,7 @@ export const DE_MESSAGES = {
   "taskWorkspace.status.reconciled": "Task Workspaces aktualisiert.",
   "taskWorkspace.reason.busy": "Eine andere Workspace-Aktion wird gerade ausgeführt.",
   "taskWorkspace.reason.switchUnavailable":
-    "Es kann nur zu aktiven, pausierten oder handoff-bereiten Workspaces gewechselt werden.",
+    "Es kann nur zu Workspaces gewechselt werden, die bereitgestellt werden, aktiv, pausiert oder handoff-bereit sind oder den Status „Wiederherstellung erforderlich“ haben.",
   "taskWorkspace.reason.pauseUnavailable": "Nur ein aktiver Workspace kann pausiert werden.",
   "taskWorkspace.reason.resumeUnavailable": "Nur ein pausierter Workspace kann fortgesetzt werden.",
   "taskWorkspace.reason.handoffUnavailable":
@@ -1469,6 +1484,8 @@ export const DE_MESSAGES = {
     "Der native Ordnerdialog ist nicht verfügbar. Gib den Pfad unten ein.",
   "workspaceContext.selectionFailed":
     "Der Ordner konnte nicht ausgewählt werden. Prüfe den Pfad und versuche es erneut.",
+  "workspaceContext.overrideClearFailed":
+    "Der aktive Task Workspace konnte nicht gelöst werden, daher wurde der Ordner nicht gewechselt. Prüfe den Task Workspace und versuche es erneut.",
   "workspaceContext.supportId": "Support-ID: {correlationId}",
   "workspaceContext.selecting": "Wird ausgewählt…",
   "workspaceContext.manual.label": "Oder lokalen Pfad eingeben",

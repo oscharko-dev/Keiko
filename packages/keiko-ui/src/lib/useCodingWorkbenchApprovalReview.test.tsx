@@ -61,7 +61,11 @@ describe("useCodingWorkbenchApprovalReview", () => {
     );
     await flushRead();
 
-    expect(result.current).toEqual({ status: "idle", review: null });
+    expect(result.current).toEqual({
+      status: "idle",
+      review: null,
+      retry: expect.any(Function),
+    });
     expect(getApprovalReviewMock).not.toHaveBeenCalled();
   });
 
@@ -71,19 +75,56 @@ describe("useCodingWorkbenchApprovalReview", () => {
     );
     await flushRead();
 
-    expect(result.current).toEqual({ status: "idle", review: null });
+    expect(result.current).toEqual({
+      status: "idle",
+      review: null,
+      retry: expect.any(Function),
+    });
     expect(getApprovalReviewMock).not.toHaveBeenCalled();
   });
 
   it("waits for pairing to settle, then publishes the reviewable changeset facts", async () => {
     const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
-    expect(result.current).toEqual({ status: "loading", review: null });
+    expect(result.current).toEqual({
+      status: "loading",
+      review: null,
+      retry: expect.any(Function),
+    });
 
     await waitFor(() => {
-      expect(result.current).toEqual({ status: "ready", review: REVIEW });
+      expect(result.current).toEqual({
+        status: "ready",
+        review: REVIEW,
+        retry: expect.any(Function),
+      });
     });
     expect(pairingSettledMock).toHaveBeenCalledOnce();
     expect(getApprovalReviewMock).toHaveBeenCalledWith("run-1", expect.any(AbortSignal));
+  });
+
+  // Workbench audit, 2026-09-03: before `retry`, a transient failure while a file-edit approval was
+  // open left the operator stuck on "unavailable" forever — nothing else re-triggers a fetch while
+  // runId/permissionRequestId stay the same during that one decision.
+  it("re-reads on demand via retry() without any input changing", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    getApprovalReviewMock.mockRejectedValueOnce(new Error("transient"));
+    getApprovalReviewMock.mockResolvedValueOnce(active());
+    const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+    });
+    expect(getApprovalReviewMock).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      result.current.retry();
+    });
+    expect(result.current.status).toBe("loading");
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("ready");
+    });
+    expect(result.current.review).toEqual(REVIEW);
+    expect(getApprovalReviewMock).toHaveBeenCalledTimes(2);
   });
 
   it("reports unavailable for an unpaired window instead of an empty change summary", async () => {
@@ -91,7 +132,11 @@ describe("useCodingWorkbenchApprovalReview", () => {
     const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
 
     await waitFor(() => {
-      expect(result.current).toEqual({ status: "unavailable", review: null });
+      expect(result.current).toEqual({
+        status: "unavailable",
+        review: null,
+        retry: expect.any(Function),
+      });
     });
   });
 
@@ -100,7 +145,11 @@ describe("useCodingWorkbenchApprovalReview", () => {
     const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
 
     await waitFor(() => {
-      expect(result.current).toEqual({ status: "unavailable", review: null });
+      expect(result.current).toEqual({
+        status: "unavailable",
+        review: null,
+        retry: expect.any(Function),
+      });
     });
   });
 
@@ -110,7 +159,11 @@ describe("useCodingWorkbenchApprovalReview", () => {
     const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
 
     await waitFor(() => {
-      expect(result.current).toEqual({ status: "unavailable", review: null });
+      expect(result.current).toEqual({
+        status: "unavailable",
+        review: null,
+        retry: expect.any(Function),
+      });
     });
     expect(warn).toHaveBeenCalledOnce();
   });
@@ -137,9 +190,17 @@ describe("useCodingWorkbenchApprovalReview", () => {
 
     // The scoped state is discarded the moment the input changes: a stale review can never be
     // rendered against a different approval decision.
-    expect(result.current).toEqual({ status: "loading", review: null });
+    expect(result.current).toEqual({
+      status: "loading",
+      review: null,
+      retry: expect.any(Function),
+    });
     await waitFor(() => {
-      expect(result.current).toEqual({ status: "ready", review: next });
+      expect(result.current).toEqual({
+        status: "ready",
+        review: next,
+        retry: expect.any(Function),
+      });
     });
   });
 

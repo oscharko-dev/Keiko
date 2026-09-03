@@ -3710,6 +3710,7 @@ function activityAwareWorkspaceLifecycle(
   };
   return {
     list: lifecycle.list,
+    listAll: lifecycle.listAll,
     getActive: lifecycle.getActive,
     setActive: (request): ReturnType<WorkspaceLifecycleService["setActive"]> => {
       purge();

@@ -90,6 +90,31 @@ const RESUMABLE_STATES: ReadonlySet<TaskWorkspaceLifecycleState> = new Set([
   "paused",
   "handoff-ready",
 ]);
+// The states an explicit activation may start from: the resumable ones plus `recovery-required`,
+// which the contract lists as activatable under `lock-held-by-actor` + `path-contained`
+// (TASK_WORKSPACE_LEGAL_TRANSITIONS). Activation re-proves exactly those facts live — persisted
+// path, worktree presence, managed identity — so a flag left behind by a drift that has since been
+// resolved (the tree restored, the pointer reconciled) is cleared by the proof itself, while a row
+// whose drift persists still refuses through the same proofs. Widening the set widens no trust
+// boundary; refusing here while the contract permits it left the switcher offering an action the
+// server answered with ILLEGAL_TRANSITION (2026-09-03 dev log).
+const ACTIVATABLE_STATES: ReadonlySet<TaskWorkspaceLifecycleState> = new Set([
+  ...RESUMABLE_STATES,
+  "recovery-required",
+]);
+// The markers a successful activation or resume has re-proven false: the path is contained, the
+// worktree is present and its identity is current. Any other marker — a moved HEAD, a deleted
+// branch, uncommitted work — is not proven here and is carried forward for the next reconcile to
+// confirm or clear; `lock-stale` is refuted only by the write that replaces the lock (activation),
+// never by a resume, which leaves the lock field as it found it.
+const MARKERS_REPROVEN_BY_LIVE_PROOF: ReadonlySet<TaskWorkspaceDriftMarker> = new Set([
+  "worktree-missing",
+  "pointer-stale",
+  "gitdir-mismatch",
+  "identity-schema-retired",
+  "identity-unsupported",
+  "path-escape",
+]);
 // One sentence for the migration refusal, shared by every path that refuses it, so an operator sees
 // the same instruction whether the refusal came from the first attempt or a later retry.
 const COMPLETABLE_STATES: ReadonlySet<TaskWorkspaceLifecycleState> = new Set([
@@ -106,6 +131,9 @@ interface ProvisioningCtx {
   // in each helper's signature: the ctx is already threaded everywhere the adapter is built, so this
   // needed no new parameter on any private function (PR #3355 review, P2).
   readonly correlationId: string;
+  // When this operation began, so every evidence line it emits carries a measured duration instead
+  // of a placeholder zero (audit finding, 2026-09-03).
+  readonly startedAtMs: number;
   // Operation-local: an emitted classified failure must not be followed by a duplicate generic
   // rejection line when the same TaskWorkspaceError crosses the public service boundary.
   failureOutcomeRecorded: boolean;
@@ -141,6 +169,9 @@ interface EmitInput {
   readonly errorCode?: string | undefined;
   // The classified drift marker on a drift verdict, carried into the activity-log line's `extra`.
   readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
+  // The managed worktrees this outcome handled: one for a materialised, resumed or activated
+  // worktree, none for a pre-write rejection or a refusal.
+  readonly worktreeCount?: number | undefined;
 }
 
 // ─── pure helpers ────────────────────────────────────────────────────────────────────────────────
@@ -335,8 +366,8 @@ function emit(ctx: ProvisioningCtx, input: EmitInput): void {
       operation: input.operation,
       outcome: input.outcome,
       attempt: 1,
-      durationMs: 0,
-      worktreeCount: 0,
+      durationMs: Math.max(0, input.nowMs - ctx.startedAtMs),
+      worktreeCount: input.worktreeCount ?? 0,
       event,
     },
     redactString: ctx.deps.redactString,
@@ -642,6 +673,7 @@ function resumeExisting(
   ensureManagedWorkspaceIdentity(ctx, existing, true);
   const refreshed = ctx.deps.store.upsert({
     ...existing,
+    ...driftAfterLiveProof(existing, false),
     health: "healthy",
     lastVerifiedAt: isoFrom(nowMs),
     updatedAt: isoFrom(nowMs),
@@ -655,6 +687,7 @@ function resumeExisting(
     nowMs,
     correlationId,
     toState: refreshed.lifecycleState,
+    worktreeCount: 1,
   });
   return { instance: refreshed, binding: buildBinding(refreshed), created: false };
 }
@@ -796,6 +829,7 @@ async function runWorktreeMutation(
     correlationId: request.correlationId,
     fromState: "provisioning",
     toState: "active",
+    worktreeCount: 1,
   });
   return { instance: active, binding: buildBinding(active), created: attemptedHere };
 }
@@ -915,12 +949,32 @@ function assertActivatable(
   ) {
     throw new TaskWorkspaceError("LOCK_CONTENTION", "workspace is locked by another actor");
   }
-  if (!RESUMABLE_STATES.has(instance.lifecycleState)) {
+  if (!ACTIVATABLE_STATES.has(instance.lifecycleState)) {
     throw new TaskWorkspaceError(
       "ILLEGAL_TRANSITION",
       `cannot activate from ${instance.lifecycleState}`,
     );
   }
+}
+
+// The drift bookkeeping a passed live proof persists: every marker the proofs have just refuted is
+// dropped and the hints are re-planned from what remains, so a healthy row never advertises an
+// identity or path finding its own proof disproved (and the read-only report, which derives its
+// status from the persisted markers, cannot report a healthy active row as stale). Shared by the
+// activation and the idempotent-resume path: the two perform the same proof and the same
+// "healthy" write, and fixing one without the other left the resume path persisting a stale
+// `gitdir-mismatch` next to `health: "healthy"` (audit finding, 2026-09-03). Only the caller that
+// rewrites the lock field may also drop `lock-stale`: a marker is dropped by the write that
+// refutes it, never by one that leaves the lock as it found it.
+function driftAfterLiveProof(
+  instance: WorkspaceInstance,
+  lockRewritten: boolean,
+): Pick<WorkspaceInstance, "driftMarkers" | "recoveryHints"> {
+  const driftMarkers = instance.driftMarkers.filter(
+    (marker) =>
+      !MARKERS_REPROVEN_BY_LIVE_PROOF.has(marker) && !(lockRewritten && marker === "lock-stale"),
+  );
+  return { driftMarkers, recoveryHints: planWorkspaceRecoveryHints(driftMarkers) };
 }
 
 // The gated activation critical section, run under the `ws:<workspaceId>` mutex key (#449, ADR-0093 D1)
@@ -972,6 +1026,7 @@ function activateLocked(
   const lock = request.acquireLock ? makeLock(ctx, request.requestedBy, "activation", nowMs) : null;
   const persisted = ctx.deps.store.upsert({
     ...next,
+    ...driftAfterLiveProof(next, true),
     health: "healthy",
     lock,
     lastVerifiedAt: isoFrom(nowMs),
@@ -988,6 +1043,7 @@ function activateLocked(
     ...(type === "resumed" ? { fromState: instance.lifecycleState } : {}),
     toState: "active",
     ...(lock !== null ? { lockId: lock.lockId } : {}),
+    worktreeCount: 1,
   });
   return { instance: persisted, binding: buildBinding(persisted) };
 }
@@ -1054,6 +1110,7 @@ export function createWorkspaceProvisioningService(
     deps,
     lockTtlMs,
     correlationId: correlationIdOrUnknown(correlationId),
+    startedAtMs: deps.now(),
     failureOutcomeRecorded: false,
   });
   return {

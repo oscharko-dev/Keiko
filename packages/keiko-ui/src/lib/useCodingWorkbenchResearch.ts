@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type {
   CodingWorkbenchRuntimePendingResearch,
   CodingWorkbenchRuntimeResearchChannelPayload,
@@ -18,6 +18,16 @@ export interface CodingWorkbenchResearchState {
   readonly status: CodingWorkbenchResearchStatus;
   readonly ask: CodingWorkbenchRuntimePendingResearch | null;
   readonly grant: CodingWorkbenchRuntimeResearchGrant | null;
+}
+
+export interface UseCodingWorkbenchResearchResult extends CodingWorkbenchResearchState {
+  /**
+   * Re-reads the research channel on demand, without waiting for `runId`/`revision`/
+   * `permissionRequestId` to change (workbench audit, 2026-09-03) — the operator's only recourse after a
+   * transient failure while a `network-egress` approval decision is still open, mirroring
+   * `useCodingWorkbenchChanges`/`useCodingWorkbenchQuestions`.
+   */
+  readonly retry: () => void;
 }
 
 export interface UseCodingWorkbenchResearchInput {
@@ -46,11 +56,15 @@ interface ActiveResearchInput extends UseCodingWorkbenchResearchInput {
  */
 export function useCodingWorkbenchResearch(
   input: UseCodingWorkbenchResearchInput,
-): CodingWorkbenchResearchState {
+): UseCodingWorkbenchResearchResult {
   const { runId, revision, permissionRequestId } = input;
   const [scoped, setScoped] = useState<ScopedResearchState>(() =>
     scopeResearchState(runId, revision, permissionRequestId, inputState(input)),
   );
+  // Bumped only by `retry()`; not read inside the effect. Its sole job is to force the effect
+  // below to re-run — including its `setScoped(...LOADING)` — on demand.
+  const [epoch, setEpoch] = useState(0);
+  const retry = useCallback((): void => setEpoch((value) => value + 1), []);
 
   useEffect(() => {
     if (runId === undefined) {
@@ -59,9 +73,10 @@ export function useCodingWorkbenchResearch(
     }
     setScoped(scopeResearchState(runId, revision, permissionRequestId, LOADING));
     return startResearchSync({ runId, revision, permissionRequestId }, setScoped);
-  }, [runId, revision, permissionRequestId]);
+  }, [runId, revision, permissionRequestId, epoch]);
 
-  return sameResearchInput(scoped, input) ? scoped.value : inputState(input);
+  const value = sameResearchInput(scoped, input) ? scoped.value : inputState(input);
+  return { ...value, retry };
 }
 
 function startResearchSync(

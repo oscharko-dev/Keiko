@@ -170,8 +170,13 @@ export interface WorkspaceLifecycleActionResult {
 }
 
 export interface WorkspaceLifecycleService {
-  // List the persisted instances for an already-resolved repository root (switcher inventory).
+  // List the persisted instances for an already-resolved repository root.
   readonly list: (repositoryRoot: string) => readonly WorkspaceInstance[];
+  // Every persisted instance across repositories — the switcher's inventory. The active pointer is
+  // global, so a switch may target a workspace of ANY repository; an inventory scoped to the
+  // selected folder hid every other repository's workspaces (a paused one could not be resumed
+  // after a reload; observed live, 2026-09-03).
+  readonly listAll: () => readonly WorkspaceInstance[];
   // Current active instance + derived binding + pointer, or undefined in unbound mode.
   // The request's correlation id, so a refused or unprovable binding on the read path joins the
   // request timeline; a proof that cannot run throws the classified IDENTITY_PROOF_FAILED (#3376).

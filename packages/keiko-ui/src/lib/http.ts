@@ -77,6 +77,19 @@ function defaultParseFailureMessage(status: number): string {
  * The shared BFF fetch scaffold. Kept as a referenceable generic function so satellite modules can
  * bind it as their `fetchImpl = bffFetchJson<T>` default-param test seam.
  */
+function isBffErrorEnvelope(value: unknown): value is BffErrorEnvelope {
+  if (typeof value !== "object" || value === null || !("error" in value)) return false;
+  const error: unknown = value.error;
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    "message" in error &&
+    typeof error.message === "string"
+  );
+}
+
 export async function bffFetchJson<T>(
   path: string,
   init?: RequestInit,
@@ -93,10 +106,15 @@ export async function bffFetchJson<T>(
     let message = (opts?.parseFailureMessage ?? defaultParseFailureMessage)(res.status);
     let envelope: BffErrorEnvelope | undefined;
     try {
-      const parsed = (await res.json()) as BffErrorEnvelope;
-      envelope = parsed;
-      code = parsed.error.code;
-      message = parsed.error.message;
+      const parsed: unknown = await res.json();
+      // A body that is JSON but not the envelope (an empty object, a bare string) is a parse
+      // failure too: it must never be read as one, or the read itself throws a TypeError that
+      // replaces the classified error the caller is about to render.
+      if (isBffErrorEnvelope(parsed)) {
+        envelope = parsed;
+        code = parsed.error.code;
+        message = parsed.error.message;
+      }
     } catch {
       // parse failure — keep the (possibly friendly) fallback message, never log the body
     }
@@ -108,7 +126,13 @@ export async function bffFetchJson<T>(
     error.correlationId =
       res.headers.get(CORRELATION_HEADER) ??
       (typeof envelopeId === "string" ? envelopeId : correlationId);
-    opts?.enrichError?.(error, envelope);
+    // The hook decorates the classified error; a hook that throws on an unexpected envelope shape
+    // must not replace that error with its own — the caller would then render a raw TypeError.
+    try {
+      opts?.enrichError?.(error, envelope);
+    } catch {
+      // The ApiError below already carries code, status and correlation id; the hook added nothing.
+    }
     throw error;
   }
 

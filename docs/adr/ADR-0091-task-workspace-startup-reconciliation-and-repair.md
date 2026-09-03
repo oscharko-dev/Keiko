@@ -143,7 +143,7 @@ Each maps to an unambiguous action:
 | `drifted` | Worktree present **and usable** but HEAD moved, branch deleted, uncommitted work, or a stale lock | Keep lifecycle, set health `drifted`, flag the marker + recovery hint (surface, do not force recovery) |
 | `locked` | A live lock is held by another actor | Defer — leave the instance unchanged (no flag) |
 | `partially-created` | Instance row is in `provisioning`/`failed` lifecycle — provisioning never completed | Leave for the provisioning retry path; flag `worktree-missing`/`pointer-stale` if the partial worktree is gone |
-| `stale-pointer` | Worktree present but its `.git` pointer is missing/corrupt, its gitdir identity moved, its identity was registered under the retired inode-only rule, or its filesystem reports no durable creation time | Mark `recovery-required`, flag `pointer-stale`/`gitdir-mismatch`/`identity-schema-retired`/`identity-unsupported` |
+| `stale-pointer` | Worktree present but its `.git` pointer is missing/corrupt, its gitdir identity moved, its identity was registered under a retired rule (the inode-only rule or the pre-#3367 pointer-text rule), or its filesystem reports no durable creation time — for an operational instance, and for a `cleanup-pending` one whose tree is still present | Mark `recovery-required`, flag `pointer-stale`/`gitdir-mismatch`/`identity-schema-retired`/`identity-unsupported` |
 | `unmanaged-path` | Stored `managedWorktreePath` resolves outside the Keiko-owned managed root (path-escape condition) | Mark `recovery-required`, flag `path-escape` |
 | `recovery-required` | Instance is already in `recovery-required` lifecycle state — no fresh disk drift; carry-forward | Keep `recovery-required` |
 
@@ -226,7 +226,15 @@ otherwise-healthy workspace):
 3. **`healthy` (terminal lifecycle)**: `TERMINAL_LIFECYCLE_STATES` (`merged`,
    `archived`, `abandoned`, `cleanup-pending`) → status `healthy`, no markers. A
    missing worktree for a terminal lifecycle is expected (cleanup), so it is
-   treated as settled rather than drifted.
+   treated as settled rather than drifted. One exception precedes this step: a
+   `cleanup-pending` worktree that is still present but no longer proves its
+   identity (`cleanupPendingDrift`) is classified `stale-pointer` with the
+   pointer/identity marker the facts name and flagged `recovery-required` (a
+   legal, precondition-free transition). Reporting it settled left the row with
+   no exit — the governed removal refuses an unproven tree as
+   `ownership-unproven`, no repair applies to a `healthy` status, and the terminal
+   branch of provisioning refuses to re-register it (2026-09-03 audit). The other
+   terminal states never re-enter activity, so their disk state stays irrelevant.
 4. **`partially-created`**: `PARTIAL_LIFECYCLE_STATES` (`provisioning`, `failed`)
    → status `partially-created`, with the partial-creation markers derived from
    what is actually gone on disk (a `stale-lock` marker is appended if
@@ -514,7 +522,14 @@ Conservative means: classify first, restore only if clean. The reconciliation
 service does not auto-promote `recovery-required` → `active`. It does not
 automatically recreate a missing worktree. It does not automatically resolve
 ambiguous active instances. These are all operator-approval-gated repair actions
-(D5). The conservative posture reflects two principles from ADR-0088:
+(D5). An EXPLICIT operator activation of a `recovery-required` workspace is a
+different thing: the provisioning service admits it (since 2026-09-03; it used to
+answer `ILLEGAL_TRANSITION` while the switcher, reading the ADR-0088 transition
+table, offered the action) and re-proves the persisted path, the worktree's
+presence and its managed identity live before the row becomes `active`, dropping
+only the markers those proofs refuted. A row whose drift persists still refuses
+through the same proofs. The conservative posture reflects two principles from
+ADR-0088:
 
 - `recovery-required → active` requires `lock-held-by-actor` and `path-contained`
   preconditions (ADR-0088 D2 transition table). Those preconditions cannot be
@@ -527,7 +542,17 @@ open but before route registration completes, mirroring the QI-retention startup
 pass (ADR-0048). It uses `reconciliationService.reconcile()` wrapped in
 `try/catch`: any error is logged (content-free: error code + workspace IDs only,
 no stack trace with paths or source content) and swallowed. Bootstrap never throws
-from this pass.
+from this pass. Inside the pass, a failure to GATHER a row's live facts is
+isolated to the row or repository it belongs to: a repository the worktree
+adapter cannot consult at all (a vanished root, a denied path, a spawn failure)
+is logged once as the retryable `REPOSITORY_UNREACHABLE` with its frames and
+cause chain, its rows are carried forward unverified (health `unknown`, nothing
+persisted), and the pass continues with every other repository — the health
+report applies the same rule. Only the gathering is isolated: a failure to
+persist or evidence a verdict is not a fact about the repository, is never
+relabelled as one, and propagates under its own name. Before 2026-09-03 a
+gathering failure escaped the per-instance boundary and silently aborted the
+pass for every repository after the failing one.
 
 **D5 — Repair is a controlled, operator-approval-gated server action that reuses, never duplicates.**
 

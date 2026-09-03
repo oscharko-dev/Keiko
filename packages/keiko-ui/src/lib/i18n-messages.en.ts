@@ -240,6 +240,10 @@ export const EN_MESSAGES = {
   "workspace.selection.none": "No workspace windows selected",
   "workspace.binding.restoreVerificationFailed":
     "The active task workspace failed re-verification. Re-bind it before starting a coding run.",
+  "workspace.binding.provisionFailed":
+    "The task workspace could not be verified and activated. Review the repository and try again.",
+  "workspace.binding.repairOperatorRequired":
+    "This recovery needs an operator first. Inspect the managed worktree, then retry the repair.",
   "workspace.selection.one": "1 workspace window selected",
   "workspace.selection.many": "{count} workspace windows selected",
   "workspace.clipboard.copied.one": "1 window copied",
@@ -1382,6 +1386,16 @@ export const EN_MESSAGES = {
   "taskWorkspace.updatedAt": "Updated {value}",
   "taskWorkspace.recoveryHints": "Recovery hints ({count})",
   "taskWorkspace.operatorActionRequired": " (operator action required)",
+  "taskWorkspace.marker.worktree-missing": "Worktree missing",
+  "taskWorkspace.marker.gitdir-mismatch": "Git pointer mismatch",
+  "taskWorkspace.marker.pointer-stale": "Git pointer missing",
+  "taskWorkspace.marker.identity-schema-retired": "Identity rule retired",
+  "taskWorkspace.marker.identity-unsupported": "Creation time unsupported",
+  "taskWorkspace.marker.head-moved": "HEAD moved",
+  "taskWorkspace.marker.branch-deleted": "Branch deleted",
+  "taskWorkspace.marker.uncommitted-changes": "Uncommitted changes",
+  "taskWorkspace.marker.lock-stale": "Stale lock",
+  "taskWorkspace.marker.path-escape": "Path escapes managed root",
   "taskWorkspace.status.none": "No active task workspace",
   "taskWorkspace.status.active": "Active: {taskId} on {branch} ({lifecycle}, {health})",
   "taskWorkspace.trigger.noActive": "Task workspaces: no active workspace",
@@ -1396,6 +1410,7 @@ export const EN_MESSAGES = {
   "taskWorkspace.action.refresh": "Refresh",
   "taskWorkspace.action.active": "Active",
   "taskWorkspace.action.switch": "Switch",
+  "taskWorkspace.action.repair": "Repair",
   "taskWorkspace.empty.title": "No active task workspace",
   "taskWorkspace.empty.openProject": "Open a project before creating a managed task workspace.",
   "taskWorkspace.empty.switchOrCreate":
@@ -1406,7 +1421,7 @@ export const EN_MESSAGES = {
   "taskWorkspace.status.reconciled": "Task workspaces refreshed.",
   "taskWorkspace.reason.busy": "Another workspace action is in progress.",
   "taskWorkspace.reason.switchUnavailable":
-    "Only active, paused, or handoff-ready workspaces can be switched to.",
+    "Only provisioning, active, paused, handoff-ready, or recovery-required workspaces can be switched to.",
   "taskWorkspace.reason.pauseUnavailable": "Only an active workspace can be paused.",
   "taskWorkspace.reason.resumeUnavailable": "Only a paused workspace can be resumed.",
   "taskWorkspace.reason.handoffUnavailable":
@@ -1433,6 +1448,8 @@ export const EN_MESSAGES = {
     "The native folder dialog is unavailable. Enter the path below.",
   "workspaceContext.selectionFailed":
     "The folder could not be selected. Check the path and try again.",
+  "workspaceContext.overrideClearFailed":
+    "The active task workspace could not be released, so the folder was not changed. Review the task workspace, then try again.",
   "workspaceContext.supportId": "Support ID: {correlationId}",
   "workspaceContext.selecting": "Selecting…",
   "workspaceContext.manual.label": "Or enter a local path",

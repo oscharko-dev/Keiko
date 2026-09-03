@@ -77,6 +77,44 @@ export function ModelRuntimeStatus({ state, actions, locked }: ModelRuntimeStatu
   );
 }
 
+// The sign-in surface for the Codex subscription source, mounted by the window while that source
+// is selected and its authentication is not `connected`. The composer's source select can choose
+// the subscription, but until this card existed nothing rendered `AuthTruth`/`CodexSetup` any more
+// (`ModelRuntimeStatus` had lost its mount): an operator with a missing, expired, revoked or
+// failed login saw Start stay disabled with no explanation and no way to authenticate (audit
+// finding, 2026-09-03). The card renders nothing for the managed gateway and once connected.
+export function CodexSubscriptionAuthCard({
+  state,
+  actions,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly actions: Pick<CodingWorkbenchRuntimeActions, "prepareCodexSetup" | "refreshProfile">;
+}): ReactNode {
+  const t = useTranslate();
+  if (state.runtimePreference !== "codex-subscription") return null;
+  if (state.profile.value?.status === "connected") return null;
+  return (
+    <section
+      className={styles.card}
+      aria-labelledby="coding-workbench-codex-auth-title"
+      data-testid="coding-workbench-codex-auth"
+    >
+      <PanelTitle
+        eyebrow={t("codingWorkbench.source.codex.label")}
+        id="coding-workbench-codex-auth-title"
+      >
+        {t("codingWorkbench.auth.cardTitle")}
+      </PanelTitle>
+      <p className={styles.helpText}>{t("codingWorkbench.auth.cardHelp")}</p>
+      <AuthTruth
+        state={state}
+        onRetry={actions.refreshProfile}
+        onPrepare={actions.prepareCodexSetup}
+      />
+    </section>
+  );
+}
+
 function SourceCard({
   preference,
   selected,

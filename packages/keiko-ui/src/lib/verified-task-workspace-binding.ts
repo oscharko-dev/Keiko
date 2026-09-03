@@ -7,23 +7,52 @@
 
 import {
   getActiveTaskWorkspace,
+  listTaskWorkspaces,
   provisionTaskWorkspace,
   reconcileTaskWorkspaces,
+  repairTaskWorkspace,
   setActiveTaskWorkspace,
   type ActiveWorkspaceView,
 } from "./task-workspace-api";
-import type { WorkspaceFailureClass } from "@oscharko-dev/keiko-contracts";
-import { isWorkspaceFailureClass } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import type {
+  TaskWorkspaceDriftMarker,
+  WorkspaceFailureClass,
+  WorkspaceInstance,
+  WorkspaceRecoveryStrategy,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  isAutomaticWorkspaceRepairStrategy,
+  isWorkspaceFailureClass,
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
 import { reportClientDiagnostic } from "./client-diagnostics";
 
 export type VerifiedTaskWorkspaceBindFailureReason = "branch-conflict";
 
+export type VerifiedTaskWorkspaceBindStage = "provision" | "verify" | "activate" | "repair";
+
+/**
+ * What the server refused to bind and what it can do about it. Provisioning refuses an existing
+ * managed workspace whose identity it cannot re-prove (POINTER_DRIFT, failure class `repairable`)
+ * and persists the classified markers and recovery hints on that row; this carries them to the
+ * surface so the operator sees the actual finding and the executable exit, instead of a sentence
+ * about the repository path. `strategy` is the first hint the #447 repair service applies under
+ * operator approval, or null when every hint needs a human first.
+ */
+export interface VerifiedTaskWorkspaceRepairOffer {
+  readonly workspaceId: string;
+  readonly driftMarkers: readonly TaskWorkspaceDriftMarker[];
+  readonly strategy: WorkspaceRecoveryStrategy | null;
+}
+
 export interface VerifiedTaskWorkspaceBindFailure {
   readonly ok: false;
-  readonly stage: "provision" | "verify" | "activate";
+  readonly stage: VerifiedTaskWorkspaceBindStage;
+  // The server's structured task-workspace error code, when the failure carried one.
+  readonly code?: string;
   readonly reason?: VerifiedTaskWorkspaceBindFailureReason;
   readonly failureClass?: WorkspaceFailureClass;
+  readonly repair?: VerifiedTaskWorkspaceRepairOffer;
 }
 
 export type VerifiedTaskWorkspaceBindResult =
@@ -48,21 +77,81 @@ function warnBindStage(stage: string, error: unknown): void {
   );
 }
 
+// The caller-visible shape of a failure: the stage, the server's code when it sent one, and the
+// failure class + branch-conflict reason only when the class is one of the contract's own values
+// (an unknown class carries no meaning the surface may act on).
 function boundedBindFailure(
-  stage: VerifiedTaskWorkspaceBindFailure["stage"],
+  stage: VerifiedTaskWorkspaceBindStage,
   error: unknown,
 ): VerifiedTaskWorkspaceBindFailure {
   if (typeof error !== "object" || error === null) return { ok: false, stage };
   const candidate = error as { readonly code?: unknown; readonly failureClass?: unknown };
-  if (candidate.code !== "BRANCH_CONFLICT" || !isWorkspaceFailureClass(candidate.failureClass)) {
-    return { ok: false, stage };
+  const code = typeof candidate.code === "string" ? candidate.code : undefined;
+  if (!isWorkspaceFailureClass(candidate.failureClass)) {
+    return code === undefined ? { ok: false, stage } : { ok: false, stage, code };
   }
   return {
     ok: false,
     stage,
-    reason: "branch-conflict",
+    ...(code === undefined ? {} : { code }),
+    ...(code === "BRANCH_CONFLICT" ? { reason: "branch-conflict" as const } : {}),
     failureClass: candidate.failureClass,
   };
+}
+
+function automaticStrategyOf(instance: WorkspaceInstance): WorkspaceRecoveryStrategy | null {
+  const hint = instance.recoveryHints.find(
+    (candidate) =>
+      !candidate.operatorActionRequired && isAutomaticWorkspaceRepairStrategy(candidate.strategy),
+  );
+  return hint?.strategy ?? null;
+}
+
+// A refused provision names no workspace, but the row it refused is the one persisted for this
+// (repository, task) pair, so the inventory the switcher already lists resolves it. A lookup that
+// fails leaves the failure without an offer — the surface then shows the finding without a button
+// — and is diagnosable in the console like every other stage.
+async function repairOfferFor(
+  root: string,
+  taskId: string,
+): Promise<VerifiedTaskWorkspaceRepairOffer | undefined> {
+  try {
+    const instance = (await listTaskWorkspaces(root)).find((item) => item.taskId === taskId);
+    if (instance === undefined) return undefined;
+    return {
+      workspaceId: instance.workspaceId,
+      driftMarkers: instance.driftMarkers,
+      strategy: automaticStrategyOf(instance),
+    };
+  } catch (error) {
+    warnBindStage("repair-lookup", error);
+    return undefined;
+  }
+}
+
+// Reconcile, then activate only a workspace the pass reports healthy. Shared by the first bind and
+// the post-repair bind so the two cannot drift into different trust postures.
+async function verifyAndActivate(
+  root: string,
+  workspaceId: string,
+  requestedBy: string,
+): Promise<VerifiedTaskWorkspaceBindResult> {
+  try {
+    const report = await reconcileTaskWorkspaces({ root });
+    if (report.entries.find((entry) => entry.workspaceId === workspaceId)?.status !== "healthy") {
+      return { ok: false, stage: "verify" };
+    }
+  } catch (error) {
+    warnBindStage("verify", error);
+    return boundedBindFailure("verify", error);
+  }
+  try {
+    await setActiveTaskWorkspace({ workspaceId, requestedBy });
+    return { ok: true };
+  } catch (error) {
+    warnBindStage("activate", error);
+    return boundedBindFailure("activate", error);
+  }
 }
 
 export interface RestoreVerifiedActiveTaskWorkspaceOptions {
@@ -109,7 +198,11 @@ export async function restoreVerifiedActiveTaskWorkspace(
   if (reverified === null) return null;
   const entry = report.entries.find((item) => item.workspaceId === reverified.instance.workspaceId);
   if (entry?.status === "healthy" || reverified.instance.health !== "healthy") return reverified;
-  warnBindStage("restore-verify", entry?.status ?? "missing-report-entry");
+  // The verdict is a closed, content-free status (never an Error), so it is logged as itself: the
+  // one fact an operator needs from this line is WHICH status refused the restored binding.
+  reportClientDiagnostic(
+    `[keiko] task workspace bind restore-verify failed: status=${entry?.status ?? "missing-report-entry"}`,
+  );
   throw new TaskWorkspaceRestoreVerificationError();
 }
 
@@ -136,7 +229,10 @@ export async function bindVerifiedTaskWorkspace(
     workspaceId = provisioned.instance.workspaceId;
   } catch (error) {
     warnBindStage("provision", error);
-    return boundedBindFailure("provision", error);
+    const failure = boundedBindFailure("provision", error);
+    if (failure.code !== "POINTER_DRIFT") return failure;
+    const repair = await repairOfferFor(input.root, input.taskId);
+    return repair === undefined ? failure : { ...failure, repair };
   }
   try {
     // The notification hook must not break the always-resolves contract of this sequence.
@@ -144,20 +240,52 @@ export async function bindVerifiedTaskWorkspace(
   } catch (error) {
     warnBindStage("provision-callback", error);
   }
+  return verifyAndActivate(input.root, workspaceId, input.requestedBy);
+}
+
+export interface VerifiedTaskWorkspaceRepairInput {
+  readonly root: string;
+  readonly workspaceId: string;
+  readonly strategy: WorkspaceRecoveryStrategy;
+  readonly requestedBy: string;
+  readonly onRepaired?: (() => void) | undefined;
+}
+
+/**
+ * The operator-approved counterpart of {@link bindVerifiedTaskWorkspace} for a workspace the
+ * provision refused: apply the offered recovery strategy through the #447 repair route (the call
+ * carries the operator's explicit approval), then run the SAME verify-then-activate sequence a
+ * fresh bind runs — a repaired workspace is never activated on the repair's word alone.
+ */
+export async function repairAndBindVerifiedTaskWorkspace(
+  input: VerifiedTaskWorkspaceRepairInput,
+): Promise<VerifiedTaskWorkspaceBindResult> {
   try {
-    const report = await reconcileTaskWorkspaces({ root: input.root });
-    if (report.entries.find((entry) => entry.workspaceId === workspaceId)?.status !== "healthy") {
-      return { ok: false, stage: "verify" };
+    const result = await repairTaskWorkspace({
+      workspaceId: input.workspaceId,
+      requestedBy: input.requestedBy,
+      strategy: input.strategy,
+      operatorApproved: true,
+    });
+    if (!result.applied) {
+      return {
+        ok: false,
+        stage: "repair",
+        repair: {
+          workspaceId: input.workspaceId,
+          driftMarkers: result.driftMarkers,
+          strategy: null,
+        },
+      };
     }
   } catch (error) {
-    warnBindStage("verify", error);
-    return boundedBindFailure("verify", error);
+    warnBindStage("repair", error);
+    return boundedBindFailure("repair", error);
   }
   try {
-    await setActiveTaskWorkspace({ workspaceId, requestedBy: input.requestedBy });
-    return { ok: true };
+    input.onRepaired?.();
   } catch (error) {
-    warnBindStage("activate", error);
-    return boundedBindFailure("activate", error);
+    warnBindStage("repair-callback", error);
   }
+  return verifyAndActivate(input.root, input.workspaceId, input.requestedBy);
 }

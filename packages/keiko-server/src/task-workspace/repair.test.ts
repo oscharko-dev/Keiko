@@ -21,7 +21,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { runMigrations } from "../store/schema.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
-import { inspectManagedGitdirIdentity } from "./gitdir-identity.js";
+import {
+  inspectManagedGitdirIdentity,
+  type ManagedGitdirIdentityInspection,
+} from "./gitdir-identity.js";
 import {
   buildActiveWorkspacePointerStoreOverDatabase,
   type ActiveWorkspacePointerStore,
@@ -225,30 +228,47 @@ describe("reconcile-pointer (relink known managed worktree)", () => {
   // existing worktree, so a workspace registered under the retired rule would be stranded unless an
   // executable, approval-gated strategy reaches the re-materialisation. This is that strategy, and
   // the approval is what stands in for the judgement that the retired proof is genuine.
-  it("reissues a retired-schema identity only under operator approval", async () => {
-    const instance = await provisionTask("t1");
-    const inspection = inspectManagedGitdirIdentity(instance.managedWorktreePath, repoRoot);
-    if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
-    store.upsert({
-      ...instance,
-      gitdirIdentity: inspection.legacyIdentity,
-      lifecycleState: "recovery-required",
-      health: "drifted",
-      driftMarkers: ["identity-schema-retired"],
-    });
+  // Both retired compositions take this exit: the v2 inode rule (#3367) and the pointer-text rule
+  // every workspace provisioned before #3367 carries.
+  it.each([
+    {
+      rule: "v2 inode composition",
+      retired: (i: ManagedGitdirIdentityInspection): string => i.legacyIdentity,
+    },
+    {
+      rule: "pre-#3367 pointer-text composition",
+      retired: (i: ManagedGitdirIdentityInspection): string => i.legacyPointerIdentity,
+    },
+  ])(
+    "reissues a retired-schema identity ($rule) only under operator approval",
+    async ({ retired }) => {
+      const instance = await provisionTask("t1");
+      const inspection = inspectManagedGitdirIdentity(instance.managedWorktreePath, repoRoot);
+      if (inspection === undefined)
+        throw new Error("real linked-worktree identity was not resolved");
+      const retiredIdentity = retired(inspection);
+      store.upsert({
+        ...instance,
+        gitdirIdentity: retiredIdentity,
+        lifecycleState: "recovery-required",
+        health: "drifted",
+        driftMarkers: ["identity-schema-retired"],
+      });
 
-    await expect(repair(instance.workspaceId, "reconcile-pointer", false)).rejects.toMatchObject({
-      code: "OPERATOR_APPROVAL_REQUIRED",
-    });
-    expect(store.getById(instance.workspaceId)?.gitdirIdentity).toBe(inspection.legacyIdentity);
+      await expect(repair(instance.workspaceId, "reconcile-pointer", false)).rejects.toMatchObject({
+        code: "OPERATOR_APPROVAL_REQUIRED",
+      });
+      expect(store.getById(instance.workspaceId)?.gitdirIdentity).toBe(retiredIdentity);
 
-    const result = await repair(instance.workspaceId, "reconcile-pointer", true);
-    expect(result.applied).toBe(true);
-    expect(result.status).toBe("healthy");
-    const persisted = store.getById(instance.workspaceId);
-    expect(persisted?.gitdirIdentity).toBe(inspection.identity);
-    expect(persisted?.driftMarkers).not.toContain("identity-schema-retired");
-  });
+      const result = await repair(instance.workspaceId, "reconcile-pointer", true);
+      expect(result.applied).toBe(true);
+      expect(result.status).toBe("healthy");
+      const persisted = store.getById(instance.workspaceId);
+      expect(persisted?.lifecycleState).toBe("active");
+      expect(persisted?.gitdirIdentity).toBe(inspection.identity);
+      expect(persisted?.driftMarkers).not.toContain("identity-schema-retired");
+    },
+  );
 
   it("refreshes a mismatched gitdir identity back to healthy", async () => {
     const instance = await provisionTask("t1");
@@ -259,6 +279,50 @@ describe("reconcile-pointer (relink known managed worktree)", () => {
     const persisted = store.getById(instance.workspaceId);
     expect(persisted?.gitdirIdentity).not.toBe("0000000000000000deadbeefdeadbeef");
     expect(persisted?.health).toBe("healthy");
+  });
+});
+
+// A cleanup-pending row whose worktree no longer proves its identity used to be stranded: every
+// complete-cleanup was refused `ownership-unproven`, reconciliation reported the row "healthy" so
+// no repair applied, and the terminal branch refused re-provisioning (audit finding, 2026-09-03).
+// The live re-reconcile now classifies it stale and flags it, which makes the operator-approved
+// re-registration reachable — the same exit every other unproven worktree has.
+describe("cleanup-pending rows whose worktree no longer proves its identity", () => {
+  it("re-registers the tree under operator approval and returns it to active", async () => {
+    const instance = await provisionTask("t-pending");
+    store.upsert({
+      ...instance,
+      lifecycleState: "cleanup-pending",
+      gitdirIdentity: "0000000000000000deadbeefdeadbeef",
+    });
+
+    const result = await repair(instance.workspaceId, "reconcile-pointer", true);
+
+    expect(result.applied).toBe(true);
+    expect(result.status).toBe("healthy");
+    const persisted = store.getById(instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("active");
+    expect(persisted?.gitdirIdentity).toBe(instance.gitdirIdentity);
+    expect(persisted?.driftMarkers).toEqual([]);
+  });
+
+  it("still refuses without operator approval and leaves the row flagged, not settled", async () => {
+    const instance = await provisionTask("t-pending-refused");
+    store.upsert({
+      ...instance,
+      lifecycleState: "cleanup-pending",
+      gitdirIdentity: "0000000000000000deadbeefdeadbeef",
+    });
+
+    await rejectsWithCode(
+      () => repair(instance.workspaceId, "reconcile-pointer", false),
+      "OPERATOR_APPROVAL_REQUIRED",
+    );
+
+    const persisted = store.getById(instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("recovery-required");
+    expect(persisted?.driftMarkers).toEqual(["gitdir-mismatch"]);
+    expect(persisted?.gitdirIdentity).toBe("0000000000000000deadbeefdeadbeef");
   });
 });
 

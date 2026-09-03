@@ -2,7 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import type {
+  CodingWorkbenchActionClass,
+  CodingWorkbenchApprovalRisk,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchSupervisedActionKind,
+  CodingWorkbenchSupervisedPolicyReason,
   CodingWorkbenchMode,
+  CodingWorkbenchPermissionRequestKind,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimePendingPermission,
   CodingWorkbenchRuntimeSseEvent,
@@ -20,23 +26,30 @@ import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
+import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import {
   useCodingWorkbenchRuntime,
   type CodingWorkbenchRuntimeActions,
   type UseCodingWorkbenchRuntimeInput,
 } from "@/lib/useCodingWorkbenchRuntime";
 import { useAutonomyModePolicy } from "../../hooks/useAutonomyModePolicy";
-import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-state";
+import type {
+  CodingWorkbenchMutationKind,
+  CodingWorkbenchMutationState,
+  CodingWorkbenchRuntimeState,
+} from "@/lib/coding-workbench-live-state";
 import { useCodingWorkbenchQuestions } from "@/lib/useCodingWorkbenchQuestions";
 import { useCodingWorkbenchSafeActivity } from "@/lib/useCodingWorkbenchSafeActivity";
 import { useFollowNewest } from "@/lib/useFollowNewest";
 import {
   useCodingWorkbenchResearch,
-  type CodingWorkbenchResearchState,
+  type CodingWorkbenchResearchStatus,
+  type UseCodingWorkbenchResearchResult,
 } from "@/lib/useCodingWorkbenchResearch";
 import {
   useCodingWorkbenchApprovalReview,
-  type CodingWorkbenchApprovalReviewState,
+  type CodingWorkbenchApprovalReviewStatus,
+  type UseCodingWorkbenchApprovalReviewResult,
 } from "@/lib/useCodingWorkbenchApprovalReview";
 import {
   useCodingWorkbenchEditorBridge,
@@ -56,6 +69,7 @@ import {
   type CodingWorkbenchSetupRuntimePosture,
 } from "./CodingWorkbenchSetup";
 import { CodingWorkbenchChanges, diffLabels } from "./CodingWorkbenchChanges";
+import { CodexSubscriptionAuthCard } from "./CodingWorkbenchModelCards";
 import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
 import { requestGatewayModelCatalogRefresh } from "../shared/gatewaySetupBus";
 import {
@@ -79,19 +93,47 @@ const EMPTY_WORKSPACE = {
 } as const;
 
 /**
- * The bootstrap setup section's honest posture. Readiness that has not RESOLVED yields "verified"
- * so neither note flashes during load; a resolved-but-unverified runtime yields "evaluation"
- * (ADR-0163 D9), which is what keeps the first screen of a fresh evaluation install honest.
+ * The coding runtime's resolved posture, or `null` while the readiness read is still in flight: a
+ * read that failed or answered "unavailable" is "unavailable" (never silently reassuring), a
+ * resolved-but-unverified runtime is "evaluation" (ADR-0163 D9), and only a resolved, verified
+ * runtime is "verified".
  */
-function setupRuntimePosture(
-  state: CodingWorkbenchRuntimeState,
-): CodingWorkbenchSetupRuntimePosture {
-  if (state.runtime.status !== "ready") return "verified";
-  if (state.runtime.value?.runtimeAvailable === false) return "unavailable";
-  return state.runtime.value?.runtimeEvidenceClass === "functional-not-platform-qualified"
+function resolvedRuntimePosture(
+  runtime: CodingWorkbenchRuntimeState["runtime"],
+): CodingWorkbenchSetupRuntimePosture | null {
+  if (runtime.status === "idle" || runtime.status === "loading") return null;
+  if (runtime.status !== "ready" || runtime.value?.runtimeAvailable === false) return "unavailable";
+  return runtime.value?.runtimeEvidenceClass === "functional-not-platform-qualified"
     ? "evaluation"
     : "verified";
 }
+
+/**
+ * The posture shared by the bootstrap setup section and the header's "Coding runtime" chip
+ * (workbench audit, 2026-09-03) so the two can never disagree. While a read is in flight the LAST
+ * resolved posture stands — every mode switch re-reads readiness, and a known-unavailable runtime
+ * must not flash "verified" for the duration of that read; before the first read resolves the
+ * posture is "verified" so neither note flashes during the initial load.
+ */
+function useRuntimeAssurancePosture(
+  state: CodingWorkbenchRuntimeState,
+): CodingWorkbenchSetupRuntimePosture {
+  const lastResolvedRef = useRef<CodingWorkbenchSetupRuntimePosture>("verified");
+  const resolved = resolvedRuntimePosture(state.runtime);
+  useEffect(() => {
+    if (resolved !== null) lastResolvedRef.current = resolved;
+  }, [resolved]);
+  return resolved ?? lastResolvedRef.current;
+}
+
+const RUNTIME_ASSURANCE_MESSAGE_KEYS: Record<
+  CodingWorkbenchSetupRuntimePosture,
+  CodingWorkbenchMessageKey
+> = {
+  verified: "codingWorkbench.readiness.runtime.verified",
+  evaluation: "codingWorkbench.readiness.runtime.evaluation",
+  unavailable: "codingWorkbench.readiness.runtime.unavailable",
+};
 
 function latestChangesSignal(events: readonly CodingWorkbenchRuntimeSseEvent[]): string | null {
   for (let index = events.length - 1; index >= 0; index -= 1) {
@@ -149,6 +191,54 @@ function useWorkbenchAuthoritySelection(
   };
 }
 
+// `actions.start`/`actions.submitFollowUp`/`actions.retry` never reject — the mutation queue
+// (coding-workbench-runtime-hooks.ts's `useRuntimeMutationQueue`) catches every failure into
+// `state.mutation` and always resolves the returned promise — so success and failure can only be
+// told apart by watching the reducer's own settlement, never by awaiting the action call itself
+// (workbench audit, 2026-09-03). These are the three mutation kinds that consume the composer draft.
+const TASK_INTENT_MUTATIONS: ReadonlySet<CodingWorkbenchMutationKind> = new Set([
+  "start",
+  "follow-up",
+  "retry",
+]);
+
+function consumesTaskIntent(mutation: CodingWorkbenchMutationState): boolean {
+  return (
+    mutation.status === "pending" &&
+    mutation.kind !== null &&
+    TASK_INTENT_MUTATIONS.has(mutation.kind)
+  );
+}
+
+/**
+ * Clears the composer's draft once the draft-consuming mutation that WAS pending settles as a
+ * success (`mutation-complete` → status "idle"), and only when the draft is still the text that
+ * mutation consumed: a failure (`mutation-failed` → status "error") keeps it so the operator can
+ * fix and resend, and text added while the mutation was in flight (dictation) is never wiped.
+ * Without this, the draft stayed put after every completed Start, Retry or paused-run Send —
+ * indistinguishable from an unsent draft, and re-submittable as a brand-new follow-up by mistake.
+ */
+function useClearTaskIntentOnMutationSuccess(
+  mutation: CodingWorkbenchMutationState,
+  taskIntent: string,
+  setTaskIntent: (value: string) => void,
+): void {
+  const previousRef = useRef(mutation);
+  const submittedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = previousRef.current;
+    previousRef.current = mutation;
+    if (!consumesTaskIntent(previous) && consumesTaskIntent(mutation)) {
+      submittedRef.current = taskIntent;
+      return;
+    }
+    if (consumesTaskIntent(previous) && mutation.status === "idle") {
+      if (submittedRef.current === taskIntent) setTaskIntent("");
+      submittedRef.current = null;
+    }
+  }, [mutation, setTaskIntent, taskIntent]);
+}
+
 function resumableModes(currentMode: CodingWorkbenchMode): readonly CodingWorkbenchMode[] {
   return CODING_WORKBENCH_MODES.filter((mode) => !isCodingWorkbenchModeWidening(currentMode, mode));
 }
@@ -193,6 +283,7 @@ export function CodingWorkbenchWindow({
     permissionRequestId: state.run.value?.pendingPermission?.requestId,
   });
   const [taskIntent, setTaskIntent] = useState("");
+  useClearTaskIntentOnMutationSuccess(state.mutation, taskIntent, setTaskIntent);
   const focusRef = useRef<HTMLHeadingElement>(null);
   const approvalAction = useRef(false);
   const t = useCodingWorkbenchTranslate();
@@ -271,7 +362,7 @@ interface WorkbenchContentProps {
   readonly t: CodingWorkbenchTranslate;
   readonly workbenchLabel: string;
   readonly onDecision: (decision: "approved" | "denied") => void;
-  readonly research: CodingWorkbenchResearchState;
+  readonly research: UseCodingWorkbenchResearchResult;
   readonly codingModels: readonly ModelCapability[];
   readonly authority: WorkbenchAuthoritySelection;
   readonly onOpenGit: (target: CodingWorkbenchGitTarget) => void;
@@ -311,7 +402,7 @@ function WorkbenchContent({
       data-state={state.run.value?.state ?? "idle"}
     >
       <h2 className="sr-only">{workbenchLabel}</h2>
-      <SessionContextBar state={state} activeWorkspace={activeWorkspace} />
+      <SessionContextBar state={state} />
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {lifecycleAnnouncement(state, t, research.grant)}
       </p>
@@ -358,7 +449,7 @@ function WorkbenchColumns({
   // explains why a run cannot start yet (#2476 AC4). Once a binding lands it yields to the task-start
   // flow. The honest note shows only once readiness has RESOLVED as unavailable, never during load.
   const showSetup = bootstrapSetupVisible(state, activeWorkspace);
-  const runtimePosture = setupRuntimePosture(state);
+  const runtimePosture = useRuntimeAssurancePosture(state);
   // Monotonic, not a count: the event buffer is capped (CODING_WORKBENCH_EVENT_RETENTION_LIMIT), so
   // its length plateaus on a long run and every change-driven resync — questions and the activity
   // feed's automatic reconnect — would silently stop firing exactly when a run is busiest. The
@@ -380,11 +471,18 @@ function WorkbenchColumns({
     runState: state.run.value?.state,
     runtimeEventSignal,
   });
+  // The active workspace's live root, and whether that binding is still resolving — shared by the
+  // headless editor bridge and `CodingWorkbenchChanges` below so a workspace switch mid-run is
+  // handled identically by both (workbench audit, 2026-09-03): each locks to the run's own root via
+  // `useRunBoundRoot` and reports "binding lost" rather than silently following the switch.
+  const liveWorkspaceRoot =
+    activeWorkspace.error === null ? (activeWorkspace.activeBinding?.activeRoot ?? null) : null;
+  const workspaceBindingPending = activeWorkspace.loading || activeWorkspace.switching;
   const editorBridge = useCodingWorkbenchEditorBridge({
-    root:
-      activeWorkspace.error === null ? (activeWorkspace.activeBinding?.activeRoot ?? null) : null,
+    root: liveWorkspaceRoot,
     runId: state.run.value?.runId,
     active: activeRunState(state.run.value?.state),
+    bindingPending: workspaceBindingPending,
   });
   // The session stream is a bounded scroll region below the header; a run's newest activity lands
   // at its end. Follow that growth while the operator is at the bottom, never yank a reader who
@@ -461,7 +559,7 @@ function WorkbenchColumns({
       <div className={styles.emptySession}>
         <CodingWorkbenchSetup
           selectedRoot={selectedRoot}
-          refreshWorkspace={(root) => activeWorkspace.refresh(root)}
+          refreshWorkspace={() => activeWorkspace.refresh()}
           runtimePosture={runtimePosture}
         />
       </div>
@@ -510,19 +608,16 @@ function WorkbenchColumns({
             focusRef={focusRef}
           />
           <CodingWorkbenchChanges
-            root={
-              activeWorkspace.error === null
-                ? (activeWorkspace.activeBinding?.activeRoot ?? null)
-                : null
-            }
+            root={liveWorkspaceRoot}
             runId={state.run.value?.runId}
             changeSignal={latestChangesSignal(state.events)}
-            bindingPending={activeWorkspace.loading || activeWorkspace.switching}
+            bindingPending={workspaceBindingPending}
             pairing={state.pairing}
           />
         </div>
       )}
       <div className={styles.composerDock}>
+        <CodexSubscriptionAuthCard state={state} actions={actions} />
         <RuntimeControls
           state={state}
           actions={actions}
@@ -614,50 +709,52 @@ function RuntimeAssuranceContextItem({
   readonly state: CodingWorkbenchRuntimeState;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  const verified = state.runtime.value?.runtimeEvidenceClass === "platform-qualified";
+  const posture = useRuntimeAssurancePosture(state);
+  const value = t(RUNTIME_ASSURANCE_MESSAGE_KEYS[posture]);
   return (
-    <span className={styles.contextItem} {...(verified ? {} : { "data-tone": "warning" })}>
+    <span
+      className={styles.contextItem}
+      title={value}
+      {...(posture === "verified" ? {} : { "data-tone": "warning" })}
+    >
       <span className={styles.contextLabel}>{t("codingWorkbench.readiness.runtime.label")}</span>
-      <span className={styles.contextValue}>
-        {t(
-          verified
-            ? "codingWorkbench.readiness.runtime.verified"
-            : "codingWorkbench.readiness.runtime.evaluation",
-        )}
-      </span>
+      <span className={styles.contextValue}>{value}</span>
     </span>
   );
 }
 
-function SessionContextBar({
-  state,
-  activeWorkspace,
-}: {
-  readonly state: CodingWorkbenchRuntimeState;
-  readonly activeWorkspace: UseCodingWorkbenchRuntimeInput["workspace"];
-}): ReactNode {
+// Workbench audit, 2026-09-03: every chip's `title` carries the SAME text as its truncatable
+// `.contextValue` — never a different, unrelated string (the workspace chip used to show the raw
+// filesystem root here) and never absent (the unbound case used to have none at all) — so a
+// sighted low-vision reader can always recover what the CSS ellipsis clipped.
+function SessionContextBar({ state }: { readonly state: CodingWorkbenchRuntimeState }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const mode = confirmedMode(state);
+  const workspaceValue = workspaceContextValue(state.workspace.value, t);
+  const sourceValue = sessionSourceValue(state.source.value, t);
+  const modeValue = confirmedModeLabel(state, t);
   return (
     <div className={styles.contextBar} aria-label={t("codingWorkbench.header.summary")}>
-      <span className={styles.contextItem} title={activeWorkspace.activeBinding?.activeRoot}>
+      <span className={styles.contextItem} title={workspaceValue}>
         <span className={styles.contextLabel}>
           {t("codingWorkbench.readiness.workspace.label")}
         </span>
-        <span className={styles.contextValue}>
-          {workspaceContextValue(state.workspace.value, t)}
-        </span>
+        <span className={styles.contextValue}>{workspaceValue}</span>
       </span>
-      <span className={styles.contextItem}>
+      <span className={styles.contextItem} title={sourceValue}>
         <span className={styles.contextLabel}>
           {t("codingWorkbench.readiness.modelSource.label")}
         </span>
-        <span className={styles.contextValue}>{sessionSourceValue(state.source.value, t)}</span>
+        <span className={styles.contextValue}>{sourceValue}</span>
       </span>
       <RuntimeAssuranceContextItem state={state} t={t} />
-      <span className={styles.contextItem} {...(mode === null ? {} : { "data-mode": mode })}>
+      <span
+        className={styles.contextItem}
+        title={modeValue}
+        {...(mode === null ? {} : { "data-mode": mode })}
+      >
         <span className={styles.contextLabel}>{t("codingWorkbench.mode.eyebrow")}</span>
-        <span className={styles.contextValue}>{confirmedModeLabel(state, t)}</span>
+        <span className={styles.contextValue}>{modeValue}</span>
       </span>
     </div>
   );
@@ -744,7 +841,7 @@ function PermissionPrompt({
   onDecision,
 }: {
   readonly state: CodingWorkbenchRuntimeState;
-  readonly research: CodingWorkbenchResearchState;
+  readonly research: UseCodingWorkbenchResearchResult;
   readonly onDecision: (decision: CodingWorkbenchRuntimeApprovalDecision) => void;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
@@ -883,11 +980,54 @@ function ChangesetReviewPanel({
  * The paths arrive over the authenticated approval-review channel and are model-selected: they are
  * rendered as plain text, never as markup or a link, and no patch byte reaches this component.
  */
+// A genuinely UNAVAILABLE read (a transient failure while the approval is still open) is the
+// operator's dead end without a retry — nothing else re-triggers a fetch while they are still
+// deciding (workbench audit, 2026-09-03). A LOADING read is not a failure and gets no button;
+// mirrors `CodingWorkbenchChanges`'s `RetryMessage`. Shared by both approval detail channels.
+function RetryableDetailMessage({
+  status,
+  retry,
+  t,
+  keys,
+}: {
+  readonly status: CodingWorkbenchApprovalReviewStatus | CodingWorkbenchResearchStatus;
+  readonly retry: () => void;
+  readonly t: CodingWorkbenchTranslate;
+  readonly keys: {
+    readonly loading: CodingWorkbenchMessageKey;
+    readonly unavailable: CodingWorkbenchMessageKey;
+    readonly retry: CodingWorkbenchMessageKey;
+  };
+}): ReactNode {
+  const text = t(status === "loading" ? keys.loading : keys.unavailable);
+  if (status !== "unavailable") return <p className={styles.approvalResearchDetail}>{text}</p>;
+  return (
+    <div className={styles.approvalResearchDetail}>
+      <p>{text}</p>
+      <button className={styles.button} type="button" onClick={retry}>
+        {t(keys.retry)}
+      </button>
+    </div>
+  );
+}
+
+const APPROVAL_CHANGES_MESSAGE_KEYS = {
+  loading: "codingWorkbench.approval.changes.loading",
+  unavailable: "codingWorkbench.approval.changes.unavailable",
+  retry: "codingWorkbench.approval.changes.retry",
+} as const;
+
+const RESEARCH_DESTINATION_MESSAGE_KEYS = {
+  loading: "codingWorkbench.approval.research.loading",
+  unavailable: "codingWorkbench.approval.research.unavailable",
+  retry: "codingWorkbench.approval.research.retry",
+} as const;
+
 function ApprovalChangedFiles({
   state,
   t,
 }: {
-  readonly state: CodingWorkbenchApprovalReviewState;
+  readonly state: UseCodingWorkbenchApprovalReviewResult;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   if (state.status === "idle") return null;
@@ -899,13 +1039,12 @@ function ApprovalChangedFiles({
     >
       <p className={styles.approvalResearchTitle}>{t("codingWorkbench.approval.changes.title")}</p>
       {review === null ? (
-        <p className={styles.approvalResearchDetail}>
-          {t(
-            state.status === "loading"
-              ? "codingWorkbench.approval.changes.loading"
-              : "codingWorkbench.approval.changes.unavailable",
-          )}
-        </p>
+        <RetryableDetailMessage
+          status={state.status}
+          retry={state.retry}
+          t={t}
+          keys={APPROVAL_CHANGES_MESSAGE_KEYS}
+        />
       ) : (
         <>
           <dl className={styles.approvalFacts}>
@@ -946,7 +1085,7 @@ function ResearchDestination({
   state,
   t,
 }: {
-  readonly state: CodingWorkbenchResearchState;
+  readonly state: UseCodingWorkbenchResearchResult;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   if (state.status === "idle") return null;
@@ -958,13 +1097,12 @@ function ResearchDestination({
     >
       <p className={styles.approvalResearchTitle}>{t("codingWorkbench.approval.research.title")}</p>
       {ask === null ? (
-        <p className={styles.approvalResearchDetail}>
-          {t(
-            state.status === "loading"
-              ? "codingWorkbench.approval.research.loading"
-              : "codingWorkbench.approval.research.unavailable",
-          )}
-        </p>
+        <RetryableDetailMessage
+          status={state.status}
+          retry={state.retry}
+          t={t}
+          keys={RESEARCH_DESTINATION_MESSAGE_KEYS}
+        />
       ) : (
         <dl className={styles.approvalFacts}>
           <ApprovalFact label={t("codingWorkbench.approval.research.host")} value={ask.host} />
@@ -994,15 +1132,114 @@ function ApprovalFacts({
   );
 }
 
+// Workbench audit, 2026-09-03: every enum VALUE on the governance-critical approval screen must be
+// localized like every LABEL already is — a raw kebab-case slug ("workspace-write") is an
+// untranslated leak onto an otherwise fully-translated surface. `Record<Union, ...>` (not a
+// function with a fallback) so a new member of any of these three contract unions fails typecheck
+// here instead of silently rendering as English regardless of locale.
+const PERMISSION_KIND_MESSAGE_KEYS: Record<
+  CodingWorkbenchPermissionRequestKind,
+  CodingWorkbenchMessageKey
+> = {
+  "workspace-write": "codingWorkbench.approval.kind.workspace-write",
+  "command-execution": "codingWorkbench.approval.kind.command-execution",
+  "network-egress": "codingWorkbench.approval.kind.network-egress",
+  "connector-access": "codingWorkbench.approval.kind.connector-access",
+  "delivery-substrate": "codingWorkbench.approval.kind.delivery-substrate",
+};
+
+const ACTION_CLASS_MESSAGE_KEYS: Record<CodingWorkbenchActionClass, CodingWorkbenchMessageKey> = {
+  "workspace-read": "codingWorkbench.approval.actionClass.workspace-read",
+  "workspace-write": "codingWorkbench.approval.actionClass.workspace-write",
+  "command-execution": "codingWorkbench.approval.actionClass.command-execution",
+  verification: "codingWorkbench.approval.actionClass.verification",
+  "connector-access": "codingWorkbench.approval.actionClass.connector-access",
+  "network-egress": "codingWorkbench.approval.actionClass.network-egress",
+  "delivery-substrate": "codingWorkbench.approval.actionClass.delivery-substrate",
+};
+
+const APPROVAL_RISK_MESSAGE_KEYS: Record<CodingWorkbenchApprovalRisk, CodingWorkbenchMessageKey> = {
+  low: "codingWorkbench.approval.risk.low",
+  medium: "codingWorkbench.approval.risk.medium",
+  high: "codingWorkbench.approval.risk.high",
+  critical: "codingWorkbench.approval.risk.critical",
+};
+
+const ACTION_KIND_MESSAGE_KEYS: Record<
+  CodingWorkbenchSupervisedActionKind,
+  CodingWorkbenchMessageKey
+> = {
+  "file-edit": "codingWorkbench.approval.actionKind.file-edit",
+  "verification-command": "codingWorkbench.approval.actionKind.verification-command",
+  research: "codingWorkbench.approval.actionKind.research",
+  commit: "codingWorkbench.approval.actionKind.commit",
+  push: "codingWorkbench.approval.actionKind.push",
+  "pull-request": "codingWorkbench.approval.actionKind.pull-request",
+  merge: "codingWorkbench.approval.actionKind.merge",
+  "connector-write": "codingWorkbench.approval.actionKind.connector-write",
+  "external-write": "codingWorkbench.approval.actionKind.external-write",
+  "system-mutation": "codingWorkbench.approval.actionKind.system-mutation",
+};
+
+const POLICY_REASON_MESSAGE_KEYS: Record<
+  CodingWorkbenchSupervisedPolicyReason,
+  CodingWorkbenchMessageKey
+> = {
+  "scoped-file-edit": "codingWorkbench.approval.policyReason.scoped-file-edit",
+  "out-of-scope-file-edit": "codingWorkbench.approval.policyReason.out-of-scope-file-edit",
+  "allowlisted-verification-command":
+    "codingWorkbench.approval.policyReason.allowlisted-verification-command",
+  "unknown-command-denied": "codingWorkbench.approval.policyReason.unknown-command-denied",
+  "mutating-command-denied": "codingWorkbench.approval.policyReason.mutating-command-denied",
+  "approval-required": "codingWorkbench.approval.policyReason.approval-required",
+  "approval-proof-missing": "codingWorkbench.approval.policyReason.approval-proof-missing",
+  "approval-proof-stale": "codingWorkbench.approval.policyReason.approval-proof-stale",
+  "approval-proof-accepted": "codingWorkbench.approval.policyReason.approval-proof-accepted",
+  "operator-denied": "codingWorkbench.approval.policyReason.operator-denied",
+  "operator-stopped": "codingWorkbench.approval.policyReason.operator-stopped",
+  "redacted-failure": "codingWorkbench.approval.policyReason.redacted-failure",
+};
+
+const CONNECTOR_SCOPE_MESSAGE_KEYS: Record<
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchMessageKey
+> = {
+  "source-control.read": "codingWorkbench.approval.connectorScope.source-control.read",
+  "source-control.write": "codingWorkbench.approval.connectorScope.source-control.write",
+  "issue-tracker.read": "codingWorkbench.approval.connectorScope.issue-tracker.read",
+  "issue-tracker.write": "codingWorkbench.approval.connectorScope.issue-tracker.write",
+  "knowledge-base.read": "codingWorkbench.approval.connectorScope.knowledge-base.read",
+  "knowledge-base.write": "codingWorkbench.approval.connectorScope.knowledge-base.write",
+};
+
+// An optional closed-union fact, localized when present.
+function optionalFact<K extends string>(
+  value: K | undefined,
+  keys: Readonly<Record<K, CodingWorkbenchMessageKey>>,
+  fallback: string,
+  t: CodingWorkbenchTranslate,
+): string {
+  return value === undefined ? fallback : t(keys[value]);
+}
+
 function approvalFacts(
   request: CodingWorkbenchRuntimePendingPermission,
   t: CodingWorkbenchTranslate,
 ): readonly { readonly label: string; readonly value: string }[] {
   const notSpecified = t("codingWorkbench.approval.notSpecified");
   return [
-    { label: t("codingWorkbench.approval.permissionKind"), value: request.kind },
-    { label: t("codingWorkbench.approval.actionClass"), value: request.actionClass },
-    { label: t("codingWorkbench.approval.action"), value: request.actionKind ?? notSpecified },
+    {
+      label: t("codingWorkbench.approval.permissionKind"),
+      value: t(PERMISSION_KIND_MESSAGE_KEYS[request.kind]),
+    },
+    {
+      label: t("codingWorkbench.approval.actionClass"),
+      value: t(ACTION_CLASS_MESSAGE_KEYS[request.actionClass]),
+    },
+    {
+      label: t("codingWorkbench.approval.action"),
+      value: optionalFact(request.actionKind, ACTION_KIND_MESSAGE_KEYS, notSpecified, t),
+    },
     { label: t("codingWorkbench.approval.scope"), value: request.scopeLabel ?? notSpecified },
     {
       label: t("codingWorkbench.approval.commandClass"),
@@ -1010,15 +1247,23 @@ function approvalFacts(
     },
     {
       label: t("codingWorkbench.approval.connectorScopes"),
-      value: request.connectorScopes?.join(", ") || t("codingWorkbench.approval.noneRequested"),
+      value:
+        (request.connectorScopes ?? [])
+          .map((scope) => t(CONNECTOR_SCOPE_MESSAGE_KEYS[scope]))
+          .join(", ") || t("codingWorkbench.approval.noneRequested"),
     },
     {
       label: t("codingWorkbench.approval.risk"),
-      value: request.risk ?? t("codingWorkbench.approval.unspecified"),
+      value: optionalFact(
+        request.risk,
+        APPROVAL_RISK_MESSAGE_KEYS,
+        t("codingWorkbench.approval.unspecified"),
+        t,
+      ),
     },
     {
       label: t("codingWorkbench.approval.policyReason"),
-      value: request.policyReason ?? notSpecified,
+      value: optionalFact(request.policyReason, POLICY_REASON_MESSAGE_KEYS, notSpecified, t),
     },
     { label: t("codingWorkbench.approval.reasonCode"), value: request.reasonCode },
     { label: t("codingWorkbench.approval.expires"), value: request.expiresAt },
