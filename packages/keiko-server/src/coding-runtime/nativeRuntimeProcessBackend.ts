@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-sandbox";
 
@@ -101,13 +102,12 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
     });
     const recoveryHandle = request.recoveryHandle;
     const packet = encodeLaunchPacket(request, paths);
-    assertExpectedHelperSha256(this.options.helperPath, this.options.expectedHelperSha256);
-    const child = this.options.spawnHelper(this.options.helperPath, [], {
-      cwd: dirname(this.options.helperPath),
-      env: {},
-      shell: false,
-      windowsHide: true,
-    });
+    const child = spawnVerifiedHelper(
+      this.options.helperPath,
+      this.options.expectedHelperSha256,
+      this.options.spawnHelper,
+      [],
+    );
     const tree = new NativeRuntimeTree(recoveryHandle, child);
     child.controlInput.write(packet);
     return tree;
@@ -161,10 +161,51 @@ function validExpectedHelperSha256(value: string | undefined): string | undefine
   return value;
 }
 
-function assertExpectedHelperSha256(path: string, expected: string | undefined): void {
-  if (expected === undefined) return;
-  const actual = createHash("sha256").update(readFileSync(path)).digest("hex");
-  if (actual !== expected) throw new Error("native-runtime-helper-digest-mismatch");
+interface VerifiedHelperExecutionCopy {
+  readonly path: string;
+  cleanup(): void;
+}
+
+function spawnVerifiedHelper(
+  helperPath: string,
+  expectedHelperSha256: string | undefined,
+  spawnHelper: NativeRuntimeHelperSpawn,
+  args: readonly string[],
+): NativeRuntimeHelperProcess {
+  if (expectedHelperSha256 === undefined)
+    return spawnHelper(helperPath, args, nativeSpawnOptions(helperPath));
+  const executionCopy = verifiedHelperExecutionCopy(helperPath, expectedHelperSha256);
+  try {
+    const child = spawnHelper(executionCopy.path, args, nativeSpawnOptions(executionCopy.path));
+    child.onExit(executionCopy.cleanup);
+    child.onError(executionCopy.cleanup);
+    return child;
+  } catch (error) {
+    executionCopy.cleanup();
+    throw error;
+  }
+}
+
+function nativeSpawnOptions(helperPath: string): NativeRuntimeHelperSpawnOptions {
+  return { cwd: dirname(helperPath), env: {}, shell: false, windowsHide: true };
+}
+
+function verifiedHelperExecutionCopy(
+  helperPath: string,
+  expectedHelperSha256: string,
+): VerifiedHelperExecutionCopy {
+  const bytes = readFileSync(helperPath);
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  if (actual !== expectedHelperSha256) throw new Error("native-runtime-helper-digest-mismatch");
+  const directory = mkdtempSync(join(tmpdir(), "keiko-native-runtime-"));
+  const path = join(directory, basename(helperPath));
+  try {
+    writeFileSync(path, bytes, { flag: "wx", mode: 0o700 });
+    return { path, cleanup: (): void => rmSync(directory, { recursive: true, force: true }) };
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 function spawnNativeHelper(
@@ -210,13 +251,10 @@ async function reconcileRecoveryHandle(
   timeoutMs: number,
 ): Promise<boolean> {
   if (!/^[0-9a-f]{32}$/u.test(recoveryHandle)) invalidRequest();
-  assertExpectedHelperSha256(helperPath, expectedHelperSha256);
-  const child = spawnHelper(helperPath, ["--reconcile", recoveryHandle], {
-    cwd: dirname(helperPath),
-    env: {},
-    shell: false,
-    windowsHide: true,
-  });
+  const child = spawnVerifiedHelper(helperPath, expectedHelperSha256, spawnHelper, [
+    "--reconcile",
+    recoveryHandle,
+  ]);
   const tree = new NativeRuntimeTree(recoveryHandle, child);
   return tree.waitForProof(timeoutMs);
 }

@@ -4,7 +4,7 @@
 // re-verifies fail-closed at every start. Dev checkouts only; packaged installs never use this.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -179,33 +179,27 @@ async function stageWindowsSupervisor(target, stagedTargetRoot, root, runSupervi
   return supervisorPath;
 }
 
-/**
- * Stages the dev lane. The I/O boundary is injectable so the orchestration is testable on any
- * host; production invocation supplies the real payload preparer, native builder, and git.
- */
-export async function stageDevCodingRuntime(argv, deps = {}) {
-  const {
-    root,
-    prepareSidecars,
-    runBuild,
-    runSupervisorBuild,
-    resolveGit,
-    exec,
-    log,
-    platform,
-    arch,
-    target,
-  } = resolveStageDeps(deps);
-  if (target === undefined) {
-    // Report the identity that actually drove the decision (injected in tests, real otherwise).
-    throw new Error(
-      "The coding-runtime dev lane supports macOS (arm64/x64) and Windows (x64) checkouts only; " +
-        `this host is ${platform}/${arch}.`,
-    );
-  }
-  log(`[dev-lane] preparing approved sidecar payload for ${target} …`);
-  await prepareSidecars(["--target", target, ...argv]);
+function requireSupportedDevLaneTarget({ target, platform, arch }) {
+  if (target !== undefined) return target;
+  throw new Error(
+    "The coding-runtime dev lane supports macOS (arm64/x64) and Windows (x64) checkouts only; " +
+      `this host is ${platform}/${arch}.`,
+  );
+}
+
+async function stageDevLaneNativeHelpers({
+  root,
+  target,
+  runBuild,
+  runSupervisorBuild,
+  resolveGit,
+  exec,
+  log,
+}) {
   const stagedTargetRoot = join(root, STAGED_ROOT, target);
+  // The native directory is an execution boundary. Recreate it instead of overwriting known
+  // files so a planted DLL, stale binary, or Finder metadata cannot survive trusted staging.
+  rmSync(join(stagedTargetRoot, "native"), { recursive: true, force: true });
   const helperPath = join(stagedTargetRoot, helperRelativePath(target));
   log("[dev-lane] building the secure-workspace-read helper …");
   await buildHelper(target, helperPath, root, runBuild);
@@ -225,6 +219,29 @@ export async function stageDevCodingRuntime(argv, deps = {}) {
     resolveGit,
     log,
   });
+}
+
+/**
+ * Rebuilds only the locally compiled native components of an already verified sidecar payload.
+ * The trusted dev launcher uses this on every start, binding the current server process to
+ * freshly built checkout sources without redownloading the approved sidecar archive.
+ */
+export async function restageDevCodingRuntimeNativeHelpers(deps = {}) {
+  const resolved = resolveStageDeps(deps);
+  const target = requireSupportedDevLaneTarget(resolved);
+  return stageDevLaneNativeHelpers({ ...resolved, target });
+}
+
+/**
+ * Stages the dev lane. The I/O boundary is injectable so the orchestration is testable on any
+ * host; production invocation supplies the real payload preparer, native builder, and git.
+ */
+export async function stageDevCodingRuntime(argv, deps = {}) {
+  const resolved = resolveStageDeps(deps);
+  const target = requireSupportedDevLaneTarget(resolved);
+  resolved.log(`[dev-lane] preparing approved sidecar payload for ${target} …`);
+  await resolved.prepareSidecars(["--target", target, ...argv]);
+  return stageDevLaneNativeHelpers({ ...resolved, target });
 }
 
 export function isDirectInvocation(argv1 = process.argv[1], moduleUrl = import.meta.url) {

@@ -24,6 +24,7 @@ const HELPER_SOURCE_DIR = "native/secure-workspace-read";
 const ENABLE_TOKENS = new Set(["1", "true", "on", "yes", "enabled"]);
 const SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
+const admittedRuntimeSupervisorDigests = new Map<string, string>();
 
 export type DevLaneOpenCodeTarget = "windows-x64" | "macos-arm64" | "macos-x64";
 
@@ -73,6 +74,8 @@ export interface DevLaneOpenCodeDiscoveryInput {
   readonly env: NodeJS.ProcessEnv;
   readonly platform?: NodeJS.Platform | undefined;
   readonly arch?: string | undefined;
+  /** The trusted launcher probes before native regeneration without establishing process authority. */
+  readonly admitRuntimeSupervisor?: boolean | undefined;
 }
 
 export function devLaneEnvEnabled(value: string | undefined): boolean {
@@ -110,7 +113,12 @@ function discoverEnabledLane(input: DevLaneOpenCodeDiscoveryInput): DevLaneOpenC
   if (!payload.ok) return refused(payload.refusal);
   const secureRead = verifiedSecureRead(checkoutRoot.root, stagedTargetRoot, target);
   if (!secureRead.ok) return refused(secureRead.refusal);
-  const runtimeSupervisor = verifiedRuntimeSupervisor(checkoutRoot.root, stagedTargetRoot, target);
+  const runtimeSupervisor = verifiedRuntimeSupervisor(
+    checkoutRoot.root,
+    stagedTargetRoot,
+    target,
+    input.admitRuntimeSupervisor ?? true,
+  );
   if (target === "windows-x64" && runtimeSupervisor === undefined)
     return refused("payload-missing");
   if (!trustedNativeHelperDirectory(stagedTargetRoot, target)) {
@@ -414,6 +422,7 @@ function verifiedRuntimeSupervisor(
   checkoutRoot: string,
   stagedTargetRoot: string,
   target: DevLaneOpenCodeTarget,
+  admit: boolean,
 ): VerifiedRuntimeSupervisor | undefined {
   if (target !== "windows-x64") return undefined;
   const path = join(stagedTargetRoot, runtimeSupervisorRelativePath(target));
@@ -423,12 +432,20 @@ function verifiedRuntimeSupervisor(
   );
   if (manifest === undefined || !isRegularFile(path)) return undefined;
   const sha256 = sha256File(path);
-  return sha256 === manifest.sha256 &&
+  const valid =
+    sha256 === manifest.sha256 &&
     statSync(path).size === manifest.sizeBytes &&
     hashHelperSourceTree(join(checkoutRoot, "native", "runtime-supervisor", "windows")) ===
-      manifest.sourceTreeSha256
-    ? { path, sha256 }
-    : undefined;
+      manifest.sourceTreeSha256;
+  if (!valid) return undefined;
+  if (!admit) return { path, sha256 };
+  // `dev:start` regenerates this locally compiled helper before the BFF launches. After this
+  // process admits that fresh digest, neither a rewritten staged manifest nor a replacement
+  // executable may alter the execution authority for the lifetime of the server process.
+  const admitted = admittedRuntimeSupervisorDigests.get(path);
+  if (admitted !== undefined && admitted !== sha256) return undefined;
+  admittedRuntimeSupervisorDigests.set(path, sha256);
+  return { path, sha256 };
 }
 
 function trustedNativeHelperDirectory(

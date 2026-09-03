@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -220,6 +220,30 @@ describe("native runtime process backend", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it("executes a private copy of the verified Windows helper bytes", () => {
+    const paths = fixture();
+    const child = new FakeHelper();
+    let executedBytes = "";
+    const spawn = vi.fn<NativeRuntimeHelperSpawn>((helperPath) => {
+      writeFileSync(paths.helper, "replaced after verification");
+      executedBytes = readFileSync(helperPath, "utf8");
+      return child;
+    });
+    const backend = createNativeRuntimeProcessBackend({
+      helperPath: paths.helper,
+      expectedHelperSha256: createHash("sha256").update("helper").digest("hex"),
+      runtimeRoots: [join(paths.runtime, "..")],
+      workspaceRoot: paths.workspace,
+      spawnHelper: spawn,
+    });
+
+    backend.spawnOwnedTree(request(paths.runtime, paths.workspace));
+
+    expect(spawn.mock.calls[0]?.[0]).not.toBe(realpathSync(paths.helper));
+    expect(executedBytes).toBe("helper");
+    child.emit("exit", 0);
+  });
+
   it("maps both signals to closed helper protocol commands without OS process signaling", () => {
     const { backend, child, paths } = backendFixture();
     const tree = backend.spawnOwnedTree(request(paths.runtime, paths.workspace));
@@ -261,6 +285,29 @@ describe("native runtime process backend", () => {
     await expect(recovery.reconcile("../unsafe", 50)).rejects.toThrow(
       "native-runtime-request-invalid",
     );
+  });
+
+  it("uses a private verified helper copy for recovery reconciliation", async () => {
+    const paths = fixture();
+    const child = new FakeHelper();
+    let executedBytes = "";
+    const spawn = vi.fn<NativeRuntimeHelperSpawn>((helperPath) => {
+      writeFileSync(paths.helper, "replaced after verification");
+      executedBytes = readFileSync(helperPath, "utf8");
+      return child;
+    });
+    const recovery = createNativeRuntimeRecoveryPort({
+      helperPath: paths.helper,
+      expectedHelperSha256: createHash("sha256").update("helper").digest("hex"),
+      spawnHelper: spawn,
+    });
+    const pending = recovery.reconcile("c".repeat(32), 50);
+    const payload = Buffer.alloc(8);
+    child.controlOutput.write(response(2, payload));
+
+    await expect(pending).resolves.toBe(true);
+    expect(executedBytes).toBe("helper");
+    child.emit("exit", 0);
   });
 });
 

@@ -447,8 +447,8 @@ function normalizePathBody(body) {
 // matching. Now both harnesses call this single primitive; a change here lands in both gates
 // in lockstep.
 //
-// String LITERAL bodies stay verbatim (each harness applies `stripStringLiteralBodies` after
-// its own decisions about which pins observe the raw literal shape).
+// String LITERAL bodies are normalized for shell-path checks (each harness applies
+// `stripStringLiteralBodies` after its own decisions about which pins observe identifiers).
 export function prepareCSource(rawSource) {
   return normalizeCurrentDirComponents(
     foldAdjacentStringLiterals(
@@ -457,6 +457,13 @@ export function prepareCSource(rawSource) {
       ),
     ),
   );
+}
+
+// A narrower preparation mode for source contracts that assert an exact string-literal spelling.
+// It still applies C's comment and dead-branch rules, but deliberately stops before escape decoding
+// or adjacent-literal folding so `SetDllDirectoryW(L"")` cannot degrade into `SetDllDirectoryW(L)`.
+export function prepareCSourcePreservingLiterals(rawSource) {
+  return stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource)));
 }
 
 // ---------------------------------------------------------------------------

@@ -295,6 +295,13 @@ describe.skipIf(!hasPwsh())("check-windows-native-quality flag derivation", () =
     expect(derivationAccepts({ launcherSourcePath })).toContain("REJECTED");
   });
 
+  it("rejects a launcher flag that survives only in a trailing line comment", () => {
+    const launcherSourcePath = copyLauncherWith((source) =>
+      source.replace('        "/MT",\n', '        "/REMOVED", // "/MT"\n'),
+    );
+    expect(derivationAccepts({ launcherSourcePath })).toContain("REJECTED");
+  });
+
   it("rejects a setup-bootstrap flag that survives only in a comment, not in the argument list", () => {
     const setupBootstrapSourcePath = copySetupBootstrapWith((source) =>
       source.replace('        "/MT",\n', '        // "/MT",\n'),

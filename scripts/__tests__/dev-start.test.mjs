@@ -258,7 +258,7 @@ describe("dev-start coding runtime lifecycle", () => {
     expect(stage).not.toHaveBeenCalled();
   });
 
-  it("reuses a verified runtime and stages a repair only when production discovery refuses it", async () => {
+  it("refreshes native helpers for a verified runtime and stages a full repair when discovery refuses it", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const activated = {
       outcome: "activated",
@@ -266,6 +266,7 @@ describe("dev-start coding runtime lifecycle", () => {
     };
     const discoverReady = vi.fn().mockResolvedValue(activated);
     const stageReady = vi.fn();
+    const restageReady = vi.fn().mockResolvedValue(undefined);
     await expect(
       ensureDevCodingRuntime({
         platform: "darwin",
@@ -273,13 +274,23 @@ describe("dev-start coding runtime lifecycle", () => {
         env: {},
         discover: discoverReady,
         stage: stageReady,
+        restageNative: restageReady,
       }),
     ).resolves.toBe(true);
     expect(stageReady).not.toHaveBeenCalled();
-    expect(discoverReady).toHaveBeenCalledWith({
+    expect(restageReady).toHaveBeenCalledOnce();
+    expect(discoverReady).toHaveBeenCalledTimes(2);
+    expect(discoverReady).toHaveBeenNthCalledWith(1, {
       env: { KEIKO_CODING_RUNTIME_DEV_LANE: "1" },
       platform: "darwin",
       arch: "arm64",
+      admitRuntimeSupervisor: false,
+    });
+    expect(discoverReady).toHaveBeenLastCalledWith({
+      env: { KEIKO_CODING_RUNTIME_DEV_LANE: "1" },
+      platform: "darwin",
+      arch: "arm64",
+      admitRuntimeSupervisor: true,
     });
 
     const discoverRepair = vi
@@ -300,6 +311,7 @@ describe("dev-start coding runtime lifecycle", () => {
     expect(discoverRepair).toHaveBeenCalledTimes(2);
 
     const discoverWindows = vi.fn().mockResolvedValue(activated);
+    const restageWindows = vi.fn().mockResolvedValue(undefined);
     await expect(
       ensureDevCodingRuntime({
         platform: "win32",
@@ -307,12 +319,15 @@ describe("dev-start coding runtime lifecycle", () => {
         env: {},
         discover: discoverWindows,
         stage: vi.fn(),
+        restageNative: restageWindows,
       }),
     ).resolves.toBe(true);
-    expect(discoverWindows).toHaveBeenCalledWith({
+    expect(restageWindows).toHaveBeenCalledOnce();
+    expect(discoverWindows).toHaveBeenLastCalledWith({
       env: { KEIKO_CODING_RUNTIME_DEV_LANE: "1" },
       platform: "win32",
       arch: "x64",
+      admitRuntimeSupervisor: true,
     });
   });
 
@@ -347,6 +362,31 @@ describe("dev-start coding runtime lifecycle", () => {
         stage: vi.fn(),
       }),
     ).rejects.toThrow("coding runtime dev lane refused (unsupported-platform)");
+  });
+
+  it("repairs an untrusted native helper directory through complete staging", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const activated = {
+      outcome: "activated",
+      runtime: { evidenceClass: "functional-not-platform-qualified" },
+    };
+    const discover = vi
+      .fn()
+      .mockResolvedValueOnce({ outcome: "refused", reason: "native-helper-directory-untrusted" })
+      .mockResolvedValueOnce(activated);
+    const stage = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      ensureDevCodingRuntime({
+        platform: "win32",
+        arch: "x64",
+        env: {},
+        discover,
+        stage,
+      }),
+    ).resolves.toBe(true);
+
+    expect(stage).toHaveBeenCalledOnce();
   });
 });
 

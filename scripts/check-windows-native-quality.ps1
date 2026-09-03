@@ -5,8 +5,17 @@ function Get-ActiveNativeProducerSource {
   param([Parameter(Mandatory = $true)][string] $FunctionSource)
 
   $withoutBlockComments = [regex]::Replace($FunctionSource, '(?s)/\*.*?\*/', '')
-  return ($withoutBlockComments -split "`n" |
-    Where-Object { $_.Trim() -notmatch '^(//|/\*|\*)' }) -join "`n"
+  # Preserve quoted JavaScript strings while removing `//` comments. A line-only filter catches
+  # full-line comments but would let a required flag survive in `args = []; // "/MT"`.
+  return [regex]::Replace(
+    $withoutBlockComments,
+    '(?s:"(?:\\.|[^"\\])*")|//[^\r\n]*',
+    [System.Text.RegularExpressions.MatchEvaluator] {
+      param($match)
+      if ($match.Value.StartsWith('"')) { return $match.Value }
+      return ''
+    }
+  )
 }
 
 function Assert-NativeProducerLinkFlags {

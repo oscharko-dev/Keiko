@@ -75,6 +75,14 @@ Staging, signing, qualification, assembly, publishing, and fresh-runner smoke ch
 any required component is absent, duplicated, unsigned, unnotarized where applicable,
 architecture-mismatched, stale, or not bound to the source commit and target.
 
+**Amended 2026-09-03 — Windows native-helper CRT packaging.** The Windows launcher, setup
+bootstrap, secure workspace-read helper, and Job Object supervisor are compiled with `/MT`, so
+their C runtime is statically linked rather than resolved through a separately plantable Visual C++
+runtime DLL. Their link lines also retain `/DEPENDENTLOADFLAG:0x800`; together with the helpers'
+fail-closed DLL-directory initialization, this keeps later dynamic dependency resolution confined
+to the system directory. The Windows native-quality gate derives and proves these exact production
+flags for every producer.
+
 There are exactly three pre-signing lanes, and a lane is a declaration the artifact carries in its
 own manifest, never an argument a caller supplies:
 

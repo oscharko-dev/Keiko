@@ -143,7 +143,7 @@ describe("dev-lane OpenCode discovery", () => {
     expectRefusal(discover(staged, { platform: "win32", arch: "x64" }), "payload-missing");
   });
 
-  it("binds the verified Windows supervisor into the dev-lane receipt", () => {
+  it("refuses a replacement Windows supervisor even when its staged manifest is rewritten", () => {
     const staged = fixture("windows-x64");
     const first = discover(staged, { platform: "win32", arch: "x64" });
     expect(first.outcome).toBe("activated");
@@ -165,11 +165,7 @@ describe("dev-lane OpenCode discovery", () => {
     writeFileSync(manifestPath, JSON.stringify(manifest));
 
     const second = discover(staged, { platform: "win32", arch: "x64" });
-    expect(second.outcome).toBe("activated");
-    if (second.outcome !== "activated") return;
-    expect(second.runtime.qualification.releaseReceipt).not.toBe(
-      first.runtime.qualification.releaseReceipt,
-    );
+    expectRefusal(second, "payload-missing");
   });
 
   it("refuses unsupported platforms and unknown architectures", () => {

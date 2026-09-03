@@ -18,7 +18,11 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { hostDevLaneTarget, stageDevCodingRuntime } from "./stage-dev-coding-runtime.mjs";
+import {
+  hostDevLaneTarget,
+  restageDevCodingRuntimeNativeHelpers,
+  stageDevCodingRuntime,
+} from "./stage-dev-coding-runtime.mjs";
 import { probePortFree } from "./lib/port-probe.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -571,6 +575,7 @@ const STAGEABLE_DEV_RUNTIME_REASONS = new Set([
   "payload-missing",
   "payload-unapproved",
   "payload-tampered",
+  "native-helper-directory-untrusted",
   "secure-read-helper-missing",
   "secure-read-helper-stale",
 ]);
@@ -604,15 +609,21 @@ export async function ensureDevCodingRuntime(seams = {}) {
   };
   const discover = seams.discover ?? discoverDevCodingRuntime;
   const stage = seams.stage ?? (() => stageDevCodingRuntime([]));
-  let discovery = await discover({ env, platform, arch });
+  const restageNative = seams.restageNative ?? (() => restageDevCodingRuntimeNativeHelpers());
+  let discovery = await discover({ env, platform, arch, admitRuntimeSupervisor: false });
   if (discovery.outcome === "activated") {
-    console.log(`[dev:start] verified coding runtime for ${target}`);
+    // The sidecar stays catalog-verified on disk; regenerate its locally compiled native
+    // components before the BFF starts so a previous workspace write cannot authorize a helper.
+    await restageNative();
+    discovery = await discover({ env, platform, arch, admitRuntimeSupervisor: true });
+    requireActivatedDevRuntime(discovery);
+    console.log(`[dev:start] refreshed coding runtime for ${target}`);
     return true;
   }
   const reason = requireStageableDevRuntime(discovery);
   console.log(`[dev:start] coding runtime ${reason}; preparing ${target}`);
   await stage();
-  discovery = await discover({ env, platform, arch });
+  discovery = await discover({ env, platform, arch, admitRuntimeSupervisor: true });
   requireActivatedDevRuntime(discovery);
   console.log(`[dev:start] coding runtime ready for ${target}`);
   return true;

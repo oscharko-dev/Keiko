@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +14,7 @@ import {
   listFilesSorted,
   resolveStageDeps,
   runtimeSupervisorRelativePath,
+  restageDevCodingRuntimeNativeHelpers,
   stageDevCodingRuntime,
 } from "../stage-dev-coding-runtime.mjs";
 
@@ -262,5 +263,44 @@ describe("stageDevCodingRuntime", () => {
       sha256: sha256("runtime supervisor"),
       sizeBytes: "runtime supervisor".length,
     });
+  });
+
+  it("rebuilds native helpers without retaining an untrusted staged native entry", async () => {
+    const root = tempRoot();
+    const nativeRoot = join(root, ".portable-sidecar-payloads", "windows-x64", "native");
+    mkdirSync(join(root, "native", "secure-workspace-read"), { recursive: true });
+    mkdirSync(join(root, "native", "runtime-supervisor", "windows"), { recursive: true });
+    mkdirSync(nativeRoot, { recursive: true });
+    writeFileSync(join(root, "native", "secure-workspace-read", "src.c"), "/* secure */\n");
+    writeFileSync(
+      join(root, "native", "runtime-supervisor", "windows", "supervisor.c"),
+      "/* supervisor */\n",
+    );
+    writeFileSync(join(nativeRoot, "plantable.dll"), "untrusted");
+    const build = vi.fn().mockImplementation(({ argv }) => {
+      mkdirSync(join(argv[3], ".."), { recursive: true });
+      writeFileSync(argv[3], "secure helper");
+      return Promise.resolve(0);
+    });
+    const buildSupervisor = vi.fn().mockImplementation(({ argv }) => {
+      mkdirSync(join(argv[3], ".."), { recursive: true });
+      writeFileSync(argv[3], "runtime supervisor");
+      return Promise.resolve(0);
+    });
+
+    await restageDevCodingRuntimeNativeHelpers({
+      target: "windows-x64",
+      root,
+      prepareSidecars: vi.fn(),
+      runBuild: build,
+      runSupervisorBuild: buildSupervisor,
+      exec: vi.fn().mockReturnValue(`${"c".repeat(40)}\n`),
+      resolveGit: vi.fn().mockReturnValue("C:\\Program Files\\Git\\git.exe"),
+      log: vi.fn(),
+    });
+
+    expect(existsSync(join(nativeRoot, "plantable.dll"))).toBe(false);
+    expect(build).toHaveBeenCalledOnce();
+    expect(buildSupervisor).toHaveBeenCalledOnce();
   });
 });
