@@ -252,11 +252,17 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.ref }}
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - run: npm ci --ignore-scripts
@@ -422,6 +428,7 @@ jobs:
   coverage-packages:
     name: Coverage shard (packages ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     strategy:
@@ -435,15 +442,19 @@ jobs:
           # Unchanged from the serial job: package tests read real repository history.
           fetch-depth: 0
           persist-credentials: false
-          # Pinned to the run's immutable commit, not the moving ref the single job could safely
-          # use: five checkouts now feed one merged verdict, and `refs/pull/N/merge` is rewritten
-          # whenever the head or base moves. Skew would have the shards measure one tree while the
-          # gates and the scanner judge another, with nothing to detect it (Issue #2704).
+          # PR/push runs use their immutable commit. Manual Sonar runs bind this producer to `dev`
+          # so its coverage cannot be mixed with a scanner checkout from another revision.
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Restore the npm download cache
@@ -527,6 +538,7 @@ jobs:
   coverage-ui:
     name: Coverage suite (keiko-ui)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -534,15 +546,19 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          # Pinned to the run's immutable commit, not the moving ref the single job could safely
-          # use: five checkouts now feed one merged verdict, and `refs/pull/N/merge` is rewritten
-          # whenever the head or base moves. Skew would have the shards measure one tree while the
-          # gates and the scanner judge another, with nothing to detect it (Issue #2704).
+          # PR/push runs use their immutable commit. Manual Sonar runs bind this producer to `dev`
+          # so its coverage cannot be mixed with a scanner checkout from another revision.
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Restore the npm download cache
@@ -590,6 +606,7 @@ jobs:
   coverage-scripts:
     name: Coverage suite (scripts)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -597,15 +614,19 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          # Pinned to the run's immutable commit, not the moving ref the single job could safely
-          # use: five checkouts now feed one merged verdict, and `refs/pull/N/merge` is rewritten
-          # whenever the head or base moves. Skew would have the shards measure one tree while the
-          # gates and the scanner judge another, with nothing to detect it (Issue #2704).
+          # PR/push runs use their immutable commit. Manual Sonar runs bind this producer to `dev`
+          # so its coverage cannot be mixed with a scanner checkout from another revision.
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Restore the npm download cache
@@ -660,6 +681,10 @@ jobs:
       - coverage-scripts
       - coverage-ui
     runs-on: ubuntu-latest
+    # One full hosted scan currently takes about 15 minutes. ADR-0139 D6 permits three attempts
+    # with 30/60-second backoff, so 50 minutes bounds the designed worst case without killing the
+    # final permitted attempt.
+    timeout-minutes: 50
     permissions:
       contents: read
     steps:
@@ -697,6 +722,12 @@ jobs:
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Restore and maintain the npm download cache
@@ -832,6 +863,8 @@ jobs:
               -Dsonar.projectBaseDir="$GITHUB_WORKSPACE" \
               -Dsonar.projectVersion="${STEPS_SONAR_VERSION_OUTPUTS_VERSION}" \
               -Dsonar.scm.revision="${SONAR_HEAD_SHA}" \
+              -Dsonar.analysisCache.enabled=false \
+              -Dsonar.sensor.cache.enable=false \
               -Dsonar.qualitygate.wait=true \
               -Dsonar.working.directory="$RUNNER_TEMP/sonar-work" \
               2>&1 | tee "$RUNNER_TEMP/sonar-scanner.log"
@@ -848,12 +881,13 @@ jobs:
               sleep $((attempt * 30))
             fi
           done
-          node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log"
-          echo "status=$scanner_status" >> "$GITHUB_OUTPUT"
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            exit 0
-          fi
           exit "$scanner_status"
+      - name: Verify Sonar full-analysis evidence
+        if: ${{ always() && steps.sonar-scan.outcome != 'skipped' }}
+        run: >-
+          node scripts/check-sonar-analysis-log.mjs
+          --log "$RUNNER_TEMP/sonar-scanner.log"
+          --require-full-analysis
       - name: Verify SonarCloud Banking Grade PR evidence
         if: ${{ github.event_name == 'pull_request' && github.base_ref == 'dev' }}
         env:
@@ -920,6 +954,7 @@ jobs:
     # feat/keiko-editor, on dev/release PRs, and on manual workflow_dispatch runs.
     if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       attestations: write
       contents: read
@@ -928,10 +963,17 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - run: npm ci --ignore-scripts
@@ -1034,16 +1076,24 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         if: runner.os == 'Windows'
         with:
@@ -1154,10 +1204,17 @@ jobs:
           # Keep that commit reachable instead of relying on the default single-commit checkout.
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install workspaces (single root lockfile after #167)

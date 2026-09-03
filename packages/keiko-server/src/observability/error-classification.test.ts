@@ -21,6 +21,12 @@ describe("safeProperty", () => {
     expect(safeProperty(new TypeError("x"), "name")).toBe("TypeError");
   });
 
+  it("preserves machine metadata carried by a callable error value", () => {
+    const callable = Object.assign(() => undefined, { code: "CALLABLE_FAILURE" });
+
+    expect(safeProperty(callable, "code")).toBe("CALLABLE_FAILURE");
+  });
+
   it("degrades to undefined for a non-object, non-function receiver", () => {
     expect(safeProperty("a string", "code")).toBeUndefined();
     expect(safeProperty(42, "code")).toBeUndefined();
@@ -60,6 +66,7 @@ describe("machineToken", () => {
 
   it("rejects a prose-shaped value (spaces disqualify it)", () => {
     expect(machineToken("the request body was rejected")).toBeUndefined();
+    expect(machineToken("")).toBeUndefined();
   });
 
   it("rejects a value over the 128-character bound", () => {
@@ -75,6 +82,48 @@ describe("machineToken", () => {
 });
 
 describe("declaredErrorClassName", () => {
+  it("preserves a class exposed through a legitimate constructor accessor", () => {
+    class AccessorConstructorError extends Error {}
+    Object.defineProperty(AccessorConstructorError.prototype, "constructor", {
+      configurable: true,
+      get: () => AccessorConstructorError,
+    });
+
+    expect(declaredErrorClassName(new AccessorConstructorError("x"))).toBe(
+      "AccessorConstructorError",
+    );
+  });
+
+  it("preserves a bounded code-owned accessor class name", () => {
+    class AccessorNameError extends Error {}
+    Object.defineProperty(AccessorNameError, "name", {
+      configurable: true,
+      get: () => "DeclaredAccessorError",
+    });
+
+    expect(declaredErrorClassName(new AccessorNameError("x"))).toBe("DeclaredAccessorError");
+  });
+
+  it("preserves the inherited declaration across an intermediate prototype", () => {
+    class ParentError extends Error {}
+    class IntermediateError extends ParentError {}
+    Reflect.deleteProperty(IntermediateError.prototype, "constructor");
+
+    expect(declaredErrorClassName(new IntermediateError("x"))).toBe("ParentError");
+  });
+
+  it("preserves Node ERR_* constructor accessors", () => {
+    let nodeError: unknown;
+    try {
+      Buffer.from(1 as unknown as string);
+    } catch (error) {
+      nodeError = error;
+    }
+
+    expect(nodeError).toBeInstanceOf(TypeError);
+    expect(declaredErrorClassName(nodeError as Error)).toBe("TypeError");
+  });
+
   it("degrades to undefined instead of throwing when getPrototypeOf traps", () => {
     const hostile = new Proxy(
       {},

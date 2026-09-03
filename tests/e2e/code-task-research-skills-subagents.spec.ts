@@ -61,8 +61,8 @@ async function openWorkbench(page: Page, pairingFragment?: string): Promise<void
   if (pairingFragment !== undefined) {
     await expect.poll(() => page.url()).not.toContain("keiko-app-session");
   }
-  await page.getByRole("button", { name: "Coding Workbench" }).click();
-  await expect(page.getByRole("heading", { name: "Coding Workbench" })).toBeVisible();
+  await page.getByRole("button", { name: "Coding Workbench", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Coding Workbench", exact: true })).toBeVisible();
 }
 
 async function bindFixtureWorkspace(page: Page): Promise<void> {

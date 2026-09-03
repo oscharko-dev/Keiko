@@ -172,12 +172,12 @@ current. Cross-check individual root devDependencies before claiming a clean swe
 
 ## GitHub Actions baseline
 
-Every action is pinned to a full 40-character commit SHA with a version comment, and every pinned
-SHA was verified against the upstream tag it claims: all 14 action repositories resolve their
-documented tag to exactly the pinned commit. `check:dependency-currency` enforces the table against
-the workflow files, in both directions, and additionally rejects an action repository whose
-sub-actions have drifted onto different refs — `github/codeql-action/init` and `/analyze` are not
-grouped by Dependabot and a one-sided bump is a guaranteed version-mismatch failure.
+Every action is pinned to a full 40-character commit SHA with a version comment. All 14 external
+action repositories resolve their documented tag to exactly the pinned commit.
+`check:dependency-currency` enforces the table against the workflow files, in both directions, and
+additionally rejects an action repository whose sub-actions have drifted onto different refs —
+`github/codeql-action/init` and `/analyze` are not grouped by Dependabot and a one-sided bump is a
+guaranteed version-mismatch failure.
 
 | Action                             | Version | Commit                                   | Disposition    |
 | ---------------------------------- | ------- | ---------------------------------------- | -------------- |

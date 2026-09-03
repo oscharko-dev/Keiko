@@ -182,11 +182,14 @@ export default defineConfig(
       },
     },
   },
-  // Build tooling under scripts/ is Node ESM outside the TypeScript program: disable type-aware
-  // rules and permit console output (these scripts report build progress on stdout).
-  { files: ["scripts/**/*.mjs"], ...tseslint.configs.disableTypeChecked },
+  // Build and GitHub Action tooling is Node ESM outside the TypeScript program: disable type-aware
+  // rules and permit console output (these scripts report gate progress on stdout).
   {
-    files: ["scripts/**/*.mjs"],
+    files: ["scripts/**/*.mjs", ".github/actions/**/main.mjs"],
+    ...tseslint.configs.disableTypeChecked,
+  },
+  {
+    files: ["scripts/**/*.mjs", ".github/actions/**/main.mjs"],
     languageOptions: {
       // structuredClone is a Node built-in since 17 and the repository floor is 24; declare it the
       // same way this config declares every other runtime global it relies on.

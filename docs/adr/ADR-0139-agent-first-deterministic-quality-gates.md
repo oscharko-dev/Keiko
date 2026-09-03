@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (2026-07-16); amended for the local-only #3347 diagnostic on 2026-09-01.
+Accepted (2026-07-16); amended for the local-only #3347 diagnostic on 2026-09-01; amended
+2026-09-03 to make required pull-request Sonar analysis dev-equivalent and non-incremental.
 
 ## Amends
 
@@ -118,6 +119,21 @@ makes the first run proportional to the change as well. `--full` restores the co
 and the required CI run on the pull request remains the authoritative full matrix — scoping moves
 local verification effort, never the enforcement bar.
 
+"Full matrix" includes the analysis surface inside each required check. SonarCloud's default PR
+sensor cache previously made that sentence false: the workflow ran, but its JavaScript/TypeScript
+analyzer freshly processed only changed files and could miss a full-tree warning that appeared on
+the subsequent `dev` push. Required Sonar scans therefore disable the analysis cache and the
+scanner-log validator proves full-project breadth before accepting the result.
+
+The matrix also shares one immutable integration subject. Full-tree lanes check out `github.sha`
+and run the repository's merge-candidate consistency script immediately after Node setup and before
+any other repository command. It verifies that the checked-out PR merge commit is clean and that
+its parents exactly match the event base and head. This is not adversarial isolation from a
+candidate-controlled workflow; branch protection, workflow-change review, and exact-current-head
+required checks own that trust boundary. Combined with strict required-status-check branch
+protection, concurrent agents are serialized by GitHub's candidate invalidation and re-check
+semantics rather than by post-merge agent monitoring.
+
 ### D5 — Static guards prefer precision to suppression
 
 Guardrail scanners must not require suppression markers for provably safe constructs. The
@@ -131,7 +147,9 @@ class are treated as gate defects, not as occasions for suppression comments.
 Required steps that call external services (SonarCloud scanner provisioning and analysis
 submission) wrap the call in bounded retry with backoff. A persistent outage still fails closed —
 availability of the review product remains a quality property (ADR-0135 D4) — but a transient
-5xx no longer consumes an integration attempt.
+5xx no longer consumes an integration attempt. The coverage/Sonar job has a 50-minute timeout: each
+of its three permitted full scans has measured about 15 minutes, with 30- and 60-second backoff, so
+the job bound includes the designed worst case rather than terminating the final permitted attempt.
 
 ### D7 — Merge-queue readiness removes the up-to-date race
 
@@ -142,7 +160,7 @@ with D2 in place the evidence source-tree binding remains valid across queue int
 the queued merge does not alter measured surfaces, and the scheduled refresh (D3) corrects the
 residual drift.
 
-### D8 — The scanner-log gate exempts one benign SCM-metadata warning class
+### D8 — The scanner-log gate proves warnings and full-analysis breadth
 
 `check-sonar-analysis-log.mjs` fails closed on any scanner `WARN`/`ERROR`, with one precisely
 scoped exception: `File '<path>' was detected as changed but without having changed lines`. This
@@ -151,6 +169,14 @@ still in the changed-file set, which is routine when pull-request analysis runs 
 merge ref. It carries no rule, coverage, or rating signal, and the SonarCloud quality gate keeps
 enforcing all of those independently. The exemption matches only that exact wording, so every other
 warning — including any real SCM failure such as a missing revision — still fails the gate.
+
+The same direct CLI invocation uses `--require-full-analysis`. It requires exactly zero JavaScript/
+TypeScript cache hits, one complete cache-miss receipt, a completed source set, and an explicit
+80-percent floor against the indexed-file inventory for both fresh inventories. Architecture proof
+binds the combined receipt total to SonarJasmin's plan and requires each receipt independently to be
+complete, so offsetting `51/50` and `49/50` receipts cannot pass by summing to `100/100`. The receipt
+grammar is recorded against scanner CLI `8.1.0.6389` and hosted plugin `13.8.0.44569`; future hosted
+wording or analyzer changes fail closed until the parser and fixtures are deliberately updated.
 
 ### D9 — D12 binds dependency state per revision
 
