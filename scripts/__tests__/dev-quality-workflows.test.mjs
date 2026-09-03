@@ -265,6 +265,7 @@ describe("dev quality workflows", () => {
     // SonarCloud "detected as changed but without having changed lines" SCM warning.
     expect(ci).toContain('-Dsonar.scm.revision="${SONAR_HEAD_SHA}"');
     expect(ci).toContain("-Dsonar.analysisCache.enabled=false");
+    expect(ci).toContain("-Dsonar.sensor.cache.enable=false");
     expect(ci).toContain(
       "SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.sonar-head.outputs.sha || github.sha }}",
     );

@@ -71,7 +71,7 @@ export function safeProperty(value: unknown, property: string): unknown {
 // declarations, whose prototype constructor and function name are own data properties.
 function safeOwnDataProperty(value: object, property: string): unknown {
   try {
-    const descriptor = Reflect.getOwnPropertyDescriptor(value, property);
+    const descriptor = Object.getOwnPropertyDescriptor(value, property);
     return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
   } catch {
     return undefined;
@@ -104,6 +104,7 @@ export function declaredErrorClassName(error: Error): string | undefined {
   if (proto === null) return undefined;
   const ctor = safeOwnDataProperty(proto, "constructor");
   if (typeof ctor !== "function") return undefined;
+  if (safeOwnDataProperty(ctor, "prototype") !== proto) return undefined;
   const name = safeOwnDataProperty(ctor, "name");
   if (typeof name !== "string") return undefined;
   if (!DECLARED_ERROR_CLASS_SHAPE.test(name)) {

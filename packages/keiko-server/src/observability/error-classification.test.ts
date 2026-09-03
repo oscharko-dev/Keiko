@@ -75,6 +75,16 @@ describe("machineToken", () => {
 });
 
 describe("declaredErrorClassName", () => {
+  it("rejects a foreign native constructor planted on an Error prototype", () => {
+    class ForeignConstructorError extends Error {}
+    Object.defineProperty(ForeignConstructorError.prototype, "constructor", {
+      configurable: true,
+      value: Object,
+    });
+
+    expect(declaredErrorClassName(new ForeignConstructorError("x"))).toBeUndefined();
+  });
+
   it("does not execute a constructor accessor planted on the prototype", () => {
     class HostileConstructorError extends Error {}
     let accessorReads = 0;
