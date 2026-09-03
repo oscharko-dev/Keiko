@@ -261,10 +261,10 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Verify immutable pull-request merge candidate
         if: ${{ github.event_name == 'pull_request' }}
-        env:
-          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/check-ci-merge-candidate.mjs
+        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
       - run: npm ci --ignore-scripts
       # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor; bubblewrap (and the
       # unshare fallback) need them to create the network namespace. Relax it for the runner so
@@ -455,10 +455,10 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Verify immutable pull-request merge candidate
         if: ${{ github.event_name == 'pull_request' }}
-        env:
-          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/check-ci-merge-candidate.mjs
+        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
       - name: Restore the npm download cache
         # Restore-only. The measuring jobs sit on the critical path, and on a cold key all five
         # would otherwise tar and compress a several-hundred-megabyte `~/.npm` in their post-job
@@ -561,10 +561,10 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Verify immutable pull-request merge candidate
         if: ${{ github.event_name == 'pull_request' }}
-        env:
-          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/check-ci-merge-candidate.mjs
+        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
       - name: Restore the npm download cache
         # Restore-only; `coverage-sonar` owns the save. See the note in `coverage-packages`.
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -631,10 +631,10 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Verify immutable pull-request merge candidate
         if: ${{ github.event_name == 'pull_request' }}
-        env:
-          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/check-ci-merge-candidate.mjs
+        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
       - name: Restore the npm download cache
         # Restore-only; `coverage-sonar` owns the save. See the note in `coverage-packages`.
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -729,10 +729,10 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Verify immutable pull-request merge candidate
         if: ${{ github.event_name == 'pull_request' }}
-        env:
-          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/check-ci-merge-candidate.mjs
+        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
       - name: Restore and maintain the npm download cache
         # The one job that also SAVES. It runs after the measuring jobs, so a cold key costs exactly
         # one post-job compression instead of six racing ones.
@@ -884,12 +884,22 @@ jobs:
               sleep $((attempt * 30))
             fi
           done
-          node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log" --require-full-analysis
           echo "status=$scanner_status" >> "$GITHUB_OUTPUT"
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            exit 0
+      - name: Verify trusted Sonar full-analysis evidence
+        if: ${{ always() && steps.sonar-scan.outcome != 'skipped' }}
+        uses: oscharko-dev/Keiko/.github/actions/verify-sonar-analysis-log@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        with:
+          log-path: ${{ runner.temp }}/sonar-scanner.log
+      - name: Fail the lane when the Sonar scanner failed
+        if: ${{ always() && github.event_name != 'workflow_dispatch' && ((github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
+        env:
+          SONAR_SCANNER_STATUS: ${{ steps.sonar-scan.outputs.status }}
+        run: |
+          if [ -z "$SONAR_SCANNER_STATUS" ]; then
+            echo "Sonar scanner did not publish an exit status." >&2
+            exit 1
           fi
-          exit "$scanner_status"
+          exit "$SONAR_SCANNER_STATUS"
       - name: Verify SonarCloud Banking Grade PR evidence
         if: ${{ github.event_name == 'pull_request' && github.base_ref == 'dev' }}
         env:
@@ -974,10 +984,10 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Verify immutable pull-request merge candidate
         if: ${{ github.event_name == 'pull_request' }}
-        env:
-          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/check-ci-merge-candidate.mjs
+        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
       - run: npm ci --ignore-scripts
       - name: Build
         run: npm run build
@@ -1098,10 +1108,10 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Verify immutable pull-request merge candidate
         if: ${{ github.event_name == 'pull_request' }}
-        env:
-          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/check-ci-merge-candidate.mjs
+        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
       - run: npm ci --ignore-scripts
       # The spawn smoke imports `packages/keiko-tools/src/windows-shell.ts` as SOURCE (Node type
       # stripping) so the escaping it exercises cannot drift from what ships. That source now
@@ -1215,10 +1225,10 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Verify immutable pull-request merge candidate
         if: ${{ github.event_name == 'pull_request' }}
-        env:
-          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/check-ci-merge-candidate.mjs
+        uses: oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 # gate-snapshot-1
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
       - name: Install workspaces (single root lockfile after #167)
         run: npm ci --ignore-scripts
       # The #2215 real-BFF E2E executes verification commands through the same mandatory

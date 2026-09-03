@@ -6,6 +6,14 @@ import { parse } from "yaml";
 const root = resolve(import.meta.dirname, "..", "..");
 const mutation = readFileSync(resolve(root, ".github/workflows/mutation-security.yml"), "utf8");
 const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
+const mergeCandidateAction = parse(
+  readFileSync(resolve(root, ".github/actions/verify-ci-merge-candidate/action.yml"), "utf8"),
+  { maxAliasCount: 0 },
+);
+const sonarAnalysisAction = parse(
+  readFileSync(resolve(root, ".github/actions/verify-sonar-analysis-log/action.yml"), "utf8"),
+  { maxAliasCount: 0 },
+);
 const nightlyPerfEvidence = readFileSync(
   resolve(root, ".github/workflows/nightly-perf-evidence.yml"),
   "utf8",
@@ -20,6 +28,7 @@ const mutationScope = readFileSync(resolve(root, "scripts/check-mutation-scope.m
 const localSonar = readFileSync(resolve(root, "docker/gates/run-sonar.sh"), "utf8");
 const localSonarCompose = readFileSync(resolve(root, "docker/gates/sonar-compose.yml"), "utf8");
 const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+const trustedGateRevision = "8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6";
 
 describe("dev quality workflows", () => {
   it("runs full mutation on a daily or explicit bounded lane, never on the PR critical path", () => {
@@ -193,14 +202,42 @@ describe("dev quality workflows", () => {
         "${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}",
       );
       expect(candidateCheck, `${jobName} must verify its candidate`).toMatchObject({
-        env: {
-          KEIKO_CANDIDATE_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
-          KEIKO_CANDIDATE_HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
-        },
         if: "${{ github.event_name == 'pull_request' }}",
-        run: "node scripts/check-ci-merge-candidate.mjs",
+        with: {
+          "base-sha": "${{ github.event.pull_request.base.sha }}",
+          "head-sha": "${{ github.event.pull_request.head.sha }}",
+        },
       });
+      expect(candidateCheck.uses).toBe(
+        `oscharko-dev/Keiko/.github/actions/verify-ci-merge-candidate@${trustedGateRevision}`,
+      );
     }
+
+    const sonarEvidence = ciWorkflow.jobs["coverage-sonar"].steps.find(
+      (step) => step.name === "Verify trusted Sonar full-analysis evidence",
+    );
+    expect(sonarEvidence).toMatchObject({
+      if: "${{ always() && steps.sonar-scan.outcome != 'skipped' }}",
+      with: { "log-path": "${{ runner.temp }}/sonar-scanner.log" },
+    });
+    expect(sonarEvidence.uses).toBe(
+      `oscharko-dev/Keiko/.github/actions/verify-sonar-analysis-log@${trustedGateRevision}`,
+    );
+    expect(mergeCandidateAction.runs.steps).toEqual([
+      {
+        env: {
+          KEIKO_CANDIDATE_BASE_SHA: "${{ inputs.base-sha }}",
+          KEIKO_CANDIDATE_HEAD_SHA: "${{ inputs.head-sha }}",
+        },
+        name: "Verify exact GitHub merge revision",
+        run: 'node "$GITHUB_ACTION_PATH/../../../scripts/check-ci-merge-candidate.mjs"',
+        shell: "bash",
+      },
+    ]);
+    expect(sonarAnalysisAction.runs.steps[0].run).toContain(
+      'node "$GITHUB_ACTION_PATH/../../../scripts/check-sonar-analysis-log.mjs"',
+    );
+    expect(sonarAnalysisAction.runs.steps[0].run).toContain("--require-full-analysis");
   });
 
   it("isolates local Sonar state by repository and selectable loopback port", () => {
@@ -273,11 +310,9 @@ describe("dev quality workflows", () => {
     );
     expect(ci).toContain('tee "$RUNNER_TEMP/sonar-scanner.log"');
     expect(ci).toContain("scanner_status=${PIPESTATUS[0]}");
-    expect(ci).toContain(
-      'node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log" --require-full-analysis',
-    );
-    expect(ci).toContain('exit "$scanner_status"');
-    expect(ci).toContain('if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]');
+    expect(ci).not.toContain("node scripts/check-sonar-analysis-log.mjs");
+    expect(ci).toContain("SONAR_SCANNER_STATUS: ${{ steps.sonar-scan.outputs.status }}");
+    expect(ci).toContain('exit "$SONAR_SCANNER_STATUS"');
     expect(ci).toContain("if: ${{ always() && github.event_name == 'workflow_dispatch' }}");
   });
 

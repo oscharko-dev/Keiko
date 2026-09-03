@@ -61,6 +61,11 @@ are excluded. The scanner archive, installation, working directory, and full log
 Scanner warnings are blocking. A future exception requires an exact, documented signature and a
 bounded count with a regression test. Wildcard warning suppression is forbidden.
 
+The merge-candidate and scanner-log validators execute through repository actions pinned to an
+exact reviewed commit, not from the pull-request checkout. The candidate contributes only the
+checked-out Git object and the scanner log being inspected; changing either validator in a pull
+request cannot change the code that authorizes that same pull request.
+
 Required scans also run with both the documented `sonar.analysisCache.enabled=false` control and
 SonarQube Cloud's effective `sonar.sensor.cache.enable=false` control. Incident #3380 proved the
 documented server control alone did not override Cloud's injected sensor-cache setting. The

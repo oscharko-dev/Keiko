@@ -172,29 +172,31 @@ current. Cross-check individual root devDependencies before claiming a clean swe
 
 ## GitHub Actions baseline
 
-Every action is pinned to a full 40-character commit SHA with a version comment, and every pinned
-SHA was verified against the upstream tag it claims: all 14 action repositories resolve their
-documented tag to exactly the pinned commit. `check:dependency-currency` enforces the table against
-the workflow files, in both directions, and additionally rejects an action repository whose
-sub-actions have drifted onto different refs — `github/codeql-action/init` and `/analyze` are not
-grouped by Dependabot and a one-sided bump is a guaranteed version-mismatch failure.
+Every action is pinned to a full 40-character commit SHA with a version comment. All 14 external
+action repositories resolve their documented tag to exactly the pinned commit; Keiko's two trusted
+gate actions resolve to the separately reviewed repository commit recorded below.
+`check:dependency-currency` enforces the table against the workflow files, in both directions, and
+additionally rejects an action repository whose sub-actions have drifted onto different refs —
+`github/codeql-action/init` and `/analyze` are not grouped by Dependabot and a one-sided bump is a
+guaranteed version-mismatch failure.
 
-| Action                             | Version | Commit                                   | Disposition    |
-| ---------------------------------- | ------- | ---------------------------------------- | -------------- |
-| `actions/checkout`                 | v7.0.0  | 9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 | patch-deferred |
-| `actions/setup-node`               | v7.0.0  | 820762786026740c76f36085b0efc47a31fe5020 | current        |
-| `actions/upload-artifact`          | v7.0.1  | 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a | current        |
-| `actions/download-artifact`        | v8.0.1  | 3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c | current        |
-| `actions/cache`                    | v6.1.0  | 55cc8345863c7cc4c66a329aec7e433d2d1c52a9 | current        |
-| `actions/attest`                   | v4.2.0  | f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 | patch-deferred |
-| `actions/setup-dotnet`             | v6.0.0  | a98b56852c35b8e3190ac28c8c2271da59106c68 | current        |
-| `actions/dependency-review-action` | v5.0.0  | a1d282b36b6f3519aa1f3fc636f609c47dddb294 | current        |
-| `github/codeql-action`             | v4.37.7 | ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd | patch-deferred |
-| `google/osv-scanner-action`        | v2.5.1  | 6e4298ebc4db23e847df9b2e2de2939d6f066c67 | current        |
-| `zizmorcore/zizmor-action`         | v0.6.2  | 3dc1ecc9bcb9e94e9b2c709687979e1298497054 | current        |
-| `Azure/login`                      | v3.0.0  | 532459ea530d8321f2fb9bb10d1e0bcf23869a43 | patch-deferred |
-| `Azure/artifact-signing-action`    | v2.0.0  | c7ab2a863ab5f9a846ddb8265964877ef296ee82 | current        |
-| `oscharko-dev/Keiko-for-Quality`   | v0.25.0 | f1117fb2b56a62bcbec22afbc149d5bd1474060c | current        |
+| Action                             | Version         | Commit                                   | Disposition    |
+| ---------------------------------- | --------------- | ---------------------------------------- | -------------- |
+| `actions/checkout`                 | v7.0.0          | 9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 | patch-deferred |
+| `actions/setup-node`               | v7.0.0          | 820762786026740c76f36085b0efc47a31fe5020 | current        |
+| `actions/upload-artifact`          | v7.0.1          | 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a | current        |
+| `actions/download-artifact`        | v8.0.1          | 3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c | current        |
+| `actions/cache`                    | v6.1.0          | 55cc8345863c7cc4c66a329aec7e433d2d1c52a9 | current        |
+| `actions/attest`                   | v4.2.0          | f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 | patch-deferred |
+| `actions/setup-dotnet`             | v6.0.0          | a98b56852c35b8e3190ac28c8c2271da59106c68 | current        |
+| `actions/dependency-review-action` | v5.0.0          | a1d282b36b6f3519aa1f3fc636f609c47dddb294 | current        |
+| `github/codeql-action`             | v4.37.7         | ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd | patch-deferred |
+| `google/osv-scanner-action`        | v2.5.1          | 6e4298ebc4db23e847df9b2e2de2939d6f066c67 | current        |
+| `zizmorcore/zizmor-action`         | v0.6.2          | 3dc1ecc9bcb9e94e9b2c709687979e1298497054 | current        |
+| `Azure/login`                      | v3.0.0          | 532459ea530d8321f2fb9bb10d1e0bcf23869a43 | patch-deferred |
+| `Azure/artifact-signing-action`    | v2.0.0          | c7ab2a863ab5f9a846ddb8265964877ef296ee82 | current        |
+| `oscharko-dev/Keiko-for-Quality`   | v0.25.0         | f1117fb2b56a62bcbec22afbc149d5bd1474060c | current        |
+| `oscharko-dev/Keiko`               | gate-snapshot-1 | 8ad6e87fced2c91b9bd421f56d05ee2459a2aaa6 | current        |
 
 The four `patch-deferred` actions have newer upstream tags (checkout v7.0.1, attest v4.2.2,
 codeql-action v4.37.9, Azure/login v3.0.2). They are left to Dependabot rather than hand-bumped
