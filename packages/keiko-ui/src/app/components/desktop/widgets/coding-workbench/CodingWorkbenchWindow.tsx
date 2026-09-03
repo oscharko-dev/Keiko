@@ -37,6 +37,7 @@ import type {
   CodingWorkbenchMutationKind,
   CodingWorkbenchMutationState,
   CodingWorkbenchRuntimeState,
+  CodingWorkbenchWorkspaceProjection,
 } from "@/lib/coding-workbench-live-state";
 import { useCodingWorkbenchQuestions } from "@/lib/useCodingWorkbenchQuestions";
 import { useCodingWorkbenchSafeActivity } from "@/lib/useCodingWorkbenchSafeActivity";
@@ -75,6 +76,11 @@ import {
   type RetryMessageProps,
 } from "./CodingWorkbenchChanges";
 import { CodexSubscriptionAuthCard } from "./CodingWorkbenchModelCards";
+import {
+  useCodingWorkbenchRunWorkspace,
+  type CodingWorkbenchRunWorkspace,
+  type CodingWorkbenchRunWorkspaceBinding,
+} from "./useCodingWorkbenchRunWorkspace";
 import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
 import { requestGatewayModelCatalogRefresh } from "../shared/gatewaySetupBus";
 import {
@@ -279,6 +285,60 @@ export interface CodingWorkbenchGitTarget {
 
 function noopOpenGit(_target: CodingWorkbenchGitTarget): void {}
 
+type WorkbenchWorkspaceApi = UseCodingWorkbenchRuntimeInput["workspace"];
+
+/** The live active root, or null when the read failed — one definition, so the surfaces that
+ * consume it (the editor bridge, the changes panel, the run-workspace lock) cannot disagree. */
+function liveWorkspaceRootOf(workspace: WorkbenchWorkspaceApi): string | null {
+  return workspace.error === null ? (workspace.activeBinding?.activeRoot ?? null) : null;
+}
+
+/** True while the live binding is unsettled and therefore proves nothing about where it points. */
+function workspaceBindingPendingOf(workspace: WorkbenchWorkspaceApi): boolean {
+  return workspace.loading || workspace.switching;
+}
+
+function liveWorkspaceIdentity(
+  workspace: WorkbenchWorkspaceApi,
+  state: CodingWorkbenchRuntimeState,
+): CodingWorkbenchRunWorkspace {
+  return {
+    root: liveWorkspaceRootOf(workspace),
+    taskBranch: workspace.activeInstance?.taskBranch ?? null,
+    workspace: state.workspace.value,
+  };
+}
+
+/** The run-scoped workspace lock, wired from the live binding (#3381 review). */
+function useRunWorkspaceBinding(
+  state: CodingWorkbenchRuntimeState,
+  activeWorkspace: WorkbenchWorkspaceApi,
+): CodingWorkbenchRunWorkspaceBinding {
+  return useCodingWorkbenchRunWorkspace({
+    runId: state.run.value?.runId,
+    live: liveWorkspaceIdentity(activeWorkspace, state),
+    // An unreadable binding is as unsettled as a switching one: it proves nothing about where the
+    // pointer now points, so it must not be read as a divergence from the run's workspace.
+    bindingPending: workspaceBindingPendingOf(activeWorkspace) || activeWorkspace.error !== null,
+  });
+}
+
+/**
+ * The workspace the context bar names while a run is live: the run's own. The LIVE projection is
+ * preferred while it still names that workspace, so mutable facts (health) stay current; once the
+ * pointer names a different workspace the frozen submission-time projection stands, because
+ * captioning workspace B's identity with the run in A is exactly the confusion this repairs.
+ */
+function sessionWorkspaceProjection(
+  state: CodingWorkbenchRuntimeState,
+  runWorkspace: CodingWorkbenchRunWorkspaceBinding,
+): CodingWorkbenchWorkspaceProjection | null {
+  const bound = runWorkspace.bound?.workspace ?? null;
+  if (bound === null || !activeRunState(state.run.value?.state)) return state.workspace.value;
+  const live = state.workspace.value;
+  return live !== null && live.workspaceId === bound.workspaceId ? live : bound;
+}
+
 export function CodingWorkbenchWindow({
   selectedRoot,
   onOpenGit = noopOpenGit,
@@ -300,6 +360,9 @@ export function CodingWorkbenchWindow({
     revision: state.run.value?.revision,
     permissionRequestId: state.run.value?.pendingPermission?.requestId,
   });
+  // Run attribution is answered from the run's OWN workspace for its whole life, never from the
+  // live pointer (#3381 review) — see `useCodingWorkbenchRunWorkspace`.
+  const runWorkspace = useRunWorkspaceBinding(state, activeWorkspace);
   const [taskIntent, setTaskIntent] = useState("");
   useClearTaskIntentOnMutationSuccess(state.mutation, taskIntent, setTaskIntent);
   const focusRef = useRef<HTMLHeadingElement>(null);
@@ -342,6 +405,7 @@ export function CodingWorkbenchWindow({
       codingModels={codingModels}
       authority={authority}
       onOpenGit={onOpenGit}
+      runWorkspace={runWorkspace}
     />
   );
 }
@@ -384,6 +448,8 @@ interface WorkbenchContentProps {
   readonly codingModels: readonly ModelCapability[];
   readonly authority: WorkbenchAuthoritySelection;
   readonly onOpenGit: (target: CodingWorkbenchGitTarget) => void;
+  /** The run's own workspace attribution, independent of the live pointer (#3381 review). */
+  readonly runWorkspace: CodingWorkbenchRunWorkspaceBinding;
 }
 
 function WorkbenchAlert({ message }: { readonly message: string | null }): ReactNode {
@@ -395,23 +461,32 @@ function WorkbenchAlert({ message }: { readonly message: string | null }): React
   );
 }
 
+/**
+ * The one place the LIVE workspace pointer is consulted during a run (#3381 review): it cannot
+ * retarget the run — the chips, the Git target and the editor bridge stay on the workspace the run
+ * was submitted against — but a pointer that no longer names that workspace is exactly why the
+ * changes panel reports a lost binding and why nothing the operator does in the other workspace
+ * reaches this run. Stating it is what turns two silent inert panels into one actionable fact.
+ */
+function RunWorkspaceMismatchNotice({ visible }: { readonly visible: boolean }): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  if (!visible) return null;
+  return (
+    <output className={styles.alert}>
+      <span aria-hidden="true">!</span> {t("codingWorkbench.composer.workspaceMismatch")}
+    </output>
+  );
+}
+
+// The three props this level owns are named; the rest belong to `WorkbenchColumns` and pass
+// through as one rest object, so a new column prop is not restated on this hop at all.
 function WorkbenchContent({
-  state,
-  actions,
-  activeWorkspace,
-  selectedRoot,
-  taskIntent,
-  onTaskIntentChange,
-  focusRef,
   alert,
   t,
   workbenchLabel,
-  onDecision,
-  research,
-  codingModels,
-  authority,
-  onOpenGit,
+  ...columns
 }: WorkbenchContentProps): ReactNode {
+  const { research, runWorkspace, state } = columns;
   return (
     <section
       className={styles.shell}
@@ -420,26 +495,16 @@ function WorkbenchContent({
       data-state={state.run.value?.state ?? "idle"}
     >
       <h2 className="sr-only">{workbenchLabel}</h2>
-      <SessionContextBar state={state} />
+      <SessionContextBar
+        state={state}
+        workspace={sessionWorkspaceProjection(state, runWorkspace)}
+      />
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {lifecycleAnnouncement(state, t, research.grant)}
       </p>
       <div className={styles.body}>
         <WorkbenchAlert message={alert} />
-        <WorkbenchColumns
-          state={state}
-          actions={actions}
-          activeWorkspace={activeWorkspace}
-          selectedRoot={selectedRoot}
-          taskIntent={taskIntent}
-          onTaskIntentChange={onTaskIntentChange}
-          focusRef={focusRef}
-          onDecision={onDecision}
-          research={research}
-          codingModels={codingModels}
-          authority={authority}
-          onOpenGit={onOpenGit}
-        />
+        <WorkbenchColumns {...columns} />
       </div>
     </section>
   );
@@ -458,6 +523,7 @@ function WorkbenchColumns({
   codingModels,
   authority,
   onOpenGit,
+  runWorkspace,
 }: Omit<WorkbenchContentProps, "alert" | "t" | "workbenchLabel">): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [resumeSelection, setResumeSelection] = useState<ResumeModeSelection | null>(null);
@@ -491,16 +557,19 @@ function WorkbenchColumns({
   });
   // The active workspace's live root, and whether that binding is still resolving — shared by the
   // headless editor bridge and `CodingWorkbenchChanges` below so a workspace switch mid-run is
-  // handled identically by both (workbench audit, 2026-09-03): each locks to the run's own root via
-  // `useRunBoundRoot` and reports "binding lost" rather than silently following the switch.
-  const liveWorkspaceRoot =
-    activeWorkspace.error === null ? (activeWorkspace.activeBinding?.activeRoot ?? null) : null;
-  const workspaceBindingPending = activeWorkspace.loading || activeWorkspace.switching;
+  // handled identically by both (workbench audit, 2026-09-03). Each also receives the run's
+  // SUBMISSION-time root: the server bound the run to the pointer it read when Start arrived, so a
+  // Start whose response lands after a switch must still bind this run to the workspace it was
+  // submitted against, never to whatever the pointer names by then (#3381 review).
+  const liveWorkspaceRoot = liveWorkspaceRootOf(activeWorkspace);
+  const workspaceBindingPending = workspaceBindingPendingOf(activeWorkspace);
+  const runBoundRoot = runWorkspace.bound?.root ?? null;
   const editorBridge = useCodingWorkbenchEditorBridge({
     root: liveWorkspaceRoot,
     runId: state.run.value?.runId,
     active: activeRunState(state.run.value?.state),
     bindingPending: workspaceBindingPending,
+    submittedRoot: runBoundRoot,
   });
   // The session stream is a bounded scroll region below the header; a run's newest activity lands
   // at its end. Follow that growth while the operator is at the bottom, never yank a reader who
@@ -526,15 +595,24 @@ function WorkbenchColumns({
   // Workbench: before a run it names the repository that workspace was bound from, during a run
   // the worktree the run edits. Showing the selected folder next to the bound branch misled the
   // operator about where the run would work (workbench end-to-end run, 2026-09-03).
+  //
+  // During a run those chips — and the Git target they open — name the RUN's workspace, which the
+  // server still holds authority over, not the live pointer: labelling a run in A with B's root and
+  // branch, and opening B's Git, invited the operator to act on the wrong tree (#3381 review).
   const repositoryRoot = runIsActive
-    ? (activeWorkspace.activeBinding?.activeRoot ?? selectedRoot ?? null)
+    ? (runBoundRoot ?? activeWorkspace.activeBinding?.activeRoot ?? selectedRoot ?? null)
     : (activeWorkspace.activeInstance?.repositoryRoot ?? selectedRoot ?? null);
   const taskComposer = (
     <TaskStartSection
       taskIntent={taskIntent}
       onTaskIntentChange={onTaskIntentChange}
       actions={{
-        onStart: () => void actions.start(taskIntent.trim()),
+        onStart: () => {
+          // Capture the workspace identity the Start is submitted against BEFORE the request goes
+          // out: the run id only arrives with the response, by which time the pointer may have moved.
+          runWorkspace.captureSubmission();
+          void actions.start(taskIntent.trim());
+        },
         onPause: () => void actions.pause(),
         onResume: () => {
           if (resumeMode !== null) void actions.resume(resumeMode);
@@ -549,7 +627,7 @@ function WorkbenchColumns({
       repositoryLabel={repositoryLabel(repositoryRoot)}
       branchLabel={
         runIsActive
-          ? (activeWorkspace.activeInstance?.taskBranch ?? null)
+          ? (runWorkspace.bound?.taskBranch ?? activeWorkspace.activeInstance?.taskBranch ?? null)
           : (activeWorkspace.activeInstance?.baseBranch ?? null)
       }
       onOpenGit={() =>
@@ -634,12 +712,14 @@ function WorkbenchColumns({
             runId={state.run.value?.runId}
             changeSignal={latestChangesSignal(state.events)}
             bindingPending={workspaceBindingPending}
+            submittedRoot={runBoundRoot}
             pairing={state.pairing}
           />
         </div>
       )}
       <div className={styles.composerDock}>
         <CodexSubscriptionAuthCard state={state} actions={actions} />
+        <RunWorkspaceMismatchNotice visible={runIsActive && runWorkspace.mismatched} />
         <RuntimeControls
           state={state}
           actions={actions}
@@ -749,10 +829,17 @@ function RuntimeAssuranceContextItem({
 // `.contextValue` — never a different, unrelated string (the workspace chip used to show the raw
 // filesystem root here) and never absent (the unbound case used to have none at all) — so a
 // sighted low-vision reader can always recover what the CSS ellipsis clipped.
-function SessionContextBar({ state }: { readonly state: CodingWorkbenchRuntimeState }): ReactNode {
+function SessionContextBar({
+  state,
+  workspace,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+  /** The workspace this session is about: the RUN's while one is live, else the live binding's. */
+  readonly workspace: CodingWorkbenchWorkspaceProjection | null;
+}): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const mode = confirmedMode(state);
-  const workspaceValue = workspaceContextValue(state.workspace.value, t);
+  const workspaceValue = workspaceContextValue(workspace, t);
   const sourceValue = sessionSourceValue(state.source.value, t);
   const modeValue = confirmedModeLabel(state, t);
   return (
@@ -857,6 +944,33 @@ function RuntimeControls({
   );
 }
 
+/**
+ * Whether the evidence THIS request is decided on is loaded and belongs to it (#3381 review).
+ *
+ * A `file-edit` asks the operator to authorize writes to a set of paths, and a `network-egress` ask
+ * authorizes one destination; both travel on their own authenticated channel, so a loading, failed,
+ * unpaired or superseded read leaves the card carrying vocabulary — kind, class, risk — and nothing
+ * about what would actually happen. Approving there is approving blind, which defeats the review
+ * channel and the human-control invariant (ADR-0129 D1), so Approve fails closed until the evidence
+ * is READY and its `requestId` binds it to the request on screen. Deny and the channel's own retry
+ * stay available — the recovery path is to see the evidence or refuse, never to wave it through.
+ */
+function approvalEvidenceBound(
+  request: CodingWorkbenchRuntimePendingPermission,
+  approvalReview: UseCodingWorkbenchApprovalReviewResult,
+  research: UseCodingWorkbenchResearchResult,
+): boolean {
+  if (request.actionKind === "file-edit") {
+    const review = approvalReview.status === "ready" ? approvalReview.review : null;
+    if (review?.requestId !== request.requestId) return false;
+  }
+  if (request.kind === "network-egress") {
+    const ask = research.status === "ready" ? research.ask : null;
+    if (ask?.requestId !== request.requestId) return false;
+  }
+  return true;
+}
+
 function PermissionPrompt({
   state,
   research,
@@ -875,6 +989,7 @@ function PermissionPrompt({
   });
   if (request === undefined) return null;
   const busy = state.mutation.status === "pending";
+  const evidenceBound = approvalEvidenceBound(request, approvalReview, research);
   return (
     <section className={cx(styles.card, styles.permission)} aria-labelledby="permission-title">
       <PanelTitle eyebrow={t("codingWorkbench.approval.eyebrow")} id="permission-title">
@@ -884,11 +999,43 @@ function PermissionPrompt({
       <ApprovalChangedFiles state={approvalReview} t={t} />
       {request.kind === "network-egress" ? <ResearchDestination state={research} t={t} /> : null}
       <p className={styles.helpText}>{t("codingWorkbench.approval.help")}</p>
+      <ApprovalDecisionControls
+        busy={busy}
+        evidenceBound={evidenceBound}
+        onDecision={onDecision}
+        t={t}
+      />
+    </section>
+  );
+}
+
+/** Ties the disabled Approve button to the note that says why, for a screen reader. */
+const APPROVAL_EVIDENCE_NOTE_ID = "coding-workbench-approval-evidence-note";
+
+function ApprovalDecisionControls({
+  busy,
+  evidenceBound,
+  onDecision,
+  t,
+}: {
+  readonly busy: boolean;
+  readonly evidenceBound: boolean;
+  readonly onDecision: (decision: CodingWorkbenchRuntimeApprovalDecision) => void;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <>
+      {evidenceBound ? null : (
+        <output className={styles.helpText} id={APPROVAL_EVIDENCE_NOTE_ID}>
+          {t("codingWorkbench.approval.evidenceRequired")}
+        </output>
+      )}
       <div className={styles.controls}>
         <button
           className={cx(styles.button, styles.buttonPrimary)}
           type="button"
-          disabled={busy}
+          disabled={busy || !evidenceBound}
+          {...(evidenceBound ? {} : { "aria-describedby": APPROVAL_EVIDENCE_NOTE_ID })}
           onClick={() => onDecision("approved")}
         >
           {t("codingWorkbench.approval.approve")}
@@ -902,7 +1049,7 @@ function PermissionPrompt({
           {t("codingWorkbench.approval.deny")}
         </button>
       </div>
-    </section>
+    </>
   );
 }
 

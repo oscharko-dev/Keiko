@@ -40,6 +40,7 @@ export interface UseCodingWorkbenchResearchInput {
 
 const IDLE: CodingWorkbenchResearchState = { status: "idle", ask: null, grant: null };
 const LOADING: CodingWorkbenchResearchState = { status: "loading", ask: null, grant: null };
+const UNAVAILABLE: CodingWorkbenchResearchState = { status: "unavailable", ask: null, grant: null };
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 interface ScopedResearchState extends UseCodingWorkbenchResearchInput {
@@ -96,7 +97,12 @@ function startResearchSync(
       const payload = await getCodingWorkbenchRuntimeResearch(input.runId, controller.signal);
       if (controller.signal.aborted) return;
       const nowMs = Date.now();
-      publish(scopeResearchStateFromInput(input, projectResearchState(payload, nowMs)));
+      publish(
+        scopeResearchStateFromInput(
+          input,
+          projectResearchState(payload, nowMs, input.permissionRequestId),
+        ),
+      );
       expiryTimer = scheduleResearchRefresh(input, payload, nowMs, publish, refresh);
     } catch (error) {
       if (!controller.signal.aborted) {
@@ -106,13 +112,7 @@ function startResearchSync(
           `[keiko] research channel refresh failed: ${clientErrorSummary(error)}`,
           { correlationId: correlationIdOf(error) },
         );
-        publish(
-          scopeResearchStateFromInput(input, {
-            status: "unavailable",
-            ask: null,
-            grant: null,
-          }),
-        );
+        publish(scopeResearchStateFromInput(input, UNAVAILABLE));
       }
     }
   }
@@ -134,7 +134,12 @@ function scheduleResearchRefresh(
   const delayMs = researchRefreshDelay(payload, nowMs);
   if (delayMs === undefined) return undefined;
   return setTimeout(() => {
-    publish(scopeResearchStateFromInput(input, projectResearchState(payload, Date.now())));
+    publish(
+      scopeResearchStateFromInput(
+        input,
+        projectResearchState(payload, Date.now(), input.permissionRequestId),
+      ),
+    );
     void refresh();
   }, delayMs);
 }
@@ -175,17 +180,38 @@ function sameResearchInput(
   );
 }
 
+/**
+ * The channel read and the runtime snapshot advance independently, so a read issued while the card
+ * was deciding P1 can be answered with the P2 ask the server has since moved on to. Published under
+ * P1's id it renders P2's host and request line beside P1's approve/deny controls (#3381 review) —
+ * the scoping in `useCodingWorkbenchResearch` cannot see it, because the input never changed, only
+ * the answer did. A carried ask therefore has to name the request being decided, or the whole state
+ * is the honest `unavailable`.
+ *
+ * An ABSENT ask is not a mismatch: it is the server having resolved or expired the request, which
+ * the expiry revalidation ("revalidates each expiry and never retains server-expired research
+ * state") must keep reporting as `ready` with a null ask so a live grant stays visible.
+ */
 function projectResearchState(
   payload: CodingWorkbenchRuntimeResearchChannelPayload,
   nowMs: number,
+  expectedRequestId: string | undefined,
 ): CodingWorkbenchResearchState {
-  return payload.session === "unpaired"
-    ? { status: "unavailable", ask: null, grant: null }
-    : {
-        status: "ready",
-        ask: liveUntil(payload.pending, nowMs),
-        grant: liveUntil(payload.grant, nowMs),
-      };
+  if (payload.session === "unpaired") return UNAVAILABLE;
+  if (mismatchedAsk(payload.pending, expectedRequestId)) return UNAVAILABLE;
+  return {
+    status: "ready",
+    ask: liveUntil(payload.pending, nowMs),
+    grant: liveUntil(payload.grant, nowMs),
+  };
+}
+
+function mismatchedAsk(
+  pending: CodingWorkbenchRuntimePendingResearch | undefined,
+  expectedRequestId: string | undefined,
+): boolean {
+  if (pending === undefined || expectedRequestId === undefined) return false;
+  return pending.requestId !== expectedRequestId;
 }
 
 function liveUntil<T extends { readonly expiresAt: string }>(

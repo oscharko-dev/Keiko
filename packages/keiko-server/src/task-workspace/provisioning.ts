@@ -900,7 +900,10 @@ async function provisionImpl(
 
 // ─── activate orchestration ──────────────────────────────────────────────────────────────────────
 
-function activateActiveOrResume(instance: WorkspaceInstance): {
+function activateActiveOrResume(
+  instance: WorkspaceInstance,
+  lockHeldByActor: boolean,
+): {
   readonly next: WorkspaceInstance;
   readonly type: WorkspaceEventType;
 } {
@@ -911,7 +914,7 @@ function activateActiveOrResume(instance: WorkspaceInstance): {
     from: instance.lifecycleState,
     to: "active",
     context: {
-      lockHeldByActor: true,
+      lockHeldByActor,
       pathContained: true,
       worktreeClean: true,
       branchReady: true,
@@ -920,11 +923,16 @@ function activateActiveOrResume(instance: WorkspaceInstance): {
     },
   });
   if (!transition.ok) {
-    throw new TaskWorkspaceError(
-      "ILLEGAL_TRANSITION",
-      "cannot resume workspace",
-      transition.reasons,
-    );
+    // The state pair itself is legal for every ACTIVATABLE_STATES member, so the only precondition
+    // that can fail here is ownership — and that is contention (retryable once the actor owns the
+    // workspace), not an illegal transition (a permanent verdict about the state pair).
+    throw lockHeldByActor
+      ? new TaskWorkspaceError("ILLEGAL_TRANSITION", "cannot resume workspace", transition.reasons)
+      : new TaskWorkspaceError(
+          "LOCK_CONTENTION",
+          "activation does not hold the workspace lock",
+          transition.reasons,
+        );
   }
   return { next: { ...instance, lifecycleState: "active" }, type: "resumed" };
 }
@@ -1025,6 +1033,105 @@ function assertActivationIdentityCurrent(
   );
 }
 
+// What the activation actually owns, and the fact ADR-0088's `lock-held-by-actor` precondition is
+// answered with.
+interface ActivationOwnership {
+  // The row as the store persisted it with the actor's lock on it — the transition is validated
+  // against THIS record, never against the pre-acquisition one. For an already-active row, which
+  // makes no transition, it is the row as it was read.
+  readonly instance: WorkspaceInstance;
+  // The lock this activation may RETAIN when `acquireLock` asked for it. `null` only where no
+  // transition needed one and no retention was requested.
+  readonly lock: WorkspaceLock | null;
+  // Whether the DURABLE row proves the actor owns the workspace. Read back from what the store
+  // returned rather than from the object handed to it: an ownership that could not be recorded is
+  // not ownership, and this activation must refuse rather than assert a precondition nothing
+  // supports.
+  readonly lockHeldByActor: boolean;
+}
+
+// ADR-0088 gates every activation transition — `paused`/`handoff-ready`/`recovery-required` →
+// `active` — on `lock-held-by-actor`. That fact used to be hard-coded `true`, which the mutex cannot
+// stand in for: mutex.ts states the `ws:` key grants TURN ORDER (same-process serialization) while
+// the persisted advisory `WorkspaceLock` grants OWNERSHIP (across-restart / across-actor). With
+// `recovery-required` now activatable, the hard-coded fact let ANY actor promote a drifted, unowned
+// row while the settled write persisted `lock: null` — the precondition was fabricated, not met
+// (PR #3381 review P1).
+//
+// So the lock is ACQUIRED here: the actor's `activation` lock is written to the durable row before
+// the transition is validated, and a live lock this same actor already holds is reused rather than
+// replaced. `acquireLock` keeps exactly the meaning it always had — RETENTION beyond this call for
+// cross-actor exclusivity — and the settled write in `activateLocked` releases the lock again when
+// it was not requested, so the persisted outcome of an ordinary switch is unchanged.
+// `assertActivatable` has already refused a live lock owned by anyone else, so an acquisition can
+// only take a row this actor is entitled to.
+function ownActivation(
+  ctx: ProvisioningCtx,
+  instance: WorkspaceInstance,
+  request: WorkspaceActivateRequest,
+  nowMs: number,
+): ActivationOwnership {
+  // An already-active row makes NO transition, so the contract's precondition table asks nothing of
+  // the lock and this stays the single-write idempotent activation ADR-0093 D4's constant-per-switch
+  // bound (pinned in scale.test.ts) describes. `lockHeldByActor` is reported as what it is — nothing
+  // was acquired — so a future caller that DID need a transition here would fail closed.
+  if (instance.lifecycleState === "active") {
+    return {
+      instance,
+      lock: request.acquireLock ? makeLock(ctx, request.requestedBy, "activation", nowMs) : null,
+      lockHeldByActor: false,
+    };
+  }
+  const existing = instance.lock;
+  const lock =
+    existing !== null &&
+    existing.owner === request.requestedBy &&
+    provisioningLockLive(ctx, existing, nowMs)
+      ? existing
+      : makeLock(ctx, request.requestedBy, "activation", nowMs);
+  const persisted = ctx.deps.store.upsert({ ...instance, lock, updatedAt: isoFrom(nowMs) });
+  const durable = persisted.lock;
+  return {
+    instance: persisted,
+    lock,
+    lockHeldByActor:
+      durable !== null &&
+      durable.lockId === lock.lockId &&
+      durable.owner === request.requestedBy &&
+      provisioningLockLive(ctx, durable, nowMs),
+  };
+}
+
+// The transition, with its refusal left CLASSIFIED and VISIBLE rather than only thrown: a rejected
+// activation records the same `transition-rejected` evidence + `task-workspace.lifecycle` line the
+// provision gate records, carrying the error code, so an operator reading `server.log` alone sees
+// which precondition refused the switch (AGENTS.md §8, SC4).
+function activateOrRefuse(
+  ctx: ProvisioningCtx,
+  owned: ActivationOwnership,
+  request: WorkspaceActivateRequest,
+  nowMs: number,
+): { readonly next: WorkspaceInstance; readonly type: WorkspaceEventType } {
+  try {
+    return activateActiveOrResume(owned.instance, owned.lockHeldByActor);
+  } catch (error) {
+    if (error instanceof TaskWorkspaceError) {
+      emit(ctx, {
+        operation: "activate",
+        outcome: error.outcome,
+        type: "transition-rejected",
+        workspaceId: owned.instance.workspaceId,
+        taskId: owned.instance.taskId,
+        nowMs,
+        correlationId: request.correlationId,
+        fromState: owned.instance.lifecycleState,
+        errorCode: error.code,
+      });
+    }
+    throw error;
+  }
+}
+
 function activateLocked(
   ctx: ProvisioningCtx,
   request: WorkspaceActivateRequest,
@@ -1041,8 +1148,9 @@ function activateLocked(
   }
   assertActivationIdentityCurrent(ctx, instance, nowMs, request.correlationId);
   ensureManagedWorkspaceIdentity(ctx, instance, false);
-  const { next, type } = activateActiveOrResume(instance);
-  const lock = request.acquireLock ? makeLock(ctx, request.requestedBy, "activation", nowMs) : null;
+  const owned = ownActivation(ctx, instance, request, nowMs);
+  const { next, type } = activateOrRefuse(ctx, owned, request, nowMs);
+  const lock = request.acquireLock ? owned.lock : null;
   const persisted = ctx.deps.store.upsert({
     ...next,
     ...driftAfterLiveProof(next, next.lifecycleState, true),

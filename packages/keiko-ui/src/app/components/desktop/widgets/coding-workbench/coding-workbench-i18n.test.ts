@@ -120,6 +120,20 @@ describe("Coding Workbench translations", () => {
     );
   });
 
+  // #3381 review: both new governance strings — the one that explains why a run's chips no longer
+  // follow the active workspace, and the one that explains a disabled Approve — must exist in both
+  // catalogs, since either shown blank leaves an operator with an unexplained blocked control.
+  it.each([
+    "codingWorkbench.composer.workspaceMismatch",
+    "codingWorkbench.approval.evidenceRequired",
+  ] as const)("localizes %s in both catalogs", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en.length).toBeGreaterThan(0);
+    expect(de.length).toBeGreaterThan(0);
+    expect(de).not.toBe(en);
+  });
+
   it("keeps every Coding Workbench key out of eager locale catalogs", () => {
     expect(Object.keys(EN_MESSAGES)).not.toContainEqual(
       expect.stringMatching(/^codingWorkbench\./u),

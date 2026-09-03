@@ -612,6 +612,40 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     expect(attempts.count).toBe(1);
   });
 
+  // The group latch above must key on the SCOPE of the failing operation, not on the classification
+  // an unclassified error is normalised to. `gatherFacts` calls `localBranchExists(taskBranch)`
+  // before `listWorktrees`; the durable validator accepts any non-empty `taskBranch` while the
+  // production adapter throws `GitWorktreeOperandError` for one that is not a safe ref name. That
+  // row-local rejection used to be normalised to REPOSITORY_UNREACHABLE and LATCH, after which every
+  // later row of the same repository was skipped — and the deterministic row order made one
+  // malformed row suppress the repository on every subsequent pass (PR #3381 review P2).
+  //
+  // The real adapter is used deliberately: the operand rejection is raised by the production argv
+  // guard, not by a double that could be simplified past the violation it guards (AGENTS.md §7).
+  it("keeps a row-local operand failure from suppressing every later row of the repository", async () => {
+    const healthy = await provisionTask("t-row-healthy");
+    const malformed = await provisionTask("t-row-malformed");
+    // `updatedAt` fixes the order the store enumerates (updated_at DESC): the malformed row is
+    // reconciled FIRST, so a latch set by it would be in place when the healthy row is reached.
+    store.upsert({
+      ...malformed,
+      taskBranch: "invalid branch",
+      updatedAt: "2026-02-01T00:00:00.000Z",
+    });
+    store.upsert({ ...healthy, updatedAt: "2026-01-01T00:00:00.000Z" });
+    const activityLog = createBufferedServerLogSink();
+
+    const report = await reconciliation(activityLog).reconcile(repoRoot, "row-local-0001");
+
+    // The malformed row alone is carried forward unverified, with its own line on the log.
+    expect(entryFor(report, malformed.workspaceId).health).toBe("unknown");
+    expect(activityLog.events.filter((event) => event.errorKind !== undefined)).toHaveLength(1);
+    // The healthy row BEHIND it in the enumeration order is still reconciled and still verified.
+    expect(entryFor(report, healthy.workspaceId).health).toBe("healthy");
+    expect(entryFor(report, healthy.workspaceId).status).toBe("healthy");
+    expect(store.getById(healthy.workspaceId)?.lastVerifiedHead).toBeDefined();
+  });
+
   // Only the GATHERING of a row's live facts is isolated. A failure to persist the verdict is not a
   // fact about the repository: it propagates under its own name instead of being relabelled as an
   // unreachable repository, which would send an operator after the wrong subsystem (review of
@@ -906,6 +940,71 @@ describe("dangling active pointer", () => {
     expect(clearCount).toBe(0); // read-only GET path never mutates the pointer store
     await svc.reconcile();
     expect(clearCount).toBe(1); // the live reconcile self-heals the dangling pointer
+  });
+
+  // The active pointer is a SINGLETON across every repository, and every UI bind/restore reconciles
+  // with a `root` — a SCOPED pass. Comparing the singleton pointer with the scoped entry list alone
+  // made a pointer that merely belongs to ANOTHER repository indistinguishable from one whose
+  // workspace is gone, and the live path then DELETED it: a bind attempt for repository A wiped the
+  // valid pointer held on repository B, so a subsequent verification failure for A left the
+  // application unbound from a workspace nothing was wrong with (PR #3381 review P1).
+  it("keeps a valid pointer that belongs to another repository during a scoped pass", async () => {
+    const other = makeRepo("keiko-recon-scope-");
+    const inA = await provisionTask("t-scope-a");
+    const inB = await provisionTaskInRepo(other, "t-scope-b");
+    pointerStore.set({
+      workspaceId: inB.workspaceId,
+      setBy: "u",
+      atIso: "2026-01-01T00:00:00Z",
+    });
+
+    const report = await reconciliation().reconcile(repoRoot, "scope-0001");
+
+    // The report itself stays scoped — the caller asked for one repository.
+    expect(report.entries.map((entry) => entry.workspaceId)).toEqual([inA.workspaceId]);
+    // ... but the pointer is resolved against the GLOBAL store, so it is neither reported dangling
+    // nor cleared.
+    expect(report.activeRestoration).toEqual({ kind: "restored", workspaceId: inB.workspaceId });
+    expect(pointerStore.get()?.workspaceId).toBe(inB.workspaceId);
+  });
+
+  // Anti-vacuity for the guard above: a pointer whose workspace exists NOWHERE is still dangling
+  // during a scoped pass, so the fix narrowed the clear to the genuinely dangling case rather than
+  // disabling it.
+  it("still clears a pointer whose workspace exists in no repository during a scoped pass", async () => {
+    await provisionTask("t-scope-gone");
+    // A pointer whose workspace id is in NO repository. It has to come from a stub: deleting the
+    // row cascades the real pointer away, which would make the pass see no pointer at all rather
+    // than a dangling one.
+    let clearCount = 0;
+    const dangling: ActiveWorkspacePointer = {
+      workspaceId: "ws_ghost",
+      setBy: "u",
+      setAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+    const svc = createWorkspaceReconciliationService({
+      store,
+      activePointerStore: {
+        get: () => dangling,
+        set: () => dangling,
+        clear: () => {
+          clearCount += 1;
+        },
+      },
+      evidenceStore: capturingEvidence(),
+      managedRoot,
+      createAdapter: realAdapter,
+      redactString: (s: string): string => s,
+      now: (): number => nowMs,
+      newId: (): string => `id-${String(idCounter++)}`,
+      mutex: __twMutex,
+    });
+
+    const report = await svc.reconcile(repoRoot, "scope-0002");
+
+    expect(report.activeRestoration.kind).toBe("cleared-dangling");
+    expect(clearCount).toBe(1);
   });
 });
 

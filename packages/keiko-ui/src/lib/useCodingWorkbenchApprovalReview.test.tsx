@@ -153,6 +153,44 @@ describe("useCodingWorkbenchApprovalReview", () => {
     });
   });
 
+  // #3381 review: the channel read and the runtime snapshot advance independently, so a read
+  // issued for P1 can be answered with the review of the P2 the server has moved on to. Published
+  // under P1's id it renders P2's paths and magnitude beside P1's approve/deny controls — the input
+  // never changed, so the hook's own input scoping cannot see it.
+  it("reports unavailable when the channel answers with a different request's review", async () => {
+    getApprovalReviewMock.mockResolvedValue({
+      session: "active",
+      pending: { ...REVIEW, requestId: "permission-8", paths: ["src/gamma.ts"], fileCount: 1 },
+    });
+    const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+    });
+    expect(result.current.review).toBeNull();
+  });
+
+  it("reports unavailable when a retry answers with a newer request's review", async () => {
+    getApprovalReviewMock.mockResolvedValueOnce(active());
+    getApprovalReviewMock.mockResolvedValueOnce({
+      session: "active",
+      pending: { ...REVIEW, requestId: "permission-9" },
+    });
+    const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
+    await waitFor(() => {
+      expect(result.current.review).toEqual(REVIEW);
+    });
+
+    act(() => {
+      result.current.retry();
+    });
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+    });
+    expect(result.current.review).toBeNull();
+  });
+
   it("reports unavailable and stays diagnosable when the channel read fails", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     getApprovalReviewMock.mockRejectedValue(new Error("channel down"));

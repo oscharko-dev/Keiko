@@ -440,7 +440,13 @@ describe("useActiveWorkspaceState", () => {
     expect(result.current.error).toBeNull();
   });
 
-  it("ignores a stale mutation reload after a newer switch has settled", async () => {
+  // Two switches in flight at once. `mutationSeqRef` orders the CLIENT's commits, but it cannot
+  // un-apply a request the server is already executing: here ws-2 answers first and ws-1's POST
+  // lands last, so the server pointer ends on ws-1. The surface must end where the SERVER ended —
+  // it advertised ws-2 while every bound surface would have resolved ws-1's root (#3381 review).
+  // The convergence is asserted against the routed server's own state, not a literal, so the pin
+  // cannot pass on a UI and a server that merely happen to both be wrong.
+  it("converges on server truth after every applied switch of a burst has settled", async () => {
     const postWs1 = deferred<Response>();
     const postWs2 = deferred<Response>();
     const state: RouterState = {
@@ -477,17 +483,75 @@ describe("useActiveWorkspaceState", () => {
       second = result.current.switchTo("ws-2");
     });
 
+    // The newer switch settles first and owns the surface: its reload is not clobbered by the
+    // older request that is still executing.
     await act(async (): Promise<void> => {
       postWs2.resolve(json({}));
       await second;
     });
     expect(result.current.activeRoot).toBe("/wt/2");
+    expect(state.active?.instance.workspaceId).toBe("ws-2");
 
     await act(async (): Promise<void> => {
       postWs1.resolve(json({}));
       await first;
     });
-    expect(result.current.activeRoot).toBe("/wt/2");
+    // The server ended on ws-1, so the surface does too — an applied mutation is never dropped
+    // just because a newer one committed first.
+    expect(state.active?.instance.workspaceId).toBe("ws-1");
+    expect(result.current.activeRoot).toBe(state.active?.binding.activeRoot);
+    expect(result.current.activeInstance?.workspaceId).toBe(state.active?.instance.workspaceId);
+    expect(result.current.activeRoot).toBe("/wt/1");
+    expect(result.current.switching).toBe(false);
+    expect(result.current.error).toBeNull();
+  });
+
+  // The authoritative re-read of an applied-but-superseded mutation must not swallow the refusal
+  // of the newer one that superseded it: the operator would be left with the reconciled binding
+  // and no sign that their last action was refused (AGENTS.md §7, no silent failures).
+  it("keeps a refused newer mutation's error while converging on the applied older one", async () => {
+    const post = deferred<Response>();
+    const target = instance("ws-1", "/wt/1");
+    const state: RouterState = { active: null, instances: [target] };
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const method = requestMethod(init);
+      const read = workspaceReadResponse(state, url, method);
+      if (read !== undefined) return read;
+      if (url === "/api/task-workspaces/active" && method === "POST") {
+        return post.promise.then(() => {
+          activateWorkspace(state, target.workspaceId);
+          return json({ instance: target, binding: state.active?.binding });
+        });
+      }
+      if (url === "/api/task-workspaces/ws-1/pause" && method === "POST") {
+        return Promise.resolve(
+          json({ error: { code: "LOCK_CONTENTION", message: "locked" } }, 409),
+        );
+      }
+      return Promise.resolve(json({}, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useActiveWorkspaceState());
+    await act(async (): Promise<void> => {
+      await result.current.refresh();
+    });
+
+    let applied!: Promise<boolean>;
+    act(() => {
+      applied = result.current.switchTo("ws-1");
+    });
+    await act(async (): Promise<void> => {
+      expect(await result.current.pause("ws-1")).toBe(false);
+    });
+    expect(result.current.error).toBe("locked");
+
+    await act(async (): Promise<void> => {
+      post.resolve(json({}));
+      expect(await applied).toBe(true);
+    });
+    expect(result.current.activeRoot).toBe(state.active?.binding.activeRoot);
+    expect(result.current.activeRoot).toBe("/wt/1");
+    expect(result.current.error).toBe("locked");
   });
 
   it("reloads server truth after a concurrent refresh settles during a mutation", async () => {

@@ -175,9 +175,10 @@ type VerificationTrustDeps = Pick<
 function verificationWorkspaceTrust(
   deps: VerificationTrustDeps,
   workspaceRoot: string,
+  correlationId: string | undefined,
 ): WorkspaceTrustLevel {
   try {
-    const trustRoot = verificationTrustRoot(deps, workspaceRoot);
+    const trustRoot = verificationTrustRoot(deps, workspaceRoot, correlationId);
     if (trustRoot === undefined) return "restricted";
     return deps.workspaceScriptTrust?.trustLevelForRoot(trustRoot) === "trusted"
       ? "trusted"
@@ -187,11 +188,21 @@ function verificationWorkspaceTrust(
   }
 }
 
+// The resolver is asked WITH the request's correlation id, exactly as the containment port is
+// (`resolveEditorAgentContainmentPort`). This lookup can be the one that observes an access change
+// — a revoked lifecycle row, a replaced identity, an unproven gitdir identity — between the two
+// root-binding checks, and the body-free `workspace.root.denied` line it emits then lands on the
+// request's timeline instead of UNKNOWN_CORRELATION_ID. Without it the policy answered
+// `workspace-restricted` and returned before `runAndRespond` could emit its correlated refusal, so
+// the denial that decided the request was unjoinable to it (CodeRabbit, PR #3381).
 function verificationTrustRoot(
   deps: Pick<UiHandlerDeps, "workspaceRootAccessResolver">,
   workspaceRoot: string,
+  correlationId: string | undefined,
 ): string | undefined {
-  const access = workspaceRootAccessOrUndefined(deps.workspaceRootAccessResolver?.(workspaceRoot));
+  const access = workspaceRootAccessOrUndefined(
+    deps.workspaceRootAccessResolver?.(workspaceRoot, correlationId),
+  );
   if (access?.kind !== "managed-task") return workspaceRoot;
   const repositoryRoot = access.repositoryRoot;
   // A managed worktree that names no repository has no grantable basis at all: the standing
@@ -234,7 +245,7 @@ function decideVerificationPolicy(
     baseline,
     resolution.envelope,
     EDITOR_AGENT_ACTION_APPROVAL_RISK.requestVerification,
-    verificationWorkspaceTrust(deps, snapshot.workspaceRoot),
+    verificationWorkspaceTrust(deps, snapshot.workspaceRoot, verificationCorrelationId(request)),
   );
 }
 

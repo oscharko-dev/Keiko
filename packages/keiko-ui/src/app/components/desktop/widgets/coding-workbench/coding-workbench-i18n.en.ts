@@ -54,6 +54,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "MemoriaViva uses only the active project memory in Coding Workbench.",
   "codingWorkbench.composer.help":
     "Pause the active run to send a follow-up. A drafted follow-up is admitted only while paused and is never queued.",
+  "codingWorkbench.composer.workspaceMismatch":
+    "This run keeps the authority of the workspace it started in, which is no longer the active one. The chips, Git and the run's changes stay on the run's workspace; switch back to it to review or edit those files.",
   "codingWorkbench.questions.sectionLabel": "Runtime questions",
   "codingWorkbench.questions.eyebrow": "Input needed",
   "codingWorkbench.questions.title": "Runtime questions",
@@ -380,6 +382,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Changed files unavailable. Re-pair this window to see them before deciding.",
   "codingWorkbench.approval.changes.retry": "Retry loading the changed files",
   "codingWorkbench.approval.help": "Raw commands, prompts, diffs, and file contents remain hidden.",
+  "codingWorkbench.approval.evidenceRequired":
+    "Approval stays unavailable until what this request would touch has loaded. Retry that read, or deny the request.",
   "codingWorkbench.approval.approve": "Approve once",
   "codingWorkbench.approval.deny": "Deny",
   "codingWorkbench.changesetReview.eyebrow": "Change review",

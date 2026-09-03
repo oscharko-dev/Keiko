@@ -167,12 +167,15 @@ interface ResolvedVerificationWorkspace {
   // facts would never match its repository's grant).
   readonly trustProjectId: string;
   readonly trustWorkspace: WorkspaceInfo;
-  // Whether the root whose scripts will actually run carries the SAME package-script trust basis
-  // as the granted project. False only for a managed task worktree whose `package.json` differs
-  // from its repository's: the grant is bound to exact manifest bytes (ADR-0147 D3), and a run that
-  // rewrote its own `package.json` would otherwise execute those scripts under the repository's
-  // standing decision (P1, PR #3381 review).
-  readonly trustBasisMatches: boolean;
+  // The repository root the root that will actually run scripts must STILL match — the roots, not
+  // the boolean they compare to. The grant is bound to exact manifest bytes (ADR-0147 D3), so a
+  // comparison taken once at resolution time and reused at the effect boundary would accept a
+  // `package.json` replaced between the two checks and spawn a script no human approved (P1,
+  // PR #3381 review). `trustedForScripts` therefore re-derives the comparison from these roots on
+  // every ask, so the at-effect answer is read from the filesystem in the same synchronous step
+  // that admits the run. `undefined` for an ordinary root (its own basis) and for a managed access
+  // naming no repository (no grantable basis at all — script kinds fail closed).
+  readonly trustBasisRepositoryRoot: string | undefined;
 }
 
 class VerificationRunnerManagerImpl implements VerificationRunnerManager {
@@ -646,12 +649,26 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private trustedForScripts(resolved: ResolvedVerificationWorkspace): boolean {
     try {
       return (
-        resolved.trustBasisMatches &&
+        this.trustBasisMatchesNow(resolved) &&
         this.isTrusted(resolved.trustProjectId, resolved.trustWorkspace)
       );
     } catch {
       return false;
     }
+  }
+
+  // Re-derived from the filesystem on EVERY ask — plan time, at-effect, and catalog projection —
+  // never cached on the resolved workspace. See `ResolvedVerificationWorkspace.trustBasisRepositoryRoot`.
+  private trustBasisMatchesNow(resolved: ResolvedVerificationWorkspace): boolean {
+    const repositoryRoot = resolved.trustBasisRepositoryRoot;
+    // An ORDINARY root is its own trust basis and has nothing to compare against. A managed access
+    // that names NO repository has no grantable package-script basis at all: the standing decision
+    // that governs it is unknown, so script kinds fail closed rather than being evaluated against
+    // the worktree's own trust row — the root a governed run can rewrite (CodeRabbit, PR #3381).
+    // Production always names one (`canonicalManagedRootAccess` sets `repositoryRoot` on every
+    // granted managed access), so this is the floor, not a supported configuration.
+    if (repositoryRoot === undefined) return resolved.access.kind !== "managed-task";
+    return worktreeSharesRepositoryTrustBasis(resolved.access, repositoryRoot, this.fs);
   }
 
   private resolveWorkspace(
@@ -687,13 +704,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         workspace,
         trustProjectId: projectId,
         trustWorkspace: workspace,
-        // A managed worktree that names NO repository has no grantable package-script basis: the
-        // standing decision that governs it is unknown. Script kinds fail closed rather than being
-        // evaluated against the worktree's own trust row — the root a governed run can rewrite
-        // (CodeRabbit, PR #3381). Production always names one: `canonicalManagedRootAccess` sets
-        // `repositoryRoot` on every granted managed access, so this is the floor, not a supported
-        // configuration. An ORDINARY root is its own trust basis and keeps the previous answer.
-        trustBasisMatches: access.kind !== "managed-task",
+        // No repository names a basis to compare against; `trustBasisMatchesNow` resolves what that
+        // means for an ordinary root and for a managed access with no bound repository.
+        trustBasisRepositoryRoot: undefined,
       };
     }
     return {
@@ -703,7 +716,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       trustWorkspace: detectWorkspaceAt(repositoryRoot, this.fs, {
         scanSourceFilesForLanguages: false,
       }),
-      trustBasisMatches: worktreeSharesRepositoryTrustBasis(access, repositoryRoot, this.fs),
+      trustBasisRepositoryRoot: repositoryRoot,
     };
   }
 

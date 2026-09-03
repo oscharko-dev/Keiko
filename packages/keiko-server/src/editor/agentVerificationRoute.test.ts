@@ -1087,8 +1087,12 @@ function registerManagedSession(workspaceRoot: string, bindRoot: boolean): void 
   expect(editorAgentRegistry.registerSnapshot(bound)).toBe(true);
 }
 
-function managedAuthorityRef(workspaceRoot: string): { runId: string; envelopeDigest: string } {
+function managedAuthorityRef(
+  workspaceRoot: string,
+  runId?: string,
+): { runId: string; envelopeDigest: string } {
   return registerAuthority(undefined, {
+    ...(runId === undefined ? {} : { runId }),
     workspace: {
       workspaceId: "workspace-1",
       rootLabel: "workspace",
@@ -1102,7 +1106,7 @@ function managedAuthorityRef(workspaceRoot: string): { runId: string; envelopeDi
 // route that asks about the worktree instead of its repository can never come back trusted.
 function managedDeps(
   manager: VerificationRunnerManager,
-  access: (requestedRoot: string) => WorkspaceRootAccessOutcome,
+  access: (requestedRoot: string, correlationId?: string) => WorkspaceRootAccessOutcome,
   trustedRoot: string,
 ): UiHandlerDeps {
   return {
@@ -1258,6 +1262,52 @@ describe("handleEditorAgentVerificationRun managed task worktree (PR #3381)", ()
       expect(manager.calls).toBe(calls);
     },
   );
+
+  // CodeRabbit, PR #3381 (outside the diff, agentVerificationRoute.ts:194): the POLICY-time access
+  // lookup asked the resolver without a correlation id, so a `workspace.root.denied` line emitted
+  // by THIS lookup — the one that can observe an access change between the two root-binding checks
+  // — landed under UNKNOWN_CORRELATION_ID, and the policy then answered `workspace-restricted` and
+  // returned before `runAndRespond` could emit its correlated refusal. The double records every
+  // `(root, correlationId)` pair the route asks for; the run completing proves the policy-time
+  // lookup really ran (it is what maps the worktree to the repository whose grant is trusted here),
+  // and the recorded set proves no call — that one included — was made without the request's id.
+  it("asks the policy-time access resolver with the request's correlation id, never undefined", async () => {
+    // >= 8 chars from the correlation alphabet, so `isValidCorrelationId` accepts it and
+    // `verificationCorrelationId` resolves the authority runId rather than answering undefined.
+    const runId = "run-local-1";
+    registerManagedSession(fixture.worktreeRoot, false);
+    const manifest = JSON.stringify({ name: "fixture", scripts: { typecheck: "tsc" } });
+    writeFileSync(join(fixture.repositoryRoot, "package.json"), manifest, "utf8");
+    writeFileSync(join(fixture.worktreeRoot, "package.json"), manifest, "utf8");
+    const manager = new FakeManager();
+    manager.report = { ...failingReport(), workspaceRoot: fixture.worktreeRoot };
+    const authorityRef = managedAuthorityRef(fixture.worktreeRoot, runId);
+    expect(authorityRef.runId).toBe(runId);
+    const seen: (string | undefined)[] = [];
+
+    const result = await handleEditorAgentVerificationRun(
+      ctx({
+        schemaVersion: "1",
+        sessionId: MANAGED_SESSION_ID,
+        kind: "typecheck",
+        authorityRef,
+      }),
+      managedDeps(
+        manager,
+        (requestedRoot, correlationId?: string): WorkspaceRootAccessOutcome => {
+          seen.push(correlationId);
+          return managedAccess(requestedRoot, nodeWorkspaceFs, fixture.repositoryRoot);
+        },
+        fixture.repositoryRoot,
+      ),
+    );
+
+    expect(resultBody(result)).toMatchObject({ outcome: "completed" });
+    expect(manager.calls).toBe(1);
+    expect(seen.length).toBeGreaterThan(0);
+    // One id for every lookup the request makes — containment AND the policy-time trust lookup.
+    expect([...new Set(seen)]).toEqual([runId]);
+  });
 
   // A managed access that names NO repository has no grantable basis at all, so it stays
   // restricted instead of falling back to its own unregistered root.

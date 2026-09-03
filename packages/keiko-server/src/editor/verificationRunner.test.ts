@@ -361,6 +361,69 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
     }
   });
 
+  // The at-effect gate must RE-READ the worktree basis, not replay a comparison taken once at
+  // resolution time. The worktree manifest here is byte-identical to its repository's when the plan
+  // is built and is replaced before the run is admitted — exactly the "another process rewrote
+  // package.json between the two checks" window (P1, PR #3381 review). The trust decider is the
+  // deterministic clock for that window: `trustedForScripts` calls it AFTER the plan-time basis read
+  // and the at-effect basis read happens after the plan is built, so a rewrite issued from inside
+  // the first decider call lands strictly between the two checks. `manifestRewritten` proves the
+  // window really was entered mid-flight (the plan-time gate had already admitted), and `port.calls`
+  // proves npm was never handed the bytes nobody approved.
+  it("re-reads the worktree trust basis at the effect boundary and never spawns a manifest rewritten between the checks", async () => {
+    const worktreeRoot = mkdtempSync(join(tmpdir(), "keiko-verify-toctou-"));
+    try {
+      writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
+      mkdirSync(join(worktreeRoot, "src"), { recursive: true });
+      writeFileSync(join(worktreeRoot, "src", "a.test.ts"), "test('x', () => {});\n", "utf8");
+      const port = fakePort(report(["typecheck"]));
+      let rewriteOnNextTrustCheck = false;
+      let manifestRewritten = false;
+      const manager = makeManager({
+        resolveWorkspaceRootAccess: (root): WorkspaceRootAccess | undefined =>
+          root === worktreeRoot
+            ? {
+                kind: "managed-task",
+                canonicalRoot: worktreeRoot,
+                fs: nodeWorkspaceFs,
+                repositoryRoot: workspaceRoot,
+              }
+            : undefined,
+        execute: port.port,
+        isWorkspaceTrustedForPackageScripts: (): boolean => {
+          if (rewriteOnNextTrustCheck) {
+            rewriteOnNextTrustCheck = false;
+            manifestRewritten = true;
+            // Still a valid manifest carrying every planned script, so the refusal below can only
+            // come from the trust basis — never from NO_RUNNABLE_STEPS.
+            writeFileSync(
+              join(worktreeRoot, "package.json"),
+              PACKAGE_JSON.replace('"tsc --noEmit"', '"tsc --noEmit && node ./attacker.js"'),
+              "utf8",
+            );
+          }
+          return true;
+        },
+      });
+
+      // Control: no rewrite, so the repository's standing grant still covers the worktree.
+      const { done } = collect(manager);
+      manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] }));
+      await done;
+      expect(port.calls).toBe(1);
+
+      rewriteOnNextTrustCheck = true;
+      expect(() =>
+        manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] })),
+      ).toThrow(expect.objectContaining({ code: "WORKSPACE_TRUST_REQUIRED", status: 403 }));
+      expect(manifestRewritten).toBe(true);
+      expect(port.calls).toBe(1);
+      expect(manager.inFlightCount()).toBe(0);
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
   it("denies a script-backed kind when the workspace is untrusted, without starting a run", () => {
     const port = fakePort(report(["typecheck"]));
     const manager = makeManager({ execute: port.port });

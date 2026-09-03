@@ -9,9 +9,12 @@
 // These pins take the filesystem out of the verdict. They drive the real production entry point,
 // `inspectManagedGitdirIdentity`, through an injected port whose stat values are written by hand,
 // so "the inode was reused" is an input rather than something the test hopes for.
-import { join, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { afterEach, describe, expect, it } from "vitest";
 import type {
   WorkspaceDescriptorReadCompleteness,
   WorkspaceDescriptorUtf8Read,
@@ -243,6 +246,11 @@ describe("inspectManagedGitdirIdentity — a reused inode no longer replays an i
   // Anti-vacuity guard. If a pointer rule and the ctime requirement could both refuse, a filesystem
   // that failed the second would make every pointer rule stop being tested while still looking
   // green. This pins that a malformed pointer is refused on its own merits, ctime available.
+  //
+  // A RELATIVE target is no longer malformed by itself — Git writes one under
+  // `worktree.useRelativePaths` and the parse resolves it against the worktree root (see the
+  // relative-pointer describe below). This one is refused for its SHAPE: resolved, it names
+  // `<worktree>/relative/admin-dir`, whose parent is not a `worktrees` directory.
   it("refuses a malformed pointer on its own merits, not for a missing stamp", () => {
     const malformed = mutate(authenticTree(), WORKTREE_POINTER, {
       text: `gitdir: ${join("relative", "admin-dir")}\n`,
@@ -893,4 +901,160 @@ describe("the inspection carries the common directory it hashed", () => {
       inspection: { commonDirectory: COMMON_DIRECTORY },
     });
   });
+});
+
+// Git 2.48 added `worktree.useRelativePaths`, and `git worktree add` inherits the repository
+// setting, so Keiko's own managed worktrees carry RELATIVE pointers on any repository configured
+// that way. The absolute-only parse refused both of them before any identity could be computed, so
+// every such workspace reconciled as `pointer-stale` with no executable repair (PR #3381 review
+// P2). The pointers below are the exact shapes Git 2.50.1 wrote in the owner's reproduction.
+describe("relative Git pointers (worktree.useRelativePaths)", () => {
+  // The same authentic tree, spelled the way Git spells it with relative paths on: the worktree's
+  // `.git` names the admin directory relative to the WORKTREE ROOT, and the admin `gitdir` file
+  // names the worktree's `.git` relative to the ADMIN DIRECTORY.
+  function relativePointerTree(): Map<string, Node> {
+    const tree = authenticTree();
+    mutate(tree, WORKTREE_POINTER, {
+      text: `gitdir: ${relative(WORKTREE_ROOT, ADMIN_DIRECTORY)}\n`,
+    });
+    mutate(tree, ADMIN_BACKPOINTER, {
+      text: `${relative(ADMIN_DIRECTORY, WORKTREE_POINTER)}\n`,
+    });
+    return tree;
+  }
+
+  it("spells the fixture the way Git does — both pointers relative, neither absolute", () => {
+    const tree = relativePointerTree();
+
+    expect(tree.get(WORKTREE_POINTER)?.text).toBe(
+      `gitdir: ${join("..", "..", "repo", ".git", "worktrees", "ws")}\n`,
+    );
+    expect(tree.get(ADMIN_BACKPOINTER)?.text).toBe(
+      `${join("..", "..", "..", "..", "work", "ws", ".git")}\n`,
+    );
+  });
+
+  // The identity binds the RESOLVED objects — the admin directory, the common directory and the
+  // five stamped descriptors — never the spelling of the pointer, so Git's choice of relative or
+  // absolute paths must not change it. An absolute-only parse makes the left side `undefined`.
+  it("proves the same identity whichever way Git spelled the two pointers", () => {
+    expect(identityOf(relativePointerTree())).toBe(identityOf(authenticTree()));
+    expect(identityOf(relativePointerTree())).toEqual(expect.any(String));
+  });
+
+  // Resolution does not loosen reciprocity: a relative backpointer that resolves to a DIFFERENT
+  // worktree is still refused, exactly as an absolute one naming another worktree is.
+  it("still refuses a relative backpointer that resolves to another worktree", () => {
+    const foreign = join(resolve(sep, "work", "other"), ".git");
+    const tree = mutate(relativePointerTree(), ADMIN_BACKPOINTER, {
+      text: `${relative(ADMIN_DIRECTORY, foreign)}\n`,
+    });
+
+    expect(identityOf(tree)).toBeUndefined();
+  });
+
+  // And containment is unchanged: a relative forward pointer that resolves outside a `worktrees`
+  // directory is refused for its shape, so `..` in a pointer is not an escape hatch.
+  it("still refuses a relative forward pointer that resolves outside a worktrees directory", () => {
+    const tree = mutate(relativePointerTree(), WORKTREE_POINTER, {
+      text: `gitdir: ${join("..", "..", "elsewhere", "ws")}\n`,
+    });
+
+    expect(identityOf(tree)).toBeUndefined();
+  });
+});
+
+// The fixture above states what Git writes; this states that Git actually writes it. A parse rule
+// derived from documentation is worth exactly as much as the documentation, so the shapes are taken
+// from a real `git worktree add` on the local Git — the reproduction the finding reported.
+const GIT_RELATIVE_PATHS_MIN = { major: 2, minor: 48 } as const;
+
+function localGitVersion(): { readonly major: number; readonly minor: number } | undefined {
+  try {
+    const raw = execFileSync("git", ["--version"], { encoding: "utf8" });
+    const match = /(\d+)\.(\d+)/u.exec(raw);
+    const major = Number(match?.[1]);
+    const minor = Number(match?.[2]);
+    return Number.isFinite(major) && Number.isFinite(minor) ? { major, minor } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function gitSupportsRelativeWorktreePaths(): boolean {
+  const version = localGitVersion();
+  if (version === undefined) return false;
+  return (
+    version.major > GIT_RELATIVE_PATHS_MIN.major ||
+    (version.major === GIT_RELATIVE_PATHS_MIN.major &&
+      version.minor >= GIT_RELATIVE_PATHS_MIN.minor)
+  );
+}
+
+const RELATIVE_WORKTREE_PATHS_SUPPORTED = gitSupportsRelativeWorktreePaths();
+
+describe("real Git linked worktrees, absolute and relative pointers", () => {
+  let scratch: string | undefined;
+
+  afterEach(() => {
+    if (scratch !== undefined) rmSync(scratch, { recursive: true, force: true });
+    scratch = undefined;
+  });
+
+  function realRepository(): string {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gitdir-rel-")));
+    scratch = root;
+    const repository = join(root, "repo");
+    const run = (args: readonly string[]): void => {
+      execFileSync("git", [...args], { cwd: repository, encoding: "utf8" });
+    };
+    execFileSync("git", ["init", "-q", "-b", "main", repository], { encoding: "utf8" });
+    run(["config", "user.email", "test@keiko.example"]);
+    run(["config", "user.name", "Keiko Test"]);
+    run(["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(repository, "README.md"), "# demo\n");
+    run(["add", "README.md"]);
+    run(["commit", "-q", "-m", "initial"]);
+    return repository;
+  }
+
+  function addWorktree(repository: string, name: string, relativePaths: boolean): string {
+    const target = join(repository, "..", name);
+    execFileSync(
+      "git",
+      [
+        ...(relativePaths ? ["-c", "worktree.useRelativePaths=true"] : []),
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        `keiko/${name}`,
+        target,
+      ],
+      { cwd: repository, encoding: "utf8" },
+    );
+    return realpathSync(target);
+  }
+
+  it.skipIf(!RELATIVE_WORKTREE_PATHS_SUPPORTED)(
+    "identifies a worktree Git created with worktree.useRelativePaths (needs Git >= 2.48)",
+    () => {
+      const repository = realRepository();
+      const absolute = addWorktree(repository, "abs", false);
+      const relativePaths = addWorktree(repository, "rel", true);
+
+      // The fixture is real: Git wrote a relative forward pointer for the second worktree and an
+      // absolute one for the first. Without this the assertion below could pass on two identical
+      // absolute layouts and prove nothing.
+      expect(readFileSync(join(relativePaths, ".git"), "utf8").trim()).not.toMatch(
+        /^gitdir: [/\\]/u,
+      );
+      expect(readFileSync(join(absolute, ".git"), "utf8").trim()).toMatch(/^gitdir: /u);
+
+      expect(inspectManagedGitdirIdentityOutcome(absolute, repository).kind).toBe("identified");
+      expect(inspectManagedGitdirIdentityOutcome(relativePaths, repository).kind).toBe(
+        "identified",
+      );
+    },
+  );
 });

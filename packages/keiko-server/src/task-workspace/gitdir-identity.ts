@@ -401,31 +401,54 @@ function readStableContainedFile(
   return { rawText: result.rawText, rootIdentity: before, fileIdentity: targetIdentity };
 }
 
-function parseAbsoluteSingleLine(raw: string): string | undefined {
+// Git writes BOTH linked-worktree pointers relative when `worktree.useRelativePaths=true`, and
+// `git worktree add` inherits that repository setting, so Keiko's own managed worktrees carry them
+// on any repository configured that way (Git 2.48+; reproduced on 2.50.1 as
+// `gitdir: ../repo/.git/worktrees/<name>` in the worktree's `.git` and `../../../../<worktree>/.git`
+// in the admin `gitdir` file). An absolute-only parse refused a pointer Git itself considers valid,
+// so the identity could not be proven at all and every such workspace reconciled as `pointer-stale`
+// (PR #3381 review P2).
+//
+// Each pointer resolves against the directory Git resolves it against — the forward pointer against
+// the WORKTREE root that contains the `.git` file, the backpointer against the ADMIN directory that
+// contains the `gitdir` file — and `base` is always an already-canonical path, so the lexical
+// `normalize` inside `join` cannot traverse a symlink the caller has not resolved. `undefined` keeps
+// the strict absolute-only behaviour for a caller with no base in hand.
+function parseSingleLinePath(raw: string, base: string | undefined): string | undefined {
   const value = raw.trim();
   if (value.length === 0 || value.includes("\0") || /[\r\n]/u.test(value)) return undefined;
-  return isAbsolute(value) ? normalize(value) : undefined;
+  if (isAbsolute(value)) return normalize(value);
+  return base === undefined ? undefined : normalize(join(base, value));
 }
 
 interface GitdirPointerLine {
-  // The normalised absolute admin-directory path the pointer names.
+  // The admin-directory path the pointer names, normalised and made absolute against the worktree
+  // root when Git wrote it relative.
   readonly target: string;
   // The target text as written after `gitdir:`, trimmed and NOT normalised — the retired
-  // pointer-text composition hashed exactly this.
+  // pointer-text composition hashed exactly this, so a relative pointer keeps the bytes a pre-v3
+  // registration would have hashed.
   readonly targetText: string;
 }
 
-function parseGitdirPointerLine(raw: string): GitdirPointerLine | undefined {
+function parseGitdirPointerLine(
+  raw: string,
+  worktreeRoot: string | undefined,
+): GitdirPointerLine | undefined {
   const value = raw.trim();
   if (!value.startsWith("gitdir:")) return undefined;
   const targetText = value.slice("gitdir:".length).trim();
-  const target = parseAbsoluteSingleLine(targetText);
+  const target = parseSingleLinePath(targetText, worktreeRoot);
   return target === undefined ? undefined : { target, targetText };
 }
 
-/** Parses the complete contents of a linked-worktree `.git` pointer. */
-export function parseGitdirPointerTarget(raw: string): string | undefined {
-  return parseGitdirPointerLine(raw)?.target;
+/**
+ * Parses the complete contents of a linked-worktree `.git` pointer. `worktreeRoot` is the canonical
+ * directory that CONTAINS the pointer file — the base Git resolves a relative `gitdir:` against.
+ * Omitting it keeps the strict absolute-only reading for callers that have no base to resolve with.
+ */
+export function parseGitdirPointerTarget(raw: string, worktreeRoot?: string): string | undefined {
+  return parseGitdirPointerLine(raw, worktreeRoot)?.target;
 }
 
 function samePath(left: string, right: string): boolean {
@@ -440,8 +463,9 @@ function validBackpointer(
   raw: string,
   requestedWorktree: string,
   canonicalWorktree: string,
+  canonicalAdminDirectory: string,
 ): boolean {
-  const target = parseAbsoluteSingleLine(raw);
+  const target = parseSingleLinePath(raw, canonicalAdminDirectory);
   if (target === undefined) return false;
   return (
     samePath(target, join(requestedWorktree, ".git")) ||
@@ -476,7 +500,9 @@ function inspectLinkedWorktreePointer(
   const canonicalWorktree = fs.realPath(requestedWorktree);
   const pointer = readStableContainedFile(fs, canonicalWorktree, join(canonicalWorktree, ".git"));
   if (pointer === undefined) return undefined;
-  const line = parseGitdirPointerLine(pointer.rawText);
+  // The forward pointer resolves against the CANONICAL worktree root — the directory the `.git`
+  // file was just read from — which is exactly the base Git uses for a relative `gitdir:`.
+  const line = parseGitdirPointerLine(pointer.rawText, canonicalWorktree);
   if (line === undefined) return undefined;
   const canonicalAdminDirectory = resolveAdminDirectory(fs, line.target, expectedAdminParent);
   if (canonicalAdminDirectory === undefined) return undefined;
@@ -487,7 +513,14 @@ function inspectLinkedWorktreePointer(
   );
   if (
     backpointer === undefined ||
-    !validBackpointer(backpointer.rawText, requestedWorktree, canonicalWorktree)
+    // ... and the backpointer against the canonical ADMIN directory it lives in. Reciprocity is
+    // unchanged: whichever way Git spelled the two pointers, they must still name each other.
+    !validBackpointer(
+      backpointer.rawText,
+      requestedWorktree,
+      canonicalWorktree,
+      canonicalAdminDirectory,
+    )
   ) {
     return undefined;
   }

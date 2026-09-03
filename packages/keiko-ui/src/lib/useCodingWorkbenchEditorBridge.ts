@@ -28,7 +28,7 @@ import {
   type DiffParseResult,
 } from "@/app/components/desktop/widgets/cards/shared/diffParser";
 import { ApiError, postEditorAgentSessionSnapshot } from "./api";
-import { useRunBoundRoot } from "./useCodingWorkbenchChanges";
+import { useRunLockedRoot } from "./useCodingWorkbenchChanges";
 import type {
   EditorAgentAction,
   EditorAgentActionResultRequest,
@@ -156,7 +156,7 @@ const FORCE_RECONNECT_SETTLE_MS = 120;
 export interface UseCodingWorkbenchEditorBridgeInput {
   /** The task workspace's currently active absolute root, or null when none is bound. This is the
    * shell's LIVE root, not necessarily the run's own — the hook locks onto the run's root itself
-   * (workbench audit, 2026-09-03) via `useRunBoundRoot`, the same way `CodingWorkbenchChanges` does. */
+   * (workbench audit, 2026-09-03) via `useRunLockedRoot`. */
   readonly root: string | null;
   readonly runId: string | undefined;
   /** True only while a run is live enough to receive tool-call actions. */
@@ -167,6 +167,13 @@ export interface UseCodingWorkbenchEditorBridgeInput {
    * "already resolved" assumption `root` carried before this hook started locking it to the run.
    */
   readonly bindingPending?: boolean | undefined;
+  /**
+   * The root the run was submitted against, captured by the caller when Start was issued
+   * (`useCodingWorkbenchRunWorkspace`), and forwarded to the lock's own `submittedRoot`: without
+   * it, a Start whose response lands after the operator moved the workspace pointer locks this
+   * session onto the WRONG workspace, and the run's real root gets no session at all (#3381).
+   */
+  readonly submittedRoot?: string | null | undefined;
 }
 
 export interface UseCodingWorkbenchEditorBridgeResult {
@@ -235,10 +242,20 @@ export function useCodingWorkbenchEditorBridge(
   // Workbench audit, 2026-09-03: lock to the run's own workspace root for its entire lifetime rather
   // than following whatever workspace the shell's active binding drifts to later — an unrelated
   // workspace switch mid-run must never re-register this session against another root.
-  const root = useRunBoundRoot({
+  //
+  // #3381 review: the lock arms from the SUBMISSION-time root, and the session it registers stays
+  // bound to that root even once the shell's pointer names something else. Both halves are the
+  // same invariant — this session serves the run, whose authority the server bound to one root —
+  // and dropping either one breaks every governed edit the run still has to make: arming from the
+  // live root at response time binds another workspace entirely, and going inert on a pointer move
+  // leaves the run's `applyChangeset` calls with no session to reach. The presentation surfaces
+  // (`CodingWorkbenchChanges`, the composer chips) keep the opposite rule via `useRunBoundRoot`:
+  // they report the divergence instead of showing one workspace's state under another's name.
+  const root = useRunLockedRoot({
     runId: input.runId,
     root: input.root,
     bindingPending: input.bindingPending ?? false,
+    submittedRoot: input.submittedRoot ?? null,
   });
   const [pending, setPending] = useState<PendingChangeset | null>(null);
   const pendingRef = useRef(pending);

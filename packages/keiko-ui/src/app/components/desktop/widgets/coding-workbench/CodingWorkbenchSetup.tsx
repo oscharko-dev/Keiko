@@ -22,7 +22,15 @@
 // exit in the product (2026-09-03 dev log). The target branch defaults to the repository's
 // checked-out branch: a checkout whose integration branch is `dev` must not be offered `main`.
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import type { WorkspaceRecoveryStrategy } from "@oscharko-dev/keiko-contracts";
 import {
   bindVerifiedTaskWorkspace,
@@ -242,47 +250,134 @@ interface SetupActions {
   readonly onRepair: () => void;
 }
 
-function useSetupActions(params: {
+// One operator action, together with the exact field values it was started for. A sequence may
+// only write to the card while its own attempt is still the current one.
+interface SetupAttempt {
+  readonly id: number;
   readonly repositoryPath: string;
   readonly targetBranch: string;
+}
+
+// Publishes a status only while `attempt` is still the card's current attempt.
+type SetupPublish = (status: SetupStatus) => void;
+
+// A refusal — and the repair offer it may carry — belongs to BOTH inputs it was answered for: the
+// path, and the target branch the refused task id is derived from (`codingWorkbenchSetupTaskId`).
+// A PENDING attempt belongs to them just as much. Clearing only an existing error left the
+// in-flight case open (#3381 review): the fields are disabled while pending, but the branch is not
+// only typed — clicking Bind BLURS the path field, which arms the asynchronous base-branch lookup,
+// and that lookup can replace the branch while provisioning is still running. The sequence would
+// then publish its phase, its success, or a repair offer computed for the previous inputs, and a
+// stale `main` repair offer would sit beside a `dev` field, one click away from repairing and
+// activating the wrong workspace.
+//
+// So every attempt carries an id plus the inputs it was started for; a change to either abandons
+// it — nothing it publishes afterwards is applied — and returns the card to idle. The abandoned
+// sequence still runs to completion on the server, and `settleBoundWorkspace` still refreshes the
+// shared context: a workspace the server DID activate must reach the bound surfaces, whatever the
+// card now shows.
+function useSetupAttempt(params: {
+  readonly repositoryPath: string;
+  readonly targetBranch: string;
+  readonly setStatus: Dispatch<SetStateAction<SetupStatus>>;
+}): { readonly start: () => SetupPublish } {
+  const { repositoryPath, targetBranch, setStatus } = params;
+  const attemptRef = useRef<SetupAttempt | null>(null);
+  const attemptSeqRef = useRef(0);
+  useEffect(() => {
+    const attempt = attemptRef.current;
+    if (attempt === null) return;
+    if (attempt.repositoryPath === repositoryPath && attempt.targetBranch === targetBranch) return;
+    attemptRef.current = null;
+    setStatus((current) => (current.kind === "idle" ? current : { kind: "idle" }));
+  }, [repositoryPath, targetBranch, setStatus]);
+  const start = useCallback((): SetupPublish => {
+    const id = (attemptSeqRef.current += 1);
+    attemptRef.current = { id, repositoryPath, targetBranch };
+    return (status: SetupStatus): void => {
+      if (attemptRef.current?.id !== id) return;
+      setStatus(status);
+    };
+  }, [repositoryPath, targetBranch, setStatus]);
+  return { start };
+}
+
+function useSetupActions(params: {
+  readonly repositoryPath: string;
+  readonly branch: TargetBranchState;
   readonly refreshWorkspace: () => Promise<boolean>;
   readonly status: SetupStatus;
-  readonly setStatus: (status: SetupStatus) => void;
+  readonly setStatus: Dispatch<SetStateAction<SetupStatus>>;
 }): SetupActions {
-  const { repositoryPath, targetBranch, refreshWorkspace, status, setStatus } = params;
+  const { repositoryPath, branch, refreshWorkspace, status, setStatus } = params;
+  const targetBranch = branch.targetBranch;
   const root = repositoryPath.trim();
   const baseBranch = targetBranch.trim();
   const pending = status.kind === "pending";
-  const onPhase = (phase: SetupPhase): void => {
-    setStatus({ kind: "pending", phase });
-  };
+  const attempt = useSetupAttempt({ repositoryPath, targetBranch, setStatus });
   const onSubmit = (event: { preventDefault: () => void }): void => {
     event.preventDefault();
     if (pending || root === "" || baseBranch === "") return;
-    setStatus({ kind: "pending", phase: "binding" });
-    settleOutcome(executeBind({ root, baseBranch, refreshWorkspace, onPhase }), setStatus);
+    // The task id is derived from the target branch, so a branch that is not authoritative for
+    // THIS path would provision and activate the previous repository's workspace (CodeRabbit
+    // review of #3381). `lookupFor` runs on blur, and Enter submits without ever blurring the
+    // field, so this is also the only place that can arm the missing lookup: the bind is refused
+    // and re-armed until the answer for the path in the field has settled.
+    if (!branch.settled) {
+      if (!branch.resolving) branch.lookupFor(root);
+      return;
+    }
+    const publish = attempt.start();
+    publish({ kind: "pending", phase: "binding" });
+    settleOutcome(
+      executeBind({ root, baseBranch, refreshWorkspace, onPhase: phaseReporter(publish) }),
+      publish,
+    );
   };
   const onRepair = (): void => {
     const offer = status.kind === "error" ? status.repair : undefined;
     const strategy = offer?.strategy ?? null;
     if (pending || root === "" || offer === undefined || strategy === null) return;
-    setStatus({ kind: "pending", phase: "repairing" });
+    const publish = attempt.start();
+    publish({ kind: "pending", phase: "repairing" });
     settleOutcome(
       executeRepairAndBind({
         root,
         workspaceId: offer.workspaceId,
         strategy,
         refreshWorkspace,
-        onPhase,
+        onPhase: phaseReporter(publish),
       }),
-      setStatus,
+      publish,
     );
   };
   return { onSubmit, onRepair };
 }
 
+// The phase of an abandoned attempt is as stale as its outcome: it would re-disable the fields and
+// claim "Verifying…" for inputs the card has already moved off.
+function phaseReporter(publish: SetupPublish): (phase: SetupPhase) => void {
+  return (phase: SetupPhase): void => {
+    publish({ kind: "pending", phase });
+  };
+}
+
+// Which repository path the target branch in the field is authoritative for. A branch the operator
+// typed is their choice for whatever path they bind; a derived one belongs to the exact path whose
+// lookup produced it; the initial fallback belongs to no path at all.
+type BranchAuthority =
+  | { readonly kind: "none" }
+  | { readonly kind: "path"; readonly root: string }
+  | { readonly kind: "operator" };
+
 interface TargetBranchState {
   readonly targetBranch: string;
+  // True once the field's branch is authoritative for the path being bound. Binding is refused
+  // until then: the task id is derived from this branch, so an untouched default carried over from
+  // the previous repository would provision and activate the wrong managed workspace.
+  readonly settled: boolean;
+  // A lookup is in flight for the path in the field.
+  readonly resolving: boolean;
   // The operator's own choice; it wins over every lookup from here on.
   readonly chooseTargetBranch: (value: string) => void;
   // Re-read the checked-out branch of `root` unless the operator already chose a branch.
@@ -302,26 +397,8 @@ function useTargetBranchDefault(
   selectedRoot: string | undefined,
   repositoryPath: string,
 ): TargetBranchState {
-  const [targetBranch, setTargetBranch] = useState(DEFAULT_TARGET_BRANCH);
-  const touchedRef = useRef(false);
-  const lookupSeqRef = useRef(0);
-  const lookupFor = useCallback((root: string): void => {
-    const trimmed = root.trim();
-    if (trimmed === "" || touchedRef.current) return;
-    const seq = (lookupSeqRef.current += 1);
-    fetchRepositoryBaseBranch(trimmed).then(
-      (branch) => {
-        if (seq !== lookupSeqRef.current || touchedRef.current || branch === null) return;
-        setTargetBranch(branch);
-      },
-      (error: unknown) => {
-        reportClientDiagnostic(
-          `[keiko] coding workbench base branch lookup failed: ${clientErrorSummary(error)}`,
-          { correlationId: correlationIdOf(error) },
-        );
-      },
-    );
-  }, []);
+  const lookup = useBranchLookup();
+  const { lookupFor, releaseOperatorChoice } = lookup;
   // A branch typed for one repository is not a choice for the next, and "the next" is decided by
   // the path field: re-arm only once it has FOLLOWED the new selection. A selection the field does
   // not follow (the operator typed a different path) leaves both the branch and the touched state
@@ -333,9 +410,61 @@ function useTargetBranchDefault(
     if (selected.trim() === "" || repositoryPath !== selected) return;
     if (armedRootRef.current === selected) return;
     armedRootRef.current = selected;
-    touchedRef.current = false;
+    releaseOperatorChoice();
     lookupFor(selected);
-  }, [lookupFor, repositoryPath, selectedRoot]);
+  }, [lookupFor, releaseOperatorChoice, repositoryPath, selectedRoot]);
+  return {
+    targetBranch: lookup.targetBranch,
+    settled: !lookup.resolving && authoritativeFor(lookup.authority, repositoryPath.trim()),
+    resolving: lookup.resolving,
+    chooseTargetBranch: lookup.chooseTargetBranch,
+    lookupFor,
+  };
+}
+
+interface BranchLookup {
+  readonly targetBranch: string;
+  readonly authority: BranchAuthority;
+  readonly resolving: boolean;
+  readonly lookupFor: (root: string) => void;
+  readonly chooseTargetBranch: (value: string) => void;
+  // Drops the operator's claim so the next selection may derive its own default again.
+  readonly releaseOperatorChoice: () => void;
+}
+
+// The branch value together with the evidence of where it came from. Nothing here knows about the
+// workbench-wide selection: it answers only "what is in the field, and for which path is it true".
+function useBranchLookup(): BranchLookup {
+  const [targetBranch, setTargetBranch] = useState(DEFAULT_TARGET_BRANCH);
+  const [authority, setAuthority] = useState<BranchAuthority>({ kind: "none" });
+  const [resolving, setResolving] = useState(false);
+  const touchedRef = useRef(false);
+  const lookupSeqRef = useRef(0);
+  // Every SETTLED lookup — a branch, a path that cannot answer one (no repository, detached HEAD),
+  // or a transport failure — makes the field authoritative for the path it was issued for: the
+  // fallback then belongs to this path instead of being the previous repository's branch, and the
+  // card is never locked out of binding by a lookup that could not answer. A superseded lookup
+  // settles nothing, and an operator who typed a branch meanwhile keeps it.
+  const settleLookup = useCallback((seq: number, root: string, branch: string | null): void => {
+    if (seq !== lookupSeqRef.current) return;
+    setResolving(false);
+    if (touchedRef.current) return;
+    setAuthority({ kind: "path", root });
+    if (branch !== null) setTargetBranch(branch);
+  }, []);
+  const lookupFor = useCallback(
+    (root: string): void => {
+      const trimmed = root.trim();
+      if (trimmed === "" || touchedRef.current) return;
+      const seq = (lookupSeqRef.current += 1);
+      setAuthority({ kind: "none" });
+      setResolving(true);
+      void readBaseBranch(trimmed).then((branch) => {
+        settleLookup(seq, trimmed, branch);
+      });
+    },
+    [settleLookup],
+  );
   // A lookup that lands after unmount must not write into a surface that no longer exists.
   useEffect(
     () => (): void => {
@@ -345,9 +474,39 @@ function useTargetBranchDefault(
   );
   const chooseTargetBranch = useCallback((value: string): void => {
     touchedRef.current = true;
+    setAuthority({ kind: "operator" });
+    setResolving(false);
     setTargetBranch(value);
   }, []);
-  return { targetBranch, chooseTargetBranch, lookupFor };
+  const releaseOperatorChoice = useCallback((): void => {
+    touchedRef.current = false;
+  }, []);
+  return {
+    targetBranch,
+    authority,
+    resolving,
+    lookupFor,
+    chooseTargetBranch,
+    releaseOperatorChoice,
+  };
+}
+
+// The lookup reduced to its one settled answer: the repository's checked-out branch, or null for
+// every path that cannot name one — no repository, a detached HEAD, or a transport failure, which
+// is the only one of the three that leaves a diagnostic.
+function readBaseBranch(root: string): Promise<string | null> {
+  return fetchRepositoryBaseBranch(root).catch((error: unknown) => {
+    reportClientDiagnostic(
+      `[keiko] coding workbench base branch lookup failed: ${clientErrorSummary(error)}`,
+      { correlationId: correlationIdOf(error) },
+    );
+    return null;
+  });
+}
+
+function authoritativeFor(authority: BranchAuthority, root: string): boolean {
+  if (authority.kind === "operator") return true;
+  return authority.kind === "path" && authority.root === root;
 }
 
 // The failure reasons whose sentence needs no interpolation.
@@ -537,20 +696,18 @@ export function CodingWorkbenchSetup({
   const [repositoryPath, setRepositoryPath] = useRepositoryPathDefault(selectedRoot);
   const branch = useTargetBranchDefault(selectedRoot, repositoryPath);
   const [status, setStatus] = useState<SetupStatus>({ kind: "idle" });
-  // A refusal — and the repair offer it may carry — belongs to BOTH inputs it was answered for:
-  // the path, and the target branch the refused task id is derived from
-  // (`codingWorkbenchSetupTaskId`). When either moves on (typed, or following a new workbench-wide
-  // selection) the offer must not survive it, or "Repair and bind" would repair, verify and
-  // activate the previous branch's workspace while the card displays the new one (#3381 review).
-  useEffect(() => {
-    setStatus((current) => (current.kind === "error" ? { kind: "idle" } : current));
-  }, [repositoryPath, branch.targetBranch]);
   const pending = status.kind === "pending";
+  // A branch lookup in flight is the one wait this card imposes on the operator: until it settles,
+  // the field's branch belongs to another path (or to nothing), and binding it would derive the
+  // task id from the wrong repository's default.
   const submitDisabled =
-    pending || repositoryPath.trim() === "" || branch.targetBranch.trim() === "";
+    pending ||
+    branch.resolving ||
+    repositoryPath.trim() === "" ||
+    branch.targetBranch.trim() === "";
   const actions = useSetupActions({
     repositoryPath,
-    targetBranch: branch.targetBranch,
+    branch,
     refreshWorkspace,
     status,
     setStatus,

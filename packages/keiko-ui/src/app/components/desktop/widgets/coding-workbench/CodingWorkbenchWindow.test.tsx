@@ -222,15 +222,16 @@ function renderWorkbench(
 function activeWorkspaceWithBinding(
   repositoryRoot: string,
   activeRoot: string,
+  identity: { readonly workspaceId?: string; readonly taskBranch?: string } = {},
 ): ActiveWorkspaceApi {
   const instance: WorkspaceInstance = {
     schemaVersion: "1",
-    workspaceId: "workspace-1",
+    workspaceId: identity.workspaceId ?? "workspace-1",
     taskId: "task-1",
     repositoryId: "repository-1",
     repositoryRoot,
     baseBranch: "dev",
-    taskBranch: "task-1",
+    taskBranch: identity.taskBranch ?? "task-1",
     managedWorktreePath: "/worktrees/task-1",
     gitdirIdentity: "gitdir-1",
     lifecycleState: "active",
@@ -1338,6 +1339,116 @@ describe("CodingWorkbenchWindow", () => {
     ).not.toBeInTheDocument();
   });
 
+  // #3381 review: the loading/unavailable branches of the evidence panels used to leave Approve
+  // enabled, so a file-edit could be approved without its paths and an egress ask without its
+  // destination — the review channel bypassed, and the human-control invariant with it. Approve
+  // now fails closed until the evidence is READY and bound to the request on screen; Deny and the
+  // channel's own retry remain the recovery path.
+  const APPROVAL_REVIEW = {
+    requestId: "permission-7",
+    paths: ["src/alpha.ts"],
+    pathsTruncated: false,
+    fileCount: 1,
+    addedLines: 3,
+    deletedLines: 1,
+  };
+
+  const RESEARCH_ASK = {
+    requestId: "research-approval-1",
+    host: "nodejs.org",
+    requestLine: "/docs/latest/api/stream.html backpressure",
+    expiresAt: "2026-07-13T12:02:00.000Z",
+  };
+
+  function approveButton(): HTMLElement {
+    return screen.getByRole("button", { name: "Approve once" });
+  }
+
+  it.each([
+    ["loading", { status: "loading", review: null }],
+    ["unavailable", { status: "unavailable", review: null }],
+  ])(
+    "#3381: cannot approve a file edit whose changed files are %s",
+    async (_label, reviewState) => {
+      const user = userEvent.setup();
+      approvalReviewHookMock.mockReturnValue({ ...reviewState, retry: vi.fn() });
+      const liveActions = renderWorkbench(editApprovalState());
+
+      expect(approveButton()).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+      await user.click(approveButton());
+      expect(liveActions.decideApproval).not.toHaveBeenCalled();
+    },
+  );
+
+  it("#3381: cannot approve a file edit whose evidence belongs to another request", async () => {
+    const user = userEvent.setup();
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: { ...APPROVAL_REVIEW, requestId: "permission-8" },
+      retry: vi.fn(),
+    });
+    const liveActions = renderWorkbench(editApprovalState());
+
+    expect(approveButton()).toBeDisabled();
+    await user.click(approveButton());
+    expect(liveActions.decideApproval).not.toHaveBeenCalled();
+  });
+
+  it("#3381: approves a file edit once its changed files are ready and bound", async () => {
+    const user = userEvent.setup();
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: APPROVAL_REVIEW,
+      retry: vi.fn(),
+    });
+    const liveActions = renderWorkbench(editApprovalState());
+
+    expect(approveButton()).toBeEnabled();
+    await user.click(approveButton());
+    expect(liveActions.decideApproval).toHaveBeenCalledWith("approved");
+  });
+
+  it.each([
+    ["loading", { status: "loading", ask: null }],
+    ["unavailable", { status: "unavailable", ask: null }],
+  ])("#3381: cannot approve network egress whose destination is %s", async (_label, askState) => {
+    const user = userEvent.setup();
+    researchHookMock.mockReturnValue({ ...askState, grant: null, retry: vi.fn() });
+    const liveActions = renderWorkbench(egressApprovalState());
+
+    expect(approveButton()).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+    await user.click(approveButton());
+    expect(liveActions.decideApproval).not.toHaveBeenCalled();
+  });
+
+  it("#3381: approves network egress once its destination is ready and bound", async () => {
+    const user = userEvent.setup();
+    researchHookMock.mockReturnValue({
+      status: "ready",
+      ask: RESEARCH_ASK,
+      grant: null,
+      retry: vi.fn(),
+    });
+    const liveActions = renderWorkbench(egressApprovalState());
+
+    expect(approveButton()).toBeEnabled();
+    await user.click(approveButton());
+    expect(liveActions.decideApproval).toHaveBeenCalledWith("approved");
+  });
+
+  it("#3381: names the blocked approval instead of leaving a dead control", async () => {
+    approvalReviewHookMock.mockReturnValue({ status: "unavailable", review: null, retry: vi.fn() });
+    renderWorkbench(editApprovalState());
+
+    const note = screen.getByText(
+      /Approval stays unavailable until what this request would touch/u,
+    );
+    expect(approveButton()).toHaveAttribute("aria-describedby", note.id);
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
   it("#2802: shows no changed-file block for an approval that writes no file", () => {
     approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });
     renderWorkbench(egressApprovalState());
@@ -1888,5 +1999,132 @@ describe("Codex subscription sign-in surface", () => {
     renderWorkbench(liveState());
 
     expect(screen.queryByTestId("coding-workbench-codex-auth")).not.toBeInTheDocument();
+  });
+});
+
+// #3381 review: the active task workspace is a global singleton pointer the operator can move at
+// any time; a run's authority is not. The server bound the run to the workspace that was active
+// when Start arrived and keeps it for the run's life, so the composer chips, the session context
+// bar and the Git target must keep naming THAT workspace. Following the pointer instead labelled a
+// run in A with B's root and branch and opened B's Git — an invitation to act on the wrong tree.
+describe("CodingWorkbenchWindow run workspace attribution", () => {
+  const WORKSPACE_A = { root: "/worktrees/task-a", branch: "issue/aaa", id: "workspace-a" };
+  const WORKSPACE_B = { root: "/worktrees/task-b", branch: "issue/bbb", id: "workspace-b" };
+
+  function workspaceApi(workspace: {
+    root: string;
+    branch: string;
+    id: string;
+  }): ActiveWorkspaceApi {
+    return activeWorkspaceWithBinding("/repos/keiko", workspace.root, {
+      workspaceId: workspace.id,
+      taskBranch: workspace.branch,
+    });
+  }
+
+  /** The runtime state while the shell's pointer names `workspace`: the runtime's own workspace
+   * projection follows that pointer, exactly as `useCodingWorkbenchWorkspaceEffect` makes it. */
+  function stateIn(
+    workspace: { root: string; branch: string; id: string },
+    run: Partial<CodingWorkbenchRuntimeSnapshot> | null = null,
+  ): CodingWorkbenchRuntimeState {
+    return liveState({
+      ...(run === null
+        ? {}
+        : { run: { status: "ready" as const, value: snapshot(run), error: null } }),
+      workspace: {
+        status: "ready",
+        error: null,
+        value: {
+          workspaceId: workspace.id,
+          taskId: workspace.id,
+          taskBranch: workspace.branch,
+          health: "healthy",
+          switching: false,
+        },
+      },
+    });
+  }
+
+  /** Start a run in workspace A, then move the singleton pointer to B while it is still live. */
+  async function startInAThenSwitchToB(
+    liveActions: CodingWorkbenchRuntimeActions,
+    onOpenGit: (target: CodingWorkbenchGitTarget) => void,
+  ): Promise<void> {
+    const user = userEvent.setup();
+    runtimeHookMock.mockReturnValue({ state: stateIn(WORKSPACE_A), actions: liveActions });
+    const window = <CodingWorkbenchWindow selectedRoot={undefined} onOpenGit={onOpenGit} />;
+    const view = render(
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>{window}</ActiveWorkspaceProvider>,
+    );
+    await user.type(screen.getByLabelText("Task instructions"), "Repair the failing gate");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+
+    // The Start response lands only now — after the operator switched the pointer to B.
+    runtimeHookMock.mockReturnValue({
+      state: stateIn(WORKSPACE_B, { state: "running", runId: "run-1" }),
+      actions: liveActions,
+    });
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_B)}>{window}</ActiveWorkspaceProvider>,
+    );
+  }
+
+  it("keeps the composer, context bar and Git target on the run's own workspace", async () => {
+    const onOpenGit = vi.fn();
+    await startInAThenSwitchToB(actions(), onOpenGit);
+
+    expect(screen.getByRole("button", { name: "Manage repository task-a" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Manage repository task-b" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: `Manage branch ${WORKSPACE_A.branch}` }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(`workspace-a · ${WORKSPACE_A.branch} · healthy`)).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(WORKSPACE_B.branch, "u"))).toBeNull();
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "Manage repository task-a" }));
+    expect(onOpenGit).toHaveBeenCalledWith({
+      root: WORKSPACE_A.root,
+      binding: "task-workspace",
+    });
+  });
+
+  it("surfaces the workspace mismatch instead of leaving the inert panels unexplained", async () => {
+    await startInAThenSwitchToB(actions(), vi.fn());
+
+    expect(
+      screen.getByText(/This run keeps the authority of the workspace it started in/u),
+    ).toBeInTheDocument();
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it("states no mismatch while the pointer still names the run's workspace", async () => {
+    const liveActions = actions();
+    const user = userEvent.setup();
+    runtimeHookMock.mockReturnValue({ state: stateIn(WORKSPACE_A), actions: liveActions });
+    const window = <CodingWorkbenchWindow selectedRoot={undefined} />;
+    const view = render(
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>{window}</ActiveWorkspaceProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    runtimeHookMock.mockReturnValue({
+      state: stateIn(WORKSPACE_A, { state: "running", runId: "run-1" }),
+      actions: liveActions,
+    });
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>{window}</ActiveWorkspaceProvider>,
+    );
+
+    expect(
+      screen.queryByText(/This run keeps the authority of the workspace it started in/u),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Manage repository task-a" })).toBeInTheDocument();
+  });
+
+  it("binds the editor bridge to the root the run was submitted against", async () => {
+    await startInAThenSwitchToB(actions(), vi.fn());
+
+    const lastCall = editorBridgeHookMock.mock.calls.at(-1) as [{ submittedRoot: string | null }];
+    expect(lastCall[0].submittedRoot).toBe(WORKSPACE_A.root);
   });
 });

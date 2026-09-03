@@ -84,7 +84,13 @@ function startApprovalReviewSync(
       if (controller.signal.aborted) return;
       const payload = await getCodingWorkbenchRuntimeApprovalReview(runId, controller.signal);
       if (controller.signal.aborted) return;
-      publish(scopeState(runId, permissionRequestId, project(payload.session, payload.pending)));
+      publish(
+        scopeState(
+          runId,
+          permissionRequestId,
+          project(payload.session, payload.pending, permissionRequestId),
+        ),
+      );
     } catch (error) {
       if (controller.signal.aborted) return;
       // Same bounded console idiom as the research channel: the rendered state stays the honest
@@ -106,12 +112,21 @@ function startApprovalReviewSync(
 /**
  * A review is rendered only when it binds to the very request the card is deciding about. A
  * mismatched or absent review is `unavailable`, never a silently empty change summary.
+ *
+ * The binding is checked here, against the id the caller is deciding about, because the channel
+ * read and the runtime snapshot advance independently: a read issued for P1 can be answered with
+ * the review of the P2 the server has since moved on to, and publishing it under P1's id renders
+ * P2's paths and magnitude beside P1's approve/deny controls (#3381 review). The scoping in
+ * `useCodingWorkbenchApprovalReview` cannot see this — the input never changed, only the answer
+ * did — so the payload's own `requestId` is the only evidence that the two agree.
  */
 function project(
   session: "active" | "unpaired",
   pending: CodingWorkbenchRuntimePendingApprovalReview | undefined,
+  expectedRequestId: string,
 ): CodingWorkbenchApprovalReviewState {
   if (session === "unpaired" || pending === undefined) return UNAVAILABLE;
+  if (pending.requestId !== expectedRequestId) return UNAVAILABLE;
   return { status: "ready", review: pending };
 }
 

@@ -29,6 +29,12 @@ export interface CodingWorkbenchChangesProps {
   readonly changeSignal: string | null;
   readonly bindingPending: boolean;
   /**
+   * The root this run was SUBMITTED against (`useCodingWorkbenchRunWorkspace`), so a Start whose
+   * response lands after the operator moved the workspace pointer cannot caption another
+   * workspace's git status as this run's changes (#3381 review).
+   */
+  readonly submittedRoot?: string | null | undefined;
+  /**
    * The window's server-confirmed pairing dimension (release-audit F-08): the run root always
    * lives under the managed task-workspace area, which is readable only through a launcher-paired
    * app session (ADR-0141), so a read denial in a confirmed-unpaired window names that condition.

@@ -480,14 +480,84 @@ describe("useCodingWorkbenchEditorBridge — run-bound root", () => {
       await new Promise((resolve) => setTimeout(resolve, 400));
     });
 
-    // No further registration ever names the new root: the session stays bound to the run's
-    // original root (or goes inert) — it must never pick up "/repo/other-workspace", and no new
-    // registration call for ANY root happens at all once the binding is lost.
-    expect(postSnapshotSpy).toHaveBeenCalledTimes(1);
+    // The invariant this pin exists for: no registration EVER names the workspace the operator
+    // switched to. It now also pins the other half (#3381 review) — the session keeps being
+    // maintained for the run's own root instead of going inert. The earlier
+    // `toHaveBeenCalledTimes(1)` recorded that inertness (the switch tore the session down, which
+    // cancelled the mount-time debounced refresh), and inertness is the defect: a run whose
+    // `applyChangeset` calls have no session to reach cannot land a single governed edit, however
+    // valid its server-side authority still is. Counting is therefore replaced by the stronger
+    // statement — every root ever registered is the run's — which no wrong-root regression can pass.
+    const registeredRoots = postSnapshotSpy.mock.calls.map(
+      ([snapshot]) => (snapshot as { workspaceRoot: string }).workspaceRoot,
+    );
+    expect(registeredRoots).not.toContain("/repo/other-workspace");
+    expect(new Set(registeredRoots)).toStrictEqual(new Set(["/repo/task-1"]));
+  });
+
+  // #3381 review: the server binds a new run to the workspace pointer it reads SYNCHRONOUSLY when
+  // Start arrives, and only then awaits runtime startup — so the response carrying `runId` can land
+  // long after the operator moved that pointer. Locking onto the live root at that moment binds the
+  // session to a workspace this run has no authority over, and leaves the run's real root with no
+  // session at all, so every governed edit it makes fails.
+  it("locks a delayed Start onto its submission-time root, not the live one", async () => {
+    const { rerender } = renderHook(
+      (props: { root: string; runId: string | undefined }) =>
+        useCodingWorkbenchEditorBridge({
+          root: props.root,
+          runId: props.runId,
+          active: true,
+          bindingPending: false,
+          submittedRoot: "/repo/task-1",
+        }),
+      { initialProps: { root: "/repo/task-1", runId: undefined as string | undefined } },
+    );
+    await flushMicrotasks();
+    expect(postSnapshotSpy).not.toHaveBeenCalled();
+
+    // The operator switches the singleton workspace pointer while Start is still in flight.
+    rerender({ root: "/repo/other-workspace", runId: undefined });
+    await flushMicrotasks();
+
+    // The delayed Start response lands: the run id appears while the live pointer names B.
+    rerender({ root: "/repo/other-workspace", runId: "run-1" });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+
+    expect(postSnapshotSpy).toHaveBeenCalled();
     for (const call of postSnapshotSpy.mock.calls) {
       const [snapshot] = call as [{ workspaceRoot: string }];
       expect(snapshot.workspaceRoot).toBe("/repo/task-1");
     }
+  });
+
+  // The consequence half of the same finding: a run whose session was torn down by an unrelated
+  // pointer move cannot land the edit it is asking the operator to approve.
+  it("still serves the run's changeset review after the pointer moves to another workspace", async () => {
+    const { result, rerender } = renderHook(
+      (props: { root: string }) =>
+        useCodingWorkbenchEditorBridge({
+          root: props.root,
+          runId: "run-1",
+          active: true,
+          bindingPending: false,
+          submittedRoot: "/repo/task-1",
+        }),
+      { initialProps: { root: "/repo/task-1" } },
+    );
+    await flushMicrotasks();
+    const source = latestSource();
+    const sessionId = new URL(source.url, "https://example.test").searchParams.get("sessionId");
+
+    rerender({ root: "/repo/other-workspace" });
+    await flushMicrotasks();
+
+    act(() => {
+      emitApplyChangeset(source, sessionId ?? "");
+    });
+    await flushMicrotasks();
+    expect(result.current.pendingReview).not.toBeNull();
   });
 
   it("re-registers a fresh session once a new run starts after a workspace switch", async () => {

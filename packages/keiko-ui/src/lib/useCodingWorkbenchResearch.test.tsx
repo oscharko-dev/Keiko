@@ -149,6 +149,50 @@ describe("useCodingWorkbenchResearch", () => {
     expect(result.current.grant).toBeNull();
   });
 
+  // #3381 review: the channel read and the runtime snapshot advance independently, so a read
+  // issued while the card was deciding P1 can be answered with the P2 ask the server has moved on
+  // to. Published under P1's id it renders P2's host and request line beside P1's approve/deny
+  // controls — the input never changed, so the hook's own input scoping cannot see it.
+  it("reports unavailable when the channel answers with a different request's ask", async () => {
+    getResearchMock.mockResolvedValue({
+      session: "active",
+      pending: { ...PENDING, requestId: "research-approval-2", host: "other.example.org" },
+      grant: GRANT,
+    });
+
+    const { result } = renderHook(() => useCodingWorkbenchResearch(RUN));
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+    });
+    // The grant travels in the same payload as the mismatched ask, so it is no more trustworthy
+    // evidence for this decision than the ask is.
+    expect(result.current.ask).toBeNull();
+    expect(result.current.grant).toBeNull();
+  });
+
+  it("reports unavailable when a retry answers with a newer request's ask", async () => {
+    getResearchMock.mockResolvedValueOnce(active());
+    getResearchMock.mockResolvedValueOnce({
+      session: "active",
+      pending: { ...PENDING, requestId: "research-approval-3" },
+    });
+
+    const { result } = renderHook(() => useCodingWorkbenchResearch(RUN));
+    await waitFor(() => {
+      expect(result.current.ask).toEqual(PENDING);
+    });
+
+    act(() => {
+      result.current.retry();
+    });
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+    });
+    expect(result.current.ask).toBeNull();
+  });
+
   it("reports unavailable when the read fails, so the panel never implies there is no destination", async () => {
     getResearchMock.mockRejectedValue(new Error("network"));
 

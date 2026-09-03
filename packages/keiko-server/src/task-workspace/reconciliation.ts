@@ -201,6 +201,21 @@ function identityFacts(
   };
 }
 
+// `listWorktrees` is the ONE question fact-gathering asks about the repository ITSELF rather than
+// about a single row, so its failure — and only its failure — is classified here as the
+// repository-wide REPOSITORY_UNREACHABLE the group latch keys on. Every other adapter call on this
+// path carries a row-local operand (`localBranchExists(instance.taskBranch)`), and a rejection from
+// one of those says nothing about the repository (PR #3381 review P2).
+async function listWorktreesOrUnreachable(
+  worktrees: WorktreesSource,
+): Promise<readonly WorktreeListEntry[]> {
+  try {
+    return await resolveWorktrees(worktrees);
+  } catch (error) {
+    throw repositoryUnreachable(error);
+  }
+}
+
 // The repository's worktree list — consulted only for a worktree that still exists on disk — and
 // the managed worktree's entry in it.
 async function listedWorktrees(
@@ -209,7 +224,7 @@ async function listedWorktrees(
   worktreeDirExists: boolean,
 ): Promise<{ readonly worktreeCount: number; readonly observedHead: string | undefined }> {
   if (!worktreeDirExists) return { worktreeCount: 0, observedHead: undefined };
-  const listed = await resolveWorktrees(worktrees);
+  const listed = await listWorktreesOrUnreachable(worktrees);
   return {
     worktreeCount: listed.length,
     observedHead: findWorktreeEntry(listed, instance.managedWorktreePath)?.head,
@@ -472,6 +487,31 @@ function entryFromInstance(instance: WorkspaceInstance): WorkspaceReconciliation
   });
 }
 
+// The active pointer is a SINGLETON across every repository, while a pass may be SCOPED to one
+// (`reconcile(root)`, which is what every UI bind and restore sends). Resolving the restoration
+// against the scoped entry list alone made a pointer that simply belongs to a different repository
+// indistinguishable from one whose workspace is gone — and on the live path `clearDangling` then
+// DELETED it, so a failed bind for repository A left the application unbound from the perfectly
+// valid workspace it held in repository B (PR #3381 review P1).
+//
+// A pointer outside this pass's scope is not dangling, so the question is asked of the GLOBAL store
+// instead: the pointer's own persisted row is appended to the restoration input when the scoped
+// list does not already carry it. Only a pointer whose workspace exists nowhere is still
+// `cleared-dangling`. `entries` stays scoped — the caller asked for one repository's report — and
+// the appended row is derived by the same `entryFromInstance` the read-only `report()` uses, so an
+// out-of-scope pointer is classified from persisted state rather than claimed verified by a pass
+// that never looked at it.
+function restorationEntries(
+  ctx: ReconcileCtx,
+  entries: readonly WorkspaceReconciliationEntry[],
+  pointerWorkspaceId: string | undefined,
+): readonly WorkspaceReconciliationEntry[] {
+  if (pointerWorkspaceId === undefined || pointerWorkspaceId.length === 0) return entries;
+  if (entries.some((entry) => entry.workspaceId === pointerWorkspaceId)) return entries;
+  const persisted = ctx.deps.store.getById(pointerWorkspaceId);
+  return persisted === undefined ? entries : [...entries, entryFromInstance(persisted)];
+}
+
 // Builds the report from a set of instances. `clearDangling` is true ONLY on the live reconcile path:
 // clearing a dangling pointer is a state mutation, so the read-only report() must never perform it (it
 // still REPORTS the `cleared-dangling` kind; the next live reconcile or getActive() self-heals it).
@@ -483,7 +523,10 @@ function buildReport(
 ): WorkspaceReconciliationReport {
   const entries = instances.map(entryFromInstance);
   const pointer = ctx.deps.activePointerStore.get();
-  const restoration = resolveActiveRestoration(pointer?.workspaceId, entries);
+  const restoration = resolveActiveRestoration(
+    pointer?.workspaceId,
+    restorationEntries(ctx, entries, pointer?.workspaceId),
+  );
   if (clearDangling && restoration.kind === "cleared-dangling") {
     ctx.deps.activePointerStore.clear();
   }
@@ -638,6 +681,14 @@ function repositoryUnreachable(error: unknown): TaskWorkspaceError {
   return asRepositoryUnreachable(error, "reconciliation could not consult the repository");
 }
 
+// Whether a gathering failure was raised by a REPOSITORY-WIDE operation. Only the repository-wide
+// call sites mint this classification (`listWorktreesOrUnreachable`, and `consultRepository` on the
+// single-instance path); an unclassified rejection from a row-local adapter call arrives here bare
+// and is therefore never mistaken for a verdict about the repository.
+function isRepositoryWideFailure(error: unknown): boolean {
+  return error instanceof TaskWorkspaceError && error.code === "REPOSITORY_UNREACHABLE";
+}
+
 // Builds the repository's adapter, or logs why it could not be built and returns undefined so the
 // caller carries that repository's rows forward instead of aborting the pass.
 function adapterForRepository(
@@ -727,11 +778,16 @@ async function gatherFactsOrLogFailure(
     );
   } catch (error) {
     const classified = error instanceof TaskWorkspaceError ? error : repositoryUnreachable(error);
-    // An unclassified failure of the adapter and filesystem reads can only mean the repository
-    // itself could not be consulted, which is a fact about the whole GROUP: latch it, so the rows
-    // after this one are carried forward without a second spawn and without a duplicate line.
-    // A classified failure (IDENTITY_PROOF_FAILED) is a fact about this ROW and never latches.
-    if (classified.code === "REPOSITORY_UNREACHABLE") reachability.markUnreachable();
+    // The latch is a fact about the REPOSITORY, so only a failure of a repository-wide operation
+    // may set it: the adapter build (handled by `adapterForRepository`, which carries the whole
+    // group) and `listWorktrees`, which classifies itself at its own call site. Latching on the
+    // CLASSIFICATION instead let a row-local failure suppress the repository: the durable
+    // validator accepts any non-empty `taskBranch`, the real adapter throws
+    // `GitWorktreeOperandError` for a malformed one, and that rejection — normalised here to
+    // REPOSITORY_UNREACHABLE — skipped every later healthy row of the same repository, which the
+    // deterministic row order then made permanent (PR #3381 review P2).
+    // A row-local failure stays isolated: it is logged and this row alone is carried forward.
+    if (isRepositoryWideFailure(error)) reachability.markUnreachable();
     logWorkspaceLifecycleFailure(
       ctx.deps,
       { operation: "reconcile", workspaceIdentitySeed: instance.workspaceId, correlationId },

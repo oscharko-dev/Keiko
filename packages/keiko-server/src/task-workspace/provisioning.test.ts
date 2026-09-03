@@ -25,7 +25,11 @@ import type {
   WorktreeOperationResult,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { WorkspaceInfo, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import type {
+  WorkspaceInfo,
+  WorkspaceInstance,
+  WorkspaceLock,
+} from "@oscharko-dev/keiko-contracts";
 import { planWorkspaceRecoveryHints } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { runMigrations } from "../store/schema.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
@@ -147,6 +151,61 @@ function rejectingAdapterFactory(received: string[]): AdapterFactory {
 function expectOnlyAdapterCorrelation(received: readonly string[], expected: string): void {
   expect(received.length).toBeGreaterThan(0);
   expect(new Set(received)).toEqual(new Set([expected]));
+}
+
+// The same service over a DIFFERENT instance store, so the activation's ownership write can be
+// observed — and denied — at the durable boundary that answers `lock-held-by-actor`.
+function makeServiceOver(
+  instanceStore: WorkspaceInstanceStore,
+  activityLog?: ServerLogSink,
+): WorkspaceProvisioningService {
+  return createWorkspaceProvisioningService({
+    store: instanceStore,
+    evidenceStore: capturingEvidence(),
+    managedRoot,
+    createAdapter: realAdapter,
+    redactString: (s: string): string => s,
+    now: (): number => FIXED_NOW,
+    newId: (): string => `id-${String(idCounter++)}`,
+    mutex: __twMutex,
+    ...(activityLog === undefined ? {} : { activityLog }),
+  });
+}
+
+// Records the lock every write carried, in order, and otherwise persists through the real store.
+function recordingStore(written: (WorkspaceLock | null)[]): WorkspaceInstanceStore {
+  return {
+    ...store,
+    upsert: (instance: WorkspaceInstance): WorkspaceInstance => {
+      written.push(instance.lock);
+      return store.upsert(instance);
+    },
+  };
+}
+
+// A durable store that cannot record ownership: it persists every write with `lock: null`. The
+// activation must observe that from the row the store returned and refuse, rather than proceed on
+// the lock it merely handed over.
+function lockDroppingStore(): WorkspaceInstanceStore {
+  return {
+    ...store,
+    upsert: (instance: WorkspaceInstance): WorkspaceInstance =>
+      store.upsert({ ...instance, lock: null }),
+  };
+}
+
+// The persisted shape of a workspace a drift refused: `recovery-required`, no lock, classified
+// markers and their hints — the row ADR-0088 lists as activatable under `lock-held-by-actor` +
+// `path-contained`.
+function driftedRecoveryRow(instance: WorkspaceInstance): void {
+  store.upsert({
+    ...instance,
+    lifecycleState: "recovery-required",
+    health: "drifted",
+    lock: null,
+    driftMarkers: ["pointer-stale"],
+    recoveryHints: planWorkspaceRecoveryHints(["pointer-stale"]),
+  });
 }
 
 function makeService(
@@ -1380,6 +1439,69 @@ describe("activate", () => {
         (e) => e.json.includes('"type": "resumed"') || e.json.includes('"type":"resumed"'),
       ),
     ).toBe(true);
+  });
+
+  // ADR-0088 gates every activation transition — `paused`/`handoff-ready`/`recovery-required` →
+  // `active` — on `lock-held-by-actor`, and that fact used to be hard-coded `true`. The `ws:` mutex
+  // cannot stand in for it (mutex.ts: it grants TURN ORDER, never OWNERSHIP), so with
+  // `recovery-required` activatable the precondition was fabricated: any actor could promote a
+  // drifted, unowned row while the settled write persisted `lock: null` (PR #3381 review P1).
+  // The activation now ACQUIRES the actor's advisory lock and validates the transition against the
+  // durable row that carries it.
+  it("acquires the actor's advisory lock before it resumes a recovery-required workspace", async () => {
+    const service = makeService();
+    const provisioned = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "act-lock-owned",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    driftedRecoveryRow(provisioned.instance);
+    const written: (WorkspaceLock | null)[] = [];
+
+    const activated = await makeServiceOver(recordingStore(written)).activate({
+      workspaceId: provisioned.instance.workspaceId,
+      taskId: "act-lock-owned",
+      requestedBy: "u",
+      acquireLock: false,
+    });
+
+    expect(activated.instance.lifecycleState).toBe("active");
+    // The transition was validated against a DURABLE row carrying THIS actor's activation lock.
+    expect(written[0]).toMatchObject({ owner: "u", reason: "activation" });
+    // `acquireLock` still decides RETENTION only, so an ordinary switch persists no lingering lock
+    // and the settled row is exactly what it was before.
+    expect(activated.instance.lock).toBeNull();
+    expect(store.getById(provisioned.instance.workspaceId)?.lock).toBeNull();
+  });
+
+  // The other half: ownership is read back from the persisted record, so an activation whose
+  // ownership the durable store did not record REFUSES instead of asserting a precondition nothing
+  // supports. The row stays `recovery-required` and the refusal is classified and logged.
+  it("refuses the recovery-required activation when the durable row records no actor lock", async () => {
+    const service = makeService();
+    const provisioned = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "act-lock-unrecorded",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    driftedRecoveryRow(provisioned.instance);
+    const activityLog = createBufferedServerLogSink();
+
+    await expect(
+      makeServiceOver(lockDroppingStore(), activityLog).activate({
+        workspaceId: provisioned.instance.workspaceId,
+        taskId: "act-lock-unrecorded",
+        requestedBy: "u",
+        acquireLock: false,
+      }),
+    ).rejects.toMatchObject({ code: "LOCK_CONTENTION" });
+
+    expect(store.getById(provisioned.instance.workspaceId)?.lifecycleState).toBe(
+      "recovery-required",
+    );
+    expect(activityLog.events.some((event) => event.errorKind === "LOCK_CONTENTION")).toBe(true);
   });
 
   // Both measurements on the resumed activation's evidence line were placeholder zeros before the

@@ -56,6 +56,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "MemoriaViva verwendet in der Coding Workbench ausschließlich das aktive Projekt-Memory.",
   "codingWorkbench.composer.help":
     "Pausieren Sie den aktiven Lauf, um eine Rückfrage zu senden. Ein entworfener Follow-up wird nur im pausierten Zustand zugelassen und niemals in eine Warteschlange gestellt.",
+  "codingWorkbench.composer.workspaceMismatch":
+    "Dieser Lauf behält die Autorität des Arbeitsbereichs, in dem er gestartet wurde; dieser ist nicht mehr der aktive. Chips, Git und die Änderungen des Laufs bleiben bei seinem Arbeitsbereich. Wechseln Sie zurück, um diese Dateien zu prüfen oder zu bearbeiten.",
   "codingWorkbench.questions.sectionLabel": "Laufzeitfragen",
   "codingWorkbench.questions.eyebrow": "Eingabe erforderlich",
   "codingWorkbench.questions.title": "Laufzeitfragen",
@@ -388,6 +390,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.changes.retry": "Geänderte Dateien erneut laden",
   "codingWorkbench.approval.help":
     "Unverarbeitete Befehle, Prompts, Diffs und Dateiinhalte bleiben verborgen.",
+  "codingWorkbench.approval.evidenceRequired":
+    "Die Genehmigung bleibt gesperrt, bis geladen ist, was diese Anfrage berühren würde. Wiederholen Sie diesen Abruf oder lehnen Sie die Anfrage ab.",
   "codingWorkbench.approval.approve": "Einmal genehmigen",
   "codingWorkbench.approval.deny": "Ablehnen",
   "codingWorkbench.changesetReview.eyebrow": "Änderungsprüfung",

@@ -451,6 +451,14 @@ execute its decision:
   drift markers — the operator must choose.
 - `none`: clear the pointer (dangling or no prior pointer). Idempotent.
 
+The active pointer is a SINGLETON across every repository, but `reconcile(root)`
+reports only ONE repository's rows, so the pointer is never judged against the
+scoped entry list alone: a pointer the list does not carry is resolved against the
+GLOBAL instance store and only counted dangling when its workspace exists in no
+repository at all. Reporting it dangling from a scoped list — and, on the live path,
+clearing it — deleted a valid pointer held on another repository whenever a bind was
+attempted elsewhere (corrected 2026-09-03).
+
 **Concurrency guarantee (KEIKO-0996, #3339).** Step 8's per-instance re-read,
 fact-gathering, classification, and persisted write (`WorkspaceInstanceStore.upsert`
 inside `reconcileWithContext`, called from the live `reconcile()` path) run as ONE
@@ -548,10 +556,19 @@ adapter cannot consult at all (a vanished root, a denied path, a spawn failure)
 is logged once as the retryable `REPOSITORY_UNREACHABLE` with its frames and
 cause chain, its rows are carried forward unverified (health `unknown`, nothing
 persisted), and the pass continues with every other repository — the health
-report applies the same rule. Once per repository is literal: the first
-unclassified gathering failure latches that repository for the remainder of the
+report applies the same rule. Once per repository is literal: the first failure of
+a REPOSITORY-WIDE operation latches that repository for the remainder of the
 pass, so twenty rows of a vanished root produce one line and one `git` spawn, not
-twenty of each. A CLASSIFIED failure (`IDENTITY_PROOF_FAILED`) is a fact about one
+twenty of each. Fact-gathering asks exactly two such questions — the adapter build
+and `listWorktrees` — and each classifies its own failure as
+`REPOSITORY_UNREACHABLE` at its call site; nothing else may set the latch. Latching
+on the CLASSIFICATION instead (any unclassified gathering failure, the shape before
+2026-09-03) let a ROW-LOCAL rejection suppress the repository: the durable validator
+accepts any non-empty `taskBranch` while the production adapter rejects one that is
+not a safe ref name, so a single malformed row skipped every healthy row behind it
+in the deterministic enumeration order, indefinitely. A row-local failure is logged
+and carried forward for that row alone. A CLASSIFIED failure (`IDENTITY_PROOF_FAILED`)
+is likewise a fact about one
 worktree and never latches, and a SUCCESSFUL worktree listing is never memoized —
 the freshness rule above requires each row to classify against the list observed
 after its own `ws:<workspaceId>` lock. `reconcileSingleInstance`, which every
