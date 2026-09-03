@@ -89,12 +89,14 @@ or cache-restored PR analysis cannot authorize integration merely because the sa
 a fresh scan after merge. This closes incident #3377, where an already-red `dev` was followed by a
 green incremental PR verdict and another red post-merge scan.
 
-Every full-tree CI lane checks out the workflow run's immutable `github.sha`, never the moving
-`refs/pull/<number>/merge` name. Immediately after the trusted checkout and Node setup, and before
-executing another repository command, each lane's direct consistency script verifies that a
-pull-request checkout is clean and is a two-parent merge commit whose first parent is the event's
-exact base SHA and whose second parent is its exact head SHA. Because the candidate also controls
-the workflow and script, this assertion is not represented as an independent trust boundary;
+On pull-request runs, every full-tree CI lane checks out the workflow run's immutable `github.sha`,
+never the moving `refs/pull/<number>/merge` name. Manual runs instead bind the Sonar job and its
+three coverage producers to `dev` as defined by ADR-0134 D3. Immediately after the trusted checkout
+and Node setup, and before executing another repository command, each lane's direct consistency
+script verifies that a pull-request checkout is clean and is a two-parent merge commit whose first
+parent is the event's exact base SHA and whose second parent is its exact head SHA. Because the
+candidate also controls the workflow and script, this assertion is not represented as an independent
+trust boundary;
 workflow review, CODEOWNERS, branch protection, and exact-current-head required checks own that
 boundary. Repository branch protection keeps strict status checks enabled, so a concurrent `dev`
 integration invalidates the old candidate and GitHub must produce and check a new one. Agent
