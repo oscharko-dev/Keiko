@@ -236,6 +236,7 @@ import { createWorkspaceReconciliationService } from "./task-workspace/reconcili
 import { createWorkspaceRepairService } from "./task-workspace/repair.js";
 import { createWorkspaceHealthService } from "./task-workspace/health.js";
 import { createWorkspaceCleanupService } from "./task-workspace/cleanup.js";
+import { canonicalManagedRootPath } from "./task-workspace/managed-root.js";
 import type {
   WorkspaceCleanupService,
   WorkspaceHealthService,
@@ -2028,8 +2029,15 @@ function composePersistence(
 
 // The Keiko-owned managed task-workspace root lives alongside the UI database (`<uiDbDir>/
 // task-workspaces`), so it inherits the same per-user data directory and 0o700 hardening posture.
+//
+// CANONICALISED, not merely joined (#3382): every managed worktree path is derived from this value
+// and persisted, and the runtime workspace authority refuses any root whose `realpathSync(root)` is
+// not the root itself. A lexically composed root under a symlinked or case-folded state directory
+// therefore persisted paths that could be provisioned but never run. The canonical form comes from
+// the managed-root module's own containment engine (realpath of the longest existing ancestor plus
+// the remaining segments), never a second path rule here.
 function resolveManagedWorktreeRoot(uiDbPath: string): string {
-  return join(dirname(uiDbPath), "task-workspaces");
+  return canonicalManagedRootPath(join(dirname(uiDbPath), "task-workspaces"));
 }
 
 function composedManagedWorktreeRoot(
@@ -2058,11 +2066,29 @@ function managedWorkspaceRootRef(uiStore: UiStore, managedRoot: string): string 
   return rootRef;
 }
 
+/**
+ * Registers the server-owned Project/Manifest identity for one managed worktree and, when the
+ * repository's standing grant currently covers it, derives the worktree's own script-trust record
+ * from it.
+ *
+ * The derivation used to run for an explicit provision ONLY (an `initializeTrust` flag). That flag
+ * was a proxy for the two guards below, and it stranded every worktree whose repository was not yet
+ * trusted at provision time: activate and `ensureIdentity` re-registered the identity and skipped
+ * trust for good, so nothing ever revisited the record and the editor's restricted-mode level for
+ * that worktree root could not follow a grant the operator later gave the repository (#3382).
+ *
+ * Running it on every call infers and renews nothing, because the guards that actually carry the
+ * "never infer or renew execution trust" invariant are unchanged and are now the whole rule:
+ *  1. the repository must be TRUSTED RIGHT NOW (`trustLevelForRoot`), and `deriveFromTrustedRoot`
+ *     independently re-proves that grant against the repository's live basis and refuses unless the
+ *     worktree's own `package.json` is byte-identical to it (ADR-0147 D3);
+ *  2. an EXISTING record is never overwritten — a restricted one is authoritative evidence of
+ *     revocation or drift.
+ */
 export function ensureManagedTaskWorkspaceIdentity(input: {
   readonly uiStore: UiStore;
   readonly workspaceScriptTrust: WorkspaceScriptTrustService;
   readonly instance: WorkspaceInstance;
-  readonly initializeTrust: boolean;
 }): void {
   const projectRegistered = input.uiStore
     .listProjects()
@@ -2076,13 +2102,10 @@ export function ensureManagedTaskWorkspaceIdentity(input: {
       `${basename(input.instance.repositoryRoot)} · Coding Workbench`,
     );
   }
-  if (!input.initializeTrust) return;
   if (input.workspaceScriptTrust.trustLevelForRoot(input.instance.repositoryRoot) !== "trusted") {
     return;
   }
   const rootRef = managedWorkspaceRootRef(input.uiStore, input.instance.managedWorktreePath);
-  // An absent target record may be initialized from this explicit provisioning act. A restricted
-  // record is authoritative evidence of revocation or drift and must never be silently overwritten.
   if (input.uiStore.readWorkspaceTrustRecord(rootRef) !== undefined) return;
   input.workspaceScriptTrust.deriveFromTrustedRoot(
     input.instance.managedWorktreePath,
@@ -2102,7 +2125,6 @@ function withManagedWorkspaceIdentity(
         uiStore,
         workspaceScriptTrust,
         instance: result.instance,
-        initializeTrust: true,
       });
       return result;
     },
@@ -2112,7 +2134,6 @@ function withManagedWorkspaceIdentity(
         uiStore,
         workspaceScriptTrust,
         instance: result.instance,
-        initializeTrust: false,
       });
       return result;
     },
@@ -2120,12 +2141,7 @@ function withManagedWorkspaceIdentity(
       provisioning.getInstance(workspaceId),
     ensureIdentity: (instance): void => {
       provisioning.ensureIdentity?.(instance);
-      ensureManagedTaskWorkspaceIdentity({
-        uiStore,
-        workspaceScriptTrust,
-        instance,
-        initializeTrust: false,
-      });
+      ensureManagedTaskWorkspaceIdentity({ uiStore, workspaceScriptTrust, instance });
     },
   };
 }
@@ -2161,13 +2177,8 @@ function buildWorkspaceProvisioning(
     redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,
-    ensureManagedWorkspaceIdentity: (instance, initializeTrust): void => {
-      ensureManagedTaskWorkspaceIdentity({
-        uiStore,
-        workspaceScriptTrust,
-        instance,
-        initializeTrust,
-      });
+    ensureManagedWorkspaceIdentity: (instance): void => {
+      ensureManagedTaskWorkspaceIdentity({ uiStore, workspaceScriptTrust, instance });
     },
     mutex: args.mutex,
   });

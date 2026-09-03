@@ -168,9 +168,8 @@ function makeManager(
 describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
   it("uses managed-root access for planning and execution and fails closed when denied", async () => {
     // `repositoryRoot` is production-shaped: `canonicalManagedRootAccess` sets it on EVERY granted
-    // managed access, and a managed access that names no repository now fails closed for script
-    // kinds (see the sibling test below), so the fixture has to carry the field this root's own
-    // grant is resolved through.
+    // managed access, and since #3382 `WorkspaceRootAccess`'s `managed-task` member REQUIRES it, so
+    // the fixture has to carry the field this root's own grant is resolved through.
     const access: WorkspaceRootAccess = {
       kind: "managed-task",
       canonicalRoot: workspaceRoot,
@@ -193,35 +192,55 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
     ).toThrow(expect.objectContaining({ code: "PROJECT_NOT_FOUND" }));
   });
 
-  // CodeRabbit, PR #3381: the `repositoryRoot === undefined` branch used to fall through to the
-  // ORDINARY trust path — `trustProjectId: projectId` with `trustBasisMatches: true` — so a managed
-  // worktree that named no repository had its package-script decision taken from its own
-  // unregistered root with the ADR-0147 D3 basis-equality guard skipped entirely. A managed access
-  // with no bound repository has no grantable basis at all and now fails closed; targeted-test,
-  // which is a Keiko-synthesized invocation and exempt from script trust, still runs.
-  it("refuses script kinds for a managed access that names no repository, and still runs targeted-test", async () => {
-    const access: WorkspaceRootAccess = {
-      kind: "managed-task",
-      canonicalRoot: workspaceRoot,
-      fs: nodeWorkspaceFs,
-    };
-    const port = fakePort(report(["targeted-test"]));
-    const manager = makeManager({
-      resolveWorkspaceRootAccess: () => access,
-      execute: port.port,
-      isWorkspaceTrustedForPackageScripts: () => true,
-    });
+  // Re-targeted for #3382/L-6. CodeRabbit, PR #3381 had pinned the `repositoryRoot === undefined`
+  // branch — a managed worktree naming no repository used to fall through to the ORDINARY trust
+  // path (`trustProjectId: projectId`, `trustBasisMatches: true`), taking its package-script
+  // decision from its own unregistered root with the ADR-0147 D3 basis-equality guard skipped.
+  // `WorkspaceRootAccess`'s `managed-task` member now REQUIRES `repositoryRoot`, so that shape is
+  // unconstructable and the branch is gone. What the pin uniquely covered and no sibling test does
+  // is the OTHER half: when the basis guard refuses script kinds, `targeted-test` — a
+  // Keiko-synthesized invocation exempt from script trust — must still run, through the access
+  // port. The refusal is now driven by the reachable cause (a worktree manifest that is not the
+  // repository's byte-identical fact) instead of the removed one.
+  it("refuses script kinds on a broken worktree trust basis, and still runs targeted-test", async () => {
+    const worktreeRoot = mkdtempSync(join(tmpdir(), "keiko-verify-basis-targeted-"));
+    try {
+      writeFileSync(
+        join(worktreeRoot, "package.json"),
+        PACKAGE_JSON.replace('"typecheck"', '"typecheck-renamed"'),
+        "utf8",
+      );
+      mkdirSync(join(worktreeRoot, "src"), { recursive: true });
+      writeFileSync(join(worktreeRoot, "src", "a.test.ts"), "test('x', () => {});\n", "utf8");
+      const access: WorkspaceRootAccess = {
+        kind: "managed-task",
+        canonicalRoot: worktreeRoot,
+        fs: nodeWorkspaceFs,
+        repositoryRoot: workspaceRoot,
+      };
+      const port = fakePort(report(["targeted-test"]));
+      const manager = makeManager({
+        resolveWorkspaceRootAccess: () => access,
+        execute: port.port,
+        isWorkspaceTrustedForPackageScripts: () => true,
+      });
 
-    expect(
-      manager.discover(workspaceRoot).kinds.find((entry) => entry.kind === "typecheck")?.trustState,
-    ).toBe("approval-required");
-    expect(() => manager.execute(input({ kinds: ["typecheck"] }))).toThrow(
-      expect.objectContaining({ code: "WORKSPACE_TRUST_REQUIRED" }),
-    );
-    const { done } = collect(manager);
-    manager.execute(input({ kinds: ["targeted-test"], targetPath: "src/a.test.ts" }));
-    await done;
-    expect(port.fileSystems).toEqual([nodeWorkspaceFs]);
+      expect(
+        manager.discover(worktreeRoot).kinds.find((entry) => entry.kind === "typecheck")
+          ?.trustState,
+      ).toBe("approval-required");
+      expect(() =>
+        manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] })),
+      ).toThrow(expect.objectContaining({ code: "WORKSPACE_TRUST_REQUIRED" }));
+      const { done } = collect(manager);
+      manager.execute(
+        input({ projectId: worktreeRoot, kinds: ["targeted-test"], targetPath: "src/a.test.ts" }),
+      );
+      await done;
+      expect(port.fileSystems).toEqual([nodeWorkspaceFs]);
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
   });
 
   // A managed task worktree carries no script-trust grant of its own (production DOES register it

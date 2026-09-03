@@ -2429,6 +2429,7 @@ describe("coding runtime manager", () => {
       kind: "managed-task",
       canonicalRoot: fixture.workspaceRoot,
       fs: nodeWorkspaceFs,
+      repositoryRoot: fixture.workspaceRoot,
     };
     const manager = createTestCodingRuntimeManager({
       supervisor: testSupervisor(harness.spawn),
@@ -2476,6 +2477,7 @@ describe("coding runtime manager", () => {
       kind: "managed-task",
       canonicalRoot: fixture.workspaceRoot,
       fs: nodeWorkspaceFs,
+      repositoryRoot: fixture.workspaceRoot,
     };
     const manager = createTestCodingRuntimeManager({
       supervisor: testSupervisor(harness.spawn),
@@ -2517,6 +2519,7 @@ describe("coding runtime manager", () => {
       kind: "managed-task",
       canonicalRoot: fixture.workspaceRoot,
       fs: nodeWorkspaceFs,
+      repositoryRoot: fixture.workspaceRoot,
     };
     const manager = createCodexTestCodingRuntimeManager({
       processEnv: {},
@@ -2553,6 +2556,7 @@ describe("coding runtime manager", () => {
         kind: "managed-task",
         canonicalRoot: fixture.workspaceRoot,
         fs: nodeWorkspaceFs,
+        repositoryRoot: fixture.workspaceRoot,
       }),
       openCodeLifecycleAdapter: {
         prepare: async () => {

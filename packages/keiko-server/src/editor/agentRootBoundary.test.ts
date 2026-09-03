@@ -941,6 +941,7 @@ describe("editor agent containment port (PR #3381)", () => {
               kind: "managed-task",
               canonicalRoot: requestedRoot,
               fs: accessFs,
+              repositoryRoot: requestedRoot,
             }),
         },
         rootA,

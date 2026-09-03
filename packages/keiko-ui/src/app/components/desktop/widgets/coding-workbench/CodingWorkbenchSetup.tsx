@@ -450,7 +450,10 @@ function useBranchLookup(): BranchLookup {
     setResolving(false);
     if (touchedRef.current) return;
     setAuthority({ kind: "path", root });
-    if (branch !== null) setTargetBranch(branch);
+    // A path that cannot name a branch falls back to the DEFAULT — never to the branch the previous
+    // repository answered, which would bind this path with that repository's base and derive the
+    // task id from it (CodeRabbit, PR #3381).
+    setTargetBranch(branch ?? DEFAULT_TARGET_BRANCH);
   }, []);
   const lookupFor = useCallback(
     (root: string): void => {
@@ -549,6 +552,7 @@ const REPAIR_EFFECT_KEYS: Readonly<Record<WorkspaceRecoveryStrategy, CodingWorkb
   "reconcile-pointer": "codingWorkbench.setup.repairEffect.reconcilePointer",
   "recreate-worktree": "codingWorkbench.setup.repairEffect.recreateWorktree",
   "release-stale-lock": "codingWorkbench.setup.repairEffect.releaseStaleLock",
+  "accept-moved-head": "codingWorkbench.setup.repairEffect.acceptMovedHead",
   "reattach-branch": GENERIC_REPAIR_EFFECT_KEY,
   "commit-or-stash-required": GENERIC_REPAIR_EFFECT_KEY,
   "operator-repair": GENERIC_REPAIR_EFFECT_KEY,

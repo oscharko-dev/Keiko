@@ -27,14 +27,34 @@ import {
   type ManagedIdentityDrift,
 } from "./gitdir-identity.js";
 
-export interface WorkspaceRootAccess {
-  readonly kind: "ordinary" | "managed-task";
-  readonly canonicalRoot: string;
-  readonly fs: WorkspaceFs;
-  // The repository a managed task worktree was bound from. A worktree is not a registered project
-  // of its own: standing decisions about its repository — workspace script trust — apply to it.
-  readonly repositoryRoot?: string | undefined;
-}
+/**
+ * A proven capability over ONE workspace root.
+ *
+ * A DISCRIMINATED UNION, not a flat record with an optional field: only a managed task worktree has a
+ * repository behind it, and it ALWAYS has one — `canonicalManagedRootAccess` reads `repositoryRoot`
+ * off the persisted instance it just re-proved, so a granted managed access without a repository is
+ * unconstructable in production. While the field was optional on both branches, every consumer that
+ * needs the repository (script trust, the verification runner, the command runner) carried a
+ * "managed access with no repository" branch that could never run, and each of those branches had to
+ * invent its own fail-closed answer to a configuration that does not exist (PR #3381 review). The
+ * union deletes the question: an ordinary root cannot name a repository, a managed one cannot omit
+ * it, and the compiler enforces both.
+ */
+export type WorkspaceRootAccess =
+  | {
+      readonly kind: "ordinary";
+      readonly canonicalRoot: string;
+      readonly fs: WorkspaceFs;
+    }
+  | {
+      readonly kind: "managed-task";
+      readonly canonicalRoot: string;
+      readonly fs: WorkspaceFs;
+      // The repository this managed task worktree was bound from. A worktree is not a registered
+      // project of its own: standing decisions about its repository — workspace script trust — apply
+      // to it.
+      readonly repositoryRoot: string;
+    };
 
 /**
  * The typed outcome of resolving one requested workspace root. A resolution failure is not one

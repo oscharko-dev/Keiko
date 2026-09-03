@@ -173,8 +173,9 @@ interface ResolvedVerificationWorkspace {
   // `package.json` replaced between the two checks and spawn a script no human approved (P1,
   // PR #3381 review). `trustedForScripts` therefore re-derives the comparison from these roots on
   // every ask, so the at-effect answer is read from the filesystem in the same synchronous step
-  // that admits the run. `undefined` for an ordinary root (its own basis) and for a managed access
-  // naming no repository (no grantable basis at all — script kinds fail closed).
+  // that admits the run. `undefined` for an ordinary root, which is its own basis and has nothing to
+  // compare against; a managed access always names one (`WorkspaceRootAccess`'s `managed-task`
+  // branch REQUIRES `repositoryRoot`).
   readonly trustBasisRepositoryRoot: string | undefined;
 }
 
@@ -661,13 +662,11 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   // never cached on the resolved workspace. See `ResolvedVerificationWorkspace.trustBasisRepositoryRoot`.
   private trustBasisMatchesNow(resolved: ResolvedVerificationWorkspace): boolean {
     const repositoryRoot = resolved.trustBasisRepositoryRoot;
-    // An ORDINARY root is its own trust basis and has nothing to compare against. A managed access
-    // that names NO repository has no grantable package-script basis at all: the standing decision
-    // that governs it is unknown, so script kinds fail closed rather than being evaluated against
-    // the worktree's own trust row — the root a governed run can rewrite (CodeRabbit, PR #3381).
-    // Production always names one (`canonicalManagedRootAccess` sets `repositoryRoot` on every
-    // granted managed access), so this is the floor, not a supported configuration.
-    if (repositoryRoot === undefined) return resolved.access.kind !== "managed-task";
+    // An ORDINARY root is its own trust basis and has nothing to compare against — and it is now the
+    // only kind that reaches this branch, because `WorkspaceRootAccess`'s `managed-task` member
+    // REQUIRES `repositoryRoot`. The previous fail-closed answer for "a managed access naming no
+    // repository" (CodeRabbit, PR #3381) guarded a configuration the type no longer admits.
+    if (repositoryRoot === undefined) return true;
     return worktreeSharesRepositoryTrustBasis(resolved.access, repositoryRoot, this.fs);
   }
 
@@ -704,8 +703,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         workspace,
         trustProjectId: projectId,
         trustWorkspace: workspace,
-        // No repository names a basis to compare against; `trustBasisMatchesNow` resolves what that
-        // means for an ordinary root and for a managed access with no bound repository.
+        // An ordinary root is its own basis, so there is nothing to compare against.
         trustBasisRepositoryRoot: undefined,
       };
     }

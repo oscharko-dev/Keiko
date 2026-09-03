@@ -332,6 +332,7 @@ describe("TerminalExecutionManager — happy path", () => {
       kind: "managed-task",
       canonicalRoot: workspaceRoot,
       fs,
+      repositoryRoot: workspaceRoot,
     };
 
     const listing = await listDirectories(store, workspaceRoot, undefined, undefined, access);
@@ -349,6 +350,7 @@ describe("TerminalExecutionManager — happy path", () => {
       kind: "managed-task",
       canonicalRoot: workspaceRoot,
       fs: nodeWorkspaceFs,
+      repositoryRoot: workspaceRoot,
     };
     const admitted = makeManager(spawn, {
       resolveWorkspaceRootAccess: () => grantedWorkspaceRootAccess(access),

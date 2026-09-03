@@ -74,6 +74,15 @@ export interface WorkspaceActivateResult {
   readonly binding: WorkspaceBinding;
 }
 
+export interface RecordVerifiedHeadInput {
+  // The CANONICAL managed worktree root the governed mutation ran in — the same value the managed
+  // root-access prover returned for it, so the lookup resolves exactly the row that boundary
+  // admitted and no other path spelling can reach this write.
+  readonly managedWorktreePath: string;
+  // See WorkspaceProvisionRequest.correlationId.
+  readonly correlationId?: string | undefined;
+}
+
 export interface WorkspaceProvisioningService {
   readonly provision: (request: WorkspaceProvisionRequest) => Promise<WorkspaceProvisionResult>;
   readonly activate: (request: WorkspaceActivateRequest) => Promise<WorkspaceActivateResult>;
@@ -81,6 +90,13 @@ export interface WorkspaceProvisioningService {
   // Internal upgrade seam used by the active-binding authority after restart. It may repair only
   // server-owned Project/Manifest identity; it must never infer or renew execution trust.
   readonly ensureIdentity?: ((instance: WorkspaceInstance) => void) | undefined;
+  // Records the managed worktree's CURRENT head as its verified head, for a commit KEIKO ITSELF
+  // executed inside it (verified-head.ts, #3382). Optional so every existing test double and every
+  // injected provisioning service keeps compiling; a composition that omits it simply performs no
+  // restamp, which is the pre-#3382 behaviour. It grants no authority: the caller must already have
+  // proven the root is a managed task worktree, and this only replaces the drift baseline the next
+  // reconciliation compares against — never Git, never the filesystem, never trust.
+  readonly recordVerifiedHead?: ((input: RecordVerifiedHeadInput) => Promise<boolean>) | undefined;
 }
 
 export type GitWorktreeAdapterFactory = (
@@ -120,11 +136,18 @@ export interface WorkspaceProvisioningServiceDeps extends WorkspaceActivityLogSe
     | undefined;
   // The server-owned Project → single-root manifest identity for a managed worktree. Production
   // supplies the existing UiStore paired-write owner; tests may omit it when trust/catalog behavior
-  // is outside their scope. Explicit provision may initialize exact trust; resume, activate, and
-  // getActive call it idempotently without trust initialization so persisted pre-integration
-  // workspaces are repaired before they are exposed as active.
-  readonly ensureManagedWorkspaceIdentity?:
-    ((instance: WorkspaceInstance, initializeTrust: boolean) => void) | undefined;
+  // is outside their scope. Provision, resume, activate and getActive all call it idempotently, so
+  // a persisted pre-integration workspace is repaired before it is exposed as active.
+  //
+  // It carried an `initializeTrust` flag that let ONLY an explicit provision derive the worktree's
+  // script-trust record from its repository's standing grant. That flag was a proxy for the two
+  // guards that actually carry the "never infer or renew execution trust" invariant — the repository
+  // must be trusted RIGHT NOW with a byte-identical package basis, and an existing (possibly
+  // restricted) record is never overwritten — and it stranded every worktree provisioned before its
+  // repository was granted: nothing revisited the record afterwards, so the editor's restricted-mode
+  // level for that worktree could never follow the repository (#3382). The guards are now the whole
+  // rule; the flag is gone (pinned in deps.test.ts, which asserts the guards directly).
+  readonly ensureManagedWorkspaceIdentity?: ((instance: WorkspaceInstance) => void) | undefined;
   // Optional: how long a provisioning/activation lock stays valid before it is treated as stale.
   readonly lockTtlMs?: number | undefined;
   // In-process serializer shared across all mutating workspace services (#449, ADR-0093 D1): provision

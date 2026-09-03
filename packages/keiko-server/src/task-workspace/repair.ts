@@ -9,14 +9,17 @@
 // It REUSES the existing engines, adds none (SC1): the worktree-recreating strategies delegate to the
 // #445 provisioning re-materialization path (which rebuilds a missing worktree from the existing branch
 // and refreshes a stale pointer through the SAME narrow worktree adapter, with its own rollback +
-// evidence); `release-stale-lock` is a content-free store upsert clearing the lock field; and
-// `abandon-and-cleanup` is a legal lifecycle transition to `abandoned` (physical cleanup stays #448's).
-// Strategies that cannot be applied safely without a human — reattach a deleted branch, resolve a moved
-// HEAD or uncommitted work, repair a containment escape — return an `operator-required` result with NO
+// evidence); `release-stale-lock` is a content-free store upsert clearing the lock field;
+// `accept-moved-head` records the worktree's CURRENT commit as its verified head (one recorded
+// baseline, no Git and no filesystem mutation, #3382); and `abandon-and-cleanup` is a legal lifecycle
+// transition to `abandoned` (physical cleanup stays #448's).
+// Strategies that cannot be applied safely without a human — reattach a deleted branch, resolve
+// uncommitted work, repair a containment escape — return an `operator-required` result with NO
 // mutation.
 
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import type {
+  TaskWorkspaceDriftMarker,
   TaskWorkspaceLifecycleState,
   WorkspaceEventType,
   WorkspaceInstance,
@@ -26,6 +29,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
+  classifyWorkspaceReconciliation,
   isLegalTaskWorkspaceTransition,
   isWorkspaceRecoveryStrategy,
   isWorkspaceRepairStrategyApplicable,
@@ -38,7 +42,8 @@ import { TaskWorkspaceError } from "./errors.js";
 import { assertSafeFieldValue } from "./field-safety.js";
 import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
-import { reconcileSingleInstance } from "./reconciliation.js";
+import { workspaceDriftBookkeeping } from "./provisioning.js";
+import { gatherInstanceReconciliationFacts, reconcileSingleInstance } from "./reconciliation.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import {
   recordWorkspaceLifecycle,
@@ -281,6 +286,108 @@ async function applyProvisioningRepair(
   return result.instance;
 }
 
+// The live facts `accept-moved-head` decides on, gathered through the SAME reconciliation
+// fact-gathering the pass uses (no second containment/identity/git engine), plus the ONE fact that
+// path cannot see: whether the tree currently holds uncommitted work. Cleanliness is not live
+// detected by reconciliation (the narrow #445 adapter has no `git status` verb on the repository
+// lane), and the classifier's fixed precedence puts `head-moved` AHEAD of `uncommitted-changes`, so
+// the persisted markers of a dirty-and-moved row carry only `head-moved`. Reading the row would
+// therefore have made the documented "no uncommitted-changes blocker" guard unreachable; the probe
+// is the same worktree-bound `worktreeStatus()` call cleanup.ts uses, with the same fail-closed
+// reading of an inconclusive result.
+interface MovedHeadAcceptance {
+  readonly observedHead: string | undefined;
+  readonly driftMarkers: readonly TaskWorkspaceDriftMarker[];
+  readonly worktreeDirty: boolean;
+}
+
+async function gatherMovedHeadAcceptance(
+  ctx: RepairCtx,
+  instance: WorkspaceInstance,
+  requestedBy: string,
+  nowMs: number,
+  correlationId: string | undefined,
+): Promise<MovedHeadAcceptance> {
+  const adapter = ctx.deps.createAdapter(
+    detectWorkspaceAt(instance.repositoryRoot),
+    ctx.correlationId,
+  );
+  const { facts, observedHead } = await gatherInstanceReconciliationFacts(
+    reconDeps(ctx.deps),
+    adapter,
+    await adapter.listWorktrees(),
+    instance,
+    nowMs,
+    requestedBy,
+    correlationId,
+  );
+  const status = await ctx.deps
+    .createAdapter(detectWorkspaceAt(instance.managedWorktreePath), ctx.correlationId)
+    .worktreeStatus();
+  return {
+    observedHead,
+    driftMarkers: classifyWorkspaceReconciliation(facts).driftMarkers,
+    // Fail closed: a tree whose `git status` could not run may still hold real work.
+    worktreeDirty: !status.ok || status.dirty,
+  };
+}
+
+// accept-moved-head: adopt the worktree's CURRENT commit as the verified head. It mutates neither
+// Git nor the filesystem — it replaces ONE recorded baseline — but it does settle a finding, so it
+// runs only when the live facts say the moved head is the ONLY thing wrong with the row. The rule is
+// stated through the contract's own classifier rather than a second marker list: if a fresh
+// classification of the live facts yields anything other than exactly `["head-moved"]` (a missing
+// worktree, an absent or foreign pointer, a deleted branch, a stale lock, a containment escape),
+// that row keeps its own hint and this repair refuses.
+async function applyAcceptMovedHead(
+  ctx: RepairCtx,
+  instance: WorkspaceInstance,
+  requestedBy: string,
+  nowMs: number,
+  correlationId: string | undefined,
+): Promise<WorkspaceInstance> {
+  const acceptance = await gatherMovedHeadAcceptance(
+    ctx,
+    instance,
+    requestedBy,
+    nowMs,
+    correlationId,
+  );
+  assertMovedHeadAcceptable(acceptance);
+  const remaining = instance.driftMarkers.filter((marker) => marker !== "head-moved");
+  const iso = isoFrom(ctx.deps.now());
+  return ctx.deps.store.upsert({
+    ...instance,
+    ...workspaceDriftBookkeeping(remaining, instance.lifecycleState),
+    lastVerifiedHead: acceptance.observedHead,
+    lastVerifiedAt: iso,
+    updatedAt: iso,
+  });
+}
+
+function assertMovedHeadAcceptable(
+  acceptance: MovedHeadAcceptance,
+): asserts acceptance is MovedHeadAcceptance & { readonly observedHead: string } {
+  if (acceptance.observedHead === undefined) {
+    throw new TaskWorkspaceError(
+      "REPAIR_NOT_APPLICABLE",
+      "the repository reports no readable HEAD for the managed worktree",
+    );
+  }
+  if (acceptance.worktreeDirty) {
+    throw new TaskWorkspaceError(
+      "REPAIR_NOT_APPLICABLE",
+      "the managed worktree holds uncommitted work; commit or stash it before accepting the moved head",
+    );
+  }
+  if (acceptance.driftMarkers.length !== 1 || acceptance.driftMarkers[0] !== "head-moved") {
+    throw new TaskWorkspaceError(
+      "REPAIR_NOT_APPLICABLE",
+      "a moved head may only be accepted when it is the workspace's only live finding",
+    );
+  }
+}
+
 async function executeStrategy(
   ctx: RepairCtx,
   instance: WorkspaceInstance,
@@ -295,6 +402,8 @@ async function executeStrategy(
       return applyProvisioningRepair(ctx, instance, requestedBy, correlationId);
     case "release-stale-lock":
       return applyReleaseStaleLock(ctx, instance, requestedBy, nowMs, correlationId);
+    case "accept-moved-head":
+      return applyAcceptMovedHead(ctx, instance, requestedBy, nowMs, correlationId);
     case "abandon-and-cleanup":
       return applyAbandon(ctx, instance, nowMs);
     default:
@@ -338,7 +447,7 @@ function needsOperator(
 }
 
 // Emits the operator-required evidence and returns the no-mutation result for a recovery that needs a
-// human (corrupt pointer, moved HEAD, uncommitted work, deleted branch).
+// human (corrupt pointer, uncommitted work, deleted branch).
 function reportOperatorRequired(
   ctx: RepairCtx,
   reconciled: WorkspaceInstance,

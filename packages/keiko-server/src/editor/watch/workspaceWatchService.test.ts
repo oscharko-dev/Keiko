@@ -787,6 +787,7 @@ describe("workspace watch service", () => {
         kind: "managed-task",
         canonicalRoot: root,
         fs: capability,
+        repositoryRoot: root,
       }),
     });
     expect(subscription.kind).toBe("ok");

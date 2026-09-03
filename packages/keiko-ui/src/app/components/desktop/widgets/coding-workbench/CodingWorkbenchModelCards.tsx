@@ -1,78 +1,22 @@
 import type { ReactNode } from "react";
-import { gatewayVerificationContradictsReadiness } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
   CodingWorkbenchCodexAuthMethod,
   CodingWorkbenchCodexSubscriptionProfile,
-  CodingWorkbenchRuntimePreference,
 } from "@oscharko-dev/keiko-contracts";
 import {
   useCodingWorkbenchTranslate as useTranslate,
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
 import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
-import type {
-  CodingWorkbenchRuntimeState,
-  CodingWorkbenchSourceProjection,
-} from "@/lib/coding-workbench-live-state";
-import {
-  modelSourceLabel,
-  resourceStatusLabel,
-  resourceStatusSymbol,
-  resourceTone,
-  sourceUnavailableReasonText,
-  sourceVerificationLabel,
-} from "./codingWorkbenchLabels";
+import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-state";
 import { PanelTitle } from "./CodingWorkbenchSections";
 import styles from "./CodingWorkbenchWindow.module.css";
 
-interface ModelRuntimeStatusProps {
-  readonly state: CodingWorkbenchRuntimeState;
-  readonly actions: Pick<CodingWorkbenchRuntimeActions, "setRuntimePreference" | "refreshSource">;
-  readonly locked: boolean;
-}
-
-export function ModelRuntimeStatus({ state, actions, locked }: ModelRuntimeStatusProps): ReactNode {
-  const t = useTranslate();
-  const selected = state.runtimePreference;
-  return (
-    <section className={styles.card} aria-labelledby="coding-workbench-source-title">
-      <PanelTitle eyebrow={t("codingWorkbench.source.eyebrow")} id="coding-workbench-source-title">
-        {t("codingWorkbench.source.title")}
-      </PanelTitle>
-      <div
-        className={styles.sourceGrid}
-        role="radiogroup"
-        aria-label={t("codingWorkbench.source.group")}
-      >
-        <SourceCard
-          preference="managed-gateway"
-          selected={selected === "managed-gateway"}
-          locked={locked}
-          status={selected === "managed-gateway" ? state.source.status : "idle"}
-          label={t("codingWorkbench.source.gateway.label")}
-          detail={t("codingWorkbench.source.gateway.detail")}
-          onSelect={actions.setRuntimePreference}
-        />
-        <SourceCard
-          preference="codex-subscription"
-          selected={selected === "codex-subscription"}
-          locked={locked}
-          status={selected === "codex-subscription" ? state.source.status : "idle"}
-          label={t("codingWorkbench.source.codex.label")}
-          detail={t("codingWorkbench.source.codex.detail")}
-          onSelect={actions.setRuntimePreference}
-        />
-      </div>
-      <SourceTruth state={state} onRetry={actions.refreshSource} />
-    </section>
-  );
-}
-
 // The sign-in surface for the Codex subscription source, and the ONLY renderer of
 // `AuthTruth`/`CodexSetup`: the window mounts this card while the subscription source is selected
-// and its authentication is not `connected`. `ModelRuntimeStatus` used to render `AuthTruth` too,
-// which was dead production code — the window mounts this card, not that panel — so a review of
-// #3381 removed the duplicate branch and the auth/setup tests now drive the mounted card.
+// and its authentication is not `connected`. A `ModelRuntimeStatus` panel used to render `AuthTruth`
+// too, which was dead production code — the window mounts this card, not that panel — so a review of
+// #3381 removed the duplicate branch and #3382 removed the unmounted panel entirely.
 // An operator with a missing, expired, revoked or failed login used to see Start stay disabled with
 // no explanation and no way to authenticate (audit finding, 2026-09-03). The card renders nothing
 // for the managed gateway and once connected.
@@ -105,102 +49,6 @@ export function CodexSubscriptionAuthCard({
         onPrepare={actions.prepareCodexSetup}
       />
     </section>
-  );
-}
-
-function SourceCard({
-  preference,
-  selected,
-  locked,
-  status,
-  label,
-  detail,
-  onSelect,
-}: {
-  readonly preference: CodingWorkbenchRuntimePreference;
-  readonly selected: boolean;
-  readonly locked: boolean;
-  readonly status: CodingWorkbenchRuntimeState["source"]["status"];
-  readonly label: string;
-  readonly detail: string;
-  readonly onSelect: (preference: CodingWorkbenchRuntimePreference) => void;
-}): ReactNode {
-  const t = useTranslate();
-  const id = `coding-workbench-source-${preference}`;
-  return (
-    <div
-      className={styles.sourceCard}
-      data-selected={selected ? "true" : "false"}
-      data-status={status}
-    >
-      <input
-        id={id}
-        type="radio"
-        name="coding-workbench-source"
-        checked={selected}
-        disabled={locked}
-        onChange={() => onSelect(preference)}
-      />
-      <label htmlFor={id} className={styles.sourceText}>
-        <span className={styles.sourceName}>{label}</span>
-        <span className={styles.sourceDetail}>{detail}</span>
-      </label>
-      {selected ? (
-        <span className={styles.statusBadge} data-tone={resourceTone(status)}>
-          <span aria-hidden="true">{resourceStatusSymbol(status)}</span>
-          {resourceStatusLabel(status, t)}
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-// F-01: an available source is a CONFIGURED source. The verification word next to it is the only
-// part of this row backed by a live probe, and the hint appears when a probe actually failed —
-// refreshing the profile re-reads the same configuration, so the operator has to be told where the
-// re-check lives.
-function sourceTruthStatus(source: CodingWorkbenchSourceProjection): string {
-  if (!source.available) return "unavailable";
-  if (gatewayVerificationContradictsReadiness(source.verification)) return "unavailable";
-  return source.verification === "verified" ? "ready" : "unverified";
-}
-
-function SourceTruth({
-  state,
-  onRetry,
-}: {
-  readonly state: CodingWorkbenchRuntimeState;
-  readonly onRetry: () => Promise<void>;
-}): ReactNode {
-  const t = useTranslate();
-  const source = state.source.value;
-  if (source === null) return null;
-  const probeFailed = gatewayVerificationContradictsReadiness(source.verification);
-  const reasonText = sourceUnavailableReasonText(source, t);
-  return (
-    <div className={styles.truthRow} data-status={sourceTruthStatus(source)}>
-      <div>
-        <p className={styles.truthLabel}>{t("codingWorkbench.source.confirmedLabel")}</p>
-        <p className={styles.truthValue}>
-          {t("codingWorkbench.source.confirmedValue", {
-            source: modelSourceLabel(source.modelSource, t),
-            status: source.available
-              ? t("codingWorkbench.status.available")
-              : t("codingWorkbench.status.unavailable"),
-            verification: sourceVerificationLabel(source.verification, t),
-          })}
-        </p>
-        {probeFailed ? (
-          <p className={styles.helpText}>{t("codingWorkbench.source.verificationHint")}</p>
-        ) : null}
-        {reasonText === null ? null : <p className={styles.helpText}>{reasonText}</p>}
-      </div>
-      {!source.available ? (
-        <button className={styles.button} type="button" onClick={() => void onRetry()}>
-          {t("codingWorkbench.source.retry")}
-        </button>
-      ) : null}
-    </div>
   );
 }
 

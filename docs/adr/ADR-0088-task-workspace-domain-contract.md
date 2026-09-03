@@ -149,12 +149,17 @@ provisioning | activation | mutation | repair | cleanup
 ```
 
 **Entity 5 — Recovery hints.** `WorkspaceRecoveryHint` pairs a drift marker with a recovery strategy
-and an `operatorActionRequired` flag. `WorkspaceRecoveryStrategy` is a closed seven-member union:
+and an `operatorActionRequired` flag. `WorkspaceRecoveryStrategy` is a closed eight-member union:
 
 ```
-reconcile-pointer | recreate-worktree | reattach-branch
-release-stale-lock | commit-or-stash-required | operator-repair | abandon-and-cleanup
+reconcile-pointer | recreate-worktree | reattach-branch | release-stale-lock
+commit-or-stash-required | accept-moved-head | operator-repair | abandon-and-cleanup
 ```
+
+`accept-moved-head` adopts the worktree's CURRENT commit as its verified head. It mutates neither Git
+nor the filesystem — it replaces one recorded baseline — and it exists because `head-moved` otherwise
+had no executable recovery at all: the marker could be persisted and never cleared, and the runtime
+launch authority refuses any row that carries one (issue #3382).
 
 This is WORKSPACE recovery only. Git-mutation recovery (e.g., resolving conflicts, rebasing, undoing
 commits) stays owned by the governed Git delivery surface (ADR-0083).

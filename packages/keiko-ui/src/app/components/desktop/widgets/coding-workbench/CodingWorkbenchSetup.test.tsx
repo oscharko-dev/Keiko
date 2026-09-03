@@ -531,6 +531,35 @@ describe("CodingWorkbenchSetup", () => {
     expect(baseBranchMock).not.toHaveBeenCalledWith("/repos/B");
   });
 
+  // A settled lookup that cannot name a branch (detached HEAD, no repository, transport failure)
+  // makes the field authoritative for the NEW path — with the default, never with the previous
+  // repository's answer, which would bind the new path against that base (CodeRabbit, PR #3381).
+  it("falls back to the default branch when the new path's lookup cannot name one", async () => {
+    baseBranchMock.mockResolvedValue("release/1");
+    const api = workspaceApi();
+    const view = renderWorkbench(api, liveState(), "/repos/A");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("release/1");
+    });
+    baseBranchMock.mockResolvedValue(null);
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={api}>
+        <CodingWorkbenchWindow selectedRoot="/repos/B" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/B");
+    });
+    await waitFor(() => {
+      expect(baseBranchMock).toHaveBeenCalledWith("/repos/B");
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("main");
+    });
+  });
+
   it("keeps a branch the operator typed even when the lookup resolves later", async () => {
     const user = userEvent.setup();
     let resolveLookup: (branch: string | null) => void = () => undefined;

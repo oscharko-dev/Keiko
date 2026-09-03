@@ -5,7 +5,6 @@ import type {
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
-  GatewayVerificationState,
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
@@ -13,8 +12,6 @@ import type {
   CodingWorkbenchResourceStatus,
   CodingWorkbenchRuntimeState,
 } from "@/lib/coding-workbench-live-state";
-
-export type CodingWorkbenchTone = "neutral" | "success" | "warning" | "danger";
 
 export function cx(...classes: readonly (string | undefined | false)[]): string {
   return classes.filter((value): value is string => typeof value === "string").join(" ");
@@ -34,18 +31,6 @@ export function modelSourceLabel(
   return t("codingWorkbench.modelSource.codexSubscription");
 }
 
-/**
- * F-01: the source row used to read "Keiko Gateway · Available" from stored configuration alone.
- * This names what a live probe actually said, so an unprobed gateway reads as unconfirmed instead of
- * healthy, and a failed probe is visible rather than hidden behind a configured source.
- */
-export function sourceVerificationLabel(
-  verification: GatewayVerificationState,
-  t: CodingWorkbenchTranslate,
-): string {
-  return t(`codingWorkbench.source.verification.${verification}`);
-}
-
 // The sidecar gateway's closed unavailable reasons (coding-workbench-provider-api.ts allow-list),
 // each with the operator's next step. "Model source unavailable." alone left the operator with no
 // way to learn that a readiness check would have fixed it (workbench end-to-end run, 2026-09-03).
@@ -63,7 +48,7 @@ const SOURCE_UNAVAILABLE_REASON_KEYS: Readonly<Record<string, CodingWorkbenchMes
 };
 
 /** The operator-facing sentence for an unavailable source's reason, or null when it has none. */
-export function sourceUnavailableReasonText(
+function sourceUnavailableReasonText(
   source: CodingWorkbenchRuntimeState["source"]["value"],
   t: CodingWorkbenchTranslate,
 ): string | null {
@@ -77,27 +62,6 @@ function runStateLabel(
   t: CodingWorkbenchTranslate,
 ): string {
   return t(`codingWorkbench.runState.${state}`);
-}
-
-export function resourceStatusLabel(
-  status: CodingWorkbenchResourceStatus,
-  t: CodingWorkbenchTranslate,
-): string {
-  return t(`codingWorkbench.resourceStatus.${status}`);
-}
-
-export function resourceStatusSymbol(status: CodingWorkbenchResourceStatus): string {
-  if (status === "ready") return "✓";
-  if (status === "loading") return "↻";
-  if (status === "error" || status === "unavailable") return "!";
-  return "○";
-}
-
-export function resourceTone(status: CodingWorkbenchResourceStatus): CodingWorkbenchTone {
-  if (status === "ready") return "success";
-  if (status === "error") return "danger";
-  if (status === "unavailable") return "warning";
-  return "neutral";
 }
 
 function runAnnouncement(state: CodingWorkbenchRuntimeState, t: CodingWorkbenchTranslate): string {

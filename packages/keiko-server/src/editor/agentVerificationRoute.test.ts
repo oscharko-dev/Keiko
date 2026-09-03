@@ -1122,14 +1122,9 @@ function managedDeps(
 function managedAccess(
   canonicalRoot: string,
   fs: WorkspaceFs,
-  repositoryRoot?: string,
+  repositoryRoot: string,
 ): WorkspaceRootAccessOutcome {
-  return grantedWorkspaceRootAccess({
-    kind: "managed-task",
-    canonicalRoot,
-    fs,
-    ...(repositoryRoot === undefined ? {} : { repositoryRoot }),
-  });
+  return grantedWorkspaceRootAccess({ kind: "managed-task", canonicalRoot, fs, repositoryRoot });
 }
 
 describe("handleEditorAgentVerificationRun managed task worktree (PR #3381)", () => {
@@ -1309,10 +1304,88 @@ describe("handleEditorAgentVerificationRun managed task worktree (PR #3381)", ()
     expect([...new Set(seen)]).toEqual([runId]);
   });
 
-  // A managed access that names NO repository has no grantable basis at all, so it stays
-  // restricted instead of falling back to its own unregistered root.
-  it("keeps a managed worktree restricted when the access names no repository", async () => {
+  // The REQUEST's own correlation id (`RouteContext.correlationId`) outranks the authority run id
+  // for every resolver lookup the request makes — containment and the policy-time trust lookup —
+  // so a denial observed by either lands on the request's timeline (CodeRabbit, PR #3381).
+  it("records every resolver lookup under the request's correlation id when the route has one", async () => {
     registerManagedSession(fixture.worktreeRoot, false);
+    const manifest = JSON.stringify({ name: "fixture", scripts: { typecheck: "tsc" } });
+    writeFileSync(join(fixture.repositoryRoot, "package.json"), manifest, "utf8");
+    writeFileSync(join(fixture.worktreeRoot, "package.json"), manifest, "utf8");
+    const manager = new FakeManager();
+    manager.report = { ...failingReport(), workspaceRoot: fixture.worktreeRoot };
+    const authorityRef = managedAuthorityRef(fixture.worktreeRoot, "run-local-1");
+    const seen: (string | undefined)[] = [];
+
+    const result = await handleEditorAgentVerificationRun(
+      ctx(
+        { schemaVersion: "1", sessionId: MANAGED_SESSION_ID, kind: "typecheck", authorityRef },
+        "request-correlation-9c",
+      ),
+      managedDeps(
+        manager,
+        (requestedRoot, correlationId?: string): WorkspaceRootAccessOutcome => {
+          seen.push(correlationId);
+          return managedAccess(requestedRoot, nodeWorkspaceFs, fixture.repositoryRoot);
+        },
+        fixture.repositoryRoot,
+      ),
+    );
+
+    expect(resultBody(result)).toMatchObject({ outcome: "completed" });
+    expect(seen.length).toBeGreaterThan(1);
+    expect([...new Set(seen)]).toEqual(["request-correlation-9c"]);
+  });
+
+  // A policy refusal ends the request before `runAndRespond`, so the runner-refusal diagnostic was
+  // never reached and the decision that closed the request left no line on its timeline.
+  it("records an early policy refusal as a body-free diagnostic under the request's id", async () => {
+    const manager = new FakeManager();
+    const authorityRef = registerAuthority();
+    const records: unknown[] = [];
+
+    const result = await handleEditorAgentVerificationRun(
+      ctx(
+        { schemaVersion: "1", sessionId: SESSION_ID, kind: "typecheck", authorityRef },
+        "request-correlation-8d",
+      ),
+      { ...deps(manager), diagnostics: { record: (record): void => void records.push(record) } },
+      {
+        decide: (): EditorAgentActionPolicyDecision => ({
+          disposition: "denied",
+          effectClass: "execution",
+          origin: "agent",
+          denyReason: "workspace-restricted",
+        }),
+      },
+    );
+
+    expect(resultBody(result)).toMatchObject({ outcome: "not-run", disposition: "denied" });
+    expect(manager.calls).toBe(0);
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "request-correlation-8d",
+        operation: "editor.verification.execute",
+        source: "editor.agent-verification-route",
+        errorClass: "workspace-restricted",
+        message: "verification-refused",
+      }),
+    ]);
+  });
+
+  // Re-targeted for #3382/L-6: `WorkspaceRootAccess` is now a discriminated union whose
+  // `managed-task` branch REQUIRES `repositoryRoot`, so the route's "a managed access that names no
+  // repository" branch — and the pin that drove it — became unconstructable. The invariant that
+  // branch protected is the one asserted here instead, and it is still live: a managed worktree's
+  // package-script decision is taken from its REPOSITORY, never from its own unregistered root. The
+  // worktree root is the ONLY root this deps bundle trusts and both manifests agree, so the run can
+  // only be admitted by a route that asks about the worktree — which is exactly the fallback ADR-0147
+  // D3 forbids.
+  it("never falls back to the worktree's own root for the package-script decision", async () => {
+    registerManagedSession(fixture.worktreeRoot, false);
+    const manifest = JSON.stringify({ name: "fixture", scripts: { typecheck: "tsc" } });
+    writeFileSync(join(fixture.repositoryRoot, "package.json"), manifest, "utf8");
+    writeFileSync(join(fixture.worktreeRoot, "package.json"), manifest, "utf8");
     const manager = new FakeManager();
     const authorityRef = managedAuthorityRef(fixture.worktreeRoot);
 
@@ -1325,7 +1398,7 @@ describe("handleEditorAgentVerificationRun managed task worktree (PR #3381)", ()
       }),
       managedDeps(
         manager,
-        (requestedRoot) => managedAccess(requestedRoot, nodeWorkspaceFs),
+        (requestedRoot) => managedAccess(requestedRoot, nodeWorkspaceFs, fixture.repositoryRoot),
         fixture.worktreeRoot,
       ),
     );

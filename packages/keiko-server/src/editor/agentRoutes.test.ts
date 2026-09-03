@@ -561,6 +561,7 @@ function runtimeMutationDeps(
       kind: "managed-task",
       canonicalRoot: requestedRoot,
       fs: nodeWorkspaceFs,
+      repositoryRoot: requestedRoot,
     }),
 ): Parameters<typeof handleEditorAgentActions>[1] {
   return { runtimeMutationLease, workspaceRootAccessResolver };
@@ -2733,6 +2734,7 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
             kind: "managed-task",
             canonicalRoot: requestedRoot,
             fs: accessFs,
+            repositoryRoot: requestedRoot,
           }),
       } satisfies Parameters<typeof handleEditorAgentActions>[1];
 
@@ -4441,6 +4443,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
         kind: "managed-task",
         canonicalRoot: requestedRoot,
         fs: accessFs,
+        repositoryRoot: requestedRoot,
       });
     });
     const writeFileUtf8 = vi.fn((_path: string, _content: string): void => {
@@ -4515,6 +4518,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
               kind: "managed-task",
               canonicalRoot: requestedRoot,
               fs: nodeWorkspaceFs,
+              repositoryRoot: requestedRoot,
             });
           }
           return outcome === "revoked"
@@ -4523,6 +4527,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
                 kind: "managed-task",
                 canonicalRoot: join(requestedRoot, "replacement"),
                 fs: nodeWorkspaceFs,
+                repositoryRoot: requestedRoot,
               });
         },
       );

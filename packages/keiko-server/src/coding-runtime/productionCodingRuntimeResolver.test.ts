@@ -327,7 +327,12 @@ function resolverFor(
     verificationRunner: { runToReport: vi.fn() },
     resolveWorkspaceRootAccess: (requestedRoot) =>
       fixture.workspaceAccessAvailable()
-        ? { kind: "managed-task", canonicalRoot: requestedRoot, fs: nodeWorkspaceFs }
+        ? {
+            kind: "managed-task",
+            canonicalRoot: requestedRoot,
+            fs: nodeWorkspaceFs,
+            repositoryRoot: requestedRoot,
+          }
         : undefined,
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
     ...(runtimeMutationLeaseBroker ? { runtimeMutationLeaseBroker } : {}),

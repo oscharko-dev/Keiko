@@ -11,7 +11,7 @@
 // consulted for exactly one thing: telling the operator that it no longer names the run's
 // workspace, so the inert Changes panel and editor bridge have a stated cause.
 
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { CodingWorkbenchWorkspaceProjection } from "@/lib/coding-workbench-live-state";
 
@@ -69,7 +69,7 @@ export function useCodingWorkbenchRunWorkspace(
   input: UseCodingWorkbenchRunWorkspaceInput,
 ): CodingWorkbenchRunWorkspaceBinding {
   const submission = useRef<SubmissionCapture | null>(null);
-  const bound = useRef<BoundRun | null>(null);
+  const [bound, setBound] = useState<BoundRun | null>(null);
   const latest = useRef(input);
   latest.current = input;
   const captureSubmission = useCallback((): void => {
@@ -78,11 +78,18 @@ export function useCodingWorkbenchRunWorkspace(
       workspace: latest.current.live,
     };
   }, []);
-  const armed = nextBoundRun(bound.current, submission.current, input);
-  // A capture is consumed by the run it armed, and only then — never by the "adopt the first
-  // resolved root" recovery below it, which belongs to a run that is already bound.
-  if (armed !== null && armed.runId !== bound.current?.runId) submission.current = null;
-  bound.current = armed;
+  // Derived for THIS render from the committed lock and the pending capture — a pure read, so the
+  // value is available without a render of lag. Nothing is written here: React may discard this
+  // render, and a capture consumed by a discarded render would let the next one re-arm the run from
+  // the moved live pointer (CodeRabbit, PR #3381). The bookkeeping commits below.
+  const armed = nextBoundRun(bound, submission.current, input);
+  useEffect(() => {
+    if (armed === bound) return;
+    // A capture is consumed by the run it armed, and only then — never by the "adopt the first
+    // resolved root" recovery, which belongs to a run that is already bound.
+    if (armed !== null && armed.runId !== bound?.runId) submission.current = null;
+    setBound(armed);
+  }, [armed, bound]);
   const workspace = armed?.workspace ?? null;
   return { bound: workspace, mismatched: isMismatched(workspace, input), captureSubmission };
 }

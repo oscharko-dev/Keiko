@@ -249,8 +249,8 @@ otherwise-healthy workspace):
      `identity-schema-retired`, else `gitdir-mismatch` — and that marker's hint.
    - `!taskBranchPresent` → status `drifted`, marker `branch-deleted`, hint
      `reattach-branch` (`operatorActionRequired: true`).
-   - `!headMatches` → status `drifted`, marker `head-moved`, hint `operator-repair`
-     (`operatorActionRequired: true`).
+   - `!headMatches` → status `drifted`, marker `head-moved`, hint `accept-moved-head`
+     (`operatorActionRequired: false`).
    - `uncommittedChanges` → status `drifted`, marker `uncommitted-changes`, hint
      `commit-or-stash-required` (`operatorActionRequired: true`).
 6. **`recovery-required`** (lingering-lifecycle): `facts.lifecycleState === "recovery-required"`
@@ -294,7 +294,7 @@ The mapping (closed, derived from the ADR-0088 Entity 5 recovery strategy union)
 |---|---|---|
 | `worktree-missing` | `recreate-worktree` | `false` |
 | `gitdir-mismatch` | `reconcile-pointer` | `false` |
-| `head-moved` | `operator-repair` | `true` |
+| `head-moved` | `accept-moved-head` | `false` |
 | `branch-deleted` | `reattach-branch` | `true` |
 | `uncommitted-changes` | `commit-or-stash-required` | `true` |
 | `lock-stale` | `release-stale-lock` | `false` |
@@ -304,14 +304,25 @@ The mapping (closed, derived from the ADR-0088 Entity 5 recovery strategy union)
 | `identity-unsupported` | `operator-repair` | `true` |
 
 Only `recreate-worktree`, `reconcile-pointer` (a moved-but-readable gitdir, or a
-registration under the retired identity rule), and `release-stale-lock` are
-executable by the repair service; a missing/corrupt `.git` pointer (`pointer-stale`),
-a moved HEAD, a deleted branch, uncommitted work, and a filesystem without creation
-times require an operator, because the narrow worktree adapter cannot repair them
-without risking loss of the worktree's work. `operatorActionRequired: false` means the
-strategy has an executable path, not that it runs unattended: every repair request
-still carries `operatorApproved`, and reissuing a managed identity for an existing
-worktree happens only on that approved path (#3376).
+registration under the retired identity rule), `release-stale-lock` and
+`accept-moved-head` are executable by the repair service; a missing/corrupt `.git`
+pointer (`pointer-stale`), a deleted branch, uncommitted work, and a filesystem
+without creation times require an operator, because the narrow worktree adapter
+cannot repair them without risking loss of the worktree's work.
+`operatorActionRequired: false` means the strategy has an executable path, not that it
+runs unattended: every repair request still carries `operatorApproved`, and reissuing a
+managed identity for an existing worktree happens only on that approved path (#3376).
+
+`head-moved` was mapped to `operator-repair` until issue #3382. That strategy is
+`operator-required` by definition and the repair service executes it for no marker, so
+once the marker was persisted nothing could clear it — while
+`productionRuntimeWorkspaceAuthority` refuses any row carrying a drift marker and
+additionally requires `lastVerifiedHead` to equal the live HEAD. Any commit therefore
+made the workspace permanently unstartable. Two changes close that: a commit KEIKO
+ITSELF executes inside a managed worktree restamps `lastVerifiedHead` in the same
+operation (so the marker is never raised for Keiko's own work — see D-Head-Restamp
+below), and a move Keiko did NOT make is resolved by the operator-approved
+`accept-moved-head` repair.
 
 **`WorkspaceReconciliationEntry` and `WorkspaceReconciliationReport` — content-free result types.**
 
@@ -615,6 +626,7 @@ Each strategy maps to exactly one action, using only existing subsystems:
 | `reattach-branch` | Return `outcome: "operator-required"` with no mutation (recreating a deleted branch is a Git delivery operation — ADR-0080; the operator must act via the #470 surface, not via a workspace repair route) | None (no mutation) |
 | `release-stale-lock` | `WorkspaceInstanceStore.upsert` clearing `lock: null`, then re-reconcile so the classification drops the `lock-stale` marker | #445 store |
 | `commit-or-stash-required` | Return `outcome: "operator-required"` with no mutation (uncommitted-changes disposition is a Git delivery decision — ADR-0084; the operator must act via the #470 surface) | None (no mutation) |
+| `accept-moved-head` | Re-gather the live reconciliation facts for the row, require the freshly classified drift to be exactly `["head-moved"]`, a readable HEAD, and a clean tree (a live `worktreeStatus()` probe, fail-closed on an inconclusive result), then persist `lastVerifiedHead := observedHead`, drop the marker and re-derive hints + health through the same contract mapping a live proof uses. No Git and no filesystem mutation. | #447 fact-gathering + #445 store |
 | `operator-repair` | Return `outcome: "operator-required"` with no mutation | None (no mutation) |
 | `abandon-and-cleanup` | Transition instance to `abandoned` (legal only from `paused`/`handoff-ready`/`recovery-required`/`failed`/`cleanup-pending`, requires `operator-approval`; an `active`/`provisioning` source is refused as `REPAIR_NOT_APPLICABLE`); actual worktree cleanup deferred to #448 (governed cleanup controls) | #445 store transition |
 
@@ -660,6 +672,29 @@ All responses pass through `deps.redactor` (content-free invariant at the BFF
 boundary). `WorkspaceReconciliationReport.repoRoot` is passed through `deps.redactor`
 before returning to the browser.
 
+**D-Head-Restamp — a commit Keiko itself executes records the head it wrote (issue #3382).**
+
+`lastVerifiedHead` had exactly one production writer (`reconcileWithContext`, on a `healthy`
+outcome), while the classifier answers `drifted` + `head-moved` for any observed head that differs
+from it. Every governed commit inside a managed task worktree therefore moved HEAD away from the
+recorded baseline, the next pass persisted `head-moved`, and the coding runtime's launch authority
+refused the workspace from then on. That is drift only in the sense that the recorded baseline is
+stale: Keiko performed the commit under its own governance and knows the head it wrote.
+
+`WorkspaceProvisioningService.recordVerifiedHead({ managedWorktreePath, correlationId })` records it.
+`gitDelivery/execution.ts` calls it after `executeGovernedMutation` completes, and only when all
+three hold: the command was a `commit`, the kernel reported it `succeeded`, and the managed prover
+(`resolveManagedWorkspaceRootAccess`) still admits the root as a managed task worktree. The head is
+observed through the SAME repository consultation and porcelain entry match the classifier uses, so
+the persisted value is exactly what the next pass compares against. The write is one field on one
+row — nothing is re-proven that does not need to be, no Git or filesystem state changes, and no
+trust is granted. It is best-effort (a governed commit that already happened must not fail because
+the restamp could not be recorded) but never silent: every refusal and failure emits the existing
+`task-workspace.lifecycle` classified line under the commit's correlation id.
+
+A head Keiko did NOT write is untouched and still classifies as `head-moved`; the operator-approved
+`accept-moved-head` repair above is the exit for that case.
+
 ### Reuse map
 
 | Item reused | Source | Reuse point |
@@ -668,7 +703,7 @@ before returning to the browser.
 | `WorkspaceEvent` types (`drift-detected`, `health-changed`, `recovery-flagged`, `repaired`) | ADR-0088 D3 (17-member closed union) | Reconciliation and repair evidence |
 | `validateWorkspaceInstance` closed-allowlist gate | ADR-0088 D3 | Every store write after reconciliation re-validates |
 | `TaskWorkspaceDriftMarker` 8-member union | ADR-0088 Entity 3 | `WorkspaceReconciliationFacts.driftMarkers` + `planWorkspaceRecoveryHints` mapping |
-| `WorkspaceRecoveryStrategy` 7-member union | ADR-0088 Entity 5 | `WorkspaceRepairRequest.strategy` + per-strategy repair dispatch |
+| `WorkspaceRecoveryStrategy` 8-member union | ADR-0088 Entity 5 | `WorkspaceRepairRequest.strategy` + per-strategy repair dispatch |
 | `WorkspaceRecoveryHint` type | ADR-0088 Entity 5 | `classifyWorkspaceReconciliation` return type |
 | `legal transition active|paused → recovery-required` (no preconditions) | ADR-0088 D2 transition table | Classification step 8 (D3 above) — no new transition semantics |
 | `repair` operation (`requiresLock: true`, `requiresOperatorApproval: true`) | ADR-0088 D4 operation authority table | Repair service enforces the same gate |

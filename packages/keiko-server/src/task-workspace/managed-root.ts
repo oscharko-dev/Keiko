@@ -20,7 +20,7 @@ import {
   writeFileSync,
   type Dirent,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { PathEscapeError, resolveWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertContainedRealPathWithinOwnedRoot } from "@oscharko-dev/keiko-workspace/internal/owned-root";
@@ -56,6 +56,46 @@ function hardenMarkerPermissionsBestEffort(target: string): void {
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }
+}
+
+function realPathOrUndefined(target: string): string | undefined {
+  try {
+    return nodeWorkspaceFs.realPath(target);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The CANONICAL spelling of the managed-worktree root: the realpath of its longest EXISTING
+ * ancestor, with the segments that do not exist yet re-appended.
+ *
+ * The root is composed lexically from the UI database's directory (`<uiDbDir>/task-workspaces`), and
+ * every managed worktree path is derived from it and PERSISTED. On a symlinked or case-folded state
+ * directory — `/var` → `/private/var` on macOS is the everyday example — that lexical spelling is not
+ * the canonical one, so every persisted `managedWorktreePath` was non-canonical too, and
+ * `productionRuntimeWorkspaceAuthority.qualifiedWorkspaceRoot` refuses any root whose
+ * `realpathSync(root) !== root`: the workspace could be provisioned and then never run (#3382).
+ *
+ * The longest-existing-ancestor walk is the same shape `assertContainedRealPathWithinOwnedRoot` uses
+ * to verify a path whose leaf does not exist yet, so the answer is stable whether this is called
+ * before or after the root is materialized. A root with no resolvable ancestor at all (an
+ * unreadable chain) falls back to the absolute lexical spelling — this function canonicalises, it
+ * never decides authority; ownership and containment are still proven by the guards above.
+ */
+export function canonicalManagedRootPath(managedRoot: string): string {
+  const absolute = resolve(managedRoot);
+  const pending: string[] = [];
+  let current = absolute;
+  let parent = dirname(current);
+  while (current !== parent) {
+    const canonical = realPathOrUndefined(current);
+    if (canonical !== undefined) return join(canonical, ...pending);
+    pending.unshift(basename(current));
+    current = parent;
+    parent = dirname(current);
+  }
+  return absolute;
 }
 
 // Creates (if absent) and proves ownership of the managed-worktree root. The marker file is the

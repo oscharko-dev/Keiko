@@ -304,10 +304,14 @@ describe("planWorkspaceRecoveryHints", () => {
       strategy: "operator-repair",
       operatorActionRequired: true,
     },
+    // #3382: `operator-repair` here was a strategy the repair service executes for no marker, so a
+    // persisted `head-moved` could never be cleared and the runtime authority — which refuses any row
+    // carrying a drift marker — locked the workspace out for good. `accept-moved-head` is executable
+    // and still `operatorApproved`-gated at the repair route (ADR-0091, ADR-0088 Entity 5).
     "head-moved": {
       marker: "head-moved",
-      strategy: "operator-repair",
-      operatorActionRequired: true,
+      strategy: "accept-moved-head",
+      operatorActionRequired: false,
     },
     "branch-deleted": {
       marker: "branch-deleted",
@@ -594,6 +598,7 @@ describe("repair applicability", () => {
     expect(isAutomaticWorkspaceRepairStrategy("recreate-worktree")).toBe(true);
     expect(isAutomaticWorkspaceRepairStrategy("reconcile-pointer")).toBe(true);
     expect(isAutomaticWorkspaceRepairStrategy("release-stale-lock")).toBe(true);
+    expect(isAutomaticWorkspaceRepairStrategy("accept-moved-head")).toBe(true);
     expect(isAutomaticWorkspaceRepairStrategy("reattach-branch")).toBe(false);
     expect(isAutomaticWorkspaceRepairStrategy("operator-repair")).toBe(false);
     expect(isAutomaticWorkspaceRepairStrategy("commit-or-stash-required")).toBe(false);

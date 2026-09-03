@@ -1018,12 +1018,18 @@ describe("real Git linked worktrees, absolute and relative pointers", () => {
     return repository;
   }
 
+  // `worktree.useRelativePaths` is pinned EXPLICITLY for both shapes, never left to inheritance:
+  // `git init` picks up the user's global configuration, so with `worktree.useRelativePaths=true`
+  // set globally — or a future Git defaulting it on — the "absolute" worktree would get a relative
+  // pointer too and this fixture would silently cover ONE shape while still passing (CodeRabbit,
+  // PR #3381).
   function addWorktree(repository: string, name: string, relativePaths: boolean): string {
     const target = join(repository, "..", name);
     execFileSync(
       "git",
       [
-        ...(relativePaths ? ["-c", "worktree.useRelativePaths=true"] : []),
+        "-c",
+        `worktree.useRelativePaths=${relativePaths ? "true" : "false"}`,
         "worktree",
         "add",
         "-q",
@@ -1044,12 +1050,13 @@ describe("real Git linked worktrees, absolute and relative pointers", () => {
       const relativePaths = addWorktree(repository, "rel", true);
 
       // The fixture is real: Git wrote a relative forward pointer for the second worktree and an
-      // absolute one for the first. Without this the assertion below could pass on two identical
-      // absolute layouts and prove nothing.
+      // absolute one for the first. BOTH halves are asserted by SHAPE — the absolute one anchored on
+      // the leading separator, because `/^gitdir: /u` also matches `gitdir: ../../repo/.git/...` and
+      // would pass on two identical relative layouts, proving nothing (CodeRabbit, PR #3381).
       expect(readFileSync(join(relativePaths, ".git"), "utf8").trim()).not.toMatch(
         /^gitdir: [/\\]/u,
       );
-      expect(readFileSync(join(absolute, ".git"), "utf8").trim()).toMatch(/^gitdir: /u);
+      expect(readFileSync(join(absolute, ".git"), "utf8").trim()).toMatch(/^gitdir: [/\\]/u);
 
       expect(inspectManagedGitdirIdentityOutcome(absolute, repository).kind).toBe("identified");
       expect(inspectManagedGitdirIdentityOutcome(relativePaths, repository).kind).toBe(

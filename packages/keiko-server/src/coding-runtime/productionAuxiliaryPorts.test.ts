@@ -123,6 +123,7 @@ function ports(
         kind: "managed-task",
         canonicalRoot: "/workspace",
         fs: nodeWorkspaceFs,
+        repositoryRoot: "/repository",
       })),
     modelId,
     authorityExpiresAt: AUTHORITY_EXPIRES_AT,
@@ -233,6 +234,7 @@ describe("createProductionAuxiliaryPorts", () => {
       kind: "managed-task" as const,
       canonicalRoot: "/workspace",
       fs: nodeWorkspaceFs,
+      repositoryRoot: "/repository",
     }));
     const surface = ports("gpt-coding-safe", [], { readText, resolveWorkspaceRootAccess });
 
@@ -261,6 +263,7 @@ describe("createProductionAuxiliaryPorts", () => {
             kind: "managed-task" as const,
             canonicalRoot: "/workspace",
             fs: nodeWorkspaceFs,
+            repositoryRoot: "/repository",
           };
         }
         return outcome === "revoked"
@@ -269,6 +272,7 @@ describe("createProductionAuxiliaryPorts", () => {
               kind: "managed-task" as const,
               canonicalRoot: "/workspace-replacement",
               fs: nodeWorkspaceFs,
+              repositoryRoot: "/repository",
             };
       });
       const surface = ports("gpt-coding-safe", [], { readText, resolveWorkspaceRootAccess });
@@ -371,7 +375,12 @@ describe("createProductionAuxiliaryPorts", () => {
     const resolveWorkspaceRootAccess = vi.fn(() => {
       proofCount += 1;
       return proofCount === 1
-        ? { kind: "managed-task" as const, canonicalRoot: "/workspace", fs: nodeWorkspaceFs }
+        ? {
+            kind: "managed-task" as const,
+            canonicalRoot: "/workspace",
+            fs: nodeWorkspaceFs,
+            repositoryRoot: "/repository",
+          }
         : undefined;
     });
     const modelCall = vi.fn(toolThenFinish("read_file", { relativePath: "src/index.ts" }));

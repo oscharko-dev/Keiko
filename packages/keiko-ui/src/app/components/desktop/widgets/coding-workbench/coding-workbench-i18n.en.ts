@@ -1,7 +1,5 @@
 export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.status.checking": "Checking",
-  "codingWorkbench.status.available": "Available",
-  "codingWorkbench.status.unavailable": "Unavailable",
   "codingWorkbench.header.eyebrow": "Coding",
   "codingWorkbench.header.summary":
     "Start and supervise one governed coding run. Authority and outcomes remain server-owned.",
@@ -116,6 +114,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "prunes the stale worktree registration and rebuilds the worktree from its task branch; committed work on the branch is kept",
   "codingWorkbench.setup.repairEffect.releaseStaleLock":
     "releases the stale lock an interrupted action left behind; the worktree is not touched",
+  "codingWorkbench.setup.repairEffect.acceptMovedHead":
+    "accepts the worktree's current commit as its verified head; HEAD moved outside Keiko, and nothing in the repository or on disk is changed",
   "codingWorkbench.setup.repairEffect.generic":
     "applies the recovery strategy Keiko recommended for this finding",
   "codingWorkbench.setup.boundRefreshFailed":
@@ -224,24 +224,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.planState.active": "In progress",
   "codingWorkbench.activity.planState.completed": "Completed",
   "codingWorkbench.activity.planState.cancelled": "Cancelled",
-  "codingWorkbench.source.eyebrow": "Model source",
-  "codingWorkbench.source.title": "Choose a server-confirmed source",
-  "codingWorkbench.source.group": "Runtime model source",
   "codingWorkbench.source.gateway.label": "Keiko Gateway",
-  "codingWorkbench.source.gateway.detail":
-    "Uses the configured Gateway profile. Provider details remain private.",
   "codingWorkbench.source.codex.label": "ChatGPT/Codex subscription",
-  "codingWorkbench.source.codex.detail":
-    "Uses a Keiko-owned subscription session. Credentials remain private.",
-  "codingWorkbench.source.confirmedLabel": "Server-confirmed source",
-  "codingWorkbench.source.confirmedValue": "{source} · {status} · {verification}",
-  "codingWorkbench.source.verification.verified": "verified by the last gateway check",
-  "codingWorkbench.source.verification.partial": "partly verified by the last gateway check",
-  "codingWorkbench.source.verification.failed": "the last gateway check failed",
-  "codingWorkbench.source.verification.unverified": "configured, not verified",
-  "codingWorkbench.source.verificationHint":
-    "The last gateway readiness check could not reach this source, so runs stay blocked. Re-run the readiness check in Settings.",
-  "codingWorkbench.source.retry": "Retry source",
   "codingWorkbench.source.unavailableReason.missing-config":
     "No gateway is configured. Configure the Keiko Gateway in Settings → Models.",
   "codingWorkbench.source.unavailableReason.missing-provider":
@@ -419,12 +403,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runState.cancelled": "Stopped",
   "codingWorkbench.runState.taken-over": "Taken over",
   "codingWorkbench.runState.recovery-required": "Recovery required",
-  "codingWorkbench.resourceStatus.idle": "Not checked",
-  "codingWorkbench.resourceStatus.loading": "Checking",
-  "codingWorkbench.resourceStatus.ready": "Available",
-  "codingWorkbench.resourceStatus.empty": "Not selected",
   "codingWorkbench.resourceStatus.unavailable": "Unavailable",
-  "codingWorkbench.resourceStatus.error": "Error",
   "codingWorkbench.announcement.runChecking": "Run status checking.",
   "codingWorkbench.announcement.noActiveRun": "No active coding run.",
   "codingWorkbench.announcement.runRevision": "{state}. Revision {revision}.",

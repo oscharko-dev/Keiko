@@ -153,6 +153,66 @@ export function managedRootStillAuthorized(
   };
 }
 
+/**
+ * The canonical managed task-worktree root this mutation ran in, or `undefined` when the workspace is
+ * an ordinary registered project.
+ *
+ * Asks the SAME prover admission and the mid-flight re-proof use (`resolveManagedWorkspaceRootAccess`)
+ * and reads its `kind` discriminator, rather than re-deriving "is this managed" from path shape. The
+ * classifier gate in front of it is the one `managedRootStillAuthorized` uses, so an ordinary root
+ * costs no prover call and produces no managed-authority denial line.
+ */
+function managedTaskWorktreeRoot(
+  deps: Pick<UiHandlerDeps, "managedTaskWorkspaceRoot" | "workspaceProvisioning">,
+  workspace: WorkspaceInfo,
+  logging: WorkspaceRootAccessDenialLogging,
+): string | undefined {
+  if (!requiresConfiguredManagedWorkspaceAuthority(deps, workspace.root)) return undefined;
+  const access = resolveManagedWorkspaceRootAccess(deps, workspace.root, logging);
+  return access?.kind === "managed-task" ? access.canonicalRoot : undefined;
+}
+
+/**
+ * Records the head Keiko's own governed COMMIT just wrote as the managed workspace's verified head
+ * (#3382).
+ *
+ * `lastVerifiedHead` is the baseline `classifyWorkspaceReconciliation` measures `head-moved` against,
+ * and until this call existed nothing wrote it outside a healthy reconciliation pass. Every governed
+ * commit inside a managed task worktree therefore moved HEAD away from that baseline, the next pass
+ * persisted `head-moved`, and `productionRuntimeWorkspaceAuthority` refused the workspace for every
+ * further run — with `DRIFT_MARKER_RECOVERY["head-moved"]` mapped to a strategy `repair.ts` executes
+ * for no marker, nothing could ever clear it.
+ *
+ * Scope, deliberately narrow:
+ *  - only a COMMIT (the only local mutation kind that moves HEAD),
+ *  - only when the kernel reports it `succeeded` and the authority guard did NOT refuse dispatch,
+ *  - only inside a root the managed prover still admits as a managed task worktree.
+ * Anything else — a move Keiko did not make, an ordinary project, a blocked or failed commit — leaves
+ * the baseline untouched and still classifies as drift, which the operator-approved
+ * `accept-moved-head` repair is the exit for.
+ *
+ * Best-effort and awaited: the commit has already happened, so a failed restamp must not turn a
+ * successful mutation into an error. It is never silent — the task-workspace layer logs every refusal
+ * and failure on the existing `task-workspace.lifecycle` line under this correlation id.
+ */
+async function restampManagedTaskWorkspaceHead(
+  deps: GitDeliveryMutationDeps,
+  workspace: WorkspaceInfo,
+  command: GitMutationCommand,
+  lifecycle: GitMutationLifecycleResult,
+  logging: WorkspaceRootAccessDenialLogging,
+): Promise<void> {
+  // `succeeded` is the whole gate: a dispatch the authority guard refused is recorded as
+  // `blocked`/`authority-denied` by `authorityDeniedGitDeliveryLifecycle`, so it can never reach here.
+  if (command.kind !== "commit" || lifecycle.outcome.status !== "succeeded") return;
+  const managedWorktreePath = managedTaskWorktreeRoot(deps, workspace, logging);
+  if (managedWorktreePath === undefined) return;
+  await deps.workspaceProvisioning?.recordVerifiedHead?.({
+    managedWorktreePath,
+    ...(logging.correlationId === undefined ? {} : { correlationId: logging.correlationId }),
+  });
+}
+
 // One refusal record per governed mutation: it writes the no-spawn marker the instant the guard
 // refuses a dispatch, and remembers that it did so, so the terminal lifecycle can be projected as
 // the governance block it is instead of the adapter's synthetic transport abort.
@@ -470,6 +530,25 @@ function runGovernedMutationKernel(
   );
 }
 
+// The live snapshot read, with its precondition failure classified before it propagates. Extracted
+// so `executeGovernedMutation` stays inside the repo's per-function line budget (AGENTS.md §6); the
+// behaviour is unchanged — the same `git.delivery.mutation.failed` line, then the same rethrow.
+async function snapshotOrReportFailure(
+  workspace: WorkspaceInfo,
+  seams: GitDeliveryExecutionSeams,
+  now: () => number,
+  activityLog: ServerLogSink,
+  actionKind: GitDeliveryActionKind,
+  correlationId: string | undefined,
+): Promise<GitWorktreeSnapshot> {
+  try {
+    return await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
+  } catch (error) {
+    logGitDeliveryPreconditionFailure(activityLog, actionKind, error, correlationId);
+    throw error;
+  }
+}
+
 /**
  * Runs ONE governed local mutation end-to-end: live snapshot → kernel (preflight + policy + approval +
  * execute) → evidence. Returns the kernel lifecycle result; the caller projects it into a content-free
@@ -489,22 +568,21 @@ export async function executeGovernedMutation(
 ): Promise<GitMutationLifecycleResult> {
   const now = seams.now ?? Date.now;
   const activityLog = seams.activityLog ?? processServerLogSink();
-  const stillAuthorized = managedRootStillAuthorized(deps, workspace, {
-    activityLog,
-    correlationId,
-  });
+  const logging: WorkspaceRootAccessDenialLogging = { activityLog, correlationId };
+  const stillAuthorized = managedRootStillAuthorized(deps, workspace, logging);
   const refusal = mutationDispatchRefusal(activityLog, command.kind, correlationId);
   if (!stillAuthorized()) {
     refusal.deny();
     throw new GitDeliveryRootAuthorityRevokedError();
   }
-  let snapshot: GitWorktreeSnapshot;
-  try {
-    snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
-  } catch (error) {
-    logGitDeliveryPreconditionFailure(activityLog, command.kind, error, correlationId);
-    throw error;
-  }
+  const snapshot = await snapshotOrReportFailure(
+    workspace,
+    seams,
+    now,
+    activityLog,
+    command.kind,
+    correlationId,
+  );
   const result = await runGovernedMutationKernel({
     command,
     approval,
@@ -517,7 +595,7 @@ export async function executeGovernedMutation(
     seams,
     now,
   });
-  return recordGitDeliveryLifecycle({
+  const lifecycle = recordGitDeliveryLifecycle({
     deps,
     result,
     snapshot,
@@ -527,6 +605,8 @@ export async function executeGovernedMutation(
     correlationId,
     authorityDenied: refusal.denied(),
   });
+  await restampManagedTaskWorkspaceHead(deps, workspace, command, lifecycle, logging);
+  return lifecycle;
 }
 
 /**

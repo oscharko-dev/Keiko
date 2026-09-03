@@ -21,6 +21,7 @@ import { MANAGED_ROOT_MARKER_FILENAME } from "./naming.js";
 import {
   assertManagedRootOwned,
   assertManagedTargetContained,
+  canonicalManagedRootPath,
   ensureManagedWorktreeParent,
   isManagedRootOwned,
   listManagedRepositoryIds,
@@ -191,4 +192,40 @@ describe("listManagedRepositoryIds", () => {
       }
     },
   );
+});
+
+// #3382/L-4: the managed root was composed LEXICALLY (`join(dirname(uiDbPath), "task-workspaces")`),
+// and every managed worktree path is derived from it and PERSISTED — while
+// `productionRuntimeWorkspaceAuthority.qualifiedWorkspaceRoot` refuses any root whose
+// `realpathSync(root)` is not the root itself. A state directory reached through a symlink (the
+// default `~/.keiko` branch of `resolveUiDbPath` is not symlink-checked at all, and a home directory
+// on a symlinked mount is ordinary) or on a case-folding volume therefore produced workspaces that
+// could be provisioned and then never run.
+describe("canonicalManagedRootPath", () => {
+  it("resolves a symlinked ancestor while keeping the segments that do not exist yet", () => {
+    const linkParent = join(base, "link-parent");
+    mkdirSync(linkParent, { recursive: true });
+    const linkedBase = join(linkParent, "state");
+    symlinkSync(base, linkedBase, "dir");
+
+    // The leaf does not exist yet — the case the composition actually runs in, before the root is
+    // materialized — so the walk has to resolve the longest EXISTING ancestor and re-append it.
+    expect(canonicalManagedRootPath(join(linkedBase, "task-workspaces"))).toBe(
+      join(base, "task-workspaces"),
+    );
+    // The property the runtime authority asks of every persisted managed root.
+    mkdirSync(join(base, "task-workspaces"), { recursive: true });
+    expect(realpathSync(canonicalManagedRootPath(join(linkedBase, "task-workspaces")))).toBe(
+      canonicalManagedRootPath(join(linkedBase, "task-workspaces")),
+    );
+  });
+
+  it("keeps every segment that does not exist yet, however deep", () => {
+    // The composition may run before ANY of the state directory exists. The walk must climb past
+    // each absent segment and re-append them in order rather than throwing and leaving the
+    // composition without a root — this function canonicalises, it never decides authority.
+    const deep = join(base, "absent-a", "absent-b", "task-workspaces");
+    expect(canonicalManagedRootPath(deep)).toBe(deep);
+    expect(existsSync(join(base, "absent-a"))).toBe(false);
+  });
 });

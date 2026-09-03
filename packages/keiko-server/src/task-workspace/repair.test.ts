@@ -392,6 +392,148 @@ describe("cleanup-pending rows whose worktree no longer proves its identity", ()
   });
 });
 
+// #3382: `head-moved` used to map to `operator-repair`, a strategy `executeStrategy` runs for no
+// marker, so a workspace whose HEAD moved outside Keiko carried a marker nothing could clear —
+// `productionRuntimeWorkspaceAuthority` refuses any row with a drift marker, so the workspace was
+// bricked for every further run. `accept-moved-head` is that missing executable exit: it adopts the
+// worktree's CURRENT commit as its verified head, mutating neither Git nor the filesystem, and it
+// runs only behind the same `operatorApproved` gate every other strategy does.
+describe("accept-moved-head (adopt an out-of-band commit as the verified head)", () => {
+  // A commit made in the worktree without Keiko — the operator's own terminal.
+  function commitOutOfBand(worktreePath: string, name: string): string {
+    writeFileSync(join(worktreePath, name), `${name}\n`);
+    execFileSync("git", ["add", name], { cwd: worktreePath });
+    execFileSync("git", ["commit", "-q", "-m", `add ${name}`], { cwd: worktreePath });
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: worktreePath,
+      encoding: "utf8",
+    }).trim();
+  }
+
+  async function driftedByMovedHead(taskId: string): Promise<{
+    readonly instance: WorkspaceInstance;
+    readonly head: string;
+  }> {
+    const instance = await provisionTask(taskId);
+    await reconciliation().reconcile();
+    const head = commitOutOfBand(instance.managedWorktreePath, `${taskId}.txt`);
+    return { instance, head };
+  }
+
+  it("refuses without operator approval and leaves the baseline untouched", async () => {
+    const { instance } = await driftedByMovedHead("t-moved-unapproved");
+    const before = store.getById(instance.workspaceId)?.lastVerifiedHead;
+
+    await rejectsWithCode(
+      () => repair(instance.workspaceId, "accept-moved-head", false),
+      "OPERATOR_APPROVAL_REQUIRED",
+    );
+
+    expect(store.getById(instance.workspaceId)?.lastVerifiedHead).toBe(before);
+    expect(store.getById(instance.workspaceId)?.driftMarkers).toEqual(["head-moved"]);
+  });
+
+  it("restamps the head, drops the marker and derives health with approval", async () => {
+    const { instance, head } = await driftedByMovedHead("t-moved-approved");
+
+    const result = await repair(instance.workspaceId, "accept-moved-head", true);
+
+    expect(result.applied).toBe(true);
+    expect(result.outcome).toBe("repaired");
+    expect(result.driftMarkers).toEqual([]);
+    const persisted = store.getById(instance.workspaceId);
+    expect(persisted?.lastVerifiedHead).toBe(head);
+    expect(persisted?.health).toBe("healthy");
+    expect(persisted?.recoveryHints).toEqual([]);
+    // The next live pass agrees: the row is settled, not merely rewritten.
+    const report = await reconciliation().reconcile();
+    const entry = report.entries.find((item) => item.workspaceId === instance.workspaceId);
+    expect(entry?.status).toBe("healthy");
+  });
+
+  it("refuses a worktree that still holds uncommitted work", async () => {
+    const { instance } = await driftedByMovedHead("t-moved-dirty");
+    writeFileSync(join(instance.managedWorktreePath, "wip.txt"), "uncommitted\n");
+
+    await rejectsWithCode(
+      () => repair(instance.workspaceId, "accept-moved-head", true),
+      "REPAIR_NOT_APPLICABLE",
+    );
+
+    expect(store.getById(instance.workspaceId)?.driftMarkers).toEqual(["head-moved"]);
+  });
+
+  // The repository is reachable but no longer lists a worktree at this path, so there is no head to
+  // adopt. Nothing is written: the baseline the next pass classifies against stays as it was.
+  it("refuses when the repository reports no readable HEAD for the worktree", async () => {
+    const { instance } = await driftedByMovedHead("t-moved-headless");
+    const before = store.getById(instance.workspaceId)?.lastVerifiedHead;
+    const service = repairService(undefined, (workspace: WorkspaceInfo): GitWorktreeAdapter => ({
+      ...realAdapter(workspace),
+      listWorktrees: (): Promise<readonly WorktreeListEntry[]> => Promise.resolve([]),
+    }));
+
+    await rejectsWithCode(
+      () =>
+        service.repair({
+          workspaceId: instance.workspaceId,
+          requestedBy: "u",
+          strategy: "accept-moved-head",
+          operatorApproved: true,
+        }),
+      "REPAIR_NOT_APPLICABLE",
+    );
+    expect(store.getById(instance.workspaceId)?.lastVerifiedHead).toBe(before);
+  });
+
+  // The window this strategy re-gathers its facts for: the row was classified `head-moved` before
+  // the repair lock was taken, and the task branch is deleted between that classification and the
+  // accepting write. The second gather sees `branch-deleted` and refuses, so the moved head is never
+  // settled onto a row whose only live finding is something else.
+  it("refuses when the live facts change between the classification and the write", async () => {
+    const { instance } = await driftedByMovedHead("t-moved-raced");
+    let branchLookups = 0;
+    const service = repairService(undefined, (workspace: WorkspaceInfo): GitWorktreeAdapter => {
+      const adapter = realAdapter(workspace);
+      return {
+        ...adapter,
+        localBranchExists: (branch: string): Promise<boolean> => {
+          branchLookups += 1;
+          return branchLookups === 1 ? adapter.localBranchExists(branch) : Promise.resolve(false);
+        },
+      };
+    });
+
+    await rejectsWithCode(
+      () =>
+        service.repair({
+          workspaceId: instance.workspaceId,
+          requestedBy: "u",
+          strategy: "accept-moved-head",
+          operatorApproved: true,
+        }),
+      "REPAIR_NOT_APPLICABLE",
+    );
+    expect(branchLookups).toBeGreaterThan(1);
+    expect(store.getById(instance.workspaceId)?.driftMarkers).toEqual(["head-moved"]);
+  });
+
+  it("refuses a row whose live findings are not only the moved head", async () => {
+    const { instance } = await driftedByMovedHead("t-moved-foreign");
+    // The task branch is gone as well, so the live classification is `branch-deleted`, not
+    // `head-moved`: that row keeps its own operator-guided hint and this repair must not settle it.
+    store.upsert({
+      ...(store.getById(instance.workspaceId) ?? instance),
+      taskBranch: "keiko/task/ghost-00000000",
+    });
+
+    await rejectsWithCode(
+      () => repair(instance.workspaceId, "accept-moved-head", true),
+      "REPAIR_NOT_APPLICABLE",
+    );
+  });
+});
+
 describe("release-stale-lock (clear stale lock)", () => {
   it("clears an expired lock and returns to healthy", async () => {
     const instance = await provisionTask("t1");

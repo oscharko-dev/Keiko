@@ -210,7 +210,7 @@ function driftedRecoveryRow(instance: WorkspaceInstance): void {
 
 function makeService(
   adapterFactory?: AdapterFactory,
-  ensureManagedWorkspaceIdentity?: (instance: WorkspaceInstance, initializeTrust: boolean) => void,
+  ensureManagedWorkspaceIdentity?: (instance: WorkspaceInstance) => void,
   activityLog?: ServerLogSink,
   proveCreationTimeSupport?: (
     managedRoot: string,
@@ -523,11 +523,18 @@ describe("provision success (AC1, AC4)", () => {
     expect(activityLog.events).toHaveLength(1);
   });
 
+  // The `initializeTrust` flag this used to assert (`[true, true, false]`) is gone with #3382/L-3:
+  // it made an explicit provision the ONLY call that could derive the worktree's script-trust record
+  // from its repository, so a worktree provisioned before its repository was granted stayed
+  // restricted for good. The invariant that assertion stood for — activation must never INFER or
+  // RENEW execution trust — is unchanged and is now pinned where the guards that carry it actually
+  // live, in deps.test.ts ("derives managed trust on activation…" / "…never overwrites an existing
+  // record" / "…never derives from an untrusted repository"). What this test owns is the other half:
+  // the identity port is called, with the right row, before EVERY active exposure.
   it("establishes the managed workspace identity before every active exposure", async () => {
-    const observed: { readonly instance: WorkspaceInstance; readonly initializeTrust: boolean }[] =
-      [];
-    const service = makeService(undefined, (instance, initializeTrust) => {
-      observed.push({ instance, initializeTrust });
+    const observed: WorkspaceInstance[] = [];
+    const service = makeService(undefined, (instance) => {
+      observed.push(instance);
     });
     const request = {
       repositoryRequestPath: repoRoot,
@@ -545,17 +552,16 @@ describe("provision success (AC1, AC4)", () => {
       acquireLock: false,
     });
 
-    expect(observed.map(({ instance }) => instance.managedWorktreePath)).toEqual([
+    expect(observed.map((instance) => instance.managedWorktreePath)).toEqual([
       provisioned.instance.managedWorktreePath,
       provisioned.instance.managedWorktreePath,
       provisioned.instance.managedWorktreePath,
     ]);
-    expect(observed.map(({ instance }) => instance.lifecycleState)).toEqual([
+    expect(observed.map((instance) => instance.lifecycleState)).toEqual([
       "provisioning",
       "active",
       "active",
     ]);
-    expect(observed.map(({ initializeTrust }) => initializeTrust)).toEqual([true, true, false]);
   });
 });
 

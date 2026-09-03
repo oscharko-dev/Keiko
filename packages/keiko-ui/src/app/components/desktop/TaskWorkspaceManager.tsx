@@ -60,8 +60,9 @@ function isDirty(instance: WorkspaceInstance): boolean {
 
 // The first recovery hint a Repair click can apply automatically: no operator action needed, and
 // the strategy is one the #447 repair service actually runs without further gating
-// (reconcile-pointer, recreate-worktree, release-stale-lock). Null when every hint needs a human
-// first (operator-repair, reattach-branch, commit-or-stash-required) or there is no hint at all.
+// (reconcile-pointer, recreate-worktree, release-stale-lock, accept-moved-head). Null when every
+// hint needs a human first (operator-repair, reattach-branch, commit-or-stash-required) or there is
+// no hint at all.
 function firstAutomaticRepairHint(instance: WorkspaceInstance): WorkspaceRecoveryHint | null {
   return (
     instance.recoveryHints.find(

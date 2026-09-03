@@ -13,7 +13,7 @@ import {
   type CodingWorkbenchResourceState,
   type CodingWorkbenchRuntimeState,
 } from "@/lib/coding-workbench-live-state";
-import { CodexSubscriptionAuthCard, ModelRuntimeStatus } from "./CodingWorkbenchModelCards";
+import { CodexSubscriptionAuthCard } from "./CodingWorkbenchModelCards";
 
 type ModelActions = Pick<
   CodingWorkbenchRuntimeActions,
@@ -92,19 +92,11 @@ function codexState(
   };
 }
 
-function renderStatus(
-  state: CodingWorkbenchRuntimeState,
-  actions: ModelActions = modelActions(),
-  locked = false,
-): ModelActions {
-  render(<ModelRuntimeStatus state={state} actions={actions} locked={locked} />);
-  return actions;
-}
-
 // The authentication truth and the Codex setup plan are rendered by `CodexSubscriptionAuthCard`,
-// which the window actually mounts — never by `ModelRuntimeStatus`, whose duplicate `AuthTruth`
-// branch was dead production code and was removed in the #3381 review. Driving these suites through
-// the mounted card keeps them from passing over a surface no operator can reach.
+// which the window actually mounts. A `ModelRuntimeStatus` panel used to render a duplicate
+// `AuthTruth` branch; the #3381 review removed the duplicate and #3382 removed the panel itself,
+// which nothing ever mounted. Driving these suites through the mounted card keeps them from passing
+// over a surface no operator can reach.
 function renderAuthCard(
   state: CodingWorkbenchRuntimeState,
   actions: ModelActions = modelActions(),
@@ -112,105 +104,6 @@ function renderAuthCard(
   render(<CodexSubscriptionAuthCard state={state} actions={actions} />);
   return actions;
 }
-
-describe("ModelRuntimeStatus source cards", () => {
-  it("selects the other source through the radio group", async () => {
-    const user = userEvent.setup();
-    const actions = renderStatus(
-      codexState({
-        ...createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway"),
-      }),
-    );
-    await user.click(screen.getByRole("radio", { name: /ChatGPT\/Codex subscription/u }));
-    expect(actions.setRuntimePreference).toHaveBeenCalledWith("codex-subscription");
-  });
-
-  it("locks both radios while a run is active", () => {
-    renderStatus(codexState(), modelActions(), true);
-    for (const radio of screen.getAllByRole("radio")) {
-      expect(radio).toBeDisabled();
-    }
-  });
-
-  // F-01: this row is the Workbench's "server-confirmed source" readout. It used to render
-  // "Keiko Gateway - Available" from a configured profile, with no statement about whether anything
-  // had confirmed the gateway answers.
-  it("says a configured source is unverified until a probe confirms it", () => {
-    renderStatus(
-      codexState({
-        source: ready({
-          runtimePreference: "codex-subscription" as const,
-          modelSource: "chatgpt-codex-subscription-profile" as const,
-          runtimeSource: "codex-cli-adapter" as const,
-          available: true,
-          verification: UNVERIFIED_GATEWAY,
-        }),
-      }),
-    );
-
-    expect(screen.getByText(/configured, not verified/u)).toBeInTheDocument();
-    expect(screen.queryByText(/verified by the last gateway check/u)).toBeNull();
-  });
-
-  it("surfaces a failed probe with the re-check hint instead of an available source", () => {
-    renderStatus(
-      codexState({
-        source: ready({
-          runtimePreference: "codex-subscription" as const,
-          modelSource: "chatgpt-codex-subscription-profile" as const,
-          runtimeSource: "codex-cli-adapter" as const,
-          available: true,
-          verification: "failed",
-        }),
-      }),
-    );
-
-    expect(screen.getByText(/the last gateway check failed/u)).toBeInTheDocument();
-    expect(screen.getByText(/Re-run the readiness check/u)).toBeInTheDocument();
-  });
-
-  it("offers a retry when the confirmed source is unavailable and refreshes it", async () => {
-    const user = userEvent.setup();
-    const actions = renderStatus(
-      codexState({
-        source: ready({
-          runtimePreference: "codex-subscription" as const,
-          modelSource: "chatgpt-codex-subscription-profile" as const,
-          runtimeSource: "codex-cli-adapter" as const,
-          available: false,
-          verification: UNVERIFIED_GATEWAY,
-        }),
-      }),
-    );
-    expect(screen.getByText(/Unavailable/u)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Retry source" }));
-    expect(actions.refreshSource).toHaveBeenCalledTimes(1);
-  });
-
-  // "Unavailable" alone left the operator with no way to learn that a readiness check would have
-  // fixed it (workbench end-to-end run, 2026-09-03).
-  it("names the reason and the next step for an unavailable gateway source", () => {
-    renderStatus(
-      codexState({
-        source: ready({
-          runtimePreference: "managed-gateway" as const,
-          modelSource: "keiko-model-gateway" as const,
-          runtimeSource: "keiko-sidecar" as const,
-          available: false,
-          unavailableReason: "no-tool-calling",
-          verification: UNVERIFIED_GATEWAY,
-        }),
-      }),
-    );
-    expect(screen.getByText(/No chat model has verified tool calling/u)).toBeInTheDocument();
-    expect(screen.getByText(/Run the readiness check in Settings/u)).toBeInTheDocument();
-  });
-
-  it("hides the confirmed-source row until the server has answered", () => {
-    renderStatus(codexState({ source: { status: "loading", value: null, error: null } }));
-    expect(screen.queryByText("Server-confirmed source")).not.toBeInTheDocument();
-  });
-});
 
 describe("CodexSubscriptionAuthCard authentication truth", () => {
   // `connected` is deliberately absent: the card renders NOTHING once the subscription is
@@ -350,7 +243,7 @@ describe("CodexSubscriptionAuthCard codex setup", () => {
 
 // The window's only mount of the subscription sign-in surface: selecting the subscription in the
 // composer's source select must lead somewhere when the sign-in is missing, expired, revoked or
-// failed (audit finding, 2026-09-03 — `ModelRuntimeStatus` had lost its mount, so Start stayed
+// failed (audit finding, 2026-09-03 — the sign-in surface had lost its only mount, so Start stayed
 // disabled with no explanation and no way to authenticate).
 describe("CodexSubscriptionAuthCard", () => {
   it("renders the sign-in status and the refresh control while the subscription is not connected", async () => {

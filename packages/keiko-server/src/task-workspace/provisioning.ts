@@ -77,7 +77,9 @@ import {
   type WorkspaceLifecycleOperation,
   type WorkspaceLifecycleOutcome,
 } from "./evidence.js";
+import { recordVerifiedManagedHead } from "./verified-head.js";
 import type {
+  RecordVerifiedHeadInput,
   WorkspaceActivateRequest,
   WorkspaceActivateResult,
   WorkspaceProvisioningService,
@@ -306,13 +308,9 @@ function assertPersistedManagedPath(ctx: ProvisioningCtx, instance: WorkspaceIns
   }
 }
 
-function ensureManagedWorkspaceIdentity(
-  ctx: ProvisioningCtx,
-  instance: WorkspaceInstance,
-  initializeTrust: boolean,
-): void {
+function ensureManagedWorkspaceIdentity(ctx: ProvisioningCtx, instance: WorkspaceInstance): void {
   try {
-    ctx.deps.ensureManagedWorkspaceIdentity?.(instance, initializeTrust);
+    ctx.deps.ensureManagedWorkspaceIdentity?.(instance);
   } catch (error) {
     throw new TaskWorkspaceError(
       "PROVISIONING_FAILED",
@@ -672,7 +670,7 @@ function resumeExisting(
       managedIdentityDriftMessage(drift),
     );
   }
-  ensureManagedWorkspaceIdentity(ctx, existing, true);
+  ensureManagedWorkspaceIdentity(ctx, existing);
   const refreshed = ctx.deps.store.upsert({
     ...existing,
     ...driftAfterLiveProof(existing, existing.lifecycleState, false),
@@ -803,7 +801,7 @@ async function runWorktreeMutation(
       repo.repositoryRoot,
       request.correlationId,
     );
-    ensureManagedWorkspaceIdentity(ctx, provisioning, true);
+    ensureManagedWorkspaceIdentity(ctx, provisioning);
   } catch (error) {
     const failure =
       error instanceof TaskWorkspaceError
@@ -989,10 +987,28 @@ function driftAfterLiveProof(
   lifecycleState: TaskWorkspaceLifecycleState,
   lockRewritten: boolean,
 ): Pick<WorkspaceInstance, "driftMarkers" | "recoveryHints" | "health"> {
-  const driftMarkers = instance.driftMarkers.filter(
-    (marker) =>
-      !MARKERS_REPROVEN_BY_LIVE_PROOF.has(marker) && !(lockRewritten && marker === "lock-stale"),
+  return workspaceDriftBookkeeping(
+    instance.driftMarkers.filter(
+      (marker) =>
+        !MARKERS_REPROVEN_BY_LIVE_PROOF.has(marker) && !(lockRewritten && marker === "lock-stale"),
+    ),
+    lifecycleState,
   );
+}
+
+/**
+ * The drift bookkeeping for a caller that has just REFUTED one or more markers: re-plan the hints
+ * from what remains and DERIVE health from what remains, through the contract's own mapping.
+ *
+ * Extracted from `driftAfterLiveProof` so the #3382 `accept-moved-head` repair (repair.ts) drops its
+ * one marker through the identical derivation instead of restating it. A second copy of this three
+ * line rule is exactly how the resume path once persisted `health: "healthy"` next to a stale
+ * `gitdir-mismatch` (audit finding, 2026-09-03): the two callers must move together.
+ */
+export function workspaceDriftBookkeeping(
+  driftMarkers: readonly TaskWorkspaceDriftMarker[],
+  lifecycleState: TaskWorkspaceLifecycleState,
+): Pick<WorkspaceInstance, "driftMarkers" | "recoveryHints" | "health"> {
   return {
     driftMarkers,
     recoveryHints: planWorkspaceRecoveryHints(driftMarkers),
@@ -1147,7 +1163,7 @@ function activateLocked(
     flagDrift(ctx, "activate", instance, nowMs, request.correlationId);
   }
   assertActivationIdentityCurrent(ctx, instance, nowMs, request.correlationId);
-  ensureManagedWorkspaceIdentity(ctx, instance, false);
+  ensureManagedWorkspaceIdentity(ctx, instance);
   const owned = ownActivation(ctx, instance, request, nowMs);
   const { next, type } = activateOrRefuse(ctx, owned, request, nowMs);
   const lock = request.acquireLock ? owned.lock : null;
@@ -1250,7 +1266,12 @@ export function createWorkspaceProvisioningService(
     // no child process and therefore emits no termination evidence. UNKNOWN is honest here, and it
     // is the sanctioned fallback rather than an ad-hoc string.
     ensureIdentity: (instance: WorkspaceInstance): void => {
-      ensureManagedWorkspaceIdentity(ctxFor(undefined), instance, false);
+      ensureManagedWorkspaceIdentity(ctxFor(undefined), instance);
     },
+    // The #3382 restamp seam. It shares this service's deps bundle (store, managed root, adapter
+    // factory, evidence, clock, id) rather than composing a second one, so a caller cannot reach a
+    // different store or a different managed root than provisioning itself writes through.
+    recordVerifiedHead: (input: RecordVerifiedHeadInput): Promise<boolean> =>
+      recordVerifiedManagedHead(deps, input),
   };
 }

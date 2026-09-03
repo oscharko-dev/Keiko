@@ -53,6 +53,10 @@ import {
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
 import type { ServerLogSink } from "./observability/server-log.js";
 import type { WorkspaceRootAccess } from "./task-workspace/workspace-root-access.js";
+// ONE definition of "may this worktree run its repository's scripts" (ADR-0147 D3). The verification
+// runner owns it; this runner asks it rather than restating the rule, so the two governed
+// script-spawn boundaries can never drift apart (PR #3381 review P1).
+import { worktreeSharesRepositoryTrustBasis } from "./editor/verificationRunner.js";
 
 const MAX_CONCURRENT_RUNS = 8;
 const MIN_TIMEOUT_MS = 1_000;
@@ -290,6 +294,20 @@ interface InFlightRun {
 interface ResolvedCommandWorkspace {
   readonly access: WorkspaceRootAccess;
   readonly workspace: WorkspaceInfo;
+  // The project whose standing script trust governs this workspace, and that project's own
+  // workspace facts. For an ordinary root that is the root itself; for a managed task worktree it is
+  // the REPOSITORY it was bound from. A worktree is not a registered trust decision of its own — a
+  // governed run can create and rewrite files inside it, its own row included — so taking the
+  // decision from its own root is what let workspace-contained work grant itself script trust
+  // (PR #3381 review P1, closed for the verification runner and now for this runner too).
+  readonly trustProjectId: string;
+  readonly trustWorkspace: WorkspaceInfo;
+  // The repository root the worktree's own `package.json` must STILL match, or `undefined` for an
+  // ordinary root, which is its own basis. Stored as the ROOT, never as a boolean taken once:
+  // `trustedForScripts` re-derives the comparison from the filesystem on every ask, so the
+  // at-effect answer is read in the same synchronous step that admits the run and a manifest
+  // replaced between discovery and execution cannot be spawned (ADR-0147 D3).
+  readonly trustBasisRepositoryRoot: string | undefined;
 }
 
 class CommandRunnerManagerImpl implements CommandRunnerManager {
@@ -342,14 +360,13 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
 
   public readonly discover = (projectId: string): CommandTaskCatalog => {
     const resolved = this.resolveWorkspace(projectId);
-    const { workspace } = resolved;
     return {
       schemaVersion: COMMAND_RUNNER_SCHEMA_VERSION,
       projectId,
       tasks: discoverTasks(
-        workspace,
+        resolved.workspace,
         resolved.access.fs,
-        this.workspaceTrustedForPackageScripts(projectId, workspace),
+        this.trustedForScripts(resolved),
       ),
     };
   };
@@ -364,7 +381,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     const task = discoverTasks(
       workspace,
       resolved.access.fs,
-      this.workspaceTrustedForPackageScripts(input.projectId, workspace),
+      this.trustedForScripts(resolved),
     ).find((entry) => entry.id === input.taskId);
     if (task === undefined) {
       throw new CommandRunnerError("TASK_NOT_FOUND", "Task is not in the discovered catalog.");
@@ -378,7 +395,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     if (this.runs.size >= MAX_CONCURRENT_RUNS) {
       throw new CommandRunnerError("RUN_LIMIT_EXCEEDED", "Too many in-flight command runs.");
     }
-    this.assertWorkspaceTrustAtEffect(input.projectId, workspace);
+    this.assertWorkspaceTrustAtEffect(resolved);
     return this.runExecution(task, resolved, input);
   };
 
@@ -386,16 +403,32 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     return this.runDeps.fs ?? nodeWorkspaceFs;
   }
 
-  private workspaceTrustedForPackageScripts(projectId: string, workspace: WorkspaceInfo): boolean {
+  // The ONE script-trust rule this runner asks, identical in shape to the verification runner's
+  // `trustedForScripts`: the standing grant of the root that OWNS the decision, AND — for a managed
+  // task worktree — the ADR-0147 D3 basis equality that keeps the repository's grant bound to the
+  // worktree's actual `package.json` bytes. Both halves are re-derived on every ask, so discovery
+  // and the at-effect gate can never disagree with the filesystem.
+  private trustedForScripts(resolved: ResolvedCommandWorkspace): boolean {
     try {
-      return this.isWorkspaceTrustedForPackageScripts(projectId, workspace);
+      return (
+        this.trustBasisMatchesNow(resolved) &&
+        this.isWorkspaceTrustedForPackageScripts(resolved.trustProjectId, resolved.trustWorkspace)
+      );
     } catch {
       return false;
     }
   }
 
-  private assertWorkspaceTrustAtEffect(projectId: string, workspace: WorkspaceInfo): void {
-    if (this.workspaceTrustedForPackageScripts(projectId, workspace)) return;
+  // Re-read from disk on EVERY ask — discovery and at-effect — never cached on the resolved
+  // workspace. An ordinary root is its own basis and has nothing to compare against.
+  private trustBasisMatchesNow(resolved: ResolvedCommandWorkspace): boolean {
+    const repositoryRoot = resolved.trustBasisRepositoryRoot;
+    if (repositoryRoot === undefined) return true;
+    return worktreeSharesRepositoryTrustBasis(resolved.access, repositoryRoot, this.fs());
+  }
+
+  private assertWorkspaceTrustAtEffect(resolved: ResolvedCommandWorkspace): void {
+    if (this.trustedForScripts(resolved)) return;
     throw new CommandRunnerError(
       "TASK_REQUIRES_TRUST",
       "Repository package scripts require server-side workspace trust before execution.",
@@ -419,7 +452,23 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     if (access === undefined) {
       throw new CommandRunnerError("PROJECT_NOT_FOUND", "Project root path could not be resolved.");
     }
-    return { access, workspace: buildWorkspaceInfo(access.canonicalRoot) };
+    const workspace = buildWorkspaceInfo(access.canonicalRoot);
+    if (access.kind !== "managed-task") {
+      return {
+        access,
+        workspace,
+        trustProjectId: projectId,
+        trustWorkspace: workspace,
+        trustBasisRepositoryRoot: undefined,
+      };
+    }
+    return {
+      access,
+      workspace,
+      trustProjectId: access.repositoryRoot,
+      trustWorkspace: buildWorkspaceInfo(access.repositoryRoot),
+      trustBasisRepositoryRoot: access.repositoryRoot,
+    };
   }
 
   private buildRunDeps(workspace: WorkspaceInfo, fs: WorkspaceFs): RunCommandDeps {

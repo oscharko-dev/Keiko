@@ -23,6 +23,7 @@ const resolveWorkspaceRootAccess = (): WorkspaceRootAccess => ({
   kind: "managed-task" as const,
   canonicalRoot: "/managed/worktree",
   fs: nodeWorkspaceFs,
+  repositoryRoot: "/repository",
 });
 const FACTS: CodingWorkbenchRuntimeAuthorityFacts = {
   binding: {
@@ -576,6 +577,7 @@ describe("production managed worktree tools", () => {
       kind: "managed-task" as const,
       canonicalRoot: "/managed/worktree",
       fs: nodeWorkspaceFs,
+      repositoryRoot: "/repository",
     };
     const execute = vi.fn((): Promise<CommandTaskRunResult> =>
       Promise.resolve({

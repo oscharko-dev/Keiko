@@ -204,13 +204,11 @@ function verificationTrustRoot(
     deps.workspaceRootAccessResolver?.(workspaceRoot, correlationId),
   );
   if (access?.kind !== "managed-task") return workspaceRoot;
-  const repositoryRoot = access.repositoryRoot;
-  // A managed worktree that names no repository has no grantable basis at all: the standing
-  // decision that would govern it is unknown, so it stays restricted rather than falling back to
-  // its own unregistered root.
-  if (repositoryRoot === undefined) return undefined;
-  return worktreeSharesRepositoryTrustBasis(access, repositoryRoot, nodeWorkspaceFs)
-    ? repositoryRoot
+  // `WorkspaceRootAccess`'s `managed-task` branch REQUIRES `repositoryRoot`, so there is no
+  // "managed worktree that names no repository" case to fall back from: the only question left is
+  // whether the repository's standing grant still covers this worktree's own manifest (ADR-0147 D3).
+  return worktreeSharesRepositoryTrustBasis(access, access.repositoryRoot, nodeWorkspaceFs)
+    ? access.repositoryRoot
     : undefined;
 }
 
@@ -222,6 +220,9 @@ function decideVerificationPolicy(
   request: EditorAgentVerificationRunRequest,
   snapshot: EditorAgentSessionSnapshot,
   deps: UiHandlerDeps,
+  // The REQUEST's correlation id (`RouteContext.correlationId`); the policy-time resolver lookup is
+  // recorded under it, so a denial it observes joins the request's timeline (CodeRabbit, PR #3381).
+  requestCorrelationId?: string,
 ): EditorAgentActionPolicyDecision {
   const { targetPath, targetSensitive } = verificationActionTarget(request.targetPath);
   const baseline = classifyEditorAgentAction("requestVerification", {
@@ -245,7 +246,11 @@ function decideVerificationPolicy(
     baseline,
     resolution.envelope,
     EDITOR_AGENT_ACTION_APPROVAL_RISK.requestVerification,
-    verificationWorkspaceTrust(deps, snapshot.workspaceRoot, verificationCorrelationId(request)),
+    verificationWorkspaceTrust(
+      deps,
+      snapshot.workspaceRoot,
+      requestCorrelationId ?? verificationCorrelationId(request),
+    ),
   );
 }
 
@@ -388,6 +393,26 @@ function emitVerificationRefusalDiagnostic(
   });
 }
 
+// Body-free: the closed deny reason (or the disposition) as `errorClass`, the catalogued
+// `verification-refused` summary, and the request's own correlation id.
+function emitPolicyRefusalDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  lifecycle: RequestLifecycle,
+  request: EditorAgentVerificationRunRequest,
+  decision: EditorAgentActionPolicyDecision,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: correlationIdOrUnknown(
+      lifecycle.correlationId ?? verificationCorrelationId(request),
+    ),
+    timestamp: new Date().toISOString(),
+    operation: "editor.verification.execute",
+    source: "editor.agent-verification-route",
+    errorClass: decision.denyReason ?? decision.disposition,
+    message: "verification-refused",
+  });
+}
+
 function requestLifecycle(ctx: RouteContext): RequestLifecycle {
   const controller = new AbortController();
   const abort = (): void => {
@@ -418,12 +443,21 @@ async function admitAndRun(
   lifecycle: RequestLifecycle,
   ports: AgentVerificationRoutePorts,
 ): Promise<RouteResult> {
-  const rooted = bindVerificationRoot(request, snapshot, deps);
+  const rooted = bindVerificationRoot(request, snapshot, deps, lifecycle.correlationId);
   const audit = ports.audit ?? recordEditorAgentActionAudit;
   if (!rooted.ok) return rejectVerificationRoot(request, snapshot, rooted.reason, audit);
   request = rooted.request;
-  const decision = (ports.decide ?? decideVerificationPolicy)(request, snapshot, deps);
+  const decision = (ports.decide ?? decideVerificationPolicy)(
+    request,
+    snapshot,
+    deps,
+    lifecycle.correlationId,
+  );
   if (decision.disposition !== "allowed") {
+    // The refusal that ends the request here — a restricted workspace, a denied authority — used to
+    // leave the audit row only; the diagnostic that `runAndRespond` emits for a runner refusal was
+    // never reached, so the request's timeline ended without the decision that closed it.
+    emitPolicyRefusalDiagnostic(deps.diagnostics, lifecycle, request, decision);
     return auditVerification(request, snapshot, decision, "conflict", audit)
       ? notRunResult(decision)
       : auditFailure();
@@ -434,7 +468,7 @@ async function admitAndRun(
       ? notRunResult(denied)
       : auditFailure();
   }
-  const finalRoot = bindVerificationRoot(request, snapshot, deps);
+  const finalRoot = bindVerificationRoot(request, snapshot, deps, lifecycle.correlationId);
   if (!finalRoot.ok) {
     rollbackVerificationReservation(request);
     return rejectVerificationRoot(request, snapshot, finalRoot.reason, audit);
@@ -462,6 +496,7 @@ function bindVerificationRoot(
   request: EditorAgentVerificationRunRequest,
   snapshot: EditorAgentSessionSnapshot,
   deps: Pick<UiHandlerDeps, "store" | "workspaceRootAccessResolver">,
+  requestCorrelationId?: string,
 ): RootedVerificationRequest {
   const root = resolveEditorAgentActionRoot(snapshot, request.rootBinding, deps.store);
   if (!root.ok) return root;
@@ -469,7 +504,7 @@ function bindVerificationRoot(
     root.root,
     request.targetPath === undefined ? [] : [request.targetPath],
     deps,
-    verificationCorrelationId(request),
+    requestCorrelationId ?? verificationCorrelationId(request),
   );
   if (reason !== null) return { ok: false, reason };
   return {

@@ -183,7 +183,12 @@ export function createFunctionalRuntimeResolver(
     verificationRunner: input.verificationRunner,
     resolveWorkspaceRootAccess: (requestedRoot) =>
       requestedRoot === activeRoot()
-        ? { kind: "managed-task", canonicalRoot: requestedRoot, fs: nodeWorkspaceFs }
+        ? {
+            kind: "managed-task",
+            canonicalRoot: requestedRoot,
+            fs: nodeWorkspaceFs,
+            repositoryRoot: requestedRoot,
+          }
         : undefined,
     confirmationConsumer: createAuthenticatedSessionStartConfirmationPlane(),
   });

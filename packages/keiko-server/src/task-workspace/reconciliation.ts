@@ -444,9 +444,36 @@ export async function reconcileSingleInstance(
     lockTtlMs: resolveLockTtl(deps.lockTtlMs),
     correlationId: correlationIdOrUnknown(correlationId),
   };
-  const { adapter, worktrees } = await consultRepository(ctx, instance.repositoryRoot);
+  const { adapter, worktrees } = await consultRepository(
+    ctx.deps,
+    instance.repositoryRoot,
+    ctx.correlationId,
+  );
   const gathered = await gatherFacts(ctx, adapter, worktrees, instance, nowMs, actor);
   return reconcileWithContext(ctx, gathered, instance, nowMs, correlationId);
+}
+
+/**
+ * The commit one managed worktree's HEAD currently reports, or `undefined` when the repository
+ * lists no entry for it.
+ *
+ * Observed through the SAME repository consultation and the SAME porcelain entry match `gatherFacts`
+ * classifies against (`findWorktreeEntry`), because the value is written back to
+ * `instance.lastVerifiedHead` and the next pass compares `observedHead` to exactly that field. A head
+ * read any other way (a second git verb, a different path spelling) could persist a value the
+ * classifier never produces, and `head-moved` would fire again on the very next pass — the defect
+ * this observation exists to close (#3382).
+ *
+ * Fails the same way the pass does: an unreachable repository throws the classified retryable
+ * REPOSITORY_UNREACHABLE, never a bare rejection.
+ */
+export async function observeManagedWorktreeHead(
+  deps: Pick<WorkspaceReconciliationServiceDeps, "createAdapter">,
+  instance: WorkspaceInstance,
+  correlationId: string,
+): Promise<string | undefined> {
+  const { worktrees } = await consultRepository(deps, instance.repositoryRoot, correlationId);
+  return findWorktreeEntry(worktrees, instance.managedWorktreePath)?.head;
 }
 
 interface RepositoryConsultation {
@@ -464,11 +491,12 @@ interface RepositoryConsultation {
 // the same retryable REPOSITORY_UNREACHABLE, with its frames and cause chain, that ADR-0091 D4
 // documents for every pass.
 async function consultRepository(
-  ctx: ReconcileCtx,
+  deps: Pick<WorkspaceReconciliationServiceDeps, "createAdapter">,
   repositoryRoot: string,
+  correlationId: string,
 ): Promise<RepositoryConsultation> {
   try {
-    const adapter = ctx.deps.createAdapter(detectWorkspaceAt(repositoryRoot), ctx.correlationId);
+    const adapter = deps.createAdapter(detectWorkspaceAt(repositoryRoot), correlationId);
     return { adapter, worktrees: await adapter.listWorktrees() };
   } catch (error) {
     throw repositoryUnreachable(error);

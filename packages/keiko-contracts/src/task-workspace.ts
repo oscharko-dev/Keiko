@@ -425,6 +425,11 @@ export type WorkspaceRecoveryStrategy =
   | "reattach-branch"
   | "release-stale-lock"
   | "commit-or-stash-required"
+  // Adopt the worktree's CURRENT commit as the verified head. It mutates neither Git nor the
+  // filesystem: it only replaces the recorded baseline `head-moved` is measured against, so a
+  // workspace whose HEAD moved outside Keiko can be returned to service instead of being stranded
+  // forever behind a strategy nothing could execute (#3382).
+  | "accept-moved-head"
   | "operator-repair"
   | "abandon-and-cleanup";
 
@@ -434,6 +439,7 @@ export const WORKSPACE_RECOVERY_STRATEGIES: readonly WorkspaceRecoveryStrategy[]
   "reattach-branch",
   "release-stale-lock",
   "commit-or-stash-required",
+  "accept-moved-head",
   "operator-repair",
   "abandon-and-cleanup",
 ] as const;
@@ -1302,7 +1308,14 @@ const DRIFT_MARKER_RECOVERY: Readonly<
   // Relocating the workspace root is the documented resolution; no automatic repair can create a
   // creation time the filesystem does not keep.
   "identity-unsupported": { strategy: "operator-repair", operatorActionRequired: true },
-  "head-moved": { strategy: "operator-repair", operatorActionRequired: true },
+  // A moved HEAD used to map to `operator-repair`, which the repair service EXECUTES for no marker:
+  // once `head-moved` was persisted, nothing could clear it, the runtime authority refuses any row
+  // with a drift marker, and the workspace was bricked for every further run (#3382). The move
+  // itself is still not something Keiko may assume it caused — accepting it is a decision — so the
+  // strategy is executable but the repair route keeps its `operatorApproved` gate exactly like
+  // `reconcile-pointer`. `operatorActionRequired: false` states only that Keiko HAS an executable
+  // strategy; it never bypasses that approval.
+  "head-moved": { strategy: "accept-moved-head", operatorActionRequired: false },
   // A deleted local branch cannot be safely re-created by the narrow worktree adapter without risking
   // loss of the worktree's commits, so reattachment is operator-guided, never automatic.
   "branch-deleted": { strategy: "reattach-branch", operatorActionRequired: true },
@@ -1583,14 +1596,23 @@ export function reconciliationStatusFromInstance(input: {
 
 // The strategies the repair service can apply WITHOUT operator action, because each is reversible /
 // non-destructive: recreate a missing worktree from the still-present branch, refresh a stale/moved
-// worktree pointer, or release an expired lock. `reattach-branch`, `operator-repair`, and
-// `commit-or-stash-required` are deliberately excluded — they require a human decision.
+// worktree pointer, release an expired lock, or record the worktree's current commit as the
+// verified head. `reattach-branch`, `operator-repair`, and `commit-or-stash-required` are
+// deliberately excluded — they require a human decision.
+//
+// "Automatic" here means EXECUTABLE, never unapproved: every one of these still runs behind the
+// repair service's `operatorApproved` gate (`assertRepairAuthorized`). `accept-moved-head` is the
+// least invasive of the four — it writes one recorded baseline and touches neither Git nor the
+// filesystem.
+const AUTOMATIC_WORKSPACE_REPAIR_STRATEGIES: ReadonlySet<WorkspaceRecoveryStrategy> = new Set([
+  "reconcile-pointer",
+  "recreate-worktree",
+  "release-stale-lock",
+  "accept-moved-head",
+]);
+
 export function isAutomaticWorkspaceRepairStrategy(strategy: WorkspaceRecoveryStrategy): boolean {
-  return (
-    strategy === "reconcile-pointer" ||
-    strategy === "recreate-worktree" ||
-    strategy === "release-stale-lock"
-  );
+  return AUTOMATIC_WORKSPACE_REPAIR_STRATEGIES.has(strategy);
 }
 
 // Pure: whether `strategy` is applicable given the recovery hints reconciliation produced. An

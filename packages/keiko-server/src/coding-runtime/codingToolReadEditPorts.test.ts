@@ -78,13 +78,14 @@ function singleUseManagedAccess(root: string): () =>
       readonly kind: "managed-task";
       readonly canonicalRoot: string;
       readonly fs: typeof nodeWorkspaceFs;
+      readonly repositoryRoot: string;
     }
   | undefined {
   let available = true;
   return () => {
     if (!available) return undefined;
     available = false;
-    return { kind: "managed-task", canonicalRoot: root, fs: nodeWorkspaceFs };
+    return { kind: "managed-task", canonicalRoot: root, fs: nodeWorkspaceFs, repositoryRoot: root };
   };
 }
 
