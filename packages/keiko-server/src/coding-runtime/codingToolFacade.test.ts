@@ -532,6 +532,31 @@ describe("CodingToolFacade", () => {
     }
   });
 
+  // The read/edit port's own pre-dispatch refusals: an edit the prepare stage rejected, and one
+  // whose workspace access stopped resolving while the port waited for a live editor session. Both
+  // reached the model as a bare "failed" before the cursor review of PR #3381, so a revoked
+  // workspace authority looked exactly like a retryable editor conflict.
+  it.each(["EDIT_PREPARE_FAILED", "WORKSPACE_ACCESS_LOST"])(
+    "forwards the read/edit port's closed %s refusal",
+    async (code) => {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() =>
+        Promise.resolve({ outcome: "failed", reasonCode: code }),
+      );
+      const subject = createCodingToolFacade(ports);
+
+      const result = await subject.execute({
+        body: requestBody({ action: "edit", changeset }),
+        capability,
+      });
+
+      expect(result).toEqual({
+        status: "failed",
+        evidence: [{ kind: "governed-delegate", code }],
+      });
+    },
+  );
+
   it("never forwards a reasonCode for a non-edit action's failure", async () => {
     const ports = facade();
     ports.delegate.execute = vi.fn(() =>
@@ -569,8 +594,10 @@ describe("CodingToolFacade", () => {
     });
   });
 
-  // The verification runner's own closed codes reach the model: a refusal (no project, missing
-  // trust, nothing runnable) must be told apart from a red run (end-to-end run, 2026-09-03).
+  // Every closed verification code reaches the model: a refusal must be told apart from a red run
+  // (end-to-end run, 2026-09-03). The last two are the PORT's own pre-run refusals — the run's
+  // authority or managed-workspace liveness already gone, and an unimplemented verifier id — which
+  // returned a bare "failed" until the cursor review of PR #3381.
   it.each([
     "PROJECT_NOT_FOUND",
     "WORKSPACE_TRUST_REQUIRED",
@@ -578,7 +605,9 @@ describe("CodingToolFacade", () => {
     "RUN_LIMIT_EXCEEDED",
     "EVIDENCE_WRITE_FAILED",
     "VERIFICATION_FAILED",
-  ])("forwards the verification runner's closed %s refusal", async (code) => {
+    "verification-authority-revoked",
+    "verification-verifier-unsupported",
+  ])("forwards the closed verification %s refusal", async (code) => {
     const ports = facade();
     ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "failed", reasonCode: code }));
     const subject = createCodingToolFacade(ports);

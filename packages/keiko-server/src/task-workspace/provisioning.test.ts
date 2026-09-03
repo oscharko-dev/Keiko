@@ -157,6 +157,11 @@ function makeService(
     managedRoot: string,
     repositoryCommonDirectory: string,
   ) => ProvenCreationTimeSupport,
+  // The clock. Fixed by default so every timestamp assertion stays deterministic; an ADVANCING one
+  // is what makes the evidence line's `durationMs` falsifiable at all — under the fixed clock the
+  // measurement is always `0`, so a regression back to the placeholder zero it replaced (audit
+  // finding, 2026-09-03) could not turn a single test red (PR #3381 review).
+  now: () => number = (): number => FIXED_NOW,
 ): WorkspaceProvisioningService {
   return createWorkspaceProvisioningService({
     store,
@@ -164,13 +169,39 @@ function makeService(
     managedRoot,
     createAdapter: adapterFactory ?? realAdapter,
     redactString: (s: string): string => s,
-    now: (): number => FIXED_NOW,
+    now,
     newId: (): string => `id-${String(idCounter++)}`,
     ...(ensureManagedWorkspaceIdentity === undefined ? {} : { ensureManagedWorkspaceIdentity }),
     mutex: __twMutex,
     ...(activityLog === undefined ? {} : { activityLog }),
     ...(proveCreationTimeSupport === undefined ? {} : { proveCreationTimeSupport }),
   });
+}
+
+// A clock that moves one millisecond per read, so an operation's start and end are distinguishable.
+function advancingClock(startMs: number = FIXED_NOW): () => number {
+  let current = startMs;
+  return (): number => {
+    current += 1;
+    return current;
+  };
+}
+
+// The last evidence record whose event type matches, parsed from the SAME persisted JSON
+// `evidence.ts` writes.
+function lastEvidenceOfType(type: string): {
+  readonly durationMs: number;
+  readonly worktreeCount: number;
+} {
+  for (const entry of [...evidence].reverse()) {
+    const parsed = JSON.parse(entry.json) as {
+      readonly durationMs: number;
+      readonly worktreeCount: number;
+      readonly event: { readonly type: string };
+    };
+    if (parsed.event.type === type) return parsed;
+  }
+  throw new Error(`no evidence record of type ${type}`);
 }
 
 // The last-appended evidence record's WorkspaceEvent.correlationId — the join key an operator's
@@ -1351,11 +1382,42 @@ describe("activate", () => {
     ).toBe(true);
   });
 
+  // Both measurements on the resumed activation's evidence line were placeholder zeros before the
+  // 2026-09-03 audit. `worktreeCount` is pinned here, and `durationMs` needs a clock that MOVES:
+  // under the suite's fixed clock the subtraction is always `0`, so a regression to a hard-coded
+  // zero could not fail a single test (PR #3381 review).
+  it("measures the resumed activation instead of persisting placeholder zeros", async () => {
+    const service = makeService(undefined, undefined, undefined, undefined, advancingClock());
+    const provisioned = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "act-measured",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({ ...provisioned.instance, lifecycleState: "paused", lock: null });
+
+    await service.activate({
+      workspaceId: provisioned.instance.workspaceId,
+      taskId: "act-measured",
+      requestedBy: "u",
+      acquireLock: false,
+    });
+
+    const measured = lastEvidenceOfType("resumed");
+    expect(measured.durationMs).toBeGreaterThan(0);
+    expect(measured.worktreeCount).toBe(1);
+  });
+
   // The idempotent resume (re-provisioning an already-active pair) performs the same live proof and
-  // the same "healthy" write as activation, so it drops the same refuted markers — a reconcile that
-  // had recorded `gitdir-mismatch` on a since-repaired pointer must not survive next to
-  // `health: "healthy"` on the row the bind hands back (audit finding, 2026-09-03).
-  it("drops the refuted identity markers on an idempotent resume and keeps the rest", async () => {
+  // the same write as activation, so it drops the same refuted markers — a reconcile that had
+  // recorded `gitdir-mismatch` on a since-repaired pointer must not survive next to the health the
+  // row the bind hands back reports (audit finding, 2026-09-03).
+  //
+  // And the persisted health is DERIVED from the markers that survive, never a flat "healthy": the
+  // proof refutes the identity and path findings, not a dirty tree or a stale lock, so the row used
+  // to be handed back claiming healthy WHILE carrying drift. The health report copies that value
+  // onto its live classification and the workbench renders both (PR #3381 review).
+  it("drops the refuted identity markers on an idempotent resume and derives the health that remains", async () => {
     const service = makeService();
     const first = await service.provision({
       repositoryRequestPath: repoRoot,
@@ -1379,17 +1441,54 @@ describe("activate", () => {
     });
 
     expect(resumed.created).toBe(false);
-    expect(resumed.instance.health).toBe("healthy");
+    // `uncommitted-changes` survived the proof, so the row says `drifted` — the same status the
+    // read-only report reconstructs from these very markers.
+    expect(resumed.instance.health).toBe("drifted");
     // A resume leaves the lock field as it found it, so it cannot refute `lock-stale`; only the
     // activation write, which replaces the lock, drops that marker (review of ec04288dc).
     expect(resumed.instance.driftMarkers).toEqual(["uncommitted-changes", "lock-stale"]);
-    expect(resumed.instance.recoveryHints).toEqual(
-      planWorkspaceRecoveryHints(["uncommitted-changes", "lock-stale"]),
-    );
+    // Literal contract values, not a second call to the production planner: calling it would move
+    // the expected and the actual together and leave a changed recovery table green (AGENTS.md §7).
+    expect(resumed.instance.recoveryHints).toEqual([
+      {
+        marker: "uncommitted-changes",
+        strategy: "commit-or-stash-required",
+        operatorActionRequired: true,
+      },
+      { marker: "lock-stale", strategy: "release-stale-lock", operatorActionRequired: false },
+    ]);
     expect(store.getById(first.instance.workspaceId)?.driftMarkers).toEqual([
       "uncommitted-changes",
       "lock-stale",
     ]);
+    expect(store.getById(first.instance.workspaceId)?.health).toBe("drifted");
+  });
+
+  // The other half of the same rule: with nothing left to carry, the derivation says `healthy`.
+  it("derives healthy on a resume that refutes every marker", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "resume-clean",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({
+      ...first.instance,
+      health: "drifted",
+      driftMarkers: ["gitdir-mismatch"],
+      recoveryHints: planWorkspaceRecoveryHints(["gitdir-mismatch"]),
+    });
+
+    const resumed = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "resume-clean",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+
+    expect(resumed.instance.health).toBe("healthy");
+    expect(resumed.instance.driftMarkers).toEqual([]);
   });
 
   // Only the findings activation has just refuted are dropped; a marker it does not prove (dirty
@@ -1420,9 +1519,17 @@ describe("activate", () => {
 
     expect(activated.instance.lifecycleState).toBe("active");
     expect(activated.instance.driftMarkers).toEqual(["uncommitted-changes"]);
-    expect(activated.instance.recoveryHints).toEqual(
-      planWorkspaceRecoveryHints(["uncommitted-changes"]),
-    );
+    // Literal contract values, not a second call to the production planner (AGENTS.md §7).
+    expect(activated.instance.recoveryHints).toEqual([
+      {
+        marker: "uncommitted-changes",
+        strategy: "commit-or-stash-required",
+        operatorActionRequired: true,
+      },
+    ]);
+    // The surviving marker decides the persisted health; an activation that carries drift forward
+    // may not hand back a row claiming `healthy` (PR #3381 review).
+    expect(activated.instance.health).toBe("drifted");
   });
 
   // Widening the entry set widens no trust boundary: the live proofs still refuse a row whose

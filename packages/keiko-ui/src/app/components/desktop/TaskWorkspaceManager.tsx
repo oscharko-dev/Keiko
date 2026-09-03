@@ -96,7 +96,14 @@ function unavailableStateReason(action: StateBoundAction, t: I18nTranslate): str
 // so a table lookup alone reported every other active workspace as unswitchable, which is exactly
 // the "bind two workspaces, then switch between them" flow; observed live, 2026-09-03) or one the
 // table lets reach `active` (paused, handoff-ready, recovery-required).
+//
+// `provisioning` is the one state the table lists as reaching `active` that the server refuses:
+// the provisioning service's activatable set is `active | paused | handoff-ready |
+// recovery-required`, because the transient provisioning state is owned by the in-flight
+// provision. Offering Switch there answered ILLEGAL_TRANSITION and rendered as the generic
+// mutation error, so it is excluded here and dropped from the unavailability sentence.
 function isSwitchable(lifecycleState: TaskWorkspaceLifecycleState): boolean {
+  if (lifecycleState === "provisioning") return false;
   return (
     lifecycleState === "active" || nextLegalTaskWorkspaceStates(lifecycleState).includes("active")
   );
@@ -145,13 +152,22 @@ function actionFor(
   return actions[action];
 }
 
+// Repair's applicability is the instance's own recovery hint, NEVER the active flag — exactly what
+// the comment on `firstAutomaticRepairHint` says. Deriving it per lifecycle branch left the row this
+// surface exists to repair without the button: a workspace that is already the active binding but
+// has drifted (`identity-schema-retired` after the #3367 upgrade, a later HEAD move) has no other
+// in-product exit, because Start requires `health === "healthy"` and the Coding Workbench hides
+// "Repair and bind" while any binding exists. The undocumented workaround was Clear active →
+// Repair → Switch. A paused drifted row was in the same position.
 function workspaceActions(
   instance: WorkspaceInstance,
   active: boolean,
 ): readonly LifecycleAction[] {
-  if (active) return ["pause", "handoff"];
-  if (instance.lifecycleState === "paused") return ["resume", "handoff"];
-  return firstAutomaticRepairHint(instance) !== null ? ["repair", "switch"] : ["switch"];
+  const repair: readonly LifecycleAction[] =
+    firstAutomaticRepairHint(instance) === null ? [] : ["repair"];
+  if (active) return [...repair, "pause", "handoff"];
+  if (instance.lifecycleState === "paused") return [...repair, "resume", "handoff"];
+  return [...repair, "switch"];
 }
 
 // Every drift marker except `uncommitted-changes`, labelled next to the health text.
@@ -294,6 +310,16 @@ function WorkspaceInventory(props: {
 }): ReactNode {
   if (props.api.loading)
     return <p className={styles["cmp-empty"]}>{props.t("taskWorkspace.loading")}</p>;
+  // A listing the server could not answer degrades to an empty list so it never hides the active
+  // binding — but "no managed task workspaces yet" is then a lie about the repository, not a report
+  // of the failure. The two states must not be the same pixels: this one names the failure and
+  // points at the Refresh control in this panel's own header.
+  if (props.api.inventoryUnavailable)
+    return (
+      <p className={styles["cmp-empty"]} data-testid="task-workspace-inventory-unavailable">
+        {props.t("taskWorkspace.inventoryUnavailable")}
+      </p>
+    );
   if (props.api.instances.length === 0)
     return <p className={styles["cmp-empty"]}>{props.t("taskWorkspace.noneManaged")}</p>;
   return (

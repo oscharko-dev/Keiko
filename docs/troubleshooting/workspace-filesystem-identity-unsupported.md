@@ -68,10 +68,19 @@ failure such as `EIO` or `EACCES` on one of the identity's components — and it
 503). The active-workspace read answers it instead of silently unbinding the application; health and
 reconciliation carry that one workspace forward unverified (health `unknown`, `recovery-required`,
 not cleanup-eligible) and keep working on the others; governed cleanup and repair fail closed on it;
-provisioning refuses without deleting a worktree it did not create. A deterministic refusal of the
-pointer file by the descriptor-safe read (a symlink, a hard link, an oversized file) is not this case —
-it is an unproven identity, and retrying will not change it. The activity-log line carries the cause
-chain and frames.
+provisioning refuses without deleting a worktree it did not create. The activity-log line carries
+the cause chain and frames.
+
+Two refusals that look similar are NOT this case, because retrying them can never change the
+answer — both are an **unproven** identity and carry the `pointer-stale` marker:
+
+- A deterministic refusal of the pointer file by the descriptor-safe read: a symlink, a hard link,
+  an oversized file, or a lineage that changed under the read.
+- A component of the identity that is **absent** (`ENOENT`, or `ENOTDIR` on an ancestor) — the
+  partially removed worktree whose `.git` pointer was deleted while the tree stayed. Classifying
+  that as a proof failure answered every bind with a retryable 503 that could not succeed, and
+  persisted no marker, so the row stayed `active`/`healthy` in the inventory with no Repair offer
+  until a reconcile pass happened to run.
 
 Before an identity is minted, every volume it hashes is proven to keep a durable creation time: the
 managed root by a probe entry Keiko creates and removes, the repository volume read-only from the
@@ -90,8 +99,8 @@ Grep the activity log for `decision: "denied"` and read the `reason` discriminat
 `WORKSPACE_MANAGED_AUTHORITY_DENIED` with `extra: { decision, reason }`; a resolution failure (the proof
 itself threw) carries the caught error's classified `errorKind` with `extra: { decision, reason, frames?,
 causeChain? }` — dist-anchored frames and error class names, never messages; a request refused before
-any proof ran (no launcher-paired app session, or no root at all — `reason`
-`managed-root-session-authority-missing` or `managed-root-unspecified`) carries the fixed `errorKind`
+any proof ran (no launcher-paired app session — `reason`
+`managed-root-session-authority-missing`) carries the fixed `errorKind`
 `DENIED` with `extra: { decision, reason }` and no frames. No shape ever carries
 the workspace path, the repository path, or the stored identity. The correlation id ties the refusal to the request or
 lifecycle operation that triggered it: health reports and governed cleanup pass their own, so the

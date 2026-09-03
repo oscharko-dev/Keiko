@@ -259,6 +259,7 @@ function activeWorkspaceWithBinding(
     loading: false,
     switching: false,
     error: null,
+    inventoryUnavailable: false,
     refresh: vi.fn(() => Promise.resolve(true)),
     switchTo: vi.fn(() => Promise.resolve(true)),
     clearActive: vi.fn(() => Promise.resolve(true)),
@@ -270,31 +271,38 @@ function activeWorkspaceWithBinding(
   };
 }
 
-describe("CodingWorkbenchWindow", () => {
-  beforeEach(() => {
-    chatCatalogMock.activeProject = undefined;
-    chatCatalogMock.projects = [];
-    questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
-    activityHookMock.mockReturnValue(IDLE_ACTIVITY);
-    approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });
-    researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
-    editorBridgeHookMock.mockReset();
-    editorBridgeHookMock.mockReturnValue({
-      pendingReview: null,
-      approve: vi.fn(),
-      deny: vi.fn(),
-      retry: vi.fn(),
-    });
-    autonomyHookMock.mockReturnValue({
-      requestedMode: "supervised-coding",
-      effectiveMode: "supervised-coding",
-      deploymentCeiling: "autonomous-delivery",
-      pending: false,
-      error: null,
-      change: vi.fn(),
-    });
+// FILE scope, not one describe's: three top-level suites in this file render
+// `CodingWorkbenchWindow`, which reads `research.grant` and `editorBridge.pendingReview` on every
+// render. While these defaults lived inside the first describe, the other two saw them only because
+// vitest happens to run the suites in source order and mock return values survive across them — a
+// reorder, an `only`, or a `clearMocks` config would have handed those renders `undefined` hook
+// results (#3381 review). A suite that needs a different default overrides it in its own
+// `beforeEach`, which runs after this one.
+beforeEach(() => {
+  chatCatalogMock.activeProject = undefined;
+  chatCatalogMock.projects = [];
+  questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
+  activityHookMock.mockReturnValue(IDLE_ACTIVITY);
+  approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });
+  researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
+  editorBridgeHookMock.mockReset();
+  editorBridgeHookMock.mockReturnValue({
+    pendingReview: null,
+    approve: vi.fn(),
+    deny: vi.fn(),
+    retry: vi.fn(),
   });
+  autonomyHookMock.mockReturnValue({
+    requestedMode: "supervised-coding",
+    effectiveMode: "supervised-coding",
+    deploymentCeiling: "autonomous-delivery",
+    pending: false,
+    error: null,
+    change: vi.fn(),
+  });
+});
 
+describe("CodingWorkbenchWindow", () => {
   it("refreshes the model catalog when the Workbench opens", (): void => {
     const listener = vi.fn();
     window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, listener);
@@ -988,16 +996,78 @@ describe("CodingWorkbenchWindow", () => {
       expect(screen.getByText("Coding runtime unavailable")).toBeInTheDocument();
     });
 
-    it("does not flash the evaluation text while runtime readiness is still loading", (): void => {
+    // The placeholder before the FIRST resolve must claim nothing: not the evaluation text (nothing
+    // has been confirmed yet) and not the platform-verified text either, which is the strongest
+    // trust claim in the window and used to stand on first open, on every remount, and indefinitely
+    // on a hanging readiness read (#3381 review).
+    it("claims neither verification nor evaluation while the first readiness read is in flight", (): void => {
       renderWorkbench(liveState({ runtime: { status: "loading", value: null, error: null } }));
 
       expect(
         screen.queryByText("Unverified evaluation runtime — no platform signature"),
       ).not.toBeInTheDocument();
       expect(
+        screen.queryByText("Platform-verified — signed and notarized runtime"),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText("Checking coding runtime…")).toBeInTheDocument();
+    });
+
+    it("keeps the pending placeholder neutral rather than marking it a warning", (): void => {
+      renderWorkbench(liveState({ runtime: { status: "idle", value: null, error: null } }));
+
+      const chip = screen.getByText("Checking coding runtime…").closest("[title]");
+      expect(chip).not.toBeNull();
+      expect(chip).not.toHaveAttribute("data-tone", "warning");
+    });
+
+    // The last RESOLVED posture still stands across a re-read — the pending placeholder is only
+    // for the state before anything has resolved.
+    it("keeps the resolved verified posture while a later readiness read is in flight", (): void => {
+      const liveActions = actions();
+      runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
+      const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+      expect(
         screen.getByText("Platform-verified — signed and notarized runtime"),
       ).toBeInTheDocument();
+
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ runtime: { status: "loading", value: null, error: null } }),
+        actions: liveActions,
+      });
+      view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+      expect(
+        screen.getByText("Platform-verified — signed and notarized runtime"),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("Checking coding runtime…")).not.toBeInTheDocument();
     });
+  });
+
+  // The remedy for an unavailable model source used to render only inside the source panel, which
+  // nothing mounts: a sighted operator saw "Keiko Gateway — Unavailable" and a disabled Start with
+  // no reason and no next step, while only the sr-only live region spoke it (#3381 review).
+  it("shows an unavailable source's reason and next step on the mounted surface", (): void => {
+    renderWorkbench(
+      liveState({
+        canStart: false,
+        source: {
+          status: "ready",
+          value: {
+            runtimePreference: "managed-gateway",
+            modelSource: "keiko-model-gateway",
+            runtimeSource: "keiko-sidecar",
+            available: false,
+            unavailableReason: "no-tool-calling",
+            verification: UNVERIFIED_GATEWAY,
+          },
+          error: null,
+        },
+      }),
+    );
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(/No chat model has verified tool calling/u);
+    expect(alert).toHaveTextContent(/Run the readiness check in Settings/u);
   });
 
   // Workbench audit, 2026-09-03: every truncatable header chip carries a `title` equal to its OWN
@@ -1625,18 +1695,8 @@ describe("CodingWorkbenchWindow", () => {
 });
 
 describe("CodingWorkbenchWindow live stream follows the newest activity", () => {
+  // Only what differs from the file-scope defaults above.
   beforeEach(() => {
-    chatCatalogMock.activeProject = undefined;
-    chatCatalogMock.projects = [];
-    questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
-    approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });
-    researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
-    editorBridgeHookMock.mockReturnValue({
-      pendingReview: null,
-      approve: vi.fn(),
-      deny: vi.fn(),
-      retry: vi.fn(),
-    });
     autonomyHookMock.mockReturnValue({
       requestedMode: "governed-assist",
       effectiveMode: "governed-assist",

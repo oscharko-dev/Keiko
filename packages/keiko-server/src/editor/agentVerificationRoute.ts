@@ -49,19 +49,20 @@ import {
 } from "./agentAuthorityRegistry.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
+import { worktreeSharesRepositoryTrustBasis } from "./verificationRunner.js";
 import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { readJsonObject } from "../files.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
-  editorAgentPathBoundaryReason,
+  editorAgentRootContainmentReason,
   isEditorAgentRootBoundaryDenial,
   resolveEditorAgentActionRoot,
   type EditorAgentRootBoundaryReason,
 } from "./agentRootBoundary.js";
 import { workspaceRootAccessOrUndefined } from "../task-workspace/workspace-root-access.js";
+import { isValidCorrelationId } from "../correlation.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
 const MAX_AGENT_VERIFICATION_BODY_BYTES = 8_000;
 
@@ -147,17 +148,51 @@ export function verificationAuthorityDenyReason(
   return "authority-invalid";
 }
 
+type VerificationTrustDeps = Pick<
+  UiHandlerDeps,
+  "workspaceScriptTrust" | "workspaceRootAccessResolver"
+>;
+
+// A managed task worktree is never a registered project of its own, so `trustLevelForRoot` on the
+// worktree path always answers "restricted" and an execution-class request was denied
+// `workspace-restricted` here BEFORE the runner's repository-trust lookup could ever run. The
+// workbench facade calls `verificationRunner.runToReport` directly and bypasses this route, which is
+// why the owner's end-to-end run could pass while `POST /api/editor/verification/agent-runs` (the
+// sidecar / docked-agent entry point) stayed denied (cursor review, PR #3381).
+//
+// Standing script trust belongs to the repository the worktree was bound from, and applies to the
+// worktree only while the worktree's own `package.json` is that same fact — asked of
+// `worktreeSharesRepositoryTrustBasis` (verificationRunner.ts, ADR-0147 D3) rather than restated
+// here, so this route and the runner cannot disagree about one grant.
 function verificationWorkspaceTrust(
-  deps: UiHandlerDeps,
+  deps: VerificationTrustDeps,
   workspaceRoot: string,
 ): WorkspaceTrustLevel {
   try {
-    return deps.workspaceScriptTrust?.trustLevelForRoot(workspaceRoot) === "trusted"
+    const trustRoot = verificationTrustRoot(deps, workspaceRoot);
+    if (trustRoot === undefined) return "restricted";
+    return deps.workspaceScriptTrust?.trustLevelForRoot(trustRoot) === "trusted"
       ? "trusted"
       : "restricted";
   } catch {
     return "restricted";
   }
+}
+
+function verificationTrustRoot(
+  deps: Pick<UiHandlerDeps, "workspaceRootAccessResolver">,
+  workspaceRoot: string,
+): string | undefined {
+  const access = workspaceRootAccessOrUndefined(deps.workspaceRootAccessResolver?.(workspaceRoot));
+  if (access?.kind !== "managed-task") return workspaceRoot;
+  const repositoryRoot = access.repositoryRoot;
+  // A managed worktree that names no repository has no grantable basis at all: the standing
+  // decision that would govern it is unknown, so it stays restricted rather than falling back to
+  // its own unregistered root.
+  if (repositoryRoot === undefined) return undefined;
+  return worktreeSharesRepositoryTrustBasis(access, repositoryRoot, nodeWorkspaceFs)
+    ? repositoryRoot
+    : undefined;
 }
 
 // classify → (resolve envelope) → compose, in the exact order decideActionPolicy uses. "execution" is
@@ -362,21 +397,17 @@ async function admitAndRun(
   return runAndRespond(runner, request, snapshot, lifecycle.signal);
 }
 
-// The filesystem port the root's own authority resolved (see agentRoutes.ts `containmentFs`).
-function containmentFs(
-  deps: Pick<UiHandlerDeps, "workspaceRootAccessResolver">,
-  workspaceRoot: string,
-): WorkspaceFs {
-  try {
-    return (
-      workspaceRootAccessOrUndefined(deps.workspaceRootAccessResolver?.(workspaceRoot))?.fs ??
-      nodeWorkspaceFs
-    );
-  } catch {
-    return nodeWorkspaceFs;
-  }
+// The correlation the containment port's own denial line is recorded under; the synthetic action id
+// carries colons, which the correlation shape rejects.
+function verificationCorrelationId(request: EditorAgentVerificationRunRequest): string | undefined {
+  const runId = request.authorityRef.runId;
+  return isValidCorrelationId(runId) ? runId : undefined;
 }
 
+// Containment runs through the port the root's own authority resolved — the owned-root port a
+// proven managed task worktree minted — via the one shared helper both editor route families now
+// call (`agentRootBoundary.ts`). The former private copy of that resolution here and in
+// agentRoutes.ts was a drift risk on the exact defect this PR closes (cursor review, PR #3381).
 function bindVerificationRoot(
   request: EditorAgentVerificationRunRequest,
   snapshot: EditorAgentSessionSnapshot,
@@ -384,10 +415,11 @@ function bindVerificationRoot(
 ): RootedVerificationRequest {
   const root = resolveEditorAgentActionRoot(snapshot, request.rootBinding, deps.store);
   if (!root.ok) return root;
-  const reason = editorAgentPathBoundaryReason(
+  const reason = editorAgentRootContainmentReason(
     root.root,
     request.targetPath === undefined ? [] : [request.targetPath],
-    containmentFs(deps, root.root.workspaceRoot),
+    deps,
+    verificationCorrelationId(request),
   );
   if (reason !== null) return { ok: false, reason };
   return {

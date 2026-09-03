@@ -23,6 +23,7 @@
 // checked-out branch: a checkout whose integration branch is `dev` must not be offered `main`.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import type { WorkspaceRecoveryStrategy } from "@oscharko-dev/keiko-contracts";
 import {
   bindVerifiedTaskWorkspace,
   repairAndBindVerifiedTaskWorkspace,
@@ -54,6 +55,7 @@ const DEFAULT_TARGET_BRANCH = "main";
 type SetupPhase = "binding" | "repairing" | "verifying";
 type SetupErrorReason =
   | "bind"
+  | "refresh"
   | "verify"
   | "branch-conflict"
   | "invalid-base-branch"
@@ -82,13 +84,19 @@ export interface CodingWorkbenchSetupProps {
   readonly refreshWorkspace: () => Promise<boolean>;
   // The honest pre-activation posture. "unavailable" only once readiness has RESOLVED as
   // unavailable, "evaluation" once it has resolved as available over an unverified evaluation
-  // runtime, "verified" otherwise — a still-pending readiness check stays "verified" so neither
-  // note flashes during load. The bootstrap section is the FIRST screen a fresh evaluation install
+  // runtime, "verified" once it has resolved as a platform-qualified runtime, and "pending" while
+  // nothing has resolved yet — this card shows no note for "pending", so neither note flashes
+  // during the initial load. The bootstrap section is the FIRST screen a fresh evaluation install
   // shows, so a clean form here would imply a verified runtime (ADR-0163 D9).
   readonly runtimePosture: CodingWorkbenchSetupRuntimePosture;
 }
 
-export type CodingWorkbenchSetupRuntimePosture = "unavailable" | "evaluation" | "verified";
+// "pending" is a real state, not a stand-in for "verified": before the first readiness read
+// resolves, nothing has been verified, and a placeholder of "verified" made the header chip claim
+// "Platform-verified — signed and notarized runtime" on every open and every remount, indefinitely
+// on a hanging read (#3381 review).
+export type CodingWorkbenchSetupRuntimePosture =
+  "pending" | "unavailable" | "evaluation" | "verified";
 
 // Strips a run of leading and/or trailing "-" characters. Plain index scanning instead of a
 // regex (SonarCloud S8786 flagged /^-+|-+$/gu, an alternation of two unbounded quantifiers) —
@@ -150,6 +158,11 @@ function failureStatus(failure: VerifiedTaskWorkspaceBindFailure): SetupError {
 // The bound workspace becomes the surfaces' truth only through the shared context refresh; a
 // refresh that does not settle (a newer operation superseded it) or fails leaves the setup surface
 // in place with a bounded retry, diagnosable in the console.
+//
+// Its own reason, never `bind`: everything the server owns — provision, repair, reconcile, activate
+// — has COMPLETED by the time this runs, so "The workspace could not be bound. Review the
+// repository path and target branch." is the exact sentence this change exists to stop showing
+// (#3381 review). A rapid folder switch or an overlapping bind is how an operator reaches it.
 async function settleBoundWorkspace(
   refreshWorkspace: () => Promise<boolean>,
 ): Promise<SetupStatus> {
@@ -162,7 +175,7 @@ async function settleBoundWorkspace(
       { correlationId: correlationIdOf(error) },
     );
   }
-  return { kind: "error", reason: "bind" };
+  return { kind: "error", reason: "refresh" };
 }
 
 interface BindInput {
@@ -322,6 +335,7 @@ function useTargetBranchDefault(selectedRoot: string | undefined): TargetBranchS
 
 // The failure reasons whose sentence needs no interpolation.
 const PLAIN_ALERT_KEYS: Readonly<Partial<Record<SetupErrorReason, CodingWorkbenchMessageKey>>> = {
+  refresh: "codingWorkbench.setup.boundRefreshFailed",
   verify: "codingWorkbench.setup.reconcileFailed",
   "branch-conflict": "codingWorkbench.setup.branchConflict",
   "invalid-base-branch": "codingWorkbench.setup.invalidBaseBranch",
@@ -345,6 +359,34 @@ function findingLabel(
     : tGlobal(TASK_WORKSPACE_MARKER_MESSAGE_KEYS[marker]);
 }
 
+const GENERIC_REPAIR_EFFECT_KEY = "codingWorkbench.setup.repairEffect.generic";
+
+// What Repair will actually DO, keyed on the strategy the server recommended. A single sentence
+// could not be honest here: `automaticStrategyOf` returns `recreate-worktree` first for a missing
+// worktree, and the server's repair then prunes the stale registration and rebuilds it, so the
+// original "nothing is deleted" promise was true only on the `reconcile-pointer` path (#3381
+// review). TOTAL over the contract union, not partial with a fallback: a new recovery strategy then
+// fails typecheck here instead of silently rendering the neutral sentence. The four strategies a
+// repair offer never carries (they all require an operator first, so `repairReason` classifies them
+// as `operator-required` and this table is never consulted for them) map to that neutral sentence.
+const REPAIR_EFFECT_KEYS: Readonly<Record<WorkspaceRecoveryStrategy, CodingWorkbenchMessageKey>> = {
+  "reconcile-pointer": "codingWorkbench.setup.repairEffect.reconcilePointer",
+  "recreate-worktree": "codingWorkbench.setup.repairEffect.recreateWorktree",
+  "release-stale-lock": "codingWorkbench.setup.repairEffect.releaseStaleLock",
+  "reattach-branch": GENERIC_REPAIR_EFFECT_KEY,
+  "commit-or-stash-required": GENERIC_REPAIR_EFFECT_KEY,
+  "operator-repair": GENERIC_REPAIR_EFFECT_KEY,
+  "abandon-and-cleanup": GENERIC_REPAIR_EFFECT_KEY,
+};
+
+function repairEffectLabel(
+  repair: VerifiedTaskWorkspaceRepairOffer | undefined,
+  t: CodingWorkbenchTranslate,
+): string {
+  const strategy = repair?.strategy ?? null;
+  return t(strategy === null ? GENERIC_REPAIR_EFFECT_KEY : REPAIR_EFFECT_KEYS[strategy]);
+}
+
 function alertMessage(
   status: SetupError,
   t: CodingWorkbenchTranslate,
@@ -352,12 +394,15 @@ function alertMessage(
 ): string {
   const plain = PLAIN_ALERT_KEYS[status.reason];
   if (plain !== undefined) return t(plain);
-  if (status.reason === "repair-required" || status.reason === "operator-required") {
-    const key =
-      status.reason === "repair-required"
-        ? "codingWorkbench.setup.repairRequired"
-        : "codingWorkbench.setup.operatorRequired";
-    return t(key, { finding: findingLabel(status.repair, t, tGlobal) });
+  const finding = findingLabel(status.repair, t, tGlobal);
+  if (status.reason === "repair-required") {
+    return t("codingWorkbench.setup.repairRequired", {
+      finding,
+      effect: repairEffectLabel(status.repair, t),
+    });
+  }
+  if (status.reason === "operator-required") {
+    return t("codingWorkbench.setup.operatorRequired", { finding });
   }
   return t("codingWorkbench.alert.workspaceBindFailed");
 }

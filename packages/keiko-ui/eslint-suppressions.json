@@ -1307,7 +1307,7 @@
       "count": 1
     },
     "max-lines-per-function": {
-      "count": 5
+      "count": 4
     }
   },
   "src/app/components/desktop/widgets/connectors/AtlassianConnectorsPanel.tsx": {

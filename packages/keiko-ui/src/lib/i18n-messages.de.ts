@@ -1457,7 +1457,7 @@ export const DE_MESSAGES = {
   "taskWorkspace.status.reconciled": "Task Workspaces aktualisiert.",
   "taskWorkspace.reason.busy": "Eine andere Workspace-Aktion wird gerade ausgeführt.",
   "taskWorkspace.reason.switchUnavailable":
-    "Es kann nur zu Workspaces gewechselt werden, die bereitgestellt werden, aktiv, pausiert oder handoff-bereit sind oder den Status „Wiederherstellung erforderlich“ haben.",
+    "Es kann nur zu Workspaces gewechselt werden, die aktiv, pausiert oder handoff-bereit sind oder den Status „Wiederherstellung erforderlich“ haben.",
   "taskWorkspace.reason.pauseUnavailable": "Nur ein aktiver Workspace kann pausiert werden.",
   "taskWorkspace.reason.resumeUnavailable": "Nur ein pausierter Workspace kann fortgesetzt werden.",
   "taskWorkspace.reason.handoffUnavailable":
@@ -1465,6 +1465,8 @@ export const DE_MESSAGES = {
   "taskWorkspace.reason.handoffDirty":
     "Committe oder stashe ungesicherte Änderungen, bevor du einen Handoff vorbereitest.",
   "taskWorkspace.noneManaged": "Noch keine verwalteten Task Workspaces vorhanden.",
+  "taskWorkspace.inventoryUnavailable":
+    "Die Liste der Task Workspaces konnte nicht gelesen werden. Die oben angezeigte aktive Bindung gilt weiterhin. Versuche es über „Aktualisieren“ erneut.",
   "taskWorkspace.list": "Task Workspaces",
   "taskWorkspace.create.title": "Workspace erstellen",
   "taskWorkspace.create.taskId": "Task-ID",

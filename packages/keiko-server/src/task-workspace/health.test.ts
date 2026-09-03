@@ -5,7 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -467,4 +467,40 @@ describe("a global report surfaces orphans of repositories without persisted row
     expect(orphans).toHaveLength(1);
     expect(orphans[0]?.classification).toBe("orphaned");
   });
+
+  // That shared listing THROWS for a root it cannot read, because the orphan sweep — which deletes
+  // — may never act on an inventory it could not take. This report only observes, and aborting it
+  // discarded every row already evaluated, including repositories that were perfectly readable:
+  // the same isolation the unreachable-repository path applies (PR #3381 review).
+  //
+  // `0o111` on the managed root is traverse-WITHOUT-read: the ownership marker, containment
+  // realpaths, and the per-worktree git probes all still work, so the listing is the only thing
+  // that fails and the pin cannot pass for an unrelated reason. Skipped as root, where the
+  // permission bits are not enforced.
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "keeps reporting every persisted row when the managed root cannot be listed",
+    async () => {
+      const instance = await provisionTask("t-listing-denied");
+      const activityLog = createBufferedServerLogSink();
+      chmodSync(managedRoot, 0o111);
+      try {
+        const report = await health(realAdapter, activityLog).report(
+          undefined,
+          "health-listing-0001",
+        );
+
+        expect(entryFor(report, instance.workspaceId)?.classification).toBe("healthy");
+        expect(validateWorkspaceHealthReport(report).ok).toBe(true);
+        const line = activityLog.events.find(
+          (event) => event.errorKind === "REPOSITORY_UNREACHABLE",
+        );
+        expect(line?.correlationId).toBe("health-listing-0001");
+        expect(line?.extra).toMatchObject({ operation: "health" });
+        expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
+        expect(JSON.stringify(line)).not.toContain(managedRoot);
+      } finally {
+        chmodSync(managedRoot, 0o700);
+      }
+    },
+  );
 });

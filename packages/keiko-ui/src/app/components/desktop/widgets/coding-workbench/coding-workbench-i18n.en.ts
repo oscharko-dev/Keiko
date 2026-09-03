@@ -107,7 +107,17 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.provisioningUnavailable":
     "Managed task workspaces are not configured on this installation, so no workspace can be bound.",
   "codingWorkbench.setup.repairRequired":
-    "A managed workspace for this repository and branch already exists, but Keiko could not re-verify it: {finding}. Repairing re-registers the existing worktree in place; nothing is deleted.",
+    "A managed workspace for this repository and branch already exists, but Keiko could not re-verify it: {finding}. Repairing {effect}.",
+  "codingWorkbench.setup.repairEffect.reconcilePointer":
+    "re-registers the existing worktree in place; nothing is deleted",
+  "codingWorkbench.setup.repairEffect.recreateWorktree":
+    "prunes the stale worktree registration and rebuilds the worktree from its task branch; committed work on the branch is kept",
+  "codingWorkbench.setup.repairEffect.releaseStaleLock":
+    "releases the stale lock an interrupted action left behind; the worktree is not touched",
+  "codingWorkbench.setup.repairEffect.generic":
+    "applies the recovery strategy Keiko recommended for this finding",
+  "codingWorkbench.setup.boundRefreshFailed":
+    "The workspace was bound, but this view could not refresh. Open Task workspaces and use Refresh.",
   "codingWorkbench.setup.operatorRequired":
     "A managed workspace for this repository and branch already exists, but Keiko cannot repair it automatically: {finding}. Inspect it in the Task workspaces panel, then try again.",
   "codingWorkbench.setup.repairFailed":
@@ -125,6 +135,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.readiness.workspace.none": "No active task workspace",
   "codingWorkbench.readiness.eventStream.label": "Event stream",
   "codingWorkbench.readiness.runtime.label": "Coding runtime",
+  "codingWorkbench.readiness.runtime.pending": "Checking coding runtime…",
   "codingWorkbench.readiness.runtime.verified": "Platform-verified — signed and notarized runtime",
   "codingWorkbench.readiness.runtime.evaluation":
     "Unverified evaluation runtime — no platform signature",

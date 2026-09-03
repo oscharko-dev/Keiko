@@ -2708,6 +2708,59 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
       expect(actionResultStatus(result.body)).toBe("queued");
     });
 
+    // Cursor review, PR #3381: the boundary check was repaired to run through the port a managed
+    // task worktree's access minted, but `inspectAdmissionAction` still hardcoded the plain node
+    // port for `applyPatch`, so a single-file patch inside such a worktree failed preflight as
+    // OUT_OF_SCOPE / INVALID_EDITS. The managed port is the ONLY source of the pre-image here — the
+    // bytes on disk do not match the patch — so reverting that hunk turns this 202 into a conflict.
+    it("inspects an applyPatch pre-image through the port the managed access resolved", async () => {
+      const srcDir = join(tmpDir, "src");
+      mkdirSync(srcDir);
+      const preImage = "export const VALUE = 1;\n";
+      // Same byte length as the pre-image (so nothing downstream reports the file as changed
+      // mid-validation) but a different value, which the patch context cannot match.
+      writeFileSync(join(srcDir, "widget.ts"), "export const VALUE = 9;\n", "utf8");
+      await registerSnapshot(tmpDir, "src/widget.ts");
+      const accessFs = forwardWorkspaceFs(nodeWorkspaceFs);
+      const accessRead = vi
+        .spyOn(accessFs, "readFileUtf8")
+        .mockImplementation((path: string): string =>
+          path === join(srcDir, "widget.ts") ? preImage : nodeWorkspaceFs.readFileUtf8(path),
+        );
+      const deps = {
+        workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+          grantedWorkspaceRootAccess({
+            kind: "managed-task",
+            canonicalRoot: requestedRoot,
+            fs: accessFs,
+          }),
+      } satisfies Parameters<typeof handleEditorAgentActions>[1];
+
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            type: "applyPatch",
+            idempotencyKey: "ik-managed-patch",
+            actionId: "a-managed-patch",
+            expectedContentHash: HASH,
+            patch: [
+              "--- a/src/widget.ts",
+              "+++ b/src/widget.ts",
+              "@@ -1,1 +1,1 @@",
+              "-export const VALUE = 1;",
+              "+export const VALUE = 42;",
+            ].join("\n"),
+          }),
+        ),
+        deps,
+      );
+
+      expect(result.status).toBe(202);
+      expect(actionResultStatus(result.body)).toBe("queued");
+      expect(accessRead).toHaveBeenCalledWith(join(srcDir, "widget.ts"));
+      expect(JSON.stringify(result.body)).not.toContain("VALUE = 9");
+    });
+
     it("preserves chat origin on queued applyPatch and emits content-free audit (#2119)", async () => {
       const relativePath = "src/chat-origin.ts";
       const srcDir = join(tmpDir, "src");

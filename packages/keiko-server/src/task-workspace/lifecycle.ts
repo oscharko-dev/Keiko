@@ -37,7 +37,7 @@ import { deriveManagedWorktreePath, deriveRepositoryId } from "./naming.js";
 import { isManagedTargetContained, managedTargetExists } from "./managed-root.js";
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { activePointerKey, workspaceKey } from "./mutex.js";
-import { TaskWorkspaceError } from "./errors.js";
+import { TaskWorkspaceError, type TaskWorkspaceErrorCode } from "./errors.js";
 import {
   liveManagedIdentityDrift,
   managedIdentityDriftMarker,
@@ -195,30 +195,64 @@ function canExposeBinding(
   try {
     assertBindableManagedPath(ctx, instance);
   } catch {
+    // The one refusal with no marker to persist: a persisted path that is not the one this
+    // workspace identity derives is not a containment escape, and borrowing `path-escape` for it
+    // would report an incident that did not happen (#3376 review). It gets the line, not a row.
+    logReadTimeRefusal(ctx, instance, correlationId, "POINTER_DRIFT");
     return false;
   }
-  if (!managedTargetExists(instance.managedWorktreePath)) return false;
+  if (!managedTargetExists(instance.managedWorktreePath)) {
+    flagReadTimeDrift(ctx, instance, "worktree-missing", correlationId);
+    return false;
+  }
   // The persisted pointer may predate the current identity rule (an upgrade window before the
   // detached reconcile has run) or point at a replaced tree: no binding leaves this service on
-  // path existence alone (#3376 review P1). The refusal is logged; the pointer is cleared by the
-  // caller exactly as for any other non-bindable instance.
+  // path existence alone (#3376 review P1). The refusal is flagged on the row and logged; the
+  // pointer is cleared by the caller exactly as for any other non-bindable instance.
   const drift = identityDriftOf(ctx, instance);
   if (drift === "matches") return true;
-  // A synchronous read-time check: `attempt`, `durationMs` and `worktreeCount` are the line's
-  // required shape, not measurements of this refusal.
+  flagReadTimeDrift(ctx, instance, managedIdentityDriftMarker(drift), correlationId);
+  return false;
+}
+
+// A read-time refusal with no drift marker of its own. A synchronous read-time check: `attempt`,
+// `durationMs` and `worktreeCount` are the line's required shape, not measurements of this refusal.
+function logReadTimeRefusal(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  correlationId: string | undefined,
+  errorCode: TaskWorkspaceErrorCode,
+): void {
   logWorkspaceLifecycle(ctx.deps, {
     operation: "activate",
-    outcome: "retry-required",
+    outcome: "blocked",
     workspaceId: instance.workspaceId,
     taskId: instance.taskId,
     correlationId,
     attempt: 1,
     durationMs: 0,
     worktreeCount: 0,
-    errorCode: "POINTER_DRIFT",
-    driftMarker: managedIdentityDriftMarker(drift),
+    errorCode,
   });
-  return false;
+}
+
+// The active-pointer read refuses a binding, so the STORE has to agree with the pointer the caller
+// is about to clear. Logging the refusal alone left inventory showing `lifecycleState: "active"`,
+// `health: "healthy"` and empty `driftMarkers` while `GET /active` was already unbound — and Repair
+// only appears where a recovery hint exists, so the operator saw an active-looking workspace with no
+// way to fix it until the next startup reconcile happened to run (PR #3381 review).
+//
+// Same drift row a readiness transition writes, through the same owner, so the two refusals cannot
+// describe one fact differently. Safe from a read: `getActiveImpl` is entirely synchronous, so its
+// re-read-classify-write is one event-loop turn (it already clears the pointer store the same way),
+// and reconciliation remains the authority that re-derives the row from live facts afterwards.
+function flagReadTimeDrift(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  marker: TaskWorkspaceDriftMarker,
+  correlationId: string | undefined,
+): void {
+  persistDriftRow(ctx, instance, "activate", marker, ctx.deps.now(), correlationId);
 }
 
 // The live four-way verdict, or the injected one in tests. A proof that could not run arrives as the
@@ -291,18 +325,19 @@ function assertIdentityCurrentFor(
   if (drift !== "matches") flagTransitionDrift(ctx, instance, spec, nowMs, correlationId, drift);
 }
 
-// A readiness transition found a retired, unsupported or changed identity: the row is flagged for
-// recovery with the classified marker and its hint, the event carries the marker, and the request
-// is refused — the same shape provisioning's activation gives the same finding.
-function flagTransitionDrift(
+// The drift row a refusal leaves behind: `recovery-required` with the classified marker and its
+// recovery hint, the lock released, and the `drift-detected` event (and its activity-log line)
+// carrying the marker. ONE owner, because a readiness transition and the active-pointer read must
+// leave the row in exactly the same shape for the same fact — the same shape provisioning's
+// activation gives it.
+function persistDriftRow(
   ctx: LifecycleCtx,
   instance: WorkspaceInstance,
-  spec: DirectTransitionSpec,
+  operation: WorkspaceLifecycleOperation,
+  marker: TaskWorkspaceDriftMarker,
   nowMs: number,
   correlationId: string | undefined,
-  drift: ManagedIdentityDrift,
-): never {
-  const marker = managedIdentityDriftMarker(drift);
+): void {
   const drifted = ctx.deps.store.upsert({
     ...instance,
     lifecycleState: "recovery-required",
@@ -313,7 +348,7 @@ function flagTransitionDrift(
     recoveryHints: planWorkspaceRecoveryHints([marker]),
   });
   emit(ctx, {
-    operation: spec.operation,
+    operation,
     outcome: "retry-required",
     type: "drift-detected",
     instance: drifted,
@@ -323,6 +358,27 @@ function flagTransitionDrift(
     errorCode: "POINTER_DRIFT",
     driftMarker: marker,
   });
+}
+
+// A readiness transition found a retired, unsupported or changed identity: the row is flagged for
+// recovery with the classified marker and its hint, the event carries the marker, and the request
+// is refused.
+function flagTransitionDrift(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  spec: DirectTransitionSpec,
+  nowMs: number,
+  correlationId: string | undefined,
+  drift: ManagedIdentityDrift,
+): never {
+  persistDriftRow(
+    ctx,
+    instance,
+    spec.operation,
+    managedIdentityDriftMarker(drift),
+    nowMs,
+    correlationId,
+  );
   throw new TaskWorkspaceError("POINTER_DRIFT", managedIdentityDriftMessage(drift));
 }
 

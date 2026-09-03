@@ -46,6 +46,7 @@ interface State {
   readonly loading: boolean;
   readonly switching: boolean;
   readonly error: string | null;
+  readonly inventoryUnavailable: boolean;
 }
 
 type Action =
@@ -54,6 +55,7 @@ type Action =
   | {
       readonly kind: "settle";
       readonly instances: readonly WorkspaceInstance[];
+      readonly inventoryUnavailable: boolean;
       readonly active: ActiveWorkspaceView | null;
     }
   | { readonly kind: "fail"; readonly error: string };
@@ -64,6 +66,7 @@ const INITIAL: State = {
   loading: false,
   switching: false,
   error: null,
+  inventoryUnavailable: false,
 };
 
 function reducer(state: State, action: Action): State {
@@ -79,6 +82,7 @@ function reducer(state: State, action: Action): State {
         loading: false,
         switching: false,
         error: null,
+        inventoryUnavailable: action.inventoryUnavailable,
       };
     case "fail":
       return { ...state, loading: false, switching: false, error: action.error };
@@ -104,15 +108,28 @@ class TaskWorkspaceRepairOperatorRequiredError extends Error {
   }
 }
 
+interface InventoryRead {
+  readonly instances: readonly WorkspaceInstance[];
+  readonly unavailable: boolean;
+}
+
 // The inventory degrades to empty so a listing failure never hides the active binding, but the
 // failure itself is not silent: an empty list from a 503 must be distinguishable in the console
-// from a repository that genuinely has no managed workspaces (AGENTS.md §7/§8).
-function inventoryUnavailable(error: unknown): readonly WorkspaceInstance[] {
+// from a repository that genuinely has no managed workspaces (AGENTS.md §7/§8) — and on the
+// surface too, which is what `unavailable` carries. The console diagnostic alone left the panel
+// rendering "No managed task workspaces yet." under a bound workspace (#3381 review).
+function inventoryUnavailable(error: unknown): InventoryRead {
   reportClientDiagnostic(
     `[keiko] task workspace inventory refresh failed: ${clientErrorSummary(error)}`,
     { correlationId: correlationIdOf(error) },
   );
-  return [];
+  return { instances: [], unavailable: true };
+}
+
+function readInventory(): Promise<InventoryRead> {
+  return listTaskWorkspaces()
+    .then((instances): InventoryRead => ({ instances, unavailable: false }))
+    .catch(inventoryUnavailable);
 }
 
 function messageFor(error: unknown, t: I18nTranslate): string {
@@ -175,9 +192,14 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
     // must stay resumable from this panel whatever folder is selected. Scoping the list to the
     // folder left the panel saying "no managed task workspaces yet" right under a bound or
     // just-paused workspace whenever the two differed (observed live, 2026-09-03).
-    const instances = await listTaskWorkspaces().catch(inventoryUnavailable);
+    const inventory = await readInventory();
     if (operationSeqRef.current !== operationSeq) return;
-    dispatch({ kind: "settle", instances, active });
+    dispatch({
+      kind: "settle",
+      instances: inventory.instances,
+      inventoryUnavailable: inventory.unavailable,
+      active,
+    });
   }, []);
 
   const refresh = useCallback(async (): Promise<boolean> => {
@@ -195,10 +217,17 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
 
   // Shared mutation envelope: guard with `switching`, run the wire call, then reload + commit
   // atomically. Surfaces keep the previous active root until reload lands (no mixed transient state).
-  // Resolves `true` only when both the action and the reload settled for THIS mutation; a failure
-  // is dispatched as the redacted `error` and reported as `false`, never thrown — a caller that
-  // must not proceed on a refused mutation reads the outcome (audit finding, 2026-09-03: the folder
-  // switcher awaited `clearActive()` and could not observe that the clear had been refused).
+  // A failure is dispatched as the redacted `error` and reported as `false`, never thrown — a caller
+  // that must not proceed on a refused mutation reads the outcome (audit finding, 2026-09-03: the
+  // folder switcher awaited `clearActive()` and could not observe that the clear had been refused).
+  //
+  // `false` means REFUSED — and only that. It used to also mean "a newer mutation or refresh
+  // superseded this one's reload", two outcomes with opposite consequences collapsed into one
+  // boolean: the server HAS applied a superseded mutation, so the folder switcher reported an
+  // override clear as unreleasable and aborted the folder change on a quick double-click or a
+  // concurrent workbench bind refresh (#3381 review). A superseded mutation resolves `true`; the
+  // newer operation owns the state commit. A reload that itself fails after an applied mutation
+  // surfaces as `error` without denying that the mutation happened.
   const mutate = useCallback(
     async (action: () => Promise<unknown>): Promise<boolean> => {
       const mutationSeq = (mutationSeqRef.current += 1);
@@ -206,17 +235,22 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
       dispatch({ kind: "mutate-start" });
       try {
         await action();
-        if (mutationSeqRef.current !== mutationSeq) return false;
-        operationSeq = operationSeqRef.current += 1;
-        await reload(operationSeq);
-        return operationSeqRef.current === operationSeq;
       } catch (error) {
-        if (mutationSeqRef.current !== mutationSeq || operationSeqRef.current !== operationSeq) {
-          return false;
+        if (mutationSeqRef.current === mutationSeq && operationSeqRef.current === operationSeq) {
+          dispatch({ kind: "fail", error: messageFor(error, t) });
         }
-        dispatch({ kind: "fail", error: messageFor(error, t) });
         return false;
       }
+      if (mutationSeqRef.current !== mutationSeq) return true;
+      operationSeq = operationSeqRef.current += 1;
+      try {
+        await reload(operationSeq);
+      } catch (error) {
+        if (operationSeqRef.current === operationSeq) {
+          dispatch({ kind: "fail", error: messageFor(error, t) });
+        }
+      }
+      return true;
     },
     [reload, t],
   );
@@ -291,6 +325,7 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
       loading: state.loading,
       switching: state.switching,
       error: state.error,
+      inventoryUnavailable: state.inventoryUnavailable,
       refresh,
       switchTo,
       clearActive,
@@ -305,6 +340,7 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
       state.loading,
       state.switching,
       state.error,
+      state.inventoryUnavailable,
       activeBinding,
       activeInstance,
       refresh,

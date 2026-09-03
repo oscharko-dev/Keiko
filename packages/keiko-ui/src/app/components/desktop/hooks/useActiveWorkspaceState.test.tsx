@@ -209,9 +209,35 @@ describe("useActiveWorkspaceState", () => {
     expect(result.current.activeRoot).toBe("/wt/1");
     expect(result.current.instances).toEqual([]);
     expect(result.current.error).toBeNull();
+    // The console diagnostic is not the whole obligation: the surface has to be able to tell a
+    // failed listing apart from a repository with no managed workspaces, or it renders "No managed
+    // task workspaces yet." under a bound workspace (#3381 review).
+    expect(result.current.inventoryUnavailable).toBe(true);
     expect(
       diagnostics.some((line) => line.includes("task workspace inventory refresh failed")),
     ).toBe(true);
+  });
+
+  it("clears the inventory-unavailable flag once a later listing succeeds", async () => {
+    const bound = instance("ws-1", "/wt/1");
+    const state: RouterState = {
+      active: { instance: bound, binding: binding("ws-1", "/wt/1"), pointer: {} },
+      instances: [bound],
+      inventoryUnavailable: true,
+    };
+    installRouter(state);
+    const { result } = renderHook(() => useActiveWorkspaceState());
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.inventoryUnavailable).toBe(true);
+
+    state.inventoryUnavailable = false;
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.inventoryUnavailable).toBe(false);
+    expect(result.current.instances.map((item) => item.workspaceId)).toEqual(["ws-1"]);
   });
 
   // The inventory is every managed workspace: the pointer is global, a switch may target any
@@ -309,6 +335,109 @@ describe("useActiveWorkspaceState", () => {
     });
     expect(listCalls).toBe(1);
     expect(result.current.instances.map((item) => item.workspaceId)).toEqual(["ws-b"]);
+  });
+
+  // The SECOND supersession guard, after the inventory GET resolves — the one the early exit above
+  // cannot reach because the inventory request has already been issued. Refresh A passes the active
+  // read and issues its listing; a newer refresh settles; A's listing lands late. Without the guard
+  // A dispatches `settle` with its own pre-supersession view and flips every bound surface back.
+  // Restored after the #3381 review found that replacing the base pin ("ignores a stale refresh
+  // response after a newer root has settled") with the early-exit case left the guard deletable
+  // with this file fully green (AGENTS.md §7: a pin may be relocated or strengthened, never
+  // relaxed).
+  it("ignores a late inventory response after a newer refresh has settled", async () => {
+    const listResponses: { resolve: (value: Response) => void }[] = [];
+    const state: RouterState = { active: null, instances: [] };
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const method = requestMethod(init);
+      if (url === "/api/task-workspaces" && method === "GET") {
+        const pending = deferred<Response>();
+        listResponses.push({ resolve: pending.resolve });
+        return pending.promise;
+      }
+      const read = workspaceReadResponse(state, url, method);
+      if (read !== undefined) return read;
+      return Promise.resolve(json({}, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useActiveWorkspaceState());
+
+    let first!: Promise<boolean>;
+    act(() => {
+      first = result.current.refresh();
+    });
+    // Refresh A is parked on its own inventory request, PAST the post-`readActive` early exit.
+    await waitFor(() => {
+      expect(listResponses).toHaveLength(1);
+    });
+
+    let second!: Promise<boolean>;
+    act(() => {
+      second = result.current.refresh();
+    });
+    await waitFor(() => {
+      expect(listResponses).toHaveLength(2);
+    });
+
+    await act(async (): Promise<void> => {
+      listResponses[1]?.resolve(json({ instances: [instance("ws-b", "/wt/b")] }));
+      expect(await second).toBe(true);
+    });
+    expect(result.current.instances.map((item) => item.workspaceId)).toEqual(["ws-b"]);
+
+    await act(async (): Promise<void> => {
+      listResponses[0]?.resolve(json({ instances: [instance("ws-a", "/wt/a")] }));
+      expect(await first).toBe(false);
+    });
+    expect(result.current.instances.map((item) => item.workspaceId)).toEqual(["ws-b"]);
+  });
+
+  // A mutation the server APPLIED and a newer mutation then superseded is not a refusal. Collapsing
+  // the two into one `false` made the folder switcher report an override clear as unreleasable —
+  // and abort the folder change — for a clear the server had performed (#3381 review). `false` is
+  // reserved for a refused wire call ("surfaces an error and preserves the previous binding on
+  // failure" below pins that side).
+  it("reports a superseded but applied mutation as applied, not refused", async () => {
+    const firstDelete = deferred<Response>();
+    const target = instance("ws-1", "/wt/1");
+    const state: RouterState = {
+      active: { instance: target, binding: binding("ws-1", "/wt/1"), pointer: {} },
+      instances: [target],
+    };
+    let deletes = 0;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const method = requestMethod(init);
+      if (url === "/api/task-workspaces/active" && method === "DELETE") {
+        deletes += 1;
+        state.active = null;
+        if (deletes === 1) return firstDelete.promise;
+        return Promise.resolve(json({ active: null }));
+      }
+      const read = workspaceReadResponse(state, url, method);
+      if (read !== undefined) return read;
+      return Promise.resolve(json({}, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useActiveWorkspaceState());
+
+    let first!: Promise<boolean>;
+    let second!: Promise<boolean>;
+    act(() => {
+      first = result.current.clearActive();
+    });
+    act(() => {
+      second = result.current.clearActive();
+    });
+
+    await act(async (): Promise<void> => {
+      expect(await second).toBe(true);
+    });
+    await act(async (): Promise<void> => {
+      firstDelete.resolve(json({ active: null }));
+      expect(await first).toBe(true);
+    });
+    expect(result.current.activeInstance).toBeNull();
+    expect(result.current.error).toBeNull();
   });
 
   it("ignores a stale mutation reload after a newer switch has settled", async () => {

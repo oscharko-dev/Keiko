@@ -126,9 +126,14 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     ).resolves.toEqual({ status: "failed" });
   });
 
-  it("denies an edit when managed-root authority is revoked before the effect", async () => {
+  // The revoked-access refusal used to return a bare `{ status: "failed" }` with nothing on the
+  // activity log, so the model could not tell it from a retryable editor conflict and kept
+  // re-issuing the edit while the workspace authority stayed gone (cursor review, PR #3381). The
+  // closed reason code AND the `edit-refused` line under the run's own correlation are the pin.
+  it("denies an edit with a closed reason and a correlated diagnostic when managed-root authority is revoked before the effect", async () => {
     const root = "/managed/workspace";
     const action = vi.fn();
+    const records: ServerDiagnosticRecord[] = [];
     const ports = createCodingToolReadEditPorts({
       secureWorkspaceTextRead: { readText: vi.fn() },
       editorAgentClient: { action },
@@ -140,6 +145,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       }),
       resolveWorkspaceRoot: () => root,
       resolveWorkspaceRootAccess: singleUseManagedAccess(root),
+      diagnostics: { record: (record): void => void records.push(record) },
     });
 
     await expect(
@@ -153,8 +159,56 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true },
       ),
-    ).resolves.toEqual({ status: "failed" });
+    ).resolves.toEqual({ status: "failed", reasonCode: "WORKSPACE_ACCESS_LOST" });
     expect(action).not.toHaveBeenCalled();
+    expect(records).toEqual([
+      expect.objectContaining({
+        operation: "coding-runtime.editor-changeset",
+        source: "coding-tool-read-edit-ports.edit",
+        message: "edit-refused",
+        errorClass: "WORKSPACE_ACCESS_LOST",
+        correlationId: "run-revoked",
+      }),
+    ]);
+  });
+
+  // The prepare stage refuses before any editor action exists, so its correlation has to come from
+  // the run's own editor context; before this it left no line at all.
+  it("emits a correlated prepare refusal when the changeset never reaches the editor route", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const action = vi.fn();
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn() },
+      editorAgentClient: { action },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-prepare",
+        authorityRef: { runId: "run-prepare-1", envelopeDigest: DIGEST },
+        origin: "agent",
+      }),
+      diagnostics: { record: (record): void => void records.push(record) },
+    });
+
+    await expect(
+      ports.editorChangeset.execute(
+        {
+          action: "edit",
+          actionId: "edit-prepare",
+          idempotencyKey: "edit-prepare-key",
+          changeset: { patch: "x", files: [] },
+        },
+        undefined,
+        { check: (): true => true },
+      ),
+    ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+    expect(action).not.toHaveBeenCalled();
+    expect(records).toEqual([
+      expect.objectContaining({
+        operation: "coding-runtime.editor-changeset",
+        message: "edit-refused",
+        errorClass: "EDIT_PREPARE_FAILED",
+        correlationId: "run-prepare-1",
+      }),
+    ]);
   });
 
   it("discovers exact governed file paths without exposing denied or unrelated entries", async (): Promise<void> => {
@@ -650,7 +704,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true },
       ),
-    ).resolves.toEqual({ status: "failed" });
+    ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
     expect(editorAction).not.toHaveBeenCalled();
   });
 
@@ -886,7 +940,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): false => false },
       ),
-    ).resolves.toEqual({ status: "failed" });
+    ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
     expect(editorAction).not.toHaveBeenCalled();
   });
 
@@ -911,7 +965,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true, binding: admittedBinding },
       ),
-    ).resolves.toEqual({ status: "failed" });
+    ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
     expect(editorAction).not.toHaveBeenCalled();
   });
 
@@ -1106,7 +1160,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
             undefined,
             bindingless,
           ),
-        ).resolves.toEqual({ status: "failed" });
+        ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
         expect(editorAction).not.toHaveBeenCalled();
       } finally {
         rmSync(root, { recursive: true, force: true });

@@ -93,6 +93,7 @@ function workspaceApi(overrides: Partial<ActiveWorkspaceApi> = {}): ActiveWorksp
     loading: false,
     switching: false,
     error: null,
+    inventoryUnavailable: false,
     refresh: vi.fn(() => Promise.resolve(true)),
     switchTo: vi.fn(() => Promise.resolve(true)),
     clearActive: vi.fn(() => Promise.resolve(true)),
@@ -330,7 +331,11 @@ describe("CodingWorkbenchSetup", () => {
     expect(api.refresh).not.toHaveBeenCalled();
   });
 
-  it("treats a refresh that does not settle as a bind failure", async () => {
+  // Provision, reconcile and activate all COMPLETED here — only the shared context refresh did
+  // not settle (a newer operation superseded it). Reporting that as the generic bind failure told
+  // the operator to review a path and branch that were both accepted, and hid the fact that the
+  // workspace IS bound (#3381 review).
+  it("names a bound workspace whose view could not refresh instead of blaming the bind", async () => {
     const user = userEvent.setup();
     const diagnostics: string[] = [];
     setClientDiagnosticWriter((message) => diagnostics.push(message));
@@ -343,11 +348,39 @@ describe("CodingWorkbenchSetup", () => {
     await user.type(screen.getByLabelText("Repository path"), "/repos/x");
     await user.click(screen.getByRole("button", { name: "Bind workspace" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "The workspace could not be bound. Review the repository path and target branch.",
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      "The workspace was bound, but this view could not refresh. Open Task workspaces and use Refresh.",
     );
+    expect(alert).not.toHaveTextContent("Review the repository path and target branch.");
     expect(api.refresh).toHaveBeenCalledTimes(1);
     expect(diagnostics).toContain("[keiko] coding workbench workspace refresh did not settle");
+  });
+
+  it("names a bound workspace whose refresh threw instead of blaming the bind", async () => {
+    const user = userEvent.setup();
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+    const api = workspaceApi({
+      refresh: vi.fn(() => Promise.reject(new Error("REFRESH_TRANSPORT_FAILED"))),
+    });
+    provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-9" }, created: true });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-9", "healthy"));
+    setActiveMock.mockResolvedValue({});
+    renderWorkbench(api);
+
+    await user.type(screen.getByLabelText("Repository path"), "/repos/x");
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("The workspace was bound, but this view could not refresh.");
+    expect(alert).not.toHaveTextContent("Review the repository path and target branch.");
+    expect(alert).not.toHaveTextContent("REFRESH_TRANSPORT_FAILED");
+    expect(
+      diagnostics.some((line) =>
+        line.includes("[keiko] coding workbench workspace refresh failed"),
+      ),
+    ).toBe(true);
   });
 
   it("surfaces a content-free alert when the bind fails and never activates", async () => {
@@ -596,6 +629,44 @@ describe("CodingWorkbenchSetup", () => {
       workspaceId: "ws-refused",
       requestedBy: "studio-operator",
     });
+  });
+
+  // `automaticStrategyOf` returns `recreate-worktree` first for a missing worktree, and the #447
+  // repair then prunes the stale registration and rebuilds it. The single sentence keyed to every
+  // automatic strategy promised "nothing is deleted" on that path too (#3381 review).
+  it("describes the repair by the recommended strategy, not one sentence for all of them", async () => {
+    const user = userEvent.setup();
+    provisionMock.mockRejectedValue(pointerDrift());
+    listMock.mockResolvedValue([
+      refusedWorkspace({ strategy: "recreate-worktree", operatorActionRequired: false }),
+    ]);
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Keiko could not re-verify it");
+    expect(alert).toHaveTextContent("rebuilds the worktree from its task branch");
+    expect(alert).not.toHaveTextContent("nothing is deleted");
+    expect(await screen.findByRole("button", { name: "Repair and bind" })).toBeInTheDocument();
+  });
+
+  it("describes a stale-lock repair as touching no worktree", async () => {
+    const user = userEvent.setup();
+    provisionMock.mockRejectedValue(pointerDrift());
+    listMock.mockResolvedValue([
+      refusedWorkspace(
+        { strategy: "release-stale-lock", operatorActionRequired: false },
+        "lock-stale",
+      ),
+    ]);
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("releases the stale lock an interrupted action left behind");
+    expect(alert).not.toHaveTextContent("nothing is deleted");
   });
 
   it("names an operator-required finding without offering a repair", async () => {

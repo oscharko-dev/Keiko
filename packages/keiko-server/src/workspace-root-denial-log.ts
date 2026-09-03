@@ -40,11 +40,11 @@ export function recordWorkspaceRootDenial(
 // workspace identity could be examined. A 403 that leaves no line is not reconstructible: an
 // unpaired browser tab reading an active managed worktree's editor settings produced exactly that
 // (observed live, 2026-09-03).
+// A request that names the managed root itself, never a workspace inside it, is not a member: it
+// reaches `resolveManagedWorkspaceRootAccess`, which records its own classified denial (#3381).
 export type ManagedRootRequestDenialReason =
   // No live launcher-paired app session accompanied the request.
-  | "managed-root-session-authority-missing"
-  // The request named the managed root itself, never a workspace inside it.
-  | "managed-root-unspecified";
+  "managed-root-session-authority-missing";
 
 export function recordManagedRootRequestDenial(
   reason: ManagedRootRequestDenialReason,

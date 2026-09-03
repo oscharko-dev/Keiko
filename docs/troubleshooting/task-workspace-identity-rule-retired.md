@@ -47,6 +47,17 @@ its recovery hint named a strategy the repair service never executes.
    carries the identity value or the path.
 2. `GET /api/task-workspaces/reconciliation` shows the entry with status `stale-pointer`, the
    marker, and the hint `{ strategy: "reconcile-pointer", operatorActionRequired: false }`.
+
+   `operatorActionRequired: false` does **not** mean the repair runs unattended. The two flags
+   answer different questions, and both apply here:
+   - `operatorActionRequired` (on the hint) says whether the operator has to change something on
+     disk BEFORE any repair can run. It is `false` for this marker because Keiko has an executable
+     strategy — `reconcile-pointer` re-materialises the existing worktree in place. It is `true`
+     for markers like `uncommitted-changes` or `identity-unsupported`, where no strategy Keiko can
+     run would change the verdict.
+   - `operatorApproved` (on the repair REQUEST, below) is the human decision to accept a retired
+     proof. It is always required here; there is no path that reissues the identity without it.
+
 3. A marker of `gitdir-mismatch` instead means the pointer is readable but proves a DIFFERENT
    identity (the worktree was replaced or relinked); `pointer-stale` means the pointer is missing
    or malformed. Both are distinct incidents from the migration this page describes.

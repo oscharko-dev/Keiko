@@ -111,6 +111,7 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { workspaceRootAccessOrUndefined } from "../task-workspace/workspace-root-access.js";
+import { isValidCorrelationId } from "../correlation.js";
 import {
   errorBody,
   STREAMING,
@@ -144,9 +145,10 @@ import {
 } from "./agentActionAudit.js";
 import {
   EDITOR_AGENT_ROOT_BOUNDARY_ERROR_CODE,
-  editorAgentPathBoundaryReason,
+  editorAgentRootContainmentReason,
   isEditorAgentRootBoundaryDenial,
   resolveEditorAgentActionRoot,
+  resolveEditorAgentContainmentPort,
   resolveEditorAgentSessionRoot,
   type EditorAgentRootBoundaryReason,
 } from "./agentRootBoundary.js";
@@ -1080,9 +1082,12 @@ function inspectAdmissionAction(
     return { changeset: inspectChangeset(action, snapshot, fs) };
   }
   if (action.type === "applyPatch") {
+    // The SAME port the changeset branch above uses. Hardcoding the node port here inspected a
+    // managed task worktree under the user-workspace rules and refused every path inside it
+    // (cursor review, PR #3381) — see `admissionInspectionFs`.
     return {
       patch: inspectPatch(workspaceInfoFromRoot(snapshot.workspaceRoot), action.patch ?? "", {
-        fs: nodeWorkspaceFs,
+        fs,
       }),
     };
   }
@@ -1208,10 +1213,11 @@ function registerBridgeSnapshot(
 ): RouteResult {
   const root = resolveEditorAgentSessionRoot(request.snapshot, deps?.store);
   if (!root.ok) return rootBoundaryError(root.reason);
-  const pathReason = editorAgentPathBoundaryReason(
+  const pathReason = editorAgentRootContainmentReason(
     root.root,
     snapshotRootPaths(request.snapshot),
-    containmentFs(deps, root.root.workspaceRoot),
+    deps,
+    shapedCorrelationId(request.snapshot.sessionId),
   );
   if (pathReason !== null) return rootBoundaryError(pathReason);
   const snapshot =
@@ -1447,23 +1453,22 @@ function serverResolvedPathIssue(path: string): EditorAgentActionDenyReason | nu
   return isDenied(path) ? "denied-sensitive-path" : null;
 }
 
-// The filesystem port the root's own authority resolved: the owned-root port for a managed task
-// worktree, the plain node port otherwise. Containment checks run through it so a managed root is
-// not re-admitted under the user-workspace rules (see agentRootBoundary.ts).
-function containmentFs(
-  deps: EditorAgentEitherRouteDeps | undefined,
-  workspaceRoot: string,
-): WorkspaceFs {
-  try {
-    return (
-      workspaceRootAccessOrUndefined(deps?.workspaceRootAccessResolver?.(workspaceRoot))?.fs ??
-      nodeWorkspaceFs
-    );
-  } catch {
-    return nodeWorkspaceFs;
-  }
+// The correlation the containment port's own denial line is recorded under. A governed action
+// carries its run id; a bridge snapshot has only its session id. Both are shape-checked, so an
+// unshaped value is omitted (and logged as UNKNOWN_CORRELATION_ID) rather than smuggled onto the
+// activity log.
+function shapedCorrelationId(candidate: string | undefined): string | undefined {
+  return candidate !== undefined && isValidCorrelationId(candidate) ? candidate : undefined;
 }
 
+function actionCorrelationId(action: EditorAgentAction): string | undefined {
+  return shapedCorrelationId(action.authorityRef?.runId) ?? shapedCorrelationId(action.actionId);
+}
+
+// The filesystem port the root's own authority resolved: the owned-root port for a proven managed
+// task worktree, the plain node port for an ordinary root. A refused root keeps the previous
+// fail-closed outcome at this seam (the git query is denied) but no longer silently borrows the
+// node port to get there.
 function queryGitPathIssue(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
@@ -1475,9 +1480,15 @@ function queryGitPathIssue(
   if (targetPath !== undefined && normalizeWorkspaceRelativePath(targetPath) !== queryPath) {
     return "workspace-boundary-escape";
   }
+  const port = resolveEditorAgentContainmentPort(
+    deps,
+    snapshot.workspaceRoot,
+    actionCorrelationId(action),
+  );
+  if (!port.ok) return port.reason;
   try {
     containedRealPathInfo(
-      containmentFs(deps, snapshot.workspaceRoot),
+      port.fs,
       snapshot.workspaceRoot,
       resolve(snapshot.workspaceRoot, queryPath),
     );
@@ -1664,10 +1675,11 @@ function reserveActionAuthority(
   }
   const rooted = resolveEditorAgentActionRoot(snapshot, action.rootBinding, deps?.store);
   if (!rooted.ok) return denyByAuthority(decision, rooted.reason);
-  const pathReason = editorAgentPathBoundaryReason(
+  const pathReason = editorAgentRootContainmentReason(
     rooted.root,
     actionRootPaths(action, snapshot),
-    containmentFs(deps, rooted.root.workspaceRoot),
+    deps,
+    actionCorrelationId(action),
   );
   if (pathReason !== null) return denyByAuthority(decision, pathReason);
   const reservation = editorAgentAuthorityRegistry.reserveForAction(
@@ -1703,10 +1715,11 @@ function validateActionAuthority(
   }
   const rooted = resolveEditorAgentActionRoot(snapshot, action.rootBinding, deps?.store);
   if (!rooted.ok) return denyByAuthority(decision, rooted.reason);
-  const pathReason = editorAgentPathBoundaryReason(
+  const pathReason = editorAgentRootContainmentReason(
     rooted.root,
     actionRootPaths(action, snapshot),
-    containmentFs(deps, rooted.root.workspaceRoot),
+    deps,
+    actionCorrelationId(action),
   );
   if (pathReason !== null) return denyByAuthority(decision, pathReason);
   const resolution = editorAgentAuthorityRegistry.resolveForAction(
@@ -3538,6 +3551,21 @@ function rootBoundaryDecision(
   );
 }
 
+// The containment check now reports a REFUSED root (revoked lifecycle, replaced identity, an
+// unfinished authority proof) with its own reason instead of borrowing the plain node port and
+// failing as a path escape, so the conflict code has to follow the reason rather than assume every
+// non-decompose outcome is a target outside the root (P3, PR #3381 review).
+function boundaryConflictCode(reason: EditorAgentRootBoundaryReason): EditorAgentConflictCode {
+  if (reason === "decompose-per-root") return "DECOMPOSE_PER_ROOT";
+  return reason === "workspace-boundary-escape" ? "OUT_OF_SCOPE" : "POLICY_DENIED";
+}
+
+function boundaryConflictMessage(reason: EditorAgentRootBoundaryReason): string {
+  return reason === "root-binding-invalid" || reason === "root-binding-required"
+    ? "The editor action must be authorized and decomposed for one workspace root."
+    : "The editor action target is outside its bound workspace root.";
+}
+
 function bindActionRoot(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
@@ -3555,10 +3583,11 @@ function bindActionRoot(
       ),
     };
   }
-  const pathReason = editorAgentPathBoundaryReason(
+  const pathReason = editorAgentRootContainmentReason(
     resolution.root,
     actionRootPaths(action, snapshot),
-    containmentFs(deps, resolution.root.workspaceRoot),
+    deps,
+    actionCorrelationId(action),
   );
   if (pathReason !== null) {
     return {
@@ -3566,8 +3595,8 @@ function bindActionRoot(
       decision: rootBoundaryDecision(action, snapshot, pathReason),
       result: conflict(
         action,
-        pathReason === "decompose-per-root" ? "DECOMPOSE_PER_ROOT" : "OUT_OF_SCOPE",
-        "The editor action target is outside its bound workspace root.",
+        boundaryConflictCode(pathReason),
+        boundaryConflictMessage(pathReason),
       ),
     };
   }
@@ -3578,6 +3607,33 @@ function bindActionRoot(
   };
 }
 
+// The port the admission INSPECTION reads the current file contents through. A changeset keeps the
+// write-capable managed resolution (`changesetWorkspaceFs`, which refuses outright rather than
+// downgrading to the node port). Every OTHER write action — `applyPatch` above all — inspected
+// through the plain node port, so a single-file patch inside a managed task worktree below the state
+// directory's always-denied segment failed preflight as OUT_OF_SCOPE/INVALID_EDITS: exactly the
+// class the boundary check was repaired for, still open on the editor-agent patch path (cursor
+// review, PR #3381). It now reads through the same containment port the boundary check resolves.
+// A refused port lands on the established fail-closed 403 below; `bindActionRoot` already refuses
+// such a root earlier in `admitEditorAction`, so this is the floor, not the reporting seam.
+function admissionInspectionFs(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  runtimeMutation: RuntimeMutationClassification,
+  deps: EditorAgentActionRouteDeps | undefined,
+): WorkspaceFs | undefined {
+  if (snapshot === undefined) return nodeWorkspaceFs;
+  if (action.type === "applyChangeset") {
+    return changesetWorkspaceFs(snapshot.workspaceRoot, runtimeMutation, deps);
+  }
+  const port = resolveEditorAgentContainmentPort(
+    deps,
+    snapshot.workspaceRoot,
+    actionCorrelationId(action),
+  );
+  return port.ok ? port.fs : undefined;
+}
+
 function admitAndReserveAction(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot | undefined,
@@ -3586,10 +3642,7 @@ function admitAndReserveAction(
   requestHash: string,
   deps: EditorAgentActionRouteDeps | undefined,
 ): { readonly ok: true; readonly inspection: AdmissionInspection } | RouteResult {
-  const inspectionFs =
-    action.type === "applyChangeset" && snapshot !== undefined
-      ? changesetWorkspaceFs(snapshot.workspaceRoot, runtimeMutation, deps)
-      : nodeWorkspaceFs;
+  const inspectionFs = admissionInspectionFs(action, snapshot, runtimeMutation, deps);
   if (inspectionFs === undefined) {
     return rejectActionRequest(
       action,

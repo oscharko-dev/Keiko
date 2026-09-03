@@ -20,7 +20,12 @@ import type {
   WorktreeListEntry,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { WorkspaceInfo, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import type {
+  WorkspaceInfo,
+  WorkspaceInstance,
+  WorkspaceReconciliationEntry,
+  WorkspaceReconciliationReport,
+} from "@oscharko-dev/keiko-contracts";
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import { runMigrations } from "../store/schema.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
@@ -104,6 +109,22 @@ function capturingEvidence(): EvidenceStore {
 function lastActivityLogEvent(sink: BufferedServerLogSink): ServerLogEvent {
   const line = sink.events.at(-1);
   if (line === undefined) throw new Error("no activity-log event recorded");
+  return line;
+}
+
+// The same single-narrowing-point rule for a report entry and for a searched log line.
+function entryFor(
+  report: WorkspaceReconciliationReport,
+  workspaceId: string,
+): WorkspaceReconciliationEntry {
+  const entry = report.entries.find((candidate) => candidate.workspaceId === workspaceId);
+  if (entry === undefined) throw new Error("no reconciliation entry for that workspace");
+  return entry;
+}
+
+function activityLogEventWithKind(sink: BufferedServerLogSink, errorKind: string): ServerLogEvent {
+  const line = sink.events.find((event) => event.errorKind === errorKind);
+  if (line === undefined) throw new Error(`no activity-log event with errorKind ${errorKind}`);
   return line;
 }
 
@@ -505,6 +526,11 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     const other = makeRepo("keiko-recon-other-");
     const healthy = await provisionTask("t-reachable");
     const stranded = await provisionTaskInRepo(other, "t-unreachable");
+    pointerStore.set({
+      workspaceId: stranded.workspaceId,
+      setBy: "u",
+      atIso: "2026-01-01T00:00:00Z",
+    });
     const activityLog = createBufferedServerLogSink();
 
     const report = await reconciliation(activityLog, adapterFailingFor(other)).reconcile(
@@ -512,20 +538,28 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
       "unreachable-0001",
     );
 
-    expect(report.entries.find((e) => e.workspaceId === healthy.workspaceId)?.status).toBe(
-      "healthy",
-    );
-    const carried = report.entries.find((e) => e.workspaceId === stranded.workspaceId);
-    expect(carried).toBeDefined();
+    expect(entryFor(report, healthy.workspaceId).status).toBe("healthy");
+    // Carried forward UNVERIFIED, and reported as such: this pass proved nothing about the row, so
+    // it may not be reported settled and the active pointer may not be claimed restored onto it
+    // (PR #3381 review P2 — the workbench read this status as "binding verified" and offered Start
+    // against a worktree whose common git dir was gone).
+    const carried = entryFor(report, stranded.workspaceId);
+    expect(carried.health).toBe("unknown");
+    expect(carried.status).toBe("recovery-required");
+    expect(report.activeRestoration).toEqual({
+      kind: "recovery-required",
+      workspaceId: stranded.workspaceId,
+    });
     // Nothing was written for the row the pass could not verify: the last classification stands.
-    const persisted = store.getById(stranded.workspaceId);
-    expect(persisted?.lifecycleState).toBe("active");
-    expect(persisted?.health).toBe("healthy");
-    expect(persisted?.driftMarkers).toEqual([]);
-    const line = activityLog.events.find((event) => event.errorKind === "REPOSITORY_UNREACHABLE");
-    expect(line?.correlationId).toBe("unreachable-0001");
-    expect(line?.extra).toMatchObject({ operation: "reconcile" });
-    expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
+    expect(store.getById(stranded.workspaceId)).toMatchObject({
+      lifecycleState: "active",
+      health: "healthy",
+      driftMarkers: [],
+    });
+    const line = activityLogEventWithKind(activityLog, "REPOSITORY_UNREACHABLE");
+    expect(line.correlationId).toBe("unreachable-0001");
+    expect(line.extra).toMatchObject({ operation: "reconcile" });
+    expect(Array.isArray(line.extra?.causeChain)).toBe(true);
     expect(JSON.stringify(line)).not.toContain(other);
   });
 
@@ -585,18 +619,23 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
 
     const report = await reconciliation(activityLog).reconcile(repoRoot, "proof-failed-0001");
 
-    const carried = report.entries.find((e) => e.workspaceId === failing.workspaceId);
-    expect(carried?.status).toBe("healthy");
-    expect(carried?.driftMarkers).toEqual([]);
-    expect(report.entries.find((e) => e.workspaceId === other.workspaceId)?.status).toBe("healthy");
-    const persisted = store.getById(failing.workspaceId);
-    expect(persisted?.lifecycleState).toBe("active");
-    expect(persisted?.driftMarkers).toEqual([]);
-    const line = activityLog.events.find((event) => event.errorKind === "IDENTITY_PROOF_FAILED");
-    expect(line?.correlationId).toBe("proof-failed-0001");
+    // Unverified, not settled: the proof could not run, so the entry says `unknown`/
+    // `recovery-required` rather than vouching for a row this pass never saw (PR #3381 review P2).
+    expect(entryFor(report, failing.workspaceId)).toMatchObject({
+      health: "unknown",
+      status: "recovery-required",
+      driftMarkers: [],
+    });
+    expect(entryFor(report, other.workspaceId).status).toBe("healthy");
+    expect(store.getById(failing.workspaceId)).toMatchObject({
+      lifecycleState: "active",
+      driftMarkers: [],
+    });
+    const line = activityLogEventWithKind(activityLog, "IDENTITY_PROOF_FAILED");
+    expect(line.correlationId).toBe("proof-failed-0001");
     // Body-free by contract: the cause travels as a class chain, never as its message.
-    expect(line?.extra).toMatchObject({ operation: "reconcile" });
-    expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
+    expect(line.extra).toMatchObject({ operation: "reconcile" });
+    expect(Array.isArray(line.extra?.causeChain)).toBe(true);
   });
 
   // S8786 pointer-drift regression: the shared production parser replaced both formerly duplicated

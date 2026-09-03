@@ -334,7 +334,7 @@ function resolveCanonicalRoot(
  * and start its managed language server. A manifest that exists but cannot be read or parsed is
  * `unavailable` and still fails closed, because there the basis is unknown rather than empty.
  */
-function resolveTrustBasisFact(
+export function resolveTrustBasisFact(
   fs: WorkspaceFs,
   canonicalRoot: string,
 ): WorkspaceFact<WorkspaceTrustBasisDigest> {
@@ -365,7 +365,14 @@ function resolveTrustBasisFact(
   }
 }
 
-function trustBasisFactsMatch(
+/**
+ * ADR-0147 D3: two roots share one package-script grant only while their bases are the SAME fact.
+ * Exported so a consumer that runs scripts from a root other than the granted one (the verification
+ * runner, for a managed task worktree) asks this module's rule instead of restating the digest
+ * formula — a second copy could not stay in step with the size cap, the symlink refusal or the
+ * absent/unavailable distinction above.
+ */
+export function trustBasisFactsMatch(
   left: WorkspaceFact<WorkspaceTrustBasisDigest>,
   right: WorkspaceFact<WorkspaceTrustBasisDigest>,
 ): boolean {

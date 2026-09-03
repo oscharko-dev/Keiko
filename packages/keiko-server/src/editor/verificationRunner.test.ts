@@ -167,10 +167,15 @@ function makeManager(
 
 describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
   it("uses managed-root access for planning and execution and fails closed when denied", async () => {
+    // `repositoryRoot` is production-shaped: `canonicalManagedRootAccess` sets it on EVERY granted
+    // managed access, and a managed access that names no repository now fails closed for script
+    // kinds (see the sibling test below), so the fixture has to carry the field this root's own
+    // grant is resolved through.
     const access: WorkspaceRootAccess = {
       kind: "managed-task",
       canonicalRoot: workspaceRoot,
       fs: nodeWorkspaceFs,
+      repositoryRoot: workspaceRoot,
     };
     const port = fakePort(report(["typecheck"]));
     const manager = makeManager({
@@ -186,6 +191,37 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
     expect(() =>
       makeManager({ resolveWorkspaceRootAccess: () => undefined }).discover(workspaceRoot),
     ).toThrow(expect.objectContaining({ code: "PROJECT_NOT_FOUND" }));
+  });
+
+  // CodeRabbit, PR #3381: the `repositoryRoot === undefined` branch used to fall through to the
+  // ORDINARY trust path — `trustProjectId: projectId` with `trustBasisMatches: true` — so a managed
+  // worktree that named no repository had its package-script decision taken from its own
+  // unregistered root with the ADR-0147 D3 basis-equality guard skipped entirely. A managed access
+  // with no bound repository has no grantable basis at all and now fails closed; targeted-test,
+  // which is a Keiko-synthesized invocation and exempt from script trust, still runs.
+  it("refuses script kinds for a managed access that names no repository, and still runs targeted-test", async () => {
+    const access: WorkspaceRootAccess = {
+      kind: "managed-task",
+      canonicalRoot: workspaceRoot,
+      fs: nodeWorkspaceFs,
+    };
+    const port = fakePort(report(["targeted-test"]));
+    const manager = makeManager({
+      resolveWorkspaceRootAccess: () => access,
+      execute: port.port,
+      isWorkspaceTrustedForPackageScripts: () => true,
+    });
+
+    expect(
+      manager.discover(workspaceRoot).kinds.find((entry) => entry.kind === "typecheck")?.trustState,
+    ).toBe("approval-required");
+    expect(() => manager.execute(input({ kinds: ["typecheck"] }))).toThrow(
+      expect.objectContaining({ code: "WORKSPACE_TRUST_REQUIRED" }),
+    );
+    const { done } = collect(manager);
+    manager.execute(input({ kinds: ["targeted-test"], targetPath: "src/a.test.ts" }));
+    await done;
+    expect(port.fileSystems).toEqual([nodeWorkspaceFs]);
   });
 
   // A managed task worktree is not a registered project; the root access resolver proves it and
@@ -230,6 +266,50 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
       expect(() => manager.discover(join(worktreeRoot, "..", "elsewhere"))).toThrow(
         expect.objectContaining({ code: "PROJECT_NOT_FOUND" }),
       );
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  // ADR-0147 D3 binds the grant to exact `package.json` bytes. A governed run can rewrite its own
+  // worktree manifest, so inheriting the repository's grant may only hold while the worktree is
+  // that same fact — otherwise the rewritten script would run under a decision no human made for
+  // it (P1, PR #3381 review).
+  it("refuses a managed worktree whose package.json differs from its repository's", async () => {
+    const worktreeRoot = mkdtempSync(join(tmpdir(), "keiko-verify-basis-"));
+    try {
+      writeFileSync(
+        join(worktreeRoot, "package.json"),
+        PACKAGE_JSON.replace('"typecheck"', '"typecheck-renamed"'),
+        "utf8",
+      );
+      mkdirSync(join(worktreeRoot, "src"), { recursive: true });
+      writeFileSync(join(worktreeRoot, "src", "a.test.ts"), "test('x', () => {});\n", "utf8");
+      const port = fakePort(report(["typecheck"]));
+      const manager = makeManager({
+        resolveWorkspaceRootAccess: (root): WorkspaceRootAccess | undefined =>
+          root === worktreeRoot
+            ? {
+                kind: "managed-task",
+                canonicalRoot: worktreeRoot,
+                fs: nodeWorkspaceFs,
+                repositoryRoot: workspaceRoot,
+              }
+            : undefined,
+        execute: port.port,
+        isWorkspaceTrustedForPackageScripts: (): boolean => true,
+      });
+
+      expect(() =>
+        manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] })),
+      ).toThrow(expect.objectContaining({ code: "WORKSPACE_TRUST_REQUIRED" }));
+      expect(port.calls).toBe(0);
+      // The same worktree with a byte-identical manifest keeps the repository's grant.
+      writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
+      const { done } = collect(manager);
+      manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] }));
+      await done;
+      expect(port.calls).toBe(1);
     } finally {
       rmSync(worktreeRoot, { recursive: true, force: true });
     }

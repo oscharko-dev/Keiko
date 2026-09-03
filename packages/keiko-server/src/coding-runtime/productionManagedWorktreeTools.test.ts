@@ -321,7 +321,12 @@ describe("production managed worktree tools", () => {
   // reaches the model under the runner's own closed code and leaves a body-free diagnostic; a bare
   // "failed" made the agent re-run the verifier instead of reporting the blocker (workbench
   // end-to-end run, 2026-09-03).
-  it("forwards a verification runner refusal as its closed reason code with a diagnostic", async () => {
+  //
+  // The run id is ALSO the correlation handed to the runner (P2, PR #3381 review): the fixture uses
+  // a shape-valid one so this pins the JOIN — the port's own line and every line the runner emits
+  // for the same call carry one id — rather than the UNKNOWN_CORRELATION_ID fallback a 5-character
+  // fixture id pinned instead, which stayed green with the correlation dropped entirely.
+  it("forwards a verification runner refusal as its closed reason code, under the run's own correlation", async () => {
     const records: ServerDiagnosticRecord[] = [];
     const runToReport = vi.fn(() =>
       Promise.reject(
@@ -346,7 +351,7 @@ describe("production managed worktree tools", () => {
           envelope: authorizedEnvelope(true),
         }),
       },
-      authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+      authorityRef: { runId: "run-verification-1", envelopeDigest: DIGEST },
       workspaceRoot: "/managed/worktree",
       resolveWorkspaceRootAccess,
       authorityExpiresAt: "2099-01-01T00:00:00.000Z",
@@ -378,17 +383,101 @@ describe("production managed worktree tools", () => {
         }),
       }),
     ).resolves.toMatchObject({ status: "failed", reasonCode: "WORKSPACE_TRUST_REQUIRED" });
-    expect(runToReport).toHaveBeenCalledOnce();
+    expect(runToReport).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        projectId: "/managed/worktree",
+        kinds: ["test"],
+        requestId: "verification-1",
+        correlationId: "run-verification-1",
+      }),
+      expect.any(AbortSignal),
+    );
     expect(records).toEqual([
       expect.objectContaining({
         operation: "coding-runtime.verification",
         message: "verification-refused",
         errorClass: "WORKSPACE_TRUST_REQUIRED",
-        correlationId: "unknown-correlation-id",
+        correlationId: "run-verification-1",
       }),
     ]);
     expect(JSON.stringify(records)).not.toContain("server-side workspace trust");
   });
+
+  // The two refusals BEFORE the runner is called. Both returned a bare `{ status: "failed" }` with
+  // no reason code and no log line, so the model could not tell "do not retry, report this" from
+  // "try again" and the activity log had nothing to reconstruct (cursor review, PR #3381).
+  it.each([
+    ["verifier-unknown", "sentinel-verifier", true, "verification-verifier-unsupported"],
+    ["authority-revoked", "test", false, "verification-authority-revoked"],
+  ] as const)(
+    "refuses a verification before the runner (%s) with a closed reason code and a diagnostic",
+    async (_label, verifierId, managedAccessLive, reasonCode) => {
+      const records: ServerDiagnosticRecord[] = [];
+      const runToReport = vi.fn();
+      const liveFacts: CodingWorkbenchRuntimeAuthorityFacts = {
+        ...FACTS,
+        actionClasses: ["workspace-read", "workspace-write", "verification", "command-execution"],
+      };
+      const facade = createProductionManagedWorktreeToolFacade({
+        authority: {
+          revalidateCapabilityForMutation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(true),
+          }),
+          resolveCapabilityForDelegation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(true),
+          }),
+        },
+        authorityRef: { runId: "run-verification-2", envelopeDigest: DIGEST },
+        workspaceRoot: "/managed/worktree",
+        // Authority stays valid for decades, so a refusal here can only come from the liveness
+        // recheck (or the unknown verifier), never from expiry.
+        resolveWorkspaceRootAccess: (): WorkspaceRootAccess | undefined =>
+          managedAccessLive ? resolveWorkspaceRootAccess() : undefined,
+        authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+        effectiveMode: "autonomous-delivery",
+        deploymentCeiling: "autonomous-delivery",
+        liveFacts: () => liveFacts,
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: () =>
+            Promise.resolve({
+              ok: false as const,
+              error: { kind: "route" as const, code: "denied", message: "denied" },
+            }),
+        },
+        invocationRegistry: createCodingToolInvocationRegistry(),
+        verificationRunner: { runToReport },
+        diagnostics: { record: (record): void => void records.push(record) },
+        onRuntimeEvent: vi.fn(),
+      });
+
+      await expect(
+        facade.execute({
+          capability: "opaque-capability",
+          body: JSON.stringify({
+            action: "verification",
+            actionId: "verification-2",
+            idempotencyKey: "vkey-2",
+            verifierId,
+          }),
+        }),
+      ).resolves.toMatchObject({ status: "failed", reasonCode });
+      expect(runToReport).not.toHaveBeenCalled();
+      expect(records).toEqual([
+        expect.objectContaining({
+          operation: "coding-runtime.verification",
+          source: "production-managed-worktree-tools.verification",
+          message: "verification-refused",
+          errorClass: reasonCode,
+          correlationId: "run-verification-2",
+        }),
+      ]);
+    },
+  );
 
   it("revokes liveness the instant resolveWorkspaceRootAccess stops proving managed authority, even before expiry (#3347)", async () => {
     let access: ReturnType<typeof resolveWorkspaceRootAccess> | undefined = {

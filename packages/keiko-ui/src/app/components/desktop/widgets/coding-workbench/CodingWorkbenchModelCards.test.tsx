@@ -101,6 +101,18 @@ function renderStatus(
   return actions;
 }
 
+// The authentication truth and the Codex setup plan are rendered by `CodexSubscriptionAuthCard`,
+// which the window actually mounts — never by `ModelRuntimeStatus`, whose duplicate `AuthTruth`
+// branch was dead production code and was removed in the #3381 review. Driving these suites through
+// the mounted card keeps them from passing over a surface no operator can reach.
+function renderAuthCard(
+  state: CodingWorkbenchRuntimeState,
+  actions: ModelActions = modelActions(),
+): ModelActions {
+  render(<CodexSubscriptionAuthCard state={state} actions={actions} />);
+  return actions;
+}
+
 describe("ModelRuntimeStatus source cards", () => {
   it("selects the other source through the radio group", async () => {
     const user = userEvent.setup();
@@ -200,9 +212,11 @@ describe("ModelRuntimeStatus source cards", () => {
   });
 });
 
-describe("ModelRuntimeStatus subscription authentication truth", () => {
+describe("CodexSubscriptionAuthCard authentication truth", () => {
+  // `connected` is deliberately absent: the card renders NOTHING once the subscription is
+  // connected ("renders nothing once the subscription is connected" below), so no operator ever
+  // reads a "Connected" authentication row.
   it.each([
-    ["connected", "Connected"],
     ["missing", "Sign-in required"],
     ["expired", "Session expired"],
     ["revoked", "Session revoked"],
@@ -211,7 +225,7 @@ describe("ModelRuntimeStatus subscription authentication truth", () => {
     ["unsupported-headless", "Unavailable in this environment"],
     ["redistribution-unapproved", "Unavailable in this release"],
   ] as const)("labels the %s profile status", (status, label) => {
-    renderStatus(
+    renderAuthCard(
       codexState({
         profile: ready(profile({ status, supportsBrowserLogin: false, supportsDeviceCode: false })),
       }),
@@ -220,7 +234,7 @@ describe("ModelRuntimeStatus subscription authentication truth", () => {
   });
 
   it("shows checking without a refresh control while the profile loads", () => {
-    renderStatus(codexState({ profile: { status: "loading", value: null, error: null } }));
+    renderAuthCard(codexState({ profile: { status: "loading", value: null, error: null } }));
     expect(screen.getByText("Checking")).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Refresh authentication" }),
@@ -228,34 +242,34 @@ describe("ModelRuntimeStatus subscription authentication truth", () => {
   });
 
   it("falls back to the unavailable label when no profile truth exists", () => {
-    renderStatus(codexState({ profile: { status: "unavailable", value: null, error: null } }));
+    renderAuthCard(codexState({ profile: { status: "unavailable", value: null, error: null } }));
     expect(screen.getByText("Authentication unavailable")).toBeInTheDocument();
   });
 
   it("refreshes the profile from the auth truth row", async () => {
     const user = userEvent.setup();
-    const actions = renderStatus(codexState({ profile: ready(profile()) }));
+    const actions = renderAuthCard(codexState({ profile: ready(profile()) }));
     await user.click(screen.getByRole("button", { name: "Refresh authentication" }));
     expect(actions.refreshProfile).toHaveBeenCalledTimes(1);
   });
 
   it("hides the refresh control once the profile is connected", () => {
-    renderStatus(codexState({ profile: ready(profile({ status: "connected" })) }));
+    renderAuthCard(codexState({ profile: ready(profile({ status: "connected" })) }));
     expect(
       screen.queryByRole("button", { name: "Refresh authentication" }),
     ).not.toBeInTheDocument();
   });
 
   it("does not offer setup for non-actionable statuses", () => {
-    renderStatus(codexState({ profile: ready(profile({ status: "disabled-by-deployment" })) }));
+    renderAuthCard(codexState({ profile: ready(profile({ status: "disabled-by-deployment" })) }));
     expect(screen.queryByText("Server-approved setup methods")).not.toBeInTheDocument();
   });
 });
 
-describe("ModelRuntimeStatus codex setup", () => {
+describe("CodexSubscriptionAuthCard codex setup", () => {
   it("prepares the chosen server-approved method", async () => {
     const user = userEvent.setup();
-    const actions = renderStatus(codexState({ profile: ready(profile()) }));
+    const actions = renderAuthCard(codexState({ profile: ready(profile()) }));
     expect(screen.getByRole("button", { name: "Prepare browser login" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Prepare access-token login" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Prepare device-code login" }));
@@ -263,7 +277,7 @@ describe("ModelRuntimeStatus codex setup", () => {
   });
 
   it("explains when the server approves no setup method", () => {
-    renderStatus(
+    renderAuthCard(
       codexState({
         profile: ready(
           profile({
@@ -280,7 +294,7 @@ describe("ModelRuntimeStatus codex setup", () => {
   });
 
   it("disables setup buttons while a plan is being prepared", () => {
-    renderStatus(
+    renderAuthCard(
       codexState({
         profile: ready(profile()),
         codexSetup: { status: "loading", value: null, error: null },
@@ -292,7 +306,7 @@ describe("ModelRuntimeStatus codex setup", () => {
   });
 
   it("disables setup buttons when no prepare action is wired", () => {
-    renderStatus(
+    renderAuthCard(
       codexState({ profile: ready(profile()) }),
       modelActions({ prepareCodexSetup: undefined }),
     );
@@ -300,7 +314,7 @@ describe("ModelRuntimeStatus codex setup", () => {
   });
 
   it("announces a failed or unavailable setup plane", () => {
-    renderStatus(
+    renderAuthCard(
       codexState({
         profile: ready(profile()),
         codexSetup: { status: "error", value: null, error: null },
@@ -310,7 +324,7 @@ describe("ModelRuntimeStatus codex setup", () => {
   });
 
   it("renders the ready plan with managed secret input", () => {
-    renderStatus(
+    renderAuthCard(
       codexState({
         profile: ready(profile()),
         codexSetup: ready(
@@ -329,7 +343,7 @@ describe("ModelRuntimeStatus codex setup", () => {
   });
 
   it("renders the ready plan without secret input", () => {
-    renderStatus(codexState({ profile: ready(profile()), codexSetup: ready(setupPlan()) }));
+    renderAuthCard(codexState({ profile: ready(profile()), codexSetup: ready(setupPlan()) }));
     expect(screen.getByText(/browser login .* not required/u)).toBeInTheDocument();
   });
 });

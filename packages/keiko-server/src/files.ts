@@ -235,8 +235,15 @@ export interface ResolveRequestRootOptions {
   readonly managedRootAuthority?: "authorize" | "defer-to-caller";
 }
 
-function requestedManagedRoot(deps: UiHandlerDeps, rootInput: string | null): boolean {
-  return rootInput !== null && requiresConfiguredManagedWorkspaceAuthority(deps, rootInput);
+// The requested root when it names a path under Keiko's private managed-task-workspace root, or
+// `undefined`. Returns the value rather than a boolean so the one place that decides "this is a
+// managed-root request" is also the place that proves the root is present: the caller used to
+// re-test `rootInput === null` afterwards purely to narrow the type, and that second test could
+// never be true — every unspecified root has already returned through `resolveRoot` — so the
+// content-free denial it recorded was unreachable (PR #3381 review).
+function requestedManagedRoot(deps: UiHandlerDeps, rootInput: string | null): string | undefined {
+  if (rootInput === null) return undefined;
+  return requiresConfiguredManagedWorkspaceAuthority(deps, rootInput) ? rootInput : undefined;
 }
 
 /**
@@ -252,10 +259,8 @@ export async function resolveRequestRoot(
   options: ResolveRequestRootOptions = {},
 ): Promise<ResolvedProjectRoot> {
   const deferManagedAuthority = options.managedRootAuthority === "defer-to-caller";
-  if (!requestedManagedRoot(deps, rootInput)) {
-    return resolveRoot(deps.store, rootInput, deps.redactor);
-  }
-  if (deferManagedAuthority) {
+  const managedRootInput = requestedManagedRoot(deps, rootInput);
+  if (managedRootInput === undefined || deferManagedAuthority) {
     return resolveRoot(deps.store, rootInput, deps.redactor);
   }
   if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
@@ -264,21 +269,17 @@ export async function resolveRequestRoot(
     });
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  if (rootInput === null) {
-    recordManagedRootRequestDenial("managed-root-unspecified", {
-      correlationId: ctx.correlationId,
-    });
-    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
-  }
-  const access = resolveManagedWorkspaceRootAccess(deps, rootInput, {
+  // A root that names the managed root ITSELF, or any path under it that no workspace record
+  // claims, is refused here — the resolver records its own classified denial for that.
+  const access = resolveManagedWorkspaceRootAccess(deps, managedRootInput, {
     correlationId: ctx.correlationId,
   });
   if (access === undefined) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  assertMetadataSafe(rootInput, deps.redactor);
+  assertMetadataSafe(managedRootInput, deps.redactor);
   assertMetadataSafe(access.canonicalRoot, deps.redactor);
-  return { root: rootInput, realRoot: access.canonicalRoot, access };
+  return { root: managedRootInput, realRoot: access.canonicalRoot, access };
 }
 
 /**

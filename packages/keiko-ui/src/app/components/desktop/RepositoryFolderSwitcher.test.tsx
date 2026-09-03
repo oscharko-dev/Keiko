@@ -111,6 +111,7 @@ function api(overrides: Partial<ActiveWorkspaceApi> = {}): ActiveWorkspaceApi {
     loading: false,
     switching: false,
     error: null,
+    inventoryUnavailable: false,
     refresh: vi.fn(() => Promise.resolve(true)),
     switchTo: vi.fn(() => Promise.resolve(true)),
     clearActive: vi.fn(() => Promise.resolve(true)),

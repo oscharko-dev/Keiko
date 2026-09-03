@@ -39,6 +39,7 @@ function api(overrides: Partial<ActiveWorkspaceApi> = {}): ActiveWorkspaceApi {
     loading: false,
     switching: false,
     error: null,
+    inventoryUnavailable: false,
     refresh: vi.fn(() => Promise.resolve(true)),
     switchTo: vi.fn(() => Promise.resolve(true)),
     clearActive: vi.fn(() => Promise.resolve(true)),
@@ -169,7 +170,7 @@ describe("TaskWorkspaceManager", () => {
       name: /Prepare handoff: Commit or stash/i,
     });
     const failedSwitch = within(panel).getByRole("button", {
-      name: /Switch: Only provisioning, active, paused/i,
+      name: /Switch: Only active, paused/i,
     });
     expect(dirtyHandoff).toHaveAttribute("aria-disabled", "true");
     expect(failedSwitch).toHaveAttribute("aria-disabled", "true");
@@ -218,6 +219,97 @@ describe("TaskWorkspaceManager", () => {
     if (item === null) throw new Error("Workspace list item missing");
     expect(within(item).queryByRole("button", { name: "Repair" })).not.toBeInTheDocument();
     expect(within(item).getByText("HEAD moved")).toBeVisible();
+  });
+
+  // The row this surface exists to repair is the ACTIVE one: Start requires `health === "healthy"`
+  // and the Coding Workbench hides "Repair and bind" while a binding exists, so an active-but-
+  // drifted workspace had no in-product exit at all while Repair was derived from the active flag
+  // instead of the recovery hint (#3381 review). Pause/handoff stay offered alongside it.
+  it("offers Repair on the ACTIVE row when it carries an automatic recovery hint", () => {
+    const drifted = instance({
+      taskId: "active-drifted-446",
+      lifecycleState: "recovery-required",
+      health: "drifted",
+      driftMarkers: ["identity-schema-retired"],
+      recoveryHints: [
+        {
+          marker: "identity-schema-retired",
+          strategy: "reconcile-pointer",
+          operatorActionRequired: false,
+        },
+      ],
+    });
+    const value = api({ activeInstance: drifted, instances: [drifted] });
+    renderManager(value);
+
+    const panel = openManager();
+    const item = within(panel).getByText("active-drifted-446").closest("li");
+    if (item === null) throw new Error("Workspace list item missing");
+    expect(item).toHaveAttribute("data-active", "true");
+    expect(within(item).getByRole("button", { name: "Pause" })).toBeVisible();
+
+    fireEvent.click(within(item).getByRole("button", { name: "Repair" }));
+    expect(value.repair).toHaveBeenCalledWith("ws-alpha", "reconcile-pointer");
+  });
+
+  it("offers Repair on a paused row when it carries an automatic recovery hint", () => {
+    const paused = instance({
+      taskId: "paused-drifted-446",
+      lifecycleState: "paused",
+      health: "drifted",
+      driftMarkers: ["pointer-stale"],
+      recoveryHints: [
+        { marker: "pointer-stale", strategy: "reconcile-pointer", operatorActionRequired: false },
+      ],
+    });
+    const value = api({ instances: [paused] });
+    renderManager(value);
+
+    const panel = openManager();
+    const item = within(panel).getByText("paused-drifted-446").closest("li");
+    if (item === null) throw new Error("Workspace list item missing");
+    expect(within(item).getByRole("button", { name: "Resume" })).toBeVisible();
+
+    fireEvent.click(within(item).getByRole("button", { name: "Repair" }));
+    expect(value.repair).toHaveBeenCalledWith("ws-alpha", "reconcile-pointer");
+  });
+
+  // The contract's transition table lists `provisioning -> active`, but the server's activatable
+  // set does not: a switch to a provisioning row answers ILLEGAL_TRANSITION and rendered as the
+  // generic mutation error, so the action must be refused here with its own reason (#3381 review).
+  it("refuses Switch for a provisioning row the server cannot activate", () => {
+    const current = instance();
+    const provisioning = instance({
+      workspaceId: "ws-provisioning",
+      taskId: "provisioning-446",
+      lifecycleState: "provisioning",
+    });
+    const value = api({ activeInstance: current, instances: [current, provisioning] });
+    renderManager(value);
+
+    const panel = openManager();
+    const item = within(panel).getByText("provisioning-446").closest("li");
+    if (item === null) throw new Error("Workspace list item missing");
+    const switchButton = within(item).getByRole("button", { name: /^Switch:/ });
+    expect(switchButton).toHaveAttribute("aria-disabled", "true");
+    expect(switchButton).toHaveAccessibleName(
+      "Switch: Only active, paused, handoff-ready, or recovery-required workspaces can be switched to.",
+    );
+    fireEvent.click(switchButton);
+    expect(value.switchTo).not.toHaveBeenCalled();
+  });
+
+  // A listing the server could not answer degrades to an empty list so the active binding survives
+  // it; the panel must not then render the same pixels as a repository that genuinely has no
+  // managed workspaces (#3381 review).
+  it("names an unreadable inventory instead of rendering the empty state", () => {
+    renderManager(api({ inventoryUnavailable: true, instances: [] }));
+
+    const panel = openManager();
+    expect(within(panel).queryByText("No managed task workspaces yet.")).not.toBeInTheDocument();
+    expect(within(panel).getByTestId("task-workspace-inventory-unavailable")).toHaveTextContent(
+      "The task workspace list could not be read.",
+    );
   });
 
   it("announces a successful refresh from the resolved operation outcome", async () => {

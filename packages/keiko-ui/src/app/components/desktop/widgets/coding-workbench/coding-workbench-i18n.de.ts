@@ -109,7 +109,17 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.provisioningUnavailable":
     "Verwaltete Task Workspaces sind auf dieser Installation nicht konfiguriert, daher kann kein Workspace gebunden werden.",
   "codingWorkbench.setup.repairRequired":
-    "Für dieses Repository und diesen Branch existiert bereits ein verwalteter Workspace, den Keiko nicht erneut verifizieren konnte: {finding}. Die Reparatur registriert den vorhandenen Worktree an Ort und Stelle neu; nichts wird gelöscht.",
+    "Für dieses Repository und diesen Branch existiert bereits ein verwalteter Workspace, den Keiko nicht erneut verifizieren konnte: {finding}. Die Reparatur {effect}.",
+  "codingWorkbench.setup.repairEffect.reconcilePointer":
+    "registriert den vorhandenen Worktree an Ort und Stelle neu; nichts wird gelöscht",
+  "codingWorkbench.setup.repairEffect.recreateWorktree":
+    "entfernt die veraltete Worktree-Registrierung und baut den Worktree aus seinem Aufgabenbranch neu auf; committete Arbeit auf dem Branch bleibt erhalten",
+  "codingWorkbench.setup.repairEffect.releaseStaleLock":
+    "gibt die veraltete Sperre einer abgebrochenen Aktion frei; der Worktree bleibt unberührt",
+  "codingWorkbench.setup.repairEffect.generic":
+    "wendet die von Keiko für diesen Befund empfohlene Wiederherstellungsstrategie an",
+  "codingWorkbench.setup.boundRefreshFailed":
+    "Der Workspace wurde gebunden, aber diese Ansicht konnte nicht aktualisiert werden. Öffne „Task Workspaces“ und nutze „Aktualisieren“.",
   "codingWorkbench.setup.operatorRequired":
     "Für dieses Repository und diesen Branch existiert bereits ein verwalteter Workspace, den Keiko nicht automatisch reparieren kann: {finding}. Prüfe ihn im Task-Workspaces-Panel und versuche es dann erneut.",
   "codingWorkbench.setup.repairFailed":
@@ -127,6 +137,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.readiness.workspace.none": "Kein aktiver Aufgabenarbeitsbereich",
   "codingWorkbench.readiness.eventStream.label": "Ereignisstrom",
   "codingWorkbench.readiness.runtime.label": "Coding-Runtime",
+  "codingWorkbench.readiness.runtime.pending": "Coding-Runtime wird geprüft…",
   "codingWorkbench.readiness.runtime.verified":
     "Plattformgeprüft — signierte und notarisierte Runtime",
   "codingWorkbench.readiness.runtime.evaluation":

@@ -28,16 +28,26 @@ export interface ActiveWorkspaceApi {
   readonly activeRoot: string | null;
   // True while the initial inventory/active fetch is in flight.
   readonly loading: boolean;
+  // True when the LAST settled read could not list the inventory (the listing degrades to an empty
+  // `instances` so a failed list never hides the active binding). A surface must not render its
+  // empty state for this: "no managed task workspaces yet" is a claim about the repository, not a
+  // report of a failed read. Cleared by the next settled read that succeeds.
+  readonly inventoryUnavailable: boolean;
   // True while a switch/pause/resume/handoff/provision mutation is in flight (atomic-switch guard).
   readonly switching: boolean;
   // The last action error (already redacted server-side), or null.
   readonly error: string | null;
   // Re-fetch the inventory and the active binding.
   readonly refresh: () => Promise<boolean>;
-  // Every mutation below resolves `true` once the wire call AND the reload have settled, and
-  // `false` when the action failed (the redacted reason is in `error`) or a newer operation
-  // superseded it. Mutations never reject, so a caller that must not proceed on a refused
-  // mutation — clearing an override before switching folders — reads the outcome, not a throw.
+  // Every mutation below resolves `false` if and ONLY IF the wire call was refused (the redacted
+  // reason is then in `error`), and `true` once the server applied it — including when a newer
+  // mutation or refresh superseded this one's reload and therefore owns the state commit.
+  // Supersession is not a refusal: reporting it as `false` made the folder switcher announce that
+  // an override clear "could not be released" that the server had in fact performed, and abort the
+  // folder change (#3381 review). Mutations never reject, so a caller that must not proceed on a
+  // refused mutation — clearing an override before switching folders — reads the outcome, not a
+  // throw. `refresh` is NOT a mutation and keeps its narrower meaning: it resolves `true` only when
+  // THIS operation settled the state, so a superseded refresh never announces success.
   // Atomic switch: activate/resume the target and bind all surfaces to it.
   readonly switchTo: (workspaceId: string) => Promise<boolean>;
   // Clear the active pointer → unbound mode.

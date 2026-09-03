@@ -12,7 +12,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CodingWorkbenchAuthorityEnvelope,
   EditorAgentAction,
@@ -49,9 +49,17 @@ import { handleEditorAgentVerificationRun } from "./agentVerificationRoute.js";
 import type { VerificationRunnerManager } from "./verificationRunner.js";
 import {
   editorAgentPathBoundaryReason,
+  editorAgentRootContainmentReason,
   resolveEditorAgentActionRoot,
+  resolveEditorAgentContainmentPort,
   resolveEditorAgentSessionRoot,
 } from "./agentRootBoundary.js";
+import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  grantedWorkspaceRootAccess,
+  type WorkspaceRootAccessOutcome,
+} from "../task-workspace/workspace-root-access.js";
+import { forwardWorkspaceFs, nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 const HASH = "a".repeat(64);
 let temporaryRoot: string;
@@ -897,5 +905,123 @@ describe("root-binding-required across every server consumer (#2619)", () => {
       listEditorAgentActionAudit("session-required-verification")[0],
       { reason: "root-binding-required" },
     );
+  });
+});
+
+// PR #3381 review — the containment port both editor route families resolve. It used to be a
+// near-verbatim private copy in agentRoutes.ts and agentVerificationRoute.ts (cursor, low), and
+// its `catch { return nodeWorkspaceFs; }` plus `?.fs ?? nodeWorkspaceFs` collapsed a REFUSED
+// managed root into a boundary escape: the operator was told the target left the workspace when
+// the truth was that the workspace's own authority no longer held, and nothing was logged (P3).
+describe("editor agent containment port (PR #3381)", () => {
+  it("returns the node port when no resolver is wired or the root is merely unresolved", () => {
+    expect(resolveEditorAgentContainmentPort(undefined, rootA)).toEqual({
+      ok: true,
+      fs: nodeWorkspaceFs,
+    });
+    expect(
+      resolveEditorAgentContainmentPort(
+        {
+          workspaceRootAccessResolver: (): WorkspaceRootAccessOutcome => ({
+            decision: "unresolved",
+          }),
+        },
+        rootA,
+      ),
+    ).toEqual({ ok: true, fs: nodeWorkspaceFs });
+  });
+
+  it("returns the port a granted managed access minted", () => {
+    const accessFs = forwardWorkspaceFs(nodeWorkspaceFs);
+    expect(
+      resolveEditorAgentContainmentPort(
+        {
+          workspaceRootAccessResolver: (requestedRoot): WorkspaceRootAccessOutcome =>
+            grantedWorkspaceRootAccess({
+              kind: "managed-task",
+              canonicalRoot: requestedRoot,
+              fs: accessFs,
+            }),
+        },
+        rootA,
+      ),
+    ).toEqual({ ok: true, fs: accessFs });
+  });
+
+  it("threads the caller's correlation id into the resolver so its denial line is joinable", () => {
+    const seen: (string | undefined)[] = [];
+    resolveEditorAgentContainmentPort(
+      {
+        workspaceRootAccessResolver: (_root, correlationId): WorkspaceRootAccessOutcome => {
+          seen.push(correlationId);
+          return { decision: "denied" };
+        },
+      },
+      rootA,
+      "run-boundary-1",
+    );
+    expect(seen).toEqual(["run-boundary-1"]);
+  });
+
+  it("reports a denied managed root as its own refusal, never as a path escape", () => {
+    const session = snapshot(rootA, binding(0), "session-denied-port");
+    const resolved = resolveEditorAgentSessionRoot(session, store);
+    if (!resolved.ok) throw new Error("root resolution failed");
+    const deps = {
+      workspaceRootAccessResolver: (): WorkspaceRootAccessOutcome => ({ decision: "denied" }),
+    };
+
+    // The path is genuinely contained, so the node-port fallback would have answered `null` here
+    // and admitted the action against a root whose authority was refused.
+    expect(editorAgentPathBoundaryReason(resolved.root, ["src/file.ts"])).toBeNull();
+    expect(editorAgentRootContainmentReason(resolved.root, ["src/file.ts"], deps)).toBe(
+      "root-binding-invalid",
+    );
+    // Positive control: a real escape still reports as an escape, so the denial mapping above did
+    // not simply swallow every reason.
+    expect(
+      editorAgentRootContainmentReason(resolved.root, ["../escape.ts"], {
+        workspaceRootAccessResolver: (requestedRoot): WorkspaceRootAccessOutcome =>
+          grantedWorkspaceRootAccess({
+            kind: "ordinary",
+            canonicalRoot: requestedRoot,
+            fs: nodeWorkspaceFs,
+          }),
+      }),
+    ).toBe("workspace-boundary-escape");
+  });
+
+  it("refuses and records a resolver that cannot complete its authority proof at all", () => {
+    const session = snapshot(rootA, binding(0), "session-throwing-port");
+    const resolved = resolveEditorAgentSessionRoot(session, store);
+    if (!resolved.ok) throw new Error("root resolution failed");
+    const record = vi
+      .spyOn(defaultServerDiagnosticSink, "record")
+      .mockImplementation(() => undefined);
+    try {
+      expect(
+        editorAgentRootContainmentReason(
+          resolved.root,
+          ["src/file.ts"],
+          {
+            workspaceRootAccessResolver: (): never => {
+              throw new Error("SENTINEL_RESOLVER_FAULT");
+            },
+          },
+          "run-boundary-2",
+        ),
+      ).toBe("root-binding-invalid");
+      expect(record).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          operation: "editor.agent.root-containment",
+          source: "editor.agent-root-boundary",
+          message: "editor-agent-root-authority-unresolvable",
+          correlationId: "run-boundary-2",
+        }),
+      );
+      expect(JSON.stringify(record.mock.calls)).not.toContain("SENTINEL_RESOLVER_FAULT");
+    } finally {
+      record.mockRestore();
+    }
   });
 });

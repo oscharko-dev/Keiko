@@ -55,6 +55,23 @@ did not name that reason.
 
 Update to a build that contains the 2026-09-03 repair; nothing has to be migrated. For the gateway
 reason, open Settings → Models, run the readiness check for the chat model and apply the verified
-values; the Coding Workbench re-reads its source without a reload. For `WORKSPACE_TRUST_REQUIRED`,
-grant workspace script trust to the repository the task workspace was bound from (Settings →
-Security, or the editor's verification panel); its task worktrees inherit that grant.
+values; the Coding Workbench re-reads its source without a reload.
+
+For `WORKSPACE_TRUST_REQUIRED`, grant workspace script trust to the repository the task workspace
+was bound from. Two surfaces do it:
+
+- **Settings → Security → Workspace Trust → "Open Workspace Trust"**, then "Trust" on the
+  repository's row in the panel that opens and confirm in the "Trust this workspace?" dialog. The
+  panel lists every registered workspace root, so this is the surface to use when the repository is
+  not the one currently open.
+- The editor's verification panel, for the root the editor is already on.
+
+The grant is recorded for the REPOSITORY root, and a task worktree runs its scripts under that grant
+only while the worktree's `package.json` is byte-identical to the repository's. That is what the
+grant is bound to (ADR-0147 D3), and a governed run may edit `package.json` inside its own worktree:
+the runner compares the two manifests before every verification and answers
+`WORKSPACE_TRUST_REQUIRED` when they differ, rather than spawning a rewritten script under a
+decision the human made about different bytes. Re-granting trust does not clear this: the grant the
+runner reads is always the repository's. Bring the two manifests back into agreement — land the
+worktree's `package.json` change in the repository, or revert it in the worktree — and the runner
+admits the scripts again. An unreadable manifest on either side fails closed the same way.

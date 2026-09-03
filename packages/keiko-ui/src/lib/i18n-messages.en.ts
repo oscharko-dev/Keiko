@@ -1421,7 +1421,7 @@ export const EN_MESSAGES = {
   "taskWorkspace.status.reconciled": "Task workspaces refreshed.",
   "taskWorkspace.reason.busy": "Another workspace action is in progress.",
   "taskWorkspace.reason.switchUnavailable":
-    "Only provisioning, active, paused, handoff-ready, or recovery-required workspaces can be switched to.",
+    "Only active, paused, handoff-ready, or recovery-required workspaces can be switched to.",
   "taskWorkspace.reason.pauseUnavailable": "Only an active workspace can be paused.",
   "taskWorkspace.reason.resumeUnavailable": "Only a paused workspace can be resumed.",
   "taskWorkspace.reason.handoffUnavailable":
@@ -1429,6 +1429,8 @@ export const EN_MESSAGES = {
   "taskWorkspace.reason.handoffDirty":
     "Commit or stash uncommitted changes before preparing a handoff.",
   "taskWorkspace.noneManaged": "No managed task workspaces yet.",
+  "taskWorkspace.inventoryUnavailable":
+    "The task workspace list could not be read. The active binding above still applies. Use Refresh to try again.",
   "taskWorkspace.list": "Task workspaces",
   "taskWorkspace.create.title": "Create workspace",
   "taskWorkspace.create.taskId": "Task id",

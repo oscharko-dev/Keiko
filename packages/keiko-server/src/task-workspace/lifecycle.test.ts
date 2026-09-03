@@ -679,6 +679,84 @@ describe("identity proof before bindings and readiness", () => {
       workspaceId: inst.workspaceId,
       driftMarker: "identity-schema-retired",
     });
+    // The row has to AGREE with the pointer that was just dropped. Logging the refusal alone left
+    // inventory showing `active`/`healthy` with no markers while `GET /active` was already unbound,
+    // and Repair only appears where a hint exists — so the operator saw an active-looking workspace
+    // with no way to fix it until the next startup reconcile ran (PR #3381 review).
+    const flagged = store.getById(inst.workspaceId);
+    expect(flagged?.lifecycleState).toBe("recovery-required");
+    expect(flagged?.health).toBe("drifted");
+    expect(flagged?.driftMarkers).toEqual(["identity-schema-retired"]);
+    expect(flagged?.recoveryHints).toEqual([
+      {
+        marker: "identity-schema-retired",
+        strategy: "reconcile-pointer",
+        operatorActionRequired: false,
+      },
+    ]);
+    expect(flagged?.lock).toBeNull();
+  });
+
+  // Every identity verdict the read refuses leaves the SAME row shape, through the same owner as a
+  // readiness transition, so a bind refusal and a handoff refusal cannot describe one fact
+  // differently.
+  it.each([
+    { drift: "unsupported", marker: "identity-unsupported" },
+    { drift: "changed", marker: "gitdir-mismatch" },
+    { drift: "unproven", marker: "pointer-stale" },
+  ] as const)(
+    "flags the row with $marker when the active read finds a $drift identity",
+    ({ drift, marker }) => {
+      const inst = store.upsert(instance(`read-${marker}`.slice(0, 20)));
+      pointerStore.set({
+        workspaceId: inst.workspaceId,
+        setBy: "op",
+        atIso: "2026-06-26T00:00:00.000Z",
+      });
+      const refusing = lifecycleWith(
+        fakeProvisioning(),
+        undefined,
+        capturingEvidence(),
+        () => drift,
+      );
+
+      expect(refusing.getActive()).toBeUndefined();
+
+      const flagged = store.getById(inst.workspaceId);
+      expect(flagged?.lifecycleState).toBe("recovery-required");
+      expect(flagged?.driftMarkers).toEqual([marker]);
+      expect(flagged?.recoveryHints).not.toEqual([]);
+    },
+  );
+
+  // The other structural refusal on the read path: the worktree directory is gone. It used to
+  // return false with no line and no row at all.
+  it("flags a vanished worktree on the active read instead of refusing silently", () => {
+    const inst = store.upsert(instance("read-missing"));
+    pointerStore.set({
+      workspaceId: inst.workspaceId,
+      setBy: "op",
+      atIso: "2026-06-26T00:00:00.000Z",
+    });
+    rmSync(inst.managedWorktreePath, { recursive: true, force: true });
+    const activityLog = createBufferedServerLogSink();
+    const reading = lifecycleWith(fakeProvisioning(), activityLog);
+
+    expect(reading.getActive("active-read-missing")).toBeUndefined();
+    expect(pointerStore.get()).toBeUndefined();
+
+    const flagged = store.getById(inst.workspaceId);
+    expect(flagged?.lifecycleState).toBe("recovery-required");
+    expect(flagged?.health).toBe("missing");
+    expect(flagged?.driftMarkers).toEqual(["worktree-missing"]);
+    const line = activityLog.events.find((event) => event.errorKind === "POINTER_DRIFT");
+    expect(line?.correlationId).toBe("active-read-missing");
+    expect(line?.extra).toMatchObject({
+      operation: "activate",
+      outcome: "retry-required",
+      workspaceId: inst.workspaceId,
+      driftMarker: "worktree-missing",
+    });
   });
 
   // `changed` (a readable pointer proving another identity) carries the contract's

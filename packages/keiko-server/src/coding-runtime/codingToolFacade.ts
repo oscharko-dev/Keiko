@@ -45,10 +45,18 @@ const EDIT_TRANSPORT_REASON_CODES = [
   "REDIRECT_BLOCKED",
   "EDIT_TRANSPORT_ERROR",
 ] as const;
+// The two refusals the read/edit port raises BEFORE the editor route ever sees the changeset: the
+// prepare stage rejected it (malformed changeset, revoked mutation guard, cross-wired producer
+// binding), or the workspace access the run is bound to stopped resolving while the port waited for
+// a live editor session. Both used to reach the model as a bare "failed", so a governed run whose
+// workspace authority had been revoked looked exactly like a retryable editor conflict and the
+// agent kept re-issuing the edit (workbench end-to-end run, 2026-09-03).
+const EDIT_PORT_REFUSAL_REASON_CODES = ["EDIT_PREPARE_FAILED", "WORKSPACE_ACCESS_LOST"] as const;
 const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   ...EDITOR_AGENT_CONFLICT_CODES,
   ...EDITOR_AGENT_FAILURE_CODES,
   ...EDIT_TRANSPORT_REASON_CODES,
+  ...EDIT_PORT_REFUSAL_REASON_CODES,
 ]);
 const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set([
   "capability-backend-unavailable",
@@ -58,6 +66,12 @@ const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set([
   "git-authority-revoked",
   "delivery-authority-revoked",
   "connector-authority-revoked",
+  // The verification port's own pre-run refusals: the run's authority or managed-workspace liveness
+  // was already gone when the tool call arrived, or the sidecar named a verifier this server does
+  // not implement. Neither is a red test run and neither is retryable, but both used to return a
+  // bare "failed" (cursor review, PR #3381).
+  "verification-authority-revoked",
+  "verification-verifier-unsupported",
   // The verification runner's own closed codes (editor/verificationRunner.ts). A verification the
   // runner refused used to reach the model as a bare "failed", indistinguishable from a red test
   // run, so the agent re-ran it instead of reporting the blocker (end-to-end run, 2026-09-03).

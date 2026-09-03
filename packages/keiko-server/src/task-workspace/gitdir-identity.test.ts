@@ -95,10 +95,18 @@ function statOf(node: Node): WorkspaceStat {
   };
 }
 
+// Absence has to arrive the way the real port reports it — a Node `Error` carrying `code`. The
+// production classifier reads that code to tell "the component is not there" (deterministic,
+// `unproven`) from "the proof could not run" (retryable, `failed`); a fake that threw a bare Error
+// would make the ENOENT verdict untestable here and this file would stop guarding it.
+function absent(path: string): Error {
+  return Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+}
+
 function portFor(tree: Map<string, Node>): WorkspaceFs {
   const nodeAt = (path: string): Node => {
     const node = tree.get(path);
-    if (node === undefined) throw new Error(`ENOENT: ${path}`);
+    if (node === undefined) throw absent(path);
     return node;
   };
   return {
@@ -781,6 +789,73 @@ describe("inspectManagedGitdirIdentityOutcome — I/O failures keep their cause"
     expect(inspectManagedGitdirIdentityOutcome(WORKTREE_ROOT, REPOSITORY_ROOT, port).kind).toBe(
       "unproven",
     );
+  });
+
+  // A partially removed worktree — the tree is still there, its `.git` pointer is gone — is the
+  // documented `pointer-stale` case (ADR-0088, ADR-0091), not an I/O failure. Classified `failed`
+  // it left every consumer of the refusal paths (provisioning resume/activate, the active read,
+  // health) answering a retryable 503 "retry" that could never succeed, and no marker was ever
+  // persisted, so the row stayed `active`/`healthy` in the inventory with no Repair offer until a
+  // reconcile pass happened to run (PR #3381 review P2).
+  it.each([
+    { label: "worktree .git pointer", path: WORKTREE_POINTER },
+    { label: "admin gitdir backpointer", path: ADMIN_BACKPOINTER },
+    { label: "Git admin directory", path: ADMIN_DIRECTORY },
+  ])("reports unproven when the $label is absent, never a retryable failure", ({ path }) => {
+    const partiallyRemoved = authenticTree();
+    partiallyRemoved.delete(path);
+
+    const outcome = inspectManagedGitdirIdentityOutcome(
+      WORKTREE_ROOT,
+      REPOSITORY_ROOT,
+      portFor(partiallyRemoved),
+    );
+
+    expect(outcome.kind).toBe("unproven");
+    // The whole chain the consumers read: no throw, the `pointer-stale` marker, and the sentence
+    // that does not accuse the operator of a replaced worktree.
+    const drift = managedIdentityDriftFor(outcome, "persisted-identity");
+    expect(drift).toBe("unproven");
+    expect(managedIdentityDriftMarker(drift)).toBe("pointer-stale");
+  });
+
+  // ENOTDIR is the same fact reached through a component whose ancestor is no longer a directory.
+  it("reports unproven when a component's ancestor is not a directory", () => {
+    const inner = portFor(authenticTree());
+    const port: WorkspaceFs = {
+      ...inner,
+      stat: (candidate: string): WorkspaceStat => {
+        if (candidate === ADMIN_BACKPOINTER) {
+          throw Object.assign(new Error("ENOTDIR: not a directory"), { code: "ENOTDIR" });
+        }
+        return inner.stat(candidate);
+      },
+    };
+
+    expect(inspectManagedGitdirIdentityOutcome(WORKTREE_ROOT, REPOSITORY_ROOT, port).kind).toBe(
+      "unproven",
+    );
+  });
+
+  // The distinction is the errno, not the shape of the error: an EACCES on the same component is
+  // still the retryable failure the operator documentation promises.
+  it("keeps an EACCES on the pointer a retryable failure", () => {
+    const inner = portFor(authenticTree());
+    const read = inner.readFileUtf8WithinRootSameDescriptor;
+    if (read === undefined) throw new Error("fixture port lost its descriptor read");
+    const failure = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    const port: WorkspaceFs = {
+      ...inner,
+      readFileUtf8WithinRootSameDescriptor: (canonicalRoot, absolutePath, ...rest) => {
+        if (absolutePath === WORKTREE_POINTER) throw failure;
+        return read.call(inner, canonicalRoot, absolutePath, ...rest);
+      },
+    };
+
+    const outcome = inspectManagedGitdirIdentityOutcome(WORKTREE_ROOT, REPOSITORY_ROOT, port);
+
+    expect(outcome.kind).toBe("failed");
+    expect(outcome.kind === "failed" ? outcome.cause : undefined).toBe(failure);
   });
 });
 

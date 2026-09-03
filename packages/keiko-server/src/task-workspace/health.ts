@@ -307,21 +307,80 @@ async function evaluateRepositoryGroup(
 // for the global report every repository-id directory on disk without one — the same on-disk half
 // the orphan sweep unions in. Without it a leftover directory of a repository whose every row was
 // already cleaned up never appeared in the "everything" report (audit finding, 2026-09-03).
+//
+// The shared listing THROWS for a root that exists but cannot be read, because the orphan sweep —
+// which deletes — may never act on an inventory it could not take. This report only observes, and
+// aborting it would discard every row it had already evaluated, including repositories that were
+// perfectly readable: the same isolation the unreachable-repository path applies (PR #3381 review).
+// The failure is named on the log and the report continues with the persisted repository ids, so
+// the one thing missing is the leftover directory of a repository whose every row is already gone.
 function unseenRepositoryIds(
   deps: WorkspaceHealthServiceDeps,
   repositoryRoot: string | undefined,
   seen: ReadonlySet<string>,
+  correlationId: string,
 ): readonly string[] {
-  const candidates =
-    repositoryRoot !== undefined && repositoryRoot.length > 0
-      ? [deriveRepositoryId(repositoryRoot)]
-      : listManagedRepositoryIds(deps.managedRoot);
-  return candidates.filter((repositoryId) => !seen.has(repositoryId));
+  if (repositoryRoot !== undefined && repositoryRoot.length > 0) {
+    const requested = deriveRepositoryId(repositoryRoot);
+    return seen.has(requested) ? [] : [requested];
+  }
+  let onDisk: readonly string[];
+  try {
+    onDisk = listManagedRepositoryIds(deps.managedRoot);
+  } catch (error) {
+    logManagedListingFailure(deps, error, correlationId);
+    return [];
+  }
+  return onDisk.filter((repositoryId) => !seen.has(repositoryId));
+}
+
+// A managed-root scan that could not be taken, reported the way an unreachable repository is: the
+// classified retryable REPOSITORY_UNREACHABLE with its frames and cause chain under this report's
+// correlation, seeded from the managed root's own content-free id — no path, no errno message.
+function logManagedListingFailure(
+  deps: WorkspaceHealthServiceDeps,
+  error: unknown,
+  correlationId: string,
+): void {
+  logWorkspaceLifecycleFailure(
+    deps,
+    {
+      operation: "health",
+      workspaceIdentitySeed: deriveRepositoryId(deps.managedRoot),
+      correlationId,
+    },
+    repositoryUnreachable(error),
+  );
 }
 
 // Detects orphaned managed worktrees for one repository: directories under `<managedRoot>/<repoId>`
 // that no persisted instance references. Each candidate is realpath-contained before it is reported,
 // and its live cleanup-eligibility is evaluated (owned + contained + clean; orphans hold no lock).
+// The leaf directories of one repository's managed directory, or `[]` once the failure to list them
+// is on the log. Per-repository isolation, not a swallow: this one directory's orphans are unknown
+// and the rest of the report stands. The bare catch this replaces left "no orphans here"
+// indistinguishable from "could not look", so a permission change silently removed the orphan
+// surface (PR #3381 review — the same class as the managed-root listing above).
+function orphanLeavesOrLogFailure(
+  deps: WorkspaceHealthServiceDeps,
+  repositoryId: string,
+  repoDir: string,
+  correlationId: string,
+): readonly string[] {
+  try {
+    return readdirSync(repoDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch (error) {
+    logWorkspaceLifecycleFailure(
+      deps,
+      { operation: "health", workspaceIdentitySeed: repositoryId, correlationId },
+      repositoryUnreachable(error),
+    );
+    return [];
+  }
+}
+
 async function detectOrphans(
   deps: WorkspaceHealthServiceDeps,
   repositoryId: string,
@@ -331,14 +390,7 @@ async function detectOrphans(
 ): Promise<WorkspaceHealthEntry[]> {
   const repoDir = join(deps.managedRoot, repositoryId);
   if (!existsSync(repoDir)) return [];
-  let leaves: readonly string[];
-  try {
-    leaves = readdirSync(repoDir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-  } catch {
-    return [];
-  }
+  const leaves = orphanLeavesOrLogFailure(deps, repositoryId, repoDir, correlationId);
   const entries: WorkspaceHealthEntry[] = [];
   for (const leaf of leaves) {
     const candidate = join(repoDir, leaf);
@@ -429,7 +481,12 @@ async function reportImpl(
   }
   // A repository with no persisted instance — the requested one, or on the global report every
   // repository-id directory still on disk — still surfaces its orphans.
-  for (const repositoryId of unseenRepositoryIds(deps, repositoryRoot, seenRepoIds)) {
+  for (const repositoryId of unseenRepositoryIds(
+    deps,
+    repositoryRoot,
+    seenRepoIds,
+    correlationId,
+  )) {
     entries.push(
       ...(await detectOrphans(deps, repositoryId, new Set(), ownershipProven, correlationId)),
     );

@@ -35,6 +35,7 @@ import {
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { resolveTrustBasisFact, trustBasisFactsMatch } from "../workspace-script-trust.js";
 import {
   appendEditorVerificationRunEvidence,
   buildEditorVerificationInterruptedEvidenceEntry,
@@ -156,6 +157,12 @@ interface ResolvedVerificationWorkspace {
   // facts would never match its repository's grant).
   readonly trustProjectId: string;
   readonly trustWorkspace: WorkspaceInfo;
+  // Whether the root whose scripts will actually run carries the SAME package-script trust basis
+  // as the granted project. False only for a managed task worktree whose `package.json` differs
+  // from its repository's: the grant is bound to exact manifest bytes (ADR-0147 D3), and a run that
+  // rewrote its own `package.json` would otherwise execute those scripts under the repository's
+  // standing decision (P1, PR #3381 review).
+  readonly trustBasisMatches: boolean;
 }
 
 class VerificationRunnerManagerImpl implements VerificationRunnerManager {
@@ -629,7 +636,10 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
 
   private trustedForScripts(resolved: ResolvedVerificationWorkspace): boolean {
     try {
-      return this.isTrusted(resolved.trustProjectId, resolved.trustWorkspace);
+      return (
+        resolved.trustBasisMatches &&
+        this.isTrusted(resolved.trustProjectId, resolved.trustWorkspace)
+      );
     } catch {
       return false;
     }
@@ -652,14 +662,29 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     }
     const workspace = detectWorkspaceAt(access.canonicalRoot, access.fs);
     const repositoryRoot = access.kind === "managed-task" ? access.repositoryRoot : undefined;
+    if (repositoryRoot === undefined) {
+      return {
+        access,
+        workspace,
+        trustProjectId: projectId,
+        trustWorkspace: workspace,
+        // A managed worktree that names NO repository has no grantable package-script basis: the
+        // standing decision that governs it is unknown. Script kinds fail closed rather than being
+        // evaluated against the worktree's own trust row — the root a governed run can rewrite
+        // (CodeRabbit, PR #3381). Production always names one: `canonicalManagedRootAccess` sets
+        // `repositoryRoot` on every granted managed access, so this is the floor, not a supported
+        // configuration. An ORDINARY root is its own trust basis and keeps the previous answer.
+        trustBasisMatches: access.kind !== "managed-task",
+      };
+    }
     return {
       access,
       workspace,
-      trustProjectId: repositoryRoot ?? projectId,
-      trustWorkspace:
-        repositoryRoot === undefined
-          ? workspace
-          : detectWorkspaceAt(repositoryRoot, this.fs, { scanSourceFilesForLanguages: false }),
+      trustProjectId: repositoryRoot,
+      trustWorkspace: detectWorkspaceAt(repositoryRoot, this.fs, {
+        scanSourceFilesForLanguages: false,
+      }),
+      trustBasisMatches: worktreeSharesRepositoryTrustBasis(access, repositoryRoot, this.fs),
     };
   }
 
@@ -704,6 +729,32 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       errorClass: "VerificationSubscriber",
       message: "A verification event subscriber failed.",
     });
+  }
+}
+
+/**
+ * The package-script grant is bound to the granted root's exact `package.json` bytes (ADR-0147 D3),
+ * so a managed task worktree may only run scripts under its repository's grant while its own
+ * manifest is that same fact. A governed run can edit `package.json` inside its worktree; without
+ * this the runner would answer "trusted" from the repository's record and spawn the rewritten
+ * script with no human decision (P1, PR #3381 review). Fails closed on any unreadable manifest.
+ *
+ * Exported so the agent verification route (`agentVerificationRoute.ts`), which composes its own
+ * policy decision from the same standing grant before this runner is reached, asks THIS rule
+ * instead of restating it — one definition of "may this worktree run its repository's scripts".
+ */
+export function worktreeSharesRepositoryTrustBasis(
+  access: WorkspaceRootAccess,
+  repositoryRoot: string,
+  repositoryFs: WorkspaceFs,
+): boolean {
+  try {
+    return trustBasisFactsMatch(
+      resolveTrustBasisFact(access.fs, access.canonicalRoot),
+      resolveTrustBasisFact(repositoryFs, repositoryRoot),
+    );
+  } catch {
+    return false;
   }
 }
 

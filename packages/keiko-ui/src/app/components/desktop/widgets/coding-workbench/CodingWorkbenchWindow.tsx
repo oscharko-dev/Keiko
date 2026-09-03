@@ -110,30 +110,43 @@ function resolvedRuntimePosture(
 
 /**
  * The posture shared by the bootstrap setup section and the header's "Coding runtime" chip
- * (workbench audit, 2026-09-03) so the two can never disagree. While a read is in flight the LAST
- * resolved posture stands — every mode switch re-reads readiness, and a known-unavailable runtime
- * must not flash "verified" for the duration of that read; before the first read resolves the
- * posture is "verified" so neither note flashes during the initial load.
+ * (workbench audit, 2026-09-03) so the two can never disagree. While a RE-read is in flight the
+ * last RESOLVED posture stands — every mode switch re-reads readiness, and a known-unavailable
+ * runtime must not flash "verified" for the duration of that read.
+ *
+ * Before anything has resolved the posture is "pending", never "verified": seeding the last-resolved
+ * reference with "verified" made the chip render "Platform-verified — signed and notarized runtime"
+ * on first open and on every remount, and stand there indefinitely on a slow or hanging readiness
+ * read — the strongest trust claim in the window, shown for the wrong reason, on an evaluation
+ * install included (#3381 review).
  */
 function useRuntimeAssurancePosture(
   state: CodingWorkbenchRuntimeState,
 ): CodingWorkbenchSetupRuntimePosture {
-  const lastResolvedRef = useRef<CodingWorkbenchSetupRuntimePosture>("verified");
+  const lastResolvedRef = useRef<CodingWorkbenchSetupRuntimePosture | null>(null);
   const resolved = resolvedRuntimePosture(state.runtime);
   useEffect(() => {
     if (resolved !== null) lastResolvedRef.current = resolved;
   }, [resolved]);
-  return resolved ?? lastResolvedRef.current;
+  return resolved ?? lastResolvedRef.current ?? "pending";
 }
 
 const RUNTIME_ASSURANCE_MESSAGE_KEYS: Record<
   CodingWorkbenchSetupRuntimePosture,
   CodingWorkbenchMessageKey
 > = {
+  pending: "codingWorkbench.readiness.runtime.pending",
   verified: "codingWorkbench.readiness.runtime.verified",
   evaluation: "codingWorkbench.readiness.runtime.evaluation",
   unavailable: "codingWorkbench.readiness.runtime.unavailable",
 };
+
+// The chip's warning tone marks a posture the operator has to act on. "pending" is neutral — it
+// states that the check is still running, which is neither an assurance nor a problem — and
+// "verified" is neutral because it is the good outcome.
+const NEUTRAL_RUNTIME_ASSURANCE_POSTURES: ReadonlySet<CodingWorkbenchSetupRuntimePosture> = new Set(
+  ["pending", "verified"],
+);
 
 function latestChangesSignal(events: readonly CodingWorkbenchRuntimeSseEvent[]): string | null {
   for (let index = events.length - 1; index >= 0; index -= 1) {
@@ -719,7 +732,7 @@ function RuntimeAssuranceContextItem({
     <span
       className={styles.contextItem}
       title={value}
-      {...(posture === "verified" ? {} : { "data-tone": "warning" })}
+      {...(NEUTRAL_RUNTIME_ASSURANCE_POSTURES.has(posture) ? {} : { "data-tone": "warning" })}
     >
       <span className={styles.contextLabel}>{t("codingWorkbench.readiness.runtime.label")}</span>
       <span className={styles.contextValue}>{value}</span>
@@ -1027,6 +1040,50 @@ const RESEARCH_DESTINATION_MESSAGE_KEYS = {
   retry: "codingWorkbench.approval.research.retry",
 } as const;
 
+// The reviewable facts of a changeset the operator is deciding about: the counts, the file list,
+// and the honest note when the list is truncated. Extracted from `ApprovalChangedFiles` so that
+// function stays inside the 50-line budget (AGENTS.md §6) — behaviour unchanged, only moved.
+function ApprovalReviewBody({
+  review,
+  t,
+}: {
+  readonly review: NonNullable<UseCodingWorkbenchApprovalReviewResult["review"]>;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <>
+      <dl className={styles.approvalFacts}>
+        <ApprovalFact
+          label={t("codingWorkbench.approval.changes.files")}
+          value={String(review.fileCount)}
+        />
+        <ApprovalFact
+          label={t("codingWorkbench.approval.changes.lines")}
+          value={t("codingWorkbench.approval.changes.lineCounts", {
+            added: review.addedLines,
+            deleted: review.deletedLines,
+          })}
+        />
+      </dl>
+      <ul className={styles.approvalChangedFiles}>
+        {review.paths.map((path) => (
+          <li className={styles.approvalChangedFile} key={path}>
+            {path}
+          </li>
+        ))}
+      </ul>
+      {review.pathsTruncated ? (
+        <p className={styles.approvalResearchDetail}>
+          {t("codingWorkbench.approval.changes.truncated", {
+            shown: review.paths.length,
+            total: review.fileCount,
+          })}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
 function ApprovalChangedFiles({
   state,
   t,
@@ -1050,36 +1107,7 @@ function ApprovalChangedFiles({
           keys={APPROVAL_CHANGES_MESSAGE_KEYS}
         />
       ) : (
-        <>
-          <dl className={styles.approvalFacts}>
-            <ApprovalFact
-              label={t("codingWorkbench.approval.changes.files")}
-              value={String(review.fileCount)}
-            />
-            <ApprovalFact
-              label={t("codingWorkbench.approval.changes.lines")}
-              value={t("codingWorkbench.approval.changes.lineCounts", {
-                added: review.addedLines,
-                deleted: review.deletedLines,
-              })}
-            />
-          </dl>
-          <ul className={styles.approvalChangedFiles}>
-            {review.paths.map((path) => (
-              <li className={styles.approvalChangedFile} key={path}>
-                {path}
-              </li>
-            ))}
-          </ul>
-          {review.pathsTruncated ? (
-            <p className={styles.approvalResearchDetail}>
-              {t("codingWorkbench.approval.changes.truncated", {
-                shown: review.paths.length,
-                total: review.fileCount,
-              })}
-            </p>
-          ) : null}
-        </>
+        <ApprovalReviewBody review={review} t={t} />
       )}
     </fieldset>
   );

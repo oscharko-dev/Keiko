@@ -27,10 +27,7 @@ import styles from "./CodingWorkbenchWindow.module.css";
 
 interface ModelRuntimeStatusProps {
   readonly state: CodingWorkbenchRuntimeState;
-  readonly actions: Pick<
-    CodingWorkbenchRuntimeActions,
-    "setRuntimePreference" | "prepareCodexSetup" | "refreshProfile" | "refreshSource"
-  >;
+  readonly actions: Pick<CodingWorkbenchRuntimeActions, "setRuntimePreference" | "refreshSource">;
   readonly locked: boolean;
 }
 
@@ -67,23 +64,18 @@ export function ModelRuntimeStatus({ state, actions, locked }: ModelRuntimeStatu
         />
       </div>
       <SourceTruth state={state} onRetry={actions.refreshSource} />
-      {selected === "codex-subscription" ? (
-        <AuthTruth
-          state={state}
-          onRetry={actions.refreshProfile}
-          onPrepare={actions.prepareCodexSetup}
-        />
-      ) : null}
     </section>
   );
 }
 
-// The sign-in surface for the Codex subscription source, mounted by the window while that source
-// is selected and its authentication is not `connected`. The composer's source select can choose
-// the subscription, but until this card existed nothing rendered `AuthTruth`/`CodexSetup` any more
-// (`ModelRuntimeStatus` had lost its mount): an operator with a missing, expired, revoked or
-// failed login saw Start stay disabled with no explanation and no way to authenticate (audit
-// finding, 2026-09-03). The card renders nothing for the managed gateway and once connected.
+// The sign-in surface for the Codex subscription source, and the ONLY renderer of
+// `AuthTruth`/`CodexSetup`: the window mounts this card while the subscription source is selected
+// and its authentication is not `connected`. `ModelRuntimeStatus` used to render `AuthTruth` too,
+// which was dead production code — the window mounts this card, not that panel — so a review of
+// #3381 removed the duplicate branch and the auth/setup tests now drive the mounted card.
+// An operator with a missing, expired, revoked or failed login used to see Start stay disabled with
+// no explanation and no way to authenticate (audit finding, 2026-09-03). The card renders nothing
+// for the managed gateway and once connected.
 export function CodexSubscriptionAuthCard({
   state,
   actions,

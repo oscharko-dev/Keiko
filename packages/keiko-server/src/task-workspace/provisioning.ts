@@ -29,6 +29,8 @@ import type {
 import {
   isTaskWorkspaceDriftMarker,
   planWorkspaceRecoveryHints,
+  reconciliationHealth,
+  reconciliationStatusFromInstance,
   TASK_WORKSPACE_SCHEMA_VERSION,
   validateTaskWorkspaceTransition,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
@@ -673,8 +675,7 @@ function resumeExisting(
   ensureManagedWorkspaceIdentity(ctx, existing, true);
   const refreshed = ctx.deps.store.upsert({
     ...existing,
-    ...driftAfterLiveProof(existing, false),
-    health: "healthy",
+    ...driftAfterLiveProof(existing, existing.lifecycleState, false),
     lastVerifiedAt: isoFrom(nowMs),
     updatedAt: isoFrom(nowMs),
   });
@@ -958,23 +959,41 @@ function assertActivatable(
 }
 
 // The drift bookkeeping a passed live proof persists: every marker the proofs have just refuted is
-// dropped and the hints are re-planned from what remains, so a healthy row never advertises an
-// identity or path finding its own proof disproved (and the read-only report, which derives its
-// status from the persisted markers, cannot report a healthy active row as stale). Shared by the
-// activation and the idempotent-resume path: the two perform the same proof and the same
-// "healthy" write, and fixing one without the other left the resume path persisting a stale
-// `gitdir-mismatch` next to `health: "healthy"` (audit finding, 2026-09-03). Only the caller that
-// rewrites the lock field may also drop `lock-stale`: a marker is dropped by the write that
+// dropped, the hints are re-planned from what remains, and `health` is DERIVED from what remains, so
+// a healthy row never advertises an identity or path finding its own proof disproved (and the
+// read-only report, which derives its status from the persisted markers, cannot report a healthy
+// active row as stale). Shared by the activation and the idempotent-resume path: the two perform the
+// same proof and the same write, and fixing one without the other left the resume path persisting a
+// stale `gitdir-mismatch` next to `health: "healthy"` (audit finding, 2026-09-03). Only the caller
+// that rewrites the lock field may also drop `lock-stale`: a marker is dropped by the write that
 // refutes it, never by one that leaves the lock as it found it.
+//
+// The proof refutes the identity and path findings, not the operational ones — a moved HEAD, a
+// deleted branch, a dirty tree survive it — so a flat `health: "healthy"` stated the opposite of the
+// markers it was written next to. The health report copies the persisted value onto its live
+// classification and the workbench renders both, so an active workspace read as healthy WHILE
+// showing drift, and the UI's own "a drifted worktree stays visible" branch (which keys on the
+// persisted health telling the truth) instead threw a restore-verification error (PR #3381 review).
+// The mapping is the contract's, not a second one: the same status the read-only report will
+// reconstruct from these markers, through the same `reconciliationHealth` reconciliation persists.
 function driftAfterLiveProof(
   instance: WorkspaceInstance,
+  lifecycleState: TaskWorkspaceLifecycleState,
   lockRewritten: boolean,
-): Pick<WorkspaceInstance, "driftMarkers" | "recoveryHints"> {
+): Pick<WorkspaceInstance, "driftMarkers" | "recoveryHints" | "health"> {
   const driftMarkers = instance.driftMarkers.filter(
     (marker) =>
       !MARKERS_REPROVEN_BY_LIVE_PROOF.has(marker) && !(lockRewritten && marker === "lock-stale"),
   );
-  return { driftMarkers, recoveryHints: planWorkspaceRecoveryHints(driftMarkers) };
+  return {
+    driftMarkers,
+    recoveryHints: planWorkspaceRecoveryHints(driftMarkers),
+    // `health: "healthy"` as the input keeps the `locked-out` short-circuit out of this derivation:
+    // the live proof has just passed and the lock is the caller's business, not a drift fact.
+    health: reconciliationHealth(
+      reconciliationStatusFromInstance({ lifecycleState, health: "healthy", driftMarkers }),
+    ),
+  };
 }
 
 // The gated activation critical section, run under the `ws:<workspaceId>` mutex key (#449, ADR-0093 D1)
@@ -1026,8 +1045,7 @@ function activateLocked(
   const lock = request.acquireLock ? makeLock(ctx, request.requestedBy, "activation", nowMs) : null;
   const persisted = ctx.deps.store.upsert({
     ...next,
-    ...driftAfterLiveProof(next, true),
-    health: "healthy",
+    ...driftAfterLiveProof(next, next.lifecycleState, true),
     lock,
     lastVerifiedAt: isoFrom(nowMs),
     updatedAt: isoFrom(nowMs),

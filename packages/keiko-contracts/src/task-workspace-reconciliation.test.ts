@@ -104,25 +104,17 @@ describe("classifyWorkspaceReconciliation precedence", () => {
     }
   });
 
-  // A cleanup-pending tree that is present but no longer proves its identity can never pass the
+  // A cleanup-pending tree whose pointer is ABSENT or proves a DIFFERENT worktree is refused by the
   // governed removal's ownership gate; reporting it settled left the row with no exit — no repair
-  // applies to a healthy status, the terminal branch refuses re-provisioning, and the orphan sweep
-  // skips a directory that still has a record (audit finding, 2026-09-03).
-  it("classifies a present but unproven cleanup-pending worktree as stale, never as settled", () => {
+  // applies to a healthy status, not even the universal `abandon-and-cleanup`, the terminal branch
+  // refuses re-provisioning, and the orphan sweep skips a directory that still has a record (audit
+  // finding, 2026-09-03).
+  it("classifies a present but disproven cleanup-pending worktree as stale, never as settled", () => {
     expect(
       classifyWorkspaceReconciliation(
         healthyFacts({ lifecycleState: "cleanup-pending", gitdirIdentityMatches: false }),
       ),
     ).toMatchObject({ status: "stale-pointer", driftMarkers: ["gitdir-mismatch"] });
-    expect(
-      classifyWorkspaceReconciliation(
-        healthyFacts({
-          lifecycleState: "cleanup-pending",
-          gitdirIdentityMatches: false,
-          gitdirIdentitySchemaRetired: true,
-        }),
-      ),
-    ).toMatchObject({ status: "stale-pointer", driftMarkers: ["identity-schema-retired"] });
     expect(
       classifyWorkspaceReconciliation(
         healthyFacts({
@@ -141,6 +133,56 @@ describe("classifyWorkspaceReconciliation precedence", () => {
       expect(
         classifyWorkspaceReconciliation(
           healthyFacts({ lifecycleState, gitdirIdentityMatches: false }),
+        ).status,
+      ).toBe("healthy");
+    }
+  });
+
+  // A retired-schema or unsupported-volume cleanup-pending row is UNPROVEN, not disproven, and the
+  // governed removal admits exactly that pair (its ownership probe runs `unprovenNotDisproven`), so
+  // unsettling it CLOSES the only exit: `request-cleanup` refuses a `recovery-required` row as not
+  // cleanup-eligible and `complete-cleanup` requires `cleanup-pending`, while an unsupported volume
+  // has no repair that can ever change the verdict (PR #3381 review P2).
+  it("keeps an unproven-but-not-disproven cleanup-pending row removable", () => {
+    for (const identity of [
+      { gitdirIdentitySchemaRetired: true },
+      { gitdirIdentityUnsupported: true },
+    ] as const) {
+      const outcome = classifyWorkspaceReconciliation(
+        healthyFacts({
+          lifecycleState: "cleanup-pending",
+          gitdirIdentityMatches: false,
+          ...identity,
+        }),
+      );
+      expect(outcome).toMatchObject({ status: "healthy", driftMarkers: [] });
+      expect(reconciliationRequiresRecoveryFlag(outcome.status, "cleanup-pending")).toBe(false);
+    }
+    // The same pair on an OPERATIONAL row still reclassifies — the exemption is scoped to the
+    // lifecycle whose exit it protects, never to the identity verdict itself.
+    expect(
+      classifyWorkspaceReconciliation(
+        healthyFacts({
+          lifecycleState: "active",
+          gitdirIdentityMatches: false,
+          gitdirIdentitySchemaRetired: true,
+        }),
+      ),
+    ).toMatchObject({ status: "stale-pointer", driftMarkers: ["identity-schema-retired"] });
+  });
+
+  // Operational drift on a present, proven cleanup-pending tree keeps both cleanup verbs: the
+  // removal succeeds for a clean tree and refuses a dirty one with the actionable `worktree-dirty`,
+  // and the health classifier resolves the row by disposition rather than by this status.
+  it("leaves a proven cleanup-pending tree settled through operational drift", () => {
+    for (const drift of [
+      { taskBranchPresent: false },
+      { headMatches: false },
+      { uncommittedChanges: true },
+    ] as const) {
+      expect(
+        classifyWorkspaceReconciliation(
+          healthyFacts({ lifecycleState: "cleanup-pending", ...drift }),
         ).status,
       ).toBe("healthy");
     }
@@ -341,7 +383,7 @@ describe("status/health/recovery-flag derivations", () => {
     }
   });
 
-  it("reconstructs a cleanup-pending row marked with an identity finding as stale", () => {
+  it("reconstructs a cleanup-pending row marked with a disproven pointer as stale", () => {
     expect(
       reconciliationStatusFromInstance({
         lifecycleState: "cleanup-pending",
@@ -363,6 +405,78 @@ describe("status/health/recovery-flag derivations", () => {
         driftMarkers: ["gitdir-mismatch"],
       }),
     ).toBe("healthy");
+  });
+
+  // In lockstep with cleanupPendingDrift: the mirror may not unsettle a row the live classifier
+  // leaves removable, or a GET would offer a repair the next live pass withdraws (PR #3381 review).
+  it("mirrors the cleanup-pending exemption for a retained retired/unsupported marker", () => {
+    for (const marker of ["identity-schema-retired", "identity-unsupported"] as const) {
+      expect(
+        reconciliationStatusFromInstance({
+          lifecycleState: "cleanup-pending",
+          health: "drifted",
+          driftMarkers: [marker],
+        }),
+      ).toBe("healthy");
+      // The same retained marker on an operational row is still stale.
+      expect(
+        reconciliationStatusFromInstance({
+          lifecycleState: "active",
+          health: "drifted",
+          driftMarkers: [marker],
+        }),
+      ).toBe("stale-pointer");
+    }
+  });
+
+  // A row a pass could not verify carries health `unknown`. resolveActiveRestoration reads THIS
+  // status, so reporting it `healthy` let the workbench claim an unverified binding as verified
+  // (PR #3381 review P2). Settled and partial rows keep their disposition: `abandoned` with health
+  // `unknown` is what the abandon repair persists, not a failed verification.
+  it("never reports an unverified carried-forward row as healthy", () => {
+    for (const lifecycleState of ["active", "paused", "handoff-ready"] as const) {
+      expect(
+        reconciliationStatusFromInstance({ lifecycleState, health: "unknown", driftMarkers: [] }),
+      ).toBe("recovery-required");
+      expect(
+        reconciliationStatusFromInstance({
+          lifecycleState,
+          health: "unknown",
+          driftMarkers: ["head-moved"],
+        }),
+      ).toBe("recovery-required");
+    }
+    expect(
+      reconciliationStatusFromInstance({
+        lifecycleState: "abandoned",
+        health: "unknown",
+        driftMarkers: [],
+      }),
+    ).toBe("healthy");
+    expect(
+      reconciliationStatusFromInstance({
+        lifecycleState: "provisioning",
+        health: "unknown",
+        driftMarkers: [],
+      }),
+    ).toBe("partially-created");
+  });
+
+  // The consequence the finding named: an unverified row must not restore the active pointer.
+  it("refuses to restore the active pointer onto an unverified row", () => {
+    const unverified = deriveReconciliationEntry({
+      workspaceId: "ws_a",
+      taskId: "t",
+      lifecycleState: "active",
+      health: "unknown",
+      driftMarkers: [],
+      recoveryHints: [],
+    });
+    expect(unverified.status).not.toBe("healthy");
+    expect(resolveActiveRestoration("ws_a", [unverified])).toEqual({
+      kind: "recovery-required",
+      workspaceId: "ws_a",
+    });
   });
 
   it("reconstructs the status from persisted content-free fields", () => {

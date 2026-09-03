@@ -15,7 +15,10 @@ import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 
 import type { CommandRunnerManager } from "../command-runner.js";
-import type { VerificationRunnerManager } from "../editor/verificationRunner.js";
+import type {
+  VerificationRunInput,
+  VerificationRunnerManager,
+} from "../editor/verificationRunner.js";
 import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
 import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -283,20 +286,27 @@ type VerificationPortResult =
 // step) is not a red test run. Both used to reach the model as the same bare "failed" and left no
 // log line, so the agent re-ran the verifier instead of reporting the blocker (workbench end-to-end
 // run, 2026-09-03). The runner's closed error codes are forwarded and logged; a run that executed
-// and did not pass says so with its own code.
+// and did not pass says so with its own code. The two refusals BEFORE the runner is even called —
+// authority or managed-workspace liveness already gone, and a verifier this server does not
+// implement — carry their own codes for the same reason (cursor review, PR #3381): the model cannot
+// tell "do not retry, report this" from "try again" out of a bare status.
 function buildVerificationRunner(
   input: ProductionManagedWorktreeToolInput,
 ): CodingToolGovernedPorts["verificationRunner"] {
   let verificationSequence = 0;
   return {
     execute: async (request, signal, guard): Promise<VerificationPortResult> => {
-      if (!guard.check() || !live(input)) return { status: "failed" };
+      if (!guard.check() || !live(input)) {
+        return verificationPortRefusal(input, "verification-authority-revoked");
+      }
       const kind = verificationKind(request.verifierId);
-      if (kind === undefined) return { status: "failed" };
+      if (kind === undefined) {
+        return verificationPortRefusal(input, "verification-verifier-unsupported");
+      }
       let report: VerificationReport;
       try {
         report = await input.verificationRunner.runToReport(
-          { projectId: input.workspaceRoot, kinds: [kind], requestId: request.actionId },
+          verificationRunInput(input, request.actionId, kind),
           signal ?? new AbortController().signal,
         );
       } catch (error) {
@@ -304,10 +314,67 @@ function buildVerificationRunner(
       }
       verificationSequence += 1;
       publishVerification(input, verificationSequence, report);
-      if (report.overallStatus === "passed" && live(input)) return { status: "completed" };
-      return { status: "failed", reasonCode: "VERIFICATION_FAILED" };
+      if (report.overallStatus !== "passed") {
+        return { status: "failed", reasonCode: "VERIFICATION_FAILED" };
+      }
+      // The run passed and only the authority behind it lapsed. Calling that VERIFICATION_FAILED
+      // would send the model back to the code over a green verification, so the revocation keeps
+      // its own code here too.
+      return live(input)
+        ? { status: "completed" }
+        : verificationPortRefusal(input, "verification-authority-revoked");
     },
   };
+}
+
+// The runner keys its run-started/step/terminal evidence and its own "execution failed
+// unexpectedly" diagnostic on `input.correlationId ?? <fresh uuid>`, so omitting the field left the
+// two halves of one verification unjoinable: this file logged under the run id while the runner
+// logged under a UUID nothing else carried, and `keiko support analyze --correlation-id <runId>`
+// showed only half the operation (P2, PR #3381 review). The human route threads its request
+// correlation the same way (verificationRoutes.ts).
+function verificationRunInput(
+  input: ProductionManagedWorktreeToolInput,
+  requestId: string,
+  kind: VerificationKind,
+): VerificationRunInput {
+  const correlationId = verificationCorrelationId(input);
+  return {
+    projectId: input.workspaceRoot,
+    kinds: [kind],
+    requestId,
+    ...(correlationId === undefined ? {} : { correlationId }),
+  };
+}
+
+// The run id is the timeline every verification line belongs to; the tool action id carries the
+// sidecar's `session:call` shape, which is not a correlation id.
+function verificationCorrelationId(input: ProductionManagedWorktreeToolInput): string | undefined {
+  const runId = input.authorityRef.runId;
+  return isValidCorrelationId(runId) ? runId : undefined;
+}
+
+function verificationPortRefusal(
+  input: ProductionManagedWorktreeToolInput,
+  reasonCode: "verification-authority-revoked" | "verification-verifier-unsupported",
+): VerificationPortResult {
+  emitVerificationDiagnostic(input, reasonCode, "verification-refused");
+  return { status: "failed", reasonCode };
+}
+
+function emitVerificationDiagnostic(
+  input: ProductionManagedWorktreeToolInput,
+  errorClass: string,
+  message: "verification-refused" | "verification-failed",
+): void {
+  emitServerDiagnostic(input.diagnostics, {
+    correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.verification",
+    source: "production-managed-worktree-tools.verification",
+    errorClass,
+    message,
+  });
 }
 
 function verificationRefused(
@@ -315,17 +382,11 @@ function verificationRefused(
   error: unknown,
 ): VerificationPortResult {
   const code = error instanceof VerificationRunnerError ? error.code : undefined;
-  const runId = input.authorityRef.runId;
-  emitServerDiagnostic(input.diagnostics, {
-    // The run id is the timeline this refusal belongs to; the tool action id carries the sidecar's
-    // `session:call` shape, which is not a correlation id.
-    correlationId: isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID,
-    timestamp: new Date().toISOString(),
-    operation: "coding-runtime.verification",
-    source: "production-managed-worktree-tools.verification",
-    errorClass: code ?? (error instanceof Error ? error.name : "unknown"),
-    message: code === undefined ? "verification-failed" : "verification-refused",
-  });
+  emitVerificationDiagnostic(
+    input,
+    code ?? (error instanceof Error ? error.name : "unknown"),
+    code === undefined ? "verification-failed" : "verification-refused",
+  );
   return code === undefined ? { status: "failed" } : { status: "failed", reasonCode: code };
 }
 

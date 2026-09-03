@@ -18,6 +18,7 @@ import {
   openSync,
   readdirSync,
   writeFileSync,
+  type Dirent,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { PathEscapeError, resolveWithinWorkspace } from "@oscharko-dev/keiko-workspace";
@@ -161,9 +162,25 @@ export function isManagedTargetContained(managedRoot: string, target: string): b
 // repositories with a persisted row and never surfaced a leftover directory without one). A missing
 // root lists nothing; a root that exists but cannot be read throws, because neither caller may
 // claim a complete inventory it could not take.
+//
+// The absence is decided by `readdirSync` itself, never by a preceding `existsSync`. That precheck
+// answers `false` for a root whose PARENT denies traversal — `existsSync` swallows the `EACCES` its
+// `stat` raised — so an unreadable root produced an empty listing that both callers then read as a
+// complete "no repositories exist" inventory (PR #3381 review). `ENOENT`, the one code that means
+// "there is no such directory", lists nothing; every other errno propagates, `ENOTDIR` included —
+// a managed root that is a FILE exists and cannot be read, which is the case the pin above covers.
 export function listManagedRepositoryIds(managedRoot: string): readonly string[] {
-  if (!existsSync(managedRoot)) return [];
-  return readdirSync(managedRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name);
+  let entries: readonly Dirent[];
+  try {
+    entries = readdirSync(managedRoot, { withFileTypes: true });
+  } catch (error) {
+    if (isMissingDirectory(error)) return [];
+    throw error;
+  }
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+}
+
+function isMissingDirectory(error: unknown): boolean {
+  if (error === null || typeof error !== "object" || !("code" in error)) return false;
+  return (error as { readonly code?: unknown }).code === "ENOENT";
 }

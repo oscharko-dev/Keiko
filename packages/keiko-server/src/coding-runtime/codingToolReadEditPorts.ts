@@ -392,6 +392,12 @@ interface PreparedEdit {
   readonly workspaceRoot: string | undefined;
 }
 
+// EVERY failed exit here carries a closed reason code and one `edit-refused` line. The two that did
+// not — the prepare stage refusing (malformed changeset, revoked mutation guard, cross-wired
+// producer binding, unresolvable editor context) and the post-session-bind workspace-access recheck
+// — returned a bare `{ status: "failed" }` with nothing in the activity log, which is exactly the
+// workbench failure mode this file's diagnostic was added for: the model saw a retryable-looking
+// failure and re-issued the edit while the log stayed empty (cursor review, PR #3381).
 async function executeEdit(
   deps: CodingToolReadEditPortDeps,
   request: EditorChangesetRequest,
@@ -399,7 +405,10 @@ async function executeEdit(
   mutationGuard: CodingToolMutationGuard,
 ): Promise<EditOutcome> {
   const prepared = prepareEdit(deps, request, signal, mutationGuard);
-  if (prepared === undefined) return { status: "failed" };
+  if (prepared === undefined) {
+    return editRefused(deps, editContextCorrelationId(deps), "EDIT_PREPARE_FAILED");
+  }
+  const correlationId = editCorrelationId(prepared.action);
   try {
     const action = await bindLiveEditorSession(
       deps.editorAgentClient,
@@ -409,24 +418,32 @@ async function executeEdit(
     );
     if (action === undefined) {
       discardMutationLease(deps, prepared.leaseRequest);
-      return { status: "failed", reasonCode: "NO_ACTIVE_SESSION" };
+      return editRefused(deps, correlationId, "NO_ACTIVE_SESSION");
     }
     if (!hasLiveWorkspaceAccess(deps)) {
       discardMutationLease(deps, prepared.leaseRequest);
-      return { status: "failed" };
+      return editRefused(deps, correlationId, "WORKSPACE_ACCESS_LOST");
     }
     const result = await deps.editorAgentClient.action(action, prepared.signal);
-    const completed = result.ok && editorStatusCompleted(result.value.result.status);
-    if (completed) return { status: "completed" };
+    if (result.ok && editorStatusCompleted(result.value.result.status)) {
+      return { status: "completed" };
+    }
     discardMutationLease(deps, prepared.leaseRequest);
-    const reasonCode = editFailureReasonCode(result);
-    emitEditRefusedDiagnostic(deps.diagnostics, editCorrelationId(prepared.action), reasonCode);
-    return { status: "failed", reasonCode };
+    return editRefused(deps, correlationId, editFailureReasonCode(result));
   } catch (error) {
     discardMutationLease(deps, prepared.leaseRequest);
-    emitEditFailureDiagnostic(deps.diagnostics, editCorrelationId(prepared.action), error);
+    emitEditFailureDiagnostic(deps.diagnostics, correlationId, error);
     return { status: "failed", reasonCode: "EDIT_TRANSPORT_ERROR" };
   }
+}
+
+function editRefused(
+  deps: CodingToolReadEditPortDeps,
+  correlationId: string,
+  reasonCode: string | undefined,
+): EditOutcome {
+  emitEditRefusedDiagnostic(deps.diagnostics, correlationId, reasonCode);
+  return { status: "failed", reasonCode };
 }
 
 // The closed vocabulary a rejected edit can name (EditorAgentConflictCode/EditorAgentFailureCode
@@ -446,6 +463,14 @@ function editFailureReasonCode(
 // "invalid-correlation-id" on every edit diagnostic before this, end-to-end run 2026-09-03).
 function editCorrelationId(action: EditorAgentAction): string {
   const runId = action.authorityRef?.runId;
+  return runId !== undefined && isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID;
+}
+
+// The prepare stage can refuse before any action exists, so that refusal takes its correlation from
+// the run's own editor context instead of an action that was never built. Same run id, same
+// timeline: a prepare refusal and an editor-route refusal for one run join on the one key.
+function editContextCorrelationId(deps: CodingToolReadEditPortDeps): string {
+  const runId = resolveEditorContext(deps)?.authorityRef.runId;
   return runId !== undefined && isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID;
 }
 

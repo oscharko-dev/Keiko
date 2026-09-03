@@ -34,6 +34,10 @@ export const MAX_DIFF_FILES = GIT_EDITOR_DIFF_MAX_FILES;
 
 // --- helpers ----------------------------------------------------------------
 
+// The placeholder path for a file whose record opens before its name is known: a hunk with no file
+// header at all, or a `--- /dev/null` whose `+++ b/<path>` has not arrived yet.
+const UNKNOWN_PATH = "(unknown)";
+
 function stripGitPrefix(p: string): string {
   if (p.startsWith("a/") || p.startsWith("b/")) return p.slice(2);
   return p;
@@ -246,20 +250,29 @@ function recordHunkLine(state: ParserState, hunk: MutableHunk, dl: DiffLine): vo
 function handleFileHeaderMinusLine(line: string, state: ParserState): boolean {
   if (!line.startsWith("--- ")) return false;
   const rest = line.slice(4);
-  if (rest !== "/dev/null" && (state.current === null || state.current.hunks.length > 0)) {
-    // No open file, or a file whose hunks are complete: this header opens the next file.
+  const addsFile = rest === "/dev/null";
+  // No open file, or a file whose hunks are COMPLETE: this header opens the next file — and that
+  // holds for `--- /dev/null` exactly as it does for `--- a/<path>`. Two added files in a
+  // header-only diff carry no `diff --git` line between them, so treating the second
+  // `--- /dev/null` as a status update on the finished first file let the following
+  // `+++ b/<second>` overwrite its path: the first file vanished from change review and both
+  // hunks were reported under the second (#3381 review).
+  if (state.current === null || state.current.hunks.length > 0) {
     flushFile(state);
-    const path = stripGitPrefix(rest);
-    state.current = mutableFile(path);
-  } else if (rest !== "/dev/null" && state.current !== null) {
-    // Update oldPath when we see the --- line after diff --git
-    const oldPath = stripGitPrefix(rest);
-    if (oldPath !== state.current.path) {
-      state.current.oldPath = oldPath;
-      state.current.status = "renamed";
-    }
-  } else if (rest === "/dev/null" && state.current !== null) {
+    const next = mutableFile(addsFile ? UNKNOWN_PATH : stripGitPrefix(rest));
+    if (addsFile) next.status = "added";
+    state.current = next;
+    return true;
+  }
+  if (addsFile) {
     state.current.status = "added";
+    return true;
+  }
+  // Update oldPath when we see the --- line after diff --git
+  const oldPath = stripGitPrefix(rest);
+  if (oldPath !== state.current.path) {
+    state.current.oldPath = oldPath;
+    state.current.status = "renamed";
   }
   return true;
 }
@@ -283,7 +296,7 @@ function handleFileHeaderPlusLine(line: string, state: ParserState): boolean {
 function handleHunkHeaderLine(line: string, state: ParserState): boolean {
   if (!line.startsWith("@@ ")) return false;
   // Hunk without a file header — create an anonymous file entry
-  state.current ??= mutableFile("(unknown)");
+  state.current ??= mutableFile(UNKNOWN_PATH);
   flushHunk(state);
   const pos = parseHunkHeader(line);
   const oldStart = pos?.oldStart ?? 1;

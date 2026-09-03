@@ -151,10 +151,13 @@ interface FolderSelection {
 // The one real touch point between folder selection and Task Workspace lifecycle (see the header
 // comment's meaning #2): picking a different base folder here must not leave a Task Workspace
 // override bound to the folder the user is leaving, so an active override is cleared explicitly
-// before the new folder is applied. Resolves true when nothing had to be cleared or the clear
-// settled, false when the server refused it: the context then carries the redacted reason, and the
-// new folder must NOT be applied on top of an override that is still bound (audit finding,
-// 2026-09-03 — the context's mutations never reject, so an `await` alone observed nothing).
+// before the new folder is applied. Resolves true when nothing had to be cleared or the server
+// applied the clear, false ONLY when the server refused it: the context then carries the redacted
+// reason, and the new folder must NOT be applied on top of an override that is still bound (audit
+// finding, 2026-09-03 — the context's mutations never reject, so an `await` alone observed
+// nothing). A clear the server applied but a newer mutation or refresh superseded resolves true
+// and the folder change continues, because the override IS released; `mutate` in
+// hooks/useActiveWorkspaceState.ts owns that distinction (#3381 review).
 async function clearTaskOverride(api: ActiveWorkspaceApi): Promise<boolean> {
   if (api.activeInstance === null) return true;
   return api.clearActive();

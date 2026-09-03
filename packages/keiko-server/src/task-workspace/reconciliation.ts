@@ -536,6 +536,13 @@ async function reconcileImpl(
 
 // The pass reports a row it could not verify as itself with health `unknown`: nothing is written,
 // the last classification stands, and the report says so honestly.
+//
+// `unknown` is the whole signal, and the contract reads it: `reconciliationStatusFromInstance` maps
+// it to `recovery-required`, so the entry cannot come back `healthy` and `resolveActiveRestoration`
+// cannot report the active pointer as `restored` onto it. Before that mapping existed the report
+// answered `healthy` for an unverifiable row — an adapter failure used to abort the whole pass, so
+// the UI's restore-verification failed closed; isolating the failure per repository turned that into
+// a claimed-verified binding against a worktree whose repository was unreachable (PR #3381 review).
 function carriedForward(instance: WorkspaceInstance): WorkspaceInstance {
   return { ...instance, health: "unknown" };
 }

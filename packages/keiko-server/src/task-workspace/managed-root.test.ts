@@ -166,4 +166,29 @@ describe("listManagedRepositoryIds", () => {
     writeFileSync(notADirectory, "");
     expect(() => listManagedRepositoryIds(notADirectory)).toThrow();
   });
+
+  // The same rule for the case an `existsSync` precheck could not see: a root whose PARENT denies
+  // traversal. `existsSync` swallows the `EACCES` its own stat raised and answers `false`, so the
+  // listing returned `[]` and both global scans read that as "no repositories exist" (PR #3381
+  // review). Only `readdirSync`'s own errno may decide, and `EACCES` is not an absence.
+  // Skipped as root, where the permission bits are not enforced at all.
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "throws instead of listing nothing when the managed root's parent denies traversal",
+    () => {
+      const parent = join(base, "denied-parent");
+      const denied = join(parent, "task-workspaces");
+      mkdirSync(denied, { recursive: true });
+      chmodSync(parent, 0o000);
+      try {
+        // The precondition the precheck got wrong, asserted so this pin cannot pass for the wrong
+        // reason: the root IS there and `existsSync` still says it is not.
+        expect(existsSync(denied)).toBe(false);
+        expect(() => listManagedRepositoryIds(denied)).toThrow(
+          expect.objectContaining({ code: "EACCES" }),
+        );
+      } finally {
+        chmodSync(parent, 0o700);
+      }
+    },
+  );
 });

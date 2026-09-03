@@ -267,8 +267,11 @@ export type ManagedGitdirIdentityOutcome =
   | { readonly kind: "identified"; readonly inspection: ManagedGitdirIdentityInspection }
   | { readonly kind: "unsupported" }
   | { readonly kind: "unproven" }
-  // The port threw (EIO, EACCES, EMFILE, a stat race). Kept apart from `unproven` so the denial that
-  // follows can carry `errorKind`, frames and cause instead of looking like a malformed pointer.
+  // The port threw for a reason that says nothing about the tree (EIO, EACCES, EMFILE, a stat race).
+  // Kept apart from `unproven` so the denial that follows can carry `errorKind`, frames and cause
+  // instead of looking like a malformed pointer. An ABSENT component is not this case: `ENOENT` /
+  // `ENOTDIR` answer the same way on every retry, so they are `unproven` (see
+  // DETERMINISTIC_ABSENCE_CODES).
   | { readonly kind: "failed"; readonly cause: unknown };
 
 /**
@@ -328,6 +331,22 @@ function creationTimeWitness(fs: WorkspaceFs): {
   };
 }
 
+// The errno values that mean a component of the identity IS NOT THERE, as opposed to could not be
+// read: no entry at the path, and a path whose ancestor is not a directory. Both are deterministic
+// verdicts about the tree — a partially removed worktree whose `.git` pointer was deleted answers
+// `ENOENT` on every retry — so they are `unproven`, never the retryable `IDENTITY_PROOF_FAILED`
+// that ADR-0088 and the operator documentation reserve for an I/O failure such as `EIO` or `EACCES`
+// (PR #3381 review P2: the bind answered a 503 "retry" forever and left the row `active`/`healthy`
+// with no Repair offer, because only the reconcile pass, which computes pointer presence itself,
+// ever classified it).
+const DETERMINISTIC_ABSENCE_CODES: ReadonlySet<string> = new Set(["ENOENT", "ENOTDIR"]);
+
+function isDeterministicAbsence(cause: unknown): boolean {
+  if (cause === null || typeof cause !== "object" || !("code" in cause)) return false;
+  const { code } = cause as { readonly code?: unknown };
+  return typeof code === "string" && DETERMINISTIC_ABSENCE_CODES.has(code);
+}
+
 /** The identity plus, when there is none, the reason an operator needs to act on the right thing. */
 export function inspectManagedGitdirIdentityOutcome(
   worktreePath: string,
@@ -344,6 +363,9 @@ export function inspectManagedGitdirIdentityOutcome(
     // the identity is unproven, and retrying will not change that (#3376 review). Only a real I/O
     // failure is `failed`.
     if (cause instanceof WorkspaceDescriptorReadError) return { kind: "unproven" };
+    // Same rule, reached through the port's raw errno: the descriptor-safe read rethrows anything
+    // that is not a symlink loop, so an absent pointer arrives here as a plain Node error.
+    if (isDeterministicAbsence(cause)) return { kind: "unproven" };
     return { kind: "failed", cause };
   }
   if (inspection !== undefined) return { kind: "identified", inspection };

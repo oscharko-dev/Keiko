@@ -390,21 +390,23 @@ function refreshFailureAlert(
   return null;
 }
 
-export function visibleAlert(
+// The standing conditions: properties of the selected source or of this installation, not a failed
+// action. They come after actionable refresh failures (one alert at a time — reporting a standing
+// condition first would swallow the recoverable error). Pairing remains in the lifecycle narration,
+// but it is not useful enough to take over the workbench as a banner.
+function standingConditionAlert(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
   setupVisible: boolean,
-  authorityError: string | null = null,
 ): string | null {
-  if (state.mutation.error) {
-    return actionFailureAlert("codingWorkbench.alert.actionFailedCode", state.mutation.error, t);
-  }
-  const refreshAlert = refreshFailureAlert(state, t);
-  if (refreshAlert !== null) return refreshAlert;
-  if (!setupVisible && authorityError !== null) return authorityError;
-  // Standing conditions come after actionable refresh failures (one alert at a time — reporting a
-  // standing condition first would swallow the recoverable error). Pairing remains in the
-  // lifecycle narration, but it is not useful enough to take over the workbench as a banner.
+  // The source's own unavailability reason and next step. It reaches a SIGHTED operator only here:
+  // the header chip renders "<label> — unavailable" with no reason, and the only other renderer of
+  // `sourceUnavailableReasonText` is the source panel, which nothing mounts — so before this branch
+  // the remedy existed for the sr-only live region alone (#3381 review). Ungated by `setupVisible`,
+  // unlike the runtime note below: the bootstrap setup card states the runtime posture itself but
+  // says nothing about the model source, so there is nothing to duplicate.
+  const sourceReason = sourceUnavailableReasonText(state.source.value, t);
+  if (sourceReason !== null) return sourceReason;
   // Last: the unqualified runtime, and only while the bootstrap setup section is off screen — it
   // states the same condition itself, and duplicating it would announce it twice to assistive
   // technology. This wording is its own: the setup copy invites binding a workspace, which is
@@ -417,4 +419,19 @@ export function visibleAlert(
     return t("codingWorkbench.alert.runtimeUnqualified");
   }
   return null;
+}
+
+export function visibleAlert(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+  setupVisible: boolean,
+  authorityError: string | null = null,
+): string | null {
+  if (state.mutation.error) {
+    return actionFailureAlert("codingWorkbench.alert.actionFailedCode", state.mutation.error, t);
+  }
+  const refreshAlert = refreshFailureAlert(state, t);
+  if (refreshAlert !== null) return refreshAlert;
+  if (!setupVisible && authorityError !== null) return authorityError;
+  return standingConditionAlert(state, t, setupVisible);
 }
