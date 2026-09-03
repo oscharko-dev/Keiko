@@ -177,8 +177,12 @@ function spawnVerifiedHelper(
   const executionCopy = verifiedHelperExecutionCopy(helperPath, expectedHelperSha256);
   try {
     const child = spawnHelper(executionCopy.path, args, nativeSpawnOptions(executionCopy.path));
-    child.onExit(executionCopy.cleanup);
-    child.onError(executionCopy.cleanup);
+    child.onExit((): void => {
+      executionCopy.cleanup();
+    });
+    child.onError((): void => {
+      executionCopy.cleanup();
+    });
     return child;
   } catch (error) {
     executionCopy.cleanup();
@@ -201,7 +205,12 @@ function verifiedHelperExecutionCopy(
   const path = join(directory, basename(helperPath));
   try {
     writeFileSync(path, bytes, { flag: "wx", mode: 0o700 });
-    return { path, cleanup: (): void => rmSync(directory, { recursive: true, force: true }) };
+    return {
+      path,
+      cleanup: (): void => {
+        rmSync(directory, { recursive: true, force: true });
+      },
+    };
   } catch (error) {
     rmSync(directory, { recursive: true, force: true });
     throw error;

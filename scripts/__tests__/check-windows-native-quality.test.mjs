@@ -288,39 +288,45 @@ describe.skipIf(!hasPwsh())("check-windows-native-quality flag derivation", () =
   // satisfied here and would keep certifying a posture the product dropped. Covered for both
   // producers: the comment-stripping logic is duplicated per derivation block, not shared, so each
   // copy needs its own proof that it actually strips rather than merely existing.
-  it("rejects a launcher flag that survives only in a comment, not in the argument list", () => {
-    const launcherSourcePath = copyLauncherWith((source) =>
-      source.replace('        "/MT",\n', '        // "/MT",\n'),
-    );
-    expect(derivationAccepts({ launcherSourcePath })).toContain("REJECTED");
-  });
-
-  it("rejects a launcher flag that survives only in a trailing line comment", () => {
-    const launcherSourcePath = copyLauncherWith((source) =>
-      source.replace('        "/MT",\n', '        "/REMOVED", // "/MT"\n'),
-    );
-    expect(derivationAccepts({ launcherSourcePath })).toContain("REJECTED");
-  });
-
-  it("rejects a setup-bootstrap flag that survives only in a comment, not in the argument list", () => {
-    const setupBootstrapSourcePath = copySetupBootstrapWith((source) =>
-      source.replace('        "/MT",\n', '        // "/MT",\n'),
-    );
-    expect(derivationAccepts({ setupBootstrapSourcePath })).toContain("REJECTED");
-  });
-
-  it("rejects a runtime-supervisor flag that survives only in a comment, not in the argument list", () => {
-    const runtimeSupervisorBuildSourcePath = copyRuntimeSupervisorBuildWith((source) =>
-      source.replace('        "/MT",\n', '        // "/MT",\n'),
-    );
-    expect(derivationAccepts({ runtimeSupervisorBuildSourcePath })).toContain("REJECTED");
-  });
-
-  it("rejects a secure-read flag that survives only in a comment, not in the argument list", () => {
-    const secureReadBuildSourcePath = copySecureReadBuildWith((source) =>
-      source.replace('    "/MT",\n', '    // "/MT",\n'),
-    );
-    expect(derivationAccepts({ secureReadBuildSourcePath })).toContain("REJECTED");
+  it.each([
+    [
+      "launcher flag that survives only in a comment, not in the argument list",
+      "launcherSourcePath",
+      copyLauncherWith,
+      '        "/MT",\n',
+      '        // "/MT",\n',
+    ],
+    [
+      "launcher flag that survives only in a trailing line comment",
+      "launcherSourcePath",
+      copyLauncherWith,
+      '        "/MT",\n',
+      '        "/REMOVED", // "/MT"\n',
+    ],
+    [
+      "setup-bootstrap flag that survives only in a comment, not in the argument list",
+      "setupBootstrapSourcePath",
+      copySetupBootstrapWith,
+      '        "/MT",\n',
+      '        // "/MT",\n',
+    ],
+    [
+      "runtime-supervisor flag that survives only in a comment, not in the argument list",
+      "runtimeSupervisorBuildSourcePath",
+      copyRuntimeSupervisorBuildWith,
+      '        "/MT",\n',
+      '        // "/MT",\n',
+    ],
+    [
+      "secure-read flag that survives only in a comment, not in the argument list",
+      "secureReadBuildSourcePath",
+      copySecureReadBuildWith,
+      '    "/MT",\n',
+      '    // "/MT",\n',
+    ],
+  ])("rejects a %s", (_description, sourcePathName, copySource, original, replacement) => {
+    const sourcePath = copySource((source) => source.replace(original, replacement));
+    expect(derivationAccepts({ [sourcePathName]: sourcePath })).toContain("REJECTED");
   });
 
   it("rejects a launcher flag hidden inside an interior block-comment line", () => {
