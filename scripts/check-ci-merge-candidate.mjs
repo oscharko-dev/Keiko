@@ -18,6 +18,9 @@ export function mergeCandidateFailures(candidate) {
   if (candidate.actualSha !== candidate.runSha) {
     failures.push("checked-out revision does not match the immutable workflow revision");
   }
+  if (candidate.isClean !== true) {
+    failures.push("candidate worktree differs from the immutable workflow revision");
+  }
   if (candidate.parents.length !== 2) {
     failures.push("candidate is not a two-parent merge commit");
   }
@@ -37,10 +40,16 @@ export function inspectCurrentCandidate(input = {}) {
     input.cwd === undefined ? { encoding: "utf8" } : { cwd: input.cwd, encoding: "utf8" };
   const actualSha = execute(executable, ["rev-parse", "HEAD"], options).trim();
   const commitLines = execute(executable, ["cat-file", "commit", "HEAD"], options).split(/\r?\n/u);
+  const worktreeStatus = execute(
+    executable,
+    ["status", "--porcelain=v1", "--untracked-files=all"],
+    options,
+  ).trim();
   const headerEnd = commitLines.indexOf("");
   const commitHeaders = headerEnd < 0 ? [] : commitLines.slice(0, headerEnd);
   return {
     actualSha,
+    isClean: worktreeStatus.length === 0,
     parents: commitHeaders
       .filter((line) => line.startsWith("parent "))
       .map((line) => line.slice("parent ".length)),

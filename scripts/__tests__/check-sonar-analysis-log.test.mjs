@@ -228,6 +228,22 @@ describe("Sonar scanner warning gate", () => {
     ]);
   });
 
+  it("does not replace an explicit zero SonarJasmin plan with the legacy UDG inventory", () => {
+    const emptyArchitecturePlan = [
+      "INFO 5525 files indexed (done)",
+      ...freshJavascriptAnalysis(4788),
+      "INFO 4844/4844 source files have been analyzed",
+      "INFO Architecture JS/TS UDG cache: 2272 source file(s) without a UDG",
+      "INFO 0 file(s) will be analysed by SonarJasmin.",
+      'INFO * Files successfully loaded: "189" out of "189"',
+      'INFO * Files successfully loaded: "2083" out of "2083"',
+    ].join("\n");
+
+    expect(fullAnalysisEvidenceFailures(emptyArchitecturePlan)).toEqual([
+      "architecture UDG receipts 2272/2272 for 0 source files do not prove a full-project graph",
+    ]);
+  });
+
   it("rejects dangerous analyzer states even when the scanner logs them as INFO", () => {
     expect(
       sonarLogFailures(

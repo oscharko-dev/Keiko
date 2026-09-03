@@ -123,6 +123,22 @@ describe("zizmor ignore anchors", () => {
     expect(failures).toEqual([expect.stringContaining("update the anchor to ci.yml:8")]);
   });
 
+  it.each(["main", "", "a".repeat(39), "a".repeat(41)])(
+    "rejects a non-immutable internal action revision %j",
+    (revision) => {
+      const weakened = CI.replace(
+        "@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa # gate-snapshot-1",
+        `@${revision} # gate-snapshot-1`,
+      );
+      const failures = anchorFailures(
+        [{ rule: "ref-version-mismatch", file: "ci.yml", line: 7 }],
+        (file) => (file === "ci.yml" ? weakened : read(file)),
+      );
+
+      expect(failures).toEqual([expect.stringContaining("pinned to a full commit SHA")]);
+    },
+  );
+
   // Reality guard: the committed configuration must satisfy its own checker.
   it("holds for the committed .github/zizmor.yml", () => {
     const config = readFileSync(join(repoRoot, ".github", "zizmor.yml"), "utf8");

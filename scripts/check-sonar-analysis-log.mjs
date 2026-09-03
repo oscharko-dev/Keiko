@@ -168,12 +168,16 @@ function architectureUdgReceipt(line) {
 
 function architectureUdgEvidence(lines) {
   const largestCount = (suffix) =>
-    lines.reduce((largest, line) => Math.max(largest, integerBeforeSuffix(line, suffix) ?? 0), 0);
+    lines.reduce((largest, line) => {
+      const count = integerBeforeSuffix(line, suffix);
+      if (count === undefined) return largest;
+      return largest === undefined ? count : Math.max(largest, count);
+    }, undefined);
   // The UDG-cache inventory is measured before SonarJasmin decides which files it will load, so
   // the two values may legitimately differ. Bind the receipts to SonarJasmin's own plan when the
   // current analyzer emits it; retain the cache inventory only as a legacy-log fallback.
   const sonarJasminExpected = largestCount(SONARJASMIN_SOURCE_SUFFIX);
-  const expected = sonarJasminExpected || largestCount(UDG_CACHE_SOURCE_SUFFIX);
+  const expected = sonarJasminExpected ?? largestCount(UDG_CACHE_SOURCE_SUFFIX) ?? 0;
   const receipts = lines.flatMap((line) => architectureUdgReceipt(line) ?? []);
   return receipts.reduce(
     (evidence, receipt) => ({
