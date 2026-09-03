@@ -73,8 +73,10 @@ export function safeProperty(value: unknown, property: string): unknown {
 // declarations, whose prototype constructor and function name are own data properties.
 function safeOwnDataProperty(value: object, property: string): unknown {
   try {
-    const descriptor = Object.getOwnPropertyDescriptor(value, property);
-    return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
+    const descriptor = Reflect.getOwnPropertyDescriptor(value, property);
+    if (descriptor === undefined) return undefined;
+    const ownValue = Reflect.getOwnPropertyDescriptor(descriptor, "value");
+    return ownValue?.value;
   } catch {
     return undefined;
   }

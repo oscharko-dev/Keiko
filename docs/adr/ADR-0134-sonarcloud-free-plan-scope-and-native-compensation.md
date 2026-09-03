@@ -64,15 +64,16 @@ bounded count with a regression test. Wildcard warning suppression is forbidden.
 Required scans also run with both the documented `sonar.analysisCache.enabled=false` control and
 SonarQube Cloud's effective `sonar.sensor.cache.enable=false` control. Incident #3380 proved the
 documented server control alone did not override Cloud's injected sensor-cache setting. The
-scanner-log gate rejects an enabled sensor cache and rejects analysis whose largest completed
-source set is narrower than 75% of that same run's indexed files. The ratio is run-derived, not a
-repository file-count snapshot;
-it distinguishes a full Keiko analysis (4,844 of 5,525 in incident #3377) from the incremental PR
-analysis that missed the failure (91 of 5,525). It separately requires every emitted JS/TS
-architecture UDG to load successfully and bounds the difference between the graph receipts and the
-scanner's own eligible-source count; this prevents a broad unrelated sensor from masquerading as a
-full architecture run. This makes unchanged production sources part of the pre-merge
-scanner-warning verdict while retaining Sonar's PR-scoped issue and coverage evaluation.
+scanner-log gate rejects an enabled sensor cache and treats the JavaScript/TypeScript sensor's own
+cache denominator as its exclusion-aware eligible inventory. Exactly zero cache hits and one miss
+receipt covering that entire inventory are required; generic source-progress receipts may cover
+fewer files because they belong to other sensors, but may never exceed the scanner's indexed
+inventory. Incident #3377's incremental PR analysis (4,753 cache hits out of 4,788 eligible files)
+therefore cannot masquerade as the fresh analysis that `dev` performs. The gate separately requires
+the SonarJasmin eligible-file count to equal the combined JS/TS architecture receipt totals and
+requires every emitted UDG to load successfully. This makes unchanged production sources part of
+the pre-merge scanner-warning verdict while retaining Sonar's PR-scoped issue and coverage
+evaluation.
 
 ### D3 — Manual analysis always means the remote `dev` revision
 

@@ -43,13 +43,17 @@ export function sonarLogFailures(contents) {
   return [...new Set([...warnings, ...forbidden])];
 }
 
-const MIN_ANALYZED_TO_INDEXED_RATIO = 0.75;
-const MAX_UNLOADED_ARCHITECTURE_UDGS = 8;
 const ANALYZED_SOURCE_SUFFIXES = [
   " source file has been analyzed",
   " source files have been analyzed",
 ];
-const UDG_SOURCE_SUFFIX = " source file(s) without a UDG";
+const JAVASCRIPT_ANALYSIS_SENSOR = "Sensor JavaScript/TypeScript/CSS analysis [javascript]";
+const JAVASCRIPT_CACHE_HIT_PREFIX = "Hit the cache for ";
+const JAVASCRIPT_CACHE_MISS_PREFIX = "Miss the cache for ";
+const UDG_SOURCE_SUFFIXES = [
+  " source file(s) without a UDG",
+  " file(s) will be analysed by SonarJasmin.",
+];
 const UDG_RECEIPT_PREFIX = 'Files successfully loaded: "';
 const UDG_RECEIPT_SEPARATOR = '" out of "';
 
@@ -90,6 +94,59 @@ function largestAnalyzedSourceSet(lines) {
   );
 }
 
+function countPairAfterPrefix(line, prefix) {
+  const prefixAt = line.indexOf(prefix);
+  if (prefixAt < 0) return undefined;
+  const match = /^(\d+) out of (\d+)(?:\D|$)/u.exec(line.slice(prefixAt + prefix.length));
+  if (match === null) return undefined;
+  const count = decimalInteger(match[1]);
+  const total = decimalInteger(match[2]);
+  return count === undefined || total === undefined ? undefined : { count, total };
+}
+
+function javascriptAnalysisCacheEvidence(lines) {
+  const hits = [];
+  const misses = [];
+  let insideSensor = false;
+  for (const line of lines) {
+    if (line.includes(`${JAVASCRIPT_ANALYSIS_SENSOR} (done)`)) {
+      insideSensor = false;
+      continue;
+    }
+    if (line.includes(JAVASCRIPT_ANALYSIS_SENSOR)) {
+      insideSensor = true;
+      continue;
+    }
+    if (!insideSensor) continue;
+    const hit = countPairAfterPrefix(line, JAVASCRIPT_CACHE_HIT_PREFIX);
+    const miss = countPairAfterPrefix(line, JAVASCRIPT_CACHE_MISS_PREFIX);
+    if (hit !== undefined) hits.push(hit);
+    if (miss !== undefined) misses.push(miss);
+  }
+  return { hits, misses };
+}
+
+function isExactFreshJavascriptAnalysis(evidence) {
+  if (evidence.hits.length !== 1 || evidence.misses.length !== 1) return false;
+  const hit = evidence.hits[0];
+  const miss = evidence.misses[0];
+  if (hit === undefined || miss === undefined) return false;
+  return hit.total > 0 && hit.count === 0 && miss.count === hit.total && miss.total === hit.total;
+}
+
+function cacheReceiptSummary(receipt) {
+  return receipt === undefined ? "0/0" : `${String(receipt.count)}/${String(receipt.total)}`;
+}
+
+function javascriptAnalysisCacheFailures(lines) {
+  const evidence = javascriptAnalysisCacheEvidence(lines);
+  if (isExactFreshJavascriptAnalysis(evidence)) return [];
+  return [
+    `JavaScript/TypeScript cache evidence ${cacheReceiptSummary(evidence.hits[0])} hit and ` +
+      `${cacheReceiptSummary(evidence.misses[0])} missed does not prove an exact fresh analysis`,
+  ];
+}
+
 function integerBeforeSuffix(line, suffix) {
   const suffixAt = line.indexOf(suffix);
   if (suffixAt < 0) return undefined;
@@ -113,8 +170,10 @@ function architectureUdgReceipt(line) {
 
 function architectureUdgEvidence(lines) {
   const expected = lines.reduce((largest, line) => {
-    const candidate = integerBeforeSuffix(line, UDG_SOURCE_SUFFIX);
-    return candidate === undefined ? largest : Math.max(largest, candidate);
+    const candidates = UDG_SOURCE_SUFFIXES.flatMap(
+      (suffix) => integerBeforeSuffix(line, suffix) ?? [],
+    );
+    return candidates.reduce((current, candidate) => Math.max(current, candidate), largest);
   }, 0);
   const receipts = lines.flatMap((line) => architectureUdgReceipt(line) ?? []);
   return receipts.reduce(
@@ -129,13 +188,11 @@ function architectureUdgEvidence(lines) {
 
 function architectureUdgEvidenceFailures(lines) {
   const evidence = architectureUdgEvidence(lines);
-  const missing = evidence.expected - evidence.total;
   const isIncomplete =
     evidence.expected === 0 ||
     evidence.total === 0 ||
     evidence.loaded !== evidence.total ||
-    missing < 0 ||
-    missing > MAX_UNLOADED_ARCHITECTURE_UDGS;
+    evidence.total !== evidence.expected;
   return isIncomplete
     ? [
         `architecture UDG receipts ${evidence.loaded}/${evidence.total} for ` +
@@ -147,27 +204,31 @@ function architectureUdgEvidenceFailures(lines) {
 // A PR analysis may index the whole repository but restore almost every JS/TS result from dev's
 // sensor cache. That is not equivalent to the fresh analysis a push to dev receives: #3377 was
 // green after analyzing 91 files, then the merged revision failed while freshly analyzing 4,844.
-// Require both a disabled sensor cache and broad source-analysis evidence. The breadth is derived
-// from this scanner run's own indexed count rather than a hand-maintained repository file count.
+// Sonar's JavaScript sensor reports its own exclusion-aware eligible inventory as the denominator
+// of both cache receipts. Require exactly zero hits and one miss receipt covering that entire
+// inventory. Generic source-progress receipts remain a consistency check only: other sensors own
+// them, so they may cover fewer files, but they may never claim more files than were indexed.
 export function fullAnalysisEvidenceFailures(contents) {
   const lines = contents.split(/\r?\n/u);
   const failures = [];
   if (lines.some((line) => /Sensor cache enabled/iu.test(line))) {
     failures.push("sensor cache remained enabled");
   }
-  const indexed = lines.reduce((largest, line) => {
+  failures.push(...javascriptAnalysisCacheFailures(lines));
+  const indexedSourceCount = lines.reduce((largest, line) => {
     const match = line.match(/(?:^|\s)(\d+) files indexed(?:\s|$)/iu);
     return match === null ? largest : Math.max(largest, Number(match[1]));
   }, 0);
   const analyzed = largestAnalyzedSourceSet(lines);
   if (
-    indexed === 0 ||
+    indexedSourceCount === 0 ||
     analyzed.total === 0 ||
     analyzed.analyzed !== analyzed.total ||
-    analyzed.analyzed / indexed < MIN_ANALYZED_TO_INDEXED_RATIO
+    analyzed.total > indexedSourceCount
   ) {
     failures.push(
-      `largest analyzed source set ${analyzed.analyzed}/${indexed} is not a full-project analysis`,
+      `completed source set ${analyzed.analyzed}/${analyzed.total} against ` +
+        `${indexedSourceCount} indexed files is inconsistent`,
     );
   }
   failures.push(...architectureUdgEvidenceFailures(lines));

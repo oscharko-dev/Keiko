@@ -81,6 +81,32 @@ describe("machineToken", () => {
 });
 
 describe("declaredErrorClassName", () => {
+  it("does not read an inherited descriptor value under prototype pollution", () => {
+    class PollutedDescriptorError extends Error {}
+    let inheritedValueReads = 0;
+    Object.defineProperty(PollutedDescriptorError.prototype, "constructor", {
+      configurable: true,
+      get: () => PollutedDescriptorError,
+    });
+    Object.defineProperty(Object.prototype, "value", {
+      configurable: true,
+      get: () => {
+        inheritedValueReads += 1;
+        return PollutedDescriptorError;
+      },
+    });
+
+    let declaredName: string | undefined;
+    try {
+      declaredName = declaredErrorClassName(new PollutedDescriptorError("x"));
+    } finally {
+      Reflect.deleteProperty(Object.prototype, "value");
+    }
+
+    expect(declaredName).toBeUndefined();
+    expect(inheritedValueReads).toBe(0);
+  });
+
   it("rejects a foreign native constructor planted on an Error prototype", () => {
     class ForeignConstructorError extends Error {}
     Object.defineProperty(ForeignConstructorError.prototype, "constructor", {
