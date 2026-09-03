@@ -810,6 +810,7 @@ const COMMIT = { kind: "commit", message: "governed commit", allowEmpty: true } 
 interface RestampCall {
   readonly managedWorktreePath: string;
   readonly correlationId?: string | undefined;
+  readonly signal?: AbortSignal | undefined;
 }
 
 function managedDepsWithRestamp(
@@ -857,12 +858,17 @@ describe("executeGovernedMutation — verified-head restamp (#3382)", () => {
       );
 
       expect(result.outcome.status).toBe("succeeded");
-      expect(calls).toEqual([
-        {
-          managedWorktreePath: fixture.managedWorktreePath,
-          correlationId: "request-correlation-restamp",
-        },
-      ]);
+      // Exactly one call, carrying the canonical worktree root and the request's own correlation id
+      // — matched field-by-field rather than by whole-object equality, so the deadline signal the
+      // input now also carries does not make this pin about the input's shape.
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        managedWorktreePath: fixture.managedWorktreePath,
+        correlationId: "request-correlation-restamp",
+      });
+      // The port is handed a LIVE deadline signal: the restamp completed inside its bound, so
+      // nothing abandoned it and the write it made was legitimate.
+      expect(calls[0]?.signal?.aborted).toBe(false);
     } finally {
       fixture.dispose();
     }
@@ -984,6 +990,68 @@ describe("executeGovernedMutation — verified-head restamp (#3382)", () => {
       expect(failures[0]?.extra?.operation).toBe("verify-head");
       expect(failures[0]?.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
       expect(JSON.stringify(activity.events)).not.toContain(fixture.managedWorktreePath);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  // CodeRabbit, PR #3381: the previous guard caught a REJECTION but not a promise that never
+  // settles. The port serializes on the workspace's `ws:` key and that wait cannot be cancelled, so
+  // a wedged holder left this `await` pending forever — and it runs AFTER the commit and its
+  // lifecycle evidence are durable, so the client hung on a commit that had already succeeded. The
+  // deadline is injected in milliseconds here; in production it is
+  // VERIFIED_HEAD_RESTAMP_DEADLINE_MS.
+  it("completes a successful commit when the restamp port never settles", async () => {
+    const fixture = createManagedWorktreeFixture("task-3382-restamp-hangs");
+    const cap = captureStore();
+    const activity = captureActivityLog();
+    let observedSignal: AbortSignal | undefined;
+    try {
+      const base = managedAccessDeps(fixture, () => fixture.instance);
+      const result = await executeGovernedMutation(
+        COMMIT,
+        { required: false },
+        workspaceInfo(fixture.managedWorktreePath),
+        {
+          evidenceStore: cap.store,
+          redactor: buildRedactor({}),
+          ...base,
+          workspaceProvisioning: {
+            ...base.workspaceProvisioning,
+            // Never settles — exactly what a wedged `ws:` holder produces.
+            recordVerifiedHead: (input): Promise<boolean> => {
+              observedSignal = input.signal;
+              return new Promise<boolean>(() => undefined);
+            },
+          },
+        },
+        {
+          policyPacks: { repoPack: ALLOW_LOCAL },
+          activityLog: activity.sink,
+          adapterFactory: () => recordingMutationAdapter([]),
+          snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(MANAGED_SNAPSHOT),
+          verifiedHeadRestampDeadlineMs: 5,
+        },
+        "request-correlation-restamp-hangs",
+      );
+
+      // The commit's own result is untouched and the call RETURNED — that is the whole finding.
+      expect(result.outcome.status).toBe("succeeded");
+      expect(
+        activity.events.find((e) => e.op === "git.delivery.mutation.completed")?.extra?.status,
+      ).toBe("succeeded");
+
+      // Exactly one classified line for the expiry, body-free, under this request's correlation id.
+      const failures = activity.events.filter((e) => e.op === "task-workspace.lifecycle");
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.errorKind).toBe("LOCK_CONTENTION");
+      expect(failures[0]?.correlationId).toBe("request-correlation-restamp-hangs");
+      expect(failures[0]?.extra?.operation).toBe("verify-head");
+      expect(JSON.stringify(activity.events)).not.toContain(fixture.managedWorktreePath);
+
+      // The port was handed the deadline's signal and it is aborted, so the abandoned attempt can
+      // never persist a head after the request it belonged to has been answered.
+      expect(observedSignal?.aborted).toBe(true);
     } finally {
       fixture.dispose();
     }

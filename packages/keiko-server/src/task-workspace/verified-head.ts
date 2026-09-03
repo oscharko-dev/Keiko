@@ -116,6 +116,24 @@ function emitRestamp(
   });
 }
 
+// The caller's deadline, honoured at the two points where it can still change the outcome: once the
+// `ws:` key is finally held (the wait this bound exists for), and again immediately before the write.
+//
+// `runExclusive` cannot be cancelled, so an abandoned attempt still runs to completion — this only
+// makes sure it runs to a NO-OP. The second check is what carries the guarantee: without it, an
+// attempt that acquired the key after its caller gave up would observe a head and persist it, so a
+// baseline the caller no longer knows about would appear minutes after the request it belonged to.
+// `LOCK_CONTENTION` is the classification because that is what the wait actually was — a contended,
+// TTL-bounded queue on another holder of the same key — and the taxonomy already maps it to the
+// retryable class the next commit or reconciliation pass resolves.
+function assertNotAbandoned(signal: AbortSignal | undefined, stage: string): void {
+  if (signal?.aborted !== true) return;
+  throw new TaskWorkspaceError(
+    "LOCK_CONTENTION",
+    `the verified-head restamp was abandoned by its caller before ${stage}`,
+  );
+}
+
 // The head this restamp records, observed against the row as it stands INSIDE the critical section.
 // Re-proving the path chain here (not just re-reading by id) keeps the write bound to the root the
 // caller was admitted for: a concurrent re-materialization that moved `managedWorktreePath` must not
@@ -149,7 +167,8 @@ async function observeHeadForFreshRow(
   return head;
 }
 
-// The whole critical section, under the workspace's own `ws:<workspaceId>` key.
+// The whole critical section, under the workspace's own `ws:<workspaceId>` key, bounded at both ends
+// by the caller's deadline (see `assertNotAbandoned`).
 //
 // The row is re-read TWICE and the snapshot the caller admitted is never written back. Observing the
 // head is a git spawn, so the previous version's `upsert({ ...instance, … })` replayed a snapshot
@@ -164,7 +183,9 @@ async function restampLocked(
   expectedWorkspaceId: string,
   startedAtMs: number,
 ): Promise<boolean> {
+  assertNotAbandoned(input.signal, "the workspace lock was acquired");
   const head = await observeHeadForFreshRow(deps, input, expectedWorkspaceId);
+  assertNotAbandoned(input.signal, "the observed head could be persisted");
   const current = deps.store.getById(expectedWorkspaceId);
   if (current === undefined) {
     throw new TaskWorkspaceError(

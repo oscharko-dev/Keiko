@@ -81,6 +81,15 @@ export interface RecordVerifiedHeadInput {
   readonly managedWorktreePath: string;
   // See WorkspaceProvisionRequest.correlationId.
   readonly correlationId?: string | undefined;
+  // The caller's bound on how long this restamp may take. The port serializes on the workspace's
+  // `ws:` key and `WorkspaceMutexRegistry.runExclusive` has no cancellation, so a wedged holder of
+  // that key would otherwise leave this promise pending forever — and the git-delivery seam awaits
+  // it AFTER the commit and its evidence are already durable, so an unbounded wait leaves a
+  // successful commit's request hanging (CodeRabbit, PR #3381). The port cannot shorten the wait it
+  // is queued behind, but it CAN refuse to act on a decision the caller has stopped waiting for: it
+  // checks the signal once the key is acquired and again immediately before the write, so an
+  // abandoned attempt never persists anything after the deadline.
+  readonly signal?: AbortSignal | undefined;
 }
 
 export interface WorkspaceProvisioningService {

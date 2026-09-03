@@ -316,6 +316,87 @@ describe("recordVerifiedManagedHead (#3382)", () => {
     expect(order).toEqual(["observe:start", "observe:end", "contender"]);
   });
 
+  // The half of the deadline the seam cannot enforce: `runExclusive` has no cancellation, so an
+  // attempt whose caller has already given up still runs. It must run to a NO-OP. Without the check
+  // immediately before the write, an attempt that acquired the key late would observe a head and
+  // persist it — a baseline appearing after the request it belonged to was answered (CodeRabbit,
+  // PR #3381).
+  it("writes nothing once its caller has abandoned the restamp", async () => {
+    const instance = await provisionTask("t-abandoned");
+    await reconciliation().reconcile();
+    const before = persisted(instance.workspaceId);
+    commitInWorktree(instance.managedWorktreePath, "abandoned.txt");
+    const controller = new AbortController();
+    const activityLog = createBufferedServerLogSink();
+    let listings = 0;
+
+    await expect(
+      recordVerifiedManagedHead(
+        // The caller gives up WHILE the head is being observed — the widest window there is, and
+        // the one the second check exists for. The observation itself still completes.
+        verifiedHeadDeps(activityLog, (workspace) => {
+          const adapter = realAdapter(workspace);
+          return {
+            ...adapter,
+            listWorktrees: async (): Promise<readonly WorktreeListEntry[]> => {
+              const listed = await adapter.listWorktrees();
+              listings += 1;
+              controller.abort();
+              return listed;
+            },
+          };
+        }),
+        {
+          managedWorktreePath: instance.managedWorktreePath,
+          correlationId: "req-restamp-abandoned",
+          signal: controller.signal,
+        },
+      ),
+    ).resolves.toBe(false);
+
+    expect(listings).toBe(1);
+    const after = persisted(instance.workspaceId);
+    expect(after.lastVerifiedHead).toBe(before.lastVerifiedHead);
+    expect(after.updatedAt).toBe(before.updatedAt);
+    // Refused, never silent.
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.errorKind).toBe("LOCK_CONTENTION");
+    expect(line.correlationId).toBe("req-restamp-abandoned");
+  });
+
+  // A signal that is already aborted when the port is entered never reaches the git spawn at all.
+  it("does not even observe the head when the signal is already aborted", async () => {
+    const instance = await provisionTask("t-abandoned-early");
+    await reconciliation().reconcile();
+    commitInWorktree(instance.managedWorktreePath, "early.txt");
+    const activityLog = createBufferedServerLogSink();
+    let listings = 0;
+
+    await expect(
+      recordVerifiedManagedHead(
+        verifiedHeadDeps(activityLog, (workspace) => {
+          const adapter = realAdapter(workspace);
+          return {
+            ...adapter,
+            listWorktrees: (): Promise<readonly WorktreeListEntry[]> => {
+              listings += 1;
+              return adapter.listWorktrees();
+            },
+          };
+        }),
+        {
+          managedWorktreePath: instance.managedWorktreePath,
+          correlationId: "req-restamp-abandoned-early",
+          signal: AbortSignal.abort(),
+        },
+      ),
+    ).resolves.toBe(false);
+
+    expect(listings).toBe(0);
+    expect(lastActivityLogEvent(activityLog).errorKind).toBe("LOCK_CONTENTION");
+  });
+
   it("refuses and logs when no managed row resolves the requested root", async () => {
     const activityLog = createBufferedServerLogSink();
     await expect(
