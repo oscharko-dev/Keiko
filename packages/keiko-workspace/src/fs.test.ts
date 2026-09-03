@@ -795,8 +795,12 @@ describe("every volume an identity hashes", () => {
         ].join("\n"),
         { eval: true, workerData: { moduleUrl: moduleUrl.href, root } },
       );
-      const [verdict] = (await once(worker, "message")) as [unknown];
-      await once(worker, "exit");
+      // Subscribe before either event can arrive: a fast worker can otherwise exit in the microtask
+      // between receiving its verdict and registering the exit listener.
+      const message = once(worker, "message");
+      const exit = once(worker, "exit");
+      const [verdict] = (await message) as [unknown];
+      await exit;
       return verdict;
     };
 

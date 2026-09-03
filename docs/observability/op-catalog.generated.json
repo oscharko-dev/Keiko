@@ -903,6 +903,18 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-runtime.dev-lane.activated",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:169",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.dev-lane.refused",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:184",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-runtime.run.settled",
       "category": "process",
       "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:169",

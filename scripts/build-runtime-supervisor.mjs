@@ -23,11 +23,18 @@ function compilerInvocation(argv) {
         "/W4",
         "/WX",
         "/O2",
+        // Keep the staged Job Object supervisor self-contained. Otherwise the loader resolves a
+        // plantable VC runtime DLL from the workspace-writable application directory before wmain.
+        "/MT",
         "/DUNICODE",
         "/D_UNICODE",
         "/D_CRT_SECURE_NO_WARNINGS",
         `/Fe:${output}`,
         WINDOWS_SOURCE,
+        "/link",
+        // Restrict implicit DLL dependencies before the first instruction runs; wmain's own
+        // SetDefaultDllDirectories call only governs later dynamic loads.
+        "/DEPENDENTLOADFLAG:0x800",
       ],
       compiler: "cl",
       output,

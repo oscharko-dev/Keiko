@@ -8,6 +8,7 @@ import {
   classifyLsofNetworkNames,
   createJourneyContext,
   createNetworkObserver,
+  ensureMacTarget,
   governedExecutable,
   missingRealBinaryEvidence,
   readGatewayObservation,
@@ -29,6 +30,11 @@ function containedIn(root, candidate) {
 }
 
 describe("#2483 real-binary observation helpers", () => {
+  it("rejects the Windows dev-lane target before its macOS-only real-binary journey", () => {
+    expect(() => ensureMacTarget("windows-x64")).toThrow("requires macOS arm64 or x64");
+    expect(ensureMacTarget("macos-arm64")).toBe("macos-arm64");
+  });
+
   it("classifies connections without returning a persisted endpoint projection", () => {
     const observations = classifyLsofNetworkNames(
       [

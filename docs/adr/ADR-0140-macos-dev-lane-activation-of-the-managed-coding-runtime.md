@@ -1,4 +1,4 @@
-# ADR-0140: macOS dev-lane activation of the managed coding runtime
+# ADR-0140: macOS and Windows dev-lane activation of the managed coding runtime
 
 ## Status
 
@@ -30,7 +30,7 @@ through seams that production never exercises.
 ### D1 — A development lane is a distinct, declared availability source
 
 The coding runtime gains exactly one additional activation source next to the packaged
-windows-x64 discovery: dev-lane discovery on macOS (arm64/x64). It is inactive unless
+windows-x64 discovery: dev-lane discovery on macOS (arm64/x64) and Windows (x64). It is inactive unless
 `KEIKO_CODING_RUNTIME_DEV_LANE` carries an explicit enable token. A runtime activated through it
 carries `evidenceClass: "functional-not-platform-qualified"` and an availability record in which
 only checks the lane actually performs are marked verified (`signatureVerified: false`,
@@ -46,7 +46,7 @@ hole — the dev lane's evidence class previously reached no UI surface, so a de
 announced "Runtime ready."
 
 `npm run dev:start` is the trusted development launcher and is itself the operator's explicit
-selection of this repository-confined lane. On a supported macOS checkout it supplies the enable
+selection of this repository-confined lane. On a supported macOS or Windows checkout it supplies the enable
 token to the BFF, evaluates production discovery after the package build, stages the
 review-approved payload and secure-read helper only when discovery reports a repairable staged
 artifact failure, and then evaluates production discovery again. The launcher fails instead of
@@ -73,14 +73,14 @@ some other prerequisite fails.
 ### D3 — Verified payload, declared forgone guarantees
 
 The lane's trust anchor is the review-approved redistribution catalog
-(`portable-runtime-approvals.json`): the staged executable's tree digest and the license digest
-are recomputed from disk and compared against the catalog on every discovery. The secure-read
-helper is built locally, digest-pinned in a dev-lane manifest at staging time, re-verified at
-discovery (including source-tree freshness) and at every admitted read. Two guarantees are
-deliberately forgone and must stay documented wherever the lane is described: the
-release-qualified supervisor's containment and orphan-reaping proof (the dev-lane backend
-terminates a POSIX process group best-effort and proves exit only for the direct child), and
-platform signature chains (digest pinning replaces Developer ID/notarization evidence).
+(`portable-runtime-approvals.json`): the staged executable's tree digest, license digest, and the
+freshly generated SBOM digest are compared against the catalog during staging and on every
+discovery. The secure-read helper is built locally, digest-pinned in a dev-lane manifest at
+staging time, re-verified at discovery (including source-tree freshness) and at every admitted
+read. On macOS the dev-lane backend terminates a POSIX process group best-effort and proves exit
+only for the direct child; Windows uses its native Job Object supervisor. Neither platform carries
+a platform signature chain (digest pinning replaces Developer ID/notarization or Authenticode
+evidence).
 
 ### D4 — Honest, content-free unavailability reasons
 
@@ -131,7 +131,7 @@ keep proving a composition production never runs, and first-contact integration 
 URL composition, secure-read wiring, supervisor identity) would surface only after the packaged
 qualification lands.
 
-### Silently qualify macOS through the existing receipt path
+### Silently qualify a dev checkout through the existing receipt path
 
 Rejected. Fabricating supervisor qualification receipts without the qualification suite would
 forge packaged-grade evidence and violate ADR-0137 D5's core prohibition. The dev lane instead

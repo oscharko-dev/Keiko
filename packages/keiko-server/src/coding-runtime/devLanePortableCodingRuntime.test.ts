@@ -15,20 +15,23 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   computePortableSidecarPayloadTreeDigest,
+  DEV_LANE_MANIFEST_FILE,
+  DEV_LANE_RUNTIME_SUPERVISOR_RELATIVE_PATH,
   discoverDevLaneOpenCode,
   devLaneEnvEnabled,
   KEIKO_CODING_RUNTIME_DEV_LANE_ENV,
   type DevLaneOpenCodeDiscovery,
+  type DevLaneOpenCodeTarget,
 } from "./devLanePortableCodingRuntime.js";
 import { OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256 } from "./opencodeProtocolSurface.js";
 import { stageDevLaneFixture, type DevLaneFixture } from "./devLaneFixture/_support.js";
 
 const roots: string[] = [];
 
-function fixture(): DevLaneFixture {
+function fixture(target: DevLaneOpenCodeTarget = "macos-arm64"): DevLaneFixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-dev-lane-")));
   roots.push(root);
-  return stageDevLaneFixture(root);
+  return stageDevLaneFixture(root, target);
 }
 
 function discover(
@@ -100,10 +103,75 @@ describe("dev-lane OpenCode discovery", () => {
     });
   });
 
-  it("refuses every non-macOS platform and unknown architecture", () => {
+  it("activates Windows-x64 through the same verified dev lane", () => {
+    const staged = fixture("windows-x64");
+    const discovery = discover(staged, { platform: "win32", arch: "x64" });
+    expect(discovery.outcome).toBe("activated");
+    if (discovery.outcome !== "activated") return;
+    expect(discovery.runtime).toMatchObject({
+      target: "windows-x64",
+      qualification: { platform: "win32", arch: "x64", backend: "windows-job-object" },
+      secureRead: {
+        artifact: {
+          target: "win32-x64",
+          installRelativePath: "runtime/native/keiko-secure-workspace-read.exe",
+        },
+      },
+    });
+    expect(discovery.runtime.nativeHelperPath).toContain("keiko-runtime-supervisor.exe");
+    expect(discovery.runtime.nativeHelperSha256).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("refuses an unexpected DLL beside a staged Windows helper", () => {
+    const staged = fixture("windows-x64");
+    writeFileSync(join(staged.paths.stagedTargetRoot, "native", "plantable.dll"), "malicious");
+
+    expectRefusal(
+      discover(staged, { platform: "win32", arch: "x64" }),
+      "native-helper-directory-untrusted",
+    );
+  });
+
+  it("fails closed on a malformed Windows supervisor binding", () => {
+    const staged = fixture("windows-x64");
+    const manifest = JSON.parse(readFileSync(staged.paths.helperManifest, "utf8")) as {
+      runtimeSupervisor: { sha256: string };
+    };
+    manifest.runtimeSupervisor.sha256 = "not-a-digest";
+    writeFileSync(staged.paths.helperManifest, JSON.stringify(manifest));
+
+    expectRefusal(discover(staged, { platform: "win32", arch: "x64" }), "payload-missing");
+  });
+
+  it("refuses a replacement Windows supervisor even when its staged manifest is rewritten", () => {
+    const staged = fixture("windows-x64");
+    const first = discover(staged, { platform: "win32", arch: "x64" });
+    expect(first.outcome).toBe("activated");
+    if (first.outcome !== "activated") return;
+
+    const supervisor = join(
+      staged.paths.stagedTargetRoot,
+      `${DEV_LANE_RUNTIME_SUPERVISOR_RELATIVE_PATH}.exe`,
+    );
+    writeFileSync(supervisor, "rebuilt supervisor");
+    const manifestPath = join(staged.paths.stagedTargetRoot, DEV_LANE_MANIFEST_FILE);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      runtimeSupervisor: { sha256: string; sizeBytes: number };
+    };
+    manifest.runtimeSupervisor.sha256 = createHash("sha256")
+      .update(readFileSync(supervisor))
+      .digest("hex");
+    manifest.runtimeSupervisor.sizeBytes = readFileSync(supervisor).length;
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    const second = discover(staged, { platform: "win32", arch: "x64" });
+    expectRefusal(second, "payload-missing");
+  });
+
+  it("refuses unsupported platforms and unknown architectures", () => {
     const staged = fixture();
     expectRefusal(discover(staged, { platform: "linux" }), "platform-unsupported");
-    expectRefusal(discover(staged, { platform: "win32", arch: "x64" }), "platform-unsupported");
+    expectRefusal(discover(staged, { platform: "win32", arch: "arm64" }), "platform-unsupported");
     expectRefusal(discover(staged, { arch: "ppc64" }), "platform-unsupported");
     expect(discover(staged, { arch: "x64" })).toMatchObject({ outcome: "refused" });
   });

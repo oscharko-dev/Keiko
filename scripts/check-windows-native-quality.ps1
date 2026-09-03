@@ -5,8 +5,40 @@ function Get-ActiveNativeProducerSource {
   param([Parameter(Mandatory = $true)][string] $FunctionSource)
 
   $withoutBlockComments = [regex]::Replace($FunctionSource, '(?s)/\*.*?\*/', '')
-  return ($withoutBlockComments -split "`n" |
-    Where-Object { $_.Trim() -notmatch '^(//|/\*|\*)' }) -join "`n"
+  # Preserve quoted JavaScript strings while removing `//` comments. A line-only filter catches
+  # full-line comments but would let a required flag survive in `args = []; // "/MT"`.
+  return [regex]::Replace(
+    $withoutBlockComments,
+    '(?s:"(?:\\.|[^"\\])*")|//[^\r\n]*',
+    [System.Text.RegularExpressions.MatchEvaluator] {
+      param($match)
+      if ($match.Value.StartsWith('"')) { return $match.Value }
+      return ''
+    }
+  )
+}
+
+function Get-NativeProducerArgumentList {
+  param(
+    [Parameter(Mandatory = $true)][string] $ActiveSource,
+    [Parameter(Mandatory = $true)][string] $ArgumentListStartMarker,
+    [Parameter(Mandatory = $true)][string] $ProducerPath,
+    [Parameter(Mandatory = $true)][string] $FunctionName
+  )
+
+  $markerStart = $ActiveSource.IndexOf($ArgumentListStartMarker)
+  if ($markerStart -lt 0) {
+    throw "could not locate the target compiler invocation in $ProducerPath $FunctionName()"
+  }
+  $argumentListStart = $ActiveSource.IndexOf("[", $markerStart + $ArgumentListStartMarker.Length)
+  if ($argumentListStart -lt 0) {
+    throw "could not locate the target compiler argument list in $ProducerPath $FunctionName()"
+  }
+  $argumentListEnd = $ActiveSource.IndexOf("]", $argumentListStart)
+  if ($argumentListEnd -lt $argumentListStart) {
+    throw "could not locate the target compiler argument list in $ProducerPath $FunctionName()"
+  }
+  return $ActiveSource.Substring($argumentListStart, $argumentListEnd - $argumentListStart + 1)
 }
 
 function Assert-NativeProducerLinkFlags {
@@ -15,6 +47,7 @@ function Assert-NativeProducerLinkFlags {
     [Parameter(Mandatory = $true)][string] $FunctionName,
     [Parameter(Mandatory = $true)][string] $EndMarker,
     [Parameter(Mandatory = $true)][string] $ProducerPath,
+    [Parameter(Mandatory = $true)][string] $ArgumentListStartMarker,
     [Parameter(Mandatory = $true)][string[]] $RequiredFlagLiterals
   )
 
@@ -25,9 +58,14 @@ function Assert-NativeProducerLinkFlags {
   }
   $functionSource = $Source.Substring($functionStart, $functionEnd - $functionStart)
   $activeSource = Get-ActiveNativeProducerSource -FunctionSource $functionSource
+  $argumentList = Get-NativeProducerArgumentList `
+    -ActiveSource $activeSource `
+    -ArgumentListStartMarker $ArgumentListStartMarker `
+    -ProducerPath $ProducerPath `
+    -FunctionName $FunctionName
   foreach ($requiredFlagLiteral in $RequiredFlagLiterals) {
-    if (-not $activeSource.Contains($requiredFlagLiteral)) {
-      throw ("$ProducerPath $FunctionName() no longer contains the hardened flag " +
+    if (-not $argumentList.Contains($requiredFlagLiteral)) {
+      throw ("$ProducerPath $FunctionName() no longer passes the hardened flag " +
         "$requiredFlagLiteral -- update this gate deliberately if the hardening posture " +
         "changed, do not let it silently keep proving a configuration the product no longer ships")
     }
@@ -54,38 +92,62 @@ try {
   # Compiling with the same flags here proves the toolchain accepts the exact production line on
   # every pull request.
   #
-  # There are TWO independently hardened native producers, not one: compileWindowsLauncher() in
-  # stage-portable-runtime.mjs (the portable launcher) and compileSetupBootstrap() in
-  # build-windows-portable-setup.mjs (the setup companion that replaced IExpress, issue #2992).
-  # Both link /MT and /DEPENDENTLOADFLAG:0x800 for the same DLL-plant/no-redistributable-dependency
-  # reasons -- see each producer's own comments. A gate that proved only the launcher would leave
-  # the setup-bootstrap binary's hardening droppable with this gate still green, so both are
-  # derived and proven below, independently.
+  # There are FOUR independently hardened native producers, not one: compileWindowsLauncher() in
+  # stage-portable-runtime.mjs (the portable launcher), compileSetupBootstrap() in
+  # build-windows-portable-setup.mjs (the setup companion that replaced IExpress, issue #2992), and
+  # windowsCompilerFlags() in build-secure-workspace-read.mjs (the workspace-read helper), and
+  # compilerInvocation() in build-runtime-supervisor.mjs (the Job Object supervisor staged by the
+  # dev lane). All four link /MT and /DEPENDENTLOADFLAG:0x800 for the same DLL-plant/no-
+  # redistributable-dependency reasons. A gate that omitted any one producer would leave that
+  # binary's hardening droppable while the gate stayed green, so all are derived and proven below.
   #
   # A SECOND, independently hand-typed copy of either producer's flags would defeat the point: if
-  # compileWindowsLauncher() or compileSetupBootstrap() ever dropped /MT or
-  # /DEPENDENTLOADFLAG:0x800, a retyped copy here would keep compiling the OLD hardened command and
-  # keep reporting PASS -- proving a configuration the product no longer ships. So this gate does
-  # not retype them: it reads each function out of its own producer (AGENTS.md §7 -- a fixture must
-  # never restate a formula the code under test owns, derive it from the production entry point)
-  # and fails closed, before compiling anything, the moment either literal is no longer there in
-  # either producer.
+  # any producer ever dropped /MT or /DEPENDENTLOADFLAG:0x800, a retyped copy here would keep
+  # compiling the OLD hardened command and report PASS -- proving a configuration the product no
+  # longer ships. So this gate does not retype them: it reads each function out of its own producer
+  # (AGENTS.md §7 -- a fixture must never restate a formula the code under test owns, derive it from
+  # the production entry point) and fails closed, before compiling anything, the moment either
+  # literal is no longer there in any producer.
   $productionScriptPath = Join-Path $PSScriptRoot "stage-portable-runtime.mjs"
   $productionScriptSource = Get-Content -LiteralPath $productionScriptPath -Raw
   $setupBuildScriptPath = Join-Path $PSScriptRoot "build-windows-portable-setup.mjs"
   $setupBuildScriptSource = Get-Content -LiteralPath $setupBuildScriptPath -Raw
-  # Comments and dead code are stripped by the shared assertion before either producer is checked.
+  $secureReadBuildScriptPath = Join-Path $PSScriptRoot "build-secure-workspace-read.mjs"
+  $secureReadBuildScriptSource = Get-Content -LiteralPath $secureReadBuildScriptPath -Raw
+  $supervisorBuildScriptPath = Join-Path $PSScriptRoot "build-runtime-supervisor.mjs"
+  $supervisorBuildScriptSource = Get-Content -LiteralPath $supervisorBuildScriptPath -Raw
+  # Comments and dead code are stripped by the shared assertion before any producer is checked.
   # A plain `Contains` on the unfiltered function would accept a flag surviving only in a comment.
   $requiredNativeLinkFlagLiterals = @('"/MT"', '"/DEPENDENTLOADFLAG:0x800"')
   Assert-NativeProducerLinkFlags -Source $productionScriptSource `
     -FunctionName "compileWindowsLauncher" `
     -EndMarker "function requireWindowsLauncherIconSource(" `
     -ProducerPath "scripts/stage-portable-runtime.mjs" `
+    -ArgumentListStartMarker 'windowsToolFromPath(env.PATH, "cl.exe"),' `
     -RequiredFlagLiterals $requiredNativeLinkFlagLiterals
   Assert-NativeProducerLinkFlags -Source $setupBuildScriptSource `
     -FunctionName "compileSetupBootstrap" `
     -EndMarker "function fsyncFile(" `
     -ProducerPath "scripts/build-windows-portable-setup.mjs" `
+    -ArgumentListStartMarker 'windowsToolFromPath(env.PATH, "cl.exe"),' `
+    -RequiredFlagLiterals $requiredNativeLinkFlagLiterals
+  Assert-NativeProducerLinkFlags -Source $secureReadBuildScriptSource `
+    -FunctionName "windowsCompilerFlags" `
+    -EndMarker "const supported =" `
+    -ProducerPath "scripts/build-secure-workspace-read.mjs" `
+    -ArgumentListStartMarker "return" `
+    -RequiredFlagLiterals @('"/MT"')
+  Assert-NativeProducerLinkFlags -Source $secureReadBuildScriptSource `
+    -FunctionName "compilerInvocation" `
+    -EndMarker "export async function runSecureWorkspaceReadBuild(" `
+    -ProducerPath "scripts/build-secure-workspace-read.mjs" `
+    -ArgumentListStartMarker 'target === "windows-x64"' `
+    -RequiredFlagLiterals @('"/DEPENDENTLOADFLAG:0x800"')
+  Assert-NativeProducerLinkFlags -Source $supervisorBuildScriptSource `
+    -FunctionName "compilerInvocation" `
+    -EndMarker "function macosComponentInvocations(" `
+    -ProducerPath "scripts/build-runtime-supervisor.mjs" `
+    -ArgumentListStartMarker 'if (target === "windows-x64")' `
     -RequiredFlagLiterals $requiredNativeLinkFlagLiterals
 
   # Proven present above, byte-for-byte, in the production entry point -- not an independent guess.
@@ -140,13 +202,13 @@ try {
   $secureRead = Join-Path $root "native/secure-workspace-read/secure_workspace_read.c"
   $secureReadOut = Join-Path $scratch "secure-workspace-read.exe"
   $secureReadObject = Join-Path $scratch "secure-workspace-read.obj"
-  & cl.exe @c11Flags "/Fo:$secureReadObject" "/Fe:$secureReadOut" $secureRead /link ntdll.lib
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$secureReadObject" "/Fe:$secureReadOut" $secureRead /link @productionLinkFlags ntdll.lib
   if ($LASTEXITCODE -ne 0) { throw "MSVC secure-workspace-read quality analysis failed" }
 
   $supervisor = Join-Path $root "native/runtime-supervisor/windows/keiko_runtime_supervisor.c"
   $supervisorOut = Join-Path $scratch "keiko-runtime-supervisor.exe"
   $supervisorObject = Join-Path $scratch "keiko-runtime-supervisor.obj"
-  & cl.exe @c11Flags "/Fo:$supervisorObject" "/Fe:$supervisorOut" $supervisor
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$supervisorObject" "/Fe:$supervisorOut" $supervisor /link @productionLinkFlags
   if ($LASTEXITCODE -ne 0) { throw "MSVC runtime-supervisor quality analysis failed" }
 
   $fixture = Join-Path $root "native/runtime-supervisor/windows/qualification_fixture.c"

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,11 +7,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   compareCodeUnits,
   devLaneManifestDocument,
+  helperRelativePath,
   hashHelperSourceTree,
   hostDevLaneTarget,
   isDirectInvocation,
   listFilesSorted,
   resolveStageDeps,
+  runtimeSupervisorRelativePath,
+  restageDevCodingRuntimeNativeHelpers,
   stageDevCodingRuntime,
 } from "../stage-dev-coding-runtime.mjs";
 
@@ -32,12 +35,25 @@ afterEach(() => {
 });
 
 describe("hostDevLaneTarget", () => {
-  it("maps only the two supported macOS architectures", () => {
+  it("maps every supported macOS and Windows architecture", () => {
     expect(hostDevLaneTarget("darwin", "arm64")).toBe("macos-arm64");
     expect(hostDevLaneTarget("darwin", "x64")).toBe("macos-x64");
+    expect(hostDevLaneTarget("win32", "x64")).toBe("windows-x64");
+    expect(hostDevLaneTarget("win32", "arm64")).toBeUndefined();
     expect(hostDevLaneTarget("darwin", "ppc64")).toBeUndefined();
     expect(hostDevLaneTarget("linux", "x64")).toBeUndefined();
-    expect(hostDevLaneTarget("win32", "x64")).toBeUndefined();
+    expect(hostDevLaneTarget("win32", "arm64")).toBeUndefined();
+  });
+});
+
+describe("dev-lane native paths", () => {
+  it("uses Windows executable names only where Windows requires them", () => {
+    expect(helperRelativePath("windows-x64")).toBe("native/keiko-secure-workspace-read.exe");
+    expect(helperRelativePath("macos-arm64")).toBe("native/keiko-secure-workspace-read");
+    expect(runtimeSupervisorRelativePath("windows-x64")).toBe(
+      "native/keiko-runtime-supervisor.exe",
+    );
+    expect(runtimeSupervisorRelativePath("macos-arm64")).toBeUndefined();
   });
 });
 
@@ -203,5 +219,88 @@ describe("stageDevCodingRuntime", () => {
       },
     });
     expect(manifest.helper.sourceTreeSha256).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("stages the Windows Job Object supervisor with the verified payload", async () => {
+    const root = tempRoot();
+    mkdirSync(join(root, "native", "secure-workspace-read"), { recursive: true });
+    mkdirSync(join(root, "native", "runtime-supervisor", "windows"), { recursive: true });
+    writeFileSync(join(root, "native", "secure-workspace-read", "src.c"), "/* secure */\n");
+    writeFileSync(
+      join(root, "native", "runtime-supervisor", "windows", "supervisor.c"),
+      "/* supervisor */\n",
+    );
+    const runBuild = vi.fn().mockImplementation(({ argv }) => {
+      mkdirSync(join(argv[3], ".."), { recursive: true });
+      writeFileSync(argv[3], "secure helper");
+      return Promise.resolve(0);
+    });
+    const runSupervisorBuild = vi.fn().mockImplementation(({ argv }) => {
+      mkdirSync(join(argv[3], ".."), { recursive: true });
+      writeFileSync(argv[3], "runtime supervisor");
+      return Promise.resolve(0);
+    });
+
+    const manifestPath = await stageDevCodingRuntime([], {
+      target: "windows-x64",
+      root,
+      prepareSidecars: vi.fn().mockResolvedValue(undefined),
+      runBuild,
+      runSupervisorBuild,
+      exec: vi.fn().mockReturnValue(`${"c".repeat(40)}\n`),
+      resolveGit: vi.fn().mockReturnValue("C:\\Program Files\\Git\\git.exe"),
+      log: vi.fn(),
+    });
+
+    expect(runBuild).toHaveBeenCalledWith(
+      expect.objectContaining({ argv: expect.arrayContaining(["windows-x64"]) }),
+    );
+    expect(runSupervisorBuild).toHaveBeenCalledWith(
+      expect.objectContaining({ argv: expect.arrayContaining(["windows-x64"]) }),
+    );
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.runtimeSupervisor).toMatchObject({
+      sha256: sha256("runtime supervisor"),
+      sizeBytes: "runtime supervisor".length,
+    });
+  });
+
+  it("rebuilds native helpers without retaining an untrusted staged native entry", async () => {
+    const root = tempRoot();
+    const nativeRoot = join(root, ".portable-sidecar-payloads", "windows-x64", "native");
+    mkdirSync(join(root, "native", "secure-workspace-read"), { recursive: true });
+    mkdirSync(join(root, "native", "runtime-supervisor", "windows"), { recursive: true });
+    mkdirSync(nativeRoot, { recursive: true });
+    writeFileSync(join(root, "native", "secure-workspace-read", "src.c"), "/* secure */\n");
+    writeFileSync(
+      join(root, "native", "runtime-supervisor", "windows", "supervisor.c"),
+      "/* supervisor */\n",
+    );
+    writeFileSync(join(nativeRoot, "plantable.dll"), "untrusted");
+    const build = vi.fn().mockImplementation(({ argv }) => {
+      mkdirSync(join(argv[3], ".."), { recursive: true });
+      writeFileSync(argv[3], "secure helper");
+      return Promise.resolve(0);
+    });
+    const buildSupervisor = vi.fn().mockImplementation(({ argv }) => {
+      mkdirSync(join(argv[3], ".."), { recursive: true });
+      writeFileSync(argv[3], "runtime supervisor");
+      return Promise.resolve(0);
+    });
+
+    await restageDevCodingRuntimeNativeHelpers({
+      target: "windows-x64",
+      root,
+      prepareSidecars: vi.fn(),
+      runBuild: build,
+      runSupervisorBuild: buildSupervisor,
+      exec: vi.fn().mockReturnValue(`${"c".repeat(40)}\n`),
+      resolveGit: vi.fn().mockReturnValue("C:\\Program Files\\Git\\git.exe"),
+      log: vi.fn(),
+    });
+
+    expect(existsSync(join(nativeRoot, "plantable.dll"))).toBe(false);
+    expect(build).toHaveBeenCalledOnce();
+    expect(buildSupervisor).toHaveBeenCalledOnce();
   });
 });

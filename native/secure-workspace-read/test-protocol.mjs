@@ -19,6 +19,7 @@ import { resolveWindowsMsvcEnv, windowsToolFromPath } from "../../scripts/lib/wi
 import {
   foldAdjacentStringLiterals,
   prepareCSource,
+  prepareCSourcePreservingLiterals,
   stripCComments,
   stripStringLiteralBodies,
 } from "../lib/c-source-scanner.mjs";
@@ -338,9 +339,28 @@ function preparedSource(rawSource) {
   return prepareCSource(rawSource);
 }
 
+function literalPreservingSource(rawSource) {
+  return prepareCSourcePreservingLiterals(rawSource);
+}
+
 async function assertWindowsSourceContract() {
   const rawSource = await readFile(source, "utf8");
+  assertWindowsSourceContractOn(rawSource);
+  const unsafeDllDirectory = rawSource.replace(
+    /SetDllDirectoryW\(L""\)/gu,
+    'SetDllDirectoryW(L"not-empty")',
+  );
+  assert.notEqual(unsafeDllDirectory, rawSource, "DLL-directory mutation must change source");
+  assert.throws(
+    () => assertWindowsSourceContractOn(unsafeDllDirectory),
+    /SetDllDirectoryW/u,
+    "Windows source contract must reject a non-empty DLL directory in its startup guard",
+  );
+}
+
+function assertWindowsSourceContractOn(rawSource) {
   const nativeSource = stripCommentsAndStrings(rawSource);
+  const nativeSourceLiteralPreserving = literalPreservingSource(rawSource);
   // Comments-only strip for the two assertions whose subject is a string-literal body inside
   // `"..."`. Reading the RAW source for those left a commented-out reserved-stem list or a
   // commented-out `ascii_name_equals(..., "GLOBALROOT")` invocation visible to the assertion,
@@ -358,6 +378,10 @@ async function assertWindowsSourceContract() {
   assert.match(
     nativeSource,
     /_setmode\(_fileno\(stdin\), _O_BINARY\).*_setmode\(_fileno\(stdout\), _O_BINARY\)/su,
+  );
+  assert.match(
+    nativeSourceLiteralPreserving,
+    /int main\(void\)\s*\{[\s\S]*?if\s*\(\s*!SetDefaultDllDirectories\(LOAD_LIBRARY_SEARCH_SYSTEM32\)\s*\|\|\s*!SetDllDirectoryW\(L""\)\s*\)\s*return\s+1\s*;[\s\S]*?parse_request\(/u,
   );
   assert.match(nativeSource, /if \(!binary_standard_io\(\)\) return 1;.*parse_request\(/su);
   for (const stem of WINDOWS_RESERVED_STEMS)

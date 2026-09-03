@@ -31,7 +31,11 @@ import {
 // evade it) and `stripStringLiteralBodies(prepareCSource(...))` for positive identifier /
 // call pins (blanks string bodies so a diagnostic `"CREATE_SUSPENDED"` cannot satisfy an
 // assertion on the identifier).
-import { prepareCSource, stripStringLiteralBodies } from "../lib/c-source-scanner.mjs";
+import {
+  prepareCSource,
+  prepareCSourcePreservingLiterals,
+  stripStringLiteralBodies,
+} from "../lib/c-source-scanner.mjs";
 
 const source = fileURLToPath(new URL("./windows/keiko_runtime_supervisor.c", import.meta.url));
 const fixtureSource = fileURLToPath(new URL("./windows/qualification_fixture.c", import.meta.url));
@@ -254,6 +258,7 @@ function runSourceContractOn(rawSource) {
   // cannot satisfy an assertion on the identifier); the negative shell-launch pin consumes
   // the literal-preserving scan (so a real `system("cmd.exe")` still trips it).
   const preparedText = prepareCSource(rawSource);
+  const literalPreservingText = prepareCSourcePreservingLiterals(rawSource);
   const codeText = stripStringLiteralBodies(preparedText);
   assert.match(codeText, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/u);
   assert.match(codeText, /CREATE_SUSPENDED/u);
@@ -262,6 +267,10 @@ function runSourceContractOn(rawSource) {
   assert.match(codeText, /JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO/u);
   assert.match(codeText, /accounting\.ActiveProcesses == 0/u);
   assert.match(codeText, /PROC_THREAD_ATTRIBUTE_HANDLE_LIST/u);
+  assert.match(
+    literalPreservingText,
+    /int wmain\([^)]*\)\s*\{[\s\S]*?if\s*\(\s*!SetDefaultDllDirectories\(LOAD_LIBRARY_SEARCH_SYSTEM32\)\s*\|\|\s*!SetDllDirectoryW\(L""\)\s*\)\s*return\s+1\s*;/u,
+  );
   // Coderabbit 3793899396 on #3202: the negative shell-launch regex must accept `system` /
   // `ShellExecute` calls with OPTIONAL whitespace before the opening parenthesis (`system
   // ("cmd")` and `ShellExecute (…)` both compile identically). Word boundary on `system`
@@ -294,6 +303,30 @@ function assertMutationRejected(rawSource) {
     /CREATE_SUSPENDED/,
     "assertSourceContract must reject a mutation that hides CREATE_SUSPENDED inside a " +
       "diagnostic string — pins that `stripStringLiteralBodies` runs on the identifier pin",
+  );
+  const withoutLoaderHardening = rawSource.replace(
+    "SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)",
+    "0",
+  );
+  assert.notEqual(
+    withoutLoaderHardening,
+    rawSource,
+    "loader-hardening mutation must change source",
+  );
+  assert.throws(
+    () => runSourceContractOn(withoutLoaderHardening),
+    /SetDefaultDllDirectories/,
+    "assertSourceContract must reject a source that drops its runtime DLL search-path hardening",
+  );
+  const unsafeDllDirectory = rawSource.replace(
+    /SetDllDirectoryW\(L""\)/gu,
+    'SetDllDirectoryW(L"not-empty")',
+  );
+  assert.notEqual(unsafeDllDirectory, rawSource, "DLL-directory mutation must change source");
+  assert.throws(
+    () => runSourceContractOn(unsafeDllDirectory),
+    /SetDllDirectoryW/u,
+    "assertSourceContract must reject a non-empty DLL directory in the fail-closed startup guard",
   );
 }
 

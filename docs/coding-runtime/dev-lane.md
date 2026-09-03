@@ -1,6 +1,7 @@
-# Coding-runtime development lane (macOS)
+# Coding-runtime development lane
 
-The development lane activates the managed OpenCode runtime on a **macOS repository checkout**
+The development lane activates the managed OpenCode runtime on a **macOS (arm64/x64) or Windows
+(x64) repository checkout**
 through production discovery and production composition — the same `buildUiHandlerDeps` path a
 packaged install uses, with no injected runtime seams. It exists to end the false-green era in
 which every green journey injected the runtime through test-only seams while every real
@@ -13,30 +14,29 @@ Decision record: [ADR-0140](../adr/ADR-0140-macos-dev-lane-activation-of-the-man
 The lane carries the evidence class **`functional-not-platform-qualified`**. It is a functional
 activation, not a platform qualification:
 
-- **Forgone: runtime-supervisor containment and orphan-reaping guarantees.** The release-qualified
-  supervisor (ADR-0137 D5) proves complete process-tree termination before a run slot is reused.
-  The dev-lane backend spawns the runtime as the leader of a fresh POSIX process group and
-  terminates the group best-effort; a descendant that leaves the group survives unobserved, and
-  tree exit is proven only for the direct child. This is a deliberate, documented trade-off — not
-  merely a missing qualification receipt.
+- **Platform-specific supervision, no platform qualification.** On macOS the dev-lane backend
+  terminates a fresh POSIX process group best-effort; a descendant that leaves the group survives
+  unobserved, and tree exit is proven only for the direct child. Windows uses the native Job Object
+  supervisor staged with the runtime. Neither development path claims a release qualification.
 - **Forgone: platform signature chains.** The OpenCode payload is verified byte-for-byte against
   the review-approved redistribution catalog (`portable-runtime-approvals.json`), and the
   secure-read helper is digest-pinned at build time and re-verified on every read — but no
-  Developer ID/notarization chain is evaluated. The locally built helper carries only the
-  linker's ad-hoc signature.
+  Developer ID/notarization or Authenticode chain is evaluated. The locally built helper carries
+  only local build evidence.
 - **Structurally confined to dev checkouts.** Discovery refuses whenever the package root carries
   a packaged-install manifest (`.portable/…`) or is not a repository checkout (no `.git` /
   `tsconfig.packages.json`). **No packaged install — Windows or macOS — can adopt this lane**;
   packaged behavior is unchanged and stays fail-closed until the Wave-5 packaged qualification.
 - **Trusted-launcher opt-in only.** `npm run dev:start` is the operator's explicit selection of
-  development mode and supplies `KEIKO_CODING_RUNTIME_DEV_LANE=1` to the BFF on supported macOS
+  development mode and supplies `KEIKO_CODING_RUNTIME_DEV_LANE=1` to the BFF on supported
   checkouts. Direct BFF startup does nothing unless the environment value is explicitly enabled
   (`1`, `true`, `on`, `yes`, `enabled`).
 
 ## Prerequisites
 
-- macOS arm64 or x64, Node per `.nvmrc`/engines, a full repository checkout.
-- Xcode Command Line Tools (`xcrun clang`) — the secure-read helper is compiled locally.
+- macOS arm64/x64 or Windows x64, Node per `.nvmrc`/engines, and a full repository checkout.
+- macOS: Xcode Command Line Tools (`xcrun clang`). Windows: Visual Studio Build Tools with the C++
+  workload. The launcher resolves the required compiler environment before building its helpers.
 - Network access to `github.com` release assets for the one-time payload download.
 
 ## Start
@@ -53,12 +53,13 @@ standalone staging command remains available for deliberate pre-provisioning.
 
 Staging writes `.portable-sidecar-payloads/<target>/`:
 
-| Path                                       | Content                                                                                     |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| `opencode-compatible/payload/bin/opencode` | The pinned OpenCode 1.17.17 executable, tree-digest-verified against the approvals catalog. |
-| `opencode-compatible/payload/evidence/`    | License (digest-pinned by the catalog) and generated SBOM.                                  |
-| `native/keiko-secure-workspace-read`       | The locally built KSR1/KSS1 secure-read helper.                                             |
-| `dev-lane-manifest.json`                   | Digest, size, source commit, and source-tree digest of the helper.                          |
+| Path                                             | Content                                                                                     |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `opencode-compatible/payload/bin/opencode[.exe]` | The pinned OpenCode 1.17.17 executable, tree-digest-verified against the approvals catalog. |
+| `opencode-compatible/payload/evidence/`          | License and freshly generated SBOM, each digest-pinned by the catalog.                      |
+| `native/keiko-secure-workspace-read[.exe]`       | The locally built KSR1/KSS1 secure-read helper.                                             |
+| `native/keiko-runtime-supervisor.exe`            | Windows native Job Object supervisor.                                                       |
+| `dev-lane-manifest.json`                         | Digest, size, source commit, and source-tree digest of staged helpers.                      |
 
 At server start, discovery re-verifies everything fail-closed: catalog approval, executable tree
 digest, license digest, helper digest/size, and helper source-tree freshness (a rebuilt or edited
@@ -76,17 +77,17 @@ required whenever `runtimeAvailable` is true.
 
 When readiness reports `false`, the `runtimeUnavailableReason` names the first failed prerequisite:
 
-| Reason                    | Meaning                                                                                                                    | Typical fix                                                 |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `runtime-disabled`        | `KEIKO_CODING_SIDECAR_DISABLED` kill switch is set.                                                                        | Unset the kill switch.                                      |
-| `platform-unqualified`    | No packaged qualification and the trusted dev launcher was not used.                                                       | Use `npm run dev:start` or a qualified install.             |
-| `dev-lane-refused`        | Lane enabled, but the host is not a permitted dev checkout (packaged manifest present, no checkout markers, or non-macOS). | Run from a real macOS repository checkout.                  |
-| `payload-missing`         | Staged payload or evidence files absent.                                                                                   | `npm run dev:coding-runtime:stage`                          |
-| `payload-unapproved`      | Approvals catalog missing, unparseable, or redistribution not approved.                                                    | Restore `portable-runtime-approvals.json`.                  |
-| `payload-tampered`        | Executable or license digest no longer matches the catalog.                                                                | Re-stage; investigate the modification.                     |
-| `secure-read-unavailable` | Helper or its manifest missing, digest/size drifted, or helper source changed since the build.                             | `npm run dev:coding-runtime:stage`                          |
-| `loopback-unavailable`    | `KEIKO_UI_PORT` unset or invalid in the server process.                                                                    | Use `npm run dev:start` (exports it) or export it manually. |
-| `runtime-unqualified`     | Generic composition fallback (for example, no task-workspace stack).                                                       | Check server composition.                                   |
+| Reason                    | Meaning                                                                                                                               | Typical fix                                                 |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `runtime-disabled`        | `KEIKO_CODING_SIDECAR_DISABLED` kill switch is set.                                                                                   | Unset the kill switch.                                      |
+| `platform-unqualified`    | No packaged qualification and the trusted dev launcher was not used.                                                                  | Use `npm run dev:start` or a qualified install.             |
+| `dev-lane-refused`        | Lane enabled, but the host is not a permitted dev checkout (packaged manifest present, no checkout markers, or unsupported platform). | Run from a supported repository checkout.                   |
+| `payload-missing`         | Staged payload or evidence files absent.                                                                                              | `npm run dev:coding-runtime:stage`                          |
+| `payload-unapproved`      | Approvals catalog missing, unparseable, or redistribution not approved.                                                               | Restore `portable-runtime-approvals.json`.                  |
+| `payload-tampered`        | Executable or license digest no longer matches the catalog.                                                                           | Re-stage; investigate the modification.                     |
+| `secure-read-unavailable` | Helper or its manifest missing, digest/size drifted, or helper source changed since the build.                                        | `npm run dev:coding-runtime:stage`                          |
+| `loopback-unavailable`    | `KEIKO_UI_PORT` unset or invalid in the server process.                                                                               | Use `npm run dev:start` (exports it) or export it manually. |
+| `runtime-unqualified`     | Generic composition fallback (for example, no task-workspace stack).                                                                  | Check server composition.                                   |
 
 ## Deployment ceiling
 

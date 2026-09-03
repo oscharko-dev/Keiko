@@ -4231,6 +4231,7 @@ function resolveProductionRuntimePorts(
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     runtimeEvidence,
     gatewayReadiness: readiness,
+    activityLog: processServerLogSink(),
     // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) yields no root: the
     // activation stays unavailable rather than crashing the resolution or trusting an unproven tree.
     resolveWorkspaceRoot: (): string | undefined => {

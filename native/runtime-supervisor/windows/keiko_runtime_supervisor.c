@@ -483,6 +483,12 @@ int wmain(int argc, wchar_t **argv) {
   unsigned char proof[8];
   uint32_t active_processes = UINT32_MAX;
   int result = 1;
+  /*
+   * The supervisor is staged beneath a developer checkout.  Its implicit imports are constrained
+   * before wmain by /MT and /DEPENDENTLOADFLAG:0x800 in build-runtime-supervisor.mjs; these calls
+   * close the remaining search-path surface for any later LoadLibrary-style dependency.
+   */
+  if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) || !SetDllDirectoryW(L"")) return 1;
   memset(&process, 0, sizeof(process));
   if (argc == 3 && wcscmp(argv[1], L"--reconcile") == 0) return reconcile_job(argv[2]);
   if (argc != 1) {

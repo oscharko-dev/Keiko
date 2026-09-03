@@ -4,9 +4,12 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { ServerLogEvent } from "../observability/index.js";
 import { resolveProductionOpenCodeActivation } from "./productionOpenCodeActivation.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { stageDevLaneFixture, type DevLaneFixture } from "./devLaneFixture/_support.js";
+import type { DevLaneOpenCodeTarget } from "./devLanePortableCodingRuntime.js";
 
 const secureRead: SecureWorkspaceTextReadPort = {
   readText: () => Promise.resolve({ ok: false, reason: "denied" }),
@@ -14,16 +17,19 @@ const secureRead: SecureWorkspaceTextReadPort = {
 
 const roots: string[] = [];
 
-function devLaneFixture(): DevLaneFixture {
+function devLaneFixture(target?: DevLaneOpenCodeTarget): DevLaneFixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-activation-")));
   roots.push(root);
-  return stageDevLaneFixture(root);
+  return stageDevLaneFixture(root, target);
 }
 
 interface ActivationOverrides {
   readonly withSecureRead?: boolean;
   readonly withWorkspaceRoot?: boolean;
   readonly stateDir?: string;
+  readonly platform?: NodeJS.Platform;
+  readonly arch?: string;
+  readonly activity?: ServerLogEvent[];
 }
 
 function activationInput(
@@ -32,15 +38,20 @@ function activationInput(
 ): Parameters<typeof resolveProductionOpenCodeActivation>[0] {
   return {
     env,
-    // Deterministic host identity: these cases exercise the macOS dev lane on every CI host.
-    platform: "darwin",
-    arch: "arm64",
+    // Deterministic host identity: these cases exercise supported dev lanes on every CI host.
+    platform: overrides.platform ?? "darwin",
+    arch: overrides.arch ?? "arm64",
     runtimeStateDir: overrides.stateDir ?? join(tmpdir(), "keiko-runtime-state"),
     runtimeEvidence: { observe: () => undefined },
     gatewayReadiness: {
       waitForObservedRequest: () => Promise.resolve(false),
       verifyObserved: () => undefined,
       clear: () => undefined,
+    },
+    activityLog: {
+      write: (event: ServerLogEvent): void => {
+        overrides.activity?.push(event);
+      },
     },
     ...(overrides.withSecureRead === true ? { secureWorkspaceTextRead: secureRead } : {}),
     ...(overrides.withWorkspaceRoot === false
@@ -111,6 +122,26 @@ describe("production OpenCode activation", () => {
     expect(result.unavailableReason).toBe("payload-missing");
   });
 
+  it("records body-free dev-lane refusal evidence", () => {
+    const staged = devLaneFixture();
+    const activity: ServerLogEvent[] = [];
+    unlinkSync(staged.paths.executable);
+
+    const result = resolveProductionOpenCodeActivation(
+      activationInput({ ...staged.env, KEIKO_UI_PORT: "1983" }, { activity }),
+    );
+
+    expect(result.unavailableReason).toBe("payload-missing");
+    expect(activity).toEqual([
+      {
+        category: "process",
+        op: "coding-runtime.dev-lane.refused",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        extra: { lane: "dev-checkout", reason: "payload-missing" },
+      },
+    ]);
+  });
+
   it("names secure-read-unavailable when workspace-root resolution is not composed", () => {
     const staged = devLaneFixture();
     const result = resolveProductionOpenCodeActivation(
@@ -131,6 +162,32 @@ describe("production OpenCode activation", () => {
     expect(result.ports?.backend).toBeDefined();
     expect(result.ports?.secureWorkspaceTextRead).toBeDefined();
     expect(result.ports?.editorAgentClient).toBeDefined();
+  });
+
+  it("activates the staged Windows dev lane through the production composition", () => {
+    const staged = devLaneFixture("windows-x64");
+    const stateDir = join(staged.root, "runtime-state");
+    const activity: ServerLogEvent[] = [];
+    const result = resolveProductionOpenCodeActivation(
+      activationInput(
+        { ...staged.env, KEIKO_UI_PORT: "1983" },
+        { platform: "win32", arch: "x64", stateDir, activity },
+      ),
+    );
+
+    expect(result.unavailableReason).toBeUndefined();
+    expect(result.ports?.backend).toBeDefined();
+    expect(result.ports?.secureWorkspaceTextRead).toBeDefined();
+    expect(activity).toHaveLength(1);
+    const [event] = activity;
+    if (event === undefined) throw new Error("dev-lane-activation-log-missing");
+    expect(event).toMatchObject({
+      category: "process",
+      op: "coding-runtime.dev-lane.activated",
+      correlationId: UNKNOWN_CORRELATION_ID,
+      extra: { lane: "dev-checkout", target: "windows-x64" },
+    });
+    expect(event.extra?.runtimeSupervisorSha256).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   it("prefers an injected secure-read port over dev-lane construction", () => {

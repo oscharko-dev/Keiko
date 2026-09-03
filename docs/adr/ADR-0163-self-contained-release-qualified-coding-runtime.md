@@ -75,6 +75,14 @@ Staging, signing, qualification, assembly, publishing, and fresh-runner smoke ch
 any required component is absent, duplicated, unsigned, unnotarized where applicable,
 architecture-mismatched, stale, or not bound to the source commit and target.
 
+**Amended 2026-09-03 — Windows native-helper CRT packaging.** The Windows launcher, setup
+bootstrap, secure workspace-read helper, and Job Object supervisor are compiled with `/MT`, so
+their C runtime is statically linked rather than resolved through a separately plantable Visual C++
+runtime DLL. Their link lines also retain `/DEPENDENTLOADFLAG:0x800`; together with the helpers'
+fail-closed DLL-directory initialization, this keeps later dynamic dependency resolution confined
+to the system directory. The Windows native-quality gate derives and proves these exact production
+flags for every producer.
+
 There are exactly three pre-signing lanes, and a lane is a declaration the artifact carries in its
 own manifest, never an argument a caller supplies:
 
@@ -429,3 +437,10 @@ green. This is the class audit finding F-01 closed, and it must not be reintrodu
   in a shipped bundle learns nothing about evaluation. The machinery is reused; the lane is not.
 - **Auto-select Full access after successful setup.** Installation state is not human authorization
   and may never widen the deployment ceiling.
+
+## Version History
+
+| Version | Date       | Change |
+| ------- | ---------- | ------ |
+| 1.0     | 2026-07-27 | Accepted the self-contained release-qualified Coding Workbench runtime. |
+| 1.1     | 2026-09-03 | Recorded the D1 Windows native-helper packaging amendment: `/MT` statically links the CRT while `/DEPENDENTLOADFLAG:0x800` and fail-closed DLL-directory initialization retain the DLL-planting defense. |

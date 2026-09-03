@@ -287,10 +287,12 @@ async function extractVerifiedRuntimeExecutable(runtime, target, sourceRoot, arc
 }
 
 function writeSidecarSbom(runtime, target, sourceRoot, executableSha256) {
-  writeFileSync(
-    join(sourceRoot, SPEC_EVIDENCE_DIR, "sbom.cdx.json"),
-    `${JSON.stringify(sidecarSbomDocument(runtime, target, executableSha256), null, 2)}\n`,
-  );
+  const document = `${JSON.stringify(sidecarSbomDocument(runtime, target, executableSha256), null, 2)}\n`;
+  const generatedSha256 = createHash("sha256").update(document, "utf8").digest("hex");
+  if (generatedSha256 !== runtime.archives[target].sbomSha256) {
+    fail("generated sidecar SBOM digest does not match approved catalog");
+  }
+  writeFileSync(join(sourceRoot, SPEC_EVIDENCE_DIR, "sbom.cdx.json"), document);
 }
 
 export function sidecarSpecDocument(runtime, target, sourceRoot, executableRelative) {
@@ -381,20 +383,18 @@ export async function prepareApprovedSidecarPayloads(
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  prepareApprovedSidecarPayloads(process.argv.slice(2)).then(
-    (summary) => {
-      for (const entry of summary.results) {
-        console.log(
-          `prepared ${entry.name} for ${summary.target}: payload ${entry.payloadSha256.slice(0, 12)} spec ${entry.specPath}`,
-        );
-      }
-      if (summary.results.length === 0) {
-        console.log(`no approved sidecar runtimes configured for ${summary.target}`);
-      }
-    },
-    (error) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
-    },
-  );
+  try {
+    const summary = await prepareApprovedSidecarPayloads(process.argv.slice(2));
+    for (const entry of summary.results) {
+      console.log(
+        `prepared ${entry.name} for ${summary.target}: payload ${entry.payloadSha256.slice(0, 12)} spec ${entry.specPath}`,
+      );
+    }
+    if (summary.results.length === 0) {
+      console.log(`no approved sidecar runtimes configured for ${summary.target}`);
+    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }

@@ -18,7 +18,11 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { hostDevLaneTarget, stageDevCodingRuntime } from "./stage-dev-coding-runtime.mjs";
+import {
+  hostDevLaneTarget,
+  restageDevCodingRuntimeNativeHelpers,
+  stageDevCodingRuntime,
+} from "./stage-dev-coding-runtime.mjs";
 import { probePortFree } from "./lib/port-probe.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -348,7 +352,7 @@ export async function codingRuntimeHealth(baseUrl, fetchFn = globalThis.fetch) {
     // beside the status instead.
     return body?.runtimeEvidenceClass === "platform-qualified"
       ? "ok"
-      : "ok · unverified evaluation runtime (no platform signature)";
+      : "ok · local runtime integrity verified (no platform signature)";
   }
   const reason =
     typeof body?.runtimeUnavailableReason === "string"
@@ -361,16 +365,20 @@ export function codingRuntimeRequired(platform = process.platform, arch = proces
   return hostDevLaneTarget(platform, arch) !== undefined;
 }
 
+export function healthyDevServer(health) {
+  return health.startsWith("ok");
+}
+
 function healthError(name, error) {
   if (error instanceof Error) return `${name}: ${error.message}`;
   return `${name}: ${String(error)}`;
 }
 
 // Exported for test: the gate that consumes codingRuntimeHealth. It went untested, which is how an
-// honest status string could break every macOS `dev:start` while the suite stayed green.
+// honest status string could break every supported `dev:start` while the suite stayed green.
 export async function requiredRuntimeHealth(baseUrl, required = codingRuntimeRequired()) {
   // `required` is a parameter so the gate is assertable on any host: codingRuntimeRequired() is
-  // true only where a dev-lane target exists (darwin), so a test that let it default would take
+  // true only where a dev-lane target exists, so a test that let it default would take
   // the short-circuit on Linux CI and pass without ever reaching the code under test.
   if (!required) return "ok";
   try {
@@ -418,7 +426,7 @@ async function devServerHealth(port) {
   ];
 
   const runtime = await requiredRuntimeHealth(baseUrl);
-  if (!runtime.startsWith("ok")) return runtime;
+  if (!healthyDevServer(runtime)) return runtime;
   const runtimeDetail = runtime === "ok" ? "" : runtime.slice("ok".length);
 
   for (const check of checks) {
@@ -460,7 +468,7 @@ async function waitForHealth(port, child) {
     lastError = await devServerHealth(port);
     // Same rule as the gate above: the status word is "ok", anything after it is the runtime's
     // honest evidence detail and must never turn a healthy server into a failed start.
-    if (lastError.startsWith("ok"))
+    if (healthyDevServer(lastError))
       return lastError === "ok" ? undefined : lastError.slice(2).trim();
     if (lastError.startsWith("runtime: unavailable")) {
       throw new Error(`coding runtime failed readiness: ${lastError}; see ${logFile}`);
@@ -483,7 +491,7 @@ async function restartExistingRunnerIfNeeded() {
 
   const runningPort = state.publicPort ?? publicPort;
   const health = await devServerHealth(runningPort);
-  if (health === "ok") {
+  if (healthyDevServer(health)) {
     console.log(
       `Keiko dev UI already running on ${publicBrowserUrl(runningPort)} (pid ${String(
         state.runnerPid,
@@ -567,6 +575,7 @@ const STAGEABLE_DEV_RUNTIME_REASONS = new Set([
   "payload-missing",
   "payload-unapproved",
   "payload-tampered",
+  "native-helper-directory-untrusted",
   "secure-read-helper-missing",
   "secure-read-helper-stale",
 ]);
@@ -600,15 +609,21 @@ export async function ensureDevCodingRuntime(seams = {}) {
   };
   const discover = seams.discover ?? discoverDevCodingRuntime;
   const stage = seams.stage ?? (() => stageDevCodingRuntime([]));
-  let discovery = await discover({ env, platform, arch });
+  const restageNative = seams.restageNative ?? (() => restageDevCodingRuntimeNativeHelpers());
+  let discovery = await discover({ env, platform, arch, admitRuntimeSupervisor: false });
   if (discovery.outcome === "activated") {
-    console.log(`[dev:start] verified coding runtime for ${target}`);
+    // The sidecar stays catalog-verified on disk; regenerate its locally compiled native
+    // components before the BFF starts so a previous workspace write cannot authorize a helper.
+    await restageNative();
+    discovery = await discover({ env, platform, arch, admitRuntimeSupervisor: true });
+    requireActivatedDevRuntime(discovery);
+    console.log(`[dev:start] refreshed coding runtime for ${target}`);
     return true;
   }
   const reason = requireStageableDevRuntime(discovery);
   console.log(`[dev:start] coding runtime ${reason}; preparing ${target}`);
   await stage();
-  discovery = await discover({ env, platform, arch });
+  discovery = await discover({ env, platform, arch, admitRuntimeSupervisor: true });
   requireActivatedDevRuntime(discovery);
   console.log(`[dev:start] coding runtime ready for ${target}`);
   return true;
