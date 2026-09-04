@@ -3038,20 +3038,28 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
-  it("bootstraps locked Corepack inside the Node 26 runtime trust root", () => {
+  it("exposes locked Corepack through the Node 26 runtime trust root", () => {
     const job = ciJobs().find((candidate) => candidate.name === "node-26-compatibility");
     expect(job).toBeDefined();
     if (job === undefined) throw new Error("node-26-compatibility job is missing");
     const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
     expect(manifest.devDependencies.corepack).toMatch(/^\d+\.\d+\.\d+$/u);
+    const buildAt = job.text.indexOf("npm run build:ui");
+    const evidenceAt = job.text.indexOf("node scripts/editor-release-evidence.mjs --json");
     const rootAt = job.text.indexOf("NODE_RUNTIME_ROOT=");
-    const installAt = job.text.indexOf("npm install --global --ignore-scripts --offline");
+    const shimAt = job.text.indexOf('cat > "$COREPACK_BIN/corepack"');
     const provisionAt = job.text.indexOf("npm run provision:smoke");
-    expect(job.text).toContain("./node_modules/corepack");
+    expect(job.text).toContain(
+      'exec node "$GITHUB_WORKSPACE/node_modules/corepack/dist/corepack.js" "$@"',
+    );
     expect(job.text).toContain("$NODE_RUNTIME_ROOT/keiko-corepack.XXXXXX");
+    expect(job.text).toContain('chmod 755 "$COREPACK_BIN/corepack"');
+    expect(job.text).not.toContain("npm install --global");
+    expect(evidenceAt).toBeGreaterThan(buildAt);
+    expect(rootAt).toBeGreaterThan(evidenceAt);
     expect(rootAt).toBeGreaterThan(-1);
-    expect(installAt).toBeGreaterThan(rootAt);
-    expect(provisionAt).toBeGreaterThan(installAt);
+    expect(shimAt).toBeGreaterThan(rootAt);
+    expect(provisionAt).toBeGreaterThan(shimAt);
   });
 
   it("bounds every step that may reach the package-manager host", () => {
