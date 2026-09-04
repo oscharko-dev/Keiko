@@ -778,6 +778,57 @@ describe("workspace widget renderer registry", () => {
     expect(alerts[0]).toHaveTextContent("Settings > Models");
   });
 
+  it("renders exactly one fallback alert for a creation-only failure", async () => {
+    const ctx = makeCtx();
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.chats = [];
+    render(<>{WIN_TYPES.chat.render({ newChatRequestId: "creation-only" }, ctx)}</>);
+
+    await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(1));
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not open chat.");
+  });
+
+  it("renders exactly one fallback alert for a lookup-only failure", async () => {
+    const ctx = makeCtx();
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.chats = [];
+    render(
+      <>
+        {WIN_TYPES.chat.render({ chatId: "missing-chat", projectPath: "/missing-project" }, ctx)}
+      </>,
+    );
+
+    await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(1));
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not open chat.");
+  });
+
+  it.each([
+    ["empty", "", "Could not open chat."],
+    ["malformed", "{", "{"],
+    [
+      "hostile",
+      "<script>window.__unsafe = true</script>",
+      "<script>window.__unsafe = true</script>",
+    ],
+  ])("renders one safe alert for a %s combined failure", async (_case, error, expected) => {
+    const ctx = makeCtx();
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.chats = [];
+    const view = render(
+      <>{WIN_TYPES.chat.render({ newChatRequestId: `combined-${_case}` }, ctx)}</>,
+    );
+    await screen.findByRole("alert");
+
+    chatSessionMock.error = error;
+    view.rerender(<>{WIN_TYPES.chat.render({ newChatRequestId: `combined-${_case}` }, ctx)}</>);
+
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toHaveTextContent(expected);
+    expect(alerts[0]?.querySelector("script")).toBeNull();
+    expect(window).not.toHaveProperty("__unsafe");
+  });
+
   it("routes an editor selection into an existing project chat without opening a duplicate", async () => {
     const ctx = makeCtx();
     const acceptSelectionHandoff = vi.fn<(selectionHandoffId: string) => void>();

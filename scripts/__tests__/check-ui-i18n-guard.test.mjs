@@ -448,6 +448,31 @@ test("fails a JSON feature catalog with a missing language", async () => {
   );
 });
 
+test.each([
+  ["malformed JSON", "{"],
+  ["a null root", "null"],
+  ["an array root", "[]"],
+  ["an empty object", "{}"],
+])("fails a JSON feature catalog with %s", async (_description, catalogSource) => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [JSON_FEATURE_CATALOG]: catalogSource,
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, JSON_FEATURE_CATALOG],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.problems).toHaveLength(1);
+      expect(result.problems[0]).toMatch(/must contain (valid JSON|a non-empty JSON object)/u);
+    },
+  );
+});
+
 // A keyed lookup declared AFTER the two catalogs — e.g. a closed Record mapping a server reason code
 // onto a catalog key — is not catalog content. The parity slice used to run to end of file, so those
 // code names read as German-only entries and broke parity in a file whose catalogs are identical.

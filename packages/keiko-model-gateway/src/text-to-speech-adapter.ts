@@ -241,14 +241,18 @@ async function dispatch(
 // Normalizes the provider `content-type` to a bare audio MIME type, dropping any parameters (e.g.
 // `; charset`). A provider that omits the header or returns a non-audio type falls back to the MIME
 // derived from the requested response format, so the browser always receives a playable label.
+const OGG_HEADER_PROBE_BYTES = 6;
+
 function hasOggContainerSignature(audio: Uint8Array | undefined): boolean {
   return (
     audio !== undefined &&
-    audio.byteLength >= 4 &&
+    audio.byteLength >= OGG_HEADER_PROBE_BYTES &&
     audio[0] === 0x4f &&
     audio[1] === 0x67 &&
     audio[2] === 0x67 &&
-    audio[3] === 0x53
+    audio[3] === 0x53 &&
+    audio[4] === 0x00 &&
+    ((audio[5] ?? 0xff) & 0xf8) === 0
   );
 }
 
@@ -259,10 +263,6 @@ function declaredMimeType(response: Response, responseFormat: SpeechResponseForm
     if (base.startsWith("audio/")) return base;
   }
   return RESPONSE_FORMAT_MIME[responseFormat];
-}
-
-function resolveMimeType(response: Response, responseFormat: SpeechResponseFormat): string {
-  return declaredMimeType(response, responseFormat);
 }
 
 function speechMimeClass(mimeType: string): SpeechResponseFormat | "other-audio" {
@@ -386,6 +386,69 @@ function boundBodyStream(
   });
 }
 
+function replayPeekedStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  buffered: readonly Uint8Array[],
+  sourceDone: boolean,
+): ReadableStream<Uint8Array> {
+  let bufferedIndex = 0;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller): Promise<void> {
+      const chunk = buffered[bufferedIndex];
+      if (chunk !== undefined) {
+        bufferedIndex += 1;
+        controller.enqueue(chunk);
+        return;
+      }
+      if (sourceDone) {
+        controller.close();
+        return;
+      }
+      const { done, value } = await reader.read();
+      if (done) controller.close();
+      else controller.enqueue(value);
+    },
+    cancel(reason): void {
+      void reader.cancel(reason);
+    },
+  });
+}
+
+function copyPrefix(chunks: readonly Uint8Array[], byteLimit: number): Uint8Array {
+  const prefix = new Uint8Array(byteLimit);
+  let copied = 0;
+  for (const chunk of chunks) {
+    const count = Math.min(chunk.byteLength, byteLimit - copied);
+    prefix.set(chunk.subarray(0, count), copied);
+    copied += count;
+    if (copied === byteLimit) break;
+  }
+  return prefix.subarray(0, copied);
+}
+
+async function peekBodyStream(
+  source: ReadableStream<Uint8Array>,
+  byteLimit: number,
+): Promise<{ readonly prefix: Uint8Array; readonly body: ReadableStream<Uint8Array> }> {
+  const reader = source.getReader();
+  const buffered: Uint8Array[] = [];
+  let bufferedBytes = 0;
+  let sourceDone = false;
+  while (bufferedBytes < byteLimit) {
+    const { done, value } = await reader.read();
+    if (done) {
+      sourceDone = true;
+      break;
+    }
+    buffered.push(value);
+    bufferedBytes += value.byteLength;
+  }
+  return {
+    prefix: copyPrefix(buffered, Math.min(bufferedBytes, byteLimit)),
+    body: replayPeekedStream(reader, buffered, sourceDone),
+  };
+}
+
 // Streaming variant of requestTextToSpeech: returns the provider audio as a bounded byte stream instead
 // of a fully-buffered clip, so the BFF can forward it chunk-by-chunk and the browser can start playback
 // on the first chunk. Same provider contract, auth, egress seam, error coding, and size cap; only the
@@ -409,11 +472,17 @@ export async function requestTextToSpeechStream(
   if (dispatched.body === null) {
     return { ok: false, kind: "empty-audio" };
   }
+  let peeked: Awaited<ReturnType<typeof peekBodyStream>>;
+  try {
+    peeked = await peekBodyStream(dispatched.body, OGG_HEADER_PROBE_BYTES);
+  } catch {
+    return { ok: false, kind: "invalid-response" };
+  }
   return {
     ok: true,
     value: {
-      body: boundBodyStream(dispatched.body, built.maxAudioBytes),
-      mimeType: resolveMimeType(dispatched, built.responseFormat),
+      body: boundBodyStream(peeked.body, built.maxAudioBytes),
+      mimeType: resolveBufferedMimeType(dispatched, built.responseFormat, peeked.prefix, built.log),
     },
   };
 }

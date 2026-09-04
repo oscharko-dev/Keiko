@@ -458,7 +458,7 @@ function spawnChild(label, command, args, options) {
     if (children.get(label) !== child) return;
     children.delete(label);
     publicReady = false;
-    if (label === "bff") allowSameOriginMicrophone = false;
+    allowSameOriginMicrophone = microphoneAllowanceAfterChildExit(label, allowSameOriginMicrophone);
     writeState({ ready: false, lastExit: { label, code, signal } });
     if (shuttingDown) return;
     console.error(`[dev] ${label} exited unexpectedly.`);
@@ -481,16 +481,38 @@ async function fetchOk(url, validate = async () => true) {
   return (await validate(response)) ? "ok" : "unexpected response";
 }
 
-async function readinessProbe() {
+export function microphoneAllowanceAfterChildExit(label, currentAllowance) {
+  return label === "bff" ? false : currentAllowance === true;
+}
+
+export async function probeApiReadiness(url, fetchImpl = globalThis.fetch) {
   try {
-    const api = await fetchOk(`http://${host}:${String(bffPort)}/api/health`, async (response) => {
-      const body = await response.json();
-      allowSameOriginMicrophone = upstreamAllowsSameOriginMicrophone(
-        Object.fromEntries(response.headers.entries()),
-      );
-      return body?.status === "ok";
-    });
-    if (api !== "ok") return `api: ${api}`;
+    const response = await fetchImpl(url, { cache: "no-store" });
+    if (!response.ok) {
+      return { result: `HTTP ${String(response.status)}`, allowSameOriginMicrophone: false };
+    }
+    const body = await response.json();
+    const healthy = body?.status === "ok";
+    return {
+      result: healthy ? "ok" : "unexpected response",
+      allowSameOriginMicrophone:
+        healthy &&
+        upstreamAllowsSameOriginMicrophone(Object.fromEntries(response.headers.entries())),
+    };
+  } catch (error) {
+    return {
+      result: error instanceof Error ? error.message : String(error),
+      allowSameOriginMicrophone: false,
+    };
+  }
+}
+
+async function readinessProbe() {
+  allowSameOriginMicrophone = false;
+  try {
+    const api = await probeApiReadiness(`http://${host}:${String(bffPort)}/api/health`);
+    allowSameOriginMicrophone = api.allowSameOriginMicrophone;
+    if (api.result !== "ok") return `api: ${api.result}`;
 
     const ui = await fetchOk(`http://${host}:${String(nextPort)}/`, async (response) => {
       const contentType = response.headers.get("content-type") ?? "";
@@ -694,7 +716,7 @@ function devPermissionsPolicy(allowMicrophone) {
   return `camera=(), geolocation=(), ${microphone}, payment=(), usb=()`;
 }
 
-function upstreamAllowsSameOriginMicrophone(upstreamHeaders) {
+export function upstreamAllowsSameOriginMicrophone(upstreamHeaders) {
   const value = upstreamHeaders?.["permissions-policy"];
   return (
     typeof value === "string" &&

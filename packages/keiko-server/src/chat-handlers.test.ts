@@ -87,7 +87,7 @@ describe("parseExpectedGroundingScopeIdentity", (): void => {
   );
 });
 
-function requestContext(body: Record<string, unknown>): RouteContext {
+function requestContext(body: Record<string, unknown>, correlationId?: string): RouteContext {
   const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]);
   const res = {
     destroyed: false,
@@ -101,7 +101,7 @@ function requestContext(body: Record<string, unknown>): RouteContext {
     },
   };
   return {
-    correlationId: undefined,
+    correlationId,
     req: req as unknown as IncomingMessage,
     res: res as unknown as ServerResponse,
     params: {},
@@ -208,11 +208,14 @@ describe("desktop chat production gateway reuse", () => {
       vi.stubGlobal("fetch", fetchSpy);
 
       const createRejected = await handleCreateDesktopChat(
-        requestContext({
-          modelId: "breaker-chat",
-          projectPath: fixture.projectPath,
-          title: "must not be created",
-        }),
+        requestContext(
+          {
+            modelId: "breaker-chat",
+            projectPath: fixture.projectPath,
+            title: "must not be created",
+          },
+          "corr-create-unready",
+        ),
         fixture.deps,
       );
       const rejected = await sendBreakerChat(fixture, "must not leave the server");
@@ -260,7 +263,7 @@ describe("desktop chat production gateway reuse", () => {
         expect.objectContaining({
           category: "gateway",
           op: "chat.creation.rejected",
-          correlationId: UNKNOWN_CORRELATION_ID,
+          correlationId: "corr-create-unready",
           status: 400,
           errorKind: "model-not-ready",
           extra: { reason: "readiness", modelKind: "chat" },
@@ -268,6 +271,37 @@ describe("desktop chat production gateway reuse", () => {
       );
     } finally {
       vi.unstubAllGlobals();
+      resetServerLogger();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
+  it("logs an invalid model creation rejection with the undefined-context fallback", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const rejected = await handleCreateDesktopChat(
+        requestContext({
+          modelId: "missing-model",
+          projectPath: fixture.projectPath,
+          title: "must not be created",
+        }),
+        fixture.deps,
+      );
+
+      expect(rejected).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "gateway",
+          op: "chat.creation.rejected",
+          correlationId: UNKNOWN_CORRELATION_ID,
+          status: 400,
+          errorKind: "invalid-model",
+          extra: { reason: "configuration", modelKind: "unknown" },
+        }),
+      );
+    } finally {
       resetServerLogger();
       await disposeGatewayBreakerFixture(fixture);
     }

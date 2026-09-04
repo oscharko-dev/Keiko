@@ -856,6 +856,26 @@ function logChatCreationRejection(
   });
 }
 
+export function logChatReadinessRejection(
+  operation: "chat.send.rejected" | "chat.regeneration.rejected",
+  correlationId: string | undefined,
+  modelId: string,
+  deps: UiHandlerDeps,
+  status: number,
+): void {
+  getServerLogger().warn({
+    category: "gateway",
+    op: operation,
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    status,
+    errorKind: "model-not-ready",
+    extra: {
+      reason: "readiness",
+      modelKind: chatCapability(deps, modelId)?.kind ?? "unknown",
+    },
+  });
+}
+
 export function createUserMessage(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
@@ -1904,13 +1924,24 @@ function bufferedModelAtProviderBoundary(
   deps: UiHandlerDeps,
   modelId: string,
   executionAdmission: DesktopChatExecutionAdmission,
+  correlationId: string | undefined,
+  operation: "chat.send.rejected" | "chat.regeneration.rejected" = "chat.send.rejected",
 ): BufferedModelPort | RouteResult {
   const invalidProviderBoundary = validateDesktopChatProviderBoundary(
     modelId,
     executionAdmission,
     deps,
   );
-  if (invalidProviderBoundary !== undefined) return invalidProviderBoundary;
+  if (invalidProviderBoundary !== undefined) {
+    logChatReadinessRejection(
+      operation,
+      correlationId,
+      modelId,
+      deps,
+      invalidProviderBoundary.status,
+    );
+    return invalidProviderBoundary;
+  }
   return (
     deps.modelPortFactory(modelId) ?? {
       status: 400,
@@ -1969,6 +2000,7 @@ async function resolveBufferedMemory(
 function admitBufferedModelTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
+  correlationId: string | undefined,
 ):
   | {
       readonly admitted: AdmittedTurnHandle;
@@ -1986,7 +2018,7 @@ function admitBufferedModelTurn(
   // a clientTurnId) and would orphan the user message — the pre-#3182 invariant. The
   // clientTurnId path keeps resolving after the memory await for provider freshness.
   if (legacyAdmission !== undefined) {
-    const probe = bufferedModelAtProviderBoundary(deps, modelId, legacyAdmission);
+    const probe = bufferedModelAtProviderBoundary(deps, modelId, legacyAdmission, correlationId);
     if (isRouteResult(probe)) return probe;
   }
   const admission = admitDesktopChatTurn(deps, prepared);
@@ -2039,7 +2071,7 @@ async function executeBufferedModelTurn(
   correlationId: string | undefined,
 ): Promise<RouteResult> {
   const { request, modelId } = prepared;
-  const outcome = admitBufferedModelTurn(deps, prepared);
+  const outcome = admitBufferedModelTurn(deps, prepared, correlationId);
   if (isRouteResult(outcome)) return outcome;
   const { admitted, executionAdmission } = outcome;
   const { userMessage } = admitted;
@@ -2053,7 +2085,7 @@ async function executeBufferedModelTurn(
   // count or role — so the counted shape is identical from either assembly.
   logChatTurnStarted(correlationId, baseAssembly.messages, request.attachments);
   const assembly = assemblyWithConversationImages(deps, request, modelId, baseAssembly);
-  const model = bufferedModelAtProviderBoundary(deps, modelId, executionAdmission);
+  const model = bufferedModelAtProviderBoundary(deps, modelId, executionAdmission, correlationId);
   if (isRouteResult(model)) {
     settleRejectedDesktopChatTurn(deps, prepared, admitted);
     return model;
@@ -2857,16 +2889,14 @@ async function persistRegeneratedChatTurn(
   try {
     const { memory, messages } = await buildRegenerateMemoryAndMessages(deps, prepared);
     if (requestSignalAborted(signal)) return requestCancelledResult();
-    const invalidProviderBoundary = validateDesktopChatProviderBoundary(
+    const model = bufferedModelAtProviderBoundary(
+      deps,
       modelId,
       executionAdmission,
-      deps,
+      correlationId,
+      "chat.regeneration.rejected",
     );
-    if (invalidProviderBoundary !== undefined) return invalidProviderBoundary;
-    const model = deps.modelPortFactory(modelId);
-    if (model === undefined) {
-      return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
-    }
+    if (isRouteResult(model)) return model;
     const response = await model.call(
       { modelId, messages, stream: false, logContext: { correlationId } },
       signal,

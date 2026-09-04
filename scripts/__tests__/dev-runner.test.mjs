@@ -26,18 +26,31 @@ import {
   findAvailableNextPort,
   forwardedUpstreamHeaders,
   normalizeUpstreamLocation,
+  microphoneAllowanceAfterChildExit,
   packageBuildWatchArgs,
   preflightNextRespawn,
   proxyHttp,
+  probeApiReadiness,
   publicBrowserUrl,
   readNextLockInfo,
   createRestartBudget,
   restartNextChildWithRetry,
   resolveConfiguredNextBundler,
   resolveNextBundler,
+  upstreamAllowsSameOriginMicrophone,
   writeAtomicUtf8File,
   writeState,
 } from "../dev-runner.mjs";
+
+function readinessResponse(status, body, permissionsPolicy) {
+  const values = permissionsPolicy === undefined ? {} : { "permissions-policy": permissionsPolicy };
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => Promise.resolve(body),
+    headers: { entries: () => Object.entries(values)[Symbol.iterator]() },
+  };
+}
 
 describe("atomic state persistence", () => {
   let stateDirectory;
@@ -840,6 +853,48 @@ describe("forwardedUpstreamHeaders", () => {
     );
     expect(out["permissions-policy"]).not.toContain("microphone=*");
   });
+
+  it.each([undefined, null, "", "microphone=*", "microphone=(*)", "microphone=(self)junk"])(
+    "rejects an invalid microphone policy value (%j)",
+    (value) => {
+      const headers = value === undefined ? {} : { "permissions-policy": value };
+      expect(upstreamAllowsSameOriginMicrophone(headers)).toBe(false);
+    },
+  );
+
+  it("clears a prior allowance on BFF exit without coupling it to unrelated child exits", () => {
+    expect(microphoneAllowanceAfterChildExit("bff", true)).toBe(false);
+    expect(microphoneAllowanceAfterChildExit("next", true)).toBe(true);
+  });
+
+  it("keeps microphone capability disabled after failed health probes", async () => {
+    const unavailable = await probeApiReadiness("http://127.0.0.1/api/health", () =>
+      Promise.resolve(readinessResponse(503, "unavailable", "microphone=(self)")),
+    );
+    const rejected = await probeApiReadiness("http://127.0.0.1/api/health", () =>
+      Promise.reject(new Error("connection refused")),
+    );
+
+    expect(unavailable).toEqual({
+      result: "HTTP 503",
+      allowSameOriginMicrophone: false,
+    });
+    expect(rejected).toEqual({
+      result: "connection refused",
+      allowSameOriginMicrophone: false,
+    });
+  });
+
+  it.each(["", "microphone=*", "microphone=(*)", "microphone=(self)junk"])(
+    "keeps a healthy response fail-closed for policy %j",
+    async (policy) => {
+      const result = await probeApiReadiness("http://127.0.0.1/api/health", () =>
+        Promise.resolve(readinessResponse(200, { status: "ok" }, policy)),
+      );
+
+      expect(result).toEqual({ result: "ok", allowSameOriginMicrophone: false });
+    },
+  );
 
   it("keeps HMR-only CSP relaxations scoped to script-src/style-src/connect-src (KEIKO-0607)", () => {
     const out = forwardedUpstreamHeaders({ "content-type": "text/html" }, NEXT_PORT);

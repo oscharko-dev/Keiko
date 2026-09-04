@@ -378,6 +378,14 @@ function jsonFeatureCatalogProblems(repoRoot, jsonFeatureCatalogs) {
       problems.push(`Feature i18n catalog ${file} must contain valid JSON.`);
       continue;
     }
+    if (typeof catalog !== "object" || catalog === null || Array.isArray(catalog)) {
+      problems.push(`Feature i18n catalog ${file} must contain a non-empty JSON object.`);
+      continue;
+    }
+    if (Object.keys(catalog).length === 0) {
+      problems.push(`Feature i18n catalog ${file} must contain a non-empty JSON object.`);
+      continue;
+    }
     const incompleteKeys = Object.entries(catalog)
       .filter(([, messages]) => {
         if (typeof messages !== "object" || messages === null) return true;

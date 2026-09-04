@@ -52,6 +52,7 @@ import {
   recordChatCompaction,
   validateDesktopChatSend,
   validateDesktopChatProviderBoundary,
+  logChatReadinessRejection,
   validateCurrentDesktopChatSend,
   runPostCommitConversationMemorySideEffects,
   type ParsedDesktopChatSend,
@@ -493,7 +494,16 @@ function resolveDesktopChatStreamCall(
     executionAdmission,
     deps,
   );
-  if (invalidExecution !== undefined) return invalidExecution;
+  if (invalidExecution !== undefined) {
+    logChatReadinessRejection(
+      "chat.send.rejected",
+      correlationId,
+      prepared.modelId,
+      deps,
+      invalidExecution.status,
+    );
+    return invalidExecution;
+  }
   const model = deps.modelPortFactory(prepared.modelId);
   return model?.callStream === undefined
     ? streamingUnsupportedOutcome(correlationId)

@@ -530,6 +530,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetServerLogger();
   store.close();
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -1357,6 +1358,8 @@ describe("desktop chat SSE streaming handler", () => {
   });
 
   it("rejects a buffered turn when the gateway generation changes during memory retrieval", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     const chatId = seedChat();
     const memoryDir = join(tmp, "buffered-readiness-generation-race");
     mkdirSync(memoryDir);
@@ -1394,16 +1397,19 @@ describe("desktop chat SSE streaming handler", () => {
     });
     const secretContent = "BUFFERED_GENERATION_RACE_SECRET_7A12";
     const outcome = handleSendDesktopChat(
-      routeContext(
-        makeReq({
-          chatId,
-          projectPath: projectDir,
-          content: secretContent,
-          clientTurnId: "buffered-readiness-generation-race",
-          memory: { enabled: true, budgetTokens: 900, context: {} },
-        }),
-        captureRes().res,
-      ),
+      {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            content: secretContent,
+            clientTurnId: "buffered-readiness-generation-race",
+            memory: { enabled: true, budgetTokens: 900, context: {} },
+          }),
+          captureRes().res,
+        ),
+        correlationId: "corr-buffered-readiness-race",
+      },
       sharedDeps,
     );
     await embeddingStarted.promise;
@@ -1418,6 +1424,15 @@ describe("desktop chat SSE streaming handler", () => {
     expect(JSON.stringify(rejected.body)).not.toContain(secretContent);
     expect(factoryCalls).toBe(0);
     expect(providerCalls).toBe(0);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "chat.send.rejected",
+        correlationId: "corr-buffered-readiness-race",
+        status: 400,
+        errorKind: "model-not-ready",
+        extra: { reason: "readiness", modelKind: "chat" },
+      }),
+    );
     memoryVault.close();
   });
 
@@ -1524,6 +1539,8 @@ describe("desktop chat SSE streaming handler", () => {
   });
 
   it("rejects a streamed turn when the gateway generation changes during memory retrieval", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     const chatId = seedChat();
     const memoryDir = join(tmp, "streamed-readiness-generation-race");
     mkdirSync(memoryDir);
@@ -1564,16 +1581,19 @@ describe("desktop chat SSE streaming handler", () => {
     const secretContent = "STREAMED_GENERATION_RACE_SECRET_8B23";
     const captured = captureRes();
     const outcome = handleSendDesktopChatStream(
-      routeContext(
-        makeReq({
-          chatId,
-          projectPath: projectDir,
-          content: secretContent,
-          clientTurnId: "streamed-readiness-generation-race",
-          memory: { enabled: true, budgetTokens: 900, context: {} },
-        }),
-        captured.res,
-      ),
+      {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            content: secretContent,
+            clientTurnId: "streamed-readiness-generation-race",
+            memory: { enabled: true, budgetTokens: 900, context: {} },
+          }),
+          captured.res,
+        ),
+        correlationId: "corr-streamed-readiness-race",
+      },
       sharedDeps,
     );
     await embeddingStarted.promise;
@@ -1590,6 +1610,15 @@ describe("desktop chat SSE streaming handler", () => {
     expect(captured.writes).toEqual([]);
     expect(factoryCalls).toBe(0);
     expect(providerCalls).toBe(0);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "chat.send.rejected",
+        correlationId: "corr-streamed-readiness-race",
+        status: 400,
+        errorKind: "model-not-ready",
+        extra: { reason: "readiness", modelKind: "chat" },
+      }),
+    );
     memoryVault.close();
   });
 
@@ -1783,6 +1812,8 @@ describe("desktop chat SSE streaming handler", () => {
   });
 
   it("rejects regeneration when the gateway generation changes during memory retrieval", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     const chatId = seedChat();
     seedMessage(chatId, "user", "original regeneration question");
     seedMessage(chatId, "assistant", "original regeneration answer");
@@ -1823,15 +1854,18 @@ describe("desktop chat SSE streaming handler", () => {
       },
     });
     const outcome = handleRegenerateDesktopChat(
-      routeContext(
-        makeReq({
-          chatId,
-          projectPath: projectDir,
-          assistantMessageId: assistant.id,
-          memory: { enabled: true, budgetTokens: 900, context: {} },
-        }),
-        captureRes().res,
-      ),
+      {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            assistantMessageId: assistant.id,
+            memory: { enabled: true, budgetTokens: 900, context: {} },
+          }),
+          captureRes().res,
+        ),
+        correlationId: "corr-regeneration-readiness-race",
+      },
       sharedDeps,
     );
     await embeddingStarted.promise;
@@ -1846,6 +1880,15 @@ describe("desktop chat SSE streaming handler", () => {
     expect(JSON.stringify(rejected.body)).not.toContain("original regeneration question");
     expect(factoryCalls).toBe(0);
     expect(providerCalls).toBe(0);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "chat.regeneration.rejected",
+        correlationId: "corr-regeneration-readiness-race",
+        status: 400,
+        errorKind: "model-not-ready",
+        extra: { reason: "readiness", modelKind: "chat" },
+      }),
+    );
     memoryVault.close();
   });
 

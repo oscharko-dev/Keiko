@@ -201,7 +201,9 @@ function serverReadinessFallback(
   readiness: ReadinessRunState | undefined,
   conversationReady: boolean | undefined,
 ): boolean | undefined {
-  return readiness === undefined || readiness.status === "idle" ? conversationReady : undefined;
+  return readiness === undefined || readiness.status === "idle" || readiness.status === "running"
+    ? conversationReady
+    : undefined;
 }
 
 function chatReadinessPassed(
@@ -243,6 +245,47 @@ function conversationBadgePresentation(
   return { className: "ml-type", label: t("settings.models.modelNotVerified") };
 }
 
+function VoiceEligibilityBadge({
+  model,
+  t,
+}: {
+  readonly model: ModelCapability;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const label = voiceProviderAvailabilityLabel(model, t);
+  return (
+    <output
+      className="ml-elig ml-elig-voice"
+      data-testid="voice-elig-ok"
+      aria-label={t("settings.models.eligibilityPrefix", { label })}
+      title={label}
+    >
+      {t("settings.models.voiceProviderBadge", { label: voiceProviderShortLabel(model, t) })}
+    </output>
+  );
+}
+
+function EligibleChatBadge({
+  model,
+  readiness,
+  t,
+}: {
+  readonly model: ModelCapability;
+  readonly readiness: ReadinessRunState | undefined;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const presentation = conversationBadgePresentation(readiness, model.conversationReady, t);
+  return (
+    <output
+      className={`ml-elig ${presentation.className}`}
+      data-testid="conv-elig-ok"
+      aria-label={t("settings.models.eligibilityPrefix", { label: presentation.label })}
+    >
+      {presentation.label}
+    </output>
+  );
+}
+
 function ConversationEligibilityBadge({
   model,
   readiness,
@@ -252,33 +295,9 @@ function ConversationEligibilityBadge({
 }): ReactNode {
   const t = useTranslate();
   const reason = explainConversationIneligibility(model);
-  // Issue #1557 (AC4): a correctly configured voice provider is available for its voice purpose, not a
-  // chat-ineligibility warning. `isConversationEligibleModel` stays unchanged (voice is genuinely not
-  // a chat model) — only the presentation differs.
-  if (isConfiguredVoiceProvider(model)) {
-    const label = voiceProviderAvailabilityLabel(model, t);
-    return (
-      <output
-        className="ml-elig ml-elig-voice"
-        data-testid="voice-elig-ok"
-        aria-label={t("settings.models.eligibilityPrefix", { label })}
-        title={label}
-      >
-        {t("settings.models.voiceProviderBadge", { label: voiceProviderShortLabel(model, t) })}
-      </output>
-    );
-  }
+  if (isConfiguredVoiceProvider(model)) return <VoiceEligibilityBadge model={model} t={t} />;
   if (reason === undefined) {
-    const presentation = conversationBadgePresentation(readiness, model.conversationReady, t);
-    return (
-      <output
-        className={`ml-elig ${presentation.className}`}
-        data-testid="conv-elig-ok"
-        aria-label={t("settings.models.eligibilityPrefix", { label: presentation.label })}
-      >
-        {presentation.label}
-      </output>
-    );
+    return <EligibleChatBadge model={model} readiness={readiness} t={t} />;
   }
   if (reason === "embedding-only") {
     const label = embeddingAvailabilityLabel(t);
@@ -1351,7 +1370,7 @@ function gatewayVerificationFromServerObservations(
     const localRun = runs[model.id];
     if (
       !isConversationEligibleModel(model) ||
-      (localRun !== undefined && localRun.status !== "idle")
+      (localRun !== undefined && localRun.status !== "idle" && localRun.status !== "running")
     ) {
       continue;
     }

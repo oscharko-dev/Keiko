@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -26,6 +27,30 @@ const devDispatchCoverageJobs = new Set([
   "coverage-scripts",
   "coverage-sonar",
 ]);
+
+function runCiAggregate(overrides = {}) {
+  const aggregateStep = ciWorkflow.jobs.ci.steps.find(
+    (step) => step.name === "Aggregate required CI results fail closed",
+  );
+  return spawnSync("bash", ["-euo", "pipefail", "-c", aggregateStep.run], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      BUILD_SCAN_SBOM_SMOKE_RESULT: "success",
+      CHANGE_SCOPE_RESULT: "success",
+      CORE_QUALITY_RESULT: "success",
+      COVERAGE_SONAR_RESULT: "success",
+      CROSS_PLATFORM_RESULT: "success",
+      DOCUMENTATION_ONLY: "false",
+      EDITOR_FAST_PR: "false",
+      PROTECTED_BRANCH_RESULT: "success",
+      SECRET_SCAN_RESULT: "success",
+      SEMANTIC_DUPLICATION_RESULT: "success",
+      UI_RESULT: "success",
+      ...overrides,
+    },
+  });
+}
 
 describe("dev quality workflows", () => {
   it("runs full mutation on a daily or explicit bounded lane, never on the PR critical path", () => {
@@ -398,10 +423,34 @@ describe("dev quality workflows", () => {
     expect(aggregateJob).toContain("- cross-platform-smoke");
     expect(aggregateJob).toContain("- ui");
     expect(aggregateJob).toContain("BUILD_SCAN_SBOM_SMOKE_RESULT");
+    expect(aggregateJob).toContain("CHANGE_SCOPE_RESULT");
     expect(aggregateJob).toContain("CROSS_PLATFORM_RESULT");
     expect(aggregateJob).toContain("EDITOR_FAST_PR");
     expect(aggregateJob).toContain("UI_RESULT");
     expect(aggregateJob).toContain('if [ "$result" != "success" ]');
+  });
+
+  it("allows the build skip only for editor fast-path pull requests", () => {
+    const editor = runCiAggregate({
+      BUILD_SCAN_SBOM_SMOKE_RESULT: "skipped",
+      EDITOR_FAST_PR: "true",
+    });
+    const nonEditor = runCiAggregate({
+      BUILD_SCAN_SBOM_SMOKE_RESULT: "skipped",
+      EDITOR_FAST_PR: "false",
+    });
+
+    expect(editor.status).toBe(0);
+    expect(editor.stdout).toContain("editor fast-path PR");
+    expect(nonEditor.status).not.toBe(0);
+    expect(nonEditor.stdout).toContain("skipped outside an editor fast-path PR");
+  });
+
+  it("fails the aggregate when change-scope does not succeed", () => {
+    const result = runCiAggregate({ CHANGE_SCOPE_RESULT: "failure" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toContain("Required CI dependency did not succeed: failure");
   });
 
   it("retries transient npm audit service failures without weakening advisory enforcement", () => {

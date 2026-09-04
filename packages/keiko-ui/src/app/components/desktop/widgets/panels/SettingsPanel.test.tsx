@@ -214,6 +214,27 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
     expect(screen.getByTestId("model-status-test-chat-failed").className).toContain("error");
   });
 
+  it.each([
+    [true, "Gateway connected", "connected", /conversation-eligible/i],
+    [false, "Gateway check failed", "error", /check failed/i],
+  ] as const)(
+    "preserves server-observed conversationReady=%s while a local probe is running",
+    async (conversationReady, gatewayLabel, statusClass, badgeLabel) => {
+      const modelId = conversationReady ? "test-chat-ready" : "test-chat-failed";
+      primeFetches([{ ...chatCapability(modelId), conversationReady }]);
+      runGatewayReadinessMock.mockImplementation(() => new Promise(() => undefined));
+      render(<SettingsPanel />);
+
+      await screen.findByText(gatewayLabel);
+      fireEvent.click(screen.getByRole("button", { name: "Run readiness check" }));
+
+      expect(await screen.findByText(/checking basic readiness/i)).toBeInTheDocument();
+      expect(screen.getByText(gatewayLabel)).toBeInTheDocument();
+      expect(screen.getByTestId(`model-status-${modelId}`).className).toContain(statusClass);
+      expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(badgeLabel);
+    },
+  );
+
   it("renders the embedding reason for an embedding capability", async () => {
     primeFetches([embeddingCapability("test-embed-1")]);
     render(<SettingsPanel />);

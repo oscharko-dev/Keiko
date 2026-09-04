@@ -856,6 +856,12 @@
     },
     {
       "op": "<dynamic>",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/chat-handlers.ts:868",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/diagnostics-log.ts:316",
       "package": "keiko-server"
@@ -905,7 +911,7 @@
     {
       "op": "chat.turn.started",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1708",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1728",
       "package": "keiko-server"
     },
     {

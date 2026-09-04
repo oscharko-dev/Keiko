@@ -926,6 +926,7 @@ jobs:
       - name: Aggregate required CI results fail closed
         env:
           BUILD_SCAN_SBOM_SMOKE_RESULT: ${{ needs.build-scan-sbom-smoke.result }}
+          CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}
           CORE_QUALITY_RESULT: ${{ needs.core-quality.result }}
           COVERAGE_SONAR_RESULT: ${{ needs.coverage-sonar.result }}
           CROSS_PLATFORM_RESULT: ${{ needs.cross-platform-smoke.result }}
@@ -936,7 +937,7 @@ jobs:
           SEMANTIC_DUPLICATION_RESULT: ${{ needs.semantic-duplication.result }}
           UI_RESULT: ${{ needs.ui.result }}
         run: |
-          for result in "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT" "$UI_RESULT"; do
+          for result in "$CHANGE_SCOPE_RESULT" "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT" "$UI_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "Required CI dependency did not succeed: $result"
               exit 1
