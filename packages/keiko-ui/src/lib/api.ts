@@ -104,7 +104,10 @@ import type {
   WorkflowsResponse,
 } from "./types";
 import type {
+  CodingWorkbenchIssueBinding,
   CodingWorkbenchMode,
+  GitHubIssueReaderAuthorizationWire,
+  UpdateGitHubIssueReaderAuthorizationWire,
   GitCommitChangeSummary,
   GitCommitIntentAnalysis,
   GitCommitMessageValidation,
@@ -162,6 +165,7 @@ import {
   validateGitRepositorySummary,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository-summary";
 import {
+  isSafeGitRefName,
   validateGitRepositoryDiffResponse,
   validateGitRepositoryStatusResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
@@ -307,14 +311,25 @@ async function fetchJson<T>(
   if (!res.ok) {
     let code = "INTERNAL";
     let message = `HTTP ${res.status.toString()}`;
+    let envelopeCorrelationId: string | undefined;
     try {
-      const envelope = (await res.json()) as BffError;
+      const envelope = (await res.json()) as BffError & {
+        readonly error: { readonly correlationId?: unknown };
+      };
       code = envelope.error.code;
       message = envelope.error.message;
+      envelopeCorrelationId =
+        typeof envelope.error.correlationId === "string" ? envelope.error.correlationId : undefined;
     } catch {
       // parse failure — keep generic message, never log body
     }
-    throw new ApiError(code, message, res.status);
+    const error = new ApiError(code, message, res.status);
+    // RB-6: the header is the transport's own record of the id; the envelope carries the same id
+    // when a route writes it into the body. Either ties this failure to one redacted server
+    // diagnostic (#3385 — a refused issue preview names its correlation id in the UI state).
+    const correlationId = res.headers.get(CORRELATION_HEADER) ?? envelopeCorrelationId;
+    if (correlationId !== undefined) error.correlationId = correlationId;
+    throw error;
   }
 
   if (res.status === 204) {
@@ -3249,4 +3264,250 @@ export async function fetchGitDeliveryMergeExecute(
     body: gitDeliveryMergeBody(input),
     ...(signal === undefined ? {} : { signal }),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Coding Workbench issue intake and GitHub issue reader grant (#3385)
+// ---------------------------------------------------------------------------
+
+/**
+ * The bounded, server-resolved preview of one GitHub issue. Every string is UNTRUSTED content —
+ * issue text is authored by whoever can write on the tracker — so the renderer shows it as plain
+ * text nodes only. The bounds below are the client's own ceiling on what it will hand to that
+ * renderer; the server bounds the same values first, and a body outside them is a contract failure,
+ * never something to truncate quietly.
+ */
+export interface GitHubIssuePreviewProvenanceWire {
+  readonly ownerAndRepo: string;
+  readonly issueNumber: number;
+  readonly url: string;
+}
+
+export interface GitHubIssuePreviewWire {
+  readonly title: string;
+  readonly bodyExcerpt: string;
+  readonly commentCount: number;
+  readonly state: string;
+  readonly provenance: GitHubIssuePreviewProvenanceWire;
+}
+
+/**
+ * `binding` is the content-free, immutable issue binding the server resolved for the preview
+ * (`CodingWorkbenchIssueBinding`); the UI only ever echoes its opaque values back and never
+ * authors one.
+ */
+export interface GitHubIssuePreviewResponseWire {
+  readonly preview: GitHubIssuePreviewWire;
+  readonly binding: CodingWorkbenchIssueBinding;
+}
+
+export interface CodingWorkbenchIssuePreviewRequest {
+  readonly repositoryPath: string;
+  readonly issueRef: string;
+}
+
+export const GITHUB_ISSUE_PREVIEW_TITLE_MAX_CHARS = 512;
+export const GITHUB_ISSUE_PREVIEW_EXCERPT_MAX_CHARS = 8_192;
+export const GITHUB_ISSUE_REFERENCE_MAX_CHARS = 512;
+const GITHUB_ISSUE_PREVIEW_STATE_MAX_CHARS = 32;
+const GITHUB_ISSUE_PROVENANCE_REPO_MAX_CHARS = 256;
+const GITHUB_ISSUE_PROVENANCE_URL_MAX_CHARS = 2_048;
+const GITHUB_ISSUE_BINDING_ID_MAX_CHARS = 128;
+// The provider's positive integer range, mirrored from CODING_WORKBENCH_ISSUE_NUMBER_MAX without a
+// value import (this module is first-load reachable, #2639).
+const GITHUB_ISSUE_NUMBER_MAX = 2_147_483_647;
+const SHA256_HEX = /^[0-9a-f]{64}$/u;
+const OWNER_AND_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
+const ISSUE_BINDING_KEYS: ReadonlySet<string> = new Set([
+  "schemaVersion",
+  "repositoryId",
+  "remoteDigest",
+  "issueNumber",
+  "issueIdDigest",
+  "defaultBaseRef",
+  "contentRevisionDigest",
+  "bindingDigest",
+]);
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// eslint-disable-next-line no-control-regex -- the class IS the control range being refused
+const CONTROL_CHARACTER = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u;
+
+function isBoundedText(value: unknown, maxChars: number, allowEmpty = false): value is string {
+  return (
+    typeof value === "string" &&
+    (allowEmpty || value.trim().length > 0) &&
+    value.length <= maxChars &&
+    !CONTROL_CHARACTER.test(value)
+  );
+}
+
+function isIssueNumber(value: unknown): value is number {
+  return (
+    Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= GITHUB_ISSUE_NUMBER_MAX
+  );
+}
+
+function issuePreviewProvenanceReasons(value: unknown): readonly string[] {
+  if (!isRecordValue(value)) return ["preview.provenance must be an object"];
+  const reasons: string[] = [];
+  if (
+    !isBoundedText(value.ownerAndRepo, GITHUB_ISSUE_PROVENANCE_REPO_MAX_CHARS) ||
+    !OWNER_AND_REPO.test(value.ownerAndRepo)
+  ) {
+    reasons.push("preview.provenance.ownerAndRepo must be owner/repo");
+  }
+  if (!isIssueNumber(value.issueNumber)) {
+    reasons.push("preview.provenance.issueNumber must be a bounded positive integer");
+  }
+  if (
+    !isBoundedText(value.url, GITHUB_ISSUE_PROVENANCE_URL_MAX_CHARS) ||
+    !value.url.startsWith("https://")
+  ) {
+    reasons.push("preview.provenance.url must be a bounded https URL");
+  }
+  return reasons;
+}
+
+function issuePreviewReasons(value: unknown): readonly string[] {
+  if (!isRecordValue(value)) return ["preview must be an object"];
+  const reasons: string[] = [];
+  if (!isBoundedText(value.title, GITHUB_ISSUE_PREVIEW_TITLE_MAX_CHARS)) {
+    reasons.push("preview.title must be bounded text");
+  }
+  if (!isBoundedText(value.bodyExcerpt, GITHUB_ISSUE_PREVIEW_EXCERPT_MAX_CHARS, true)) {
+    reasons.push("preview.bodyExcerpt must be bounded text");
+  }
+  if (!Number.isSafeInteger(value.commentCount) || Number(value.commentCount) < 0) {
+    reasons.push("preview.commentCount must be a non-negative integer");
+  }
+  if (!isBoundedText(value.state, GITHUB_ISSUE_PREVIEW_STATE_MAX_CHARS)) {
+    reasons.push("preview.state must be bounded text");
+  }
+  reasons.push(...issuePreviewProvenanceReasons(value.provenance));
+  return reasons;
+}
+
+function issueBindingReasons(value: unknown): readonly string[] {
+  if (!isRecordValue(value)) return ["binding must be an object"];
+  const reasons: string[] = [];
+  for (const key of Object.keys(value)) {
+    if (!ISSUE_BINDING_KEYS.has(key)) reasons.push(`binding.${key} is not a binding field`);
+  }
+  if (!isBoundedText(value.schemaVersion, 16)) reasons.push("binding.schemaVersion is invalid");
+  if (!isBoundedText(value.repositoryId, GITHUB_ISSUE_BINDING_ID_MAX_CHARS)) {
+    reasons.push("binding.repositoryId must be a bounded id");
+  }
+  for (const field of ["remoteDigest", "issueIdDigest", "contentRevisionDigest", "bindingDigest"]) {
+    const digest = value[field];
+    if (typeof digest !== "string" || !SHA256_HEX.test(digest)) {
+      reasons.push(`binding.${field} must be a sha256 digest`);
+    }
+  }
+  if (!isIssueNumber(value.issueNumber)) {
+    reasons.push("binding.issueNumber must be a bounded positive integer");
+  }
+  if (typeof value.defaultBaseRef !== "string" || !isSafeGitRefName(value.defaultBaseRef)) {
+    reasons.push("binding.defaultBaseRef must be a safe git ref");
+  }
+  return reasons;
+}
+
+// The preview and the binding describe the same issue: a response whose two halves name different
+// numbers would let the renderer show one issue while the run binds another.
+function issuePreviewCoherenceReasons(value: Record<string, unknown>): readonly string[] {
+  const preview = value.preview;
+  const binding = value.binding;
+  if (!isRecordValue(preview) || !isRecordValue(binding)) return [];
+  const provenance = preview.provenance;
+  if (!isRecordValue(provenance)) return [];
+  return provenance.issueNumber === binding.issueNumber
+    ? []
+    : ["binding.issueNumber must equal preview.provenance.issueNumber"];
+}
+
+export function validateGitHubIssuePreviewResponse(value: unknown): GitRepositoryValidation {
+  if (!isRecordValue(value)) return { ok: false, reasons: ["issue preview must be an object"] };
+  const reasons = [
+    ...issuePreviewReasons(value.preview),
+    ...issueBindingReasons(value.binding),
+    ...issuePreviewCoherenceReasons(value),
+  ];
+  return reasons.length === 0 ? { ok: true, reasons: [] } : { ok: false, reasons };
+}
+
+/**
+ * Resolve and preview a GitHub issue for the repository at `repositoryPath` (#3385). The server
+ * parses the reference, checks the per-checkout grant, reads the issue through the `gh` boundary
+ * and answers with the bounded preview plus the content-free binding, or a 4xx whose `error.code`
+ * is a `CodingWorkbenchIssueBindingFailure` member. Both inputs are intent only: the path must be
+ * a registered project and the reference is re-parsed server-side.
+ */
+export async function previewCodingWorkbenchIssue(
+  input: CodingWorkbenchIssuePreviewRequest,
+  signal?: AbortSignal,
+): Promise<GitHubIssuePreviewResponseWire> {
+  return fetchJson(
+    "/api/coding-workbench/issue/preview",
+    {
+      method: "POST",
+      body: JSON.stringify({ repositoryPath: input.repositoryPath, issueRef: input.issueRef }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    validateGitHubIssuePreviewResponse,
+  );
+}
+
+export function validateGitHubIssueReaderAuthorization(value: unknown): GitRepositoryValidation {
+  if (!isRecordValue(value)) return { ok: false, reasons: ["authorization must be an object"] };
+  const reasons: string[] = [];
+  if (!isBoundedText(value.repositoryId, GITHUB_ISSUE_BINDING_ID_MAX_CHARS)) {
+    reasons.push("authorization.repositoryId must be a bounded id");
+  }
+  if (typeof value.authorized !== "boolean")
+    reasons.push("authorization.authorized must be boolean");
+  if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 0) {
+    reasons.push("authorization.revision must be a non-negative integer");
+  }
+  return reasons.length === 0 ? { ok: true, reasons: [] } : { ok: false, reasons };
+}
+
+/** The per-checkout GitHub issue reader grant for a registered project path (#3385). */
+export async function fetchGitHubIssueReaderAuthorization(
+  repositoryPath: string,
+  signal?: AbortSignal,
+): Promise<GitHubIssueReaderAuthorizationWire> {
+  const params = new URLSearchParams({ repositoryPath });
+  return fetchJson(
+    `/api/coding-workbench/github-authorization?${params.toString()}`,
+    signal === undefined ? undefined : { signal },
+    validateGitHubIssueReaderAuthorization,
+  );
+}
+
+/**
+ * Grant or revoke the reader for one registered checkout. `expectedRevision` is the revision the
+ * caller last read; the server answers 409 `CONFLICT` when it moved, and the caller re-reads
+ * rather than retrying blind.
+ */
+export async function updateGitHubIssueReaderAuthorization(
+  input: UpdateGitHubIssueReaderAuthorizationWire,
+  signal?: AbortSignal,
+): Promise<GitHubIssueReaderAuthorizationWire> {
+  return fetchJson(
+    "/api/coding-workbench/github-authorization",
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        repositoryPath: input.repositoryPath,
+        authorized: input.authorized,
+        expectedRevision: input.expectedRevision,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    validateGitHubIssueReaderAuthorization,
+  );
 }

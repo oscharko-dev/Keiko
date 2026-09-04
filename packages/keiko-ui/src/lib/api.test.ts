@@ -91,6 +91,10 @@ import {
   exportEditorProfile,
   previewEditorProfileImport,
   applyEditorProfileImport,
+  previewCodingWorkbenchIssue,
+  fetchGitHubIssueReaderAuthorization,
+  updateGitHubIssueReaderAuthorization,
+  type GitHubIssuePreviewResponseWire,
 } from "./api";
 import {
   MANAGED_LSP_TEST_LANGUAGES,
@@ -3131,5 +3135,247 @@ describe("M11 local-history and profile API wrappers", () => {
     for (const call of fetchMock.mock.calls) {
       expect((call[1] as RequestInit | undefined)?.signal).toBeInstanceOf(AbortSignal);
     }
+  });
+});
+
+// #3385 — the Coding Workbench issue intake and the per-checkout GitHub issue reader grant. The
+// preview response is server-resolved and content-bounded; the client re-validates its shape so a
+// malformed or oversized body fails closed instead of reaching the untrusted-content renderer.
+describe("Coding Workbench issue intake API (#3385)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonOk(body: unknown, headers: Record<string, string> = {}): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json", ...headers },
+    });
+  }
+
+  function previewResponse(
+    overrides: Partial<GitHubIssuePreviewResponseWire["preview"]> = {},
+    bindingOverrides: Partial<GitHubIssuePreviewResponseWire["binding"]> = {},
+  ): GitHubIssuePreviewResponseWire {
+    return {
+      preview: {
+        title: "Start a Code task from a GitHub issue",
+        bodyExcerpt: "From the existing Coding Workbench, resolve a GitHub issue URL…",
+        commentCount: 3,
+        state: "open",
+        provenance: {
+          ownerAndRepo: "oscharko-dev/Keiko",
+          issueNumber: 3385,
+          url: "https://github.com/oscharko-dev/Keiko/issues/3385",
+        },
+        ...overrides,
+      },
+      binding: {
+        schemaVersion: "1",
+        repositoryId: "a".repeat(64),
+        remoteDigest: "b".repeat(64),
+        issueNumber: 3385,
+        issueIdDigest: "c".repeat(64),
+        defaultBaseRef: "dev",
+        contentRevisionDigest: "d".repeat(64),
+        bindingDigest: "e".repeat(64),
+        ...bindingOverrides,
+      },
+    };
+  }
+
+  it("posts the repository path and issue reference as exact keys and returns the validated preview", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk(previewResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const result = await previewCodingWorkbenchIssue(
+      { repositoryPath: "/repos/keiko", issueRef: "#3385" },
+      controller.signal,
+    );
+
+    expect(result).toEqual(previewResponse());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/coding-workbench/issue/preview");
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      repositoryPath: "/repos/keiko",
+      issueRef: "#3385",
+    });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect((init.headers as Record<string, string>)["X-Keiko-CSRF"]).toBe("1");
+  });
+
+  it.each([
+    ["a missing preview", { preview: undefined }],
+    ["an oversized title", { preview: { ...previewResponse().preview, title: "x".repeat(513) } }],
+    [
+      "an oversized excerpt",
+      { preview: { ...previewResponse().preview, bodyExcerpt: "x".repeat(8193) } },
+    ],
+    ["a negative comment count", { preview: { ...previewResponse().preview, commentCount: -1 } }],
+    [
+      "a control character in the title",
+      { preview: { ...previewResponse().preview, title: "bad\u0007title" } },
+    ],
+    [
+      "a provenance without owner/repo shape",
+      {
+        preview: {
+          ...previewResponse().preview,
+          provenance: { ...previewResponse().preview.provenance, ownerAndRepo: "not a repo" },
+        },
+      },
+    ],
+    [
+      "a provenance url that is not https",
+      {
+        preview: {
+          ...previewResponse().preview,
+          provenance: {
+            ...previewResponse().preview.provenance,
+            url: "javascript:alert(1)",
+          },
+        },
+      },
+    ],
+    [
+      "a binding with an unsafe base ref",
+      { binding: { ...previewResponse().binding, defaultBaseRef: "../x" } },
+    ],
+    [
+      "a binding with a non-digest field",
+      { binding: { ...previewResponse().binding, bindingDigest: "nope" } },
+    ],
+    ["a binding with an extra key", { binding: { ...previewResponse().binding, title: "leak" } }],
+    [
+      "a binding whose issue number disagrees with the provenance",
+      { binding: { ...previewResponse().binding, issueNumber: 12 } },
+    ],
+  ] as const)("fails closed on %s", async (_label, patch) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonOk({ ...previewResponse(), ...patch })));
+
+    await expect(
+      previewCodingWorkbenchIssue({ repositoryPath: "/repos/keiko", issueRef: "#3385" }),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED", status: 502 });
+  });
+
+  it("surfaces the server's closed failure code and correlation id on a refused preview", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "auth-required",
+              message: "GitHub issue access is not enabled.",
+              correlationId: "corr-3385",
+            },
+          }),
+          { status: 403, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(
+      previewCodingWorkbenchIssue({ repositoryPath: "/repos/keiko", issueRef: "#3385" }),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "auth-required",
+      status: 403,
+      correlationId: "corr-3385",
+    });
+  });
+
+  it("prefers the response correlation header over the envelope id", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: { code: "issue-unavailable", message: "x" } }), {
+          status: 404,
+          headers: { "Content-Type": "application/json", [CORRELATION_HEADER]: "hdr-1" },
+        }),
+      ),
+    );
+
+    await expect(
+      previewCodingWorkbenchIssue({ repositoryPath: "/repos/keiko", issueRef: "#1" }),
+    ).rejects.toMatchObject({ code: "issue-unavailable", correlationId: "hdr-1" });
+  });
+
+  it("reads the grant for the named repository through the query string and validates the projection", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonOk({ repositoryId: "f".repeat(64), authorized: true, revision: 2 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const grant = await fetchGitHubIssueReaderAuthorization("/repos/keiko a");
+
+    expect(grant).toEqual({ repositoryId: "f".repeat(64), authorized: true, revision: 2 });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "/api/coding-workbench/github-authorization?repositoryPath=%2Frepos%2Fkeiko+a",
+    );
+  });
+
+  it("rejects a grant projection whose fields are malformed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ repositoryId: "", authorized: "yes", revision: -1 })),
+    );
+
+    await expect(fetchGitHubIssueReaderAuthorization("/repos/keiko")).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+    });
+  });
+
+  it("puts the exact-key grant update with the echoed revision", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonOk({ repositoryId: "f".repeat(64), authorized: false, revision: 3 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const grant = await updateGitHubIssueReaderAuthorization(
+      { repositoryPath: "/repos/keiko", authorized: false, expectedRevision: 2 },
+      controller.signal,
+    );
+
+    expect(grant.revision).toBe(3);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/coding-workbench/github-authorization");
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(String(init.body))).toEqual({
+      repositoryPath: "/repos/keiko",
+      authorized: false,
+      expectedRevision: 2,
+    });
+    expect(init.signal).toBe(controller.signal);
+  });
+
+  it("surfaces the 409 revision conflict with its code so the caller can re-read", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "CONFLICT",
+              message: "GitHub issue access changed. Reload and retry.",
+              correlationId: "corr-409",
+            },
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(
+      updateGitHubIssueReaderAuthorization({
+        repositoryPath: "/repos/keiko",
+        authorized: true,
+        expectedRevision: 0,
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT", status: 409, correlationId: "corr-409" });
   });
 });
