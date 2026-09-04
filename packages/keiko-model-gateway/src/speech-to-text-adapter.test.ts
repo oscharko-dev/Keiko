@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { requestSpeechToText } from "./speech-to-text-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
+import type { ModelGatewayLogEvent } from "./observability.js";
 
 // A recognizable ASCII audio marker so we can locate the binary `file` part inside the multipart
 // body the adapter builds, without depending on real audio bytes.
@@ -85,6 +86,7 @@ describe("requestSpeechToText", () => {
   it("supports a custom apiKeyHeaderName (Azure api-key) and an optional language field", async () => {
     let header: string | null = null;
     let body = "";
+    const events: ModelGatewayLogEvent[] = [];
     const fetchImpl = mockFetch(async (_url, init) => {
       header = (init.headers as Record<string, string>)["api-key"] ?? null;
       body = await bodyToText(init);
@@ -98,6 +100,12 @@ describe("requestSpeechToText", () => {
       audio: AUDIO,
       mimeType: "audio/ogg",
       language: "de-DE",
+      correlationId: "corr-stt-language",
+      log: {
+        write(event): void {
+          events.push(event);
+        },
+      },
       fetchImpl,
     });
     expect(outcome.ok).toBe(true);
@@ -105,6 +113,19 @@ describe("requestSpeechToText", () => {
     expect(body).toContain('name="language"');
     expect(body).toContain("\r\n\r\nde\r\n");
     expect(body).not.toContain("\r\n\r\nde-DE\r\n");
+    expect(events).toEqual([
+      {
+        level: "info",
+        category: "gateway",
+        op: "speech.stt.language.normalized",
+        correlationId: "corr-stt-language",
+        extra: {
+          declaredSubtagCount: 2,
+          resolvedSubtagCount: 1,
+          primaryLanguagePreserved: true,
+        },
+      },
+    ]);
   });
 
   it("includes an optional domain-keyword prompt field in the multipart body", async () => {

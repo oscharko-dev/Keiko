@@ -765,6 +765,18 @@
       "package": "keiko-model-gateway"
     },
     {
+      "op": "speech.stt.language.normalized",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:153",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "speech.tts.mime.corrected",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:290",
+      "package": "keiko-model-gateway"
+    },
+    {
       "op": "security.fs.atomic-rename-failed",
       "category": "security",
       "site": "packages/keiko-security/src/fs-atomic-rename.ts:116",
@@ -1175,7 +1187,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:1899",
+      "site": "packages/keiko-server/src/deps.ts:1903",
       "package": "keiko-server"
     },
     {

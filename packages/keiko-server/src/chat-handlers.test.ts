@@ -20,6 +20,7 @@ import {
 } from "./chat-handlers.js";
 import { buildRedactor, buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   createBufferedServerLogSink,
   createServerLogger,
@@ -259,6 +260,7 @@ describe("desktop chat production gateway reuse", () => {
         expect.objectContaining({
           category: "gateway",
           op: "chat.creation.rejected",
+          correlationId: UNKNOWN_CORRELATION_ID,
           status: 400,
           errorKind: "model-not-ready",
           extra: { reason: "readiness", modelKind: "chat" },

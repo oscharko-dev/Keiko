@@ -191,6 +191,29 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
     expect(screen.getByTestId("conv-elig-ok").className).toContain("ml-type");
   });
 
+  it("restores the server-observed ready state when Settings is reopened", async () => {
+    primeFetches([{ ...chatCapability("test-chat-ready"), conversationReady: true }]);
+    render(<SettingsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Gateway connected")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/conversation-eligible/i);
+    expect(screen.getByTestId("conv-elig-ok").className).toContain("ml-elig-ok");
+    expect(screen.getByTestId("model-status-test-chat-ready").className).toContain("connected");
+  });
+
+  it("restores the server-observed failed state when Settings is reopened", async () => {
+    primeFetches([{ ...chatCapability("test-chat-failed"), conversationReady: false }]);
+    render(<SettingsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Gateway check failed")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/check failed/i);
+    expect(screen.getByTestId("model-status-test-chat-failed").className).toContain("error");
+  });
+
   it("renders the embedding reason for an embedding capability", async () => {
     primeFetches([embeddingCapability("test-embed-1")]);
     render(<SettingsPanel />);

@@ -849,7 +849,7 @@ function logChatCreationRejection(
   getServerLogger().warn({
     category: "gateway",
     op: "chat.creation.rejected",
-    correlationId: ctx.correlationId,
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
     status,
     errorKind: readinessFailure ? "model-not-ready" : "invalid-model",
     extra: { reason: readinessFailure ? "readiness" : "configuration", modelKind },

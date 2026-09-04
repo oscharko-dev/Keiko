@@ -5,6 +5,7 @@ import {
   requestTextToSpeechStream,
 } from "./text-to-speech-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
+import type { ModelGatewayLogEvent } from "./observability.js";
 
 // A recognizable audio byte marker so a test can assert the adapter returns the provider body verbatim
 // without depending on real audio.
@@ -249,6 +250,7 @@ describe("requestTextToSpeech", () => {
 
   it("uses an Ogg container signature when Azure mislabels Opus audio as MPEG", async () => {
     const oggAudio = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0x00, 0x02]);
+    const events: ModelGatewayLogEvent[] = [];
     const outcome = await requestTextToSpeech({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -256,12 +258,27 @@ describe("requestTextToSpeech", () => {
       input: ANSWER,
       voice: "configured-voice",
       responseFormat: "opus",
+      correlationId: "corr-tts-mime",
+      log: {
+        write(event): void {
+          events.push(event);
+        },
+      },
       fetchImpl: mockFetch(() => audioResponse(oggAudio, "audio/mpeg")),
     });
     expect(outcome.ok).toBe(true);
     if (outcome.ok) {
       expect(outcome.value.mimeType).toBe("audio/ogg");
     }
+    expect(events).toEqual([
+      {
+        level: "info",
+        category: "gateway",
+        op: "speech.tts.mime.corrected",
+        correlationId: "corr-tts-mime",
+        extra: { declaredMimeClass: "mp3", resolvedMimeClass: "opus" },
+      },
+    ]);
   });
 
   it("returns empty-audio when a 2xx response carries no audio bytes", async () => {

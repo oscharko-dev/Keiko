@@ -13,7 +13,9 @@ describe("npm audit retry", () => {
   it.each([
     "npm warn audit 503 Service Unavailable",
     "npm error audit endpoint returned an error",
+    "request failed with ECONNREFUSED",
     "request failed with ECONNRESET",
+    "request failed with ENETUNREACH",
     "429 Too Many Requests",
   ])("recognizes a transient service failure: %s", (output) => {
     expect(isTransientAuditFailure(output)).toBe(true);

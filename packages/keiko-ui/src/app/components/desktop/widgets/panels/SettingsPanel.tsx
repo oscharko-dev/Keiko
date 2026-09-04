@@ -197,29 +197,47 @@ type ReadinessRunState =
   | { readonly status: "done"; readonly report: GatewayReadinessReport }
   | { readonly status: "error"; readonly message: string };
 
-function chatReadinessPassed(readiness: ReadinessRunState | undefined): boolean {
-  return (
-    readiness?.status === "done" &&
-    readiness.report.probes.some((probe) => probe.name === "chat" && probe.status === "passed")
-  );
+function serverReadinessFallback(
+  readiness: ReadinessRunState | undefined,
+  conversationReady: boolean | undefined,
+): boolean | undefined {
+  return readiness === undefined || readiness.status === "idle" ? conversationReady : undefined;
 }
 
-function chatReadinessFailed(readiness: ReadinessRunState | undefined): boolean {
+function chatReadinessPassed(
+  readiness: ReadinessRunState | undefined,
+  conversationReady?: boolean,
+): boolean {
+  if (readiness?.status === "done") {
+    return readiness.report.probes.some(
+      (probe) => probe.name === "chat" && probe.status === "passed",
+    );
+  }
+  return serverReadinessFallback(readiness, conversationReady) === true;
+}
+
+function chatReadinessFailed(
+  readiness: ReadinessRunState | undefined,
+  conversationReady?: boolean,
+): boolean {
   if (readiness?.status === "error") return true;
-  return (
-    readiness?.status === "done" &&
-    !readiness.report.probes.some((probe) => probe.name === "chat" && probe.status === "passed")
-  );
+  if (readiness?.status === "done") {
+    return !readiness.report.probes.some(
+      (probe) => probe.name === "chat" && probe.status === "passed",
+    );
+  }
+  return serverReadinessFallback(readiness, conversationReady) === false;
 }
 
 function conversationBadgePresentation(
   readiness: ReadinessRunState | undefined,
+  conversationReady: boolean | undefined,
   t: I18nTranslate,
 ): { readonly className: string; readonly label: string } {
-  if (chatReadinessFailed(readiness)) {
+  if (chatReadinessFailed(readiness, conversationReady)) {
     return { className: "ml-elig-no", label: t("settings.models.modelProbeFailed") };
   }
-  if (chatReadinessPassed(readiness)) {
+  if (chatReadinessPassed(readiness, conversationReady)) {
     return { className: "ml-elig-ok", label: t("settings.models.eligibilityOk") };
   }
   return { className: "ml-type", label: t("settings.models.modelNotVerified") };
@@ -251,7 +269,7 @@ function ConversationEligibilityBadge({
     );
   }
   if (reason === undefined) {
-    const presentation = conversationBadgePresentation(readiness, t);
+    const presentation = conversationBadgePresentation(readiness, model.conversationReady, t);
     return (
       <output
         className={`ml-elig ${presentation.className}`}
@@ -743,10 +761,10 @@ function modelStatusTitle(
   readiness: ReadinessRunState | undefined,
   t: I18nTranslate,
 ): string {
-  if (conversationEligible && chatReadinessFailed(readiness)) {
+  if (conversationEligible && chatReadinessFailed(readiness, model.conversationReady)) {
     return t("settings.models.statusProbeFailed");
   }
-  if (conversationEligible && chatReadinessPassed(readiness)) {
+  if (conversationEligible && chatReadinessPassed(readiness, model.conversationReady)) {
     return t("settings.models.statusConversationEligible");
   }
   if (conversationEligible) return t("settings.models.statusNotVerified");
@@ -756,13 +774,17 @@ function modelStatusTitle(
 }
 
 function modelStatusClass(
+  model: ModelCapability,
   conversationEligible: boolean,
   embeddingReady: boolean,
   voiceReady: boolean,
   readiness: ReadinessRunState | undefined,
 ): string {
-  if (conversationEligible && chatReadinessFailed(readiness)) return "error";
-  if (conversationEligible && chatReadinessPassed(readiness)) return "connected";
+  if (conversationEligible && chatReadinessFailed(readiness, model.conversationReady))
+    return "error";
+  if (conversationEligible && chatReadinessPassed(readiness, model.conversationReady)) {
+    return "connected";
+  }
   if (conversationEligible) return "untested";
   return embeddingReady || voiceReady ? "connected" : "ineligible";
 }
@@ -784,7 +806,13 @@ function ModelCapabilityRow({
   const conversationEligible = isConversationEligibleModel(model);
   const embeddingReady = model.kind === "embedding";
   const voiceReady = isConfiguredVoiceProvider(model);
-  const statusClass = modelStatusClass(conversationEligible, embeddingReady, voiceReady, readiness);
+  const statusClass = modelStatusClass(
+    model,
+    conversationEligible,
+    embeddingReady,
+    voiceReady,
+    readiness,
+  );
   const statusTitle = modelStatusTitle(
     model,
     conversationEligible,
@@ -1301,8 +1329,9 @@ const VERIFIED_GATEWAY: GatewayVerificationState = "verified";
  */
 function gatewayVerificationFromRuns(
   runs: Record<string, ReadinessRunState>,
+  models: readonly ModelCapability[],
 ): GatewayVerificationState {
-  let best: GatewayVerificationState = UNVERIFIED_GATEWAY;
+  let best = gatewayVerificationFromServerObservations(models, runs);
   for (const run of Object.values(runs)) {
     if (run.status === "error") return FAILED_VERIFICATION;
     if (run.status !== "done") continue;
@@ -1311,6 +1340,25 @@ function gatewayVerificationFromRuns(
     if (state === PARTIAL_VERIFICATION || best === UNVERIFIED_GATEWAY) best = state;
   }
   return best;
+}
+
+function gatewayVerificationFromServerObservations(
+  models: readonly ModelCapability[],
+  runs: Record<string, ReadinessRunState>,
+): GatewayVerificationState {
+  let observed: GatewayVerificationState = UNVERIFIED_GATEWAY;
+  for (const model of models) {
+    const localRun = runs[model.id];
+    if (
+      !isConversationEligibleModel(model) ||
+      (localRun !== undefined && localRun.status !== "idle")
+    ) {
+      continue;
+    }
+    if (model.conversationReady === false) return FAILED_VERIFICATION;
+    if (model.conversationReady === true) observed = VERIFIED_GATEWAY;
+  }
+  return observed;
 }
 
 function computeGatewayStatusLabel(
@@ -1532,7 +1580,7 @@ function ModelsTabContent({
   // Issue #144: source of truth is the helper, not an inline kind check.
   const chatCount = models.filter(isConversationEligibleModel).length;
   const hasDiscoveredModels = models.length > 0;
-  const verification = gatewayVerificationFromRuns(readiness);
+  const verification = gatewayVerificationFromRuns(readiness, models);
   const gatewayStatusLabel = computeGatewayStatusLabel(
     gatewayConfigured,
     hasDiscoveredModels,

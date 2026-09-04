@@ -22,6 +22,7 @@ import {
   readJsonCapped,
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
+import { resolveLogSink, withCorrelationId, type ModelGatewayLogSink } from "./observability.js";
 import type { OutboundHttpEgressConfig, ProviderEndpointStyle } from "./types.js";
 
 // Closed set of response formats the OpenAI-compatible `/audio/speech` contract accepts, mapped to
@@ -69,6 +70,8 @@ export interface TextToSpeechRequest {
   readonly egress?: OutboundHttpEgressConfig | undefined;
   // Ceiling on the synthesized audio size. Defaults to MAX_SPEECH_AUDIO_BYTES.
   readonly maxAudioBytes?: number;
+  readonly log?: ModelGatewayLogSink | undefined;
+  readonly correlationId?: string | undefined;
 }
 
 export interface TextToSpeechSuccess {
@@ -166,6 +169,7 @@ interface BuiltRequest {
   readonly callerSignal: AbortSignal | undefined;
   readonly responseFormat: SpeechResponseFormat;
   readonly maxAudioBytes: number;
+  readonly log: ModelGatewayLogSink;
 }
 
 type TextToSpeechRequestWithVoice = TextToSpeechRequest & { readonly voice: string };
@@ -199,6 +203,7 @@ function buildRequest(request: TextToSpeechRequestWithVoice): BuiltRequest {
     callerSignal: request.signal,
     responseFormat,
     maxAudioBytes: request.maxAudioBytes ?? MAX_SPEECH_AUDIO_BYTES,
+    log: withCorrelationId(resolveLogSink(request.log), request.correlationId),
   };
 }
 
@@ -247,23 +252,47 @@ function hasOggContainerSignature(audio: Uint8Array | undefined): boolean {
   );
 }
 
-function resolveMimeType(
-  response: Response,
-  responseFormat: SpeechResponseFormat,
-  audio?: Uint8Array,
-): string {
-  // Azure's deployment-style TTS endpoint can return an Opus/Ogg body with `audio/mpeg`. The
-  // container signature is authoritative in that disagreement; forwarding the wrong MIME makes a
-  // valid clip fail browser playback and any later speech-to-text handoff.
-  if (hasOggContainerSignature(audio)) return "audio/ogg";
+function declaredMimeType(response: Response, responseFormat: SpeechResponseFormat): string {
   const raw = response.headers.get("content-type");
   if (raw !== null) {
     const base = raw.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-    if (base.startsWith("audio/")) {
-      return base;
-    }
+    if (base.startsWith("audio/")) return base;
   }
   return RESPONSE_FORMAT_MIME[responseFormat];
+}
+
+function resolveMimeType(response: Response, responseFormat: SpeechResponseFormat): string {
+  return declaredMimeType(response, responseFormat);
+}
+
+function speechMimeClass(mimeType: string): SpeechResponseFormat | "other-audio" {
+  if (mimeType === "audio/mpeg") return "mp3";
+  for (const [format, candidate] of Object.entries(RESPONSE_FORMAT_MIME)) {
+    if (candidate === mimeType) return format as SpeechResponseFormat;
+  }
+  return "other-audio";
+}
+
+function resolveBufferedMimeType(
+  response: Response,
+  responseFormat: SpeechResponseFormat,
+  audio: Uint8Array,
+  log: ModelGatewayLogSink,
+): string {
+  const declared = declaredMimeType(response, responseFormat);
+  // Azure's deployment-style TTS endpoint can return an Opus/Ogg body with `audio/mpeg`. The
+  // container signature is authoritative in that disagreement; forwarding the wrong MIME makes a
+  // valid clip fail browser playback and any later speech-to-text handoff.
+  if (hasOggContainerSignature(audio) && declared !== "audio/ogg") {
+    log.write({
+      level: "info",
+      category: "gateway",
+      op: "speech.tts.mime.corrected",
+      extra: { declaredMimeClass: speechMimeClass(declared), resolvedMimeClass: "opus" },
+    });
+    return "audio/ogg";
+  }
+  return declared;
 }
 
 async function decodeSuccess(
@@ -281,7 +310,10 @@ async function decodeSuccess(
   }
   return {
     ok: true,
-    value: { audio, mimeType: resolveMimeType(response, built.responseFormat, audio) },
+    value: {
+      audio,
+      mimeType: resolveBufferedMimeType(response, built.responseFormat, audio, built.log),
+    },
   };
 }
 
