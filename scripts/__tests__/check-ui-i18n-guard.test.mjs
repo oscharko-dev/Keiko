@@ -405,6 +405,8 @@ test("accepts a single-file feature catalog carrying both language maps", async 
 });
 
 const JSON_FEATURE_CATALOG = "packages/keiko-ui/src/app/feature/feature-i18n.messages.json";
+const NON_I18N_UI_FILE = "packages/keiko-ui/src/app/feature/arithmetic.ts";
+const NON_I18N_UI_SOURCE = "export const add = (left, right) => left + right;\n";
 
 test("accepts a JSON feature catalog carrying both languages", async () => {
   await withFixture(
@@ -457,18 +459,20 @@ test.each([
   await withFixture(
     {
       ...matchingCatalogs,
-      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [NON_I18N_UI_FILE]: NON_I18N_UI_SOURCE,
       [JSON_FEATURE_CATALOG]: catalogSource,
     },
     (repoRoot) => {
-      const result = checkUiI18nGuard({
-        repoRoot,
-        changedFiles: [SINGLE_FILE_UI, JSON_FEATURE_CATALOG],
-      });
+      for (const changedFiles of [
+        [JSON_FEATURE_CATALOG],
+        [NON_I18N_UI_FILE, JSON_FEATURE_CATALOG],
+      ]) {
+        const result = checkUiI18nGuard({ repoRoot, changedFiles });
 
-      expect(result.ok).toBe(false);
-      expect(result.problems).toHaveLength(1);
-      expect(result.problems[0]).toMatch(/must contain (valid JSON|a non-empty JSON object)/u);
+        expect(result.ok).toBe(false);
+        expect(result.problems).toHaveLength(1);
+        expect(result.problems[0]).toMatch(/must contain (valid JSON|a non-empty JSON object)/u);
+      }
     },
   );
 });

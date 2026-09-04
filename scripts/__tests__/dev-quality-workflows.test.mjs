@@ -462,6 +462,16 @@ describe("dev quality workflows", () => {
     expect(result.stdout).toContain("Required CI dependency did not succeed: failure");
   });
 
+  it.each(["failure", "skipped", "cancelled"])(
+    "fails the aggregate when the UI result is %s",
+    (uiResult) => {
+      const result = runCiAggregate({ UI_RESULT: uiResult });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain(`Required CI dependency did not succeed: ${uiResult}`);
+    },
+  );
+
   it("retries transient npm audit service failures without weakening advisory enforcement", () => {
     const rootAudit = ciWorkflow.jobs["build-scan-sbom-smoke"].steps.find(
       (step) => step.name === "Security audit (high and above)",

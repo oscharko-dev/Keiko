@@ -1433,6 +1433,7 @@ describe("desktop chat SSE streaming handler", () => {
         extra: { reason: "readiness", modelKind: "chat" },
       }),
     );
+    expect(JSON.stringify(sink.events)).not.toContain(secretContent);
     memoryVault.close();
   });
 
@@ -1619,6 +1620,7 @@ describe("desktop chat SSE streaming handler", () => {
         extra: { reason: "readiness", modelKind: "chat" },
       }),
     );
+    expect(JSON.stringify(sink.events)).not.toContain(secretContent);
     memoryVault.close();
   });
 

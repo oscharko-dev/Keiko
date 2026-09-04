@@ -2102,6 +2102,22 @@ export function buildLiteralBaseline(repoRoot) {
   return files;
 }
 
+function hasChangedCatalogFile(changedFileSet, repoRoot) {
+  if (
+    [EN_CATALOG, DE_CATALOG, OPTIONAL_WIDGET_EN_CATALOG, OPTIONAL_WIDGET_DE_CATALOG].some((file) =>
+      changedFileSet.has(file),
+    )
+  ) {
+    return true;
+  }
+  return (
+    changedJsonFeatureCatalogs(changedFileSet).length > 0 ||
+    changedFeatureCatalogPairs(changedFileSet).length > 0 ||
+    unpairedFeatureCatalogs(changedFileSet).length > 0 ||
+    changedSingleFileFeatureCatalogs(changedFileSet, repoRoot).length > 0
+  );
+}
+
 export function checkUiI18nGuard({
   repoRoot = process.cwd(),
   changedFiles = changedFilesFromInput(repoRoot),
@@ -2113,6 +2129,7 @@ export function checkUiI18nGuard({
   const changedFileSet = new Set(normalizedChangedFiles);
   const uiFiles = normalizedChangedFiles.filter(isUiProductionSource);
   const i18nRelevantFiles = uiFiles.filter((file) => hasI18nRelevantChange(repoRoot, file));
+  const catalogChanged = hasChangedCatalogFile(changedFileSet, repoRoot);
   const problems = [];
 
   // The literal ledger is evaluated for EVERY changed UI source, not only the ones the relevance
@@ -2123,7 +2140,7 @@ export function checkUiI18nGuard({
     problems.push(...untranslatedLiteralProblems(repoRoot, uiFiles, baseline));
   }
 
-  if (uiFiles.length === 0 || i18nRelevantFiles.length === 0) {
+  if (i18nRelevantFiles.length === 0 && !catalogChanged) {
     return {
       ok: problems.length === 0,
       problems,
