@@ -55,6 +55,7 @@ import {
   type CodeContextSource,
 } from "../coding-context/codeContextConnector.js";
 import { createGitHubCodeContextConnector } from "../coding-context/githubCodeContextConnector.js";
+import type { GitHubCodeContextApiPort } from "../coding-context/githubCodeContextConnector.js";
 import {
   gitHubCodeContextPortFor,
   isGitHubIssueReaderAuthorized,
@@ -1052,9 +1053,16 @@ function connectorAuthorizedInEnv(deps: UiHandlerDeps, key: string): boolean {
 function connectedContextScopes(
   deps: UiHandlerDeps,
   config: CodeContextConnectorConfig,
+  // The port this intake will actually read through, NOT the launch-time field. Keying the scope
+  // off `deps.codingContextGitHubPort` meant that starting Keiko without an initial project built a
+  // working fallback port and could carry a live grant, and then withheld `source-control.read` so
+  // `authorizeCodeContextRead` answered `missing-scope` — denying the exact case the fallback
+  // exists to serve. The pack route already derives its flag from the resolved port; this is the
+  // editor twin catching up.
+  githubPort: GitHubCodeContextApiPort | undefined,
 ): readonly CodingWorkbenchConnectorScope[] {
   const scopes: CodingWorkbenchConnectorScope[] = [];
-  if (deps.codingContextGitHubPort !== undefined && config.github_connector_authorized === true) {
+  if (githubPort !== undefined && config.github_connector_authorized === true) {
     scopes.push("source-control.read");
   }
   if (deps.codingContextJiraPort !== undefined && config.jira_connector_authorized === true) {
@@ -1098,7 +1106,7 @@ function connectedContextIntake(
           : createJiraCodeContextConnector(jiraPort),
     },
     connectorConfig,
-    connectorScopes: connectedContextScopes(deps, connectorConfig),
+    connectorScopes: connectedContextScopes(deps, connectorConfig, githubPort),
     effectiveMode: deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist",
   };
 }

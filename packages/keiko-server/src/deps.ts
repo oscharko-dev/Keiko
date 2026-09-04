@@ -338,7 +338,6 @@ import { resolveProductionOpenCodeActivation } from "./coding-runtime/production
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextConnector.js";
-import { createGitHubCodeContextApiPort } from "./coding-context/githubCodeContextPort.js";
 import { createGovernedJiraCodeContextHttpPort } from "./coding-context/jiraCodeContextPort.js";
 import type { AtlassianConnectorCredentialDeps } from "./atlassian/credentialRoutes.js";
 import { buildAtlassianConnectorCredentialDeps } from "./atlassian/wiring.js";
@@ -4033,32 +4032,21 @@ function buildOptionalUiHandlerDeps(
 }
 
 function buildCodingContextPortsDependency(
-  args: UiHandlerDepsAssemblyArgs,
+  _args: UiHandlerDepsAssemblyArgs,
 ): Pick<UiHandlerDeps, "codingContextGitHubPort"> {
-  // #3385: the port is an inert, read-only `gh api /repos/...` invoker; it holds no authorization
-  // of its own. Composing it whenever a project path exists lets the stored per-checkout grant in the
-  // settings surface be the single, live decision (isGitHubIssueReaderAuthorized), instead of a
-  // launch-path environment variable that could only be changed by restarting the process.
-  const githubPort =
-    args.bundle.preferredProjectPath === undefined
-      ? undefined
-      : createGitHubCodeContextApiPort({
-          workspace: {
-            root: args.bundle.preferredProjectPath,
-            selectedRoot: args.bundle.preferredProjectPath,
-            name: undefined,
-            version: undefined,
-            testFramework: "unknown",
-            sourceDirs: [],
-            testDirs: [],
-            languages: [],
-            ignoreLines: [],
-          },
-          processEnv: args.options.env,
-        });
-  return {
-    ...(githubPort === undefined ? {} : { codingContextGitHubPort: githubPort }),
-  };
+  // #3385: production composes NO port here.
+  //
+  // This used to build one from `preferredProjectPath`, the project the process happened to start
+  // in. Both consumption sites read `deps.codingContextGitHubPort ?? <port for the working root>`,
+  // so that launch-time snapshot won whenever Keiko started with a project: the grant was evaluated
+  // for the repository the caller was working in while `gh` stayed confined to the launch
+  // directory, and starting without a project left GitHub context unreachable however the grant was
+  // set. Returning nothing makes the per-request port the only one production ever uses.
+  //
+  // The field survives as an injection seam so a test can substitute a fake `gh` without spawning a
+  // process. That is also why the `??` order is correct rather than accidental: an injected port
+  // must win, and in production there is none to win.
+  return {};
 }
 
 function createUiHandlerDispose(

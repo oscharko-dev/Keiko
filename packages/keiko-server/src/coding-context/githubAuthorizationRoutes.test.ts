@@ -107,9 +107,12 @@ describe("GitHub issue reader authorization routes (#3385)", () => {
     store.close();
   });
 
-  // The caller must not be able to name the repository: that would let a user grant access to a
-  // repository they are not working in. The server resolves it from the selected project only.
-  it("rejects a body that tries to name its own repository or carry extra fields", async () => {
+  // The caller DOES name the repository — `repositoryPath` is required — because the server has no
+  // reliable notion of a "current" one: the launch path is a start-up snapshot that opening another
+  // repository never updates, which is how an earlier revision stored grants against the wrong
+  // repository. Naming is intent; registration is authority. `repositoryId` is never accepted, so
+  // the content-free identity stays server-derived, and unknown keys stay a 400.
+  it("rejects a body that names a repository identity or carries unknown fields", async () => {
     const store = createInMemoryUiStore();
     const deps = depsFor(store);
 

@@ -152,6 +152,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "forget",
   "gateway",
   "git",
+  "github-authorization",
   "git-delivery",
   "grounded",
   "handoff",

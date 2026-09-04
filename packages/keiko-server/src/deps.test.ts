@@ -29,6 +29,7 @@ import { ATLASSIAN_CONNECTOR_SCHEMA_VERSION } from "@oscharko-dev/keiko-contract
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import { composeCodingContextConnectors } from "./coding-context/codingContextRoutes.js";
+import { gitHubCodeContextPortFor } from "./coding-context/githubIssueReaderAuthorization.js";
 import { deriveRepositoryId } from "./task-workspace/naming.js";
 import { resolveAtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
 import { resolveAtlassianSyncJobRegistry } from "./atlassian/syncService.js";
@@ -1198,7 +1199,13 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     deps.memoryVault?.close();
   });
 
-  it("composes the connected-context GitHub port for the launch project", async () => {
+  // Relocated, not dropped. This asserted that assembly composes a GitHub port for the launch
+  // project — the very snapshot that made the port a start-up fact: it won over the per-request
+  // port whenever Keiko started with a project, so the grant was evaluated for the repository the
+  // caller was working in while `gh` stayed confined to the launch directory. Production now
+  // composes none, and the invariant that survives is the one that always mattered: a GitHub port
+  // must be reachable for the repository actually being read.
+  it("composes no launch-time GitHub port, and reaches one for the working repository", async () => {
     const projectDir = tmp("coding-context-project-");
     const deps = buildUiHandlerDeps({
       configPath: undefined,
@@ -1208,7 +1215,10 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     });
 
     try {
-      expect(deps.codingContextGitHubPort).toBeDefined();
+      expect(deps.codingContextGitHubPort).toBeUndefined();
+      expect(gitHubCodeContextPortFor(projectDir, {})).toBeDefined();
+      // A repository the caller never names still yields no port.
+      expect(gitHubCodeContextPortFor(undefined, {})).toBeUndefined();
     } finally {
       await deps.dispose?.();
     }
@@ -1225,24 +1235,18 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     writeGhStub(injectedBin, "injected");
     writeGhStub(ambientBin, "ambient");
     vi.stubEnv("PATH", ambientBin);
-    const deps = buildUiHandlerDeps({
-      configPath: undefined,
-      evidenceDir: tmp("coding-context-env-evidence-"),
-      env: {
-        GH_TOKEN: "test-injected-token",
-        HOME: tmp("coding-context-env-home-"),
-        PATH: injectedBin,
-      },
-      initialProjectPath: tmp("coding-context-env-project-"),
+    // The port is now built per request rather than at assembly, so the environment invariant is
+    // asserted on the factory both composition sites call: the composed environment wins over the
+    // ambient PATH, which is what keeps a stray `gh` on the operator's machine out of the read path.
+    const port = gitHubCodeContextPortFor(tmp("coding-context-env-project-"), {
+      GH_TOKEN: "test-injected-token",
+      HOME: tmp("coding-context-env-home-"),
+      PATH: injectedBin,
     });
 
-    try {
-      await expect(
-        deps.codingContextGitHubPort?.readJson(["api", "repos/example/project/issues/1"]),
-      ).resolves.toEqual({ source: "injected" });
-    } finally {
-      await deps.dispose?.();
-    }
+    await expect(port?.readJson(["api", "repos/example/project/issues/1"])).resolves.toEqual({
+      source: "injected",
+    });
   });
 
   // #3385 relocated this pin rather than dropping it. Its invariant is "an unauthorized deployment

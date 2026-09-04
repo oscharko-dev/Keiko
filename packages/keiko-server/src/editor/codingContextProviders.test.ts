@@ -964,6 +964,23 @@ describe("runConnectedContextProvider", () => {
     expect(outcome.omission).toEqual({ sourceKind: "connected-context", reason: "denied" });
   });
 
+  // Every other case here injects a fake `gh` port, which hid the defect this pins: the editor's
+  // scope list keyed `source-control.read` off the LAUNCH-TIME field rather than the port the intake
+  // actually resolved. With no injected port, a granted repository built a working fallback port and
+  // was then refused for `missing-scope` — denying exactly the case the fallback exists to serve.
+  it("emits source-control.read from the resolved fallback port, not the launch-time field", async () => {
+    const outcome = await runConnectedContextProvider(
+      providerCtx({
+        deps: connectedDeps({ codingContextGitHubPort: undefined }),
+      }),
+      { queryText: "acme/widgets#42" },
+    );
+
+    // Denied would mean the grant was not seen; missing-scope surfaces as "denied" too, so the
+    // distinction that matters is that this is NOT the denial reason.
+    expect(outcome.omission).not.toEqual({ sourceKind: "connected-context", reason: "denied" });
+  });
+
   it("denies an unauthorized connector instead of calling the port", async () => {
     const { port, calls } = gitHubPort({ title: "Crash on save", body: "details" });
     const outcome = await runConnectedContextProvider(
