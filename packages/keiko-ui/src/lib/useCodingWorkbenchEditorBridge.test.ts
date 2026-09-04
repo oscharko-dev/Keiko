@@ -447,3 +447,138 @@ describe("useCodingWorkbenchEditorBridge — applyChangeset", () => {
     expect(result.current.pendingReview).toBeNull();
   });
 });
+
+// Workbench audit, 2026-09-03: before this lock, the headless bridge re-registered its session against
+// whatever workspace the shell's active binding happened to point at, so an unrelated workspace
+// switch mid-run silently re-targeted a still-live run's file edits at the wrong root.
+describe("useCodingWorkbenchEditorBridge — run-bound root", () => {
+  it("keeps the session bound to the run's original root when the active workspace switches mid-run", async () => {
+    const { rerender } = renderHook(
+      (props: { root: string; bindingPending: boolean }) =>
+        useCodingWorkbenchEditorBridge({
+          root: props.root,
+          runId: "run-1",
+          active: true,
+          bindingPending: props.bindingPending,
+        }),
+      { initialProps: { root: "/repo/task-1", bindingPending: false } },
+    );
+    await flushMicrotasks();
+    expect(postSnapshotSpy).toHaveBeenCalledTimes(1);
+    const [firstSnapshot] = postSnapshotSpy.mock.calls[0] as [{ workspaceRoot: string }];
+    expect(firstSnapshot.workspaceRoot).toBe("/repo/task-1");
+
+    // The operator switches the desktop's active workspace to an unrelated repository while this
+    // run is still live — an ordinary, reachable action nothing warns them not to take.
+    rerender({ root: "/repo/other-workspace", bindingPending: false });
+    await flushMicrotasks();
+    // The re-registration this new (unlocked) `root` would otherwise trigger is itself debounced
+    // (EDITOR_SNAPSHOT_DEBOUNCE_MS, a REAL 300ms timer) — flushing only microtasks would let this
+    // assertion pass even without the fix, since that timer never gets to fire. Wait past it for
+    // real so a still-unlocked root has every chance to prove itself.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+
+    // The invariant this pin exists for: no registration EVER names the workspace the operator
+    // switched to. It now also pins the other half (#3381 review) — the session keeps being
+    // maintained for the run's own root instead of going inert. The earlier
+    // `toHaveBeenCalledTimes(1)` recorded that inertness (the switch tore the session down, which
+    // cancelled the mount-time debounced refresh), and inertness is the defect: a run whose
+    // `applyChangeset` calls have no session to reach cannot land a single governed edit, however
+    // valid its server-side authority still is. Counting is therefore replaced by the stronger
+    // statement — every root ever registered is the run's — which no wrong-root regression can pass.
+    const registeredRoots = postSnapshotSpy.mock.calls.map(
+      ([snapshot]) => (snapshot as { workspaceRoot: string }).workspaceRoot,
+    );
+    expect(registeredRoots).not.toContain("/repo/other-workspace");
+    expect(new Set(registeredRoots)).toStrictEqual(new Set(["/repo/task-1"]));
+  });
+
+  // #3381 review: the server binds a new run to the workspace pointer it reads SYNCHRONOUSLY when
+  // Start arrives, and only then awaits runtime startup — so the response carrying `runId` can land
+  // long after the operator moved that pointer. Locking onto the live root at that moment binds the
+  // session to a workspace this run has no authority over, and leaves the run's real root with no
+  // session at all, so every governed edit it makes fails.
+  it("locks a delayed Start onto its submission-time root, not the live one", async () => {
+    const { rerender } = renderHook(
+      (props: { root: string; runId: string | undefined }) =>
+        useCodingWorkbenchEditorBridge({
+          root: props.root,
+          runId: props.runId,
+          active: true,
+          bindingPending: false,
+          submittedRoot: "/repo/task-1",
+        }),
+      { initialProps: { root: "/repo/task-1", runId: undefined as string | undefined } },
+    );
+    await flushMicrotasks();
+    expect(postSnapshotSpy).not.toHaveBeenCalled();
+
+    // The operator switches the singleton workspace pointer while Start is still in flight.
+    rerender({ root: "/repo/other-workspace", runId: undefined });
+    await flushMicrotasks();
+
+    // The delayed Start response lands: the run id appears while the live pointer names B.
+    rerender({ root: "/repo/other-workspace", runId: "run-1" });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+
+    expect(postSnapshotSpy).toHaveBeenCalled();
+    for (const call of postSnapshotSpy.mock.calls) {
+      const [snapshot] = call as [{ workspaceRoot: string }];
+      expect(snapshot.workspaceRoot).toBe("/repo/task-1");
+    }
+  });
+
+  // The consequence half of the same finding: a run whose session was torn down by an unrelated
+  // pointer move cannot land the edit it is asking the operator to approve.
+  it("still serves the run's changeset review after the pointer moves to another workspace", async () => {
+    const { result, rerender } = renderHook(
+      (props: { root: string }) =>
+        useCodingWorkbenchEditorBridge({
+          root: props.root,
+          runId: "run-1",
+          active: true,
+          bindingPending: false,
+          submittedRoot: "/repo/task-1",
+        }),
+      { initialProps: { root: "/repo/task-1" } },
+    );
+    await flushMicrotasks();
+    const source = latestSource();
+    const sessionId = new URL(source.url, "https://example.test").searchParams.get("sessionId");
+
+    rerender({ root: "/repo/other-workspace" });
+    await flushMicrotasks();
+
+    act(() => {
+      emitApplyChangeset(source, sessionId ?? "");
+    });
+    await flushMicrotasks();
+    expect(result.current.pendingReview).not.toBeNull();
+  });
+
+  it("re-registers a fresh session once a new run starts after a workspace switch", async () => {
+    const { rerender } = renderHook(
+      (props: { root: string; runId: string }) =>
+        useCodingWorkbenchEditorBridge({
+          root: props.root,
+          runId: props.runId,
+          active: true,
+          bindingPending: false,
+        }),
+      { initialProps: { root: "/repo/task-1", runId: "run-1" } },
+    );
+    await flushMicrotasks();
+
+    // Workspace switch mid-run: the session must not follow it (asserted above). A brand new run
+    // starting in the now-active workspace is a different story — it re-arms the lock from scratch.
+    rerender({ root: "/repo/other-workspace", runId: "run-2" });
+    await flushMicrotasks();
+
+    const [latestSnapshot] = postSnapshotSpy.mock.calls.at(-1) as [{ workspaceRoot: string }];
+    expect(latestSnapshot.workspaceRoot).toBe("/repo/other-workspace");
+  });
+});

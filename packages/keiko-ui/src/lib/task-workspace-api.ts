@@ -6,13 +6,16 @@
  * it consumes only the #444 contract TYPES and reaches the BFF over fetch.
  */
 
-import { ApiError } from "./api";
+import { ApiError, fetchGitStatus } from "./api";
 import { bffFetchJson } from "./http";
 import type {
+  TaskWorkspaceDriftMarker,
   WorkspaceBinding,
   WorkspaceFailureClass,
   WorkspaceInstance,
   WorkspaceReconciliationReport,
+  WorkspaceReconciliationStatus,
+  WorkspaceRecoveryStrategy,
 } from "@oscharko-dev/keiko-contracts";
 import { isWorkspaceFailureClass } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 
@@ -52,7 +55,9 @@ export interface WorkspaceMutationResult {
 async function taskWorkspaceFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return bffFetchJson<T>(path, init, {
     enrichError: (error, envelope) => {
-      const raw = envelope?.error["failureClass"];
+      // A non-2xx body that parsed but is not the `{ error: { … } }` envelope (a proxy answering
+      // with `{}`) must still yield the redacted ApiError, never a TypeError from this hook.
+      const raw = envelope?.error?.["failureClass"];
       const failureClass: WorkspaceFailureClass | undefined = isWorkspaceFailureClass(raw)
         ? raw
         : undefined;
@@ -91,12 +96,15 @@ export async function reconcileTaskWorkspaces(input: {
   return body.report;
 }
 
-export async function listTaskWorkspaces(root: string): Promise<readonly WorkspaceInstance[]> {
-  const params = new URLSearchParams();
-  params.set("root", root);
-  const body = await taskWorkspaceFetch<{ instances: readonly WorkspaceInstance[] }>(
-    `/api/task-workspaces?${params.toString()}`,
-  );
+// Every managed workspace across repositories when no root is given — the switcher's inventory,
+// because the active pointer is global and a switch may target any repository — or one
+// repository's when a root is.
+export async function listTaskWorkspaces(root?: string): Promise<readonly WorkspaceInstance[]> {
+  const path =
+    root === undefined
+      ? "/api/task-workspaces"
+      : `/api/task-workspaces?${new URLSearchParams({ root }).toString()}`;
+  const body = await taskWorkspaceFetch<{ instances: readonly WorkspaceInstance[] }>(path);
   return body.instances;
 }
 
@@ -150,4 +158,50 @@ export async function prepareHandoffTaskWorkspace(input: {
     `/api/task-workspaces/${encodeURIComponent(input.workspaceId)}/handoff`,
     { method: "POST", body: JSON.stringify({ requestedBy: input.requestedBy }) },
   );
+}
+
+// The #447 repair route's answer: `applied` is true when the controlled mutation completed, false
+// when the recovery still needs a human (then `driftMarkers` says what). Mirrors the server
+// WorkspaceRepairResult minus nothing the browser is allowed to see.
+export interface WorkspaceRepairResult extends WorkspaceMutationResult {
+  readonly strategy: WorkspaceRecoveryStrategy;
+  readonly applied: boolean;
+  readonly outcome: "repaired" | "operator-required";
+  readonly status: WorkspaceReconciliationStatus;
+  readonly driftMarkers: readonly TaskWorkspaceDriftMarker[];
+  readonly operatorActionRequired: boolean;
+}
+
+// Controlled, operator-approval-gated repair (#447). `operatorApproved` is the operator's explicit
+// consent — a click on a control that names the repair — and travels on the wire as such: the
+// server refuses every automatic strategy without it, and the browser never sets it on its own.
+export async function repairTaskWorkspace(input: {
+  readonly workspaceId: string;
+  readonly requestedBy: string;
+  readonly strategy: WorkspaceRecoveryStrategy;
+  readonly operatorApproved: boolean;
+}): Promise<WorkspaceRepairResult> {
+  return taskWorkspaceFetch(
+    `/api/task-workspaces/${encodeURIComponent(input.workspaceId)}/repair`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        requestedBy: input.requestedBy,
+        strategy: input.strategy,
+        operatorApproved: input.operatorApproved,
+      }),
+    },
+  );
+}
+
+// The checked-out branch of a local repository, as the sensible default base branch for a
+// workbench-initiated binding: a repository whose integration branch is `dev` must not be offered
+// `main`, which does not resolve there and refuses the bind with INVALID_BASE_BRANCH. Resolves to
+// null (never throws) when the path is not an available repository or its HEAD is detached — the
+// caller keeps its previous default; a transport failure is the caller's to report.
+export async function fetchRepositoryBaseBranch(root: string): Promise<string | null> {
+  const status = await fetchGitStatus(root);
+  if (!status.available || status.detached) return null;
+  const branch = status.branch?.trim() ?? "";
+  return branch.length === 0 ? null : branch;
 }

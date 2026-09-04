@@ -884,13 +884,15 @@ function AppShellInner(): ReactNode {
       .then((res) => setGroundingLimits(res.effectiveGroundingLimits))
       .catch(() => undefined);
   }, []);
-  // Issue #446 — load the task-workspace inventory + active binding for the launched project, and
-  // re-list whenever the active project changes. Best-effort: a server without the binding routes
-  // degrades to an empty inventory and an unbound state (the switcher then shows "no active workspace").
+  // Issue #446 — load the task-workspace inventory + active binding on launch, and re-read them
+  // whenever the active project changes. The inventory itself spans every repository (the active
+  // pointer is global, so a switch may target any of them); the project path only triggers the
+  // re-read. Best-effort: a server without the binding routes degrades to an empty inventory and
+  // an unbound state (the switcher then shows "no active workspace").
   const refreshActiveWorkspace = activeWorkspace.refresh;
   const activeProjectPath = session.activeProject?.path;
   useEffect(() => {
-    void refreshActiveWorkspace(activeProjectPath);
+    void refreshActiveWorkspace();
   }, [refreshActiveWorkspace, activeProjectPath]);
   // Release 0.2.0 — user-visible feedback when a connect gesture is rejected because the
   // per-chat source limit is reached. Cleared on the next accepted bind and auto-dismissed.

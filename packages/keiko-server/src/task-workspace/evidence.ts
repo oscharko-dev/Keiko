@@ -41,7 +41,12 @@ export type WorkspaceLifecycleOperation =
   | "repair"
   | "cleanup"
   // The read-only health report: its failures must not read as a reconciliation write (#3376).
-  | "health";
+  | "health"
+  // The narrow restamp a governed commit Keiko itself executed inside a managed worktree performs on
+  // that row's `lastVerifiedHead` (#3382). Distinct from `reconcile`: it classifies nothing and
+  // writes exactly one field, so an operator filtering `server.log` can tell "Keiko recorded the head
+  // it just wrote" apart from "a pass re-classified this workspace".
+  | "verify-head";
 
 export type WorkspaceLifecycleOutcome =
   | "provisioned"
@@ -73,6 +78,8 @@ export interface WorkspaceLifecycleEvidenceRecord {
   readonly outcome: WorkspaceLifecycleOutcome;
   readonly attempt: number;
   readonly durationMs: number;
+  // Operation-dependent: the managed worktrees the operation touched (0 or 1 for provision,
+  // activate, repair and cleanup) or, for a reconcile, the worktrees the repository listed.
   readonly worktreeCount: number;
   readonly event: WorkspaceEvent;
 }

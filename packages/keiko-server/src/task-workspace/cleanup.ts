@@ -36,6 +36,7 @@ import {
   assertManagedTargetContained,
   isManagedRootOwned,
   isManagedTargetContained,
+  listManagedRepositoryIds,
 } from "./managed-root.js";
 import { deriveOrphanId } from "./health.js";
 import { assertSafeFieldValue } from "./field-safety.js";
@@ -43,9 +44,10 @@ import { gatherInstanceReconciliationFacts } from "./reconciliation.js";
 import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
-import { TaskWorkspaceError } from "./errors.js";
+import { asRepositoryUnreachable, TaskWorkspaceError } from "./errors.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import {
+  logWorkspaceLifecycleFailure,
   recordWorkspaceLifecycle,
   runWithWorkspaceLifecycleFailureLogging,
 } from "./activity-log.js";
@@ -629,10 +631,22 @@ async function cleanupOneOrphan(
   return { removed: true };
 }
 
+// The leaf directories of one repository's managed directory that no persisted row references, or
+// `[]` once the failure to list them is on the log.
+//
+// The bare `catch { return []; }` this replaces made "this repository has no orphans" and "this
+// repository could not be looked at" the same answer, so a permission change or an unreadable mount
+// silently removed the orphan sweep for that repository and the operator-approved run reported
+// `removed: 0` as if it had swept it. The health report closed exactly this class in
+// `orphanLeavesOrLogFailure` (health.ts); the MUTATING sweep is where it matters most, and the rule
+// it must never break is the one it already has — it still deletes nothing it could not inventory,
+// because the failure yields an empty candidate list rather than a guess (PR #3381 review, #3382).
+// Per-repository isolation, not a swallow: the rest of the sweep continues.
 function orphanLeavesFor(
   ctx: CleanupCtx,
   repositoryId: string,
   knownPaths: ReadonlySet<string>,
+  correlationId: string | undefined,
 ): readonly string[] {
   const repoDir = join(ctx.deps.managedRoot, repositoryId);
   if (!existsSync(repoDir)) return [];
@@ -641,7 +655,15 @@ function orphanLeavesFor(
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .filter((leaf) => !knownPaths.has(join(repoDir, leaf)));
-  } catch {
+  } catch (error) {
+    logWorkspaceLifecycleFailure(
+      ctx.deps,
+      { operation: "cleanup", workspaceIdentitySeed: repositoryId, correlationId },
+      asRepositoryUnreachable(
+        error,
+        "orphan sweep could not list the managed repository directory",
+      ),
+    );
     return [];
   }
 }
@@ -660,7 +682,7 @@ function resolveOrphanRepositoryIds(
     return new Set([deriveRepositoryId(request.repositoryRoot)]);
   }
   const ids = new Set(knownByRepo.keys());
-  for (const onDisk of managedRepoDirs(ctx)) ids.add(onDisk);
+  for (const onDisk of listManagedRepositoryIds(ctx.deps.managedRoot)) ids.add(onDisk);
   return ids;
 }
 
@@ -696,7 +718,7 @@ async function cleanupOrphansImpl(
   const refused: WorkspaceOrphanRefusal[] = [];
   for (const repositoryId of resolveOrphanRepositoryIds(ctx, request, knownByRepo)) {
     const known = knownByRepo.get(repositoryId) ?? new Set<string>();
-    for (const leaf of orphanLeavesFor(ctx, repositoryId, known)) {
+    for (const leaf of orphanLeavesFor(ctx, repositoryId, known, request.correlationId)) {
       // Serialize each candidate leaf and re-check persisted liveness inside the critical section. The
       // initial known-path snapshot may be stale if a provision finishes while a sweep is walking disk.
       const outcome = await ctx.deps.mutex.runExclusive([workspaceKey(leaf)], () =>
@@ -707,17 +729,6 @@ async function cleanupOrphansImpl(
     }
   }
   return { removed, refused };
-}
-
-function managedRepoDirs(ctx: CleanupCtx): readonly string[] {
-  if (!existsSync(ctx.deps.managedRoot)) return [];
-  try {
-    return readdirSync(ctx.deps.managedRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-  } catch {
-    return [];
-  }
 }
 
 export function createWorkspaceCleanupService(

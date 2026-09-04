@@ -129,12 +129,15 @@ identity-schema-retired | identity-unsupported
 ```
 
 The last two were added with the creation-time-bound managed identity (#3376): `identity-schema-retired`
-names a workspace registered under the retired inode-only identity rule, whose authenticity is unproven
-under the current rule (a migration to resolve by operator-approved re-registration, not a defect on the
-customer's disk); `identity-unsupported` names a filesystem that reports no durable creation time, so no
-identity can be derived at all (ADR-0155's `FILESYSTEM_IDENTITY_UNSUPPORTED` at the managed boundary,
-resolved by relocating the root). Neither is a `gitdir-mismatch`, because both send an operator to a
-different action than a replaced worktree does.
+names a workspace registered under a retired identity rule — the inode-only rule (#3367) or the
+pointer-text rule every workspace provisioned before #3367 carries (the SHA-256 of the `.git` pointer
+target, recognised since 2026-09-03; before that every such workspace was reported as a replaced
+worktree with no executable recovery) — whose authenticity is unproven under the current rule (a
+migration to resolve by operator-approved re-registration, not a defect on the customer's disk);
+`identity-unsupported` names a filesystem that reports no durable creation time, so no identity can
+be derived at all (ADR-0155's `FILESYSTEM_IDENTITY_UNSUPPORTED` at the managed boundary, resolved by
+relocating the root). Neither is a `gitdir-mismatch`, because both send an operator to a different
+action than a replaced worktree does.
 
 `TASK_WORKSPACE_DRIFT_MARKERS`, `TaskWorkspaceDriftMarker`, `isTaskWorkspaceDriftMarker`.
 
@@ -146,12 +149,17 @@ provisioning | activation | mutation | repair | cleanup
 ```
 
 **Entity 5 — Recovery hints.** `WorkspaceRecoveryHint` pairs a drift marker with a recovery strategy
-and an `operatorActionRequired` flag. `WorkspaceRecoveryStrategy` is a closed seven-member union:
+and an `operatorActionRequired` flag. `WorkspaceRecoveryStrategy` is a closed eight-member union:
 
 ```
-reconcile-pointer | recreate-worktree | reattach-branch
-release-stale-lock | commit-or-stash-required | operator-repair | abandon-and-cleanup
+reconcile-pointer | recreate-worktree | reattach-branch | release-stale-lock
+commit-or-stash-required | accept-moved-head | operator-repair | abandon-and-cleanup
 ```
+
+`accept-moved-head` adopts the worktree's CURRENT commit as its verified head. It mutates neither Git
+nor the filesystem — it replaces one recorded baseline — and it exists because `head-moved` otherwise
+had no executable recovery at all: the marker could be persisted and never cleared, and the runtime
+launch authority refuses any row that carries one (issue #3382).
 
 This is WORKSPACE recovery only. Git-mutation recovery (e.g., resolving conflicts, rebasing, undoing
 commits) stays owned by the governed Git delivery surface (ADR-0083).
@@ -294,13 +302,19 @@ cleanup controls (#448) must check these before enqueuing cleanup or archival wo
 `provisioning` and may retry or transition to `recovery-required`. There is no implicit promotion to
 `active` on partial success.
 
-**Stale-pointer semantics (SC4).** The `pointer-stale` drift marker signals that the stored
-`managedWorktreePath` or `gitdirIdentity` no longer matches the filesystem. When health probing
-detects this condition, the active/paused workspace transitions to `recovery-required` (the
-`active`/`paused → recovery-required` detection transitions carry no preconditions) and populates
-`recoveryHints` with
-`{ marker: "pointer-stale", strategy: "reconcile-pointer", operatorActionRequired: false }`. The
-binding is invalidated; downstream slices must re-validate the binding before use.
+**Stale-pointer semantics (SC4).** Two markers name a worktree whose stored `gitdirIdentity` no
+longer matches the filesystem, and every path that observes the fact — reconciliation, the
+provisioning resume, activation, handoff, the active-pointer read — persists the SAME marker for it:
+`pointer-stale` when the `.git` pointer is missing, malformed or not reciprocal (nothing to compare;
+hint `operator-repair`, `operatorActionRequired: true`, because the narrow adapter cannot rewrite a
+pointer without risking the tree's work), and `gitdir-mismatch` when the pointer is readable and
+reciprocal but proves a different identity (hint `reconcile-pointer`, `operatorActionRequired: false`
+— executable by the repair service under operator approval). Before 2026-09-03 the provisioning and
+lifecycle refusals collapsed both facts into `pointer-stale`, so one row's hint flipped between an
+executable strategy and a dead end depending on which path ran last. On either marker the
+active/paused workspace transitions to `recovery-required` (the `active`/`paused → recovery-required`
+detection transitions carry no preconditions); the binding is invalidated, and downstream slices
+must re-validate the binding before use.
 
 **Lock-contention semantics (SC4).** The `lock-stale` drift marker signals that a held lock's
 `expiresAt` has passed without release. The recovery strategy is `release-stale-lock`; no operator

@@ -9,9 +9,12 @@
 // These pins take the filesystem out of the verdict. They drive the real production entry point,
 // `inspectManagedGitdirIdentity`, through an injected port whose stat values are written by hand,
 // so "the inode was reused" is an input rather than something the test hopes for.
-import { join, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { afterEach, describe, expect, it } from "vitest";
 import type {
   WorkspaceDescriptorReadCompleteness,
   WorkspaceDescriptorUtf8Read,
@@ -23,10 +26,17 @@ import type {
 import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
+  classifyWorkspaceReconciliation,
+  type WorkspaceReconciliationFacts,
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import {
   inspectManagedGitdirIdentity,
   inspectManagedGitdirIdentityOutcome,
   managedIdentityDriftFor,
+  managedIdentityDriftMarker,
+  managedIdentityDriftMessage,
   type ManagedGitdirIdentityInspection,
+  type ManagedIdentityDrift,
 } from "./gitdir-identity.js";
 
 // Keys are built with the same `node:path` API the production code uses. Spelling them as POSIX
@@ -88,10 +98,18 @@ function statOf(node: Node): WorkspaceStat {
   };
 }
 
+// Absence has to arrive the way the real port reports it — a Node `Error` carrying `code`. The
+// production classifier reads that code to tell "the component is not there" (deterministic,
+// `unproven`) from "the proof could not run" (retryable, `failed`); a fake that threw a bare Error
+// would make the ENOENT verdict untestable here and this file would stop guarding it.
+function absent(path: string): Error {
+  return Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+}
+
 function portFor(tree: Map<string, Node>): WorkspaceFs {
   const nodeAt = (path: string): Node => {
     const node = tree.get(path);
-    if (node === undefined) throw new Error(`ENOENT: ${path}`);
+    if (node === undefined) throw absent(path);
     return node;
   };
   return {
@@ -228,6 +246,11 @@ describe("inspectManagedGitdirIdentity — a reused inode no longer replays an i
   // Anti-vacuity guard. If a pointer rule and the ctime requirement could both refuse, a filesystem
   // that failed the second would make every pointer rule stop being tested while still looking
   // green. This pins that a malformed pointer is refused on its own merits, ctime available.
+  //
+  // A RELATIVE target is no longer malformed by itself — Git writes one under
+  // `worktree.useRelativePaths` and the parse resolves it against the worktree root (see the
+  // relative-pointer describe below). This one is refused for its SHAPE: resolved, it names
+  // `<worktree>/relative/admin-dir`, whose parent is not a `worktrees` directory.
   it("refuses a malformed pointer on its own merits, not for a missing stamp", () => {
     const malformed = mutate(authenticTree(), WORKTREE_POINTER, {
       text: `gitdir: ${join("relative", "admin-dir")}\n`,
@@ -294,6 +317,62 @@ describe("legacy identity — recognises a superseded registration without trust
   });
 });
 
+describe("pointer-text identity — recognises a registration made before the identity rule", () => {
+  // EXTERNAL anchor: the composition every workspace provisioned before #3367 carries, transcribed
+  // from the retired `gitdirIdentity` in provisioning.ts (`git show bbfe47b13^:…/provisioning.ts`):
+  // the `.git` pointer's target text, trimmed, hashed bare — no schema string, no inode, no
+  // creation time. Two real workspaces registered on 2026-08-23 carried exactly this value and were
+  // reported as REPLACED worktrees on every start after the upgrade, with an operator-repair hint
+  // that no strategy could execute. If this composition ever drifts from what the old code wrote,
+  // the migration diagnosis silently stops firing again; only a value derived outside the
+  // production file can catch that.
+  const V1_GOLDEN_IDENTITY = createHash("sha256")
+    .update(ADMIN_DIRECTORY, "utf8")
+    .digest("hex")
+    .slice(0, 32);
+
+  it("reproduces the retired pointer-text composition exactly", () => {
+    expect(inspect(authenticTree())?.legacyPointerIdentity).toBe(V1_GOLDEN_IDENTITY);
+  });
+
+  it("is neither the identity that grants access nor the v2 composition", () => {
+    const inspection = inspect(authenticTree());
+
+    expect(inspection?.legacyPointerIdentity).toEqual(expect.any(String));
+    expect(inspection?.legacyPointerIdentity).not.toBe(inspection?.identity);
+    expect(inspection?.legacyPointerIdentity).not.toBe(inspection?.legacyIdentity);
+  });
+
+  // The property that lets it recognise a pre-#3367 record: it is blind to every filesystem
+  // component, exactly as the retired rule was.
+  it("ignores every inode and creation time the current identity binds", () => {
+    const tree = authenticTree();
+    for (const path of tree.keys()) {
+      mutate(tree, path, { identity: `7:${String(path.length)}`, birthtimeNs: "999" });
+    }
+
+    expect(inspect(tree)?.legacyPointerIdentity).toBe(V1_GOLDEN_IDENTITY);
+    expect(inspect(tree)?.identity).not.toBe(inspect(authenticTree())?.identity);
+  });
+
+  it("hashes the target text as written, whitespace trimmed", () => {
+    const padded = mutate(authenticTree(), WORKTREE_POINTER, {
+      text: `gitdir:   ${ADMIN_DIRECTORY}   \n`,
+    });
+
+    expect(inspect(padded)?.legacyPointerIdentity).toBe(V1_GOLDEN_IDENTITY);
+  });
+
+  it("is recognised as a retired registration, not as a replaced worktree", () => {
+    const inspection = inspect(authenticTree());
+    if (inspection === undefined) throw new Error("fixture produced no identity");
+
+    expect(
+      managedIdentityDriftFor({ kind: "identified", inspection }, inspection.legacyPointerIdentity),
+    ).toBe("schema-retired");
+  });
+});
+
 // One owner for the three-way verdict. The access boundary, the provisioning resume and
 // reconciliation all compare a persisted identity, and they have to agree — a site that reduces this
 // to a boolean is how "registered under the old rule" gets reported as "your worktree was replaced".
@@ -321,7 +400,7 @@ describe("managedIdentityDriftFor", () => {
     expect(driftOf(inspection, inspection.legacyIdentity)).toBe("schema-retired");
   });
 
-  it("reports anything else as changed", () => {
+  it("reports a readable pointer proving a different identity as changed", () => {
     expect(driftOf(inspect(authenticTree()), "not-an-identity")).toBe("changed");
   });
 
@@ -342,8 +421,72 @@ describe("managedIdentityDriftFor", () => {
     }
   });
 
-  it("reports changed when the worktree proves no identity at all", () => {
-    expect(driftOf(undefined, "anything")).toBe("changed");
+  // Relocated pin: this used to expect "changed". A worktree that proves NO identity — missing,
+  // malformed or non-reciprocal pointer — is refused exactly as before, but as its own verdict:
+  // the contract keeps a corrupt pointer operator-guided (`pointer-stale`) and a readable
+  // mismatch automatically re-linkable (`gitdir-mismatch`), and collapsing the two let one row's
+  // persisted recovery hint flip between those strategies depending on which path saw it last.
+  it("reports unproven when the worktree proves no identity at all", () => {
+    expect(driftOf(undefined, "anything")).toBe("unproven");
+  });
+});
+
+// The refusal paths (provisioning resume/completion/activation, lifecycle handoff, the active read)
+// persist the marker this mapping returns; reconciliation persists the marker the contract's
+// classifier returns for the same on-disk fact. They must agree, or the recovery hint a row carries
+// depends on which path observed it last — the 2026-09-03 dev log showed one row alternating
+// between `gitdir-mismatch` (reconcile-pointer, executable) and `pointer-stale` (operator-repair,
+// nothing executable) on every provision attempt.
+describe("managedIdentityDriftMarker — one marker per fact, the same one reconciliation persists", () => {
+  const healthyFacts: WorkspaceReconciliationFacts = {
+    lifecycleState: "active",
+    pathContained: true,
+    worktreeDirExists: true,
+    gitPointerPresent: true,
+    gitdirIdentityMatches: true,
+    taskBranchPresent: true,
+    headMatches: true,
+    uncommittedChanges: false,
+    lockPresent: false,
+    lockLive: false,
+    lockedByOtherActor: false,
+  };
+  const classifierMarker = (facts: Partial<WorkspaceReconciliationFacts>): string | undefined =>
+    classifyWorkspaceReconciliation({ ...healthyFacts, ...facts }).driftMarkers[0];
+
+  it.each([
+    {
+      drift: "changed",
+      facts: { gitdirIdentityMatches: false },
+    },
+    {
+      drift: "unproven",
+      facts: { gitPointerPresent: false, gitdirIdentityMatches: false },
+    },
+    {
+      drift: "schema-retired",
+      facts: { gitdirIdentityMatches: false, gitdirIdentitySchemaRetired: true },
+    },
+    {
+      drift: "unsupported",
+      facts: { gitdirIdentityMatches: false, gitdirIdentityUnsupported: true },
+    },
+  ] satisfies readonly {
+    drift: ManagedIdentityDrift;
+    facts: Partial<WorkspaceReconciliationFacts>;
+  }[])("persists the classifier's marker for a $drift verdict", ({ drift, facts }) => {
+    expect(managedIdentityDriftMarker(drift)).toBe(classifierMarker(facts));
+  });
+
+  it("maps a readable mismatch to the executable reconcile-pointer marker, never operator-repair", () => {
+    expect(managedIdentityDriftMarker("changed")).toBe("gitdir-mismatch");
+    expect(managedIdentityDriftMarker("unproven")).toBe("pointer-stale");
+  });
+
+  it("tells an operator which of the two happened", () => {
+    expect(managedIdentityDriftMessage("changed")).toContain("identity changed");
+    expect(managedIdentityDriftMessage("unproven")).toContain("could not be proven");
+    expect(managedIdentityDriftMessage("unproven")).not.toContain("changed");
   });
 });
 
@@ -655,6 +798,73 @@ describe("inspectManagedGitdirIdentityOutcome — I/O failures keep their cause"
       "unproven",
     );
   });
+
+  // A partially removed worktree — the tree is still there, its `.git` pointer is gone — is the
+  // documented `pointer-stale` case (ADR-0088, ADR-0091), not an I/O failure. Classified `failed`
+  // it left every consumer of the refusal paths (provisioning resume/activate, the active read,
+  // health) answering a retryable 503 "retry" that could never succeed, and no marker was ever
+  // persisted, so the row stayed `active`/`healthy` in the inventory with no Repair offer until a
+  // reconcile pass happened to run (PR #3381 review P2).
+  it.each([
+    { label: "worktree .git pointer", path: WORKTREE_POINTER },
+    { label: "admin gitdir backpointer", path: ADMIN_BACKPOINTER },
+    { label: "Git admin directory", path: ADMIN_DIRECTORY },
+  ])("reports unproven when the $label is absent, never a retryable failure", ({ path }) => {
+    const partiallyRemoved = authenticTree();
+    partiallyRemoved.delete(path);
+
+    const outcome = inspectManagedGitdirIdentityOutcome(
+      WORKTREE_ROOT,
+      REPOSITORY_ROOT,
+      portFor(partiallyRemoved),
+    );
+
+    expect(outcome.kind).toBe("unproven");
+    // The whole chain the consumers read: no throw, the `pointer-stale` marker, and the sentence
+    // that does not accuse the operator of a replaced worktree.
+    const drift = managedIdentityDriftFor(outcome, "persisted-identity");
+    expect(drift).toBe("unproven");
+    expect(managedIdentityDriftMarker(drift)).toBe("pointer-stale");
+  });
+
+  // ENOTDIR is the same fact reached through a component whose ancestor is no longer a directory.
+  it("reports unproven when a component's ancestor is not a directory", () => {
+    const inner = portFor(authenticTree());
+    const port: WorkspaceFs = {
+      ...inner,
+      stat: (candidate: string): WorkspaceStat => {
+        if (candidate === ADMIN_BACKPOINTER) {
+          throw Object.assign(new Error("ENOTDIR: not a directory"), { code: "ENOTDIR" });
+        }
+        return inner.stat(candidate);
+      },
+    };
+
+    expect(inspectManagedGitdirIdentityOutcome(WORKTREE_ROOT, REPOSITORY_ROOT, port).kind).toBe(
+      "unproven",
+    );
+  });
+
+  // The distinction is the errno, not the shape of the error: an EACCES on the same component is
+  // still the retryable failure the operator documentation promises.
+  it("keeps an EACCES on the pointer a retryable failure", () => {
+    const inner = portFor(authenticTree());
+    const read = inner.readFileUtf8WithinRootSameDescriptor;
+    if (read === undefined) throw new Error("fixture port lost its descriptor read");
+    const failure = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    const port: WorkspaceFs = {
+      ...inner,
+      readFileUtf8WithinRootSameDescriptor: (canonicalRoot, absolutePath, ...rest) => {
+        if (absolutePath === WORKTREE_POINTER) throw failure;
+        return read.call(inner, canonicalRoot, absolutePath, ...rest);
+      },
+    };
+
+    const outcome = inspectManagedGitdirIdentityOutcome(WORKTREE_ROOT, REPOSITORY_ROOT, port);
+
+    expect(outcome.kind).toBe("failed");
+    expect(outcome.kind === "failed" ? outcome.cause : undefined).toBe(failure);
+  });
 });
 
 // The volume proof must observe the common git directory the identity hashed. For a repository root
@@ -691,4 +901,188 @@ describe("the inspection carries the common directory it hashed", () => {
       inspection: { commonDirectory: COMMON_DIRECTORY },
     });
   });
+});
+
+// Git 2.48 added `worktree.useRelativePaths`, and `git worktree add` inherits the repository
+// setting, so Keiko's own managed worktrees carry RELATIVE pointers on any repository configured
+// that way. The absolute-only parse refused both of them before any identity could be computed, so
+// every such workspace reconciled as `pointer-stale` with no executable repair (PR #3381 review
+// P2). The pointers below are the exact shapes Git 2.50.1 wrote in the owner's reproduction.
+describe("relative Git pointers (worktree.useRelativePaths)", () => {
+  // The same authentic tree, spelled the way Git spells it with relative paths on: the worktree's
+  // `.git` names the admin directory relative to the WORKTREE ROOT, and the admin `gitdir` file
+  // names the worktree's `.git` relative to the ADMIN DIRECTORY.
+  function relativePointerTree(): Map<string, Node> {
+    const tree = authenticTree();
+    mutate(tree, WORKTREE_POINTER, {
+      text: `gitdir: ${relative(WORKTREE_ROOT, ADMIN_DIRECTORY)}\n`,
+    });
+    mutate(tree, ADMIN_BACKPOINTER, {
+      text: `${relative(ADMIN_DIRECTORY, WORKTREE_POINTER)}\n`,
+    });
+    return tree;
+  }
+
+  it("spells the fixture the way Git does — both pointers relative, neither absolute", () => {
+    const tree = relativePointerTree();
+
+    expect(tree.get(WORKTREE_POINTER)?.text).toBe(
+      `gitdir: ${join("..", "..", "repo", ".git", "worktrees", "ws")}\n`,
+    );
+    expect(tree.get(ADMIN_BACKPOINTER)?.text).toBe(
+      `${join("..", "..", "..", "..", "work", "ws", ".git")}\n`,
+    );
+  });
+
+  // The identity binds the RESOLVED objects — the admin directory, the common directory and the
+  // five stamped descriptors — never the spelling of the pointer, so Git's choice of relative or
+  // absolute paths must not change it. An absolute-only parse makes the left side `undefined`.
+  it("proves the same identity whichever way Git spelled the two pointers", () => {
+    expect(identityOf(relativePointerTree())).toBe(identityOf(authenticTree()));
+    expect(identityOf(relativePointerTree())).toEqual(expect.any(String));
+  });
+
+  // Resolution does not loosen reciprocity: a relative backpointer that resolves to a DIFFERENT
+  // worktree is still refused, exactly as an absolute one naming another worktree is.
+  it("still refuses a relative backpointer that resolves to another worktree", () => {
+    const foreign = join(resolve(sep, "work", "other"), ".git");
+    const tree = mutate(relativePointerTree(), ADMIN_BACKPOINTER, {
+      text: `${relative(ADMIN_DIRECTORY, foreign)}\n`,
+    });
+
+    expect(identityOf(tree)).toBeUndefined();
+  });
+
+  // And containment is unchanged: a relative forward pointer that resolves outside a `worktrees`
+  // directory is refused for its shape, so `..` in a pointer is not an escape hatch.
+  it("still refuses a relative forward pointer that resolves outside a worktrees directory", () => {
+    const tree = mutate(relativePointerTree(), WORKTREE_POINTER, {
+      text: `gitdir: ${join("..", "..", "elsewhere", "ws")}\n`,
+    });
+
+    expect(identityOf(tree)).toBeUndefined();
+  });
+});
+
+// The fixture above states what Git writes; this states that Git actually writes it. A parse rule
+// derived from documentation is worth exactly as much as the documentation, so the shapes are taken
+// from a real `git worktree add` on the local Git — the reproduction the finding reported.
+const GIT_RELATIVE_PATHS_MIN = { major: 2, minor: 48 } as const;
+
+function localGitVersion(): { readonly major: number; readonly minor: number } | undefined {
+  try {
+    const raw = execFileSync("git", ["--version"], { encoding: "utf8" });
+    const match = /(\d+)\.(\d+)/u.exec(raw);
+    const major = Number(match?.[1]);
+    const minor = Number(match?.[2]);
+    return Number.isFinite(major) && Number.isFinite(minor) ? { major, minor } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function gitSupportsRelativeWorktreePaths(): boolean {
+  const version = localGitVersion();
+  if (version === undefined) return false;
+  return (
+    version.major > GIT_RELATIVE_PATHS_MIN.major ||
+    (version.major === GIT_RELATIVE_PATHS_MIN.major &&
+      version.minor >= GIT_RELATIVE_PATHS_MIN.minor)
+  );
+}
+
+const RELATIVE_WORKTREE_PATHS_SUPPORTED = gitSupportsRelativeWorktreePaths();
+
+describe("real Git linked worktrees, absolute and relative pointers", () => {
+  let scratch: string | undefined;
+
+  afterEach(() => {
+    if (scratch !== undefined) rmSync(scratch, { recursive: true, force: true });
+    scratch = undefined;
+  });
+
+  function realRepository(): string {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gitdir-rel-")));
+    scratch = root;
+    const repository = join(root, "repo");
+    const run = (args: readonly string[]): void => {
+      execFileSync("git", [...args], { cwd: repository, encoding: "utf8" });
+    };
+    execFileSync("git", ["init", "-q", "-b", "main", repository], { encoding: "utf8" });
+    run(["config", "user.email", "test@keiko.example"]);
+    run(["config", "user.name", "Keiko Test"]);
+    run(["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(repository, "README.md"), "# demo\n");
+    run(["add", "README.md"]);
+    run(["commit", "-q", "-m", "initial"]);
+    return repository;
+  }
+
+  // `worktree.useRelativePaths` is pinned EXPLICITLY for both shapes, never left to inheritance:
+  // `git init` picks up the user's global configuration, so with `worktree.useRelativePaths=true`
+  // set globally — or a future Git defaulting it on — the "absolute" worktree would get a relative
+  // pointer too and this fixture would silently cover ONE shape while still passing (CodeRabbit,
+  // PR #3381).
+  function addWorktree(repository: string, name: string, relativePaths: boolean): string {
+    const target = join(repository, "..", name);
+    execFileSync(
+      "git",
+      [
+        "-c",
+        `worktree.useRelativePaths=${relativePaths ? "true" : "false"}`,
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        `keiko/${name}`,
+        target,
+      ],
+      { cwd: repository, encoding: "utf8" },
+    );
+    return realpathSync(target);
+  }
+
+  // A forward pointer Git spelled ABSOLUTELY: root-anchored on a POSIX separator, a Windows
+  // separator, or a drive qualifier (`C:/…`, `C:\…`). Stated once so the positive and the negative
+  // assertion below can never encode two different notions of "absolute".
+  const ABSOLUTE_GITDIR_POINTER = /^gitdir: (?:[/\\]|[A-Za-z]:[/\\])/u;
+
+  // The real-worktree assertions below only ever see the spelling of the platform they run on, so the
+  // Windows half of `ABSOLUTE_GITDIR_POINTER` would be unexercised on every lane CI actually runs.
+  // Pinned here directly, on every platform.
+  it("treats a drive-qualified pointer as absolute and a dot-relative one as not", () => {
+    for (const absolute of ["gitdir: /repo/.git/worktrees/x", "gitdir: C:/repo/.git/worktrees/x"]) {
+      expect(absolute).toMatch(ABSOLUTE_GITDIR_POINTER);
+    }
+    expect("gitdir: C:\\repo\\.git\\worktrees\\x").toMatch(ABSOLUTE_GITDIR_POINTER);
+    expect("gitdir: \\\\server\\share\\.git").toMatch(ABSOLUTE_GITDIR_POINTER);
+    for (const relative of ["gitdir: ../repo/.git/worktrees/x", "gitdir: repo/.git/worktrees/x"]) {
+      expect(relative).not.toMatch(ABSOLUTE_GITDIR_POINTER);
+    }
+  });
+
+  it.skipIf(!RELATIVE_WORKTREE_PATHS_SUPPORTED)(
+    "identifies a worktree Git created with worktree.useRelativePaths (needs Git >= 2.48)",
+    () => {
+      const repository = realRepository();
+      const absolute = addWorktree(repository, "abs", false);
+      const relativePaths = addWorktree(repository, "rel", true);
+
+      // The fixture is real: Git wrote a relative forward pointer for the second worktree and an
+      // absolute one for the first. BOTH halves are asserted by SHAPE — the absolute one anchored on
+      // a ROOT, because `/^gitdir: /u` also matches `gitdir: ../../repo/.git/...` and would pass on
+      // two identical relative layouts, proving nothing (CodeRabbit, PR #3381). "Root-anchored" is
+      // `/`, `\`, or a drive letter: Git for Windows writes `gitdir: C:/…` for an absolute pointer,
+      // which a separator-only anchor would reject on the Windows lane (CodeRabbit, PR #3381).
+      expect(readFileSync(join(relativePaths, ".git"), "utf8").trim()).not.toMatch(
+        ABSOLUTE_GITDIR_POINTER,
+      );
+      expect(readFileSync(join(absolute, ".git"), "utf8").trim()).toMatch(ABSOLUTE_GITDIR_POINTER);
+
+      expect(inspectManagedGitdirIdentityOutcome(absolute, repository).kind).toBe("identified");
+      expect(inspectManagedGitdirIdentityOutcome(relativePaths, repository).kind).toBe(
+        "identified",
+      );
+    },
+  );
 });

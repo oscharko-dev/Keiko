@@ -794,3 +794,298 @@ describe("executeGovernedMutation — managed-root re-proof at the spawn boundar
     }
   });
 });
+
+// ── #3382: a governed COMMIT restamps the managed workspace's verified head ─────────────────────
+//
+// `lastVerifiedHead` is the baseline `classifyWorkspaceReconciliation` measures `head-moved`
+// against, and until this restamp existed nothing wrote it outside a healthy reconciliation pass.
+// Every governed commit inside a managed task worktree therefore moved HEAD away from that
+// baseline, the next pass persisted `head-moved` — whose recovery was a strategy `repair.ts`
+// executes for no marker — and `productionRuntimeWorkspaceAuthority` refused the workspace for
+// every further run. The restamp is scoped to exactly what Keiko KNOWS it did: a commit, that
+// succeeded, inside a root the managed prover still admits.
+
+const COMMIT = { kind: "commit", message: "governed commit", allowEmpty: true } as const;
+
+interface RestampCall {
+  readonly managedWorktreePath: string;
+  readonly correlationId?: string | undefined;
+  readonly signal?: AbortSignal | undefined;
+}
+
+function managedDepsWithRestamp(
+  fixture: ManagedWorktreeFixture,
+  calls: RestampCall[],
+): ReturnType<typeof managedAccessDeps> & {
+  readonly workspaceProvisioning: {
+    readonly recordVerifiedHead: (input: RestampCall) => Promise<boolean>;
+  };
+} {
+  const base = managedAccessDeps(fixture, () => fixture.instance);
+  return {
+    ...base,
+    workspaceProvisioning: {
+      ...base.workspaceProvisioning,
+      recordVerifiedHead: (input: RestampCall): Promise<boolean> => {
+        calls.push(input);
+        return Promise.resolve(true);
+      },
+    },
+  };
+}
+
+describe("executeGovernedMutation — verified-head restamp (#3382)", () => {
+  it("records the managed workspace's verified head after a successful commit", async () => {
+    const fixture = createManagedWorktreeFixture("task-3382-commit");
+    const cap = captureStore();
+    const calls: RestampCall[] = [];
+    try {
+      const result = await executeGovernedMutation(
+        COMMIT,
+        { required: false },
+        workspaceInfo(fixture.managedWorktreePath),
+        {
+          evidenceStore: cap.store,
+          redactor: buildRedactor({}),
+          ...managedDepsWithRestamp(fixture, calls),
+        },
+        {
+          policyPacks: { repoPack: ALLOW_LOCAL },
+          adapterFactory: () => recordingMutationAdapter([]),
+          snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(MANAGED_SNAPSHOT),
+        },
+        "request-correlation-restamp",
+      );
+
+      expect(result.outcome.status).toBe("succeeded");
+      // Exactly one call, carrying the canonical worktree root and the request's own correlation id
+      // — matched field-by-field rather than by whole-object equality, so the deadline signal the
+      // input now also carries does not make this pin about the input's shape.
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        managedWorktreePath: fixture.managedWorktreePath,
+        correlationId: "request-correlation-restamp",
+      });
+      // The port is handed a LIVE deadline signal: the restamp completed inside its bound, so
+      // nothing abandoned it and the write it made was legitimate.
+      expect(calls[0]?.signal?.aborted).toBe(false);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("records nothing for a mutation that does not move HEAD", async () => {
+    const fixture = createManagedWorktreeFixture("task-3382-branch");
+    const cap = captureStore();
+    const calls: RestampCall[] = [];
+    try {
+      const result = await executeGovernedMutation(
+        BRANCH_CREATE,
+        { required: false },
+        workspaceInfo(fixture.managedWorktreePath),
+        {
+          evidenceStore: cap.store,
+          redactor: buildRedactor({}),
+          ...managedDepsWithRestamp(fixture, calls),
+        },
+        {
+          policyPacks: { repoPack: ALLOW_LOCAL },
+          adapterFactory: () => recordingMutationAdapter([]),
+          snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(MANAGED_SNAPSHOT),
+        },
+        "request-correlation-branch",
+      );
+
+      expect(result.outcome.status).toBe("succeeded");
+      expect(calls).toEqual([]);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("records nothing when the commit did not succeed", async () => {
+    const fixture = createManagedWorktreeFixture("task-3382-failed");
+    const cap = captureStore();
+    const calls: RestampCall[] = [];
+    try {
+      const result = await executeGovernedMutation(
+        COMMIT,
+        { required: false },
+        workspaceInfo(fixture.managedWorktreePath),
+        {
+          evidenceStore: cap.store,
+          redactor: buildRedactor({}),
+          ...managedDepsWithRestamp(fixture, calls),
+        },
+        {
+          policyPacks: { repoPack: ALLOW_LOCAL },
+          adapterFactory: (): GitLocalMutationAdapter => ({
+            ...recordingMutationAdapter([]),
+            commit: (): Promise<GitDeliveryExecutionResult> =>
+              Promise.resolve({
+                schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+                outcome: "failed",
+                durationMs: 1,
+                errorCode: "precondition-failed",
+              }),
+          }),
+          snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(MANAGED_SNAPSHOT),
+        },
+        "request-correlation-failed-commit",
+      );
+
+      expect(result.outcome.status).not.toBe("succeeded");
+      expect(calls).toEqual([]);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  // An ordinary registered project is not a managed task worktree, so it has no row to restamp and
+  // the prover is never even consulted for it.
+  // CodeRabbit, PR #3381: the restamp is documented best-effort, but the `await` was unguarded, so a
+  // port that rejects turned a COMMITTED, already-evidenced mutation into a rejected call — the
+  // caller's route then answered 409 GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE for a commit that is in
+  // the operator's history. The rejection is contained at this seam and reported instead.
+  it("keeps a rejecting restamp port from failing a commit that already succeeded", async () => {
+    const fixture = createManagedWorktreeFixture("task-3382-restamp-rejects");
+    const cap = captureStore();
+    const activity = captureActivityLog();
+    try {
+      const base = managedAccessDeps(fixture, () => fixture.instance);
+      const result = await executeGovernedMutation(
+        COMMIT,
+        { required: false },
+        workspaceInfo(fixture.managedWorktreePath),
+        {
+          evidenceStore: cap.store,
+          redactor: buildRedactor({}),
+          ...base,
+          workspaceProvisioning: {
+            ...base.workspaceProvisioning,
+            recordVerifiedHead: (): Promise<boolean> =>
+              Promise.reject(new Error("restamp port exploded")),
+          },
+        },
+        {
+          policyPacks: { repoPack: ALLOW_LOCAL },
+          activityLog: activity.sink,
+          adapterFactory: () => recordingMutationAdapter([]),
+          snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(MANAGED_SNAPSHOT),
+        },
+        "request-correlation-restamp-rejects",
+      );
+
+      // The commit's own result is untouched, and its evidence line still says `succeeded`.
+      expect(result.outcome.status).toBe("succeeded");
+      expect(
+        activity.events.find((e) => e.op === "git.delivery.mutation.completed")?.extra?.status,
+      ).toBe("succeeded");
+
+      // Exactly one classified line for the failed restamp — not silent, and body-free.
+      const failures = activity.events.filter((e) => e.op === "task-workspace.lifecycle");
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.errorKind).toBe("REPOSITORY_UNREACHABLE");
+      expect(failures[0]?.correlationId).toBe("request-correlation-restamp-rejects");
+      expect(failures[0]?.extra?.operation).toBe("verify-head");
+      expect(failures[0]?.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
+      expect(JSON.stringify(activity.events)).not.toContain(fixture.managedWorktreePath);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  // CodeRabbit, PR #3381: the previous guard caught a REJECTION but not a promise that never
+  // settles. The port serializes on the workspace's `ws:` key and that wait cannot be cancelled, so
+  // a wedged holder left this `await` pending forever — and it runs AFTER the commit and its
+  // lifecycle evidence are durable, so the client hung on a commit that had already succeeded. The
+  // deadline is injected in milliseconds here; in production it is
+  // VERIFIED_HEAD_RESTAMP_DEADLINE_MS.
+  it("completes a successful commit when the restamp port never settles", async () => {
+    const fixture = createManagedWorktreeFixture("task-3382-restamp-hangs");
+    const cap = captureStore();
+    const activity = captureActivityLog();
+    let observedSignal: AbortSignal | undefined;
+    try {
+      const base = managedAccessDeps(fixture, () => fixture.instance);
+      const result = await executeGovernedMutation(
+        COMMIT,
+        { required: false },
+        workspaceInfo(fixture.managedWorktreePath),
+        {
+          evidenceStore: cap.store,
+          redactor: buildRedactor({}),
+          ...base,
+          workspaceProvisioning: {
+            ...base.workspaceProvisioning,
+            // Never settles — exactly what a wedged `ws:` holder produces.
+            recordVerifiedHead: (input): Promise<boolean> => {
+              observedSignal = input.signal;
+              return new Promise<boolean>(() => undefined);
+            },
+          },
+        },
+        {
+          policyPacks: { repoPack: ALLOW_LOCAL },
+          activityLog: activity.sink,
+          adapterFactory: () => recordingMutationAdapter([]),
+          snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(MANAGED_SNAPSHOT),
+          verifiedHeadRestampDeadlineMs: 5,
+        },
+        "request-correlation-restamp-hangs",
+      );
+
+      // The commit's own result is untouched and the call RETURNED — that is the whole finding.
+      expect(result.outcome.status).toBe("succeeded");
+      expect(
+        activity.events.find((e) => e.op === "git.delivery.mutation.completed")?.extra?.status,
+      ).toBe("succeeded");
+
+      // Exactly one classified line for the expiry, body-free, under this request's correlation id.
+      const failures = activity.events.filter((e) => e.op === "task-workspace.lifecycle");
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.errorKind).toBe("LOCK_CONTENTION");
+      expect(failures[0]?.correlationId).toBe("request-correlation-restamp-hangs");
+      expect(failures[0]?.extra?.operation).toBe("verify-head");
+      expect(JSON.stringify(activity.events)).not.toContain(fixture.managedWorktreePath);
+
+      // The port was handed the deadline's signal and it is aborted, so the abandoned attempt can
+      // never persist a head after the request it belonged to has been answered.
+      expect(observedSignal?.aborted).toBe(true);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("records nothing for an ordinary registered project", async () => {
+    const cap = captureStore();
+    const calls: RestampCall[] = [];
+    const result = await executeGovernedMutation(
+      COMMIT,
+      { required: false },
+      workspaceInfo(root),
+      {
+        evidenceStore: cap.store,
+        redactor: buildRedactor({}),
+        workspaceProvisioning: {
+          getInstance: (): undefined => undefined,
+          provision: (): Promise<never> => Promise.reject(new Error("not used")),
+          activate: (): Promise<never> => Promise.reject(new Error("not used")),
+          recordVerifiedHead: (input: RestampCall): Promise<boolean> => {
+            calls.push(input);
+            return Promise.resolve(true);
+          },
+        },
+      },
+      {
+        policyPacks: { repoPack: ALLOW_LOCAL },
+        adapterFactory: () => recordingMutationAdapter([]),
+        snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(MANAGED_SNAPSHOT),
+      },
+      "request-correlation-ordinary",
+    );
+
+    expect(result.outcome.status).toBe("succeeded");
+    expect(calls).toEqual([]);
+  });
+});

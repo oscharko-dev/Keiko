@@ -236,6 +236,7 @@ import { createWorkspaceReconciliationService } from "./task-workspace/reconcili
 import { createWorkspaceRepairService } from "./task-workspace/repair.js";
 import { createWorkspaceHealthService } from "./task-workspace/health.js";
 import { createWorkspaceCleanupService } from "./task-workspace/cleanup.js";
+import { canonicalManagedRootPath } from "./task-workspace/managed-root.js";
 import type {
   WorkspaceCleanupService,
   WorkspaceHealthService,
@@ -1643,11 +1644,16 @@ function buildTerminalManager(options: {
 // asks whether a managed root re-proved. The collapse is stated HERE, at the injection point that
 // owns it, instead of inside the resolver: the surface that can tell the two decisions apart (the
 // terminal manager, which answers 403 vs 404) consumes the undiluted outcome (#3347).
+// The optional correlation id travels through the collapse as well: only the DECISION is flattened
+// here, never the operation it belongs to. A caller that knows the run/request id (the verification
+// runner threads `VerificationRunInput.correlationId`) makes the resolver's own
+// `workspace.root.denied` line joinable to that run instead of landing under
+// UNKNOWN_CORRELATION_ID (PR #3381 review); a caller with none in scope still passes one argument.
 function collapsedWorkspaceRootAccessResolver(
   resolveAccess: WorkspaceRootAccessResolver,
-): (requestedRoot: string) => WorkspaceRootAccess | undefined {
-  return (requestedRoot): WorkspaceRootAccess | undefined =>
-    workspaceRootAccessOrUndefined(resolveAccess(requestedRoot));
+): (requestedRoot: string, correlationId?: string) => WorkspaceRootAccess | undefined {
+  return (requestedRoot, correlationId): WorkspaceRootAccess | undefined =>
+    workspaceRootAccessOrUndefined(resolveAccess(requestedRoot, correlationId));
 }
 
 // Issue #1387 — the command runner reuses the same store + evidence + live-redactor wiring as the
@@ -2023,8 +2029,15 @@ function composePersistence(
 
 // The Keiko-owned managed task-workspace root lives alongside the UI database (`<uiDbDir>/
 // task-workspaces`), so it inherits the same per-user data directory and 0o700 hardening posture.
+//
+// CANONICALISED, not merely joined (#3382): every managed worktree path is derived from this value
+// and persisted, and the runtime workspace authority refuses any root whose `realpathSync(root)` is
+// not the root itself. A lexically composed root under a symlinked or case-folded state directory
+// therefore persisted paths that could be provisioned but never run. The canonical form comes from
+// the managed-root module's own containment engine (realpath of the longest existing ancestor plus
+// the remaining segments), never a second path rule here.
 function resolveManagedWorktreeRoot(uiDbPath: string): string {
-  return join(dirname(uiDbPath), "task-workspaces");
+  return canonicalManagedRootPath(join(dirname(uiDbPath), "task-workspaces"));
 }
 
 function composedManagedWorktreeRoot(
@@ -2053,11 +2066,29 @@ function managedWorkspaceRootRef(uiStore: UiStore, managedRoot: string): string 
   return rootRef;
 }
 
+/**
+ * Registers the server-owned Project/Manifest identity for one managed worktree and, when the
+ * repository's standing grant currently covers it, derives the worktree's own script-trust record
+ * from it.
+ *
+ * The derivation used to run for an explicit provision ONLY (an `initializeTrust` flag). That flag
+ * was a proxy for the two guards below, and it stranded every worktree whose repository was not yet
+ * trusted at provision time: activate and `ensureIdentity` re-registered the identity and skipped
+ * trust for good, so nothing ever revisited the record and the editor's restricted-mode level for
+ * that worktree root could not follow a grant the operator later gave the repository (#3382).
+ *
+ * Running it on every call infers and renews nothing, because the guards that actually carry the
+ * "never infer or renew execution trust" invariant are unchanged and are now the whole rule:
+ *  1. the repository must be TRUSTED RIGHT NOW (`trustLevelForRoot`), and `deriveFromTrustedRoot`
+ *     independently re-proves that grant against the repository's live basis and refuses unless the
+ *     worktree's own `package.json` is byte-identical to it (ADR-0147 D3);
+ *  2. an EXISTING record is never overwritten — a restricted one is authoritative evidence of
+ *     revocation or drift.
+ */
 export function ensureManagedTaskWorkspaceIdentity(input: {
   readonly uiStore: UiStore;
   readonly workspaceScriptTrust: WorkspaceScriptTrustService;
   readonly instance: WorkspaceInstance;
-  readonly initializeTrust: boolean;
 }): void {
   const projectRegistered = input.uiStore
     .listProjects()
@@ -2071,13 +2102,10 @@ export function ensureManagedTaskWorkspaceIdentity(input: {
       `${basename(input.instance.repositoryRoot)} · Coding Workbench`,
     );
   }
-  if (!input.initializeTrust) return;
   if (input.workspaceScriptTrust.trustLevelForRoot(input.instance.repositoryRoot) !== "trusted") {
     return;
   }
   const rootRef = managedWorkspaceRootRef(input.uiStore, input.instance.managedWorktreePath);
-  // An absent target record may be initialized from this explicit provisioning act. A restricted
-  // record is authoritative evidence of revocation or drift and must never be silently overwritten.
   if (input.uiStore.readWorkspaceTrustRecord(rootRef) !== undefined) return;
   input.workspaceScriptTrust.deriveFromTrustedRoot(
     input.instance.managedWorktreePath,
@@ -2097,7 +2125,6 @@ function withManagedWorkspaceIdentity(
         uiStore,
         workspaceScriptTrust,
         instance: result.instance,
-        initializeTrust: true,
       });
       return result;
     },
@@ -2107,7 +2134,6 @@ function withManagedWorkspaceIdentity(
         uiStore,
         workspaceScriptTrust,
         instance: result.instance,
-        initializeTrust: false,
       });
       return result;
     },
@@ -2115,13 +2141,16 @@ function withManagedWorkspaceIdentity(
       provisioning.getInstance(workspaceId),
     ensureIdentity: (instance): void => {
       provisioning.ensureIdentity?.(instance);
-      ensureManagedTaskWorkspaceIdentity({
-        uiStore,
-        workspaceScriptTrust,
-        instance,
-        initializeTrust: false,
-      });
+      ensureManagedTaskWorkspaceIdentity({ uiStore, workspaceScriptTrust, instance });
     },
+    // Forwarded, not re-implemented: this wrapper adds Project/Manifest identity around an INJECTED
+    // provisioning service, and it owns no store or mutex of its own. A wrapper that silently
+    // dropped the seam would leave every injected composition (the e2e coding-runtime servers, an
+    // `options.workspaceProvisioning` test bed) without the #3382 restamp, so a governed commit
+    // there would still strand its workspace — the exact defect, reintroduced by omission.
+    ...(provisioning.recordVerifiedHead === undefined
+      ? {}
+      : { recordVerifiedHead: provisioning.recordVerifiedHead }),
   };
 }
 
@@ -2156,13 +2185,8 @@ function buildWorkspaceProvisioning(
     redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,
-    ensureManagedWorkspaceIdentity: (instance, initializeTrust): void => {
-      ensureManagedTaskWorkspaceIdentity({
-        uiStore,
-        workspaceScriptTrust,
-        instance,
-        initializeTrust,
-      });
+    ensureManagedWorkspaceIdentity: (instance): void => {
+      ensureManagedTaskWorkspaceIdentity({ uiStore, workspaceScriptTrust, instance });
     },
     mutex: args.mutex,
   });
@@ -3095,12 +3119,13 @@ interface PersistenceBundle {
   readonly codingRuntimeSnapshotStore: CodingRuntimeSnapshotStore | undefined;
 }
 
-// The optional correlationId is forward-compatible plumbing: no current caller of this resolver
-// type threads one through yet (TerminalManager.resolveWorkspaceRootAccess and the editor/files
-// route seams still call it with one argument), but every resolution failure below is reported
-// under UNKNOWN_CORRELATION_ID until one is. An extra optional trailing parameter is always a valid
-// substitute wherever the narrower one-argument shape is expected, so this stays a non-breaking
-// widening (#3347).
+// The optional correlationId is threaded by the callers that have one in scope — the verification
+// runner passes `VerificationRunInput.correlationId` through
+// `collapsedWorkspaceRootAccessResolver` (PR #3381 review) — while the remaining seams
+// (TerminalManager.resolveWorkspaceRootAccess, the editor/files routes) still call it with one
+// argument and have every resolution failure below reported under UNKNOWN_CORRELATION_ID. An extra
+// optional trailing parameter is always a valid substitute wherever the narrower one-argument shape
+// is expected, so this stays a non-breaking widening (#3347).
 type WorkspaceRootAccessResolver = (
   requestedRoot: string,
   correlationId?: string,
@@ -3710,6 +3735,7 @@ function activityAwareWorkspaceLifecycle(
   };
   return {
     list: lifecycle.list,
+    listAll: lifecycle.listAll,
     getActive: lifecycle.getActive,
     setActive: (request): ReturnType<WorkspaceLifecycleService["setActive"]> => {
       purge();

@@ -12,7 +12,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
-import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type {
+  GitWorktreeAdapter,
+  WorktreeListEntry,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type {
   WorkspaceInfo,
@@ -21,15 +24,23 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { runMigrations } from "../store/schema.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
-import { inspectManagedGitdirIdentity } from "./gitdir-identity.js";
+import {
+  inspectManagedGitdirIdentity,
+  type ManagedGitdirIdentityInspection,
+} from "./gitdir-identity.js";
 import {
   buildActiveWorkspacePointerStoreOverDatabase,
   type ActiveWorkspacePointerStore,
 } from "./active-store.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";
 import { createWorkspaceRepairService } from "./repair.js";
+import { createWorkspaceReconciliationService } from "./reconciliation.js";
 import { TaskWorkspaceError, type TaskWorkspaceErrorCode } from "./errors.js";
-import type { WorkspaceProvisioningService, WorkspaceRepairService } from "./types.js";
+import type {
+  WorkspaceProvisioningService,
+  WorkspaceReconciliationService,
+  WorkspaceRepairService,
+} from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
@@ -90,6 +101,51 @@ function rejectingAdapterFactory(received: string[]): AdapterFactory {
 function expectOnlyAdapterCorrelation(received: readonly string[], expected: string): void {
   expect(received.length).toBeGreaterThan(0);
   expect(new Set(received)).toEqual(new Set([expected]));
+}
+
+// The real adapter with ONLY `listWorktrees` rejecting, the way an unmounted repository root or a
+// denied path does — the second bare call on the repair path, after the adapter build.
+function listFailingAdapterFactory(): AdapterFactory {
+  return (workspace: WorkspaceInfo): GitWorktreeAdapter => ({
+    ...realAdapter(workspace),
+    listWorktrees: (): Promise<readonly WorktreeListEntry[]> =>
+      Promise.reject(new Error("spawn git ENOENT")),
+  });
+}
+
+// The live #447 classifier the repair path re-enters, built over the same fixtures, so a test can
+// assert what reconciliation ACTUALLY classifies a row as instead of seeding the verdict itself.
+function reconciliation(): WorkspaceReconciliationService {
+  return createWorkspaceReconciliationService({
+    store,
+    activePointerStore: pointerStore,
+    evidenceStore: capturingEvidence(),
+    managedRoot,
+    createAdapter: realAdapter,
+    redactString: (s: string): string => s,
+    now: (): number => nowMs,
+    newId: (): string => `id-${String(idCounter++)}`,
+    mutex: __twMutex,
+  });
+}
+
+// Single narrowing point for a captured rejection, so the assertions on it stay linear.
+async function rejectionOf(thunk: () => Promise<unknown>): Promise<TaskWorkspaceError> {
+  let caught: unknown;
+  try {
+    await thunk();
+  } catch (error) {
+    caught = error;
+  }
+  if (!(caught instanceof TaskWorkspaceError)) {
+    throw new Error("expected a classified TaskWorkspaceError rejection");
+  }
+  return caught;
+}
+
+function causeMessageOf(error: Error): string | undefined {
+  const cause: unknown = error.cause;
+  return cause instanceof Error ? cause.message : undefined;
 }
 
 function repairService(
@@ -161,6 +217,13 @@ function lastActivityLogEvent(sink: BufferedServerLogSink): ServerLogEvent {
   return line;
 }
 
+// The same single-narrowing-point rule for a searched log line.
+function activityLogEventWithKind(sink: BufferedServerLogSink, errorKind: string): ServerLogEvent {
+  const line = sink.events.find((event) => event.errorKind === errorKind);
+  if (line === undefined) throw new Error(`no activity-log event with errorKind ${errorKind}`);
+  return line;
+}
+
 function lastEventCorrelationId(): string {
   const last = evidence.at(-1);
   if (last === undefined) throw new Error("no evidence recorded");
@@ -225,30 +288,60 @@ describe("reconcile-pointer (relink known managed worktree)", () => {
   // existing worktree, so a workspace registered under the retired rule would be stranded unless an
   // executable, approval-gated strategy reaches the re-materialisation. This is that strategy, and
   // the approval is what stands in for the judgement that the retired proof is genuine.
-  it("reissues a retired-schema identity only under operator approval", async () => {
-    const instance = await provisionTask("t1");
-    const inspection = inspectManagedGitdirIdentity(instance.managedWorktreePath, repoRoot);
-    if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
-    store.upsert({
-      ...instance,
-      gitdirIdentity: inspection.legacyIdentity,
-      lifecycleState: "recovery-required",
-      health: "drifted",
-      driftMarkers: ["identity-schema-retired"],
-    });
+  // Both retired compositions take this exit: the v2 inode rule (#3367) and the pointer-text rule
+  // every workspace provisioned before #3367 carries.
+  it.each([
+    {
+      rule: "v2 inode composition",
+      retired: (i: ManagedGitdirIdentityInspection): string => i.legacyIdentity,
+    },
+    {
+      rule: "pre-#3367 pointer-text composition",
+      retired: (i: ManagedGitdirIdentityInspection): string => i.legacyPointerIdentity,
+    },
+  ])(
+    "reissues a retired-schema identity ($rule) only under operator approval",
+    async ({ retired }) => {
+      const instance = await provisionTask("t1");
+      const inspection = inspectManagedGitdirIdentity(instance.managedWorktreePath, repoRoot);
+      if (inspection === undefined)
+        throw new Error("real linked-worktree identity was not resolved");
+      const retiredIdentity = retired(inspection);
+      // ONLY the retired value is seeded. The marker is NOT: pre-seeding
+      // `driftMarkers: ["identity-schema-retired"]` made both variants pass with and without
+      // `isRetiredIdentity` recognising the composition under test, because an approved
+      // reconcile-pointer also refreshes a plain `gitdir-mismatch` row (PR #3381 review). The live
+      // classification below is what distinguishes the two, so dropping either retired composition
+      // from the recogniser turns THIS case red.
+      store.upsert({ ...instance, gitdirIdentity: retiredIdentity });
 
-    await expect(repair(instance.workspaceId, "reconcile-pointer", false)).rejects.toMatchObject({
-      code: "OPERATOR_APPROVAL_REQUIRED",
-    });
-    expect(store.getById(instance.workspaceId)?.gitdirIdentity).toBe(inspection.legacyIdentity);
+      await reconciliation().reconcile(repoRoot, "retired-schema-0001");
 
-    const result = await repair(instance.workspaceId, "reconcile-pointer", true);
-    expect(result.applied).toBe(true);
-    expect(result.status).toBe("healthy");
-    const persisted = store.getById(instance.workspaceId);
-    expect(persisted?.gitdirIdentity).toBe(inspection.identity);
-    expect(persisted?.driftMarkers).not.toContain("identity-schema-retired");
-  });
+      const classified = store.getById(instance.workspaceId);
+      expect(classified?.driftMarkers).toEqual(["identity-schema-retired"]);
+      expect(classified?.recoveryHints).toEqual([
+        {
+          marker: "identity-schema-retired",
+          strategy: "reconcile-pointer",
+          operatorActionRequired: false,
+        },
+      ]);
+      expect(classified?.lifecycleState).toBe("recovery-required");
+
+      await expect(repair(instance.workspaceId, "reconcile-pointer", false)).rejects.toMatchObject({
+        code: "OPERATOR_APPROVAL_REQUIRED",
+      });
+      expect(store.getById(instance.workspaceId)?.gitdirIdentity).toBe(retiredIdentity);
+
+      const result = await repair(instance.workspaceId, "reconcile-pointer", true);
+      expect(result.applied).toBe(true);
+      expect(result.status).toBe("healthy");
+      const persisted = store.getById(instance.workspaceId);
+      expect(persisted?.lifecycleState).toBe("active");
+      expect(persisted?.gitdirIdentity).toBe(inspection.identity);
+      expect(persisted?.driftMarkers).not.toContain("identity-schema-retired");
+    },
+  );
 
   it("refreshes a mismatched gitdir identity back to healthy", async () => {
     const instance = await provisionTask("t1");
@@ -259,6 +352,238 @@ describe("reconcile-pointer (relink known managed worktree)", () => {
     const persisted = store.getById(instance.workspaceId);
     expect(persisted?.gitdirIdentity).not.toBe("0000000000000000deadbeefdeadbeef");
     expect(persisted?.health).toBe("healthy");
+  });
+});
+
+// A cleanup-pending row whose worktree no longer proves its identity used to be stranded: every
+// complete-cleanup was refused `ownership-unproven`, reconciliation reported the row "healthy" so
+// no repair applied, and the terminal branch refused re-provisioning (audit finding, 2026-09-03).
+// The live re-reconcile now classifies it stale and flags it, which makes the operator-approved
+// re-registration reachable — the same exit every other unproven worktree has.
+describe("cleanup-pending rows whose worktree no longer proves its identity", () => {
+  it("re-registers the tree under operator approval and returns it to active", async () => {
+    const instance = await provisionTask("t-pending");
+    store.upsert({
+      ...instance,
+      lifecycleState: "cleanup-pending",
+      gitdirIdentity: "0000000000000000deadbeefdeadbeef",
+    });
+
+    const result = await repair(instance.workspaceId, "reconcile-pointer", true);
+
+    expect(result.applied).toBe(true);
+    expect(result.status).toBe("healthy");
+    const persisted = store.getById(instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("active");
+    expect(persisted?.gitdirIdentity).toBe(instance.gitdirIdentity);
+    expect(persisted?.driftMarkers).toEqual([]);
+  });
+
+  it("still refuses without operator approval and leaves the row flagged, not settled", async () => {
+    const instance = await provisionTask("t-pending-refused");
+    store.upsert({
+      ...instance,
+      lifecycleState: "cleanup-pending",
+      gitdirIdentity: "0000000000000000deadbeefdeadbeef",
+    });
+
+    await rejectsWithCode(
+      () => repair(instance.workspaceId, "reconcile-pointer", false),
+      "OPERATOR_APPROVAL_REQUIRED",
+    );
+
+    const persisted = store.getById(instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("recovery-required");
+    expect(persisted?.driftMarkers).toEqual(["gitdir-mismatch"]);
+    expect(persisted?.gitdirIdentity).toBe("0000000000000000deadbeefdeadbeef");
+  });
+});
+
+// #3382: `head-moved` used to map to `operator-repair`, a strategy `executeStrategy` runs for no
+// marker, so a workspace whose HEAD moved outside Keiko carried a marker nothing could clear —
+// `productionRuntimeWorkspaceAuthority` refuses any row with a drift marker, so the workspace was
+// bricked for every further run. `accept-moved-head` is that missing executable exit: it adopts the
+// worktree's CURRENT commit as its verified head, mutating neither Git nor the filesystem, and it
+// runs only behind the same `operatorApproved` gate every other strategy does.
+describe("accept-moved-head (adopt an out-of-band commit as the verified head)", () => {
+  // A commit made in the worktree without Keiko — the operator's own terminal.
+  function commitOutOfBand(worktreePath: string, name: string): string {
+    writeFileSync(join(worktreePath, name), `${name}\n`);
+    execFileSync("git", ["add", name], { cwd: worktreePath });
+    execFileSync("git", ["commit", "-q", "-m", `add ${name}`], { cwd: worktreePath });
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: worktreePath,
+      encoding: "utf8",
+    }).trim();
+  }
+
+  async function driftedByMovedHead(taskId: string): Promise<{
+    readonly instance: WorkspaceInstance;
+    readonly head: string;
+  }> {
+    const instance = await provisionTask(taskId);
+    await reconciliation().reconcile();
+    const head = commitOutOfBand(instance.managedWorktreePath, `${taskId}.txt`);
+    return { instance, head };
+  }
+
+  it("refuses without operator approval and leaves the baseline untouched", async () => {
+    const { instance } = await driftedByMovedHead("t-moved-unapproved");
+    const before = store.getById(instance.workspaceId)?.lastVerifiedHead;
+
+    await rejectsWithCode(
+      () => repair(instance.workspaceId, "accept-moved-head", false),
+      "OPERATOR_APPROVAL_REQUIRED",
+    );
+
+    expect(store.getById(instance.workspaceId)?.lastVerifiedHead).toBe(before);
+    expect(store.getById(instance.workspaceId)?.driftMarkers).toEqual(["head-moved"]);
+  });
+
+  it("restamps the head, drops the marker and derives health with approval", async () => {
+    const { instance, head } = await driftedByMovedHead("t-moved-approved");
+
+    const result = await repair(instance.workspaceId, "accept-moved-head", true);
+
+    expect(result.applied).toBe(true);
+    expect(result.outcome).toBe("repaired");
+    expect(result.driftMarkers).toEqual([]);
+    const persisted = store.getById(instance.workspaceId);
+    expect(persisted?.lastVerifiedHead).toBe(head);
+    expect(persisted?.health).toBe("healthy");
+    expect(persisted?.recoveryHints).toEqual([]);
+    // The next live pass agrees: the row is settled, not merely rewritten.
+    const report = await reconciliation().reconcile();
+    const entry = report.entries.find((item) => item.workspaceId === instance.workspaceId);
+    expect(entry?.status).toBe("healthy");
+  });
+
+  it("refuses a worktree that still holds uncommitted work", async () => {
+    const { instance } = await driftedByMovedHead("t-moved-dirty");
+    writeFileSync(join(instance.managedWorktreePath, "wip.txt"), "uncommitted\n");
+
+    await rejectsWithCode(
+      () => repair(instance.workspaceId, "accept-moved-head", true),
+      "REPAIR_NOT_APPLICABLE",
+    );
+
+    expect(store.getById(instance.workspaceId)?.driftMarkers).toEqual(["head-moved"]);
+  });
+
+  // The repository is reachable but no longer lists a worktree at this path, so there is no head to
+  // adopt. Nothing is written: the baseline the next pass classifies against stays as it was.
+  it("refuses when the repository reports no readable HEAD for the worktree", async () => {
+    const { instance } = await driftedByMovedHead("t-moved-headless");
+    const before = store.getById(instance.workspaceId)?.lastVerifiedHead;
+    const service = repairService(undefined, (workspace: WorkspaceInfo): GitWorktreeAdapter => ({
+      ...realAdapter(workspace),
+      listWorktrees: (): Promise<readonly WorktreeListEntry[]> => Promise.resolve([]),
+    }));
+
+    await rejectsWithCode(
+      () =>
+        service.repair({
+          workspaceId: instance.workspaceId,
+          requestedBy: "u",
+          strategy: "accept-moved-head",
+          operatorApproved: true,
+        }),
+      "REPAIR_NOT_APPLICABLE",
+    );
+    expect(store.getById(instance.workspaceId)?.lastVerifiedHead).toBe(before);
+  });
+
+  // The window this strategy re-gathers its facts for: the row was classified `head-moved` before
+  // the repair lock was taken, and the task branch is deleted between that classification and the
+  // accepting write. The second gather sees `branch-deleted` and refuses, so the moved head is never
+  // settled onto a row whose only live finding is something else.
+  it("refuses when the live facts change between the classification and the write", async () => {
+    const { instance } = await driftedByMovedHead("t-moved-raced");
+    let branchLookups = 0;
+    const service = repairService(undefined, (workspace: WorkspaceInfo): GitWorktreeAdapter => {
+      const adapter = realAdapter(workspace);
+      return {
+        ...adapter,
+        localBranchExists: (branch: string): Promise<boolean> => {
+          branchLookups += 1;
+          return branchLookups === 1 ? adapter.localBranchExists(branch) : Promise.resolve(false);
+        },
+      };
+    });
+
+    await rejectsWithCode(
+      () =>
+        service.repair({
+          workspaceId: instance.workspaceId,
+          requestedBy: "u",
+          strategy: "accept-moved-head",
+          operatorApproved: true,
+        }),
+      "REPAIR_NOT_APPLICABLE",
+    );
+    expect(branchLookups).toBeGreaterThan(1);
+    expect(store.getById(instance.workspaceId)?.driftMarkers).toEqual(["head-moved"]);
+  });
+
+  // CodeRabbit, PR #3381: `reconcileSingleInstance` has already returned by the time the acceptance
+  // gathers its own facts, so the three spawns it makes (the adapter build, `listWorktrees`,
+  // `worktreeStatus`) were outside every classification. A plain rejection there reached
+  // `runWithWorkspaceLifecycleFailureLogging`, which only logs a TaskWorkspaceError, and the route's
+  // `mapped === undefined` branch turned it into a generic 500 with no lifecycle line at all.
+  it("classifies a repository it cannot consult during the acceptance", async () => {
+    const { instance } = await driftedByMovedHead("t-moved-unreachable");
+    const activityLog = createBufferedServerLogSink();
+    let gathers = 0;
+    // The FIRST consultation is the repair's own `reconcileSingleInstance` (it must still classify
+    // the row as `head-moved`, or the applicability gate would refuse first and this would pin
+    // nothing); the acceptance's own listing is the one that fails.
+    const service = repairService(activityLog, (workspace: WorkspaceInfo): GitWorktreeAdapter => {
+      const adapter = realAdapter(workspace);
+      return {
+        ...adapter,
+        listWorktrees: (): Promise<readonly WorktreeListEntry[]> => {
+          gathers += 1;
+          return gathers === 1
+            ? adapter.listWorktrees()
+            : Promise.reject(new Error("spawn git ENOENT"));
+        },
+      };
+    });
+
+    const error = await rejectionOf(() =>
+      service.repair({
+        workspaceId: instance.workspaceId,
+        requestedBy: "u",
+        strategy: "accept-moved-head",
+        operatorApproved: true,
+      }),
+    );
+
+    expect(error.code).toBe("REPOSITORY_UNREACHABLE");
+    expect(error.outcome).toBe("retry-required");
+    expect(causeMessageOf(error)).toBe("spawn git ENOENT");
+    expect(gathers).toBeGreaterThan(1);
+    const line = activityLogEventWithKind(activityLog, "REPOSITORY_UNREACHABLE");
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.extra?.operation).toBe("repair");
+    expect(Array.isArray(line.extra?.frames)).toBe(true);
+    // The baseline is untouched: a repair that could not consult the repository mutates nothing.
+    expect(store.getById(instance.workspaceId)?.driftMarkers).toEqual(["head-moved"]);
+  });
+
+  it("refuses a row whose live findings are not only the moved head", async () => {
+    const { instance } = await driftedByMovedHead("t-moved-foreign");
+    // The task branch is gone as well, so the live classification is `branch-deleted`, not
+    // `head-moved`: that row keeps its own operator-guided hint and this repair must not settle it.
+    store.upsert({
+      ...(store.getById(instance.workspaceId) ?? instance),
+      taskBranch: "keiko/task/ghost-00000000",
+    });
+
+    await rejectsWithCode(
+      () => repair(instance.workspaceId, "accept-moved-head", true),
+      "REPAIR_NOT_APPLICABLE",
+    );
   });
 });
 
@@ -338,7 +663,7 @@ describe("release-stale-lock (clear stale lock)", () => {
       async (_label, input) => {
         const received: string[] = [];
         const instance = await provisionTask(`t-adapter-${_label.replaceAll(" ", "-")}`);
-        await expect(
+        const rejection = await rejectionOf(() =>
           repairService(undefined, rejectingAdapterFactory(received)).repair({
             workspaceId: instance.workspaceId,
             strategy: "release-stale-lock",
@@ -346,10 +671,48 @@ describe("release-stale-lock (clear stale lock)", () => {
             requestedBy: "u",
             correlationId: input,
           }),
-        ).rejects.toThrow("captured adapter correlation");
+        );
+        // Strengthened, not relaxed (PR #3381 review): the adapter build inside the repair's live
+        // re-reconcile is now CLASSIFIED, so the same throw arrives as the retryable
+        // REPOSITORY_UNREACHABLE — and the original still rides as its cause, which is what proves
+        // the adapter was actually constructed with the value asserted below.
+        expect(rejection.code).toBe("REPOSITORY_UNREACHABLE");
+        expect(causeMessageOf(rejection)).toBe("captured adapter correlation");
         expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
       },
     );
+
+    // reconcileSingleInstance — the path EVERY operator-approved repair re-enters (repair.ts:201,
+    // :453) — used to call `createAdapter` and `listWorktrees` bare. An operator clicking
+    // "Repair and bind" while the repository root was unavailable therefore got an UNCLASSIFIED
+    // rejection: `runWithWorkspaceLifecycleFailureLogging` logs only a TaskWorkspaceError, so
+    // server.log carried no `task-workspace.lifecycle` line for the repair's correlation id and
+    // routes.ts's `mapped === undefined` branch turned it into a generic 500 (PR #3381 review).
+    it("classifies and logs an unreachable repository during a repair, not a bare 500", async () => {
+      const instance = await provisionTask("t-repair-unreachable");
+      const activityLog = createBufferedServerLogSink();
+
+      const rejection = await rejectionOf(() =>
+        repairService(activityLog, listFailingAdapterFactory()).repair({
+          workspaceId: instance.workspaceId,
+          strategy: "reconcile-pointer",
+          operatorApproved: true,
+          requestedBy: "u",
+          correlationId: "repair-unreachable-0001",
+        }),
+      );
+
+      expect(rejection.code).toBe("REPOSITORY_UNREACHABLE");
+      // Retryable and 503, the same verdict the pass and the health report give the same fact.
+      expect(rejection.status).toBe(503);
+      expect(rejection.failureClass).toBe("retryable");
+      const line = activityLog.events.find((event) => event.errorKind === "REPOSITORY_UNREACHABLE");
+      expect(line?.correlationId).toBe("repair-unreachable-0001");
+      expect(line?.extra).toMatchObject({ operation: "repair" });
+      expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
+      // Body-free: the unreachable root never reaches the line.
+      expect(JSON.stringify(line)).not.toContain(repoRoot);
+    });
   });
 
   // IDX51: the same normalization that protects adapter termination evidence also protects lifecycle

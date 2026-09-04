@@ -14,9 +14,18 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import type { TaskWorkspaceLifecycleState, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
-import { nextLegalTaskWorkspaceStates } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import type {
+  TaskWorkspaceDriftMarker,
+  TaskWorkspaceLifecycleState,
+  WorkspaceInstance,
+  WorkspaceRecoveryHint,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  isAutomaticWorkspaceRepairStrategy,
+  nextLegalTaskWorkspaceStates,
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { TASK_WORKSPACE_MARKER_MESSAGE_KEYS } from "@/lib/task-workspace-marker-labels";
 import { useOptionalAnnouncer } from "./context/AnnouncerContext";
 import { useActiveWorkspace, type ActiveWorkspaceApi } from "./context/ActiveWorkspaceContext";
 import { Icons } from "./Icons";
@@ -25,17 +34,41 @@ import styles from "./TaskWorkspaceManager.module.css";
 const ChevronIcon = Icons.chevron;
 const GitIcon = Icons.git;
 
-type LifecycleAction = "pause" | "resume" | "handoff" | "switch";
+type LifecycleAction = "pause" | "resume" | "handoff" | "switch" | "repair";
+// The four actions above carry a fixed lifecycle target state (checked against
+// `nextLegalTaskWorkspaceStates`). `repair` does not: its applicability comes from the instance's
+// own recovery hints (see `firstAutomaticRepairHint`), never from a lifecycle transition.
+type StateBoundAction = Exclude<LifecycleAction, "repair">;
 
-const ACTION_TARGET_STATES: Readonly<Record<LifecycleAction, TaskWorkspaceLifecycleState>> = {
+const ACTION_TARGET_STATES: Readonly<Record<StateBoundAction, TaskWorkspaceLifecycleState>> = {
   pause: "paused",
   resume: "active",
   handoff: "handoff-ready",
   switch: "active",
 };
 
+// The inventory spans every repository, so each row names the one it belongs to — by its last path
+// segment, the way the folder switcher names a selection; the full path rides on the title.
+function repositoryLabel(repositoryRoot: string): string {
+  const segments = repositoryRoot.split(/[\\/]/u).filter((segment) => segment.length > 0);
+  return segments.at(-1) ?? repositoryRoot;
+}
+
 function isDirty(instance: WorkspaceInstance): boolean {
   return instance.driftMarkers.includes("uncommitted-changes");
+}
+
+// The first recovery hint a Repair click can apply automatically: no operator action needed, and
+// the strategy is one the #447 repair service actually runs without further gating
+// (reconcile-pointer, recreate-worktree, release-stale-lock, accept-moved-head). Null when every
+// hint needs a human first (operator-repair, reattach-branch, commit-or-stash-required) or there is
+// no hint at all.
+function firstAutomaticRepairHint(instance: WorkspaceInstance): WorkspaceRecoveryHint | null {
+  return (
+    instance.recoveryHints.find(
+      (hint) => !hint.operatorActionRequired && isAutomaticWorkspaceRepairStrategy(hint.strategy),
+    ) ?? null
+  );
 }
 
 function actionLabel(action: LifecycleAction, t: I18nTranslate): string {
@@ -44,12 +77,13 @@ function actionLabel(action: LifecycleAction, t: I18nTranslate): string {
     resume: t("taskWorkspace.action.resume"),
     handoff: t("taskWorkspace.action.prepareHandoff"),
     switch: t("taskWorkspace.action.switch"),
+    repair: t("taskWorkspace.action.repair"),
   };
   return labels[action];
 }
 
-function unavailableStateReason(action: LifecycleAction, t: I18nTranslate): string {
-  const reasons: Readonly<Record<LifecycleAction, string>> = {
+function unavailableStateReason(action: StateBoundAction, t: I18nTranslate): string {
+  const reasons: Readonly<Record<StateBoundAction, string>> = {
     pause: t("taskWorkspace.reason.pauseUnavailable"),
     resume: t("taskWorkspace.reason.resumeUnavailable"),
     handoff: t("taskWorkspace.reason.handoffUnavailable"),
@@ -58,14 +92,42 @@ function unavailableStateReason(action: LifecycleAction, t: I18nTranslate): stri
   return reasons[action];
 }
 
+// Switching binds the active pointer to a workspace the server can activate: one that is already
+// `active` (activation is idempotent there — the contract's transition table has no self-edge,
+// so a table lookup alone reported every other active workspace as unswitchable, which is exactly
+// the "bind two workspaces, then switch between them" flow; observed live, 2026-09-03) or one the
+// table lets reach `active` (paused, handoff-ready, recovery-required).
+//
+// `provisioning` is the one state the table lists as reaching `active` that the server refuses:
+// the provisioning service's activatable set is `active | paused | handoff-ready |
+// recovery-required`, because the transient provisioning state is owned by the in-flight
+// provision. Offering Switch there answered ILLEGAL_TRANSITION and rendered as the generic
+// mutation error, so it is excluded here and dropped from the unavailability sentence.
+function isSwitchable(lifecycleState: TaskWorkspaceLifecycleState): boolean {
+  if (lifecycleState === "provisioning") return false;
+  return (
+    lifecycleState === "active" || nextLegalTaskWorkspaceStates(lifecycleState).includes("active")
+  );
+}
+
+function stateBoundActionAllowed(
+  action: StateBoundAction,
+  lifecycleState: TaskWorkspaceLifecycleState,
+): boolean {
+  if (action === "switch") return isSwitchable(lifecycleState);
+  return nextLegalTaskWorkspaceStates(lifecycleState).includes(ACTION_TARGET_STATES[action]);
+}
+
+// `repair` is only ever rendered once `workspaceActions` has already found an applicable
+// automatic hint, so it has nothing left to refuse here beyond the shared busy state
+// `LifecycleButton` applies to every action.
 function actionUnavailableReason(
   action: LifecycleAction,
   instance: WorkspaceInstance,
   t: I18nTranslate,
 ): string | null {
-  if (
-    !nextLegalTaskWorkspaceStates(instance.lifecycleState).includes(ACTION_TARGET_STATES[action])
-  ) {
+  if (action === "repair") return null;
+  if (!stateBoundActionAllowed(action, instance.lifecycleState)) {
     return unavailableStateReason(action, t);
   }
   return action === "handoff" && isDirty(instance) ? t("taskWorkspace.reason.handoffDirty") : null;
@@ -74,24 +136,51 @@ function actionUnavailableReason(
 function actionFor(
   api: ActiveWorkspaceApi,
   action: LifecycleAction,
-  workspaceId: string,
+  instance: WorkspaceInstance,
 ): () => void {
-  const actions: Readonly<Record<LifecycleAction, () => void>> = {
-    pause: () => void api.pause(workspaceId),
-    resume: () => void api.resume(workspaceId),
-    handoff: () => void api.prepareHandoff(workspaceId),
-    switch: () => void api.switchTo(workspaceId),
+  if (action === "repair") {
+    const hint = firstAutomaticRepairHint(instance);
+    return () => {
+      if (hint !== null) void api.repair(instance.workspaceId, hint.strategy);
+    };
+  }
+  const actions: Readonly<Record<StateBoundAction, () => void>> = {
+    pause: () => void api.pause(instance.workspaceId),
+    resume: () => void api.resume(instance.workspaceId),
+    handoff: () => void api.prepareHandoff(instance.workspaceId),
+    switch: () => void api.switchTo(instance.workspaceId),
   };
   return actions[action];
 }
 
+// Repair's applicability is the instance's own recovery hint, NEVER the active flag — exactly what
+// the comment on `firstAutomaticRepairHint` says. Deriving it per lifecycle branch left the row this
+// surface exists to repair without the button: a workspace that is already the active binding but
+// has drifted (`identity-schema-retired` after the #3367 upgrade, a later HEAD move) has no other
+// in-product exit, because Start requires `health === "healthy"` and the Coding Workbench hides
+// "Repair and bind" while any binding exists. The undocumented workaround was Clear active →
+// Repair → Switch. A paused drifted row was in the same position.
 function workspaceActions(
   instance: WorkspaceInstance,
   active: boolean,
 ): readonly LifecycleAction[] {
-  if (active) return ["pause", "handoff"];
-  if (instance.lifecycleState === "paused") return ["resume", "handoff"];
-  return ["switch"];
+  const repair: readonly LifecycleAction[] =
+    firstAutomaticRepairHint(instance) === null ? [] : ["repair"];
+  if (active) return [...repair, "pause", "handoff"];
+  if (instance.lifecycleState === "paused") return [...repair, "resume", "handoff"];
+  return [...repair, "switch"];
+}
+
+// Every drift marker except `uncommitted-changes`, labelled next to the health text.
+// `uncommitted-changes` keeps its existing dedicated "dirty" badge (below) instead of being
+// repeated here as a second, differently-styled label for the same fact.
+function driftMarkerLabels(
+  instance: WorkspaceInstance,
+  t: I18nTranslate,
+): readonly { readonly marker: TaskWorkspaceDriftMarker; readonly label: string }[] {
+  return instance.driftMarkers
+    .filter((marker) => marker !== "uncommitted-changes")
+    .map((marker) => ({ marker, label: t(TASK_WORKSPACE_MARKER_MESSAGE_KEYS[marker]) }));
 }
 
 function useWorkspacePanelState(): {
@@ -150,7 +239,7 @@ function LifecycleButton(props: {
       aria-label={unavailable === null ? label : `${label}: ${unavailable}`}
       title={unavailable ?? undefined}
       onClick={() => {
-        if (!disabled) actionFor(props.api, props.action, props.instance.workspaceId)();
+        if (!disabled) actionFor(props.api, props.action, props.instance)();
       }}
     >
       {label}
@@ -191,13 +280,22 @@ function WorkspaceItem(props: {
 }): ReactNode {
   const active = props.activeWorkspaceId === props.instance.workspaceId;
   const dirty = isDirty(props.instance);
+  const markers = driftMarkerLabels(props.instance, props.t);
   return (
     <li className={styles["cmp-i"]} data-active={active ? "true" : "false"}>
       <div className={styles["cmp-id"]}>
         <strong title={props.instance.taskId}>{props.instance.taskId}</strong>
         <span title={props.instance.taskBranch}>{props.instance.taskBranch}</span>
+        <span className={styles["cmp-meta"]} title={props.instance.repositoryRoot}>
+          {repositoryLabel(props.instance.repositoryRoot)}
+        </span>
         <span className={styles["cmp-meta"]}>{props.instance.lifecycleState}</span>
         <span className={styles["cmp-meta"]}>{props.instance.health}</span>
+        {markers.map(({ marker, label }) => (
+          <span key={marker} className={styles["cmp-meta"]}>
+            {label}
+          </span>
+        ))}
         {dirty ? (
           <span className={styles["cmp-warn"]}>{props.t("taskWorkspace.dirty.short")}</span>
         ) : null}
@@ -213,6 +311,16 @@ function WorkspaceInventory(props: {
 }): ReactNode {
   if (props.api.loading)
     return <p className={styles["cmp-empty"]}>{props.t("taskWorkspace.loading")}</p>;
+  // A listing the server could not answer degrades to an empty list so it never hides the active
+  // binding — but "no managed task workspaces yet" is then a lie about the repository, not a report
+  // of the failure. The two states must not be the same pixels: this one names the failure and
+  // points at the Refresh control in this panel's own header.
+  if (props.api.inventoryUnavailable)
+    return (
+      <p className={styles["cmp-empty"]} data-testid="task-workspace-inventory-unavailable">
+        {props.t("taskWorkspace.inventoryUnavailable")}
+      </p>
+    );
   if (props.api.instances.length === 0)
     return <p className={styles["cmp-empty"]}>{props.t("taskWorkspace.noneManaged")}</p>;
   return (

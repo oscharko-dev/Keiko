@@ -42,6 +42,7 @@ const __twMutex = createWorkspaceMutexRegistry();
 let server: Server;
 let staticRoot: string;
 let repoRoot: string;
+let createdRepositoryRoots: string[] = [];
 let managedRoot: string;
 let db: DatabaseSync;
 let port: number;
@@ -135,11 +136,11 @@ async function rebuild(override: Partial<UiHandlerDeps> = {}): Promise<void> {
   port = built.port;
 }
 
-async function provision(taskId: string): Promise<WorkspaceInstance> {
+async function provision(taskId: string, root: string = repoRoot): Promise<WorkspaceInstance> {
   const res = await fetch(`${baseUrl()}/api/task-workspaces`, {
     method: "POST",
     headers: csrfHeaders(),
-    body: JSON.stringify({ root: repoRoot, taskId, baseBranch: "main", requestedBy: "u" }),
+    body: JSON.stringify({ root, taskId, baseBranch: "main", requestedBy: "u" }),
   });
   const body = (await res.json()) as { instance: WorkspaceInstance };
   return body.instance;
@@ -178,17 +179,28 @@ async function action(
   });
 }
 
+// A disposable git repository with one commit on `main`. Every repository this suite provisions
+// into is created here, and each one is torn down in `afterEach` — a second repository is what
+// makes the rootless inventory listing falsifiable (a root-scoped implementation passes a
+// single-repository assertion unchanged).
+function createRepository(): string {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-twb-repo-")));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "test@keiko.example"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: root });
+  execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: root });
+  writeFileSync(join(root, "README.md"), "# demo\n");
+  execFileSync("git", ["add", "README.md"], { cwd: root });
+  execFileSync("git", ["commit", "-q", "-m", "initial"], { cwd: root });
+  createdRepositoryRoots.push(root);
+  return root;
+}
+
 beforeEach(async () => {
   staticRoot = await mkdtemp(join(tmpdir(), "keiko-twb-static-"));
-  repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-twb-repo-")));
+  createdRepositoryRoots = [];
+  repoRoot = createRepository();
   managedRoot = join(realpathSync(mkdtempSync(join(tmpdir(), "keiko-twb-mr-"))), "task-workspaces");
-  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repoRoot });
-  execFileSync("git", ["config", "user.email", "test@keiko.example"], { cwd: repoRoot });
-  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: repoRoot });
-  execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: repoRoot });
-  writeFileSync(join(repoRoot, "README.md"), "# demo\n");
-  execFileSync("git", ["add", "README.md"], { cwd: repoRoot });
-  execFileSync("git", ["commit", "-q", "-m", "initial"], { cwd: repoRoot });
   db = new DatabaseSync(":memory:");
   runMigrations(db);
   buildServices();
@@ -203,7 +215,8 @@ afterEach(async () => {
   resetServerLogger();
   db.close();
   await rm(staticRoot, { recursive: true, force: true });
-  rmSync(repoRoot, { recursive: true, force: true });
+  for (const root of createdRepositoryRoots) rmSync(root, { recursive: true, force: true });
+  createdRepositoryRoots = [];
   rmSync(managedRoot, { recursive: true, force: true });
 });
 
@@ -217,6 +230,27 @@ describe("active binding lifecycle over HTTP", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { instances: readonly WorkspaceInstance[] };
     expect(body.instances).toHaveLength(2);
+  });
+
+  // Two DIFFERENT repositories on purpose: `provision` always posts a `repoRoot`, so a listing that
+  // is still scoped to one root returns both task ids from a single-repository fixture and passes
+  // this test unchanged. The pairs are what prove the rootless read spans repositories, which is
+  // the whole point of the switcher's global inventory (#3381 review).
+  it("lists every managed workspace across repositories when no root is given", async () => {
+    const otherRepoRoot = createRepository();
+    await provision("t1");
+    await provision("t2", otherRepoRoot);
+
+    const res = await fetch(`${baseUrl()}/api/task-workspaces`);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { instances: readonly WorkspaceInstance[] };
+    const pairs = body.instances
+      .map((item) => `${item.repositoryRoot}::${item.taskId}`)
+      .sort((left, right) => left.localeCompare(right));
+    expect(pairs).toEqual(
+      [`${repoRoot}::t1`, `${otherRepoRoot}::t2`].sort((left, right) => left.localeCompare(right)),
+    );
   });
 
   it("getActive is null before any switch (unbound mode)", async () => {

@@ -29,6 +29,8 @@ import type {
 import {
   isTaskWorkspaceDriftMarker,
   planWorkspaceRecoveryHints,
+  reconciliationHealth,
+  reconciliationStatusFromInstance,
   TASK_WORKSPACE_SCHEMA_VERSION,
   validateTaskWorkspaceTransition,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
@@ -75,7 +77,9 @@ import {
   type WorkspaceLifecycleOperation,
   type WorkspaceLifecycleOutcome,
 } from "./evidence.js";
+import { recordVerifiedManagedHead } from "./verified-head.js";
 import type {
+  RecordVerifiedHeadInput,
   WorkspaceActivateRequest,
   WorkspaceActivateResult,
   WorkspaceProvisioningService,
@@ -89,6 +93,31 @@ const RESUMABLE_STATES: ReadonlySet<TaskWorkspaceLifecycleState> = new Set([
   "active",
   "paused",
   "handoff-ready",
+]);
+// The states an explicit activation may start from: the resumable ones plus `recovery-required`,
+// which the contract lists as activatable under `lock-held-by-actor` + `path-contained`
+// (TASK_WORKSPACE_LEGAL_TRANSITIONS). Activation re-proves exactly those facts live — persisted
+// path, worktree presence, managed identity — so a flag left behind by a drift that has since been
+// resolved (the tree restored, the pointer reconciled) is cleared by the proof itself, while a row
+// whose drift persists still refuses through the same proofs. Widening the set widens no trust
+// boundary; refusing here while the contract permits it left the switcher offering an action the
+// server answered with ILLEGAL_TRANSITION (2026-09-03 dev log).
+const ACTIVATABLE_STATES: ReadonlySet<TaskWorkspaceLifecycleState> = new Set([
+  ...RESUMABLE_STATES,
+  "recovery-required",
+]);
+// The markers a successful activation or resume has re-proven false: the path is contained, the
+// worktree is present and its identity is current. Any other marker — a moved HEAD, a deleted
+// branch, uncommitted work — is not proven here and is carried forward for the next reconcile to
+// confirm or clear; `lock-stale` is refuted only by the write that replaces the lock (activation),
+// never by a resume, which leaves the lock field as it found it.
+const MARKERS_REPROVEN_BY_LIVE_PROOF: ReadonlySet<TaskWorkspaceDriftMarker> = new Set([
+  "worktree-missing",
+  "pointer-stale",
+  "gitdir-mismatch",
+  "identity-schema-retired",
+  "identity-unsupported",
+  "path-escape",
 ]);
 // One sentence for the migration refusal, shared by every path that refuses it, so an operator sees
 // the same instruction whether the refusal came from the first attempt or a later retry.
@@ -106,6 +135,9 @@ interface ProvisioningCtx {
   // in each helper's signature: the ctx is already threaded everywhere the adapter is built, so this
   // needed no new parameter on any private function (PR #3355 review, P2).
   readonly correlationId: string;
+  // When this operation began, so every evidence line it emits carries a measured duration instead
+  // of a placeholder zero (audit finding, 2026-09-03).
+  readonly startedAtMs: number;
   // Operation-local: an emitted classified failure must not be followed by a duplicate generic
   // rejection line when the same TaskWorkspaceError crosses the public service boundary.
   failureOutcomeRecorded: boolean;
@@ -141,6 +173,9 @@ interface EmitInput {
   readonly errorCode?: string | undefined;
   // The classified drift marker on a drift verdict, carried into the activity-log line's `extra`.
   readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
+  // The managed worktrees this outcome handled: one for a materialised, resumed or activated
+  // worktree, none for a pre-write rejection or a refusal.
+  readonly worktreeCount?: number | undefined;
 }
 
 // ─── pure helpers ────────────────────────────────────────────────────────────────────────────────
@@ -273,13 +308,9 @@ function assertPersistedManagedPath(ctx: ProvisioningCtx, instance: WorkspaceIns
   }
 }
 
-function ensureManagedWorkspaceIdentity(
-  ctx: ProvisioningCtx,
-  instance: WorkspaceInstance,
-  initializeTrust: boolean,
-): void {
+function ensureManagedWorkspaceIdentity(ctx: ProvisioningCtx, instance: WorkspaceInstance): void {
   try {
-    ctx.deps.ensureManagedWorkspaceIdentity?.(instance, initializeTrust);
+    ctx.deps.ensureManagedWorkspaceIdentity?.(instance);
   } catch (error) {
     throw new TaskWorkspaceError(
       "PROVISIONING_FAILED",
@@ -335,8 +366,8 @@ function emit(ctx: ProvisioningCtx, input: EmitInput): void {
       operation: input.operation,
       outcome: input.outcome,
       attempt: 1,
-      durationMs: 0,
-      worktreeCount: 0,
+      durationMs: Math.max(0, input.nowMs - ctx.startedAtMs),
+      worktreeCount: input.worktreeCount ?? 0,
       event,
     },
     redactString: ctx.deps.redactString,
@@ -639,10 +670,10 @@ function resumeExisting(
       managedIdentityDriftMessage(drift),
     );
   }
-  ensureManagedWorkspaceIdentity(ctx, existing, true);
+  ensureManagedWorkspaceIdentity(ctx, existing);
   const refreshed = ctx.deps.store.upsert({
     ...existing,
-    health: "healthy",
+    ...driftAfterLiveProof(existing, existing.lifecycleState, false),
     lastVerifiedAt: isoFrom(nowMs),
     updatedAt: isoFrom(nowMs),
   });
@@ -655,6 +686,7 @@ function resumeExisting(
     nowMs,
     correlationId,
     toState: refreshed.lifecycleState,
+    worktreeCount: 1,
   });
   return { instance: refreshed, binding: buildBinding(refreshed), created: false };
 }
@@ -769,7 +801,7 @@ async function runWorktreeMutation(
       repo.repositoryRoot,
       request.correlationId,
     );
-    ensureManagedWorkspaceIdentity(ctx, provisioning, true);
+    ensureManagedWorkspaceIdentity(ctx, provisioning);
   } catch (error) {
     const failure =
       error instanceof TaskWorkspaceError
@@ -796,6 +828,7 @@ async function runWorktreeMutation(
     correlationId: request.correlationId,
     fromState: "provisioning",
     toState: "active",
+    worktreeCount: 1,
   });
   return { instance: active, binding: buildBinding(active), created: attemptedHere };
 }
@@ -865,7 +898,10 @@ async function provisionImpl(
 
 // ─── activate orchestration ──────────────────────────────────────────────────────────────────────
 
-function activateActiveOrResume(instance: WorkspaceInstance): {
+function activateActiveOrResume(
+  instance: WorkspaceInstance,
+  lockHeldByActor: boolean,
+): {
   readonly next: WorkspaceInstance;
   readonly type: WorkspaceEventType;
 } {
@@ -876,7 +912,7 @@ function activateActiveOrResume(instance: WorkspaceInstance): {
     from: instance.lifecycleState,
     to: "active",
     context: {
-      lockHeldByActor: true,
+      lockHeldByActor,
       pathContained: true,
       worktreeClean: true,
       branchReady: true,
@@ -885,11 +921,16 @@ function activateActiveOrResume(instance: WorkspaceInstance): {
     },
   });
   if (!transition.ok) {
-    throw new TaskWorkspaceError(
-      "ILLEGAL_TRANSITION",
-      "cannot resume workspace",
-      transition.reasons,
-    );
+    // The state pair itself is legal for every ACTIVATABLE_STATES member, so the only precondition
+    // that can fail here is ownership — and that is contention (retryable once the actor owns the
+    // workspace), not an illegal transition (a permanent verdict about the state pair).
+    throw lockHeldByActor
+      ? new TaskWorkspaceError("ILLEGAL_TRANSITION", "cannot resume workspace", transition.reasons)
+      : new TaskWorkspaceError(
+          "LOCK_CONTENTION",
+          "activation does not hold the workspace lock",
+          transition.reasons,
+        );
   }
   return { next: { ...instance, lifecycleState: "active" }, type: "resumed" };
 }
@@ -915,12 +956,68 @@ function assertActivatable(
   ) {
     throw new TaskWorkspaceError("LOCK_CONTENTION", "workspace is locked by another actor");
   }
-  if (!RESUMABLE_STATES.has(instance.lifecycleState)) {
+  if (!ACTIVATABLE_STATES.has(instance.lifecycleState)) {
     throw new TaskWorkspaceError(
       "ILLEGAL_TRANSITION",
       `cannot activate from ${instance.lifecycleState}`,
     );
   }
+}
+
+// The drift bookkeeping a passed live proof persists: every marker the proofs have just refuted is
+// dropped, the hints are re-planned from what remains, and `health` is DERIVED from what remains, so
+// a healthy row never advertises an identity or path finding its own proof disproved (and the
+// read-only report, which derives its status from the persisted markers, cannot report a healthy
+// active row as stale). Shared by the activation and the idempotent-resume path: the two perform the
+// same proof and the same write, and fixing one without the other left the resume path persisting a
+// stale `gitdir-mismatch` next to `health: "healthy"` (audit finding, 2026-09-03). Only the caller
+// that rewrites the lock field may also drop `lock-stale`: a marker is dropped by the write that
+// refutes it, never by one that leaves the lock as it found it.
+//
+// The proof refutes the identity and path findings, not the operational ones — a moved HEAD, a
+// deleted branch, a dirty tree survive it — so a flat `health: "healthy"` stated the opposite of the
+// markers it was written next to. The health report copies the persisted value onto its live
+// classification and the workbench renders both, so an active workspace read as healthy WHILE
+// showing drift, and the UI's own "a drifted worktree stays visible" branch (which keys on the
+// persisted health telling the truth) instead threw a restore-verification error (PR #3381 review).
+// The mapping is the contract's, not a second one: the same status the read-only report will
+// reconstruct from these markers, through the same `reconciliationHealth` reconciliation persists.
+function driftAfterLiveProof(
+  instance: WorkspaceInstance,
+  lifecycleState: TaskWorkspaceLifecycleState,
+  lockRewritten: boolean,
+): Pick<WorkspaceInstance, "driftMarkers" | "recoveryHints" | "health"> {
+  return workspaceDriftBookkeeping(
+    instance.driftMarkers.filter(
+      (marker) =>
+        !MARKERS_REPROVEN_BY_LIVE_PROOF.has(marker) && !(lockRewritten && marker === "lock-stale"),
+    ),
+    lifecycleState,
+  );
+}
+
+/**
+ * The drift bookkeeping for a caller that has just REFUTED one or more markers: re-plan the hints
+ * from what remains and DERIVE health from what remains, through the contract's own mapping.
+ *
+ * Extracted from `driftAfterLiveProof` so the #3382 `accept-moved-head` repair (repair.ts) drops its
+ * one marker through the identical derivation instead of restating it. A second copy of this three
+ * line rule is exactly how the resume path once persisted `health: "healthy"` next to a stale
+ * `gitdir-mismatch` (audit finding, 2026-09-03): the two callers must move together.
+ */
+export function workspaceDriftBookkeeping(
+  driftMarkers: readonly TaskWorkspaceDriftMarker[],
+  lifecycleState: TaskWorkspaceLifecycleState,
+): Pick<WorkspaceInstance, "driftMarkers" | "recoveryHints" | "health"> {
+  return {
+    driftMarkers,
+    recoveryHints: planWorkspaceRecoveryHints(driftMarkers),
+    // `health: "healthy"` as the input keeps the `locked-out` short-circuit out of this derivation:
+    // the live proof has just passed and the lock is the caller's business, not a drift fact.
+    health: reconciliationHealth(
+      reconciliationStatusFromInstance({ lifecycleState, health: "healthy", driftMarkers }),
+    ),
+  };
 }
 
 // The gated activation critical section, run under the `ws:<workspaceId>` mutex key (#449, ADR-0093 D1)
@@ -952,6 +1049,105 @@ function assertActivationIdentityCurrent(
   );
 }
 
+// What the activation actually owns, and the fact ADR-0088's `lock-held-by-actor` precondition is
+// answered with.
+interface ActivationOwnership {
+  // The row as the store persisted it with the actor's lock on it — the transition is validated
+  // against THIS record, never against the pre-acquisition one. For an already-active row, which
+  // makes no transition, it is the row as it was read.
+  readonly instance: WorkspaceInstance;
+  // The lock this activation may RETAIN when `acquireLock` asked for it. `null` only where no
+  // transition needed one and no retention was requested.
+  readonly lock: WorkspaceLock | null;
+  // Whether the DURABLE row proves the actor owns the workspace. Read back from what the store
+  // returned rather than from the object handed to it: an ownership that could not be recorded is
+  // not ownership, and this activation must refuse rather than assert a precondition nothing
+  // supports.
+  readonly lockHeldByActor: boolean;
+}
+
+// ADR-0088 gates every activation transition — `paused`/`handoff-ready`/`recovery-required` →
+// `active` — on `lock-held-by-actor`. That fact used to be hard-coded `true`, which the mutex cannot
+// stand in for: mutex.ts states the `ws:` key grants TURN ORDER (same-process serialization) while
+// the persisted advisory `WorkspaceLock` grants OWNERSHIP (across-restart / across-actor). With
+// `recovery-required` now activatable, the hard-coded fact let ANY actor promote a drifted, unowned
+// row while the settled write persisted `lock: null` — the precondition was fabricated, not met
+// (PR #3381 review P1).
+//
+// So the lock is ACQUIRED here: the actor's `activation` lock is written to the durable row before
+// the transition is validated, and a live lock this same actor already holds is reused rather than
+// replaced. `acquireLock` keeps exactly the meaning it always had — RETENTION beyond this call for
+// cross-actor exclusivity — and the settled write in `activateLocked` releases the lock again when
+// it was not requested, so the persisted outcome of an ordinary switch is unchanged.
+// `assertActivatable` has already refused a live lock owned by anyone else, so an acquisition can
+// only take a row this actor is entitled to.
+function ownActivation(
+  ctx: ProvisioningCtx,
+  instance: WorkspaceInstance,
+  request: WorkspaceActivateRequest,
+  nowMs: number,
+): ActivationOwnership {
+  // An already-active row makes NO transition, so the contract's precondition table asks nothing of
+  // the lock and this stays the single-write idempotent activation ADR-0093 D4's constant-per-switch
+  // bound (pinned in scale.test.ts) describes. `lockHeldByActor` is reported as what it is — nothing
+  // was acquired — so a future caller that DID need a transition here would fail closed.
+  if (instance.lifecycleState === "active") {
+    return {
+      instance,
+      lock: request.acquireLock ? makeLock(ctx, request.requestedBy, "activation", nowMs) : null,
+      lockHeldByActor: false,
+    };
+  }
+  const existing = instance.lock;
+  const lock =
+    existing !== null &&
+    existing.owner === request.requestedBy &&
+    provisioningLockLive(ctx, existing, nowMs)
+      ? existing
+      : makeLock(ctx, request.requestedBy, "activation", nowMs);
+  const persisted = ctx.deps.store.upsert({ ...instance, lock, updatedAt: isoFrom(nowMs) });
+  const durable = persisted.lock;
+  return {
+    instance: persisted,
+    lock,
+    lockHeldByActor:
+      durable !== null &&
+      durable.lockId === lock.lockId &&
+      durable.owner === request.requestedBy &&
+      provisioningLockLive(ctx, durable, nowMs),
+  };
+}
+
+// The transition, with its refusal left CLASSIFIED and VISIBLE rather than only thrown: a rejected
+// activation records the same `transition-rejected` evidence + `task-workspace.lifecycle` line the
+// provision gate records, carrying the error code, so an operator reading `server.log` alone sees
+// which precondition refused the switch (AGENTS.md §8, SC4).
+function activateOrRefuse(
+  ctx: ProvisioningCtx,
+  owned: ActivationOwnership,
+  request: WorkspaceActivateRequest,
+  nowMs: number,
+): { readonly next: WorkspaceInstance; readonly type: WorkspaceEventType } {
+  try {
+    return activateActiveOrResume(owned.instance, owned.lockHeldByActor);
+  } catch (error) {
+    if (error instanceof TaskWorkspaceError) {
+      emit(ctx, {
+        operation: "activate",
+        outcome: error.outcome,
+        type: "transition-rejected",
+        workspaceId: owned.instance.workspaceId,
+        taskId: owned.instance.taskId,
+        nowMs,
+        correlationId: request.correlationId,
+        fromState: owned.instance.lifecycleState,
+        errorCode: error.code,
+      });
+    }
+    throw error;
+  }
+}
+
 function activateLocked(
   ctx: ProvisioningCtx,
   request: WorkspaceActivateRequest,
@@ -967,12 +1163,13 @@ function activateLocked(
     flagDrift(ctx, "activate", instance, nowMs, request.correlationId);
   }
   assertActivationIdentityCurrent(ctx, instance, nowMs, request.correlationId);
-  ensureManagedWorkspaceIdentity(ctx, instance, false);
-  const { next, type } = activateActiveOrResume(instance);
-  const lock = request.acquireLock ? makeLock(ctx, request.requestedBy, "activation", nowMs) : null;
+  ensureManagedWorkspaceIdentity(ctx, instance);
+  const owned = ownActivation(ctx, instance, request, nowMs);
+  const { next, type } = activateOrRefuse(ctx, owned, request, nowMs);
+  const lock = request.acquireLock ? owned.lock : null;
   const persisted = ctx.deps.store.upsert({
     ...next,
-    health: "healthy",
+    ...driftAfterLiveProof(next, next.lifecycleState, true),
     lock,
     lastVerifiedAt: isoFrom(nowMs),
     updatedAt: isoFrom(nowMs),
@@ -988,6 +1185,7 @@ function activateLocked(
     ...(type === "resumed" ? { fromState: instance.lifecycleState } : {}),
     toState: "active",
     ...(lock !== null ? { lockId: lock.lockId } : {}),
+    worktreeCount: 1,
   });
   return { instance: persisted, binding: buildBinding(persisted) };
 }
@@ -1054,6 +1252,7 @@ export function createWorkspaceProvisioningService(
     deps,
     lockTtlMs,
     correlationId: correlationIdOrUnknown(correlationId),
+    startedAtMs: deps.now(),
     failureOutcomeRecorded: false,
   });
   return {
@@ -1067,7 +1266,12 @@ export function createWorkspaceProvisioningService(
     // no child process and therefore emits no termination evidence. UNKNOWN is honest here, and it
     // is the sanctioned fallback rather than an ad-hoc string.
     ensureIdentity: (instance: WorkspaceInstance): void => {
-      ensureManagedWorkspaceIdentity(ctxFor(undefined), instance, false);
+      ensureManagedWorkspaceIdentity(ctxFor(undefined), instance);
     },
+    // The #3382 restamp seam. It shares this service's deps bundle (store, managed root, adapter
+    // factory, evidence, clock, id) rather than composing a second one, so a caller cannot reach a
+    // different store or a different managed root than provisioning itself writes through.
+    recordVerifiedHead: (input: RecordVerifiedHeadInput): Promise<boolean> =>
+      recordVerifiedManagedHead(deps, input),
   };
 }

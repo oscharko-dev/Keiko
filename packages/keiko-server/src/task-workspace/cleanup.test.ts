@@ -1216,6 +1216,41 @@ describe("orphan cleanup", () => {
     expect(store.getById(instance.workspaceId)).toBeDefined();
   });
 
+  // #3382/L-2: `orphanLeavesFor` swallowed a per-repository `readdir` failure with `catch { return
+  // []; }`, so "this repository has no orphans" and "this repository could not be listed" were the
+  // same answer — a permission change or an unreadable mount silently removed the orphan sweep for
+  // that repository while the operator-approved run reported `removed: 0` as if it had swept it. The
+  // failure is now classified on the same `task-workspace.lifecycle` line the health report's twin
+  // uses, and the mutating sweep still deletes nothing it could not inventory.
+  it("classifies a repository directory it cannot list and removes nothing", async () => {
+    const instance = await provisionTask("t-orphan-unlistable");
+    const repoDir = dirname(instance.managedWorktreePath);
+    store.delete(instance.workspaceId);
+    // A FILE where the repository-id directory was: `existsSync` still answers true and `readdirSync`
+    // fails with ENOTDIR on every platform, without depending on process privileges.
+    rmSync(repoDir, { recursive: true, force: true });
+    writeFileSync(repoDir, "not a directory\n");
+    const activityLog = createBufferedServerLogSink();
+
+    const result = await cleanup(store, realAdapter, undefined, activityLog).cleanupOrphans({
+      // Scoped to this repository: a GLOBAL sweep resolves its repository ids from the managed
+      // root's DIRECTORY entries, and the fixture's repository-id entry is deliberately not one.
+      repositoryRoot: repoRoot,
+      requestedBy: "u",
+      operatorApproved: true,
+      correlationId: "req-corr-orphan-unlistable-1",
+    });
+
+    expect(result).toEqual({ removed: 0, refused: [] });
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.level).toBe("warn");
+    expect(line.errorKind).toBe("REPOSITORY_UNREACHABLE");
+    expect(line.correlationId).toBe("req-corr-orphan-unlistable-1");
+    expect(line.extra?.operation).toBe("cleanup");
+    expect(JSON.stringify(activityLog.events)).not.toContain(repoDir);
+  });
+
   it("rejects orphan cleanup without operator approval", async () => {
     const activityLog = createBufferedServerLogSink();
     await expect(

@@ -125,6 +125,41 @@ describe("parseUnifiedDiff", () => {
     expect(beta.removedLines).toBe(1);
   });
 
+  // A model-authored changeset carries no `diff --git` headers; the parser used to keep the first
+  // hunk open past its announced line counts, so the second file's `--- a/…` / `+++ b/…` header
+  // rendered as a deleted and an added line and the second file vanished from the change review
+  // (workbench end-to-end run, 2026-09-03).
+  it("ends a hunk after its announced lines so a headerless second file starts a new file", () => {
+    const raw = [
+      "--- a/src/math.mjs",
+      "+++ b/src/math.mjs",
+      "@@ -1,3 +1,4 @@",
+      " export function add(a, b) {",
+      "+export function subtract(a, b) {",
+      "   return a + b;",
+      " }",
+      "--- a/test/math.test.mjs",
+      "+++ b/test/math.test.mjs",
+      "@@ -1,2 +1,3 @@",
+      ' import { test } from "node:test";',
+      '-import { add } from "../src/math.mjs";',
+      '+import { add, subtract } from "../src/math.mjs";',
+      '+test("subtract", () => {});',
+      "",
+    ].join("\n");
+
+    const result = parseUnifiedDiff(raw);
+
+    expect(result.files.map((file) => file.path)).toEqual(["src/math.mjs", "test/math.test.mjs"]);
+    const first = assertDefined(result.files[0], "first");
+    expect(first.addedLines).toBe(1);
+    expect(first.removedLines).toBe(0);
+    expect(first.hunks[0]?.lines.map((line) => line.kind)).toEqual(["ctx", "add", "ctx", "ctx"]);
+    const second = assertDefined(result.files[1], "second");
+    expect(second.addedLines).toBe(2);
+    expect(second.removedLines).toBe(1);
+  });
+
   it("reflects rename in path and oldPath", () => {
     const raw = [
       "diff --git a/old.ts b/new.ts",
@@ -411,5 +446,41 @@ describe("parseUnifiedDiff", () => {
     const hunk = assertDefined(file.hunks[0], "hunk");
     const ctxLines = hunk.lines.filter((l) => l.kind === "ctx");
     expect(ctxLines.map((l) => l.text)).toEqual(["one", "", "three"]);
+  });
+
+  // A completed file must be flushed before the NEXT `--- /dev/null`, not only before the next
+  // `--- a/<path>`: two added files in a header-only diff have no `diff --git` line between them,
+  // so the second `/dev/null` header used to update the finished first file's status and the
+  // following `+++ b/<second>` then overwrote its path — the first file disappeared from change
+  // review and both hunks were reported under the second (#3381 review).
+  it("keeps two sequential added files apart without diff --git headers", () => {
+    const raw = [
+      "--- /dev/null",
+      "+++ b/first.txt",
+      "@@ -0,0 +1,2 @@",
+      "+alpha",
+      "+beta",
+      "--- /dev/null",
+      "+++ b/second.txt",
+      "@@ -0,0 +1,1 @@",
+      "+gamma",
+      "",
+    ].join("\n");
+
+    const result = parseUnifiedDiff(raw);
+
+    expect(result.files.map((file) => file.path)).toEqual(["first.txt", "second.txt"]);
+    expect(result.files.map((file) => file.status)).toEqual(["added", "added"]);
+    const first = assertDefined(result.files[0], "first file");
+    const second = assertDefined(result.files[1], "second file");
+    expect(first.addedLines).toBe(2);
+    expect(second.addedLines).toBe(1);
+    expect(assertDefined(first.hunks[0], "first hunk").lines.map((line) => line.text)).toEqual([
+      "alpha",
+      "beta",
+    ]);
+    expect(assertDefined(second.hunks[0], "second hunk").lines.map((line) => line.text)).toEqual([
+      "gamma",
+    ]);
   });
 });

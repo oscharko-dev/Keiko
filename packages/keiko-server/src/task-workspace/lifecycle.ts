@@ -37,7 +37,7 @@ import { deriveManagedWorktreePath, deriveRepositoryId } from "./naming.js";
 import { isManagedTargetContained, managedTargetExists } from "./managed-root.js";
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { activePointerKey, workspaceKey } from "./mutex.js";
-import { TaskWorkspaceError } from "./errors.js";
+import { TaskWorkspaceError, type TaskWorkspaceErrorCode } from "./errors.js";
 import {
   liveManagedIdentityDrift,
   managedIdentityDriftMarker,
@@ -152,14 +152,24 @@ function loadInstance(ctx: LifecycleCtx, workspaceId: string): WorkspaceInstance
   return instance;
 }
 
-function assertBindableManagedPath(ctx: LifecycleCtx, instance: WorkspaceInstance): void {
+// The persisted path must be the one this workspace identity derives. Containment is checked
+// separately and first (a path outside the managed root is the contract's `path-escape` fact and is
+// persisted as such); this is the residual lexical check for a contained path.
+function isDerivedManagedPath(ctx: LifecycleCtx, instance: WorkspaceInstance): boolean {
   const expected = deriveManagedWorktreePath({
     managedRoot: ctx.deps.managedRoot,
     repositoryId: instance.repositoryId,
     workspaceId: instance.workspaceId,
   });
+  return instance.managedWorktreePath === expected;
+}
+
+// Readiness transitions refuse a row whose persisted path is not contained or not the derived one
+// before any proof moves it; the active READ classifies the same facts marker by marker instead
+// (see canExposeBinding).
+function assertBindableManagedPath(ctx: LifecycleCtx, instance: WorkspaceInstance): void {
   if (
-    instance.managedWorktreePath !== expected ||
+    !isDerivedManagedPath(ctx, instance) ||
     !isManagedTargetContained(ctx.deps.managedRoot, instance.managedWorktreePath)
   ) {
     throw new TaskWorkspaceError(
@@ -175,35 +185,94 @@ function canExposeBinding(
   correlationId: string | undefined,
 ): boolean {
   if (instance.lifecycleState !== "active" && instance.lifecycleState !== "handoff-ready") {
+    // A persisted pointer can name a workspace a later pass moved out of the bindable states (a
+    // startup reconcile flagged it `recovery-required`). The caller clears the pointer; without a
+    // line here the operator's "my active workspace vanished after the restart" had no trace in
+    // the log at all (observed live, 2026-09-03).
+    logWorkspaceLifecycle(ctx.deps, {
+      operation: "activate",
+      outcome: "blocked",
+      workspaceId: instance.workspaceId,
+      taskId: instance.taskId,
+      correlationId,
+      attempt: 1,
+      durationMs: 0,
+      worktreeCount: 0,
+      errorCode: "ILLEGAL_TRANSITION",
+    });
     return false;
   }
-  try {
-    assertBindableManagedPath(ctx, instance);
-  } catch {
+  // Classifying checks first, in the order reconciliation persists the same facts: a persisted path
+  // outside the managed root is the contract's `path-escape` (what a live pass writes for
+  // `!pathContained`), a vanished tree is `worktree-missing`, and the identity verdict carries its
+  // own marker — so a row that cannot be bound never stays `active`/`healthy` with no hint for the
+  // operator (CodeRabbit, PR #3381).
+  if (!isManagedTargetContained(ctx.deps.managedRoot, instance.managedWorktreePath)) {
+    flagReadTimeDrift(ctx, instance, "path-escape", correlationId);
     return false;
   }
-  if (!managedTargetExists(instance.managedWorktreePath)) return false;
+  if (!managedTargetExists(instance.managedWorktreePath)) {
+    flagReadTimeDrift(ctx, instance, "worktree-missing", correlationId);
+    return false;
+  }
   // The persisted pointer may predate the current identity rule (an upgrade window before the
   // detached reconcile has run) or point at a replaced tree: no binding leaves this service on
-  // path existence alone (#3376 review P1). The refusal is logged; the pointer is cleared by the
-  // caller exactly as for any other non-bindable instance.
+  // path existence alone (#3376 review P1). The refusal is flagged on the row and logged; the
+  // pointer is cleared by the caller exactly as for any other non-bindable instance.
   const drift = identityDriftOf(ctx, instance);
-  if (drift === "matches") return true;
-  // A synchronous read-time check: `attempt`, `durationMs` and `worktreeCount` are the line's
-  // required shape, not measurements of this refusal.
+  if (drift !== "matches") {
+    flagReadTimeDrift(ctx, instance, managedIdentityDriftMarker(drift), correlationId);
+    return false;
+  }
+  // The residual: a contained tree that exists and proves THIS identity, persisted under a path the
+  // identity does not derive. No marker in the closed vocabulary describes a spelling, and a live
+  // pass would call the row healthy, so borrowing one would report an incident that did not happen
+  // (#3376 review). It gets the line, not a row — and the binding is still refused.
+  if (!isDerivedManagedPath(ctx, instance)) {
+    logReadTimeRefusal(ctx, instance, correlationId, "POINTER_DRIFT");
+    return false;
+  }
+  return true;
+}
+
+// A read-time refusal with no drift marker of its own. A synchronous read-time check: `attempt`,
+// `durationMs` and `worktreeCount` are the line's required shape, not measurements of this refusal.
+function logReadTimeRefusal(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  correlationId: string | undefined,
+  errorCode: TaskWorkspaceErrorCode,
+): void {
   logWorkspaceLifecycle(ctx.deps, {
     operation: "activate",
-    outcome: "retry-required",
+    outcome: "blocked",
     workspaceId: instance.workspaceId,
     taskId: instance.taskId,
     correlationId,
     attempt: 1,
     durationMs: 0,
     worktreeCount: 0,
-    errorCode: "POINTER_DRIFT",
-    driftMarker: managedIdentityDriftMarker(drift),
+    errorCode,
   });
-  return false;
+}
+
+// The active-pointer read refuses a binding, so the STORE has to agree with the pointer the caller
+// is about to clear. Logging the refusal alone left inventory showing `lifecycleState: "active"`,
+// `health: "healthy"` and empty `driftMarkers` while `GET /active` was already unbound — and Repair
+// only appears where a recovery hint exists, so the operator saw an active-looking workspace with no
+// way to fix it until the next startup reconcile happened to run (PR #3381 review).
+//
+// Same drift row a readiness transition writes, through the same owner, so the two refusals cannot
+// describe one fact differently. Safe from a read: `getActiveImpl` is entirely synchronous, so its
+// re-read-classify-write is one event-loop turn (it already clears the pointer store the same way),
+// and reconciliation remains the authority that re-derives the row from live facts afterwards.
+function flagReadTimeDrift(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  marker: TaskWorkspaceDriftMarker,
+  correlationId: string | undefined,
+): void {
+  persistDriftRow(ctx, instance, "activate", marker, ctx.deps.now(), correlationId);
 }
 
 // The live four-way verdict, or the injected one in tests. A proof that could not run arrives as the
@@ -276,18 +345,19 @@ function assertIdentityCurrentFor(
   if (drift !== "matches") flagTransitionDrift(ctx, instance, spec, nowMs, correlationId, drift);
 }
 
-// A readiness transition found a retired, unsupported or changed identity: the row is flagged for
-// recovery with the classified marker and its hint, the event carries the marker, and the request
-// is refused — the same shape provisioning's activation gives the same finding.
-function flagTransitionDrift(
+// The drift row a refusal leaves behind: `recovery-required` with the classified marker and its
+// recovery hint, the lock released, and the `drift-detected` event (and its activity-log line)
+// carrying the marker. ONE owner, because a readiness transition and the active-pointer read must
+// leave the row in exactly the same shape for the same fact — the same shape provisioning's
+// activation gives it.
+function persistDriftRow(
   ctx: LifecycleCtx,
   instance: WorkspaceInstance,
-  spec: DirectTransitionSpec,
+  operation: WorkspaceLifecycleOperation,
+  marker: TaskWorkspaceDriftMarker,
   nowMs: number,
   correlationId: string | undefined,
-  drift: ManagedIdentityDrift,
-): never {
-  const marker = managedIdentityDriftMarker(drift);
+): void {
   const drifted = ctx.deps.store.upsert({
     ...instance,
     lifecycleState: "recovery-required",
@@ -298,7 +368,7 @@ function flagTransitionDrift(
     recoveryHints: planWorkspaceRecoveryHints([marker]),
   });
   emit(ctx, {
-    operation: spec.operation,
+    operation,
     outcome: "retry-required",
     type: "drift-detected",
     instance: drifted,
@@ -308,18 +378,84 @@ function flagTransitionDrift(
     errorCode: "POINTER_DRIFT",
     driftMarker: marker,
   });
+}
+
+// A readiness transition found a retired, unsupported or changed identity: the row is flagged for
+// recovery with the classified marker and its hint, the event carries the marker, and the request
+// is refused.
+function flagTransitionDrift(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  spec: DirectTransitionSpec,
+  nowMs: number,
+  correlationId: string | undefined,
+  drift: ManagedIdentityDrift,
+): never {
+  persistDriftRow(
+    ctx,
+    instance,
+    spec.operation,
+    managedIdentityDriftMarker(drift),
+    nowMs,
+    correlationId,
+  );
   throw new TaskWorkspaceError("POINTER_DRIFT", managedIdentityDriftMessage(drift));
 }
 
-function activeIdentityAvailable(ctx: LifecycleCtx, instance: WorkspaceInstance): boolean {
+// The LAST refusal on the active read that clears the pointer, and the one that stayed silent after
+// the three inside `canExposeBinding` were given lines: the server-owned identity repair seam is not
+// wired, or it threw. Either way the caller drops the binding and the application goes unbound, so an
+// operator's "my active workspace vanished after the restart" needs the same trace here as everywhere
+// else — the bare `catch { return false; }` lost the reason for good (AGENTS.md §7/§8, PR #3381
+// review). A classified failure keeps its own code, frames and cause chain; nothing else about the
+// read changes: it still fails closed rather than exposing a root verification cannot authorize.
+function activeIdentityAvailable(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  correlationId: string | undefined,
+): boolean {
   const ensureIdentity = ctx.deps.provisioning.ensureIdentity;
-  if (ensureIdentity === undefined) return false;
+  if (ensureIdentity === undefined) {
+    logIdentityRepairFailure(ctx, instance, correlationId, identityRepairUnavailable());
+    return false;
+  }
   try {
     ensureIdentity(instance);
     return true;
-  } catch {
+  } catch (error) {
+    logIdentityRepairFailure(ctx, instance, correlationId, error);
     return false;
   }
+}
+
+// A seam this server does not carry cannot repair anything: the same code the provisioning seam
+// itself raises when an identity registration cannot be completed, so the log keeps one vocabulary
+// for "the managed identity could not be established" regardless of which half was missing.
+function identityRepairUnavailable(): TaskWorkspaceError {
+  return new TaskWorkspaceError(
+    "PROVISIONING_FAILED",
+    "managed workspace identity repair is unavailable",
+  );
+}
+
+function logIdentityRepairFailure(
+  ctx: LifecycleCtx,
+  instance: WorkspaceInstance,
+  correlationId: string | undefined,
+  error: unknown,
+): void {
+  logWorkspaceLifecycleFailure(
+    ctx.deps,
+    { operation: "activate", workspaceIdentitySeed: instance.workspaceId, correlationId },
+    error instanceof TaskWorkspaceError
+      ? error
+      : new TaskWorkspaceError(
+          "PROVISIONING_FAILED",
+          "managed workspace identity repair failed",
+          [],
+          { cause: error },
+        ),
+  );
 }
 
 // Resolves the #444 transition context for a direct (pause / handoff) action. The actor holds the
@@ -469,7 +605,7 @@ function getActiveImpl(
   // Project/Manifest identity. Repair that server-owned identity before any surface receives the
   // binding; this seam deliberately cannot initialize trust. Failure clears the pointer and leaves
   // the application unbound instead of exposing a root that verification cannot authorize.
-  if (!activeIdentityAvailable(ctx, instance)) {
+  if (!activeIdentityAvailable(ctx, instance, correlationId)) {
     ctx.deps.activePointerStore.clear();
     return undefined;
   }
@@ -569,6 +705,7 @@ export function createWorkspaceLifecycleService(
   const ctx: LifecycleCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
   return {
     list: (repositoryRoot: string): readonly WorkspaceInstance[] => listImpl(ctx, repositoryRoot),
+    listAll: (): readonly WorkspaceInstance[] => deps.store.listAll(),
     getActive: (correlationId?: string): ActiveWorkspaceView | undefined =>
       getActiveImpl(ctx, correlationId),
     setActive: (request: SetActiveWorkspaceRequest): Promise<ActiveWorkspaceView> =>

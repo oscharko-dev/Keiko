@@ -96,7 +96,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   store.close();
-  await rm(root, { recursive: true, force: true });
+  // A git process the fixture spawned can still be closing when the tree is removed; retry the
+  // teardown instead of failing the suite on a transient ENOTEMPTY/EBUSY (CI, PR #3381 round 2).
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("GET /api/git/summary", () => {
@@ -654,6 +656,12 @@ describe("GET /api/git/history — selected-root scoping", () => {
     await runRealGit(["init", "--quiet"]);
     await runRealGit(["config", "user.email", "fixture@example.invalid"]);
     await runRealGit(["config", "user.name", "Keiko Fixture"]);
+    // Hermetic: a commit otherwise spawns a DETACHED `git maintenance run --auto`, which can outlive
+    // the test and write into `.git/objects` while `afterEach` removes the tree (ENOTEMPTY on the
+    // loaded coverage runner). Nothing here measures maintenance, so none may run.
+    await runRealGit(["config", "gc.auto", "0"]);
+    await runRealGit(["config", "gc.autoDetach", "false"]);
+    await runRealGit(["config", "maintenance.auto", "false"]);
     await commitFile(["outside/first.txt"], "outside first");
     await commitFile(["sub/inside.txt"], "inside only");
     await commitFile(["outside/second.txt"], "outside second");

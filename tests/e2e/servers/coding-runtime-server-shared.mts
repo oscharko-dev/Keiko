@@ -183,13 +183,8 @@ function createWorkspaceServices(managedRoot: string): JourneyWorkspaceServices 
   const mutex = createWorkspaceMutexRegistry();
   const provisioning = createWorkspaceProvisioningService({
     ...shared,
-    ensureManagedWorkspaceIdentity: (instance, initializeTrust): void => {
-      ensureManagedTaskWorkspaceIdentity({
-        uiStore,
-        workspaceScriptTrust,
-        instance,
-        initializeTrust,
-      });
+    ensureManagedWorkspaceIdentity: (instance): void => {
+      ensureManagedTaskWorkspaceIdentity({ uiStore, workspaceScriptTrust, instance });
     },
     mutex,
   });

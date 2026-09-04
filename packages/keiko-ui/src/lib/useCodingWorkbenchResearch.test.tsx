@@ -100,10 +100,40 @@ describe("useCodingWorkbenchResearch", () => {
     expect(getResearchMock.mock.calls[0]?.[0]).toBe("run-1");
   });
 
+  // Workbench audit, 2026-09-03: before `retry`, a transient failure while a network-egress approval
+  // was open left the operator stuck on "unavailable" forever — nothing else re-triggers a fetch
+  // while runId/revision/permissionRequestId all stay the same during that one decision.
+  it("re-reads on demand via retry() without any input changing", async () => {
+    getResearchMock.mockRejectedValueOnce(new Error("transient"));
+    getResearchMock.mockResolvedValueOnce(active());
+
+    const { result } = renderHook(() => useCodingWorkbenchResearch(RUN));
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+    });
+    expect(getResearchMock).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      result.current.retry();
+    });
+    expect(result.current.status).toBe("loading");
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("ready");
+    });
+    expect(result.current.ask).toEqual(PENDING);
+    expect(getResearchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("stays idle with no run", () => {
     const withoutRun = renderHook(() => useCodingWorkbenchResearch({ ...RUN, runId: undefined }));
 
-    expect(withoutRun.result.current).toEqual({ status: "idle", ask: null, grant: null });
+    expect(withoutRun.result.current).toEqual({
+      status: "idle",
+      ask: null,
+      grant: null,
+      retry: expect.any(Function),
+    });
     expect(getResearchMock).not.toHaveBeenCalled();
   });
 
@@ -119,6 +149,50 @@ describe("useCodingWorkbenchResearch", () => {
     expect(result.current.grant).toBeNull();
   });
 
+  // #3381 review: the channel read and the runtime snapshot advance independently, so a read
+  // issued while the card was deciding P1 can be answered with the P2 ask the server has moved on
+  // to. Published under P1's id it renders P2's host and request line beside P1's approve/deny
+  // controls — the input never changed, so the hook's own input scoping cannot see it.
+  it("reports unavailable when the channel answers with a different request's ask", async () => {
+    getResearchMock.mockResolvedValue({
+      session: "active",
+      pending: { ...PENDING, requestId: "research-approval-2", host: "other.example.org" },
+      grant: GRANT,
+    });
+
+    const { result } = renderHook(() => useCodingWorkbenchResearch(RUN));
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+    });
+    // The grant travels in the same payload as the mismatched ask, so it is no more trustworthy
+    // evidence for this decision than the ask is.
+    expect(result.current.ask).toBeNull();
+    expect(result.current.grant).toBeNull();
+  });
+
+  it("reports unavailable when a retry answers with a newer request's ask", async () => {
+    getResearchMock.mockResolvedValueOnce(active());
+    getResearchMock.mockResolvedValueOnce({
+      session: "active",
+      pending: { ...PENDING, requestId: "research-approval-3" },
+    });
+
+    const { result } = renderHook(() => useCodingWorkbenchResearch(RUN));
+    await waitFor(() => {
+      expect(result.current.ask).toEqual(PENDING);
+    });
+
+    act(() => {
+      result.current.retry();
+    });
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+    });
+    expect(result.current.ask).toBeNull();
+  });
+
   it("reports unavailable when the read fails, so the panel never implies there is no destination", async () => {
     getResearchMock.mockRejectedValue(new Error("network"));
 
@@ -129,7 +203,12 @@ describe("useCodingWorkbenchResearch", () => {
     });
     // The whole state must clear: a retained ask would leave a stale destination on screen while
     // the panel claims the read failed.
-    expect(result.current).toEqual({ status: "unavailable", ask: null, grant: null });
+    expect(result.current).toEqual({
+      status: "unavailable",
+      ask: null,
+      grant: null,
+      retry: expect.any(Function),
+    });
   });
 
   // Wave 5 follow-up (epic #3233) — the fatal-flaw fix: a real caught `ApiError` must carry its
@@ -185,7 +264,12 @@ describe("useCodingWorkbenchResearch", () => {
     getResearchMock.mockReturnValue(replacement.promise);
     rerender({ ...RUN, revision: 5, permissionRequestId: "research-approval-2" });
 
-    expect(result.current).toEqual({ status: "loading", ask: null, grant: null });
+    expect(result.current).toEqual({
+      status: "loading",
+      ask: null,
+      grant: null,
+      retry: expect.any(Function),
+    });
     await act(async () => {
       replacement.resolve({
         session: "active",
@@ -223,14 +307,24 @@ describe("useCodingWorkbenchResearch", () => {
     });
 
     rerender({ ...RUN, runId: undefined });
-    expect(result.current).toEqual({ status: "idle", ask: null, grant: null });
+    expect(result.current).toEqual({
+      status: "idle",
+      ask: null,
+      grant: null,
+      retry: expect.any(Function),
+    });
     expect(observed?.aborted).toBe(true);
 
     await act(async () => {
       inFlight.resolve(active());
       await inFlight.promise;
     });
-    expect(result.current).toEqual({ status: "idle", ask: null, grant: null });
+    expect(result.current).toEqual({
+      status: "idle",
+      ask: null,
+      grant: null,
+      retry: expect.any(Function),
+    });
   });
 
   it("does not start a read when pairing settles after the run disappears", async () => {
@@ -251,7 +345,12 @@ describe("useCodingWorkbenchResearch", () => {
       await pairing.promise;
     });
 
-    expect(result.current).toEqual({ status: "idle", ask: null, grant: null });
+    expect(result.current).toEqual({
+      status: "idle",
+      ask: null,
+      grant: null,
+      retry: expect.any(Function),
+    });
     expect(getResearchMock).not.toHaveBeenCalled();
   });
 
@@ -285,7 +384,12 @@ describe("useCodingWorkbenchResearch", () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
     expect(getResearchMock).toHaveBeenCalledTimes(3);
-    expect(result.current).toEqual({ status: "ready", ask: null, grant: null });
+    expect(result.current).toEqual({
+      status: "ready",
+      ask: null,
+      grant: null,
+      retry: expect.any(Function),
+    });
     await act(async () => {
       afterGrantExpiry.resolve({ session: "active" });
       await afterGrantExpiry.promise;
@@ -308,7 +412,12 @@ describe("useCodingWorkbenchResearch", () => {
     const { result } = renderHook(() => useCodingWorkbenchResearch(RUN));
     await flushResearchRead();
 
-    expect(result.current).toEqual({ status: "ready", ask: null, grant: null });
+    expect(result.current).toEqual({
+      status: "ready",
+      ask: null,
+      grant: null,
+      retry: expect.any(Function),
+    });
     await vi.advanceTimersByTimeAsync(10_000);
     expect(getResearchMock).toHaveBeenCalledTimes(1);
   });

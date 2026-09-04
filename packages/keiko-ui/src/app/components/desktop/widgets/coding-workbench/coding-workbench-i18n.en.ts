@@ -1,7 +1,5 @@
 export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.status.checking": "Checking",
-  "codingWorkbench.status.available": "Available",
-  "codingWorkbench.status.unavailable": "Unavailable",
   "codingWorkbench.header.eyebrow": "Coding",
   "codingWorkbench.header.summary":
     "Start and supervise one governed coding run. Authority and outcomes remain server-owned.",
@@ -54,6 +52,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "MemoriaViva uses only the active project memory in Coding Workbench.",
   "codingWorkbench.composer.help":
     "Pause the active run to send a follow-up. A drafted follow-up is admitted only while paused and is never queued.",
+  "codingWorkbench.composer.workspaceMismatch":
+    "This run keeps the authority of the workspace it started in, which is no longer the active one. The chips, Git and the run's changes stay on the run's workspace; switch back to it to review or edit those files.",
   "codingWorkbench.questions.sectionLabel": "Runtime questions",
   "codingWorkbench.questions.eyebrow": "Input needed",
   "codingWorkbench.questions.title": "Runtime questions",
@@ -96,6 +96,37 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The workspace could not be verified. Reconciliation did not confirm a clean, matching checkout, so the run stays unavailable. Review the repository and try again.",
   "codingWorkbench.setup.branchConflict":
     "The task branch for this coding run already exists. Remove the previous branch or its managed workspace. Alternatively, choose a different target branch.",
+  "codingWorkbench.setup.invalidBaseBranch":
+    "The target branch does not exist in this repository. Enter a branch that resolves locally, for example the checked-out branch.",
+  "codingWorkbench.setup.missingRepository":
+    "The repository path is not inside a local Git repository. Enter the path of an existing checkout.",
+  "codingWorkbench.setup.unsafePath":
+    "The repository path is outside the folders this installation may bind. Choose a folder inside an allowed workspace root.",
+  "codingWorkbench.setup.lockContention":
+    "Another action currently holds this task workspace. Wait a moment, then try again.",
+  "codingWorkbench.setup.provisioningUnavailable":
+    "Managed task workspaces are not configured on this installation, so no workspace can be bound.",
+  "codingWorkbench.setup.repairRequired":
+    "A managed workspace for this repository and branch already exists, but Keiko could not re-verify it: {finding}. Repairing {effect}. Keiko cannot tell the original worktree from a replacement at the same path, so approving re-registers whatever is on disk there — inspect the tree in Task workspaces first if its provenance is in doubt.",
+  "codingWorkbench.setup.repairEffect.reconcilePointer":
+    "re-registers the existing worktree in place; nothing is deleted",
+  "codingWorkbench.setup.repairEffect.recreateWorktree":
+    "prunes the stale worktree registration and rebuilds the worktree from its task branch; committed work on the branch is kept",
+  "codingWorkbench.setup.repairEffect.releaseStaleLock":
+    "releases the stale lock an interrupted action left behind; the worktree is not touched",
+  "codingWorkbench.setup.repairEffect.acceptMovedHead":
+    "accepts the worktree's current commit as its verified head; HEAD moved outside Keiko, and nothing in the repository or on disk is changed",
+  "codingWorkbench.setup.repairEffect.generic":
+    "applies the recovery strategy Keiko recommended for this finding",
+  "codingWorkbench.setup.boundRefreshFailed":
+    "The workspace was bound, but this view could not refresh. Open Task workspaces and use Refresh.",
+  "codingWorkbench.setup.operatorRequired":
+    "A managed workspace for this repository and branch already exists, but Keiko cannot repair it automatically: {finding}. Inspect it in the Task workspaces panel, then try again.",
+  "codingWorkbench.setup.repairFailed":
+    "The repair did not complete. Refresh the task workspaces, then try again.",
+  "codingWorkbench.setup.findingUnknown": "its state could not be re-verified",
+  "codingWorkbench.setup.repairAndBind": "Repair and bind",
+  "codingWorkbench.setup.repairing": "Repairing…",
   "codingWorkbench.setup.runtimeUnavailable":
     "Starting a coding run is unavailable on this installation until the coding runtime is active. You can bind a workspace now; the run becomes startable once the runtime is confirmed.",
   "codingWorkbench.setup.runtimeEvaluation":
@@ -106,9 +137,11 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.readiness.workspace.none": "No active task workspace",
   "codingWorkbench.readiness.eventStream.label": "Event stream",
   "codingWorkbench.readiness.runtime.label": "Coding runtime",
+  "codingWorkbench.readiness.runtime.pending": "Checking coding runtime…",
   "codingWorkbench.readiness.runtime.verified": "Platform-verified — signed and notarized runtime",
   "codingWorkbench.readiness.runtime.evaluation":
     "Unverified evaluation runtime — no platform signature",
+  "codingWorkbench.readiness.runtime.unavailable": "Coding runtime unavailable",
   "codingWorkbench.timeline.eyebrow": "Timeline",
   "codingWorkbench.timeline.title": "Activity",
   "codingWorkbench.timeline.empty": "No activity yet.",
@@ -191,28 +224,33 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.planState.active": "In progress",
   "codingWorkbench.activity.planState.completed": "Completed",
   "codingWorkbench.activity.planState.cancelled": "Cancelled",
-  "codingWorkbench.source.eyebrow": "Model source",
-  "codingWorkbench.source.title": "Choose a server-confirmed source",
-  "codingWorkbench.source.group": "Runtime model source",
   "codingWorkbench.source.gateway.label": "Keiko Gateway",
-  "codingWorkbench.source.gateway.detail":
-    "Uses the configured Gateway profile. Provider details remain private.",
   "codingWorkbench.source.codex.label": "ChatGPT/Codex subscription",
-  "codingWorkbench.source.codex.detail":
-    "Uses a Keiko-owned subscription session. Credentials remain private.",
-  "codingWorkbench.source.confirmedLabel": "Server-confirmed source",
-  "codingWorkbench.source.confirmedValue": "{source} · {status} · {verification}",
-  "codingWorkbench.source.verification.verified": "verified by the last gateway check",
-  "codingWorkbench.source.verification.partial": "partly verified by the last gateway check",
-  "codingWorkbench.source.verification.failed": "the last gateway check failed",
-  "codingWorkbench.source.verification.unverified": "configured, not verified",
-  "codingWorkbench.source.verificationHint":
-    "The last gateway readiness check could not reach this source, so runs stay blocked. Re-run the readiness check in Settings.",
-  "codingWorkbench.source.retry": "Retry source",
+  "codingWorkbench.source.unavailableReason.missing-config":
+    "No gateway is configured. Configure the Keiko Gateway in Settings → Models.",
+  "codingWorkbench.source.unavailableReason.missing-provider":
+    "The gateway configuration names no model provider. Add one in Settings → Models.",
+  "codingWorkbench.source.unavailableReason.missing-credentials":
+    "The configured provider has no credentials. Update them in Settings → Models.",
+  "codingWorkbench.source.unavailableReason.non-chat":
+    "No configured model is a chat model. Add a chat-capable model in Settings → Models.",
+  "codingWorkbench.source.unavailableReason.no-tool-calling":
+    "No chat model has verified tool calling. Run the readiness check in Settings → Models and apply the verified values.",
+  "codingWorkbench.source.unavailableReason.non-workflow-eligible":
+    "The tool-calling chat model is not workflow-eligible. Enable workflow eligibility in Settings → Models.",
+  "codingWorkbench.source.unavailableReason.non-coding-capable":
+    "The configured chat model is not coding-capable.",
+  "codingWorkbench.source.unavailableReason.deployment-policy-disabled":
+    "The deployment policy disables the coding runtime's gateway source.",
+  "codingWorkbench.source.unavailableReason.subscription-source":
+    "The subscription source is selected; the gateway is not in use.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI through Gateway",
   "codingWorkbench.modelSource.codexSubscription": "ChatGPT/Codex subscription",
   "codingWorkbench.auth.label": "Subscription authentication",
+  "codingWorkbench.auth.cardTitle": "Sign in to the Codex subscription",
+  "codingWorkbench.auth.cardHelp":
+    "A coding run over the ChatGPT/Codex subscription can start only once this installation is signed in. Refresh the status after signing in, or prepare a server-approved setup method below.",
   "codingWorkbench.auth.refresh": "Refresh authentication",
   "codingWorkbench.auth.setupMethods": "Server-approved setup methods",
   "codingWorkbench.auth.setupMethodsGroup": "Codex authentication setup methods",
@@ -264,12 +302,59 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.notApplicable": "Not applicable",
   "codingWorkbench.approval.noneRequested": "None requested",
   "codingWorkbench.approval.unspecified": "Unspecified",
+  "codingWorkbench.approval.kind.workspace-write": "Workspace write",
+  "codingWorkbench.approval.kind.command-execution": "Command execution",
+  "codingWorkbench.approval.kind.network-egress": "Network egress",
+  "codingWorkbench.approval.kind.connector-access": "Connector access",
+  "codingWorkbench.approval.kind.delivery-substrate": "Delivery",
+  "codingWorkbench.approval.actionClass.workspace-read": "Workspace read",
+  "codingWorkbench.approval.actionClass.workspace-write": "Workspace write",
+  "codingWorkbench.approval.actionClass.command-execution": "Command execution",
+  "codingWorkbench.approval.actionClass.verification": "Verification",
+  "codingWorkbench.approval.actionClass.connector-access": "Connector access",
+  "codingWorkbench.approval.actionClass.network-egress": "Network egress",
+  "codingWorkbench.approval.actionClass.delivery-substrate": "Delivery",
+  "codingWorkbench.approval.risk.low": "Low",
+  "codingWorkbench.approval.risk.medium": "Medium",
+  "codingWorkbench.approval.risk.high": "High",
+  "codingWorkbench.approval.risk.critical": "Critical",
+  "codingWorkbench.approval.actionKind.file-edit": "File edit",
+  "codingWorkbench.approval.actionKind.verification-command": "Verification command",
+  "codingWorkbench.approval.actionKind.research": "Research",
+  "codingWorkbench.approval.actionKind.commit": "Commit",
+  "codingWorkbench.approval.actionKind.push": "Push",
+  "codingWorkbench.approval.actionKind.pull-request": "Pull request",
+  "codingWorkbench.approval.actionKind.merge": "Merge",
+  "codingWorkbench.approval.actionKind.connector-write": "Connector write",
+  "codingWorkbench.approval.actionKind.external-write": "External write",
+  "codingWorkbench.approval.actionKind.system-mutation": "System mutation",
+  "codingWorkbench.approval.policyReason.scoped-file-edit": "File edit inside the task scope",
+  "codingWorkbench.approval.policyReason.out-of-scope-file-edit":
+    "File edit outside the task scope",
+  "codingWorkbench.approval.policyReason.allowlisted-verification-command":
+    "Allowlisted verification command",
+  "codingWorkbench.approval.policyReason.unknown-command-denied": "Unknown command denied",
+  "codingWorkbench.approval.policyReason.mutating-command-denied": "Mutating command denied",
+  "codingWorkbench.approval.policyReason.approval-required": "Approval required",
+  "codingWorkbench.approval.policyReason.approval-proof-missing": "Approval proof missing",
+  "codingWorkbench.approval.policyReason.approval-proof-stale": "Approval proof stale",
+  "codingWorkbench.approval.policyReason.approval-proof-accepted": "Approval proof accepted",
+  "codingWorkbench.approval.policyReason.operator-denied": "Denied by the operator",
+  "codingWorkbench.approval.policyReason.operator-stopped": "Stopped by the operator",
+  "codingWorkbench.approval.policyReason.redacted-failure": "Failure (details redacted)",
+  "codingWorkbench.approval.connectorScope.source-control.read": "Source control (read)",
+  "codingWorkbench.approval.connectorScope.source-control.write": "Source control (write)",
+  "codingWorkbench.approval.connectorScope.issue-tracker.read": "Issue tracker (read)",
+  "codingWorkbench.approval.connectorScope.issue-tracker.write": "Issue tracker (write)",
+  "codingWorkbench.approval.connectorScope.knowledge-base.read": "Knowledge base (read)",
+  "codingWorkbench.approval.connectorScope.knowledge-base.write": "Knowledge base (write)",
   "codingWorkbench.approval.research.title": "Research destination",
   "codingWorkbench.approval.research.host": "Public domain",
   "codingWorkbench.approval.research.requestLine": "Requested path and query",
   "codingWorkbench.approval.research.loading": "Loading the destination…",
   "codingWorkbench.approval.research.unavailable":
     "Destination unavailable. Re-pair this window to see it before deciding.",
+  "codingWorkbench.approval.research.retry": "Retry loading the destination",
   "codingWorkbench.approval.changes.title": "Files this change would write",
   "codingWorkbench.approval.changes.files": "Files",
   "codingWorkbench.approval.changes.lines": "Lines",
@@ -279,7 +364,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.changes.loading": "Loading the changed files…",
   "codingWorkbench.approval.changes.unavailable":
     "Changed files unavailable. Re-pair this window to see them before deciding.",
+  "codingWorkbench.approval.changes.retry": "Retry loading the changed files",
   "codingWorkbench.approval.help": "Raw commands, prompts, diffs, and file contents remain hidden.",
+  "codingWorkbench.approval.evidenceRequired":
+    "Approval stays unavailable until what this request would touch has loaded. Retry that read, or deny the request.",
   "codingWorkbench.approval.approve": "Approve once",
   "codingWorkbench.approval.deny": "Deny",
   "codingWorkbench.changesetReview.eyebrow": "Change review",
@@ -315,12 +403,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runState.cancelled": "Stopped",
   "codingWorkbench.runState.taken-over": "Taken over",
   "codingWorkbench.runState.recovery-required": "Recovery required",
-  "codingWorkbench.resourceStatus.idle": "Not checked",
-  "codingWorkbench.resourceStatus.loading": "Checking",
-  "codingWorkbench.resourceStatus.ready": "Available",
-  "codingWorkbench.resourceStatus.empty": "Not selected",
   "codingWorkbench.resourceStatus.unavailable": "Unavailable",
-  "codingWorkbench.resourceStatus.error": "Error",
   "codingWorkbench.announcement.runChecking": "Run status checking.",
   "codingWorkbench.announcement.noActiveRun": "No active coding run.",
   "codingWorkbench.announcement.runRevision": "{state}. Revision {revision}.",

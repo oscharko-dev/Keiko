@@ -425,6 +425,11 @@ export type WorkspaceRecoveryStrategy =
   | "reattach-branch"
   | "release-stale-lock"
   | "commit-or-stash-required"
+  // Adopt the worktree's CURRENT commit as the verified head. It mutates neither Git nor the
+  // filesystem: it only replaces the recorded baseline `head-moved` is measured against, so a
+  // workspace whose HEAD moved outside Keiko can be returned to service instead of being stranded
+  // forever behind a strategy nothing could execute (#3382).
+  | "accept-moved-head"
   | "operator-repair"
   | "abandon-and-cleanup";
 
@@ -434,6 +439,7 @@ export const WORKSPACE_RECOVERY_STRATEGIES: readonly WorkspaceRecoveryStrategy[]
   "reattach-branch",
   "release-stale-lock",
   "commit-or-stash-required",
+  "accept-moved-head",
   "operator-repair",
   "abandon-and-cleanup",
 ] as const;
@@ -1302,7 +1308,14 @@ const DRIFT_MARKER_RECOVERY: Readonly<
   // Relocating the workspace root is the documented resolution; no automatic repair can create a
   // creation time the filesystem does not keep.
   "identity-unsupported": { strategy: "operator-repair", operatorActionRequired: true },
-  "head-moved": { strategy: "operator-repair", operatorActionRequired: true },
+  // A moved HEAD used to map to `operator-repair`, which the repair service EXECUTES for no marker:
+  // once `head-moved` was persisted, nothing could clear it, the runtime authority refuses any row
+  // with a drift marker, and the workspace was bricked for every further run (#3382). The move
+  // itself is still not something Keiko may assume it caused — accepting it is a decision — so the
+  // strategy is executable but the repair route keeps its `operatorApproved` gate exactly like
+  // `reconcile-pointer`. `operatorActionRequired: false` states only that Keiko HAS an executable
+  // strategy; it never bypasses that approval.
+  "head-moved": { strategy: "accept-moved-head", operatorActionRequired: false },
   // A deleted local branch cannot be safely re-created by the narrow worktree adapter without risking
   // loss of the worktree's commits, so reattachment is operator-guided, never automatic.
   "branch-deleted": { strategy: "reattach-branch", operatorActionRequired: true },
@@ -1386,8 +1399,53 @@ function classifyOnDiskDrift(
   return null;
 }
 
+// Whether an identity outcome is UNPROVEN BUT NOT DISPROVEN: a registration made under a retired
+// rule, or a volume that reports no creation time. Neither says the tree is somebody else's, which
+// is why the governed removal admits exactly these two on an ownership probe that skips the identity
+// gate. The predicate is stated once, here, because the removal path keys on the same pair.
+function unprovenNotDisprovenIdentity(facts: WorkspaceReconciliationFacts): boolean {
+  return facts.gitdirIdentitySchemaRetired === true || facts.gitdirIdentityUnsupported === true;
+}
+
+// A `cleanup-pending` row is settled while its worktree is gone (the expected end state), still the
+// registered one, or unproven-but-not-disproven — and NOT settled when its pointer is absent or
+// proves a different worktree.
+//
+// The exit an operator needs is the governed removal, and which side of it a row lands on is decided
+// by the ownership probe, not by this classifier. A retired-schema or unsupported-volume tree is
+// admitted by that probe (it runs `unprovenNotDisproven` and proves ownership without the identity
+// gate), so `complete-cleanup` still removes the tree the operator asked to remove — and moving such
+// a row to `recovery-required` would CLOSE that exit for good: `request-cleanup` refuses a
+// `recovery-required` row as not cleanup-eligible and `complete-cleanup` requires `cleanup-pending`,
+// while an `identity-unsupported` volume has no repair that can ever change the verdict (PR #3381
+// review P2). An absent or disproven pointer is refused by that same probe as `ownership-unproven`,
+// so reporting it "healthy" is what leaves it with no exit at all — no repair applies to a healthy
+// status, not even the universal `abandon-and-cleanup`. Classifying it as the stale-pointer fact it
+// is lets the pass flag it (`cleanup-pending -> recovery-required` is a legal, precondition-free
+// transition) so the operator-approved re-registration can reach it (audit finding, 2026-09-03).
+//
+// Operational drift on a present, proven tree (a moved HEAD, a deleted branch, uncommitted work) is
+// deliberately NOT reclassified here: the row keeps both cleanup verbs, the removal succeeds for a
+// clean tree and refuses a dirty one with the actionable `worktree-dirty`, and the health classifier
+// already resolves such a row by disposition (`cleanup-ready` / `dirty`, see healthClassificationFor)
+// rather than reporting it as ready when it is not.
+function cleanupPendingDrift(
+  facts: WorkspaceReconciliationFacts,
+): WorkspaceReconciliationOutcome | null {
+  if (facts.lifecycleState !== "cleanup-pending" || !facts.worktreeDirExists) return null;
+  if (unprovenNotDisprovenIdentity(facts)) return null;
+  if (!facts.gitPointerPresent) {
+    return outcome("stale-pointer", withStaleLock(["pointer-stale"], facts));
+  }
+  if (!facts.gitdirIdentityMatches) {
+    return outcome("stale-pointer", withStaleLock([identityDriftMarker(facts)], facts));
+  }
+  return null;
+}
+
 // Pure deterministic classifier with a fixed precedence (most severe first): a containment escape and
-// a live foreign lock short-circuit before any disk classification; terminal lifecycles are settled;
+// a live foreign lock short-circuit before any disk classification; terminal lifecycles are settled
+// (except a cleanup-pending tree whose pointer is absent or disproven, see cleanupPendingDrift);
 // then partial-creation, then on-disk drift (missing → stale pointer → branch/HEAD/dirty), then a
 // lingering recovery-required flag, then a stale lock on an otherwise-healthy workspace.
 export function classifyWorkspaceReconciliation(
@@ -1395,6 +1453,8 @@ export function classifyWorkspaceReconciliation(
 ): WorkspaceReconciliationOutcome {
   if (!facts.pathContained) return outcome("unmanaged-path", ["path-escape"]);
   if (facts.lockedByOtherActor) return outcome("locked", []);
+  const pendingDrift = cleanupPendingDrift(facts);
+  if (pendingDrift) return pendingDrift;
   if (TERMINAL_LIFECYCLE_STATES.includes(facts.lifecycleState)) return outcome("healthy", []);
   if (PARTIAL_LIFECYCLE_STATES.includes(facts.lifecycleState)) {
     return outcome("partially-created", withStaleLock(partialCreationMarkers(facts), facts));
@@ -1441,6 +1501,11 @@ export function reconciliationRequiresRecoveryFlag(
   status: WorkspaceReconciliationStatus,
   lifecycleState: TaskWorkspaceLifecycleState,
 ): boolean {
+  // A cleanup-pending tree whose pointer is absent or DISPROVEN is flagged so re-registration can
+  // reach it; a MISSING one is the expected end state of a cleanup, and a retired/unsupported
+  // identity is still removable through the governed cleanup, so neither is unsettled here (see
+  // cleanupPendingDrift — only it can produce `stale-pointer` for this lifecycle).
+  if (lifecycleState === "cleanup-pending") return status === "stale-pointer";
   if (
     lifecycleState !== "active" &&
     lifecycleState !== "paused" &&
@@ -1449,6 +1514,41 @@ export function reconciliationRequiresRecoveryFlag(
     return false;
   }
   return status === "missing" || status === "stale-pointer" || status === "unmanaged-path";
+}
+
+const POINTER_OR_IDENTITY_MARKERS: ReadonlySet<TaskWorkspaceDriftMarker> = new Set([
+  "pointer-stale",
+  "gitdir-mismatch",
+  "identity-schema-retired",
+  "identity-unsupported",
+]);
+
+function hasPointerOrIdentityMarker(markers: readonly TaskWorkspaceDriftMarker[]): boolean {
+  return markers.some((marker) => POINTER_OR_IDENTITY_MARKERS.has(marker));
+}
+
+// The two markers that state the pointer is absent or proves ANOTHER identity — the only two the
+// governed removal refuses on a cleanup-pending row; a retired or unsupported identity is unproven,
+// not disproven, and stays removable (`unprovenNotDisprovenIdentity` in the live classifier).
+const POINTER_DISPROOF_MARKERS: ReadonlySet<TaskWorkspaceDriftMarker> = new Set([
+  "pointer-stale",
+  "gitdir-mismatch",
+]);
+
+// The persisted-marker mirror of cleanupPendingDrift, for the same reasons stated there: a retired
+// or unsupported identity keeps a cleanup-pending row SETTLED (the governed removal still admits
+// it), an absent or disproven pointer does not (the removal refuses it as `ownership-unproven`), and
+// operational drift is reported without unsettling the row. Kept in lockstep with the live
+// classifier so the read-only report and a live pass cannot disagree about the same row.
+function cleanupPendingStatusFromMarkers(
+  markers: readonly TaskWorkspaceDriftMarker[],
+): WorkspaceReconciliationStatus {
+  // A persisted list may carry BOTH an unproven identity and a pointer disproof. The disproof wins:
+  // the governed removal refuses an absent or disproven pointer as `ownership-unproven` whatever
+  // else the row retains, so reporting such a row settled would hide the cleanup recovery flag it
+  // needs (CodeRabbit, PR #3381). Only an unproven-but-not-disproven identity keeps the row settled.
+  if (markers.some((marker) => POINTER_DISPROOF_MARKERS.has(marker))) return "stale-pointer";
+  return "healthy";
 }
 
 // Pure: reconstruct the reconciliation status from the CONTENT-FREE persisted instance fields, so a
@@ -1463,17 +1563,18 @@ export function reconciliationStatusFromInstance(input: {
   const markers = input.driftMarkers;
   if (markers.includes("path-escape")) return "unmanaged-path";
   if (input.health === "locked-out") return "locked";
+  if (input.lifecycleState === "cleanup-pending") return cleanupPendingStatusFromMarkers(markers);
   if (TERMINAL_LIFECYCLE_STATES.includes(input.lifecycleState)) return "healthy";
   if (PARTIAL_LIFECYCLE_STATES.includes(input.lifecycleState)) return "partially-created";
+  // A row a pass could not VERIFY carries health `unknown` and its LAST classification's markers.
+  // It is never `healthy`: the pointer restoration reads this status (resolveActiveRestoration), so
+  // reporting an unverifiable row settled is what let the workbench claim a binding as verified
+  // against a worktree whose repository had become unreachable (PR #3381 review P2). The status is
+  // the one the documented carry-forward contract already names — `recovery-required`, health
+  // `unknown`, not cleanup-eligible — and it matches the health report's carriedForwardEntry.
+  if (input.health === "unknown") return "recovery-required";
   if (markers.includes("worktree-missing")) return "missing";
-  if (
-    markers.includes("pointer-stale") ||
-    markers.includes("gitdir-mismatch") ||
-    markers.includes("identity-schema-retired") ||
-    markers.includes("identity-unsupported")
-  ) {
-    return "stale-pointer";
-  }
+  if (hasPointerOrIdentityMarker(markers)) return "stale-pointer";
   if (
     markers.includes("branch-deleted") ||
     markers.includes("head-moved") ||
@@ -1495,14 +1596,23 @@ export function reconciliationStatusFromInstance(input: {
 
 // The strategies the repair service can apply WITHOUT operator action, because each is reversible /
 // non-destructive: recreate a missing worktree from the still-present branch, refresh a stale/moved
-// worktree pointer, or release an expired lock. `reattach-branch`, `operator-repair`, and
-// `commit-or-stash-required` are deliberately excluded — they require a human decision.
+// worktree pointer, release an expired lock, or record the worktree's current commit as the
+// verified head. `reattach-branch`, `operator-repair`, and `commit-or-stash-required` are
+// deliberately excluded — they require a human decision.
+//
+// "Automatic" here means EXECUTABLE, never unapproved: every one of these still runs behind the
+// repair service's `operatorApproved` gate (`assertRepairAuthorized`). `accept-moved-head` is the
+// least invasive of the four — it writes one recorded baseline and touches neither Git nor the
+// filesystem.
+const AUTOMATIC_WORKSPACE_REPAIR_STRATEGIES: ReadonlySet<WorkspaceRecoveryStrategy> = new Set([
+  "reconcile-pointer",
+  "recreate-worktree",
+  "release-stale-lock",
+  "accept-moved-head",
+]);
+
 export function isAutomaticWorkspaceRepairStrategy(strategy: WorkspaceRecoveryStrategy): boolean {
-  return (
-    strategy === "reconcile-pointer" ||
-    strategy === "recreate-worktree" ||
-    strategy === "release-stale-lock"
-  );
+  return AUTOMATIC_WORKSPACE_REPAIR_STRATEGIES.has(strategy);
 }
 
 // Pure: whether `strategy` is applicable given the recovery hints reconciliation produced. An

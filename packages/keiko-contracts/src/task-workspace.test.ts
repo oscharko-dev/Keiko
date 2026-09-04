@@ -417,7 +417,7 @@ describe("enum vocab + guards", () => {
   });
 
   it("recovery strategies", () => {
-    expect(WORKSPACE_RECOVERY_STRATEGIES).toHaveLength(7);
+    expect(WORKSPACE_RECOVERY_STRATEGIES).toHaveLength(8);
     for (const strategy of WORKSPACE_RECOVERY_STRATEGIES) {
       expect(isWorkspaceRecoveryStrategy(strategy)).toBe(true);
     }

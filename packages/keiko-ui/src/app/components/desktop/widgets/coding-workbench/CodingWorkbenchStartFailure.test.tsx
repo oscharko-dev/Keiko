@@ -91,12 +91,13 @@ function boundActiveWorkspace(): unknown {
     switching: false,
     error: null,
     refresh: vi.fn(() => Promise.resolve(true)),
-    switchTo: vi.fn(() => Promise.resolve()),
-    clearActive: vi.fn(() => Promise.resolve()),
-    pause: vi.fn(() => Promise.resolve()),
-    resume: vi.fn(() => Promise.resolve()),
-    prepareHandoff: vi.fn(() => Promise.resolve()),
-    provision: vi.fn(() => Promise.resolve()),
+    switchTo: vi.fn(() => Promise.resolve(true)),
+    clearActive: vi.fn(() => Promise.resolve(true)),
+    pause: vi.fn(() => Promise.resolve(true)),
+    resume: vi.fn(() => Promise.resolve(true)),
+    prepareHandoff: vi.fn(() => Promise.resolve(true)),
+    repair: vi.fn(() => Promise.resolve(true)),
+    provision: vi.fn(() => Promise.resolve(true)),
   };
 }
 

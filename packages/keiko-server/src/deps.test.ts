@@ -615,12 +615,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
 
     try {
       store.createProject(repositoryRoot);
-      ensureManagedTaskWorkspaceIdentity({
-        uiStore: store,
-        workspaceScriptTrust,
-        instance,
-        initializeTrust: true,
-      });
+      ensureManagedTaskWorkspaceIdentity({ uiStore: store, workspaceScriptTrust, instance });
 
       const managedRootRef = requiredManifestRootRef(store, managedRoot);
       expect(store.readWorkspaceTrustRecord(managedRootRef)).toBeUndefined();
@@ -646,17 +641,84 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     try {
       store.createProject(repositoryRoot);
       workspaceScriptTrust.grant(repositoryRoot);
-      ensureManagedTaskWorkspaceIdentity({
-        uiStore: store,
-        workspaceScriptTrust,
-        instance,
-        initializeTrust: true,
-      });
+      ensureManagedTaskWorkspaceIdentity({ uiStore: store, workspaceScriptTrust, instance });
 
       expect(workspaceScriptTrust.status(managedRoot)).toMatchObject({
         projectId: managedRoot,
         trust: "restricted",
         reason: "state-unavailable",
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  // #3382/L-3 — the fix, and the two guards the retired `initializeTrust` flag stood for. The flag
+  // let ONLY an explicit provision derive the worktree's record, so a worktree registered while its
+  // repository carried no grant stayed restricted for the rest of its life: activate and
+  // `ensureIdentity` re-registered the identity and skipped trust for good, and the editor's
+  // restricted-mode level for that worktree root could never follow a grant given afterwards.
+  // Relocated here from provisioning.test.ts's `[true, true, false]` assertion, which pinned the
+  // flag rather than the invariant.
+  it("derives managed trust on a later call once the repository grant arrives", () => {
+    const repositoryRoot = tmp("managed-root-late-grant-source-");
+    const managedRoot = tmp("managed-root-late-grant-target-");
+    const manifest = JSON.stringify({ name: "shared" });
+    writeFileSync(join(repositoryRoot, "package.json"), manifest);
+    writeFileSync(join(managedRoot, "package.json"), manifest);
+    const instance = managedWorkspaceInstance(repositoryRoot, managedRoot);
+    const store = createInMemoryUiStore();
+    const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });
+
+    try {
+      store.createProject(repositoryRoot);
+      // First exposure: the repository is not granted yet, so nothing is derived.
+      ensureManagedTaskWorkspaceIdentity({ uiStore: store, workspaceScriptTrust, instance });
+      expect(
+        store.readWorkspaceTrustRecord(requiredManifestRootRef(store, managedRoot)),
+      ).toBeUndefined();
+
+      workspaceScriptTrust.grant(repositoryRoot);
+      // A later exposure (activate / ensureIdentity) now derives from the standing grant.
+      ensureManagedTaskWorkspaceIdentity({ uiStore: store, workspaceScriptTrust, instance });
+
+      expect(workspaceScriptTrust.status(managedRoot)).toMatchObject({
+        projectId: managedRoot,
+        trust: "trusted",
+        reason: "derived-from-trusted-root",
+      });
+      expect(workspaceScriptTrust.trustLevelForRoot(managedRoot)).toBe("trusted");
+    } finally {
+      store.close();
+    }
+  });
+
+  // The second guard, and the reason running the derivation on every exposure still never RENEWS
+  // execution trust: a restricted record is authoritative evidence of revocation or drift, and no
+  // later identity call may overwrite it — not even while the repository stays trusted.
+  it("never overwrites an existing restricted record on a later call", () => {
+    const repositoryRoot = tmp("managed-root-revoked-source-");
+    const managedRoot = tmp("managed-root-revoked-target-");
+    const manifest = JSON.stringify({ name: "shared" });
+    writeFileSync(join(repositoryRoot, "package.json"), manifest);
+    writeFileSync(join(managedRoot, "package.json"), manifest);
+    const instance = managedWorkspaceInstance(repositoryRoot, managedRoot);
+    const store = createInMemoryUiStore();
+    const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });
+
+    try {
+      store.createProject(repositoryRoot);
+      workspaceScriptTrust.grant(repositoryRoot);
+      ensureManagedTaskWorkspaceIdentity({ uiStore: store, workspaceScriptTrust, instance });
+      expect(workspaceScriptTrust.trustLevelForRoot(managedRoot)).toBe("trusted");
+
+      expect(workspaceScriptTrust.revoke(managedRoot)).toEqual({ trusted: false });
+      ensureManagedTaskWorkspaceIdentity({ uiStore: store, workspaceScriptTrust, instance });
+
+      expect(workspaceScriptTrust.status(managedRoot)).toMatchObject({
+        projectId: managedRoot,
+        trust: "restricted",
+        reason: "human-revocation",
       });
     } finally {
       store.close();

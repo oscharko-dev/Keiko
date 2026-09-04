@@ -172,6 +172,9 @@ describe("CommandRunnerManager — discovery", () => {
       kind: "managed-task",
       canonicalRoot: workspaceRoot,
       fs: nodeWorkspaceFs,
+      // The worktree IS its own repository here, so the ADR-0147 D3 basis comparison is trivially
+      // satisfied and this test keeps measuring only the root-access resolution it is about.
+      repositoryRoot: workspaceRoot,
     };
     expect(
       makeManager(makeSpawn(), { resolveWorkspaceRootAccess: () => access }).discover(workspaceRoot)
@@ -182,6 +185,101 @@ describe("CommandRunnerManager — discovery", () => {
         workspaceRoot,
       ),
     ).toThrow(expect.objectContaining({ code: "PROJECT_NOT_FOUND" }));
+  });
+
+  // #3382/L-5. Script trust for a MANAGED TASK WORKTREE is the repository's standing grant AND the
+  // ADR-0147 D3 basis equality that binds it to the worktree's own `package.json` bytes — the exact
+  // rule `verificationRunner.worktreeSharesRepositoryTrustBasis` states, asked here rather than
+  // restated. Before this, the decision was keyed on the worktree's OWN root, which a governed run
+  // can write to: the runner answered "trusted" for a manifest no human ever approved.
+  it("refuses a managed worktree whose package.json differs from its repository's", async () => {
+    const worktreeRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-cmd-worktree-")));
+    try {
+      writeFileSync(
+        join(worktreeRoot, "package.json"),
+        PACKAGE_JSON.replace('"vitest run"', '"vitest run && node ./attacker.js"'),
+        "utf8",
+      );
+      store.createProject(worktreeRoot, "worktree");
+      const spawn = vi.fn(makeSpawn());
+      const manager = makeManager(spawn, {
+        resolveWorkspaceRootAccess: (): WorkspaceRootAccess => ({
+          kind: "managed-task",
+          canonicalRoot: worktreeRoot,
+          fs: nodeWorkspaceFs,
+          repositoryRoot: workspaceRoot,
+        }),
+      });
+
+      expect(
+        manager.discover(worktreeRoot).tasks.find((task) => task.id === "npm-script:test")
+          ?.trustState,
+      ).toBe("approval-required");
+      await expect(
+        manager.execute({ projectId: worktreeRoot, taskId: "npm-script:test" }),
+      ).rejects.toThrow(expect.objectContaining({ code: "TASK_REQUIRES_TRUST" }));
+      expect(spawn).not.toHaveBeenCalled();
+
+      // Control: the SAME worktree with a byte-identical manifest keeps the repository's grant.
+      writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
+      await manager.execute({ projectId: worktreeRoot, taskId: "npm-script:test" });
+      expect(spawn).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  // The at-effect gate must RE-READ the worktree basis, not replay the comparison discovery took.
+  // The manifest here is byte-identical when the catalog is built and is replaced before the run is
+  // admitted — the "another process rewrote package.json between the two checks" window. The trust
+  // decider is the deterministic clock for it: `trustedForScripts` reads the basis and THEN calls the
+  // decider, so a rewrite issued from inside the discovery-time decider call lands strictly between
+  // the two basis reads. Every script survives the rewrite, so the refusal can only come from the
+  // basis — and `spawn` proves the rewritten bytes never reached a child process.
+  it("re-reads the worktree trust basis at the effect boundary and never spawns a rewritten manifest", async () => {
+    const worktreeRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-cmd-toctou-")));
+    try {
+      writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
+      store.createProject(worktreeRoot, "worktree");
+      const spawn = vi.fn(makeSpawn());
+      let rewriteOnNextTrustCheck = false;
+      let manifestRewritten = false;
+      const isWorkspaceTrustedForPackageScripts: CommandRunnerWorkspaceTrustDecider = () => {
+        if (rewriteOnNextTrustCheck) {
+          rewriteOnNextTrustCheck = false;
+          manifestRewritten = true;
+          writeFileSync(
+            join(worktreeRoot, "package.json"),
+            PACKAGE_JSON.replace('"vitest run"', '"vitest run && node ./attacker.js"'),
+            "utf8",
+          );
+        }
+        return true;
+      };
+      const manager = makeManager(spawn, {
+        isWorkspaceTrustedForPackageScripts,
+        resolveWorkspaceRootAccess: (): WorkspaceRootAccess => ({
+          kind: "managed-task",
+          canonicalRoot: worktreeRoot,
+          fs: nodeWorkspaceFs,
+          repositoryRoot: workspaceRoot,
+        }),
+      });
+
+      // Control: no rewrite, so the repository's standing grant still covers the worktree.
+      await manager.execute({ projectId: worktreeRoot, taskId: "npm-script:test" });
+      expect(spawn).toHaveBeenCalledTimes(1);
+
+      rewriteOnNextTrustCheck = true;
+      await expect(
+        manager.execute({ projectId: worktreeRoot, taskId: "npm-script:test" }),
+      ).rejects.toThrow(expect.objectContaining({ code: "TASK_REQUIRES_TRUST" }));
+      expect(manifestRewritten).toBe(true);
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(manager.inFlightCount()).toBe(0);
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
   });
 
   // eslint-disable-next-line complexity -- single discovery assertion covers the command kind/trust matrix.

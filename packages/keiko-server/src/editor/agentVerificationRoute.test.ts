@@ -4,9 +4,12 @@
 // registered with a far-future expiry and a generous runtime budget, then resolved in the same tick.
 
 import { EventEmitter } from "node:events";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import type { ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchAuthorityEnvelope,
@@ -26,8 +29,14 @@ import {
   isWorkspaceRootIdentityDigest,
   isWorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+import { forwardWorkspaceFs, nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import {
+  grantedWorkspaceRootAccess,
+  type WorkspaceRootAccessOutcome,
+} from "../task-workspace/workspace-root-access.js";
 import {
   createInMemoryUiStore,
   type UiStore,
@@ -45,6 +54,8 @@ import {
   verificationAuthorityDenyReason,
 } from "./agentVerificationRoute.js";
 import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
+import { VerificationRunnerError } from "./verificationRunnerErrors.js";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 
 const ROOT = "/repo";
 const SESSION_ID = "session-1";
@@ -236,13 +247,13 @@ function fakeReq(body: Record<string, unknown>): IncomingMessage {
   return req;
 }
 
-function routeContext(body: Record<string, unknown>): RouteContext {
+function routeContext(body: Record<string, unknown>, correlationId?: string): RouteContext {
   const res = Object.assign(new EventEmitter(), {
     writableEnded: false,
     destroyed: false,
   }) as unknown as ServerResponse;
   return {
-    correlationId: undefined,
+    correlationId,
     req: fakeReq(body),
     res,
     params: {},
@@ -250,8 +261,8 @@ function routeContext(body: Record<string, unknown>): RouteContext {
   };
 }
 
-function ctx(body: Record<string, unknown>): RouteContext {
-  return routeContext(body);
+function ctx(body: Record<string, unknown>, correlationId?: string): RouteContext {
+  return routeContext(body, correlationId);
 }
 
 function resultBody(result: { status: number; body: unknown }): Record<string, unknown> {
@@ -549,6 +560,42 @@ describe("handleEditorAgentVerificationRun audit (AC5)", () => {
     expect(listEditorAgentActionAudit(SESSION_ID)).toMatchObject([
       { actionType: "requestVerification", disposition: "allowed", outcome: "queued" },
     ]);
+  });
+
+  // A runner refusal answered 403/404/422/429 out of an error body and left NOTHING on the operator
+  // side: only the coding-tool port (a different entry point) ever logged one, so
+  // `keiko support analyze --correlation-id <request>` showed the request and no refusal at all
+  // (PR #3381 review). The request correlation is also what the run itself is filed under, so the
+  // runner's own lifecycle evidence and the workspace resolver's denial line join the same id.
+  it("emits a body-free refusal diagnostic under the request correlation when the runner refuses", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const manager = new FakeManager();
+    manager.failWith = new VerificationRunnerError(
+      "WORKSPACE_TRUST_REQUIRED",
+      "Repository package scripts require server-side workspace trust before execution.",
+    );
+    const authorityRef = registerAuthority();
+
+    const result = await handleEditorAgentVerificationRun(
+      ctx(
+        { schemaVersion: "1", sessionId: SESSION_ID, kind: "typecheck", authorityRef },
+        "request-correlation-7b",
+      ),
+      { ...deps(manager), diagnostics: { record: (record): void => void records.push(record) } },
+    );
+
+    expect(result).toMatchObject({ status: 403 });
+    expect(manager.lastInput?.correlationId).toBe("request-correlation-7b");
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "request-correlation-7b",
+        operation: "editor.verification.execute",
+        source: "editor.agent-verification-route",
+        errorClass: "WORKSPACE_TRUST_REQUIRED",
+        message: "verification-refused",
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("server-side workspace trust");
   });
 
   it("records exactly one audit entry for a denied request", async () => {
@@ -852,6 +899,49 @@ describe("handleEditorAgentVerificationRun root-binding guards (#2624)", () => {
     expect(manager.calls).toBe(1);
   });
 
+  // A reservation that fails AFTER the policy allowed the run ends the request before
+  // `runAndRespond` too, so its refusal has to be recorded the same way (CodeRabbit, PR #3381).
+  it("records an exhausted authority budget as a body-free refusal diagnostic", async () => {
+    const manager = new FakeManager();
+    const authorityRef = registerAuthority(undefined, {
+      budget: {
+        maxRuntimeMs: 3_600_000,
+        maxToolCalls: 1,
+        maxPromptTokens: 10_000,
+        maxPatchBytes: 65_536,
+      },
+    });
+    const request = { schemaVersion: "1", sessionId: SESSION_ID, kind: "typecheck", authorityRef };
+    const records: unknown[] = [];
+    const allow = (): EditorAgentActionPolicyDecision => ({
+      disposition: "allowed",
+      effectClass: "execution",
+      origin: "agent",
+    });
+
+    await handleEditorAgentVerificationRun(ctx(request), deps(manager), { decide: allow });
+    const exhausted = await handleEditorAgentVerificationRun(
+      ctx(request, "request-correlation-6e"),
+      { ...deps(manager), diagnostics: { record: (record): void => void records.push(record) } },
+      { decide: allow },
+    );
+
+    expect(resultBody(exhausted)).toMatchObject({
+      outcome: "not-run",
+      disposition: "denied",
+      reason: "authority-budget-exceeded",
+    });
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "request-correlation-6e",
+        operation: "editor.verification.execute",
+        source: "editor.agent-verification-route",
+        errorClass: "authority-budget-exceeded",
+        message: "verification-refused",
+      }),
+    ]);
+  });
+
   it("fails closed when a boundary denial cannot be audited", async () => {
     const manager = new FakeManager();
     const authorityRef = registerAuthority();
@@ -994,4 +1084,373 @@ describe("verificationAuthorityDenyReason", () => {
       expect(verificationAuthorityDenyReason(reason)).toBe("authority-invalid");
     },
   );
+});
+
+// PR #3381 review — the two managed-worktree guards on this route. `POST
+// /api/editor/verification/agent-runs` is the sidecar / docked-agent entry point; the workbench
+// facade calls `verificationRunner.runToReport` directly and bypasses it, which is why an
+// end-to-end run could pass while this route stayed denied.
+//
+//  - P3/[41]: containment must run through the port the managed access minted. The sibling wiring
+//    in agentRoutes.ts was pinned; this one was not, so reverting the hunk left the suite green.
+//  - Medium/[9]: script trust must be resolved against the repository the worktree was bound from
+//    (a worktree carries no standing grant of its own — its project row is not a trust decision —
+//    so its root is always `restricted` and the execution-class request was denied
+//    `workspace-restricted` before the runner ever ran), and
+//    only while the worktree's own package manifest is still the repository's trust basis.
+const MANAGED_SESSION_ID = "session-managed";
+
+interface ManagedVerificationFixture {
+  readonly worktreeRoot: string;
+  readonly repositoryRoot: string;
+  readonly dispose: () => void;
+}
+
+function createManagedVerificationFixture(): ManagedVerificationFixture {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-verify-route-")));
+  const worktreeRoot = realpathSync(mkdtempSync(join(base, "worktree-")));
+  const repositoryRoot = realpathSync(mkdtempSync(join(base, "repository-")));
+  writeFileSync(join(worktreeRoot, "src.ts"), "export const a = 1;\n", "utf8");
+  return {
+    worktreeRoot,
+    repositoryRoot,
+    dispose: (): void => {
+      rmSync(base, { recursive: true, force: true });
+    },
+  };
+}
+
+function registerManagedSession(workspaceRoot: string, bindRoot: boolean): void {
+  const bound: EditorAgentSessionSnapshot = {
+    ...snapshot(),
+    sessionId: MANAGED_SESSION_ID,
+    workspaceRoot,
+    ...(bindRoot ? { rootBinding: sessionRootBinding() } : {}),
+  };
+  expect(editorAgentRegistry.registerSnapshot(bound)).toBe(true);
+}
+
+function managedAuthorityRef(
+  workspaceRoot: string,
+  runId?: string,
+): { runId: string; envelopeDigest: string } {
+  return registerAuthority(undefined, {
+    ...(runId === undefined ? {} : { runId }),
+    workspace: {
+      workspaceId: "workspace-1",
+      rootLabel: "workspace",
+      rootDigest: editorAgentWorkspaceRootDigest(workspaceRoot),
+    },
+  });
+}
+
+// The dependency shape the route actually reads for a managed root: the typed access resolver plus
+// the script-trust service. `trustLevelForRoot` answers "trusted" ONLY for `trustedRoot`, so a
+// route that asks about the worktree instead of its repository can never come back trusted.
+function managedDeps(
+  manager: VerificationRunnerManager,
+  access: (requestedRoot: string, correlationId?: string) => WorkspaceRootAccessOutcome,
+  trustedRoot: string,
+): UiHandlerDeps {
+  return {
+    verificationRunner: manager,
+    autonomousDeliveryDeploymentCeiling: CEILING,
+    workspaceRootAccessResolver: access,
+    workspaceScriptTrust: {
+      trustLevelForRoot: (root: string) => (root === trustedRoot ? "trusted" : "restricted"),
+    },
+  } as unknown as UiHandlerDeps;
+}
+
+function managedAccess(
+  canonicalRoot: string,
+  fs: WorkspaceFs,
+  repositoryRoot: string,
+): WorkspaceRootAccessOutcome {
+  return grantedWorkspaceRootAccess({ kind: "managed-task", canonicalRoot, fs, repositoryRoot });
+}
+
+describe("handleEditorAgentVerificationRun managed task worktree (PR #3381)", () => {
+  let fixture: ManagedVerificationFixture;
+
+  beforeEach(() => {
+    fixture = createManagedVerificationFixture();
+  });
+
+  afterEach(() => {
+    fixture.dispose();
+  });
+
+  it("runs the path-boundary check through the port the managed access resolved", async () => {
+    // The managed port is the ONLY thing that can refuse here: the root and the target both exist
+    // on disk, so the plain node port admits them. Reverting to `nodeWorkspaceFs` therefore flips
+    // this denial into an admitted run.
+    registerManagedSession(fixture.worktreeRoot, true);
+    const manager = new FakeManager();
+    const authorityRef = managedAuthorityRef(fixture.worktreeRoot);
+    const refusingFs = forwardWorkspaceFs(nodeWorkspaceFs);
+    const realPath = vi.spyOn(refusingFs, "realPath").mockImplementation((path: string): string => {
+      if (path === fixture.worktreeRoot || path.startsWith(`${fixture.worktreeRoot}/`)) {
+        throw new Error("managed port refuses this path");
+      }
+      return nodeWorkspaceFs.realPath(path);
+    });
+
+    const result = await handleEditorAgentVerificationRun(
+      ctx({
+        schemaVersion: "1",
+        sessionId: MANAGED_SESSION_ID,
+        kind: "targeted-test",
+        targetPath: "src.ts",
+        authorityRef,
+        rootBinding: sessionRootBinding(),
+      }),
+      managedDeps(
+        manager,
+        (requestedRoot) => managedAccess(requestedRoot, refusingFs, fixture.repositoryRoot),
+        fixture.repositoryRoot,
+      ),
+    );
+
+    expect(resultBody(result)).toMatchObject({
+      outcome: "not-run",
+      disposition: "denied",
+      reason: "workspace-boundary-escape",
+    });
+    expect(realPath).toHaveBeenCalled();
+    expect(manager.calls).toBe(0);
+  });
+
+  it("admits a contained target through the managed port and takes trust from the repository", async () => {
+    // Both halves at once: the boundary check reads through the access port (asserted by the spy),
+    // and the execution-class trust decision comes from the REPOSITORY root. Asking
+    // `trustLevelForRoot` about the worktree — the root the previous code passed — answers
+    // "restricted", which denies with `workspace-restricted` and never reaches the runner.
+    registerManagedSession(fixture.worktreeRoot, true);
+    const manager = new FakeManager();
+    manager.report = { ...failingReport(), workspaceRoot: fixture.worktreeRoot };
+    const authorityRef = managedAuthorityRef(fixture.worktreeRoot);
+    const accessFs = forwardWorkspaceFs(nodeWorkspaceFs);
+    const realPath = vi.spyOn(accessFs, "realPath");
+
+    const result = await handleEditorAgentVerificationRun(
+      ctx({
+        schemaVersion: "1",
+        sessionId: MANAGED_SESSION_ID,
+        kind: "targeted-test",
+        targetPath: "src.ts",
+        authorityRef,
+        rootBinding: sessionRootBinding(),
+      }),
+      managedDeps(
+        manager,
+        (requestedRoot) => managedAccess(requestedRoot, accessFs, fixture.repositoryRoot),
+        fixture.repositoryRoot,
+      ),
+    );
+
+    expect(resultBody(result)).toMatchObject({ outcome: "completed" });
+    expect(realPath).toHaveBeenCalledWith(join(fixture.worktreeRoot, "src.ts"));
+    expect(manager.calls).toBe(1);
+  });
+
+  // ADR-0147 D3, asked of verificationRunner.ts's `worktreeSharesRepositoryTrustBasis` rather than
+  // restated: the repository's package-script grant covers the worktree only while the worktree's
+  // own `package.json` IS that same fact. A governed run can rewrite its own manifest, so an
+  // inherited grant must not survive that edit.
+  it.each([
+    ["a matching package manifest", true, "completed", 1],
+    ["a rewritten package manifest", false, "not-run", 0],
+  ] as const)(
+    "inherits the repository grant only with %s",
+    async (_label, manifestsMatch, outcome, calls) => {
+      registerManagedSession(fixture.worktreeRoot, false);
+      const manifest = JSON.stringify({ name: "fixture", scripts: { typecheck: "tsc" } });
+      writeFileSync(join(fixture.repositoryRoot, "package.json"), manifest, "utf8");
+      writeFileSync(
+        join(fixture.worktreeRoot, "package.json"),
+        manifestsMatch ? manifest : `${manifest}\n`,
+        "utf8",
+      );
+      const manager = new FakeManager();
+      manager.report = { ...failingReport(), workspaceRoot: fixture.worktreeRoot };
+      const authorityRef = managedAuthorityRef(fixture.worktreeRoot);
+
+      const result = await handleEditorAgentVerificationRun(
+        ctx({
+          schemaVersion: "1",
+          sessionId: MANAGED_SESSION_ID,
+          kind: "typecheck",
+          authorityRef,
+        }),
+        managedDeps(
+          manager,
+          (requestedRoot) => managedAccess(requestedRoot, nodeWorkspaceFs, fixture.repositoryRoot),
+          fixture.repositoryRoot,
+        ),
+      );
+
+      expect(resultBody(result)).toMatchObject({ outcome });
+      if (outcome === "not-run") {
+        expect(resultBody(result)).toMatchObject({
+          disposition: "denied",
+          reason: "workspace-restricted",
+        });
+      }
+      expect(manager.calls).toBe(calls);
+    },
+  );
+
+  // CodeRabbit, PR #3381 (outside the diff, agentVerificationRoute.ts:194): the POLICY-time access
+  // lookup asked the resolver without a correlation id, so a `workspace.root.denied` line emitted
+  // by THIS lookup — the one that can observe an access change between the two root-binding checks
+  // — landed under UNKNOWN_CORRELATION_ID, and the policy then answered `workspace-restricted` and
+  // returned before `runAndRespond` could emit its correlated refusal. The double records every
+  // `(root, correlationId)` pair the route asks for; the run completing proves the policy-time
+  // lookup really ran (it is what maps the worktree to the repository whose grant is trusted here),
+  // and the recorded set proves no call — that one included — was made without the request's id.
+  it("asks the policy-time access resolver with the request's correlation id, never undefined", async () => {
+    // >= 8 chars from the correlation alphabet, so `isValidCorrelationId` accepts it and
+    // `verificationCorrelationId` resolves the authority runId rather than answering undefined.
+    const runId = "run-local-1";
+    registerManagedSession(fixture.worktreeRoot, false);
+    const manifest = JSON.stringify({ name: "fixture", scripts: { typecheck: "tsc" } });
+    writeFileSync(join(fixture.repositoryRoot, "package.json"), manifest, "utf8");
+    writeFileSync(join(fixture.worktreeRoot, "package.json"), manifest, "utf8");
+    const manager = new FakeManager();
+    manager.report = { ...failingReport(), workspaceRoot: fixture.worktreeRoot };
+    const authorityRef = managedAuthorityRef(fixture.worktreeRoot, runId);
+    expect(authorityRef.runId).toBe(runId);
+    const seen: (string | undefined)[] = [];
+
+    const result = await handleEditorAgentVerificationRun(
+      ctx({
+        schemaVersion: "1",
+        sessionId: MANAGED_SESSION_ID,
+        kind: "typecheck",
+        authorityRef,
+      }),
+      managedDeps(
+        manager,
+        (requestedRoot, correlationId?: string): WorkspaceRootAccessOutcome => {
+          seen.push(correlationId);
+          return managedAccess(requestedRoot, nodeWorkspaceFs, fixture.repositoryRoot);
+        },
+        fixture.repositoryRoot,
+      ),
+    );
+
+    expect(resultBody(result)).toMatchObject({ outcome: "completed" });
+    expect(manager.calls).toBe(1);
+    expect(seen.length).toBeGreaterThan(0);
+    // One id for every lookup the request makes — containment AND the policy-time trust lookup.
+    expect([...new Set(seen)]).toEqual([runId]);
+  });
+
+  // The REQUEST's own correlation id (`RouteContext.correlationId`) outranks the authority run id
+  // for every resolver lookup the request makes — containment and the policy-time trust lookup —
+  // so a denial observed by either lands on the request's timeline (CodeRabbit, PR #3381).
+  it("records every resolver lookup under the request's correlation id when the route has one", async () => {
+    registerManagedSession(fixture.worktreeRoot, false);
+    const manifest = JSON.stringify({ name: "fixture", scripts: { typecheck: "tsc" } });
+    writeFileSync(join(fixture.repositoryRoot, "package.json"), manifest, "utf8");
+    writeFileSync(join(fixture.worktreeRoot, "package.json"), manifest, "utf8");
+    const manager = new FakeManager();
+    manager.report = { ...failingReport(), workspaceRoot: fixture.worktreeRoot };
+    const authorityRef = managedAuthorityRef(fixture.worktreeRoot, "run-local-1");
+    const seen: (string | undefined)[] = [];
+
+    const result = await handleEditorAgentVerificationRun(
+      ctx(
+        { schemaVersion: "1", sessionId: MANAGED_SESSION_ID, kind: "typecheck", authorityRef },
+        "request-correlation-9c",
+      ),
+      managedDeps(
+        manager,
+        (requestedRoot, correlationId?: string): WorkspaceRootAccessOutcome => {
+          seen.push(correlationId);
+          return managedAccess(requestedRoot, nodeWorkspaceFs, fixture.repositoryRoot);
+        },
+        fixture.repositoryRoot,
+      ),
+    );
+
+    expect(resultBody(result)).toMatchObject({ outcome: "completed" });
+    expect(seen.length).toBeGreaterThan(1);
+    expect([...new Set(seen)]).toEqual(["request-correlation-9c"]);
+  });
+
+  // A policy refusal ends the request before `runAndRespond`, so the runner-refusal diagnostic was
+  // never reached and the decision that closed the request left no line on its timeline.
+  it("records an early policy refusal as a body-free diagnostic under the request's id", async () => {
+    const manager = new FakeManager();
+    const authorityRef = registerAuthority();
+    const records: unknown[] = [];
+
+    const result = await handleEditorAgentVerificationRun(
+      ctx(
+        { schemaVersion: "1", sessionId: SESSION_ID, kind: "typecheck", authorityRef },
+        "request-correlation-8d",
+      ),
+      { ...deps(manager), diagnostics: { record: (record): void => void records.push(record) } },
+      {
+        decide: (): EditorAgentActionPolicyDecision => ({
+          disposition: "denied",
+          effectClass: "execution",
+          origin: "agent",
+          denyReason: "workspace-restricted",
+        }),
+      },
+    );
+
+    expect(resultBody(result)).toMatchObject({ outcome: "not-run", disposition: "denied" });
+    expect(manager.calls).toBe(0);
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "request-correlation-8d",
+        operation: "editor.verification.execute",
+        source: "editor.agent-verification-route",
+        errorClass: "workspace-restricted",
+        message: "verification-refused",
+      }),
+    ]);
+  });
+
+  // Re-targeted for #3382/L-6: `WorkspaceRootAccess` is now a discriminated union whose
+  // `managed-task` branch REQUIRES `repositoryRoot`, so the route's "a managed access that names no
+  // repository" branch — and the pin that drove it — became unconstructable. The invariant that
+  // branch protected is the one asserted here instead, and it is still live: a managed worktree's
+  // package-script decision is taken from its REPOSITORY, never from its own unregistered root. The
+  // worktree root is the ONLY root this deps bundle trusts and both manifests agree, so the run can
+  // only be admitted by a route that asks about the worktree — which is exactly the fallback ADR-0147
+  // D3 forbids.
+  it("never falls back to the worktree's own root for the package-script decision", async () => {
+    registerManagedSession(fixture.worktreeRoot, false);
+    const manifest = JSON.stringify({ name: "fixture", scripts: { typecheck: "tsc" } });
+    writeFileSync(join(fixture.repositoryRoot, "package.json"), manifest, "utf8");
+    writeFileSync(join(fixture.worktreeRoot, "package.json"), manifest, "utf8");
+    const manager = new FakeManager();
+    const authorityRef = managedAuthorityRef(fixture.worktreeRoot);
+
+    const result = await handleEditorAgentVerificationRun(
+      ctx({
+        schemaVersion: "1",
+        sessionId: MANAGED_SESSION_ID,
+        kind: "typecheck",
+        authorityRef,
+      }),
+      managedDeps(
+        manager,
+        (requestedRoot) => managedAccess(requestedRoot, nodeWorkspaceFs, fixture.repositoryRoot),
+        fixture.worktreeRoot,
+      ),
+    );
+
+    expect(resultBody(result)).toMatchObject({
+      outcome: "not-run",
+      disposition: "denied",
+      reason: "workspace-restricted",
+    });
+    expect(manager.calls).toBe(0);
+  });
 });

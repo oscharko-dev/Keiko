@@ -3,7 +3,7 @@
 // content-free lifecycle streaming without a real spawn. Route-level coverage lives in
 // verificationRoutes.test.ts.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -167,10 +167,14 @@ function makeManager(
 
 describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
   it("uses managed-root access for planning and execution and fails closed when denied", async () => {
+    // `repositoryRoot` is production-shaped: `canonicalManagedRootAccess` sets it on EVERY granted
+    // managed access, and since #3382 `WorkspaceRootAccess`'s `managed-task` member REQUIRES it, so
+    // the fixture has to carry the field this root's own grant is resolved through.
     const access: WorkspaceRootAccess = {
       kind: "managed-task",
       canonicalRoot: workspaceRoot,
       fs: nodeWorkspaceFs,
+      repositoryRoot: workspaceRoot,
     };
     const port = fakePort(report(["typecheck"]));
     const manager = makeManager({
@@ -186,6 +190,257 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
     expect(() =>
       makeManager({ resolveWorkspaceRootAccess: () => undefined }).discover(workspaceRoot),
     ).toThrow(expect.objectContaining({ code: "PROJECT_NOT_FOUND" }));
+  });
+
+  // Re-targeted for #3382/L-6. CodeRabbit, PR #3381 had pinned the `repositoryRoot === undefined`
+  // branch — a managed worktree naming no repository used to fall through to the ORDINARY trust
+  // path (`trustProjectId: projectId`, `trustBasisMatches: true`), taking its package-script
+  // decision from its own unregistered root with the ADR-0147 D3 basis-equality guard skipped.
+  // `WorkspaceRootAccess`'s `managed-task` member now REQUIRES `repositoryRoot`, so that shape is
+  // unconstructable and the branch is gone. What the pin uniquely covered and no sibling test does
+  // is the OTHER half: when the basis guard refuses script kinds, `targeted-test` — a
+  // Keiko-synthesized invocation exempt from script trust — must still run, through the access
+  // port. The refusal is now driven by the reachable cause (a worktree manifest that is not the
+  // repository's byte-identical fact) instead of the removed one.
+  it("refuses script kinds on a broken worktree trust basis, and still runs targeted-test", async () => {
+    const worktreeRoot = mkdtempSync(join(tmpdir(), "keiko-verify-basis-targeted-"));
+    try {
+      writeFileSync(
+        join(worktreeRoot, "package.json"),
+        PACKAGE_JSON.replace('"typecheck"', '"typecheck-renamed"'),
+        "utf8",
+      );
+      mkdirSync(join(worktreeRoot, "src"), { recursive: true });
+      writeFileSync(join(worktreeRoot, "src", "a.test.ts"), "test('x', () => {});\n", "utf8");
+      const access: WorkspaceRootAccess = {
+        kind: "managed-task",
+        canonicalRoot: worktreeRoot,
+        fs: nodeWorkspaceFs,
+        repositoryRoot: workspaceRoot,
+      };
+      const port = fakePort(report(["targeted-test"]));
+      const manager = makeManager({
+        resolveWorkspaceRootAccess: () => access,
+        execute: port.port,
+        isWorkspaceTrustedForPackageScripts: () => true,
+      });
+
+      expect(
+        manager.discover(worktreeRoot).kinds.find((entry) => entry.kind === "typecheck")
+          ?.trustState,
+      ).toBe("approval-required");
+      expect(() =>
+        manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] })),
+      ).toThrow(expect.objectContaining({ code: "WORKSPACE_TRUST_REQUIRED" }));
+      const { done } = collect(manager);
+      manager.execute(
+        input({ projectId: worktreeRoot, kinds: ["targeted-test"], targetPath: "src/a.test.ts" }),
+      );
+      await done;
+      expect(port.fileSystems).toEqual([nodeWorkspaceFs]);
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  // A managed task worktree carries no script-trust grant of its own (production DOES register it
+  // as a project row — deps.ts `ensureManagedTaskWorkspaceIdentity` — but a row is not a trust
+  // decision); the root access resolver proves the root and names the repository whose grant
+  // governs it. This exercises the no-row shape, where `managedAccessFor` answers instead of
+  // `accessFor`; either way the decision comes from the repository, never the worktree's own root,
+  // which is what refused every governed verification inside a task workspace before this
+  // (workbench end-to-end run, 2026-09-03).
+  it("resolves a managed task worktree without a project row and takes script trust from its repository", async () => {
+    const worktreeRoot = mkdtempSync(join(tmpdir(), "keiko-verify-worktree-"));
+    // A REAL, resolvable directory the production resolver would grant ORDINARY access to. The
+    // fake mirrors that grant instead of answering `undefined`, so the `managed-task` kind filter
+    // in `managedAccessFor` is the ONLY thing that still produces PROJECT_NOT_FOUND below. With a
+    // fake that refuses the root outright the assertion passed with the filter deleted
+    // (`return access;`) and pinned nothing (PR #3381 review) — and the filter is what keeps the
+    // production resolver's ordinary grant for ANY existing allowed directory out of the
+    // unregistered path, where `targeted-test` is not trust-gated.
+    const elsewhereRoot = mkdtempSync(join(tmpdir(), "keiko-verify-elsewhere-"));
+    writeFileSync(join(elsewhereRoot, "package.json"), PACKAGE_JSON, "utf8");
+    try {
+      writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
+      mkdirSync(join(worktreeRoot, "src"), { recursive: true });
+      writeFileSync(join(worktreeRoot, "src", "a.test.ts"), "test('x', () => {});\n", "utf8");
+      const port = fakePort(report(["typecheck"]));
+      const trustChecks: string[] = [];
+      const manager = makeManager({
+        resolveWorkspaceRootAccess: (root): WorkspaceRootAccess | undefined =>
+          root === worktreeRoot
+            ? {
+                kind: "managed-task",
+                canonicalRoot: worktreeRoot,
+                fs: nodeWorkspaceFs,
+                repositoryRoot: workspaceRoot,
+              }
+            : { kind: "ordinary", canonicalRoot: root, fs: nodeWorkspaceFs },
+        execute: port.port,
+        isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean => {
+          trustChecks.push(`${projectId}|${workspace.root}`);
+          return projectId === workspaceRoot;
+        },
+      });
+
+      const catalog = manager.discover(worktreeRoot);
+      expect(catalog.kinds.find((entry) => entry.kind === "typecheck")?.trustState).toBe("trusted");
+      const { done } = collect(manager);
+      manager.execute(input({ projectId: worktreeRoot }));
+      await done;
+      expect(port.calls).toBe(1);
+      // The decider sees the repository's own (canonical) workspace, never the worktree's.
+      expect(new Set(trustChecks)).toEqual(
+        new Set([`${workspaceRoot}|${realpathSync(workspaceRoot)}`]),
+      );
+      // An unregistered ORDINARY root is still no project — even though the resolver grants it.
+      expect(() => manager.discover(elsewhereRoot)).toThrow(
+        expect.objectContaining({ code: "PROJECT_NOT_FOUND" }),
+      );
+      expect(() =>
+        manager.execute(input({ projectId: elsewhereRoot, kinds: ["targeted-test"] })),
+      ).toThrow(expect.objectContaining({ code: "PROJECT_NOT_FOUND" }));
+    } finally {
+      rmSync(elsewhereRoot, { recursive: true, force: true });
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  // The resolver's OWN refusal line (`workspace.root.denied`, emitted inside the production
+  // resolver) landed under UNKNOWN_CORRELATION_ID because the runner called it with one argument,
+  // so a denial that blocked a verification could not be joined to the run that asked for it
+  // (PR #3381 review). Both run entry points hand the resolver the run's correlation; `discover`
+  // has no run and passes none, which the third row pins so the parameter stays optional.
+  it("hands the run's correlation id to the workspace root access resolver", async () => {
+    const seen: (string | undefined)[] = [];
+    const port = fakePort(report(["typecheck"]));
+    const manager = makeManager({
+      resolveWorkspaceRootAccess: (root, correlationId): WorkspaceRootAccess => {
+        seen.push(correlationId);
+        return { kind: "ordinary", canonicalRoot: root, fs: nodeWorkspaceFs };
+      },
+      execute: port.port,
+      isWorkspaceTrustedForPackageScripts: () => true,
+    });
+
+    const { done } = collect(manager);
+    manager.execute(input({ correlationId: "run-correlation-a" }));
+    await done;
+    await manager.runToReport(
+      input({ correlationId: "run-correlation-b" }),
+      new AbortController().signal,
+    );
+    manager.discover(workspaceRoot);
+
+    expect(seen).toEqual(["run-correlation-a", "run-correlation-b", undefined]);
+  });
+
+  // ADR-0147 D3 binds the grant to exact `package.json` bytes. A governed run can rewrite its own
+  // worktree manifest, so inheriting the repository's grant may only hold while the worktree is
+  // that same fact — otherwise the rewritten script would run under a decision no human made for
+  // it (P1, PR #3381 review).
+  it("refuses a managed worktree whose package.json differs from its repository's", async () => {
+    const worktreeRoot = mkdtempSync(join(tmpdir(), "keiko-verify-basis-"));
+    try {
+      writeFileSync(
+        join(worktreeRoot, "package.json"),
+        PACKAGE_JSON.replace('"typecheck"', '"typecheck-renamed"'),
+        "utf8",
+      );
+      mkdirSync(join(worktreeRoot, "src"), { recursive: true });
+      writeFileSync(join(worktreeRoot, "src", "a.test.ts"), "test('x', () => {});\n", "utf8");
+      const port = fakePort(report(["typecheck"]));
+      const manager = makeManager({
+        resolveWorkspaceRootAccess: (root): WorkspaceRootAccess | undefined =>
+          root === worktreeRoot
+            ? {
+                kind: "managed-task",
+                canonicalRoot: worktreeRoot,
+                fs: nodeWorkspaceFs,
+                repositoryRoot: workspaceRoot,
+              }
+            : undefined,
+        execute: port.port,
+        isWorkspaceTrustedForPackageScripts: (): boolean => true,
+      });
+
+      expect(() =>
+        manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] })),
+      ).toThrow(expect.objectContaining({ code: "WORKSPACE_TRUST_REQUIRED" }));
+      expect(port.calls).toBe(0);
+      // The same worktree with a byte-identical manifest keeps the repository's grant.
+      writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
+      const { done } = collect(manager);
+      manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] }));
+      await done;
+      expect(port.calls).toBe(1);
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  // The at-effect gate must RE-READ the worktree basis, not replay a comparison taken once at
+  // resolution time. The worktree manifest here is byte-identical to its repository's when the plan
+  // is built and is replaced before the run is admitted — exactly the "another process rewrote
+  // package.json between the two checks" window (P1, PR #3381 review). The trust decider is the
+  // deterministic clock for that window: `trustedForScripts` calls it AFTER the plan-time basis read
+  // and the at-effect basis read happens after the plan is built, so a rewrite issued from inside
+  // the first decider call lands strictly between the two checks. `manifestRewritten` proves the
+  // window really was entered mid-flight (the plan-time gate had already admitted), and `port.calls`
+  // proves npm was never handed the bytes nobody approved.
+  it("re-reads the worktree trust basis at the effect boundary and never spawns a manifest rewritten between the checks", async () => {
+    const worktreeRoot = mkdtempSync(join(tmpdir(), "keiko-verify-toctou-"));
+    try {
+      writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
+      mkdirSync(join(worktreeRoot, "src"), { recursive: true });
+      writeFileSync(join(worktreeRoot, "src", "a.test.ts"), "test('x', () => {});\n", "utf8");
+      const port = fakePort(report(["typecheck"]));
+      let rewriteOnNextTrustCheck = false;
+      let manifestRewritten = false;
+      const manager = makeManager({
+        resolveWorkspaceRootAccess: (root): WorkspaceRootAccess | undefined =>
+          root === worktreeRoot
+            ? {
+                kind: "managed-task",
+                canonicalRoot: worktreeRoot,
+                fs: nodeWorkspaceFs,
+                repositoryRoot: workspaceRoot,
+              }
+            : undefined,
+        execute: port.port,
+        isWorkspaceTrustedForPackageScripts: (): boolean => {
+          if (rewriteOnNextTrustCheck) {
+            rewriteOnNextTrustCheck = false;
+            manifestRewritten = true;
+            // Still a valid manifest carrying every planned script, so the refusal below can only
+            // come from the trust basis — never from NO_RUNNABLE_STEPS.
+            writeFileSync(
+              join(worktreeRoot, "package.json"),
+              PACKAGE_JSON.replace('"tsc --noEmit"', '"tsc --noEmit && node ./attacker.js"'),
+              "utf8",
+            );
+          }
+          return true;
+        },
+      });
+
+      // Control: no rewrite, so the repository's standing grant still covers the worktree.
+      const { done } = collect(manager);
+      manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] }));
+      await done;
+      expect(port.calls).toBe(1);
+
+      rewriteOnNextTrustCheck = true;
+      expect(() =>
+        manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] })),
+      ).toThrow(expect.objectContaining({ code: "WORKSPACE_TRUST_REQUIRED", status: 403 }));
+      expect(manifestRewritten).toBe(true);
+      expect(port.calls).toBe(1);
+      expect(manager.inFlightCount()).toBe(0);
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
   });
 
   it("denies a script-backed kind when the workspace is untrusted, without starting a run", () => {

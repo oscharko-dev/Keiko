@@ -202,6 +202,14 @@ describe("getActive / list", () => {
     expect(() => service.list("")).toThrow(TaskWorkspaceError);
   });
 
+  // The switcher's inventory: the pointer is global, so it spans every repository.
+  it("lists every persisted instance across repositories", () => {
+    store.upsert(instance("a"));
+    store.upsert(instance("b", { repositoryId: "repo_other", repositoryRoot: "/other" }));
+    expect(service.listAll()).toHaveLength(2);
+    expect(service.list(REPO_ROOT)).toHaveLength(1);
+  });
+
   it("self-heals a dangling pointer (instance gone) to unbound mode", () => {
     const inst = store.upsert(instance("a"));
     pointerStore.set({
@@ -214,9 +222,16 @@ describe("getActive / list", () => {
     expect(pointerStore.get()).toBeUndefined();
   });
 
-  it("self-heals an active pointer whose persisted path no longer contains to the managed root", () => {
+  // Relocated (PR #3381, CodeRabbit): this pin encodes the MARKER-FREE refusal — a contained tree
+  // that exists and proves its identity under a path the identity does not derive. Its fixture used
+  // to sit outside the managed root, which is the contract's `path-escape` fact and now persists that
+  // marker (see the path-escape pin below); the invariant here is unchanged: a line, no row.
+  it("refuses a contained tree under a non-derived path with a line and no drift row", () => {
     const inst = store.upsert(instance("a"));
-    const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-lifecycle-escape-")));
+    const outside = join(managedRoot, REPO_ID, "not-the-derived-spelling");
+    mkdirSync(outside, { recursive: true });
+    const activityLog = createBufferedServerLogSink();
+    const reading = lifecycleWith(fakeProvisioning(), activityLog);
     try {
       store.upsert({ ...inst, managedWorktreePath: outside });
       pointerStore.set({
@@ -224,8 +239,21 @@ describe("getActive / list", () => {
         setBy: "op",
         atIso: "2026-06-26T00:00:00.000Z",
       });
-      expect(service.getActive()).toBeUndefined();
+      expect(reading.getActive("active-read-unbindable")).toBeUndefined();
       expect(pointerStore.get()).toBeUndefined();
+      // The refusal that carries no marker of its own still carries a LINE: a persisted path that
+      // is not the one this identity derives is not a containment incident, so it gets the line and
+      // no drift row (#3376 review) — but never silence, because the caller drops the binding here
+      // exactly as it does for the other refusals (PR #3381 review).
+      const line = activityLog.events.find((event) => event.errorKind === "POINTER_DRIFT");
+      expect(line?.correlationId).toBe("active-read-unbindable");
+      expect(line?.extra).toMatchObject({
+        operation: "activate",
+        outcome: "blocked",
+        workspaceId: inst.workspaceId,
+      });
+      // No row was written for it: the marker-free refusal reports itself and nothing else.
+      expect(store.getById(inst.workspaceId)?.driftMarkers).toEqual([]);
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
@@ -249,34 +277,75 @@ describe("getActive / list", () => {
     expect(observed).toEqual([inst.managedWorktreePath]);
   });
 
-  it("fails closed when persisted active identity cannot be repaired after restart", () => {
+  it("fails closed when persisted active identity cannot be repaired after restart, and logs why", () => {
     const inst = store.upsert(instance("restart-failure"));
     pointerStore.set({
       workspaceId: inst.workspaceId,
       setBy: "op",
       atIso: "2026-06-26T00:00:00.000Z",
     });
+    const activityLog = createBufferedServerLogSink();
     const restarted = lifecycleWith(
       fakeProvisioning(() => {
         throw new Error("identity store unavailable");
       }),
+      activityLog,
     );
 
-    expect(restarted.getActive()).toBeUndefined();
+    expect(restarted.getActive("active-read-identity-failed")).toBeUndefined();
     expect(pointerStore.get()).toBeUndefined();
+    // The last refusal on this read that clears the pointer. It used to swallow the cause in a bare
+    // `catch { return false; }`, so the operator's binding disappeared with nothing in `server.log`
+    // to tie it to — the same gap the three refusals inside canExposeBinding had (PR #3381 review).
+    const line = activityLog.events.find((event) => event.errorKind === "PROVISIONING_FAILED");
+    expect(line?.correlationId).toBe("active-read-identity-failed");
+    expect(line?.extra).toMatchObject({ operation: "activate" });
+    expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
+    // Body-free: the seam's own message never reaches the line.
+    expect(activityLog.lines().join("\n")).not.toContain("identity store unavailable");
   });
 
-  it("fails closed and clears the active pointer when identity repair is unavailable", () => {
+  // Observed live on 2026-09-03: a startup reconcile had flagged the pointed-at workspace
+  // `recovery-required`, the read cleared the pointer, and the log carried nothing an operator could
+  // tie their vanished binding to.
+  it("logs why a pointer to a non-bindable lifecycle is cleared on the active read", () => {
+    const inst = store.upsert(instance("restart-flagged", { lifecycleState: "recovery-required" }));
+    pointerStore.set({
+      workspaceId: inst.workspaceId,
+      setBy: "op",
+      atIso: "2026-06-26T00:00:00.000Z",
+    });
+    const activityLog = createBufferedServerLogSink();
+    const restarted = lifecycleWith(fakeProvisioning(), activityLog);
+
+    expect(restarted.getActive("active-read-0001")).toBeUndefined();
+    expect(pointerStore.get()).toBeUndefined();
+    const line = activityLog.events.find((event) => event.errorKind === "ILLEGAL_TRANSITION");
+    expect(line?.correlationId).toBe("active-read-0001");
+    expect(line?.extra).toMatchObject({
+      operation: "activate",
+      outcome: "blocked",
+      workspaceId: inst.workspaceId,
+    });
+  });
+
+  it("fails closed and logs when the identity-repair seam is not wired at all", () => {
     const inst = store.upsert(instance("restart-without-identity-hook"));
     pointerStore.set({
       workspaceId: inst.workspaceId,
       setBy: "op",
       atIso: "2026-06-26T00:00:00.000Z",
     });
-    const restarted = lifecycleWith(fakeProvisioning("omit"));
+    const activityLog = createBufferedServerLogSink();
+    const restarted = lifecycleWith(fakeProvisioning("omit"), activityLog);
 
-    expect(restarted.getActive()).toBeUndefined();
+    expect(restarted.getActive("active-read-identity-unwired")).toBeUndefined();
     expect(pointerStore.get()).toBeUndefined();
+    // A missing seam is the same operator symptom as a seam that threw, so it gets the same line
+    // rather than an unexplained unbound application.
+    const line = activityLog.events.find((event) => event.errorKind === "PROVISIONING_FAILED");
+    expect(line?.correlationId).toBe("active-read-identity-unwired");
+    expect(line?.extra).toMatchObject({ operation: "activate" });
   });
 });
 
@@ -647,12 +716,148 @@ describe("identity proof before bindings and readiness", () => {
       workspaceId: inst.workspaceId,
       driftMarker: "identity-schema-retired",
     });
+    // The row has to AGREE with the pointer that was just dropped. Logging the refusal alone left
+    // inventory showing `active`/`healthy` with no markers while `GET /active` was already unbound,
+    // and Repair only appears where a hint exists — so the operator saw an active-looking workspace
+    // with no way to fix it until the next startup reconcile ran (PR #3381 review).
+    const flagged = store.getById(inst.workspaceId);
+    expect(flagged?.lifecycleState).toBe("recovery-required");
+    expect(flagged?.health).toBe("drifted");
+    expect(flagged?.driftMarkers).toEqual(["identity-schema-retired"]);
+    expect(flagged?.recoveryHints).toEqual([
+      {
+        marker: "identity-schema-retired",
+        strategy: "reconcile-pointer",
+        operatorActionRequired: false,
+      },
+    ]);
+    expect(flagged?.lock).toBeNull();
   });
 
+  // Every identity verdict the read refuses leaves the SAME row shape, through the same owner as a
+  // readiness transition, so a bind refusal and a handoff refusal cannot describe one fact
+  // differently.
+  it.each([
+    { drift: "unsupported", marker: "identity-unsupported" },
+    { drift: "changed", marker: "gitdir-mismatch" },
+    { drift: "unproven", marker: "pointer-stale" },
+  ] as const)(
+    "flags the row with $marker when the active read finds a $drift identity",
+    ({ drift, marker }) => {
+      const inst = store.upsert(instance(`read-${marker}`.slice(0, 20)));
+      pointerStore.set({
+        workspaceId: inst.workspaceId,
+        setBy: "op",
+        atIso: "2026-06-26T00:00:00.000Z",
+      });
+      const refusing = lifecycleWith(
+        fakeProvisioning(),
+        undefined,
+        capturingEvidence(),
+        () => drift,
+      );
+
+      expect(refusing.getActive()).toBeUndefined();
+
+      const flagged = store.getById(inst.workspaceId);
+      expect(flagged?.lifecycleState).toBe("recovery-required");
+      expect(flagged?.driftMarkers).toEqual([marker]);
+      expect(flagged?.recoveryHints).not.toEqual([]);
+    },
+  );
+
+  // The other structural refusal on the read path: the worktree directory is gone. It used to
+  // return false with no line and no row at all.
+  // A persisted path outside the managed root is the contract's `path-escape` fact — the marker a
+  // live pass persists for `!pathContained` — so the read-time refusal persists the same one instead
+  // of leaving the row `active`/`healthy` with no recovery hint (CodeRabbit, PR #3381).
+  it("flags a persisted path outside the managed root as path-escape on the active read", () => {
+    const escaped = realpathSync(mkdtempSync(join(tmpdir(), "keiko-lifecycle-escape-")));
+    try {
+      const inst = store.upsert(instance("read-escape", { managedWorktreePath: escaped }));
+      pointerStore.set({
+        workspaceId: inst.workspaceId,
+        setBy: "op",
+        atIso: "2026-06-26T00:00:00.000Z",
+      });
+      const activityLog = createBufferedServerLogSink();
+      const reading = lifecycleWith(fakeProvisioning(), activityLog);
+
+      expect(reading.getActive("active-read-escape")).toBeUndefined();
+      expect(pointerStore.get()).toBeUndefined();
+
+      const flagged = store.getById(inst.workspaceId);
+      expect(flagged?.lifecycleState).toBe("recovery-required");
+      expect(flagged?.driftMarkers).toEqual(["path-escape"]);
+      expect(flagged?.recoveryHints.map((hint) => hint.strategy)).toEqual(["operator-repair"]);
+      const line = activityLog.events.find((event) => event.errorKind === "POINTER_DRIFT");
+      expect(line?.correlationId).toBe("active-read-escape");
+      expect(line?.extra).toMatchObject({
+        operation: "activate",
+        workspaceId: inst.workspaceId,
+        driftMarker: "path-escape",
+      });
+    } finally {
+      rmSync(escaped, { recursive: true, force: true });
+    }
+  });
+
+  // A contained, non-derived path that points at NO tree is classified by the existence check —
+  // `worktree-missing` on the row — rather than refused with a line only.
+  it("classifies a contained but non-derived path through the same checks as a derived one", () => {
+    const inst = store.upsert(
+      instance("read-nonderived", {
+        managedWorktreePath: join(managedRoot, REPO_ID, "not-the-derived-directory"),
+      }),
+    );
+    pointerStore.set({
+      workspaceId: inst.workspaceId,
+      setBy: "op",
+      atIso: "2026-06-26T00:00:00.000Z",
+    });
+    const reading = lifecycleWith(fakeProvisioning(), createBufferedServerLogSink());
+
+    expect(reading.getActive("active-read-nonderived")).toBeUndefined();
+    expect(store.getById(inst.workspaceId)?.driftMarkers).toEqual(["worktree-missing"]);
+  });
+
+  it("flags a vanished worktree on the active read instead of refusing silently", () => {
+    const inst = store.upsert(instance("read-missing"));
+    pointerStore.set({
+      workspaceId: inst.workspaceId,
+      setBy: "op",
+      atIso: "2026-06-26T00:00:00.000Z",
+    });
+    rmSync(inst.managedWorktreePath, { recursive: true, force: true });
+    const activityLog = createBufferedServerLogSink();
+    const reading = lifecycleWith(fakeProvisioning(), activityLog);
+
+    expect(reading.getActive("active-read-missing")).toBeUndefined();
+    expect(pointerStore.get()).toBeUndefined();
+
+    const flagged = store.getById(inst.workspaceId);
+    expect(flagged?.lifecycleState).toBe("recovery-required");
+    expect(flagged?.health).toBe("missing");
+    expect(flagged?.driftMarkers).toEqual(["worktree-missing"]);
+    const line = activityLog.events.find((event) => event.errorKind === "POINTER_DRIFT");
+    expect(line?.correlationId).toBe("active-read-missing");
+    expect(line?.extra).toMatchObject({
+      operation: "activate",
+      outcome: "retry-required",
+      workspaceId: inst.workspaceId,
+      driftMarker: "worktree-missing",
+    });
+  });
+
+  // `changed` (a readable pointer proving another identity) carries the contract's
+  // `gitdir-mismatch` marker — the SAME marker reconciliation persists for that fact, with the
+  // executable `reconcile-pointer` strategy; `unproven` (no readable pointer at all) keeps the
+  // operator-guided `pointer-stale`. Relocated pin: `changed` used to map to `pointer-stale`.
   it.each([
     { drift: "schema-retired", marker: "identity-schema-retired", strategy: "reconcile-pointer" },
     { drift: "unsupported", marker: "identity-unsupported", strategy: "operator-repair" },
-    { drift: "changed", marker: "pointer-stale", strategy: "operator-repair" },
+    { drift: "changed", marker: "gitdir-mismatch", strategy: "reconcile-pointer" },
+    { drift: "unproven", marker: "pointer-stale", strategy: "operator-repair" },
   ] as const)(
     "refuses handoff on a $drift identity and flags the row with $marker",
     async ({ drift, marker, strategy }) => {

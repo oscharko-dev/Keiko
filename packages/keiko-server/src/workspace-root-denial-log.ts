@@ -36,6 +36,32 @@ export function recordWorkspaceRootDenial(
   });
 }
 
+// Why a request for a path under Keiko's private managed-workspace root was refused before any
+// workspace identity could be examined. A 403 that leaves no line is not reconstructible: an
+// unpaired browser tab reading an active managed worktree's editor settings produced exactly that
+// (observed live, 2026-09-03).
+// A request that names the managed root itself, never a workspace inside it, is not a member: it
+// reaches `resolveManagedWorkspaceRootAccess`, which records its own classified denial (#3381).
+export type ManagedRootRequestDenialReason =
+  // No live launcher-paired app session accompanied the request.
+  "managed-root-session-authority-missing";
+
+export function recordManagedRootRequestDenial(
+  reason: ManagedRootRequestDenialReason,
+  context: WorkspaceRootDenialLogContext,
+): void {
+  createServerLogger({
+    sink: context.activityLog ?? processServerLogSink(),
+    level: "debug",
+  }).warn({
+    category: "security",
+    op: "workspace.root.denied",
+    correlationId: correlationIdOrUnknown(context.correlationId),
+    errorKind: "DENIED",
+    extra: { decision: "denied", reason },
+  });
+}
+
 export function resolveRecordedWorkspaceRoot(
   fs: WorkspaceFs,
   lexicalRoot: string,

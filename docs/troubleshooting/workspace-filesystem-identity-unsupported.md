@@ -30,14 +30,17 @@ mistake for an attack when it is really a migration.
 
 `managed-root-identity-schema-retired` on the activity log — or, from the provisioning path, the
 drift message "managed worktree identity predates the current identity rule; re-register to reissue
-it" — means the workspace was registered under the retired identity rule, and under that rule its
-authenticity is unproven: not disproven, but not established either. That proof was built from the
-device and inode numbers of the worktree's Git pointer files and directories alone; it lacked the
-creation time the current rule binds to each of them and to the worktree root. An inode number is
-REUSED: deleting a directory and recreating it at the same path hands the new directory the old
-number, so the retired proof cannot separate an authentic worktree from a same-path replacement —
-which is why a matching retired proof is never read as "the worktree is intact". Inspect the tree
-before re-registering it, or recreate it.
+it" — means the workspace was registered under a retired identity rule, and under that rule its
+authenticity is unproven: not disproven, but not established either. The retired rules are the
+original one (before #3367), which hashed the `.git` pointer's target text and so is reproduced by
+any same-path replacement, and the inode-only one (#3367), which was built from the device and
+inode numbers of the worktree's Git pointer files and directories and lacked the creation time the
+current rule binds to each of them and to the worktree root. An inode number is REUSED: deleting a
+directory and recreating it at the same path hands the new directory the old number, so neither
+retired proof can separate an authentic worktree from a same-path replacement — which is why a
+matching retired proof is never read as "the worktree is intact". Inspect the tree before
+re-registering it, or recreate it. The operator flow is in
+[task-workspace-identity-rule-retired.md](task-workspace-identity-rule-retired.md).
 
 Re-register the workspace through the `reconcile-pointer` repair with operator approval
 (`operatorApproved: true` on the repair request) to reissue the proof; it re-materialises the
@@ -65,10 +68,19 @@ failure such as `EIO` or `EACCES` on one of the identity's components — and it
 503). The active-workspace read answers it instead of silently unbinding the application; health and
 reconciliation carry that one workspace forward unverified (health `unknown`, `recovery-required`,
 not cleanup-eligible) and keep working on the others; governed cleanup and repair fail closed on it;
-provisioning refuses without deleting a worktree it did not create. A deterministic refusal of the
-pointer file by the descriptor-safe read (a symlink, a hard link, an oversized file) is not this case —
-it is an unproven identity, and retrying will not change it. The activity-log line carries the cause
-chain and frames.
+provisioning refuses without deleting a worktree it did not create. The activity-log line carries
+the cause chain and frames.
+
+Two refusals that look similar are NOT this case, because retrying them can never change the
+answer — both are an **unproven** identity and carry the `pointer-stale` marker:
+
+- A deterministic refusal of the pointer file by the descriptor-safe read: a symlink, a hard link,
+  an oversized file, or a lineage that changed under the read.
+- A component of the identity that is **absent** (`ENOENT`, or `ENOTDIR` on an ancestor) — the
+  partially removed worktree whose `.git` pointer was deleted while the tree stayed. Classifying
+  that as a proof failure answered every bind with a retryable 503 that could not succeed, and
+  persisted no marker, so the row stayed `active`/`healthy` in the inventory with no Repair offer
+  until a reconcile pass happened to run.
 
 Before an identity is minted, every volume it hashes is proven to keep a durable creation time: the
 managed root by a probe entry Keiko creates and removes, the repository volume read-only from the
@@ -83,10 +95,13 @@ timestamp granule.
 ## Diagnostic Steps for the managed boundary
 
 Grep the activity log for `decision: "denied"` and read the `reason` discriminator. The
-`workspace.root.denied` line has two body-free shapes: a classified denial carries `errorKind`
+`workspace.root.denied` line has three body-free shapes: a classified denial carries `errorKind`
 `WORKSPACE_MANAGED_AUTHORITY_DENIED` with `extra: { decision, reason }`; a resolution failure (the proof
 itself threw) carries the caught error's classified `errorKind` with `extra: { decision, reason, frames?,
-causeChain? }` — dist-anchored frames and error class names, never messages. Neither shape ever carries
+causeChain? }` — dist-anchored frames and error class names, never messages; a request refused before
+any proof ran (no launcher-paired app session — `reason`
+`managed-root-session-authority-missing`) carries the fixed `errorKind`
+`DENIED` with `extra: { decision, reason }` and no frames. No shape ever carries
 the workspace path, the repository path, or the stored identity. The correlation id ties the refusal to the request or
 lifecycle operation that triggered it: health reports and governed cleanup pass their own, so the
 denial sits in that operation's timeline.

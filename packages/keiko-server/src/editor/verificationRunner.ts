@@ -35,6 +35,7 @@ import {
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { resolveTrustBasisFact, trustBasisFactsMatch } from "../workspace-script-trust.js";
 import {
   appendEditorVerificationRunEvidence,
   buildEditorVerificationInterruptedEvidenceEntry,
@@ -125,9 +126,19 @@ export interface VerificationRunnerManagerOptions {
   readonly evidenceStore?: EvidenceStore | undefined;
   readonly redactor?: ((input: string) => string) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
-  readonly resolveWorkspaceRootAccess?:
-    ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
+  readonly resolveWorkspaceRootAccess?: VerificationWorkspaceRootAccessResolver | undefined;
 }
+
+// The resolver carries the run's own correlation id so ITS refusal line (`workspace.root.denied`,
+// emitted inside the production resolver) joins the run that asked for it. Without the second
+// argument every denial that refused a verification landed under UNKNOWN_CORRELATION_ID and
+// `keiko support analyze --correlation-id <run>` showed the refusal nowhere (PR #3381 review). The
+// parameter is optional, so a one-argument resolver (every existing test fake) is still a valid
+// substitute.
+export type VerificationWorkspaceRootAccessResolver = (
+  requestedRoot: string,
+  correlationId?: string,
+) => WorkspaceRootAccess | undefined;
 
 // ─── Project resolution (private per-module copy, established convention — command-runner.ts:94) ──
 
@@ -150,6 +161,22 @@ interface InFlightRun {
 interface ResolvedVerificationWorkspace {
   readonly access: WorkspaceRootAccess;
   readonly workspace: WorkspaceInfo;
+  // The project whose standing script trust governs this workspace, and that project's own
+  // workspace facts: the project itself, or for a managed task worktree the repository it was bound
+  // from (the trust decider checks the workspace root against the project root, so a worktree's
+  // facts would never match its repository's grant).
+  readonly trustProjectId: string;
+  readonly trustWorkspace: WorkspaceInfo;
+  // The repository root the root that will actually run scripts must STILL match — the roots, not
+  // the boolean they compare to. The grant is bound to exact manifest bytes (ADR-0147 D3), so a
+  // comparison taken once at resolution time and reused at the effect boundary would accept a
+  // `package.json` replaced between the two checks and spawn a script no human approved (P1,
+  // PR #3381 review). `trustedForScripts` therefore re-derives the comparison from these roots on
+  // every ask, so the at-effect answer is read from the filesystem in the same synchronous step
+  // that admits the run. `undefined` for an ordinary root, which is its own basis and has nothing to
+  // compare against; a managed access always names one (`WorkspaceRootAccess`'s `managed-task`
+  // branch REQUIRES `repositoryRoot`).
+  readonly trustBasisRepositoryRoot: string | undefined;
 }
 
 class VerificationRunnerManagerImpl implements VerificationRunnerManager {
@@ -162,8 +189,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private readonly evidenceStore: EvidenceStore | undefined;
   private readonly redactor: (input: string) => string;
   private readonly diagnostics: ServerDiagnosticSink | undefined;
-  private readonly rootAccessResolver:
-    ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
+  private readonly rootAccessResolver: VerificationWorkspaceRootAccessResolver | undefined;
   private readonly runs = new Map<string, InFlightRun>();
   private readonly subscribers = new Set<VerificationRunnerEventEmitter>();
 
@@ -201,7 +227,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     const resolved = this.resolveWorkspace(projectId);
     const { workspace } = resolved;
     const catalog = detectScripts(workspace, resolved.access.fs);
-    const trusted = this.trustedForScripts(projectId, workspace);
+    const trusted = this.trustedForScripts(resolved);
     const runnable = isRunnableTestFramework(workspace);
     return {
       schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
@@ -211,11 +237,10 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   };
 
   public readonly execute = (input: VerificationRunInput): VerificationRunStart => {
-    const resolved = this.resolveWorkspace(input.projectId);
-    const { workspace } = resolved;
-    const plan = this.buildPlan(workspace, input, resolved.access.fs);
+    const resolved = this.resolveWorkspace(input.projectId, input.correlationId);
+    const plan = this.buildPlan(resolved, input);
     this.assertRunnable(plan);
-    this.assertWorkspaceTrustAtEffect(input, workspace);
+    this.assertWorkspaceTrustAtEffect(resolved, input);
     const runId = randomUUID();
     const controller = new AbortController();
     this.runs.set(runId, {
@@ -248,11 +273,11 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     input: VerificationRunInput,
     signal: AbortSignal,
   ): Promise<VerificationReport> => {
-    const resolved = this.resolveWorkspace(input.projectId);
+    const resolved = this.resolveWorkspace(input.projectId, input.correlationId);
     const { workspace } = resolved;
-    const plan = this.buildPlan(workspace, input, resolved.access.fs);
+    const plan = this.buildPlan(resolved, input);
     this.assertRunnable(plan);
-    this.assertWorkspaceTrustAtEffect(input, workspace);
+    this.assertWorkspaceTrustAtEffect(resolved, input);
     const runId = randomUUID();
     const controller = new AbortController();
     const forwardAbort = (): void => {
@@ -327,12 +352,13 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   }
 
   private buildPlan(
-    workspace: WorkspaceInfo,
+    resolved: ResolvedVerificationWorkspace,
     input: VerificationRunInput,
-    fs: WorkspaceFs,
   ): VerificationPlan {
+    const { workspace } = resolved;
+    const fs = resolved.access.fs;
     const scriptKinds = input.kinds.filter(isScriptBackedKind);
-    this.assertWorkspaceTrustForScriptKinds(input.projectId, workspace, scriptKinds);
+    this.assertWorkspaceTrustForScriptKinds(resolved, scriptKinds);
     const steps = [
       ...this.scriptSteps(workspace, scriptKinds, fs),
       ...this.targetedSteps(workspace, input, fs),
@@ -341,22 +367,17 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   }
 
   private assertWorkspaceTrustAtEffect(
+    resolved: ResolvedVerificationWorkspace,
     input: VerificationRunInput,
-    workspace: WorkspaceInfo,
   ): void {
-    this.assertWorkspaceTrustForScriptKinds(
-      input.projectId,
-      workspace,
-      input.kinds.filter(isScriptBackedKind),
-    );
+    this.assertWorkspaceTrustForScriptKinds(resolved, input.kinds.filter(isScriptBackedKind));
   }
 
   private assertWorkspaceTrustForScriptKinds(
-    projectId: string,
-    workspace: WorkspaceInfo,
+    resolved: ResolvedVerificationWorkspace,
     scriptKinds: readonly VerificationKind[],
   ): void {
-    if (scriptKinds.length === 0 || this.trustedForScripts(projectId, workspace)) return;
+    if (scriptKinds.length === 0 || this.trustedForScripts(resolved)) return;
     throw new VerificationRunnerError(
       "WORKSPACE_TRUST_REQUIRED",
       "Repository package scripts require server-side workspace trust before execution.",
@@ -626,39 +647,103 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     });
   }
 
-  private trustedForScripts(projectId: string, workspace: WorkspaceInfo): boolean {
+  private trustedForScripts(resolved: ResolvedVerificationWorkspace): boolean {
     try {
-      return this.isTrusted(projectId, workspace);
+      return (
+        this.trustBasisMatchesNow(resolved) &&
+        this.isTrusted(resolved.trustProjectId, resolved.trustWorkspace)
+      );
     } catch {
       return false;
     }
   }
 
-  private resolveWorkspace(projectId: string): ResolvedVerificationWorkspace {
+  // Re-derived from the filesystem on EVERY ask — plan time, at-effect, and catalog projection —
+  // never cached on the resolved workspace. See `ResolvedVerificationWorkspace.trustBasisRepositoryRoot`.
+  private trustBasisMatchesNow(resolved: ResolvedVerificationWorkspace): boolean {
+    const repositoryRoot = resolved.trustBasisRepositoryRoot;
+    // An ORDINARY root is its own trust basis and has nothing to compare against — and it is now the
+    // only kind that reaches this branch, because `WorkspaceRootAccess`'s `managed-task` member
+    // REQUIRES `repositoryRoot`. The previous fail-closed answer for "a managed access naming no
+    // repository" (CodeRabbit, PR #3381) guarded a configuration the type no longer admits.
+    if (repositoryRoot === undefined) return true;
+    return worktreeSharesRepositoryTrustBasis(resolved.access, repositoryRoot, this.fs);
+  }
+
+  private resolveWorkspace(
+    projectId: string,
+    correlationId?: string,
+  ): ResolvedVerificationWorkspace {
     const project = projectFor(this.store, projectId);
-    if (project === undefined) {
-      throw new VerificationRunnerError("PROJECT_NOT_FOUND", "Project not found.");
-    }
-    let access: WorkspaceRootAccess | undefined;
-    try {
-      access =
-        this.rootAccessResolver?.(project.path) ??
-        (this.rootAccessResolver === undefined
-          ? { kind: "ordinary", canonicalRoot: this.fs.realPath(project.path), fs: this.fs }
-          : undefined);
-    } catch {
-      access = undefined;
-    }
+    // A managed task worktree's package-script decision is never taken from its OWN row. Production
+    // does register the worktree as a project (deps.ts `ensureManagedTaskWorkspaceIdentity` calls
+    // `createProject(managedWorktreePath)` on provision/activate), so `project` is usually defined
+    // here and `accessFor` returns the managed grant; the branch below covers the case where no row
+    // resolves for the requested root. Either way the root access resolver is what proves the root
+    // (lifecycle row, identity, containment) and names the repository whose script trust governs
+    // it, valid only while the worktree manifest is that same trust-basis fact (ADR-0147 D3).
+    // Before this, script trust was looked up for the worktree's own unregistered root and every
+    // governed verification inside a task workspace was refused (workbench end-to-end run,
+    // 2026-09-03). An unregistered ORDINARY root still fails closed here.
+    const access =
+      project === undefined
+        ? this.managedAccessFor(projectId, correlationId)
+        : this.accessFor(project.path, correlationId);
     if (access === undefined) {
       throw new VerificationRunnerError(
         "PROJECT_NOT_FOUND",
-        "Project root path could not be resolved.",
+        project === undefined ? "Project not found." : "Project root path could not be resolved.",
       );
+    }
+    const workspace = detectWorkspaceAt(access.canonicalRoot, access.fs);
+    const repositoryRoot = access.kind === "managed-task" ? access.repositoryRoot : undefined;
+    if (repositoryRoot === undefined) {
+      return {
+        access,
+        workspace,
+        trustProjectId: projectId,
+        trustWorkspace: workspace,
+        // An ordinary root is its own basis, so there is nothing to compare against.
+        trustBasisRepositoryRoot: undefined,
+      };
     }
     return {
       access,
-      workspace: detectWorkspaceAt(access.canonicalRoot, access.fs),
+      workspace,
+      trustProjectId: repositoryRoot,
+      trustWorkspace: detectWorkspaceAt(repositoryRoot, this.fs, {
+        scanSourceFilesForLanguages: false,
+      }),
+      trustBasisRepositoryRoot: repositoryRoot,
     };
+  }
+
+  private accessFor(
+    projectPath: string,
+    correlationId: string | undefined,
+  ): WorkspaceRootAccess | undefined {
+    try {
+      return (
+        this.rootAccessResolver?.(projectPath, correlationId) ??
+        (this.rootAccessResolver === undefined
+          ? { kind: "ordinary", canonicalRoot: this.fs.realPath(projectPath), fs: this.fs }
+          : undefined)
+      );
+    } catch {
+      return undefined;
+    }
+  }
+
+  private managedAccessFor(
+    root: string,
+    correlationId: string | undefined,
+  ): WorkspaceRootAccess | undefined {
+    try {
+      const access = this.rootAccessResolver?.(root, correlationId);
+      return access?.kind === "managed-task" ? access : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private emit(event: EditorVerificationEvent): void {
@@ -680,6 +765,32 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       errorClass: "VerificationSubscriber",
       message: "A verification event subscriber failed.",
     });
+  }
+}
+
+/**
+ * The package-script grant is bound to the granted root's exact `package.json` bytes (ADR-0147 D3),
+ * so a managed task worktree may only run scripts under its repository's grant while its own
+ * manifest is that same fact. A governed run can edit `package.json` inside its worktree; without
+ * this the runner would answer "trusted" from the repository's record and spawn the rewritten
+ * script with no human decision (P1, PR #3381 review). Fails closed on any unreadable manifest.
+ *
+ * Exported so the agent verification route (`agentVerificationRoute.ts`), which composes its own
+ * policy decision from the same standing grant before this runner is reached, asks THIS rule
+ * instead of restating it — one definition of "may this worktree run its repository's scripts".
+ */
+export function worktreeSharesRepositoryTrustBasis(
+  access: WorkspaceRootAccess,
+  repositoryRoot: string,
+  repositoryFs: WorkspaceFs,
+): boolean {
+  try {
+    return trustBasisFactsMatch(
+      resolveTrustBasisFact(access.fs, access.canonicalRoot),
+      resolveTrustBasisFact(repositoryFs, repositoryRoot),
+    );
+  } catch {
+    return false;
   }
 }
 

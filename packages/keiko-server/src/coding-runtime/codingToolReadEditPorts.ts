@@ -18,6 +18,11 @@ import {
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
+import {
+  correlationIdOrUnknown,
+  isValidCorrelationId,
+  UNKNOWN_CORRELATION_ID,
+} from "../correlation.js";
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
 import { isExactEditorAgentChangeset, type CodingToolReadResult } from "./codingToolIpc.js";
 import type { CodingToolActionOf, GovernedCodingToolPort } from "./codingToolGovernedDelegate.js";
@@ -165,7 +170,7 @@ function executeDiscoverSync(
     }
     return { status: "completed", read: discoveryReadResult(text) };
   } catch (error) {
-    emitDiscoveryFailureDiagnostic(deps.diagnostics, binding, request.actionId, error);
+    emitDiscoveryFailureDiagnostic(deps.diagnostics, binding, error);
     return { status: "failed" };
   }
 }
@@ -184,19 +189,19 @@ function discoveryWorkspace(deps: CodingToolReadEditPortDeps): DiscoveryWorkspac
   return root === undefined ? undefined : { root };
 }
 
-const SAFE_DISCOVERY_CORRELATION_ID = /^[A-Za-z0-9:._-]{1,128}$/u;
-
+// Same rule as `editCorrelationId`/`editContextCorrelationId` below: the run id is the timeline a
+// discovery failure belongs to, and the ONE sanctioned stand-in when there is no run in scope is
+// UNKNOWN_CORRELATION_ID (correlation.ts, AGENTS.md §8). The local `[A-Za-z0-9:._-]{1,128}` regex
+// this replaced admitted the tool action id — a `session:call` shape the sink rewrites to
+// "invalid-correlation-id" — and otherwise fell back to an ad-hoc literal, so a wiring with no
+// producer binding logged a line indistinguishable from a hostile id (PR #3381 review).
 function emitDiscoveryFailureDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
   binding: RuntimeProducerBinding | undefined,
-  actionId: string,
   error: unknown,
 ): void {
-  const candidate = binding?.runId ?? actionId;
   emitServerDiagnostic(diagnostics, {
-    correlationId: SAFE_DISCOVERY_CORRELATION_ID.test(candidate)
-      ? candidate
-      : "coding-discovery-failure",
+    correlationId: correlationIdOrUnknown(binding?.runId),
     timestamp: new Date().toISOString(),
     operation: "coding-runtime.workspace-discovery",
     source: "coding-tool-read-edit-ports.discover",
@@ -391,6 +396,12 @@ interface PreparedEdit {
   readonly workspaceRoot: string | undefined;
 }
 
+// EVERY failed exit here carries a closed reason code and one `edit-refused` line. The two that did
+// not — the prepare stage refusing (malformed changeset, revoked mutation guard, cross-wired
+// producer binding, unresolvable editor context) and the post-session-bind workspace-access recheck
+// — returned a bare `{ status: "failed" }` with nothing in the activity log, which is exactly the
+// workbench failure mode this file's diagnostic was added for: the model saw a retryable-looking
+// failure and re-issued the edit while the log stayed empty (cursor review, PR #3381).
 async function executeEdit(
   deps: CodingToolReadEditPortDeps,
   request: EditorChangesetRequest,
@@ -398,7 +409,10 @@ async function executeEdit(
   mutationGuard: CodingToolMutationGuard,
 ): Promise<EditOutcome> {
   const prepared = prepareEdit(deps, request, signal, mutationGuard);
-  if (prepared === undefined) return { status: "failed" };
+  if (prepared === undefined) {
+    return editRefused(deps, editContextCorrelationId(deps), "EDIT_PREPARE_FAILED");
+  }
+  const correlationId = editCorrelationId(prepared.action);
   try {
     const action = await bindLiveEditorSession(
       deps.editorAgentClient,
@@ -408,22 +422,32 @@ async function executeEdit(
     );
     if (action === undefined) {
       discardMutationLease(deps, prepared.leaseRequest);
-      return { status: "failed", reasonCode: "NO_ACTIVE_SESSION" };
+      return editRefused(deps, correlationId, "NO_ACTIVE_SESSION");
     }
     if (!hasLiveWorkspaceAccess(deps)) {
       discardMutationLease(deps, prepared.leaseRequest);
-      return { status: "failed" };
+      return editRefused(deps, correlationId, "WORKSPACE_ACCESS_LOST");
     }
     const result = await deps.editorAgentClient.action(action, prepared.signal);
-    const completed = result.ok && editorStatusCompleted(result.value.result.status);
-    if (completed) return { status: "completed" };
+    if (result.ok && editorStatusCompleted(result.value.result.status)) {
+      return { status: "completed" };
+    }
     discardMutationLease(deps, prepared.leaseRequest);
-    return { status: "failed", reasonCode: editFailureReasonCode(result) };
+    return editRefused(deps, correlationId, editFailureReasonCode(result));
   } catch (error) {
     discardMutationLease(deps, prepared.leaseRequest);
-    emitEditFailureDiagnostic(deps.diagnostics, prepared.action.actionId, error);
+    emitEditFailureDiagnostic(deps.diagnostics, correlationId, error);
     return { status: "failed", reasonCode: "EDIT_TRANSPORT_ERROR" };
   }
+}
+
+function editRefused(
+  deps: CodingToolReadEditPortDeps,
+  correlationId: string,
+  reasonCode: string | undefined,
+): EditOutcome {
+  emitEditRefusedDiagnostic(deps.diagnostics, correlationId, reasonCode);
+  return { status: "failed", reasonCode };
 }
 
 // The closed vocabulary a rejected edit can name (EditorAgentConflictCode/EditorAgentFailureCode
@@ -438,18 +462,53 @@ function editFailureReasonCode(
   return outcome.conflict?.code ?? outcome.failure?.code;
 }
 
+// The run id is the timeline an edit failure belongs to; the tool action id carries the sidecar's
+// `session:call` shape, which the diagnostics sink rejects as a correlation id (it wrote
+// "invalid-correlation-id" on every edit diagnostic before this, end-to-end run 2026-09-03).
+function editCorrelationId(action: EditorAgentAction): string {
+  const runId = action.authorityRef?.runId;
+  return runId !== undefined && isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID;
+}
+
+// The prepare stage can refuse before any action exists, so that refusal takes its correlation from
+// the run's own editor context instead of an action that was never built. Same run id, same
+// timeline: a prepare refusal and an editor-route refusal for one run join on the one key.
+function editContextCorrelationId(deps: CodingToolReadEditPortDeps): string {
+  const runId = resolveEditorContext(deps)?.authorityRef.runId;
+  return runId !== undefined && isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID;
+}
+
 function emitEditFailureDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
-  actionId: string,
+  correlationId: string,
   error: unknown,
 ): void {
   emitServerDiagnostic(diagnostics, {
-    correlationId: SAFE_DISCOVERY_CORRELATION_ID.test(actionId) ? actionId : "coding-edit-failure",
+    correlationId,
     timestamp: new Date().toISOString(),
     operation: "coding-runtime.editor-changeset",
     source: "coding-tool-read-edit-ports.edit",
     errorClass: contentFreeErrorClass(error),
     message: "edit-transport-failed",
+  });
+}
+
+// A governed edit the editor route refused (a policy denial, a conflict, a failed apply) is a
+// decision the activity log must be able to reconstruct: before this line the only trace was the
+// in-memory audit feed, and a workbench run that could never edit a file left an empty log
+// (end-to-end run, 2026-09-03). The reason is the closed editor-agent vocabulary, never content.
+function emitEditRefusedDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string,
+  reasonCode: string | undefined,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.editor-changeset",
+    source: "coding-tool-read-edit-ports.edit",
+    errorClass: reasonCode ?? "unclassified",
+    message: "edit-refused",
   });
 }
 

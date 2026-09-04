@@ -4,9 +4,17 @@ import {
   codingWorkbenchStreamRunId,
   useCodingWorkbenchPairingEffect,
   useCodingWorkbenchWorkspaceEffect,
+  useCodingWorkbenchRuntimeRefreshEffects,
 } from "./coding-workbench-runtime-effects";
 import { STREAMABLE_RUNTIME_STATES } from "./useCodingWorkbenchRuntime";
-import type { CodingWorkbenchRuntimeState } from "./coding-workbench-live-state";
+import {
+  createInitialCodingWorkbenchRuntimeState,
+  type CodingWorkbenchRuntimeState,
+} from "./coding-workbench-live-state";
+import {
+  GATEWAY_CONFIG_UPDATED_EVENT,
+  GATEWAY_MODEL_READINESS_UPDATED_EVENT,
+} from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
 
 const manifestAccessMock = vi.hoisted(() => vi.fn());
 vi.mock("./workspace-manifest-api", async (importOriginal) => {
@@ -148,5 +156,38 @@ describe("useCodingWorkbenchWorkspaceEffect", () => {
     });
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith({ kind: "resource-loading", resource: "workspace" });
+  });
+});
+
+describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
+  // Settings replaces the gateway configuration and records readiness verdicts without this
+  // window knowing; the source stayed "unavailable" after tool calling had just been verified
+  // until a reload (workbench end-to-end run, 2026-09-03).
+  it("re-reads the source and the runtime posture when Settings announces a gateway change", async () => {
+    const refreshRuntime = vi.fn(() => Promise.resolve());
+    const refreshSource = vi.fn(() => Promise.resolve());
+    const refreshRun = vi.fn(() => Promise.resolve());
+    const { unmount } = renderHook(() => {
+      useCodingWorkbenchRuntimeRefreshEffects({
+        state: createInitialCodingWorkbenchRuntimeState(),
+        refreshRuntime,
+        refreshSource,
+        refreshRun,
+      });
+    });
+    await waitFor(() => {
+      expect(refreshSource).toHaveBeenCalledTimes(1);
+    });
+
+    window.dispatchEvent(new CustomEvent(GATEWAY_MODEL_READINESS_UPDATED_EVENT));
+    window.dispatchEvent(new CustomEvent(GATEWAY_CONFIG_UPDATED_EVENT));
+
+    await waitFor(() => {
+      expect(refreshSource).toHaveBeenCalledTimes(3);
+      expect(refreshRuntime).toHaveBeenCalledTimes(3);
+    });
+    unmount();
+    window.dispatchEvent(new CustomEvent(GATEWAY_CONFIG_UPDATED_EVENT));
+    expect(refreshSource).toHaveBeenCalledTimes(3);
   });
 });

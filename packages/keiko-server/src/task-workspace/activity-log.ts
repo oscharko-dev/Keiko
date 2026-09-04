@@ -106,7 +106,8 @@ export interface WorkspaceLifecycleLogInput {
   // `errorKind` out of nothing.
   readonly errorCode?: string | undefined;
   // The classified drift marker when the outcome is a drift verdict, so the log can tell a migration
-  // (`identity-schema-retired`), a platform limitation (`identity-unsupported`) and a replacement
+  // (`identity-schema-retired`), a platform limitation (`identity-unsupported`), a readable pointer
+  // proving a different identity (`gitdir-mismatch`) and a missing or corrupt pointer
   // (`pointer-stale`) apart without the evidence store (#3376 review P2).
   readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
 }

@@ -1,4 +1,8 @@
 import {
+  editorAgentPathBoundaryReason,
+  type EditorAgentResolvedRoot,
+} from "./agentRootBoundary.js";
+import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -29,6 +33,12 @@ import type {
   EditorAgentSessionSnapshot,
   WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  isWorkspaceManifestDigest,
+  isWorkspaceManifestRef,
+  isWorkspaceRootIdentityDigest,
+  isWorkspaceRootRef,
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
@@ -103,6 +113,12 @@ function handleEditorAgentActions(
 }
 
 const HASH = "a".repeat(64);
+
+// Narrows a fixture literal through the contract's own guard instead of casting to the brand.
+function branded<T>(value: string, guard: (candidate: unknown) => candidate is T): T {
+  if (!guard(value)) throw new Error(`fixture value does not satisfy the contract guard: ${value}`);
+  return value;
+}
 const PREPARED_CHANGESET_WIRE_LIMIT_BYTES = 65_536;
 const PATCH_SOURCE_LIMIT_BYTES = 1_000_000;
 let bridgeDecisionCapability: string | undefined;
@@ -545,6 +561,7 @@ function runtimeMutationDeps(
       kind: "managed-task",
       canonicalRoot: requestedRoot,
       fs: nodeWorkspaceFs,
+      repositoryRoot: requestedRoot,
     }),
 ): Parameters<typeof handleEditorAgentActions>[1] {
   return { runtimeMutationLease, workspaceRootAccessResolver };
@@ -2692,6 +2709,60 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
       expect(actionResultStatus(result.body)).toBe("queued");
     });
 
+    // Cursor review, PR #3381: the boundary check was repaired to run through the port a managed
+    // task worktree's access minted, but `inspectAdmissionAction` still hardcoded the plain node
+    // port for `applyPatch`, so a single-file patch inside such a worktree failed preflight as
+    // OUT_OF_SCOPE / INVALID_EDITS. The managed port is the ONLY source of the pre-image here — the
+    // bytes on disk do not match the patch — so reverting that hunk turns this 202 into a conflict.
+    it("inspects an applyPatch pre-image through the port the managed access resolved", async () => {
+      const srcDir = join(tmpDir, "src");
+      mkdirSync(srcDir);
+      const preImage = "export const VALUE = 1;\n";
+      // Same byte length as the pre-image (so nothing downstream reports the file as changed
+      // mid-validation) but a different value, which the patch context cannot match.
+      writeFileSync(join(srcDir, "widget.ts"), "export const VALUE = 9;\n", "utf8");
+      await registerSnapshot(tmpDir, "src/widget.ts");
+      const accessFs = forwardWorkspaceFs(nodeWorkspaceFs);
+      const accessRead = vi
+        .spyOn(accessFs, "readFileUtf8")
+        .mockImplementation((path: string): string =>
+          path === join(srcDir, "widget.ts") ? preImage : nodeWorkspaceFs.readFileUtf8(path),
+        );
+      const deps = {
+        workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+          grantedWorkspaceRootAccess({
+            kind: "managed-task",
+            canonicalRoot: requestedRoot,
+            fs: accessFs,
+            repositoryRoot: requestedRoot,
+          }),
+      } satisfies Parameters<typeof handleEditorAgentActions>[1];
+
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            type: "applyPatch",
+            idempotencyKey: "ik-managed-patch",
+            actionId: "a-managed-patch",
+            expectedContentHash: HASH,
+            patch: [
+              "--- a/src/widget.ts",
+              "+++ b/src/widget.ts",
+              "@@ -1,1 +1,1 @@",
+              "-export const VALUE = 1;",
+              "+export const VALUE = 42;",
+            ].join("\n"),
+          }),
+        ),
+        deps,
+      );
+
+      expect(result.status).toBe(202);
+      expect(actionResultStatus(result.body)).toBe("queued");
+      expect(accessRead).toHaveBeenCalledWith(join(srcDir, "widget.ts"));
+      expect(JSON.stringify(result.body)).not.toContain("VALUE = 9");
+    });
+
     it("preserves chat origin on queued applyPatch and emits content-free audit (#2119)", async () => {
       const relativePath = "src/chat-origin.ts";
       const srcDir = join(tmpDir, "src");
@@ -4165,6 +4236,42 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     },
   );
 
+  // A Keiko-managed task worktree lives below the state directory's always-denied segment. The
+  // boundary check answers "does the path leave the resolved root" through the port the managed
+  // access minted; through the plain node port it re-admitted the root under the user-workspace
+  // rules and refused every path inside the worktree as an escape, which denied every governed
+  // coding edit (workbench end-to-end run, 2026-09-03).
+  it("keeps a path inside a managed task worktree on its root through the access port", () => {
+    const fixture = createManagedAgentWorkspaceFixture();
+    try {
+      writeWorkspaceFile(fixture.root, "src/a.txt", "A0\n");
+      const access = fixture.resolveAccess(fixture.root);
+      if (access.decision !== "granted") throw new Error("expected managed-root access");
+      const root: EditorAgentResolvedRoot = {
+        workspaceRoot: fixture.root,
+        binding: {
+          workspaceId: "ws-managed",
+          manifestRef: branded("manifest-managed", isWorkspaceManifestRef),
+          manifestRevision: 1,
+          manifestDigest: branded(HASH, isWorkspaceManifestDigest),
+          rootRef: branded("root-managed", isWorkspaceRootRef),
+          rootIdentityDigest: branded(HASH, isWorkspaceRootIdentityDigest),
+        },
+        explicitBindingRequired: true,
+      };
+
+      expect(editorAgentPathBoundaryReason(root, ["src/a.txt"], access.access.fs)).toBeNull();
+      expect(editorAgentPathBoundaryReason(root, ["src/new.txt"], access.access.fs)).toBeNull();
+      expect(editorAgentPathBoundaryReason(root, ["../escape.txt"], access.access.fs)).toBe(
+        "workspace-boundary-escape",
+      );
+      // The plain node port still applies the user-workspace admission to the same root.
+      expect(editorAgentPathBoundaryReason(root, ["src/a.txt"])).toBe("workspace-boundary-escape");
+    } finally {
+      fixture.dispose();
+    }
+  });
+
   it("applies a runtime changeset through freshly resolved managed-root authority", async () => {
     const fixture = createManagedAgentWorkspaceFixture();
     try {
@@ -4190,7 +4297,9 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       const committed = await postActionResult(proposed, "succeeded", "session-1", undefined, deps);
 
       expect(actionResultStatus(committed.body)).toBe("succeeded");
-      expect(resolveAccess).toHaveBeenCalledTimes(3);
+      // Five live proofs: the root boundary checks at submission and at the posted result run
+      // through the managed access port too (2026-09-03), ahead of the inspection and apply proofs.
+      expect(resolveAccess).toHaveBeenCalledTimes(5);
       expect(runtimeMutationLease.claim).toHaveBeenCalledOnce();
       expect(readWorkspaceFile(fixture.root, "src/a.txt")).toBe("A1\n");
       expect(readWorkspaceFile(fixture.root, "src/b.txt")).toBe("B1\n");
@@ -4334,6 +4443,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
         kind: "managed-task",
         canonicalRoot: requestedRoot,
         fs: accessFs,
+        repositoryRoot: requestedRoot,
       });
     });
     const writeFileUtf8 = vi.fn((_path: string, _content: string): void => {
@@ -4373,7 +4483,8 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(runtimeMutationLease.matches).toHaveBeenCalledTimes(1);
     expect(runtimeMutationLease.claim).toHaveBeenCalledTimes(1);
     expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(expect.any(Object), true);
-    expect(resolveWorkspaceRootAccess).toHaveBeenCalledTimes(3);
+    // Boundary checks at submission and at the posted result add two proofs (2026-09-03).
+    expect(resolveWorkspaceRootAccess).toHaveBeenCalledTimes(5);
     expect(accessRead).toHaveBeenCalled();
     expect(order).toEqual(expect.arrayContaining(["claim", "access", "write"]));
     expect(order.indexOf("claim")).toBeLessThan(order.indexOf("write"));
@@ -4400,11 +4511,14 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       const resolveWorkspaceRootAccess = vi.fn(
         (requestedRoot: string): WorkspaceRootAccessOutcome => {
           proofCount += 1;
-          if (proofCount < 3) {
+          // Proofs 1-2 admit the submission, 3-4 the posted result's boundary check and
+          // projection; the apply's own re-proof is the fifth and must fail closed (2026-09-03).
+          if (proofCount < 5) {
             return grantedWorkspaceRootAccess({
               kind: "managed-task",
               canonicalRoot: requestedRoot,
               fs: nodeWorkspaceFs,
+              repositoryRoot: requestedRoot,
             });
           }
           return outcome === "revoked"
@@ -4413,6 +4527,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
                 kind: "managed-task",
                 canonicalRoot: join(requestedRoot, "replacement"),
                 fs: nodeWorkspaceFs,
+                repositoryRoot: requestedRoot,
               });
         },
       );
@@ -4435,7 +4550,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       );
 
       expect(actionResultStatus(denied.body)).toBe("failed");
-      expect(resolveWorkspaceRootAccess).toHaveBeenCalledTimes(3);
+      expect(resolveWorkspaceRootAccess).toHaveBeenCalledTimes(5);
       expect(runtimeMutationLease.claim).toHaveBeenCalledOnce();
       expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(
         expect.any(Object),

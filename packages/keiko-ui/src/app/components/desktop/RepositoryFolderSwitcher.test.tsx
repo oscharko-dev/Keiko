@@ -111,13 +111,15 @@ function api(overrides: Partial<ActiveWorkspaceApi> = {}): ActiveWorkspaceApi {
     loading: false,
     switching: false,
     error: null,
+    inventoryUnavailable: false,
     refresh: vi.fn(() => Promise.resolve(true)),
-    switchTo: vi.fn(() => Promise.resolve()),
-    clearActive: vi.fn(() => Promise.resolve()),
-    pause: vi.fn(() => Promise.resolve()),
-    resume: vi.fn(() => Promise.resolve()),
-    prepareHandoff: vi.fn(() => Promise.resolve()),
-    provision: vi.fn(() => Promise.resolve()),
+    switchTo: vi.fn(() => Promise.resolve(true)),
+    clearActive: vi.fn(() => Promise.resolve(true)),
+    pause: vi.fn(() => Promise.resolve(true)),
+    resume: vi.fn(() => Promise.resolve(true)),
+    prepareHandoff: vi.fn(() => Promise.resolve(true)),
+    repair: vi.fn(() => Promise.resolve(true)),
+    provision: vi.fn(() => Promise.resolve(true)),
     ...overrides,
   };
 }
@@ -303,6 +305,32 @@ describe("RepositoryFolderSwitcher", () => {
       throw new Error("Expected the task override to clear before folder activation");
     }
     expect(clearOrder).toBeLessThan(addOrder);
+  });
+
+  // The context's mutations never reject, so only the returned verdict says whether the override
+  // was released; a folder activated on top of an override the server still holds would retarget
+  // every surface to a root the task workspace still owns (workbench audit, 2026-09-03).
+  it("does not activate the chosen folder when releasing the task override is refused", async () => {
+    nativeDialogState.pick.mockResolvedValue({
+      kind: "picked",
+      paths: [SELECTED_ROOT],
+    });
+    const value = api({
+      activeInstance: instance(),
+      clearActive: vi.fn(() => Promise.resolve(false)),
+    });
+    renderSwitcher(value);
+    const dialog = openDialog();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Choose a folder" }));
+
+    await waitFor(() => {
+      expect(value.clearActive).toHaveBeenCalledOnce();
+    });
+    expect(
+      await within(dialog).findByText(/could not be released, so the folder was not changed/),
+    ).toBeInTheDocument();
+    expect(chatActions.addProject).not.toHaveBeenCalled();
   });
 
   it("keeps the dialog focused on folder selection without task or recent-list clutter", () => {

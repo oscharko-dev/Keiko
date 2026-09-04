@@ -217,9 +217,32 @@ POST /api/task-workspaces/:id/repair
 # Worktree now exists, instance is active and healthy
 ```
 
-##### Reattach the branch (HEAD moved, gitdir corrupted)
+##### Accept a moved HEAD (a commit made outside Keiko)
 
-**When:** `driftMarker ∈ { head-moved, gitdir-broken }` (the .git pointer or branch state is stale).
+**When:** `driftMarker: head-moved` — the worktree's HEAD is not the commit Keiko last verified,
+because someone committed in that worktree from a terminal. A commit Keiko itself made through the
+governed Git-delivery surface records its own head and never raises this marker.
+
+**Operator action:**
+
+- Inspect the worktree first: this accepts whatever commit is currently checked out as the verified
+  head. Nothing in the repository or on disk changes; only the recorded baseline does.
+- Call `POST /api/task-workspaces/:id/repair` with `strategy: "accept-moved-head"` and
+  `operatorApproved: true`.
+- Refused as `REPAIR_NOT_APPLICABLE` when the tree still holds uncommitted work, when the repository
+  reports no readable HEAD for the worktree, or when the live facts show any other finding — commit
+  or stash the work, or resolve the other finding first.
+
+**Example:**
+
+```
+POST /api/task-workspaces/:id/repair { strategy: "accept-moved-head", operatorApproved: true }
+→ { outcome: "repaired", driftMarkers: [], health: "healthy" }
+```
+
+##### Reattach the branch (gitdir corrupted)
+
+**When:** `driftMarker: gitdir-broken` (the .git pointer or branch state is stale).
 
 **Operator action:**
 
@@ -437,7 +460,7 @@ Lifecycle evidence is **content-free** and stored for audit/compliance purposes.
 - **eventType** — what mutation occurred (e.g., `provisioned`, `activated`, `cleanup-requested`).
 - **outcome** — the result (e.g., `completed`, `refused`, `failed-retryable`, `failed-terminal`).
 - **refusalReasons** — why cleanup/repair was refused (e.g., `["worktree-dirty", "lock-live"]`).
-- **recoveryStrategy** — the repair strategy applied (e.g., `recreate-worktree`, `release-stale-lock`).
+- **recoveryStrategy** — the repair strategy applied (e.g., `recreate-worktree`, `release-stale-lock`, `accept-moved-head`).
 
 ### Fields operators should NOT rely on:
 

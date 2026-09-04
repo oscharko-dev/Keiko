@@ -29,6 +29,25 @@ const admittedBinding = {
   expiresAt: "2026-07-12T12:00:00.000Z",
 };
 
+// A producer binding whose authority is still live at the moment the test runs, so the discovery
+// preflight admits it and the failure diagnostic is filed under this run id rather than the
+// no-binding fallback. Derived from the clock, never a fixed future date that silently expires.
+function liveDiscoveryBinding(): {
+  readonly runId: string;
+  readonly envelopeDigest: string;
+  readonly workspaceId: string;
+  readonly workspaceRootDigest: string;
+  readonly expiresAt: string;
+} {
+  return {
+    runId: "run-discovery-live",
+    envelopeDigest: DIGEST,
+    workspaceId: "workspace-discovery-live",
+    workspaceRootDigest: DIGEST,
+    expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+  };
+}
+
 function changeset(): EditorAgentChangeset {
   return {
     patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
@@ -59,13 +78,14 @@ function singleUseManagedAccess(root: string): () =>
       readonly kind: "managed-task";
       readonly canonicalRoot: string;
       readonly fs: typeof nodeWorkspaceFs;
+      readonly repositoryRoot: string;
     }
   | undefined {
   let available = true;
   return () => {
     if (!available) return undefined;
     available = false;
-    return { kind: "managed-task", canonicalRoot: root, fs: nodeWorkspaceFs };
+    return { kind: "managed-task", canonicalRoot: root, fs: nodeWorkspaceFs, repositoryRoot: root };
   };
 }
 
@@ -126,9 +146,14 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     ).resolves.toEqual({ status: "failed" });
   });
 
-  it("denies an edit when managed-root authority is revoked before the effect", async () => {
+  // The revoked-access refusal used to return a bare `{ status: "failed" }` with nothing on the
+  // activity log, so the model could not tell it from a retryable editor conflict and kept
+  // re-issuing the edit while the workspace authority stayed gone (cursor review, PR #3381). The
+  // closed reason code AND the `edit-refused` line under the run's own correlation are the pin.
+  it("denies an edit with a closed reason and a correlated diagnostic when managed-root authority is revoked before the effect", async () => {
     const root = "/managed/workspace";
     const action = vi.fn();
+    const records: ServerDiagnosticRecord[] = [];
     const ports = createCodingToolReadEditPorts({
       secureWorkspaceTextRead: { readText: vi.fn() },
       editorAgentClient: { action },
@@ -140,6 +165,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       }),
       resolveWorkspaceRoot: () => root,
       resolveWorkspaceRootAccess: singleUseManagedAccess(root),
+      diagnostics: { record: (record): void => void records.push(record) },
     });
 
     await expect(
@@ -153,8 +179,56 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true },
       ),
-    ).resolves.toEqual({ status: "failed" });
+    ).resolves.toEqual({ status: "failed", reasonCode: "WORKSPACE_ACCESS_LOST" });
     expect(action).not.toHaveBeenCalled();
+    expect(records).toEqual([
+      expect.objectContaining({
+        operation: "coding-runtime.editor-changeset",
+        source: "coding-tool-read-edit-ports.edit",
+        message: "edit-refused",
+        errorClass: "WORKSPACE_ACCESS_LOST",
+        correlationId: "run-revoked",
+      }),
+    ]);
+  });
+
+  // The prepare stage refuses before any editor action exists, so its correlation has to come from
+  // the run's own editor context; before this it left no line at all.
+  it("emits a correlated prepare refusal when the changeset never reaches the editor route", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const action = vi.fn();
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn() },
+      editorAgentClient: { action },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-prepare",
+        authorityRef: { runId: "run-prepare-1", envelopeDigest: DIGEST },
+        origin: "agent",
+      }),
+      diagnostics: { record: (record): void => void records.push(record) },
+    });
+
+    await expect(
+      ports.editorChangeset.execute(
+        {
+          action: "edit",
+          actionId: "edit-prepare",
+          idempotencyKey: "edit-prepare-key",
+          changeset: { patch: "x", files: [] },
+        },
+        undefined,
+        { check: (): true => true },
+      ),
+    ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+    expect(action).not.toHaveBeenCalled();
+    expect(records).toEqual([
+      expect.objectContaining({
+        operation: "coding-runtime.editor-changeset",
+        message: "edit-refused",
+        errorClass: "EDIT_PREPARE_FAILED",
+        correlationId: "run-prepare-1",
+      }),
+    ]);
   });
 
   it("discovers exact governed file paths without exposing denied or unrelated entries", async (): Promise<void> => {
@@ -217,46 +291,62 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     }
   });
 
-  it("emits a redacted, correlated diagnostic when workspace discovery throws", async (): Promise<void> => {
-    const records: ServerDiagnosticRecord[] = [];
-    const ports = createCodingToolReadEditPorts({
-      secureWorkspaceTextRead: { readText: vi.fn() },
-      editorAgentClient: { action: vi.fn() },
-      resolveEditorActionContext: () => ({
-        sessionId: "session-discover",
-        authorityRef: { runId: "run-discover", envelopeDigest: DIGEST },
-        origin: "agent",
-      }),
-      resolveWorkspaceRoot: (): never => {
-        throw new Error(SENTINEL);
-      },
-      diagnostics: { record: (record): void => void records.push(record) },
-    });
+  // The correlation a discovery failure is filed under is the RUN's, and the only sanctioned
+  // stand-in when no producer binding is in scope is UNKNOWN_CORRELATION_ID. The tool action id is
+  // never it: the `session:call` shape the sidecar mints is rewritten to "invalid-correlation-id"
+  // by the sink, so admitting it made an honestly-absent id indistinguishable from a hostile one
+  // (PR #3381 review). Both rows run the same failure through one table so the fallback cannot be
+  // fixed by re-adding a second, laxer id shape for one of them.
+  it.each([
+    ["no producer binding", undefined, "unknown-correlation-id"],
+    ["a live producer binding", liveDiscoveryBinding(), "run-discovery-live"],
+  ] as const)(
+    "emits a redacted diagnostic under the run's correlation when workspace discovery throws (%s)",
+    async (_label, binding, expectedCorrelationId): Promise<void> => {
+      const records: ServerDiagnosticRecord[] = [];
+      const ports = createCodingToolReadEditPorts({
+        secureWorkspaceTextRead: { readText: vi.fn() },
+        editorAgentClient: { action: vi.fn() },
+        resolveEditorActionContext: () => ({
+          sessionId: "session-discover",
+          authorityRef: { runId: "run-discover", envelopeDigest: DIGEST },
+          origin: "agent",
+        }),
+        ...(binding === undefined
+          ? {}
+          : { resolveRepositoryReadContext: (): typeof binding => binding }),
+        resolveWorkspaceRoot: (): never => {
+          throw new Error(SENTINEL);
+        },
+        diagnostics: { record: (record): void => void records.push(record) },
+      });
 
-    const result = await ports.repositoryDiscover.execute(
-      {
-        action: "discover",
-        actionId: "discover-failure",
-        idempotencyKey: "discover-failure-key",
-        query: "*",
-        maxResults: 10,
-      },
-      undefined,
-      { check: (): true => true },
-    );
+      const result = await ports.repositoryDiscover.execute(
+        {
+          action: "discover",
+          actionId: "discover-failure",
+          idempotencyKey: "discover-failure-key",
+          query: "*",
+          maxResults: 10,
+        },
+        undefined,
+        binding === undefined ? { check: (): true => true } : { check: (): true => true, binding },
+      );
 
-    expect(result).toEqual({ status: "failed" });
-    expect(records).toEqual([
-      expect.objectContaining({
-        correlationId: "discover-failure",
-        operation: "coding-runtime.workspace-discovery",
-        source: "coding-tool-read-edit-ports.discover",
-        errorClass: "Error",
-        message: "workspace-discovery-failed",
-      }),
-    ]);
-    expect(JSON.stringify(records)).not.toContain(SENTINEL);
-  });
+      expect(result).toEqual({ status: "failed" });
+      expect(records).toEqual([
+        expect.objectContaining({
+          correlationId: expectedCorrelationId,
+          operation: "coding-runtime.workspace-discovery",
+          source: "coding-tool-read-edit-ports.discover",
+          errorClass: "Error",
+          message: "workspace-discovery-failed",
+        }),
+      ]);
+      expect(JSON.stringify(records)).not.toContain("discover-failure");
+      expect(JSON.stringify(records)).not.toContain(SENTINEL);
+    },
+  );
 
   it("uses only SecureWorkspaceTextReadPort and exposes the sole bounded content-bearing read result", async () => {
     const readText = vi.fn(() =>
@@ -517,6 +607,58 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     expect(adapterSignal).toBeInstanceOf(AbortSignal);
   });
 
+  // A refused edit used to leave no trace outside the in-memory editor audit feed; the activity
+  // log must carry the refusal with its closed-vocabulary reason (end-to-end run, 2026-09-03).
+  it("emits a body-free refusal diagnostic when the editor route rejects the changeset", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const editorAction = vi.fn((_action: EditorAgentAction, _signal: AbortSignal) =>
+      Promise.resolve({
+        ok: true as const,
+        value: {
+          result: {
+            schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+            actionId: "edit-refused-1",
+            sessionId: "session-2332",
+            status: "conflict" as const,
+            conflict: { code: "OUT_OF_SCOPE" as const, message: "The target escapes the root." },
+          },
+        },
+      }),
+    );
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn() },
+      editorAgentClient: { action: editorAction },
+      diagnostics: { record: (record): void => void records.push(record) },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-2332",
+        authorityRef: { runId: "run-2332", envelopeDigest: DIGEST },
+        origin: "agent",
+      }),
+    });
+
+    await expect(
+      ports.editorChangeset.execute(
+        {
+          action: "edit",
+          actionId: "edit-refused-1",
+          idempotencyKey: "edit-refused-key",
+          changeset: changeset(),
+        },
+        undefined,
+        { check: (): true => true },
+      ),
+    ).resolves.toEqual({ status: "failed", reasonCode: "OUT_OF_SCOPE" });
+    expect(records).toEqual([
+      expect.objectContaining({
+        operation: "coding-runtime.editor-changeset",
+        source: "coding-tool-read-edit-ports.edit",
+        message: "edit-refused",
+        errorClass: "OUT_OF_SCOPE",
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("escapes the root");
+  });
+
   it("normalizes the real single-file raw-index model patch before editor validation", async () => {
     const editorAction = vi.fn(() =>
       Promise.resolve({
@@ -598,7 +740,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true },
       ),
-    ).resolves.toEqual({ status: "failed" });
+    ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
     expect(editorAction).not.toHaveBeenCalled();
   });
 
@@ -834,7 +976,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): false => false },
       ),
-    ).resolves.toEqual({ status: "failed" });
+    ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
     expect(editorAction).not.toHaveBeenCalled();
   });
 
@@ -859,7 +1001,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true, binding: admittedBinding },
       ),
-    ).resolves.toEqual({ status: "failed" });
+    ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
     expect(editorAction).not.toHaveBeenCalled();
   });
 
@@ -1054,7 +1196,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
             undefined,
             bindingless,
           ),
-        ).resolves.toEqual({ status: "failed" });
+        ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
         expect(editorAction).not.toHaveBeenCalled();
       } finally {
         rmSync(root, { recursive: true, force: true });

@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -21,6 +22,7 @@ function lastInit(fetchMock: ReturnType<typeof vi.fn>): RequestInit {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  resetClientDiagnosticWriter();
 });
 
 describe("bffFetchJson — header union", () => {
@@ -177,6 +179,80 @@ describe("bffFetchJson — error handling", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "C", failureClass: "retryable", status: 409 });
+  });
+
+  // The hook decorates the classified error; it must never replace it. A hook that throws on an
+  // unexpected envelope shape used to surface as its own TypeError, hiding the server's code and
+  // the correlation id the operator needs (workbench audit, 2026-09-03).
+  // JSON that is not the envelope (an empty object, a bare string) used to be read as one: the
+  // read threw a TypeError outside the parse guard and the caller rendered that instead of the
+  // classified error (workbench audit, 2026-09-03).
+  it("maps a JSON body without an error envelope to the fallback ApiError", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({}, 500)));
+    const enrichError = vi.fn();
+    await expect(bffFetchJson("/api/x", undefined, { enrichError })).rejects.toMatchObject({
+      code: "INTERNAL",
+      status: 500,
+    });
+    expect(enrichError).toHaveBeenCalledWith(expect.any(ApiError), undefined);
+  });
+
+  // The boundary of `isBffErrorEnvelope`, case by case: every shape below is valid JSON that a
+  // proxy or a partially-written handler can answer with, and each must yield the SAME classified
+  // fallback `ApiError` and an `undefined` envelope — never a half-read envelope and never the
+  // TypeError that reading one used to throw (#3381 review).
+  it.each([
+    ["a bare string", "oops"],
+    ["a bare number", 500],
+    ["a null body", null],
+    ["an array", [{ code: "C", message: "m" }]],
+    ["a null error", { error: null }],
+    ["an error without a code", { error: { message: "m" } }],
+    ["an error with a non-string code", { error: { code: 7, message: "m" } }],
+    ["an error without a message", { error: { code: "C" } }],
+    ["an error with a non-string message", { error: { code: "C", message: { text: "m" } } }],
+  ])("maps %s to the fallback ApiError with no envelope", async (_label, body) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(body, 502)));
+    const enrichError = vi.fn();
+
+    await expect(bffFetchJson("/api/x", undefined, { enrichError })).rejects.toMatchObject({
+      code: "INTERNAL",
+      message: "HTTP 502",
+      status: 502,
+    });
+    expect(enrichError).toHaveBeenCalledWith(expect.any(ApiError), undefined);
+  });
+
+  it("keeps the classified ApiError when opts.enrichError throws", async () => {
+    const diagnostics: { message: string; correlationId?: string | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      diagnostics.push({ message, correlationId: meta?.correlationId });
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: { code: "C", message: "m" } }), {
+          status: 409,
+          headers: { "Content-Type": "application/json", "X-Keiko-Correlation-Id": "corr-9" },
+        }),
+      ),
+    );
+    await expect(
+      bffFetchJson("/api/x", undefined, {
+        enrichError: () => {
+          throw new TypeError("unexpected envelope");
+        },
+      }),
+    ).rejects.toMatchObject({ code: "C", status: 409 });
+
+    // The hook is the only place `failureClass` is attached, so a hook that throws degrades every
+    // refusal to an unclassified error. Swallowing that silently left neither the console nor a
+    // support bundle with a record of it (AGENTS.md §7/§8, #3381 review). Body-free: the hook's
+    // error CLASS, and the failed request's correlation id as report metadata.
+    expect(diagnostics).toEqual([
+      { message: "[keiko] bff error enrichment failed: TypeError", correlationId: "corr-9" },
+    ]);
+    expect(diagnostics[0]?.message).not.toContain("unexpected envelope");
   });
 
   it("runs opts.enrichError with an undefined envelope on a parse failure", async () => {

@@ -29,6 +29,12 @@ export interface CodingWorkbenchChangesProps {
   readonly changeSignal: string | null;
   readonly bindingPending: boolean;
   /**
+   * The root this run was SUBMITTED against (`useCodingWorkbenchRunWorkspace`), so a Start whose
+   * response lands after the operator moved the workspace pointer cannot caption another
+   * workspace's git status as this run's changes (#3381 review).
+   */
+  readonly submittedRoot?: string | null | undefined;
+  /**
    * The window's server-confirmed pairing dimension (release-audit F-08): the run root always
    * lives under the managed task-workspace area, which is readable only through a launcher-paired
    * app session (ADR-0141), so a read denial in a confirmed-unpaired window names that condition.
@@ -84,7 +90,14 @@ function ChangesContent({
         ? "codingWorkbench.changes.unavailable"
         : "codingWorkbench.changes.error",
     );
-    return <RetryMessage text={text} retry={changes.retry} t={t} />;
+    return (
+      <RetryMessage
+        text={text}
+        className={styles.changesMessage}
+        role="alert"
+        retry={{ label: t("codingWorkbench.changes.retry"), onRetry: changes.retry }}
+      />
+    );
   }
   return <ReadyChanges changes={changes} t={t} />;
 }
@@ -103,20 +116,31 @@ function ChangesMessage({
   );
 }
 
-function RetryMessage({
-  text,
-  retry,
-  t,
-}: {
+/**
+ * A bounded message with the control that recovers it. The ONE retry affordance of the Coding
+ * Workbench: the run-changes panel and both approval detail channels in `CodingWorkbenchWindow`
+ * render it, so an a11y, focus or wording fix lands once instead of drifting between two copies
+ * (#3381 review — the window's `RetryableDetailMessage` was a second copy of this markup).
+ *
+ * `retry` is absent when the state carries no recovery: a read still in flight is not a failure and
+ * gets no control, and the message then renders as the plain paragraph its container styles.
+ */
+export interface RetryMessageProps {
   readonly text: string;
-  readonly retry: () => void;
-  readonly t: CodingWorkbenchTranslate;
-}): ReactNode {
+  // The container class of the surface this message belongs to. Typed like React's own
+  // `className`, because a CSS-module lookup is `string | undefined` under noUncheckedIndexedAccess.
+  readonly className: string | undefined;
+  readonly role?: "alert" | undefined;
+  readonly retry?: { readonly label: string; readonly onRetry: () => void } | undefined;
+}
+
+export function RetryMessage({ text, className, role, retry }: RetryMessageProps): ReactNode {
+  if (retry === undefined) return <p className={className}>{text}</p>;
   return (
-    <div className={styles.changesMessage} role="alert">
+    <div className={className} role={role}>
       <p>{text}</p>
-      <button className={styles.button} type="button" onClick={retry}>
-        {t("codingWorkbench.changes.retry")}
+      <button className={styles.button} type="button" onClick={retry.onRetry}>
+        {retry.label}
       </button>
     </div>
   );

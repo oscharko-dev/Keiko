@@ -21,8 +21,10 @@ import { MANAGED_ROOT_MARKER_FILENAME } from "./naming.js";
 import {
   assertManagedRootOwned,
   assertManagedTargetContained,
+  canonicalManagedRootPath,
   ensureManagedWorktreeParent,
   isManagedRootOwned,
+  listManagedRepositoryIds,
   managedTargetExists,
 } from "./managed-root.js";
 
@@ -142,5 +144,88 @@ describe("worktree parent + existence", () => {
     ensureManagedWorktreeParent(target);
     expect(existsSync(join(managedRoot, "repo_x"))).toBe(true);
     expect(managedTargetExists(target)).toBe(false);
+  });
+});
+
+describe("listManagedRepositoryIds", () => {
+  it("lists nothing for a managed root that does not exist yet", () => {
+    expect(listManagedRepositoryIds(join(base, "absent"))).toEqual([]);
+  });
+
+  it("lists the repository directories and skips loose files", () => {
+    mkdirSync(join(managedRoot, "repo-a"), { recursive: true });
+    mkdirSync(join(managedRoot, "repo-b"), { recursive: true });
+    writeFileSync(join(managedRoot, "stray.txt"), "");
+    expect([...listManagedRepositoryIds(managedRoot)].sort()).toEqual(["repo-a", "repo-b"]);
+  });
+
+  // A root that exists but cannot be read is not an empty inventory: the health report and the
+  // orphan sweep must fail instead of claiming a complete scan they could not take (review of
+  // ec04288dc; the previous silent catch reported "no repositories" for an unreadable root).
+  it("throws instead of listing nothing when the managed root cannot be read", () => {
+    const notADirectory = join(base, "managed-as-file");
+    writeFileSync(notADirectory, "");
+    expect(() => listManagedRepositoryIds(notADirectory)).toThrow();
+  });
+
+  // The same rule for the case an `existsSync` precheck could not see: a root whose PARENT denies
+  // traversal. `existsSync` swallows the `EACCES` its own stat raised and answers `false`, so the
+  // listing returned `[]` and both global scans read that as "no repositories exist" (PR #3381
+  // review). Only `readdirSync`'s own errno may decide, and `EACCES` is not an absence.
+  // Skipped as root, where the permission bits are not enforced at all.
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "throws instead of listing nothing when the managed root's parent denies traversal",
+    () => {
+      const parent = join(base, "denied-parent");
+      const denied = join(parent, "task-workspaces");
+      mkdirSync(denied, { recursive: true });
+      chmodSync(parent, 0o000);
+      try {
+        // The precondition the precheck got wrong, asserted so this pin cannot pass for the wrong
+        // reason: the root IS there and `existsSync` still says it is not.
+        expect(existsSync(denied)).toBe(false);
+        expect(() => listManagedRepositoryIds(denied)).toThrow(
+          expect.objectContaining({ code: "EACCES" }),
+        );
+      } finally {
+        chmodSync(parent, 0o700);
+      }
+    },
+  );
+});
+
+// #3382/L-4: the managed root was composed LEXICALLY (`join(dirname(uiDbPath), "task-workspaces")`),
+// and every managed worktree path is derived from it and PERSISTED — while
+// `productionRuntimeWorkspaceAuthority.qualifiedWorkspaceRoot` refuses any root whose
+// `realpathSync(root)` is not the root itself. A state directory reached through a symlink (the
+// default `~/.keiko` branch of `resolveUiDbPath` is not symlink-checked at all, and a home directory
+// on a symlinked mount is ordinary) or on a case-folding volume therefore produced workspaces that
+// could be provisioned and then never run.
+describe("canonicalManagedRootPath", () => {
+  it("resolves a symlinked ancestor while keeping the segments that do not exist yet", () => {
+    const linkParent = join(base, "link-parent");
+    mkdirSync(linkParent, { recursive: true });
+    const linkedBase = join(linkParent, "state");
+    symlinkSync(base, linkedBase, "dir");
+
+    // The leaf does not exist yet — the case the composition actually runs in, before the root is
+    // materialized — so the walk has to resolve the longest EXISTING ancestor and re-append it.
+    expect(canonicalManagedRootPath(join(linkedBase, "task-workspaces"))).toBe(
+      join(base, "task-workspaces"),
+    );
+    // The property the runtime authority asks of every persisted managed root.
+    mkdirSync(join(base, "task-workspaces"), { recursive: true });
+    expect(realpathSync(canonicalManagedRootPath(join(linkedBase, "task-workspaces")))).toBe(
+      canonicalManagedRootPath(join(linkedBase, "task-workspaces")),
+    );
+  });
+
+  it("keeps every segment that does not exist yet, however deep", () => {
+    // The composition may run before ANY of the state directory exists. The walk must climb past
+    // each absent segment and re-append them in order rather than throwing and leaving the
+    // composition without a root — this function canonicalises, it never decides authority.
+    const deep = join(base, "absent-a", "absent-b", "task-workspaces");
+    expect(canonicalManagedRootPath(deep)).toBe(deep);
+    expect(existsSync(join(base, "absent-a"))).toBe(false);
   });
 });

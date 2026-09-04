@@ -381,7 +381,7 @@ Reuse `requireService`/`unavailable` pattern but gated on a new optional
 
 | Method | URL pattern | Handler | Request body | 200 body | Notes |
 | --- | --- | --- | --- | --- | --- |
-| GET | `/api/task-workspaces?root=<repoRoot>` | `handleListTaskWorkspaces` | — | `{ instances: WorkspaceInstance[] }` | `resolveRoot(deps.store, root, deps.redactor)` then `lifecycle.list(realRoot)`. Read-only. Matches the **collection** path with a `root` query, distinct from the existing `GET /api/task-workspaces/:workspaceId`. |
+| GET | `/api/task-workspaces?root=<repoRoot>` | `handleListTaskWorkspaces` | — | `{ instances: WorkspaceInstance[] }` | `resolveRoot(deps.store, root, deps.redactor)` then `lifecycle.list(realRoot)`. Read-only. Matches the **collection** path with a `root` query, distinct from the existing `GET /api/task-workspaces/:workspaceId`. Without a `root` (absent or blank) the handler answers `lifecycle.listAll()` — every managed workspace across repositories, the inventory the switcher needs because the active pointer is global (2026-09-03). |
 | GET | `/api/task-workspaces/active` | `handleGetActiveTaskWorkspace` | — | `{ active: ActiveWorkspaceView \| null }` | `lifecycle.getActive() ?? null`. Read-only. MUST be registered **before** `GET /api/task-workspaces/:workspaceId` so the literal `active` wins over `:workspaceId`. |
 | POST | `/api/task-workspaces/active` | `handleSetActiveTaskWorkspace` | `{ workspaceId, requestedBy, acquireLock? }` | `{ instance, binding }` | CSRF-gated. `boundedString` each field; `acquireLock = body.acquireLock === true`. Calls `lifecycle.setActive`. |
 | DELETE | `/api/task-workspaces/active` | `handleClearActiveTaskWorkspace` | — | `{ active: null }` | CSRF-gated. `lifecycle.clearActive()`. |
@@ -392,7 +392,7 @@ Reuse `requireService`/`unavailable` pattern but gated on a new optional
 Route registration order in `packages/keiko-server/src/routes.ts` (literal-before-param):
 
 ```
-GET    /api/task-workspaces                       (list; reads ?root)
+GET    /api/task-workspaces                       (list; ?root scopes, no root lists all)
 GET    /api/task-workspaces/active                (must precede :workspaceId)
 POST   /api/task-workspaces/active
 DELETE /api/task-workspaces/active
@@ -645,6 +645,9 @@ implementation team rather than silently resolved:
    with the existing `GET /api/task-workspaces/:workspaceId`. Implementers MUST
    register the literal/collection routes (`?root`, `/active`) so they resolve
    before the `:workspaceId` param route; the route table in (d) fixes the order.
+   The same collection path without a `root` query lists every managed workspace
+   (`lifecycle.listAll()`), because the single global active pointer can name a
+   workspace of any repository and the switcher must be able to show it.
 4. **Foreign-key cascade.** The pointer→instance `ON DELETE CASCADE` only fires
    when `PRAGMA foreign_keys = ON` for the handle. If the shared handle does not
    enable it, the lifecycle service must clear the pointer explicitly whenever it

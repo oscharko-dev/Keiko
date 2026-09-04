@@ -16,9 +16,11 @@ import {
   fstatSync,
   mkdirSync,
   openSync,
+  readdirSync,
   writeFileSync,
+  type Dirent,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { PathEscapeError, resolveWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertContainedRealPathWithinOwnedRoot } from "@oscharko-dev/keiko-workspace/internal/owned-root";
@@ -54,6 +56,46 @@ function hardenMarkerPermissionsBestEffort(target: string): void {
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }
+}
+
+function realPathOrUndefined(target: string): string | undefined {
+  try {
+    return nodeWorkspaceFs.realPath(target);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The CANONICAL spelling of the managed-worktree root: the realpath of its longest EXISTING
+ * ancestor, with the segments that do not exist yet re-appended.
+ *
+ * The root is composed lexically from the UI database's directory (`<uiDbDir>/task-workspaces`), and
+ * every managed worktree path is derived from it and PERSISTED. On a symlinked or case-folded state
+ * directory — `/var` → `/private/var` on macOS is the everyday example — that lexical spelling is not
+ * the canonical one, so every persisted `managedWorktreePath` was non-canonical too, and
+ * `productionRuntimeWorkspaceAuthority.qualifiedWorkspaceRoot` refuses any root whose
+ * `realpathSync(root) !== root`: the workspace could be provisioned and then never run (#3382).
+ *
+ * The longest-existing-ancestor walk is the same shape `assertContainedRealPathWithinOwnedRoot` uses
+ * to verify a path whose leaf does not exist yet, so the answer is stable whether this is called
+ * before or after the root is materialized. A root with no resolvable ancestor at all (an
+ * unreadable chain) falls back to the absolute lexical spelling — this function canonicalises, it
+ * never decides authority; ownership and containment are still proven by the guards above.
+ */
+export function canonicalManagedRootPath(managedRoot: string): string {
+  const absolute = resolve(managedRoot);
+  const pending: string[] = [];
+  let current = absolute;
+  let parent = dirname(current);
+  while (current !== parent) {
+    const canonical = realPathOrUndefined(current);
+    if (canonical !== undefined) return join(canonical, ...pending);
+    pending.unshift(basename(current));
+    current = parent;
+    parent = dirname(current);
+  }
+  return absolute;
 }
 
 // Creates (if absent) and proves ownership of the managed-worktree root. The marker file is the
@@ -151,4 +193,34 @@ export function isManagedTargetContained(managedRoot: string, target: string): b
   } catch {
     return false;
   }
+}
+
+// The repository-id directories currently under the managed root — the on-disk half of the managed
+// inventory, which the persisted rows alone cannot enumerate once every row of a repository is gone.
+// ONE listing shared by the health report and the orphan sweep, so the two global scans cannot
+// disagree about which repositories exist on disk (audit finding, 2026-09-03: the report only knew
+// repositories with a persisted row and never surfaced a leftover directory without one). A missing
+// root lists nothing; a root that exists but cannot be read throws, because neither caller may
+// claim a complete inventory it could not take.
+//
+// The absence is decided by `readdirSync` itself, never by a preceding `existsSync`. That precheck
+// answers `false` for a root whose PARENT denies traversal — `existsSync` swallows the `EACCES` its
+// `stat` raised — so an unreadable root produced an empty listing that both callers then read as a
+// complete "no repositories exist" inventory (PR #3381 review). `ENOENT`, the one code that means
+// "there is no such directory", lists nothing; every other errno propagates, `ENOTDIR` included —
+// a managed root that is a FILE exists and cannot be read, which is the case the pin above covers.
+export function listManagedRepositoryIds(managedRoot: string): readonly string[] {
+  let entries: readonly Dirent[];
+  try {
+    entries = readdirSync(managedRoot, { withFileTypes: true });
+  } catch (error) {
+    if (isMissingDirectory(error)) return [];
+    throw error;
+  }
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+}
+
+function isMissingDirectory(error: unknown): boolean {
+  if (error === null || typeof error !== "object" || !("code" in error)) return false;
+  return (error as { readonly code?: unknown }).code === "ENOENT";
 }

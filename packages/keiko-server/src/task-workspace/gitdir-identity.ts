@@ -17,7 +17,9 @@ const MAX_GIT_METADATA_BYTES = 64 * 1024;
 // The schema string is part of the hashed input, so bumping it is what makes the composition change
 // explicit instead of silently reinterpreting identities persisted under the weaker v2 rule.
 const IDENTITY_SCHEMA = "managed-linked-worktree-v3";
-// The retired composition, kept only to recognise identities persisted before v3. Never granted.
+// The retired compositions, kept only to recognise identities persisted before v3. Never granted.
+// v2 (#3367) bound the inodes; the rule before it (pre-#3367, minted by provisioning.ts itself)
+// hashed the pointer target text bare — no schema string, no filesystem component at all.
 const LEGACY_IDENTITY_SCHEMA = "managed-linked-worktree-v2";
 
 // Two compositions of the SAME observed components. `withCreation` is what v3 binds and the only one
@@ -39,6 +41,10 @@ interface StableContainedRead {
 
 interface LinkedWorktreePointer {
   readonly canonicalAdminDirectory: string;
+  // The pointer line's target text exactly as written (trimmed, never normalised). The retired
+  // pointer-text composition hashed this and nothing else, so it is carried only to RECOGNISE such
+  // a registration; it takes no part in the identity that grants access.
+  readonly pointerTargetText: string;
   readonly worktreeIdentity: IdentityPair;
   readonly pointerIdentity: IdentityPair;
   readonly adminDirectoryIdentity: IdentityPair;
@@ -59,6 +65,16 @@ export interface ManagedGitdirIdentityInspection {
    * incident — from an identity that matches nothing.
    */
   readonly legacyIdentity: string;
+  /**
+   * The composition every workspace registered before #3367 carries: the SHA-256 of the `.git`
+   * pointer's target text, with no schema string and no filesystem component. Same contract as
+   * `legacyIdentity` — compared to classify a persisted value as a pre-v3 registration, never
+   * trusted: any same-path replacement reproduces it exactly. Without it every workspace an
+   * operator created before the identity rule existed reconciles as a REPLACED worktree
+   * (`pointer-stale`, operator-repair, no executable strategy) — a false statement about their
+   * disk that stranded every pre-existing managed workspace on upgrade (2026-09-03 dev log).
+   */
+  readonly legacyPointerIdentity: string;
   /**
    * The common git directory the identity hashed, resolved through the pointer a linked worktree or
    * a separate-git-dir layout leaves at `<root>/.git`. The volume proof observes THIS directory: a
@@ -126,22 +142,36 @@ function fileIdentity(read: WorkspaceDescriptorUtf8Read): IdentityPair | undefin
  * changed being reported as a replaced worktree, which is a false statement about the customer's
  * disk and sends them to the wrong recovery.
  *
- * `schema-retired` still refuses. A v2 identity is forgeable by exactly the inode reuse v3 closes, so
- * it is recognised and never accepted.
+ * `schema-retired` still refuses. A retired identity is forgeable by exactly the inode reuse v3
+ * closes (or, for the pre-#3367 pointer-text rule, by any same-path replacement), so it is
+ * recognised and never accepted.
  */
-export type ManagedIdentityDrift = "matches" | "schema-retired" | "unsupported" | "changed";
+export type ManagedIdentityDrift =
+  "matches" | "schema-retired" | "unsupported" | "unproven" | "changed";
 
 /**
- * Four outcomes, because three of them need different operator actions and collapsing any pair
+ * Five outcomes, because four of them need different operator actions and collapsing any pair
  * sends the operator to the wrong one:
  *   matches         — nothing to do.
- *   schema-retired  — authenticity is unproven under the retired rule (a same-path replacement
- *                     can reproduce every inode-only term); re-register to reissue the proof.
+ *   schema-retired  — authenticity is unproven under a retired rule (a same-path replacement can
+ *                     reproduce every term); re-register to reissue the proof.
  *   unsupported     — this filesystem reports no creation time; relocate the root (ADR-0155).
- *   changed         — the worktree really is not the one that was registered.
+ *   unproven        — the worktree proves no identity at all: its `.git` pointer is missing,
+ *                     malformed or not reciprocal, so there is nothing to compare. The contract's
+ *                     `pointer-stale` marker: a corrupt pointer is operator-guided, because the
+ *                     narrow adapter cannot rewrite it without risking the tree's uncommitted work.
+ *   changed         — the pointer is readable and reciprocal but proves a different identity: the
+ *                     worktree was replaced or relinked. The contract's `gitdir-mismatch` marker,
+ *                     whose `reconcile-pointer` strategy re-links it under operator approval.
  *
  * `unsupported` is NOT `changed`: nothing about the customer's disk changed, and reporting a
  * platform limitation as a replaced worktree is a false statement that sends them hunting an attack.
+ *
+ * `unproven` is NOT `changed` either, and the split is load-bearing for recovery: reconciliation
+ * already told the two apart (`pointer-stale` for an absent pointer, `gitdir-mismatch` for a readable
+ * mismatch) while the provisioning and lifecycle refusals collapsed both into `pointer-stale`, so
+ * one row's persisted hint flipped between "operator-repair, nothing executable" and
+ * "reconcile-pointer" depending on which path ran last. One verdict, one marker, every path.
  *
  * A `failed` proof is not a drift verdict at all: an EIO or EACCES says nothing about the worktree,
  * so it is thrown as the classified, retryable IDENTITY_PROOF_FAILED (cause preserved) for the
@@ -153,9 +183,21 @@ export function managedIdentityDriftFor(
 ): ManagedIdentityDrift {
   if (outcome.kind === "failed") throw proofFailure(outcome.cause);
   if (outcome.kind === "unsupported") return "unsupported";
-  if (outcome.kind === "unproven") return "changed";
+  if (outcome.kind === "unproven") return "unproven";
   if (outcome.inspection.identity === persisted) return "matches";
-  return outcome.inspection.legacyIdentity === persisted ? "schema-retired" : "changed";
+  return isRetiredIdentity(outcome.inspection, persisted) ? "schema-retired" : "changed";
+}
+
+/**
+ * Whether a persisted value is one of the RETIRED compositions of this worktree's own components —
+ * a registration made under an earlier rule, as opposed to a value that matches nothing this
+ * worktree can produce. Recognition only: neither composition ever grants access.
+ */
+export function isRetiredIdentity(
+  inspection: ManagedGitdirIdentityInspection,
+  persisted: string,
+): boolean {
+  return inspection.legacyIdentity === persisted || inspection.legacyPointerIdentity === persisted;
 }
 
 // A proof that could not run (EIO, EACCES, a vanished path) leaves here as the classified, retryable
@@ -176,6 +218,8 @@ export const RETIRED_IDENTITY_SCHEMA_MESSAGE =
   "managed worktree identity predates the current identity rule; re-register to reissue it";
 export const UNSUPPORTED_IDENTITY_MESSAGE =
   "managed worktree filesystem cannot report a durable creation time; relocate the workspace root";
+export const UNPROVEN_IDENTITY_MESSAGE = "managed worktree git identity could not be proven";
+export const CHANGED_IDENTITY_MESSAGE = "managed worktree git identity changed";
 
 // One mapping from the verdict to what is persisted and what the operator is told, shared by every
 // path that may expose an operational binding or readiness state — provisioning resume and
@@ -184,13 +228,18 @@ export const UNSUPPORTED_IDENTITY_MESSAGE =
 export function managedIdentityDriftMarker(drift: ManagedIdentityDrift): TaskWorkspaceDriftMarker {
   if (drift === "schema-retired") return "identity-schema-retired";
   if (drift === "unsupported") return "identity-unsupported";
-  return "pointer-stale";
+  if (drift === "unproven") return "pointer-stale";
+  // A readable pointer proving a different identity is the fact the contract's classifier records
+  // as `gitdir-mismatch`; the refusal here must persist the same marker so its recovery hint is the
+  // executable `reconcile-pointer` the repair service accepts for this fact, not a dead end.
+  return "gitdir-mismatch";
 }
 
 export function managedIdentityDriftMessage(drift: ManagedIdentityDrift): string {
   if (drift === "schema-retired") return RETIRED_IDENTITY_SCHEMA_MESSAGE;
   if (drift === "unsupported") return UNSUPPORTED_IDENTITY_MESSAGE;
-  return "managed worktree git identity changed";
+  if (drift === "unproven") return UNPROVEN_IDENTITY_MESSAGE;
+  return CHANGED_IDENTITY_MESSAGE;
 }
 
 /** The live four-way verdict for one persisted registration; an I/O failure inside the proof throws. */
@@ -218,8 +267,11 @@ export type ManagedGitdirIdentityOutcome =
   | { readonly kind: "identified"; readonly inspection: ManagedGitdirIdentityInspection }
   | { readonly kind: "unsupported" }
   | { readonly kind: "unproven" }
-  // The port threw (EIO, EACCES, EMFILE, a stat race). Kept apart from `unproven` so the denial that
-  // follows can carry `errorKind`, frames and cause instead of looking like a malformed pointer.
+  // The port threw for a reason that says nothing about the tree (EIO, EACCES, EMFILE, a stat race).
+  // Kept apart from `unproven` so the denial that follows can carry `errorKind`, frames and cause
+  // instead of looking like a malformed pointer. An ABSENT component is not this case: `ENOENT` /
+  // `ENOTDIR` answer the same way on every retry, so they are `unproven` (see
+  // DETERMINISTIC_ABSENCE_CODES).
   | { readonly kind: "failed"; readonly cause: unknown };
 
 /**
@@ -279,6 +331,22 @@ function creationTimeWitness(fs: WorkspaceFs): {
   };
 }
 
+// The errno values that mean a component of the identity IS NOT THERE, as opposed to could not be
+// read: no entry at the path, and a path whose ancestor is not a directory. Both are deterministic
+// verdicts about the tree — a partially removed worktree whose `.git` pointer was deleted answers
+// `ENOENT` on every retry — so they are `unproven`, never the retryable `IDENTITY_PROOF_FAILED`
+// that ADR-0088 and the operator documentation reserve for an I/O failure such as `EIO` or `EACCES`
+// (PR #3381 review P2: the bind answered a 503 "retry" forever and left the row `active`/`healthy`
+// with no Repair offer, because only the reconcile pass, which computes pointer presence itself,
+// ever classified it).
+const DETERMINISTIC_ABSENCE_CODES: ReadonlySet<string> = new Set(["ENOENT", "ENOTDIR"]);
+
+function isDeterministicAbsence(cause: unknown): boolean {
+  if (cause === null || typeof cause !== "object" || !("code" in cause)) return false;
+  const { code } = cause as { readonly code?: unknown };
+  return typeof code === "string" && DETERMINISTIC_ABSENCE_CODES.has(code);
+}
+
 /** The identity plus, when there is none, the reason an operator needs to act on the right thing. */
 export function inspectManagedGitdirIdentityOutcome(
   worktreePath: string,
@@ -295,6 +363,9 @@ export function inspectManagedGitdirIdentityOutcome(
     // the identity is unproven, and retrying will not change that (#3376 review). Only a real I/O
     // failure is `failed`.
     if (cause instanceof WorkspaceDescriptorReadError) return { kind: "unproven" };
+    // Same rule, reached through the port's raw errno: the descriptor-safe read rethrows anything
+    // that is not a symlink loop, so an absent pointer arrives here as a plain Node error.
+    if (isDeterministicAbsence(cause)) return { kind: "unproven" };
     return { kind: "failed", cause };
   }
   if (inspection !== undefined) return { kind: "identified", inspection };
@@ -330,17 +401,54 @@ function readStableContainedFile(
   return { rawText: result.rawText, rootIdentity: before, fileIdentity: targetIdentity };
 }
 
-function parseAbsoluteSingleLine(raw: string): string | undefined {
+// Git writes BOTH linked-worktree pointers relative when `worktree.useRelativePaths=true`, and
+// `git worktree add` inherits that repository setting, so Keiko's own managed worktrees carry them
+// on any repository configured that way (Git 2.48+; reproduced on 2.50.1 as
+// `gitdir: ../repo/.git/worktrees/<name>` in the worktree's `.git` and `../../../../<worktree>/.git`
+// in the admin `gitdir` file). An absolute-only parse refused a pointer Git itself considers valid,
+// so the identity could not be proven at all and every such workspace reconciled as `pointer-stale`
+// (PR #3381 review P2).
+//
+// Each pointer resolves against the directory Git resolves it against — the forward pointer against
+// the WORKTREE root that contains the `.git` file, the backpointer against the ADMIN directory that
+// contains the `gitdir` file — and `base` is always an already-canonical path, so the lexical
+// `normalize` inside `join` cannot traverse a symlink the caller has not resolved. `undefined` keeps
+// the strict absolute-only behaviour for a caller with no base in hand.
+function parseSingleLinePath(raw: string, base: string | undefined): string | undefined {
   const value = raw.trim();
   if (value.length === 0 || value.includes("\0") || /[\r\n]/u.test(value)) return undefined;
-  return isAbsolute(value) ? normalize(value) : undefined;
+  if (isAbsolute(value)) return normalize(value);
+  return base === undefined ? undefined : normalize(join(base, value));
 }
 
-/** Parses the complete contents of a linked-worktree `.git` pointer. */
-export function parseGitdirPointerTarget(raw: string): string | undefined {
+interface GitdirPointerLine {
+  // The admin-directory path the pointer names, normalised and made absolute against the worktree
+  // root when Git wrote it relative.
+  readonly target: string;
+  // The target text as written after `gitdir:`, trimmed and NOT normalised — the retired
+  // pointer-text composition hashed exactly this, so a relative pointer keeps the bytes a pre-v3
+  // registration would have hashed.
+  readonly targetText: string;
+}
+
+function parseGitdirPointerLine(
+  raw: string,
+  worktreeRoot: string | undefined,
+): GitdirPointerLine | undefined {
   const value = raw.trim();
   if (!value.startsWith("gitdir:")) return undefined;
-  return parseAbsoluteSingleLine(value.slice("gitdir:".length));
+  const targetText = value.slice("gitdir:".length).trim();
+  const target = parseSingleLinePath(targetText, worktreeRoot);
+  return target === undefined ? undefined : { target, targetText };
+}
+
+/**
+ * Parses the complete contents of a linked-worktree `.git` pointer. `worktreeRoot` is the canonical
+ * directory that CONTAINS the pointer file — the base Git resolves a relative `gitdir:` against.
+ * Omitting it keeps the strict absolute-only reading for callers that have no base to resolve with.
+ */
+export function parseGitdirPointerTarget(raw: string, worktreeRoot?: string): string | undefined {
+  return parseGitdirPointerLine(raw, worktreeRoot)?.target;
 }
 
 function samePath(left: string, right: string): boolean {
@@ -355,8 +463,9 @@ function validBackpointer(
   raw: string,
   requestedWorktree: string,
   canonicalWorktree: string,
+  canonicalAdminDirectory: string,
 ): boolean {
-  const target = parseAbsoluteSingleLine(raw);
+  const target = parseSingleLinePath(raw, canonicalAdminDirectory);
   if (target === undefined) return false;
   return (
     samePath(target, join(requestedWorktree, ".git")) ||
@@ -371,11 +480,10 @@ function validAdminDirectoryShape(path: string): boolean {
 
 function resolveAdminDirectory(
   fs: WorkspaceFs,
-  rawPointer: string,
+  target: string,
   expectedParent: string | undefined,
 ): string | undefined {
-  const target = parseGitdirPointerTarget(rawPointer);
-  if (target === undefined || !validAdminDirectoryShape(target)) return undefined;
+  if (!validAdminDirectoryShape(target)) return undefined;
   if (expectedParent !== undefined && !samePath(dirname(target), expectedParent)) return undefined;
   const canonical = fs.realPath(target);
   if (!validAdminDirectoryShape(canonical)) return undefined;
@@ -392,7 +500,11 @@ function inspectLinkedWorktreePointer(
   const canonicalWorktree = fs.realPath(requestedWorktree);
   const pointer = readStableContainedFile(fs, canonicalWorktree, join(canonicalWorktree, ".git"));
   if (pointer === undefined) return undefined;
-  const canonicalAdminDirectory = resolveAdminDirectory(fs, pointer.rawText, expectedAdminParent);
+  // The forward pointer resolves against the CANONICAL worktree root — the directory the `.git`
+  // file was just read from — which is exactly the base Git uses for a relative `gitdir:`.
+  const line = parseGitdirPointerLine(pointer.rawText, canonicalWorktree);
+  if (line === undefined) return undefined;
+  const canonicalAdminDirectory = resolveAdminDirectory(fs, line.target, expectedAdminParent);
   if (canonicalAdminDirectory === undefined) return undefined;
   const backpointer = readStableContainedFile(
     fs,
@@ -401,12 +513,20 @@ function inspectLinkedWorktreePointer(
   );
   if (
     backpointer === undefined ||
-    !validBackpointer(backpointer.rawText, requestedWorktree, canonicalWorktree)
+    // ... and the backpointer against the canonical ADMIN directory it lives in. Reciprocity is
+    // unchanged: whichever way Git spelled the two pointers, they must still name each other.
+    !validBackpointer(
+      backpointer.rawText,
+      requestedWorktree,
+      canonicalWorktree,
+      canonicalAdminDirectory,
+    )
   ) {
     return undefined;
   }
   return {
     canonicalAdminDirectory,
+    pointerTargetText: line.targetText,
     worktreeIdentity: pointer.rootIdentity,
     pointerIdentity: pointer.fileIdentity,
     adminDirectoryIdentity: backpointer.rootIdentity,
@@ -473,6 +593,13 @@ function composeIdentity(
   return createHash("sha256").update(JSON.stringify(fields), "utf8").digest("hex").slice(0, 32);
 }
 
+// The pre-#3367 composition, transcribed from the retired `gitdirIdentity` that provisioning.ts
+// minted itself: the pointer target text hashed bare. Reproduced only so a value persisted under
+// it is recognised as "registered before the identity rule" rather than as a replaced worktree.
+function composeRetiredPointerIdentity(pointerTargetText: string): string {
+  return createHash("sha256").update(pointerTargetText, "utf8").digest("hex").slice(0, 32);
+}
+
 // Both compositions are produced from ONE set of observations, so the legacy value can never drift
 // into describing a different filesystem state than the current one it is compared against.
 function identitiesFor(
@@ -500,6 +627,7 @@ function identitiesFor(
       paths,
       pairs.map((pair) => pair.inodeOnly),
     ),
+    legacyPointerIdentity: composeRetiredPointerIdentity(pointer.pointerTargetText),
     commonDirectory: commonDirectory.path,
   };
 }

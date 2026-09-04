@@ -41,6 +41,7 @@ import {
   inspectManagedGitdirIdentity,
   inspectManagedGitdirIdentityOutcome,
   parseGitdirPointerTarget,
+  type ManagedGitdirIdentityInspection,
 } from "./gitdir-identity.js";
 
 // The one identity classifier is wrapped, never replaced: every call reaches the real proof unless a
@@ -506,23 +507,39 @@ describe("resolveManagedWorkspaceRootAccess", () => {
   // An identity persisted under the retired v2 composition is still refused — accepting a forgeable
   // identity even once would mint a trusted v3 one from it. What changes is only what the operator
   // is told: this workspace needs re-registration, not an incident response.
-  it("names the retired identity schema instead of reporting a replacement", () => {
-    const inspection = inspectManagedGitdirIdentity(workspaceRoot, repositoryRoot);
-    if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
-    registered = instanceAt(workspaceRoot, inspection.legacyIdentity);
-    const activityLog = createBufferedServerLogSink();
+  // Both retired compositions: the v2 inode rule and the pointer-text rule every workspace
+  // provisioned before #3367 carries.
+  it.each([
+    {
+      rule: "v2 inode composition",
+      retired: (i: ManagedGitdirIdentityInspection): string => i.legacyIdentity,
+    },
+    {
+      rule: "pre-#3367 pointer-text composition",
+      retired: (i: ManagedGitdirIdentityInspection): string => i.legacyPointerIdentity,
+    },
+  ])(
+    "names the retired identity schema ($rule) instead of reporting a replacement",
+    ({ retired }) => {
+      const inspection = inspectManagedGitdirIdentity(workspaceRoot, repositoryRoot);
+      if (inspection === undefined)
+        throw new Error("real linked-worktree identity was not resolved");
+      const retiredIdentity = retired(inspection);
+      registered = instanceAt(workspaceRoot, retiredIdentity);
+      const activityLog = createBufferedServerLogSink();
 
-    expect(resolveAccessLogged(activityLog, "wra-schema-0001")).toBeUndefined();
-    expect(denialEvents(activityLog)).toHaveLength(1);
-    expect(denialEvents(activityLog)[0]).toMatchObject({
-      level: "warn",
-      category: "security",
-      correlationId: "wra-schema-0001",
-      extra: { decision: "denied", reason: "managed-root-identity-schema-retired" },
-    });
-    // The legacy value is a filesystem fingerprint; it must not travel into the log.
-    expect(JSON.stringify(denialEvents(activityLog)[0])).not.toContain(inspection.legacyIdentity);
-  });
+      expect(resolveAccessLogged(activityLog, "wra-schema-0001")).toBeUndefined();
+      expect(denialEvents(activityLog)).toHaveLength(1);
+      expect(denialEvents(activityLog)[0]).toMatchObject({
+        level: "warn",
+        category: "security",
+        correlationId: "wra-schema-0001",
+        extra: { decision: "denied", reason: "managed-root-identity-schema-retired" },
+      });
+      // The retired value is a filesystem fingerprint; it must not travel into the log.
+      expect(JSON.stringify(denialEvents(activityLog)[0])).not.toContain(retiredIdentity);
+    },
+  );
 
   // A volume that keeps no creation time is refused with its OWN reason — a platform limitation with
   // a documented relocation, not an incident and not a migration. The fact cannot be produced on a
