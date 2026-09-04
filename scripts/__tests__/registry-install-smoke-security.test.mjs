@@ -63,6 +63,7 @@ import {
   runRegistryInstallSmokeForTest,
 } from "../registry-install-smoke.mjs";
 import { runPrepareOfflineSmoke } from "../prepare-offline-smoke.mjs";
+import { prepareTrustedCorepack } from "../prepare-trusted-corepack.mjs";
 import { provenancePublishArgs } from "../lib/npm-publish-preflight.mjs";
 import {
   PINNED_YARN,
@@ -3035,6 +3036,43 @@ describe("installable package smoke optional-dependency coverage", () => {
       if (prune > -1) {
         expect(prepare, `${job.name} prepares after its own prune`).toBeLessThan(prune);
       }
+    }
+  });
+
+  it("copies locked Corepack into the Node 26 runtime trust root", () => {
+    const job = ciJobs().find((candidate) => candidate.name === "node-26-compatibility");
+    expect(job).toBeDefined();
+    if (job === undefined) throw new Error("node-26-compatibility job is missing");
+    const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+    expect(manifest.devDependencies.corepack).toMatch(/^\d+\.\d+\.\d+$/u);
+    const prepareBinAt = job.text.indexOf("npm run prepare:bin");
+    const buildAt = job.text.indexOf("npm run build:ui");
+    const shimAt = job.text.indexOf("node scripts/prepare-trusted-corepack.mjs");
+    const provisionAt = job.text.indexOf("npm run provision:smoke");
+    expect(job.text).not.toContain("npm install --global");
+    expect(buildAt).toBeGreaterThan(prepareBinAt);
+    expect(shimAt).toBeGreaterThan(buildAt);
+    expect(provisionAt).toBeGreaterThan(shimAt);
+  });
+
+  it("prepares an executable Corepack copy inside the supplied runtime root", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-trusted-corepack-test-"));
+    const sourceRoot = join(root, "source");
+    const runtimeRoot = join(root, "runtime");
+    mkdirSync(join(sourceRoot, "dist"), { recursive: true });
+    mkdirSync(runtimeRoot);
+    writeFileSync(join(sourceRoot, "dist", "corepack.js"), 'process.stdout.write("trusted");\n');
+    try {
+      const prepared = prepareTrustedCorepack({ runtimeRoot, sourceRoot });
+      const result = spawnSync(join(prepared.binDir, "corepack"), [], { encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("trusted");
+      expect(prepared.version).toBe(ROOT_MANIFEST.devDependencies.corepack);
+      expect(readFileSync(join(prepared.packageRoot, "dist", "corepack.js"), "utf8")).toContain(
+        "trusted",
+      );
+    } finally {
+      rmSync(root, { force: true, recursive: true });
     }
   });
 

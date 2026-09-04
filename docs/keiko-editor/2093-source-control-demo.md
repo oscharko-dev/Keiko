@@ -10,7 +10,7 @@ It does not stage, commit, push, merge, or otherwise widen delivery authority fr
 
 ### Build and start Keiko
 
-From a clean checkout, use the governed toolchain — Node.js `>=24.18.0 <25` and npm 11.16.0:
+From a clean checkout, use Node.js `>=24.18.0 <25 || >=26.3.0 <27` and npm `>=11.16.0 <12`:
 
 ```bash
 npm install
