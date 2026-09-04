@@ -191,7 +191,47 @@ function conversationIneligibilityShortLabel(
   return t("settings.models.ineligibleShortGeneric");
 }
 
-function ConversationEligibilityBadge({ model }: { readonly model: ModelCapability }): ReactNode {
+type ReadinessRunState =
+  | { readonly status: "idle" }
+  | { readonly status: "running"; readonly deep: boolean }
+  | { readonly status: "done"; readonly report: GatewayReadinessReport }
+  | { readonly status: "error"; readonly message: string };
+
+function chatReadinessPassed(readiness: ReadinessRunState | undefined): boolean {
+  return (
+    readiness?.status === "done" &&
+    readiness.report.probes.some((probe) => probe.name === "chat" && probe.status === "passed")
+  );
+}
+
+function chatReadinessFailed(readiness: ReadinessRunState | undefined): boolean {
+  if (readiness?.status === "error") return true;
+  return (
+    readiness?.status === "done" &&
+    !readiness.report.probes.some((probe) => probe.name === "chat" && probe.status === "passed")
+  );
+}
+
+function conversationBadgePresentation(
+  readiness: ReadinessRunState | undefined,
+  t: I18nTranslate,
+): { readonly className: string; readonly label: string } {
+  if (chatReadinessFailed(readiness)) {
+    return { className: "ml-elig-no", label: t("settings.models.modelProbeFailed") };
+  }
+  if (chatReadinessPassed(readiness)) {
+    return { className: "ml-elig-ok", label: t("settings.models.eligibilityOk") };
+  }
+  return { className: "ml-type", label: t("settings.models.modelNotVerified") };
+}
+
+function ConversationEligibilityBadge({
+  model,
+  readiness,
+}: {
+  readonly model: ModelCapability;
+  readonly readiness: ReadinessRunState | undefined;
+}): ReactNode {
   const t = useTranslate();
   const reason = explainConversationIneligibility(model);
   // Issue #1557 (AC4): a correctly configured voice provider is available for its voice purpose, not a
@@ -211,13 +251,14 @@ function ConversationEligibilityBadge({ model }: { readonly model: ModelCapabili
     );
   }
   if (reason === undefined) {
+    const presentation = conversationBadgePresentation(readiness, t);
     return (
       <output
-        className="ml-elig ml-elig-ok"
+        className={`ml-elig ${presentation.className}`}
         data-testid="conv-elig-ok"
-        aria-label={t("settings.models.eligibilityOkAria")}
+        aria-label={t("settings.models.eligibilityPrefix", { label: presentation.label })}
       >
-        {t("settings.models.eligibilityOk")}
+        {presentation.label}
       </output>
     );
   }
@@ -248,12 +289,6 @@ function ConversationEligibilityBadge({ model }: { readonly model: ModelCapabili
     </output>
   );
 }
-
-type ReadinessRunState =
-  | { readonly status: "idle" }
-  | { readonly status: "running"; readonly deep: boolean }
-  | { readonly status: "done"; readonly report: GatewayReadinessReport }
-  | { readonly status: "error"; readonly message: string };
 
 type ReportCopyState = "idle" | "copied" | "failed";
 
@@ -705,12 +740,31 @@ function modelStatusTitle(
   conversationEligible: boolean,
   embeddingReady: boolean,
   voiceReady: boolean,
+  readiness: ReadinessRunState | undefined,
   t: I18nTranslate,
 ): string {
-  if (conversationEligible) return t("settings.models.statusConversationEligible");
+  if (conversationEligible && chatReadinessFailed(readiness)) {
+    return t("settings.models.statusProbeFailed");
+  }
+  if (conversationEligible && chatReadinessPassed(readiness)) {
+    return t("settings.models.statusConversationEligible");
+  }
+  if (conversationEligible) return t("settings.models.statusNotVerified");
   if (embeddingReady) return t("settings.models.statusEmbedding");
   if (voiceReady) return voiceProviderAvailabilityLabel(model, t);
   return t("settings.models.statusNotSelectable");
+}
+
+function modelStatusClass(
+  conversationEligible: boolean,
+  embeddingReady: boolean,
+  voiceReady: boolean,
+  readiness: ReadinessRunState | undefined,
+): string {
+  if (conversationEligible && chatReadinessFailed(readiness)) return "error";
+  if (conversationEligible && chatReadinessPassed(readiness)) return "connected";
+  if (conversationEligible) return "untested";
+  return embeddingReady || voiceReady ? "connected" : "ineligible";
 }
 
 function ModelCapabilityRow({
@@ -730,9 +784,15 @@ function ModelCapabilityRow({
   const conversationEligible = isConversationEligibleModel(model);
   const embeddingReady = model.kind === "embedding";
   const voiceReady = isConfiguredVoiceProvider(model);
-  const statusClass =
-    conversationEligible || embeddingReady || voiceReady ? "connected" : "ineligible";
-  const statusTitle = modelStatusTitle(model, conversationEligible, embeddingReady, voiceReady, t);
+  const statusClass = modelStatusClass(conversationEligible, embeddingReady, voiceReady, readiness);
+  const statusTitle = modelStatusTitle(
+    model,
+    conversationEligible,
+    embeddingReady,
+    voiceReady,
+    readiness,
+    t,
+  );
   const RowIcon = model.kind === "voice" ? Icons.mic : Icons.cube;
   return (
     <div className="ml-row">
@@ -743,7 +803,7 @@ function ModelCapabilityRow({
         <div className="ml-top">
           <span className="ml-name">{model.id}</span>
           <span className="ml-type mono">{kindLabel(model.kind)}</span>
-          <ConversationEligibilityBadge model={model} />
+          <ConversationEligibilityBadge model={model} readiness={readiness} />
         </div>
         <div className="ml-url mono">
           {t("settings.models.capabilitySummary", {
@@ -784,7 +844,12 @@ function ModelCapabilityRow({
           ) : null}
         </div>
       ) : null}
-      <span className={"ml-status " + statusClass} title={statusTitle} aria-hidden="true" />
+      <span
+        className={"ml-status " + statusClass}
+        title={statusTitle}
+        data-testid={`model-status-${model.id}`}
+        aria-hidden="true"
+      />
     </div>
   );
 }

@@ -97,13 +97,14 @@ describe("requestSpeechToText", () => {
       modelId: "keiko-stt",
       audio: AUDIO,
       mimeType: "audio/ogg",
-      language: "de",
+      language: "de-DE",
       fetchImpl,
     });
     expect(outcome.ok).toBe(true);
     expect(header).toBe(SECRET_API_KEY);
     expect(body).toContain('name="language"');
     expect(body).toContain("\r\n\r\nde\r\n");
+    expect(body).not.toContain("\r\n\r\nde-DE\r\n");
   });
 
   it("includes an optional domain-keyword prompt field in the multipart body", async () => {

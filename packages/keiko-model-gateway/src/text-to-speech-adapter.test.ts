@@ -247,6 +247,23 @@ describe("requestTextToSpeech", () => {
     }
   });
 
+  it("uses an Ogg container signature when Azure mislabels Opus audio as MPEG", async () => {
+    const oggAudio = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0x00, 0x02]);
+    const outcome = await requestTextToSpeech({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "configured-voice",
+      responseFormat: "opus",
+      fetchImpl: mockFetch(() => audioResponse(oggAudio, "audio/mpeg")),
+    });
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.value.mimeType).toBe("audio/ogg");
+    }
+  });
+
   it("returns empty-audio when a 2xx response carries no audio bytes", async () => {
     const outcome = await requestTextToSpeech({
       endpoint: ENDPOINT,

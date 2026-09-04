@@ -838,6 +838,24 @@ function unreadyChatModelResult(): RouteResult {
   return conversationModelNotReadyResult();
 }
 
+function logChatCreationRejection(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  modelId: string,
+  status: number,
+): void {
+  const modelKind = chatCapability(deps, modelId)?.kind ?? "unknown";
+  const readinessFailure = modelKind === "chat";
+  getServerLogger().warn({
+    category: "gateway",
+    op: "chat.creation.rejected",
+    correlationId: ctx.correlationId,
+    status,
+    errorKind: readinessFailure ? "model-not-ready" : "invalid-model",
+    extra: { reason: readinessFailure ? "readiness" : "configuration", modelKind },
+  });
+}
+
 export function createUserMessage(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
@@ -2181,7 +2199,15 @@ export async function handleCreateDesktopChat(
     ? ensureAnyConversationReadyChatModel(deps, defaultChatModelId(deps))
     : ensureOnDemandConversationReadiness(deps, explicitModelId));
   const modelId = modelFromBody(body, deps);
-  if (isRouteResult(modelId)) return modelId;
+  if (isRouteResult(modelId)) {
+    logChatCreationRejection(
+      ctx,
+      deps,
+      explicitModelId ?? defaultChatModelId(deps),
+      modelId.status,
+    );
+    return modelId;
+  }
   try {
     const projectPath = pickProjectPath(body, deps);
     const project = ensureProject(deps, projectPath);

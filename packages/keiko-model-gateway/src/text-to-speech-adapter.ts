@@ -236,7 +236,26 @@ async function dispatch(
 // Normalizes the provider `content-type` to a bare audio MIME type, dropping any parameters (e.g.
 // `; charset`). A provider that omits the header or returns a non-audio type falls back to the MIME
 // derived from the requested response format, so the browser always receives a playable label.
-function resolveMimeType(response: Response, responseFormat: SpeechResponseFormat): string {
+function hasOggContainerSignature(audio: Uint8Array | undefined): boolean {
+  return (
+    audio !== undefined &&
+    audio.byteLength >= 4 &&
+    audio[0] === 0x4f &&
+    audio[1] === 0x67 &&
+    audio[2] === 0x67 &&
+    audio[3] === 0x53
+  );
+}
+
+function resolveMimeType(
+  response: Response,
+  responseFormat: SpeechResponseFormat,
+  audio?: Uint8Array,
+): string {
+  // Azure's deployment-style TTS endpoint can return an Opus/Ogg body with `audio/mpeg`. The
+  // container signature is authoritative in that disagreement; forwarding the wrong MIME makes a
+  // valid clip fail browser playback and any later speech-to-text handoff.
+  if (hasOggContainerSignature(audio)) return "audio/ogg";
   const raw = response.headers.get("content-type");
   if (raw !== null) {
     const base = raw.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -262,7 +281,7 @@ async function decodeSuccess(
   }
   return {
     ok: true,
-    value: { audio, mimeType: resolveMimeType(response, built.responseFormat) },
+    value: { audio, mimeType: resolveMimeType(response, built.responseFormat, audio) },
   };
 }
 

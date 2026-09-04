@@ -393,10 +393,32 @@ describe("dev quality workflows", () => {
     expect(aggregateJob, "ci aggregate job block must exist").toBeDefined();
     expect(aggregateJob).toContain("if: ${{ always() }}");
     expect(aggregateJob).toContain("- core-quality");
+    expect(aggregateJob).toContain("- build-scan-sbom-smoke");
     expect(aggregateJob).toContain("- coverage-sonar");
     expect(aggregateJob).toContain("- cross-platform-smoke");
+    expect(aggregateJob).toContain("- ui");
+    expect(aggregateJob).toContain("BUILD_SCAN_SBOM_SMOKE_RESULT");
     expect(aggregateJob).toContain("CROSS_PLATFORM_RESULT");
+    expect(aggregateJob).toContain("EDITOR_FAST_PR");
+    expect(aggregateJob).toContain("UI_RESULT");
     expect(aggregateJob).toContain('if [ "$result" != "success" ]');
+  });
+
+  it("retries transient npm audit service failures without weakening advisory enforcement", () => {
+    const rootAudit = ciWorkflow.jobs["build-scan-sbom-smoke"].steps.find(
+      (step) => step.name === "Security audit (high and above)",
+    );
+    const uiAudit = ciWorkflow.jobs.ui.steps.find(
+      (step) => step.name === "Security audit UI dependencies (moderate and above)",
+    );
+
+    expect(rootAudit.run).toBe(
+      "node scripts/run-npm-audit-with-retry.mjs --audit-level=high --omit=dev",
+    );
+    expect(uiAudit.run).toBe(
+      "node scripts/run-npm-audit-with-retry.mjs --audit-level=moderate --omit=dev --workspace=@oscharko-dev/keiko-ui",
+    );
+    expect(ci).not.toMatch(/^\s*run: npm audit\b/mu);
   });
 
   it("runs native compensation on its owning platforms and aggregates it fail closed", () => {

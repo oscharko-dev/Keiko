@@ -199,6 +199,8 @@ async function sendBreakerChat(
 describe("desktop chat production gateway reuse", () => {
   it("keeps user content off the provider while probing an unready model on demand", async () => {
     const fixture = await createGatewayBreakerFixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     try {
       fixture.deps.gatewayConfig?.clearVerifiedCapability("breaker-chat");
       const fetchSpy = vi.fn();
@@ -219,7 +221,8 @@ describe("desktop chat production gateway reuse", () => {
         body: {
           error: {
             code: "BAD_REQUEST",
-            message: "The selected model is not ready for conversations.",
+            message:
+              "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
           },
         },
       });
@@ -228,7 +231,8 @@ describe("desktop chat production gateway reuse", () => {
         body: {
           error: {
             code: "BAD_REQUEST",
-            message: "The selected model is not ready for conversations.",
+            message:
+              "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
           },
         },
       });
@@ -251,8 +255,18 @@ describe("desktop chat production gateway reuse", () => {
         fixture.deps.gatewayConfig?.verifiedCapability("breaker-chat")?.fields.conversationReady,
       ).not.toBe(true);
       expect(JSON.stringify(rejected.body)).not.toContain("must not leave the server");
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "gateway",
+          op: "chat.creation.rejected",
+          status: 400,
+          errorKind: "model-not-ready",
+          extra: { reason: "readiness", modelKind: "chat" },
+        }),
+      );
     } finally {
       vi.unstubAllGlobals();
+      resetServerLogger();
       await disposeGatewayBreakerFixture(fixture);
     }
   });

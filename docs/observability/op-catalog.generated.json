@@ -885,9 +885,15 @@
       "package": "keiko-server"
     },
     {
+      "op": "chat.creation.rejected",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/chat-handlers.ts:851",
+      "package": "keiko-server"
+    },
+    {
       "op": "chat.turn.started",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1690",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1708",
       "package": "keiko-server"
     },
     {

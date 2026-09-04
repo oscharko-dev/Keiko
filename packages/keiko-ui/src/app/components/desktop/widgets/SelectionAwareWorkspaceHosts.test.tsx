@@ -53,16 +53,11 @@ const updateChatMock = vi.hoisted((): Mock<UpdateChat> => vi.fn<UpdateChat>());
 type FetchChats = (projectPath: string) => Promise<{ readonly chats: readonly Chat[] }>;
 const fetchChatsMock = vi.hoisted((): Mock<FetchChats> => vi.fn<FetchChats>());
 
-vi.mock(
-  "@/lib/api",
-  (): {
-    readonly fetchChats: Mock<FetchChats>;
-    readonly updateChat: Mock<UpdateChat>;
-  } => ({
-    fetchChats: fetchChatsMock,
-    updateChat: updateChatMock,
-  }),
-);
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  fetchChats: fetchChatsMock,
+  updateChat: updateChatMock,
+}));
 
 // The mock answers the real `WorkspaceManifestView` shape — `issue` is `"load" | "mutation" | null`,
 // and a host that reads `issue === null` must not be told `undefined` by its own test double.
@@ -1791,7 +1786,7 @@ describe("ChatWindowSessionHost target missing", () => {
       </I18nProvider>,
     );
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not open chat.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("temporary bootstrap failure");
     expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
   });
 
@@ -1903,7 +1898,9 @@ describe("ChatWindowSessionHost target missing", () => {
       </I18nProvider>,
     );
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not open chat.");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "temporary project restoration failure",
+    );
     expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
   });
 

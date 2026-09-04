@@ -119,6 +119,14 @@
     "en": "Model eligibility: eligible for conversation",
     "de": "Modelleignung: für Konversationen geeignet"
   },
+  "settings.models.modelNotVerified": {
+    "en": "Chat model — not verified",
+    "de": "Chat-Modell — nicht verifiziert"
+  },
+  "settings.models.modelProbeFailed": {
+    "en": "Chat unavailable — check failed",
+    "de": "Chat nicht verfügbar — Prüfung fehlgeschlagen"
+  },
   "settings.models.eligibilityPrefix": {
     "en": "Model eligibility: {label}",
     "de": "Modelleignung: {label}"

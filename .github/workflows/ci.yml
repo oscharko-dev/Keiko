@@ -913,30 +913,47 @@ jobs:
     needs:
       - change-scope
       - protected-branch-gate
+      - build-scan-sbom-smoke
       - core-quality
       - coverage-sonar
       - cross-platform-smoke
       - secret-scan
       - semantic-duplication
+      - ui
     runs-on: ubuntu-latest
     permissions: {}
     steps:
       - name: Aggregate required CI results fail closed
         env:
+          BUILD_SCAN_SBOM_SMOKE_RESULT: ${{ needs.build-scan-sbom-smoke.result }}
           CORE_QUALITY_RESULT: ${{ needs.core-quality.result }}
           COVERAGE_SONAR_RESULT: ${{ needs.coverage-sonar.result }}
           CROSS_PLATFORM_RESULT: ${{ needs.cross-platform-smoke.result }}
           DOCUMENTATION_ONLY: ${{ needs.change-scope.outputs.documentation-only }}
+          EDITOR_FAST_PR: ${{ github.event_name == 'pull_request' && github.base_ref == 'feat/keiko-editor' }}
           PROTECTED_BRANCH_RESULT: ${{ needs.protected-branch-gate.result }}
           SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
           SEMANTIC_DUPLICATION_RESULT: ${{ needs.semantic-duplication.result }}
+          UI_RESULT: ${{ needs.ui.result }}
         run: |
-          for result in "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT"; do
+          for result in "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT" "$UI_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "Required CI dependency did not succeed: $result"
               exit 1
             fi
           done
+          # The package/release job is intentionally skipped only for early feat/keiko-editor PRs.
+          # On dev, release, push, merge-group, and manual runs it is mandatory and aggregated.
+          if [ "$BUILD_SCAN_SBOM_SMOKE_RESULT" = "skipped" ]; then
+            if [ "$EDITOR_FAST_PR" != "true" ]; then
+              echo "Build, scan, SBOM, smoke was skipped outside an editor fast-path PR."
+              exit 1
+            fi
+            echo "Build, scan, SBOM, smoke skipped: editor fast-path PR."
+          elif [ "$BUILD_SCAN_SBOM_SMOKE_RESULT" != "success" ]; then
+            echo "Required CI dependency did not succeed: $BUILD_SCAN_SBOM_SMOKE_RESULT"
+            exit 1
+          fi
           # The cross-platform matrix is the only dependency allowed to be skipped, and only when the
           # change-scope job classified this change set as documentation-only. Any other skip — a
           # cancellation, a dependency failure, a mistaken condition — still fails closed.
@@ -1007,7 +1024,7 @@ jobs:
         # advisories are surfaced by the OSV lane instead, where they can be triaged individually
         # with a recorded reason and expiry (osv-scanner.toml) rather than blocking every pull
         # request on a transitive lint dependency that never reaches a user.
-        run: npm audit --audit-level=high --omit=dev
+        run: node scripts/run-npm-audit-with-retry.mjs --audit-level=high --omit=dev
       - name: Generate CycloneDX SBOM
         run: npm sbom --sbom-format cyclonedx --omit dev > sbom.cdx.json
       - name: Workspace SBOM and license gate (Issue #169 AC4)
@@ -1234,7 +1251,7 @@ jobs:
       - name: Security audit UI dependencies (moderate and above)
         # Same shipped-graph scope as the audit in the build job; the UI's dev toolchain (eslint,
         # next lint plugins) is not part of the static export this job builds.
-        run: npm audit --audit-level=moderate --omit=dev --workspace @oscharko-dev/keiko-ui
+        run: node scripts/run-npm-audit-with-retry.mjs --audit-level=moderate --omit=dev --workspace=@oscharko-dev/keiko-ui
       - name: Lint UI
         run: npm run lint --workspace @oscharko-dev/keiko-ui
       - name: Typecheck UI
