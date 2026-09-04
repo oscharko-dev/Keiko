@@ -1200,6 +1200,8 @@ export type {
   CodingWorkbenchRuntimeAdapterStartRequest,
   CodingWorkbenchRuntimeAuthorityEnvelope,
   CodingWorkbenchRuntimeAuthorityFacts,
+  CodingWorkbenchIssueBinding,
+  CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchRuntimeDelegationUsage,
   CodingWorkbenchRuntimeExecutionBinding,
   CodingWorkbenchRuntimeFailureCode,
@@ -1209,6 +1211,7 @@ export type {
   CodingWorkbenchRuntimeStateName,
 } from "./coding-workbench-runtime.js";
 export type {
+  CODING_WORKBENCH_ISSUE_BINDING_FAILURES,
   CODING_WORKBENCH_LIFECYCLE_COMMANDS,
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   CODING_WORKBENCH_RUNTIME_FAILURE_CODES,
@@ -1227,6 +1230,7 @@ export type {
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchRuntimeEvidenceClass,
   CodingWorkbenchRuntimePendingPermission,
+  CodingWorkbenchIssueReference,
   CodingWorkbenchRuntimePreference,
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeReadinessRequest,
@@ -1247,6 +1251,7 @@ export type {
   CodingWorkbenchRuntimeUnavailableReason,
 } from "./coding-workbench-runtime-api.js";
 export type {
+  CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_MODEL_ID_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS,

@@ -451,6 +451,114 @@ describe("Coding Workbench runtime API contracts", () => {
   });
 });
 
+describe("Coding Workbench issue binding contract (#3385)", () => {
+  const ISSUE_REF = { ownerAndRepo: "oscharko-dev/Keiko", issueNumber: 3385 };
+  const START = {
+    requestId: "request-1",
+    taskIntent: "Implement the accepted issue",
+    requestedMode: "supervised-coding",
+  };
+  const BINDING = {
+    schemaVersion: "1",
+    repositoryId: "repository-0123456789abcdef",
+    remoteDigest: "a".repeat(64),
+    issueNumber: 3385,
+    issueIdDigest: "b".repeat(64),
+    defaultBaseRef: "dev",
+    contentRevisionDigest: "c".repeat(64),
+    bindingDigest: "d".repeat(64),
+  };
+  const SNAPSHOT = {
+    schemaVersion: "1",
+    state: "running",
+    revision: 2,
+    updatedAt: AT,
+    runId: "run-1",
+    requestedMode: "supervised-coding",
+    effectiveMode: "supervised-coding",
+  };
+
+  it("accepts a start request with and without an issue reference", () => {
+    expect(parseCodingWorkbenchRuntimeStartRequest(START)).toMatchObject({ ok: true });
+    expect(
+      parseCodingWorkbenchRuntimeStartRequest({ ...START, issueRef: ISSUE_REF }),
+    ).toMatchObject({ ok: true });
+  });
+
+  it("rejects every malformed issue reference the browser could send", () => {
+    const rejected: readonly unknown[] = [
+      "oscharko-dev/Keiko#3385",
+      { ownerAndRepo: "oscharko-dev/Keiko" },
+      { ownerAndRepo: "Keiko", issueNumber: 1 },
+      { ownerAndRepo: "oscharko-dev/Keiko", issueNumber: 0 },
+      { ownerAndRepo: "oscharko-dev/Keiko", issueNumber: -1 },
+      { ownerAndRepo: "oscharko-dev/Keiko", issueNumber: 1.5 },
+      { ownerAndRepo: "oscharko-dev/Keiko", issueNumber: 1_000_000_001 },
+      { ownerAndRepo: "oscharko-dev/Keiko", issueNumber: "3385" },
+      // A traversal or absolute path must not survive as a repository name.
+      { ownerAndRepo: "../../etc/passwd", issueNumber: 1 },
+      { ownerAndRepo: "/oscharko-dev/Keiko", issueNumber: 1 },
+      // Nothing beyond the two intent fields is accepted: no base ref, no remote, no scope.
+      { ...ISSUE_REF, defaultBaseRef: "main" },
+      { ...ISSUE_REF, remote: "git@github.com:attacker/repo.git" },
+    ];
+    for (const issueRef of rejected) {
+      expect(
+        parseCodingWorkbenchRuntimeStartRequest({ ...START, issueRef }),
+        JSON.stringify(issueRef),
+      ).toMatchObject({ ok: false });
+    }
+  });
+
+  it("projects a content-free issue binding on the snapshot", () => {
+    const snapshot = { ...SNAPSHOT, issueBinding: BINDING };
+    expect(validateCodingWorkbenchRuntimeSnapshot(snapshot)).toEqual({ ok: true, value: snapshot });
+    expect(validateCodingWorkbenchRuntimeSnapshot(SNAPSHOT)).toMatchObject({ ok: true });
+  });
+
+  it("refuses to carry issue content on the snapshot projection", () => {
+    for (const field of ["title", "body", "comments", "url", "remoteUrl", "issueText"]) {
+      expect(
+        validateCodingWorkbenchRuntimeSnapshot({
+          ...SNAPSHOT,
+          issueBinding: { ...BINDING, [field]: "Add a rate limiter to the ingest path" },
+        }),
+        field,
+      ).toMatchObject({ ok: false });
+    }
+  });
+
+  it("rejects a malformed issue binding field by field", () => {
+    const rejected: readonly Record<string, unknown>[] = [
+      { schemaVersion: "2" },
+      { repositoryId: "" },
+      { repositoryId: "../escape" },
+      { remoteDigest: "not-a-digest" },
+      { remoteDigest: "A".repeat(64) },
+      { issueIdDigest: "b".repeat(63) },
+      { contentRevisionDigest: 42 },
+      { bindingDigest: undefined },
+      { issueNumber: 0 },
+      { issueNumber: 2.5 },
+      { defaultBaseRef: "" },
+      { defaultBaseRef: "/dev" },
+      { defaultBaseRef: "feature//x" },
+      { defaultBaseRef: "feature/../x" },
+      { defaultBaseRef: "dev.lock" },
+      { defaultBaseRef: "dev branch" },
+    ];
+    for (const override of rejected) {
+      expect(
+        validateCodingWorkbenchRuntimeSnapshot({
+          ...SNAPSHOT,
+          issueBinding: { ...BINDING, ...override },
+        }),
+        JSON.stringify(override),
+      ).toMatchObject({ ok: false });
+    }
+  });
+});
+
 describe("Coding Workbench runtime API failure branches", () => {
   const snapshot = {
     schemaVersion: "1",

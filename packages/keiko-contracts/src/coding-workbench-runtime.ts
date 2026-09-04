@@ -89,6 +89,81 @@ export interface CodingWorkbenchRuntimeExecutionBinding {
   readonly branchHeadDigest: string;
 }
 
+/**
+ * Why an issue could not be bound to a run. Closed vocabulary, so a caller can render a specific,
+ * actionable state instead of a generic failure, and so no reason can be invented at a call site.
+ *
+ * `repository-mismatch` is the one that must never be papered over: the pasted issue names a
+ * different repository than the bound workspace, and the product asks the user to switch, open or
+ * clone rather than silently retargeting the run.
+ */
+export type CodingWorkbenchIssueBindingFailure =
+  | "invalid-reference"
+  | "repository-mismatch"
+  | "auth-required"
+  | "issue-unavailable"
+  | "clone-failed"
+  | "authority-denied"
+  | "cancelled";
+
+export const CODING_WORKBENCH_ISSUE_BINDING_FAILURES: readonly CodingWorkbenchIssueBindingFailure[] =
+  Object.freeze([
+    "invalid-reference",
+    "repository-mismatch",
+    "auth-required",
+    "issue-unavailable",
+    "clone-failed",
+    "authority-denied",
+    "cancelled",
+  ] as const);
+
+/**
+ * The server-resolved, immutable facts that bind one run to exactly one GitHub issue.
+ *
+ * Deliberately NOT a second run binding. Task, project, workspace and branch identity already live
+ * on `CodingWorkbenchRuntimeExecutionBinding`, and a run carries exactly one of those; restating
+ * them here would create two sources of truth for the same facts and a way for them to disagree.
+ * This interface adds only what the issue itself contributes.
+ *
+ * Every field is content-free. The issue title, body and comments are transient model context and
+ * never reach a snapshot, an evidence record or a log line; what persists is
+ * `contentRevisionDigest`, which changes when the issue text changes and therefore invalidates a
+ * claim made against the old text without ever storing it.
+ */
+export interface CodingWorkbenchIssueBinding {
+  readonly schemaVersion: typeof CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION;
+  /**
+   * The content-free repository identity the task workspace already derives
+   * (`deriveRepositoryId`), so the binding and the workspace name the same repository by the same
+   * value rather than by two independently-minted ids.
+   */
+  readonly repositoryId: string;
+  /**
+   * sha256 of the configured remote URL. The URL itself never leaves the server, so a binding can
+   * be compared against the live remote without an endpoint reaching a response or an evidence
+   * document.
+   */
+  readonly remoteDigest: string;
+  /** The issue number as displayed to the user. Positive, and bounded by the provider's range. */
+  readonly issueNumber: number;
+  /**
+   * Digest of the provider-assigned immutable issue id. A transferred or renumbered issue keeps its
+   * number in the URL the user pasted but changes this value, which is how the run detects that the
+   * thing it was accepted for is no longer the thing behind that number.
+   */
+  readonly issueIdDigest: string;
+  /**
+   * The server-resolved default branch of the bound repository. This is the run envelope's base
+   * ref, the branch a published pull request targets, and the branch GitHub closes the issue
+   * against — one fact, resolved once, so those three cannot drift apart.
+   */
+  readonly defaultBaseRef: string;
+  /** sha256 over the bounded issue content actually read, never the content. */
+  readonly contentRevisionDigest: string;
+  /** sha256 over every field above; downstream stages bind to this single opaque value. */
+  readonly bindingDigest: string;
+}
+
 export interface CodingWorkbenchRuntimeAuthorityEnvelope {
   readonly schemaVersion: typeof CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION;
   readonly authority: CodingWorkbenchAuthorityEnvelope;
