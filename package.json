@@ -9,8 +9,8 @@
     "url": "https://github.com/oscharko-dev/Keiko"
   },
   "engines": {
-    "node": ">=24.18.0 <25",
-    "npm": "11.16.0"
+    "node": ">=24.18.0 <25 || >=26.3.0 <27",
+    "npm": ">=11.16.0 <12"
   },
   "packageManager": "npm@11.16.0",
   "workspaces": [
@@ -268,12 +268,13 @@
     "@vitejs/plugin-react": "6.0.5",
     "@vitest/coverage-v8": "^4.1.11",
     "acorn": "^8.16.0",
+    "corepack": "0.35.0",
     "dependency-cruiser": "^18.0.0",
     "eslint": "^10.8.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-sonarjs": "^4.2.0",
     "fallow": "3.9.1",
-    "knip": "6.32.2",
+    "knip": "6.32.3",
     "prettier": "^3.0.0",
     "semver": "^7.8.5",
     "typescript-eslint": "^8.67.0",
