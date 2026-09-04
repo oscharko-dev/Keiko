@@ -726,6 +726,10 @@
     "./runtime/workspace-ui": {
       "types": "./dist/workspace-ui.d.ts",
       "import": "./dist/workspace-ui.js"
+    },
+    "./runtime/coding-repository-search": {
+      "types": "./dist/coding-repository-search.d.ts",
+      "default": "./dist/coding-repository-search.js"
     }
   },
   "scripts": {

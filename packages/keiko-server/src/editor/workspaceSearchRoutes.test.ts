@@ -820,25 +820,28 @@ describe("POST /api/editor/workspace-search/replace-preview", () => {
     expect(after).toBe(before);
   });
 
-  it("treats a literal query with embedded whitespace as an exact multi-word match", async () => {
-    await writeFile(join(root, "src", "d.ts"), 'export const label = "parse Config";\n', "utf8");
+  it.each(["parse Config", "[literal].value (x)+?", "prefix\\suffix", "x-y"])(
+    "keeps exact literal text %s after shared-pattern conversion",
+    async (literal) => {
+      await writeFile(join(root, "src", "d.ts"), `// ${literal}\n`, "utf8");
 
-    const result = await handleEditorWorkspaceReplacePreview(
-      postContext(
-        replaceBody({
-          query: "parse Config",
-          replacement: "parseConfig",
-          includeGlobs: ["src/d.ts"],
-        }),
-        "/api/editor/workspace-search/replace-preview",
-      ),
-      deps(),
-    );
+      const result = await handleEditorWorkspaceReplacePreview(
+        postContext(
+          replaceBody({
+            query: literal,
+            replacement: "parseConfig",
+            includeGlobs: ["src/d.ts"],
+          }),
+          "/api/editor/workspace-search/replace-preview",
+        ),
+        deps(),
+      );
 
-    expect(result.status).toBe(200);
-    const body = result.body as { files: { edits: { originalText: string }[] }[] };
-    expect(body.files[0]?.edits.map((edit) => edit.originalText)).toEqual(["parse Config"]);
-  });
+      expect(result.status).toBe(200);
+      const body = result.body as { files: { edits: { originalText: string }[] }[] };
+      expect(body.files[0]?.edits.map((edit) => edit.originalText)).toEqual([literal]);
+    },
+  );
 
   it("replaces a match that follows a brace-delimited block in the same file, not just the block's own declaration line", async () => {
     // src/a.ts has "parseConfig" both in the function declaration (line 1, inside a
