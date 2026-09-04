@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..", "..");
 const PERFORMANCE_PROVIDER = ["cod", "speed"].join("");
@@ -81,6 +81,14 @@ function activeProviderFindings() {
   return providerFindingsForPaths(REPO_ROOT, trackedRepositoryPaths());
 }
 
+let repositoryProviderFindings;
+
+// The production inventory scans every tracked file. Cache that immutable repository fixture with
+// a setup-only budget so the assertion itself remains subject to Vitest's default timeout.
+beforeAll(() => {
+  repositoryProviderFindings = activeProviderFindings();
+}, 60_000);
+
 function createFixtureRoot() {
   const root = mkdtempSync(resolve(tmpdir(), "keiko-retired-provider-"));
   fixtureRoots.push(root);
@@ -129,6 +137,6 @@ describe("retired hosted quality providers", () => {
   });
 
   it("does not retain provider-named paths or active provider tokens in tracked files", () => {
-    expect(activeProviderFindings()).toEqual([]);
+    expect(repositoryProviderFindings).toEqual([]);
   });
 });
