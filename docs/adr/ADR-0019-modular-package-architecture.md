@@ -4,7 +4,7 @@ Status: Accepted
 
 Date: 2026-06-03
 
-Version: 1.1
+Version: 1.2
 
 ## Decision
 
@@ -181,5 +181,10 @@ This ADR is the anchor for the architecture sprint. If a package boundary, depen
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.2 | 2026-09-04 | Reserve the pure contracts/security-only governed-tool catalog boundary and server-owned runtime binding in ADR-0175 (#3411); runtime package creation remains #3406. |
 | 1.1 | 2026-07-27 | Narrowly permit the statically checked, egress-free USearch ANN worker boundary while preserving the general Local Knowledge worker/network denial. |
 | 1.0 | 2026-06-03 | Accepted modular package architecture as Keiko's next foundation before major feature expansion. |
+
+## Canonical tool catalog amendment (#3411)
+
+ADR-0175 reserves one pure keiko-tool-catalog package depending only on keiko-contracts and keiko-security. It owns concrete descriptors, profiles, compatibility and compiler projections; generic types remain in contracts and canonicalization/hash primitives remain in security. Runtime I/O, logging, handlers, authority/policy evaluation, readiness and credentials are forbidden in that package. #3406 owns package creation and the corresponding package-graph/public-export gates; #3411 adds no package or runtime edge. See [ADR-0175](ADR-0175-canonical-governed-tool-catalog.md).

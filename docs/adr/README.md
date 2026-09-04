@@ -201,3 +201,8 @@ supersession note would still mislead a reader rather than inform them.
 | Quality Intelligence implementation history | [ADR-0023](ADR-0023-quality-intelligence-migration-architecture.md) is retained as a historical Epic #270 decision record. Do not use it as the current repository baseline; use ADR-0025 and the active package/security docs instead. |
 
 For operational details, use the README, the runtime-state contract, the security boundaries, and the packaged-surface summary.
+
+The canonical governed-tool catalog decision and current-source migration contract are defined in
+[ADR-0175](ADR-0175-canonical-governed-tool-catalog.md). Architecture and runtime implementation
+are verified checkpoints within the single Epic #3384 delivery; the decision alone does not
+claim an available runtime catalog.
