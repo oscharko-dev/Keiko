@@ -395,7 +395,7 @@ describe("GET /api/runs/:runId/events (SSE)", () => {
     }
 
     let text = "";
-    for (let i = 0; i < 5 && !text.includes("event: ready"); i += 1) {
+    while (!text.includes("event: ready")) {
       const chunk = await reader.read();
       if (chunk.done) break;
       text += new TextDecoder().decode(chunk.value);

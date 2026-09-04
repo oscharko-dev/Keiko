@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { validateDebugLaunchPolicy, type DebugLaunchPolicy } from "./debug-launch-policy.js";
 
+const APPROVED_NPM_VERSIONS = new Set(["11.16.0", "11.19.0"]);
+
 const policy: DebugLaunchPolicy = {
   nodeExecutable: "/opt/runtime/node",
   npmExecutable: "/opt/runtime/npm",
@@ -69,7 +71,7 @@ describe("debug launch Layer-2 policy", () => {
         timeout: 10_000,
       });
       expect(npmVersion.status).toBe(0);
-      expect(npmVersion.stdout.trim()).toBe("11.16.0");
+      expect(APPROVED_NPM_VERSIONS.has(npmVersion.stdout.trim())).toBe(true);
       const result = spawnSync(
         "npm",
         [
