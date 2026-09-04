@@ -57,11 +57,11 @@ permissions: {}
 # indistinguishable from a real defect, and that evidence binds an integration commit nothing else
 # re-measures (Issue #2704).
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
-  # A new head supersedes the run in flight; a metadata edit does not. An `edited` run (title, body
-  # or base change — required to rerun by check-external-quality-config) queues behind the push run
-  # instead of cancelling it: a reviewer bot rewrites the description ~40 s after every push, and the
-  # cancellation it triggered wedged the replacement run in `pending` with no jobs (#3383).
+  # Code-head runs share the pull-request group so a synchronize event supersedes stale evidence.
+  # Metadata edits use their unique run id. GitHub cancels an already-pending run when another run
+  # enters the same group even when cancel-in-progress is false, so merely queueing `edited` behind a
+  # synchronize run lets a reviewer bot cancel the exact-head measurement before any job starts.
+  group: ci-${{ github.event_name == 'pull_request' && github.event.action != 'edited' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'edited' }}
 
 jobs:

@@ -53,6 +53,15 @@ function runCiAggregate(overrides = {}) {
 }
 
 describe("dev quality workflows", () => {
+  it("isolates metadata edits from code-head CI concurrency", () => {
+    expect(ciWorkflow.concurrency.group).toBe(
+      "ci-${{ github.event_name == 'pull_request' && github.event.action != 'edited' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}",
+    );
+    expect(ciWorkflow.concurrency["cancel-in-progress"]).toBe(
+      "${{ github.event_name == 'pull_request' && github.event.action != 'edited' }}",
+    );
+  });
+
   it("runs full mutation on a daily or explicit bounded lane, never on the PR critical path", () => {
     expect(mutation).not.toContain("pull_request:");
     expect(mutation).toContain('cron: "17 2 * * *"');
