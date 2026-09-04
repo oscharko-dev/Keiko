@@ -227,3 +227,24 @@ describe("PR 3419 negative fixture maintenance", () => {
     );
   });
 });
+
+describe("closed status lookup rejects inherited property names", () => {
+  for (const status of ["toString", "constructor", "__proto__"]) {
+    it(`rejects result status ${status} without throwing`, () => {
+      expect(
+        validateResultExample(original, {
+          ...original.resultExamples.invalid,
+          status,
+        }),
+      ).toContain("invalid result pair");
+    });
+    it(`rejects terminal status ${status} without throwing`, () => {
+      expect(
+        validateEvidenceExample(original, "terminal", {
+          ...original.examples.terminal,
+          status,
+        }),
+      ).toContain("invalid terminal pair");
+    });
+  }
+});

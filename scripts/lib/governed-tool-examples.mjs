@@ -102,8 +102,7 @@ function phaseProblems(contract, phase, value) {
   const errors = [];
   if (phase === "terminal") {
     errors.push(...terminalProblems(value));
-    if (!contract.statuses[value.status]?.includes(value.reason))
-      errors.push("invalid terminal pair");
+    if (!validStatusReason(contract, value)) errors.push("invalid terminal pair");
     return errors;
   }
   if (value.status !== undefined) errors.push("premature terminal status");
@@ -143,8 +142,12 @@ function validResultData(contract, value) {
     return value.data !== undefined && value.data !== null && validPage(contract, value.page);
   return value.data === null && value.page === null;
 }
+function validStatusReason(contract, value) {
+  if (!Object.hasOwn(contract.statuses, value.status)) return false;
+  return contract.statuses[value.status].includes(value.reason);
+}
 function validResultPair(contract, value) {
-  return value.schemaVersion === 1 && contract.statuses[value.status]?.includes(value.reason);
+  return value.schemaVersion === 1 && validStatusReason(contract, value);
 }
 function exactRecord(value, keys) {
   return (
