@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
 
+import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+
 import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchConnectorScope,
@@ -118,6 +120,18 @@ function contextFromActive(
   const branch = instance.taskBranch;
   const now = input.now?.() ?? new Date();
   const runtimeProfile = trustedRuntimeProfile(input, request);
+  // ADR-0124 D2: authority is the fail-closed MINIMUM of the requested mode and the deployment
+  // ceiling. Every capability below is derived from that minimum, never from the request. Deriving
+  // from `request.requestedMode` widened authority by request: `runtimeAuthorityService` clamps only
+  // the envelope's `effectiveMode` and copies these fields verbatim, so a run that asked for
+  // `autonomous-delivery` under a lower ceiling was minted with a clamped mode but still carried
+  // `delivery-substrate`, `connector-access`, `source-control.write` and a connector-scoped network
+  // policy — which `codingToolAuthorityPort` and `gitDelivery/runBoundAuthority` both honour,
+  // because they read the scopes, not the mode.
+  const effectiveMode = resolveEffectiveCodingWorkbenchMode(
+    request.requestedMode,
+    input.deploymentCeiling,
+  );
   return {
     operatorId: request.serverPrincipal,
     taskId: instance.taskId,
@@ -135,9 +149,8 @@ function contextFromActive(
     },
     deploymentCeiling: input.deploymentCeiling,
     runtimeSource: runtimeProfile.runtimeSource,
-    actionClasses: runtimeActionClasses(request.requestedMode, input.researchEgressEnabled),
-    connectorScopes:
-      request.requestedMode === "autonomous-delivery" ? DELIVERY_CONNECTOR_SCOPES : [],
+    actionClasses: runtimeActionClasses(effectiveMode, input.researchEgressEnabled),
+    connectorScopes: effectiveMode === "autonomous-delivery" ? DELIVERY_CONNECTOR_SCOPES : [],
     modelProfile: {
       profileId: runtimeProfile.profileId,
       source: runtimeProfile.modelSource,
@@ -148,13 +161,13 @@ function contextFromActive(
         : { reasoningEffort: runtimeProfile.reasoningEffort }),
     },
     commandPolicy: {
-      mode: request.requestedMode === "governed-assist" ? "deny" : "governed",
+      mode: effectiveMode === "governed-assist" ? "deny" : "governed",
       allow: [],
       deny: [],
       maxCommandTimeoutMs: 120_000,
-      requirePerCommandApproval: request.requestedMode !== "autonomous-delivery",
+      requirePerCommandApproval: effectiveMode !== "autonomous-delivery",
     },
-    networkPolicy: runtimeNetworkPolicy(request.requestedMode, input.researchEgressEnabled),
+    networkPolicy: runtimeNetworkPolicy(effectiveMode, input.researchEgressEnabled),
     gates: ["human-approval"],
     budget: {
       maxRuntimeMs: RUNTIME_TTL_MS,

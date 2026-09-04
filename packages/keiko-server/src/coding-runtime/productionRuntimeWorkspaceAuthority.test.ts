@@ -386,8 +386,49 @@ describe("production runtime workspace authority", () => {
         allowLoopback: false,
         connectorScopes: ["source-control.read", "source-control.write"],
       });
+    } else {
+      // The lower two modes were only ever asserted through their action classes. Without this the
+      // scope and network derivations were unpinned for them, which is how the clamp defect below
+      // stayed invisible.
+      expect(context.connectorScopes).toEqual([]);
+      expect(context.networkPolicy.connectorScopes).toEqual([]);
     }
   });
+
+  // #3384 / #3386: every capability in the envelope is derived from the EFFECTIVE mode — the
+  // fail-closed minimum of requested mode and deployment ceiling (ADR-0124 D2) — not from the
+  // requested mode. Deriving from the request let a run ask for `autonomous-delivery` under a lower
+  // ceiling and receive a clamped `effectiveMode` while still carrying `delivery-substrate`,
+  // `source-control.write` and a connector-scoped network policy, which the runtime tool port and
+  // the Git-delivery route admission both accept. That is authority widening by request.
+  it.each([
+    ["supervised-coding", ["command-execution"], ["delivery-substrate", "connector-access"]],
+    ["governed-assist", [], ["command-execution", "delivery-substrate", "connector-access"]],
+  ] as const)(
+    "clamps every derived capability to the deployment ceiling %s when a higher mode is requested",
+    (ceiling, included, excluded) => {
+      const fixture = liveFixture();
+      const context = resolveProductionRuntimeContext(
+        { ...fixture.input, deploymentCeiling: ceiling },
+        { ...fixture.request, requestedMode: "autonomous-delivery" },
+      );
+
+      expect(context.deploymentCeiling).toBe(ceiling);
+      for (const actionClass of included) expect(context.actionClasses).toContain(actionClass);
+      for (const actionClass of excluded) {
+        expect(context.actionClasses).not.toContain(actionClass);
+      }
+      expect(context.actionClasses).not.toContain("network-egress");
+      expect(context.connectorScopes).toEqual([]);
+      expect(context.networkPolicy).toEqual({
+        mode: "deny-all",
+        allowLoopback: false,
+        connectorScopes: [],
+      });
+      expect(context.commandPolicy.requirePerCommandApproval).toBe(true);
+      expect(context.commandPolicy.mode).toBe(ceiling === "governed-assist" ? "deny" : "governed");
+    },
+  );
 });
 
 function liveFixture() {
