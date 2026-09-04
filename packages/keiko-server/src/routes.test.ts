@@ -38,6 +38,9 @@ describe("API route contract", () => {
     }
   });
 
+  // #2958 deleted the modules behind these three patterns (KEIKO-0115/KEIKO-0135). The pin stays:
+  // it is what fails if a future change reintroduces a browser-authored authority front door under
+  // any of the retired paths.
   it("does not mount deprecated browser-owned runtime authority routes", () => {
     for (const pattern of [
       "/api/editor/agent/authority",

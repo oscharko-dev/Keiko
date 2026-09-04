@@ -1487,7 +1487,10 @@ describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
     expect(deps.codingWorkbenchEvidenceStore).not.toBe(deps.evidenceStore);
   });
 
-  it("creates a server-owned autonomous delivery approval store by default", () => {
+  // #2958 (KEIKO-0115/KEIKO-0135): the autonomous-delivery approval store this used to assert was
+  // deleted with its unmounted route group. The deployment ceiling outlives it and must still fail
+  // closed to undefined, which the mounted readers translate to `governed-assist`.
+  it("leaves the autonomous delivery deployment ceiling unset when nothing configures one", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("ev-autonomous-store-"),
@@ -1495,8 +1498,8 @@ describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
       store: createInMemoryUiStore(),
     });
 
-    expect(deps.autonomousDeliveryApprovalStore).toBeDefined();
     expect(deps.autonomousDeliveryDeploymentCeiling).toBeUndefined();
+    expect("autonomousDeliveryApprovalStore" in deps).toBe(false);
   });
 
   it("derives the OpenAI API-key-through-gateway model source from the selected coding-safe provider", () => {

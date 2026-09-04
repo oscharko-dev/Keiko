@@ -367,11 +367,6 @@
       "tolerance": 0,
       "lines": 100
     },
-    "packages/keiko-server/src/coding-runtime/autonomousDeliveryApprovalStore.ts": {
-      "governance": "absolute",
-      "tolerance": 0,
-      "lines": 100
-    },
     "packages/keiko-server/src/coding-runtime/supervisedCodingApprovalStore.ts": {
       "governance": "absolute",
       "tolerance": 0,

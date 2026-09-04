@@ -78,7 +78,6 @@ import {
   classifyEditorAgentAction,
   composeEditorAgentActionPolicyDecision,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
-import { validateCodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import {
   GIT_AGENT_CONTEXT_MAX_BLAME_LINES,
   GIT_AGENT_CONTEXT_MAX_FILES,
@@ -129,7 +128,6 @@ import {
   handleEditorWorkspaceSearch,
   handleEditorWorkspaceSymbols,
 } from "./workspaceSearchRoutes.js";
-import type { AutonomousDeliveryConfirmation } from "../coding-runtime/autonomousDeliveryPolicy.js";
 import type { CodingRuntimeEditorMutationLeaseRequest } from "../coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
 import {
   editorAgentAuthorityRegistry,
@@ -155,7 +153,6 @@ import {
 
 type EditorAgentRouteDeps = Pick<
   UiHandlerDeps,
-  | "autonomousDeliveryApprovalStore"
   | "autonomousDeliveryDeploymentCeiling"
   | "runtimeMutationLease"
   | "workspaceRootAccessResolver"
@@ -1319,88 +1316,8 @@ export async function handleEditorAgentSnapshot(
   };
 }
 
-const EDITOR_AGENT_AUTHORITY_REQUEST_KEYS = new Set([
-  "schemaVersion",
-  "authorityEnvelope",
-  "confirmation",
-]);
-const EDITOR_AGENT_AUTHORITY_CONFIRMATION_KEYS = new Set([
-  "confirmed",
-  "approvalProofDigest",
-  "confirmedAt",
-]);
-
 function editorAgentDeploymentCeiling(deps: EditorAgentRouteDeps | undefined): CodingWorkbenchMode {
   return deps?.autonomousDeliveryDeploymentCeiling ?? "governed-assist";
-}
-
-function parseAuthorityConfirmation(value: unknown): AutonomousDeliveryConfirmation | undefined {
-  if (
-    !isRecord(value) ||
-    !Object.keys(value).every((key) => EDITOR_AGENT_AUTHORITY_CONFIRMATION_KEYS.has(key)) ||
-    value.confirmed !== true ||
-    typeof value.approvalProofDigest !== "string" ||
-    typeof value.confirmedAt !== "string"
-  ) {
-    return undefined;
-  }
-  return {
-    confirmed: true,
-    approvalProofDigest: value.approvalProofDigest,
-    confirmedAt: value.confirmedAt,
-  };
-}
-
-interface ParsedEditorAgentAuthorityRequest {
-  readonly envelope: unknown;
-  readonly confirmation: AutonomousDeliveryConfirmation;
-}
-
-function parseAuthorityRequest(
-  body: Record<string, unknown>,
-): ParsedEditorAgentAuthorityRequest | undefined {
-  const confirmation = parseAuthorityConfirmation(body.confirmation);
-  if (
-    body.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION ||
-    !Object.keys(body).every((key) => EDITOR_AGENT_AUTHORITY_REQUEST_KEYS.has(key)) ||
-    body.authorityEnvelope === undefined ||
-    confirmation === undefined
-  ) {
-    return undefined;
-  }
-  return { envelope: body.authorityEnvelope, confirmation };
-}
-
-export async function handleEditorAgentAuthority(
-  ctx: RouteContext,
-  deps?: EditorAgentRouteDeps,
-): Promise<RouteResult> {
-  const body = await readJsonObject(ctx.req, MAX_AGENT_BODY_BYTES);
-  if (isRouteResult(body)) return body;
-  const request = parseAuthorityRequest(body);
-  if (request === undefined) {
-    return { status: 400, body: errorBody("INVALID_REQUEST", "Authority request is invalid.") };
-  }
-  const parsed = validateCodingWorkbenchAuthorityEnvelope(request.envelope);
-  const ceiling = editorAgentDeploymentCeiling(deps);
-  const approvalStore = deps?.autonomousDeliveryApprovalStore;
-  const nowIso = new Date().toISOString();
-  if (
-    !parsed.ok ||
-    parsed.value.deploymentCeiling !== ceiling ||
-    approvalStore?.consume(parsed.value, request.confirmation, nowIso) !== true
-  ) {
-    return {
-      status: 403,
-      body: errorBody("AUTHORITY_PROOF_INVALID", "Authority confirmation was not accepted."),
-    };
-  }
-  const registration = editorAgentAuthorityRegistry.register(parsed.value, ceiling, nowIso);
-  if (!registration.ok) {
-    const code = registration.reason === "expired" ? "AUTHORITY_EXPIRED" : "AUTHORITY_INVALID";
-    return { status: 403, body: errorBody(code, "The Authority Envelope was not accepted.") };
-  }
-  return { status: 200, body: { authorityRef: registration.authorityRef } };
 }
 
 function resolveNonMutationTargetPath(

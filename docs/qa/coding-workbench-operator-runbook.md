@@ -94,7 +94,8 @@ Run focused closeout checks:
 ```sh
 npx vitest run \
   packages/keiko-server/src/coding-runtime/codingAutonomyQaMatrix.test.ts \
-  packages/keiko-server/src/coding-runtime/autonomousDeliveryPolicy.test.ts \
+  packages/keiko-server/src/gitDelivery/runBoundAuthority.test.ts \
+  packages/keiko-server/src/gitDelivery/approvalStore.test.ts \
   packages/keiko-server/src/coding-runtime/codingRuntimeManager.test.ts \
   packages/keiko-server/src/coding-sidecar-gateway.test.ts \
   packages/keiko-server/src/coding-codex-subscription.test.ts

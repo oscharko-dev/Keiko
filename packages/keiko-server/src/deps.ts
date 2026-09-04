@@ -291,7 +291,6 @@ import {
   createServerWorkspaceIndexProvider,
   type WorkspaceIndexProvider,
 } from "./workspace-index-provider.js";
-import type { AutonomousDeliveryConnectorExecutor } from "./coding-runtime/autonomousDeliveryPolicy.js";
 import {
   createCodingRuntimeEditorMutationLeaseBroker,
   type CodingRuntimeEditorMutationLeasePort,
@@ -341,10 +340,6 @@ import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContex
 import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextConnector.js";
 import { createGitHubCodeContextApiPort } from "./coding-context/githubCodeContextPort.js";
 import { createGovernedJiraCodeContextHttpPort } from "./coding-context/jiraCodeContextPort.js";
-import {
-  createAutonomousDeliveryApprovalStore,
-  type AutonomousDeliveryApprovalStore,
-} from "./coding-runtime/autonomousDeliveryApprovalStore.js";
 import type { AtlassianConnectorCredentialDeps } from "./atlassian/credentialRoutes.js";
 import { buildAtlassianConnectorCredentialDeps } from "./atlassian/wiring.js";
 // KEIKO-0565: DI-scoped Atlassian connector registries. The classes are imported (not just their
@@ -616,12 +611,6 @@ export interface UiHandlerDeps {
   // Server-owned deployment ceiling for coding-runtime authority. Undefined fails closed to
   // governed-assist; the readiness projection reports the same ceiling the mint clamp enforces.
   readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
-  // Optional governed connector mutation seam for Autonomous Delivery. Production may leave this
-  // absent; the autonomous executor then fails connector writes closed instead of using provider APIs.
-  readonly autonomousDeliveryConnector?: AutonomousDeliveryConnectorExecutor | undefined;
-  // Server-owned approval proof store for Autonomous Delivery. The execute route consumes a proof
-  // minted by the confirm route instead of trusting a client-supplied digest.
-  readonly autonomousDeliveryApprovalStore?: AutonomousDeliveryApprovalStore | undefined;
   // KEIKO-0565: DI-scoped Atlassian connector approval and sync registries. Optional so
   // pre-existing fixture-heavy test wiring stays byte-for-byte compatible; production wiring in
   // buildUiHandlerDeps constructs one instance per composed deps graph so two independently-built
@@ -636,10 +625,6 @@ export interface UiHandlerDeps {
   // Server-owned deployment ceiling for Autonomous Delivery requests. Undefined fails closed to the
   // lowest authority posture instead of accepting the request-supplied ceiling.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
-  // Optional server-owned stop-state seam. A client can still stop itself by sending
-  // operatorStopped:true, but it cannot hide a server-recorded stop for the run.
-  readonly autonomousDeliveryStopState?:
-    { readonly isStopped: (runId: string) => boolean } | undefined;
   // Optional injectable ports for the coding-context intake route (#1989 wiring). Production
   // composes real ports from env/workspace when absent; tests inject deterministic fakes.
   readonly codingContextGitHubPort?: GitHubCodeContextApiPort | undefined;
@@ -958,13 +943,9 @@ export interface BuildHandlerDepsOptions {
   // otherwise creates an isolated default store under <evidenceDir>/coding-workbench so /api/evidence
   // stays clean while sidecar routing evidence still persists.
   readonly codingWorkbenchEvidenceStore?: EvidenceStore | undefined;
-  // Optional server-owned Autonomous Delivery approval store. Production creates one per BFF deps
-  // assembly so client-supplied Authority Envelope fields cannot mint or replay confirmations.
-  readonly autonomousDeliveryApprovalStore?: AutonomousDeliveryApprovalStore | undefined;
   // Optional server-owned Autonomous Delivery ceiling. When absent, autonomous confirmation and
   // execution fail closed to governed-assist.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
-  readonly autonomousDeliveryStopState?: UiHandlerDeps["autonomousDeliveryStopState"] | undefined;
   // KEIKO-0565: injectable Atlassian action-approval and sync-job registries. Production wiring
   // constructs one instance per BFF process; test wiring can inject fresh instances to keep test
   // isolation clean instead of resetting a module-level singleton.
@@ -3433,23 +3414,17 @@ function codingSidecarGatewayModelSourceFields(
   };
 }
 
+// #2958 (KEIKO-0115/KEIKO-0135): the browser-authored confirm/execute route group this helper used
+// to feed was deleted along with its approval store and stop-state seam. The server-owned deployment
+// ceiling survives it: it is the fail-closed clamp that the mounted coding-context, editor producer,
+// editor verification and Atlassian action surfaces all read.
 function autonomousDeliveryFields(
   options: BuildHandlerDepsOptions,
-): Pick<
-  UiHandlerDeps,
-  | "autonomousDeliveryApprovalStore"
-  | "autonomousDeliveryDeploymentCeiling"
-  | "autonomousDeliveryStopState"
-> {
+): Pick<UiHandlerDeps, "autonomousDeliveryDeploymentCeiling"> {
   return {
-    autonomousDeliveryApprovalStore:
-      options.autonomousDeliveryApprovalStore ?? createAutonomousDeliveryApprovalStore(),
     ...(options.autonomousDeliveryDeploymentCeiling === undefined
       ? {}
       : { autonomousDeliveryDeploymentCeiling: options.autonomousDeliveryDeploymentCeiling }),
-    ...(options.autonomousDeliveryStopState === undefined
-      ? {}
-      : { autonomousDeliveryStopState: options.autonomousDeliveryStopState }),
   };
 }
 

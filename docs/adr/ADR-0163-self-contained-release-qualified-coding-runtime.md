@@ -383,6 +383,11 @@ green. This is the class audit finding F-01 closed, and it must not be reintrodu
 
 - A customer artifact has no hidden Node.js, npm, OpenCode, supervisor, receipt, or secure-read
   download step.
+- The packaged runtime exposes exactly one autonomous coding-delivery authority path. Issue #2958
+  deleted the unmounted pre-ADR-0137 `autonomousDelivery{Routes,Policy,ApprovalStore}` scaffolding
+  and the unmounted `handleEditorAgentAuthority`, so a release artifact cannot ship a second,
+  browser-authored authority front door alongside `CODING_RUNTIME_ROUTE_GROUP` and the Git-delivery
+  admission and approval store that ADR-0137 makes normative.
 - Fresh installs no longer depend on update-only metadata.
 - Windows activation is tied to the exact shipped Job Object backend instead of a writable JSON
   receipt.

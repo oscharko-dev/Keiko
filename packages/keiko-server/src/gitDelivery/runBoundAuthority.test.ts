@@ -89,6 +89,79 @@ const AUTHORITY_DENIAL_CASES: readonly AuthorityDenialCase[] = [
     { ...REQUEST, remoteBranchName: "dev" },
     "branch-out-of-envelope",
   ],
+  // #2958 (KEIKO-0115): relocated from codingAutonomyQaMatrix.test.ts, which asserted these four
+  // boundaries against the deleted `decideAutonomousDeliveryOperation`. `authorizeGitDelivery` is
+  // the layer that now owns them on the mounted routes, so the pins move here rather than lapse.
+  // A missing action class denies even when every connector scope is present.
+  [
+    authorityPort((active) => ({
+      ...active,
+      authority: {
+        ...active.authority,
+        actionClasses: ["workspace-write", "network-egress"],
+      },
+    })),
+    REQUEST,
+    "permission-scope-missing",
+  ],
+  // Network drift: the envelope grants the scope but its network policy does not carry it, so a
+  // network-bound operation cannot borrow the non-network grant.
+  [
+    authorityPort((active) => ({
+      ...active,
+      authority: {
+        ...active.authority,
+        networkPolicy: {
+          mode: "connector-scoped-egress",
+          allowLoopback: true,
+          connectorScopes: ["source-control.read"],
+        },
+      },
+    })),
+    REQUEST,
+    "permission-scope-missing",
+  ],
+  // A deny-all network policy denies every network-bound operation outright. The scopes are left
+  // in place deliberately: with an empty scope list the later per-scope check would deny anyway and
+  // this case would pass with the mode guard removed, pinning nothing.
+  [
+    authorityPort((active) => ({
+      ...active,
+      authority: {
+        ...active.authority,
+        networkPolicy: {
+          mode: "deny-all",
+          allowLoopback: false,
+          connectorScopes: ["source-control.read", "source-control.write"],
+        },
+      },
+    })),
+    REQUEST,
+    "permission-scope-missing",
+  ],
+  // A base ref outside the envelope is refused, not only a head or remote ref.
+  [
+    permittedGitDeliveryAuthority(
+      () => PROJECT_ID,
+      () => WORKSPACE_ROOT,
+    ),
+    { ...REQUEST, baseBranchName: "main" },
+    "branch-out-of-envelope",
+  ],
+  // A head ref that matches the accepted run but escapes the envelope's allowed prefixes is
+  // refused: the prefix list is checked against the run's own head, not only against the request.
+  [
+    authorityPort((active) => ({
+      ...active,
+      branch: { ...active.branch, allowedPrefixes: ["release/"] },
+      authority: {
+        ...active.authority,
+        branch: { ...active.authority.branch, allowedPrefixes: ["release/"] },
+      },
+    })),
+    REQUEST,
+    "branch-out-of-envelope",
+  ],
 ];
 
 describe("authorizeGitDelivery", () => {

@@ -411,8 +411,8 @@ export interface RouteContext {
   // error responses or SSE error frames thread it through so a failure is traceable end-to-end.
   //
   // REQUIRED, and the optionality is what made it necessary. Keiko delegates between routes
-  // IN-PROCESS by constructing a fresh `RouteContext` — the git-agent operations, autonomous
-  // delivery, and the editor's coding-context providers all do it — and every one of those
+  // IN-PROCESS by constructing a fresh `RouteContext` — the git-agent operations, Git delivery,
+  // and the editor's coding-context providers all do it — and every one of those
   // factories silently omitted this field, so the routes they called logged under
   // `UNKNOWN_CORRELATION_ID` and could not be joined to the operation that caused them. Four such
   // families were found across three review rounds, one at a time, because nothing forced the
@@ -1486,7 +1486,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // #1577 agent repository operations: typed facade over existing Git read and governed delivery
   // handlers. No shell/provider authority is introduced; command-shaped payloads are denied first.
   ...GIT_AGENT_OPERATION_ROUTE_GROUP,
-  // #2256: browser-owned Authority Envelope confirmation/execution is intentionally not mounted.
+  // #2256 left the browser-owned Authority Envelope confirmation/execution routes unmounted;
+  // #2958 (KEIKO-0115/KEIKO-0135) deleted them outright, together with the policy and approval
+  // store behind them, so there is no second front door left to mount by accident. The one
+  // autonomous coding-delivery authority path is this group plus the Git-delivery admission in
+  // gitDelivery/runBoundAuthority.ts and its approval store. routes.test.ts pins the deleted
+  // patterns as unmatched.
   // Productive coding-runtime actions flow only through the singleton server aggregate below.
   ...CODING_RUNTIME_ROUTE_GROUP,
   // ADR-0141 (#2477): the authenticated local app-session channel — a distinct authenticated

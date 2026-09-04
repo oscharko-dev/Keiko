@@ -18,10 +18,16 @@ resource/risk matrix, separately approved delivery, and editor-agent compatibili
 corrects only the missing runtime ownership and delegation boundary. It does not activate a process,
 implement an adapter, execute a connector, or add a browser route.
 
-Production route and orchestrator migration is explicitly deferred to Issue #2256. The existing
-client-envelope runtime routes are not validated by this decision, are not claimed safe or migrated,
-and must not activate productive runtime traffic. Epic #1982 remains blocked until #2256 removes
-that caller-authored authority path and wires these contracts through the production orchestrator.
+Production route and orchestrator migration was deferred to Issue #2256, which left the
+client-envelope runtime routes unmounted, and Issue #2958 (audit KEIKO-0115/KEIKO-0135) then deleted
+them along with the policy and approval store behind them:
+`POST /api/coding-workbench/autonomous-delivery/{confirm,execute}` and
+`POST /api/editor/agent/authority` no longer exist as code, and `routes.test.ts` pins all three
+patterns as unmatched. The single mounted autonomous coding-delivery authority path is
+`CODING_RUNTIME_ROUTE_GROUP`, whose envelopes are minted by
+`runtimeAuthorityService.confirmStart`; every state-changing Git delivery operation is admitted by
+`gitDelivery/runBoundAuthority.authorizeGitDelivery` against that accepted run and gated by the
+one-use `gitDelivery/approvalStore`.
 
 ## Decision
 
@@ -135,8 +141,13 @@ it but may not weaken or reinterpret it.
   transport/backpressure, and real-binary execution belong to ordered corrective children and cannot
   be inferred from these contracts. Process-tree ownership and revocation-before-termination are
   normative here; #2251 implements them and #2258 qualifies the platform backends before activation.
-- No production traffic is migrated by Issue #2252. Issue #2256 owns route replacement and
-  orchestrator wiring because this issue expressly forbids browser-route implementation.
+- No production traffic was migrated by Issue #2252; Issue #2256 owned route replacement and
+  orchestrator wiring because this issue expressly forbade browser-route implementation. Issue #2958
+  completed that removal by deleting the unmounted caller-authored authority scaffolding, so no
+  second, unreachable delivery front door remains beside the server-owned path. No primitive was
+  relocated out of it: the one-use proof store, envelope digest, branch and scope admission, ceiling
+  clamp, and operator stop all already had live owners, and the boundary assertions its tests
+  carried moved onto `gitDelivery/runBoundAuthority.test.ts`.
 
 ## Alternatives considered
 

@@ -1282,9 +1282,10 @@ export function checkE2eSpecReachability({ specs, scripts, selections, specTags,
 //
 // The mounted set is read from the BUILT `API_ROUTES` rather than re-derived from the source. That
 // is not a convenience: `routes.ts` composes its table from route GROUPS, some produced by factory
-// calls, and one group (`AUTONOMOUS_DELIVERY_ROUTE_GROUP`) is DEFINED but deliberately never
-// spread. A source scan for `pattern:` literals finds that group and would bless the exact dead
-// call this invariant exists to catch. The production table is the only answer that cannot drift.
+// calls, so a source scan for `pattern:` literals can bless a pattern the table never spreads —
+// the exact dead call this invariant exists to catch. It held a defined-but-never-spread group
+// (`AUTONOMOUS_DELIVERY_ROUTE_GROUP`) until #2958 deleted it; reading the production table is what
+// made that group's deadness visible, and it is still the only answer that cannot drift.
 // The separator may be escaped: a spec that recognises a route with a REGULAR EXPRESSION spells it
 // `/\/api\/editor\/…/u`, and a finder anchored on a bare `/api/` never matches it — the route would
 // then be exempt from this invariant for no better reason than the syntax that named it.
