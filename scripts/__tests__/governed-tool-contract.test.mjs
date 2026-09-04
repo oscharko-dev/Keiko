@@ -101,6 +101,7 @@ describe("architecture phase fixtures (not production evidence)", () => {
             ...phaseExample("terminal"),
             status,
             reason,
+            ...(status === "failed" ? { errorKind: "TypeError", frames: [], causeChain: [] } : {}),
           }),
         ).toEqual([]);
       }

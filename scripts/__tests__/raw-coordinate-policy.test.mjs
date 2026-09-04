@@ -15,6 +15,18 @@ function source(path, text) {
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
 
 describe("ADR-0165 governed coding-search coordinate boundary", () => {
+  it("accepts empty source without claiming executable coverage", async () => {
+    const root = source("packages/keiko-server/src/coding-runtime/empty.ts", "");
+    await expect(checkArchitectureImportPolicy(root)).resolves.toEqual([]);
+  });
+  it("retains the lane denial in syntactically malformed source", async () => {
+    const root = source(
+      "packages/keiko-server/src/coding-runtime/malformed.ts",
+      'const broken = { contentLane: "editor";',
+    );
+    const violations = await checkArchitectureImportPolicy(root);
+    expect(violations.map((item) => item.rule)).toContain("adr-0165-raw-coordinate-owner");
+  });
   it.each([
     'const deps = { contentLane: "editor" };',
     'const deps = { ["contentLane"]: lane };',

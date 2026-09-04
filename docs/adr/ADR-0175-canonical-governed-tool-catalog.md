@@ -6,6 +6,8 @@ Accepted for implementation by [#3411](https://github.com/oscharko-dev/Keiko/iss
 2026-09-04. This decision and its executable architecture gates precede runtime delivery.
 The catalog package, binder and migrated consumers are **not implemented by this decision**.
 
+Version: 1.0
+
 ## Context
 
 The [audited inventory](../architecture/governed-tool-contract.v1.json) identifies independent
@@ -211,10 +213,11 @@ An uncertain effect fails closed. No retry may hide that uncertainty.
 
 The `phases` table freezes operation names for #3412's existing generator; it is not a second
 operation catalog or a runtime emission claim. #3412 produces generated provenance/fixtures;
-#3413 emits and analyzes those operations. Projection/readiness events have correlation,
+\#3413 emits and analyzes those operations. Projection/readiness events have correlation,
 catalog/profile/projection identity and readiness; they do not invent invocation IDs. Started
 records use `state="started"`, `reason="none"` and a reservation ID, **no terminal status**.
-Terminal records require the result pair and settlement receipt. A discarded completion references
+Terminal records require the result pair and settlement receipt, including `reservationId`
+(null only with `budgetDisposition="not-reserved"` before reservation). A discarded completion references
 the prior settlement and reason `late-completion`; it is not a second terminal.
 
 Only `evidenceAllowed` fields can enter durable lifecycle evidence. `frames`/`causeChain` use the
@@ -238,7 +241,7 @@ evidence. The existing Editor search route keeps its exact lane selector. The pu
 is now rejected by the import-policy AST gate even when the lane value is a variable or shorthand.
 The negative fixture is an architecture proof, not a productive H1 implementation.
 
-#3411 lands via a dedicated `dev` PR before any mandatory implementation child or H1 begins. H1
+\#3411 lands via a dedicated `dev` PR before any mandatory implementation child or H1 begins. H1
 then lands its own non-advertised typed server handler/readiness/tests PR under #3386. Only #3414
 owns the later model-visible projection. Its durable handoff records GitHub's actual dev-reachable
 merge commit and tree, merged PR, source-head required-check reference, current head and bound
@@ -260,3 +263,9 @@ contract correction. An incomplete owner, axis, status, bound, interface field o
 fails the architecture consistency gate. Runtime conformance, performance and live-model proof
 remain #3415/#3390 delivery criteria. This imposes explicit migration work but prevents silent
 schema drift, false readiness and competing authority systems.
+
+## Version History
+
+| Version | Date | Change |
+| --- | --- | --- |
+| 1.0 | 2026-09-04 | Accept the governed-tool ownership, pure package boundary, version/digest/result/state/evidence contract and workspace-only coding raw-coordinate lane (#3411); implementation belongs to the named delivery owners. |

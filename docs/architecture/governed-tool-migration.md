@@ -4,9 +4,12 @@ This is the #3411 architecture baseline at `9348fb9c` (2026-09-04), governed by
 [ADR-0175](../adr/ADR-0175-canonical-governed-tool-catalog.md). It is an inventory and implementation
 contract, not evidence that catalog runtime or H1 exists. `npm run check:governed-tool-contract`
 replays every `inventory.path` / `inventory.probe` in the
-[normative table](governed-tool-contract.v1.json) against the checkout. An obsolete probe must be
-updated with its owning migration; silently deleting a row or changing a disposition is not proof
-of migration. Future #3406/#3415 implement the shrink-only AST registry gate separately.
+[normative table](governed-tool-contract.v1.json) against the checkout. The 43 audited IDs, paths,
+probes, owners and dispositions are frozen as the historical ownership baseline; rewriting a row to another source cannot preserve coverage merely by retaining its count.
+Before a migration changes or removes any baseline source, #3406 must replace the live-probe check
+with its actual migration register and conformance validator in the same change. Historical
+ownership rows remain auditable; only the active duplicate register then shrinks. #3415 completes
+that register's zero-duplicate proof.
 
 ## Audited production inventory
 
@@ -63,21 +66,25 @@ producer. No consumer may redeclare a canonical result, cursor or identity local
 | #3390    | #3415 exact-head closeout and H1 evidence reference                       | Live pinned OpenCode real-model journey; no duplicate compiler or handler                                                                                      |
 
 Any shared file has one integrator at a time. #3406/#3412 may proceed in parallel after #3411 merges.
-#3413 follows both. #3409 lands before any consumer migration. H1 can proceed independently of
-#3406 after #3411, since the typed handler is not model-visible and references the reserved semantic
+\#3413 follows both. #3409 lands before any consumer migration. H1 can proceed independently of
+\#3406 after #3411, since the typed handler is not model-visible and references the reserved semantic
 identity rather than a runtime package that does not yet exist. #3414 waits for H1 and #3409.
-#3407/#3408 and then #3415 follow; #3390 consumes closeout and introduces no dependency cycle.
+\#3407/#3408 and then #3415 follow; #3390 consumes closeout and introduces no dependency cycle.
 
 ## Compatibility, removal and rollback
 
-#3406's actual migration register must freeze each remaining duplicate by exact source identity,
+\#3406's actual migration register must freeze each remaining duplicate by exact source identity,
 owner issue, projection/contract version and digest, reason, expiry/removal checkpoint, source
 fingerprint and removal test. New rows, broader scopes, renamed aliases or expanded consumers fail
-closed; removal is allowed only with derived-projection/handler conformance evidence. The initial
-inventory is finite, shrinks monotonically and reaches zero in #3415. A native extension has its
+closed; removal is allowed only with derived-projection/handler conformance evidence. The active
+migration register is finite, shrinks monotonically and reaches zero in #3415. The 43-row historical
+ownership inventory is not an active duplicate count and does not shrink. #3406 replaces its live
+probe prerequisite with the migration/conformance validator before removing or changing a source;
+that replacement and its first real migration must land together, with negative tests rejecting
+new duplicates and a positive test proving an authorized removal. A native extension has its
 own declared owner/identity and never counts as a compatibility exception.
 
-#3409 alone owns the old/new union and normalizer. The old arm is accepted only from its merge
+\#3409 alone owns the old/new union and normalizer. The old arm is accepted only from its merge
 until the earlier of its explicit seven-day expiry or #3415 closeout, under a server-held exact
 `legacy-native@1` projection binding. Both arms together, unbound name-only input, implicit latest
 resolution, downgrade and cross-profile replay are invalid. Every new producer emits the bound

@@ -40,8 +40,10 @@ export function checkGovernedToolContractNegatives(root = process.cwd()) {
   const errors = [];
   for (const mutation of mutations) {
     const fixture = structuredClone(contract);
-    const target = mutation.path.slice(0, -1).reduce((value, key) => value[key], fixture);
-    Reflect.deleteProperty(target, mutation.path.at(-1));
+    if (!applyNegativeMutation(fixture, mutation.path)) {
+      errors.push("negative contract fixture: invalid or stale mutation path");
+      continue;
+    }
     if (
       !validateGovernedToolContract(fixture).some((error) => error.startsWith(mutation.expected))
     ) {
@@ -50,4 +52,21 @@ export function checkGovernedToolContractNegatives(root = process.cwd()) {
   }
   if (mutations.length < 6) errors.push("missing architecture consistency negatives");
   return errors;
+}
+
+function applyNegativeMutation(fixture, path) {
+  if (!Array.isArray(path) || path.length === 0 || path.some((key) => typeof key !== "string"))
+    return false;
+  let target = fixture;
+  for (const key of path.slice(0, -1)) {
+    if (!hasProperty(target, key)) return false;
+    target = target[key];
+  }
+  const key = path.at(-1);
+  if (!hasProperty(target, key)) return false;
+  return Reflect.deleteProperty(target, key);
+}
+
+function hasProperty(target, key) {
+  return target !== null && typeof target === "object" && Object.hasOwn(target, key);
 }

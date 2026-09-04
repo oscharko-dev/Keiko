@@ -216,7 +216,8 @@
         "durationMs",
         "settlementId",
         "effectStarted",
-        "budgetDisposition"
+        "budgetDisposition",
+        "reservationId"
       ]
     },
     "discarded": {
@@ -984,7 +985,8 @@
       "settlementId": "settlement-1",
       "effectStarted": true,
       "budgetDisposition": "committed",
-      "op": "tool-catalog.invocation-settled"
+      "op": "tool-catalog.invocation-settled",
+      "reservationId": "reservation-1"
     },
     "discarded": {
       "correlationId": "correlation-1",

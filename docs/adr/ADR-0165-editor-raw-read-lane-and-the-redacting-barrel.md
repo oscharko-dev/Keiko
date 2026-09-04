@@ -114,7 +114,7 @@ a coding server handler gains no permission to import `editorRead.ts` or `discov
 Importing `./internal/editor-read` asserts that the caller is **an allowed raw-coordinate owner
 and non-evidence**. Existing Editor ownership remains. Under
 [ADR-0175 D8](ADR-0175-canonical-governed-tool-catalog.md#d8--raw-coordinate-lane-and-delivery-dependency),
-#3386 H1 may add bounded coding-search coordinate computation only **inside the existing workspace
+\#3386 H1 may add bounded coding-search coordinate computation only **inside the existing workspace
 owner**, reusing this exact guard chain. There is no new raw-read server caller or public raw
 barrel. Raw lines/offsets are computed transiently before separate display-snippet redaction;
 redaction may shorten text or collapse lines and therefore cannot define source coordinates.

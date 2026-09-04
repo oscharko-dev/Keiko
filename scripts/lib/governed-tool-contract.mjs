@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { GOVERNED_TOOL_CONTRACT_PINS as PINS } from "./governed-tool-contract-pins.mjs";
 import {
   REQUIRED_AXES,
   REQUIRED_BOUNDS,
@@ -42,11 +43,15 @@ function checkConsumerFields(issue, consumer, errors) {
   }
 }
 function checkConsumer(issue, consumer, interfaces, errors) {
+  if (!consumer || !Array.isArray(consumer.inputs) || !Array.isArray(consumer.outputs)) {
+    errors.push(`consumer ${issue}: invalid interface lists`);
+    return;
+  }
   checkConsumerFields(issue, consumer, errors);
-  for (const name of [...(consumer.inputs ?? []), ...(consumer.outputs ?? [])]) {
+  for (const name of [...consumer.inputs, ...consumer.outputs]) {
     if (!interfaces[name]) errors.push(`consumer ${issue}: unknown interface ${name}`);
   }
-  for (const name of consumer.outputs ?? []) {
+  for (const name of consumer.outputs) {
     if (String(interfaces[name]?.ownerIssue) !== issue) {
       errors.push(`consumer ${issue}: conflicting producer ${name}`);
     }
@@ -75,45 +80,27 @@ function checkStatuses(contract, errors) {
     errors.push("recovery-required: must belong only to invalid");
   }
 }
-function checkPhase(phase, value, contract, errors) {
-  const required = value.required ?? [];
-  if (!value.op?.startsWith("tool-catalog.") || !required.includes("correlationId")) {
-    errors.push(`phase ${phase}: missing operation or correlation`);
-  }
-  const allowed = contract.evidenceAllowed ?? [];
-  if (required.some((key) => !allowed.includes(key)))
-    errors.push(`phase ${phase}: unknown evidence field`);
-  if (phase === "invocation-started" && required.includes("status")) {
-    errors.push("invocation-started: terminal status is forbidden");
-  }
-}
-function checkDigestDomains(digests, errors) {
-  const domains = new Set();
-  for (const [kind, value] of Object.entries(digests)) {
-    if (!value.domain || domains.has(value.domain) || !value.fields?.length) {
-      errors.push(`digest ${kind}: missing fields or duplicate domain`);
-    }
-    domains.add(value.domain);
-  }
+function checkPhase(phase, value, errors) {
+  const expected = PINS.phases[phase];
+  if (value?.op !== expected?.op || !sameSet(value?.required, expected?.required ?? []))
+    errors.push(`phase ${phase}: operation or required fields differ`);
 }
 function checkDigests(contract, errors) {
-  checkDigestDomains(contract.digests ?? {}, errors);
-  const projection = contract.digests?.projection?.fields ?? [];
-  for (const field of [
-    "catalogRevision",
-    "profile",
-    "adapterDialect",
-    "adapterRuntime",
-    "tools.alias",
-    "tools.description",
-    "tools.inputSchema",
-    "tools.resultSchema",
-    "tools.effects",
-    "tools.actionMapping",
-    "tools.policyReferences",
-    "tools.handlerRequirement",
-  ]) {
-    if (!projection.includes(field)) errors.push(`projection digest: missing ${field}`);
+  requireKeys(contract.digests, Object.keys(PINS.digests), "digests", errors);
+  for (const [kind, expected] of Object.entries(PINS.digests)) {
+    const value = contract.digests?.[kind];
+    if (value?.domain !== expected.domain || !sameSet(value?.fields, expected.fields))
+      errors.push(`digest ${kind}: domain or input set differs`);
+  }
+}
+function checkPinnedValues(contract, errors) {
+  for (const section of ["owners", "bounds"]) {
+    for (const [key, expected] of Object.entries(PINS[section])) {
+      if (contract[section]?.[key] !== expected) errors.push(`${section}: changed ${key}`);
+    }
+  }
+  for (const section of ["evidenceAllowed", "evidenceForbidden"]) {
+    if (!sameSet(contract[section], PINS[section])) errors.push(`${section}: vocabulary differs`);
   }
 }
 function checkShape(contract, errors) {
@@ -141,11 +128,13 @@ export function validateGovernedToolContract(contract) {
   }
   const errors = [];
   checkShape(contract, errors);
+  if (errors.length > 0) return errors;
+  checkPinnedValues(contract, errors);
   checkInterfaces(contract, errors);
   checkStatuses(contract, errors);
   checkDigests(contract, errors);
   for (const [phase, value] of Object.entries(contract.phases ?? {})) {
-    checkPhase(phase, value, contract, errors);
+    checkPhase(phase, value, errors);
   }
   return errors;
 }
@@ -161,24 +150,41 @@ function checkProbe(row, root, errors) {
     errors.push(`inventory ${row.id}: source file missing`);
   }
 }
-export function checkInventoryProbes(contract, root) {
-  const errors = [];
-  const seen = new Set();
+function checkInventoryRow(row, contract, root, errors) {
   const dispositions = new Set([
     "retain owner",
     "derive projection",
     "migrate/delete",
     "external dependency",
   ]);
-  for (const row of contract.inventory ?? []) {
+  const expected = PINS.inventory.find((entry) => entry.id === row.id);
+  if (!expected || Object.keys(expected).some((key) => expected[key] !== row[key]))
+    errors.push(`inventory ${row.id}: audited source mapping differs`);
+  if (!dispositions.has(row.disposition)) errors.push(`inventory ${row.id}: unknown disposition`);
+  if (!contract.consumers[String(row.ownerIssue)])
+    errors.push(`inventory ${row.id}: missing owner`);
+  checkProbe(row, root, errors);
+}
+export function checkInventoryProbes(contract, root) {
+  const errors = [];
+  const seen = new Set();
+  if (!Array.isArray(contract.inventory)) return ["inventory: invalid audited baseline"];
+  for (const row of contract.inventory) {
+    if (!row || typeof row.path !== "string" || typeof row.probe !== "string") {
+      errors.push("inventory: invalid source row");
+      continue;
+    }
     if (seen.has(row.id)) errors.push(`inventory ${row.id}: duplicate identity`);
     seen.add(row.id);
-    if (!dispositions.has(row.disposition)) errors.push(`inventory ${row.id}: unknown disposition`);
-    if (!contract.consumers[String(row.ownerIssue)])
-      errors.push(`inventory ${row.id}: missing owner`);
-    checkProbe(row, root, errors);
+    checkInventoryRow(row, contract, root, errors);
   }
-  if (seen.size < 43) errors.push("inventory: incomplete audited baseline");
+  if (
+    !sameSet(
+      [...seen],
+      PINS.inventory.map((row) => row.id),
+    )
+  )
+    errors.push("inventory: incomplete audited baseline");
   return errors;
 }
 export function checkContractExamples(contract) {

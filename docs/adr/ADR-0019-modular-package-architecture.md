@@ -4,7 +4,7 @@ Status: Accepted
 
 Date: 2026-06-03
 
-Version: 1.1
+Version: 1.2
 
 ## Decision
 
@@ -181,6 +181,7 @@ This ADR is the anchor for the architecture sprint. If a package boundary, depen
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.2 | 2026-09-04 | Reserve the pure contracts/security-only governed-tool catalog boundary and server-owned runtime binding in ADR-0175 (#3411); runtime package creation remains #3406. |
 | 1.1 | 2026-07-27 | Narrowly permit the statically checked, egress-free USearch ANN worker boundary while preserving the general Local Knowledge worker/network denial. |
 | 1.0 | 2026-06-03 | Accepted modular package architecture as Keiko's next foundation before major feature expansion. |
 
