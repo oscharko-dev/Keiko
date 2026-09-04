@@ -24,6 +24,26 @@ Explain the product belief this epic validates and the trust or capability it sh
 - Productive model calls must remain behind the Model Gateway.
 - Workflow authority must remain explicit and documented.
 
+## Implementation Orchestrator Revalidation Contract
+
+- **Before planning and implementation, revalidate against the current code and architecture.**
+- Before sequencing, assigning, or implementing Epic work, the orchestrator must re-audit:
+  - the current target branch/code state,
+  - the current package graph and dependencies,
+  - relevant contracts, ADRs, and governing gates,
+  - existing implementations and reusable subsystems,
+  - concurrent or in-flight work (open branches, open PRs, and active tasks) that can invalidate assumptions.
+- Epic and child issue text must capture product goals, invariants, constraints, acceptance boundaries, evidence expectations, and an initial decomposition (with dependencies and ordering).
+  - This text is a planning guardrail, not an immutable implementation contract: implementers may refine technical design, sequencing, file ownership, and decomposition when live evidence requires it.
+- Working, clean, secure, verified current code is authoritative. Any divergence from initial plan must be evidence-backed and traceable:
+  - update affected issue/epic records,
+  - reconcile concurrent work before execution,
+  - update affected ADR sections when architecture decisions change,
+  - must never weaken acceptance criteria, trust boundaries, authority, redaction policy, or gate posture silently.
+- If this epic is reassigned, interrupted, or resumed across handoffs, rerun the revalidation before continuing and record a delta note on what changed and what assumptions still hold.
+- A genuinely new product decision, unsafe conflict, or material scope expansion is escalated to the Product Owner before implementation continues.
+- Closeout depends on verified current-head behavior and evidence, not checklist completion alone.
+
 ## Reuse And No-Duplication Gate
 
 - Before any new implementation is planned, inspect existing Keiko packages, UI surfaces, server routes, contracts, validation helpers, evidence models, memory/local-knowledge graph patterns, workflow state, and tool/workspace boundaries that could satisfy or partially satisfy this epic.
