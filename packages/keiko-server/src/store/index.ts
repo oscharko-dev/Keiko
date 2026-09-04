@@ -11,6 +11,7 @@ export type {
   ChatTurnInspection,
   CreateChatOptions,
   GroundedAnswer,
+  GitHubIssueReaderAuthorizationRecord,
   MemoryAutonomyPolicyRecord,
   NewChatMessage,
   Project,

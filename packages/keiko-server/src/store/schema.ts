@@ -8,7 +8,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 
 interface Migration {
   readonly version: number;
@@ -632,6 +632,28 @@ CREATE INDEX idx_coding_runtime_settled_oldest
   WHERE terminal_at IS NOT NULL;
 `;
 
+// V21 (issue #3385, epic #3384) — in-product, repository-scoped authorization for the GitHub issue
+// reader. It replaces an environment variable (`GITHUB_CONNECTOR_AUTHORIZED`) that was read at
+// process launch and therefore applied to whatever project the process happened to start in: a
+// deployment could not authorize one repository without authorizing every repository the same
+// process later opened.
+//
+// The row is deliberately content-free and carries no credential. `repository_id` is the same
+// content-free identity the task workspace derives from the repository root (`deriveRepositoryId`),
+// never a path, a remote URL or an owner/name pair — the UI database forbids credential-class
+// columns outright (store/forbidden-fields.test.ts), and credentials keep coming from the existing
+// `gh` CLI boundary. `revision` is the monotonic server-owned counter that makes a stale write
+// detectable, exactly as it does for memory_autonomy_policy.
+const V21_SQL = `
+CREATE TABLE github_issue_reader_authorization (
+  repository_id TEXT NOT NULL PRIMARY KEY,
+  authorized INTEGER NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  CHECK (authorized IN (0, 1) AND revision >= 0 AND length(repository_id) BETWEEN 1 AND 128)
+) STRICT;
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
 // change.
@@ -656,6 +678,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 18, sql: V18_SQL },
   { version: 19, sql: V19_SQL },
   { version: 20, sql: V20_SQL },
+  { version: 21, sql: V21_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

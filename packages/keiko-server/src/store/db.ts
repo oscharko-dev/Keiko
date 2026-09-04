@@ -112,6 +112,10 @@ import {
   readMemoryAutonomyPolicy as sqlReadMemoryAutonomyPolicy,
   updateMemoryAutonomyPolicy as sqlUpdateMemoryAutonomyPolicy,
 } from "./memory-autonomy-policy.js";
+import {
+  readGitHubIssueReaderAuthorization as sqlReadGitHubIssueReaderAuthorization,
+  updateGitHubIssueReaderAuthorization as sqlUpdateGitHubIssueReaderAuthorization,
+} from "./github-issue-reader-authorization.js";
 import { invalidRequest } from "./errors.js";
 
 const DEFAULT_REDACT = (s: string): string => s;
@@ -728,6 +732,16 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     readMemoryAutonomyPolicy: () => sqlReadMemoryAutonomyPolicy(db),
     updateMemoryAutonomyPolicy: (mode, expectedRevision) =>
       sqlUpdateMemoryAutonomyPolicy(db, mode, expectedRevision),
+    readGitHubIssueReaderAuthorization: (repositoryId) =>
+      sqlReadGitHubIssueReaderAuthorization(db, repositoryId),
+    updateGitHubIssueReaderAuthorization: (repositoryId, authorized, expectedRevision) =>
+      sqlUpdateGitHubIssueReaderAuthorization(
+        db,
+        repositoryId,
+        authorized,
+        expectedRevision,
+        new Date(options.now()).toISOString(),
+      ),
     readWorkspaceTrustRecord: (rootRef: string): WorkspaceTrustRecordRow | undefined =>
       sqlReadWorkspaceTrustRecord(db, rootRef),
     writeWorkspaceTrustRecord: (row: WorkspaceTrustRecordRowInput): void => {

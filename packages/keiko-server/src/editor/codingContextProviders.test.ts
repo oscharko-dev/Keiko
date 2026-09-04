@@ -18,6 +18,7 @@ import {
 import { GIT_REPOSITORY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { deriveRepositoryId } from "../task-workspace/naming.js";
 import type {
   MemoryId,
   MemoryRecord,
@@ -868,9 +869,27 @@ describe("runConnectedContextProvider", () => {
     };
   }
 
+  // #3385: the GitHub reader is authorized per repository through a server-persisted store row,
+  // replacing the `GITHUB_CONNECTOR_AUTHORIZED` environment variable that was bound to the process
+  // launch path. This grants exactly the launch project, so a test can show the grant is scoped.
+  const CONNECTED_PROJECT_ROOT = "/workspace/connected-project";
+
+  function authorizationStore(
+    authorizedRoot: string | undefined,
+  ): Pick<UiHandlerDeps["store"], "readGitHubIssueReaderAuthorization"> {
+    const authorizedId =
+      authorizedRoot === undefined ? undefined : deriveRepositoryId(authorizedRoot);
+    return {
+      readGitHubIssueReaderAuthorization: (repositoryId: string) =>
+        repositoryId === authorizedId ? { repositoryId, authorized: true, revision: 1 } : undefined,
+    };
+  }
+
   function connectedDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     return baseDeps({
-      env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+      env: {},
+      preferredProjectPath: CONNECTED_PROJECT_ROOT,
+      store: authorizationStore(CONNECTED_PROJECT_ROOT) as UiHandlerDeps["store"],
       ...overrides,
     });
   }

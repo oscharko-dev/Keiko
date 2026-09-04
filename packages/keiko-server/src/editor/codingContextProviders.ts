@@ -55,6 +55,7 @@ import {
   type CodeContextSource,
 } from "../coding-context/codeContextConnector.js";
 import { createGitHubCodeContextConnector } from "../coding-context/githubCodeContextConnector.js";
+import { isGitHubIssueReaderAuthorized } from "../coding-context/githubIssueReaderAuthorization.js";
 import { createJiraCodeContextConnector } from "../coding-context/jiraCodeContextConnector.js";
 import { handleGitBlame, handleGitStatus, handleGitStructuredDiff } from "../gitRoutes.js";
 import { openStoreForDeps } from "../local-knowledge-grounded-qa.js";
@@ -1064,7 +1065,10 @@ function connectedContextIntake(deps: UiHandlerDeps): ConnectedContextIntake | u
   const jiraPort = deps.codingContextJiraPort;
   if (githubPort === undefined && jiraPort === undefined) return undefined;
   const connectorConfig: CodeContextConnectorConfig = {
-    github_connector_authorized: connectorAuthorizedInEnv(deps, "GITHUB_CONNECTOR_AUTHORIZED"),
+    // #3385: the GitHub reader is authorized per repository in the settings surface, not by a
+    // launch-path environment variable. Jira keeps its existing environment gate; #3385 does not
+    // change that connector.
+    github_connector_authorized: isGitHubIssueReaderAuthorized(deps, deps.preferredProjectPath),
     jira_connector_authorized: connectorAuthorizedInEnv(deps, "JIRA_CONNECTOR_AUTHORIZED"),
   };
   return {

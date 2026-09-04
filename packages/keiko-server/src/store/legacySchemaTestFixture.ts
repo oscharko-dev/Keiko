@@ -20,6 +20,7 @@ export function restoreV13SchemaFixture(db: DatabaseSync): void {
   }
 
   db.exec(`
+    DROP TABLE github_issue_reader_authorization;
     DROP TABLE workspace_manifest_roots;
     DROP TABLE workspace_manifests;
     DROP TABLE workspace_trust_records;

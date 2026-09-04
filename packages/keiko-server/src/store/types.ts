@@ -52,6 +52,17 @@ export interface MemoryAutonomyPolicyRecord {
   readonly revision: number;
 }
 
+/**
+ * Issue #3385: whether the GitHub issue reader is authorized for ONE repository, identified by the
+ * content-free id the task workspace derives. No credential, path, remote URL or owner/name pair is
+ * stored — `gh` remains the only credential boundary.
+ */
+export interface GitHubIssueReaderAuthorizationRecord {
+  readonly repositoryId: string;
+  readonly authorized: boolean;
+  readonly revision: number;
+}
+
 export type ChatTurnAdmission =
   | { readonly kind: "admitted"; readonly userMessage: ChatMessage }
   | {
@@ -161,6 +172,15 @@ export interface UiStore {
     mode: CodingWorkbenchMode,
     expectedRevision: number,
   ) => MemoryAutonomyPolicyRecord | undefined;
+
+  readonly readGitHubIssueReaderAuthorization: (
+    repositoryId: string,
+  ) => GitHubIssueReaderAuthorizationRecord | undefined;
+  readonly updateGitHubIssueReaderAuthorization: (
+    repositoryId: string,
+    authorized: boolean,
+    expectedRevision: number,
+  ) => GitHubIssueReaderAuthorizationRecord | undefined;
 
   // Canonical workspace-trust persistence (issue #2521, ADR-0147 D3/D8). The store persists opaque,
   // content-free rows; all trust semantics (derivation, validation, projection) live above the port.

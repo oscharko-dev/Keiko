@@ -4035,8 +4035,11 @@ function buildOptionalUiHandlerDeps(
 function buildCodingContextPortsDependency(
   args: UiHandlerDepsAssemblyArgs,
 ): Pick<UiHandlerDeps, "codingContextGitHubPort"> {
+  // #3385: the port is an inert, read-only `gh api /repos/...` invoker; it holds no authorization
+  // of its own. Composing it whenever a project path exists lets the repository-scoped grant in the
+  // settings surface be the single, live decision (isGitHubIssueReaderAuthorized), instead of a
+  // launch-path environment variable that could only be changed by restarting the process.
   const githubPort =
-    args.options.env.GITHUB_CONNECTOR_AUTHORIZED !== "true" ||
     args.bundle.preferredProjectPath === undefined
       ? undefined
       : createGitHubCodeContextApiPort({

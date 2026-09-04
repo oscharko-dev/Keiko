@@ -28,6 +28,8 @@ import type {
 import { ATLASSIAN_CONNECTOR_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import { composeCodingContextConnectors } from "./coding-context/codingContextRoutes.js";
+import { deriveRepositoryId } from "./task-workspace/naming.js";
 import { resolveAtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
 import { resolveAtlassianSyncJobRegistry } from "./atlassian/syncService.js";
 import {
@@ -1201,7 +1203,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("coding-context-evidence-"),
-      env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+      env: {},
       initialProjectPath: projectDir,
     });
 
@@ -1227,7 +1229,6 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       configPath: undefined,
       evidenceDir: tmp("coding-context-env-evidence-"),
       env: {
-        GITHUB_CONNECTOR_AUTHORIZED: "true",
         GH_TOKEN: "test-injected-token",
         HOME: tmp("coding-context-env-home-"),
         PATH: injectedBin,
@@ -1244,16 +1245,59 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     }
   });
 
-  it("does not compose the connected-context GitHub port without authorization", async () => {
+  // #3385 relocated this pin rather than dropping it. Its invariant is "an unauthorized deployment
+  // cannot read GitHub", and that invariant now lives one layer down: the port is composed
+  // unconditionally because it is an inert `gh api /repos/...` invoker, and the authorization is a
+  // repository-scoped, server-persisted grant re-read on every composition. Asserting the port is
+  // absent would no longer test the invariant; asserting the composed connector config denies the
+  // read does, end to end through the real deps graph.
+  it("denies the GitHub connector for a launch project with no stored authorization", async () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("coding-context-disabled-evidence-"),
-      env: { GITHUB_CONNECTOR_AUTHORIZED: "false" },
+      env: {},
       initialProjectPath: tmp("coding-context-disabled-project-"),
     });
 
     try {
-      expect(deps.codingContextGitHubPort).toBeUndefined();
+      expect(composeCodingContextConnectors(deps).connectorConfig).toMatchObject({
+        github_connector_authorized: false,
+      });
+    } finally {
+      await deps.dispose?.();
+    }
+  });
+
+  it("admits the GitHub connector only for the exact repository that was authorized", async () => {
+    const projectDir = tmp("coding-context-scoped-project-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("coding-context-scoped-evidence-"),
+      env: {},
+      initialProjectPath: projectDir,
+    });
+
+    try {
+      // A grant for a DIFFERENT repository must not authorize this one.
+      deps.store.updateGitHubIssueReaderAuthorization(
+        deriveRepositoryId(tmp("coding-context-other-project-")),
+        true,
+        0,
+      );
+      expect(composeCodingContextConnectors(deps).connectorConfig).toMatchObject({
+        github_connector_authorized: false,
+      });
+
+      deps.store.updateGitHubIssueReaderAuthorization(deriveRepositoryId(projectDir), true, 0);
+      expect(composeCodingContextConnectors(deps).connectorConfig).toMatchObject({
+        github_connector_authorized: true,
+      });
+
+      // Revoking takes effect on the next read, with no restart.
+      deps.store.updateGitHubIssueReaderAuthorization(deriveRepositoryId(projectDir), false, 1);
+      expect(composeCodingContextConnectors(deps).connectorConfig).toMatchObject({
+        github_connector_authorized: false,
+      });
     } finally {
       await deps.dispose?.();
     }

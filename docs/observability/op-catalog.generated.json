@@ -1169,7 +1169,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:1899",
+      "site": "packages/keiko-server/src/deps.ts:1880",
       "package": "keiko-server"
     },
     {
@@ -1313,7 +1313,7 @@
     {
       "op": "store.opened",
       "category": "setup",
-      "site": "packages/keiko-server/src/store/db.ts:930",
+      "site": "packages/keiko-server/src/store/db.ts:944",
       "package": "keiko-server"
     },
     {

@@ -41,6 +41,7 @@ import {
 import { createGitHubCodeContextConnector } from "./githubCodeContextConnector.js";
 import { createJiraCodeContextConnector } from "./jiraCodeContextConnector.js";
 import { createGitHubCodeContextApiPort } from "./githubCodeContextPort.js";
+import { isGitHubIssueReaderAuthorized } from "./githubIssueReaderAuthorization.js";
 
 const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion",
@@ -255,8 +256,10 @@ function connectorConfigFor(
   jiraConfigured: boolean,
 ): CodeContextConnectorConfig {
   return {
+    // #3385: repository-scoped and server-persisted, re-read on every composition so a revocation
+    // in settings takes effect without a restart. The port merely has to exist; this decides.
     github_connector_authorized:
-      deps.env.GITHUB_CONNECTOR_AUTHORIZED === "true" && githubConfigured,
+      githubConfigured && isGitHubIssueReaderAuthorized(deps, deps.preferredProjectPath),
     jira_connector_authorized: deps.env.JIRA_CONNECTOR_AUTHORIZED === "true" && jiraConfigured,
   };
 }
@@ -273,7 +276,7 @@ const NO_CONNECTOR: CodeContextConnector = {
 export function composeCodingContextConnectors(deps: UiHandlerDeps): ComposedConnectors {
   const githubPort =
     deps.codingContextGitHubPort ??
-    (deps.env.GITHUB_CONNECTOR_AUTHORIZED !== "true" || deps.preferredProjectPath === undefined
+    (deps.preferredProjectPath === undefined
       ? undefined
       : createGitHubCodeContextApiPort({
           workspace: {

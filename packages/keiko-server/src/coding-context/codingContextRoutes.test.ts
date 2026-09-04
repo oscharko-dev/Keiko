@@ -14,6 +14,7 @@ import type { GitHubCodeContextApiPort } from "./githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./jiraCodeContextConnector.js";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { deriveRepositoryId } from "../task-workspace/naming.js";
 import {
   editorAgentAuthorityRegistry,
   editorAgentWorkspaceRootDigest,
@@ -57,15 +58,34 @@ function fakeJiraPort(): JiraCodeContextHttpPort {
   };
 }
 
+const PROJECT_ROOT = "/workspace/project";
+
+/**
+ * #3385: the GitHub reader's authorization is a server-persisted, repository-scoped store row, not
+ * an environment variable. This double answers for exactly one repository root, so a test can prove
+ * the grant is scoped rather than global.
+ */
+function authorizationStore(
+  authorizedRoot: string | undefined,
+): Pick<UiHandlerDeps["store"], "readGitHubIssueReaderAuthorization"> {
+  const authorizedId =
+    authorizedRoot === undefined ? undefined : deriveRepositoryId(authorizedRoot);
+  return {
+    readGitHubIssueReaderAuthorization: (repositoryId: string) =>
+      repositoryId === authorizedId ? { repositoryId, authorized: true, revision: 1 } : undefined,
+  };
+}
+
 function depsFor(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   return {
     env: {
-      GITHUB_CONNECTOR_AUTHORIZED: "true",
       JIRA_CONNECTOR_AUTHORIZED: "true",
     },
     autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
     codingContextGitHubPort: fakeGitHubPort(),
     codingContextJiraPort: fakeJiraPort(),
+    preferredProjectPath: PROJECT_ROOT,
+    store: authorizationStore(PROJECT_ROOT),
     ...overrides,
   } as UiHandlerDeps;
 }
@@ -338,7 +358,7 @@ describe("coding context pack route", () => {
       ctxFor(packRequest()),
       depsFor({
         autonomousDeliveryDeploymentCeiling: "governed-assist",
-        env: { GITHUB_CONNECTOR_AUTHORIZED: "true", JIRA_CONNECTOR_AUTHORIZED: "true" },
+        env: { JIRA_CONNECTOR_AUTHORIZED: "true" },
       }),
     );
 
@@ -382,7 +402,7 @@ describe("coding context pack route", () => {
     const result = await handleCodingContextPack(
       ctxFor(packRequest()),
       depsFor({
-        env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+        env: {},
       }),
     );
 
@@ -390,6 +410,23 @@ describe("coding context pack route", () => {
     const blocked = bodyOf(result).blocked as readonly Record<string, unknown>[];
     expect(blocked).toHaveLength(1);
     expect(blocked[0]).toMatchObject({ source: "jira", reason: "missing-credentials" });
+  });
+
+  // #3385 relocated the environment-variable pin here and strengthened it: the grant is per
+  // repository, so a repository with no row of its own is denied even while another repository is
+  // authorized in the same process. On the retired env gate this case could not be expressed at all.
+  it("blocks the GitHub reader for a repository that carries no stored authorization", async () => {
+    const result = await handleCodingContextPack(
+      ctxFor(packRequest()),
+      depsFor({
+        store: authorizationStore("/workspace/some-other-project") as UiHandlerDeps["store"],
+      }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(bodyOf(result).blocked).toContainEqual(
+      expect.objectContaining({ source: "github", reason: "missing-credentials" }),
+    );
   });
 
   it("degrades unusable Jira configuration to missing credentials", async () => {
@@ -400,7 +437,6 @@ describe("coding context pack route", () => {
         codingContextJiraPort: undefined,
         preferredProjectPath: undefined,
         env: {
-          GITHUB_CONNECTOR_AUTHORIZED: "true",
           JIRA_CONNECTOR_AUTHORIZED: "true",
           KEIKO_JIRA_BASE_URL: "http://invalid.example.com",
           KEIKO_JIRA_EMAIL: "operator@example.com",
@@ -419,12 +455,23 @@ describe("coding context pack route", () => {
     const composed = composeCodingContextConnectors(
       depsFor({
         codingContextGitHubPort: undefined,
-        preferredProjectPath: "/workspace/project",
-        env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+        env: {},
       }),
     );
 
     expect(composed.connectorConfig.github_connector_authorized).toBe(true);
+  });
+
+  it("composes the fallback port but denies the read when the repository is not authorized", () => {
+    const composed = composeCodingContextConnectors(
+      depsFor({
+        codingContextGitHubPort: undefined,
+        env: {},
+        store: authorizationStore(undefined) as UiHandlerDeps["store"],
+      }),
+    );
+
+    expect(composed.connectorConfig.github_connector_authorized).toBe(false);
   });
 
   it("does not emit an upstream diagnostic for invalid fallback Jira configuration", async () => {
