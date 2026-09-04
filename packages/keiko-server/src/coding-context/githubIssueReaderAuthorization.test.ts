@@ -46,9 +46,23 @@ describe("isGitHubIssueReaderAuthorized (#3385)", () => {
   // Every one of these is a distinct way the caller can fail to name a repository. Each must answer
   // false on its own, because a single missing guard here would authorize a GitHub read that no
   // human ever granted.
+  //
+  // The store here authorizes ANY id on purpose. Against `granted`, an empty root simply derives a
+  // different id and the store returns nothing, so the assertion passed without the guard ever
+  // running — it pinned the fixture, not the code. With a store that says yes to everything, only
+  // the `repositoryRoot === undefined || === ""` guard can produce false.
   it("fails closed for every absent or unusable repository root", () => {
-    expect(isGitHubIssueReaderAuthorized(granted, undefined)).toBe(false);
-    expect(isGitHubIssueReaderAuthorized(granted, "")).toBe(false);
+    const authorizesAnything = depsWith((repositoryId) => ({
+      repositoryId,
+      authorized: true,
+      revision: 1,
+    }));
+
+    expect(isGitHubIssueReaderAuthorized(authorizesAnything, undefined)).toBe(false);
+    expect(isGitHubIssueReaderAuthorized(authorizesAnything, "")).toBe(false);
+    // The same store authorizes a real root, so the two refusals above come from the guard and not
+    // from a store that refuses everything.
+    expect(isGitHubIssueReaderAuthorized(authorizesAnything, ROOT)).toBe(true);
   });
 
   it("fails closed when the stored row exists but withholds authorization", () => {

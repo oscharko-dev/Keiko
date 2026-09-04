@@ -1084,11 +1084,13 @@ function connectedContextIntake(
   const jiraPort = deps.codingContextJiraPort;
   if (githubPort === undefined && jiraPort === undefined) return undefined;
   const connectorConfig: CodeContextConnectorConfig = {
-    // #3385: the GitHub reader is authorized per repository in the settings surface, not by a
-    // launch-path environment variable. The root is the one this provider is actually operating on
-    // (`ctx.realRoot`), not the process-wide launch directory: an editor working in repository B
-    // must be denied unless B itself carries a grant, and A's grant must never authorize B.
-    // Jira keeps its existing environment gate; #3385 does not change that connector.
+    // #3385: the GitHub reader is authorized per local checkout by a persisted grant, not by a
+    // launch-path environment variable. The grant is written through
+    // `PUT /api/coding-workbench/github-authorization`; no settings screen calls that route yet, so
+    // "the settings surface" would overstate what exists. The root is the one this provider is
+    // actually operating on (`ctx.realRoot`), not the process-wide launch directory: an editor
+    // working in checkout B must be denied unless B itself carries a grant, and A's grant must
+    // never authorize B. Jira keeps its existing environment gate; #3385 does not change it.
     github_connector_authorized: isGitHubIssueReaderAuthorized(deps, repositoryRoot, {
       correlationId,
     }),

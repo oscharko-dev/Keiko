@@ -4,7 +4,9 @@
 // injection-labeled, content-free-evidenced context pack for selected GitHub/Jira refs.
 // Reads are gated three times before any outbound call: the server deployment ceiling
 // (the client-supplied mode can never exceed it), the connector-scope grant on the
-// request, and the default-false connector authorization resolved from server env.
+// request, and the default-false connector authorization. That third gate is no longer
+// read from the server environment for GitHub (#3385): it is a persisted grant for the
+// caller's own checkout, consulted per request. Jira still reads its environment gate.
 // Port failures surface as an opaque 502 with a correlation id; no provider detail,
 // endpoint, credential, or body content reaches the response.
 
