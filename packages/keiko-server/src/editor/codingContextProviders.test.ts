@@ -1,7 +1,16 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+
+// A real directory, canonical from the start (`realpathSync(tmpdir())`, as the other temp roots in
+// this file): the grant identity is a digest of the realpath'd root, so "/tmp/does-not-exist",
+// which stood here before, had no identity at all and could be granted only while the reader
+// digested whatever string it was handed. Module-scoped because `providerCtx` below defaults to it.
+const CONNECTED_PROJECT_ROOT = mkdtempSync(join(realpathSync(tmpdir()), "keiko-cc-connected-"));
+afterAll(() => {
+  rmSync(CONNECTED_PROJECT_ROOT, { recursive: true, force: true });
+});
 import type {
   EditorAgentDiagnostic,
   EditorAgentSessionSnapshot,
@@ -18,7 +27,7 @@ import {
 import { GIT_REPOSITORY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { deriveRepositoryId } from "../task-workspace/naming.js";
+import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
 import type {
   MemoryId,
   MemoryRecord,
@@ -100,7 +109,7 @@ function providerCtx(overrides: Partial<ProviderContext> = {}): ProviderContext 
   const nowMs = overrides.nowMs ?? 1_700_000_000_000;
   return {
     deps: baseDeps(),
-    realRoot: "/tmp/does-not-exist",
+    realRoot: CONNECTED_PROJECT_ROOT,
     fs: nodeWorkspaceFs,
     signal: new AbortController().signal,
     maxBytesPerExcerpt: 8192,
@@ -738,7 +747,7 @@ describe("runMemoryProvider", () => {
       vault,
       "project-memory",
       "Always prefer TypeScript strict mode in editor coding context.",
-      { kind: "project", projectId: "/tmp/does-not-exist" as ProjectId },
+      { kind: "project", projectId: CONNECTED_PROJECT_ROOT as ProjectId },
     );
     const ctx = providerCtx({ deps: baseDeps({ memoryVault: vault }) });
     const outcome = await runMemoryProvider(ctx, { queryText: undefined });
@@ -779,7 +788,7 @@ describe("runMemoryProvider", () => {
     const vault = makeVault();
     insertMemory(vault, "cancelled-memory", "Cancelled retrieval should not be ranked.", {
       kind: "project",
-      projectId: "/tmp/does-not-exist" as ProjectId,
+      projectId: CONNECTED_PROJECT_ROOT as ProjectId,
     });
     const controller = new AbortController();
     controller.abort();
@@ -874,13 +883,12 @@ describe("runConnectedContextProvider", () => {
   // launch path. This grants exactly the launch project, so a test can show the grant is scoped.
   // The provider authorizes the repository it is operating on (`ctx.realRoot`), not the process
   // launch directory, so the fixture grants exactly that root.
-  const CONNECTED_PROJECT_ROOT = "/tmp/does-not-exist";
 
   function authorizationStore(
     authorizedRoot: string | undefined,
   ): Pick<UiHandlerDeps["store"], "readGitHubIssueReaderAuthorization"> {
     const authorizedId =
-      authorizedRoot === undefined ? undefined : deriveRepositoryId(authorizedRoot);
+      authorizedRoot === undefined ? undefined : githubIssueReaderRepositoryId(authorizedRoot);
     return {
       readGitHubIssueReaderAuthorization: (repositoryId: string) =>
         repositoryId === authorizedId ? { repositoryId, authorized: true, revision: 1 } : undefined,
@@ -924,17 +932,53 @@ describe("runConnectedContextProvider", () => {
     expect(calls).toHaveLength(2);
   });
 
-  it("reads nothing and reports unavailable when the query references no connected object", async () => {
+  // Resolving the remote is a git subprocess plus an activity line. The first shape of this
+  // provider ran it on EVERY chat query — refs or no refs — to learn which repository it may not
+  // read for a query that reaches no connector at all. The resolver double counts its calls so this
+  // case fails if that ordering ever returns.
+  it("reads nothing, resolves no remote, and reports unavailable when the query names no connected object", async () => {
     const { port, calls } = gitHubPort({ title: "unused", body: "unused" });
+    const resolverCalls: string[] = [];
     const outcome = await runConnectedContextProvider(
       providerCtx({
-        deps: connectedDeps({ codingContextGitHubPort: port }),
+        deps: connectedDeps({
+          codingContextGitHubPort: port,
+          codingContextGitHubRemoteResolver: (root: string): Promise<string | undefined> => {
+            resolverCalls.push(root);
+            return Promise.resolve("acme/widgets");
+          },
+        }),
       }),
       { queryText: "parseConfig" },
     );
 
+    expect(resolverCalls).toEqual([]);
     expect(calls).toHaveLength(0);
     expect(outcome.excerpts).toHaveLength(0);
+    expect(outcome.omission).toEqual({ sourceKind: "connected-context", reason: "unavailable" });
+  });
+
+  it("resolves no remote for a request that is already aborted", async () => {
+    const { port, calls } = gitHubPort({ title: "unused", body: "unused" });
+    const controller = new AbortController();
+    controller.abort();
+    const resolverCalls: string[] = [];
+    const outcome = await runConnectedContextProvider(
+      providerCtx({
+        signal: controller.signal,
+        deps: connectedDeps({
+          codingContextGitHubPort: port,
+          codingContextGitHubRemoteResolver: (root: string): Promise<string | undefined> => {
+            resolverCalls.push(root);
+            return Promise.resolve("acme/widgets");
+          },
+        }),
+      }),
+      { queryText: "regression in acme/widgets#42" },
+    );
+
+    expect(resolverCalls).toEqual([]);
+    expect(calls).toHaveLength(0);
     expect(outcome.omission).toEqual({ sourceKind: "connected-context", reason: "unavailable" });
   });
 

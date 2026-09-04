@@ -350,6 +350,7 @@ export async function handleCodingContextPack(
         parsed.authority.workspaceRoot,
         deps.env,
         deps.codingContextGitHubRemoteResolver,
+        { correlationId: ctx.correlationId },
       ),
     );
     const pack = await buildCodeContextPack(request, {

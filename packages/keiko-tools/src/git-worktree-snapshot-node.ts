@@ -14,6 +14,7 @@
 // `readStagedPaths` additionally returns the staged relative paths, which stay inside the server for
 // scope inference and are never persisted into evidence.
 
+import { gitEnv } from "@oscharko-dev/keiko-git";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { CommandRule, CommandResult, SandboxPolicy } from "./types.js";
 import { DEFAULT_SANDBOX_POLICY, GOVERNED_GIT_IDENTITY_SANDBOX_POLICY } from "./types.js";
@@ -59,6 +60,36 @@ export const GIT_WORKTREE_READ_COMMAND_RULES: readonly CommandRule[] = Object.fr
     ]),
   },
 ]);
+
+// The `GIT_CONFIG_*` scope switches of keiko-git's `gitEnv` — the product's ONE config-isolated
+// local-read git profile — picked by name so the platform null-device primitive behind
+// `GIT_CONFIG_GLOBAL` keeps a single owner above the contracts leaf (KEIKO-0717 was exactly a
+// hand-copied null device drifting on Windows).
+function localReadConfigScopePins(): Readonly<Record<string, string>> {
+  const pins: Record<string, string> = {};
+  for (const [name, value] of Object.entries(gitEnv({}))) {
+    if (name.startsWith("GIT_CONFIG_") && value !== undefined) pins[name] = value;
+  }
+  return Object.freeze(pins);
+}
+
+// The dedicated policy for `readGitRemoteUrl` — see its comment for why neither the default policy
+// nor the identity lane is right for that ONE read. Built from the exported lane constants:
+//   - the identity lane's `envAllowlist`, so the account names (`USER`, `LOGNAME`, ...) are not in
+//     the output scrub set and an owner that contains them survives into the URL;
+//   - an ISOLATED home (the default ephemeral one) plus `GIT_CONFIG_GLOBAL` = null device and
+//     `GIT_CONFIG_NOSYSTEM`, so no user or host config scope can rewrite the checkout's remote;
+//   - NO `credentialEnvAllowlist`: a local read authenticates to nothing, so no token reaches git.
+const GIT_REMOTE_URL_READ_SANDBOX_POLICY: SandboxPolicy = Object.freeze({
+  ...DEFAULT_SANDBOX_POLICY,
+  envAllowlist: GOVERNED_GIT_IDENTITY_SANDBOX_POLICY.envAllowlist,
+  credentialEnvAllowlist: undefined,
+  homeIsolation: "ephemeral",
+  pinnedEnv: Object.freeze({
+    ...GOVERNED_GIT_IDENTITY_SANDBOX_POLICY.pinnedEnv,
+    ...localReadConfigScopePins(),
+  }),
+});
 
 export interface NodeGitWorktreeReaderDeps {
   readonly workspace: WorkspaceInfo;
@@ -254,22 +285,32 @@ export async function readGitRemoteUrl(
     throw new GitWorktreeReadError("remote alias is unsafe");
   }
   // This read is the ONE reader here whose payload is content-bearing: the caller needs the remote
-  // URL itself to derive an `owner/repo` operand. `runCommand` scrubs the value of every env var that
-  // is NOT on the policy's `envAllowlist`, so under the default policy the account identity is
-  // scrubbed out of the URL: a user whose GitHub owner contains their OS user name (`USER=alice`
-  // owning `alice-dev/App`) got `https://github.com/[REDACTED]-dev/App` back, and every consumer
-  // derived a repository that does not exist. It failed closed rather than leaking, but the feature
-  // could not work at all for that very common setup.
+  // URL itself to derive an `owner/repo` operand, and the consumers use that operand for
+  // AUTHORIZATION (which repository a checkout may read). Two things follow, and neither the
+  // default policy nor the identity lane satisfies both — hence the dedicated policy above.
   //
-  // The identity lane is the sanctioned profile for a git read that must act AS the local human on
-  // their own machine, and it allowlists exactly the account names (`HOME`, `USER`, `LOGNAME`, ...)
-  // whose values were corrupting this payload. It grants NO credential and NO network: it carries no
-  // `credentialEnvAllowlist`, so every token value stays in the scrub set and can still never survive
-  // into output. A caller that passes its own policy keeps it.
-  const identityDeps =
-    deps.policy === undefined ? { ...deps, policy: GOVERNED_GIT_IDENTITY_SANDBOX_POLICY } : deps;
+  // 1. The account names must not be scrubbed. `runCommand` scrubs the value of every env var that
+  //    is NOT on the policy's `envAllowlist`, so under the default policy a user whose GitHub owner
+  //    contains their OS user name (`USER=alice` owning `alice-dev/App`) got
+  //    `https://github.com/[REDACTED]-dev/App` back, and every consumer derived a repository that
+  //    does not exist. The identity lane's allowlist names exactly those account variables.
+  //
+  // 2. The URL must be the one the CHECKOUT configures, so HOME is deliberately NOT inherited and
+  //    the global and system config scopes are switched off. The identity lane inherits HOME
+  //    because a commit needs the user's signing configuration; this read needs none of it, and
+  //    with the user's config in scope `git remote get-url` applies every `url.<base>.insteadOf`
+  //    rewrite from `~/.gitconfig`, `$XDG_CONFIG_HOME/git/config` or the host's system gitconfig.
+  //    An enterprise mirror rule then resolved a non-GitHub URL (every consumer denied) and an
+  //    owner-rewriting rule changed the owner the consumers authorized against. An authorization
+  //    operand must come from the checkout, never from a global rewrite of it.
+  //
+  // The policy grants NO credential and NO network: it carries no `credentialEnvAllowlist`, so no
+  // token reaches the git child and every token value stays in the scrub set. A caller that passes
+  // its own policy keeps it.
+  const readDeps =
+    deps.policy === undefined ? { ...deps, policy: GIT_REMOTE_URL_READ_SANDBOX_POLICY } : deps;
   const lines = parseLines(
-    await runRead(buildReadContext(identityDeps), ["remote", "get-url", "--", remoteAlias]),
+    await runRead(buildReadContext(readDeps), ["remote", "get-url", "--", remoteAlias]),
   );
   if (lines.length !== 1) {
     throw new GitWorktreeReadError("remote URL could not be resolved uniquely");

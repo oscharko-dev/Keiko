@@ -22,8 +22,10 @@ import {
   MAX_ATTACHMENT_MIME_BYTES,
   MAX_CONNECTED_SOURCES,
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
+  MAX_GITHUB_ISSUE_READER_REPOSITORY_PATH_CHARS,
   MAX_LOCAL_KNOWLEDGE_SOURCES,
   normalizeAttachmentMime,
+  parseUpdateGitHubIssueReaderAuthorizationWire,
   parseUpdateMemoryAutonomyPolicyWire,
   resolveGroundingLimits,
   type Chat,
@@ -207,6 +209,62 @@ describe("parseUpdateMemoryAutonomyPolicyWire", () => {
     { requestedMode: "governed-assist", expectedRevision: Number.MAX_SAFE_INTEGER + 1 },
   ])("rejects malformed policy update payload %#", (value) => {
     expect(parseUpdateMemoryAutonomyPolicyWire(value)).toBeUndefined();
+  });
+});
+
+describe("parseUpdateGitHubIssueReaderAuthorizationWire", () => {
+  const update = {
+    repositoryPath: "/workspace/keiko",
+    authorized: true,
+    expectedRevision: 0,
+  };
+
+  it("accepts a well-formed grant at revision zero", () => {
+    expect(parseUpdateGitHubIssueReaderAuthorizationWire(update)).toEqual(update);
+  });
+
+  it("accepts a revocation at the maximum safe revision", () => {
+    const revocation = { ...update, authorized: false, expectedRevision: Number.MAX_SAFE_INTEGER };
+    expect(parseUpdateGitHubIssueReaderAuthorizationWire(revocation)).toEqual(revocation);
+  });
+
+  it("pins both ends of the repository path bound", () => {
+    const longest = "/".padEnd(MAX_GITHUB_ISSUE_READER_REPOSITORY_PATH_CHARS, "a");
+    expect(
+      parseUpdateGitHubIssueReaderAuthorizationWire({ ...update, repositoryPath: longest }),
+    ).toEqual({ ...update, repositoryPath: longest });
+    expect(
+      parseUpdateGitHubIssueReaderAuthorizationWire({ ...update, repositoryPath: `${longest}a` }),
+    ).toBeUndefined();
+  });
+
+  it("rejects a repository path containing a NUL byte", () => {
+    expect(
+      parseUpdateGitHubIssueReaderAuthorizationWire({ ...update, repositoryPath: "/a\0/b" }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    {},
+    undefined,
+    null,
+    [],
+    "/workspace/keiko",
+    { ...update, extra: true },
+    { authorized: true, expectedRevision: 0 },
+    { repositoryPath: "/workspace/keiko", expectedRevision: 0 },
+    { repositoryPath: "/workspace/keiko", authorized: true },
+    { ...update, repositoryPath: "" },
+    { ...update, repositoryPath: 7 },
+    { ...update, repositoryPath: null },
+    { ...update, authorized: "true" },
+    { ...update, authorized: 1 },
+    { ...update, expectedRevision: "0" },
+    { ...update, expectedRevision: -1 },
+    { ...update, expectedRevision: 0.5 },
+    { ...update, expectedRevision: Number.MAX_SAFE_INTEGER + 1 },
+  ])("rejects malformed authorization update payload %#", (value) => {
+    expect(parseUpdateGitHubIssueReaderAuthorizationWire(value)).toBeUndefined();
   });
 });
 

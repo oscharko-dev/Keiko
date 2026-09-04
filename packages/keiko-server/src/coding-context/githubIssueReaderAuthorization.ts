@@ -1,7 +1,11 @@
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import type { ServerLogSink } from "../observability/index.js";
+import type { ServerLogLevel, ServerLogSink } from "../observability/index.js";
+import { errorKindOf } from "../observability/server-log.js";
+import { realpathSync } from "node:fs";
+
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { readGitRemoteUrl } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 
 import { githubOwnerAndRepoFromRemoteUrl } from "../gitDelivery/branchProtectionPreflight.js";
@@ -17,9 +21,41 @@ import { createGitHubCodeContextApiPort } from "./githubCodeContextPort.js";
 export type GitHubIssueReaderAuthorizationDecision =
   "authorized" | "repository-unresolved" | "store-unavailable" | "no-grant" | "revoked";
 
+/**
+ * How this module reports what it decided. Shared by both entry points here — the stored-grant
+ * decision and the remote resolution below — rather than duplicated per function: they carry the
+ * same two things and belong to the same operation, so one correlation id threads both lines.
+ */
 export interface GitHubIssueReaderAuthorizationObservation {
   readonly activityLog?: ServerLogSink | undefined;
   readonly correlationId?: string | undefined;
+}
+
+/**
+ * The ONE identity a grant is stored and looked up under.
+ *
+ * `deriveRepositoryId` digests the string it is given and documents its precondition: the root is
+ * already canonical, a realpath'd directory. The three sites that key this grant did not all honour
+ * that. The editor reader passes its resolved `realRoot`; the pack route passes the root its
+ * authority was minted for, which for a single-root workspace with no explicit binding is the
+ * client's own lexical string; and the writer keyed the registered project path as typed. A checkout
+ * registered through a symlink — every project under `/tmp` on macOS is one, `/tmp` being a link to
+ * `/private/tmp` — was therefore granted under one id and looked up under another, and the grant
+ * never took effect. Fail-closed, and silently broken.
+ *
+ * Canonicalising HERE, once, is what makes the three sites one: a caller may hand in either form.
+ * A root that cannot be resolved — gone, or never a directory — yields no identity at all, which
+ * the reader turns into `repository-unresolved` and the writer into "not a registered repository":
+ * never a fallback to the lexical digest, which would reopen the split this closes.
+ */
+export function githubIssueReaderRepositoryId(repositoryRoot: string): string | undefined {
+  let canonical: string;
+  try {
+    canonical = realpathSync(repositoryRoot);
+  } catch {
+    return undefined;
+  }
+  return deriveRepositoryId(canonical);
 }
 
 function decide(
@@ -33,7 +69,8 @@ function decide(
   if (repositoryRoot === undefined || repositoryRoot === "") {
     return { decision: "repository-unresolved" };
   }
-  const repositoryId = deriveRepositoryId(repositoryRoot);
+  const repositoryId = githubIssueReaderRepositoryId(repositoryRoot);
+  if (repositoryId === undefined) return { decision: "repository-unresolved" };
   // A deps graph composed without persistence must DENY, not throw. `store` is typed as required,
   // but a partially-composed graph can still reach here, and an exception on the authorization path
   // would surface as an opaque failure rather than the fail-closed refusal this decision owes its
@@ -127,19 +164,98 @@ export function gitHubCodeContextPortFor(
 ): GitHubCodeContextApiPort | undefined {
   if (repositoryRoot === undefined || repositoryRoot === "") return undefined;
   return createGitHubCodeContextApiPort({
-    workspace: {
-      root: repositoryRoot,
-      selectedRoot: repositoryRoot,
-      name: undefined,
-      version: undefined,
-      testFramework: "unknown",
-      sourceDirs: [],
-      testDirs: [],
-      languages: [],
-      ignoreLines: [],
-    },
+    workspace: contentFreeWorkspaceFor(repositoryRoot),
     processEnv,
   });
+}
+
+/**
+ * Why the checkout resolved to a GitHub repository, or why it did not.
+ *
+ * The four refusals are NOT interchangeable, even though every one of them denies. Three are the
+ * expected shape of a checkout that simply has no GitHub remote to read; `remote-unreadable` and
+ * `resolver-failed` are operational faults. Collapsing them, as this module first did, left an
+ * operator unable to tell a deployment whose `git` is broken from one that is behaving exactly as
+ * designed — both were silence followed by a denied read.
+ */
+export type GitHubRemoteResolutionOutcome =
+  | "resolved"
+  | "repository-unresolved"
+  | "remote-not-github"
+  | "remote-redacted"
+  | "remote-unreadable"
+  | "resolver-failed";
+
+// `remote-redacted` is a fault too, of a very specific kind: the read succeeded, but the spawn
+// boundary replaced part of the URL with its marker because some non-allowlisted environment value
+// happened to appear inside the owner or repository name. The value is then unusable, the read is
+// denied, and WITHOUT its own outcome the timeline would show it as "not a GitHub remote" — which is
+// exactly how a CI runner's GITHUB_REPOSITORY variable hid this once.
+function isOperationalFault(outcome: GitHubRemoteResolutionOutcome): boolean {
+  return (
+    outcome === "remote-unreadable" ||
+    outcome === "resolver-failed" ||
+    outcome === "remote-redacted"
+  );
+}
+
+// A fault is a warning because someone has to look at it; an expected absence is information; a
+// success is debug, so a healthy deployment does not pay for a line on every read.
+function levelForOutcome(outcome: GitHubRemoteResolutionOutcome): ServerLogLevel {
+  if (outcome === "resolved") return "debug";
+  return isOperationalFault(outcome) ? "warn" : "info";
+}
+
+/**
+ * One body-free line per resolution (ADR-0173). It carries the outcome and, for a fault, the closed
+ * vocabulary `errorKind` — never the root, the remote URL, or the resolved repository, any of which
+ * would put a path or a customer's repository name into the log.
+ */
+function recordRemoteResolution(
+  outcome: GitHubRemoteResolutionOutcome,
+  observation: GitHubIssueReaderAuthorizationObservation,
+  errorKind?: string,
+): void {
+  const sink = observation.activityLog ?? processServerLogSink();
+  sink.write({
+    level: levelForOutcome(outcome),
+    category: "security",
+    op: "coding-context.github-remote.evaluated",
+    correlationId: observation.correlationId ?? UNKNOWN_CORRELATION_ID,
+    ...(errorKind === undefined ? {} : { errorKind }),
+    extra: { outcome },
+  });
+}
+
+// The content-free workspace view both `gh` and `git` are given for one checkout. Declared once:
+// two copies of this literal drifted apart the moment either one gained a field.
+function contentFreeWorkspaceFor(repositoryRoot: string): WorkspaceInfo {
+  return {
+    root: repositoryRoot,
+    selectedRoot: repositoryRoot,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
+}
+
+async function resolveThroughInjectedResolver(
+  repositoryRoot: string,
+  resolver: (repositoryRoot: string) => Promise<string | undefined>,
+  observation: GitHubIssueReaderAuthorizationObservation,
+): Promise<string | undefined> {
+  try {
+    const resolved = await resolver(repositoryRoot);
+    recordRemoteResolution(resolved === undefined ? "remote-not-github" : "resolved", observation);
+    return resolved;
+  } catch (error) {
+    recordRemoteResolution("resolver-failed", observation, errorKindOf(error));
+    return undefined;
+  }
 }
 
 /**
@@ -153,43 +269,48 @@ export function gitHubCodeContextPortFor(
  * to the new one rather than coasting on the old grant.
  *
  * Returns undefined when the checkout has no readable GitHub remote, which denies rather than
- * widens: the caller treats "no allowed repository" as "authorize nothing".
+ * widens: the caller treats "no allowed repository" as "authorize nothing". Every path says on the
+ * activity log WHICH of those it was, so a denial that is really a broken `git` is visible as one.
  */
 export async function githubRemoteOwnerAndRepoFor(
   repositoryRoot: string | undefined,
   processEnv: NodeJS.ProcessEnv,
   resolver?: (repositoryRoot: string) => Promise<string | undefined>,
+  observation: GitHubIssueReaderAuthorizationObservation = {},
 ): Promise<string | undefined> {
-  if (repositoryRoot === undefined || repositoryRoot === "") return undefined;
-  if (resolver !== undefined) {
-    try {
-      return await resolver(repositoryRoot);
-    } catch {
-      return undefined;
-    }
-  }
-  try {
-    const remoteUrl = await readGitRemoteUrl(
-      {
-        workspace: {
-          root: repositoryRoot,
-          selectedRoot: repositoryRoot,
-          name: undefined,
-          version: undefined,
-          testFramework: "unknown",
-          sourceDirs: [],
-          testDirs: [],
-          languages: [],
-          ignoreLines: [],
-        },
-        processEnv,
-      },
-      "origin",
-    );
-    return githubOwnerAndRepoFromRemoteUrl(remoteUrl);
-  } catch {
-    // A missing remote, a non-GitHub remote, or a failed read all mean the same thing here: this
-    // checkout authorizes no repository.
+  if (repositoryRoot === undefined || repositoryRoot === "") {
+    recordRemoteResolution("repository-unresolved", observation);
     return undefined;
   }
+  if (resolver !== undefined) {
+    return await resolveThroughInjectedResolver(repositoryRoot, resolver, observation);
+  }
+  let remoteUrl: string;
+  try {
+    remoteUrl = await readGitRemoteUrl(
+      { workspace: contentFreeWorkspaceFor(repositoryRoot), processEnv },
+      "origin",
+    );
+  } catch (error) {
+    // The read itself failed: no repository, no `origin`, or `git` could not run. That is an
+    // operational fault and is reported as one, separately from a remote that is merely not GitHub.
+    recordRemoteResolution("remote-unreadable", observation, errorKindOf(error));
+    return undefined;
+  }
+  const ownerAndRepo = githubOwnerAndRepoFromRemoteUrl(remoteUrl);
+  recordRemoteResolution(unresolvedOutcomeFor(remoteUrl, ownerAndRepo), observation);
+  return ownerAndRepo;
+}
+
+// The marker `runCommand` substitutes for a scrubbed environment value. Checked here only to NAME
+// the outcome on the activity log; the refusal itself already comes from
+// `githubOwnerAndRepoFromRemoteUrl`, whose segment rule rejects the marker's brackets.
+const SPAWN_REDACTION_MARKER = "[REDACTED]";
+
+function unresolvedOutcomeFor(
+  remoteUrl: string,
+  ownerAndRepo: string | undefined,
+): GitHubRemoteResolutionOutcome {
+  if (ownerAndRepo !== undefined) return "resolved";
+  return remoteUrl.includes(SPAWN_REDACTION_MARKER) ? "remote-redacted" : "remote-not-github";
 }

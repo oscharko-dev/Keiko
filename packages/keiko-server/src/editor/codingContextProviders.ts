@@ -1185,6 +1185,14 @@ export async function runConnectedContextProvider(
   input: { readonly queryText: string | undefined },
 ): Promise<ProviderOutcome> {
   const refs = connectedContextRefs(input.queryText);
+  // Decide whether there is anything to serve BEFORE resolving the remote: that resolution is a
+  // git subprocess plus an activity line, and the first shape of this provider ran it on every chat
+  // query — refs or no refs, live or already aborted. A query that names no connector ref never
+  // reaches GitHub or Jira, so it has no business spawning git to find out which repository it may
+  // not read.
+  if (isAborted(ctx.signal) || refs.length === 0) {
+    return { excerpts: [], omission: omission("connected-context", "unavailable") };
+  }
   const intake = connectedContextIntake(
     ctx.deps,
     ctx.realRoot,
@@ -1193,9 +1201,10 @@ export async function runConnectedContextProvider(
       ctx.realRoot,
       ctx.deps.env,
       ctx.deps.codingContextGitHubRemoteResolver,
+      { correlationId: ctx.correlationId },
     ),
   );
-  if (isAborted(ctx.signal) || refs.length === 0 || intake === undefined) {
+  if (isAborted(ctx.signal) || intake === undefined) {
     return { excerpts: [], omission: omission("connected-context", "unavailable") };
   }
   const result = await readConnectedContextPack(ctx, intake, refs);

@@ -7,7 +7,7 @@ import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
-import { deriveRepositoryId } from "../task-workspace/naming.js";
+import { githubIssueReaderRepositoryId } from "./githubIssueReaderAuthorization.js";
 
 // A grant carries two booleans and a counter. Anything larger is not this request.
 const MAX_BODY_BYTES = 1_024;
@@ -32,16 +32,34 @@ function registeredRepositoryRoot(deps: UiHandlerDeps, path: string): string | u
   return deps.store.listProjects().some((project) => project.path === path) ? path : undefined;
 }
 
+/**
+ * The stored key for a registered repository: `deriveRepositoryId` of its CANONICAL root.
+ *
+ * Registration is a lexical question ("is this spelling an opened project?") and stays one. The
+ * key is not: the editor reader consults the grant under the identity of the resolved workspace
+ * root (`ctx.realRoot`), which is what `deriveRepositoryId` documents, while the store keeps the
+ * path as registered — `validateProjectPath` normalises without resolving links. A repository
+ * opened through a symlink (a checkout under macOS `/tmp`, which is `/private/tmp`) therefore had
+ * its grant written under one id and read under another, so it never took effect. Both verbs go
+ * through this one resolver so the identity they agree on cannot drift apart again.
+ *
+ * A registered path whose directory is gone has no canonical root to key on. The lexical spelling
+ * must not stand in for one — that writes a row no reader will ever consult — so the answer is
+ * the same refusal an unregistered path receives, and the 409 carries the correlation id.
+ */
+function registeredRepositoryId(deps: UiHandlerDeps, path: string): string | undefined {
+  const root = registeredRepositoryRoot(deps, path);
+  // ONE derivation of the grant identity, shared with both readers, so the writer cannot drift from
+  // them again. It already fails closed on a root that does not resolve.
+  return root === undefined ? undefined : githubIssueReaderRepositoryId(root);
+}
+
 function requestedRepositoryPath(ctx: RouteContext): string | undefined {
   const value = ctx.url.searchParams.get("repositoryPath");
   return value === null || value.length === 0 ? undefined : value;
 }
 
-function projection(
-  deps: UiHandlerDeps,
-  repositoryRoot: string,
-): GitHubIssueReaderAuthorizationWire {
-  const repositoryId = deriveRepositoryId(repositoryRoot);
+function projection(deps: UiHandlerDeps, repositoryId: string): GitHubIssueReaderAuthorizationWire {
   const stored = deps.store.readGitHubIssueReaderAuthorization(repositoryId);
   return {
     repositoryId,
@@ -107,9 +125,9 @@ export function handleGetGitHubIssueReaderAuthorization(
 ): RouteResult {
   const requested = requestedRepositoryPath(ctx);
   if (requested === undefined) return unknownRepository(ctx, "reviewing");
-  const root = registeredRepositoryRoot(deps, requested);
-  if (root === undefined) return unknownRepository(ctx, "reviewing");
-  return { status: 200, body: projection(deps, root) };
+  const repositoryId = registeredRepositoryId(deps, requested);
+  if (repositoryId === undefined) return unknownRepository(ctx, "reviewing");
+  return { status: 200, body: projection(deps, repositoryId) };
 }
 
 function badRequest(correlationId: string | undefined): RouteResult {
@@ -135,10 +153,9 @@ export async function handlePutGitHubIssueReaderAuthorization(
 ): Promise<RouteResult> {
   const parsed = await readUpdate(ctx);
   if (parsed === undefined) return badRequest(ctx.correlationId);
-  const root = registeredRepositoryRoot(deps, parsed.repositoryPath);
-  if (root === undefined) return unknownRepository(ctx, "changing");
+  const repositoryId = registeredRepositoryId(deps, parsed.repositoryPath);
+  if (repositoryId === undefined) return unknownRepository(ctx, "changing");
 
-  const repositoryId = deriveRepositoryId(root);
   const stored = deps.store.updateGitHubIssueReaderAuthorization(
     repositoryId,
     parsed.authorized,

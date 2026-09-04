@@ -13,9 +13,16 @@ export const GIT_REPOSITORY_SCHEMA_VERSION = "1" as const;
 // Deliberately stricter than `git check-ref-format`: every ref Keiko creates is server-derived, so
 // only the deterministic shapes we emit need to be accepted, and anything that could read as an
 // option, a traversal, or a refspec/glob metacharacter is refused.
-const UNSAFE_REF_PREFIXES: readonly string[] = ["-", "/", "."];
-const UNSAFE_REF_SUFFIXES: readonly string[] = ["/", ".", ".lock"];
+const UNSAFE_REF_PREFIXES: readonly string[] = ["-", "/"];
+const UNSAFE_REF_SUFFIXES: readonly string[] = ["/", "."];
 const UNSAFE_REF_SUBSTRINGS: readonly string[] = ["..", "//", "@{"];
+// Rules git applies to every slash-separated component rather than to the ref as a whole: no
+// component may begin with a dot (`feature/.hidden`) or end with `.lock` (`a.lock/b`). Checking
+// `.lock` against the whole ref only accepted `a.lock/b`, `x.lock/y/z` and `refs/heads/a.lock/b`,
+// all of which `git check-ref-format --allow-onelevel` refuses. The trailing-dot rule is NOT in
+// this list on purpose: git applies it to the whole ref only (`a.` is refused, `a./b` is not).
+const UNSAFE_REF_COMPONENT_PREFIXES: readonly string[] = ["."];
+const UNSAFE_REF_COMPONENT_SUFFIXES: readonly string[] = [".lock"];
 
 function hasControlOrNul(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
@@ -24,14 +31,20 @@ function hasControlOrNul(value: string): boolean {
   return false;
 }
 
+function isUnsafeRefComponent(component: string): boolean {
+  return (
+    UNSAFE_REF_COMPONENT_PREFIXES.some((prefix) => component.startsWith(prefix)) ||
+    UNSAFE_REF_COMPONENT_SUFFIXES.some((suffix) => component.endsWith(suffix))
+  );
+}
+
 export function isSafeGitRefName(value: string): boolean {
   if (value.length === 0 || value.length > 255 || hasControlOrNul(value)) return false;
   if (UNSAFE_REF_PREFIXES.some((prefix) => value.startsWith(prefix))) return false;
   if (UNSAFE_REF_SUFFIXES.some((suffix) => value.endsWith(suffix))) return false;
   if (UNSAFE_REF_SUBSTRINGS.some((part) => value.includes(part))) return false;
   if (!/^[A-Za-z0-9._\-/]+$/u.test(value)) return false;
-  // Also reject a component that begins with a dot (`feature/.hidden`), which git refuses.
-  if (value.split("/").some((segment) => segment.startsWith("."))) return false;
+  if (value.split("/").some(isUnsafeRefComponent)) return false;
   return !/[~^:?*[\\ ]/u.test(value);
 }
 

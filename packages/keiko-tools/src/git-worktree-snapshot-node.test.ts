@@ -5,10 +5,12 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { gitEnv } from "@oscharko-dev/keiko-git";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { recordingSpawn } from "./_support.js";
 import {
   GIT_WORKTREE_READ_COMMAND_RULES,
   GitWorktreeReadError,
@@ -19,13 +21,45 @@ import {
   type NodeGitWorktreeReaderDeps,
 } from "./git-worktree-snapshot-node.js";
 import { isCommandAllowed } from "./sandbox.js";
-import { DEFAULT_SANDBOX_POLICY } from "./types.js";
+import { DEFAULT_SANDBOX_POLICY, GOVERNED_GIT_REMOTE_CREDENTIAL_ENV_ALLOWLIST } from "./types.js";
 
 let root: string;
 let info: WorkspaceInfo;
+// Disposable directories a test created beside the repository (fake homes/config dirs).
+const scratchDirs: string[] = [];
 
 function git(args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd: root, encoding: "utf8" });
+}
+
+const CONFIGURED_REMOTE_URL = "https://github.com/alicedev-team/App.git";
+
+// A disposable directory carrying ONE global-scope git config whose `url.<base>.insteadOf` rule
+// rewrites every github.com URL onto an enterprise mirror — the exact shape of a corporate
+// `~/.gitconfig` (`home`) or `$XDG_CONFIG_HOME/git/config` (`xdg`).
+function makeRewritingConfigDir(scope: "home" | "xdg", mirrorBase: string): string {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), `keiko-git-${scope}-`)));
+  scratchDirs.push(dir);
+  const configPath = scope === "home" ? join(dir, ".gitconfig") : join(dir, "git", "config");
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, `[url "${mirrorBase}"]\n\tinsteadOf = https://github.com/\n`, "utf8");
+  return dir;
+}
+
+// Drives readGitRemoteUrl through the injected spawn seam and returns the env the git child
+// RECEIVED. The fake child answers with one URL line so the read completes on its normal path.
+async function captureRemoteUrlReadEnv(
+  processEnv: NodeJS.ProcessEnv,
+): Promise<Record<string, string>> {
+  const spawn = recordingSpawn();
+  const pending = readGitRemoteUrl(
+    { workspace: info, processEnv, now: () => Date.now(), spawn: spawn.fn },
+    "origin",
+  );
+  spawn.child.stdout.emit("data", Buffer.from(`${CONFIGURED_REMOTE_URL}\n`, "utf8"));
+  spawn.child.emit("close", 0, null);
+  await pending;
+  return spawn.calls()[0]?.options.env ?? {};
 }
 
 function workspaceInfo(rootPath: string): WorkspaceInfo {
@@ -57,6 +91,9 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
+  for (const dir of scratchDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 describe("read-only allowlist", () => {
@@ -198,6 +235,87 @@ describe("readGitRemoteUrl", () => {
 
     expect(url).not.toContain("s3cr3t-token-value");
     expect(url).toContain("[REDACTED]");
+  });
+
+  // The consumers use this URL as an AUTHORIZATION operand — which repository a checkout may read —
+  // so it must be the remote the CHECKOUT configures, never a global rewrite of it. Under the
+  // identity lane the child inherited the user's HOME, and `git remote get-url` applies every
+  // `url.<base>.insteadOf` rule from `~/.gitconfig`: an enterprise mirror rule turned the resolved
+  // URL into a non-GitHub one (every consumer denied), and an owner-rewriting rule changed the
+  // owner the consumers authorized against.
+  it("resolves the CONFIGURED remote, not a ~/.gitconfig insteadOf rewrite of it", async () => {
+    git(["remote", "add", "origin", CONFIGURED_REMOTE_URL]);
+    const fakeHome = makeRewritingConfigDir("home", "https://ghe.corp.example/mirror/");
+
+    const url = await readGitRemoteUrl(
+      {
+        workspace: info,
+        processEnv: { PATH: process.env.PATH ?? "", HOME: fakeHome, USER: "alicedev" },
+        now: () => Date.now(),
+      },
+      "origin",
+    );
+
+    expect(url).toBe(CONFIGURED_REMOTE_URL);
+  });
+
+  // Same defect through git's OTHER global-scope location. `XDG_CONFIG_HOME` is on the identity
+  // allowlist (the identity lane needs it for signing configuration), so isolating HOME alone
+  // still let `$XDG_CONFIG_HOME/git/config` rewrite the URL; the global scope has to be switched
+  // off as a whole.
+  it("resolves the CONFIGURED remote, not an $XDG_CONFIG_HOME/git/config rewrite of it", async () => {
+    git(["remote", "add", "origin", CONFIGURED_REMOTE_URL]);
+    const fakeXdg = makeRewritingConfigDir("xdg", "https://xdg.corp.example/mirror/");
+
+    const url = await readGitRemoteUrl(
+      {
+        workspace: info,
+        processEnv: { PATH: process.env.PATH ?? "", XDG_CONFIG_HOME: fakeXdg, USER: "alicedev" },
+        now: () => Date.now(),
+      },
+      "origin",
+    );
+
+    expect(url).toBe(CONFIGURED_REMOTE_URL);
+  });
+
+  // The "still scrubs a credential value" case above proves only OUTPUT scrubbing, which holds
+  // under every lane. This pins the INPUT side: the read grants no credential, so none of the names
+  // the remote-delivery lane forwards may reach the git child — while the account identity that
+  // this read exists to keep unscrubbed still does.
+  it("forwards no credential to the git child while keeping the account identity", async () => {
+    const credentialNames = GOVERNED_GIT_REMOTE_CREDENTIAL_ENV_ALLOWLIST;
+    expect(credentialNames.length).toBeGreaterThan(0);
+    const env = await captureRemoteUrlReadEnv({
+      PATH: process.env.PATH ?? "",
+      USER: "alicedev",
+      // Scrubbable-length values on purpose: a value below the scrub floor is never forwarded by
+      // the credential lane either, so a short fixture would pass under BOTH lanes and pin nothing.
+      ...Object.fromEntries(credentialNames.map((name) => [name, `${name}-must-not-reach-git`])),
+    });
+
+    for (const name of credentialNames) {
+      expect(name in env, name).toBe(false);
+    }
+    expect(env.USER).toBe("alicedev");
+  });
+
+  // The two config scopes this read must NOT see, pinned on the child env itself: the system scope
+  // cannot be exercised hermetically (no test may own the host's system gitconfig), and the global
+  // scope must stay off even when the parent carries a real HOME.
+  it("pins the child to the checkout's own git config scopes under an isolated home", async () => {
+    const env = await captureRemoteUrlReadEnv({
+      PATH: process.env.PATH ?? "",
+      HOME: "/Users/parent",
+      XDG_CONFIG_HOME: "/Users/parent/.config",
+      USER: "alicedev",
+    });
+
+    expect(env.HOME).not.toBe("/Users/parent");
+    expect(env.GIT_CONFIG_NOSYSTEM).toBe("1");
+    // keiko-git's `gitEnv` is the product's config-isolated local-read profile; the platform null
+    // device it pins for the global scope is the one this read must pin too.
+    expect(env.GIT_CONFIG_GLOBAL).toBe(gitEnv({}).GIT_CONFIG_GLOBAL);
   });
 });
 

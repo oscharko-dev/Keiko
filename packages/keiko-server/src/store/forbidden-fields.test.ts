@@ -15,6 +15,18 @@
 //   `deployment`, `secret`, `token`, `endpoint`, `azure`, or `credential` column to any table,
 //   this test will fail. The exact-column-set assertions also catch unexpected column additions
 //   even when the column name does not match a forbidden substring pattern.
+//
+//   Two layers make that claim hold for EVERY table, not only the ones listed by hand below:
+//   1. The "every table" sweep enumerates the tables from `sqlite_master` after migration and
+//      scans every column of every table for the forbidden substrings. A migration that creates
+//      a new table cannot escape it, because nothing in this file has to be updated for the sweep
+//      to see the table (PR #3394 finding: `github_issue_reader_authorization` shipped with a
+//      schema comment citing this test while no assertion here introspected it, so adding
+//      `api_key` and `provider_endpoint` columns left the suite green).
+//   2. The table inventory and the per-table exact column sets force a conscious review of every
+//      new table and column — content-class fields that carry no forbidden substring in their
+//      name (`raw_prompt`, `manifest_bytes`) are caught by a human reading this file, not by a
+//      pattern.
 
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
@@ -120,6 +132,38 @@ const ALLOWED_WORKSPACE_TRUST_COLUMNS = new Set([
   "updated_at",
 ]);
 
+// V21 (issue #3385, epic #3384) repository-scoped GitHub issue reader authorization. The row is a
+// content-free repository identity, a boolean grant, a monotonic revision, and a timestamp. The
+// credential keeps coming from the `gh` CLI boundary and never touches this table.
+const ALLOWED_GITHUB_ISSUE_READER_AUTHORIZATION_COLUMNS = new Set([
+  "repository_id",
+  "authorized",
+  "revision",
+  "updated_at",
+]);
+
+// Every user table the migrations create, by name. A migration that adds a table must add it here
+// (and, for a credential-adjacent table, an exact column set above) so its columns are reviewed
+// consciously. The sweep below does NOT depend on this list — it reads `sqlite_master` — so a
+// table missing here still fails the forbidden-substring scan; this pin only guarantees the
+// human review happens too.
+const EXPECTED_TABLES = new Set([
+  "chat_messages",
+  "chats",
+  "coding_runtime_snapshots",
+  "github_issue_reader_authorization",
+  "memory_autonomy_policy",
+  "projects",
+  "relationship_audit_entries",
+  "relationship_lifecycle_history",
+  "relationships",
+  "task_workspace_active_pointer",
+  "task_workspace_instances",
+  "workspace_manifest_roots",
+  "workspace_manifests",
+  "workspace_trust_records",
+]);
+
 // ── Forbidden substring patterns (case-insensitive) ─────────────────────────
 // Any column whose name contains one of these substrings leaks a credential-class
 // field into the UI DB in violation of ADR-0013 D8.
@@ -150,6 +194,31 @@ function columnNames(db: DatabaseSync, table: string): string[] {
   return (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as PragmaRow[]).map(
     (r) => r.name,
   );
+}
+
+interface SqliteMasterRow {
+  readonly name: string;
+}
+
+// Every user table in the migrated database, read from the catalog rather than from any list in
+// this file. SQLite's own bookkeeping tables (`sqlite_sequence`, `sqlite_stat*`) are excluded:
+// they are not created by a migration and cannot carry a credential-class column.
+function tableNames(db: DatabaseSync): string[] {
+  return (
+    db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+      .all() as unknown as SqliteMasterRow[]
+  )
+    .map((r) => r.name)
+    .filter((name) => !name.startsWith("sqlite_"));
+}
+
+// Runs every migration through the real store, then reopens the on-disk file read-only so the
+// schema is introspected exactly as it exists on disk, not through the store's public surface.
+function openMigratedSchema(dbPath: string): DatabaseSync {
+  const store = createNodeUiStore(dbPath);
+  store.close();
+  return new DatabaseSync(dbPath, { readOnly: true });
 }
 
 let tmpDir: string;
@@ -275,6 +344,49 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
         expect(lower).not.toContain(forbidden);
       }
     }
+  });
+
+  it("github issue reader authorization rows are content-free and carry no credential, path, or remote fields", () => {
+    const dbPath = join(tmpDir, "github-authorization.db");
+    const inspector = openMigratedSchema(dbPath);
+    const cols = columnNames(inspector, "github_issue_reader_authorization");
+    inspector.close();
+    expect(new Set(cols)).toEqual(ALLOWED_GITHUB_ISSUE_READER_AUTHORIZATION_COLUMNS);
+    for (const col of cols) {
+      const lower = col.toLowerCase();
+      // `repository_id` is a derived identity: never a path, a remote URL, or an owner/name pair.
+      for (const forbidden of [...FORBIDDEN_SUBSTRINGS, "path", "url", "remote", "owner"]) {
+        expect(lower).not.toContain(forbidden);
+      }
+    }
+  });
+});
+
+describe("forbidden-fields — every table in the migrated store (AC#5 / ADR-0013 D8)", () => {
+  it("creates exactly the expected tables, so a new table is reviewed before it ships", () => {
+    const dbPath = join(tmpDir, "inventory.db");
+    const inspector = openMigratedSchema(dbPath);
+    const tables = tableNames(inspector);
+    inspector.close();
+    expect(new Set(tables)).toEqual(EXPECTED_TABLES);
+  });
+
+  it("has no credential-class column in any table enumerated from sqlite_master", () => {
+    const dbPath = join(tmpDir, "sweep.db");
+    const inspector = openMigratedSchema(dbPath);
+    const tables = tableNames(inspector);
+    // A sweep over zero tables would be vacuously green; the store must have migrated something.
+    expect(tables.length).toBeGreaterThan(0);
+
+    // Collect `<table>.<column>` for every offending column so a failure names every leak at once
+    // rather than stopping at the first one. Column names are schema identifiers, not content.
+    const offenders = tables.flatMap((table) =>
+      columnNames(inspector, table)
+        .filter((col) => FORBIDDEN_SUBSTRINGS.some((f) => col.toLowerCase().includes(f)))
+        .map((col) => `${table}.${col}`),
+    );
+    inspector.close();
+    expect(offenders).toEqual([]);
   });
 });
 

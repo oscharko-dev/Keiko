@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { URL } from "node:url";
@@ -7,20 +10,29 @@ import type {
   CodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { composeCodingContextConnectors, handleCodingContextPack } from "./codingContextRoutes.js";
 import type { GitHubCodeContextApiPort } from "./githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./jiraCodeContextConnector.js";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { deriveRepositoryId } from "../task-workspace/naming.js";
+import { githubIssueReaderRepositoryId } from "./githubIssueReaderAuthorization.js";
 import {
   editorAgentAuthorityRegistry,
   editorAgentWorkspaceRootDigest,
 } from "../editor/agentAuthorityRegistry.js";
 
-const WORKSPACE_ROOT = "/workspace/project";
+// Real directories: the grant identity is a digest of the realpath'd root, and a path that does
+// not resolve has no identity. `/workspace/project` used to stand here and passed only while the
+// reader digested the string it was given — the very split that let a symlinked checkout be granted
+// under one id and looked up under another.
+const WORKSPACE_ROOT = mkdtempSync(join(tmpdir(), "keiko-ctx-route-root-"));
+const OTHER_ROOT = mkdtempSync(join(tmpdir(), "keiko-ctx-route-other-"));
+
+afterAll(() => {
+  for (const root of [WORKSPACE_ROOT, OTHER_ROOT]) rmSync(root, { recursive: true, force: true });
+});
 const TEST_NOW = "2026-07-07T13:00:00.000Z";
 
 function requestWithBody(body: unknown): IncomingMessage {
@@ -58,7 +70,7 @@ function fakeJiraPort(): JiraCodeContextHttpPort {
   };
 }
 
-const PROJECT_ROOT = "/workspace/project";
+const PROJECT_ROOT = WORKSPACE_ROOT;
 
 /**
  * #3385: the GitHub reader's authorization is a server-persisted, repository-scoped store row, not
@@ -69,7 +81,7 @@ function authorizationStore(
   authorizedRoot: string | undefined,
 ): Pick<UiHandlerDeps["store"], "readGitHubIssueReaderAuthorization"> {
   const authorizedId =
-    authorizedRoot === undefined ? undefined : deriveRepositoryId(authorizedRoot);
+    authorizedRoot === undefined ? undefined : githubIssueReaderRepositoryId(authorizedRoot);
   return {
     readGitHubIssueReaderAuthorization: (repositoryId: string) =>
       repositoryId === authorizedId ? { repositoryId, authorized: true, revision: 1 } : undefined,
@@ -424,7 +436,7 @@ describe("coding context pack route", () => {
         // Set deliberately: the retired global gate would authorize this read, so leaving it absent
         // let the case pass under BOTH implementations and proved nothing about the new one.
         env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
-        store: authorizationStore("/workspace/some-other-project") as UiHandlerDeps["store"],
+        store: authorizationStore(OTHER_ROOT) as UiHandlerDeps["store"],
       }),
     );
 

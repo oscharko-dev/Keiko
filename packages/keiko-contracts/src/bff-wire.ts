@@ -473,8 +473,18 @@ const AUTHORIZATION_UPDATE_KEYS: ReadonlySet<string> = new Set([
   "expectedRevision",
 ]);
 
+// Transport bound only: a non-empty, NUL-free string of at most this many UTF-16 code units.
+// Whether the value is an absolute, registered project path is deliberately not judged here — the
+// server's registration check owns path semantics (#3385).
+export const MAX_GITHUB_ISSUE_READER_REPOSITORY_PATH_CHARS = 4096;
+
 function isBoundedRepositoryPath(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= 4096;
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_GITHUB_ISSUE_READER_REPOSITORY_PATH_CHARS &&
+    !value.includes("\0")
+  );
 }
 
 export function parseUpdateGitHubIssueReaderAuthorizationWire(

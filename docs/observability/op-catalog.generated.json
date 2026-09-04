@@ -905,13 +905,19 @@
     {
       "op": "coding-context.github-authorization.changed",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubAuthorizationRoutes.ts:161",
+      "site": "packages/keiko-server/src/coding-context/githubAuthorizationRoutes.ts:178",
       "package": "keiko-server"
     },
     {
       "op": "coding-context.github-authorization.evaluated",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:100",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:137",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-context.github-remote.evaluated",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:223",
       "package": "keiko-server"
     },
     {
