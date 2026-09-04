@@ -20,6 +20,7 @@ on:
       - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
+      - epic/3384-issue-to-pr
       - "release/**"
   # ADR-0139 D7: the merge queue re-triggers this workflow so the required check reports on the
   # merge group; the diff itself was already reviewed on the pull request head, so the job is

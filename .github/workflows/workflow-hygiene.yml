@@ -24,6 +24,7 @@ on:
       - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
+      - epic/3384-issue-to-pr
       - "release/**"
   pull_request:
     branches:
@@ -41,6 +42,7 @@ on:
       - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
+      - epic/3384-issue-to-pr
       - "release/**"
     # `ready_for_review` comes from osv-scanner.yml's pull-request lane, which this job absorbs. The
     # other three types are GitHub's default set, made explicit so the union is readable in one place.
