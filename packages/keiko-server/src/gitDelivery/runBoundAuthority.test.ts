@@ -164,6 +164,106 @@ const AUTHORITY_DENIAL_CASES: readonly AuthorityDenialCase[] = [
   ],
 ];
 
+describe("authorizeGitDelivery per operation", () => {
+  // Every case above drives `operation: "push"`, and the shared fixture grants every class and scope
+  // regardless of mode, so the per-operation requirement table was never exercised through this
+  // admission at all. These cases bind each operation class to the authority it actually demands, so
+  // weakening a row in `gitOperationRequirements.ts` is refused here and not only in that table's own
+  // test.
+  const WITHOUT = (
+    actionClasses: readonly string[],
+    connectorScopes: readonly string[],
+  ): GitDeliveryRunAuthorityPort =>
+    authorityPort((active) => ({
+      ...active,
+      authority: {
+        ...active.authority,
+        actionClasses: actionClasses as never,
+        connectorScopes: connectorScopes as never,
+      },
+    }));
+
+  it.each([
+    ["commit", ["workspace-write"], ["source-control.write"]],
+    ["commit", ["delivery-substrate"], ["source-control.read"]],
+    ["stage", ["workspace-read"], ["source-control.write"]],
+    ["stage", ["workspace-write"], ["source-control.read"]],
+    ["branch-create", ["workspace-read"], ["source-control.write"]],
+    ["status", ["delivery-substrate"], ["source-control.write"]],
+  ] as const)(
+    "denies %s when the envelope lacks the classes or scopes it requires",
+    (operation, actionClasses, connectorScopes) => {
+      expect(
+        authorizeGitDelivery(
+          WITHOUT(actionClasses, connectorScopes),
+          { ...REQUEST, operation },
+          NOW,
+        ),
+      ).toEqual({ allowed: false, reason: "permission-scope-missing" });
+    },
+  );
+
+  it.each(["commit", "stage", "unstage", "branch-create", "branch-switch"] as const)(
+    "admits %s without network authority, because it reaches no remote",
+    (operation) => {
+      expect(
+        authorizeGitDelivery(
+          authorityPort((active) => ({
+            ...active,
+            authority: {
+              ...active.authority,
+              actionClasses: ["workspace-write", "delivery-substrate"],
+              networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+            },
+          })),
+          { ...REQUEST, operation },
+          NOW,
+        ),
+      ).toMatchObject({ allowed: true });
+    },
+  );
+
+  it.each(["fetch", "pull", "push", "pull-request", "merge"] as const)(
+    "denies %s under a deny-all network policy, because it reaches a remote",
+    (operation) => {
+      expect(
+        authorizeGitDelivery(
+          authorityPort((active) => ({
+            ...active,
+            authority: {
+              ...active.authority,
+              networkPolicy: {
+                mode: "deny-all",
+                allowLoopback: false,
+                connectorScopes: ["source-control.read", "source-control.write"],
+              },
+            },
+          })),
+          { ...REQUEST, operation },
+          NOW,
+        ),
+      ).toEqual({ allowed: false, reason: "permission-scope-missing" });
+    },
+  );
+
+  it.each(["fetch", "pull", "push", "pull-request", "merge"] as const)(
+    "denies %s below autonomous-delivery, because it reaches a remote",
+    (operation) => {
+      expect(
+        authorizeGitDelivery(
+          permittedGitDeliveryAuthority(
+            () => PROJECT_ID,
+            () => WORKSPACE_ROOT,
+            "supervised-coding",
+          ),
+          { ...REQUEST, operation },
+          NOW,
+        ),
+      ).toEqual({ allowed: false, reason: "mode-denied" });
+    },
+  );
+});
+
 describe("authorizeGitDelivery", () => {
   it("allows a matching accepted autonomous delivery run", () => {
     expect(

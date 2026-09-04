@@ -260,8 +260,8 @@ function connectorConfigFor(
   correlationId: string | undefined,
 ): CodeContextConnectorConfig {
   return {
-    // #3385: repository-scoped and server-persisted, re-read on every composition so a revocation
-    // in settings takes effect without a restart. The port merely has to exist; this decides.
+    // #3385: server-persisted and scoped to one local checkout, re-read on every composition so a
+    // revocation takes effect without a restart. The port merely has to exist; this decides.
     //
     // The root is the one the caller's own authority was validated against, NOT the process-wide
     // launch directory. Using the launch path would deny a request whose authority names repository

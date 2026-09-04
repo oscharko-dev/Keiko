@@ -1123,6 +1123,20 @@ describe("computeStoreFingerprint (Wave 4a, epic #3233 §6.2)", () => {
       expect(Object.keys(fingerprint.tableRowCounts).sort()).toEqual(
         [...UI_STORE_FINGERPRINT_TABLES].sort(),
       );
+      // The assertion above compares the constant against itself, so a migration that adds a table
+      // and forgets to fingerprint it stays invisible — which is exactly what happened when schema
+      // v21 added `github_issue_reader_authorization`. This one asks the DATABASE instead: every
+      // persistent table the migrations actually created must be fingerprinted, or a support bundle
+      // silently omits a store an operator is trying to diagnose.
+      const liveTables = db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .all()
+        .map((row) => String(row.name));
+      expect(
+        liveTables.filter((table) => !UI_STORE_FINGERPRINT_TABLES.includes(table as never)),
+      ).toEqual([]);
       expect(Object.values(fingerprint.tableRowCounts).every((count) => count === 0)).toBe(true);
       expect(fingerprint.quickCheckOk).toBe(true);
       expect(fingerprint.encryptionMode).toBe("plaintext");

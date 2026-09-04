@@ -1182,9 +1182,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/memory/autonomy-policy",
     handler: handlePutMemoryAutonomyPolicy,
   },
-  // #3385: the in-product grant/revoke surface for the repository-scoped GitHub issue reader. The
-  // repository is resolved server-side from the selected project; the request only says grant or
-  // revoke and which revision it saw.
+  // #3385: the in-product grant/revoke surface for the GitHub issue reader, scoped to one local
+  // checkout (not to the remote whose issues it reads — see githubIssueReaderAuthorization.ts). The
+  // caller names a registered project; the server refuses an unregistered path and derives the
+  // content-free identity itself.
   {
     method: "GET",
     pattern: "/api/coding-workbench/github-authorization",

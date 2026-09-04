@@ -57,11 +57,17 @@ function decide(
  * Is the GitHub issue reader authorized for one repository?
  *
  * Issue #3385 replaces the `GITHUB_CONNECTOR_AUTHORIZED` environment variable with this
- * server-persisted, repository-scoped answer. The variable was read once at process launch and
- * bound to whatever project the process started in, so a deployment could not authorize one
- * repository without authorizing every repository that process later opened, and revoking meant
- * restarting. The stored record is keyed by the content-free repository identity the task workspace
- * already derives, and is consulted per read, so a revocation takes effect on the next read.
+ * server-persisted answer, scoped to one local checkout. The variable was read once at process
+ * launch and bound to whatever project the process started in, so a deployment could not authorize
+ * one checkout without authorizing every checkout that process later opened, and revoking meant
+ * restarting. The stored record is keyed by the content-free identity the task workspace derives
+ * from the WORKSPACE ROOT, and is consulted per read, so a revocation takes effect on the next read.
+ *
+ * The scope is deliberately named precisely: it is the local checkout, NOT the remote GitHub
+ * repository whose issues are read. Two clones of the same remote are two separate grants, and a
+ * checkout whose remote is later repointed keeps the grant it already had. Binding the grant to the
+ * resolved remote instead would be a stronger guarantee and is not what this stores; #3385's
+ * `IssueRunBinding` is where the remote identity gets pinned, and that resolver is not built yet.
  *
  * Fail-closed in every direction: no repository root, an unknown root, and no row all answer
  * `false`. Only an explicit stored grant answers `true`. Neither a browser request field nor issue

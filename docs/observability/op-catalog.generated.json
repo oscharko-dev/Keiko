@@ -911,7 +911,7 @@
     {
       "op": "coding-context.github-authorization.evaluated",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:86",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:92",
       "package": "keiko-server"
     },
     {
@@ -1325,7 +1325,7 @@
     {
       "op": "store.opened",
       "category": "setup",
-      "site": "packages/keiko-server/src/store/db.ts:944",
+      "site": "packages/keiko-server/src/store/db.ts:945",
       "package": "keiko-server"
     },
     {

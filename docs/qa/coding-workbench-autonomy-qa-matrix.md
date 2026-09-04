@@ -39,7 +39,7 @@ children #1986, #1987, #1995, #1988, #1989, #1990, #1991, #1992, and #1993 have 
 | File/workspace writes | Denied except read and diff proposal.                  | Allowed only for scoped work.                                    | Allowed only inside confirmed envelope and branch constraints.                                       | `packages/keiko-contracts/src/coding-workbench.test.ts`; `packages/keiko-server/src/coding-runtime/codingAutonomyQaMatrix.test.ts`.       |
 | Shell/commands        | Denied except verification projection.                 | Verification commands allowed; delivery commands approval-gated. | Governed command tasks allowed only with command authority and budget.                               | `codingRuntimeManager.test.ts`; `supervisedCodingPolicy.test.ts`; `codingAutonomyQaMatrix.test.ts`.                                       |
 | Git delivery          | No commit, push, PR, merge, or force-push authority.   | Commit/push/PR require prompt approval; merge remains blocked.   | Commit/push/PR can be executed only through delivery substrate; merge and force-push remain blocked. | `packages/keiko-server/src/gitDelivery/runBoundAuthority.test.ts`; `packages/keiko-server/src/gitDelivery/approvalStore.test.ts`.         |
-| Connector writes      | Write-capable scopes denied.                           | Write scopes are prompt-gated.                                   | Writes require connector scope, network scope, and task-ref binding.                                 | `packages/keiko-server/src/atlassian/actionPolicy.test.ts`; `packages/keiko-server/src/code-context-connectors.test.ts`.                  |
+| Connector writes      | Write-capable scopes denied.                           | Write scopes are prompt-gated.                                   | Writes require connector scope and network scope. **No task-ref binding is enforced** — see note.    | `packages/keiko-server/src/atlassian/actionPolicy.test.ts`; `packages/keiko-server/src/code-context-connectors.test.ts`.                  |
 | Model traffic         | Keiko Model Gateway only for OpenCode-compatible path. | Same gateway boundary; no provider credentials in UI evidence.   | Same gateway boundary for managed provider/API-key traffic; subscription traffic uses Codex adapter. | `packages/keiko-server/src/coding-sidecar-gateway.test.ts`; `packages/keiko-server/src/coding-codex-subscription.test.ts`.                |
 | Portable sidecar      | Optional read-only runtime path.                       | Managed sidecar launch only; unmanaged executable denied.        | Managed sidecar launch only; portable update verifies sidecar payloads as whole-product assets.      | `packages/keiko-server/src/coding-runtime/codingRuntimeManager.test.ts`; `scripts/__tests__/portable-runtime.test.mjs`.                   |
 | Evidence              | Content-free summaries only.                           | Content-free approval, verification, and failure evidence.       | Content-free permission, delivery, connector, and failure evidence.                                  | `validateCodingWorkbenchEvidenceRecord`; `coding-sidecar-gateway.test.ts`; `codingAutonomyQaMatrix.test.ts`; Playwright redaction checks. |
@@ -108,13 +108,27 @@ npm run test:e2e:coding-workbench-1994
   `POST /api/coding-workbench/context/packs`: GitHub reads execute read-only `gh api` calls
   through the governed keiko-tools exec boundary, Jira reads use a host-pinned HTTPS GET port,
   and both stay behind default-false connector authorization, the server deployment ceiling, and
-  connector-scope grants. GitHub activation is in-product and scoped to one repository (#3385): a
-  server-persisted authorization row keyed by the repository identity the task workspace derives,
-  read on every request, so a grant covers only that repository and a revocation takes effect
-  without restarting. It replaces the retired `GITHUB_CONNECTOR_AUTHORIZED` environment variable,
-  which was read once at process launch and therefore applied to every repository that process
-  later opened. Jira activation remains configuration: set `JIRA_CONNECTOR_AUTHORIZED=true` plus
-  `KEIKO_JIRA_BASE_URL`, `KEIKO_JIRA_EMAIL`, and `KEIKO_JIRA_API_TOKEN`. Absent authorization the
-  route reports blocked/degraded refs fail-closed instead of failing silently.
+  connector-scope grants. GitHub activation (#3385) is a server-persisted authorization row scoped
+  to one **local checkout**, keyed by the content-free identity the task workspace derives from the
+  workspace root, read on every request, so a revocation takes effect without restarting. It
+  replaces the retired `GITHUB_CONNECTOR_AUTHORIZED` environment variable, which was read once at
+  process launch and therefore applied to every checkout that process later opened. Jira activation
+  remains configuration: set `JIRA_CONNECTOR_AUTHORIZED=true` plus `KEIKO_JIRA_BASE_URL`,
+  `KEIKO_JIRA_EMAIL`, and `KEIKO_JIRA_API_TOKEN`. Absent authorization the route reports
+  blocked/degraded refs fail-closed instead of failing silently.
+
+  Two limits of that grant are stated here rather than implied. It is granted and revoked through
+  `GET`/`PUT /api/coding-workbench/github-authorization`; **no settings screen calls those routes
+  yet**, so the in-product surface #3385 asks for is the API only. And the scope is the local
+  checkout, not the remote whose issues are read: two clones of one remote are two grants, and a
+  checkout later repointed at another remote keeps the grant it had. Binding a grant to the resolved
+  remote is #3385's `IssueRunBinding` work and is not built.
+
+  **No task-ref binding is enforced for connector writes.** `validateAuthorityBindingCorrelation`
+  in `keiko-contracts` checks that a binding's task id appears in the envelope's `taskRefs`, but its
+  only caller, `validateCodingWorkbenchRuntimeAdapterStartRequest`, has no non-test caller in the
+  repository — every `taskRefs` site is a writer. The row above previously claimed this boundary; it
+  is a contract that exists and is unreached, not an enforced control.
+
 - Human visual review remains required on the final draft epic PR for subjective design-system
   fidelity; the Playwright gate covers deterministic UI/a11y assertions.
