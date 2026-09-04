@@ -1060,15 +1060,23 @@ function connectedContextScopes(
   return scopes;
 }
 
-function connectedContextIntake(deps: UiHandlerDeps): ConnectedContextIntake | undefined {
+function connectedContextIntake(
+  deps: UiHandlerDeps,
+  repositoryRoot: string,
+  correlationId: string | undefined,
+): ConnectedContextIntake | undefined {
   const githubPort = deps.codingContextGitHubPort;
   const jiraPort = deps.codingContextJiraPort;
   if (githubPort === undefined && jiraPort === undefined) return undefined;
   const connectorConfig: CodeContextConnectorConfig = {
     // #3385: the GitHub reader is authorized per repository in the settings surface, not by a
-    // launch-path environment variable. Jira keeps its existing environment gate; #3385 does not
-    // change that connector.
-    github_connector_authorized: isGitHubIssueReaderAuthorized(deps, deps.preferredProjectPath),
+    // launch-path environment variable. The root is the one this provider is actually operating on
+    // (`ctx.realRoot`), not the process-wide launch directory: an editor working in repository B
+    // must be denied unless B itself carries a grant, and A's grant must never authorize B.
+    // Jira keeps its existing environment gate; #3385 does not change that connector.
+    github_connector_authorized: isGitHubIssueReaderAuthorized(deps, repositoryRoot, {
+      correlationId,
+    }),
     jira_connector_authorized: connectorAuthorizedInEnv(deps, "JIRA_CONNECTOR_AUTHORIZED"),
   };
   return {
@@ -1154,7 +1162,7 @@ export async function runConnectedContextProvider(
   input: { readonly queryText: string | undefined },
 ): Promise<ProviderOutcome> {
   const refs = connectedContextRefs(input.queryText);
-  const intake = connectedContextIntake(ctx.deps);
+  const intake = connectedContextIntake(ctx.deps, ctx.realRoot, ctx.correlationId);
   if (isAborted(ctx.signal) || refs.length === 0 || intake === undefined) {
     return { excerpts: [], omission: omission("connected-context", "unavailable") };
   }

@@ -1230,7 +1230,6 @@ export type {
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchRuntimeEvidenceClass,
   CodingWorkbenchRuntimePendingPermission,
-  CodingWorkbenchIssueReference,
   CodingWorkbenchRuntimePreference,
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeReadinessRequest,
@@ -2304,6 +2303,11 @@ export type {
 } from "./evidence.js";
 export type { EVIDENCE_SCHEMA_VERSION, DEFAULT_RETENTION } from "./evidence.js";
 export type { parseUpdateMemoryAutonomyPolicyWire } from "./bff-wire.js";
+export type {
+  GitHubIssueReaderAuthorizationWire,
+  UpdateGitHubIssueReaderAuthorizationWire,
+  parseUpdateGitHubIssueReaderAuthorizationWire,
+} from "./bff-wire.js";
 
 // ─── BFF wire types (ADR-0013; entity shapes that travel over the HTTP wire) ──────────────
 // NOTE: WorkflowStatus and ChatMessage are NOT re-exported here because those names are already

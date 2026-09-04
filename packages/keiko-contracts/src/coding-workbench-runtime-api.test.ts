@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS,
   CODING_WORKBENCH_RUNTIME_PREFERENCES,
   CODING_WORKBENCH_RUNTIME_SSE_EVENT_KINDS,
@@ -452,7 +453,6 @@ describe("Coding Workbench runtime API contracts", () => {
 });
 
 describe("Coding Workbench issue binding contract (#3385)", () => {
-  const ISSUE_REF = { ownerAndRepo: "oscharko-dev/Keiko", issueNumber: 3385 };
   const START = {
     requestId: "request-1",
     taskIntent: "Implement the accepted issue",
@@ -478,42 +478,37 @@ describe("Coding Workbench issue binding contract (#3385)", () => {
     effectiveMode: "supervised-coding",
   };
 
-  it("accepts a start request with and without an issue reference", () => {
+  // #3385: the start request must NOT accept an issue reference until the resolver that binds it
+  // exists. Accepting it would start an ordinary generic run while the caller believed an issue was
+  // bound, and no later stage would notice.
+  it("refuses an issue reference on the start request while no resolver binds it", () => {
     expect(parseCodingWorkbenchRuntimeStartRequest(START)).toMatchObject({ ok: true });
     expect(
-      parseCodingWorkbenchRuntimeStartRequest({ ...START, issueRef: ISSUE_REF }),
-    ).toMatchObject({ ok: true });
-  });
-
-  it("rejects every malformed issue reference the browser could send", () => {
-    const rejected: readonly unknown[] = [
-      "oscharko-dev/Keiko#3385",
-      { ownerAndRepo: "oscharko-dev/Keiko" },
-      { ownerAndRepo: "Keiko", issueNumber: 1 },
-      { ownerAndRepo: "oscharko-dev/Keiko", issueNumber: 0 },
-      { ownerAndRepo: "oscharko-dev/Keiko", issueNumber: -1 },
-      { ownerAndRepo: "oscharko-dev/Keiko", issueNumber: 1.5 },
-      { ownerAndRepo: "oscharko-dev/Keiko", issueNumber: 1_000_000_001 },
-      { ownerAndRepo: "oscharko-dev/Keiko", issueNumber: "3385" },
-      // A traversal or absolute path must not survive as a repository name.
-      { ownerAndRepo: "../../etc/passwd", issueNumber: 1 },
-      { ownerAndRepo: "/oscharko-dev/Keiko", issueNumber: 1 },
-      // Nothing beyond the two intent fields is accepted: no base ref, no remote, no scope.
-      { ...ISSUE_REF, defaultBaseRef: "main" },
-      { ...ISSUE_REF, remote: "git@github.com:attacker/repo.git" },
-    ];
-    for (const issueRef of rejected) {
-      expect(
-        parseCodingWorkbenchRuntimeStartRequest({ ...START, issueRef }),
-        JSON.stringify(issueRef),
-      ).toMatchObject({ ok: false });
-    }
+      parseCodingWorkbenchRuntimeStartRequest({
+        ...START,
+        issueRef: { ownerAndRepo: "oscharko-dev/Keiko", issueNumber: 3385 },
+      }),
+    ).toMatchObject({ ok: false });
   });
 
   it("projects a content-free issue binding on the snapshot", () => {
     const snapshot = { ...SNAPSHOT, issueBinding: BINDING };
     expect(validateCodingWorkbenchRuntimeSnapshot(snapshot)).toEqual({ ok: true, value: snapshot });
     expect(validateCodingWorkbenchRuntimeSnapshot(SNAPSHOT)).toMatchObject({ ok: true });
+  });
+
+  // Both ends of the accepted issue-number range, so an off-by-one in either bound is caught rather
+  // than only the far-side rejection.
+  it("accepts both boundaries of the issue-number range", () => {
+    for (const issueNumber of [1, CODING_WORKBENCH_ISSUE_NUMBER_MAX]) {
+      expect(
+        validateCodingWorkbenchRuntimeSnapshot({
+          ...SNAPSHOT,
+          issueBinding: { ...BINDING, issueNumber },
+        }),
+        String(issueNumber),
+      ).toMatchObject({ ok: true });
+    }
   });
 
   it("refuses to carry issue content on the snapshot projection", () => {
@@ -546,6 +541,19 @@ describe("Coding Workbench issue binding contract (#3385)", () => {
       { defaultBaseRef: "feature/../x" },
       { defaultBaseRef: "dev.lock" },
       { defaultBaseRef: "dev branch" },
+      // Refs git itself refuses that a weaker second formula used to accept.
+      { defaultBaseRef: "dev/" },
+      { defaultBaseRef: "dev." },
+      { defaultBaseRef: ".hidden" },
+      { defaultBaseRef: "feature/.hidden" },
+      { defaultBaseRef: "-dev" },
+      { defaultBaseRef: "dev@{0}" },
+      { defaultBaseRef: "dev~1" },
+      { defaultBaseRef: "dev^" },
+      { defaultBaseRef: "dev:x" },
+      { defaultBaseRef: "dev?" },
+      { defaultBaseRef: "dev*" },
+      { defaultBaseRef: "a".repeat(256) },
     ];
     for (const override of rejected) {
       expect(

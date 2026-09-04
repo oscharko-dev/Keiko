@@ -89,14 +89,15 @@ function fakeGitHubPort(): GitHubCodeContextApiPort {
 // #3385: the GitHub reader is authorized per repository through a server-persisted store row,
 // replacing the `GITHUB_CONNECTOR_AUTHORIZED` environment variable that was bound to the process
 // launch path. The double answers for exactly this project root and nothing else.
-const CONNECTED_PROJECT_ROOT = "/workspace/connected-context-project";
+// The provider authorizes the repository it is actually operating on (`ctx.realRoot`), which here
+// is the per-test temporary root, not a fixed path or the process launch directory.
 
 function connectedDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
-  const authorizedId = deriveRepositoryId(CONNECTED_PROJECT_ROOT);
+  const authorizedId = deriveRepositoryId(root);
   return {
     redactor: buildRedactor({}),
     env: {},
-    preferredProjectPath: CONNECTED_PROJECT_ROOT,
+    preferredProjectPath: root,
     store: {
       readGitHubIssueReaderAuthorization: (repositoryId: string) =>
         repositoryId === authorizedId ? { repositoryId, authorized: true, revision: 1 } : undefined,

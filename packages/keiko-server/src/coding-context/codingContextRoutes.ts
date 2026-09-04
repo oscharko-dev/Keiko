@@ -254,12 +254,19 @@ function connectorConfigFor(
   deps: UiHandlerDeps,
   githubConfigured: boolean,
   jiraConfigured: boolean,
+  repositoryRoot: string | undefined,
+  correlationId: string | undefined,
 ): CodeContextConnectorConfig {
   return {
     // #3385: repository-scoped and server-persisted, re-read on every composition so a revocation
     // in settings takes effect without a restart. The port merely has to exist; this decides.
+    //
+    // The root is the one the caller's own authority was validated against, NOT the process-wide
+    // launch directory. Using the launch path would deny a request whose authority names repository
+    // B just because Keiko started in repository A, and — worse — would let A's grant authorize B's
+    // reads.
     github_connector_authorized:
-      githubConfigured && isGitHubIssueReaderAuthorized(deps, deps.preferredProjectPath),
+      githubConfigured && isGitHubIssueReaderAuthorized(deps, repositoryRoot, { correlationId }),
     jira_connector_authorized: deps.env.JIRA_CONNECTOR_AUTHORIZED === "true" && jiraConfigured,
   };
 }
@@ -273,7 +280,14 @@ const NO_CONNECTOR: CodeContextConnector = {
   read: () => Promise.reject(new Error("coding context connector is not configured")),
 };
 
-export function composeCodingContextConnectors(deps: UiHandlerDeps): ComposedConnectors {
+export function composeCodingContextConnectors(
+  deps: UiHandlerDeps,
+  // The repository the caller's authority was validated against. Omitted only by callers that have
+  // no request context, which then fall back to the launch project and are authorized only if that
+  // repository itself carries a grant.
+  repositoryRoot: string | undefined = deps.preferredProjectPath,
+  correlationId?: string,
+): ComposedConnectors {
   const githubPort =
     deps.codingContextGitHubPort ??
     (deps.preferredProjectPath === undefined
@@ -305,7 +319,13 @@ export function composeCodingContextConnectors(deps: UiHandlerDeps): ComposedCon
         githubPort === undefined ? NO_CONNECTOR : createGitHubCodeContextConnector(githubPort),
       jira: jiraConfigured ? createJiraCodeContextConnector(jiraPort) : NO_CONNECTOR,
     },
-    connectorConfig: connectorConfigFor(deps, githubPort !== undefined, jiraConfigured),
+    connectorConfig: connectorConfigFor(
+      deps,
+      githubPort !== undefined,
+      jiraConfigured,
+      repositoryRoot,
+      correlationId,
+    ),
   };
 }
 
@@ -320,7 +340,11 @@ export async function handleCodingContextPack(
   const request = resolveRequest(parsed, deps);
   if (request === undefined) return authorityDenied();
   try {
-    const composed = composeCodingContextConnectors(deps);
+    const composed = composeCodingContextConnectors(
+      deps,
+      parsed.authority.workspaceRoot,
+      ctx.correlationId,
+    );
     const pack = await buildCodeContextPack(request, {
       connectors: composed.connectors,
       connectorConfig: composed.connectorConfig,

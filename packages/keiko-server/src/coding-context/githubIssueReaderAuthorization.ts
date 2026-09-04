@@ -1,5 +1,47 @@
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/index.js";
 import { deriveRepositoryId } from "../task-workspace/naming.js";
+
+/**
+ * Why the GitHub issue reader was admitted or refused for one repository. A closed vocabulary, so a
+ * support timeline can tell a repository that was never granted apart from one whose grant was
+ * withdrawn, and both apart from a request that named no repository at all.
+ */
+export type GitHubIssueReaderAuthorizationDecision =
+  "authorized" | "repository-unresolved" | "store-unavailable" | "no-grant" | "revoked";
+
+export interface GitHubIssueReaderAuthorizationObservation {
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly correlationId?: string | undefined;
+}
+
+function decide(
+  deps: Pick<UiHandlerDeps, "store">,
+  repositoryRoot: string | undefined,
+): { readonly decision: GitHubIssueReaderAuthorizationDecision; readonly repositoryId?: string } {
+  if (repositoryRoot === undefined || repositoryRoot === "") {
+    return { decision: "repository-unresolved" };
+  }
+  const repositoryId = deriveRepositoryId(repositoryRoot);
+  // A deps graph composed without persistence must DENY, not throw. `store` is typed as required,
+  // but a partially-composed graph can still reach here, and an exception on the authorization path
+  // would surface as an opaque failure rather than the fail-closed refusal this decision owes its
+  // caller. The decision stays distinct from "no grant" so a support timeline can tell a repository
+  // nobody granted apart from a deployment whose store was never wired.
+  // `store` is typed as required, so the checker treats any nullish test on it as redundant. The
+  // guard is about runtime SHAPE, not the type: a partially-composed deps graph — every hand-built
+  // test double included — can reach here without one, and an exception on the authorization path
+  // would surface as an opaque failure instead of the fail-closed refusal this decision owes its
+  // caller. The unknown-typed view states that honestly rather than silencing the rule.
+  const read = (deps as { readonly store?: Partial<UiHandlerDeps["store"]> | undefined }).store
+    ?.readGitHubIssueReaderAuthorization;
+  if (typeof read !== "function") return { decision: "store-unavailable", repositoryId };
+  const record = read(repositoryId);
+  if (record === undefined) return { decision: "no-grant", repositoryId };
+  return { decision: record.authorized ? "authorized" : "revoked", repositoryId };
+}
 
 /**
  * Is the GitHub issue reader authorized for one repository?
@@ -11,15 +53,33 @@ import { deriveRepositoryId } from "../task-workspace/naming.js";
  * restarting. The stored record is keyed by the content-free repository identity the task workspace
  * already derives, and is consulted per read, so a revocation takes effect on the next read.
  *
- * Fail-closed in every direction: no repository root, an unknown root, no store, or no row all
- * answer `false`. Only an explicit stored grant answers `true`. Neither a browser request field nor
- * issue text can reach this decision — the only input is a server-resolved repository root.
+ * Fail-closed in every direction: no repository root, an unknown root, and no row all answer
+ * `false`. Only an explicit stored grant answers `true`. Neither a browser request field nor issue
+ * text can reach this decision — the only input is a server-resolved repository root.
+ *
+ * Every evaluation leaves body-free evidence on the activity log (ADR-0173): without it a denied
+ * external read is indistinguishable in a support timeline from a missing row, a withdrawn grant, or
+ * a request that never named a repository. The line carries the content-free repository id, the
+ * decision and the grant's revision — never a path, a remote, or issue text.
  */
 export function isGitHubIssueReaderAuthorized(
   deps: Pick<UiHandlerDeps, "store">,
   repositoryRoot: string | undefined,
+  observation: GitHubIssueReaderAuthorizationObservation = {},
 ): boolean {
-  if (repositoryRoot === undefined || repositoryRoot === "") return false;
-  const record = deps.store.readGitHubIssueReaderAuthorization(deriveRepositoryId(repositoryRoot));
-  return record?.authorized === true;
+  const { decision, repositoryId } = decide(deps, repositoryRoot);
+  const authorized = decision === "authorized";
+  const sink = observation.activityLog ?? processServerLogSink();
+  sink.write({
+    level: authorized ? "debug" : "info",
+    category: "security",
+    op: "coding-context.github-authorization.evaluated",
+    correlationId: observation.correlationId ?? UNKNOWN_CORRELATION_ID,
+    extra: {
+      decision,
+      authorized,
+      ...(repositoryId === undefined ? {} : { repositoryId }),
+    },
+  });
+  return authorized;
 }

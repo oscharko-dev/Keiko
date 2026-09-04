@@ -87,6 +87,10 @@ import {
 import { handleRunMaintenance } from "./memory-maintenance-handlers.js";
 import { handleGetMemoryHealthScan } from "./memory-health-scan-handlers.js";
 import {
+  handleGetGitHubIssueReaderAuthorization,
+  handlePutGitHubIssueReaderAuthorization,
+} from "./coding-context/githubAuthorizationRoutes.js";
+import {
   handleGetMemoryAutonomyPolicy,
   handlePutMemoryAutonomyPolicy,
 } from "./memory-autonomy-policy-handlers.js";
@@ -1177,6 +1181,19 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "PUT",
     pattern: "/api/memory/autonomy-policy",
     handler: handlePutMemoryAutonomyPolicy,
+  },
+  // #3385: the in-product grant/revoke surface for the repository-scoped GitHub issue reader. The
+  // repository is resolved server-side from the selected project; the request only says grant or
+  // revoke and which revision it saw.
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/github-authorization",
+    handler: handleGetGitHubIssueReaderAuthorization,
+  },
+  {
+    method: "PUT",
+    pattern: "/api/coding-workbench/github-authorization",
+    handler: handlePutGitHubIssueReaderAuthorization,
   },
   { method: "GET", pattern: "/api/memory/review-queue", handler: handleMemoryReviewQueue },
   { method: "GET", pattern: "/api/memory/health-scan", handler: handleGetMemoryHealthScan },

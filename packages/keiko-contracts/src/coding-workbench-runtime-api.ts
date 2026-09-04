@@ -34,6 +34,7 @@ import {
   type CodingWorkbenchRuntimeStateName,
 } from "./coding-workbench-runtime.js";
 import { MODEL_REASONING_EFFORTS, type ModelReasoningEffort } from "./gateway.js";
+import { isSafeGitRefName } from "./git-repository.js";
 
 /** Browser-level preference, deliberately not an adapter, model, profile, or endpoint selector. */
 export type CodingWorkbenchRuntimePreference = "managed-gateway" | "codex-subscription";
@@ -106,25 +107,8 @@ export interface CodingWorkbenchRuntimeReadiness {
   readonly runtimeEvidenceClass?: CodingWorkbenchRuntimeEvidenceClass | undefined;
 }
 
-/** `owner/repo` as GitHub spells it: 1-39 owner chars, 1-100 repository chars. */
-const OWNER_AND_REPO = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/u;
-
 /** GitHub issue numbers are positive and, in practice, far below this bound. */
 export const CODING_WORKBENCH_ISSUE_NUMBER_MAX = 1_000_000_000;
-
-/**
- * What the browser may say about an issue: which one, and nothing else.
- *
- * This is intent under ADR-0137 D1, never authority. The server re-resolves the repository identity,
- * the remote, the default branch and the issue's immutable id from its own reads, and refuses the
- * request when the named repository is not the one the active workspace is bound to. A field here
- * can select a target; it cannot author a path, a scope, a credential or a base ref.
- */
-export interface CodingWorkbenchIssueReference {
-  /** `owner/repo`. A pasted issue URL is reduced to this by the caller before it is sent. */
-  readonly ownerAndRepo: string;
-  readonly issueNumber: number;
-}
 
 export interface CodingWorkbenchRuntimeStartRequest {
   readonly requestId: string;
@@ -134,11 +118,6 @@ export interface CodingWorkbenchRuntimeStartRequest {
   readonly runtimePreference?: CodingWorkbenchRuntimePreference | undefined;
   readonly modelId?: string | undefined;
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
-  /**
-   * Present when the run is started from an accepted GitHub issue (#3385). Absent for a generic
-   * Code task, which keeps working exactly as before.
-   */
-  readonly issueRef?: CodingWorkbenchIssueReference | undefined;
 }
 
 /** The retry route has the same fresh, transient intent shape as start. */
@@ -337,41 +316,18 @@ function validateReasoningEffort(value: unknown, errors: string[]): void {
   }
 }
 
-function validateIssueReference(value: unknown, errors: string[]): void {
-  if (value === undefined) return;
-  if (!isRecord(value)) {
-    errors.push("issueRef must be an object");
-    return;
-  }
-  errors.push(...exactKeys(value, ["ownerAndRepo", "issueNumber"], "issueRef"));
-  if (typeof value.ownerAndRepo !== "string" || !OWNER_AND_REPO.test(value.ownerAndRepo)) {
-    errors.push("issueRef.ownerAndRepo must be owner/repo");
-  }
-  if (
-    typeof value.issueNumber !== "number" ||
-    !Number.isSafeInteger(value.issueNumber) ||
-    value.issueNumber < 1 ||
-    value.issueNumber > CODING_WORKBENCH_ISSUE_NUMBER_MAX
-  ) {
-    errors.push("issueRef.issueNumber must be a bounded positive integer");
-  }
-}
-
 export function parseCodingWorkbenchRuntimeStartRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeStartRequest> {
   if (!isRecord(value)) return invalid("start request must be an object");
   const errors = exactKeys(
     value,
-    [
-      "requestId",
-      "taskIntent",
-      "requestedMode",
-      "runtimePreference",
-      "modelId",
-      "reasoningEffort",
-      "issueRef",
-    ],
+    // #3385: `issueRef` is deliberately NOT accepted yet. The resolver that turns it into a
+    // CodingWorkbenchIssueBinding — repository identity, remote, immutable issue id, default base
+    // ref, content revision — is not built, so accepting the field would start an ordinary generic
+    // run while the caller believes an issue was bound. It is added here together with that
+    // resolver, not before it.
+    ["requestId", "taskIntent", "requestedMode", "runtimePreference", "modelId", "reasoningEffort"],
     "startRequest",
   );
   validateRequestId(value.requestId, errors);
@@ -382,7 +338,6 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   validateRuntimePreference(value.runtimePreference, errors);
   validateRuntimeModelId(value.modelId, errors);
   validateReasoningEffort(value.reasoningEffort, errors);
-  validateIssueReference(value.issueRef, errors);
   return result(value, errors);
 }
 
@@ -561,9 +516,6 @@ export function validateCodingWorkbenchRuntimeSnapshot(
 
 const SHA256_DIGEST = /^[0-9a-f]{64}$/u;
 
-/** A git ref name the server resolved: bounded, and free of the shapes git itself refuses. */
-const SAFE_GIT_REF = /^(?!\/)(?!.*\/\/)(?!.*\.\.)[A-Za-z0-9._/-]{1,255}$/u;
-
 const ISSUE_BINDING_DIGEST_FIELDS = [
   "remoteDigest",
   "issueIdDigest",
@@ -592,7 +544,10 @@ function isBoundedIssueNumber(value: unknown): boolean {
 }
 
 function isSafeGitRef(value: unknown): boolean {
-  return typeof value === "string" && SAFE_GIT_REF.test(value) && !value.endsWith(".lock");
+  // One predicate, shared with the git boundary that will actually use this ref. A second formula
+  // here accepted names (`main/`, `main.`, `.hidden`) that `isSafeGitRefName` and git both refuse,
+  // so a snapshot could pass contract validation and then be rejected downstream.
+  return typeof value === "string" && isSafeGitRefName(value);
 }
 
 function validateIssueBindingDigests(value: Record<string, unknown>, errors: string[]): void {

@@ -903,6 +903,18 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-context.github-authorization.changed",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-context/githubAuthorizationRoutes.ts:150",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-context.github-authorization.evaluated",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:63",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-runtime.dev-lane.activated",
       "category": "process",
       "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:169",

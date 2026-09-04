@@ -438,6 +438,46 @@ export function parseUpdateMemoryAutonomyPolicyWire(
     : undefined;
 }
 
+/**
+ * The GitHub issue reader's authorization for the currently selected repository (#3385).
+ *
+ * `repositoryId` is the content-free identity the task workspace derives; no path, remote or
+ * credential crosses this boundary. `revision` is the server-owned counter a client echoes back so a
+ * stale grant cannot overwrite a newer revocation.
+ */
+export interface GitHubIssueReaderAuthorizationWire {
+  readonly repositoryId: string;
+  readonly authorized: boolean;
+  readonly revision: number;
+}
+
+export interface UpdateGitHubIssueReaderAuthorizationWire {
+  readonly authorized: boolean;
+  readonly expectedRevision: number;
+}
+
+export function parseUpdateGitHubIssueReaderAuthorizationWire(
+  value: unknown,
+): UpdateGitHubIssueReaderAuthorizationWire | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const extra = Object.keys(candidate).filter(
+    (key) => key !== "authorized" && key !== "expectedRevision",
+  );
+  // The browser says only "grant" or "revoke", and which revision it saw. It cannot name the
+  // repository: the server resolves that from the selected project, so a request can never
+  // authorize a repository the user is not actually working in.
+  return extra.length === 0 &&
+    typeof candidate.authorized === "boolean" &&
+    Number.isSafeInteger(candidate.expectedRevision) &&
+    Number(candidate.expectedRevision) >= 0
+    ? {
+        authorized: candidate.authorized,
+        expectedRevision: Number(candidate.expectedRevision),
+      }
+    : undefined;
+}
+
 export interface ConversationMemoryContextEntryWire {
   readonly memoryId: string;
   readonly bodyExcerpt: string;

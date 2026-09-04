@@ -3,6 +3,38 @@
 
 export const GIT_REPOSITORY_SCHEMA_VERSION = "1" as const;
 
+// The one git ref-name predicate in the repository. It used to live only in keiko-tools, where the
+// packages that validate a ref BEFORE it reaches git — contracts among them — could not reach it,
+// because contracts is the dependency leaf (ADR-0019). A second, weaker copy grew there and
+// accepted refs (`main/`, `main.`, `.hidden`) that git itself refuses, so a snapshot could pass
+// contract validation and then be rejected at the git boundary. Consolidated here so both sides
+// share one formula; keiko-tools imports it rather than restating it.
+//
+// Deliberately stricter than `git check-ref-format`: every ref Keiko creates is server-derived, so
+// only the deterministic shapes we emit need to be accepted, and anything that could read as an
+// option, a traversal, or a refspec/glob metacharacter is refused.
+const UNSAFE_REF_PREFIXES: readonly string[] = ["-", "/", "."];
+const UNSAFE_REF_SUFFIXES: readonly string[] = ["/", ".", ".lock"];
+const UNSAFE_REF_SUBSTRINGS: readonly string[] = ["..", "//", "@{"];
+
+function hasControlOrNul(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if ((value.codePointAt(index) ?? 0) <= 0x1f) return true;
+  }
+  return false;
+}
+
+export function isSafeGitRefName(value: string): boolean {
+  if (value.length === 0 || value.length > 255 || hasControlOrNul(value)) return false;
+  if (UNSAFE_REF_PREFIXES.some((prefix) => value.startsWith(prefix))) return false;
+  if (UNSAFE_REF_SUFFIXES.some((suffix) => value.endsWith(suffix))) return false;
+  if (UNSAFE_REF_SUBSTRINGS.some((part) => value.includes(part))) return false;
+  if (!/^[A-Za-z0-9._\-/]+$/u.test(value)) return false;
+  // Also reject a component that begins with a dot (`feature/.hidden`), which git refuses.
+  if (value.split("/").some((segment) => segment.startsWith("."))) return false;
+  return !/[~^:?*[\\ ]/u.test(value);
+}
+
 export const GIT_REPOSITORY_STATES = ["available", "unavailable", "unsafe", "error"] as const;
 export type GitRepositoryState = (typeof GIT_REPOSITORY_STATES)[number];
 

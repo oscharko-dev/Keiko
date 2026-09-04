@@ -60,6 +60,21 @@ describe("GitHub issue reader authorization store (#3385)", () => {
     store.close();
   });
 
+  // 128 is the accepted maximum. Without this the validator could cap at 127 and still pass the
+  // rejection case below, silently refusing a legitimate repository id.
+  it("accepts a repository id at the maximum permitted length", () => {
+    const store = createInMemoryUiStore();
+    const maxLength = "r".repeat(128);
+
+    expect(store.updateGitHubIssueReaderAuthorization(maxLength, true, 0)).toEqual({
+      repositoryId: maxLength,
+      authorized: true,
+      revision: 1,
+    });
+    expect(store.readGitHubIssueReaderAuthorization(maxLength)?.authorized).toBe(true);
+    store.close();
+  });
+
   it("refuses a repository id that is not the bounded content-free identity", () => {
     const store = createInMemoryUiStore();
     for (const id of [

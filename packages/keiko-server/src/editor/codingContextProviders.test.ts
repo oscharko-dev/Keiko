@@ -872,7 +872,9 @@ describe("runConnectedContextProvider", () => {
   // #3385: the GitHub reader is authorized per repository through a server-persisted store row,
   // replacing the `GITHUB_CONNECTOR_AUTHORIZED` environment variable that was bound to the process
   // launch path. This grants exactly the launch project, so a test can show the grant is scoped.
-  const CONNECTED_PROJECT_ROOT = "/workspace/connected-project";
+  // The provider authorizes the repository it is operating on (`ctx.realRoot`), not the process
+  // launch directory, so the fixture grants exactly that root.
+  const CONNECTED_PROJECT_ROOT = "/tmp/does-not-exist";
 
   function authorizationStore(
     authorizedRoot: string | undefined,

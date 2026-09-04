@@ -429,6 +429,36 @@ describe("production runtime workspace authority", () => {
       expect(context.commandPolicy.mode).toBe(ceiling === "governed-assist" ? "deny" : "governed");
     },
   );
+
+  // ADR-0138's fail-closed rule: an unknown, missing or malformed mode value resolves to
+  // `governed-assist`, the lowest posture. Asserted here on the production resolver, because a
+  // malformed value reaching it must yield the same empty envelope a governed-assist run gets —
+  // not an accidental grant from a comparison that silently fell through.
+  it.each([
+    ["malformed requested mode", "AUTONOMOUS-DELIVERY", "autonomous-delivery"],
+    ["empty requested mode", "", "autonomous-delivery"],
+    ["malformed ceiling", "autonomous-delivery", "full-access"],
+    ["empty ceiling", "autonomous-delivery", ""],
+    ["both malformed", "not-a-mode", "not-a-mode"],
+  ] as const)("fails closed to the lowest posture for a %s", (_label, requestedMode, ceiling) => {
+    const fixture = liveFixture();
+    const context = resolveProductionRuntimeContext(
+      { ...fixture.input, deploymentCeiling: ceiling as never },
+      { ...fixture.request, requestedMode: requestedMode as never },
+    );
+
+    for (const actionClass of ["command-execution", "delivery-substrate", "connector-access"]) {
+      expect(context.actionClasses).not.toContain(actionClass);
+    }
+    expect(context.connectorScopes).toEqual([]);
+    expect(context.networkPolicy).toEqual({
+      mode: "deny-all",
+      allowLoopback: false,
+      connectorScopes: [],
+    });
+    expect(context.commandPolicy.mode).toBe("deny");
+    expect(context.commandPolicy.requirePerCommandApproval).toBe(true);
+  });
 });
 
 function liveFixture() {
