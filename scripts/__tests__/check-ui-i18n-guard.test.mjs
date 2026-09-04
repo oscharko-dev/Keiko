@@ -404,6 +404,50 @@ test("accepts a single-file feature catalog carrying both language maps", async 
   );
 });
 
+const JSON_FEATURE_CATALOG = "packages/keiko-ui/src/app/feature/feature-i18n.messages.json";
+
+test("accepts a JSON feature catalog carrying both languages", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [JSON_FEATURE_CATALOG]: JSON.stringify({
+        "feature.title": { en: "Title", de: "Titel" },
+      }),
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, JSON_FEATURE_CATALOG],
+      });
+
+      expect(result.problems).toEqual([]);
+      expect(result.ok).toBe(true);
+    },
+  );
+});
+
+test("fails a JSON feature catalog with a missing language", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [JSON_FEATURE_CATALOG]: JSON.stringify({
+        "feature.title": { en: "Title" },
+      }),
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, JSON_FEATURE_CATALOG],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/feature\.title/);
+    },
+  );
+});
+
 // A keyed lookup declared AFTER the two catalogs — e.g. a closed Record mapping a server reason code
 // onto a catalog key — is not catalog content. The parity slice used to run to end of file, so those
 // code names read as German-only entries and broke parity in a file whose catalogs are identical.
