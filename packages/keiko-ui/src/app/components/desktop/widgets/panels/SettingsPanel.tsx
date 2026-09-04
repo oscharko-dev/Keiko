@@ -193,27 +193,37 @@ function conversationIneligibilityShortLabel(
 
 type ReadinessRunState =
   | { readonly status: "idle" }
-  | { readonly status: "running"; readonly deep: boolean }
+  | {
+      readonly status: "running";
+      readonly deep: boolean;
+      readonly previous?: ReadinessResultState | undefined;
+    }
   | { readonly status: "done"; readonly report: GatewayReadinessReport }
   | { readonly status: "error"; readonly message: string };
+
+type ReadinessResultState = Extract<ReadinessRunState, { readonly status: "done" | "error" }>;
+
+function readinessResult(
+  readiness: ReadinessRunState | undefined,
+): ReadinessResultState | undefined {
+  if (readiness?.status === "running") return readiness.previous;
+  return readiness?.status === "done" || readiness?.status === "error" ? readiness : undefined;
+}
 
 function serverReadinessFallback(
   readiness: ReadinessRunState | undefined,
   conversationReady: boolean | undefined,
 ): boolean | undefined {
-  return readiness === undefined || readiness.status === "idle" || readiness.status === "running"
-    ? conversationReady
-    : undefined;
+  return readinessResult(readiness) === undefined ? conversationReady : undefined;
 }
 
 function chatReadinessPassed(
   readiness: ReadinessRunState | undefined,
   conversationReady?: boolean,
 ): boolean {
-  if (readiness?.status === "done") {
-    return readiness.report.probes.some(
-      (probe) => probe.name === "chat" && probe.status === "passed",
-    );
+  const result = readinessResult(readiness);
+  if (result?.status === "done") {
+    return result.report.probes.some((probe) => probe.name === "chat" && probe.status === "passed");
   }
   return serverReadinessFallback(readiness, conversationReady) === true;
 }
@@ -222,9 +232,10 @@ function chatReadinessFailed(
   readiness: ReadinessRunState | undefined,
   conversationReady?: boolean,
 ): boolean {
-  if (readiness?.status === "error") return true;
-  if (readiness?.status === "done") {
-    return !readiness.report.probes.some(
+  const result = readinessResult(readiness);
+  if (result?.status === "error") return true;
+  if (result?.status === "done") {
+    return !result.report.probes.some(
       (probe) => probe.name === "chat" && probe.status === "passed",
     );
   }
@@ -395,6 +406,14 @@ function gatewayConfigIdentity(config: SafeGatewayConfig | null, present: boolea
   if (!present) return "absent";
   if (config === null) return "present";
   return `present:${JSON.stringify(config.providers)}`;
+}
+
+function invalidateServerReadinessObservations(
+  models: readonly ModelCapability[],
+): readonly ModelCapability[] {
+  return models.map((model) =>
+    model.conversationReady === undefined ? model : { ...model, conversationReady: undefined },
+  );
 }
 
 function readinessErrorMessage(error: unknown, t: I18nTranslate): string {
@@ -1352,13 +1371,30 @@ function gatewayVerificationFromRuns(
 ): GatewayVerificationState {
   let best = gatewayVerificationFromServerObservations(models, runs);
   for (const run of Object.values(runs)) {
-    if (run.status === "error") return FAILED_VERIFICATION;
-    if (run.status !== "done") continue;
-    const state = gatewayVerificationFromProbeOutcome(run.report.overallStatus);
-    if (gatewayVerificationContradictsReadiness(state)) return FAILED_VERIFICATION;
-    if (state === PARTIAL_VERIFICATION || best === UNVERIFIED_GATEWAY) best = state;
+    const result = readinessResult(run);
+    if (result?.status === "error") return FAILED_VERIFICATION;
+    if (result?.status !== "done") continue;
+    const state = gatewayVerificationFromProbeOutcome(result.report.overallStatus);
+    if (best === UNVERIFIED_GATEWAY) {
+      best = state;
+    } else if (state !== UNVERIFIED_GATEWAY) {
+      best = worseGatewayVerification(best, state);
+    }
   }
   return best;
+}
+
+function worseGatewayVerification(
+  left: GatewayVerificationState,
+  right: GatewayVerificationState,
+): GatewayVerificationState {
+  const severity: Readonly<Record<GatewayVerificationState, number>> = {
+    verified: 0,
+    unverified: 1,
+    partial: 2,
+    failed: 3,
+  };
+  return severity[left] >= severity[right] ? left : right;
 }
 
 function gatewayVerificationFromServerObservations(
@@ -1367,11 +1403,8 @@ function gatewayVerificationFromServerObservations(
 ): GatewayVerificationState {
   let observed: GatewayVerificationState = UNVERIFIED_GATEWAY;
   for (const model of models) {
-    const localRun = runs[model.id];
-    if (
-      !isConversationEligibleModel(model) ||
-      (localRun !== undefined && localRun.status !== "idle" && localRun.status !== "running")
-    ) {
+    const localResult = readinessResult(runs[model.id]);
+    if (!isConversationEligibleModel(model) || localResult !== undefined) {
       continue;
     }
     if (model.conversationReady === false) return FAILED_VERIFICATION;
@@ -1496,7 +1529,12 @@ async function runModelReadinessCheck(
   const record = (state: ReadinessRunState): void => {
     setLedger((current) => recordReadinessRun(current, generation, modelId, state));
   };
-  record({ status: "running", deep });
+  setLedger((current) => {
+    const previous = readinessResult(
+      current.generation === generation ? current.runs[modelId] : undefined,
+    );
+    return recordReadinessRun(current, generation, modelId, { status: "running", deep, previous });
+  });
   try {
     const report = await runGatewayReadiness(
       modelId,
@@ -1803,7 +1841,9 @@ export function SettingsPanel({
   // all it takes: every remembered run is tagged with the generation it measured.
   useEffect(() => {
     const onConfigUpdated = (): void => {
+      setModels(invalidateServerReadinessObservations);
       advanceConfigGeneration();
+      setReloadTick((tick) => tick + 1);
     };
     window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
     return () => {

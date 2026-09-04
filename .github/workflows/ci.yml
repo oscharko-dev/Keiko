@@ -19,7 +19,9 @@ on:
       - epic/coding-workbench-opencode-codex
       - "release/**"
   pull_request:
-    types: [opened, reopened, synchronize, ready_for_review, edited]
+    # PR metadata cannot change executable evidence. Excluding `edited` prevents description-only
+    # changes and reviewer-bot edits from launching a second full, uncancellable pipeline.
+    types: [opened, reopened, synchronize, ready_for_review]
     branches:
       - dev
       - feat/dev
@@ -57,12 +59,8 @@ permissions: {}
 # indistinguishable from a real defect, and that evidence binds an integration commit nothing else
 # re-measures (Issue #2704).
 concurrency:
-  # Code-head runs share the pull-request group so a synchronize event supersedes stale evidence.
-  # Metadata edits use their unique run id. GitHub cancels an already-pending run when another run
-  # enters the same group even when cancel-in-progress is false, so merely queueing `edited` behind a
-  # synchronize run lets a reviewer bot cancel the exact-head measurement before any job starts.
-  group: ci-${{ github.event_name == 'pull_request' && github.event.action != 'edited' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'edited' }}
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   protected-branch-gate:
@@ -1084,10 +1082,9 @@ jobs:
     # touches no code, manifest, lockfile, workflow or test cannot alter how the product builds and
     # installs on another operating system.
     needs: change-scope
-    # `always()` is load-bearing: without it a change-scope job that fails for its own reasons —
-    # checkout, runner, a broken script — skips this matrix, and the `ci` aggregate then rejects a
-    # skip no documentation-only verdict authorized. The classifier is fail-open by construction, so
-    # its own failure must mean "run everything", never "run nothing and block the merge".
+    # `always()` is load-bearing: without it a change-scope job that fails for its own reasons would
+    # skip this matrix. The aggregate still fails closed on the classifier failure; running the matrix
+    # preserves diagnostic evidence instead of hiding a second defect behind the first one.
     if: ${{ always() && needs.change-scope.outputs.documentation-only != 'true' }}
     # The Node.js 24 baseline must execute, typecheck, build, and install on every supported desktop
     # OS. The complete hermetic suite remains in the Linux `ci` job because many security fixtures

@@ -450,6 +450,26 @@ test("fails a JSON feature catalog with a missing language", async () => {
   );
 });
 
+test.each(["", "   "])("fails a JSON feature catalog with a blank language: %j", async (de) => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [JSON_FEATURE_CATALOG]: JSON.stringify({
+        "feature.title": { en: "Title", de },
+      }),
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [JSON_FEATURE_CATALOG],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/feature\.title/u);
+    },
+  );
+});
+
 test.each([
   ["malformed JSON", "{"],
   ["a null root", "null"],

@@ -33,12 +33,12 @@ rules:
       # before removal: `zizmor` reports zero cache-poisoning findings for the pre-#2704 ci.yml with
       # no ignore list at all.
       # USearch runtime: coverage-packages, coverage-ui, coverage-scripts
-      - ci.yml:486
-      - ci.yml:578
-      - ci.yml:646
+      - ci.yml:484
+      - ci.yml:576
+      - ci.yml:644
       # coverage-sonar: npm download cache (the one job that saves it), Sonar Scanner CLI archive
-      - ci.yml:740
-      - ci.yml:826
+      - ci.yml:738
+      - ci.yml:824
   dangerous-triggers:
     ignore:
       # ADR-0161: the infrastructure-signature observer must see runs that have already completed, and

@@ -1248,21 +1248,20 @@ function BoundChatAlerts({
     !detailedFailure && controls.creating.errorKey === null && lookupFailed
       ? "chat.creation.openFailed"
       : null;
-  return (
-    <>
-      <ChatHostAlert messageKey={controls.handoff.noticeKey} />
-      {detailedFailure ? (
-        <ErrorNoticeFromError
-          error={sessionError}
-          fallback={agentT("chat.creation.openFailed")}
-          className="lk-alert"
-        />
-      ) : (
-        <ChatHostAlert messageKey={controls.creating.errorKey} />
-      )}
-      <ChatHostAlert messageKey={lookupMessage} />
-    </>
-  );
+  if (detailedFailure) {
+    return (
+      <ErrorNoticeFromError
+        error={sessionError}
+        fallback={agentT("chat.creation.openFailed")}
+        className="lk-alert"
+        dismissible={false}
+      />
+    );
+  }
+  if (controls.creating.errorKey !== null) {
+    return <ChatHostAlert messageKey={controls.creating.errorKey} />;
+  }
+  return <ChatHostAlert messageKey={lookupMessage ?? controls.handoff.noticeKey} />;
 }
 
 function useBoundChatWindowRuntime(

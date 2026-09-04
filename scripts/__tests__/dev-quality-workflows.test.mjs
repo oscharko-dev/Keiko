@@ -53,12 +53,13 @@ function runCiAggregate(overrides = {}) {
 }
 
 describe("dev quality workflows", () => {
-  it("isolates metadata edits from code-head CI concurrency", () => {
+  it("does not run full CI for pull-request metadata edits", () => {
+    expect(ciWorkflow.on.pull_request.types).not.toContain("edited");
     expect(ciWorkflow.concurrency.group).toBe(
-      "ci-${{ github.event_name == 'pull_request' && github.event.action != 'edited' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}",
+      "ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}",
     );
     expect(ciWorkflow.concurrency["cancel-in-progress"]).toBe(
-      "${{ github.event_name == 'pull_request' && github.event.action != 'edited' }}",
+      "${{ github.event_name == 'pull_request' }}",
     );
   });
 
@@ -284,6 +285,7 @@ describe("dev quality workflows", () => {
     expect(localSonar).toContain('git -C "${repo_root}" ls-files -z --others --exclude-standard');
     expect(localSonar).toContain("--needs-full-scan");
     expect(localSonar).not.toContain("-Dsonar.javascript.node.maxspace=4096");
+    expect(localSonar).toContain("-Dsonar.javascript.node.maxspace=4608");
     expect(localSonar).toContain("--partition-inclusions");
     expect(localSonar).toContain(
       '"-Dsonar.inclusions=${source_inclusions:-${empty_source_inclusion}}"',
@@ -299,6 +301,7 @@ describe("dev quality workflows", () => {
     );
     expect(localSonar).not.toContain('"-Dsonar.test.inclusions=${inclusions}"');
     expect(localSonarCompose).toContain('"127.0.0.1:${KEIKO_LOCAL_SONAR_PORT:-9234}:9000"');
+    expect(localSonarCompose).toContain('SONAR_SCANNER_OPTS: "-Xmx768m"');
     expect(packageJson.scripts["gates:sonar:stop"]).toBe("./docker/gates/run-sonar.sh --stop");
   });
 

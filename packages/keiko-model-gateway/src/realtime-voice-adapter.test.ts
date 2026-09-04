@@ -158,7 +158,7 @@ describe("requestRealtimeNegotiation", () => {
       apiKey: SECRET_API_KEY,
       modelId: "keiko-realtime",
       sessionType: "transcription",
-      transcriptionLanguage: "en",
+      transcriptionLanguage: "de-DE",
       transcriptionDelay: "low",
       offerSdp: OFFER_SDP,
       fetchImpl,
@@ -169,7 +169,8 @@ describe("requestRealtimeNegotiation", () => {
     const multipart = await (seenBody as Blob).text();
     expect(multipart).toContain('"type":"realtime"');
     expect(multipart).toContain('"turn_detection":null');
-    expect(multipart).toContain(`"model":"${CONFIGURED_TRANSCRIPTION_MODEL}","language":"en"`);
+    expect(multipart).toContain(`"model":"${CONFIGURED_TRANSCRIPTION_MODEL}","language":"de"`);
+    expect(multipart).not.toContain('"language":"de-DE"');
     expect(multipart).not.toContain('"type":"transcription"');
     expect(multipart).not.toContain('"delay"');
   });

@@ -23,6 +23,7 @@ import {
   canonicalLocalhostRedirectLocation,
   checkNextPortFree,
   copyHeadersSafely,
+  createMicrophoneAllowanceController,
   findAvailableNextPort,
   forwardedUpstreamHeaders,
   normalizeUpstreamLocation,
@@ -50,6 +51,25 @@ function readinessResponse(status, body, permissionsPolicy) {
     json: () => Promise.resolve(body),
     headers: { entries: () => Object.entries(values)[Symbol.iterator]() },
   };
+}
+
+async function proxyRoundTrip(
+  upstreamPort,
+  method,
+  policyBffPort,
+  policy,
+  url = "/api/gateway/config",
+) {
+  const request = new PassThrough();
+  Object.assign(request, { headers: {}, method, url });
+  const response = new PassThrough();
+  response.writeHead = vi.fn();
+  const completed = new Promise((resolve) => response.on("end", resolve));
+  proxyHttp(request, response, upstreamPort, policyBffPort, policy);
+  request.end();
+  response.resume();
+  await completed;
+  return response.writeHead.mock.calls[0]?.[1];
 }
 
 describe("atomic state persistence", () => {
@@ -852,6 +872,51 @@ describe("forwardedUpstreamHeaders", () => {
       "camera=(), geolocation=(), microphone=(self), payment=(), usb=()",
     );
     expect(out["permissions-policy"]).not.toContain("microphone=*");
+  });
+
+  it("revokes a cached allowance before a BFF mutation and ignores its stale response policy", async () => {
+    let resolveHealth;
+    const healthObserved = new Promise((resolve) => {
+      resolveHealth = resolve;
+    });
+    const upstream = createHttpServer((request, response) => {
+      response.writeHead(200, { "permissions-policy": "microphone=(self)" });
+      if (request.url === "/api/health") {
+        response.end(JSON.stringify({ status: "ok" }));
+        resolveHealth();
+      } else {
+        response.end("ok");
+      }
+    });
+    try {
+      await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+      const address = upstream.address();
+      if (address === null || typeof address === "string") throw new Error("Expected TCP address.");
+      const policy = createMicrophoneAllowanceController(true);
+
+      const before = await proxyRoundTrip(address.port, "GET", address.port, policy);
+      expect(before["permissions-policy"]).toContain("microphone=(self)");
+
+      const after = await proxyRoundTrip(address.port, "POST", address.port, policy);
+      expect(after["permissions-policy"]).toContain("microphone=()");
+      await healthObserved;
+      await vi.waitFor(() => expect(policy.current()).toBe(true));
+      const refreshed = await proxyRoundTrip(address.port, "GET", address.port, policy);
+      expect(refreshed["permissions-policy"]).toContain("microphone=(self)");
+    } finally {
+      await new Promise((resolve, reject) =>
+        upstream.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it("rejects a stale readiness observation after a newer policy revision", () => {
+    const policy = createMicrophoneAllowanceController(false);
+    const staleRevision = policy.revision();
+    policy.revoke();
+
+    expect(policy.observe(staleRevision, true)).toBe(false);
+    expect(policy.current()).toBe(false);
   });
 
   it.each([undefined, null, "", "microphone=*", "microphone=(*)", "microphone=(self)junk"])(

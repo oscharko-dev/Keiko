@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
@@ -174,7 +174,10 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
   return { promise, resolve };
 }
 
-function speakContext(body: unknown): {
+function speakContext(
+  body: unknown,
+  correlationId?: string,
+): {
   readonly context: RouteContext;
   readonly request: IncomingMessage;
   readonly response: FakeRes;
@@ -187,7 +190,7 @@ function speakContext(body: unknown): {
     request,
     response,
     context: {
-      correlationId: undefined,
+      correlationId,
       req: request,
       res: response as unknown as RouteContext["res"],
       params: {},
@@ -342,9 +345,10 @@ describe("POST /api/voice/speak — successful synthesis (AC1/AC2)", () => {
   });
 
   it("synthesizes the visible answer against the configured provider and returns base64 audio", async () => {
-    const { deps, seen } = speakDeps();
+    const activityLog = { write: vi.fn() };
+    const { deps, seen } = speakDeps({ activityLog });
     const answer = "This is exactly the assistant text shown in the transcript.";
-    const fixture = speakContext({ text: answer });
+    const fixture = speakContext({ text: answer }, "corr-tts-wiring-0001");
     const result = await handleVoiceSpeak(fixture.context, deps);
     expect(result.status).toBe(200);
     const body = result.body as { audio: string; mimeType: string };
@@ -356,6 +360,8 @@ describe("POST /api/voice/speak — successful synthesis (AC1/AC2)", () => {
     expect(seen[0]?.apiKey).toBe(PROVIDER_SECRET);
     expect(seen[0]?.modelId).toBe("keiko-tts");
     expect(seen[0]?.input).toBe(answer);
+    expect(seen[0]?.log).toBe(activityLog);
+    expect(seen[0]?.correlationId).toBe("corr-tts-wiring-0001");
     expect(seen[0]?.instructions).toContain("thoughtful colleague");
     expect(seen[0]?.instructions).toContain("careful articulation and moderate vocal effort");
     // The interactive speak path requests opus (audio/ogg): faster to first audio and ~4x smaller

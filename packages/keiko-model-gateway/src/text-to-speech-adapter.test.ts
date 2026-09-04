@@ -528,6 +528,54 @@ describe("requestTextToSpeechStream", () => {
     );
   });
 
+  it("logs a correlated body-free failure when the response prefix cannot be read", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.error(new TypeError("provider response prefix failed"));
+      },
+    });
+    const outcome = await requestTextToSpeechStream({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "configured-voice",
+      correlationId: "corr-tts-stream-prefix",
+      log: {
+        write(event): void {
+          events.push(event);
+        },
+      },
+      fetchImpl: mockFetch(() => new Response(stream, { status: 200 })),
+    });
+
+    expect(outcome).toEqual({ ok: false, kind: "transport" });
+    expect(events).toContainEqual({
+      level: "error",
+      category: "gateway",
+      op: "speech.tts.stream.peek.failed",
+      correlationId: "corr-tts-stream-prefix",
+      errorKind: "TypeError",
+      extra: { phase: "response-prefix", outcomeKind: "transport" },
+    });
+    expect(JSON.stringify(events)).not.toContain(ANSWER);
+    expect(JSON.stringify(events)).not.toContain(SECRET_API_KEY);
+  });
+
+  it("fails closed when a successful streaming response contains zero audio bytes", async () => {
+    const outcome = await requestTextToSpeechStream({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "configured-voice",
+      fetchImpl: mockFetch(() => new Response(new Uint8Array(), { status: 200 })),
+    });
+
+    expect(outcome).toEqual({ ok: false, kind: "empty-audio" });
+  });
+
   it("maps a provider error status to a coded kind without streaming a body", async () => {
     const fetchImpl = mockFetch(() => new Response("provider error page", { status: 429 }));
     const outcome = await requestTextToSpeechStream({

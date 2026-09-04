@@ -41,6 +41,26 @@ export function auditEnvironment(environment = process.env) {
   };
 }
 
+function stringOutput(value) {
+  return typeof value === "string" ? value : "";
+}
+
+function auditProcessResult(result) {
+  const stdout = stringOutput(result.stdout);
+  const rawStderr = stringOutput(result.stderr);
+  const error = result.error instanceof Error ? `${result.error.message}\n` : "";
+  const signal = typeof result.signal === "string" ? result.signal : undefined;
+  const termination = signal === undefined ? "" : `npm audit terminated by signal ${signal}.\n`;
+  const stderr = `${rawStderr}${error}${termination}`;
+  return {
+    output: `${stdout}${stderr}`,
+    status: typeof result.status === "number" ? result.status : 1,
+    stderr,
+    stdout,
+    signal,
+  };
+}
+
 export function runNpmAudit(arguments_, dependencies = {}) {
   const spawn = dependencies.spawn ?? spawnSync;
   const executable = dependencies.resolveNpm?.() ?? resolveHostExecutable("npm");
@@ -50,16 +70,7 @@ export function runNpmAudit(arguments_, dependencies = {}) {
     env: auditEnvironment(dependencies.environment),
     maxBuffer: 64 * 1024 * 1024,
   });
-  const stdout = typeof result.stdout === "string" ? result.stdout : "";
-  const rawStderr = typeof result.stderr === "string" ? result.stderr : "";
-  const error = result.error instanceof Error ? `${result.error.message}\n` : "";
-  const stderr = `${rawStderr}${error}`;
-  return {
-    output: `${stdout}${stderr}`,
-    status: typeof result.status === "number" ? result.status : 1,
-    stderr,
-    stdout,
-  };
+  return auditProcessResult(result);
 }
 
 const defaultSleep = (delayMs) => sleepFor(delayMs);

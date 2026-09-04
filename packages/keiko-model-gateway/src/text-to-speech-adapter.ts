@@ -22,7 +22,12 @@ import {
   readJsonCapped,
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
-import { resolveLogSink, withCorrelationId, type ModelGatewayLogSink } from "./observability.js";
+import {
+  logErrorKind,
+  resolveLogSink,
+  withCorrelationId,
+  type ModelGatewayLogSink,
+} from "./observability.js";
 import type { OutboundHttpEgressConfig, ProviderEndpointStyle } from "./types.js";
 
 // Closed set of response formats the OpenAI-compatible `/audio/speech` contract accepts, mapped to
@@ -266,7 +271,6 @@ function declaredMimeType(response: Response, responseFormat: SpeechResponseForm
 }
 
 function speechMimeClass(mimeType: string): SpeechResponseFormat | "other-audio" {
-  if (mimeType === "audio/mpeg") return "mp3";
   for (const [format, candidate] of Object.entries(RESPONSE_FORMAT_MIME)) {
     if (candidate === mimeType) return format as SpeechResponseFormat;
   }
@@ -429,7 +433,12 @@ function copyPrefix(chunks: readonly Uint8Array[], byteLimit: number): Uint8Arra
 async function peekBodyStream(
   source: ReadableStream<Uint8Array>,
   byteLimit: number,
-): Promise<{ readonly prefix: Uint8Array; readonly body: ReadableStream<Uint8Array> }> {
+): Promise<{
+  readonly prefix: Uint8Array;
+  readonly body: ReadableStream<Uint8Array>;
+  readonly exhausted: boolean;
+  readonly peekedBytes: number;
+}> {
   const reader = source.getReader();
   const buffered: Uint8Array[] = [];
   let bufferedBytes = 0;
@@ -446,6 +455,8 @@ async function peekBodyStream(
   return {
     prefix: copyPrefix(buffered, Math.min(bufferedBytes, byteLimit)),
     body: replayPeekedStream(reader, buffered, sourceDone),
+    exhausted: sourceDone,
+    peekedBytes: bufferedBytes,
   };
 }
 
@@ -475,9 +486,18 @@ export async function requestTextToSpeechStream(
   let peeked: Awaited<ReturnType<typeof peekBodyStream>>;
   try {
     peeked = await peekBodyStream(dispatched.body, OGG_HEADER_PROBE_BYTES);
-  } catch {
-    return { ok: false, kind: "invalid-response" };
+  } catch (error) {
+    const kind = classifyDispatchError(error, built.timeoutSignal, built.callerSignal);
+    built.log.write({
+      level: "error",
+      category: "gateway",
+      op: "speech.tts.stream.peek.failed",
+      errorKind: logErrorKind(error),
+      extra: { phase: "response-prefix", outcomeKind: kind },
+    });
+    return { ok: false, kind };
   }
+  if (peeked.exhausted && peeked.peekedBytes === 0) return { ok: false, kind: "empty-audio" };
   return {
     ok: true,
     value: {

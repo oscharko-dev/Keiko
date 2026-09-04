@@ -15,6 +15,30 @@ interface ErrorNoticeProps {
   readonly className?: string | undefined;
   readonly id?: string | undefined;
   readonly onDismiss?: (() => void) | undefined;
+  readonly dismissible?: boolean | undefined;
+}
+
+function ErrorNoticeDismiss({
+  dismissible,
+  label,
+  onClick,
+}: {
+  readonly dismissible: boolean;
+  readonly label: string;
+  readonly onClick: () => void;
+}): ReactNode {
+  if (!dismissible) return null;
+  return (
+    <button
+      type="button"
+      className="ui-error-notice-close"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+    >
+      <CloseIcon size={14} />
+    </button>
+  );
 }
 
 function ErrorNotice({
@@ -22,11 +46,13 @@ function ErrorNotice({
   className = "ui-error-notice",
   id,
   onDismiss,
+  dismissible = true,
 }: {
   readonly notice: UserErrorNotice;
   readonly className?: string | undefined;
   readonly id?: string | undefined;
   readonly onDismiss?: (() => void) | undefined;
+  readonly dismissible?: boolean | undefined;
 }): ReactNode {
   const t = useTranslate();
   // RB-6 / ADR-0173 D5 — correlationId is a user-visible field (the "Support ID" line), so it must
@@ -39,18 +65,14 @@ function ErrorNotice({
     <div id={id} className={className} role="alert" aria-live="assertive">
       <div className="ui-error-notice-title-row">
         <div className="ui-error-notice-title">{notice.title}</div>
-        <button
-          type="button"
-          className="ui-error-notice-close"
-          aria-label={t("common.dismissError")}
-          title={t("common.dismissError")}
+        <ErrorNoticeDismiss
+          dismissible={dismissible}
+          label={t("common.dismissError")}
           onClick={() => {
             setDismissedKey(noticeKey);
             onDismiss?.();
           }}
-        >
-          <CloseIcon size={14} />
-        </button>
+        />
       </div>
       <div className="ui-error-notice-message">{notice.message}</div>
       {notice.remediation !== undefined ? (
@@ -74,6 +96,7 @@ export function ErrorNoticeFromError({
   className,
   id,
   onDismiss,
+  dismissible,
 }: ErrorNoticeProps): ReactNode {
   return (
     <ErrorNotice
@@ -81,6 +104,7 @@ export function ErrorNoticeFromError({
       className={className}
       notice={toUserErrorNotice(error, fallback)}
       onDismiss={onDismiss}
+      dismissible={dismissible}
     />
   );
 }

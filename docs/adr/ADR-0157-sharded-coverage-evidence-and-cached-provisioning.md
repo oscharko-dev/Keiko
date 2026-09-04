@@ -120,9 +120,12 @@ signing-relevant permissions — `build-scan-sbom-smoke` and `ui`, both `attesta
 consumer. This is the same reasoning `.github/zizmor.yml` records for the `cache-poisoning` rule.
 
 **D5 — Superseded pull-request runs are cancelled; integration runs are never grouped at all.**
-The workflow declares `concurrency` with `cancel-in-progress` true for `pull_request` events only,
-grouped by pull-request number. A superseded pull-request run has no consumer: its evidence binds a
-head that the next push already replaced.
+The workflow runs for pull-request code-head actions (`opened`, `reopened`, `synchronize`, and
+`ready_for_review`), not for metadata-only `edited` events. It declares `concurrency` with
+`cancel-in-progress` true for those `pull_request` events, grouped by pull-request number. A
+superseded pull-request run has no consumer: its evidence binds a head that the next push already
+replaced. A title or description edit cannot alter executable evidence and therefore launches no CI
+pipeline.
 
 Every other event gets a group of one, keyed on `github.run_id`. `cancel-in-progress: false` on a
 shared group would not have been enough: GitHub cancels a previously *pending* run in a group

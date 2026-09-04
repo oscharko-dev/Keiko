@@ -19,6 +19,7 @@ import {
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
 import { resolveLogSink, withCorrelationId, type ModelGatewayLogSink } from "./observability.js";
+import { providerSpeechLanguage } from "./provider-language.js";
 import type { OutboundHttpEgressConfig, ProviderEndpointStyle } from "./types.js";
 
 export interface SpeechToTextRequest {
@@ -137,14 +138,9 @@ function extensionForMime(mimeType: string): string {
 // The loopback contract accepts a BCP-47 language hint because browsers and callers naturally
 // expose values such as `de-DE`. OpenAI-compatible transcription endpoints accept the ISO-639-1
 // primary language subtag instead, so keep the public contract useful while sending `de` upstream.
-function providerLanguage(language: string): string {
-  const separator = language.indexOf("-");
-  return separator === -1 ? language : language.slice(0, separator);
-}
-
 function logLanguageNormalization(request: SpeechToTextRequest): void {
   if (request.language === undefined) return;
-  const normalized = providerLanguage(request.language);
+  const normalized = providerSpeechLanguage(request.language);
   if (normalized === request.language) return;
   const log = withCorrelationId(resolveLogSink(request.log), request.correlationId);
   log.write({
@@ -230,7 +226,7 @@ function buildMultipartBody(request: SpeechToTextRequest, boundary: string): Blo
     parts.push(
       enc.encode(
         `--${boundary}\r\n` +
-          `Content-Disposition: form-data; name="language"\r\n\r\n${sanitizeFieldValue(providerLanguage(request.language))}\r\n`,
+          `Content-Disposition: form-data; name="language"\r\n\r\n${sanitizeFieldValue(providerSpeechLanguage(request.language))}\r\n`,
       ),
     );
   }

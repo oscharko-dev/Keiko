@@ -56,7 +56,26 @@ let server;
 let shuttingDown = false;
 let publicReady = false;
 let readinessCheckRunning = false;
-let allowSameOriginMicrophone = false;
+export function createMicrophoneAllowanceController(initialAllowance = false) {
+  let allowance = initialAllowance === true;
+  let revision = 0;
+  return {
+    current: () => allowance,
+    revision: () => revision,
+    revoke: () => {
+      revision += 1;
+      allowance = false;
+      return revision;
+    },
+    observe: (observedRevision, nextAllowance) => {
+      if (observedRevision !== revision) return false;
+      allowance = nextAllowance === true;
+      return true;
+    },
+  };
+}
+
+const microphoneAllowance = createMicrophoneAllowanceController();
 const requiredReadyProbeSuccesses = 2;
 
 const devServiceWorker = `
@@ -458,7 +477,7 @@ function spawnChild(label, command, args, options) {
     if (children.get(label) !== child) return;
     children.delete(label);
     publicReady = false;
-    allowSameOriginMicrophone = microphoneAllowanceAfterChildExit(label, allowSameOriginMicrophone);
+    if (label === "bff") microphoneAllowance.revoke();
     writeState({ ready: false, lastExit: { label, code, signal } });
     if (shuttingDown) return;
     console.error(`[dev] ${label} exited unexpectedly.`);
@@ -508,10 +527,10 @@ export async function probeApiReadiness(url, fetchImpl = globalThis.fetch) {
 }
 
 async function readinessProbe() {
-  allowSameOriginMicrophone = false;
+  const observedRevision = microphoneAllowance.revision();
   try {
     const api = await probeApiReadiness(`http://${host}:${String(bffPort)}/api/health`);
-    allowSameOriginMicrophone = api.allowSameOriginMicrophone;
+    microphoneAllowance.observe(observedRevision, api.allowSameOriginMicrophone);
     if (api.result !== "ok") return `api: ${api.result}`;
 
     const ui = await fetchOk(`http://${host}:${String(nextPort)}/`, async (response) => {
@@ -724,6 +743,16 @@ export function upstreamAllowsSameOriginMicrophone(upstreamHeaders) {
   );
 }
 
+function bffRequestMutatesMicrophoneAllowance(method) {
+  const normalized = typeof method === "string" ? method.toUpperCase() : "";
+  return normalized !== "GET" && normalized !== "HEAD" && normalized !== "OPTIONS";
+}
+
+async function refreshMicrophoneAllowance(controller, expectedRevision, policyBffPort) {
+  const api = await probeApiReadiness(`http://${host}:${String(policyBffPort)}/api/health`);
+  controller.observe(expectedRevision, api.allowSameOriginMicrophone);
+}
+
 export function forwardedUpstreamHeaders(upstreamHeaders, targetPort, options = {}) {
   const safe = copyHeadersSafely(upstreamHeaders);
   if ("location" in safe) {
@@ -784,13 +813,46 @@ function createProxyLifecycle(req, res) {
   };
 }
 
-export function proxyHttp(req, res, targetPort) {
+function forwardProxyResponse({
+  upstreamRes,
+  res,
+  lifecycle,
+  mutationRevision,
+  policy,
+  policyBffPort,
+  targetPort,
+}) {
+  lifecycle.bindResponse(upstreamRes);
+  if (mutationRevision !== undefined) {
+    upstreamRes.once("end", () => {
+      void refreshMicrophoneAllowance(policy, mutationRevision, policyBffPort);
+    });
+  }
+  res.writeHead(
+    upstreamRes.statusCode ?? 502,
+    forwardedUpstreamHeaders(upstreamRes.headers, targetPort, {
+      allowMicrophone: policy.current(),
+    }),
+  );
+  upstreamRes.pipe(res);
+}
+
+export function proxyHttp(
+  req,
+  res,
+  targetPort,
+  policyBffPort = bffPort,
+  policy = microphoneAllowance,
+) {
   const path = req.url;
   if (typeof path !== "string" || !/^\/(?!\/)[A-Za-z0-9._~!$&'()*+,;=:@/%?-]*$/u.test(path)) {
     res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
     res.end("Invalid development proxy request path.");
     return;
   }
+  const forwardsToBff = targetPort === policyBffPort;
+  const mutationRevision =
+    forwardsToBff && bffRequestMutatesMicrophoneAllowance(req.method) ? policy.revoke() : undefined;
   const headers = proxiedHeaders(req, targetPort);
   const lifecycle = createProxyLifecycle(req, res);
   const upstream = request(
@@ -801,19 +863,16 @@ export function proxyHttp(req, res, targetPort) {
       method: req.method,
       headers,
     },
-    (upstreamRes) => {
-      lifecycle.bindResponse(upstreamRes);
-      if (targetPort === bffPort) {
-        allowSameOriginMicrophone = upstreamAllowsSameOriginMicrophone(upstreamRes.headers);
-      }
-      res.writeHead(
-        upstreamRes.statusCode ?? 502,
-        forwardedUpstreamHeaders(upstreamRes.headers, targetPort, {
-          allowMicrophone: allowSameOriginMicrophone,
-        }),
-      );
-      upstreamRes.pipe(res);
-    },
+    (upstreamRes) =>
+      forwardProxyResponse({
+        upstreamRes,
+        res,
+        lifecycle,
+        mutationRevision,
+        policy,
+        policyBffPort,
+        targetPort,
+      }),
   );
   lifecycle.bindRequest(upstream);
   upstream.on("error", () => {

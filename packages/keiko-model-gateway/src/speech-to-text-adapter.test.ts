@@ -128,6 +128,32 @@ describe("requestSpeechToText", () => {
     ]);
   });
 
+  it("preserves a primary language tag without emitting a normalization event", async () => {
+    let body = "";
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestSpeechToText({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-stt",
+      audio: AUDIO,
+      mimeType: "audio/ogg",
+      language: "de",
+      log: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      fetchImpl: mockFetch(async (_url, init) => {
+        body = await bodyToText(init);
+        return ok({ text: "hallo" });
+      }),
+    });
+
+    expect(outcome.ok).toBe(true);
+    expect(body).toContain("\r\n\r\nde\r\n");
+    expect(events).toEqual([]);
+  });
+
   it("includes an optional domain-keyword prompt field in the multipart body", async () => {
     let body = "";
     const fetchImpl = mockFetch(async (_url, init) => {

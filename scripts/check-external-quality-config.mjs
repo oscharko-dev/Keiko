@@ -168,8 +168,8 @@ function validatePackage(packageJson) {
 function validateCiWorkflow(source) {
   const checks = [
     [
-      "types: [opened, reopened, synchronize, ready_for_review, edited]",
-      "required ci must rerun when pull-request metadata changes",
+      "types: [opened, reopened, synchronize, ready_for_review]",
+      "required ci must run only for pull-request code-head actions",
     ],
     ['GITLEAKS_VERSION: "8.30.1"', "Gitleaks must remain pinned to the reviewed OSS release"],
     ["--redact=100", "Gitleaks output must remain fully redacted"],

@@ -272,7 +272,7 @@ function hasCatalogUpdateEvidence({
   );
 }
 
-function catalogUpdateProblems(changedFileSet, repoRoot) {
+function catalogUpdateProblems(changedFileSet, repoRoot, uiSourceChanged) {
   const featureCatalogPairs = changedFeatureCatalogPairs(changedFileSet);
   const singleFileCatalogs = changedSingleFileFeatureCatalogs(changedFileSet, repoRoot);
   const jsonFeatureCatalogs = changedJsonFeatureCatalogs(changedFileSet);
@@ -297,7 +297,7 @@ function catalogUpdateProblems(changedFileSet, repoRoot) {
   for (const catalog of [EN_CATALOG, DE_CATALOG]) {
     if (!changedFileSet.has(catalog)) {
       problems.push(
-        `UI source changed, but ${catalog} was not updated. Add English and German catalog entries for UI-facing text.`,
+        `${uiSourceChanged ? "UI source changed" : "An i18n catalog changed"}, but ${catalog} was not updated. Add English and German catalog entries for UI-facing text.`,
       );
     }
   }
@@ -389,7 +389,12 @@ function jsonFeatureCatalogProblems(repoRoot, jsonFeatureCatalogs) {
     const incompleteKeys = Object.entries(catalog)
       .filter(([, messages]) => {
         if (typeof messages !== "object" || messages === null) return true;
-        return typeof messages.en !== "string" || typeof messages.de !== "string";
+        return (
+          typeof messages.en !== "string" ||
+          messages.en.trim().length === 0 ||
+          typeof messages.de !== "string" ||
+          messages.de.trim().length === 0
+        );
       })
       .map(([key]) => key);
     if (incompleteKeys.length > 0) {
@@ -2164,7 +2169,11 @@ export function checkUiI18nGuard({
 // The pre-existing checks, unchanged in behaviour: catalogs must be updated together, a changed UI
 // file must reach the i18n API somehow, and both catalogs must expose the same keys.
 function catalogRequirementProblems(repoRoot, changedFileSet, i18nRelevantFiles) {
-  const catalogRequirement = catalogUpdateProblems(changedFileSet, repoRoot);
+  const catalogRequirement = catalogUpdateProblems(
+    changedFileSet,
+    repoRoot,
+    i18nRelevantFiles.length > 0,
+  );
   const problems = [...catalogRequirement.problems];
   const nonCompliantFiles = nonCompliantUiFiles(repoRoot, i18nRelevantFiles);
 

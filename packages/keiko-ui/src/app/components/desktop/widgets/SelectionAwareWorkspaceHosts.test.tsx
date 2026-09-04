@@ -1787,6 +1787,7 @@ describe("ChatWindowSessionHost target missing", () => {
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent("temporary bootstrap failure");
+    expect(screen.queryByRole("button", { name: /dismiss error/i })).toBeNull();
     expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
   });
 

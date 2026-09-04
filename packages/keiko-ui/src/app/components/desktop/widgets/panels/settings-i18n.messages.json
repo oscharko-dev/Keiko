@@ -115,10 +115,6 @@
     "en": "Conversation-eligible",
     "de": "Konversationsfähig"
   },
-  "settings.models.eligibilityOkAria": {
-    "en": "Model eligibility: eligible for conversation",
-    "de": "Modelleignung: für Konversationen geeignet"
-  },
   "settings.models.modelNotVerified": {
     "en": "Chat model — not verified",
     "de": "Chat-Modell — nicht verifiziert"

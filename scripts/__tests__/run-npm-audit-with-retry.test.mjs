@@ -101,4 +101,17 @@ describe("npm audit retry", () => {
     );
     expect(auditEnvironment(environment).npm_config_fetch_retry_maxtimeout).toBe("10000");
   });
+
+  it("fails closed and reports a body-free diagnostic when npm is terminated by a signal", () => {
+    const spawn = vi
+      .fn()
+      .mockReturnValue({ status: null, signal: "SIGKILL", stderr: "", stdout: "" });
+
+    const audit = runNpmAudit([], { resolveNpm: () => "/trusted/npm", spawn });
+
+    expect(audit.status).toBe(1);
+    expect(audit.signal).toBe("SIGKILL");
+    expect(audit.stderr).toBe("npm audit terminated by signal SIGKILL.\n");
+    expect(audit.output).toBe(audit.stderr);
+  });
 });

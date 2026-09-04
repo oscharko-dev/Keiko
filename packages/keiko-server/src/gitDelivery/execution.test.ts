@@ -172,6 +172,10 @@ beforeEach(() => {
   // `commit.gpgSign=true` would correctly block its deliberately unsigned disposable commits.
   vi.stubEnv("HOME", root);
   vi.stubEnv("USERPROFILE", root);
+  vi.stubEnv("XDG_CONFIG_HOME", root);
+  const globalGitConfig = join(root, "controlled-global.gitconfig");
+  writeFileSync(globalGitConfig, "", "utf8");
+  vi.stubEnv("GIT_CONFIG_GLOBAL", globalGitConfig);
   git(["init", "-q", "-b", "main"]);
   git(["config", "user.email", "test@keiko.example"]);
   git(["config", "user.name", "Keiko Test"]);

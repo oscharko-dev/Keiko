@@ -185,14 +185,18 @@ async function disposeGatewayBreakerFixture(fixture: GatewayBreakerFixture): Pro
 async function sendBreakerChat(
   fixture: GatewayBreakerFixture,
   content: string,
+  correlationId?: string,
 ): Promise<Awaited<ReturnType<typeof handleSendDesktopChat>>> {
   return handleSendDesktopChat(
-    requestContext({
-      chatId: fixture.chatId,
-      projectPath: fixture.projectPath,
-      modelId: "breaker-chat",
-      content,
-    }),
+    requestContext(
+      {
+        chatId: fixture.chatId,
+        projectPath: fixture.projectPath,
+        modelId: "breaker-chat",
+        content,
+      },
+      correlationId,
+    ),
     fixture.deps,
   );
 }
@@ -218,7 +222,11 @@ describe("desktop chat production gateway reuse", () => {
         ),
         fixture.deps,
       );
-      const rejected = await sendBreakerChat(fixture, "must not leave the server");
+      const rejected = await sendBreakerChat(
+        fixture,
+        "must not leave the server",
+        "corr-send-unready",
+      );
 
       expect(createRejected).toEqual({
         status: 400,
@@ -269,6 +277,17 @@ describe("desktop chat production gateway reuse", () => {
           extra: { reason: "readiness", modelKind: "chat" },
         }),
       );
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "gateway",
+          op: "chat.send.rejected",
+          correlationId: "corr-send-unready",
+          status: 400,
+          errorKind: "model-not-ready",
+          extra: { reason: "readiness", modelKind: "chat" },
+        }),
+      );
+      expect(JSON.stringify(sink.events)).not.toContain("must not leave the server");
     } finally {
       vi.unstubAllGlobals();
       resetServerLogger();

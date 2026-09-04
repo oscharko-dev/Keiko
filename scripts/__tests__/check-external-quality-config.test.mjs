@@ -83,8 +83,8 @@ describe("external quality integration configuration", () => {
   it("fails closed when required CI stops aggregating deterministic gates", () => {
     const weakened = sources.ciWorkflow
       .replace(
+        "types: [opened, reopened, synchronize, ready_for_review]",
         "types: [opened, reopened, synchronize, ready_for_review, edited]",
-        "types: [opened]",
       )
       .replace("npm run check:external-quality-config", "node --version")
       .replace("npm run check:review-bot-suppression", "node --version")
@@ -92,7 +92,7 @@ describe("external quality integration configuration", () => {
       .replace("      - semantic-duplication", "");
     expect(findings({ ciWorkflow: weakened })).toEqual(
       expect.arrayContaining([
-        "required ci must rerun when pull-request metadata changes",
+        "required ci must run only for pull-request code-head actions",
         "required ci must aggregate the secret scan",
         "required ci must aggregate semantic duplication",
         "required ci must execute check:external-quality-config",

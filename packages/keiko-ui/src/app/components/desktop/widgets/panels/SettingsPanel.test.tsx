@@ -222,7 +222,7 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
     async (conversationReady, gatewayLabel, statusClass, badgeLabel) => {
       const modelId = conversationReady ? "test-chat-ready" : "test-chat-failed";
       primeFetches([{ ...chatCapability(modelId), conversationReady }]);
-      runGatewayReadinessMock.mockImplementation(() => new Promise(() => undefined));
+      runGatewayReadinessMock.mockImplementationOnce(() => new Promise(() => undefined));
       render(<SettingsPanel />);
 
       await screen.findByText(gatewayLabel);
@@ -489,7 +489,7 @@ describe("SettingsPanel gateway summary semantics", () => {
       ],
       verifiedCapabilities: {},
     });
-    fireEvent.click(screen.getByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
 
     await waitFor(() => {
       expect(screen.getByText("Gateway check failed")).toBeInTheDocument();
@@ -523,15 +523,18 @@ describe("SettingsPanel gateway summary semantics", () => {
 // generation it observed, and only the current generation may be displayed.
 describe("SettingsPanel readiness evidence is scoped to the configuration it measured (F-02)", () => {
   it("stops presenting a verified gateway once the configuration it measured was replaced", async () => {
-    primeFetches([chatCapability("test-chat-1")]);
+    fetchConfigMock.mockResolvedValue({ config: null, configPresent: true });
+    fetchModelsMock
+      .mockResolvedValueOnce({
+        models: [{ ...chatCapability("test-chat-1"), conversationReady: true }],
+      })
+      .mockResolvedValue({ models: [chatCapability("test-chat-1")] });
     runGatewayReadinessMock.mockResolvedValue(readyReport());
     render(<SettingsPanel />);
     fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
 
-    await waitFor(() => {
-      expect(screen.getByText("Gateway connected")).toBeInTheDocument();
-    });
-    expect(screen.getByText("Working today")).toBeInTheDocument();
+    expect(await screen.findByText("Working today")).toBeInTheDocument();
+    expect(screen.getByText("Gateway connected")).toBeInTheDocument();
 
     // A credential update replaced the stored configuration. Nothing about the reachable gateway is
     // known any more — the run above measured the previous one.
@@ -600,7 +603,7 @@ describe("SettingsPanel readiness evidence is scoped to the configuration it mea
     // gateway's story either.
     expect(screen.queryByText(/checking basic readiness/i)).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
     await waitFor(() => {
       expect(screen.getByText("Gateway connected")).toBeInTheDocument();
     });
@@ -721,6 +724,44 @@ describe("SettingsPanel gateway readiness checks", () => {
     });
     expect(screen.getByText(/JSON schema response_format was not accepted/i)).toBeInTheDocument();
     expect(screen.queryByTestId("capability-disagreements")).toBeNull();
+  });
+
+  it("keeps the worst gateway verdict when a partial probe coexists with a failed model", async () => {
+    primeFetches([
+      chatCapability("test-chat-partial"),
+      { ...chatCapability("test-chat-failed"), conversationReady: false },
+    ]);
+    runGatewayReadinessMock.mockResolvedValue({
+      modelId: "test-chat-partial",
+      checkedAt: "2026-09-04T08:00:00.000Z",
+      overallStatus: "partial",
+      probes: [{ name: "chat", status: "passed", latencyMs: 1, evidence: "Working today" }],
+      verifiedCapabilities: {},
+    });
+
+    render(<SettingsPanel />);
+    const buttons = await screen.findAllByRole("button", { name: "Run readiness check" });
+    fireEvent.click(buttons[0] as HTMLButtonElement);
+
+    expect(await screen.findByText("Working today")).toBeInTheDocument();
+    expect(screen.getByText("Gateway check failed")).toBeInTheDocument();
+  });
+
+  it("preserves a failed local verdict while its retry is still running", async () => {
+    primeFetches([{ ...chatCapability("test-chat-retry"), conversationReady: true }]);
+    runGatewayReadinessMock
+      .mockRejectedValueOnce(new Error("readiness failed"))
+      .mockImplementationOnce(() => new Promise(() => undefined));
+
+    render(<SettingsPanel />);
+    const button = await screen.findByRole("button", { name: "Run readiness check" });
+    fireEvent.click(button);
+    expect(await screen.findByText("Gateway check failed")).toBeInTheDocument();
+
+    fireEvent.click(button);
+    expect(await screen.findByText(/checking basic readiness/i)).toBeInTheDocument();
+    expect(screen.getByText("Gateway check failed")).toBeInTheDocument();
+    expect(screen.queryByText("Gateway connected")).toBeNull();
   });
 
   it("shows capability disagreements and applies only live-verified values after confirmation", async () => {

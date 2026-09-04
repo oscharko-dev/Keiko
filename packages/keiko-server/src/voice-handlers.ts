@@ -43,6 +43,7 @@ import { createRequestCancellation } from "./request-cancellation.js";
 import { toSpeakableText } from "./voice-speech-text.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 // The decoded-audio ceiling for one dictation clip. This is the authoritative bound on the
 // transcribable duration: regardless of codec, a clip cannot exceed this many bytes, so the maximum
@@ -522,7 +523,7 @@ function buildSttRequest(
     ...(egress !== undefined ? { egress } : {}),
     signal,
     timeoutMs: provider.timeoutMs,
-    log: deps.activityLog,
+    log: deps.activityLog ?? processServerLogSink(),
     correlationId,
   };
 }
@@ -800,7 +801,7 @@ function buildTtsRequest(
     ...(egress !== undefined ? { egress } : {}),
     signal,
     timeoutMs: provider.timeoutMs,
-    log: deps.activityLog,
+    log: deps.activityLog ?? processServerLogSink(),
     correlationId,
   };
 }
