@@ -831,6 +831,16 @@ describe("forwardedUpstreamHeaders", () => {
     expect(out["permissions-policy"]).toMatch(/microphone=\(\)/);
   });
 
+  it("allows same-origin microphone capture when the BFF advertises voice capability", () => {
+    const out = forwardedUpstreamHeaders({ "content-type": "text/html" }, NEXT_PORT, {
+      allowMicrophone: true,
+    });
+    expect(out["permissions-policy"]).toBe(
+      "camera=(), geolocation=(), microphone=(self), payment=(), usb=()",
+    );
+    expect(out["permissions-policy"]).not.toContain("microphone=*");
+  });
+
   it("keeps HMR-only CSP relaxations scoped to script-src/style-src/connect-src (KEIKO-0607)", () => {
     const out = forwardedUpstreamHeaders({ "content-type": "text/html" }, NEXT_PORT);
     const csp = out["content-security-policy"];

@@ -1203,6 +1203,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       evidenceDir: tmp("coding-context-evidence-"),
       env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
       initialProjectPath: projectDir,
+      uiDbPath: join(tmp("coding-context-ui-"), "keiko-ui.db"),
     });
 
     try {
@@ -1233,6 +1234,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
         PATH: injectedBin,
       },
       initialProjectPath: tmp("coding-context-env-project-"),
+      uiDbPath: join(tmp("coding-context-env-ui-"), "keiko-ui.db"),
     });
 
     try {
@@ -1250,6 +1252,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       evidenceDir: tmp("coding-context-disabled-evidence-"),
       env: { GITHUB_CONNECTOR_AUTHORIZED: "false" },
       initialProjectPath: tmp("coding-context-disabled-project-"),
+      uiDbPath: join(tmp("coding-context-disabled-ui-"), "keiko-ui.db"),
     });
 
     try {
@@ -1270,6 +1273,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
         KEIKO_JIRA_API_TOKEN: "secret-token",
       },
       diagnostics: { record: (record) => diagnostics.push(record) },
+      uiDbPath: join(tmp("coding-context-jira-ui-"), "keiko-ui.db"),
     });
 
     try {

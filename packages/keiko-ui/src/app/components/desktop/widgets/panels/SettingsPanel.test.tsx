@@ -182,12 +182,13 @@ afterEach(() => {
 });
 
 describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () => {
-  it("renders the 'Conversation-eligible' badge for a chat capability", async () => {
+  it("does not claim live conversation readiness from a static chat capability", async () => {
     primeFetches([chatCapability("test-chat-1")]);
     render(<SettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/conversation-eligible/i);
+      expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/chat model — not verified/i);
     });
+    expect(screen.getByTestId("conv-elig-ok").className).toContain("ml-type");
   });
 
   it("renders the embedding reason for an embedding capability", async () => {
@@ -413,6 +414,8 @@ describe("SettingsPanel gateway summary semantics", () => {
     expect(summaryDot).not.toBeNull();
     expect(summaryDot?.className).toContain("untested");
     expect(container.querySelector('.ml-status[title="gateway configured"]')).toBeNull();
+    expect(screen.getByTestId("model-status-test-chat-1").className).toContain("untested");
+    expect(screen.getByTestId("conv-elig-ok").className).toContain("ml-type");
   });
 
   it("promotes the summary once a readiness check passes and demotes it when one fails", async () => {
@@ -450,6 +453,9 @@ describe("SettingsPanel gateway summary semantics", () => {
     expect(screen.queryByText("Gateway connected")).toBeNull();
     const demoted = container.querySelector('.ml-status[title="gateway check failed"]');
     expect(demoted?.className).toContain("error");
+    expect(screen.getByTestId("model-status-test-chat-1").className).toContain("error");
+    expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent("Chat unavailable — check failed");
+    expect(screen.getByTestId("conv-elig-ok").className).toContain("ml-elig-no");
   });
 
   it("demotes the summary when the readiness run itself could not complete", async () => {
@@ -634,6 +640,8 @@ describe("SettingsPanel gateway readiness checks", () => {
     await waitFor(() => {
       expect(screen.getByText("Working today")).toBeInTheDocument();
     });
+    expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/conversation-eligible/i);
+    expect(screen.getByTestId("conv-elig-ok").className).toContain("ml-elig-ok");
     expect(screen.getByLabelText("Verified capabilities")).toHaveTextContent("Streaming");
     expect(screen.getByLabelText("Verified capabilities")).toHaveTextContent("Tools");
     expect(screen.getByLabelText("Verified capabilities")).toHaveTextContent("JSON");

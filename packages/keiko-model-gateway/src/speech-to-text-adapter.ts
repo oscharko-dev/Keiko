@@ -131,6 +131,14 @@ function extensionForMime(mimeType: string): string {
   return MIME_EXTENSIONS[mimeType.toLowerCase()] ?? "bin";
 }
 
+// The loopback contract accepts a BCP-47 language hint because browsers and callers naturally
+// expose values such as `de-DE`. OpenAI-compatible transcription endpoints accept the ISO-639-1
+// primary language subtag instead, so keep the public contract useful while sending `de` upstream.
+function providerLanguage(language: string): string {
+  const separator = language.indexOf("-");
+  return separator === -1 ? language : language.slice(0, separator);
+}
+
 // Strip the quote that delimits a field name plus CR/LF and every other C0/C1 control, bidirectional,
 // and zero-width code point, so a value can never break out of (or visually disguise) its multipart
 // field header. The BFF caller already constrains MIME type and language to closed/anchored
@@ -202,7 +210,7 @@ function buildMultipartBody(request: SpeechToTextRequest, boundary: string): Blo
     parts.push(
       enc.encode(
         `--${boundary}\r\n` +
-          `Content-Disposition: form-data; name="language"\r\n\r\n${sanitizeFieldValue(request.language)}\r\n`,
+          `Content-Disposition: form-data; name="language"\r\n\r\n${sanitizeFieldValue(providerLanguage(request.language))}\r\n`,
       ),
     );
   }

@@ -56,6 +56,7 @@ let server;
 let shuttingDown = false;
 let publicReady = false;
 let readinessCheckRunning = false;
+let allowSameOriginMicrophone = false;
 const requiredReadyProbeSuccesses = 2;
 
 const devServiceWorker = `
@@ -457,6 +458,7 @@ function spawnChild(label, command, args, options) {
     if (children.get(label) !== child) return;
     children.delete(label);
     publicReady = false;
+    if (label === "bff") allowSameOriginMicrophone = false;
     writeState({ ready: false, lastExit: { label, code, signal } });
     if (shuttingDown) return;
     console.error(`[dev] ${label} exited unexpectedly.`);
@@ -483,6 +485,9 @@ async function readinessProbe() {
   try {
     const api = await fetchOk(`http://${host}:${String(bffPort)}/api/health`, async (response) => {
       const body = await response.json();
+      allowSameOriginMicrophone = upstreamAllowsSameOriginMicrophone(
+        Object.fromEntries(response.headers.entries()),
+      );
       return body?.status === "ok";
     });
     if (api !== "ok") return `api: ${api}`;
@@ -682,10 +687,22 @@ const DEV_SECURITY_HEADERS = Object.freeze({
   "referrer-policy": "no-referrer",
   "cross-origin-opener-policy": "same-origin",
   "cross-origin-resource-policy": "same-origin",
-  "permissions-policy": "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
 });
 
-export function forwardedUpstreamHeaders(upstreamHeaders, targetPort) {
+function devPermissionsPolicy(allowMicrophone) {
+  const microphone = allowMicrophone ? "microphone=(self)" : "microphone=()";
+  return `camera=(), geolocation=(), ${microphone}, payment=(), usb=()`;
+}
+
+function upstreamAllowsSameOriginMicrophone(upstreamHeaders) {
+  const value = upstreamHeaders?.["permissions-policy"];
+  return (
+    typeof value === "string" &&
+    value.split(",").some((directive) => directive.trim() === "microphone=(self)")
+  );
+}
+
+export function forwardedUpstreamHeaders(upstreamHeaders, targetPort, options = {}) {
   const safe = copyHeadersSafely(upstreamHeaders);
   if ("location" in safe) {
     const normalized = normalizeUpstreamLocation(safe.location, targetPort);
@@ -701,6 +718,10 @@ export function forwardedUpstreamHeaders(upstreamHeaders, targetPort) {
   for (const [name, value] of Object.entries(DEV_SECURITY_HEADERS)) {
     safe[name] = value;
   }
+  // The BFF owns the capability decision. The dev edge mirrors that decision onto Next.js HTML
+  // responses so a voice-capable development deployment can request same-origin microphone access.
+  // Omission and every non-boolean value remain fail-closed; the policy is never widened to `*`.
+  safe["permissions-policy"] = devPermissionsPolicy(options.allowMicrophone === true);
   return safe;
 }
 
@@ -760,9 +781,14 @@ export function proxyHttp(req, res, targetPort) {
     },
     (upstreamRes) => {
       lifecycle.bindResponse(upstreamRes);
+      if (targetPort === bffPort) {
+        allowSameOriginMicrophone = upstreamAllowsSameOriginMicrophone(upstreamRes.headers);
+      }
       res.writeHead(
         upstreamRes.statusCode ?? 502,
-        forwardedUpstreamHeaders(upstreamRes.headers, targetPort),
+        forwardedUpstreamHeaders(upstreamRes.headers, targetPort, {
+          allowMicrophone: allowSameOriginMicrophone,
+        }),
       );
       upstreamRes.pipe(res);
     },

@@ -918,7 +918,8 @@ describe("handleGroundedAsk", () => {
         body: {
           error: {
             code: "BAD_REQUEST",
-            message: "The selected model is not ready for conversations.",
+            message:
+              "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
           },
         },
       });
@@ -993,7 +994,8 @@ describe("handleGroundedAsk", () => {
         body: {
           error: {
             code: "BAD_REQUEST",
-            message: "The selected model is not ready for conversations.",
+            message:
+              "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
           },
         },
       });
