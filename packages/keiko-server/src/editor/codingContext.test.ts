@@ -14,6 +14,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { deriveRepositoryId } from "../task-workspace/naming.js";
 import type {
   GatewayConfig,
   LiteLLMRerankRequest,
@@ -85,10 +86,21 @@ function fakeGitHubPort(): GitHubCodeContextApiPort {
   };
 }
 
+// #3385: the GitHub reader is authorized per repository through a server-persisted store row,
+// replacing the `GITHUB_CONNECTOR_AUTHORIZED` environment variable that was bound to the process
+// launch path. The double answers for exactly this project root and nothing else.
+const CONNECTED_PROJECT_ROOT = "/workspace/connected-context-project";
+
 function connectedDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
+  const authorizedId = deriveRepositoryId(CONNECTED_PROJECT_ROOT);
   return {
     redactor: buildRedactor({}),
-    env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+    env: {},
+    preferredProjectPath: CONNECTED_PROJECT_ROOT,
+    store: {
+      readGitHubIssueReaderAuthorization: (repositoryId: string) =>
+        repositoryId === authorizedId ? { repositoryId, authorized: true, revision: 1 } : undefined,
+    },
     codingContextGitHubPort: fakeGitHubPort(),
     ...overrides,
   } as unknown as UiHandlerDeps;
@@ -333,10 +345,24 @@ describe("assembleCodingContext", () => {
     expect(pack.excerpts.some((e) => e.citation.sourceKind === "connected-context")).toBe(false);
   });
 
+  // #3385 relocated this pin: "not authorized" used to mean an absent environment variable and now
+  // means no stored grant for THIS repository. The store below authorizes a different repository, so
+  // the case also proves the grant is scoped rather than process-wide — which the environment gate
+  // could not express at all.
   it("records a denied omission when the connected-context connector is not authorized", async () => {
+    const otherRepositoryId = deriveRepositoryId("/workspace/some-other-project");
     const pack = await assembleCodingContext(
       request({ queryText: CONNECTED_QUERY }),
-      ctx(new AbortController().signal, { deps: connectedDeps({ env: {} }) }),
+      ctx(new AbortController().signal, {
+        deps: connectedDeps({
+          store: {
+            readGitHubIssueReaderAuthorization: (repositoryId: string) =>
+              repositoryId === otherRepositoryId
+                ? { repositoryId, authorized: true, revision: 1 }
+                : undefined,
+          },
+        } as unknown as Partial<UiHandlerDeps>),
+      }),
     );
 
     expect(pack.omissions).toContainEqual({ sourceKind: "connected-context", reason: "denied" });

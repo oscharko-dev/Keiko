@@ -108,9 +108,13 @@ npm run test:e2e:coding-workbench-1994
   `POST /api/coding-workbench/context/packs`: GitHub reads execute read-only `gh api` calls
   through the governed keiko-tools exec boundary, Jira reads use a host-pinned HTTPS GET port,
   and both stay behind default-false connector authorization, the server deployment ceiling, and
-  connector-scope grants. Activation is configuration: set `GITHUB_CONNECTOR_AUTHORIZED=true`
-  and/or `JIRA_CONNECTOR_AUTHORIZED=true` plus `KEIKO_JIRA_BASE_URL`, `KEIKO_JIRA_EMAIL`, and
-  `KEIKO_JIRA_API_TOKEN`; absent configuration the route reports blocked/degraded refs
-  fail-closed instead of failing silently.
+  connector-scope grants. GitHub activation is in-product and scoped to one repository (#3385): a
+  server-persisted authorization row keyed by the repository identity the task workspace derives,
+  read on every request, so a grant covers only that repository and a revocation takes effect
+  without restarting. It replaces the retired `GITHUB_CONNECTOR_AUTHORIZED` environment variable,
+  which was read once at process launch and therefore applied to every repository that process
+  later opened. Jira activation remains configuration: set `JIRA_CONNECTOR_AUTHORIZED=true` plus
+  `KEIKO_JIRA_BASE_URL`, `KEIKO_JIRA_EMAIL`, and `KEIKO_JIRA_API_TOKEN`. Absent authorization the
+  route reports blocked/degraded refs fail-closed instead of failing silently.
 - Human visual review remains required on the final draft epic PR for subjective design-system
   fidelity; the Playwright gate covers deterministic UI/a11y assertions.
