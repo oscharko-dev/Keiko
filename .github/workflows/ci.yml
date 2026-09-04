@@ -1262,8 +1262,6 @@ jobs:
         run: npm run prepare:bin
       - name: Build UI (static export)
         run: npm run build:ui
-      - name: Refresh compatibility-only editor evidence
-        run: node scripts/editor-release-evidence.mjs --json
       - name: Prepare the offline smoke (pinned Yarn + vendor seed) (#3130/#3134)
         # The optional install smoke consumes the same seeded, bounded registry as every other
         # installable-package lane. Node 26 no longer bundles Corepack, so copy the lockfile-

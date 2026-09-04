@@ -16,8 +16,6 @@ its bundled npm 11.19.0. Every workflow verifies an approved Node/npm pair befor
 Node.js 26 no longer bundles Corepack, so its compatibility lane copies the `npm ci`-verified,
 lockfile-pinned Corepack package tree into the Node runtime trust root and creates its fixed
 executable shim there before provisioning the existing digest-pinned Yarn smoke.
-The lane refreshes editor release evidence ephemerally after its Node 26 UI build so `prepack`
-validates the same-runtime artifact; the committed Node 24 release baseline remains unchanged.
 
 ## npm 12 decision
 

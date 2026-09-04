@@ -3045,13 +3045,13 @@ describe("installable package smoke optional-dependency coverage", () => {
     if (job === undefined) throw new Error("node-26-compatibility job is missing");
     const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
     expect(manifest.devDependencies.corepack).toMatch(/^\d+\.\d+\.\d+$/u);
+    const prepareBinAt = job.text.indexOf("npm run prepare:bin");
     const buildAt = job.text.indexOf("npm run build:ui");
-    const evidenceAt = job.text.indexOf("node scripts/editor-release-evidence.mjs --json");
     const shimAt = job.text.indexOf("node scripts/prepare-trusted-corepack.mjs");
     const provisionAt = job.text.indexOf("npm run provision:smoke");
     expect(job.text).not.toContain("npm install --global");
-    expect(evidenceAt).toBeGreaterThan(buildAt);
-    expect(shimAt).toBeGreaterThan(evidenceAt);
+    expect(buildAt).toBeGreaterThan(prepareBinAt);
+    expect(shimAt).toBeGreaterThan(buildAt);
     expect(provisionAt).toBeGreaterThan(shimAt);
   });
 
