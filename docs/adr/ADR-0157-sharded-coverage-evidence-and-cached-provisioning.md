@@ -120,9 +120,19 @@ signing-relevant permissions — `build-scan-sbom-smoke` and `ui`, both `attesta
 consumer. This is the same reasoning `.github/zizmor.yml` records for the `cache-poisoning` rule.
 
 **D5 — Superseded pull-request runs are cancelled; integration runs are never grouped at all.**
-The workflow declares `concurrency` with `cancel-in-progress` true for `pull_request` events only,
-grouped by pull-request number. A superseded pull-request run has no consumer: its evidence binds a
-head that the next push already replaced.
+The workflow runs for pull-request code-head actions (`opened`, `reopened`, `synchronize`, and
+`ready_for_review`) and for `edited` events. An edit is not executable evidence, but it can change
+merge-relevant metadata: `check:review-bot-suppression` reads the title and body, and a base retarget
+changes the candidate boundary. Reusing the preceding green `ci` result would therefore let changed
+metadata bypass the required verdict. The complete pipeline reruns because publishing a lightweight
+success under the same required context could mask a failed code-head run on the same commit.
+
+The two event classes use separate per-pull-request concurrency groups. Code-head runs supersede
+older code-head evidence, while metadata runs supersede older metadata evidence; an edit cannot
+evict a queued exact-head measurement, and a push cannot discard a metadata verdict before the
+metadata gate observes it. The event payload still binds every run to an immutable head SHA, so a
+later push makes an older metadata run irrelevant to the new merge candidate even if that run is
+already executing.
 
 Every other event gets a group of one, keyed on `github.run_id`. `cancel-in-progress: false` on a
 shared group would not have been enough: GitHub cancels a previously *pending* run in a group

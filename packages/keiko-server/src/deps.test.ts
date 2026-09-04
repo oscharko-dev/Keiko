@@ -118,6 +118,10 @@ function tmp(prefix: string): string {
   return d;
 }
 
+function isolatedMemoryEnv(env: Readonly<Record<string, string>> = {}): Record<string, string> {
+  return { ...env, KEIKO_MEMORY_DIR: tmp("deps-memory-") };
+}
+
 function memoryAuditFixture(): MemoryRecord {
   return {
     id: "memory-audit-restart" as MemoryId,
@@ -1201,8 +1205,9 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("coding-context-evidence-"),
-      env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+      env: isolatedMemoryEnv({ GITHUB_CONNECTOR_AUTHORIZED: "true" }),
       initialProjectPath: projectDir,
+      uiDbPath: join(tmp("coding-context-ui-"), "keiko-ui.db"),
     });
 
     try {
@@ -1226,13 +1231,14 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("coding-context-env-evidence-"),
-      env: {
+      env: isolatedMemoryEnv({
         GITHUB_CONNECTOR_AUTHORIZED: "true",
         GH_TOKEN: "test-injected-token",
         HOME: tmp("coding-context-env-home-"),
         PATH: injectedBin,
-      },
+      }),
       initialProjectPath: tmp("coding-context-env-project-"),
+      uiDbPath: join(tmp("coding-context-env-ui-"), "keiko-ui.db"),
     });
 
     try {
@@ -1248,8 +1254,9 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("coding-context-disabled-evidence-"),
-      env: { GITHUB_CONNECTOR_AUTHORIZED: "false" },
+      env: isolatedMemoryEnv({ GITHUB_CONNECTOR_AUTHORIZED: "false" }),
       initialProjectPath: tmp("coding-context-disabled-project-"),
+      uiDbPath: join(tmp("coding-context-disabled-ui-"), "keiko-ui.db"),
     });
 
     try {
@@ -1264,12 +1271,13 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("coding-context-invalid-jira-evidence-"),
-      env: {
+      env: isolatedMemoryEnv({
         KEIKO_JIRA_BASE_URL: "http://invalid.example.com",
         KEIKO_JIRA_EMAIL: "operator@example.com",
         KEIKO_JIRA_API_TOKEN: "secret-token",
-      },
+      }),
       diagnostics: { record: (record) => diagnostics.push(record) },
+      uiDbPath: join(tmp("coding-context-jira-ui-"), "keiko-ui.db"),
     });
 
     try {

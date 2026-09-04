@@ -19,6 +19,9 @@ on:
       - epic/coding-workbench-opencode-codex
       - "release/**"
   pull_request:
+    # Metadata is merge-relevant evidence: the review-suppression gate reads the PR title/body, and
+    # a base retarget changes the candidate boundary. `edited` therefore must produce a fresh
+    # required verdict even though it does not change repository bytes.
     types: [opened, reopened, synchronize, ready_for_review, edited]
     branches:
       - dev
@@ -57,12 +60,11 @@ permissions: {}
 # indistinguishable from a real defect, and that evidence binds an integration commit nothing else
 # re-measures (Issue #2704).
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
-  # A new head supersedes the run in flight; a metadata edit does not. An `edited` run (title, body
-  # or base change — required to rerun by check-external-quality-config) queues behind the push run
-  # instead of cancelling it: a reviewer bot rewrites the description ~40 s after every push, and the
-  # cancellation it triggered wedged the replacement run in `pending` with no jobs (#3383).
-  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'edited' }}
+  # Code-head and metadata events cannot displace one another before either starts. Each class
+  # coalesces independently per PR; pushes supersede stale code evidence, while repeated metadata
+  # edits supersede stale metadata evidence. Non-PR integration runs remain groups of one.
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.action == 'edited' && 'metadata' || 'code-head') || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   protected-branch-gate:
@@ -913,30 +915,48 @@ jobs:
     needs:
       - change-scope
       - protected-branch-gate
+      - build-scan-sbom-smoke
       - core-quality
       - coverage-sonar
       - cross-platform-smoke
       - secret-scan
       - semantic-duplication
+      - ui
     runs-on: ubuntu-latest
     permissions: {}
     steps:
       - name: Aggregate required CI results fail closed
         env:
+          BUILD_SCAN_SBOM_SMOKE_RESULT: ${{ needs.build-scan-sbom-smoke.result }}
+          CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}
           CORE_QUALITY_RESULT: ${{ needs.core-quality.result }}
           COVERAGE_SONAR_RESULT: ${{ needs.coverage-sonar.result }}
           CROSS_PLATFORM_RESULT: ${{ needs.cross-platform-smoke.result }}
           DOCUMENTATION_ONLY: ${{ needs.change-scope.outputs.documentation-only }}
+          EDITOR_FAST_PR: ${{ github.event_name == 'pull_request' && github.base_ref == 'feat/keiko-editor' }}
           PROTECTED_BRANCH_RESULT: ${{ needs.protected-branch-gate.result }}
           SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
           SEMANTIC_DUPLICATION_RESULT: ${{ needs.semantic-duplication.result }}
+          UI_RESULT: ${{ needs.ui.result }}
         run: |
-          for result in "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT"; do
+          for result in "$CHANGE_SCOPE_RESULT" "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT" "$UI_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "Required CI dependency did not succeed: $result"
               exit 1
             fi
           done
+          # The package/release job is intentionally skipped only for early feat/keiko-editor PRs.
+          # On dev, release, push, merge-group, and manual runs it is mandatory and aggregated.
+          if [ "$BUILD_SCAN_SBOM_SMOKE_RESULT" = "skipped" ]; then
+            if [ "$EDITOR_FAST_PR" != "true" ]; then
+              echo "Build, scan, SBOM, smoke was skipped outside an editor fast-path PR."
+              exit 1
+            fi
+            echo "Build, scan, SBOM, smoke skipped: editor fast-path PR."
+          elif [ "$BUILD_SCAN_SBOM_SMOKE_RESULT" != "success" ]; then
+            echo "Required CI dependency did not succeed: $BUILD_SCAN_SBOM_SMOKE_RESULT"
+            exit 1
+          fi
           # The cross-platform matrix is the only dependency allowed to be skipped, and only when the
           # change-scope job classified this change set as documentation-only. Any other skip — a
           # cancellation, a dependency failure, a mistaken condition — still fails closed.
@@ -1007,7 +1027,7 @@ jobs:
         # advisories are surfaced by the OSV lane instead, where they can be triaged individually
         # with a recorded reason and expiry (osv-scanner.toml) rather than blocking every pull
         # request on a transitive lint dependency that never reaches a user.
-        run: npm audit --audit-level=high --omit=dev
+        run: node scripts/run-npm-audit-with-retry.mjs --audit-level=high --omit=dev
       - name: Generate CycloneDX SBOM
         run: npm sbom --sbom-format cyclonedx --omit dev > sbom.cdx.json
       - name: Workspace SBOM and license gate (Issue #169 AC4)
@@ -1066,10 +1086,9 @@ jobs:
     # touches no code, manifest, lockfile, workflow or test cannot alter how the product builds and
     # installs on another operating system.
     needs: change-scope
-    # `always()` is load-bearing: without it a change-scope job that fails for its own reasons —
-    # checkout, runner, a broken script — skips this matrix, and the `ci` aggregate then rejects a
-    # skip no documentation-only verdict authorized. The classifier is fail-open by construction, so
-    # its own failure must mean "run everything", never "run nothing and block the merge".
+    # `always()` is load-bearing: without it a change-scope job that fails for its own reasons would
+    # skip this matrix. The aggregate still fails closed on the classifier failure; running the matrix
+    # preserves diagnostic evidence instead of hiding a second defect behind the first one.
     if: ${{ always() && needs.change-scope.outputs.documentation-only != 'true' }}
     # The Node.js 24 baseline must execute, typecheck, build, and install on every supported desktop
     # OS. The complete hermetic suite remains in the Linux `ci` job because many security fixtures
@@ -1234,7 +1253,7 @@ jobs:
       - name: Security audit UI dependencies (moderate and above)
         # Same shipped-graph scope as the audit in the build job; the UI's dev toolchain (eslint,
         # next lint plugins) is not part of the static export this job builds.
-        run: npm audit --audit-level=moderate --omit=dev --workspace @oscharko-dev/keiko-ui
+        run: node scripts/run-npm-audit-with-retry.mjs --audit-level=moderate --omit=dev --workspace=@oscharko-dev/keiko-ui
       - name: Lint UI
         run: npm run lint --workspace @oscharko-dev/keiko-ui
       - name: Typecheck UI

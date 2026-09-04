@@ -765,6 +765,24 @@
       "package": "keiko-model-gateway"
     },
     {
+      "op": "speech.stt.language.normalized",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:149",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "speech.tts.mime.corrected",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:294",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "speech.tts.stream.peek.failed",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:494",
+      "package": "keiko-model-gateway"
+    },
+    {
       "op": "security.fs.atomic-rename-failed",
       "category": "security",
       "site": "packages/keiko-security/src/fs-atomic-rename.ts:116",
@@ -885,9 +903,27 @@
       "package": "keiko-server"
     },
     {
+      "op": "chat.creation.rejected",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/chat-handlers.ts:851",
+      "package": "keiko-server"
+    },
+    {
+      "op": "chat.regeneration.rejected",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/chat-handlers.ts:887",
+      "package": "keiko-server"
+    },
+    {
+      "op": "chat.send.rejected",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/chat-handlers.ts:885",
+      "package": "keiko-server"
+    },
+    {
       "op": "chat.turn.started",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1690",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1765",
       "package": "keiko-server"
     },
     {
@@ -1169,7 +1205,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:1899",
+      "site": "packages/keiko-server/src/deps.ts:1903",
       "package": "keiko-server"
     },
     {

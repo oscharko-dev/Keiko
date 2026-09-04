@@ -22,6 +22,12 @@ import {
   readJsonCapped,
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
+import {
+  logErrorKind,
+  resolveLogSink,
+  withCorrelationId,
+  type ModelGatewayLogSink,
+} from "./observability.js";
 import type { OutboundHttpEgressConfig, ProviderEndpointStyle } from "./types.js";
 
 // Closed set of response formats the OpenAI-compatible `/audio/speech` contract accepts, mapped to
@@ -69,6 +75,8 @@ export interface TextToSpeechRequest {
   readonly egress?: OutboundHttpEgressConfig | undefined;
   // Ceiling on the synthesized audio size. Defaults to MAX_SPEECH_AUDIO_BYTES.
   readonly maxAudioBytes?: number;
+  readonly log?: ModelGatewayLogSink | undefined;
+  readonly correlationId?: string | undefined;
 }
 
 export interface TextToSpeechSuccess {
@@ -166,6 +174,7 @@ interface BuiltRequest {
   readonly callerSignal: AbortSignal | undefined;
   readonly responseFormat: SpeechResponseFormat;
   readonly maxAudioBytes: number;
+  readonly log: ModelGatewayLogSink;
 }
 
 type TextToSpeechRequestWithVoice = TextToSpeechRequest & { readonly voice: string };
@@ -199,6 +208,7 @@ function buildRequest(request: TextToSpeechRequestWithVoice): BuiltRequest {
     callerSignal: request.signal,
     responseFormat,
     maxAudioBytes: request.maxAudioBytes ?? MAX_SPEECH_AUDIO_BYTES,
+    log: withCorrelationId(resolveLogSink(request.log), request.correlationId),
   };
 }
 
@@ -236,15 +246,57 @@ async function dispatch(
 // Normalizes the provider `content-type` to a bare audio MIME type, dropping any parameters (e.g.
 // `; charset`). A provider that omits the header or returns a non-audio type falls back to the MIME
 // derived from the requested response format, so the browser always receives a playable label.
-function resolveMimeType(response: Response, responseFormat: SpeechResponseFormat): string {
+const OGG_HEADER_PROBE_BYTES = 6;
+
+function hasOggContainerSignature(audio: Uint8Array | undefined): boolean {
+  return (
+    audio !== undefined &&
+    audio.byteLength >= OGG_HEADER_PROBE_BYTES &&
+    audio[0] === 0x4f &&
+    audio[1] === 0x67 &&
+    audio[2] === 0x67 &&
+    audio[3] === 0x53 &&
+    audio[4] === 0x00 &&
+    ((audio[5] ?? 0xff) & 0xf8) === 0
+  );
+}
+
+function declaredMimeType(response: Response, responseFormat: SpeechResponseFormat): string {
   const raw = response.headers.get("content-type");
   if (raw !== null) {
     const base = raw.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-    if (base.startsWith("audio/")) {
-      return base;
-    }
+    if (base.startsWith("audio/")) return base;
   }
   return RESPONSE_FORMAT_MIME[responseFormat];
+}
+
+function speechMimeClass(mimeType: string): SpeechResponseFormat | "other-audio" {
+  for (const [format, candidate] of Object.entries(RESPONSE_FORMAT_MIME)) {
+    if (candidate === mimeType) return format as SpeechResponseFormat;
+  }
+  return "other-audio";
+}
+
+function resolveBufferedMimeType(
+  response: Response,
+  responseFormat: SpeechResponseFormat,
+  audio: Uint8Array,
+  log: ModelGatewayLogSink,
+): string {
+  const declared = declaredMimeType(response, responseFormat);
+  // Azure's deployment-style TTS endpoint can return an Opus/Ogg body with `audio/mpeg`. The
+  // container signature is authoritative in that disagreement; forwarding the wrong MIME makes a
+  // valid clip fail browser playback and any later speech-to-text handoff.
+  if (hasOggContainerSignature(audio) && declared !== "audio/ogg") {
+    log.write({
+      level: "info",
+      category: "gateway",
+      op: "speech.tts.mime.corrected",
+      extra: { declaredMimeClass: speechMimeClass(declared), resolvedMimeClass: "opus" },
+    });
+    return "audio/ogg";
+  }
+  return declared;
 }
 
 async function decodeSuccess(
@@ -262,7 +314,10 @@ async function decodeSuccess(
   }
   return {
     ok: true,
-    value: { audio, mimeType: resolveMimeType(response, built.responseFormat) },
+    value: {
+      audio,
+      mimeType: resolveBufferedMimeType(response, built.responseFormat, audio, built.log),
+    },
   };
 }
 
@@ -335,6 +390,76 @@ function boundBodyStream(
   });
 }
 
+function replayPeekedStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  buffered: readonly Uint8Array[],
+  sourceDone: boolean,
+): ReadableStream<Uint8Array> {
+  let bufferedIndex = 0;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller): Promise<void> {
+      const chunk = buffered[bufferedIndex];
+      if (chunk !== undefined) {
+        bufferedIndex += 1;
+        controller.enqueue(chunk);
+        return;
+      }
+      if (sourceDone) {
+        controller.close();
+        return;
+      }
+      const { done, value } = await reader.read();
+      if (done) controller.close();
+      else controller.enqueue(value);
+    },
+    cancel(reason): void {
+      void reader.cancel(reason);
+    },
+  });
+}
+
+function copyPrefix(chunks: readonly Uint8Array[], byteLimit: number): Uint8Array {
+  const prefix = new Uint8Array(byteLimit);
+  let copied = 0;
+  for (const chunk of chunks) {
+    const count = Math.min(chunk.byteLength, byteLimit - copied);
+    prefix.set(chunk.subarray(0, count), copied);
+    copied += count;
+    if (copied === byteLimit) break;
+  }
+  return prefix.subarray(0, copied);
+}
+
+async function peekBodyStream(
+  source: ReadableStream<Uint8Array>,
+  byteLimit: number,
+): Promise<{
+  readonly prefix: Uint8Array;
+  readonly body: ReadableStream<Uint8Array>;
+  readonly exhausted: boolean;
+  readonly peekedBytes: number;
+}> {
+  const reader = source.getReader();
+  const buffered: Uint8Array[] = [];
+  let bufferedBytes = 0;
+  let sourceDone = false;
+  while (bufferedBytes < byteLimit) {
+    const { done, value } = await reader.read();
+    if (done) {
+      sourceDone = true;
+      break;
+    }
+    buffered.push(value);
+    bufferedBytes += value.byteLength;
+  }
+  return {
+    prefix: copyPrefix(buffered, Math.min(bufferedBytes, byteLimit)),
+    body: replayPeekedStream(reader, buffered, sourceDone),
+    exhausted: sourceDone,
+    peekedBytes: bufferedBytes,
+  };
+}
+
 // Streaming variant of requestTextToSpeech: returns the provider audio as a bounded byte stream instead
 // of a fully-buffered clip, so the BFF can forward it chunk-by-chunk and the browser can start playback
 // on the first chunk. Same provider contract, auth, egress seam, error coding, and size cap; only the
@@ -358,11 +483,26 @@ export async function requestTextToSpeechStream(
   if (dispatched.body === null) {
     return { ok: false, kind: "empty-audio" };
   }
+  let peeked: Awaited<ReturnType<typeof peekBodyStream>>;
+  try {
+    peeked = await peekBodyStream(dispatched.body, OGG_HEADER_PROBE_BYTES);
+  } catch (error) {
+    const kind = classifyDispatchError(error, built.timeoutSignal, built.callerSignal);
+    built.log.write({
+      level: "error",
+      category: "gateway",
+      op: "speech.tts.stream.peek.failed",
+      errorKind: logErrorKind(error),
+      extra: { phase: "response-prefix", outcomeKind: kind },
+    });
+    return { ok: false, kind };
+  }
+  if (peeked.exhausted && peeked.peekedBytes === 0) return { ok: false, kind: "empty-audio" };
   return {
     ok: true,
     value: {
-      body: boundBodyStream(dispatched.body, built.maxAudioBytes),
-      mimeType: resolveMimeType(dispatched, built.responseFormat),
+      body: boundBodyStream(peeked.body, built.maxAudioBytes),
+      mimeType: resolveBufferedMimeType(dispatched, built.responseFormat, peeked.prefix, built.log),
     },
   };
 }

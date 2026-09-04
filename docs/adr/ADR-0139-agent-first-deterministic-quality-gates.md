@@ -145,11 +145,14 @@ class are treated as gate defects, not as occasions for suppression comments.
 ### D6 — External-service steps retry before they fail
 
 Required steps that call external services (SonarCloud scanner provisioning and analysis
-submission) wrap the call in bounded retry with backoff. A persistent outage still fails closed —
-availability of the review product remains a quality property (ADR-0135 D4) — but a transient
-5xx no longer consumes an integration attempt. The coverage/Sonar job has a 50-minute timeout: each
-of its three permitted full scans has measured about 15 minutes, with 30- and 60-second backoff, so
-the job bound includes the designed worst case rather than terminating the final permitted attempt.
+submission, and npm's shipped-dependency audit endpoint) wrap the call in bounded retry with
+backoff. A persistent outage still fails closed — availability of the review product remains a
+quality property (ADR-0135 D4) — but a transient network failure or 5xx no longer consumes an
+integration attempt. Audit retries preserve npm's original non-zero advisory verdict and bound
+npm's own fetch timeout so all three permitted attempts fit inside the job timeout. The
+coverage/Sonar job has a 50-minute timeout: each of its three permitted full scans has measured
+about 15 minutes, with 30- and 60-second backoff, so the job bound includes the designed worst case
+rather than terminating the final permitted attempt.
 
 ### D7 — Merge-queue readiness removes the up-to-date race
 

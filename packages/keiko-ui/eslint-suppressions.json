@@ -1567,10 +1567,10 @@
       "count": 5
     },
     "complexity": {
-      "count": 2
+      "count": 1
     },
     "max-lines-per-function": {
-      "count": 8
+      "count": 7
     }
   },
   "src/app/components/desktop/widgets/panels/WorkspaceSnippetsPanel.tsx": {

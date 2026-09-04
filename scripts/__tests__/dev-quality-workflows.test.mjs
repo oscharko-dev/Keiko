@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -27,7 +28,41 @@ const devDispatchCoverageJobs = new Set([
   "coverage-sonar",
 ]);
 
+function runCiAggregate(overrides = {}) {
+  const aggregateStep = ciWorkflow.jobs.ci.steps.find(
+    (step) => step.name === "Aggregate required CI results fail closed",
+  );
+  return spawnSync("bash", ["-euo", "pipefail", "-c", aggregateStep.run], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      BUILD_SCAN_SBOM_SMOKE_RESULT: "success",
+      CHANGE_SCOPE_RESULT: "success",
+      CORE_QUALITY_RESULT: "success",
+      COVERAGE_SONAR_RESULT: "success",
+      CROSS_PLATFORM_RESULT: "success",
+      DOCUMENTATION_ONLY: "false",
+      EDITOR_FAST_PR: "false",
+      PROTECTED_BRANCH_RESULT: "success",
+      SECRET_SCAN_RESULT: "success",
+      SEMANTIC_DUPLICATION_RESULT: "success",
+      UI_RESULT: "success",
+      ...overrides,
+    },
+  });
+}
+
 describe("dev quality workflows", () => {
+  it("reruns CI for metadata edits without displacing code-head evidence", () => {
+    expect(ciWorkflow.on.pull_request.types).toContain("edited");
+    expect(ciWorkflow.concurrency.group).toBe(
+      "ci-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.action == 'edited' && 'metadata' || 'code-head') || github.run_id }}",
+    );
+    expect(ciWorkflow.concurrency["cancel-in-progress"]).toBe(
+      "${{ github.event_name == 'pull_request' }}",
+    );
+  });
+
   it("runs full mutation on a daily or explicit bounded lane, never on the PR critical path", () => {
     expect(mutation).not.toContain("pull_request:");
     expect(mutation).toContain('cron: "17 2 * * *"');
@@ -250,6 +285,7 @@ describe("dev quality workflows", () => {
     expect(localSonar).toContain('git -C "${repo_root}" ls-files -z --others --exclude-standard');
     expect(localSonar).toContain("--needs-full-scan");
     expect(localSonar).not.toContain("-Dsonar.javascript.node.maxspace=4096");
+    expect(localSonar).toContain("-Dsonar.javascript.node.maxspace=4608");
     expect(localSonar).toContain("--partition-inclusions");
     expect(localSonar).toContain(
       '"-Dsonar.inclusions=${source_inclusions:-${empty_source_inclusion}}"',
@@ -265,6 +301,7 @@ describe("dev quality workflows", () => {
     );
     expect(localSonar).not.toContain('"-Dsonar.test.inclusions=${inclusions}"');
     expect(localSonarCompose).toContain('"127.0.0.1:${KEIKO_LOCAL_SONAR_PORT:-9234}:9000"');
+    expect(localSonarCompose).toContain('SONAR_SCANNER_OPTS: "-Xmx768m"');
     expect(packageJson.scripts["gates:sonar:stop"]).toBe("./docker/gates/run-sonar.sh --stop");
   });
 
@@ -393,10 +430,66 @@ describe("dev quality workflows", () => {
     expect(aggregateJob, "ci aggregate job block must exist").toBeDefined();
     expect(aggregateJob).toContain("if: ${{ always() }}");
     expect(aggregateJob).toContain("- core-quality");
+    expect(aggregateJob).toContain("- build-scan-sbom-smoke");
     expect(aggregateJob).toContain("- coverage-sonar");
     expect(aggregateJob).toContain("- cross-platform-smoke");
+    expect(aggregateJob).toContain("- ui");
+    expect(aggregateJob).toContain("BUILD_SCAN_SBOM_SMOKE_RESULT");
+    expect(aggregateJob).toContain("CHANGE_SCOPE_RESULT");
     expect(aggregateJob).toContain("CROSS_PLATFORM_RESULT");
+    expect(aggregateJob).toContain("EDITOR_FAST_PR");
+    expect(aggregateJob).toContain("UI_RESULT");
     expect(aggregateJob).toContain('if [ "$result" != "success" ]');
+  });
+
+  it("allows the build skip only for editor fast-path pull requests", () => {
+    const editor = runCiAggregate({
+      BUILD_SCAN_SBOM_SMOKE_RESULT: "skipped",
+      EDITOR_FAST_PR: "true",
+    });
+    const nonEditor = runCiAggregate({
+      BUILD_SCAN_SBOM_SMOKE_RESULT: "skipped",
+      EDITOR_FAST_PR: "false",
+    });
+
+    expect(editor.status).toBe(0);
+    expect(editor.stdout).toContain("editor fast-path PR");
+    expect(nonEditor.status).not.toBe(0);
+    expect(nonEditor.stdout).toContain("skipped outside an editor fast-path PR");
+  });
+
+  it("fails the aggregate when change-scope does not succeed", () => {
+    const result = runCiAggregate({ CHANGE_SCOPE_RESULT: "failure" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toContain("Required CI dependency did not succeed: failure");
+  });
+
+  it.each(["failure", "skipped", "cancelled", "", "unknown"])(
+    "fails the aggregate when the UI result is %s",
+    (uiResult) => {
+      const result = runCiAggregate({ UI_RESULT: uiResult });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain(`Required CI dependency did not succeed: ${uiResult}`);
+    },
+  );
+
+  it("retries transient npm audit service failures without weakening advisory enforcement", () => {
+    const rootAudit = ciWorkflow.jobs["build-scan-sbom-smoke"].steps.find(
+      (step) => step.name === "Security audit (high and above)",
+    );
+    const uiAudit = ciWorkflow.jobs.ui.steps.find(
+      (step) => step.name === "Security audit UI dependencies (moderate and above)",
+    );
+
+    expect(rootAudit.run).toBe(
+      "node scripts/run-npm-audit-with-retry.mjs --audit-level=high --omit=dev",
+    );
+    expect(uiAudit.run).toBe(
+      "node scripts/run-npm-audit-with-retry.mjs --audit-level=moderate --omit=dev --workspace=@oscharko-dev/keiko-ui",
+    );
+    expect(ci).not.toMatch(/^\s*run: npm audit\b/mu);
   });
 
   it("runs native compensation on its owning platforms and aggregates it fail closed", () => {

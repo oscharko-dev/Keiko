@@ -11,7 +11,9 @@ export interface ConversationReadinessAdmission {
 
 export class ConversationModelNotReadyError extends Error {
   public constructor() {
-    super("The selected model is not ready for conversations.");
+    super(
+      "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
+    );
     this.name = "ConversationModelNotReadyError";
   }
 }
@@ -19,7 +21,10 @@ export class ConversationModelNotReadyError extends Error {
 export function conversationModelNotReadyResult(): RouteResult {
   return {
     status: 400,
-    body: errorBody("BAD_REQUEST", "The selected model is not ready for conversations."),
+    body: errorBody(
+      "BAD_REQUEST",
+      "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
+    ),
   };
 }
 

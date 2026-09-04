@@ -13,6 +13,7 @@ import {
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   chatTurnShapeFields,
+  captureDesktopChatExecutionAdmission,
   handleCreateDesktopChat,
   handleSendDesktopChat,
   parseClientTurnId,
@@ -20,6 +21,7 @@ import {
 } from "./chat-handlers.js";
 import { buildRedactor, buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   createBufferedServerLogSink,
   createServerLogger,
@@ -86,7 +88,7 @@ describe("parseExpectedGroundingScopeIdentity", (): void => {
   );
 });
 
-function requestContext(body: Record<string, unknown>): RouteContext {
+function requestContext(body: Record<string, unknown>, correlationId?: string): RouteContext {
   const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]);
   const res = {
     destroyed: false,
@@ -100,7 +102,7 @@ function requestContext(body: Record<string, unknown>): RouteContext {
     },
   };
   return {
-    correlationId: undefined,
+    correlationId,
     req: req as unknown as IncomingMessage,
     res: res as unknown as ServerResponse,
     params: {},
@@ -184,42 +186,108 @@ async function disposeGatewayBreakerFixture(fixture: GatewayBreakerFixture): Pro
 async function sendBreakerChat(
   fixture: GatewayBreakerFixture,
   content: string,
+  correlationId?: string,
 ): Promise<Awaited<ReturnType<typeof handleSendDesktopChat>>> {
   return handleSendDesktopChat(
-    requestContext({
-      chatId: fixture.chatId,
-      projectPath: fixture.projectPath,
-      modelId: "breaker-chat",
-      content,
-    }),
+    requestContext(
+      {
+        chatId: fixture.chatId,
+        projectPath: fixture.projectPath,
+        modelId: "breaker-chat",
+        content,
+      },
+      correlationId,
+    ),
     fixture.deps,
   );
 }
 
 describe("desktop chat production gateway reuse", () => {
+  it("logs the returned grounding rejection instead of concurrent model unreadiness", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      fixture.deps.gatewayConfig?.clearVerifiedCapability("breaker-chat");
+      const chat = fixture.deps.store.updateChat(fixture.chatId, {
+        connectedScope: {
+          kind: "workspace-root",
+          relativePaths: [],
+          connectedAtMs: 42,
+        },
+      });
+
+      const result = captureDesktopChatExecutionAdmission(
+        {
+          chatId: fixture.chatId,
+          projectPath: fixture.projectPath,
+          content: "body must stay out of evidence",
+          modelId: "breaker-chat",
+          documentContext: [],
+          attachments: [],
+          memory: undefined,
+          discussionMode: undefined,
+        },
+        chat,
+        "breaker-chat",
+        fixture.deps,
+        { operation: "chat.send.rejected", correlationId: "corr-grounding-changed" },
+      );
+
+      expect(result).toMatchObject({
+        status: 409,
+        body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
+      });
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "gateway",
+          op: "chat.send.rejected",
+          correlationId: "corr-grounding-changed",
+          status: 409,
+          errorKind: "grounding-scope-changed",
+          extra: { reason: "grounding-scope", modelKind: "chat" },
+        }),
+      );
+      expect(JSON.stringify(sink.events)).not.toContain("body must stay out of evidence");
+    } finally {
+      resetServerLogger();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
   it("keeps user content off the provider while probing an unready model on demand", async () => {
     const fixture = await createGatewayBreakerFixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     try {
       fixture.deps.gatewayConfig?.clearVerifiedCapability("breaker-chat");
       const fetchSpy = vi.fn();
       vi.stubGlobal("fetch", fetchSpy);
 
       const createRejected = await handleCreateDesktopChat(
-        requestContext({
-          modelId: "breaker-chat",
-          projectPath: fixture.projectPath,
-          title: "must not be created",
-        }),
+        requestContext(
+          {
+            modelId: "breaker-chat",
+            projectPath: fixture.projectPath,
+            title: "must not be created",
+          },
+          "corr-create-unready",
+        ),
         fixture.deps,
       );
-      const rejected = await sendBreakerChat(fixture, "must not leave the server");
+      const rejected = await sendBreakerChat(
+        fixture,
+        "must not leave the server",
+        "corr-send-unready",
+      );
 
       expect(createRejected).toEqual({
         status: 400,
         body: {
           error: {
             code: "BAD_REQUEST",
-            message: "The selected model is not ready for conversations.",
+            message:
+              "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
           },
         },
       });
@@ -228,7 +296,8 @@ describe("desktop chat production gateway reuse", () => {
         body: {
           error: {
             code: "BAD_REQUEST",
-            message: "The selected model is not ready for conversations.",
+            message:
+              "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
           },
         },
       });
@@ -251,8 +320,61 @@ describe("desktop chat production gateway reuse", () => {
         fixture.deps.gatewayConfig?.verifiedCapability("breaker-chat")?.fields.conversationReady,
       ).not.toBe(true);
       expect(JSON.stringify(rejected.body)).not.toContain("must not leave the server");
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "gateway",
+          op: "chat.creation.rejected",
+          correlationId: "corr-create-unready",
+          status: 400,
+          errorKind: "model-not-ready",
+          extra: { reason: "readiness", modelKind: "chat" },
+        }),
+      );
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "gateway",
+          op: "chat.send.rejected",
+          correlationId: "corr-send-unready",
+          status: 400,
+          errorKind: "model-not-ready",
+          extra: { reason: "readiness", modelKind: "chat" },
+        }),
+      );
+      expect(JSON.stringify(sink.events)).not.toContain("must not leave the server");
     } finally {
       vi.unstubAllGlobals();
+      resetServerLogger();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
+  it("logs an invalid model creation rejection with the undefined-context fallback", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const rejected = await handleCreateDesktopChat(
+        requestContext({
+          modelId: "missing-model",
+          projectPath: fixture.projectPath,
+          title: "must not be created",
+        }),
+        fixture.deps,
+      );
+
+      expect(rejected).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "gateway",
+          op: "chat.creation.rejected",
+          correlationId: UNKNOWN_CORRELATION_ID,
+          status: 400,
+          errorKind: "invalid-model",
+          extra: { reason: "configuration", modelKind: "unknown" },
+        }),
+      );
+    } finally {
+      resetServerLogger();
       await disposeGatewayBreakerFixture(fixture);
     }
   });

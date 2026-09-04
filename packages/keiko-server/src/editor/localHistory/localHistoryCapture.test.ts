@@ -70,7 +70,7 @@ function depsWithActivityLog(
         activity.push(event);
       },
     },
-  } as unknown as UiHandlerDeps;
+  };
 }
 
 describe("captureEditorLocalHistorySafely", () => {

@@ -838,6 +838,81 @@ function unreadyChatModelResult(): RouteResult {
   return conversationModelNotReadyResult();
 }
 
+function logChatCreationRejection(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  modelId: string,
+  status: number,
+): void {
+  const modelKind = chatCapability(deps, modelId)?.kind ?? "unknown";
+  const readinessFailure = modelKind === "chat";
+  getServerLogger().warn({
+    category: "gateway",
+    op: "chat.creation.rejected",
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    status,
+    errorKind: readinessFailure ? "model-not-ready" : "invalid-model",
+    extra: { reason: readinessFailure ? "readiness" : "configuration", modelKind },
+  });
+}
+
+type ChatRejectionReason = "readiness" | "generation" | "grounding-scope";
+
+function chatRejectionErrorKind(reason: ChatRejectionReason): string {
+  if (reason === "generation") return "config-changed";
+  return reason === "grounding-scope" ? "grounding-scope-changed" : "model-not-ready";
+}
+
+export function logChatRejection(
+  operation: "chat.send.rejected" | "chat.regeneration.rejected",
+  correlationId: string | undefined,
+  modelId: string,
+  deps: UiHandlerDeps,
+  status: number,
+  reason: ChatRejectionReason = "readiness",
+): void {
+  const event = {
+    category: "gateway",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    status,
+    errorKind: chatRejectionErrorKind(reason),
+    extra: {
+      reason,
+      modelKind: chatCapability(deps, modelId)?.kind ?? "unknown",
+    },
+  } as const;
+  if (operation === "chat.send.rejected") {
+    getServerLogger().warn({ ...event, op: "chat.send.rejected" });
+  } else {
+    getServerLogger().warn({ ...event, op: "chat.regeneration.rejected" });
+  }
+}
+
+function routeErrorFields(
+  result: RouteResult,
+): { readonly code: string; readonly message: string } | undefined {
+  if (!isRecord(result.body) || !isRecord(result.body.error)) return undefined;
+  const { code, message } = result.body.error;
+  return typeof code === "string" && typeof message === "string" ? { code, message } : undefined;
+}
+
+function chatExecutionRejectionReason(result: RouteResult): ChatRejectionReason | undefined {
+  const actual = routeErrorFields(result);
+  if (actual?.code === "GROUNDING_SCOPE_CHANGED") return "grounding-scope";
+  const expected = routeErrorFields(conversationModelNotReadyResult());
+  if (actual === undefined || expected === undefined) return undefined;
+  return result.status === 400 &&
+    actual.code === expected.code &&
+    actual.message === expected.message
+    ? "readiness"
+    : undefined;
+}
+
+interface ChatReadinessRejectionContext {
+  readonly operation: "chat.send.rejected" | "chat.regeneration.rejected";
+  readonly correlationId: string | undefined;
+}
+
 export function createUserMessage(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
@@ -1886,13 +1961,25 @@ function bufferedModelAtProviderBoundary(
   deps: UiHandlerDeps,
   modelId: string,
   executionAdmission: DesktopChatExecutionAdmission,
+  correlationId: string | undefined,
+  operation: "chat.send.rejected" | "chat.regeneration.rejected" = "chat.send.rejected",
 ): BufferedModelPort | RouteResult {
   const invalidProviderBoundary = validateDesktopChatProviderBoundary(
     modelId,
     executionAdmission,
     deps,
   );
-  if (invalidProviderBoundary !== undefined) return invalidProviderBoundary;
+  if (invalidProviderBoundary !== undefined) {
+    logChatRejection(
+      operation,
+      correlationId,
+      modelId,
+      deps,
+      invalidProviderBoundary.status,
+      desktopChatProviderBoundaryRejectionReason(modelId, executionAdmission, deps),
+    );
+    return invalidProviderBoundary;
+  }
   return (
     deps.modelPortFactory(modelId) ?? {
       status: 400,
@@ -1951,6 +2038,7 @@ async function resolveBufferedMemory(
 function admitBufferedModelTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
+  correlationId: string | undefined,
 ):
   | {
       readonly admitted: AdmittedTurnHandle;
@@ -1960,7 +2048,10 @@ function admitBufferedModelTurn(
   const { request, chat, modelId } = prepared;
   const legacyAdmission =
     request.clientTurnId === undefined
-      ? captureDesktopChatExecutionAdmission(request, chat, modelId, deps)
+      ? captureDesktopChatExecutionAdmission(request, chat, modelId, deps, {
+          operation: "chat.send.rejected",
+          correlationId,
+        })
       : undefined;
   if (isRouteResult(legacyAdmission)) return legacyAdmission;
   // Probe the provider for EVERY legacy request while nothing is persisted yet: a NO_MODEL
@@ -1968,14 +2059,18 @@ function admitBufferedModelTurn(
   // a clientTurnId) and would orphan the user message — the pre-#3182 invariant. The
   // clientTurnId path keeps resolving after the memory await for provider freshness.
   if (legacyAdmission !== undefined) {
-    const probe = bufferedModelAtProviderBoundary(deps, modelId, legacyAdmission);
+    const probe = bufferedModelAtProviderBoundary(deps, modelId, legacyAdmission, correlationId);
     if (isRouteResult(probe)) return probe;
   }
   const admission = admitDesktopChatTurn(deps, prepared);
   if (admission.kind === "replay") return { status: 200, body: admission.response };
   if (admission.kind === "rejected") return admission.result;
   const executionAdmission =
-    legacyAdmission ?? captureDesktopChatExecutionAdmission(request, chat, modelId, deps);
+    legacyAdmission ??
+    captureDesktopChatExecutionAdmission(request, chat, modelId, deps, {
+      operation: "chat.send.rejected",
+      correlationId,
+    });
   if (isRouteResult(executionAdmission)) {
     settleRejectedDesktopChatTurn(deps, prepared, admission);
     return executionAdmission;
@@ -2021,7 +2116,7 @@ async function executeBufferedModelTurn(
   correlationId: string | undefined,
 ): Promise<RouteResult> {
   const { request, modelId } = prepared;
-  const outcome = admitBufferedModelTurn(deps, prepared);
+  const outcome = admitBufferedModelTurn(deps, prepared, correlationId);
   if (isRouteResult(outcome)) return outcome;
   const { admitted, executionAdmission } = outcome;
   const { userMessage } = admitted;
@@ -2035,7 +2130,7 @@ async function executeBufferedModelTurn(
   // count or role — so the counted shape is identical from either assembly.
   logChatTurnStarted(correlationId, baseAssembly.messages, request.attachments);
   const assembly = assemblyWithConversationImages(deps, request, modelId, baseAssembly);
-  const model = bufferedModelAtProviderBoundary(deps, modelId, executionAdmission);
+  const model = bufferedModelAtProviderBoundary(deps, modelId, executionAdmission, correlationId);
   if (isRouteResult(model)) {
     settleRejectedDesktopChatTurn(deps, prepared, admitted);
     return model;
@@ -2181,7 +2276,15 @@ export async function handleCreateDesktopChat(
     ? ensureAnyConversationReadyChatModel(deps, defaultChatModelId(deps))
     : ensureOnDemandConversationReadiness(deps, explicitModelId));
   const modelId = modelFromBody(body, deps);
-  if (isRouteResult(modelId)) return modelId;
+  if (isRouteResult(modelId)) {
+    logChatCreationRejection(
+      ctx,
+      deps,
+      explicitModelId ?? defaultChatModelId(deps),
+      modelId.status,
+    );
+    return modelId;
+  }
   try {
     const projectPath = pickProjectPath(body, deps);
     const project = ensureProject(deps, projectPath);
@@ -2381,8 +2484,25 @@ export function captureDesktopChatExecutionAdmission(
   chat: Chat,
   modelId: string,
   deps: UiHandlerDeps,
+  rejectionContext?: ChatReadinessRejectionContext,
 ): DesktopChatExecutionAdmission | RouteResult {
   const invalidExecution = validateDesktopChatExecution(request, chat, modelId, deps);
+  const rejectionReason =
+    invalidExecution === undefined ? undefined : chatExecutionRejectionReason(invalidExecution);
+  if (
+    invalidExecution !== undefined &&
+    rejectionContext !== undefined &&
+    rejectionReason !== undefined
+  ) {
+    logChatRejection(
+      rejectionContext.operation,
+      rejectionContext.correlationId,
+      modelId,
+      deps,
+      invalidExecution.status,
+      rejectionReason,
+    );
+  }
   return invalidExecution ?? { gatewayConfigGeneration: deps.gatewayConfig?.generation() };
 }
 
@@ -2391,12 +2511,29 @@ export function validateDesktopChatProviderBoundary(
   admission: DesktopChatExecutionAdmission,
   deps: UiHandlerDeps,
 ): RouteResult | undefined {
+  const reason = desktopChatProviderBoundaryRejectionReason(modelId, admission, deps);
+  if (reason === undefined) return undefined;
+  if (reason === "generation") {
+    return {
+      status: 409,
+      body: errorBody(
+        "GATEWAY_CONFIG_CHANGED",
+        "The model gateway configuration changed before the turn could run.",
+      ),
+    };
+  }
+  return unreadyChatModelResult();
+}
+
+export function desktopChatProviderBoundaryRejectionReason(
+  modelId: string,
+  admission: DesktopChatExecutionAdmission,
+  deps: UiHandlerDeps,
+): ChatRejectionReason | undefined {
   const holder = deps.gatewayConfig;
   if (holder === undefined) return undefined;
-  return holder.generation() === admission.gatewayConfigGeneration &&
-    currentConversationReady(deps, modelId)
-    ? undefined
-    : unreadyChatModelResult();
+  if (holder.generation() !== admission.gatewayConfigGeneration) return "generation";
+  return currentConversationReady(deps, modelId) ? undefined : "readiness";
 }
 
 export function validateCurrentDesktopChatSend(
@@ -2743,6 +2880,7 @@ async function parseDesktopChatRegenerate(
 function prepareDesktopChatRegenerateRequest(
   request: RegenerateDesktopChatRequest,
   deps: UiHandlerDeps,
+  correlationId: string | undefined,
 ): PreparedDesktopChatRegenerate | RouteResult {
   const normalizedProjectPath = normalizeDesktopProjectPath(request.projectPath, deps);
   if (isRouteResult(normalizedProjectPath)) return normalizedProjectPath;
@@ -2752,7 +2890,7 @@ function prepareDesktopChatRegenerateRequest(
   if (closed !== undefined) return closed;
   if (hasGroundingScope(chat)) return groundedRegenerateResult();
   const modelId = request.modelId ?? chat.selectedModel;
-  const invalidModel = invalidChatModelResult(modelId, deps);
+  const invalidModel = invalidRegenerationModelResult(modelId, deps, correlationId);
   if (invalidModel !== undefined) return invalidModel;
   const executionAdmission = captureGatewayGeneration(deps);
   const visibleTurn = latestRegenerableTurn(
@@ -2769,6 +2907,25 @@ function prepareDesktopChatRegenerateRequest(
   const memoryContext = resolveDesktopMemoryContext(deps, memoryRequest, normalizedProjectPath);
   if (isRouteResult(memoryContext)) return memoryContext;
   return { request, chat, modelId, turn, memoryRequest, memoryContext, executionAdmission };
+}
+
+function invalidRegenerationModelResult(
+  modelId: string,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  const invalidModel = invalidChatModelResult(modelId, deps);
+  if (invalidModel === undefined) return undefined;
+  if (chatExecutionRejectionReason(invalidModel) === "readiness") {
+    logChatRejection(
+      "chat.regeneration.rejected",
+      correlationId,
+      modelId,
+      deps,
+      invalidModel.status,
+    );
+  }
+  return invalidModel;
 }
 
 function captureGatewayGeneration(deps: UiHandlerDeps): DesktopChatExecutionAdmission {
@@ -2831,16 +2988,14 @@ async function persistRegeneratedChatTurn(
   try {
     const { memory, messages } = await buildRegenerateMemoryAndMessages(deps, prepared);
     if (requestSignalAborted(signal)) return requestCancelledResult();
-    const invalidProviderBoundary = validateDesktopChatProviderBoundary(
+    const model = bufferedModelAtProviderBoundary(
+      deps,
       modelId,
       executionAdmission,
-      deps,
+      correlationId,
+      "chat.regeneration.rejected",
     );
-    if (invalidProviderBoundary !== undefined) return invalidProviderBoundary;
-    const model = deps.modelPortFactory(modelId);
-    if (model === undefined) {
-      return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
-    }
+    if (isRouteResult(model)) return model;
     const response = await model.call(
       { modelId, messages, stream: false, logContext: { correlationId } },
       signal,
@@ -2886,7 +3041,11 @@ export async function handleRegenerateDesktopChat(
       prepared.request.chatId,
       cancellation.signal,
       () => {
-        const current = prepareDesktopChatRegenerateRequest(prepared.request, deps);
+        const current = prepareDesktopChatRegenerateRequest(
+          prepared.request,
+          deps,
+          ctx.correlationId,
+        );
         return isRouteResult(current)
           ? current
           : persistRegeneratedChatTurn(deps, current, cancellation.signal, ctx.correlationId);

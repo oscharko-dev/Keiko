@@ -257,6 +257,7 @@ if [[ "${analysis_scope}" == "${changed_scope}" ]]; then
 fi
 KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm scanner \
   "${scanner_args[@]}" \
+  -Dsonar.javascript.node.maxspace=4608 \
   -Dsonar.projectKey="${project}" \
   -Dsonar.projectName="Keiko (local pre-push scan)" \
   -Dsonar.scm.disabled=true \
