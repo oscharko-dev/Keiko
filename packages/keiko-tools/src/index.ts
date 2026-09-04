@@ -395,3 +395,9 @@ export {
 
 // ─── Package version ────────────────────────────────────────────────────────────────
 export { KEIKO_TOOLS_VERSION } from "./version.js";
+
+// ─── Default-branch reader (#3385) ───────────────────────────────────────────────────
+// The read-only `git rev-parse` of `refs/remotes/<alias>/HEAD` the server binds an issue-bound
+// run's base ref to. Same dedicated read allowlist and remote-URL read policy as the worktree
+// snapshot reader; carries the Node spawn effect like `runCommand` above.
+export { readGitDefaultBranch } from "./git-default-branch-node.js";

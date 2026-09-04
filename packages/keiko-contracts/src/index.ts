@@ -1225,6 +1225,42 @@ export type {
   validateCodingWorkbenchRuntimeMintConfirmation,
   validateCodingWorkbenchRuntimeState,
 } from "./coding-workbench-runtime.js";
+// #3385: the issue preview/wire contracts beside the binding, and the ONE GitHub issue reference
+// parser (a dependency-free leaf whose runtime surface `coding-workbench-runtime.ts` re-exports).
+export type {
+  CodingWorkbenchIssueBindingProjection,
+  CodingWorkbenchIssuePreview,
+  CodingWorkbenchIssuePreviewFailureWire,
+  CodingWorkbenchIssuePreviewProvenance,
+  CodingWorkbenchIssuePreviewRequestWire,
+  CodingWorkbenchIssuePreviewResponseWire,
+  CodingWorkbenchIssueState,
+} from "./coding-workbench-runtime.js";
+export type {
+  CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS,
+  CODING_WORKBENCH_ISSUE_PREVIEW_TITLE_MAX_CHARS,
+  CODING_WORKBENCH_ISSUE_REF_MAX_CHARS,
+  CODING_WORKBENCH_ISSUE_STATES,
+  parseCodingWorkbenchIssuePreviewRequest,
+  validateCodingWorkbenchIssuePreview,
+} from "./coding-workbench-runtime.js";
+export type {
+  GitHubIssueReference,
+  GitHubIssueReferenceParseResult,
+  GitHubIssueReferenceRejection,
+  ParseGitHubIssueReferenceOptions,
+} from "./github-issue-reference.js";
+export type {
+  canonicalGitHubOwnerAndRepo,
+  findGitHubIssueReferences,
+  GITHUB_ISSUE_NUMBER_MAX,
+  GITHUB_ISSUE_REFERENCE_MAX_CHARS,
+  GITHUB_ISSUE_REFERENCE_REJECTIONS,
+  isGitHubOwnerAndRepo,
+  parseGitHubIssueNumber,
+  parseGitHubIssueReference,
+  sameGitHubOwnerAndRepo,
+} from "./github-issue-reference.js";
 export type {
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
@@ -1440,6 +1476,69 @@ export type {
   validateGitRepositoryStatusResponse,
   validateGitRepositoryDiffResponse,
 } from "./git-repository.js";
+
+// ─── Immutable base-to-head Git change snapshot (Issue #3397, Epic #3384, ADR-0174) ───
+// The one versioned, content-free snapshot contract every pull-request journey consumes: server-
+// resolved base/head/merge-base binding, typed entries for every change kind, bounded hunk ranges
+// with digests, completeness counts and the frozen outcome vocabulary. Runtime values are consumed
+// through `@oscharko-dev/keiko-contracts/runtime/git-change-snapshot`.
+export type {
+  GitChangeSnapshot,
+  GitChangeSnapshotAddEntry,
+  GitChangeSnapshotBinaryEntry,
+  GitChangeSnapshotCompleteness,
+  GitChangeSnapshotCompletenessInput,
+  GitChangeSnapshotContentChange,
+  GitChangeSnapshotCopyEntry,
+  GitChangeSnapshotDeleteEntry,
+  GitChangeSnapshotDurableFields,
+  GitChangeSnapshotEntry,
+  GitChangeSnapshotEntryIdentity,
+  GitChangeSnapshotEntryKind,
+  GitChangeSnapshotFailed,
+  GitChangeSnapshotFailureReason,
+  GitChangeSnapshotHunk,
+  GitChangeSnapshotLimits,
+  GitChangeSnapshotLocalDivergence,
+  GitChangeSnapshotModeChangeEntry,
+  GitChangeSnapshotModifyEntry,
+  GitChangeSnapshotOmission,
+  GitChangeSnapshotOmissionReason,
+  GitChangeSnapshotOutcome,
+  GitChangeSnapshotRenameEntry,
+  GitChangeSnapshotResult,
+  GitChangeSnapshotSubmoduleEntry,
+  GitChangeSnapshotUnavailable,
+  GitChangeSnapshotUnavailableReason,
+  GitChangeSnapshotValidation,
+  GitChangeSnapshotValidationFail,
+  GitChangeSnapshotValidationOk,
+} from "./git-change-snapshot.js";
+export type {
+  GIT_CHANGE_SNAPSHOT_CONTENT_CHANGES,
+  GIT_CHANGE_SNAPSHOT_DEFAULT_LIMITS,
+  GIT_CHANGE_SNAPSHOT_DEFAULT_TTL_MS,
+  GIT_CHANGE_SNAPSHOT_ENTRY_KINDS,
+  GIT_CHANGE_SNAPSHOT_FAILURE_REASONS,
+  GIT_CHANGE_SNAPSHOT_LIMIT_CEILINGS,
+  GIT_CHANGE_SNAPSHOT_MAX_HUNK_HEADER_CHARS,
+  GIT_CHANGE_SNAPSHOT_MAX_LINE_CHARS,
+  GIT_CHANGE_SNAPSHOT_MAX_LINES_PER_HUNK,
+  GIT_CHANGE_SNAPSHOT_MAX_TTL_MS,
+  GIT_CHANGE_SNAPSHOT_OMISSION_REASONS,
+  GIT_CHANGE_SNAPSHOT_OUTCOMES,
+  GIT_CHANGE_SNAPSHOT_REPOSITORY_ID_MAX_CHARS,
+  GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
+  GIT_CHANGE_SNAPSHOT_UNAVAILABLE_REASONS,
+  deriveGitChangeSnapshotOutcome,
+  gitChangeSnapshotDigestFields,
+  gitChangeSnapshotEntryIdentityFields,
+  isGitChangeSnapshot,
+  isGitChangeSnapshotReference,
+  resolveGitChangeSnapshotLimits,
+  summarizeGitChangeSnapshotCompleteness,
+  validateGitChangeSnapshotResult,
+} from "./git-change-snapshot.js";
 
 // ─── Editor Git read surface (Issue #2227, Epic #2093, ADR-0127) ────────────────
 // Bounded structured staged/worktree diff and privacy-minimized blame contracts shared by the

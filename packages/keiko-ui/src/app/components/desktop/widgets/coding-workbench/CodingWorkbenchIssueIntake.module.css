@@ -1,0 +1,232 @@
+/* Coding Workbench issue intake (#3385). Component-scoped, cmp-prefixed classes only: globals.css
+ * is SHA-pinned (#1300) and must not grow for a feature surface. Every colour, radius and spacing
+ * value is a design-system token so the seven canonical modes (light/dark, high contrast,
+ * prefers-contrast, forced colors, reduced motion) resolve through the same tokens the rest of
+ * the Workbench uses. */
+
+.cmp-issue-intake {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: var(--space-4);
+  background: var(--surface-elevated);
+}
+
+.cmp-issue-field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.cmp-issue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+/* The live region is visually present (not sr-only) so a sighted operator sees the same
+ * loading/failed sentence the screen reader announces; `min-height` keeps the card from jumping
+ * when the text appears. */
+.cmp-issue-status {
+  min-height: 1.5em;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+}
+
+.cmp-issue-status[data-state="loading"] {
+  color: var(--text-accent);
+}
+
+.cmp-issue-alert {
+  display: block;
+  margin: 0;
+  border-inline-start: 3px solid var(--feedback-danger);
+  border-radius: var(--radius-control);
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-primary);
+  background: var(--feedback-danger-surface);
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+}
+
+.cmp-issue-alert[data-failure="repository-mismatch"],
+.cmp-issue-alert[data-failure="auth-required"],
+.cmp-issue-alert[data-failure="unavailable-runtime"],
+.cmp-issue-alert[data-failure="cancelled"] {
+  border-inline-start-color: var(--feedback-warning);
+  background: var(--feedback-warning-surface);
+}
+
+.cmp-issue-alert:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.cmp-issue-support {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono, monospace);
+}
+
+.cmp-issue-preview {
+  display: grid;
+  gap: var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-control);
+  padding: var(--space-4);
+  background: var(--surface-primary);
+}
+
+.cmp-issue-preview:focus-visible,
+.cmp-issue-preview-title:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.cmp-issue-preview-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-body-sm);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  overflow-wrap: anywhere;
+}
+
+.cmp-issue-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+}
+
+.cmp-issue-facts dt {
+  color: var(--text-tertiary);
+  font-weight: var(--weight-semibold);
+}
+
+.cmp-issue-facts dd {
+  margin: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* Untrusted issue text: plain text nodes, pre-wrapped, bounded height with its own scroll so a
+ * long body can never push the confirm/cancel controls out of the card. Focusable because a
+ * scrollable region must be keyboard reachable (axe scrollable-region-focusable). */
+.cmp-issue-excerpt {
+  max-height: 14rem;
+  margin: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  overflow: auto;
+  color: var(--text-secondary);
+  background: var(--surface-inset);
+  font-family: inherit;
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cmp-issue-excerpt:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.cmp-issue-note {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+}
+
+.cmp-issue-baseref {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  border-inline-start: 3px solid var(--border-accent);
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-primary);
+  background: var(--surface-accent-subtle);
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+}
+
+.cmp-issue-baseref code {
+  font-family: var(--font-mono, monospace);
+}
+
+.cmp-issue-chip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-pill);
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-primary);
+  background: var(--surface-accent-subtle);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+}
+
+.cmp-issue-chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.cmp-issue-chip > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The content-free repository id on the settings grant control (same feature, same module): a
+ * 64-character digest must wrap inside the option card rather than overflow it. */
+.cmp-issue-grant-id {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+@media (forced-colors: active) {
+  .cmp-issue-intake,
+  .cmp-issue-preview,
+  .cmp-issue-excerpt,
+  .cmp-issue-alert,
+  .cmp-issue-baseref,
+  .cmp-issue-chip {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+  }
+
+  .cmp-issue-alert,
+  .cmp-issue-baseref {
+    border-inline-start-color: Highlight;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cmp-issue-preview {
+    animation: cmp-issue-reveal var(--dur-fast, 120ms) ease-out;
+  }
+}
+
+@keyframes cmp-issue-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

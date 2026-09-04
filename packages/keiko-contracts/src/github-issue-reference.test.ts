@@ -145,7 +145,8 @@ describe("parseGitHubIssueReference (#3385)", () => {
 
   it("covers every rejection in the closed vocabulary with at least one row", () => {
     const seen = new Set(REJECTED.map((row) => row.rejection));
-    for (const rejection of GITHUB_ISSUE_REFERENCE_REJECTIONS) expect(seen.has(rejection)).toBe(true);
+    for (const rejection of GITHUB_ISSUE_REFERENCE_REJECTIONS)
+      expect(seen.has(rejection)).toBe(true);
     expect(seen.size).toBe(GITHUB_ISSUE_REFERENCE_REJECTIONS.length);
   });
 
@@ -223,7 +224,10 @@ describe("findGitHubIssueReferences", () => {
 
   it("does not read an issue URL or a number above the bound as a reference", () => {
     expect(
-      findGitHubIssueReferences("https://github.com/acme/widgets/issues/42 acme/widgets#9999999999", 4),
+      findGitHubIssueReferences(
+        "https://github.com/acme/widgets/issues/42 acme/widgets#9999999999",
+        4,
+      ),
     ).toEqual([]);
   });
 });

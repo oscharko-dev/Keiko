@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
 import {
   CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS,
@@ -478,17 +479,52 @@ describe("Coding Workbench issue binding contract (#3385)", () => {
     effectiveMode: "supervised-coding",
   };
 
-  // #3385: the start request must NOT accept an issue reference until the resolver that binds it
-  // exists. Accepting it would start an ordinary generic run while the caller believed an issue was
-  // bound, and no later stage would notice.
-  it("refuses an issue reference on the start request while no resolver binds it", () => {
+  // #3385: the start request carries the pasted reference as ONE bounded string. Its meaning —
+  // which repository, which issue, whether it exists — is resolved on the server; the contract only
+  // admits the transport shape. Whether a request carrying it may START is decided by the runtime
+  // orchestrator, which refuses the field outright while no issue resolver is composed
+  // (codingRuntimeOrchestrator.test.ts pins that fail-closed admission).
+  it("admits a bounded issue reference string on the start and retry requests", () => {
     expect(parseCodingWorkbenchRuntimeStartRequest(START)).toMatchObject({ ok: true });
-    expect(
-      parseCodingWorkbenchRuntimeStartRequest({
-        ...START,
-        issueRef: { ownerAndRepo: "oscharko-dev/Keiko", issueNumber: 3385 },
-      }),
-    ).toMatchObject({ ok: false });
+    for (const issueRef of [
+      "https://github.com/oscharko-dev/Keiko/issues/3385",
+      "oscharko-dev/Keiko#3385",
+      "#3385",
+      "3385",
+      "a".repeat(GITHUB_ISSUE_REFERENCE_MAX_CHARS),
+    ]) {
+      const request = { ...START, issueRef };
+      expect(parseCodingWorkbenchRuntimeStartRequest(request), issueRef).toEqual({
+        ok: true,
+        value: request,
+      });
+      expect(parseCodingWorkbenchRuntimeRetryRequest(request), issueRef).toEqual({
+        ok: true,
+        value: request,
+      });
+    }
+  });
+
+  // A structured reference is still refused: the browser never authors repository identity or an
+  // issue number as separate trusted fields, only the raw text the server parses (the pre-resolver
+  // pin, kept). The remaining cases are the transport bounds every other start field already has.
+  it("refuses a structured, empty, oversized, or control-character issue reference", () => {
+    for (const issueRef of [
+      { ownerAndRepo: "oscharko-dev/Keiko", issueNumber: 3385 },
+      3385,
+      null,
+      "",
+      "   ",
+      "a".repeat(GITHUB_ISSUE_REFERENCE_MAX_CHARS + 1),
+      "#3385\u0000",
+      "#3385\n",
+      "#3385\u007f",
+    ]) {
+      expect(
+        parseCodingWorkbenchRuntimeStartRequest({ ...START, issueRef }),
+        JSON.stringify(issueRef),
+      ).toMatchObject({ ok: false });
+    }
   });
 
   it("projects a content-free issue binding on the snapshot", () => {

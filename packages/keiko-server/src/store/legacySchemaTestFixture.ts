@@ -20,6 +20,13 @@ export function restoreV13SchemaFixture(db: DatabaseSync): void {
   }
 
   db.exec(`
+    ALTER TABLE coding_runtime_snapshots DROP COLUMN issue_binding_digest;
+    ALTER TABLE coding_runtime_snapshots DROP COLUMN issue_content_revision_digest;
+    ALTER TABLE coding_runtime_snapshots DROP COLUMN issue_default_base_ref;
+    ALTER TABLE coding_runtime_snapshots DROP COLUMN issue_id_digest;
+    ALTER TABLE coding_runtime_snapshots DROP COLUMN issue_number;
+    ALTER TABLE coding_runtime_snapshots DROP COLUMN issue_remote_digest;
+    ALTER TABLE coding_runtime_snapshots DROP COLUMN issue_repository_id;
     DROP TABLE github_issue_reader_authorization;
     DROP TABLE workspace_manifest_roots;
     DROP TABLE workspace_manifests;

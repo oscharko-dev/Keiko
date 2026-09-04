@@ -165,7 +165,7 @@ function clampLimit(key: keyof GitChangeSnapshotLimits, requested: unknown): num
  * `maxTotalBytes` last.
  */
 export function resolveGitChangeSnapshotLimits(
-  overrides?: Partial<Readonly<Record<keyof GitChangeSnapshotLimits, unknown>>> | undefined,
+  overrides?: Partial<Readonly<Record<keyof GitChangeSnapshotLimits, unknown>>>,
 ): GitChangeSnapshotLimits {
   const maxTotalBytes = clampLimit("maxTotalBytes", overrides?.maxTotalBytes);
   return {
@@ -340,9 +340,7 @@ export interface GitChangeSnapshotFailed {
 }
 
 export type GitChangeSnapshotResult =
-  | GitChangeSnapshot
-  | GitChangeSnapshotUnavailable
-  | GitChangeSnapshotFailed;
+  GitChangeSnapshot | GitChangeSnapshotUnavailable | GitChangeSnapshotFailed;
 
 export interface GitChangeSnapshotValidationOk {
   readonly ok: true;
@@ -353,8 +351,7 @@ export interface GitChangeSnapshotValidationFail {
   readonly reasons: readonly string[];
 }
 export type GitChangeSnapshotValidation =
-  | GitChangeSnapshotValidationOk
-  | GitChangeSnapshotValidationFail;
+  GitChangeSnapshotValidationOk | GitChangeSnapshotValidationFail;
 
 // ─── Digest formulas (one owner) ────────────────────────────────────────────────────
 
@@ -409,7 +406,8 @@ export function gitChangeSnapshotEntryIdentityFields(
   return {
     kind: entry.kind,
     pathDigest: entry.pathDigest,
-    oldPathDigest: "oldPathDigest" in entry && entry.oldPathDigest !== undefined ? entry.oldPathDigest : null,
+    oldPathDigest:
+      "oldPathDigest" in entry && entry.oldPathDigest !== undefined ? entry.oldPathDigest : null,
     oldMode: entry.oldMode,
     newMode: entry.newMode,
     oldObjectId: entry.oldObjectId,
@@ -437,6 +435,54 @@ export function deriveGitChangeSnapshotOutcome(
     completeness.truncatedFiles > 0 ||
     completeness.omissions.some((omission) => LIMITING_OMISSIONS.has(omission.reason));
   return limited ? "partial" : "complete";
+}
+
+export interface GitChangeSnapshotCompletenessInput {
+  readonly entries: readonly GitChangeSnapshotEntry[];
+  /** Files the raw lane reported before the file cap; never below `entries.length`. */
+  readonly totalFiles: number;
+  /** Patch bytes retained in the transient raw lane. */
+  readonly bytes: number;
+}
+
+function omissionRollUp(
+  entries: readonly GitChangeSnapshotEntry[],
+  omittedFiles: number,
+): readonly GitChangeSnapshotOmission[] {
+  const omissions: GitChangeSnapshotOmission[] = [];
+  for (const reason of GIT_CHANGE_SNAPSHOT_OMISSION_REASONS) {
+    if (reason === "file-cap") {
+      if (omittedFiles > 0) omissions.push({ reason, files: omittedFiles, hunks: 0 });
+      continue;
+    }
+    const affected = entries.filter((entry) => entry.omission === reason);
+    if (affected.length === 0) continue;
+    const hunks = affected.reduce((sum, entry) => sum + entry.omittedHunks, 0);
+    omissions.push({ reason, files: affected.length, hunks });
+  }
+  return omissions;
+}
+
+/**
+ * THE completeness formula. The producer builds its record with this, the validator re-derives the
+ * record with it and rejects any that disagrees, and a test fixture calls it rather than restating
+ * it (AGENTS.md §7): one owner, so the counts can never drift from the entries they describe.
+ */
+export function summarizeGitChangeSnapshotCompleteness(
+  input: GitChangeSnapshotCompletenessInput,
+): GitChangeSnapshotCompleteness {
+  const { entries, totalFiles, bytes } = input;
+  const omittedFiles = Math.max(0, totalFiles - entries.length);
+  return {
+    totalFiles,
+    files: entries.length,
+    hunks: entries.reduce((sum, entry) => sum + entry.hunks.length, 0),
+    bytes,
+    omittedFiles,
+    omittedHunks: entries.reduce((sum, entry) => sum + entry.omittedHunks, 0),
+    truncatedFiles: entries.filter((entry) => entry.truncated).length,
+    omissions: omissionRollUp(entries, omittedFiles),
+  };
 }
 
 /** The opaque, server-issued handle a registry returns for a snapshot. Random, never path-derived. */
@@ -692,32 +738,46 @@ function entryIsPaired(entry: Record<string, unknown>, kind: GitChangeSnapshotEn
   return (kind === "binary" || kind === "submodule") && (change === "rename" || change === "copy");
 }
 
+function isContentFree(entry: Record<string, unknown>): boolean {
+  const hunks = field(entry, "hunks");
+  return (
+    Array.isArray(hunks) &&
+    hunks.length === 0 &&
+    field(entry, "omittedHunks") === 0 &&
+    field(entry, "additions") === 0 &&
+    field(entry, "deletions") === 0 &&
+    field(entry, "truncated") === false
+  );
+}
+
+function validateContentless(
+  entry: Record<string, unknown>,
+  kind: GitChangeSnapshotEntryKind,
+  path: string,
+  reasons: string[],
+): void {
+  if (!isContentFree(entry)) {
+    reasons.push(`${path} must carry no hunks, statistics or truncation`);
+  }
+  if (kind === "mode-change") {
+    if (field(entry, "omission") !== undefined) {
+      reasons.push(`${path}.omission is not allowed on a mode change`);
+    }
+    return;
+  }
+  if (!isOneOf(field(entry, "change"), GIT_CHANGE_SNAPSHOT_CONTENT_CHANGES)) {
+    reasons.push(`${path}.change must be a content change`);
+  }
+  if (field(entry, "omission") !== kind) reasons.push(`${path}.omission must be ${kind}`);
+}
+
 function validateEntryKindRules(
   entry: Record<string, unknown>,
   kind: GitChangeSnapshotEntryKind,
   path: string,
   reasons: string[],
 ): void {
-  if (kind === "binary" || kind === "submodule") {
-    if (!isOneOf(field(entry, "change"), GIT_CHANGE_SNAPSHOT_CONTENT_CHANGES)) {
-      reasons.push(`${path}.change must be a content change`);
-    }
-    if (field(entry, "omission") !== kind) reasons.push(`${path}.omission must be ${kind}`);
-  }
-  if (!TEXTUAL_KINDS.has(kind)) {
-    const hunks = field(entry, "hunks");
-    const empty =
-      Array.isArray(hunks) &&
-      hunks.length === 0 &&
-      field(entry, "omittedHunks") === 0 &&
-      field(entry, "additions") === 0 &&
-      field(entry, "deletions") === 0 &&
-      field(entry, "truncated") === false;
-    if (!empty) reasons.push(`${path} must carry no hunks, statistics or truncation`);
-    if (kind === "mode-change" && field(entry, "omission") !== undefined) {
-      reasons.push(`${path}.omission is not allowed on a mode change`);
-    }
-  }
+  if (!TEXTUAL_KINDS.has(kind)) validateContentless(entry, kind, path, reasons);
   validatePairing(entry, path, entryIsPaired(entry, kind), reasons);
 }
 
@@ -796,21 +856,24 @@ function validateEntries(
   value: unknown,
   limits: GitChangeSnapshotLimits | undefined,
   reasons: string[],
-): readonly Record<string, unknown>[] {
+): readonly GitChangeSnapshotEntry[] | undefined {
   if (!Array.isArray(value)) {
     reasons.push("entries must be an array");
-    return [];
+    return undefined;
   }
   if (limits !== undefined && value.length > limits.maxFiles) {
     reasons.push("entries exceeds limits.maxFiles");
   }
+  const before = reasons.length;
   const evidenceIds = new Set<unknown>();
   value.forEach((entry, index) => {
     validateEntry(entry, limits, `entries[${String(index)}]`, reasons);
     if (isRecord(entry)) evidenceIds.add(field(entry, "evidenceId"));
   });
   if (evidenceIds.size !== value.length) reasons.push("entries must carry unique evidenceIds");
-  return value.filter((entry): entry is Record<string, unknown> => isRecord(entry));
+  // Only entries that passed every rule above are handed to the roll-up: it is typed against the
+  // contract, and feeding it an unproven record would let a malformed entry shape its own summary.
+  return reasons.length === before ? (value as readonly GitChangeSnapshotEntry[]) : undefined;
 }
 
 function validateOmissionRecord(value: unknown, path: string, reasons: string[]): void {
@@ -823,28 +886,6 @@ function validateOmissionRecord(value: unknown, path: string, reasons: string[])
     reasons.push(`${path}.reason must be an omission reason`);
   }
   requireCounts(value, ["files", "hunks"], path, reasons);
-}
-
-// Omission records are the per-reason roll-up of what the entries already say; they must agree.
-function expectedOmissions(
-  entries: readonly Record<string, unknown>[],
-  omittedFiles: number,
-): readonly GitChangeSnapshotOmission[] {
-  const expected: GitChangeSnapshotOmission[] = [];
-  for (const reason of GIT_CHANGE_SNAPSHOT_OMISSION_REASONS) {
-    if (reason === "file-cap") {
-      if (omittedFiles > 0) expected.push({ reason, files: omittedFiles, hunks: 0 });
-      continue;
-    }
-    const affected = entries.filter((entry) => field(entry, "omission") === reason);
-    if (affected.length === 0) continue;
-    const hunks = affected.reduce((sum, entry) => {
-      const omitted = field(entry, "omittedHunks");
-      return sum + (typeof omitted === "number" ? omitted : 0);
-    }, 0);
-    expected.push({ reason, files: affected.length, hunks });
-  }
-  return expected;
 }
 
 function sameOmissions(
@@ -865,44 +906,37 @@ function sameOmissions(
   );
 }
 
-function countHunks(entries: readonly Record<string, unknown>[], key: string): number {
-  return entries.reduce((sum, entry) => {
-    const value = field(entry, key);
-    if (key === "hunks") return sum + (Array.isArray(value) ? value.length : 0);
-    return sum + (typeof value === "number" ? value : 0);
-  }, 0);
-}
-
-function validateCompletenessTotals(
+// The completeness record must be exactly what `summarizeGitChangeSnapshotCompleteness` derives
+// from the entries it accompanies — the same producer formula, not a second copy of it. Only
+// `totalFiles` and `bytes` are facts the entries cannot carry, so they are taken from the record.
+function validateCompletenessRollUp(
   completeness: Record<string, unknown>,
-  entries: readonly Record<string, unknown>[],
+  entries: readonly GitChangeSnapshotEntry[],
+  omissions: readonly unknown[],
   reasons: string[],
 ): void {
-  const files = field(completeness, "files");
-  const omittedFiles = field(completeness, "omittedFiles");
-  if (files !== entries.length) reasons.push("completeness.files must equal entries.length");
-  if (
-    typeof files === "number" &&
-    typeof omittedFiles === "number" &&
-    field(completeness, "totalFiles") !== files + omittedFiles
-  ) {
-    reasons.push("completeness.totalFiles must equal files + omittedFiles");
+  const totalFiles = field(completeness, "totalFiles");
+  const bytes = field(completeness, "bytes");
+  if (!isNonNegativeSafeInteger(totalFiles) || !isNonNegativeSafeInteger(bytes)) return;
+  if (totalFiles < entries.length) {
+    reasons.push("completeness.totalFiles must be at least entries.length");
+    return;
   }
-  if (field(completeness, "hunks") !== countHunks(entries, "hunks")) {
-    reasons.push("completeness.hunks must equal the carried hunk count");
+  const expected = summarizeGitChangeSnapshotCompleteness({ entries, totalFiles, bytes });
+  const scalarKeys = ["files", "hunks", "omittedFiles", "omittedHunks", "truncatedFiles"] as const;
+  for (const key of scalarKeys) {
+    if (field(completeness, key) !== expected[key]) {
+      reasons.push(`completeness.${key} must equal the roll-up of entries`);
+    }
   }
-  if (field(completeness, "omittedHunks") !== countHunks(entries, "omittedHunks")) {
-    reasons.push("completeness.omittedHunks must equal the entries' omitted hunks");
-  }
-  const truncated = entries.filter((entry) => field(entry, "truncated") === true).length;
-  if (field(completeness, "truncatedFiles") !== truncated) {
-    reasons.push("completeness.truncatedFiles must equal the truncated entry count");
+  if (!sameOmissions(omissions, expected.omissions)) {
+    reasons.push("completeness.omissions must roll up the entries' omissions in vocabulary order");
   }
 }
 
 function validateCompleteness(
   value: unknown,
-  entries: readonly Record<string, unknown>[],
+  entries: readonly GitChangeSnapshotEntry[] | undefined,
   limits: GitChangeSnapshotLimits | undefined,
   reasons: string[],
 ): value is GitChangeSnapshotCompleteness {
@@ -925,13 +959,8 @@ function validateCompleteness(
   if (limits !== undefined && typeof bytes === "number" && bytes > limits.maxTotalBytes) {
     reasons.push("completeness.bytes must not exceed limits.maxTotalBytes");
   }
-  validateCompletenessTotals(value, entries, reasons);
-  const omittedFiles = field(value, "omittedFiles");
-  const expected = expectedOmissions(entries, typeof omittedFiles === "number" ? omittedFiles : 0);
-  if (!sameOmissions(omissions, expected)) {
-    reasons.push("completeness.omissions must roll up the entries' omissions in vocabulary order");
-  }
-  return reasons.length === before;
+  if (entries !== undefined) validateCompletenessRollUp(value, entries, omissions, reasons);
+  return reasons.length === before && entries !== undefined;
 }
 
 function validateDivergence(value: unknown, reasons: string[]): void {
@@ -1003,33 +1032,67 @@ function validateSnapshot(record: Record<string, unknown>, reasons: string[]): v
 }
 
 // Each unavailable reason implies exactly which revisions could be resolved before it was reached.
+function validateUnresolvedReason(
+  record: Record<string, unknown>,
+  reason: "invalid-ref" | "missing-ref",
+  reasons: string[],
+): void {
+  const bothResolved =
+    field(record, "baseSha") !== undefined && field(record, "headSha") !== undefined;
+  if (field(record, "mergeBaseSha") !== undefined) {
+    reasons.push("mergeBaseSha is not allowed for this reason");
+  }
+  if (reason === "invalid-ref" && bothResolved) reasons.push("invalid-ref resolves no revisions");
+  if (reason === "missing-ref" && bothResolved) reasons.push("missing-ref leaves a ref unresolved");
+}
+
+function validateDivergentReason(
+  record: Record<string, unknown>,
+  reason: "no-merge-base" | "head-behind-base",
+  reasons: string[],
+): void {
+  const headSha = field(record, "headSha");
+  const mergeBaseSha = field(record, "mergeBaseSha");
+  if (field(record, "baseSha") === headSha) {
+    reasons.push(`${reason} requires baseSha and headSha to differ`);
+  }
+  if (reason === "no-merge-base" && mergeBaseSha !== undefined) {
+    reasons.push("mergeBaseSha is not allowed for no-merge-base");
+  }
+  if (reason === "head-behind-base" && mergeBaseSha !== headSha) {
+    reasons.push("head-behind-base requires mergeBaseSha to equal headSha");
+  }
+}
+
+function validateResolvedReason(
+  record: Record<string, unknown>,
+  reason: "identical-revisions" | "no-merge-base" | "head-behind-base",
+  reasons: string[],
+): void {
+  const baseSha = field(record, "baseSha");
+  const headSha = field(record, "headSha");
+  if (baseSha === undefined || headSha === undefined) {
+    reasons.push(`${reason} requires baseSha and headSha`);
+  }
+  if (reason !== "identical-revisions") {
+    validateDivergentReason(record, reason, reasons);
+    return;
+  }
+  if (baseSha !== headSha) reasons.push("identical-revisions requires baseSha to equal headSha");
+  if (field(record, "mergeBaseSha") !== undefined) {
+    reasons.push("mergeBaseSha is not allowed for identical-revisions");
+  }
+}
+
 function validateUnavailableConsistency(
   record: Record<string, unknown>,
   reason: GitChangeSnapshotUnavailableReason,
   reasons: string[],
 ): void {
-  const baseSha = field(record, "baseSha");
-  const headSha = field(record, "headSha");
-  const mergeBaseSha = field(record, "mergeBaseSha");
-  const bothResolved = baseSha !== undefined && headSha !== undefined;
   if (reason === "invalid-ref" || reason === "missing-ref") {
-    if (mergeBaseSha !== undefined) reasons.push("mergeBaseSha is not allowed for this reason");
-    if (reason === "invalid-ref" && bothResolved) reasons.push("invalid-ref resolves no revisions");
-    if (reason === "missing-ref" && bothResolved) reasons.push("missing-ref leaves a ref unresolved");
-    return;
-  }
-  if (!bothResolved) reasons.push(`${reason} requires baseSha and headSha`);
-  if (reason === "identical-revisions" && baseSha !== headSha) {
-    reasons.push("identical-revisions requires baseSha to equal headSha");
-  }
-  if (reason !== "identical-revisions" && baseSha === headSha) {
-    reasons.push(`${reason} requires baseSha and headSha to differ`);
-  }
-  if (reason === "head-behind-base" && mergeBaseSha !== headSha) {
-    reasons.push("head-behind-base requires mergeBaseSha to equal headSha");
-  }
-  if (reason !== "head-behind-base" && mergeBaseSha !== undefined) {
-    reasons.push(`mergeBaseSha is not allowed for ${reason}`);
+    validateUnresolvedReason(record, reason, reasons);
+  } else {
+    validateResolvedReason(record, reason, reasons);
   }
 }
 
@@ -1047,7 +1110,10 @@ function validateUnavailable(record: Record<string, unknown>, reasons: string[])
     reasons.push("reason must be an unavailable reason");
     return;
   }
-  if (reason !== "invalid-ref" && (!isSafeRef(field(record, "baseRef")) || !isSafeRef(field(record, "headRef")))) {
+  if (
+    reason !== "invalid-ref" &&
+    (!isSafeRef(field(record, "baseRef")) || !isSafeRef(field(record, "headRef")))
+  ) {
     reasons.push(`${reason} requires both refs`);
   }
   validateUnavailableConsistency(record, reason, reasons);

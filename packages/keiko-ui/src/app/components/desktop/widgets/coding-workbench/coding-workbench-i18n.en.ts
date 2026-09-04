@@ -489,6 +489,84 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The workspace could not be bound. Review the repository path and target branch.",
   "codingWorkbench.alert.runRefreshFailed": "Run could not be refreshed.",
   "codingWorkbench.alert.eventStreamRefreshFailed": "Event stream could not be refreshed.",
+  "codingWorkbench.issue.eyebrow": "GitHub issue",
+  "codingWorkbench.issue.title": "Start from a GitHub issue",
+  "codingWorkbench.issue.help":
+    "Optional. Paste an issue URL or #number from this repository. Keiko previews the issue as untrusted text and binds the run to the server-resolved issue, repository, remote and default branch.",
+  "codingWorkbench.issue.reference": "Issue URL or #number",
+  "codingWorkbench.issue.referencePlaceholder": "https://github.com/owner/repo/issues/123 or #123",
+  "codingWorkbench.issue.preview": "Preview issue",
+  "codingWorkbench.issue.previewing": "Previewing…",
+  "codingWorkbench.issue.cancel": "Cancel",
+  "codingWorkbench.issue.confirm": "Use this issue",
+  "codingWorkbench.issue.discard": "Discard preview",
+  "codingWorkbench.issue.remove": "Remove issue",
+  "codingWorkbench.issue.retry": "Try again",
+  "codingWorkbench.issue.changeRepository": "Change repository path",
+  "codingWorkbench.issue.openGit": "Open Git client to clone or switch",
+  "codingWorkbench.issue.previewRegion": "Issue preview",
+  "codingWorkbench.issue.untrustedNote":
+    "Issue text is shown as plain text and is never treated as instructions or approval.",
+  "codingWorkbench.issue.fact.state": "State",
+  "codingWorkbench.issue.fact.comments": "Comments",
+  "codingWorkbench.issue.fact.provenance": "Source",
+  "codingWorkbench.issue.fact.url": "URL",
+  "codingWorkbench.issue.fact.baseRef": "Base branch",
+  "codingWorkbench.issue.state.open": "Open",
+  "codingWorkbench.issue.state.closed": "Closed",
+  "codingWorkbench.issue.commentCount": "{count} bounded comment(s) included",
+  "codingWorkbench.issue.excerptLabel": "Issue body excerpt",
+  "codingWorkbench.issue.excerptEmpty": "The issue has no body.",
+  "codingWorkbench.issue.baseRefServerChosen":
+    "The base branch is the repository's server-resolved default branch. It cannot be changed for an issue-bound run.",
+  "codingWorkbench.issue.accepted": "Issue {issue} · base {baseRef}",
+  "codingWorkbench.issue.acceptedHelp":
+    "The workspace binds from {baseRef} and the run starts bound to this issue. Remove the issue to start a generic run instead.",
+  "codingWorkbench.issue.status.loading": "Loading the issue preview…",
+  "codingWorkbench.issue.status.ready": "Issue preview ready.",
+  "codingWorkbench.issue.status.cancelled": "Issue preview cancelled. No run was started.",
+  "codingWorkbench.issue.status.failed": "The issue could not be loaded.",
+  "codingWorkbench.issue.status.empty": "Enter an issue URL or #number to preview it.",
+  "codingWorkbench.issue.error.invalid-reference":
+    "That is not a GitHub issue reference. Enter an issue URL or #number from this repository; pull request URLs and other hosts are rejected.",
+  "codingWorkbench.issue.error.repository-mismatch":
+    "The issue belongs to a different repository than the one at this path. Change the repository path, or open the Git client to switch to or clone that repository. Keiko never redirects silently.",
+  "codingWorkbench.issue.error.auth-required":
+    "GitHub issue access is not enabled for this repository. Enable it under Settings → Security → GitHub issue access, then preview again.",
+  "codingWorkbench.issue.error.issue-unavailable":
+    "The issue could not be read. It may be closed, transferred, deleted, a pull request, or outside the access this installation has.",
+  "codingWorkbench.issue.error.clone-failed":
+    "The repository could not be cloned. No run was started and no destination was overwritten. Review the Git client and try again.",
+  "codingWorkbench.issue.error.authority-denied":
+    "The current authority does not allow binding a run to this issue. Review the autonomy mode and try again.",
+  "codingWorkbench.issue.error.cancelled": "The issue intake was cancelled. No run was started.",
+  "codingWorkbench.issue.error.unavailable-runtime":
+    "The coding runtime is unavailable on this installation, so an issue-bound run cannot start. The preview stays for reference; confirm once the runtime is active.",
+  "codingWorkbench.issue.error.unknown":
+    "The issue preview failed. Review the live state and try again.",
+  "codingWorkbench.issue.supportId": "Support id: {correlationId}.",
+  "codingWorkbench.composer.issue.label": "Issue {issue}",
+  "codingWorkbench.composer.issue.remove": "Remove issue {issue} from this run",
+  "codingWorkbench.composer.issue.startUnavailable":
+    "This build cannot yet carry the issue reference on the start request, so an issue-bound run is not started. Remove the issue to start a generic run.",
+  "codingWorkbench.githubAccess.title": "GitHub issue access",
+  "codingWorkbench.githubAccess.description":
+    "Lets the Coding Workbench read GitHub issues and comments for the selected repository through the local gh CLI. The grant is stored per local checkout; credentials never enter Keiko.",
+  "codingWorkbench.githubAccess.toggle": "Allow reading GitHub issues for this repository",
+  "codingWorkbench.githubAccess.repositoryId": "Repository id",
+  "codingWorkbench.githubAccess.noRepository":
+    "Open a repository as a project to manage its GitHub issue access.",
+  "codingWorkbench.githubAccess.loading": "Loading GitHub issue access…",
+  "codingWorkbench.githubAccess.enabled": "Enabled",
+  "codingWorkbench.githubAccess.disabled": "Disabled",
+  "codingWorkbench.githubAccess.error.hydrate":
+    "GitHub issue access could not be loaded. Reading stays disabled until it is confirmed.",
+  "codingWorkbench.githubAccess.error.persist":
+    "GitHub issue access could not be saved. The previous server-confirmed setting remains active.",
+  "codingWorkbench.githubAccess.error.conflict":
+    "GitHub issue access changed elsewhere. The current server state was reloaded; review it and try again.",
+  "codingWorkbench.githubAccess.error.unknown-repository":
+    "This path is not an opened project. Open the repository as a project before changing its GitHub issue access.",
 } as const;
 
 export type CodingWorkbenchMessageKey = keyof typeof EN_CODING_WORKBENCH_MESSAGES;

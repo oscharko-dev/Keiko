@@ -162,7 +162,7 @@ function parseIssueUrl(input: string): GitHubIssueReferenceParseResult {
 // `<owner>/<repo>#<n>`: exactly one `#`, with the repository on its left and the number on its right.
 function parseOwnerRepoForm(input: string): GitHubIssueReferenceParseResult {
   const separator = input.indexOf(RELATIVE_PREFIX);
-  if (separator <= 0 || input.indexOf(RELATIVE_PREFIX, separator + 1) !== -1) {
+  if (separator <= 0 || input.includes(RELATIVE_PREFIX, separator + 1)) {
     return reject("malformed");
   }
   return referenceFor(input.slice(0, separator), input.slice(separator + 1));

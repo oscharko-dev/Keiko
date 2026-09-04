@@ -8,7 +8,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 21;
+export const SCHEMA_VERSION = 22;
 
 interface Migration {
   readonly version: number;
@@ -654,6 +654,37 @@ CREATE TABLE github_issue_reader_authorization (
 ) STRICT;
 `;
 
+// V22 (issue #3385, epic #3384) — the content-free projection of the GitHub issue a coding run was
+// accepted for, on the run's own ledger row rather than in a second table: a run carries at most one
+// issue binding and it is immutable for the run's life, so a separate keyed store would only add a
+// join and a place for the two to disagree. Every column is nullable because generic runs have none.
+//
+// Exactly the seven fields of `CodingWorkbenchIssueBinding`, and nothing the issue itself says:
+// `issue_repository_id` is the same derived id the task workspace uses (`deriveRepositoryId`),
+// `issue_remote_digest`/`issue_id_digest`/`issue_content_revision_digest`/`issue_binding_digest`
+// are sha256 hex, `issue_number` is the displayed number and `issue_default_base_ref` the
+// server-resolved branch a published pull request targets. No title, body, comment, URL, remote
+// URL or owner/name pair reaches SQLite (store/forbidden-fields.test.ts pins the exact column set).
+// The existing `binding_digest` column is the EXECUTION binding's digest and is unrelated; the
+// `issue_` prefix keeps the two apart by name. Column-level CHECKs hold the same bounds the
+// contract validator enforces, so a row that bypasses the store cannot hold an out-of-range value.
+const V22_SQL = `
+ALTER TABLE coding_runtime_snapshots ADD COLUMN issue_repository_id TEXT
+  CHECK (issue_repository_id IS NULL OR length(issue_repository_id) BETWEEN 1 AND 128);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN issue_remote_digest TEXT
+  CHECK (issue_remote_digest IS NULL OR length(issue_remote_digest) = 64);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN issue_number INTEGER
+  CHECK (issue_number IS NULL OR issue_number BETWEEN 1 AND 1000000000);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN issue_id_digest TEXT
+  CHECK (issue_id_digest IS NULL OR length(issue_id_digest) = 64);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN issue_default_base_ref TEXT
+  CHECK (issue_default_base_ref IS NULL OR length(issue_default_base_ref) BETWEEN 1 AND 255);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN issue_content_revision_digest TEXT
+  CHECK (issue_content_revision_digest IS NULL OR length(issue_content_revision_digest) = 64);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN issue_binding_digest TEXT
+  CHECK (issue_binding_digest IS NULL OR length(issue_binding_digest) = 64);
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
 // change.
@@ -679,6 +710,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 19, sql: V19_SQL },
   { version: 20, sql: V20_SQL },
   { version: 21, sql: V21_SQL },
+  { version: 22, sql: V22_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

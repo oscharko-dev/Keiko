@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
+import type { CodingWorkbenchIssueBinding } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_RUNTIME_FAILURE_CODES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
-import { runMigrations } from "../store/schema.js";
+import { restoreV13SchemaFixture } from "../store/legacySchemaTestFixture.js";
+import { runMigrations, SCHEMA_VERSION } from "../store/schema.js";
 import {
   createCodingRuntimeSnapshotStore,
   type CodingRuntimeSnapshot,
@@ -35,6 +37,35 @@ function store(): ReturnType<typeof createCodingRuntimeSnapshotStore> {
   const db = new DatabaseSync(":memory:");
   runMigrations(db);
   return createCodingRuntimeSnapshotStore(db);
+}
+
+const ISSUE_BINDING: CodingWorkbenchIssueBinding = {
+  schemaVersion: "1",
+  repositoryId: "repository-0123456789abcdef",
+  remoteDigest: "1".repeat(64),
+  issueNumber: 3385,
+  issueIdDigest: "2".repeat(64),
+  defaultBaseRef: "dev",
+  contentRevisionDigest: "3".repeat(64),
+  bindingDigest: "4".repeat(64),
+};
+
+// The seven v22 columns, in migration order. Content-free by construction: an id the task workspace
+// already derives, four digests, a number and a branch name — never a title, body, URL or remote.
+const ISSUE_COLUMNS = [
+  "issue_repository_id",
+  "issue_remote_digest",
+  "issue_number",
+  "issue_id_digest",
+  "issue_default_base_ref",
+  "issue_content_revision_digest",
+  "issue_binding_digest",
+] as const;
+
+function columnNames(db: DatabaseSync): readonly string[] {
+  return (
+    db.prepare("PRAGMA table_info(coding_runtime_snapshots)").all() as { name: string }[]
+  ).map((row) => row.name);
 }
 
 describe("CodingRuntimeSnapshotStore", () => {
@@ -190,5 +221,128 @@ describe("CodingRuntimeSnapshotStore fail-closed validation", () => {
     expect(s.get("run-1")).toBeDefined();
     s.deletePruned([]);
     expect(s.get("run-1")).toBeDefined();
+  });
+});
+
+describe("issue-bound snapshots (#3385, schema v22)", () => {
+  it("round-trips the content-free issue binding and keeps it through transitions and recovery", () => {
+    const s = store();
+    s.create({ ...snapshot(), issueBinding: ISSUE_BINDING });
+
+    expect(s.get("run-1")?.issueBinding).toEqual(ISSUE_BINDING);
+    expect(s.listRecentActive(1)[0]?.issueBinding).toEqual(ISSUE_BINDING);
+    expect(
+      s.transition("run-1", { state: "running", revision: 1, updatedAt: at }).issueBinding,
+    ).toEqual(ISSUE_BINDING);
+    expect(s.markNonterminalRecoveryRequired("2026-07-13T10:01:00.000Z")).toEqual(["run-1"]);
+    const recovered = s.get("run-1");
+    expect(recovered?.state).toBe("recovery-required");
+    expect(recovered?.issueBinding).toEqual(ISSUE_BINDING);
+    expect(s.listAll(1)[0]?.issueBinding).toEqual(ISSUE_BINDING);
+  });
+
+  it("persists no issue columns for a generic run", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create(snapshot());
+
+    expect(s.get("run-1")?.issueBinding).toBeUndefined();
+    expect("issueBinding" in (s.get("run-1") ?? {})).toBe(false);
+    const row = db
+      .prepare(`SELECT ${ISSUE_COLUMNS.join(", ")} FROM coding_runtime_snapshots WHERE run_id = ?`)
+      .get("run-1") as Record<string, unknown>;
+    for (const column of ISSUE_COLUMNS) expect(row[column], column).toBeNull();
+  });
+
+  it("refuses a malformed issue binding field by field", () => {
+    const rejected: readonly Partial<Record<keyof CodingWorkbenchIssueBinding, unknown>>[] = [
+      { schemaVersion: "2" },
+      { repositoryId: "" },
+      { repositoryId: "../escape" },
+      { repositoryId: "a".repeat(129) },
+      { remoteDigest: "not-a-digest" },
+      { remoteDigest: "A".repeat(64) },
+      { issueNumber: 0 },
+      { issueNumber: 2.5 },
+      { issueNumber: 1_000_000_001 },
+      { issueIdDigest: "2".repeat(63) },
+      { defaultBaseRef: "" },
+      { defaultBaseRef: "dev branch" },
+      { defaultBaseRef: "feature/../x" },
+      { defaultBaseRef: "-dev" },
+      { contentRevisionDigest: 42 },
+      { bindingDigest: "4".repeat(65) },
+    ];
+    for (const override of rejected) {
+      const s = store();
+      expect(
+        () =>
+          s.create({
+            ...snapshot(),
+            issueBinding: { ...ISSUE_BINDING, ...override } as CodingWorkbenchIssueBinding,
+          }),
+        JSON.stringify(override),
+      ).toThrow(/issue/u);
+      expect(s.get("run-1")).toBeUndefined();
+    }
+  });
+
+  it("fails closed on a partially persisted issue binding row instead of projecting a generic run", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create({ ...snapshot(), issueBinding: ISSUE_BINDING });
+    db.exec("UPDATE coding_runtime_snapshots SET issue_number = NULL WHERE run_id = 'run-1'");
+
+    expect(() => s.get("run-1")).toThrow(/issue binding/u);
+    expect(() => s.listRecentActive(1)).toThrow(/issue binding/u);
+  });
+
+  // D9-style migration pin: forward-only in production, and the reverse fixture must remove exactly
+  // what v22 added so a v13 database migrates to the same shape a fresh one has.
+  it("adds the seven issue columns forward-only and the legacy fixture removes them", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const fresh = columnNames(db);
+    for (const column of ISSUE_COLUMNS) expect(fresh, column).toContain(column);
+
+    restoreV13SchemaFixture(db);
+    const legacy = columnNames(db);
+    for (const column of ISSUE_COLUMNS) expect(legacy, column).not.toContain(column);
+
+    runMigrations(db);
+    expect(columnNames(db)).toEqual(fresh);
+    expect(
+      (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
+    ).toBe(SCHEMA_VERSION);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create({ ...snapshot(), issueBinding: ISSUE_BINDING });
+    expect(s.get("run-1")?.issueBinding).toEqual(ISSUE_BINDING);
+  });
+
+  it("holds the SQL bounds on every issue column, not only the store's own validation", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create({ ...snapshot(), issueBinding: ISSUE_BINDING });
+    for (const [column, value] of [
+      ["issue_repository_id", "''"],
+      ["issue_remote_digest", "'abc'"],
+      ["issue_number", "0"],
+      ["issue_number", "1000000001"],
+      ["issue_id_digest", `'${"x".repeat(65)}'`],
+      ["issue_default_base_ref", "''"],
+      ["issue_content_revision_digest", "'short'"],
+      ["issue_binding_digest", "'short'"],
+    ] as const) {
+      expect(
+        () =>
+          db.exec(
+            `UPDATE coding_runtime_snapshots SET ${column} = ${value} WHERE run_id = 'run-1'`,
+          ),
+        `${column}=${value}`,
+      ).toThrow(/CHECK/u);
+    }
   });
 });

@@ -36,6 +36,32 @@ import {
   result,
   validateStrictUtcInstant,
 } from "./coding-workbench-runtime-api-validation.js";
+// The GitHub issue reference parser is a dependency-free leaf (#3385). Its runtime surface is
+// re-exported from HERE so the server and the browser reach it through the existing
+// `runtime/coding-workbench-runtime` subpath; the barrel exposes the same names as types only.
+import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
+// The transport bound on a repository path is owned by the GitHub-authorization wire (#3385):
+// the preview request names a repository the same way, so it takes the same bound rather than a
+// second number that could drift from it.
+import { MAX_GITHUB_ISSUE_READER_REPOSITORY_PATH_CHARS } from "./bff-wire.js";
+
+export {
+  canonicalGitHubOwnerAndRepo,
+  findGitHubIssueReferences,
+  GITHUB_ISSUE_NUMBER_MAX,
+  GITHUB_ISSUE_REFERENCE_MAX_CHARS,
+  GITHUB_ISSUE_REFERENCE_REJECTIONS,
+  isGitHubOwnerAndRepo,
+  parseGitHubIssueNumber,
+  parseGitHubIssueReference,
+  sameGitHubOwnerAndRepo,
+} from "./github-issue-reference.js";
+export type {
+  GitHubIssueReference,
+  GitHubIssueReferenceParseResult,
+  GitHubIssueReferenceRejection,
+  ParseGitHubIssueReferenceOptions,
+} from "./github-issue-reference.js";
 
 export {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
@@ -139,9 +165,11 @@ export interface CodingWorkbenchIssueBinding {
    */
   readonly repositoryId: string;
   /**
-   * sha256 of the configured remote URL. The URL itself never leaves the server, so a binding can
-   * be compared against the live remote without an endpoint reaching a response or an evidence
-   * document.
+   * sha256 of the canonical (lower-cased) `owner/repo` the checkout's configured remote resolves
+   * to. The remote URL itself never leaves the server, so a binding can be compared against the
+   * live remote without an endpoint reaching a response or an evidence document; digesting the
+   * canonical repository rather than the URL string means an `https` and an `ssh` clone of one
+   * repository agree, and a checkout repointed at another repository does not.
    */
   readonly remoteDigest: string;
   /** The issue number as displayed to the user. Positive, and bounded by the provider's range. */
@@ -162,6 +190,84 @@ export interface CodingWorkbenchIssueBinding {
   readonly contentRevisionDigest: string;
   /** sha256 over every field above; downstream stages bind to this single opaque value. */
   readonly bindingDigest: string;
+}
+
+/** The bound issue's lifecycle as the provider reports it; only `open` may be bound to a run. */
+export type CodingWorkbenchIssueState = "open" | "closed";
+export const CODING_WORKBENCH_ISSUE_STATES: readonly CodingWorkbenchIssueState[] = Object.freeze([
+  "open",
+  "closed",
+] as const);
+
+/** Bounds on the browser-facing preview: a title and an excerpt, never the whole issue. */
+export const CODING_WORKBENCH_ISSUE_PREVIEW_TITLE_MAX_CHARS = 256;
+export const CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS = 2_048;
+/** One pasted reference; re-stated from the parser leaf so consumers need only this module. */
+export const CODING_WORKBENCH_ISSUE_REF_MAX_CHARS = GITHUB_ISSUE_REFERENCE_MAX_CHARS;
+
+export interface CodingWorkbenchIssuePreviewProvenance {
+  /** The repository the issue was read from, as the checkout's remote resolves it. */
+  readonly ownerAndRepo: string;
+  readonly issueNumber: number;
+  /** Server-constructed canonical issue URL, never the provider's own `html_url` echoed back. */
+  readonly url: string;
+}
+
+/**
+ * What the browser shows before the user confirms (#3385). Transient and untrusted by
+ * construction: `untrusted` is a literal so a consumer cannot forget it, and the text fields are
+ * bounded so the preview is a glance at the issue, not a copy of it. It never enters a snapshot,
+ * a log line or an evidence record — the binding beside it is what persists.
+ */
+export interface CodingWorkbenchIssuePreview {
+  readonly untrusted: true;
+  readonly title: string;
+  readonly bodyExcerpt: string;
+  readonly bodyExcerptTruncated: boolean;
+  readonly commentCount: number;
+  readonly state: CodingWorkbenchIssueState;
+  readonly provenance: CodingWorkbenchIssuePreviewProvenance;
+}
+
+/** `POST /api/coding-workbench/issue/preview`: a registered repository and one pasted reference. */
+export interface CodingWorkbenchIssuePreviewRequestWire {
+  /**
+   * Intent, not authority: the server accepts the path only if it names an already-registered
+   * project, resolves the canonical root itself, and derives every identity from that root.
+   */
+  readonly repositoryPath: string;
+  /** Raw user text — an issue URL, `owner/repo#n`, or `#n` relative to the repository's remote. */
+  readonly issueRef: string;
+}
+
+/**
+ * The content-free half of a successful preview: what the browser may show as the canonical
+ * reference. `contentRevisionDigest` and `schemaVersion` stay server-side; the browser never
+ * authors a binding, so it has no use for the fields that only a producer needs.
+ */
+export type CodingWorkbenchIssueBindingProjection = Pick<
+  CodingWorkbenchIssueBinding,
+  | "repositoryId"
+  | "remoteDigest"
+  | "issueNumber"
+  | "issueIdDigest"
+  | "defaultBaseRef"
+  | "bindingDigest"
+>;
+
+export interface CodingWorkbenchIssuePreviewResponseWire {
+  readonly preview: CodingWorkbenchIssuePreview;
+  readonly binding: CodingWorkbenchIssueBindingProjection;
+}
+
+/** The typed refusal: the closed failure beside the standard error envelope. */
+export interface CodingWorkbenchIssuePreviewFailureWire {
+  readonly failure: CodingWorkbenchIssueBindingFailure;
+  readonly error: {
+    readonly code: string;
+    readonly message: string;
+    readonly correlationId?: string | undefined;
+  };
 }
 
 export interface CodingWorkbenchRuntimeAuthorityEnvelope {
@@ -420,6 +526,100 @@ export function validateCodingWorkbenchRuntimeAdapterStartRequest(
     errors.push("runtimeSource is invalid");
   if (!isOneOf(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES))
     errors.push("modelSource is invalid");
+  return result(value, errors);
+}
+
+const ISSUE_PREVIEW_REQUEST_KEYS = ["repositoryPath", "issueRef"] as const;
+
+function isBoundedNulFreeString(value: unknown, maxChars: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= maxChars &&
+    !value.includes("\0")
+  );
+}
+
+/**
+ * Parse the preview request body. Exact keys, both required, both bounded, neither judged beyond
+ * transport shape: whether the path is a registered project and whether the reference is an issue
+ * are the server's decisions, made after this returns. Anything else is `undefined`.
+ */
+export function parseCodingWorkbenchIssuePreviewRequest(
+  value: unknown,
+): CodingWorkbenchIssuePreviewRequestWire | undefined {
+  if (!isRecord(value)) return undefined;
+  if (exactKeys(value, [...ISSUE_PREVIEW_REQUEST_KEYS], "issuePreview").length > 0) {
+    return undefined;
+  }
+  const { repositoryPath, issueRef } = value;
+  if (!isBoundedNulFreeString(repositoryPath, MAX_GITHUB_ISSUE_READER_REPOSITORY_PATH_CHARS)) {
+    return undefined;
+  }
+  if (!isBoundedNulFreeString(issueRef, CODING_WORKBENCH_ISSUE_REF_MAX_CHARS)) return undefined;
+  return { repositoryPath, issueRef };
+}
+
+function validateIssuePreviewText(value: Record<string, unknown>, errors: string[]): void {
+  if (
+    typeof value.title !== "string" ||
+    value.title.length > CODING_WORKBENCH_ISSUE_PREVIEW_TITLE_MAX_CHARS
+  ) {
+    errors.push("issuePreview.title must be a bounded string");
+  }
+  if (
+    typeof value.bodyExcerpt !== "string" ||
+    value.bodyExcerpt.length > CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS
+  ) {
+    errors.push("issuePreview.bodyExcerpt must be a bounded string");
+  }
+  if (typeof value.bodyExcerptTruncated !== "boolean") {
+    errors.push("issuePreview.bodyExcerptTruncated must be a boolean");
+  }
+}
+
+function validateIssuePreviewProvenance(value: unknown, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push("issuePreview.provenance must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value, ["ownerAndRepo", "issueNumber", "url"], "provenance"));
+  if (!isNonEmpty(value.ownerAndRepo)) errors.push("provenance.ownerAndRepo is required");
+  if (!Number.isSafeInteger(value.issueNumber) || Number(value.issueNumber) < 1) {
+    errors.push("provenance.issueNumber must be a positive integer");
+  }
+  if (!isNonEmpty(value.url)) errors.push("provenance.url is required");
+}
+
+/**
+ * The preview's shape, held to exact keys so a later change cannot quietly widen what crosses the
+ * browser boundary — the same reason the snapshot's issue projection is validated that way.
+ */
+export function validateCodingWorkbenchIssuePreview(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchIssuePreview> {
+  if (!isRecord(value)) return { ok: false, errors: ["issue preview must be an object"] };
+  const errors = exactKeys(
+    value,
+    [
+      "untrusted",
+      "title",
+      "bodyExcerpt",
+      "bodyExcerptTruncated",
+      "commentCount",
+      "state",
+      "provenance",
+    ],
+    "issuePreview",
+  );
+  if (value.untrusted !== true) errors.push("issuePreview.untrusted must be true");
+  validateIssuePreviewText(value, errors);
+  if (!Number.isSafeInteger(value.commentCount) || Number(value.commentCount) < 0) {
+    errors.push("issuePreview.commentCount must be a non-negative integer");
+  }
+  if (!isOneOf(value.state, CODING_WORKBENCH_ISSUE_STATES))
+    errors.push("issuePreview.state is invalid");
+  validateIssuePreviewProvenance(value.provenance, errors);
   return result(value, errors);
 }
 

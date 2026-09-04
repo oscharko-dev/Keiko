@@ -119,6 +119,16 @@ const ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS = new Set([
   "stderr_line_count",
   "stderr_sha256",
   "stderr_truncated",
+  // V22 (issue #3385): the content-free projection of the accepted GitHub issue a run is bound to —
+  // the repository id the task workspace already derives, four sha256 digests, the issue number
+  // and the server-resolved default base ref. No title, body, URL, remote or owner/name pair.
+  "issue_repository_id",
+  "issue_remote_digest",
+  "issue_number",
+  "issue_id_digest",
+  "issue_default_base_ref",
+  "issue_content_revision_digest",
+  "issue_binding_digest",
 ]);
 
 // V11 (issue #2521) persisted workspace-trust records. Content-free by construction: an opaque
@@ -315,6 +325,14 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
         "argv",
         "env",
         "approval",
+        // #3385: the issue binding persists identity and digests, never the issue's text or
+        // where it lives.
+        "title",
+        "body",
+        "comment",
+        "url",
+        "remote_name",
+        "owner",
       ]) {
         expect(lower).not.toContain(forbidden);
       }

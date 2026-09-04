@@ -1146,6 +1146,46 @@ describe("computeStoreFingerprint (Wave 4a, epic #3233 §6.2)", () => {
     }
   });
 
+  // Schema v22 (#3385) widened `coding_runtime_snapshots` with the issue-binding columns and created
+  // no table, so the fingerprint table list is exactly what v21 left it. This pins both halves: the
+  // columns landed on the already-fingerprinted table (a support bundle keeps counting issue-bound
+  // runs through the same row count), and no second, unfingerprinted store appeared for them.
+  it("keeps the v22 issue-binding columns on the fingerprinted coding_runtime_snapshots table", () => {
+    const dbPath = join(tmpDir, "fingerprint-v22.db");
+    const db = openNodeUiDatabase(dbPath);
+    try {
+      const codingRuntimeTables = UI_STORE_FINGERPRINT_TABLES.filter((table) =>
+        table.startsWith("coding_runtime"),
+      );
+      expect(codingRuntimeTables).toEqual(["coding_runtime_snapshots"]);
+      const columns = (
+        db.prepare("PRAGMA table_info(coding_runtime_snapshots)").all() as { name: string }[]
+      ).map((row) => row.name);
+      for (const column of [
+        "issue_repository_id",
+        "issue_remote_digest",
+        "issue_number",
+        "issue_id_digest",
+        "issue_default_base_ref",
+        "issue_content_revision_digest",
+        "issue_binding_digest",
+      ]) {
+        expect(columns, column).toContain(column);
+      }
+      const liveTableCount = (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+          )
+          .get() as { count: number }
+      ).count;
+      expect(liveTableCount).toBe(UI_STORE_FINGERPRINT_TABLES.length);
+      expect(computeStoreFingerprint(db).tableRowCounts.coding_runtime_snapshots).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
   it("counts rows actually present in a table, independently per table", () => {
     const dbPath = join(tmpDir, "fingerprint-counts.db");
     const db = openNodeUiDatabase(dbPath);

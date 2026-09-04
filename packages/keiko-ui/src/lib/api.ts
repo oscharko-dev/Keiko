@@ -308,29 +308,7 @@ async function fetchJson<T>(
     },
   });
 
-  if (!res.ok) {
-    let code = "INTERNAL";
-    let message = `HTTP ${res.status.toString()}`;
-    let envelopeCorrelationId: string | undefined;
-    try {
-      const envelope = (await res.json()) as BffError & {
-        readonly error: { readonly correlationId?: unknown };
-      };
-      code = envelope.error.code;
-      message = envelope.error.message;
-      envelopeCorrelationId =
-        typeof envelope.error.correlationId === "string" ? envelope.error.correlationId : undefined;
-    } catch {
-      // parse failure — keep generic message, never log body
-    }
-    const error = new ApiError(code, message, res.status);
-    // RB-6: the header is the transport's own record of the id; the envelope carries the same id
-    // when a route writes it into the body. Either ties this failure to one redacted server
-    // diagnostic (#3385 — a refused issue preview names its correlation id in the UI state).
-    const correlationId = res.headers.get(CORRELATION_HEADER) ?? envelopeCorrelationId;
-    if (correlationId !== undefined) error.correlationId = correlationId;
-    throw error;
-  }
+  if (!res.ok) throw await bffFailure(res);
 
   if (res.status === 204) {
     return undefined as T;
@@ -338,6 +316,32 @@ async function fetchJson<T>(
 
   const value = (await res.json()) as unknown;
   return validator === undefined ? (value as T) : validateBffResponse<T>(path, value, validator);
+}
+
+// The `ApiError` for a non-2xx BFF response: code and message from the `{ error }` envelope when it
+// parses, the generic HTTP line otherwise (never the body). RB-6: the correlation header is the
+// transport's own record of the id; the envelope carries the same id when a route writes it into
+// the body. Either ties this failure to one redacted server diagnostic (#3385 — a refused issue
+// preview names its correlation id in the UI state).
+async function bffFailure(res: Response): Promise<ApiError> {
+  let code = "INTERNAL";
+  let message = `HTTP ${res.status.toString()}`;
+  let envelopeCorrelationId: string | undefined;
+  try {
+    const envelope = (await res.json()) as BffError & {
+      readonly error: { readonly correlationId?: unknown };
+    };
+    code = envelope.error.code;
+    message = envelope.error.message;
+    envelopeCorrelationId =
+      typeof envelope.error.correlationId === "string" ? envelope.error.correlationId : undefined;
+  } catch {
+    // parse failure — keep generic message, never log body
+  }
+  const error = new ApiError(code, message, res.status);
+  const correlationId = res.headers.get(CORRELATION_HEADER) ?? envelopeCorrelationId;
+  if (correlationId !== undefined) error.correlationId = correlationId;
+  return error;
 }
 
 async function fetchBinary(path: string, init?: RequestInit): Promise<Uint8Array> {
@@ -3391,21 +3395,29 @@ function issuePreviewReasons(value: unknown): readonly string[] {
   return reasons;
 }
 
-function issueBindingReasons(value: unknown): readonly string[] {
-  if (!isRecordValue(value)) return ["binding must be an object"];
+const ISSUE_BINDING_DIGEST_FIELDS = [
+  "remoteDigest",
+  "issueIdDigest",
+  "contentRevisionDigest",
+  "bindingDigest",
+] as const;
+
+function issueBindingDigestReasons(value: Record<string, unknown>): readonly string[] {
   const reasons: string[] = [];
-  for (const key of Object.keys(value)) {
-    if (!ISSUE_BINDING_KEYS.has(key)) reasons.push(`binding.${key} is not a binding field`);
-  }
-  if (!isBoundedText(value.schemaVersion, 16)) reasons.push("binding.schemaVersion is invalid");
-  if (!isBoundedText(value.repositoryId, GITHUB_ISSUE_BINDING_ID_MAX_CHARS)) {
-    reasons.push("binding.repositoryId must be a bounded id");
-  }
-  for (const field of ["remoteDigest", "issueIdDigest", "contentRevisionDigest", "bindingDigest"]) {
+  for (const field of ISSUE_BINDING_DIGEST_FIELDS) {
     const digest = value[field];
     if (typeof digest !== "string" || !SHA256_HEX.test(digest)) {
       reasons.push(`binding.${field} must be a sha256 digest`);
     }
+  }
+  return reasons;
+}
+
+function issueBindingIdentityReasons(value: Record<string, unknown>): readonly string[] {
+  const reasons: string[] = [];
+  if (!isBoundedText(value.schemaVersion, 16)) reasons.push("binding.schemaVersion is invalid");
+  if (!isBoundedText(value.repositoryId, GITHUB_ISSUE_BINDING_ID_MAX_CHARS)) {
+    reasons.push("binding.repositoryId must be a bounded id");
   }
   if (!isIssueNumber(value.issueNumber)) {
     reasons.push("binding.issueNumber must be a bounded positive integer");
@@ -3414,6 +3426,16 @@ function issueBindingReasons(value: unknown): readonly string[] {
     reasons.push("binding.defaultBaseRef must be a safe git ref");
   }
   return reasons;
+}
+
+// Exact keys: a binding that carries anything beyond its content-free fields — a title, a body —
+// is refused, so issue text can never ride along inside the value the UI echoes back.
+function issueBindingReasons(value: unknown): readonly string[] {
+  if (!isRecordValue(value)) return ["binding must be an object"];
+  const extra = Object.keys(value)
+    .filter((key) => !ISSUE_BINDING_KEYS.has(key))
+    .map((key) => `binding.${key} is not a binding field`);
+  return [...extra, ...issueBindingIdentityReasons(value), ...issueBindingDigestReasons(value)];
 }
 
 // The preview and the binding describe the same issue: a response whose two halves name different

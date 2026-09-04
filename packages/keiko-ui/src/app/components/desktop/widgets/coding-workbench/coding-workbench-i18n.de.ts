@@ -504,4 +504,85 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.runRefreshFailed": "Lauf konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.eventStreamRefreshFailed":
     "Ereignisstrom konnte nicht aktualisiert werden.",
+  "codingWorkbench.issue.eyebrow": "GitHub-Issue",
+  "codingWorkbench.issue.title": "Aus einem GitHub-Issue starten",
+  "codingWorkbench.issue.help":
+    "Optional. Füge eine Issue-URL oder #Nummer aus diesem Repository ein. Keiko zeigt das Issue als nicht vertrauenswürdigen Text an und bindet den Lauf an das serverseitig aufgelöste Issue, Repository, Remote und den Standardbranch.",
+  "codingWorkbench.issue.reference": "Issue-URL oder #Nummer",
+  "codingWorkbench.issue.referencePlaceholder": "https://github.com/owner/repo/issues/123 oder #123",
+  "codingWorkbench.issue.preview": "Issue-Vorschau",
+  "codingWorkbench.issue.previewing": "Vorschau wird geladen…",
+  "codingWorkbench.issue.cancel": "Abbrechen",
+  "codingWorkbench.issue.confirm": "Dieses Issue verwenden",
+  "codingWorkbench.issue.discard": "Vorschau verwerfen",
+  "codingWorkbench.issue.remove": "Issue entfernen",
+  "codingWorkbench.issue.retry": "Erneut versuchen",
+  "codingWorkbench.issue.changeRepository": "Repository-Pfad ändern",
+  "codingWorkbench.issue.openGit": "Git-Client öffnen, um zu klonen oder zu wechseln",
+  "codingWorkbench.issue.previewRegion": "Issue-Vorschau",
+  "codingWorkbench.issue.untrustedNote":
+    "Issue-Text wird als reiner Text angezeigt und niemals als Anweisung oder Freigabe behandelt.",
+  "codingWorkbench.issue.fact.state": "Status",
+  "codingWorkbench.issue.fact.comments": "Kommentare",
+  "codingWorkbench.issue.fact.provenance": "Quelle",
+  "codingWorkbench.issue.fact.url": "URL",
+  "codingWorkbench.issue.fact.baseRef": "Basisbranch",
+  "codingWorkbench.issue.state.open": "Offen",
+  "codingWorkbench.issue.state.closed": "Geschlossen",
+  "codingWorkbench.issue.commentCount": "{count} begrenzte Kommentar(e) enthalten",
+  "codingWorkbench.issue.excerptLabel": "Auszug aus dem Issue-Text",
+  "codingWorkbench.issue.excerptEmpty": "Das Issue hat keinen Text.",
+  "codingWorkbench.issue.baseRefServerChosen":
+    "Der Basisbranch ist der serverseitig aufgelöste Standardbranch des Repositorys. Für einen issue-gebundenen Lauf kann er nicht geändert werden.",
+  "codingWorkbench.issue.accepted": "Issue {issue} · Basis {baseRef}",
+  "codingWorkbench.issue.acceptedHelp":
+    "Der Arbeitsbereich wird von {baseRef} gebunden und der Lauf startet an dieses Issue gebunden. Entferne das Issue, um stattdessen einen generischen Lauf zu starten.",
+  "codingWorkbench.issue.status.loading": "Issue-Vorschau wird geladen…",
+  "codingWorkbench.issue.status.ready": "Issue-Vorschau bereit.",
+  "codingWorkbench.issue.status.cancelled":
+    "Issue-Vorschau abgebrochen. Es wurde kein Lauf gestartet.",
+  "codingWorkbench.issue.status.failed": "Das Issue konnte nicht geladen werden.",
+  "codingWorkbench.issue.status.empty":
+    "Gib eine Issue-URL oder #Nummer ein, um eine Vorschau zu sehen.",
+  "codingWorkbench.issue.error.invalid-reference":
+    "Das ist keine GitHub-Issue-Referenz. Gib eine Issue-URL oder #Nummer aus diesem Repository ein; Pull-Request-URLs und andere Hosts werden abgelehnt.",
+  "codingWorkbench.issue.error.repository-mismatch":
+    "Das Issue gehört zu einem anderen Repository als dem unter diesem Pfad. Ändere den Repository-Pfad oder öffne den Git-Client, um zu diesem Repository zu wechseln oder es zu klonen. Keiko leitet niemals stillschweigend um.",
+  "codingWorkbench.issue.error.auth-required":
+    "Der GitHub-Issue-Zugriff ist für dieses Repository nicht aktiviert. Aktiviere ihn unter Einstellungen → Sicherheit → GitHub-Issue-Zugriff und lade die Vorschau erneut.",
+  "codingWorkbench.issue.error.issue-unavailable":
+    "Das Issue konnte nicht gelesen werden. Es ist möglicherweise geschlossen, übertragen, gelöscht, ein Pull Request oder außerhalb des Zugriffs dieser Installation.",
+  "codingWorkbench.issue.error.clone-failed":
+    "Das Repository konnte nicht geklont werden. Es wurde kein Lauf gestartet und kein Ziel überschrieben. Prüfe den Git-Client und versuche es erneut.",
+  "codingWorkbench.issue.error.authority-denied":
+    "Die aktuelle Autorität erlaubt es nicht, einen Lauf an dieses Issue zu binden. Prüfe den Autonomiemodus und versuche es erneut.",
+  "codingWorkbench.issue.error.cancelled":
+    "Die Issue-Aufnahme wurde abgebrochen. Es wurde kein Lauf gestartet.",
+  "codingWorkbench.issue.error.unavailable-runtime":
+    "Die Coding-Runtime ist auf dieser Installation nicht verfügbar, daher kann kein issue-gebundener Lauf starten. Die Vorschau bleibt zur Ansicht; bestätige, sobald die Runtime aktiv ist.",
+  "codingWorkbench.issue.error.unknown":
+    "Die Issue-Vorschau ist fehlgeschlagen. Prüfe den Live-Zustand und versuche es erneut.",
+  "codingWorkbench.issue.supportId": "Support-ID: {correlationId}.",
+  "codingWorkbench.composer.issue.label": "Issue {issue}",
+  "codingWorkbench.composer.issue.remove": "Issue {issue} aus diesem Lauf entfernen",
+  "codingWorkbench.composer.issue.startUnavailable":
+    "Dieser Build kann die Issue-Referenz noch nicht mit der Startanfrage übertragen, daher wird kein issue-gebundener Lauf gestartet. Entferne das Issue, um einen generischen Lauf zu starten.",
+  "codingWorkbench.githubAccess.title": "GitHub-Issue-Zugriff",
+  "codingWorkbench.githubAccess.description":
+    "Erlaubt der Coding Workbench, GitHub-Issues und Kommentare des ausgewählten Repositorys über die lokale gh-CLI zu lesen. Die Freigabe wird pro lokalem Checkout gespeichert; Zugangsdaten gelangen nie in Keiko.",
+  "codingWorkbench.githubAccess.toggle": "Lesen von GitHub-Issues für dieses Repository erlauben",
+  "codingWorkbench.githubAccess.repositoryId": "Repository-ID",
+  "codingWorkbench.githubAccess.noRepository":
+    "Öffne ein Repository als Projekt, um seinen GitHub-Issue-Zugriff zu verwalten.",
+  "codingWorkbench.githubAccess.loading": "GitHub-Issue-Zugriff wird geladen…",
+  "codingWorkbench.githubAccess.enabled": "Aktiviert",
+  "codingWorkbench.githubAccess.disabled": "Deaktiviert",
+  "codingWorkbench.githubAccess.error.hydrate":
+    "Der GitHub-Issue-Zugriff konnte nicht geladen werden. Das Lesen bleibt deaktiviert, bis er bestätigt ist.",
+  "codingWorkbench.githubAccess.error.persist":
+    "Der GitHub-Issue-Zugriff konnte nicht gespeichert werden. Die zuvor serverseitig bestätigte Einstellung bleibt aktiv.",
+  "codingWorkbench.githubAccess.error.conflict":
+    "Der GitHub-Issue-Zugriff wurde an anderer Stelle geändert. Der aktuelle Serverzustand wurde neu geladen; prüfe ihn und versuche es erneut.",
+  "codingWorkbench.githubAccess.error.unknown-repository":
+    "Dieser Pfad ist kein geöffnetes Projekt. Öffne das Repository als Projekt, bevor du seinen GitHub-Issue-Zugriff änderst.",
 } satisfies CodingWorkbenchMessageCatalog;

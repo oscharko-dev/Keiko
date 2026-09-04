@@ -35,6 +35,7 @@ import {
 } from "./coding-workbench-runtime.js";
 import { MODEL_REASONING_EFFORTS, type ModelReasoningEffort } from "./gateway.js";
 import { isSafeGitRefName } from "./git-repository.js";
+import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
 
 /** Browser-level preference, deliberately not an adapter, model, profile, or endpoint selector. */
 export type CodingWorkbenchRuntimePreference = "managed-gateway" | "codex-subscription";
@@ -118,6 +119,15 @@ export interface CodingWorkbenchRuntimeStartRequest {
   readonly runtimePreference?: CodingWorkbenchRuntimePreference | undefined;
   readonly modelId?: string | undefined;
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
+  /**
+   * The GitHub issue the run must be bound to (#3385): the raw text the user pasted — an issue URL,
+   * `owner/repo#n` or `#n` — never a structured repository/number pair the browser could author.
+   * The server resolves it against the ACTIVE workspace's own repository into a content-free
+   * `CodingWorkbenchIssueBinding` before any run is minted; a deployment without that resolver
+   * refuses the field outright, so supplying it can never silently start a generic run. Transient
+   * intent like `taskIntent`: it is parsed, never persisted.
+   */
+  readonly issueRef?: string | undefined;
 }
 
 /** The retry route has the same fresh, transient intent shape as start. */
@@ -316,18 +326,36 @@ function validateReasoningEffort(value: unknown, errors: string[]): void {
   }
 }
 
+// Transport shape only: one bounded, control-character-free string, sharing the parser's own
+// length bound so a reference the contract admits is never one the parser refuses for size. What
+// the text MEANS is decided by the server-side resolver against the active repository.
+function validateIssueRef(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    value.length > GITHUB_ISSUE_REFERENCE_MAX_CHARS ||
+    containsControlCharacter(value)
+  ) {
+    errors.push("issueRef must be bounded safe text");
+  }
+}
+
 export function parseCodingWorkbenchRuntimeStartRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeStartRequest> {
   if (!isRecord(value)) return invalid("start request must be an object");
   const errors = exactKeys(
     value,
-    // #3385: `issueRef` is deliberately NOT accepted yet. The resolver that turns it into a
-    // CodingWorkbenchIssueBinding — repository identity, remote, immutable issue id, default base
-    // ref, content revision — is not built, so accepting the field would start an ordinary generic
-    // run while the caller believes an issue was bound. It is added here together with that
-    // resolver, not before it.
-    ["requestId", "taskIntent", "requestedMode", "runtimePreference", "modelId", "reasoningEffort"],
+    [
+      "requestId",
+      "taskIntent",
+      "requestedMode",
+      "runtimePreference",
+      "modelId",
+      "reasoningEffort",
+      "issueRef",
+    ],
     "startRequest",
   );
   validateRequestId(value.requestId, errors);
@@ -338,6 +366,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   validateRuntimePreference(value.runtimePreference, errors);
   validateRuntimeModelId(value.modelId, errors);
   validateReasoningEffort(value.reasoningEffort, errors);
+  validateIssueRef(value.issueRef, errors);
   return result(value, errors);
 }
 
