@@ -28,6 +28,8 @@ export type FilesystemPolicy = "inherit" | "execution-root";
 //                 never left without a home directory.
 export type HomeIsolation = "ephemeral" | "inherit";
 
+export type OutputScrubMode = "every-non-allowlisted-value" | "credentials-only";
+
 export interface SandboxPolicy {
   // Names (never values) of parent env vars allowed to reach the child. No credential-bearing
   // var is ever listed here; the child env is built by name-copy, never `...process.env`.
@@ -51,6 +53,19 @@ export interface SandboxPolicy {
   readonly pinnedEnv?: Readonly<Record<string, string>> | undefined;
   // Defaults to "ephemeral" when absent.
   readonly homeIsolation?: HomeIsolation | undefined;
+  // Which parent env VALUES the spawn boundary scrubs out of captured stdout/stderr.
+  //   "every-non-allowlisted-value" (default, absent): the value of every parent var not on
+  //     `envAllowlist` (plus every credential) is replaced with the redaction marker. Right for a
+  //     command whose output is diagnostic — a stray secret must never survive into evidence.
+  //   "credentials-only": only credential values are scrubbed — the governed credential names, any
+  //     name that looks credential-bearing, and `credentialEnvAllowlist` — while ordinary context
+  //     values survive. For the ONE kind of read whose stdout IS the value the caller needs: a
+  //     configured remote URL legitimately contains an owner/repository name, and that name is
+  //     also what a CI runner puts in GITHUB_REPOSITORY, what a user is called in USER, what a
+  //     shell exports in a dozen harmless variables. Under the default mode such a read came back
+  //     as `https://github.com/[REDACTED].git` and every consumer addressed a repository that does
+  //     not exist. Never a way to leak a token: the shape-based redaction always applies too.
+  readonly outputScrub?: OutputScrubMode | undefined;
   // Hard cap on combined stdout+stderr bytes buffered before the child is killed (flood guard).
   readonly maxOutputBytes: number;
   // Default per-command wall-time before SIGTERM/SIGKILL.

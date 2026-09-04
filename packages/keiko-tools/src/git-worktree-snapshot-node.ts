@@ -80,10 +80,17 @@ function localReadConfigScopePins(): Readonly<Record<string, string>> {
 //   - an ISOLATED home (the default ephemeral one) plus `GIT_CONFIG_GLOBAL` = null device and
 //     `GIT_CONFIG_NOSYSTEM`, so no user or host config scope can rewrite the checkout's remote;
 //   - NO `credentialEnvAllowlist`: a local read authenticates to nothing, so no token reaches git.
-const GIT_REMOTE_URL_READ_SANDBOX_POLICY: SandboxPolicy = Object.freeze({
+//   - `outputScrub: "credentials-only"`: this read's stdout IS the value the caller needs. The
+//     default mode scrubs the value of EVERY non-allowlisted parent variable, and a CI runner
+//     exports the checkout's own owner/repo as GITHUB_REPOSITORY — so the URL came back as
+//     `https://github.com/[REDACTED].git` and every consumer addressed a repository that does not
+//     exist. The first repair only hid that from the tests. Credentials are still scrubbed, by
+//     governed name, by credential-shaped name and by shape; a context name is not a secret.
+export const GIT_REMOTE_URL_READ_SANDBOX_POLICY: SandboxPolicy = Object.freeze({
   ...DEFAULT_SANDBOX_POLICY,
   envAllowlist: GOVERNED_GIT_IDENTITY_SANDBOX_POLICY.envAllowlist,
   credentialEnvAllowlist: undefined,
+  outputScrub: "credentials-only",
   homeIsolation: "ephemeral",
   pinnedEnv: Object.freeze({
     ...GOVERNED_GIT_IDENTITY_SANDBOX_POLICY.pinnedEnv,

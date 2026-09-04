@@ -2070,6 +2070,7 @@ export type {
   NetworkPolicy,
   FilesystemPolicy,
   HomeIsolation,
+  OutputScrubMode,
   SandboxPolicy,
   SandboxBackend,
   SandboxAttestation,

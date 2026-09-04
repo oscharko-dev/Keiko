@@ -85,6 +85,45 @@ export function collectSensitiveEnvValues(
 // output even though the child received them. Redundant today (a credential name is never on
 // `envAllowlist`, so the collector above already returns it) and deliberately so: the scrub set must
 // stay fail-closed if a future edit ever moves one of these names onto the allowlist.
+// The credential names the governed git lanes may forward (keiko-contracts tools.ts), restated
+// here by NAME only so the credentials-only scrub cannot depend on which lane forwarded them.
+const KNOWN_CREDENTIAL_ENV_NAMES: readonly string[] = Object.freeze([
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GH_ENTERPRISE_TOKEN",
+  "GITHUB_ENTERPRISE_TOKEN",
+]);
+
+// A parent var whose NAME says it carries a credential. Deliberately a contains-match on the
+// secret-bearing words and nothing wider: `AUTH` is absent because GIT_AUTHOR_NAME carries a
+// person's name, and a name is exactly the kind of value this mode exists to let through.
+const CREDENTIAL_ENV_NAME_PATTERN =
+  /TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_KEY|PRIVATE_KEY|ACCESS_KEY/iu;
+
+export function isCredentialEnvName(name: string): boolean {
+  return KNOWN_CREDENTIAL_ENV_NAMES.includes(name) || CREDENTIAL_ENV_NAME_PATTERN.test(name);
+}
+
+/**
+ * The scrub set for `outputScrub: "credentials-only"`: every credential value the parent carries —
+ * by governed name, by credential-shaped name, and by the policy's own credential list — and
+ * NOTHING else. The default collector above treats every non-allowlisted value as a secret, which
+ * is right for diagnostic output and wrong for the one read whose stdout is a value the caller
+ * needs: a configured remote URL carries an owner/repository name that a CI runner also exports as
+ * GITHUB_REPOSITORY, so under the default mode the URL came back as `[REDACTED]` and every consumer
+ * addressed a repository that does not exist. The shape-based redaction still applies on top.
+ */
+export function collectCredentialLikeEnvValues(
+  processEnv: NodeJS.ProcessEnv,
+  credentialNames: readonly string[],
+): readonly string[] {
+  const names = new Set<string>(credentialNames);
+  for (const name of Object.keys(processEnv)) {
+    if (isCredentialEnvName(name)) names.add(name);
+  }
+  return collectCredentialEnvValues(processEnv, [...names]);
+}
+
 export function collectCredentialEnvValues(
   processEnv: NodeJS.ProcessEnv,
   credentialNames: readonly string[],

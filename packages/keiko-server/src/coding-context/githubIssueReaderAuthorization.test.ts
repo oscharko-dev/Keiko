@@ -383,17 +383,46 @@ describe("githubRemoteOwnerAndRepoFor — emitted evidence (#3385)", () => {
     expect(typeof events[0]?.errorKind).toBe("string");
   });
 
-  // The mechanism that turned CI red on 56ffa39c, made deterministic: an environment value that
-  // appears inside the owner name is scrubbed out of git's output, the URL arrives as
-  // `https://github.com/[REDACTED].git`, and the read is refused. Before this outcome existed the
-  // line said "remote-not-github", which is the opposite of what happened.
-  it("names a redacted remote as its own fault instead of a non-GitHub remote", async () => {
+  // The defect that turned CI red on 56ffa39c, and that a first repair only hid from the tests by
+  // handing the git child a bare environment: a CI runner exports the checkout's own owner/repo
+  // as GITHUB_REPOSITORY, the default scrub treated that value as a secret, and the URL came back
+  // as `https://github.com/[REDACTED].git` — every legitimate read denied, in production. An
+  // earlier version of THIS case asserted `undefined` for exactly that input, which is a pin
+  // rewritten to bless the behaviour it was written to prevent (AGENTS.md section 7). It now
+  // asserts what the product must do: resolve the repository regardless of what context the
+  // process environment carries.
+  it("resolves the repository even when the environment carries the same owner/repo", async () => {
     const { sink, events } = capturingLog();
     const root = checkoutWithRemote("https://github.com/oscharko-dev/Keiko.git");
 
     const resolved = await githubRemoteOwnerAndRepoFor(
       root,
-      { ...hermeticEnv(home), GITHUB_REPOSITORY: "oscharko-dev/Keiko" },
+      {
+        ...hermeticEnv(home),
+        GITHUB_REPOSITORY: "oscharko-dev/Keiko",
+        GITHUB_REPOSITORY_OWNER: "oscharko-dev",
+        USER: "oscharko",
+      },
+      undefined,
+      { activityLog: sink },
+    );
+
+    expect(resolved).toBe("oscharko-dev/Keiko");
+    expect(events[0]).toMatchObject({ extra: { outcome: "resolved" } });
+  });
+
+  // What `remote-redacted` is actually for: a CREDENTIAL value that appears inside the URL is still
+  // scrubbed (by name here, by shape as well), the operand is refused, and the timeline names it
+  // rather than calling it "not a GitHub remote". A token whose value equals the owner is
+  // contrived; it is also the only remaining way a scrubbed URL can arise, so it is the honest
+  // fixture for this branch.
+  it("names a remote redacted by a credential value as its own fault", async () => {
+    const { sink, events } = capturingLog();
+    const root = checkoutWithRemote("https://github.com/oscharko-dev/Keiko.git");
+
+    const resolved = await githubRemoteOwnerAndRepoFor(
+      root,
+      { ...hermeticEnv(home), GH_TOKEN: "oscharko-dev" },
       undefined,
       { activityLog: sink },
     );

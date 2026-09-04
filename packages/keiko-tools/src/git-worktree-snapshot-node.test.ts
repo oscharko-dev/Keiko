@@ -217,6 +217,47 @@ describe("readGitRemoteUrl", () => {
 
   // The identity lane widens which NAMES are allowlisted, never what a credential may do: a token
   // value is still scrubbed out of this reader's output.
+  // The defect that turned CI red on 56ffa39c, and that the first repair only hid from the tests:
+  // a CI runner exports GITHUB_REPOSITORY=<owner/repo>, the default scrub treats that value as a
+  // secret, and the checkout's OWN remote came back as `https://github.com/[REDACTED].git`. This
+  // read's stdout IS the URL; a context value the parent happens to carry must not corrupt it.
+  it("preserves the configured remote when a context variable carries the same owner/repo", async () => {
+    git(["remote", "add", "origin", "https://github.com/alicedev-team/App.git"]);
+
+    const url = await readGitRemoteUrl(
+      {
+        workspace: info,
+        processEnv: {
+          PATH: process.env.PATH ?? "",
+          GITHUB_REPOSITORY: "alicedev-team/App",
+          GITHUB_REPOSITORY_OWNER: "alicedev-team",
+        },
+        now: () => Date.now(),
+      },
+      "origin",
+    );
+
+    expect(url).toBe("https://github.com/alicedev-team/App.git");
+  });
+
+  // Narrowing the scrub to credentials must not narrow it below "anything whose name says it is a
+  // credential": a token under a name the governed lanes never forward is still a token.
+  it("still scrubs a credential-named value the governed lanes never forward", async () => {
+    git(["remote", "add", "origin", "https://github.com/alicedev-team/deploy-tok3n-value.git"]);
+
+    const url = await readGitRemoteUrl(
+      {
+        workspace: info,
+        processEnv: { PATH: process.env.PATH ?? "", MY_DEPLOY_TOKEN: "deploy-tok3n-value" },
+        now: () => Date.now(),
+      },
+      "origin",
+    );
+
+    expect(url).not.toContain("deploy-tok3n-value");
+    expect(url).toContain("[REDACTED]");
+  });
+
   it("still scrubs a credential value that appears in the output", async () => {
     git(["remote", "add", "origin", "https://github.com/alicedev-team/s3cr3t-token-value.git"]);
 

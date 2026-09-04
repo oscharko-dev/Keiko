@@ -43,6 +43,7 @@ import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "
 import {
   buildChildEnv,
   collectCredentialEnvValues,
+  collectCredentialLikeEnvValues,
   collectSensitiveEnvValues,
   isCommandAllowed,
 } from "./sandbox.js";
@@ -938,10 +939,16 @@ function buildResult(options: BuildResultOptions): CommandResult {
   // A credential the policy deliberately handed to the child is still scrubbed on the way out: a
   // forwarded token must never survive into stdout/stderr, and from there into a rejection
   // classifier, an error, an evidence record or a diagnostic.
-  const secrets = [
-    ...collectSensitiveEnvValues(deps.processEnv, deps.policy.envAllowlist),
-    ...collectCredentialEnvValues(deps.processEnv, deps.policy.credentialEnvAllowlist ?? []),
-  ];
+  // `credentials-only` narrows the set to credential values (by governed name, credential-shaped
+  // name and the policy's own list) for the one read whose stdout is the value the caller needs;
+  // every other policy keeps the fail-closed default of scrubbing every non-allowlisted value.
+  const secrets =
+    deps.policy.outputScrub === "credentials-only"
+      ? collectCredentialLikeEnvValues(deps.processEnv, deps.policy.credentialEnvAllowlist ?? [])
+      : [
+          ...collectSensitiveEnvValues(deps.processEnv, deps.policy.envAllowlist),
+          ...collectCredentialEnvValues(deps.processEnv, deps.policy.credentialEnvAllowlist ?? []),
+        ];
   const attest = attestation === undefined ? {} : { attestation };
   if (buffers.truncated) {
     // Real over-cap byte count from the raw arrival counter (ADR-0054 D5). Clamped at 0 so a

@@ -1029,6 +1029,75 @@ describe("runCommand — real node integration", () => {
   });
 });
 
+// `outputScrub: "credentials-only"` narrows the scrub set for the one read whose stdout IS the value
+// the caller needs (a configured remote URL). Both halves are pinned end to end through the real
+// spawn boundary: a context value the parent carries survives, a credential value still does not.
+describe("runCommand — outputScrub: credentials-only", () => {
+  function echoDeps(processEnv: NodeJS.ProcessEnv, credentialsOnly: boolean): RunCommandDeps {
+    return {
+      ...realDeps(processEnv),
+      policy: {
+        ...DEFAULT_SANDBOX_POLICY,
+        defaultTimeoutMs: 10_000,
+        ...(credentialsOnly ? { outputScrub: "credentials-only" as const } : {}),
+      },
+    };
+  }
+
+  const echo = (text: string): string => `process.stdout.write(${JSON.stringify(text)})`;
+
+  it("keeps a context value the parent carries in the output", async () => {
+    const result = await runCommand(
+      {
+        command: "node",
+        args: ["-e", echo("https://github.com/alicedev-team/App.git")],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      echoDeps(
+        { PATH: process.env.PATH ?? "", GITHUB_REPOSITORY: "alicedev-team/App", USER: "alicedev" },
+        true,
+      ),
+    );
+
+    expect(result.stdout).toBe("https://github.com/alicedev-team/App.git");
+  });
+
+  it("still redacts a credential value the parent carries", async () => {
+    const token = "deploy-tok3n-value-9";
+    const result = await runCommand(
+      {
+        command: "node",
+        args: ["-e", echo(`https://github.com/alicedev-team/${token}.git`)],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      echoDeps({ PATH: process.env.PATH ?? "", MY_DEPLOY_TOKEN: token }, true),
+    );
+
+    expect(result.stdout).not.toContain(token);
+    expect(result.stdout).toContain("[REDACTED]");
+  });
+
+  // The contrast that makes the mode necessary: the default policy scrubs the context value too.
+  it("is the only mode that lets the context value through", async () => {
+    const result = await runCommand(
+      {
+        command: "node",
+        args: ["-e", echo("https://github.com/alicedev-team/App.git")],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      echoDeps({ PATH: process.env.PATH ?? "", GITHUB_REPOSITORY: "alicedev-team/App" }, false),
+    );
+
+    expect(result.stdout).toContain("[REDACTED]");
+  });
+});
+
 describe("runCommand — enforced network egress (ADR-0043, network:'none')", () => {
   const NO_BACKENDS = {
     bubblewrap: false,
