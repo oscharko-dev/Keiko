@@ -89,8 +89,22 @@ function occurrenceCount(text, value) {
   }
 }
 
+function stripHtmlComments(text) {
+  let sanitized = "";
+  let offset = 0;
+  while (offset < text.length) {
+    const start = text.indexOf("<!--", offset);
+    if (start < 0) return sanitized + text.slice(offset);
+    sanitized += text.slice(offset, start);
+    const end = text.indexOf("-->", start + 4);
+    if (end < 0) return sanitized;
+    offset = end + 3;
+  }
+  return sanitized;
+}
+
 function contractSection(text, heading) {
-  const sanitized = text.replace(/<!--[\s\S]*?-->/gu, "");
+  const sanitized = stripHtmlComments(text);
   if (occurrenceCount(sanitized, heading) !== 1) return undefined;
   const remainder = sanitized.slice(sanitized.indexOf(heading) + heading.length);
   const nextSection = remainder.search(/\n## /u);
@@ -98,7 +112,7 @@ function contractSection(text, heading) {
 }
 
 function contractFailures(contract, text) {
-  const sanitized = text.replace(/<!--[\s\S]*?-->/gu, "");
+  const sanitized = stripHtmlComments(text);
   const section = contractSection(text, contract.heading);
   const failures = section === undefined ? ["missing contract heading"] : [];
   const required = [...sharedRequirements, ...contract.requirements];
@@ -137,6 +151,7 @@ describe.each(contracts)("$name issue template contract", (contract) => {
     ],
     ["malformed contract", text.replace(contract.heading, "## Revalidation Notes")],
     ["commented-out contract clause", text.replace(decoyClause, `<!-- ${decoyClause} -->`)],
+    ["unclosed commented-out contract clause", text.replace(decoyClause, `<!-- ${decoyClause}`)],
     ["contract clause outside its section", `${text.replace(decoyClause, "")}\n${decoyClause}\n`],
     ["duplicate contract clause", `${text}\n${decoyClause}\n`],
     ["duplicate contract heading", `${text}\n${contract.heading}\n`],

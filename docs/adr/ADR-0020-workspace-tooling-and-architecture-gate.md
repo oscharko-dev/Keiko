@@ -233,11 +233,11 @@ If workspace manager, layout, gate tooling, or stub strategy changes materially,
 
 ## Node 26 package-manager compatibility clarification (2026-09-04)
 
-Node 26 does not bundle Corepack. Its compatibility lane therefore exposes the `npm ci`-verified,
-lockfile-pinned Corepack entry point through a fixed executable shim inside the Node runtime trust
-root before provisioning the existing digest-pinned Yarn smoke. This preserves the
-trusted-executable boundary and does not widen the network, registry, or package-manager authority
-of the install smoke.
+Node 26 does not bundle Corepack. Its compatibility lane therefore copies the `npm ci`-verified,
+lockfile-pinned Corepack package tree into the Node runtime trust root and creates its fixed
+executable shim there before provisioning the existing digest-pinned Yarn smoke. This preserves
+the trusted-executable boundary and does not widen the network, registry, or package-manager
+authority of the install smoke.
 The lane also refreshes editor release evidence ephemerally after its Node 26 UI build so package
 assembly validates the same-runtime artifact without replacing the committed Node 24 release
 baseline.

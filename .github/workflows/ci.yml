@@ -1266,18 +1266,11 @@ jobs:
         run: node scripts/editor-release-evidence.mjs --json
       - name: Prepare the offline smoke (pinned Yarn + vendor seed) (#3130/#3134)
         # The optional install smoke consumes the same seeded, bounded registry as every other
-        # installable-package lane. Node 26 no longer bundles Corepack, so expose the lockfile-
-        # verified package through a fixed shim inside the Node runtime trust root. Knip cannot
-        # observe this workflow-only path reference, so knip.json carries its narrow exception.
+        # installable-package lane. Node 26 no longer bundles Corepack, so copy the lockfile-
+        # verified package into the Node runtime trust root and expose its fixed shim there.
         timeout-minutes: 10
         run: |
-          NODE_RUNTIME_ROOT="$(node -p 'require("node:path").dirname(require("node:path").dirname(process.execPath))')"
-          COREPACK_BIN="$(mktemp -d "$NODE_RUNTIME_ROOT/keiko-corepack.XXXXXX")"
-          cat > "$COREPACK_BIN/corepack" <<'COREPACK_SHIM'
-          #!/bin/sh
-          exec node "$GITHUB_WORKSPACE/node_modules/corepack/dist/corepack.js" "$@"
-          COREPACK_SHIM
-          chmod 755 "$COREPACK_BIN/corepack"
+          COREPACK_BIN="$(node scripts/prepare-trusted-corepack.mjs)"
           printf '%s\n' "$COREPACK_BIN" >> "$GITHUB_PATH"
           export PATH="$COREPACK_BIN:$PATH"
           npm run provision:smoke

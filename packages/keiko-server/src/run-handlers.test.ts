@@ -367,13 +367,14 @@ describe("GET /api/runs/:runId", () => {
 async function readSseUntil(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   marker: string,
+  timeoutMs = 2_000,
 ): Promise<string> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
     timeout = setTimeout(() => {
       void reader.cancel().catch(() => undefined);
-      reject(new Error(`SSE marker was not received within 2000 ms: ${marker}`));
-    }, 2_000);
+      reject(new Error(`SSE marker was not received within ${String(timeoutMs)} ms: ${marker}`));
+    }, timeoutMs);
   });
   try {
     return await Promise.race([consumeSseUntil(reader, marker), deadline]);
@@ -395,6 +396,56 @@ async function consumeSseUntil(
   }
   return text + decoder.decode();
 }
+
+function sseReader(chunks: readonly Uint8Array[]): ReadableStreamDefaultReader<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller): void {
+      for (const chunk of chunks) controller.enqueue(chunk);
+      controller.close();
+    },
+  }).getReader();
+}
+
+describe("readSseUntil", () => {
+  const encoder = new TextEncoder();
+
+  it("finds a marker split beyond five transport chunks", async () => {
+    const chunks = ["ev", "en", "t", ":", " ", "rea", "dy", "\n\n"].map((value) =>
+      encoder.encode(value),
+    );
+    await expect(readSseUntil(sseReader(chunks), "event: ready")).resolves.toContain(
+      "event: ready",
+    );
+  });
+
+  it("returns cleanly at EOF after empty chunks without inventing a marker", async () => {
+    const chunks = [new Uint8Array(), encoder.encode("event: partial")];
+    await expect(readSseUntil(sseReader(chunks), "event: ready")).resolves.toBe("event: partial");
+  });
+
+  it("preserves malformed bytes while continuing to a valid marker", async () => {
+    const chunks = [Uint8Array.of(0xff), new Uint8Array(), encoder.encode("event: ready\n\n")];
+    const text = await readSseUntil(sseReader(chunks), "event: ready");
+    expect(text.codePointAt(0)).toBe(0xfffd);
+    expect(text).toContain("event: ready");
+  });
+
+  it("cancels a stream that never yields the marker", async () => {
+    let cancelled = false;
+    const reader = new ReadableStream<Uint8Array>({
+      pull(): Promise<void> {
+        return new Promise<void>(() => {
+          // Remain pending until the deadline cancels this deliberately stalled transport.
+        });
+      },
+      cancel(): void {
+        cancelled = true;
+      },
+    }).getReader();
+    await expect(readSseUntil(reader, "event: ready", 25)).rejects.toThrow("within 25 ms");
+    expect(cancelled).toBe(true);
+  });
+});
 
 describe("GET /api/runs/:runId/events (SSE)", () => {
   it("frames events as SSE, sends ready, and replays the buffer on connect", async () => {

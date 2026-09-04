@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { validateDebugLaunchPolicy, type DebugLaunchPolicy } from "./debug-launch-policy.js";
 
@@ -25,6 +26,9 @@ const catalogArgs = [
   "run",
   "start",
 ];
+const runtimeToolchainCheck = fileURLToPath(
+  new URL("../../../scripts/check-runtime-toolchain.mjs", import.meta.url),
+);
 
 describe("debug launch Layer-2 policy", () => {
   it("executes the selected script with distinct empty configs and the approved shell", () => {
@@ -69,11 +73,10 @@ describe("debug launch Layer-2 policy", () => {
         timeout: 10_000,
       });
       expect(npmVersion.status).toBe(0);
-      const toolchainCheck = spawnSync(
-        process.execPath,
-        [join(process.cwd(), "scripts/check-runtime-toolchain.mjs"), "--exact"],
-        { encoding: "utf8", timeout: 10_000 },
-      );
+      const toolchainCheck = spawnSync(process.execPath, [runtimeToolchainCheck, "--exact"], {
+        encoding: "utf8",
+        timeout: 10_000,
+      });
       expect(toolchainCheck.status).toBe(0);
       expect(toolchainCheck.stdout).toContain(`npm ${npmVersion.stdout.trim()}`);
       const result = spawnSync(

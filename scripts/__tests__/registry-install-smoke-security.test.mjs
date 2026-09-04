@@ -63,6 +63,7 @@ import {
   runRegistryInstallSmokeForTest,
 } from "../registry-install-smoke.mjs";
 import { runPrepareOfflineSmoke } from "../prepare-offline-smoke.mjs";
+import { prepareTrustedCorepack } from "../prepare-trusted-corepack.mjs";
 import { provenancePublishArgs } from "../lib/npm-publish-preflight.mjs";
 import {
   PINNED_YARN,
@@ -3038,7 +3039,7 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
-  it("exposes locked Corepack through the Node 26 runtime trust root", () => {
+  it("copies locked Corepack into the Node 26 runtime trust root", () => {
     const job = ciJobs().find((candidate) => candidate.name === "node-26-compatibility");
     expect(job).toBeDefined();
     if (job === undefined) throw new Error("node-26-compatibility job is missing");
@@ -3046,20 +3047,33 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(manifest.devDependencies.corepack).toMatch(/^\d+\.\d+\.\d+$/u);
     const buildAt = job.text.indexOf("npm run build:ui");
     const evidenceAt = job.text.indexOf("node scripts/editor-release-evidence.mjs --json");
-    const rootAt = job.text.indexOf("NODE_RUNTIME_ROOT=");
-    const shimAt = job.text.indexOf('cat > "$COREPACK_BIN/corepack"');
+    const shimAt = job.text.indexOf("node scripts/prepare-trusted-corepack.mjs");
     const provisionAt = job.text.indexOf("npm run provision:smoke");
-    expect(job.text).toContain(
-      'exec node "$GITHUB_WORKSPACE/node_modules/corepack/dist/corepack.js" "$@"',
-    );
-    expect(job.text).toContain("$NODE_RUNTIME_ROOT/keiko-corepack.XXXXXX");
-    expect(job.text).toContain('chmod 755 "$COREPACK_BIN/corepack"');
     expect(job.text).not.toContain("npm install --global");
     expect(evidenceAt).toBeGreaterThan(buildAt);
-    expect(rootAt).toBeGreaterThan(evidenceAt);
-    expect(rootAt).toBeGreaterThan(-1);
-    expect(shimAt).toBeGreaterThan(rootAt);
+    expect(shimAt).toBeGreaterThan(evidenceAt);
     expect(provisionAt).toBeGreaterThan(shimAt);
+  });
+
+  it("prepares an executable Corepack copy inside the supplied runtime root", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-trusted-corepack-test-"));
+    const sourceRoot = join(root, "source");
+    const runtimeRoot = join(root, "runtime");
+    mkdirSync(join(sourceRoot, "dist"), { recursive: true });
+    mkdirSync(runtimeRoot);
+    writeFileSync(join(sourceRoot, "dist", "corepack.js"), 'process.stdout.write("trusted");\n');
+    try {
+      const prepared = prepareTrustedCorepack({ runtimeRoot, sourceRoot });
+      const result = spawnSync(join(prepared.binDir, "corepack"), [], { encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("trusted");
+      expect(prepared.version).toBe(ROOT_MANIFEST.devDependencies.corepack);
+      expect(readFileSync(join(prepared.packageRoot, "dist", "corepack.js"), "utf8")).toContain(
+        "trusted",
+      );
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   it("bounds every step that may reach the package-manager host", () => {

@@ -268,9 +268,10 @@ points across eight workflows, in every case before `npm ci`. `engine-strict` wo
 version of a question that is already answered where it matters.
 
 **Its cost is a silent failure mode in exactly the machinery this closeout exists to protect.**
-`engines.node` is upper-bounded (`>=24.18.0 <25 || >=26.3.0 <27`) and `engines.npm` is an exact string. Under
-`engine-strict` both become hard install-time gates for _every_ npm process that runs in this working
-directory — including Dependabot's updater, which brings its own Node and npm and reads the project
+`engines.node` is upper-bounded (`>=24.18.0 <25 || >=26.3.0 <27`) and `engines.npm` accepts the
+governed npm 11 range (`>=11.16.0 <12`). Under `engine-strict` both become hard install-time gates
+for _every_ npm process that runs in this working directory, including Dependabot's updater, which
+brings its own Node and npm and reads the project
 `.npmrc`. If either differs, the dependency-update pull requests stop, and they stop **without
 notifying anyone**: an absence of Dependabot PRs looks identical to a quiet week. Disabling the
 mechanism that keeps dependencies current, inside the change whose subject is dependency currency,
@@ -279,10 +280,11 @@ is not a trade worth a marginal gain.
 Recorded so the measurement never has to be repeated. What would have to change first: an
 `engines` declaration that a third-party tool can satisfy — see the finding below.
 
-### A finding this raised: the published `engines.npm` constrains consumers who have no such requirement
+### Repaired finding: the published `engines.npm` constrained consumers unnecessarily
 
-`package.json` publishes `engines` as `{"node": ">=24.18.0 <25", "npm": "11.16.0"}`, and that
-manifest reaches every consumer of `@oscharko-dev/keiko`. The exact npm string is true of Keiko's
+Before this repair, `package.json` published `engines` as
+`{"node": ">=24.18.0 <25", "npm": "11.16.0"}`. That manifest reached every consumer of
+`@oscharko-dev/keiko`, although the exact npm string was true only of Keiko's
 _contributors_ — `check:runtime-toolchain` enforces it — but it is not true of anyone installing the
 package, and an organisation that sets `engine-strict` on its own side cannot install Keiko unless it
 runs a supported npm 11 version.
