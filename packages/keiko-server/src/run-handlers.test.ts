@@ -364,6 +364,38 @@ describe("GET /api/runs/:runId", () => {
   });
 });
 
+async function readSseUntil(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  marker: string,
+): Promise<string> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      void reader.cancel().catch(() => undefined);
+      reject(new Error(`SSE marker was not received within 2000 ms: ${marker}`));
+    }, 2_000);
+  });
+  try {
+    return await Promise.race([consumeSseUntil(reader, marker), deadline]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+async function consumeSseUntil(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  marker: string,
+): Promise<string> {
+  const decoder = new TextDecoder();
+  let text = "";
+  while (!text.includes(marker)) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    text += decoder.decode(chunk.value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
 describe("GET /api/runs/:runId/events (SSE)", () => {
   it("frames events as SSE, sends ready, and replays the buffer on connect", async () => {
     await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")));
@@ -394,12 +426,7 @@ describe("GET /api/runs/:runId/events (SSE)", () => {
       throw new Error("expected an SSE reader");
     }
 
-    let text = "";
-    while (!text.includes("event: ready")) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      text += new TextDecoder().decode(chunk.value);
-    }
+    const text = await readSseUntil(reader, "event: ready");
     controller.abort();
     await reader.cancel().catch(() => undefined);
 
@@ -427,12 +454,7 @@ describe("GET /api/runs/:runId/events (SSE)", () => {
       throw new Error("expected an SSE reader");
     }
 
-    let text = "";
-    for (let i = 0; i < 5 && !text.includes("event: ready"); i += 1) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      text += new TextDecoder().decode(chunk.value);
-    }
+    const text = await readSseUntil(reader, "event: ready");
     controller.abort();
     await reader.cancel().catch(() => undefined);
 

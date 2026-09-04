@@ -13,6 +13,9 @@ and Node.js 27 or newer are rejected. Portable releases and D12 measurements rem
 The supported package-manager range is npm `>=11.16.0 <12`. Keiko retains `npm@11.16.0` as its exact
 `packageManager`, publish, portable, and measurement baseline; Node.js 26.8.1 compatibility CI uses
 its bundled npm 11.19.0. Every workflow verifies an approved Node/npm pair before `npm ci`.
+Node.js 26 no longer bundles Corepack, so its compatibility lane installs the lockfile-pinned
+Corepack package offline into the Node runtime trust root before provisioning the existing
+digest-pinned Yarn smoke.
 
 ## npm 12 decision
 

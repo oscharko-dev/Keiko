@@ -198,6 +198,13 @@ describe("Sonar scanner warning gate", () => {
       ),
     ],
     [
+      "a producer read for the wrong language",
+      scanner81PrFullLog.replace(
+        "* Reading SonarArchitecture UDG data from directory <redacted>/architecture/js",
+        "* Reading SonarArchitecture UDG data from directory <redacted>/architecture/ts",
+      ),
+    ],
+    [
       "a malformed sensor receipt",
       scanner81PrFullLog.replace(
         'Files successfully loaded: "2087" out of "2087"',
@@ -224,6 +231,14 @@ describe("Sonar scanner warning gate", () => {
         'Files successfully loaded: "191" out of "191"\n' +
           'Files successfully loaded: "191" out of "191"',
       ),
+    ],
+    [
+      "a malformed receipt outside the architecture sensors",
+      `${scanner81PrFullLog}\nFiles successfully loaded: "abc" out of "1"\n`,
+    ],
+    [
+      "an unexpected legacy UDG-cache inventory",
+      `${scanner81PrFullLog}\nArchitecture JS/TS UDG cache: 2278 source file(s) without a UDG\n`,
     ],
     [
       "stale JavaScript cache evidence",

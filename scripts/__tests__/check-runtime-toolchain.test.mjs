@@ -85,6 +85,8 @@ describe("evaluateRuntimeToolchain", () => {
     ["stale workspace engine", { workspaceNodeEngines: [{ name: "stale", value: ">=22" }] }],
     ["portable drift", { portableNodeVersion: "24.17.0" }],
     ["unsupported odd Node runtime", { runtimeNodeVersion: "25.9.0" }],
+    ["non-canonical Node runtime", { runtimeNodeVersion: "024.18.0" }],
+    ["unsafe Node runtime component", { runtimeNodeVersion: "24.9007199254740992.0" }],
     ["Node runtime below the 26 floor", { runtimeNodeVersion: "26.2.0" }],
     ["future unsupported Node runtime", { runtimeNodeVersion: "27.0.0" }],
     ["npm engine drift", { rootNpmEngine: ">=11" }],
@@ -94,6 +96,7 @@ describe("evaluateRuntimeToolchain", () => {
     ],
     ["package-manager drift", { packageManager: "npm@12.0.1" }],
     ["executed npm below the floor", { runtimeNpmVersion: "11.15.0" }],
+    ["non-canonical npm runtime", { runtimeNpmVersion: "11.016.0" }],
     ["executed npm next major", { runtimeNpmVersion: "12.0.0" }],
   ])("rejects %s", (_label, change) => {
     expect(evaluateRuntimeToolchain({ ...baseline, ...change }, { exactNode: false })).not.toEqual(
@@ -143,6 +146,12 @@ describe("readNpmVersionFromPath", () => {
 
   it("fails closed for an invalid npm manifest", () => {
     const fixture = npmFixture("latest");
+    symlinkSync(fixture.npmCli, join(fixture.root, "npm"));
+    expect(readNpmVersionFromPath(fixture.root, "linux")).toBeUndefined();
+  });
+
+  it("fails closed for a non-canonical npm version", () => {
+    const fixture = npmFixture("11.016.0");
     symlinkSync(fixture.npmCli, join(fixture.root, "npm"));
     expect(readNpmVersionFromPath(fixture.root, "linux")).toBeUndefined();
   });

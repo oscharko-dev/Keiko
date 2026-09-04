@@ -186,7 +186,8 @@ function architectureUdgEvidence(lines) {
   // current analyzer emits it; retain the cache inventory only as a legacy-log fallback.
   const sonarJasminExpected = largestCount(SONARJASMIN_SOURCE_SUFFIX);
   const expected = sonarJasminExpected ?? largestCount(UDG_CACHE_SOURCE_SUFFIX);
-  const receipts = lines.flatMap((line) => architectureUdgReceipt(line) ?? []);
+  const receiptLines = lines.filter((line) => line.includes("Files successfully loaded:"));
+  const receipts = receiptLines.flatMap((line) => architectureUdgReceipt(line) ?? []);
   const totals = receipts.reduce(
     (evidence, receipt) => ({
       loaded: evidence.loaded + receipt.loaded,
@@ -194,7 +195,13 @@ function architectureUdgEvidence(lines) {
     }),
     { loaded: 0, total: 0 },
   );
-  return { ...totals, expected, receipts };
+  return {
+    ...totals,
+    expected,
+    hasMalformedReceipt: receiptLines.length !== receipts.length,
+    hasSonarJasminPlan: sonarJasminExpected !== undefined,
+    receipts,
+  };
 }
 
 function indexesIncluding(lines, fragment) {
@@ -206,6 +213,20 @@ function receiptEntries(lines) {
     const receipt = architectureUdgReceipt(line);
     return receipt === undefined ? [] : [{ index, receipt }];
   });
+}
+
+function architectureUdgReadLanguage(line) {
+  const marker = "Reading SonarArchitecture UDG data from directory";
+  const markerAt = line.indexOf(marker);
+  if (markerAt < 0) return undefined;
+  const segments = line
+    .slice(markerAt + marker.length)
+    .trim()
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter(Boolean);
+  const language = segments.at(-1);
+  return segments.at(-2) === "architecture" && language !== undefined ? language : undefined;
 }
 
 function architectureSensorEvidence(lines, specification) {
@@ -223,6 +244,9 @@ function architectureSensorEvidence(lines, specification) {
     `Found 1 potential Udg file location(s) for "${specification.language}"`,
   );
   const reads = indexesIncluding(body, "Reading SonarArchitecture UDG data from directory");
+  const matchingReads = body.flatMap((line, index) =>
+    architectureUdgReadLanguage(line) === specification.language ? [index] : [],
+  );
   const entries = receiptEntries(body);
   const ordered = [
     startIndex >= 0,
@@ -230,9 +254,10 @@ function architectureSensorEvidence(lines, specification) {
     locations.length === 1,
     matchingLocations.length === 1,
     reads.length === 1,
+    matchingReads.length === 1,
     entries.length === 1,
-    (matchingLocations[0] ?? -1) < (reads[0] ?? -1),
-    (reads[0] ?? -1) < (entries[0]?.index ?? -1),
+    (matchingLocations[0] ?? -1) < (matchingReads[0] ?? -1),
+    (matchingReads[0] ?? -1) < (entries[0]?.index ?? -1),
   ].every(Boolean);
   return {
     completionIndex,
@@ -308,22 +333,46 @@ function hasFullSensorScopedArchitectureEvidence(lines, eligibleSourceCount, all
   ].every(Boolean);
 }
 
+function hasArchitectureSensorMarkers(lines) {
+  return ARCHITECTURE_SENSORS.some((specification) =>
+    lines.some((line) => line.includes(`Sensor ${specification.name} [architecture]`)),
+  );
+}
+
+function matchesExplicitArchitectureInventory(evidence, hasSensorMarkers) {
+  return [
+    evidence.expected !== undefined,
+    (evidence.expected ?? 0) > 0,
+    evidence.total === evidence.expected,
+    [evidence.hasSonarJasminPlan, !hasSensorMarkers].some(Boolean),
+  ].every(Boolean);
+}
+
+function matchesSensorScopedArchitectureInventory(lines, eligibleSourceCount, evidence) {
+  return [
+    evidence.expected === undefined,
+    hasFullSensorScopedArchitectureEvidence(lines, eligibleSourceCount, evidence),
+  ].every(Boolean);
+}
+
 function architectureUdgEvidenceFailures(lines, eligibleSourceCount) {
   const evidence = architectureUdgEvidence(lines);
+  const hasSensorMarkers = hasArchitectureSensorMarkers(lines);
   const hasIncompleteReceipt = evidence.receipts.some(
     (receipt) => receipt.loaded !== receipt.total,
   );
-  const matchesExplicitInventory =
-    evidence.expected !== undefined &&
-    evidence.expected > 0 &&
-    evidence.total === evidence.expected;
-  const matchesSensorScopedInventory =
-    evidence.expected === undefined &&
-    hasFullSensorScopedArchitectureEvidence(lines, eligibleSourceCount, evidence);
-  const isIncomplete =
-    evidence.total === 0 ||
-    hasIncompleteReceipt ||
-    (!matchesExplicitInventory && !matchesSensorScopedInventory);
+  const matchesExplicitInventory = matchesExplicitArchitectureInventory(evidence, hasSensorMarkers);
+  const matchesSensorScopedInventory = matchesSensorScopedArchitectureInventory(
+    lines,
+    eligibleSourceCount,
+    evidence,
+  );
+  const isIncomplete = [
+    evidence.total === 0,
+    evidence.hasMalformedReceipt,
+    hasIncompleteReceipt,
+    !matchesExplicitInventory && !matchesSensorScopedInventory,
+  ].some(Boolean);
   return isIncomplete
     ? [
         `architecture UDG receipts ${evidence.loaded}/${evidence.total} for ` +

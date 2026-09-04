@@ -267,6 +267,7 @@
     "@vitejs/plugin-react": "6.0.5",
     "@vitest/coverage-v8": "^4.1.11",
     "acorn": "^8.16.0",
+    "corepack": "0.35.0",
     "dependency-cruiser": "^18.0.0",
     "eslint": "^10.8.1",
     "eslint-config-prettier": "^10.1.8",

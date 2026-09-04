@@ -153,6 +153,7 @@ or peer graph).
 | `@playwright/test`            | root                  | 1.62.1  | current        | E2E reference runner.                                                                  |
 | `prettier`                    | root                  | 3.9.6   | current        | Formatter policy is unchanged.                                                         |
 | `knip`                        | root                  | 6.32.3  | current        | Patch refresh for the required `check:knip` gate.                                      |
+| `corepack`                    | root                  | 0.35.0  | current        | Lockfile-verified Node 26 bootstrap for the pinned offline Yarn smoke.                 |
 | `fallow`                      | root                  | 3.9.1   | patch-deferred | 3.20.0 available; backs `check:semantic-duplication`. Missed by the sweep — see below. |
 | `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.8   | current        | Optional host-native backend; deduplicated to one node by a root override (see below). |
 | `postcss`                     | root                  | 8.5.26  | current        | Root override; audit reports no known vulnerability.                                   |
@@ -206,13 +207,14 @@ they executed.
 Enforced by `npm run check:runtime-toolchain` and `npm run check:typescript-toolchain`, which own
 these values; this document does not restate them as a second source.
 
-| Surface              | Governed value               | Enforcing gate               |
-| -------------------- | ---------------------------- | ---------------------------- |
-| Node.js engine       | `>=24.18.0 <25`              | `check:runtime-toolchain`    |
-| npm / packageManager | `11.16.0`                    | `check:runtime-toolchain`    |
-| TypeScript compiler  | 7.0.2 (native)               | `check:typescript-toolchain` |
-| TypeScript API       | 6.0.3                        | `check:typescript-toolchain` |
-| Internal versions    | 0.3.17 across all workspaces | `check:version-consistency`  |
+| Surface             | Governed value                    | Enforcing gate               |
+| ------------------- | --------------------------------- | ---------------------------- |
+| Node.js engine      | `>=24.18.0 <25 \|\| >=26.3.0 <27` | `check:runtime-toolchain`    |
+| npm engine          | `>=11.16.0 <12`                   | `check:runtime-toolchain`    |
+| packageManager      | `npm@11.16.0`                     | `check:runtime-toolchain`    |
+| TypeScript compiler | 7.0.2 (native)                    | `check:typescript-toolchain` |
+| TypeScript API      | 6.0.3                             | `check:typescript-toolchain` |
+| Internal versions   | 0.3.17 across all workspaces      | `check:version-consistency`  |
 
 ## Dependency graph validity (`npm ls`)
 
@@ -250,7 +252,8 @@ still describes the checkout.
 The question was measured, not estimated: across all 665 `engines` declarations in
 `package-lock.json` (1 root, 25 workspaces, 639 third-party), evaluated with the same
 `semver.satisfies(v, range, { includePrerelease: true })` predicate npm itself uses, **zero fail**
-Node 24.18.0 / npm 11.16.0 — in every class, direct, transitive, dev and optional. The optional class
+the original #2296 Node 24.18.0 / npm 11.16.0 measurement; in every class, direct, transitive,
+dev and optional. The optional class
 cannot fail at all: npm's arborist marks an optional node `inert` and explicitly ignores
 `--engine-strict` for it. Only four of the 100 distinct ranges even reject Node 25, behind three
 packages (`dependency-cruiser`, `jsdom`, `watskeburt`) that a future Node bump must move anyway.
@@ -265,7 +268,7 @@ points across eight workflows, in every case before `npm ci`. `engine-strict` wo
 version of a question that is already answered where it matters.
 
 **Its cost is a silent failure mode in exactly the machinery this closeout exists to protect.**
-`engines.node` is upper-bounded (`>=24.18.0 <25`) and `engines.npm` is an exact string. Under
+`engines.node` is upper-bounded (`>=24.18.0 <25 || >=26.3.0 <27`) and `engines.npm` is an exact string. Under
 `engine-strict` both become hard install-time gates for _every_ npm process that runs in this working
 directory — including Dependabot's updater, which brings its own Node and npm and reads the project
 `.npmrc`. If either differs, the dependency-update pull requests stop, and they stop **without
@@ -282,11 +285,9 @@ Recorded so the measurement never has to be repeated. What would have to change 
 manifest reaches every consumer of `@oscharko-dev/keiko`. The exact npm string is true of Keiko's
 _contributors_ — `check:runtime-toolchain` enforces it — but it is not true of anyone installing the
 package, and an organisation that sets `engine-strict` on its own side cannot install Keiko unless it
-happens to run npm 11.16.0 exactly.
+runs a supported npm 11 version.
 
-Not repaired here. Relaxing it means changing a deliberately governed pin **and** the gate that
-enforces it, which is a governance decision with its own reasoning, not a side effect of a currency
-closeout. Left as a stated finding for the release owner.
+This compatibility finding is repaired by the published Node.js 24/26 engine range and npm 11 consumer range. The exact `packageManager` pin remains the reproducible contributor, publication, portable, and measurement baseline; CI separately proves both approved Node/npm tuples.
 
 ## Follow-ups
 
@@ -358,7 +359,7 @@ platform-authoritative evidence.
 | `npm run check:knip`                                        | pass                                                     |
 | `npm run check:eslint-lane`                                 | pass — `npm ls eslint` exits 0 (#2777)                   |
 | `npm run check:perf-evidence`                               | pass — both documents within budget and internally sound |
-| `npm run check:dependency-currency`                         | pass — 37 dependency rows, 14 action rows                |
+| `npm run check:dependency-currency`                         | pass — 38 dependency rows, 14 action rows                |
 | `npm run check:secret-scanning-queue`                       | pass — 0 open alerts; both prior findings closed         |
 | `npm run check:runtime-toolchain`                           | pass — Node 24.18.0; npm 11.16.0; 25 workspaces          |
 | `npm run check:typescript-toolchain`                        | pass — compiler 7.0.2; API 6.0.3                         |

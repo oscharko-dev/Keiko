@@ -5,8 +5,6 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { validateDebugLaunchPolicy, type DebugLaunchPolicy } from "./debug-launch-policy.js";
 
-const APPROVED_NPM_VERSIONS = new Set(["11.16.0", "11.19.0"]);
-
 const policy: DebugLaunchPolicy = {
   nodeExecutable: "/opt/runtime/node",
   npmExecutable: "/opt/runtime/npm",
@@ -71,7 +69,13 @@ describe("debug launch Layer-2 policy", () => {
         timeout: 10_000,
       });
       expect(npmVersion.status).toBe(0);
-      expect(APPROVED_NPM_VERSIONS.has(npmVersion.stdout.trim())).toBe(true);
+      const toolchainCheck = spawnSync(
+        process.execPath,
+        [join(process.cwd(), "scripts/check-runtime-toolchain.mjs"), "--exact"],
+        { encoding: "utf8", timeout: 10_000 },
+      );
+      expect(toolchainCheck.status).toBe(0);
+      expect(toolchainCheck.stdout).toContain(`npm ${npmVersion.stdout.trim()}`);
       const result = spawnSync(
         "npm",
         [

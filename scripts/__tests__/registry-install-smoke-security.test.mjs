@@ -3038,6 +3038,22 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
+  it("bootstraps locked Corepack inside the Node 26 runtime trust root", () => {
+    const job = ciJobs().find((candidate) => candidate.name === "node-26-compatibility");
+    expect(job).toBeDefined();
+    if (job === undefined) throw new Error("node-26-compatibility job is missing");
+    const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+    expect(manifest.devDependencies.corepack).toMatch(/^\d+\.\d+\.\d+$/u);
+    const rootAt = job.text.indexOf("NODE_RUNTIME_ROOT=");
+    const installAt = job.text.indexOf("npm install --global --ignore-scripts --offline");
+    const provisionAt = job.text.indexOf("npm run provision:smoke");
+    expect(job.text).toContain("./node_modules/corepack");
+    expect(job.text).toContain("$NODE_RUNTIME_ROOT/keiko-corepack.XXXXXX");
+    expect(rootAt).toBeGreaterThan(-1);
+    expect(installAt).toBeGreaterThan(rootAt);
+    expect(provisionAt).toBeGreaterThan(installAt);
+  });
+
   it("bounds every step that may reach the package-manager host", () => {
     const workflow = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
     // Preparation is the one smoke step that may download; the child call is bounded inside the

@@ -230,3 +230,10 @@ If workspace manager, layout, gate tooling, or stub strategy changes materially,
 | 1.0 | 2026-06-03 | Initial operational addendum to ADR-0019: workspace manager, layout, TS references, architecture gate, stub strategy, and script topology for Issue #157. |
 | 1.1 | 2026-06-03 | D3 clarification: root tsconfig uses direct `packages/*/src/**/*.ts` include rather than `references` entries to avoid TS6305 under `tsc -p ... --noEmit`. Same one-pass typecheck intent; project references remain inside each package and become load-bearing when the build migrates to `tsc -b`. |
 | 1.2 | 2026-06-03 | D6 script-topology table updated to match D3's direct-include strategy (drift caught in review). No behaviour change. |
+
+## Node 26 package-manager compatibility clarification (2026-09-04)
+
+Node 26 does not bundle Corepack. Its compatibility lane therefore installs the lockfile-pinned
+Corepack package offline into the Node runtime trust root before provisioning the existing
+digest-pinned Yarn smoke. This preserves the trusted-executable boundary and does not widen the
+network, registry, or package-manager authority of the install smoke.

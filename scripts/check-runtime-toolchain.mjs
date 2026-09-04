@@ -28,12 +28,14 @@ export const EXPECTED_EXACT_TOOLCHAINS = Object.freeze([
     npm: EXPECTED_NPM_COMPATIBILITY_BASELINE,
   }),
 ]);
-const VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/u;
+const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function versionParts(value) {
   const match = VERSION_PATTERN.exec(value);
-  return match === null ? undefined : match.slice(1).map(Number);
+  if (match === null) return undefined;
+  const parts = match.slice(1).map(Number);
+  return parts.every(Number.isSafeInteger) ? parts : undefined;
 }
 
 function isSupportedNodeVersion(value) {

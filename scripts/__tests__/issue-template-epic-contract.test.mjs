@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 const templatesDir = join(dirname(fileURLToPath(import.meta.url)), "../../.github/ISSUE_TEMPLATE");
 
@@ -51,22 +52,71 @@ const contracts = [
   },
 ];
 
+function frontMatterFailures(text) {
+  const match = /^---\n([\s\S]*?)\n---\n/u.exec(text);
+  if (match === null) return ["malformed front matter"];
+  try {
+    const parsed = parse(match[1] ?? "", { maxAliasCount: 0 });
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return ["malformed front matter"];
+    }
+    const missingFields = ["name", "about"].filter(
+      (field) => typeof parsed[field] !== "string" || parsed[field].trim() === "",
+    );
+    const failures = missingFields.map((field) => `malformed front matter: ${field}`);
+    const labels = parsed.labels;
+    if (
+      !Array.isArray(labels) ||
+      labels.length === 0 ||
+      labels.some((label) => typeof label !== "string" || label.trim() === "")
+    ) {
+      failures.push("malformed front matter: labels");
+    }
+    return failures;
+  } catch {
+    return ["malformed front matter"];
+  }
+}
+
+function occurrenceCount(text, value) {
+  let count = 0;
+  let offset = 0;
+  while (true) {
+    const index = text.indexOf(value, offset);
+    if (index < 0) return count;
+    count += 1;
+    offset = index + value.length;
+  }
+}
+
+function contractSection(text, heading) {
+  const sanitized = text.replace(/<!--[\s\S]*?-->/gu, "");
+  if (occurrenceCount(sanitized, heading) !== 1) return undefined;
+  const remainder = sanitized.slice(sanitized.indexOf(heading) + heading.length);
+  const nextSection = remainder.search(/\n## /u);
+  return nextSection < 0 ? remainder : remainder.slice(0, nextSection);
+}
+
 function contractFailures(contract, text) {
-  const required = [
-    ["contract heading", contract.heading],
-    ...sharedRequirements,
-    ...contract.requirements,
-  ];
-  const failures = required.flatMap(([label, clause]) =>
-    text.includes(clause) ? [] : [`missing ${label}`],
+  const sanitized = text.replace(/<!--[\s\S]*?-->/gu, "");
+  const section = contractSection(text, contract.heading);
+  const failures = section === undefined ? ["missing contract heading"] : [];
+  const required = [...sharedRequirements, ...contract.requirements];
+  failures.push(
+    ...required.flatMap(([label, clause]) =>
+      occurrenceCount(sanitized, clause) === 1 && occurrenceCount(section ?? "", clause) === 1
+        ? []
+        : [`missing or misplaced ${label}`],
+    ),
   );
-  if (!text.startsWith("---\n")) failures.push("malformed front matter");
+  failures.push(...frontMatterFailures(text));
   return failures;
 }
 
 describe.each(contracts)("$name issue template contract", (contract) => {
   const text = readFileSync(contract.path, "utf8");
   const requirements = [...sharedRequirements, ...contract.requirements];
+  const decoyClause = requirements[0][1];
 
   it("accepts the canonical template", () => {
     expect(contractFailures(contract, text)).toEqual([]);
@@ -78,7 +128,18 @@ describe.each(contracts)("$name issue template contract", (contract) => {
 
   it.each([
     ["empty template", ""],
+    [
+      "malformed front matter",
+      text.replace(
+        /^---\n[\s\S]*?\n---\n/u,
+        '---\nname: "unterminated\nabout: valid\nlabels: valid\n---\n',
+      ),
+    ],
     ["malformed contract", text.replace(contract.heading, "## Revalidation Notes")],
+    ["commented-out contract clause", text.replace(decoyClause, `<!-- ${decoyClause} -->`)],
+    ["contract clause outside its section", `${text.replace(decoyClause, "")}\n${decoyClause}\n`],
+    ["duplicate contract clause", `${text}\n${decoyClause}\n`],
+    ["duplicate contract heading", `${text}\n${contract.heading}\n`],
     [
       "weakened gates",
       text.replace(
