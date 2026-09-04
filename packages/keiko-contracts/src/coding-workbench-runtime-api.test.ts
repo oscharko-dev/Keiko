@@ -535,6 +535,10 @@ describe("Coding Workbench issue binding contract (#3385)", () => {
       { bindingDigest: undefined },
       { issueNumber: 0 },
       { issueNumber: 2.5 },
+      // The far side of the range. Without this, deleting the upper bound from `isBoundedIssueNumber`
+      // left every case green: `0` pins the lower bound and accepting MAX pins that MAX is allowed,
+      // but neither notices that anything above it is allowed too.
+      { issueNumber: CODING_WORKBENCH_ISSUE_NUMBER_MAX + 1 },
       { defaultBaseRef: "" },
       { defaultBaseRef: "/dev" },
       { defaultBaseRef: "feature//x" },
