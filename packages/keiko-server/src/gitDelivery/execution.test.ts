@@ -167,6 +167,11 @@ const REAL_SEAMS: GitDeliveryExecutionSeams = { policyPacks: { repoPack: ALLOW_L
 
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-exec-")));
+  // The real adapter intentionally reads the invoking human's global signing policy. This suite
+  // exercises the default adapter but must not inherit a developer-machine ~/.gitconfig: a global
+  // `commit.gpgSign=true` would correctly block its deliberately unsigned disposable commits.
+  vi.stubEnv("HOME", root);
+  vi.stubEnv("USERPROFILE", root);
   git(["init", "-q", "-b", "main"]);
   git(["config", "user.email", "test@keiko.example"]);
   git(["config", "user.name", "Keiko Test"]);
@@ -177,6 +182,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   rmSync(root, { recursive: true, force: true });
 });
 
