@@ -176,6 +176,7 @@ beforeEach(() => {
   const globalGitConfig = join(root, "controlled-global.gitconfig");
   writeFileSync(globalGitConfig, "", "utf8");
   vi.stubEnv("GIT_CONFIG_GLOBAL", globalGitConfig);
+  vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
   git(["init", "-q", "-b", "main"]);
   git(["config", "user.email", "test@keiko.example"]);
   git(["config", "user.name", "Keiko Test"]);

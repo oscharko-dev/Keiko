@@ -175,6 +175,47 @@ describe("requestRealtimeNegotiation", () => {
     expect(multipart).not.toContain('"delay"');
   });
 
+  it("omits an empty live-dictation language hint", async () => {
+    let seenBody: BodyInit | null | undefined;
+    const outcome = await requestConfiguredRealtimeNegotiation({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-realtime",
+      sessionType: "transcription",
+      transcriptionLanguage: "",
+      offerSdp: OFFER_SDP,
+      fetchImpl: mockFetch((_url, init) => {
+        seenBody = init.body;
+        return sdp(ANSWER_SDP);
+      }),
+    });
+
+    expect(outcome.ok).toBe(true);
+    const multipart = await (seenBody as Blob).text();
+    expect(multipart).not.toContain('"language"');
+  });
+
+  it("normalizes a maximum-length validated live-dictation language hint", async () => {
+    let seenBody: BodyInit | null | undefined;
+    const outcome = await requestConfiguredRealtimeNegotiation({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-realtime",
+      sessionType: "transcription",
+      transcriptionLanguage: "abc-12345678-12345678-12345678-1234",
+      offerSdp: OFFER_SDP,
+      fetchImpl: mockFetch((_url, init) => {
+        seenBody = init.body;
+        return sdp(ANSWER_SDP);
+      }),
+    });
+
+    expect(outcome.ok).toBe(true);
+    const multipart = await (seenBody as Blob).text();
+    expect(multipart).toContain('"language":"abc"');
+    expect(multipart).not.toContain('"language":"abc-12345678');
+  });
+
   it("supports a custom apiKeyHeaderName (Azure api-key) and url-encodes the model id", async () => {
     let header: string | null = null;
     let seenUrl = "";

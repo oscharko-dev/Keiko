@@ -44,6 +44,34 @@ describe("npm audit retry", () => {
     expect(sleep).toHaveBeenCalledWith(15_000);
   });
 
+  it("redacts audit diagnostics without changing transient failure classification", async () => {
+    const secret = "sk-test-audit-secret-1234567890";
+    const runAudit = vi
+      .fn()
+      .mockReturnValueOnce({
+        output: `503 Service Unavailable api_key=${secret}`,
+        status: 1,
+        stderr: `api_key=${secret}`,
+        stdout: `503 Service Unavailable ${secret}`,
+      })
+      .mockReturnValueOnce(result(0, "found 0 vulnerabilities"));
+    const writeError = vi.fn();
+    const writeOutput = vi.fn();
+
+    const status = await runAuditWithRetry(["--audit-level=high"], {
+      runAudit,
+      sleep: vi.fn().mockResolvedValue(undefined),
+      writeError,
+      writeOutput,
+    });
+
+    expect(status).toBe(0);
+    expect(runAudit).toHaveBeenCalledTimes(2);
+    const emitted = [...writeError.mock.calls, ...writeOutput.mock.calls].flat().join("\n");
+    expect(emitted).not.toContain(secret);
+    expect(emitted).toContain("[REDACTED]");
+  });
+
   it("fails immediately for a genuine advisory verdict", async () => {
     const runAudit = vi.fn().mockReturnValue(result(1, "1 high severity vulnerability"));
     const sleep = vi.fn().mockResolvedValue(undefined);

@@ -154,6 +154,63 @@ describe("requestSpeechToText", () => {
     expect(events).toEqual([]);
   });
 
+  it("omits an empty language hint without emitting a normalization event", async () => {
+    let body = "";
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestSpeechToText({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-stt",
+      audio: AUDIO,
+      mimeType: "audio/ogg",
+      language: "",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(async (_url, init) => {
+        body = await bodyToText(init);
+        return ok({ text: "hallo" });
+      }),
+    });
+
+    expect(outcome.ok).toBe(true);
+    expect(body).not.toContain('name="language"');
+    expect(events).toEqual([]);
+  });
+
+  it("normalizes a maximum-length validated language hint and logs the boundary", async () => {
+    let body = "";
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestSpeechToText({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-stt",
+      audio: AUDIO,
+      mimeType: "audio/ogg",
+      language: "abc-12345678-12345678-12345678-1234",
+      correlationId: "corr-stt-language-boundary",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(async (_url, init) => {
+        body = await bodyToText(init);
+        return ok({ text: "hallo" });
+      }),
+    });
+
+    expect(outcome.ok).toBe(true);
+    expect(body).toContain("\r\n\r\nabc\r\n");
+    expect(events).toEqual([
+      {
+        level: "info",
+        category: "gateway",
+        op: "speech.stt.language.normalized",
+        correlationId: "corr-stt-language-boundary",
+        extra: {
+          declaredSubtagCount: 5,
+          resolvedSubtagCount: 1,
+          primaryLanguagePreserved: true,
+        },
+      },
+    ]);
+  });
+
   it("includes an optional domain-keyword prompt field in the multipart body", async () => {
     let body = "";
     const fetchImpl = mockFetch(async (_url, init) => {

@@ -5,6 +5,8 @@ import { dirname, resolve } from "node:path";
 import { setTimeout as sleepFor } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
+import { redact } from "@oscharko-dev/keiko-security";
+
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -85,8 +87,8 @@ function retryDependencies(dependencies) {
 }
 
 function emitAuditOutput(result, dependencies) {
-  if (result.stdout.length > 0) dependencies.writeOutput(result.stdout);
-  if (result.stderr.length > 0) dependencies.writeError(result.stderr);
+  if (result.stdout.length > 0) dependencies.writeOutput(redact(result.stdout));
+  if (result.stderr.length > 0) dependencies.writeError(redact(result.stderr));
 }
 
 export async function runAuditWithRetry(arguments_, dependencies = {}) {

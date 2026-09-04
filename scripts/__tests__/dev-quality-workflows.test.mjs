@@ -465,7 +465,7 @@ describe("dev quality workflows", () => {
     expect(result.stdout).toContain("Required CI dependency did not succeed: failure");
   });
 
-  it.each(["failure", "skipped", "cancelled"])(
+  it.each(["failure", "skipped", "cancelled", "", "unknown"])(
     "fails the aggregate when the UI result is %s",
     (uiResult) => {
       const result = runCiAggregate({ UI_RESULT: uiResult });
