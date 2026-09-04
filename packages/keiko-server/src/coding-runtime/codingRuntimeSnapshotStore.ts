@@ -2,6 +2,7 @@
 // This port intentionally has no event/token append operation: hot-path observations stay in memory.
 import type { DatabaseSync } from "node:sqlite";
 import type {
+  CodingWorkbenchIssueBinding,
   CodingWorkbenchModelSource,
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeFailureCode,
@@ -9,6 +10,9 @@ import type {
   CodingWorkbenchRuntimeSource,
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { CODING_WORKBENCH_ISSUE_NUMBER_MAX } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 
 const MAX_ROWS = 10_000;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -60,6 +64,12 @@ export interface CodingRuntimeSnapshot {
   readonly modelRequestCount: number;
   readonly recoveryHandle?: string | undefined;
   readonly result?: CodingWorkbenchRuntimeResult | undefined;
+  /**
+   * Present exactly when the run was accepted for a GitHub issue (#3385). Immutable for the run's
+   * life — a transition never rewrites it — and content-free: what persists is the identity and
+   * revision the run was accepted against, never the issue's text.
+   */
+  readonly issueBinding?: CodingWorkbenchIssueBinding | undefined;
 }
 
 export interface CodingRuntimeSnapshotTransition {
@@ -133,10 +143,17 @@ interface Row {
   readonly stderr_line_count: number | null;
   readonly stderr_sha256: string | null;
   readonly stderr_truncated: number | null;
+  readonly issue_repository_id: string | null;
+  readonly issue_remote_digest: string | null;
+  readonly issue_number: number | null;
+  readonly issue_id_digest: string | null;
+  readonly issue_default_base_ref: string | null;
+  readonly issue_content_revision_digest: string | null;
+  readonly issue_binding_digest: string | null;
 }
 
 const COLUMNS =
-  "run_id, schema_version, state, revision, requested_mode, runtime_source, model_source, failure_code, created_at, updated_at, terminal_at, recovery_acknowledged_at, predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest, binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count, recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count, stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256, stderr_truncated";
+  "run_id, schema_version, state, revision, requested_mode, runtime_source, model_source, failure_code, created_at, updated_at, terminal_at, recovery_acknowledged_at, predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest, binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count, recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count, stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256, stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest, issue_default_base_ref, issue_content_revision_digest, issue_binding_digest";
 
 // Prepared statements must remain co-located with the closed store operations they support.
 // eslint-disable-next-line max-lines-per-function
@@ -149,7 +166,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
     `SELECT ${COLUMNS} FROM coding_runtime_snapshots ORDER BY updated_at DESC, run_id LIMIT ?`,
   );
   const insert = db.prepare(
-    `INSERT INTO coding_runtime_snapshots (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO coding_runtime_snapshots (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const update = db.prepare(
     `UPDATE coding_runtime_snapshots SET state=?, revision=?, updated_at=?, failure_code=?, terminal_at=?, tool_call_count=?, patch_byte_count=?, model_request_count=?, recovery_handle=?, result_status=?, exit_code=?, stdout_byte_count=?, stdout_line_count=?, stdout_sha256=?, stdout_truncated=?, stderr_byte_count=?, stderr_line_count=?, stderr_sha256=?, stderr_truncated=? WHERE run_id=?`,
@@ -327,9 +344,38 @@ function map(row: Row | undefined): CodingRuntimeSnapshot | undefined {
     ...(row.predecessor_run_id ? { predecessorRunId: row.predecessor_run_id } : {}),
     ...(row.recovery_handle ? { recoveryHandle: row.recovery_handle } : {}),
     ...(runtimeResult(row) === undefined ? {} : { result: runtimeResult(row) }),
+    ...(issueBindingFromRow(row) === undefined ? {} : { issueBinding: issueBindingFromRow(row) }),
   };
   assertSnapshot(value);
   return value;
+}
+
+// All seven columns present, or none: a row with some of them is not a generic run and not a
+// bound one, and projecting it as either would let a run silently lose or invent its issue. It is
+// refused as the corruption it is.
+function issueBindingFromRow(row: Row): CodingWorkbenchIssueBinding | undefined {
+  const columns = [
+    row.issue_repository_id,
+    row.issue_remote_digest,
+    row.issue_number,
+    row.issue_id_digest,
+    row.issue_default_base_ref,
+    row.issue_content_revision_digest,
+    row.issue_binding_digest,
+  ];
+  const present = columns.filter((column) => column !== null).length;
+  if (present === 0) return undefined;
+  if (present !== columns.length) throw new Error("partially persisted issue binding");
+  return {
+    schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+    repositoryId: String(row.issue_repository_id),
+    remoteDigest: String(row.issue_remote_digest),
+    issueNumber: Number(row.issue_number),
+    issueIdDigest: String(row.issue_id_digest),
+    defaultBaseRef: String(row.issue_default_base_ref),
+    contentRevisionDigest: String(row.issue_content_revision_digest),
+    bindingDigest: String(row.issue_binding_digest),
+  };
 }
 function rows(values: Row[]): readonly CodingRuntimeSnapshot[] {
   return values.map((row) => requireSnapshot(map(row)));
@@ -365,6 +411,22 @@ function values(v: CodingRuntimeSnapshot): readonly (string | number | null)[] {
     v.modelRequestCount,
     v.recoveryHandle ?? null,
     ...runtimeResultValues(v.result),
+    ...issueBindingValues(v.issueBinding),
+  ];
+}
+
+function issueBindingValues(
+  binding: CodingWorkbenchIssueBinding | undefined,
+): readonly (string | number | null)[] {
+  if (binding === undefined) return [null, null, null, null, null, null, null];
+  return [
+    binding.repositoryId,
+    binding.remoteDigest,
+    binding.issueNumber,
+    binding.issueIdDigest,
+    binding.defaultBaseRef,
+    binding.contentRevisionDigest,
+    binding.bindingDigest,
   ];
 }
 
@@ -399,6 +461,36 @@ function assertSnapshot(v: CodingRuntimeSnapshot): void {
   assertSnapshotDigests(v);
   assertSnapshotCounts(v);
   if (v.result !== undefined) assertRuntimeResult(v.result);
+  if (v.issueBinding !== undefined) assertIssueBinding(v.issueBinding);
+}
+
+// The same bounds the public snapshot validator holds (`validateCodingWorkbenchRuntimeSnapshot`),
+// applied at the ledger so a binding that could not be projected is never persisted in the first
+// place. `defaultBaseRef` goes through the one shared git-ref predicate, not a second formula.
+function assertIssueBinding(binding: CodingWorkbenchIssueBinding): void {
+  if (binding.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION) {
+    throw new Error("invalid issue binding schemaVersion");
+  }
+  if (typeof binding.repositoryId !== "string" || !SAFE_ID.test(binding.repositoryId)) {
+    throw new Error("invalid issue binding repositoryId");
+  }
+  for (const [name, digest] of Object.entries({
+    remoteDigest: binding.remoteDigest,
+    issueIdDigest: binding.issueIdDigest,
+    contentRevisionDigest: binding.contentRevisionDigest,
+    bindingDigest: binding.bindingDigest,
+  })) {
+    if (typeof digest !== "string" || !DIGEST.test(digest)) {
+      throw new Error(`invalid issue binding ${name}`);
+    }
+  }
+  if (!validSnapshotCount(binding.issueNumber, CODING_WORKBENCH_ISSUE_NUMBER_MAX)) {
+    throw new Error("invalid issue binding issueNumber");
+  }
+  if (binding.issueNumber < 1) throw new Error("invalid issue binding issueNumber");
+  if (typeof binding.defaultBaseRef !== "string" || !isSafeGitRefName(binding.defaultBaseRef)) {
+    throw new Error("invalid issue binding defaultBaseRef");
+  }
 }
 
 function runtimeResult(row: Row): CodingWorkbenchRuntimeResult | undefined {

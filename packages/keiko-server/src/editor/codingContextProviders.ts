@@ -32,6 +32,7 @@ import {
   parseGitEditorDiffResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/git-editor";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import { findGitHubIssueReferences } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { validateGitRepositoryStatusResponse } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import type { MemoryScope, ProjectId } from "@oscharko-dev/keiko-contracts/memory";
 import {
@@ -988,9 +989,9 @@ export async function runMemoryProvider(
 const CONNECTED_CONTEXT_MAX_REFS = 4;
 const CONNECTED_CONTEXT_RUN_ID = "editor-coding-context";
 const CONNECTED_CONTEXT_SCORE = 0.75;
-// `owner/repo#123`; GitHub serves pull requests from the issues endpoint, so "issue" reads both.
-const GITHUB_REF_PATTERN =
-  /([A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100})#([1-9]\d{0,9})/gu;
+// `owner/repo#123` is found and admitted by the shared parser leaf (#3385) — this provider used to
+// carry the third copy of that regex. GitHub serves pull requests from the issues endpoint, so
+// "issue" reads both.
 const JIRA_REF_PATTERN = /\b([A-Z][A-Z0-9_]{1,20})-([1-9]\d{0,9})\b/gu;
 
 interface ConnectedContextIntake {
@@ -1005,13 +1006,15 @@ const CONNECTED_CONTEXT_UNCONFIGURED: CodeContextConnector = {
 };
 
 function githubContextRefs(queryText: string): CodeContextRef[] {
-  const refs: CodeContextRef[] = [];
-  for (const [, ownerAndRepo, objectId] of queryText.matchAll(GITHUB_REF_PATTERN)) {
-    if (ownerAndRepo !== undefined && objectId !== undefined) {
-      refs.push({ source: "github", objectKind: "issue", ownerAndRepo, objectId });
-    }
-  }
-  return refs;
+  // Bounded at the scan, before de-duplication: a query can name the same object many times, and
+  // the cap below is on distinct refs, so the scan asks for every candidate up to the text's own
+  // capacity for them — the parser leaf keeps that linear.
+  return findGitHubIssueReferences(queryText, Number.MAX_SAFE_INTEGER).map((reference) => ({
+    source: "github",
+    objectKind: "issue",
+    ownerAndRepo: reference.ownerAndRepo,
+    objectId: String(reference.issueNumber),
+  }));
 }
 
 function jiraContextRefs(queryText: string): CodeContextRef[] {

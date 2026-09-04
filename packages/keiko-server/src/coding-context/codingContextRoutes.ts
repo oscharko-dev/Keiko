@@ -19,6 +19,10 @@ import type {
   EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  isGitHubOwnerAndRepo,
+  parseGitHubIssueNumber,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 
 import type { UiHandlerDeps } from "../deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
@@ -69,9 +73,9 @@ const MIN_MAX_BODY_BYTES = 256;
 const MAX_MAX_BODY_BYTES = 65_536;
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
-const OWNER_AND_REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/u;
 const JIRA_PROJECT_PATTERN = /^[A-Z][A-Z0-9_]{1,20}$/u;
-const OBJECT_ID_PATTERN = /^[1-9]\d{0,9}$/u;
+// Jira issue numbers keep their own bound; GitHub refs are validated by the shared parser leaf.
+const JIRA_OBJECT_ID_PATTERN = /^[1-9]\d{0,9}$/u;
 
 // Local, cycle-free error envelope (mirrors routes.ts errorBody; a runtime import from
 // routes.ts would create an ESM cycle because routes.ts spreads this file's route group).
@@ -103,10 +107,10 @@ function parseGitHubRef(record: Record<string, unknown>): CodeContextRef | undef
   if (objectKind !== "issue" && objectKind !== "pull-request") return undefined;
   const ownerAndRepo = record.ownerAndRepo;
   const objectId = record.objectId;
-  if (typeof ownerAndRepo !== "string" || !OWNER_AND_REPO_PATTERN.test(ownerAndRepo)) {
+  if (typeof ownerAndRepo !== "string" || !isGitHubOwnerAndRepo(ownerAndRepo)) return undefined;
+  if (typeof objectId !== "string" || parseGitHubIssueNumber(objectId) === undefined) {
     return undefined;
   }
-  if (typeof objectId !== "string" || !OBJECT_ID_PATTERN.test(objectId)) return undefined;
   return { source: "github", objectKind, ownerAndRepo, objectId };
 }
 
@@ -115,7 +119,7 @@ function parseJiraRef(record: Record<string, unknown>): CodeContextRef | undefin
   const projectKey = record.projectKey;
   const objectId = record.objectId;
   if (typeof projectKey !== "string" || !JIRA_PROJECT_PATTERN.test(projectKey)) return undefined;
-  if (typeof objectId !== "string" || !OBJECT_ID_PATTERN.test(objectId)) return undefined;
+  if (typeof objectId !== "string" || !JIRA_OBJECT_ID_PATTERN.test(objectId)) return undefined;
   return { source: "jira", objectKind: "issue", projectKey, objectId };
 }
 

@@ -4,6 +4,12 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { redactCodingWorkbenchEvidenceText } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-evidence";
+// The ONE owner/repo and issue-number rule (#3385). This module used to carry its own copy of both
+// regexes, one of three across the coding-context surface; the parser leaf now owns the boundary.
+import {
+  isGitHubOwnerAndRepo,
+  parseGitHubIssueNumber,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import {
@@ -45,6 +51,9 @@ export interface CodeContextRawComment {
   readonly body: string;
 }
 
+/** The bound issue's lifecycle as the provider reports it. */
+export type CodeContextObjectState = "open" | "closed";
+
 export interface CodeContextRawObject {
   readonly source: CodeContextSource;
   readonly objectKind: CodeContextObjectKind;
@@ -53,6 +62,18 @@ export interface CodeContextRawObject {
   readonly body: string;
   readonly comments: readonly CodeContextRawComment[];
   readonly url?: string | undefined;
+  /**
+   * Content-free provider identity (#3385), present when the read projected it. `providerId` is
+   * the immutable numeric id a transferred or renumbered issue does NOT keep, which is what an
+   * issue binding digests; `state` and `isPullRequest` are what let a resolver refuse a closed
+   * issue or a pull request served from the issues endpoint; `commentCount` is the provider's own
+   * total, which the bounded `comments` page may undercount.
+   */
+  readonly providerId?: string | undefined;
+  readonly providerNodeId?: string | undefined;
+  readonly state?: CodeContextObjectState | undefined;
+  readonly isPullRequest?: boolean | undefined;
+  readonly commentCount?: number | undefined;
 }
 
 export interface CodeContextConnector {
@@ -128,22 +149,89 @@ export interface CodeContextPackResult {
   readonly evidence: CodeContextEvidenceSummary;
 }
 
-const OWNER_REPO_RE =
-  /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/u;
-const NUMBER_RE = /^[1-9]\d{0,9}$/u;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
+
+// The projection is content-bearing (title, body) AND identity-bearing (#3385): the immutable id
+// as a string so a 64-bit provider id cannot lose precision in transit, the node id, the lifecycle
+// state, and whether the object is really a pull request served from the issues endpoint. `.comments`
+// on the object is the provider's total count, not the page of comments the second read fetches.
+export const GITHUB_CODE_CONTEXT_OBJECT_JQ =
+  "{id:(.id|tostring),nodeId:.node_id,state:.state,isPullRequest:(.pull_request!=null)," +
+  "title:.title,body:.body,comments:.comments,url:.html_url}";
 
 export function buildGitHubCodeContextArgv(ref: GitHubCodeContextRef): readonly string[] {
   const repo = assertOwnerAndRepo(ref.ownerAndRepo);
   const objectId = assertNumericObjectId(ref.objectId);
   const path = ref.objectKind === "pull-request" ? "pulls" : "issues";
-  return [
-    "api",
-    `/repos/${repo}/${path}/${objectId}`,
-    "--jq",
-    "{title:.title,body:.body,comments:.comments,url:.html_url}",
-  ];
+  return ["api", `/repos/${repo}/${path}/${objectId}`, "--jq", GITHUB_CODE_CONTEXT_OBJECT_JQ];
+}
+
+/**
+ * Map the two `gh api` answers (`buildGitHubCodeContextArgv` and `buildGitHubCodeContextCommentsArgv`)
+ * onto one raw object. Lives beside the projection it reads so the two cannot drift: a field added
+ * to the jq above is mapped here, in the same file, or it is not read at all. Content fields
+ * default to an empty string; identity fields are absent rather than defaulted, because a resolver
+ * that cannot see an id, a state or a pull-request marker must refuse, never assume `open`.
+ */
+export function gitHubCodeContextRawObjectFrom(
+  ref: GitHubCodeContextRef,
+  objectJson: unknown,
+  commentsJson: unknown,
+): CodeContextRawObject {
+  const object = asRecord(objectJson, "GitHub object");
+  return {
+    source: "github",
+    objectKind: ref.objectKind,
+    objectId: ref.objectId,
+    title: optionalString(object.title),
+    body: optionalString(object.body),
+    comments: commentsFromGitHub(commentsJson),
+    url: optionalString(object.url),
+    ...identityFromGitHub(object),
+  };
+}
+
+function identityFromGitHub(
+  object: Record<string, unknown>,
+): Pick<
+  CodeContextRawObject,
+  "providerId" | "providerNodeId" | "state" | "isPullRequest" | "commentCount"
+> {
+  const providerId = typeof object.id === "string" && /^[0-9]{1,20}$/u.test(object.id)
+    ? object.id
+    : undefined;
+  const state = object.state === "open" || object.state === "closed" ? object.state : undefined;
+  return {
+    ...(providerId === undefined ? {} : { providerId }),
+    ...(typeof object.nodeId === "string" && object.nodeId.length > 0
+      ? { providerNodeId: object.nodeId }
+      : {}),
+    ...(state === undefined ? {} : { state }),
+    ...(typeof object.isPullRequest === "boolean" ? { isPullRequest: object.isPullRequest } : {}),
+    ...(Number.isSafeInteger(object.comments) && Number(object.comments) >= 0
+      ? { commentCount: Number(object.comments) }
+      : {}),
+  };
+}
+
+function commentsFromGitHub(value: unknown): readonly CodeContextRawComment[] {
+  if (!Array.isArray(value)) throw new Error("GitHub comments response must be an array");
+  return value.map((entry) => {
+    const comment = asRecord(entry, "GitHub comment");
+    return { id: optionalString(comment.id), body: optionalString(comment.body) };
+  });
+}
+
+function asRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${label} response must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function optionalString(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 export function buildGitHubCodeContextCommentsArgv(ref: GitHubCodeContextRef): readonly string[] {
@@ -260,7 +348,7 @@ function packItem(raw: CodeContextRawObject, maxBodyBytes: number): CodeContextP
     body: body.value,
     bodyTruncated: body.truncated,
     comments: raw.comments.map((comment) => packComment(comment, maxBodyBytes)),
-    contentDigest: contentDigest(raw),
+    contentDigest: codeContextContentDigest(raw),
   };
 }
 
@@ -278,7 +366,13 @@ function contextLabel(
   return `untrusted-${sourceLabel}-${objectKind}-${objectId}`;
 }
 
-function contentDigest(raw: CodeContextRawObject): string {
+/**
+ * sha256 over the content actually read — title, body and the bounded comment page — keyed by the
+ * object's source identity. Exported (#3385) because the issue binding's `contentRevisionDigest`
+ * is this same value: one formula, so a binding made at preview time and a pack attached at run
+ * time agree on whether the issue text changed in between.
+ */
+export function codeContextContentDigest(raw: CodeContextRawObject): string {
   return sha256Hex(
     JSON.stringify({
       source: raw.source,
@@ -346,11 +440,13 @@ function byteLength(value: string): number {
 }
 
 function assertOwnerAndRepo(value: string): string {
-  if (!OWNER_REPO_RE.test(value)) throw new Error("ownerAndRepo must match owner/repo");
+  if (!isGitHubOwnerAndRepo(value)) throw new Error("ownerAndRepo must match owner/repo");
   return value;
 }
 
 function assertNumericObjectId(value: string): string {
-  if (!NUMBER_RE.test(value)) throw new Error("objectId must be a positive number");
+  if (parseGitHubIssueNumber(value) === undefined) {
+    throw new Error("objectId must be a positive number");
+  }
   return value;
 }
