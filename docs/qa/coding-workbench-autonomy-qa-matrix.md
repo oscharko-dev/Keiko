@@ -119,10 +119,19 @@ npm run test:e2e:coding-workbench-1994
 
   Two limits of that grant are stated here rather than implied. It is granted and revoked through
   `GET`/`PUT /api/coding-workbench/github-authorization`; **no settings screen calls those routes
-  yet**, so the in-product surface #3385 asks for is the API only. And the scope is the local
-  checkout, not the remote whose issues are read: two clones of one remote are two grants, and a
-  checkout later repointed at another remote keeps the grant it had. Binding a grant to the resolved
-  remote is #3385's `IssueRunBinding` work and is not built.
+  yet**, so the in-product surface #3385 asks for is the API only. And the grant is stored against the local
+  checkout, not against the remote whose issues are read: two clones of one remote are two grants.
+  The row carries only the switch "GitHub reading is on for this checkout" — **which** repository may
+  be read is decided per read, by resolving the checkout's own `origin` remote on every request and
+  refusing any ref that does not name it. A checkout repointed at another remote therefore stops
+  resolving to the old repository and its refs are refused on the next read.
+
+  Resolution is deliberately live rather than persisted at grant time, so no stored identity can
+  disagree with the real remote. The consequence is stated rather than implied: after a repoint, the
+  **new** remote is readable on the next read without a fresh grant. That is fail-closed against a
+  request naming the old repository and fail-open against `git remote set-url` by someone who
+  already holds workspace write — a boundary this row is not positioned to defend. If #3385 later
+  wants "a repoint requires a re-grant", that is additional work and is not what this implements.
 
   **No task-ref binding is enforced for connector writes.** `validateAuthorityBindingCorrelation`
   in `keiko-contracts` checks that a binding's task id appears in the envelope's `taskRefs`, but its

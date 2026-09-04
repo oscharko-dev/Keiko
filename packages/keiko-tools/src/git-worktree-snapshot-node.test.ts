@@ -150,6 +150,55 @@ describe("readGitRemoteUrl", () => {
       GitWorktreeReadError,
     );
   });
+
+  // The case above cannot see this defect: `example/repository` collides with no environment value,
+  // so it stayed green while every real owner that DID collide came back corrupted.
+  //
+  // `runCommand` scrubs the value of every env var that is not on the policy's `envAllowlist`. The
+  // account names are exactly the ones that appear in a personal GitHub owner, so under the default
+  // policy a user `alice` owning `alice-dev/App` read their own remote back as
+  // `https://github.com/[REDACTED]-dev/App` and every consumer derived a repository that does not
+  // exist. Reading this remote is a governed-identity operation, so it runs under the lane that
+  // allowlists those names; that lane still grants no credential, so a token can never survive here.
+  it("preserves an owner that collides with the account identity", async () => {
+    git(["remote", "add", "origin", "https://github.com/alicedev-team/App.git"]);
+
+    const url = await readGitRemoteUrl(
+      {
+        workspace: info,
+        // At least MIN_SCRUBBABLE_VALUE_LENGTH characters on purpose: a shorter account name is
+        // never scrubbed, so a fixture using one would pass under BOTH policies and pin nothing.
+        processEnv: { PATH: process.env.PATH ?? "", USER: "alicedev", LOGNAME: "alicedev" },
+        now: () => Date.now(),
+      },
+      "origin",
+    );
+
+    expect(url).toBe("https://github.com/alicedev-team/App.git");
+    expect(url).not.toContain("[REDACTED]");
+  });
+
+  // The identity lane widens which NAMES are allowlisted, never what a credential may do: a token
+  // value is still scrubbed out of this reader's output.
+  it("still scrubs a credential value that appears in the output", async () => {
+    git(["remote", "add", "origin", "https://github.com/alicedev-team/s3cr3t-token-value.git"]);
+
+    const url = await readGitRemoteUrl(
+      {
+        workspace: info,
+        processEnv: {
+          PATH: process.env.PATH ?? "",
+          USER: "alicedev",
+          GH_TOKEN: "s3cr3t-token-value",
+        },
+        now: () => Date.now(),
+      },
+      "origin",
+    );
+
+    expect(url).not.toContain("s3cr3t-token-value");
+    expect(url).toContain("[REDACTED]");
+  });
 });
 
 describe("readStagedConflictMarkerFileCount", () => {

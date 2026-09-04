@@ -56,6 +56,23 @@ describe("githubOwnerAndRepoFromRemoteUrl", () => {
   ])("rejects unsupported or ambiguous remote URL %s", (remoteUrl) => {
     expect(githubOwnerAndRepoFromRemoteUrl(remoteUrl)).toBeUndefined();
   });
+
+  // `runCommand` replaces the value of every non-allowlisted env var with `[REDACTED]` before output
+  // leaves the spawn boundary. Parsing such a string would silently address a DIFFERENT repository
+  // than the checkout's own — and, on the coding-context path, would decide an authorization
+  // comparison against a name that is not the real one.
+  //
+  // These pass because `validRepositorySegment` rejects the marker's brackets, not because of a
+  // dedicated marker check: an explicit one was written here and then removed, because removing it
+  // changed no case and AGENTS.md §6 prefers deletion to redundant code. They are kept as the pin on
+  // that behaviour, so loosening the segment rule cannot quietly re-admit a redacted operand.
+  it.each([
+    "https://github.com/[REDACTED]-dev/Keiko.git",
+    "https://github.com/oscharko-dev/[REDACTED].git",
+    "git@github.com:[REDACTED]/Keiko.git",
+  ])("refuses a remote URL the spawn boundary redacted: %s", (remoteUrl) => {
+    expect(githubOwnerAndRepoFromRemoteUrl(remoteUrl)).toBeUndefined();
+  });
 });
 
 describe("signatureRequirementOf", () => {

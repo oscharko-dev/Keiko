@@ -16,7 +16,7 @@
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { CommandRule, CommandResult, SandboxPolicy } from "./types.js";
-import { DEFAULT_SANDBOX_POLICY } from "./types.js";
+import { DEFAULT_SANDBOX_POLICY, GOVERNED_GIT_IDENTITY_SANDBOX_POLICY } from "./types.js";
 import {
   nodeSpawnFn,
   runCommand,
@@ -253,8 +253,23 @@ export async function readGitRemoteUrl(
   if (!isSafeGitRefName(remoteAlias)) {
     throw new GitWorktreeReadError("remote alias is unsafe");
   }
+  // This read is the ONE reader here whose payload is content-bearing: the caller needs the remote
+  // URL itself to derive an `owner/repo` operand. `runCommand` scrubs the value of every env var that
+  // is NOT on the policy's `envAllowlist`, so under the default policy the account identity is
+  // scrubbed out of the URL: a user whose GitHub owner contains their OS user name (`USER=alice`
+  // owning `alice-dev/App`) got `https://github.com/[REDACTED]-dev/App` back, and every consumer
+  // derived a repository that does not exist. It failed closed rather than leaking, but the feature
+  // could not work at all for that very common setup.
+  //
+  // The identity lane is the sanctioned profile for a git read that must act AS the local human on
+  // their own machine, and it allowlists exactly the account names (`HOME`, `USER`, `LOGNAME`, ...)
+  // whose values were corrupting this payload. It grants NO credential and NO network: it carries no
+  // `credentialEnvAllowlist`, so every token value stays in the scrub set and can still never survive
+  // into output. A caller that passes its own policy keeps it.
+  const identityDeps =
+    deps.policy === undefined ? { ...deps, policy: GOVERNED_GIT_IDENTITY_SANDBOX_POLICY } : deps;
   const lines = parseLines(
-    await runRead(buildReadContext(deps), ["remote", "get-url", "--", remoteAlias]),
+    await runRead(buildReadContext(identityDeps), ["remote", "get-url", "--", remoteAlias]),
   );
   if (lines.length !== 1) {
     throw new GitWorktreeReadError("remote URL could not be resolved uniquely");

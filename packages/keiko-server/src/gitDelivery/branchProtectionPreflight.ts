@@ -46,6 +46,15 @@ function ownerAndRepoFromPath(path: string): string | undefined {
     : undefined;
 }
 
+// `runCommand` replaces the value of every non-allowlisted env var with `[REDACTED]` before output
+// leaves the spawn boundary. `readGitRemoteUrl` runs under the identity lane so the account names
+// no longer corrupt this payload, but the scrub set is wider than that lane: any other
+// non-allowlisted value appearing inside the owner or repository name is still replaced. Deriving an
+// operand from such a string would silently address a different repository than the checkout's own.
+// No separate marker check is needed to refuse it — `validRepositorySegment` above already rejects
+// the marker's brackets, which are not legal in a GitHub owner or repository segment. The cases in
+// `branchProtectionPreflight.test.ts` pin that, so the refusal cannot be lost by loosening the
+// segment rule without a failing test.
 export function githubOwnerAndRepoFromRemoteUrl(remoteUrl: string): string | undefined {
   const scpPrefix = "git@github.com:";
   if (remoteUrl.startsWith(scpPrefix)) {
