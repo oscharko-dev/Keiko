@@ -40,8 +40,10 @@ import {
 } from "./codeContextConnector.js";
 import { createGitHubCodeContextConnector } from "./githubCodeContextConnector.js";
 import { createJiraCodeContextConnector } from "./jiraCodeContextConnector.js";
-import { createGitHubCodeContextApiPort } from "./githubCodeContextPort.js";
-import { isGitHubIssueReaderAuthorized } from "./githubIssueReaderAuthorization.js";
+import {
+  gitHubCodeContextPortFor,
+  isGitHubIssueReaderAuthorized,
+} from "./githubIssueReaderAuthorization.js";
 
 const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion",
@@ -288,24 +290,10 @@ export function composeCodingContextConnectors(
   repositoryRoot: string | undefined = deps.preferredProjectPath,
   correlationId?: string,
 ): ComposedConnectors {
+  // The port follows the repository the caller is working in, not the launch snapshot: evaluating
+  // the grant for B while `gh` is confined to A would authorize one repository and read another.
   const githubPort =
-    deps.codingContextGitHubPort ??
-    (deps.preferredProjectPath === undefined
-      ? undefined
-      : createGitHubCodeContextApiPort({
-          workspace: {
-            root: deps.preferredProjectPath,
-            selectedRoot: deps.preferredProjectPath,
-            name: undefined,
-            version: undefined,
-            testFramework: "unknown",
-            sourceDirs: [],
-            testDirs: [],
-            languages: [],
-            ignoreLines: [],
-          },
-          processEnv: process.env,
-        }));
+    deps.codingContextGitHubPort ?? gitHubCodeContextPortFor(repositoryRoot, process.env);
   const jiraPort = deps.codingContextJiraPort;
   const jiraConfigured =
     jiraPort !== undefined &&

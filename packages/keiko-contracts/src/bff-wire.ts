@@ -452,8 +452,25 @@ export interface GitHubIssueReaderAuthorizationWire {
 }
 
 export interface UpdateGitHubIssueReaderAuthorizationWire {
+  /**
+   * Which repository the grant applies to, as its registered project path.
+   *
+   * The caller names it because the server has no reliable notion of "the current repository": the
+   * launch path is a start-up snapshot that opening another repository never updates, so resolving
+   * from it stored a grant against the wrong repository. It is intent, not authority — the server
+   * accepts the value only if it is already a registered project, and derives the content-free
+   * repository identity itself, so a request can neither invent a path nor reach a repository the
+   * user has not opened.
+   */
+  readonly repositoryPath: string;
   readonly authorized: boolean;
   readonly expectedRevision: number;
+}
+
+const AUTHORIZATION_UPDATE_KEYS = ["repositoryPath", "authorized", "expectedRevision"];
+
+function isBoundedRepositoryPath(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 4096;
 }
 
 export function parseUpdateGitHubIssueReaderAuthorizationWire(
@@ -461,17 +478,13 @@ export function parseUpdateGitHubIssueReaderAuthorizationWire(
 ): UpdateGitHubIssueReaderAuthorizationWire | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const candidate = value as Record<string, unknown>;
-  const extra = Object.keys(candidate).filter(
-    (key) => key !== "authorized" && key !== "expectedRevision",
-  );
-  // The browser says only "grant" or "revoke", and which revision it saw. It cannot name the
-  // repository: the server resolves that from the selected project, so a request can never
-  // authorize a repository the user is not actually working in.
-  return extra.length === 0 &&
-    typeof candidate.authorized === "boolean" &&
+  const extra = Object.keys(candidate).filter((key) => !AUTHORIZATION_UPDATE_KEYS.includes(key));
+  if (extra.length > 0 || !isBoundedRepositoryPath(candidate.repositoryPath)) return undefined;
+  return typeof candidate.authorized === "boolean" &&
     Number.isSafeInteger(candidate.expectedRevision) &&
     Number(candidate.expectedRevision) >= 0
     ? {
+        repositoryPath: candidate.repositoryPath,
         authorized: candidate.authorized,
         expectedRevision: Number(candidate.expectedRevision),
       }

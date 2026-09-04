@@ -15,14 +15,26 @@ const MAX_BODY_BYTES = 1_024;
 /**
  * Settings surface for the repository-scoped GitHub issue reader (#3385).
  *
- * The repository is resolved by the SERVER from the selected project, never named by the caller:
- * a request that could name its own repository would let a user grant access to a repository they
- * are not working in. `revision` is echoed back on update so a stale client cannot silently
- * re-authorize a repository whose grant someone else has just withdrawn.
+ * The caller names the repository, and the server accepts the name ONLY if it is already a
+ * registered project. Resolving it from `deps.preferredProjectPath` instead — as this route first
+ * did — read the project the process started in, a snapshot that opening another repository never
+ * updates: launch in A, switch to B, grant, and the row landed on A while B stayed denied. The read
+ * path had already been corrected to the caller's validated workspace root; this is the writer
+ * catching up to it.
+ *
+ * Naming a repository is intent, not authority. An unregistered path is refused, so a request can
+ * neither invent a path nor reach a repository the user has not opened, and the content-free
+ * repository identity is always derived server-side. `revision` is echoed back so a stale client
+ * cannot silently re-authorize a repository whose grant someone else has just withdrawn.
  */
-function selectedRepositoryRoot(deps: UiHandlerDeps): string | undefined {
-  const root = deps.preferredProjectPath;
-  return root === undefined || root === "" ? undefined : root;
+function registeredRepositoryRoot(deps: UiHandlerDeps, path: string): string | undefined {
+  if (path.length === 0) return undefined;
+  return deps.store.listProjects().some((project) => project.path === path) ? path : undefined;
+}
+
+function requestedRepositoryPath(ctx: RouteContext): string | undefined {
+  const value = ctx.url.searchParams.get("repositoryPath");
+  return value === null || value.length === 0 ? undefined : value;
 }
 
 function projection(
@@ -78,12 +90,12 @@ async function parseUpdate(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(raw) as unknown;
 }
 
-function noRepositorySelected(ctx: RouteContext, verb: string): RouteResult {
+function unknownRepository(ctx: RouteContext, verb: string): RouteResult {
   return {
     status: 409,
     body: errorBody(
-      "NO_REPOSITORY_SELECTED",
-      `Select a repository before ${verb} GitHub issue access.`,
+      "UNKNOWN_REPOSITORY",
+      `Open the repository before ${verb} its GitHub issue access.`,
       ctx.correlationId,
     ),
   };
@@ -93,8 +105,10 @@ export function handleGetGitHubIssueReaderAuthorization(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): RouteResult {
-  const root = selectedRepositoryRoot(deps);
-  if (root === undefined) return noRepositorySelected(ctx, "reviewing");
+  const requested = requestedRepositoryPath(ctx);
+  if (requested === undefined) return unknownRepository(ctx, "reviewing");
+  const root = registeredRepositoryRoot(deps, requested);
+  if (root === undefined) return unknownRepository(ctx, "reviewing");
   return { status: 200, body: projection(deps, root) };
 }
 
@@ -119,10 +133,10 @@ export async function handlePutGitHubIssueReaderAuthorization(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  const root = selectedRepositoryRoot(deps);
-  if (root === undefined) return noRepositorySelected(ctx, "changing");
   const parsed = await readUpdate(ctx);
   if (parsed === undefined) return badRequest(ctx.correlationId);
+  const root = registeredRepositoryRoot(deps, parsed.repositoryPath);
+  if (root === undefined) return unknownRepository(ctx, "changing");
 
   const repositoryId = deriveRepositoryId(root);
   const stored = deps.store.updateGitHubIssueReaderAuthorization(

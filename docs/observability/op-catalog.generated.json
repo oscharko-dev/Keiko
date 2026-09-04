@@ -905,13 +905,13 @@
     {
       "op": "coding-context.github-authorization.changed",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubAuthorizationRoutes.ts:150",
+      "site": "packages/keiko-server/src/coding-context/githubAuthorizationRoutes.ts:161",
       "package": "keiko-server"
     },
     {
       "op": "coding-context.github-authorization.evaluated",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:63",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:86",
       "package": "keiko-server"
     },
     {

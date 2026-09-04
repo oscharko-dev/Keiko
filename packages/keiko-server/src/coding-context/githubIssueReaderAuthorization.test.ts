@@ -65,30 +65,50 @@ describe("isGitHubIssueReaderAuthorized (#3385)", () => {
   // line, "no row", "grant withdrawn" and "no repository named" are indistinguishable in a support
   // timeline, and the reason the read was blocked is lost.
   it.each([
-    ["authorized", granted, ROOT as string | undefined, true],
-    ["no-grant", depsWith(() => undefined), ROOT as string | undefined, false],
+    ["authorized", granted, ROOT as string | undefined, true, 1],
+    ["no-grant", depsWith(() => undefined), ROOT as string | undefined, false, undefined],
     [
       "revoked",
       depsWith((repositoryId) => ({ repositoryId, authorized: false, revision: 2 })),
       ROOT as string | undefined,
       false,
+      2,
     ],
-    ["repository-unresolved", granted, undefined as string | undefined, false],
-  ] as const)("records the %s decision on the activity log", (decision, deps, root, authorized) => {
-    const { sink, events } = capturingLog();
+    ["repository-unresolved", granted, undefined as string | undefined, false, undefined],
+    // #3385 review: a deps graph composed without persistence must deny and say so, not throw. The
+    // decision stays distinct from "no grant" so a timeline can tell an ungranted repository apart
+    // from a deployment whose store was never wired.
+    [
+      "store-unavailable",
+      {} as unknown as Pick<UiHandlerDeps, "store">,
+      ROOT as string | undefined,
+      false,
+      undefined,
+    ],
+  ] as const)(
+    "records the %s decision on the activity log",
+    (decision, deps, root, authorized, revision) => {
+      const { sink, events } = capturingLog();
 
-    expect(
-      isGitHubIssueReaderAuthorized(deps, root, { activityLog: sink, correlationId: "corr-3385" }),
-    ).toBe(authorized);
+      expect(
+        isGitHubIssueReaderAuthorized(deps, root, {
+          activityLog: sink,
+          correlationId: "corr-3385",
+        }),
+      ).toBe(authorized);
 
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      category: "security",
-      op: "coding-context.github-authorization.evaluated",
-      correlationId: "corr-3385",
-      extra: { decision, authorized },
-    });
-  });
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        category: "security",
+        op: "coding-context.github-authorization.evaluated",
+        correlationId: "corr-3385",
+        extra: { decision, authorized },
+      });
+      // The revision names WHICH stored grant was evaluated; it is present exactly when a row was
+      // read, so the JSDoc's claim and the line agree.
+      expect((events[0]?.extra as { revision?: number } | undefined)?.revision).toBe(revision);
+    },
+  );
 
   it("falls back to the unknown correlation id rather than omitting it", () => {
     const { sink, events } = capturingLog();

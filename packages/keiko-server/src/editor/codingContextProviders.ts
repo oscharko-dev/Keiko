@@ -55,7 +55,10 @@ import {
   type CodeContextSource,
 } from "../coding-context/codeContextConnector.js";
 import { createGitHubCodeContextConnector } from "../coding-context/githubCodeContextConnector.js";
-import { isGitHubIssueReaderAuthorized } from "../coding-context/githubIssueReaderAuthorization.js";
+import {
+  gitHubCodeContextPortFor,
+  isGitHubIssueReaderAuthorized,
+} from "../coding-context/githubIssueReaderAuthorization.js";
 import { createJiraCodeContextConnector } from "../coding-context/jiraCodeContextConnector.js";
 import { handleGitBlame, handleGitStatus, handleGitStructuredDiff } from "../gitRoutes.js";
 import { openStoreForDeps } from "../local-knowledge-grounded-qa.js";
@@ -1065,7 +1068,11 @@ function connectedContextIntake(
   repositoryRoot: string,
   correlationId: string | undefined,
 ): ConnectedContextIntake | undefined {
-  const githubPort = deps.codingContextGitHubPort;
+  // Same rule as the route: the port follows the repository this provider is operating on. Building
+  // it only from the launch project left GitHub context permanently unavailable whenever Keiko was
+  // started without an initial project, however the grant was set.
+  const githubPort =
+    deps.codingContextGitHubPort ?? gitHubCodeContextPortFor(repositoryRoot, deps.env);
   const jiraPort = deps.codingContextJiraPort;
   if (githubPort === undefined && jiraPort === undefined) return undefined;
   const connectorConfig: CodeContextConnectorConfig = {

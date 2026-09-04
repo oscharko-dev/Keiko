@@ -436,6 +436,9 @@ describe("coding context pack route", () => {
         codingContextGitHubPort: undefined,
         codingContextJiraPort: undefined,
         preferredProjectPath: undefined,
+        // GitHub is denied through the store, not by withholding a port: the fallback port now
+        // follows the authority's repository root, so an absent launch path no longer suppresses it.
+        store: authorizationStore(undefined) as UiHandlerDeps["store"],
         env: {
           JIRA_CONNECTOR_AUTHORIZED: "true",
           KEIKO_JIRA_BASE_URL: "http://invalid.example.com",

@@ -3,6 +3,8 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/index.js";
 import { deriveRepositoryId } from "../task-workspace/naming.js";
+import type { GitHubCodeContextApiPort } from "./githubCodeContextConnector.js";
+import { createGitHubCodeContextApiPort } from "./githubCodeContextPort.js";
 
 /**
  * Why the GitHub issue reader was admitted or refused for one repository. A closed vocabulary, so a
@@ -20,7 +22,11 @@ export interface GitHubIssueReaderAuthorizationObservation {
 function decide(
   deps: Pick<UiHandlerDeps, "store">,
   repositoryRoot: string | undefined,
-): { readonly decision: GitHubIssueReaderAuthorizationDecision; readonly repositoryId?: string } {
+): {
+  readonly decision: GitHubIssueReaderAuthorizationDecision;
+  readonly repositoryId?: string;
+  readonly revision?: number;
+} {
   if (repositoryRoot === undefined || repositoryRoot === "") {
     return { decision: "repository-unresolved" };
   }
@@ -40,7 +46,11 @@ function decide(
   if (typeof read !== "function") return { decision: "store-unavailable", repositoryId };
   const record = read(repositoryId);
   if (record === undefined) return { decision: "no-grant", repositoryId };
-  return { decision: record.authorized ? "authorized" : "revoked", repositoryId };
+  return {
+    decision: record.authorized ? "authorized" : "revoked",
+    repositoryId,
+    revision: record.revision,
+  };
 }
 
 /**
@@ -67,7 +77,7 @@ export function isGitHubIssueReaderAuthorized(
   repositoryRoot: string | undefined,
   observation: GitHubIssueReaderAuthorizationObservation = {},
 ): boolean {
-  const { decision, repositoryId } = decide(deps, repositoryRoot);
+  const { decision, repositoryId, revision } = decide(deps, repositoryRoot);
   const authorized = decision === "authorized";
   const sink = observation.activityLog ?? processServerLogSink();
   sink.write({
@@ -79,7 +89,41 @@ export function isGitHubIssueReaderAuthorized(
       decision,
       authorized,
       ...(repositoryId === undefined ? {} : { repositoryId }),
+      // Which stored grant was evaluated, so a timeline can tell one revision from the next. Absent
+      // exactly when no row was read, which the decision already says.
+      ...(revision === undefined ? {} : { revision }),
     },
   });
   return authorized;
+}
+
+/**
+ * Build the read-only `gh api` port for ONE repository root.
+ *
+ * Both composition sites used to build it from `deps.preferredProjectPath`, the project the process
+ * happened to start in. That made the port a launch-time snapshot: opening another repository later
+ * left GitHub context unavailable however the grant was set, and where the two roots differed,
+ * authorization was evaluated for one repository while `gh` was confined to another. The port is now
+ * always built for the repository the caller is actually working in, so the stored grant is the only
+ * thing that decides.
+ */
+export function gitHubCodeContextPortFor(
+  repositoryRoot: string | undefined,
+  processEnv: NodeJS.ProcessEnv,
+): GitHubCodeContextApiPort | undefined {
+  if (repositoryRoot === undefined || repositoryRoot === "") return undefined;
+  return createGitHubCodeContextApiPort({
+    workspace: {
+      root: repositoryRoot,
+      selectedRoot: repositoryRoot,
+      name: undefined,
+      version: undefined,
+      testFramework: "unknown",
+      sourceDirs: [],
+      testDirs: [],
+      languages: [],
+      ignoreLines: [],
+    },
+    processEnv,
+  });
 }
