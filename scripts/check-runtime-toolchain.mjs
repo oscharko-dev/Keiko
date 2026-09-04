@@ -5,19 +5,29 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJsonFile } from "./lib/json.mjs";
 
-const EXPECTED_NODE_ENGINE = ">=24.18.0 <25";
+export const EXPECTED_NODE_ENGINE = ">=24.18.0 <25 || >=26.3.0 <27";
+export const EXPECTED_NPM_ENGINE_RANGE = ">=11.16.0 <12";
 // Exported for the same reason as EXPECTED_PACKAGE_MANAGER below: a workflow-parity test compares
 // its setup-node pins against THIS constant, so a fixture cannot restate the version and go on
 // passing while the governed baseline moves and the workflows stay behind.
 export const EXPECTED_NODE_BASELINE = "24.18.0";
+export const EXPECTED_NODE_COMPATIBILITY_BASELINE = "26.8.1";
 // Exported for the same reason as the Node baseline: three perf-evidence scripts hard-compared
 // this value and would have started rejecting valid runs on the next npm bump, with nothing to
 // point the person doing the bump at them (#3304).
 export const EXPECTED_NPM_ENGINE = "11.16.0";
+export const EXPECTED_NPM_COMPATIBILITY_BASELINE = "11.19.0";
 // Exported: release.yml pins its publish npm to this exact governed version, and the lockstep
 // test compares the workflow line against THIS constant — the 0.3.1 CI publish died on a drifted
 // hand-maintained pin (11.18.0) that the tag then froze forever.
 export const EXPECTED_PACKAGE_MANAGER = "npm@11.16.0";
+export const EXPECTED_EXACT_TOOLCHAINS = Object.freeze([
+  Object.freeze({ node: EXPECTED_NODE_BASELINE, npm: EXPECTED_NPM_ENGINE }),
+  Object.freeze({
+    node: EXPECTED_NODE_COMPATIBILITY_BASELINE,
+    npm: EXPECTED_NPM_COMPATIBILITY_BASELINE,
+  }),
+]);
 const VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/u;
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -30,16 +40,31 @@ function isSupportedNodeVersion(value) {
   const parts = versionParts(value);
   if (parts === undefined) return false;
   const [major, minor, patch] = parts;
-  return major === 24 && (minor > 18 || (minor === 18 && patch !== undefined && patch >= 0));
+  const isSupported24 = major === 24 && (minor > 18 || (minor === 18 && patch !== undefined));
+  const isSupported26 = major === 26 && (minor > 3 || (minor === 3 && patch !== undefined));
+  return isSupported24 || isSupported26;
+}
+
+function isSupportedNpmVersion(value) {
+  const parts = versionParts(value);
+  if (parts === undefined) return false;
+  const [major, minor, patch] = parts;
+  return major === 11 && (minor > 16 || (minor === 16 && patch !== undefined));
+}
+
+function isApprovedExactToolchain(nodeVersion, npmVersion) {
+  return EXPECTED_EXACT_TOOLCHAINS.some(
+    (toolchain) => toolchain.node === nodeVersion && toolchain.npm === npmVersion,
+  );
 }
 
 function evaluateDeclaredToolchain(input) {
   const problems = [];
   if (input.rootNodeEngine !== EXPECTED_NODE_ENGINE) {
-    problems.push("root Node.js engine policy does not match the governed Node.js 24 LTS line");
+    problems.push("root Node.js engine policy does not match the governed Node.js 24/26 lines");
   }
-  if (input.rootNpmEngine !== EXPECTED_NPM_ENGINE) {
-    problems.push("root npm engine policy does not match the bundled governed npm version");
+  if (input.rootNpmEngine !== EXPECTED_NPM_ENGINE_RANGE) {
+    problems.push("root npm engine policy does not match the governed npm 11 range");
   }
   if (input.packageManager !== EXPECTED_PACKAGE_MANAGER) {
     problems.push("packageManager does not match the governed npm version");
@@ -55,7 +80,7 @@ function evaluateDeclaredToolchain(input) {
   // `evaluateRuntimeToolchain` is exported; a caller written against the previous input shape must
   // not crash on a field it never knew about.
   for (const workspace of input.workspaceNpmEngines ?? []) {
-    if (workspace.value !== EXPECTED_NPM_ENGINE) {
+    if (workspace.value !== EXPECTED_NPM_ENGINE_RANGE) {
       problems.push(`${workspace.name}: npm engine policy is stale`);
     }
   }
@@ -65,13 +90,16 @@ function evaluateDeclaredToolchain(input) {
 function evaluateExecutedToolchain(input, options) {
   const problems = [];
   if (!isSupportedNodeVersion(input.runtimeNodeVersion)) {
-    problems.push("executed Node.js version is outside the supported Node.js 24 LTS line");
+    problems.push("executed Node.js version is outside the supported Node.js 24/26 lines");
   }
-  if (options.exactNode && input.runtimeNodeVersion !== EXPECTED_NODE_BASELINE) {
-    problems.push("exact runtime mode requires the approved Node.js patch");
+  if (!isSupportedNpmVersion(input.runtimeNpmVersion)) {
+    problems.push("executed npm version is outside the supported npm 11 range");
   }
-  if (input.runtimeNpmVersion !== EXPECTED_NPM_ENGINE) {
-    problems.push("executed npm version does not match the governed bundled version");
+  if (
+    options.exactNode &&
+    !isApprovedExactToolchain(input.runtimeNodeVersion, input.runtimeNpmVersion)
+  ) {
+    problems.push("exact runtime mode requires an approved Node.js/npm pair");
   }
   return problems;
 }

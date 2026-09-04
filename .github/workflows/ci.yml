@@ -919,6 +919,7 @@ jobs:
       - core-quality
       - coverage-sonar
       - cross-platform-smoke
+      - node-26-compatibility
       - secret-scan
       - semantic-duplication
       - ui
@@ -934,6 +935,7 @@ jobs:
           CROSS_PLATFORM_RESULT: ${{ needs.cross-platform-smoke.result }}
           DOCUMENTATION_ONLY: ${{ needs.change-scope.outputs.documentation-only }}
           EDITOR_FAST_PR: ${{ github.event_name == 'pull_request' && github.base_ref == 'feat/keiko-editor' }}
+          NODE_26_COMPATIBILITY_RESULT: ${{ needs.node-26-compatibility.result }}
           PROTECTED_BRANCH_RESULT: ${{ needs.protected-branch-gate.result }}
           SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
           SEMANTIC_DUPLICATION_RESULT: ${{ needs.semantic-duplication.result }}
@@ -968,6 +970,16 @@ jobs:
             echo "Cross-platform smoke skipped: documentation-only change set."
           elif [ "$CROSS_PLATFORM_RESULT" != "success" ]; then
             echo "Required CI dependency did not succeed: $CROSS_PLATFORM_RESULT"
+            exit 1
+          fi
+          if [ "$NODE_26_COMPATIBILITY_RESULT" = "skipped" ]; then
+            if [ "$DOCUMENTATION_ONLY" != "true" ]; then
+              echo "Node 26 compatibility was skipped without a documentation-only change set."
+              exit 1
+            fi
+            echo "Node 26 compatibility skipped: documentation-only change set."
+          elif [ "$NODE_26_COMPATIBILITY_RESULT" != "success" ]; then
+            echo "Required CI dependency did not succeed: $NODE_26_COMPATIBILITY_RESULT"
             exit 1
           fi
           echo "All required CI dependencies succeeded."
@@ -1207,6 +1219,50 @@ jobs:
           # The gating `build-scan-sbom-smoke` job keeps the full prepack pack on Linux.
           KEIKO_SMOKE_PACK_IGNORE_SCRIPTS: "1"
         run: npm run smoke:install
+      - name: Installable-package smoke with native optional dependencies
+        env:
+          KEIKO_SMOKE_PACK_IGNORE_SCRIPTS: "1"
+        run: npm run smoke:install:optional
+
+  node-26-compatibility:
+    name: Node 26 compatibility
+    needs: change-scope
+    if: ${{ always() && needs.change-scope.outputs.documentation-only != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "26.8.1"
+          package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - run: npm ci --ignore-scripts
+      - name: Provision the approved USearch native runtime
+        run: npm run provision:usearch
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
+      - name: Typecheck the complete package graph
+        run: npm run typecheck
+      - name: Run the complete hermetic test suite
+        run: npm test
+      - name: Prepare the offline smoke (pinned Yarn + vendor seed) (#3130)
+        # The optional install smoke consumes the same seeded, bounded registry as every other
+        # installable-package lane; preparing it here keeps the Node 26 proof hermetic.
+        timeout-minutes: 10
+        run: npm run provision:smoke
       - name: Installable-package smoke with native optional dependencies
         env:
           KEIKO_SMOKE_PACK_IGNORE_SCRIPTS: "1"

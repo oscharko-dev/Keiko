@@ -143,16 +143,16 @@ or peer graph).
 | `autoprefixer`                | keiko-ui              | 10.5.4  | current        | UI build baseline.                                                                     |
 | `@types/react`                | keiko-ui              | 19.2.18 | current        | Newest release; `@types/react-dom` lags it by one patch.                               |
 | `axe-core`                    | keiko-ui              | 4.12.1  | patch-deferred | 4.13.0 changes rule output; an accessibility-evidence refresh is required first.       |
-| `@noble/hashes`               | keiko-ui              | 2.3.0   | patch-deferred | 2.4.0 available; no capability requires it.                                            |
-| `@types/node`                 | root                  | 26.3.0  | patch-deferred | Declarations only; 26.4.0 available.                                                   |
-| `@types/node`                 | keiko-ui              | 26.3.0  | patch-deferred | Deduplicated with root.                                                                |
+| `@noble/hashes`               | keiko-ui              | 2.4.0   | current        | Security/correctness hardening; hash and UI quality gates remain authoritative.        |
+| `@types/node`                 | root                  | 26.3.0  | current        | Root declarations remain on the independently resolved compatible release.             |
+| `@types/node`                 | keiko-ui              | 26.4.0  | current        | Node 26 declaration refresh for the UI workspace.                                      |
 | `@types/react-dom`            | keiko-ui              | 19.2.4  | patch-deferred | Declarations only; 19.2.5 available.                                                   |
 | `@vitejs/plugin-react`        | keiko-ui              | 6.0.5   | patch-deferred | 6.1.1 available; UI build baseline is unchanged.                                       |
-| `@testing-library/react`      | keiko-ui              | 16.3.2  | patch-deferred | 16.3.3 available; no test capability requires it.                                      |
+| `@testing-library/react`      | keiko-ui              | 16.3.3  | current        | Fixes re-entrant `act()` behavior while dispatching events.                            |
 | `@testing-library/user-event` | keiko-ui              | 14.6.5  | patch-deferred | 14.6.6 available; no test capability requires it.                                      |
 | `@playwright/test`            | root                  | 1.62.1  | current        | E2E reference runner.                                                                  |
 | `prettier`                    | root                  | 3.9.6   | current        | Formatter policy is unchanged.                                                         |
-| `knip`                        | root                  | 6.32.2  | patch-deferred | 6.32.3 published 2026-08-26; backs the required `check:knip` gate.                     |
+| `knip`                        | root                  | 6.32.3  | current        | Patch refresh for the required `check:knip` gate.                                      |
 | `fallow`                      | root                  | 3.9.1   | patch-deferred | 3.20.0 available; backs `check:semantic-duplication`. Missed by the sweep — see below. |
 | `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.8   | current        | Optional host-native backend; deduplicated to one node by a root override (see below). |
 | `postcss`                     | root                  | 8.5.26  | current        | Root override; audit reports no known vulnerability.                                   |

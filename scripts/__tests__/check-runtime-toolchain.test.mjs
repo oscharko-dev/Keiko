@@ -4,6 +4,11 @@ import { delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  EXPECTED_EXACT_TOOLCHAINS,
+  EXPECTED_NODE_COMPATIBILITY_BASELINE,
+  EXPECTED_NODE_ENGINE,
+  EXPECTED_NPM_COMPATIBILITY_BASELINE,
+  EXPECTED_NPM_ENGINE_RANGE,
   evaluateRuntimeToolchain,
   readNpmVersionFromPath,
   readWorkspaceNodeEngines,
@@ -29,17 +34,17 @@ function npmFixture(version) {
 }
 
 const baseline = {
-  rootNodeEngine: ">=24.18.0 <25",
-  rootNpmEngine: "11.16.0",
+  rootNodeEngine: EXPECTED_NODE_ENGINE,
+  rootNpmEngine: EXPECTED_NPM_ENGINE_RANGE,
   packageManager: "npm@11.16.0",
   portableNodeVersion: "24.18.0",
   runtimeNodeVersion: "24.18.0",
   runtimeNpmVersion: "11.16.0",
   workspaceNodeEngines: [
-    { name: "@oscharko-dev/keiko-contracts", value: ">=24.18.0 <25" },
-    { name: "@oscharko-dev/keiko-ui", value: ">=24.18.0 <25" },
+    { name: "@oscharko-dev/keiko-contracts", value: EXPECTED_NODE_ENGINE },
+    { name: "@oscharko-dev/keiko-ui", value: EXPECTED_NODE_ENGINE },
   ],
-  workspaceNpmEngines: [{ name: "@oscharko-dev/keiko-ui", value: "11.16.0" }],
+  workspaceNpmEngines: [{ name: "@oscharko-dev/keiko-ui", value: EXPECTED_NPM_ENGINE_RANGE }],
 };
 
 describe("evaluateRuntimeToolchain", () => {
@@ -56,18 +61,40 @@ describe("evaluateRuntimeToolchain", () => {
     ).toEqual([]);
   });
 
+  it("accepts the Node.js 26 floor with its first governed npm version", () => {
+    expect(
+      evaluateRuntimeToolchain({ ...baseline, runtimeNodeVersion: "26.3.0" }, { exactNode: false }),
+    ).toEqual([]);
+  });
+
+  it("accepts the exact governed Node.js 26 compatibility tuple", () => {
+    expect(
+      evaluateRuntimeToolchain(
+        {
+          ...baseline,
+          runtimeNodeVersion: EXPECTED_NODE_COMPATIBILITY_BASELINE,
+          runtimeNpmVersion: EXPECTED_NPM_COMPATIBILITY_BASELINE,
+        },
+        { exactNode: true },
+      ),
+    ).toEqual([]);
+  });
+
   it.each([
     ["stale root engine", { rootNodeEngine: ">=22" }],
     ["stale workspace engine", { workspaceNodeEngines: [{ name: "stale", value: ">=22" }] }],
     ["portable drift", { portableNodeVersion: "24.17.0" }],
-    ["unsupported runtime", { runtimeNodeVersion: "26.0.0" }],
+    ["unsupported odd Node runtime", { runtimeNodeVersion: "25.9.0" }],
+    ["Node runtime below the 26 floor", { runtimeNodeVersion: "26.2.0" }],
+    ["future unsupported Node runtime", { runtimeNodeVersion: "27.0.0" }],
     ["npm engine drift", { rootNpmEngine: ">=11" }],
     [
       "stale workspace npm engine",
       { workspaceNpmEngines: [{ name: "@oscharko-dev/keiko-ui", value: "11.18.0" }] },
     ],
     ["package-manager drift", { packageManager: "npm@12.0.1" }],
-    ["executed npm drift", { runtimeNpmVersion: "11.18.0" }],
+    ["executed npm below the floor", { runtimeNpmVersion: "11.15.0" }],
+    ["executed npm next major", { runtimeNpmVersion: "12.0.0" }],
   ])("rejects %s", (_label, change) => {
     expect(evaluateRuntimeToolchain({ ...baseline, ...change }, { exactNode: false })).not.toEqual(
       [],
@@ -83,6 +110,20 @@ describe("evaluateRuntimeToolchain", () => {
   it("rejects a non-approved Node patch in exact CI mode", () => {
     expect(
       evaluateRuntimeToolchain({ ...baseline, runtimeNodeVersion: "24.19.1" }, { exactNode: true }),
+    ).not.toEqual([]);
+  });
+
+  it("rejects supported versions combined into an unapproved exact tuple", () => {
+    expect(EXPECTED_EXACT_TOOLCHAINS).toHaveLength(2);
+    expect(
+      evaluateRuntimeToolchain(
+        {
+          ...baseline,
+          runtimeNodeVersion: EXPECTED_NODE_COMPATIBILITY_BASELINE,
+          runtimeNpmVersion: "11.16.0",
+        },
+        { exactNode: true },
+      ),
     ).not.toEqual([]);
   });
 });
@@ -140,17 +181,17 @@ describe("readWorkspaceNodeEngines", () => {
     mkdirSync(join(root, "packages", "fixtures-only"), { recursive: true });
     writeFileSync(
       join(root, "packages", "zeta", "package.json"),
-      `${JSON.stringify({ name: "@oscharko-dev/zeta", engines: { node: ">=24.18.0 <25" } })}\n`,
+      `${JSON.stringify({ name: "@oscharko-dev/zeta", engines: { node: ">=24.18.0 <25 || >=26.3.0 <27" } })}\n`,
     );
     writeFileSync(
       join(root, "packages", "alpha", "package.json"),
-      `${JSON.stringify({ name: "@oscharko-dev/alpha", engines: { node: ">=24.18.0 <25" } })}\n`,
+      `${JSON.stringify({ name: "@oscharko-dev/alpha", engines: { node: ">=24.18.0 <25 || >=26.3.0 <27" } })}\n`,
     );
     writeFileSync(join(root, "packages", "beta", "package.json"), "{}\n");
 
     expect(readWorkspaceNodeEngines(root)).toEqual([
-      { name: "@oscharko-dev/alpha", value: ">=24.18.0 <25" },
-      { name: "@oscharko-dev/zeta", value: ">=24.18.0 <25" },
+      { name: "@oscharko-dev/alpha", value: ">=24.18.0 <25 || >=26.3.0 <27" },
+      { name: "@oscharko-dev/zeta", value: ">=24.18.0 <25 || >=26.3.0 <27" },
       { name: "beta", value: undefined },
     ]);
   });
@@ -169,15 +210,15 @@ describe("readWorkspaceNpmEngines", () => {
     );
     writeFileSync(
       join(root, "packages", "alpha", "package.json"),
-      `${JSON.stringify({ name: "@oscharko-dev/alpha", engines: { npm: "11.16.0" } })}\n`,
+      `${JSON.stringify({ name: "@oscharko-dev/alpha", engines: { npm: ">=11.16.0 <12" } })}\n`,
     );
     writeFileSync(
       join(root, "packages", "beta", "package.json"),
-      `${JSON.stringify({ name: "@oscharko-dev/beta", engines: { node: ">=24.18.0 <25" } })}\n`,
+      `${JSON.stringify({ name: "@oscharko-dev/beta", engines: { node: ">=24.18.0 <25 || >=26.3.0 <27" } })}\n`,
     );
 
     expect(readWorkspaceNpmEngines(root)).toEqual([
-      { name: "@oscharko-dev/alpha", value: "11.16.0" },
+      { name: "@oscharko-dev/alpha", value: ">=11.16.0 <12" },
       { name: "@oscharko-dev/zeta", value: "11.18.0" },
     ]);
   });
@@ -211,7 +252,7 @@ describe("runtimeInput", () => {
     writeFileSync(
       join(root, "package.json"),
       `${JSON.stringify({
-        engines: { node: ">=24.18.0 <25", npm: "11.16.0" },
+        engines: { node: ">=24.18.0 <25 || >=26.3.0 <27", npm: ">=11.16.0 <12" },
         packageManager: "npm@11.16.0",
       })}\n`,
     );
@@ -223,20 +264,22 @@ describe("runtimeInput", () => {
       join(root, "packages", "alpha", "package.json"),
       `${JSON.stringify({
         name: "@oscharko-dev/alpha",
-        engines: { node: ">=24.18.0 <25" },
+        engines: { node: ">=24.18.0 <25 || >=26.3.0 <27" },
       })}\n`,
     );
     const previousPath = process.env.PATH;
     process.env.PATH = npm.root;
     try {
       expect(runtimeInput(root)).toEqual({
-        rootNodeEngine: ">=24.18.0 <25",
-        rootNpmEngine: "11.16.0",
+        rootNodeEngine: ">=24.18.0 <25 || >=26.3.0 <27",
+        rootNpmEngine: ">=11.16.0 <12",
         packageManager: "npm@11.16.0",
         portableNodeVersion: "24.18.0",
         runtimeNodeVersion: process.versions.node,
         runtimeNpmVersion: "11.16.0",
-        workspaceNodeEngines: [{ name: "@oscharko-dev/alpha", value: ">=24.18.0 <25" }],
+        workspaceNodeEngines: [
+          { name: "@oscharko-dev/alpha", value: ">=24.18.0 <25 || >=26.3.0 <27" },
+        ],
         workspaceNpmEngines: [],
       });
     } finally {
@@ -254,7 +297,7 @@ describe("runtimeInput", () => {
     writeFileSync(
       join(root, "package.json"),
       `${JSON.stringify({
-        engines: { node: ">=24.18.0 <25", npm: "11.16.0" },
+        engines: { node: ">=24.18.0 <25 || >=26.3.0 <27", npm: ">=11.16.0 <12" },
         packageManager: "npm@11.16.0",
       })}\n`,
     );
@@ -266,7 +309,7 @@ describe("runtimeInput", () => {
       join(root, "packages", "ui", "package.json"),
       `${JSON.stringify({
         name: "@oscharko-dev/keiko-ui",
-        engines: { node: ">=24.18.0 <25", npm: "11.18.0" },
+        engines: { node: ">=24.18.0 <25 || >=26.3.0 <27", npm: "11.18.0" },
       })}\n`,
     );
     const previousPath = process.env.PATH;

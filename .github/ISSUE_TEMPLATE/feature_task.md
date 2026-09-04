@@ -55,8 +55,9 @@ Describe the goal of this issue and the user, developer, platform, or governance
   - concurrent or in-flight work that can invalidate assumptions.
 - Issue text must include product goal, invariant and constraint boundary, acceptance boundary, evidence expectation, and the initial implementation decomposition.
 - This issue text is a planning guardrail, not an immutable implementation contract.
+- Technical refinements must never weaken acceptance criteria, trust boundaries, authority, redaction policy, or gate posture.
 - Working, clean, secure, verified current code is authoritative. Keep technical decisions, file ownership, and sequencing aligned with live evidence, while preserving intended product outcomes and invariant posture.
-- If this task is assigned, paused, or resumed across an agent handoff, rerun revalidation against current code and note what assumptions were invalidated or remained stable.
+- If this task is assigned, paused, or resumed across an agent handoff, rerun revalidation against current code and record a delta note identifying what assumptions were invalidated or remained stable.
 - Any shift in assumptions must be traceable: update this issue and parent epic; reconcile overlapping work; and update affected ADR sections before continuing.
 - New product decisions, unsafe conflicts, or material scope expansion are escalated to the Product Owner before implementation proceeds.
 - Closeout is based on current-head evidence and behavior, not checklist completion alone.

@@ -5,80 +5,89 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const templatesDir = join(dirname(fileURLToPath(import.meta.url)), "../../.github/ISSUE_TEMPLATE");
-const epicTemplatePath = join(templatesDir, "epic.md");
-const taskTemplatePath = join(templatesDir, "feature_task.md");
 
-const epicTemplateText = readFileSync(epicTemplatePath, "utf8");
-const taskTemplateText = readFileSync(taskTemplatePath, "utf8");
+const sharedRequirements = [
+  ["target state", "current target branch/code state"],
+  ["dependency graph", "current package graph"],
+  ["contracts and gates", "relevant contracts, ADRs, and governing gates"],
+  ["reusable implementation", "existing implementation"],
+  ["concurrent work", "concurrent or in-flight work"],
+  ["planning guardrail", "planning guardrail, not an immutable implementation contract"],
+  ["authoritative current code", "Working, clean, secure, verified current code is authoritative"],
+  ["reconciliation", "reconcile"],
+  ["ADR updates", "update affected ADR sections"],
+  [
+    "non-weakenable gates",
+    "must never weaken acceptance criteria, trust boundaries, authority, redaction policy, or gate posture",
+  ],
+  ["handoff delta", "record a delta note"],
+  ["current-head closeout", "current-head"],
+];
 
-describe("Epic issue template contract", () => {
-  it("contains the Implementation Orchestrator Revalidation block", () => {
-    expect(epicTemplateText).toContain("## Implementation Orchestrator Revalidation Contract");
-    expect(epicTemplateText).toContain(
-      "Before planning and implementation, revalidate against the current code and architecture",
-    );
+const contracts = [
+  {
+    heading: "## Implementation Orchestrator Revalidation Contract",
+    name: "Epic",
+    path: join(templatesDir, "epic.md"),
+    requirements: [
+      ["implementation revalidation", "Before planning and implementation, revalidate"],
+      ["product and invariant boundaries", "product goals, invariants, constraints"],
+      ["acceptance and evidence boundaries", "acceptance boundaries, evidence expectations"],
+      ["decomposition", "initial decomposition"],
+      ["handoff revalidation", "reassigned, interrupted, or resumed across handoffs"],
+    ],
+  },
+  {
+    heading: "## Task Orchestrator Revalidation Contract",
+    name: "Feature task",
+    path: join(templatesDir, "feature_task.md"),
+    requirements: [
+      ["task revalidation", "Before sequencing, assigning, or implementing this task"],
+      ["product and invariant boundaries", "product goal, invariant and constraint boundary"],
+      ["acceptance and evidence boundaries", "acceptance boundary, evidence expectation"],
+      ["decomposition", "initial implementation decomposition"],
+      ["handoff revalidation", "assigned, paused, or resumed across an agent handoff"],
+    ],
+  },
+];
+
+function contractFailures(contract, text) {
+  const required = [
+    ["contract heading", contract.heading],
+    ...sharedRequirements,
+    ...contract.requirements,
+  ];
+  const failures = required.flatMap(([label, clause]) =>
+    text.includes(clause) ? [] : [`missing ${label}`],
+  );
+  if (!text.startsWith("---\n")) failures.push("malformed front matter");
+  return failures;
+}
+
+describe.each(contracts)("$name issue template contract", (contract) => {
+  const text = readFileSync(contract.path, "utf8");
+  const requirements = [...sharedRequirements, ...contract.requirements];
+
+  it("accepts the canonical template", () => {
+    expect(contractFailures(contract, text)).toEqual([]);
   });
 
-  it("requires live architecture and dependency revalidation before sequencing or assigning", () => {
-    expect(epicTemplateText).toContain("current package graph and dependencies");
-    expect(epicTemplateText).toContain("concurrent or in-flight work");
+  it.each(requirements)("rejects removal of the %s clause", (_label, clause) => {
+    expect(contractFailures(contract, text.replace(clause, ""))).not.toEqual([]);
   });
 
-  it("captures scope, gates, and evidence as a required planning contract", () => {
-    expect(epicTemplateText).toContain(
-      "product goals, invariants, constraints, acceptance boundaries, evidence expectations",
-    );
-    expect(epicTemplateText).toContain(
-      "Closeout depends on verified current-head behavior and evidence",
-    );
-  });
-
-  it("enforces safe escalation and traceability when implementation needs change", () => {
-    expect(epicTemplateText).toContain(
-      "Working, clean, secure, verified current code is authoritative",
-    );
-    expect(epicTemplateText).toContain(
-      "genuinely new product decision, unsafe conflict, or material scope expansion is escalated",
-    );
-    expect(epicTemplateText).toContain(
-      "never weaken acceptance criteria, trust boundaries, authority, redaction policy, or gate posture",
-    );
-  });
-
-  it("requires explicit revalidation after interruption or handoff", () => {
-    expect(epicTemplateText).toContain(
-      "If this epic is reassigned, interrupted, or resumed across handoffs",
-    );
-  });
-});
-
-describe("Feature task issue template contract", () => {
-  it("contains the Task Orchestrator Revalidation block", () => {
-    expect(taskTemplateText).toContain("## Task Orchestrator Revalidation Contract");
-    expect(taskTemplateText).toContain("revalidate against:");
-  });
-
-  it("requires issue-scoped planning contract fields", () => {
-    expect(taskTemplateText).toContain(
-      "Issue text must include product goal, invariant and constraint boundary, acceptance boundary, evidence expectation, and the initial implementation decomposition.",
-    );
-    expect(taskTemplateText).toContain(
-      "This issue text is a planning guardrail, not an immutable implementation contract.",
-    );
-  });
-
-  it("requires safe traceability and escalation when assumptions shift", () => {
-    expect(taskTemplateText).toContain(
-      "Any shift in assumptions must be traceable: update this issue and parent epic",
-    );
-    expect(taskTemplateText).toContain(
-      "New product decisions, unsafe conflicts, or material scope expansion are escalated to the Product Owner",
-    );
-  });
-
-  it("requires revalidation when paused, resumed, or handed off", () => {
-    expect(taskTemplateText).toContain(
-      "If this task is assigned, paused, or resumed across an agent handoff, rerun revalidation",
-    );
+  it.each([
+    ["empty template", ""],
+    ["malformed contract", text.replace(contract.heading, "## Revalidation Notes")],
+    [
+      "weakened gates",
+      text.replace(
+        "must never weaken acceptance criteria, trust boundaries, authority, redaction policy, or gate posture",
+        "may weaken acceptance criteria or gate posture",
+      ),
+    ],
+    ["stale closeout evidence", text.replace("current-head", "previous-head")],
+  ])("rejects a %s", (_label, candidate) => {
+    expect(contractFailures(contract, candidate)).not.toEqual([]);
   });
 });
