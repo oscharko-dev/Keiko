@@ -93,27 +93,39 @@ per fixture) and in
 required-trust-rules list so a downgrade or accidental removal shows up as a named failure, not a
 silent drift.
 
-**Scope of what the rule covers, said plainly.** The dependency-cruiser rule is a **module-graph**
-check: it fires on `import` (and static require) edges that reach `editorRead.ts` or `discovery.ts`
-from outside the allowlist. It does **not** cover the runtime-flag alternative to importing the raw
-read, and the containment claim above is limited to the import path accordingly. In particular,
-`searchText` and `readExcerpt` on the public barrel accept an optional `deps.contentLane` (see
-[`packages/keiko-workspace/src/repoSearch.ts`](../../packages/keiko-workspace/src/repoSearch.ts)):
-passing `contentLane: "editor"` from an allowed dependency returns raw, unredacted excerpts through
-the same result type as the redacted lane, without importing any guarded file. The only production
-site that does this today is
-[`packages/keiko-server/src/editor/workspaceSearchRoutes.ts`](../../packages/keiko-server/src/editor/workspaceSearchRoutes.ts),
-itself a legitimate editor caller; a future caller in an evidence-adjacent package could set the
-same flag and leak raw bytes into an evidence atom without ever tripping the rule. This is a
-**known, tracked gap** — machine-enforcing the flag pattern requires either moving the editor-lane
-variants behind the `./internal/editor-read` subpath (mirroring `readWorkspaceFileForEditing`) or
-adding an AST literal-value check for `contentLane: "editor"` outside the allowlist. It is out of
-scope for the import-graph rule this section describes and is left for a follow-up (see issue
-#2908 / PR #3295 review round for the discovery trail).
+**The public search-lane selector is also machine-enforced (#3411).** `searchText` and
+`readExcerpt` accept `deps.contentLane` through the public barrel. The import graph alone cannot
+see that capability; the previous known gap (#2908 / PR #3295) allowed a future caller to select
+raw text without importing a guarded module. `adr-0165-raw-coordinate-owner` in the existing
+[`check-import-policy.mjs`](../../scripts/check-import-policy.mjs) AST gate now rejects references
+to the `contentLane` property outside `packages/keiko-workspace/src/**` and the exact existing
+`packages/keiko-server/src/editor/workspaceSearchRoutes.ts` owner. Literal, shorthand, indirect
+value, property assignment and computed literal spellings are covered. This is a source-policy
+boundary, not arbitrary runtime data-flow analysis; unsafe dynamic reflection is not sanctioned.
+
+The permanent `raw-coordinate-owner/bad-search-lane.ts` architecture fixture reproduces a coding
+handler selecting raw text through that public barrel. Before the gate amendment, the targeted
+suite reports six failed negative assertions; afterward it passes and `arch:check:negative`
+requires the named rule to fire exactly once. Module-graph raw-read restrictions remain unchanged:
+a coding server handler gains no permission to import `editorRead.ts` or `discovery.ts`.
 
 ### D3 — Importing the subpath is a scoped assertion
 
-Importing `./internal/editor-read` asserts that the caller is **editor-owned and non-evidence**.
+Importing `./internal/editor-read` asserts that the caller is **an allowed raw-coordinate owner
+and non-evidence**. Existing Editor ownership remains. Under
+[ADR-0175 D8](ADR-0175-canonical-governed-tool-catalog.md#d8--raw-coordinate-lane-and-delivery-dependency),
+#3386 H1 may add bounded coding-search coordinate computation only **inside the existing workspace
+owner**, reusing this exact guard chain. There is no new raw-read server caller or public raw
+barrel. Raw lines/offsets are computed transiently before separate display-snippet redaction;
+redaction may shorten text or collapse lines and therefore cannot define source coordinates.
+The server handler receives bounded coordinates and separately redacted display data. Query,
+path, snippet, symbol and file content are forbidden in durable activity evidence. H1 must prove
+multiline-secret coordinate correctness, containment/link/deny/size limits and evidence redaction
+through the real workspace producer; the architecture fixture alone makes no runtime claim.
+
+The #3411 ADR/gate PR must merge to dev before H1 starts. #3414 consumes the resulting lane and
+cannot retroactively authorize a wider one.
+
 Anything that feeds evidence, a manifest, an audit export, a diagnostic, the workspace index, or a
 grounded answer imports the redacting read from the package root instead, and redacts before it
 emits. Redaction for those surfaces is owed at the surface that emits, not at this read.
@@ -140,7 +152,7 @@ the export map.
   caller written without knowledge of this ADR gets the safe lane by default.
 - A new unredacted read now exists in the repository. Its safety rests on the module graph, the type
   system, and review — reviewers of any new `./internal/editor-read` import must confirm the caller
-  is editor-owned and never persists, logs, embeds, or emits what it reads.
+  is an allowed coordinate owner and never persists, logs, embeds, or emits raw content.
 - Adding a guard to `resolveReadableWorkspaceFile` protects both lanes; adding one only to
   `readWorkspaceFile` protects neither the editor lane nor, therefore, the write path.
 

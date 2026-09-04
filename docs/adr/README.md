@@ -201,3 +201,7 @@ supersession note would still mislead a reader rather than inform them.
 | Quality Intelligence implementation history | [ADR-0023](ADR-0023-quality-intelligence-migration-architecture.md) is retained as a historical Epic #270 decision record. Do not use it as the current repository baseline; use ADR-0025 and the active package/security docs instead. |
 
 For operational details, use the README, the runtime-state contract, the security boundaries, and the packaged-surface summary.
+
+## Governed tool architecture
+
+[ADR-0175: Canonical governed-tool catalog and invocation contract](ADR-0175-canonical-governed-tool-catalog.md) freezes descriptive metadata ownership, independent version/digest axes, bounded invocation settlement, migration and the prerequisite coding-search raw-coordinate lane. The architecture delivery does not claim a runtime catalog.
