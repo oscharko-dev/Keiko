@@ -121,6 +121,10 @@ function tmp(prefix: string): string {
   return d;
 }
 
+function isolatedMemoryEnv(env: Readonly<Record<string, string>> = {}): Record<string, string> {
+  return { ...env, KEIKO_MEMORY_DIR: tmp("deps-memory-") };
+}
+
 function memoryAuditFixture(): MemoryRecord {
   return {
     id: "memory-audit-restart" as MemoryId,
@@ -1210,8 +1214,9 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("coding-context-evidence-"),
-      env: {},
+      env: isolatedMemoryEnv(),
       initialProjectPath: projectDir,
+      uiDbPath: join(tmp("coding-context-ui-"), "keiko-ui.db"),
     });
 
     try {
@@ -1259,8 +1264,9 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("coding-context-disabled-evidence-"),
-      env: {},
+      env: isolatedMemoryEnv(),
       initialProjectPath: tmp("coding-context-disabled-project-"),
+      uiDbPath: join(tmp("coding-context-disabled-ui-"), "keiko-ui.db"),
     });
 
     try {
@@ -1277,8 +1283,9 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("coding-context-scoped-evidence-"),
-      env: {},
+      env: isolatedMemoryEnv(),
       initialProjectPath: projectDir,
+      uiDbPath: join(tmp("coding-context-scoped-ui-"), "keiko-ui.db"),
     });
 
     try {
@@ -1312,12 +1319,13 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("coding-context-invalid-jira-evidence-"),
-      env: {
+      env: isolatedMemoryEnv({
         KEIKO_JIRA_BASE_URL: "http://invalid.example.com",
         KEIKO_JIRA_EMAIL: "operator@example.com",
         KEIKO_JIRA_API_TOKEN: "secret-token",
-      },
+      }),
       diagnostics: { record: (record) => diagnostics.push(record) },
+      uiDbPath: join(tmp("coding-context-jira-ui-"), "keiko-ui.db"),
     });
 
     try {

@@ -5,6 +5,7 @@ import {
   requestTextToSpeechStream,
 } from "./text-to-speech-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
+import type { ModelGatewayLogEvent } from "./observability.js";
 
 // A recognizable audio byte marker so a test can assert the adapter returns the provider body verbatim
 // without depending on real audio.
@@ -247,6 +248,68 @@ describe("requestTextToSpeech", () => {
     }
   });
 
+  it("uses an Ogg container signature when Azure mislabels Opus audio as MPEG", async () => {
+    const oggAudio = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0x00, 0x02]);
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestTextToSpeech({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "configured-voice",
+      responseFormat: "opus",
+      correlationId: "corr-tts-mime",
+      log: {
+        write(event): void {
+          events.push(event);
+        },
+      },
+      fetchImpl: mockFetch(() => audioResponse(oggAudio, "audio/mpeg")),
+    });
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.value.mimeType).toBe("audio/ogg");
+    }
+    expect(events).toEqual([
+      {
+        level: "info",
+        category: "gateway",
+        op: "speech.tts.mime.corrected",
+        correlationId: "corr-tts-mime",
+        extra: { declaredMimeClass: "mp3", resolvedMimeClass: "opus" },
+      },
+    ]);
+  });
+
+  it.each([
+    ["an exact four-byte capture pattern", [0x4f, 0x67, 0x67, 0x53]],
+    ["a one-byte prefix", [0x4f]],
+    ["a two-byte prefix", [0x4f, 0x67]],
+    ["a three-byte prefix", [0x4f, 0x67, 0x67]],
+    ["a malformed Ogg version", [0x4f, 0x67, 0x67, 0x53, 0x01, 0x02]],
+    ["hostile leading bytes before OggS", [0x00, 0x00, 0x4f, 0x67, 0x67, 0x53, 0x00, 0x02]],
+  ])("does not correct the declared MIME for %s", async (_label, bytes) => {
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestTextToSpeech({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "configured-voice",
+      responseFormat: "opus",
+      log: {
+        write(event): void {
+          events.push(event);
+        },
+      },
+      fetchImpl: mockFetch(() => audioResponse(new Uint8Array(bytes), "audio/mpeg")),
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.value.mimeType).toBe("audio/mpeg");
+    expect(events).toEqual([]);
+  });
+
   it("returns empty-audio when a 2xx response carries no audio bytes", async () => {
     const outcome = await requestTextToSpeech({
       endpoint: ENDPOINT,
@@ -419,6 +482,98 @@ describe("requestTextToSpeechStream", () => {
     if (!outcome.ok) return;
     expect(outcome.value.mimeType).toBe("audio/pcm");
     expect(new TextDecoder().decode(await collect(outcome.value.body))).toBe(AUDIO_MARKER);
+  });
+
+  it("corrects an Azure Ogg stream MIME without dropping a split prefix", async () => {
+    const chunks = [
+      new Uint8Array([0x4f, 0x67]),
+      new Uint8Array([0x67, 0x53, 0x00, 0x02]),
+      new Uint8Array([0x11, 0x22, 0x33]),
+    ];
+    const expected = new Uint8Array(chunks.flatMap((chunk) => [...chunk]));
+    const events: ModelGatewayLogEvent[] = [];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+    const outcome = await requestTextToSpeechStream({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "configured-voice",
+      responseFormat: "opus",
+      correlationId: "corr-tts-stream-mime",
+      log: {
+        write(event): void {
+          events.push(event);
+        },
+      },
+      fetchImpl: mockFetch(
+        () => new Response(stream, { headers: { "content-type": "audio/mpeg" } }),
+      ),
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.mimeType).toBe("audio/ogg");
+    expect(await collect(outcome.value.body)).toEqual(expected);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "speech.tts.mime.corrected",
+        correlationId: "corr-tts-stream-mime",
+      }),
+    );
+  });
+
+  it("logs a correlated body-free failure when the response prefix cannot be read", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.error(new TypeError("provider response prefix failed"));
+      },
+    });
+    const outcome = await requestTextToSpeechStream({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "configured-voice",
+      correlationId: "corr-tts-stream-prefix",
+      log: {
+        write(event): void {
+          events.push(event);
+        },
+      },
+      fetchImpl: mockFetch(() => new Response(stream, { status: 200 })),
+    });
+
+    expect(outcome).toEqual({ ok: false, kind: "transport" });
+    expect(events).toContainEqual({
+      level: "error",
+      category: "gateway",
+      op: "speech.tts.stream.peek.failed",
+      correlationId: "corr-tts-stream-prefix",
+      errorKind: "TypeError",
+      extra: { phase: "response-prefix", outcomeKind: "transport" },
+    });
+    expect(JSON.stringify(events)).not.toContain(ANSWER);
+    expect(JSON.stringify(events)).not.toContain(SECRET_API_KEY);
+  });
+
+  it("fails closed when a successful streaming response contains zero audio bytes", async () => {
+    const outcome = await requestTextToSpeechStream({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "configured-voice",
+      fetchImpl: mockFetch(() => new Response(new Uint8Array(), { status: 200 })),
+    });
+
+    expect(outcome).toEqual({ ok: false, kind: "empty-audio" });
   });
 
   it("maps a provider error status to a coded kind without streaming a body", async () => {

@@ -43,6 +43,7 @@ import { createRequestCancellation } from "./request-cancellation.js";
 import { toSpeakableText } from "./voice-speech-text.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 // The decoded-audio ceiling for one dictation clip. This is the authoritative bound on the
 // transcribable duration: regardless of codec, a clip cannot exceed this many bytes, so the maximum
@@ -501,6 +502,7 @@ function buildSttRequest(
   validated: ValidatedAudio,
   deps: UiHandlerDeps,
   signal: AbortSignal,
+  correlationId: string,
 ): SpeechToTextRequest {
   const egress = provider.egress ?? currentGatewayEgressConfig(deps);
   return {
@@ -521,6 +523,8 @@ function buildSttRequest(
     ...(egress !== undefined ? { egress } : {}),
     signal,
     timeoutMs: provider.timeoutMs,
+    log: deps.activityLog ?? processServerLogSink(),
+    correlationId,
   };
 }
 
@@ -563,7 +567,13 @@ export async function handleVoiceTranscribe(
   const cancellation = createRequestCancellation(ctx, "voice transcription request cancelled");
   try {
     const outcome = await transcribe(
-      buildSttRequest(provider, validated, deps, cancellation.signal),
+      buildSttRequest(
+        provider,
+        validated,
+        deps,
+        cancellation.signal,
+        ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+      ),
     );
     if (cancellation.signal.aborted) return voiceRequestCancelledResult();
     return outcome.ok
@@ -765,6 +775,7 @@ function buildTtsRequest(
   validated: ValidatedSpeech,
   deps: UiHandlerDeps,
   signal: AbortSignal,
+  correlationId: string,
 ): TextToSpeechRequest {
   const egress = provider.egress ?? currentGatewayEgressConfig(deps);
   const capability = findConfiguredCapability(
@@ -790,6 +801,8 @@ function buildTtsRequest(
     ...(egress !== undefined ? { egress } : {}),
     signal,
     timeoutMs: provider.timeoutMs,
+    log: deps.activityLog ?? processServerLogSink(),
+    correlationId,
   };
 }
 
@@ -860,6 +873,7 @@ export async function handleVoiceSpeak(
         resolved.validated,
         deps,
         cancellation.signal,
+        ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
       ),
     );
     return outcome.ok ? speechResult(outcome.value) : speechProviderErrorResult(deps, outcome.kind);
@@ -877,9 +891,17 @@ function buildStreamTtsRequest(
   resolved: ResolvedSpeak,
   deps: UiHandlerDeps,
   signal: AbortSignal,
+  correlationId: string,
 ): TextToSpeechRequest {
   return {
-    ...buildTtsRequest(resolved.provider, resolved.target, resolved.validated, deps, signal),
+    ...buildTtsRequest(
+      resolved.provider,
+      resolved.target,
+      resolved.validated,
+      deps,
+      signal,
+      correlationId,
+    ),
     responseFormat: STREAM_SPEECH_FORMAT,
   };
 }
@@ -958,7 +980,12 @@ export async function handleVoiceSpeakStream(
     deps.voiceSpeechStreamRequest ?? requestTextToSpeechStream;
   try {
     const outcome = await synthesizeStream(
-      buildStreamTtsRequest(resolved, deps, cancellation.signal),
+      buildStreamTtsRequest(
+        resolved,
+        deps,
+        cancellation.signal,
+        ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+      ),
     );
     if (!outcome.ok) {
       return speechProviderErrorResult(deps, outcome.kind);

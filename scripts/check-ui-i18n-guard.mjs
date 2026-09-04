@@ -177,6 +177,7 @@ const FEATURE_CATALOG_DE_PATTERN = /-i18n\.de\.ts$/u;
 // shared catalogs, so those must change) nor gets the local parity check (there is nothing local to
 // compare). A `-i18n.ts` file with exactly one map keeps failing closed as an incomplete catalog.
 const FEATURE_CATALOG_SINGLE_SUFFIX = "-i18n.ts";
+const FEATURE_CATALOG_JSON_SUFFIX = "-i18n.messages.json";
 const CATALOG_LANGUAGE_MAP_PATTERN = /_(EN|DE)_MESSAGES\b/gu;
 
 function isSharedCatalogKeyHelper(repoRoot, file) {
@@ -198,6 +199,15 @@ export function changedSingleFileFeatureCatalogs(changedFileSet, repoRoot) {
         file.startsWith("packages/keiko-ui/src/") && file.endsWith(FEATURE_CATALOG_SINGLE_SUFFIX),
     )
     .filter((file) => repoRoot === undefined || !isSharedCatalogKeyHelper(repoRoot, file))
+    .sort((left, right) => left.localeCompare(right));
+}
+
+export function changedJsonFeatureCatalogs(changedFileSet) {
+  return [...changedFileSet]
+    .filter(
+      (file) =>
+        file.startsWith("packages/keiko-ui/src/") && file.endsWith(FEATURE_CATALOG_JSON_SUFFIX),
+    )
     .sort((left, right) => left.localeCompare(right));
 }
 
@@ -246,28 +256,48 @@ function optionalWidgetCatalogState(changedFileSet) {
   };
 }
 
-function catalogUpdateProblems(changedFileSet, repoRoot) {
+function hasCatalogUpdateEvidence({
+  sharedCatalogsTouched,
+  optional,
+  featureCatalogPairs,
+  singleFileCatalogs,
+  jsonFeatureCatalogs,
+}) {
+  return (
+    sharedCatalogsTouched ||
+    optional.satisfied ||
+    featureCatalogPairs.length > 0 ||
+    singleFileCatalogs.length > 0 ||
+    jsonFeatureCatalogs.length > 0
+  );
+}
+
+function catalogUpdateProblems(changedFileSet, repoRoot, uiSourceChanged) {
   const featureCatalogPairs = changedFeatureCatalogPairs(changedFileSet);
   const singleFileCatalogs = changedSingleFileFeatureCatalogs(changedFileSet, repoRoot);
+  const jsonFeatureCatalogs = changedJsonFeatureCatalogs(changedFileSet);
   const sharedCatalogsTouched = changedFileSet.has(EN_CATALOG) && changedFileSet.has(DE_CATALOG);
   const optional = optionalWidgetCatalogState(changedFileSet);
   const problems = [];
   if (
-    sharedCatalogsTouched ||
-    optional.satisfied ||
-    featureCatalogPairs.length > 0 ||
-    singleFileCatalogs.length > 0
+    hasCatalogUpdateEvidence({
+      sharedCatalogsTouched,
+      optional,
+      featureCatalogPairs,
+      singleFileCatalogs,
+      jsonFeatureCatalogs,
+    })
   ) {
-    return { problems, featureCatalogPairs, singleFileCatalogs };
+    return { problems, featureCatalogPairs, singleFileCatalogs, jsonFeatureCatalogs };
   }
   if (optional.problem !== undefined) {
     problems.push(optional.problem);
-    return { problems, featureCatalogPairs, singleFileCatalogs };
+    return { problems, featureCatalogPairs, singleFileCatalogs, jsonFeatureCatalogs };
   }
   for (const catalog of [EN_CATALOG, DE_CATALOG]) {
     if (!changedFileSet.has(catalog)) {
       problems.push(
-        `UI source changed, but ${catalog} was not updated. Add English and German catalog entries for UI-facing text.`,
+        `${uiSourceChanged ? "UI source changed" : "An i18n catalog changed"}, but ${catalog} was not updated. Add English and German catalog entries for UI-facing text.`,
       );
     }
   }
@@ -276,7 +306,7 @@ function catalogUpdateProblems(changedFileSet, repoRoot) {
       `Feature i18n catalog ${file} changed without its language counterpart. Update the English and German halves together.`,
     );
   }
-  return { problems, featureCatalogPairs, singleFileCatalogs };
+  return { problems, featureCatalogPairs, singleFileCatalogs, jsonFeatureCatalogs };
 }
 
 // The split-file parity check compares two files; here both halves live in one file, so the same
@@ -332,6 +362,44 @@ function singleFileCatalogParityProblems(repoRoot, singleFileCatalogs) {
     if (mismatches.length > 0) {
       problems.push(
         `Feature i18n catalog ${file} must expose the same keys in English and German. Mismatched keys: ${mismatches.join(", ")}.`,
+      );
+    }
+  }
+  return problems;
+}
+
+function jsonFeatureCatalogProblems(repoRoot, jsonFeatureCatalogs) {
+  const problems = [];
+  for (const file of jsonFeatureCatalogs) {
+    let catalog;
+    try {
+      catalog = JSON.parse(readText(repoRoot, file));
+    } catch {
+      problems.push(`Feature i18n catalog ${file} must contain valid JSON.`);
+      continue;
+    }
+    if (typeof catalog !== "object" || catalog === null || Array.isArray(catalog)) {
+      problems.push(`Feature i18n catalog ${file} must contain a non-empty JSON object.`);
+      continue;
+    }
+    if (Object.keys(catalog).length === 0) {
+      problems.push(`Feature i18n catalog ${file} must contain a non-empty JSON object.`);
+      continue;
+    }
+    const incompleteKeys = Object.entries(catalog)
+      .filter(([, messages]) => {
+        if (typeof messages !== "object" || messages === null) return true;
+        return (
+          typeof messages.en !== "string" ||
+          messages.en.trim().length === 0 ||
+          typeof messages.de !== "string" ||
+          messages.de.trim().length === 0
+        );
+      })
+      .map(([key]) => key);
+    if (incompleteKeys.length > 0) {
+      problems.push(
+        `Feature i18n catalog ${file} must provide English and German for every key. Incomplete keys: ${incompleteKeys.join(", ")}.`,
       );
     }
   }
@@ -2039,6 +2107,22 @@ export function buildLiteralBaseline(repoRoot) {
   return files;
 }
 
+function hasChangedCatalogFile(changedFileSet, repoRoot) {
+  if (
+    [EN_CATALOG, DE_CATALOG, OPTIONAL_WIDGET_EN_CATALOG, OPTIONAL_WIDGET_DE_CATALOG].some((file) =>
+      changedFileSet.has(file),
+    )
+  ) {
+    return true;
+  }
+  return (
+    changedJsonFeatureCatalogs(changedFileSet).length > 0 ||
+    changedFeatureCatalogPairs(changedFileSet).length > 0 ||
+    unpairedFeatureCatalogs(changedFileSet).length > 0 ||
+    changedSingleFileFeatureCatalogs(changedFileSet, repoRoot).length > 0
+  );
+}
+
 export function checkUiI18nGuard({
   repoRoot = process.cwd(),
   changedFiles = changedFilesFromInput(repoRoot),
@@ -2050,6 +2134,7 @@ export function checkUiI18nGuard({
   const changedFileSet = new Set(normalizedChangedFiles);
   const uiFiles = normalizedChangedFiles.filter(isUiProductionSource);
   const i18nRelevantFiles = uiFiles.filter((file) => hasI18nRelevantChange(repoRoot, file));
+  const catalogChanged = hasChangedCatalogFile(changedFileSet, repoRoot);
   const problems = [];
 
   // The literal ledger is evaluated for EVERY changed UI source, not only the ones the relevance
@@ -2060,7 +2145,7 @@ export function checkUiI18nGuard({
     problems.push(...untranslatedLiteralProblems(repoRoot, uiFiles, baseline));
   }
 
-  if (uiFiles.length === 0 || i18nRelevantFiles.length === 0) {
+  if (i18nRelevantFiles.length === 0 && !catalogChanged) {
     return {
       ok: problems.length === 0,
       problems,
@@ -2084,7 +2169,11 @@ export function checkUiI18nGuard({
 // The pre-existing checks, unchanged in behaviour: catalogs must be updated together, a changed UI
 // file must reach the i18n API somehow, and both catalogs must expose the same keys.
 function catalogRequirementProblems(repoRoot, changedFileSet, i18nRelevantFiles) {
-  const catalogRequirement = catalogUpdateProblems(changedFileSet, repoRoot);
+  const catalogRequirement = catalogUpdateProblems(
+    changedFileSet,
+    repoRoot,
+    i18nRelevantFiles.length > 0,
+  );
   const problems = [...catalogRequirement.problems];
   const nonCompliantFiles = nonCompliantUiFiles(repoRoot, i18nRelevantFiles);
 
@@ -2108,6 +2197,7 @@ function catalogRequirementProblems(repoRoot, changedFileSet, i18nRelevantFiles)
   problems.push(
     ...featureCatalogParityProblems(repoRoot, catalogRequirement.featureCatalogPairs),
     ...singleFileCatalogParityProblems(repoRoot, catalogRequirement.singleFileCatalogs ?? []),
+    ...jsonFeatureCatalogProblems(repoRoot, catalogRequirement.jsonFeatureCatalogs ?? []),
   );
   return problems;
 }

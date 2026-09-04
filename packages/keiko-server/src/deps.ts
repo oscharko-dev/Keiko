@@ -108,6 +108,7 @@ import {
 } from "./diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
+import type { ServerLogSink } from "./observability/index.js";
 import { recordWorkspaceRootDenial } from "./workspace-root-denial-log.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
@@ -511,6 +512,9 @@ export interface UiHandlerDeps {
   // capturing sink to assert that a handler throw / mid-stream failure emits a correlation-keyed,
   // redacted diagnostic record. Never receives raw content that reaches the browser.
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  // Activity-log port shared with domain adapters. Production always wires the process sink;
+  // tests may inject a recorder or omit it when the exercised path emits no activity.
+  readonly activityLog?: ServerLogSink | undefined;
   // The in-memory, bounded run registry. Injectable so tests never share global state.
   readonly registry: RunRegistry;
   // Builds the ModelPort a run uses. Default = GatewayModelPort from config; tests inject a fake.
@@ -3892,6 +3896,7 @@ type BaseUiHandlerDeps = ReturnType<typeof gatewayConfigFields> &
     | "egress"
     | "redactor"
     | "diagnostics"
+    | "activityLog"
     | "store"
     | "uiDbPath"
     | "preferredProjectPath"
@@ -3907,6 +3912,7 @@ function buildBaseUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): BaseUiHandlerD
     egress: args.egress,
     redactor: args.liveRedactor,
     diagnostics: args.options.diagnostics,
+    activityLog: processServerLogSink(),
     store: args.bundle.uiStore,
     uiDbPath: args.resolvedUiDbPath,
     preferredProjectPath: args.bundle.preferredProjectPath,

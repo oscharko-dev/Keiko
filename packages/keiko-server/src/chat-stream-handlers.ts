@@ -36,6 +36,7 @@ import {
   conversationImageDeliveries,
   buildMemoryResult,
   captureDesktopChatExecutionAdmission,
+  desktopChatProviderBoundaryRejectionReason,
   captureGatewayTurnSnapshot,
   collectMemoryActions,
   completeDesktopChatTurn,
@@ -52,6 +53,7 @@ import {
   recordChatCompaction,
   validateDesktopChatSend,
   validateDesktopChatProviderBoundary,
+  logChatRejection,
   validateCurrentDesktopChatSend,
   runPostCommitConversationMemorySideEffects,
   type ParsedDesktopChatSend,
@@ -493,7 +495,17 @@ function resolveDesktopChatStreamCall(
     executionAdmission,
     deps,
   );
-  if (invalidExecution !== undefined) return invalidExecution;
+  if (invalidExecution !== undefined) {
+    logChatRejection(
+      "chat.send.rejected",
+      correlationId,
+      prepared.modelId,
+      deps,
+      invalidExecution.status,
+      desktopChatProviderBoundaryRejectionReason(prepared.modelId, executionAdmission, deps),
+    );
+    return invalidExecution;
+  }
   const model = deps.modelPortFactory(prepared.modelId);
   return model?.callStream === undefined
     ? streamingUnsupportedOutcome(correlationId)
@@ -571,6 +583,7 @@ function preflightDesktopChatStreamExecution(
           prepared.chat,
           prepared.modelId,
           deps,
+          { operation: "chat.send.rejected", correlationId },
         )
       : undefined;
   if (legacyExecutionAdmission !== undefined && "status" in legacyExecutionAdmission) {
@@ -646,7 +659,10 @@ async function runAdmittedDesktopChatStream(
   if (admission.kind !== "admitted") return nonAdmittedStreamOutcome(ctx, admission);
   const executionAdmission =
     preflight.legacyExecutionAdmission ??
-    captureDesktopChatExecutionAdmission(prepared.request, prepared.chat, prepared.modelId, deps);
+    captureDesktopChatExecutionAdmission(prepared.request, prepared.chat, prepared.modelId, deps, {
+      operation: "chat.send.rejected",
+      correlationId: ctx.correlationId,
+    });
   if ("status" in executionAdmission) {
     settleRejectedDesktopChatTurn(deps, prepared, admission);
     return executionAdmission;

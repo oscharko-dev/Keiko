@@ -27,6 +27,7 @@ import {
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
 import type { OutboundHttpEgressConfig, RealtimeAuthMode } from "./types.js";
+import { providerSpeechLanguage } from "./provider-language.js";
 
 // SDP offers/answers are small (a single audio m-line plus ICE/DTLS metadata is typically a few KB);
 // cap the negotiated answer well below the 10 MB gateway default so a hostile or misconfigured
@@ -394,7 +395,7 @@ function buildLiveDictationRealtimeSession(
     model: request.transcriptionModel,
   };
   if (nonEmptyString(request.transcriptionLanguage)) {
-    transcription.language = request.transcriptionLanguage;
+    transcription.language = providerSpeechLanguage(request.transcriptionLanguage);
   }
   return {
     type: "realtime",

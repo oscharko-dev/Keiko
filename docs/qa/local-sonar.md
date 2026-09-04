@@ -60,6 +60,11 @@ npm run gates:sonar:stop     # stop the server, keep its cache
 ./docker/gates/run-sonar.sh --base main   # diff against another base
 ```
 
+The local runner gives the SonarJS bridge 4.5 GiB and caps the scanner coordinator at 768 MiB. This
+keeps enough analyzer headroom while leaving space for the concurrently required SonarQube service
+inside Docker Desktop's common 8 GiB VM; the scanner's automatic heap choice can otherwise exceed
+the VM limit and terminate the bridge before it reports findings.
+
 If port 9234 is occupied by another local analyzer, select an unused loopback port. The port is
 part of the Compose-project identity, so this starts an isolated server and leaves the existing
 container and volumes untouched:

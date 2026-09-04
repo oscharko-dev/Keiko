@@ -41,6 +41,7 @@ const chatSessionMock = vi.hoisted(() => ({
     readonly available: boolean;
   }[],
   loading: false,
+  error: undefined as string | undefined,
   memoryEnabled: true,
   noEligibleModels: false,
   openChat: vi.fn<(chat: { readonly id: string }) => Promise<void>>(() => Promise.resolve()),
@@ -133,6 +134,7 @@ vi.mock("../context/ChatSessionContext", () => ({
     chats: chatSessionMock.chats,
     projects: chatSessionMock.projects,
     loading: chatSessionMock.loading,
+    error: chatSessionMock.error,
     memoryEnabled: chatSessionMock.memoryEnabled,
     models: [{ id: "model-1" }],
     noEligibleModels: chatSessionMock.noEligibleModels,
@@ -715,6 +717,7 @@ beforeEach((): void => {
   chatSessionMock.chats = [chatSessionMock.activeChat];
   chatSessionMock.projects = [chatSessionMock.activeProject];
   chatSessionMock.loading = false;
+  chatSessionMock.error = undefined;
   chatSessionMock.memoryEnabled = true;
   chatSessionMock.noEligibleModels = false;
   chatSessionMock.selectedModel = "model-1";
@@ -754,6 +757,76 @@ describe("workspace widget renderer registry", () => {
       { timeout: 5_000 },
     );
     expect(screen.getByTestId("chat-window")).toHaveTextContent("true:/repo:/repo|/docs:false");
+  });
+
+  it("renders one actionable error when initial chat creation and target lookup fail together", async () => {
+    const ctx = makeCtx();
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.chats = [];
+    const view = render(<>{WIN_TYPES.chat.render({ newChatRequestId: "initial-chat" }, ctx)}</>);
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Could not open chat."),
+    );
+    chatSessionMock.error =
+      "The selected model failed its live readiness check. Open Settings > Models for details.";
+    view.rerender(<>{WIN_TYPES.chat.render({ newChatRequestId: "initial-chat" }, ctx)}</>);
+
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toHaveTextContent("failed its live readiness check");
+    expect(alerts[0]).toHaveTextContent("Settings > Models");
+  });
+
+  it("renders exactly one fallback alert for a creation-only failure", async () => {
+    const ctx = makeCtx();
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.chats = [];
+    render(<>{WIN_TYPES.chat.render({ newChatRequestId: "creation-only" }, ctx)}</>);
+
+    await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(1));
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not open chat.");
+  });
+
+  it("renders exactly one fallback alert for a lookup-only failure", async () => {
+    const ctx = makeCtx();
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.chats = [];
+    render(
+      <>
+        {WIN_TYPES.chat.render({ chatId: "missing-chat", projectPath: "/missing-project" }, ctx)}
+      </>,
+    );
+
+    await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(1));
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not open chat.");
+  });
+
+  it.each([
+    ["empty", "", "Could not open chat."],
+    ["malformed", "{", "{"],
+    [
+      "hostile",
+      "<script>window.__unsafe = true</script>",
+      "<script>window.__unsafe = true</script>",
+    ],
+  ])("renders one safe alert for a %s combined failure", async (_case, error, expected) => {
+    const ctx = makeCtx();
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.chats = [];
+    const view = render(
+      <>{WIN_TYPES.chat.render({ newChatRequestId: `combined-${_case}` }, ctx)}</>,
+    );
+    await screen.findByRole("alert");
+
+    chatSessionMock.error = error;
+    view.rerender(<>{WIN_TYPES.chat.render({ newChatRequestId: `combined-${_case}` }, ctx)}</>);
+
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toHaveTextContent(expected);
+    expect(alerts[0]?.querySelector("script")).toBeNull();
+    expect(window).not.toHaveProperty("__unsafe");
   });
 
   it("routes an editor selection into an existing project chat without opening a duplicate", async () => {

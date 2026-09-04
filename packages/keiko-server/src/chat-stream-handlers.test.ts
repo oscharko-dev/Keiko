@@ -530,6 +530,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetServerLogger();
   store.close();
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -1356,7 +1357,72 @@ describe("desktop chat SSE streaming handler", () => {
     memoryVault.close();
   });
 
+  it("logs a streamed send rejected by the admission-time readiness observation", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const holder = readyRuntimeGatewayConfig(customModelConfig(CHAT_MODEL));
+    holder.clearVerifiedCapability(CHAT_MODEL, holder.generation());
+    const streaming = streamingModel("must not run");
+    const captured = captureRes();
+    const outcome = await handleSendDesktopChatStream(
+      {
+        ...routeContext(
+          makeReq({ chatId, projectPath: projectDir, content: "private user turn" }),
+          captured.res,
+        ),
+        correlationId: "corr-stream-admission-unready",
+      },
+      deps(streaming.model, { gatewayConfig: holder }),
+    );
+
+    expect(outcome).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(streaming.calls.count).toBe(0);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "chat.send.rejected",
+        correlationId: "corr-stream-admission-unready",
+        errorKind: "model-not-ready",
+      }),
+    );
+    expect(JSON.stringify(sink.events)).not.toContain("private user turn");
+  });
+
+  it("logs regeneration rejected by the admission-time readiness observation", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    seedMessage(chatId, "user", "private regeneration question");
+    seedMessage(chatId, "assistant", "private regeneration answer");
+    const assistant = store.listMessages(chatId).at(-1);
+    if (assistant === undefined) throw new Error("missing assistant fixture");
+    const holder = readyRuntimeGatewayConfig(customModelConfig(CHAT_MODEL));
+    holder.clearVerifiedCapability(CHAT_MODEL, holder.generation());
+    const outcome = await handleRegenerateDesktopChat(
+      {
+        ...routeContext(
+          makeReq({ chatId, projectPath: projectDir, assistantMessageId: assistant.id }),
+          captureRes().res,
+        ),
+        correlationId: "corr-regeneration-admission-unready",
+      },
+      deps(streamingModel("must not run").model, { gatewayConfig: holder }),
+    );
+
+    expect(outcome).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "chat.regeneration.rejected",
+        correlationId: "corr-regeneration-admission-unready",
+        errorKind: "model-not-ready",
+      }),
+    );
+    expect(JSON.stringify(sink.events)).not.toContain("private regeneration question");
+  });
+
   it("rejects a buffered turn when the gateway generation changes during memory retrieval", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     const chatId = seedChat();
     const memoryDir = join(tmp, "buffered-readiness-generation-race");
     mkdirSync(memoryDir);
@@ -1394,16 +1460,19 @@ describe("desktop chat SSE streaming handler", () => {
     });
     const secretContent = "BUFFERED_GENERATION_RACE_SECRET_7A12";
     const outcome = handleSendDesktopChat(
-      routeContext(
-        makeReq({
-          chatId,
-          projectPath: projectDir,
-          content: secretContent,
-          clientTurnId: "buffered-readiness-generation-race",
-          memory: { enabled: true, budgetTokens: 900, context: {} },
-        }),
-        captureRes().res,
-      ),
+      {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            content: secretContent,
+            clientTurnId: "buffered-readiness-generation-race",
+            memory: { enabled: true, budgetTokens: 900, context: {} },
+          }),
+          captureRes().res,
+        ),
+        correlationId: "corr-buffered-readiness-race",
+      },
       sharedDeps,
     );
     await embeddingStarted.promise;
@@ -1414,10 +1483,23 @@ describe("desktop chat SSE streaming handler", () => {
     });
 
     const rejected = await outcome;
-    expect(rejected).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(rejected).toMatchObject({
+      status: 409,
+      body: { error: { code: "GATEWAY_CONFIG_CHANGED" } },
+    });
     expect(JSON.stringify(rejected.body)).not.toContain(secretContent);
     expect(factoryCalls).toBe(0);
     expect(providerCalls).toBe(0);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "chat.send.rejected",
+        correlationId: "corr-buffered-readiness-race",
+        status: 409,
+        errorKind: "config-changed",
+        extra: { reason: "generation", modelKind: "chat" },
+      }),
+    );
+    expect(JSON.stringify(sink.events)).not.toContain(secretContent);
     memoryVault.close();
   });
 
@@ -1524,6 +1606,8 @@ describe("desktop chat SSE streaming handler", () => {
   });
 
   it("rejects a streamed turn when the gateway generation changes during memory retrieval", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     const chatId = seedChat();
     const memoryDir = join(tmp, "streamed-readiness-generation-race");
     mkdirSync(memoryDir);
@@ -1564,16 +1648,19 @@ describe("desktop chat SSE streaming handler", () => {
     const secretContent = "STREAMED_GENERATION_RACE_SECRET_8B23";
     const captured = captureRes();
     const outcome = handleSendDesktopChatStream(
-      routeContext(
-        makeReq({
-          chatId,
-          projectPath: projectDir,
-          content: secretContent,
-          clientTurnId: "streamed-readiness-generation-race",
-          memory: { enabled: true, budgetTokens: 900, context: {} },
-        }),
-        captured.res,
-      ),
+      {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            content: secretContent,
+            clientTurnId: "streamed-readiness-generation-race",
+            memory: { enabled: true, budgetTokens: 900, context: {} },
+          }),
+          captured.res,
+        ),
+        correlationId: "corr-streamed-readiness-race",
+      },
       sharedDeps,
     );
     await embeddingStarted.promise;
@@ -1584,12 +1671,25 @@ describe("desktop chat SSE streaming handler", () => {
     });
 
     const rejected = await outcome;
-    expect(rejected).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(rejected).toMatchObject({
+      status: 409,
+      body: { error: { code: "GATEWAY_CONFIG_CHANGED" } },
+    });
     expect(JSON.stringify(rejected)).not.toContain(secretContent);
     expect(captured.status).toBeUndefined();
     expect(captured.writes).toEqual([]);
     expect(factoryCalls).toBe(0);
     expect(providerCalls).toBe(0);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "chat.send.rejected",
+        correlationId: "corr-streamed-readiness-race",
+        status: 409,
+        errorKind: "config-changed",
+        extra: { reason: "generation", modelKind: "chat" },
+      }),
+    );
+    expect(JSON.stringify(sink.events)).not.toContain(secretContent);
     memoryVault.close();
   });
 
@@ -1650,7 +1750,10 @@ describe("desktop chat SSE streaming handler", () => {
     });
 
     const rejected = await outcome;
-    expect(rejected).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(rejected).toMatchObject({
+      status: 409,
+      body: { error: { code: "GATEWAY_CONFIG_CHANGED" } },
+    });
     expect(sharedDeps.store.countMessages(chatId)).toBe(messagesBefore);
     expect(
       sharedDeps.store
@@ -1783,6 +1886,8 @@ describe("desktop chat SSE streaming handler", () => {
   });
 
   it("rejects regeneration when the gateway generation changes during memory retrieval", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     const chatId = seedChat();
     seedMessage(chatId, "user", "original regeneration question");
     seedMessage(chatId, "assistant", "original regeneration answer");
@@ -1823,15 +1928,18 @@ describe("desktop chat SSE streaming handler", () => {
       },
     });
     const outcome = handleRegenerateDesktopChat(
-      routeContext(
-        makeReq({
-          chatId,
-          projectPath: projectDir,
-          assistantMessageId: assistant.id,
-          memory: { enabled: true, budgetTokens: 900, context: {} },
-        }),
-        captureRes().res,
-      ),
+      {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            assistantMessageId: assistant.id,
+            memory: { enabled: true, budgetTokens: 900, context: {} },
+          }),
+          captureRes().res,
+        ),
+        correlationId: "corr-regeneration-readiness-race",
+      },
       sharedDeps,
     );
     await embeddingStarted.promise;
@@ -1842,10 +1950,22 @@ describe("desktop chat SSE streaming handler", () => {
     });
 
     const rejected = await outcome;
-    expect(rejected).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(rejected).toMatchObject({
+      status: 409,
+      body: { error: { code: "GATEWAY_CONFIG_CHANGED" } },
+    });
     expect(JSON.stringify(rejected.body)).not.toContain("original regeneration question");
     expect(factoryCalls).toBe(0);
     expect(providerCalls).toBe(0);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "chat.regeneration.rejected",
+        correlationId: "corr-regeneration-readiness-race",
+        status: 409,
+        errorKind: "config-changed",
+        extra: { reason: "generation", modelKind: "chat" },
+      }),
+    );
     memoryVault.close();
   });
 

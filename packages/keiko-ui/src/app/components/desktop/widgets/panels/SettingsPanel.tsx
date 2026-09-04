@@ -191,35 +191,124 @@ function conversationIneligibilityShortLabel(
   return t("settings.models.ineligibleShortGeneric");
 }
 
-function ConversationEligibilityBadge({ model }: { readonly model: ModelCapability }): ReactNode {
-  const t = useTranslate();
-  const reason = explainConversationIneligibility(model);
-  // Issue #1557 (AC4): a correctly configured voice provider is available for its voice purpose, not a
-  // chat-ineligibility warning. `isConversationEligibleModel` stays unchanged (voice is genuinely not
-  // a chat model) — only the presentation differs.
-  if (isConfiguredVoiceProvider(model)) {
-    const label = voiceProviderAvailabilityLabel(model, t);
-    return (
-      <output
-        className="ml-elig ml-elig-voice"
-        data-testid="voice-elig-ok"
-        aria-label={t("settings.models.eligibilityPrefix", { label })}
-        title={label}
-      >
-        {t("settings.models.voiceProviderBadge", { label: voiceProviderShortLabel(model, t) })}
-      </output>
+type ReadinessRunState =
+  | { readonly status: "idle" }
+  | {
+      readonly status: "running";
+      readonly deep: boolean;
+      readonly previous?: ReadinessResultState | undefined;
+    }
+  | { readonly status: "done"; readonly report: GatewayReadinessReport }
+  | { readonly status: "error"; readonly message: string };
+
+type ReadinessResultState = Extract<ReadinessRunState, { readonly status: "done" | "error" }>;
+
+function readinessResult(
+  readiness: ReadinessRunState | undefined,
+): ReadinessResultState | undefined {
+  if (readiness?.status === "running") return readiness.previous;
+  return readiness?.status === "done" || readiness?.status === "error" ? readiness : undefined;
+}
+
+function serverReadinessFallback(
+  readiness: ReadinessRunState | undefined,
+  conversationReady: boolean | undefined,
+): boolean | undefined {
+  return readinessResult(readiness) === undefined ? conversationReady : undefined;
+}
+
+function chatReadinessPassed(
+  readiness: ReadinessRunState | undefined,
+  conversationReady?: boolean,
+): boolean {
+  const result = readinessResult(readiness);
+  if (result?.status === "done") {
+    return result.report.probes.some((probe) => probe.name === "chat" && probe.status === "passed");
+  }
+  return serverReadinessFallback(readiness, conversationReady) === true;
+}
+
+function chatReadinessFailed(
+  readiness: ReadinessRunState | undefined,
+  conversationReady?: boolean,
+): boolean {
+  const result = readinessResult(readiness);
+  if (result?.status === "error") return true;
+  if (result?.status === "done") {
+    return !result.report.probes.some(
+      (probe) => probe.name === "chat" && probe.status === "passed",
     );
   }
+  return serverReadinessFallback(readiness, conversationReady) === false;
+}
+
+function conversationBadgePresentation(
+  readiness: ReadinessRunState | undefined,
+  conversationReady: boolean | undefined,
+  t: I18nTranslate,
+): { readonly className: string; readonly label: string } {
+  if (chatReadinessFailed(readiness, conversationReady)) {
+    return { className: "ml-elig-no", label: t("settings.models.modelProbeFailed") };
+  }
+  if (chatReadinessPassed(readiness, conversationReady)) {
+    return { className: "ml-elig-ok", label: t("settings.models.eligibilityOk") };
+  }
+  return { className: "ml-type", label: t("settings.models.modelNotVerified") };
+}
+
+function VoiceEligibilityBadge({
+  model,
+  t,
+}: {
+  readonly model: ModelCapability;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const label = voiceProviderAvailabilityLabel(model, t);
+  return (
+    <output
+      className="ml-elig ml-elig-voice"
+      data-testid="voice-elig-ok"
+      aria-label={t("settings.models.eligibilityPrefix", { label })}
+      title={label}
+    >
+      {t("settings.models.voiceProviderBadge", { label: voiceProviderShortLabel(model, t) })}
+    </output>
+  );
+}
+
+function EligibleChatBadge({
+  model,
+  readiness,
+  t,
+}: {
+  readonly model: ModelCapability;
+  readonly readiness: ReadinessRunState | undefined;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const presentation = conversationBadgePresentation(readiness, model.conversationReady, t);
+  return (
+    <output
+      className={`ml-elig ${presentation.className}`}
+      data-testid="conv-elig-ok"
+      aria-label={t("settings.models.eligibilityPrefix", { label: presentation.label })}
+    >
+      {presentation.label}
+    </output>
+  );
+}
+
+function ConversationEligibilityBadge({
+  model,
+  readiness,
+}: {
+  readonly model: ModelCapability;
+  readonly readiness: ReadinessRunState | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  const reason = explainConversationIneligibility(model);
+  if (isConfiguredVoiceProvider(model)) return <VoiceEligibilityBadge model={model} t={t} />;
   if (reason === undefined) {
-    return (
-      <output
-        className="ml-elig ml-elig-ok"
-        data-testid="conv-elig-ok"
-        aria-label={t("settings.models.eligibilityOkAria")}
-      >
-        {t("settings.models.eligibilityOk")}
-      </output>
-    );
+    return <EligibleChatBadge model={model} readiness={readiness} t={t} />;
   }
   if (reason === "embedding-only") {
     const label = embeddingAvailabilityLabel(t);
@@ -248,12 +337,6 @@ function ConversationEligibilityBadge({ model }: { readonly model: ModelCapabili
     </output>
   );
 }
-
-type ReadinessRunState =
-  | { readonly status: "idle" }
-  | { readonly status: "running"; readonly deep: boolean }
-  | { readonly status: "done"; readonly report: GatewayReadinessReport }
-  | { readonly status: "error"; readonly message: string };
 
 type ReportCopyState = "idle" | "copied" | "failed";
 
@@ -323,6 +406,14 @@ function gatewayConfigIdentity(config: SafeGatewayConfig | null, present: boolea
   if (!present) return "absent";
   if (config === null) return "present";
   return `present:${JSON.stringify(config.providers)}`;
+}
+
+function invalidateServerReadinessObservations(
+  models: readonly ModelCapability[],
+): readonly ModelCapability[] {
+  return models.map((model) =>
+    model.conversationReady === undefined ? model : { ...model, conversationReady: undefined },
+  );
 }
 
 function readinessErrorMessage(error: unknown, t: I18nTranslate): string {
@@ -705,12 +796,35 @@ function modelStatusTitle(
   conversationEligible: boolean,
   embeddingReady: boolean,
   voiceReady: boolean,
+  readiness: ReadinessRunState | undefined,
   t: I18nTranslate,
 ): string {
-  if (conversationEligible) return t("settings.models.statusConversationEligible");
+  if (conversationEligible && chatReadinessFailed(readiness, model.conversationReady)) {
+    return t("settings.models.statusProbeFailed");
+  }
+  if (conversationEligible && chatReadinessPassed(readiness, model.conversationReady)) {
+    return t("settings.models.statusConversationEligible");
+  }
+  if (conversationEligible) return t("settings.models.statusNotVerified");
   if (embeddingReady) return t("settings.models.statusEmbedding");
   if (voiceReady) return voiceProviderAvailabilityLabel(model, t);
   return t("settings.models.statusNotSelectable");
+}
+
+function modelStatusClass(
+  model: ModelCapability,
+  conversationEligible: boolean,
+  embeddingReady: boolean,
+  voiceReady: boolean,
+  readiness: ReadinessRunState | undefined,
+): string {
+  if (conversationEligible && chatReadinessFailed(readiness, model.conversationReady))
+    return "error";
+  if (conversationEligible && chatReadinessPassed(readiness, model.conversationReady)) {
+    return "connected";
+  }
+  if (conversationEligible) return "untested";
+  return embeddingReady || voiceReady ? "connected" : "ineligible";
 }
 
 function ModelCapabilityRow({
@@ -730,9 +844,21 @@ function ModelCapabilityRow({
   const conversationEligible = isConversationEligibleModel(model);
   const embeddingReady = model.kind === "embedding";
   const voiceReady = isConfiguredVoiceProvider(model);
-  const statusClass =
-    conversationEligible || embeddingReady || voiceReady ? "connected" : "ineligible";
-  const statusTitle = modelStatusTitle(model, conversationEligible, embeddingReady, voiceReady, t);
+  const statusClass = modelStatusClass(
+    model,
+    conversationEligible,
+    embeddingReady,
+    voiceReady,
+    readiness,
+  );
+  const statusTitle = modelStatusTitle(
+    model,
+    conversationEligible,
+    embeddingReady,
+    voiceReady,
+    readiness,
+    t,
+  );
   const RowIcon = model.kind === "voice" ? Icons.mic : Icons.cube;
   return (
     <div className="ml-row">
@@ -743,7 +869,7 @@ function ModelCapabilityRow({
         <div className="ml-top">
           <span className="ml-name">{model.id}</span>
           <span className="ml-type mono">{kindLabel(model.kind)}</span>
-          <ConversationEligibilityBadge model={model} />
+          <ConversationEligibilityBadge model={model} readiness={readiness} />
         </div>
         <div className="ml-url mono">
           {t("settings.models.capabilitySummary", {
@@ -784,7 +910,12 @@ function ModelCapabilityRow({
           ) : null}
         </div>
       ) : null}
-      <span className={"ml-status " + statusClass} title={statusTitle} aria-hidden="true" />
+      <span
+        className={"ml-status " + statusClass}
+        title={statusTitle}
+        data-testid={`model-status-${model.id}`}
+        aria-hidden="true"
+      />
     </div>
   );
 }
@@ -1236,16 +1367,50 @@ const VERIFIED_GATEWAY: GatewayVerificationState = "verified";
  */
 function gatewayVerificationFromRuns(
   runs: Record<string, ReadinessRunState>,
+  models: readonly ModelCapability[],
 ): GatewayVerificationState {
-  let best: GatewayVerificationState = UNVERIFIED_GATEWAY;
+  let best = gatewayVerificationFromServerObservations(models, runs);
   for (const run of Object.values(runs)) {
-    if (run.status === "error") return FAILED_VERIFICATION;
-    if (run.status !== "done") continue;
-    const state = gatewayVerificationFromProbeOutcome(run.report.overallStatus);
-    if (gatewayVerificationContradictsReadiness(state)) return FAILED_VERIFICATION;
-    if (state === PARTIAL_VERIFICATION || best === UNVERIFIED_GATEWAY) best = state;
+    const result = readinessResult(run);
+    if (result?.status === "error") return FAILED_VERIFICATION;
+    if (result?.status !== "done") continue;
+    const state = gatewayVerificationFromProbeOutcome(result.report.overallStatus);
+    if (best === UNVERIFIED_GATEWAY) {
+      best = state;
+    } else if (state !== UNVERIFIED_GATEWAY) {
+      best = worseGatewayVerification(best, state);
+    }
   }
   return best;
+}
+
+function worseGatewayVerification(
+  left: GatewayVerificationState,
+  right: GatewayVerificationState,
+): GatewayVerificationState {
+  const severity: Readonly<Record<GatewayVerificationState, number>> = {
+    verified: 0,
+    unverified: 1,
+    partial: 2,
+    failed: 3,
+  };
+  return severity[left] >= severity[right] ? left : right;
+}
+
+function gatewayVerificationFromServerObservations(
+  models: readonly ModelCapability[],
+  runs: Record<string, ReadinessRunState>,
+): GatewayVerificationState {
+  let observed: GatewayVerificationState = UNVERIFIED_GATEWAY;
+  for (const model of models) {
+    const localResult = readinessResult(runs[model.id]);
+    if (!isConversationEligibleModel(model) || localResult !== undefined) {
+      continue;
+    }
+    if (model.conversationReady === false) return FAILED_VERIFICATION;
+    if (model.conversationReady === true) observed = VERIFIED_GATEWAY;
+  }
+  return observed;
 }
 
 function computeGatewayStatusLabel(
@@ -1364,7 +1529,12 @@ async function runModelReadinessCheck(
   const record = (state: ReadinessRunState): void => {
     setLedger((current) => recordReadinessRun(current, generation, modelId, state));
   };
-  record({ status: "running", deep });
+  setLedger((current) => {
+    const previous = readinessResult(
+      current.generation === generation ? current.runs[modelId] : undefined,
+    );
+    return recordReadinessRun(current, generation, modelId, { status: "running", deep, previous });
+  });
   try {
     const report = await runGatewayReadiness(
       modelId,
@@ -1467,7 +1637,7 @@ function ModelsTabContent({
   // Issue #144: source of truth is the helper, not an inline kind check.
   const chatCount = models.filter(isConversationEligibleModel).length;
   const hasDiscoveredModels = models.length > 0;
-  const verification = gatewayVerificationFromRuns(readiness);
+  const verification = gatewayVerificationFromRuns(readiness, models);
   const gatewayStatusLabel = computeGatewayStatusLabel(
     gatewayConfigured,
     hasDiscoveredModels,
@@ -1671,7 +1841,9 @@ export function SettingsPanel({
   // all it takes: every remembered run is tagged with the generation it measured.
   useEffect(() => {
     const onConfigUpdated = (): void => {
+      setModels(invalidateServerReadinessObservations);
       advanceConfigGeneration();
+      setReloadTick((tick) => tick + 1);
     };
     window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
     return () => {

@@ -84,7 +84,7 @@ describe("external quality integration configuration", () => {
     const weakened = sources.ciWorkflow
       .replace(
         "types: [opened, reopened, synchronize, ready_for_review, edited]",
-        "types: [opened]",
+        "types: [opened, reopened, synchronize, ready_for_review]",
       )
       .replace("npm run check:external-quality-config", "node --version")
       .replace("npm run check:review-bot-suppression", "node --version")

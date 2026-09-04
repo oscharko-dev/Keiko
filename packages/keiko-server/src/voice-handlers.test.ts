@@ -353,14 +353,18 @@ describe("POST /api/voice/transcribe — successful dictation (AC3/AC4/AC6)", ()
   });
 
   it("transcribes against the configured keiko-stt provider and returns the transcript (AC6)", async () => {
-    const { deps, seen } = sttDeps();
+    const activityLog = { write: vi.fn() };
+    const { deps, seen } = sttDeps({ activityLog });
     const result = await handleVoiceTranscribe(
-      ctx({
-        audio: VALID_AUDIO,
-        mimeType: "audio/webm;codecs=opus",
-        durationMs: 4000,
-        language: "en",
-      }),
+      ctx(
+        {
+          audio: VALID_AUDIO,
+          mimeType: "audio/webm;codecs=opus",
+          durationMs: 4000,
+          language: "en",
+        },
+        "corr-stt-wiring-0001",
+      ),
       deps,
     );
     expect(result.status).toBe(200);
@@ -372,6 +376,8 @@ describe("POST /api/voice/transcribe — successful dictation (AC3/AC4/AC6)", ()
     expect(seen[0]?.modelId).toBe("keiko-stt");
     expect(seen[0]?.mimeType).toBe("audio/webm");
     expect(seen[0]?.language).toBe("en");
+    expect(seen[0]?.log).toBe(activityLog);
+    expect(seen[0]?.correlationId).toBe("corr-stt-wiring-0001");
     expect(Buffer.from(seen[0]?.audio ?? new Uint8Array()).toString("utf8")).toBe(
       "keiko-dictation-audio-bytes",
     );

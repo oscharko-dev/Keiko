@@ -18,6 +18,8 @@ import {
   readJsonCapped,
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
+import { resolveLogSink, withCorrelationId, type ModelGatewayLogSink } from "./observability.js";
+import { providerSpeechLanguage } from "./provider-language.js";
 import type { OutboundHttpEgressConfig, ProviderEndpointStyle } from "./types.js";
 
 export interface SpeechToTextRequest {
@@ -40,6 +42,8 @@ export interface SpeechToTextRequest {
   readonly timeoutMs?: number;
   readonly fetchImpl?: typeof fetch;
   readonly egress?: OutboundHttpEgressConfig | undefined;
+  readonly log?: ModelGatewayLogSink | undefined;
+  readonly correlationId?: string | undefined;
 }
 
 export interface SpeechToTextSuccess {
@@ -131,6 +135,26 @@ function extensionForMime(mimeType: string): string {
   return MIME_EXTENSIONS[mimeType.toLowerCase()] ?? "bin";
 }
 
+// The loopback contract accepts a BCP-47 language hint because browsers and callers naturally
+// expose values such as `de-DE`. OpenAI-compatible transcription endpoints accept the ISO-639-1
+// primary language subtag instead, so keep the public contract useful while sending `de` upstream.
+function logLanguageNormalization(request: SpeechToTextRequest): void {
+  if (request.language === undefined) return;
+  const normalized = providerSpeechLanguage(request.language);
+  if (normalized === request.language) return;
+  const log = withCorrelationId(resolveLogSink(request.log), request.correlationId);
+  log.write({
+    level: "info",
+    category: "gateway",
+    op: "speech.stt.language.normalized",
+    extra: {
+      declaredSubtagCount: request.language.split("-").length,
+      resolvedSubtagCount: normalized.split("-").length,
+      primaryLanguagePreserved: true,
+    },
+  });
+}
+
 // Strip the quote that delimits a field name plus CR/LF and every other C0/C1 control, bidirectional,
 // and zero-width code point, so a value can never break out of (or visually disguise) its multipart
 // field header. The BFF caller already constrains MIME type and language to closed/anchored
@@ -202,7 +226,7 @@ function buildMultipartBody(request: SpeechToTextRequest, boundary: string): Blo
     parts.push(
       enc.encode(
         `--${boundary}\r\n` +
-          `Content-Disposition: form-data; name="language"\r\n\r\n${sanitizeFieldValue(request.language)}\r\n`,
+          `Content-Disposition: form-data; name="language"\r\n\r\n${sanitizeFieldValue(providerSpeechLanguage(request.language))}\r\n`,
       ),
     );
   }
@@ -333,6 +357,7 @@ async function decodeSuccess(response: Response): Promise<SpeechToTextOutcome> {
 export async function requestSpeechToText(
   request: SpeechToTextRequest,
 ): Promise<SpeechToTextOutcome> {
+  logLanguageNormalization(request);
   const built = buildRequest(request);
   const dispatched = await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {

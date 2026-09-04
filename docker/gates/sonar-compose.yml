@@ -51,7 +51,9 @@ services:
     environment:
       SONAR_HOST_URL: http://sonarqube:9000
       SONAR_TOKEN: "${KEIKO_LOCAL_SONAR_TOKEN:-}"
-      SONAR_SCANNER_OPTS: "-Xmx2g"
+      # Leave room for the SonarJS bridge and the concurrently required SonarQube service inside a
+      # common 8 GiB Docker Desktop VM. The scanner coordinator does not need a multi-gigabyte heap.
+      SONAR_SCANNER_OPTS: "-Xmx768m"
     volumes:
       - ../..:/usr/src
       - sonar-scanner-cache:/opt/sonar-scanner/.sonar/cache

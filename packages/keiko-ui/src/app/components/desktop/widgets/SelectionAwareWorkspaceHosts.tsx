@@ -10,6 +10,7 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 
 import { ChatSessionProvider } from "../context/ChatSessionContext";
+import { ErrorNoticeFromError } from "../ErrorNotice";
 import {
   routeSelectionHandoffToOpenChat,
   usePublishChatWindowActivity,
@@ -1235,17 +1236,32 @@ interface BoundChatWindowSessionHostProps {
 function BoundChatAlerts({
   controls,
   lookupFailed,
+  sessionError,
 }: {
   readonly controls: ReturnType<typeof useBoundChatControls>;
   readonly lookupFailed: boolean;
+  readonly sessionError: string | undefined;
 }): ReactNode {
-  return (
-    <>
-      <ChatHostAlert messageKey={controls.handoff.noticeKey} />
-      <ChatHostAlert messageKey={controls.creating.errorKey} />
-      <ChatHostAlert messageKey={lookupFailed ? "chat.creation.openFailed" : null} />
-    </>
-  );
+  const agentT = useEditorAgentTranslate();
+  const detailedFailure = lookupFailed && sessionError !== undefined;
+  const lookupMessage =
+    !detailedFailure && controls.creating.errorKey === null && lookupFailed
+      ? "chat.creation.openFailed"
+      : null;
+  if (detailedFailure) {
+    return (
+      <ErrorNoticeFromError
+        error={sessionError}
+        fallback={agentT("chat.creation.openFailed")}
+        className="lk-alert"
+        dismissible={false}
+      />
+    );
+  }
+  if (controls.creating.errorKey !== null) {
+    return <ChatHostAlert messageKey={controls.creating.errorKey} />;
+  }
+  return <ChatHostAlert messageKey={lookupMessage ?? controls.handoff.noticeKey} />;
 }
 
 function useBoundChatWindowRuntime(
@@ -1341,7 +1357,11 @@ function BoundChatWindowSessionHost({
   });
   return (
     <ChatSessionProvider value={memory.session}>
-      <BoundChatAlerts controls={controls} lookupFailed={targetLookupFailed} />
+      <BoundChatAlerts
+        controls={controls}
+        lookupFailed={targetLookupFailed}
+        sessionError={session.error}
+      />
       <BoundChatBody
         activeProjectPath={session.activeProject?.path}
         ctx={ctx}

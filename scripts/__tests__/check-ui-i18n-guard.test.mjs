@@ -404,6 +404,99 @@ test("accepts a single-file feature catalog carrying both language maps", async 
   );
 });
 
+const JSON_FEATURE_CATALOG = "packages/keiko-ui/src/app/feature/feature-i18n.messages.json";
+const NON_I18N_UI_FILE = "packages/keiko-ui/src/app/feature/arithmetic.ts";
+const NON_I18N_UI_SOURCE = "export const add = (left, right) => left + right;\n";
+
+test("accepts a JSON feature catalog carrying both languages", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [JSON_FEATURE_CATALOG]: JSON.stringify({
+        "feature.title": { en: "Title", de: "Titel" },
+      }),
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, JSON_FEATURE_CATALOG],
+      });
+
+      expect(result.problems).toEqual([]);
+      expect(result.ok).toBe(true);
+    },
+  );
+});
+
+test("fails a JSON feature catalog with a missing language", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [JSON_FEATURE_CATALOG]: JSON.stringify({
+        "feature.title": { en: "Title" },
+      }),
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, JSON_FEATURE_CATALOG],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/feature\.title/);
+    },
+  );
+});
+
+test.each(["", "   "])("fails a JSON feature catalog with a blank language: %j", async (de) => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [JSON_FEATURE_CATALOG]: JSON.stringify({
+        "feature.title": { en: "Title", de },
+      }),
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [JSON_FEATURE_CATALOG],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/feature\.title/u);
+    },
+  );
+});
+
+test.each([
+  ["malformed JSON", "{"],
+  ["a null root", "null"],
+  ["an array root", "[]"],
+  ["an empty object", "{}"],
+])("fails a JSON feature catalog with %s", async (_description, catalogSource) => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [NON_I18N_UI_FILE]: NON_I18N_UI_SOURCE,
+      [JSON_FEATURE_CATALOG]: catalogSource,
+    },
+    (repoRoot) => {
+      for (const changedFiles of [
+        [JSON_FEATURE_CATALOG],
+        [NON_I18N_UI_FILE, JSON_FEATURE_CATALOG],
+      ]) {
+        const result = checkUiI18nGuard({ repoRoot, changedFiles });
+
+        expect(result.ok).toBe(false);
+        expect(result.problems).toHaveLength(1);
+        expect(result.problems[0]).toMatch(/must contain (valid JSON|a non-empty JSON object)/u);
+      }
+    },
+  );
+});
+
 // A keyed lookup declared AFTER the two catalogs — e.g. a closed Record mapping a server reason code
 // onto a catalog key — is not catalog content. The parity slice used to run to end of file, so those
 // code names read as German-only entries and broke parity in a file whose catalogs are identical.
