@@ -53,10 +53,10 @@ function runCiAggregate(overrides = {}) {
 }
 
 describe("dev quality workflows", () => {
-  it("does not run full CI for pull-request metadata edits", () => {
-    expect(ciWorkflow.on.pull_request.types).not.toContain("edited");
+  it("reruns CI for metadata edits without displacing code-head evidence", () => {
+    expect(ciWorkflow.on.pull_request.types).toContain("edited");
     expect(ciWorkflow.concurrency.group).toBe(
-      "ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}",
+      "ci-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.action == 'edited' && 'metadata' || 'code-head') || github.run_id }}",
     );
     expect(ciWorkflow.concurrency["cancel-in-progress"]).toBe(
       "${{ github.event_name == 'pull_request' }}",

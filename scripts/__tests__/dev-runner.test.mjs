@@ -910,6 +910,58 @@ describe("forwardedUpstreamHeaders", () => {
     }
   });
 
+  it("refreshes a revoked allowance when a mutating proxy response is aborted", async () => {
+    const upstream = createHttpServer((request, response) => {
+      response.writeHead(200, { "permissions-policy": "microphone=(self)" });
+      if (request.url === "/api/health") {
+        response.end(JSON.stringify({ status: "ok" }));
+      } else {
+        response.write("event: ready\ndata: {}\n\n");
+      }
+    });
+    const policy = createMicrophoneAllowanceController(true);
+    const proxy = createHttpServer((request, response) => {
+      const address = upstream.address();
+      if (address === null || typeof address === "string") throw new Error("Expected TCP address.");
+      proxyHttp(request, response, address.port, address.port, policy);
+    });
+    try {
+      await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+      await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+      const address = proxy.address();
+      if (address === null || typeof address === "string") throw new Error("Expected TCP address.");
+
+      await new Promise((resolve, reject) => {
+        const request = httpRequest(
+          {
+            hostname: "127.0.0.1",
+            port: address.port,
+            path: "/api/desktop/chat/stream",
+            method: "POST",
+          },
+          (response) => {
+            response.once("data", () => {
+              expect(policy.current()).toBe(false);
+              response.destroy();
+              resolve();
+            });
+          },
+        );
+        request.once("error", reject);
+        request.end("{}");
+      });
+
+      await vi.waitFor(() => expect(policy.current()).toBe(true));
+    } finally {
+      proxy.closeAllConnections();
+      upstream.closeAllConnections();
+      await Promise.all([
+        new Promise((resolve) => proxy.close(resolve)),
+        new Promise((resolve) => upstream.close(resolve)),
+      ]);
+    }
+  });
+
   it("rejects a stale readiness observation after a newer policy revision", () => {
     const policy = createMicrophoneAllowanceController(false);
     const staleRevision = policy.revision();

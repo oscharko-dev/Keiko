@@ -911,19 +911,19 @@
     {
       "op": "chat.regeneration.rejected",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-handlers.ts:882",
+      "site": "packages/keiko-server/src/chat-handlers.ts:887",
       "package": "keiko-server"
     },
     {
       "op": "chat.send.rejected",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-handlers.ts:880",
+      "site": "packages/keiko-server/src/chat-handlers.ts:885",
       "package": "keiko-server"
     },
     {
       "op": "chat.turn.started",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1748",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1765",
       "package": "keiko-server"
     },
     {

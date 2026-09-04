@@ -856,7 +856,12 @@ function logChatCreationRejection(
   });
 }
 
-type ChatRejectionReason = "readiness" | "generation";
+type ChatRejectionReason = "readiness" | "generation" | "grounding-scope";
+
+function chatRejectionErrorKind(reason: ChatRejectionReason): string {
+  if (reason === "generation") return "config-changed";
+  return reason === "grounding-scope" ? "grounding-scope-changed" : "model-not-ready";
+}
 
 export function logChatRejection(
   operation: "chat.send.rejected" | "chat.regeneration.rejected",
@@ -870,7 +875,7 @@ export function logChatRejection(
     category: "gateway",
     correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
     status,
-    errorKind: reason === "generation" ? "config-changed" : "model-not-ready",
+    errorKind: chatRejectionErrorKind(reason),
     extra: {
       reason,
       modelKind: chatCapability(deps, modelId)?.kind ?? "unknown",
@@ -883,12 +888,24 @@ export function logChatRejection(
   }
 }
 
-function isCurrentChatReadinessRejection(modelId: string, deps: UiHandlerDeps): boolean {
-  return (
-    deps.gatewayConfig !== undefined &&
-    chatCapability(deps, modelId)?.kind === "chat" &&
-    !currentConversationReady(deps, modelId)
-  );
+function routeErrorFields(
+  result: RouteResult,
+): { readonly code: string; readonly message: string } | undefined {
+  if (!isRecord(result.body) || !isRecord(result.body.error)) return undefined;
+  const { code, message } = result.body.error;
+  return typeof code === "string" && typeof message === "string" ? { code, message } : undefined;
+}
+
+function chatExecutionRejectionReason(result: RouteResult): ChatRejectionReason | undefined {
+  const actual = routeErrorFields(result);
+  if (actual?.code === "GROUNDING_SCOPE_CHANGED") return "grounding-scope";
+  const expected = routeErrorFields(conversationModelNotReadyResult());
+  if (actual === undefined || expected === undefined) return undefined;
+  return result.status === 400 &&
+    actual.code === expected.code &&
+    actual.message === expected.message
+    ? "readiness"
+    : undefined;
 }
 
 interface ChatReadinessRejectionContext {
@@ -2470,10 +2487,12 @@ export function captureDesktopChatExecutionAdmission(
   rejectionContext?: ChatReadinessRejectionContext,
 ): DesktopChatExecutionAdmission | RouteResult {
   const invalidExecution = validateDesktopChatExecution(request, chat, modelId, deps);
+  const rejectionReason =
+    invalidExecution === undefined ? undefined : chatExecutionRejectionReason(invalidExecution);
   if (
     invalidExecution !== undefined &&
     rejectionContext !== undefined &&
-    isCurrentChatReadinessRejection(modelId, deps)
+    rejectionReason !== undefined
   ) {
     logChatRejection(
       rejectionContext.operation,
@@ -2481,6 +2500,7 @@ export function captureDesktopChatExecutionAdmission(
       modelId,
       deps,
       invalidExecution.status,
+      rejectionReason,
     );
   }
   return invalidExecution ?? { gatewayConfigGeneration: deps.gatewayConfig?.generation() };
@@ -2896,7 +2916,7 @@ function invalidRegenerationModelResult(
 ): RouteResult | undefined {
   const invalidModel = invalidChatModelResult(modelId, deps);
   if (invalidModel === undefined) return undefined;
-  if (isCurrentChatReadinessRejection(modelId, deps)) {
+  if (chatExecutionRejectionReason(invalidModel) === "readiness") {
     logChatRejection(
       "chat.regeneration.rejected",
       correlationId,

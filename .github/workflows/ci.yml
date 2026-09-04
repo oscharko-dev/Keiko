@@ -19,9 +19,10 @@ on:
       - epic/coding-workbench-opencode-codex
       - "release/**"
   pull_request:
-    # PR metadata cannot change executable evidence. Excluding `edited` prevents description-only
-    # changes and reviewer-bot edits from launching a second full, uncancellable pipeline.
-    types: [opened, reopened, synchronize, ready_for_review]
+    # Metadata is merge-relevant evidence: the review-suppression gate reads the PR title/body, and
+    # a base retarget changes the candidate boundary. `edited` therefore must produce a fresh
+    # required verdict even though it does not change repository bytes.
+    types: [opened, reopened, synchronize, ready_for_review, edited]
     branches:
       - dev
       - feat/dev
@@ -59,7 +60,10 @@ permissions: {}
 # indistinguishable from a real defect, and that evidence binds an integration commit nothing else
 # re-measures (Issue #2704).
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  # Code-head and metadata events cannot displace one another before either starts. Each class
+  # coalesces independently per PR; pushes supersede stale code evidence, while repeated metadata
+  # edits supersede stale metadata evidence. Non-PR integration runs remain groups of one.
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.action == 'edited' && 'metadata' || 'code-head') || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

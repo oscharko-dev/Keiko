@@ -13,6 +13,7 @@ import {
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   chatTurnShapeFields,
+  captureDesktopChatExecutionAdmission,
   handleCreateDesktopChat,
   handleSendDesktopChat,
   parseClientTurnId,
@@ -202,6 +203,58 @@ async function sendBreakerChat(
 }
 
 describe("desktop chat production gateway reuse", () => {
+  it("logs the returned grounding rejection instead of concurrent model unreadiness", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      fixture.deps.gatewayConfig?.clearVerifiedCapability("breaker-chat");
+      const chat = fixture.deps.store.updateChat(fixture.chatId, {
+        connectedScope: {
+          kind: "workspace-root",
+          relativePaths: [],
+          connectedAtMs: 42,
+        },
+      });
+
+      const result = captureDesktopChatExecutionAdmission(
+        {
+          chatId: fixture.chatId,
+          projectPath: fixture.projectPath,
+          content: "body must stay out of evidence",
+          modelId: "breaker-chat",
+          documentContext: [],
+          attachments: [],
+          memory: undefined,
+          discussionMode: undefined,
+        },
+        chat,
+        "breaker-chat",
+        fixture.deps,
+        { operation: "chat.send.rejected", correlationId: "corr-grounding-changed" },
+      );
+
+      expect(result).toMatchObject({
+        status: 409,
+        body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
+      });
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "gateway",
+          op: "chat.send.rejected",
+          correlationId: "corr-grounding-changed",
+          status: 409,
+          errorKind: "grounding-scope-changed",
+          extra: { reason: "grounding-scope", modelKind: "chat" },
+        }),
+      );
+      expect(JSON.stringify(sink.events)).not.toContain("body must stay out of evidence");
+    } finally {
+      resetServerLogger();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
   it("keeps user content off the provider while probing an unready model on demand", async () => {
     const fixture = await createGatewayBreakerFixture();
     const sink = createBufferedServerLogSink();

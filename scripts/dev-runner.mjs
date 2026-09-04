@@ -776,7 +776,7 @@ export function forwardedUpstreamHeaders(upstreamHeaders, targetPort, options = 
   return safe;
 }
 
-function createProxyLifecycle(req, res) {
+function createProxyLifecycle(req, res, onSettled = () => undefined) {
   let upstream;
   let upstreamResponse;
   let settled = false;
@@ -788,6 +788,7 @@ function createProxyLifecycle(req, res) {
     if (settled) return false;
     settled = true;
     detach();
+    onSettled();
     return true;
   };
   const abort = () => {
@@ -813,21 +814,8 @@ function createProxyLifecycle(req, res) {
   };
 }
 
-function forwardProxyResponse({
-  upstreamRes,
-  res,
-  lifecycle,
-  mutationRevision,
-  policy,
-  policyBffPort,
-  targetPort,
-}) {
+function forwardProxyResponse({ upstreamRes, res, lifecycle, policy, targetPort }) {
   lifecycle.bindResponse(upstreamRes);
-  if (mutationRevision !== undefined) {
-    upstreamRes.once("end", () => {
-      void refreshMicrophoneAllowance(policy, mutationRevision, policyBffPort);
-    });
-  }
   res.writeHead(
     upstreamRes.statusCode ?? 502,
     forwardedUpstreamHeaders(upstreamRes.headers, targetPort, {
@@ -854,7 +842,11 @@ export function proxyHttp(
   const mutationRevision =
     forwardsToBff && bffRequestMutatesMicrophoneAllowance(req.method) ? policy.revoke() : undefined;
   const headers = proxiedHeaders(req, targetPort);
-  const lifecycle = createProxyLifecycle(req, res);
+  const lifecycle = createProxyLifecycle(req, res, () => {
+    if (mutationRevision !== undefined) {
+      void refreshMicrophoneAllowance(policy, mutationRevision, policyBffPort);
+    }
+  });
   const upstream = request(
     {
       hostname: host,
@@ -868,9 +860,7 @@ export function proxyHttp(
         upstreamRes,
         res,
         lifecycle,
-        mutationRevision,
         policy,
-        policyBffPort,
         targetPort,
       }),
   );
