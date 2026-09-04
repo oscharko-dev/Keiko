@@ -2,6 +2,9 @@ import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/index.js";
+import { readGitRemoteUrl } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+
+import { githubOwnerAndRepoFromRemoteUrl } from "../gitDelivery/branchProtectionPreflight.js";
 import { deriveRepositoryId } from "../task-workspace/naming.js";
 import type { GitHubCodeContextApiPort } from "./githubCodeContextConnector.js";
 import { createGitHubCodeContextApiPort } from "./githubCodeContextPort.js";
@@ -63,11 +66,16 @@ function decide(
  * restarting. The stored record is keyed by the content-free identity the task workspace derives
  * from the WORKSPACE ROOT, and is consulted per read, so a revocation takes effect on the next read.
  *
- * The scope is deliberately named precisely: it is the local checkout, NOT the remote GitHub
- * repository whose issues are read. Two clones of the same remote are two separate grants, and a
- * checkout whose remote is later repointed keeps the grant it already had. Binding the grant to the
- * resolved remote instead would be a stronger guarantee and is not what this stores; #3385's
- * `IssueRunBinding` is where the remote identity gets pinned, and that resolver is not built yet.
+ * The scope is deliberately named precisely: this boolean is a per-checkout switch — it says
+ * whether GitHub reading is turned on for this local checkout, NOT which remote repository may be
+ * read. Two clones of the same remote are two separate grants. Binding a per-read decision to the
+ * checkout's OWN remote repository, verified fresh on every call rather than cached at grant time,
+ * is a separate, stronger guarantee that this row does not carry: see `githubRemoteOwnerAndRepoFor`
+ * below, which every read path (`codingContextRoutes.ts`'s `composeCodingContextConnectors` and its
+ * editor twin) resolves per request and compares against the ref through
+ * `codeContextConnector.ts`'s `connectorAuthorized`. A checkout repointed to a new remote therefore
+ * cannot coast on this row's boolean to read the old remote's repository: the very next read
+ * re-resolves the checkout's live remote and denies any ref that no longer matches it.
  *
  * Fail-closed in every direction: no repository root, an unknown root, and no row all answer
  * `false`. Only an explicit stored grant answers `true`. Neither a browser request field nor issue
@@ -132,4 +140,56 @@ export function gitHubCodeContextPortFor(
     },
     processEnv,
   });
+}
+
+/**
+ * Which GitHub repository a grant for this checkout actually authorizes.
+ *
+ * A grant is stored against a LOCAL checkout, but the thing being read is a REMOTE repository named
+ * freely by the request. Without this, a grant for checkout A authorized reading any repository the
+ * `gh` credentials could reach — the subject of the grant and the resource being accessed were not
+ * the same thing (CWE-863). Resolving the checkout's own remote here, per request, gives the read
+ * path one repository to compare against, and a checkout later repointed at another remote resolves
+ * to the new one rather than coasting on the old grant.
+ *
+ * Returns undefined when the checkout has no readable GitHub remote, which denies rather than
+ * widens: the caller treats "no allowed repository" as "authorize nothing".
+ */
+export async function githubRemoteOwnerAndRepoFor(
+  repositoryRoot: string | undefined,
+  processEnv: NodeJS.ProcessEnv,
+  resolver?: (repositoryRoot: string) => Promise<string | undefined>,
+): Promise<string | undefined> {
+  if (repositoryRoot === undefined || repositoryRoot === "") return undefined;
+  if (resolver !== undefined) {
+    try {
+      return await resolver(repositoryRoot);
+    } catch {
+      return undefined;
+    }
+  }
+  try {
+    const remoteUrl = await readGitRemoteUrl(
+      {
+        workspace: {
+          root: repositoryRoot,
+          selectedRoot: repositoryRoot,
+          name: undefined,
+          version: undefined,
+          testFramework: "unknown",
+          sourceDirs: [],
+          testDirs: [],
+          languages: [],
+          ignoreLines: [],
+        },
+        processEnv,
+      },
+      "origin",
+    );
+    return githubOwnerAndRepoFromRemoteUrl(remoteUrl);
+  } catch {
+    // A missing remote, a non-GitHub remote, or a failed read all mean the same thing here: this
+    // checkout authorizes no repository.
+    return undefined;
+  }
 }

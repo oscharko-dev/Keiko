@@ -61,6 +61,16 @@ export interface CodeContextConnector {
 
 export interface CodeContextConnectorConfig extends QiConnectorConfig {
   readonly github_connector_authorized?: unknown;
+  /**
+   * The one GitHub repository a granted checkout may be read for, as `owner/repo`.
+   *
+   * The grant is stored against a local checkout while the request names the remote repository
+   * freely, so authorization alone said "may read GitHub" rather than "may read THIS repository":
+   * a grant for one checkout admitted any repository the credentials could reach (CWE-863).
+   * Undefined denies every GitHub ref, which is the fail-closed direction — a checkout with no
+   * readable GitHub remote authorizes nothing.
+   */
+  readonly github_allowed_owner_and_repo?: string | undefined;
   readonly coding_context_allowed_modes?: readonly CodingWorkbenchMode[] | undefined;
 }
 
@@ -189,18 +199,27 @@ function authorizeCodeContextRead(
   if (!request.connectorScopes.includes(requiredScope)) {
     return { allowed: false, reason: "missing-scope", requiredScope };
   }
-  if (!connectorAuthorized(ref.source, config)) {
+  if (!connectorAuthorized(ref, config)) {
     return { allowed: false, reason: "missing-credentials", requiredScope };
   }
   return { allowed: true, requiredScope };
 }
 
 function connectorAuthorized(
-  source: CodeContextSource,
+  ref: CodeContextRef,
   config: CodeContextConnectorConfig | undefined,
 ): boolean {
-  if (source === "jira") return isJiraConnectorAuthorized(config);
-  return config?.github_connector_authorized === true;
+  if (ref.source === "jira") return isJiraConnectorAuthorized(config);
+  if (config?.github_connector_authorized !== true) return false;
+  // The grant names a repository, and this ref must be that repository. Comparing case-insensitively
+  // because GitHub treats owner and name that way, so `Owner/Repo` and `owner/repo` are one resource
+  // and must not be two different authorization answers.
+  const allowed = config.github_allowed_owner_and_repo;
+  return (
+    typeof allowed === "string" &&
+    allowed.length > 0 &&
+    ref.ownerAndRepo.toLowerCase() === allowed.toLowerCase()
+  );
 }
 
 function requiredScopeFor(source: CodeContextSource): CodingWorkbenchConnectorScope {

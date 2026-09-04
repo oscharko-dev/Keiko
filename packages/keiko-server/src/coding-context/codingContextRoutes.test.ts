@@ -86,6 +86,8 @@ function depsFor(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     codingContextJiraPort: fakeJiraPort(),
     preferredProjectPath: PROJECT_ROOT,
     store: authorizationStore(PROJECT_ROOT),
+    // The grant covers one remote repository, and the refs these fixtures request name it.
+    codingContextGitHubRemoteResolver: () => Promise.resolve("oscharko-dev/Keiko"),
     ...overrides,
   } as UiHandlerDeps;
 }
@@ -419,6 +421,9 @@ describe("coding context pack route", () => {
     const result = await handleCodingContextPack(
       ctxFor(packRequest()),
       depsFor({
+        // Set deliberately: the retired global gate would authorize this read, so leaving it absent
+        // let the case pass under BOTH implementations and proved nothing about the new one.
+        env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
         store: authorizationStore("/workspace/some-other-project") as UiHandlerDeps["store"],
       }),
     );
@@ -427,6 +432,39 @@ describe("coding context pack route", () => {
     expect(bodyOf(result).blocked).toContainEqual(
       expect.objectContaining({ source: "github", reason: "missing-credentials" }),
     );
+  });
+
+  // CWE-863 (CodeRabbit #3933343129 / #3933343148 / #3933343163): the store grant says GitHub
+  // reading is turned on for THIS checkout; it says nothing about which remote repository. Before
+  // this route-level pin, an authorized checkout could read any owner/repo the `gh` credentials
+  // reached, because nothing here compared the requested ref against the checkout's own resolved
+  // remote. The grant below targets the right checkout root and `codingContextGitHubRemoteResolver`
+  // (set in `depsFor`) resolves it to "oscharko-dev/Keiko", but the ref names a different repository
+  // and must still be denied end-to-end through the real route, not only at the connector unit.
+  it("blocks a GitHub ref naming a different repository than the checkout's own remote", async () => {
+    const result = await handleCodingContextPack(
+      ctxFor(
+        packRequest({
+          refs: [
+            {
+              source: "github",
+              objectKind: "issue",
+              ownerAndRepo: "attacker/private",
+              objectId: "1",
+            },
+          ],
+        }),
+      ),
+      depsFor(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = bodyOf(result);
+    expect(body.blocked).toHaveLength(1);
+    expect(body.blocked).toContainEqual(
+      expect.objectContaining({ source: "github", reason: "missing-credentials" }),
+    );
+    expect(body.items).toHaveLength(0);
   });
 
   it("degrades unusable Jira configuration to missing credentials", async () => {
@@ -469,7 +507,8 @@ describe("coding context pack route", () => {
     const composed = composeCodingContextConnectors(
       depsFor({
         codingContextGitHubPort: undefined,
-        env: {},
+        // Same reason as above: with the retired variable set, only the persisted grant can deny.
+        env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
         store: authorizationStore(undefined) as UiHandlerDeps["store"],
       }),
     );

@@ -58,6 +58,7 @@ import { createGitHubCodeContextConnector } from "../coding-context/githubCodeCo
 import type { GitHubCodeContextApiPort } from "../coding-context/githubCodeContextConnector.js";
 import {
   gitHubCodeContextPortFor,
+  githubRemoteOwnerAndRepoFor,
   isGitHubIssueReaderAuthorized,
 } from "../coding-context/githubIssueReaderAuthorization.js";
 import { createJiraCodeContextConnector } from "../coding-context/jiraCodeContextConnector.js";
@@ -1075,6 +1076,9 @@ function connectedContextIntake(
   deps: UiHandlerDeps,
   repositoryRoot: string,
   correlationId: string | undefined,
+  // The `owner/repo` this checkout's remote resolves to; resolved by the async caller because
+  // reading a git remote is a subprocess. Undefined denies every GitHub ref.
+  allowedOwnerAndRepo: string | undefined,
 ): ConnectedContextIntake | undefined {
   // Same rule as the route: the port follows the repository this provider is operating on. Building
   // it only from the launch project left GitHub context permanently unavailable whenever Keiko was
@@ -1094,6 +1098,8 @@ function connectedContextIntake(
     github_connector_authorized: isGitHubIssueReaderAuthorized(deps, repositoryRoot, {
       correlationId,
     }),
+    // The grant admits GitHub; this says WHICH repository it admits.
+    github_allowed_owner_and_repo: allowedOwnerAndRepo,
     jira_connector_authorized: connectorAuthorizedInEnv(deps, "JIRA_CONNECTOR_AUTHORIZED"),
   };
   return {
@@ -1179,7 +1185,16 @@ export async function runConnectedContextProvider(
   input: { readonly queryText: string | undefined },
 ): Promise<ProviderOutcome> {
   const refs = connectedContextRefs(input.queryText);
-  const intake = connectedContextIntake(ctx.deps, ctx.realRoot, ctx.correlationId);
+  const intake = connectedContextIntake(
+    ctx.deps,
+    ctx.realRoot,
+    ctx.correlationId,
+    await githubRemoteOwnerAndRepoFor(
+      ctx.realRoot,
+      ctx.deps.env,
+      ctx.deps.codingContextGitHubRemoteResolver,
+    ),
+  );
   if (isAborted(ctx.signal) || refs.length === 0 || intake === undefined) {
     return { excerpts: [], omission: omission("connected-context", "unavailable") };
   }

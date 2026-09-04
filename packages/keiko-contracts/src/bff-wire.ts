@@ -467,7 +467,11 @@ export interface UpdateGitHubIssueReaderAuthorizationWire {
   readonly expectedRevision: number;
 }
 
-const AUTHORIZATION_UPDATE_KEYS = ["repositoryPath", "authorized", "expectedRevision"];
+const AUTHORIZATION_UPDATE_KEYS: ReadonlySet<string> = new Set([
+  "repositoryPath",
+  "authorized",
+  "expectedRevision",
+]);
 
 function isBoundedRepositoryPath(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 4096;
@@ -478,7 +482,7 @@ export function parseUpdateGitHubIssueReaderAuthorizationWire(
 ): UpdateGitHubIssueReaderAuthorizationWire | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const candidate = value as Record<string, unknown>;
-  const extra = Object.keys(candidate).filter((key) => !AUTHORIZATION_UPDATE_KEYS.includes(key));
+  const extra = Object.keys(candidate).filter((key) => !AUTHORIZATION_UPDATE_KEYS.has(key));
   if (extra.length > 0 || !isBoundedRepositoryPath(candidate.repositoryPath)) return undefined;
   return typeof candidate.authorized === "boolean" &&
     Number.isSafeInteger(candidate.expectedRevision) &&

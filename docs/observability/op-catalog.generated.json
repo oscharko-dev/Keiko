@@ -911,7 +911,7 @@
     {
       "op": "coding-context.github-authorization.evaluated",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:92",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:100",
       "package": "keiko-server"
     },
     {
@@ -1181,7 +1181,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:1879",
+      "site": "packages/keiko-server/src/deps.ts:1886",
       "package": "keiko-server"
     },
     {

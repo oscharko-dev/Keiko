@@ -74,6 +74,151 @@ function connector(source: "github" | "jira"): ConnectorHarness {
 }
 
 describe("CodeContextConnector", () => {
+  // CWE-863: the grant is stored against a LOCAL checkout while the request names the REMOTE
+  // repository freely, so "authorized" used to mean "may read GitHub" rather than "may read THIS
+  // repository" — a grant for one checkout admitted any repository the credentials could reach.
+  // `github_allowed_owner_and_repo` is the checkout's own resolved remote; a ref naming anything
+  // else is refused before the connector is called.
+  it("refuses a GitHub ref that names a repository the grant does not cover", async () => {
+    const calls: string[] = [];
+    const pack = await buildCodeContextPack(
+      {
+        runId: "run-bypass",
+        effectiveMode: "autonomous-delivery",
+        connectorScopes: ["source-control.read"],
+        refs: [
+          {
+            source: "github",
+            objectKind: "issue",
+            ownerAndRepo: "attacker/private",
+            objectId: "1",
+          },
+        ],
+        maxBodyBytes: 4096,
+      },
+      {
+        connectors: {
+          github: {
+            read: (ref): Promise<CodeContextRawObject> => {
+              calls.push(ref.source);
+              return Promise.resolve({
+                source: ref.source,
+                objectKind: ref.objectKind,
+                objectId: ref.objectId,
+                title: "leaked",
+                body: "leaked",
+                comments: [],
+              });
+            },
+          },
+          jira: { read: () => Promise.reject(new Error("unused")) },
+        },
+        connectorConfig: {
+          github_connector_authorized: true,
+          github_allowed_owner_and_repo: "oscharko-dev/Keiko",
+        },
+        nowIso: () => "2026-09-04T00:00:00.000Z",
+      },
+    );
+
+    expect(calls).toEqual([]);
+    expect(pack.items).toHaveLength(0);
+    expect(pack.blocked).toContainEqual(
+      expect.objectContaining({ source: "github", reason: "missing-credentials" }),
+    );
+  });
+
+  it("accepts the covered repository regardless of owner and name casing", async () => {
+    const calls: string[] = [];
+    const pack = await buildCodeContextPack(
+      {
+        runId: "run-casing",
+        effectiveMode: "autonomous-delivery",
+        connectorScopes: ["source-control.read"],
+        refs: [
+          {
+            source: "github",
+            objectKind: "issue",
+            ownerAndRepo: "OsCharko-Dev/KEIKO",
+            objectId: "7",
+          },
+        ],
+        maxBodyBytes: 4096,
+      },
+      {
+        connectors: {
+          github: {
+            read: (ref): Promise<CodeContextRawObject> => {
+              if (ref.source !== "github") throw new Error("unexpected jira read");
+              calls.push(ref.ownerAndRepo);
+              return Promise.resolve({
+                source: ref.source,
+                objectKind: ref.objectKind,
+                objectId: ref.objectId,
+                title: "t",
+                body: "b",
+                comments: [],
+              });
+            },
+          },
+          jira: { read: () => Promise.reject(new Error("unused")) },
+        },
+        connectorConfig: {
+          github_connector_authorized: true,
+          github_allowed_owner_and_repo: "oscharko-dev/Keiko",
+        },
+        nowIso: () => "2026-09-04T00:00:00.000Z",
+      },
+    );
+
+    expect(calls).toEqual(["OsCharko-Dev/KEIKO"]);
+    expect(pack.items).toHaveLength(1);
+  });
+
+  it("refuses every GitHub ref when the checkout resolves no covered repository", async () => {
+    const calls: string[] = [];
+    const pack = await buildCodeContextPack(
+      {
+        runId: "run-no-remote",
+        effectiveMode: "autonomous-delivery",
+        connectorScopes: ["source-control.read"],
+        refs: [
+          {
+            source: "github",
+            objectKind: "issue",
+            ownerAndRepo: "oscharko-dev/Keiko",
+            objectId: "1",
+          },
+        ],
+        maxBodyBytes: 4096,
+      },
+      {
+        connectors: {
+          github: {
+            read: (ref): Promise<CodeContextRawObject> => {
+              calls.push("called");
+              return Promise.resolve({
+                source: ref.source,
+                objectKind: ref.objectKind,
+                objectId: ref.objectId,
+                title: "t",
+                body: "b",
+                comments: [],
+              });
+            },
+          },
+          jira: { read: () => Promise.reject(new Error("unused")) },
+        },
+        // Authorized, but no repository resolved — the fail-closed direction.
+        connectorConfig: { github_connector_authorized: true },
+        nowIso: () => "2026-09-04T00:00:00.000Z",
+      },
+    );
+
+    expect(calls).toEqual([]);
+    expect(pack.items).toHaveLength(0);
+  });
+
   it("builds one untrusted context pack through the unified GitHub and Jira read seam", async () => {
     const github = connector("github");
     const jira = connector("jira");
@@ -82,6 +227,7 @@ describe("CodeContextConnector", () => {
       connectors: { github: github.connector, jira: jira.connector },
       connectorConfig: {
         github_connector_authorized: true,
+        github_allowed_owner_and_repo: "oscharko-dev/Keiko",
         jira_connector_authorized: true,
       },
       nowIso: () => "2026-07-07T15:30:00.000Z",
@@ -120,7 +266,10 @@ describe("CodeContextConnector", () => {
       }),
       {
         connectors: { github: github.connector, jira: connector("jira").connector },
-        connectorConfig: { github_connector_authorized: true },
+        connectorConfig: {
+          github_connector_authorized: true,
+          github_allowed_owner_and_repo: "oscharko-dev/Keiko",
+        },
         nowIso: () => "2026-07-07T15:30:00.000Z",
       },
     );
@@ -168,7 +317,10 @@ describe("CodeContextConnector", () => {
       request({ refs: githubRef === undefined ? [] : [githubRef] }),
       {
         connectors: { github: connector("github").connector, jira: connector("jira").connector },
-        connectorConfig: { github_connector_authorized: true },
+        connectorConfig: {
+          github_connector_authorized: true,
+          github_allowed_owner_and_repo: "oscharko-dev/Keiko",
+        },
         nowIso: () => "2026-07-07T15:30:00.000Z",
       },
     );
@@ -314,6 +466,7 @@ describe("CodeContextConnector", () => {
         connectorConfig: {
           coding_context_allowed_modes: ["governed-assist", "supervised-coding"],
           github_connector_authorized: true,
+          github_allowed_owner_and_repo: "oscharko-dev/Keiko",
         },
         nowIso: () => "2026-07-07T15:30:00.000Z",
       },

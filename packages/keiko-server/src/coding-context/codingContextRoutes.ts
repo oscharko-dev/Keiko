@@ -44,6 +44,7 @@ import { createGitHubCodeContextConnector } from "./githubCodeContextConnector.j
 import { createJiraCodeContextConnector } from "./jiraCodeContextConnector.js";
 import {
   gitHubCodeContextPortFor,
+  githubRemoteOwnerAndRepoFor,
   isGitHubIssueReaderAuthorized,
 } from "./githubIssueReaderAuthorization.js";
 
@@ -260,6 +261,7 @@ function connectorConfigFor(
   jiraConfigured: boolean,
   repositoryRoot: string | undefined,
   correlationId: string | undefined,
+  allowedOwnerAndRepo: string | undefined,
 ): CodeContextConnectorConfig {
   return {
     // #3385: server-persisted and scoped to one local checkout, re-read on every composition so a
@@ -271,6 +273,8 @@ function connectorConfigFor(
     // reads.
     github_connector_authorized:
       githubConfigured && isGitHubIssueReaderAuthorized(deps, repositoryRoot, { correlationId }),
+    // The grant admits GitHub; this says WHICH repository it admits. Undefined denies every ref.
+    github_allowed_owner_and_repo: allowedOwnerAndRepo,
     jira_connector_authorized: deps.env.JIRA_CONNECTOR_AUTHORIZED === "true" && jiraConfigured,
   };
 }
@@ -291,11 +295,18 @@ export function composeCodingContextConnectors(
   // repository itself carries a grant.
   repositoryRoot: string | undefined = deps.preferredProjectPath,
   correlationId?: string,
+  // The `owner/repo` this checkout's own remote resolves to. Resolved by the async caller, because
+  // reading a git remote is a subprocess and this composition is synchronous.
+  allowedOwnerAndRepo?: string,
 ): ComposedConnectors {
   // The port follows the repository the caller is working in, not the launch snapshot: evaluating
   // the grant for B while `gh` is confined to A would authorize one repository and read another.
+  // `deps.env`, not `process.env`: the composed environment is what carries the reviewed `PATH`,
+  // `GH_TOKEN` and `HOME`, and reading the ambient one here let a stray `gh` on the host — or the
+  // host's own credentials — serve a read the deployment thought it had pinned. The editor twin
+  // already passed `deps.env`; this is the route catching up.
   const githubPort =
-    deps.codingContextGitHubPort ?? gitHubCodeContextPortFor(repositoryRoot, process.env);
+    deps.codingContextGitHubPort ?? gitHubCodeContextPortFor(repositoryRoot, deps.env);
   const jiraPort = deps.codingContextJiraPort;
   const jiraConfigured =
     jiraPort !== undefined &&
@@ -315,6 +326,7 @@ export function composeCodingContextConnectors(
       jiraConfigured,
       repositoryRoot,
       correlationId,
+      allowedOwnerAndRepo,
     ),
   };
 }
@@ -334,6 +346,11 @@ export async function handleCodingContextPack(
       deps,
       parsed.authority.workspaceRoot,
       ctx.correlationId,
+      await githubRemoteOwnerAndRepoFor(
+        parsed.authority.workspaceRoot,
+        deps.env,
+        deps.codingContextGitHubRemoteResolver,
+      ),
     );
     const pack = await buildCodeContextPack(request, {
       connectors: composed.connectors,

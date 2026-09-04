@@ -627,6 +627,13 @@ export interface UiHandlerDeps {
   // Optional injectable ports for the coding-context intake route (#1989 wiring). Production
   // composes real ports from env/workspace when absent; tests inject deterministic fakes.
   readonly codingContextGitHubPort?: GitHubCodeContextApiPort | undefined;
+  /**
+   * Resolves the `owner/repo` a checkout's own git remote points at (#3385). Production leaves this
+   * absent and the real reader runs; a test injects one so it can drive the repository-binding
+   * decision without a git subprocess. Same seam shape, and same reason, as the port above.
+   */
+  readonly codingContextGitHubRemoteResolver?:
+    ((repositoryRoot: string) => Promise<string | undefined>) | undefined;
   readonly codingContextJiraPort?: JiraCodeContextHttpPort | undefined;
   // Issue #2241 (Epic #2238, ADR-0128) — Atlassian connector credential custody: the write-only
   // custody surface plus the per-credential outbound HTTP port factory. The decrypted token is

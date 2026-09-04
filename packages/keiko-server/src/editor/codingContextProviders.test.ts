@@ -892,6 +892,8 @@ describe("runConnectedContextProvider", () => {
       env: {},
       preferredProjectPath: CONNECTED_PROJECT_ROOT,
       store: authorizationStore(CONNECTED_PROJECT_ROOT) as UiHandlerDeps["store"],
+      // The grant covers one remote repository, and these cases request refs in it.
+      codingContextGitHubRemoteResolver: () => Promise.resolve("acme/widgets"),
       ...overrides,
     });
   }

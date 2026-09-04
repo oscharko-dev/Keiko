@@ -98,6 +98,7 @@ function connectedDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     redactor: buildRedactor({}),
     env: {},
     preferredProjectPath: root,
+    codingContextGitHubRemoteResolver: () => Promise.resolve("acme/widgets"),
     store: {
       readGitHubIssueReaderAuthorization: (repositoryId: string) =>
         repositoryId === authorizedId ? { repositoryId, authorized: true, revision: 1 } : undefined,
