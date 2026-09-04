@@ -45,6 +45,22 @@ Describe the goal of this issue and the user, developer, platform, or governance
 - [ ] Any new implementation is justified as a real capability gap, not a parallel implementation of existing behavior.
 - [ ] Refactoring or consolidation was considered when existing functionality is close but not yet shaped for this issue.
 
+## Task Orchestrator Revalidation Contract
+
+- Before sequencing, assigning, or implementing this task, revalidate against:
+  - the current target branch/code state,
+  - the current package graph and dependency surface,
+  - relevant contracts, ADRs, and governing gates,
+  - existing implementation paths that may already satisfy part of the outcome,
+  - concurrent or in-flight work that can invalidate assumptions.
+- Issue text must include product goal, invariant and constraint boundary, acceptance boundary, evidence expectation, and the initial implementation decomposition.
+- This issue text is a planning guardrail, not an immutable implementation contract.
+- Working, clean, secure, verified current code is authoritative. Keep technical decisions, file ownership, and sequencing aligned with live evidence, while preserving intended product outcomes and invariant posture.
+- If this task is assigned, paused, or resumed across an agent handoff, rerun revalidation against current code and note what assumptions were invalidated or remained stable.
+- Any shift in assumptions must be traceable: update this issue and parent epic; reconcile overlapping work; and update affected ADR sections before continuing.
+- New product decisions, unsafe conflicts, or material scope expansion are escalated to the Product Owner before implementation proceeds.
+- Closeout is based on current-head evidence and behavior, not checklist completion alone.
+
 ## Delivery Board Workflow
 
 - [ ] Add this issue to the public `Keiko Product Delivery` project before work starts.
