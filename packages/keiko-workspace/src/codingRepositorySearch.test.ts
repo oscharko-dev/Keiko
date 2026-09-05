@@ -138,7 +138,7 @@ describe("workspace-owned coding repository handler", () => {
       snippetTruncated: true,
       snippet: "[REDACTED]\n界",
     });
-    expect(result.ok && result.kind === "read" && result.excerpt.snippet).not.toContain("�");
+    expect(result.ok && result.kind === "read" && result.excerpt.snippet).not.toContain("\uFFFD");
   });
   it("applies include/exclude globs through existing candidate ranking", async () => {
     const result = await executeCodingRepositoryRequest(

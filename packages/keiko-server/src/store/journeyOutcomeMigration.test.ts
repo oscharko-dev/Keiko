@@ -73,7 +73,9 @@ describe("V32 upgrades the original journey outcome table", () => {
     try {
       seedLegacy(db);
       db.exec("UPDATE git_journey_outcomes SET run_id = 'different-run'");
-      expect(() => runMigrations(db)).toThrow("Legacy journey projection mismatch");
+      expect(() => {
+        runMigrations(db);
+      }).toThrow("Legacy journey projection mismatch");
       expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(31);
       expect(db.prepare("SELECT COUNT(*) AS count FROM git_journey_outcomes").get()?.count).toBe(1);
       expect(db.prepare("PRAGMA table_info(git_journey_outcomes_v32)").all()).toEqual([]);

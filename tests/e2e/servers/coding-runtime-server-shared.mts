@@ -473,9 +473,7 @@ function scriptedComposition(
   const commit = commitFixtureFor(config, stateDir, services, holder);
   const scripted = createScriptedOpenCodeHarness({
     generatedTools: config.commit === true,
-    ...(config.ciReader === undefined || commit === undefined
-      ? {}
-      : { observePhase: commit.observeToolPhase.bind(commit) }),
+    ...(commit === undefined ? {} : { observePhase: commit.observeToolPhase.bind(commit) }),
   });
   const runtimeMutationLeaseBroker = createCodingRuntimeEditorMutationLeaseBroker();
   const resolver = scriptedResolver(

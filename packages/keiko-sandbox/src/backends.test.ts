@@ -269,9 +269,7 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
     expect(profile).toContain('(literal "/trusted/opencode")');
     expect(profile).toContain('(literal "/usr/bin/git")');
     expect(profile).toContain('(literal "/Library/Developer/CommandLineTools/usr/bin/git")');
-    expect(profile).toContain(
-      '(literal "/Applications/Xcode.app/Contents/Developer/usr/bin/git")',
-    );
+    expect(profile).toContain('(literal "/Applications/Xcode.app/Contents/Developer/usr/bin/git")');
     expect(profile).not.toContain("(allow process-exec)");
     for (const denied of ["network*", "mach-lookup", "appleevent-send", "lsopen"])
       expect(profile).toContain(`(deny ${denied})`);

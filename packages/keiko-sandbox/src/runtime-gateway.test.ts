@@ -241,8 +241,8 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
         "const { spawnSync } = require('node:child_process');",
         "const denied = spawnSync('/bin/echo', ['unexpected'], { encoding: 'utf8' });",
         "if (denied.error?.code !== 'EPERM') { process.stdout.write('UNAPPROVED_ALLOWED'); process.exit(2); }",
-        "const git = spawnSync('/usr/bin/git', ['--version'], { encoding: 'utf8' });",
-        "if (git.status !== 0 || !git.stdout.startsWith('git version ')) { process.stdout.write('GIT_DENIED'); process.exit(3); }",
+        "const git = spawnSync('/usr/bin/git', ['rev-parse', '--is-inside-work-tree'], { encoding: 'utf8' });",
+        "if (git.status !== 0 || git.stdout.trim() !== 'true') { process.stdout.write('GIT_DENIED'); process.exit(3); }",
         "process.stdout.write('DENIED_UNAPPROVED_ALLOWED_GIT');",
       ].join("");
       const wrapped = buildRuntimeGatewaySeatbeltCommand(policy, process.execPath, [

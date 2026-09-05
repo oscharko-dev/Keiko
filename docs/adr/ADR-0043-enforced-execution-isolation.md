@@ -183,14 +183,15 @@ compiles that policy into a macOS Seatbelt profile: `(deny network*)` by default
 `(allow network-outbound (remote tcp4|tcp6 "localhost:<port>"))` carved out for the attested gateway
 port, plus `(deny mach-lookup)`, `(deny appleevent-send)`, and `(deny lsopen)` to close the
 service-escape surface a long-lived interactive sidecar would otherwise have. `process-fork` is
-deliberately **allowed**: a live run against the pinned OpenCode sidecar (#3390) showed it forks
-`git` for its own session/history endpoints (`POST /sync/history`, `GET /session`), and a fork
-denial made both fail with HTTP 500 at the handshake, breaking every dev-lane coding run — a
-regression this profile's fork denial introduced, not a pre-existing posture (the pre-epic `dev`
-lane ran no Seatbelt profile at all). This does not weaken egress confinement: on macOS a Seatbelt
-profile is inherited by every descendant process, so a forked `git`/`curl` stays bound by the same
-`(deny network*)` plus the one gateway-port carve-out above (proven at the OS level by
-`runtime-gateway.test.ts`'s forked-grandchild proof).
+allowed because a live run against the pinned OpenCode sidecar (#3390) showed it forks `git` for
+its own session/history endpoints (`POST /sync/history`, `GET /session`), and a fork denial made
+both fail with HTTP 500. Fork does not grant an arbitrary child executable: `process-exec` is
+deny-by-default and allows only the already verified runtime executable plus Apple's fixed
+`/usr/bin/git` launcher and standard Command Line Tools/Xcode Git implementations. A shell, curl,
+compiler, second Node binary, or any other executable is refused by Seatbelt. Descendants inherit
+that executable policy and the same `(deny network*)` with its one gateway-port carve-out. The real
+Darwin suite proves both the Apple Git spawn and an unapproved executable denial, and separately
+proves network denial remains inherited by an allowed same-runtime descendant.
 `packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts` is the sole caller: it
 refuses to spawn the sidecar at all when no
 confinement policy is attached, or when the policy's `runId`/`treeBindingId` drift from the launch

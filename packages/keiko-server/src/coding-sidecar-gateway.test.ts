@@ -484,10 +484,10 @@ const CHILD_AGENT_SCHEMA = {
   required: ["objective", "maxToolCalls"],
 } as const;
 
-// #3386/#3387/#3388: the Git status/diff/stage/commit, push/pull-request and CI-observation
-// tools, independently hand-typed here (never imported from opencodeToolSchemas.ts) so this file
-// keeps pinning the real OpenCode 1.17.17 wire contract against a second, independently authored
-// source rather than the production array it verifies.
+// #3386/#3387/#3388: these are Keiko-authored managed Git/PR/CI tools, not stock OpenCode
+// built-ins. These independent fixtures exercise gateway rejection of schema drift against the
+// production handler schemas in opencodeToolSchemas.ts. Compatibility with the real binary's
+// advertisement is tested separately using the captured fixture in realOpenCodeAdvertisedTools.
 //
 // #3390 live-run evidence: OpenCode v1.17.17 does NOT advertise a zero-argument tool's source
 // shape (`{"type":"object","properties":{},"required":[]}`) verbatim -- it drops the empty

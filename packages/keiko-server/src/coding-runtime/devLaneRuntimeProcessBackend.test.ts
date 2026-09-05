@@ -225,12 +225,8 @@ describe("dev-lane runtime process backend", () => {
     expect(observed).toBe(0);
   });
 
-  // Regression pin (#3390 live run): the spawned-confinement log line must reflect that
-  // process-fork is allowed (the sidecar forks `git` for its own session/history endpoints), never
-  // restate the old "no children at all" posture. Failing-before: this asserted
-  // `childProcessesAllowed: false`, which was inaccurate once the fork denial was removed from the
-  // Seatbelt profile the same launch is wrapped under.
-  it("records childProcessesAllowed: true on the spawned confinement line (#3390)", () => {
+  // The activity line exposes the bounded child-executable policy without logging either path.
+  it("records the runtime-and-Apple-git executable boundary (#3390)", () => {
     const fixture = stageFixture();
     const activityLog = createBufferedServerLogSink();
     const backend = createDevLaneRuntimeProcessBackend({
@@ -249,7 +245,7 @@ describe("dev-lane runtime process backend", () => {
         correlationId: "run-2475",
         extra: expect.objectContaining({
           profile: "keiko-gateway",
-          childProcessesAllowed: true,
+          childExecutablePolicy: "runtime-and-apple-git-only",
         }) as unknown,
       }),
     );

@@ -118,6 +118,7 @@ class CommitFixture implements CodingIssueCommitFixture {
   private readonly toolPhases: ScriptedToolPhase[] = [];
   private latestPhase: FixturePhase = "run-created";
   private latestResult: CodingToolResult | undefined;
+  private staging: Promise<void> | undefined;
   constructor(private readonly input: CommitFixtureInput) {
     this.verifiedCommit = deferredDependencies(input);
     if (input.delivery === true)
@@ -151,6 +152,10 @@ class CommitFixture implements CodingIssueCommitFixture {
     this.toolPhases.push(event);
     if (this.toolPhases.length > 128) this.toolPhases.shift();
     this.write(this.latestPhase, this.latestResult);
+    if (event.tool === "keiko_changeset_edit" && event.phase === "completed") {
+      this.staging ??= this.stageCandidate();
+      void this.staging.catch(() => undefined);
+    }
   }
   private async invoke(
     operation: CommitFixtureOperation | DeliveryFixtureOperation | CiFixtureOperation,
@@ -215,12 +220,14 @@ class CommitFixture implements CodingIssueCommitFixture {
     this.run = run;
     if (this.input.delivery === true) selectDeliveryProviderRef(this.input.stateDir, run);
     this.proposalId = undefined;
+    this.staging = undefined;
     this.write("run-created");
   }
   public async beforeResponse(response: NormalizedResponse): Promise<void> {
     if (this.run === undefined) throw new Error("commit-fixture-run-unavailable");
     if (response.toolCalls.some((call) => call.name === "keiko_verification")) {
-      await this.stageCandidate();
+      if (this.staging === undefined) throw new Error("commit-fixture-stage-unavailable");
+      await this.staging;
     }
     if (response.toolCalls.length === 0) await this.waitForControls();
   }

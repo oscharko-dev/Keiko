@@ -184,7 +184,7 @@ describe("buildPrCreateArgv", () => {
       GitPrArgvError,
     );
     expect(() =>
-      buildPrCreateArgv({ ...createCommand(), body: "has a � replacement char" }),
+      buildPrCreateArgv({ ...createCommand(), body: "has a \uFFFD replacement char" }),
     ).toThrow(GitPrArgvError);
   });
 });
@@ -249,7 +249,7 @@ describe("buildPrUpdateArgv", () => {
       buildPrUpdateArgv({ ...base, ownerAndRepo: "o/r", body: "x".repeat(65_537) }),
     ).toThrow(GitPrArgvError);
     expect(() =>
-      buildPrUpdateArgv({ ...base, ownerAndRepo: "o/r", body: "has a � replacement char" }),
+      buildPrUpdateArgv({ ...base, ownerAndRepo: "o/r", body: "has a \uFFFD replacement char" }),
     ).toThrow(GitPrArgvError);
   });
 });

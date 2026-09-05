@@ -152,10 +152,7 @@ export class DraftDeliveryController implements DraftDeliveryService {
   ): Promise<CodingRuntimeDeliveryResult> {
     const context = this.context(guard);
     if (context === undefined) return unavailable("authority-denied");
-    if (this.busy) {
-      const current = currentDraft(this.options, context);
-      return current === undefined ? unavailable("proposal-unavailable") : recorded(current);
-    }
+    if (this.busy) return this.busyRefusal(context);
     this.busy = true;
     try {
       assertDraftAuthority(context);
@@ -165,6 +162,16 @@ export class DraftDeliveryController implements DraftDeliveryService {
     } finally {
       this.busy = false;
     }
+  }
+  private busyRefusal(context: DraftDeliveryRunContext): CodingRuntimeDeliveryResult {
+    (this.options.execution?.activityLog ?? processServerLogSink()).write({
+      category: "process",
+      op: "git.draft-delivery",
+      correlationId: context.correlationId,
+      level: "warn",
+      extra: { runId: context.runId, phase: "refused", reason: "proposal-unavailable" },
+    });
+    return unavailable("proposal-unavailable");
   }
   private failure(context: DraftDeliveryRunContext, error: unknown): CodingRuntimeDeliveryResult {
     this.proposal = undefined;

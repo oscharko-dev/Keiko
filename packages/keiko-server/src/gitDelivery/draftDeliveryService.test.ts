@@ -24,6 +24,13 @@ function id(value: CodingRuntimeDeliveryResult): string {
   if (value.status !== "recorded") throw new Error("missing record");
   return value.record.proposalId;
 }
+function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
 async function execute(
   value: CodingRuntimeDeliveryResult,
   service = fixture.service,
@@ -134,6 +141,34 @@ describe("draft delivery runtime admission", () => {
 });
 
 describe("draft delivery hard boundaries", () => {
+  it("refuses a concurrent operation instead of reporting the in-flight record as completed", async () => {
+    const entered = deferred();
+    const release = deferred();
+    fixture.asyncBeforeTarget = async (): Promise<void> => {
+      entered.resolve();
+      await release.promise;
+    };
+
+    const first = fixture.service.proposePush();
+    await entered.promise;
+    await expect(fixture.service.reconcile()).resolves.toEqual({
+      status: "unavailable",
+      reason: "proposal-unavailable",
+    });
+    expect(fixture.events).toContainEqual(
+      expect.objectContaining({
+        op: "git.draft-delivery",
+        correlationId: "draft-delivery-test",
+        extra: {
+          runId: "run-1",
+          phase: "refused",
+          reason: "proposal-unavailable",
+        },
+      }),
+    );
+    release.resolve();
+    await expect(first).resolves.toMatchObject({ record: { phase: "push-proposed" } });
+  });
   it.each(["authority-denied", "issue-drift", "remote-drift", "provider-failed"] as const)(
     "refuses %s before any effect",
     async (reason) => {
