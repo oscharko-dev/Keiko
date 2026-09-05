@@ -6,6 +6,7 @@
 
 import type {
   ModelCapability,
+  ModelCapabilityPricing,
   NormalizedResponse,
   GatewayRequest,
   ProviderEndpointStyle,

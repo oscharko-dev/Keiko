@@ -595,7 +595,10 @@ export async function handleGitChangeConnect(
     logGitChangeEvent(deps, "git-change.chat.blocked", correlationId, {
       reason: chatResult.reason,
     });
-    return errResult(chatResult.reason === "GIT_CHANGE_CHAT_NOT_FOUND" ? 404 : 409, chatResult.reason);
+    return errResult(
+      chatResult.reason === "GIT_CHANGE_CHAT_NOT_FOUND" ? 404 : 409,
+      chatResult.reason,
+    );
   }
   const { chat } = chatResult;
 

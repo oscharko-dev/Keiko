@@ -121,7 +121,6 @@ describe("closed lossless schema core", () => {
   });
   it.each([
     { type: "string", $ref: "https://private.example/schema" },
-    { type: "string", pattern: "a+" },
     { type: ["string", "null"] },
     { type: "string", default: "x" },
     { anyOf: [{ type: "string" }] },
@@ -143,11 +142,20 @@ describe("closed lossless schema core", () => {
     { type: "integer", enum: [1.5] },
     { type: "boolean", const: "false" },
     { type: "string", const: "x", enum: ["y"] },
+    // #3414 AC1: `pattern` is now a supported string keyword (schema.ts), but only as a
+    // syntactically valid ECMA regex source; an unclosed group must still be rejected the same
+    // way every other unsupported/inconsistent shape above is.
+    { type: "string", pattern: "(" },
+    { type: "string", pattern: 1 },
   ])("rejects unsupported or inconsistent schema %j", (schema) => {
     expect(() => compileCatalogSchema(schema)).toThrow();
   });
   it.each([
     [{ type: "string", minLength: 1, maxLength: 1 }, "😀", "xx"],
+    // #3414 AC1: `pattern` is enforced both at compile time (schema.ts's `stringSchema`) and at
+    // match time (`stringMatches`), the same closed-dialect guarantee every other string keyword
+    // already gets — never a silently-dropped, advisory-only keyword (ADR-0175 D3).
+    [{ type: "string", pattern: "^[a-f0-9]{64}$" }, "a".repeat(64), "not-hex"],
     [{ type: "number", minimum: -2, maximum: 4 }, 1.5, 5],
     [{ type: "integer" }, 2, 1.5],
     [{ type: "boolean", const: false }, false, true],

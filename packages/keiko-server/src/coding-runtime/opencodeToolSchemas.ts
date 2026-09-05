@@ -7,7 +7,10 @@ import {
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
 } from "@oscharko-dev/keiko-tool-catalog";
 import type { GatewayToolCatalogAdvertisement } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
-import type { CompiledCatalogTool } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  CatalogDigest,
+  CompiledCatalogTool,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ToolHandlerReadiness } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { CODING_REPOSITORY_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
@@ -633,14 +636,95 @@ export function deriveGatewayCatalogReadiness(
 }
 
 /**
+ * Real per-tool handler-binding ground truth, supplied by the production composition that owns
+ * the actually-bound handlers (e.g. `codingToolAuthorityPort.ts`'s `catalogFacadeBridgeFor`, via
+ * `catalogToolBinder.ts`'s `createCatalogBinding`/`catalogHandlerReadiness`) -- never derived here.
+ * `readinessByToolId` is keyed by the compiled catalog tool's canonical id
+ * (`CompiledCatalogTool["toolRef"]["canonicalId"]`); a tool absent from the map is treated as
+ * `"unavailable"` (fail closed), so a caller need only report the tools it actually knows about.
+ * `handlerSetDigest` must be `catalogToolBinder.ts`'s exported `computeHandlerSetDigest(projection,
+ * handlers)` over the SAME real bindings -- this module never re-derives that hash itself (doing so
+ * here would need a value import of `catalogToolBinder.ts`, which itself imports
+ * `codingToolAuthorityPort.ts`, which imports this module -- a circular edge this module must not
+ * introduce; #3413 F8 review, findings b1-2 / #3414-AC4).
+ */
+export interface OpenCodeGatewayHandlerCoverage {
+  readonly readinessByToolId: ReadonlyMap<string, ToolHandlerReadiness>;
+  readonly handlerSetDigest: CatalogDigest;
+}
+
+/**
  * Builds the "bound" `toolCatalog` advertisement for one outgoing coding-sidecar-gateway request.
  * The model-gateway bridge derives the actual forwarded `tools` from this projection; the caller
  * must never also forward a raw `tools` field alongside it (ADR-0175 D1/D4).
+ *
+ * `handlerCoverage` is optional and, when supplied, is the ONLY source of per-tool readiness: a
+ * tool whose real binding is not `"ready"` (or is simply absent from the map) is dropped from
+ * `offered.toolRefs` before any affected tool is advertised -- covering both #3413-AC1's
+ * readiness-rejection and #3414-AC9's "unavailable optional tool is absent, not merely denied at
+ * call time" requirement. Until every production caller supplies it, omitting `handlerCoverage`
+ * preserves this function's prior, structural-only behaviour byte-for-byte (every catalog tool
+ * offered, readiness derived only from `deriveGatewayCatalogReadiness`'s duplicate/empty-id check,
+ * `handlerSetDigest` aliased to `projectionDigest`) so existing callers keep compiling and behaving
+ * unchanged while the real wiring at their composition point is completed (tracked outOfScopeNeeds
+ * against `codingToolAuthorityPort.ts`'s `catalogFacadeBridgeFor`, per #3413 F8 review finding
+ * b1-1).
  */
+interface GatewayOfferShape {
+  readonly readiness: ToolHandlerReadiness;
+  readonly handlerSetDigest: CatalogDigest;
+  readonly toolRefs: readonly CompiledCatalogTool["toolRef"][];
+}
+
+/**
+ * Legacy, structural-only shape: every catalog tool offered unconditionally, readiness a single
+ * scalar over the whole tool list, `handlerSetDigest` aliased to `projectionDigest`. Preserved
+ * byte-for-byte for a caller that has not yet been wired to supply `handlerCoverage`.
+ */
+function structuralOnlyOffer(
+  projection: ReturnType<typeof compileToolProjection>,
+): GatewayOfferShape {
+  return {
+    readiness: deriveGatewayCatalogReadiness(projection.tools),
+    handlerSetDigest: projection.projectionDigest,
+    toolRefs: projection.tools.map((tool) => tool.toolRef),
+  };
+}
+
+/**
+ * Real-coverage shape: a tool is offered only when its actual bound handler is `"ready"`; the
+ * top-level readiness reflects the SAME real-binding truth (not just the structural dup/empty-id
+ * check, which still gates too -- a structurally unsound projection can never be "ready" even if
+ * every reported binding claims otherwise).
+ */
+function realCoverageOffer(
+  projection: ReturnType<typeof compileToolProjection>,
+  coverage: OpenCodeGatewayHandlerCoverage,
+): GatewayOfferShape {
+  const structurallyReady = deriveGatewayCatalogReadiness(projection.tools) === "ready";
+  const perTool = projection.tools.map(
+    (tool): ToolHandlerReadiness =>
+      coverage.readinessByToolId.get(tool.toolRef.canonicalId) ?? "unavailable",
+  );
+  const allBoundReady = perTool.every((readiness) => readiness === "ready");
+  return {
+    readiness: structurallyReady && allBoundReady ? "ready" : "unavailable",
+    handlerSetDigest: coverage.handlerSetDigest,
+    toolRefs: projection.tools
+      .filter((_tool, index) => perTool[index] === "ready")
+      .map((tool) => tool.toolRef),
+  };
+}
+
 export function createOpenCodeGatewayToolCatalogAdvertisement(
   now: number,
+  handlerCoverage?: OpenCodeGatewayHandlerCoverage,
 ): GatewayToolCatalogAdvertisement {
   const projection = compileToolProjection(OPENCODE_GATEWAY_CATALOG, OPENCODE_GATEWAY_PROFILE);
+  const offer =
+    handlerCoverage === undefined
+      ? structuralOnlyOffer(projection)
+      : realCoverageOffer(projection, handlerCoverage);
   return {
     kind: "bound",
     catalog: OPENCODE_GATEWAY_CATALOG,
@@ -650,11 +734,11 @@ export function createOpenCodeGatewayToolCatalogAdvertisement(
         catalogRevision: projection.catalogRevision,
         profile: projection.profile,
         projectionDigest: projection.projectionDigest,
-        handlerSetDigest: projection.projectionDigest,
-        readiness: deriveGatewayCatalogReadiness(projection.tools),
+        handlerSetDigest: offer.handlerSetDigest,
+        readiness: offer.readiness,
       },
       offerId: `opencode-gateway-${randomUUID()}`,
-      toolRefs: projection.tools.map((tool) => tool.toolRef),
+      toolRefs: offer.toolRefs,
       expiresAt: new Date(now + OPENCODE_GATEWAY_OFFER_LIFETIME_MS).toISOString(),
     },
   };

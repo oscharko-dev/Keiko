@@ -23,6 +23,7 @@ import type { LiveRuntimeFixtureOptions } from "./coding-workbench-live-runtime.
 import { parsedAutonomyPolicyUpdate } from "./autonomyPolicyRequest.js";
 import {
   activeWorkspace,
+  approvalReview,
   codexProfile,
   codexSetupPlan,
   eventStream,
@@ -231,6 +232,10 @@ async function handleRuntimeGet(
   }
   if (pathname === "/api/coding-workbench/runtime/status") {
     await fulfillJson(route, snapshot(fixture));
+    return true;
+  }
+  if (pathname.endsWith(`/runs/${FIXTURE_RUN_ID}/approval-review`)) {
+    await fulfillJson(route, approvalReview(fixture));
     return true;
   }
   if (pathname.endsWith(`/runs/${FIXTURE_RUN_ID}/events`)) {

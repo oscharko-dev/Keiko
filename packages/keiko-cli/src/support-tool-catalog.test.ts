@@ -10,11 +10,16 @@ import {
 import * as lazyModules from "./lazy-modules.js";
 import { runSupportCli } from "./support.js";
 import type { ToolCatalogLogEvidence } from "./support-tool-catalog.js";
-import { defaultServerDiagnosticSink } from "../../keiko-server/src/diagnostics-log.js";
-import { formatServerLogLine } from "../../keiko-server/src/observability/server-log.js";
+import { defaultServerDiagnosticSink } from "@oscharko-dev/keiko-server/diagnostics-log";
+import { formatServerLogLine } from "@oscharko-dev/keiko-server/observability/server-log";
+import { createCatalogToolBinder } from "@oscharko-dev/keiko-server/tool-catalog/catalogToolDispatch";
+import type { CatalogToolBinderInput } from "@oscharko-dev/keiko-server/tool-catalog/catalogToolPorts";
+// B3-24: catalogToolFixture.ts lives under packages/keiko-server/src/tool-catalog/__fixtures__/,
+// which packages/keiko-server/tsconfig.json's `exclude` list keeps out of the tsc build (no dist
+// output exists to export), and keiko-server/src/tool-catalog is outside this package's ownership
+// for this repair pass, so this one import stays a relative deep path. The other four imports
+// above now resolve through keiko-server's own declared exports map instead of reaching past it.
 import { catalogToolFixture } from "../../keiko-server/src/tool-catalog/__fixtures__/catalogToolFixture.js";
-import { createCatalogToolBinder } from "../../keiko-server/src/tool-catalog/catalogToolDispatch.js";
-import type { CatalogToolBinderInput } from "../../keiko-server/src/tool-catalog/catalogToolPorts.js";
 import {
   analyzeLogText,
   buildReproductionSeed,
@@ -188,7 +193,14 @@ describe("tool lifecycle sink and corrupted artifact reconstruction", () => {
       );
       expect(JSON.stringify(seed)).not.toMatch(/private-sink-body|private-cause-body/u);
       expect(seed.causeChain).toContain("RangeError");
-      expect(seed.stackFrames?.some((frame) => frame.includes("catalogToolLifecycle.ts:"))).toBe(
+      // B3-24: createCatalogToolBinder now resolves through keiko-server's own declared
+      // `./tool-catalog/catalogToolDispatch` export instead of a relative deep import, so its
+      // sibling same-package imports (catalogToolLifecycle.js et al.) resolve to the real built
+      // `dist` artifact too — the genuine, dist-anchored shape `stack-frames.ts` documents as the
+      // only one a real (non-vitest) V8 stack trace ever produces (no runtime source maps ship).
+      // A relative deep import into unbuilt `src` made this frame read `.ts:` only as an artifact
+      // of bypassing the package's own export surface, which real production code never does.
+      expect(seed.stackFrames?.some((frame) => frame.includes("catalogToolLifecycle.js:"))).toBe(
         true,
       );
       const terminals = seed.toolCatalog?.filter(

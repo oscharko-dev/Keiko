@@ -45,6 +45,7 @@ import {
   type GitHubCodeContextRef,
 } from "./codeContextConnector.js";
 import type { GitHubCodeContextApiPort } from "./githubCodeContextConnector.js";
+import { GitHubCodeContextPortError } from "./githubCodeContextPort.js";
 import {
   contentFreeWorkspaceFor,
   gitHubCodeContextPortFor,
@@ -107,6 +108,12 @@ export interface GitHubIssueResolverPorts {
  * Why a resolution ended where it did, one level finer than the closed failure the caller sees.
  * Closed as well, so the activity line can say WHICH `issue-unavailable` this was (a closed issue,
  * a pull request, a transfer) without ever carrying text from the provider.
+ *
+ * `read-transient-failure` (#3384 B5-13) is its own reason, deliberately distinct from
+ * `read-failed`: a rate limit, a GitHub-side 5xx, or a wall-time timeout say nothing about the
+ * issue itself and are worth retrying, unlike a read that genuinely cannot be answered. Collapsing
+ * both into `read-failed` reported a specific but false "closed/transferred/a pull request"
+ * diagnosis for a failure that had nothing to do with the issue.
  */
 export type GitHubIssueResolutionReason =
   | GitHubIssueReferenceRejection
@@ -116,6 +123,7 @@ export type GitHubIssueResolutionReason =
   | "no-grant"
   | "reader-unavailable"
   | "read-failed"
+  | "read-transient-failure"
   | "identity-missing"
   | "state-unknown"
   | "pull-request-as-issue"
@@ -283,6 +291,11 @@ async function readIssue(
     raw = gitHubCodeContextRawObjectFrom(ref, objectJson, commentsJson);
   } catch (error) {
     if (ctx.input.signal?.aborted === true) return refuse("cancelled", "aborted");
+    // #3384 B5-13: a rate limit, a GitHub-side 5xx, or a wall-time timeout is a distinct reason
+    // from a genuine read failure — see `GitHubIssueResolutionReason`'s doc comment.
+    if (error instanceof GitHubCodeContextPortError && error.code === "gh-transient-failure") {
+      return refuse("issue-unavailable", "read-transient-failure", error);
+    }
     return refuse("issue-unavailable", "read-failed", error);
   }
   const aborted = cancelledIfAborted(ctx.input.signal);

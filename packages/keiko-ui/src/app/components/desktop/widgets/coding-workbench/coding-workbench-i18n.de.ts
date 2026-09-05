@@ -951,6 +951,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der GitHub-Issue-Zugriff ist für dieses Repository nicht aktiviert. Aktiviere ihn unter Einstellungen → Sicherheit → GitHub-Issue-Zugriff und lade die Vorschau erneut.",
   "codingWorkbench.issue.error.issue-unavailable":
     "Das Issue konnte nicht gelesen werden. Es ist möglicherweise geschlossen, übertragen, gelöscht, ein Pull Request oder außerhalb des Zugriffs dieser Installation.",
+  "codingWorkbench.issue.error.read-transient-failure":
+    "GitHub war gerade nicht erreichbar (ein Rate-Limit oder ein vorübergehender Fehler). Das liegt nicht am Issue selbst — versuche es gleich noch einmal.",
   "codingWorkbench.issue.error.clone-failed":
     "Das Repository konnte nicht geklont werden. Es wurde kein Lauf gestartet und kein Ziel überschrieben. Prüfe den Git-Client und versuche es erneut.",
   "codingWorkbench.issue.error.authority-denied":

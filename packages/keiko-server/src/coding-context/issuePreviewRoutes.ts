@@ -30,7 +30,11 @@ import { GitDeliveryBodyTooLargeError, readGitDeliveryBody } from "../gitDeliver
 import { processServerLogSink } from "../process-log-sink.js";
 import { createRequestCancellation } from "../request-cancellation.js";
 import { errorBody, type RouteContext, type RouteHandler, type RouteResult } from "../routes.js";
-import { resolveGitHubIssue, type GitHubIssueResolver } from "./githubIssueResolution.js";
+import {
+  resolveGitHubIssue,
+  type GitHubIssueResolutionReason,
+  type GitHubIssueResolver,
+} from "./githubIssueResolution.js";
 
 // A repository path and one pasted reference. Anything larger is not this request. Enforced on
 // the bytes actually read, behind the shared transport reader's own (wider) cap.
@@ -80,6 +84,19 @@ const FAILURE_STATUSES: Readonly<Record<CodingWorkbenchIssueBindingFailure, Fail
     code: "CODING_WORKBENCH_ISSUE_CANCELLED",
     message: "The preview was cancelled.",
   },
+};
+
+// #3384 B5-13: a rate limit, a GitHub-side 5xx, or a wall-time timeout is reported as this
+// distinct status/code/message instead of the fixed "issue-unavailable" diagnosis — the wire
+// `failure` field stays "issue-unavailable" (the closed vocabulary has no transient member), but
+// the retry-worded code and 503 status tell a client apart from a genuinely unreadable issue. See
+// `codingWorkbenchIssueFailure` in the UI's coding-workbench-issue-errors.ts, which maps this
+// `error.code` (a free string, not part of the closed wire vocabulary) onto its own retry-labelled
+// intake state.
+const TRANSIENT_READ_FAILURE_STATUS: FailureStatus = {
+  status: 503,
+  code: "CODING_WORKBENCH_ISSUE_READ_TRANSIENT_FAILURE",
+  message: "GitHub could not be reached (rate limit or a temporary error). Try again.",
 };
 
 type BodyRead =
@@ -171,9 +188,13 @@ function redactedPreview(
 
 function failureResult(
   failure: CodingWorkbenchIssueBindingFailure,
+  failureReason: GitHubIssueResolutionReason | undefined,
   correlationId: string | undefined,
 ): RouteResult {
-  const mapped = FAILURE_STATUSES[failure];
+  const mapped =
+    failureReason === "read-transient-failure"
+      ? TRANSIENT_READ_FAILURE_STATUS
+      : FAILURE_STATUSES[failure];
   const body: CodingWorkbenchIssuePreviewFailureWire = {
     failure,
     error: errorBody(mapped.code, mapped.message, correlationId).error,
@@ -254,7 +275,7 @@ export function createCodingWorkbenchIssuePreviewHandler(
       cancellation.dispose();
     }
     if (!resolution.ok) {
-      const result = failureResult(resolution.failure, ctx.correlationId);
+      const result = failureResult(resolution.failure, resolution.failureReason, ctx.correlationId);
       recordPreview(deps, ctx.correlationId, resolution.failure, result.status, {});
       return result;
     }

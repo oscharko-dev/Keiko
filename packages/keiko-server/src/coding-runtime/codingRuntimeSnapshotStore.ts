@@ -133,12 +133,17 @@ export interface CodingRuntimeSnapshotStore {
   readonly journeyOutcomes?: GitJourneyOutcomeStore;
   readonly adoptDraftDeliveryFromPredecessor: (
     record: DraftDeliveryRecord,
+    recordedAt?: string,
   ) => CodingRuntimeSnapshot;
   readonly recordDraftDelivery: (
     record: DraftDeliveryRecord,
     expectedRevision: number | null,
+    recordedAt?: string,
   ) => CodingRuntimeSnapshot;
-  readonly recordVerifiedCommit: (result: VerifiedCommitResult) => CodingRuntimeSnapshot;
+  readonly recordVerifiedCommit: (
+    result: VerifiedCommitResult,
+    recordedAt?: string,
+  ) => CodingRuntimeSnapshot;
   /** Internal successful HEAD lineage, separate from the latest public proposal/result. */
   readonly getLastSuccessfulVerifiedCommit?: (runId: string) => VerifiedCommitResult | undefined;
   readonly create: (snapshot: CodingRuntimeSnapshot) => CodingRuntimeSnapshot;
@@ -253,11 +258,12 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
       activityLog: processServerLogSink(),
     }),
     journeyOutcomes: createGitJourneyOutcomeStore(db),
-    adoptDraftDeliveryFromPredecessor: (record): CodingRuntimeSnapshot =>
-      adoptDraftDeliveryFromPredecessor(db, one, record),
-    recordDraftDelivery: (record, expectedRevision): CodingRuntimeSnapshot =>
-      recordDraftDelivery(db, one, record, expectedRevision),
-    recordVerifiedCommit: (result): CodingRuntimeSnapshot => recordVerifiedCommit(db, one, result),
+    adoptDraftDeliveryFromPredecessor: (record, recordedAt): CodingRuntimeSnapshot =>
+      adoptDraftDeliveryFromPredecessor(db, one, record, recordedAt),
+    recordDraftDelivery: (record, expectedRevision, recordedAt): CodingRuntimeSnapshot =>
+      recordDraftDelivery(db, one, record, expectedRevision, recordedAt),
+    recordVerifiedCommit: (result, recordedAt): CodingRuntimeSnapshot =>
+      recordVerifiedCommit(db, one, result, recordedAt),
     getLastSuccessfulVerifiedCommit: (runId): VerifiedCommitResult | undefined =>
       readLastSuccessfulVerifiedCommit(db, one(runId)),
     create(snapshot): CodingRuntimeSnapshot {
@@ -452,23 +458,45 @@ function verifiedCommitFromRow(value: string | null): {
   return { verifiedCommitResult: parsed };
 }
 
+// CAS: the WHERE clause's `IS ?` predicates pin the write to the exact prior bytes this call
+// observed, so a second writer that raced in between (propose/execute/reconcile can all reach this
+// path) never silently overwrites — its own predicate no longer matches and it throws instead
+// (#3384 batch-1 B3-6). The write also advances `revision`/`updated_at` like every other mutating
+// transition on this row (acknowledge/releaseRecovery above), so a poller or SSE catch-up observes
+// a new fact rather than a same-revision no-op (#3384 batch-1 B5-6).
 function recordVerifiedCommit(
   db: DatabaseSync,
   read: (runId: string) => CodingRuntimeSnapshot | undefined,
   result: VerifiedCommitResult,
+  recordedAt: string = new Date().toISOString(),
 ): CodingRuntimeSnapshot {
   if (!isVerifiedCommitResult(result)) throw new TypeError("invalid verified commit result");
+  assertIso(recordedAt, "recordedAt");
   const current = requireSnapshot(read(result.runId));
   assertVerifiedCommitRuntimeBinding(current, result);
   const previous = readLastSuccessfulVerifiedCommit(db, current);
   const retained = result.status === "succeeded" ? result : previous;
-  db.prepare(
-    "UPDATE coding_runtime_snapshots SET verified_commit_result = ?, last_successful_verified_commit = ? WHERE run_id = ?",
-  ).run(
-    JSON.stringify(result),
-    retained === undefined ? null : JSON.stringify(retained),
-    result.runId,
-  );
+  const priorRow = db
+    .prepare(
+      "SELECT verified_commit_result, last_successful_verified_commit FROM coding_runtime_snapshots WHERE run_id = ?",
+    )
+    .get(result.runId) as
+    | { verified_commit_result: string | null; last_successful_verified_commit: string | null }
+    | undefined;
+  if (priorRow === undefined) throw new TypeError("runtime snapshot was not found");
+  const update = db
+    .prepare(
+      "UPDATE coding_runtime_snapshots SET verified_commit_result = ?, last_successful_verified_commit = ?, revision = revision + 1, updated_at = ? WHERE run_id = ? AND verified_commit_result IS ? AND last_successful_verified_commit IS ?",
+    )
+    .run(
+      JSON.stringify(result),
+      retained === undefined ? null : JSON.stringify(retained),
+      recordedAt,
+      result.runId,
+      priorRow.verified_commit_result,
+      priorRow.last_successful_verified_commit,
+    );
+  if (Number(update.changes) !== 1) throw new TypeError("concurrent verified commit update");
   if (retained !== undefined)
     processServerLogSink().write({
       category: "process",
@@ -717,7 +745,7 @@ function assertTransition(v: CodingRuntimeSnapshotTransition): void {
 function assertId(value: string, name: string): void {
   if (!SAFE_ID.test(value)) throw new Error(`invalid ${name}`);
 }
-function assertIso(value: string, name: string): void {
+export function assertIso(value: string, name: string): void {
   if (!ISO_UTC.test(value) || Number.isNaN(Date.parse(value))) throw new Error(`invalid ${name}`);
 }
 function assertLimit(value: number): number {

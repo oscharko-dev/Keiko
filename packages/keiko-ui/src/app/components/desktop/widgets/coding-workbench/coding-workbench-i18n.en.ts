@@ -912,6 +912,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "GitHub issue access is not enabled for this repository. Enable it under Settings → Security → GitHub issue access, then preview again.",
   "codingWorkbench.issue.error.issue-unavailable":
     "The issue could not be read. It may be closed, transferred, deleted, a pull request, or outside the access this installation has.",
+  "codingWorkbench.issue.error.read-transient-failure":
+    "GitHub could not be reached just now (a rate limit or a temporary error). This is not about the issue itself — try again in a moment.",
   "codingWorkbench.issue.error.clone-failed":
     "The repository could not be cloned. No run was started and no destination was overwritten. Review the Git client and try again.",
   "codingWorkbench.issue.error.authority-denied":

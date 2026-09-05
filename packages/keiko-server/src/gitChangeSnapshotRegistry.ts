@@ -126,7 +126,12 @@ export class GitChangeSnapshotRegistry {
   public release(reference: string, scope: object, correlationId: string): void {
     if (this.records.get(reference)?.scope !== scope) return;
     if (this.reserved.delete(reference)) {
-      this.log.write({ category: "process", op: "git.snapshot.released", correlationId, extra: {} });
+      this.log.write({
+        category: "process",
+        op: "git.snapshot.released",
+        correlationId,
+        extra: {},
+      });
     }
   }
 

@@ -10,6 +10,7 @@
 // rejected before spawn.
 
 import {
+  CommandTimeoutError,
   GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
   runCommand,
   type RunCommandDeps,
@@ -69,9 +70,20 @@ export const GH_CODE_CONTEXT_COMMAND_RULES: readonly CommandRule[] = Object.free
  * command itself did not succeed) and `gh-invalid-json` (the command succeeded and returned a
  * complete body that is not JSON) — a truncated read is neither, and reporting it as either one
  * sends the operator after a defect that does not exist.
+ *
+ * `gh-transient-failure` (#3384 B5-13) is likewise its own member, not a shade of `gh-failed`: a
+ * wall-time timeout, a GitHub-side rate limit, or a GitHub-side 5xx are conditions the operator
+ * should retry, never the same diagnosis as an object that genuinely is not readable (closed,
+ * transferred, a pull request, or truly denied). Collapsing them, as this port first did, sent the
+ * operator a specific but false "the issue is closed/transferred/a PR" diagnosis for a failure that
+ * had nothing to do with the issue at all.
  */
 export type GitHubCodeContextPortErrorCode =
-  "gh-denied" | "gh-failed" | "gh-output-truncated" | "gh-invalid-json";
+  | "gh-denied"
+  | "gh-failed"
+  | "gh-transient-failure"
+  | "gh-output-truncated"
+  | "gh-invalid-json";
 
 export class GitHubCodeContextPortError extends Error {
   readonly code: GitHubCodeContextPortErrorCode;
@@ -123,6 +135,25 @@ function runDepsFor(options: GitHubCodeContextPortOptions): RunCommandDeps {
   };
 }
 
+// The gh CLI reports an API-shaped failure as `gh: <message> (HTTP <status>)` on stderr. This
+// extracts ONLY the 3-digit status class needed to tell a transient GitHub-side condition (rate
+// limit, 5xx) apart from an exit that means the object genuinely is not readable — the message
+// text itself is discarded immediately and never logged (ADR-0173 body-free evidence).
+function githubHttpStatusClassOf(stderr: string): "rate-limited" | "server-error" | undefined {
+  const match = /\(HTTP (\d{3})\)/u.exec(stderr);
+  const status = match === null ? undefined : Number(match[1]);
+  if (status === 403 || status === 429) return "rate-limited";
+  if (status !== undefined && status >= 500 && status <= 599) return "server-error";
+  return undefined;
+}
+
+// A non-zero exit is transient — worth retrying, not a verdict about the object — when GitHub's own
+// response signals a rate limit or a server error. Anything else (a plain 404-shaped denial, a
+// missing scope) keeps its existing "gh-failed" classification.
+function isTransientGhExit(result: CommandResult): boolean {
+  return githubHttpStatusClassOf(result.stderr) !== undefined;
+}
+
 // Defence in depth only: the spawn boundary already refuses to hand back more than
 // GH_API_MAX_STDOUT_BYTES. Over-cap bytes here still mean the read was cut short, not malformed.
 function parseBoundedJson(stdout: string): unknown {
@@ -164,7 +195,13 @@ async function runGhApi(
   } catch (error) {
     // Timeout, cancellation, or spawn failure: surface a content-free code only. Every one of these
     // REJECTS in the spawn boundary, so a resolved result can never be a disguised timeout — which
-    // is what lets the truncation check below mean the byte cap and nothing else.
+    // is what lets the truncation check below mean the byte cap and nothing else. A wall-time
+    // timeout is transient (#3384 B5-13): the boundary rejects with `CommandTimeoutError` rather
+    // than resolving a `CommandResult` with `timedOut: true`, so it must be classified HERE, before
+    // that distinction is lost to the generic `gh-failed` code.
+    if (error instanceof CommandTimeoutError) {
+      throw new GitHubCodeContextPortError("gh-transient-failure", error);
+    }
     throw new GitHubCodeContextPortError("gh-failed", error);
   }
 }
@@ -186,7 +223,11 @@ export function createGitHubCodeContextApiPort(
         // either of those first turns "the response did not fit" into "gh failed" or "GitHub sent
         // invalid JSON" — two defects that are not there.
         if (result.truncated) throw new GitHubCodeContextPortError("gh-output-truncated");
-        if (result.exitCode !== 0) throw new GitHubCodeContextPortError("gh-failed");
+        if (result.exitCode !== 0) {
+          throw new GitHubCodeContextPortError(
+            isTransientGhExit(result) ? "gh-transient-failure" : "gh-failed",
+          );
+        }
         const parsed = parseBoundedJson(result.stdout);
         recordRead(activityLog, context, undefined, Buffer.byteLength(result.stdout, "utf8"));
         return parsed;

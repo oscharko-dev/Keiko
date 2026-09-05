@@ -777,14 +777,28 @@ export function GitChangeScopePill({
   // actually changes after mount, so a chat switch or routine re-render never re-announces. Deps
   // are the primitives the announcement needs, never the `scopes` array itself (a fresh `[]`
   // reference every render for an unbound chat would otherwise re-fire on every render).
+  //
+  // B5-3 (epic #3384 audit): this component is never remounted on a chat switch — an
+  // already-mounted chat window can be rebound to a different existing chat in place
+  // (SelectionAwareWorkspaceHosts.tsx's `updateCfg({ chatId })` handoff) — so `prevSignatureRef`
+  // alone survived across chats and a landing chat with a different scope signature announced as
+  // though the SAME chat had just gained/lost a scope. `prevChatIdRef` makes the reset silent: a
+  // changed `chat.id` re-baselines both refs without firing `setAnnouncement`, so only a genuine
+  // signature change WITHIN one chat announces.
   const [announcement, setAnnouncement] = useState("");
   const prevSignatureRef = useRef(signature);
+  const prevChatIdRef = useRef(chat.id);
   useEffect(() => {
+    if (prevChatIdRef.current !== chat.id) {
+      prevChatIdRef.current = chat.id;
+      prevSignatureRef.current = signature;
+      return;
+    }
     if (prevSignatureRef.current !== signature) {
       prevSignatureRef.current = signature;
       setAnnouncement(scopesAnnouncement(isEmpty, hasStale, t));
     }
-  }, [signature, isEmpty, hasStale, t]);
+  }, [signature, isEmpty, hasStale, t, chat.id]);
 
   const announcer = <GitChangeScopeAnnouncer text={announcement} />;
 

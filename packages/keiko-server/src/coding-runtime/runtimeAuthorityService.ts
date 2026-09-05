@@ -531,6 +531,23 @@ export class CodingRuntimeAuthorityService {
     };
   }
 
+  // B1-3 (epic #3384): a run's git-delivery authority is minted before any pull request
+  // necessarily exists, so it carries no PR identity at mint time. Once the run's PR is created
+  // and published, the caller that learns of it (Git delivery's PR-creation path) binds that
+  // identity here so `current()`'s projection — and every admission that reads it, e.g.
+  // prDescriptionRoutes.ts's `admitDescriptionModelEgress` — can compare a request's
+  // ownerAndRepo/prNumber against the run's *actual* PR scope instead of admitting any PR in the
+  // same project. Requires the exact runId of the still-active run so a stale or mismatched
+  // caller cannot bind a PR onto a different (or already-ended) run.
+  public bindPublishedPullRequest(
+    runId: string,
+    pullRequest: { readonly ownerAndRepo: string; readonly prNumber: number },
+  ): boolean {
+    if (this.activeGitDeliveryAuthority?.runId !== runId) return false;
+    this.activeGitDeliveryAuthority = { ...this.activeGitDeliveryAuthority, pullRequest };
+    return true;
+  }
+
   // A same-scope remint can only narrow a live grant's mode and expiry. An expired grant may
   // be replaced only by a newly admitted caller; it cannot become live through a read.
   public mintGitDeliveryDescriptionAuthority(

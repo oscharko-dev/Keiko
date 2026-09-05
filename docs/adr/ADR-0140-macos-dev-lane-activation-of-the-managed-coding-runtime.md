@@ -155,10 +155,13 @@ instead of an OS-level spawn error surfacing after the fact.
 D6's Windows/native gap also gets an explicit, shared refusal: `nativeRuntimeProcessBackend.ts` can
 now be given the same gateway policy and, because its launch-packet protocol has no way to enforce
 one, always fails the launch with the identical reason keiko-sandbox's planner would produce for an
-unsupported host. Production composition does not yet attach that policy to a native/Windows launch,
-so a Windows-activated sidecar still runs without kernel-enforced egress today — this addendum closes
-the refusal path the backend offers, not the platform coverage itself, consistent with D6's own
-statement of the gap.
+unsupported host. Production composition (`productionOpenCodeBackend.ts`) now always attaches that
+policy to a native/Windows launch too, via the unconditional `runtimeGatewayConfinement` helper at
+both native-backend construction sites (the release/evaluation-lane path and `devLaneSupervisor`'s
+Windows branch) — so a Windows-activated sidecar today fails closed pre-spawn with
+`GATEWAY_UNSUPPORTED_ON_HOST_REASON` (`nativeRuntimeProcessBackend.ts`'s refusal path) rather than
+running unconfined. This matches ADR-0043 D14's own description of the same wiring; the two ADRs
+converge instead of describing the fact differently.
 
 ## Consequences
 

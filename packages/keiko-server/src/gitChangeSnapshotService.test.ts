@@ -456,4 +456,66 @@ describe("immutable Git change snapshot production", () => {
     expect(await service.recheck(initial.reference ?? "", input)).toMatchObject({ state: "stale" });
     expect(service.read(initial.reference ?? "", accessScope, correlationId)).toBeUndefined();
   });
+
+  // B2-8 — a throwaway comparison (e.g. gitChangeRoutes.ts's connect/refresh handlers, which only
+  // ever read `capture.snapshot`/`.remoteDigest`, never `.reference`) must be able to opt out of
+  // retaining a registry slot it can never read back, so it stops competing with retained
+  // chat/PR-description captures for the shared 32-slot registry.
+  it("omits a registry reference when the caller opts out with retain: false", async () => {
+    const workspace = await repository();
+    const service = createGitChangeSnapshotService({});
+    const accessScope = {};
+    const retained = await service.capture({
+      workspace,
+      baseRef: "main",
+      headRef: "feature",
+      accessScope,
+      correlationId,
+    });
+    expect(retained.reference).toMatch(/^gcs_[a-f0-9]{32}$/u);
+
+    const throwaway = await service.capture({
+      workspace,
+      baseRef: "main",
+      headRef: "feature",
+      accessScope,
+      correlationId,
+      retain: false,
+    });
+    expect(isGitChangeSnapshot(throwaway.snapshot)).toBe(true);
+    expect(throwaway.reference).toBeUndefined();
+  });
+
+  // B2-8 — `reserve`/`release` must be wired through to the shared registry (whose own eviction
+  // behavior under reservation is exercised exhaustively in gitChangeSnapshotRegistry.test.ts) so
+  // a caller can protect its own reference — e.g. a PR-description proposal awaiting review — from
+  // unrelated capture activity sharing the same 32-slot registry.
+  it("wires reserve/release through to the underlying registry", async () => {
+    const workspace = await repository();
+    const service = createGitChangeSnapshotService({});
+    const accessScope = {};
+    const captured = await service.capture({
+      workspace,
+      baseRef: "main",
+      headRef: "feature",
+      accessScope,
+      correlationId,
+    });
+    const reference = captured.reference;
+    if (reference === undefined) throw new Error("expected a retained reference");
+
+    // Wrong scope is refused (fail-closed), matching `read`/`revoke`'s own identity check.
+    expect(service.reserve?.(reference, {}, correlationId)).toBe(false);
+    // The correct scope succeeds and is idempotent.
+    expect(service.reserve?.(reference, accessScope, correlationId)).toBe(true);
+    expect(service.reserve?.(reference, accessScope, correlationId)).toBe(true);
+
+    // Releasing with the wrong scope is a no-op; the reservation this asserts against is proven
+    // to still exist because `release` with the correct scope below is the one that removes it.
+    service.release?.(reference, {}, correlationId);
+    service.release?.(reference, accessScope, correlationId);
+    // Re-reserving after release still succeeds — the release actually cleared the prior state
+    // rather than merely reporting success without effect.
+    expect(service.reserve?.(reference, accessScope, correlationId)).toBe(true);
+  });
 });

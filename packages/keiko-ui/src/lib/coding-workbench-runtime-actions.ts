@@ -23,8 +23,7 @@ export interface CodingWorkbenchRuntimeActions {
   readonly setRuntimePreference: (preference: CodingWorkbenchRuntimePreference) => void;
   readonly setSelectedModel: (modelId: string | null) => void;
   readonly setReasoningEffort: (effort: ModelReasoningEffort | null) => void;
-  readonly prepareCodexSetup?:
-    ((method: CodingWorkbenchCodexAuthMethod) => Promise<void>) | undefined;
+  readonly prepareCodexSetup?: (method: CodingWorkbenchCodexAuthMethod) => Promise<void>;
   readonly refreshProfile: () => Promise<void>;
   readonly refreshSource: () => Promise<void>;
   readonly refreshRuntime: () => Promise<void>;

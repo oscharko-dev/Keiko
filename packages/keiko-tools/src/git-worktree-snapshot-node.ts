@@ -190,10 +190,17 @@ async function runReadResult(ctx: ReadContext, argv: readonly string[]): Promise
   const runDeps: RunCommandDeps = { ...ctx.runDeps, onTerminated: ctx.runDeps.onTerminated };
   let result: CommandResult;
   try {
+    // No `--no-lazy-fetch` / `--no-replace-objects` CLI flags here: git's own docs state each is
+    // "equivalent to setting the GIT_NO_(LAZY_FETCH|REPLACE_OBJECTS) environment variable", and
+    // `immutableReadPolicy` above already pins both env vars into every read this lane performs.
+    // The CLI form of `--no-lazy-fetch` is a newer global option (absent on the git 2.43 that
+    // `ubuntu-latest` ships): passing it made every read here exit 129 ("unknown option") on CI
+    // while the same read stayed green on a workstation with a newer git — the guard itself is
+    // unweakened, only its incompatible, redundant CLI duplicate is gone.
     result = await runCommand(
       {
         command: "git",
-        args: ["--no-lazy-fetch", "--no-replace-objects", ...argv],
+        args: [...argv],
         cwd: undefined,
         timeoutMs: ctx.timeoutMs,
         signal: ctx.signal,

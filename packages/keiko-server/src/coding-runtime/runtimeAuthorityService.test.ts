@@ -19,8 +19,12 @@ import {
 import { createInMemorySupervisedCodingApprovalStore } from "./supervisedCodingApprovalStore.js";
 import {
   CodingRuntimeAuthorityService,
+  codingRuntimeActionClassesForMode,
   codingRuntimeBudgetDigest,
+  codingRuntimeCommandPolicyForMode,
+  codingRuntimeConnectorScopesForMode,
   codingRuntimeFactDigest,
+  codingRuntimeNetworkPolicyForMode,
   type CodingRuntimeMintResult,
   type CodingRuntimeResolution,
   type CodingRuntimeTrustedContext,
@@ -614,31 +618,46 @@ describe("CodingRuntimeAuthorityService", () => {
     });
     const resolution = resolve(authority, minted.authorityRef, live);
     if (!resolution.ok) throw new Error("expected narrowed resolution");
+    // ADR-0138 D2: Ask for approval's workspace-contained/internet effects are approval-required,
+    // never denied outright, so a narrowed authority retains "command-execution" (gated by
+    // commandPolicy.requirePerCommandApproval, not stripped) and the connector scopes an approved
+    // request would need (gated by commandAllowed/connectorAllowed's approvalVerified check, not
+    // by an empty scope list) -- see B3-1/authority-matrix-1/B3-2/authority-matrix-2.
     expect(resolution.envelope.authority).toMatchObject({
       effectiveMode: "governed-assist",
       actionClasses: [
         "workspace-read",
         "workspace-write",
+        "command-execution",
         "verification",
         "delivery-substrate",
         "connector-access",
       ],
       connectorScopes: ["source-control.read", "source-control.write"],
-      commandPolicy: { mode: "deny", requirePerCommandApproval: true },
-      networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+      commandPolicy: { mode: "governed", requirePerCommandApproval: true },
+      networkPolicy: {
+        mode: "deny-all",
+        allowLoopback: false,
+        connectorScopes: ["source-control.read", "source-control.write"],
+      },
     });
     expect(authority.gitDeliveryAuthorityPort().current(NOW)?.authority).toMatchObject({
       effectiveMode: "governed-assist",
       actionClasses: [
         "workspace-read",
         "workspace-write",
+        "command-execution",
         "verification",
         "delivery-substrate",
         "connector-access",
       ],
       connectorScopes: ["source-control.read", "source-control.write"],
-      commandPolicy: { mode: "deny", requirePerCommandApproval: true },
-      networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+      commandPolicy: { mode: "governed", requirePerCommandApproval: true },
+      networkPolicy: {
+        mode: "deny-all",
+        allowLoopback: false,
+        connectorScopes: ["source-control.read", "source-control.write"],
+      },
     });
   });
 
@@ -1552,5 +1571,117 @@ describe("CodingRuntimeAuthorityService description authority", () => {
     expect(authority.gitDeliveryDescriptionAuthorityPort().current(SCOPE, NOW)?.effectiveMode).toBe(
       "governed-assist",
     );
+  });
+});
+
+// B3-1 / authority-matrix-1: Ask for approval (governed-assist) must mint an approval-required
+// command policy, not a hard "deny" -- ADR-0138 D2's workspace-contained row is approval-required,
+// never denied, at every mode. Regression: before the fix, codingRuntimeCommandPolicyForMode
+// hardcoded mode:"deny" for governed-assist and codingRuntimeActionClassesForMode excluded
+// "command-execution" from its envelope, so no approval proof could ever unlock a command.
+describe("codingRuntimeCommandPolicyForMode / codingRuntimeActionClassesForMode", () => {
+  it("mints an approval-required, never a hard-denied, command policy for every product mode", () => {
+    expect(codingRuntimeCommandPolicyForMode("governed-assist")).toMatchObject({
+      mode: "governed",
+      requirePerCommandApproval: true,
+    });
+    expect(codingRuntimeCommandPolicyForMode("supervised-coding")).toMatchObject({
+      mode: "governed",
+      requirePerCommandApproval: true,
+    });
+    expect(codingRuntimeCommandPolicyForMode("autonomous-delivery")).toMatchObject({
+      mode: "governed",
+      requirePerCommandApproval: false,
+    });
+  });
+
+  it("includes command-execution in governed-assist's action classes so an approved command is not double-denied", () => {
+    expect(codingRuntimeActionClassesForMode("governed-assist", undefined)).toContain(
+      "command-execution",
+    );
+    expect(codingRuntimeActionClassesForMode("supervised-coding", undefined)).toContain(
+      "command-execution",
+    );
+    expect(codingRuntimeActionClassesForMode("autonomous-delivery", undefined)).toContain(
+      "command-execution",
+    );
+  });
+});
+
+// B3-2 / authority-matrix-2: a mode's networkPolicy.connectorScopes must mirror the same
+// deliveryScopeGranted posture codingRuntimeConnectorScopesForMode already uses for
+// authority.connectorScopes, so a connector-scoped read (git ci, "connector") has a real scope to
+// check once gated behind approval -- not an unconditionally empty array that fails closed
+// regardless of any approval proof.
+describe("codingRuntimeNetworkPolicyForMode", () => {
+  it("carries the delivery connector scopes at every mode, not only autonomous-delivery", () => {
+    expect(codingRuntimeNetworkPolicyForMode("governed-assist", undefined).connectorScopes).toEqual(
+      codingRuntimeConnectorScopesForMode("governed-assist"),
+    );
+    expect(
+      codingRuntimeNetworkPolicyForMode("governed-assist", undefined).connectorScopes,
+    ).toEqual(["source-control.read", "source-control.write"]);
+    expect(
+      codingRuntimeNetworkPolicyForMode("governed-assist", true).connectorScopes,
+    ).toEqual(["source-control.read", "source-control.write"]);
+    expect(
+      codingRuntimeNetworkPolicyForMode("supervised-coding", undefined).connectorScopes,
+    ).toEqual(["source-control.read", "source-control.write"]);
+    expect(
+      codingRuntimeNetworkPolicyForMode("autonomous-delivery", undefined).connectorScopes,
+    ).toEqual(["source-control.read", "source-control.write"]);
+  });
+
+  it("still keeps deny-all/governed-egress mode gating unchanged by the scope population", () => {
+    expect(codingRuntimeNetworkPolicyForMode("governed-assist", undefined).mode).toBe("deny-all");
+    expect(codingRuntimeNetworkPolicyForMode("governed-assist", true).mode).toBe("governed-egress");
+    expect(codingRuntimeNetworkPolicyForMode("autonomous-delivery", undefined).mode).toBe(
+      "connector-scoped-egress",
+    );
+  });
+});
+
+// B1-3: a run's git-delivery authority is minted before any PR necessarily exists. Once the run's
+// PR is published, bindPublishedPullRequest lets the caller that learns of it attach that identity
+// so downstream admission (prDescriptionRoutes.ts's admitDescriptionModelEgress) can compare a
+// request's PR identity against the run's actual scope instead of admitting any PR in the project.
+describe("CodingRuntimeAuthorityService.bindPublishedPullRequest", () => {
+  it("binds the pull request identity onto the active run's projected Git-delivery authority", () => {
+    const authority = service();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+
+    expect(
+      authority.bindPublishedPullRequest(minted.authorityRef.runId, {
+        ownerAndRepo: "acme/widgets",
+        prNumber: 42,
+      }),
+    ).toBe(true);
+    expect(authority.gitDeliveryAuthorityPort().current(NOW)).toMatchObject({
+      pullRequest: { ownerAndRepo: "acme/widgets", prNumber: 42 },
+    });
+  });
+
+  it("refuses to bind onto a run that is not the currently active one", () => {
+    const authority = service();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+
+    expect(
+      authority.bindPublishedPullRequest("some-other-run", {
+        ownerAndRepo: "acme/widgets",
+        prNumber: 42,
+      }),
+    ).toBe(false);
+    expect(authority.gitDeliveryAuthorityPort().current(NOW)).not.toMatchObject({
+      pullRequest: { ownerAndRepo: "acme/widgets", prNumber: 42 },
+    });
+  });
+
+  it("refuses to bind when no run is active", () => {
+    const authority = service();
+    expect(
+      authority.bindPublishedPullRequest("run-1", { ownerAndRepo: "acme/widgets", prNumber: 42 }),
+    ).toBe(false);
   });
 });

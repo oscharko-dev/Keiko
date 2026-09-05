@@ -31,15 +31,73 @@ import { CatalogDispatchFault, catalogBudgetOperation } from "./catalogToolRunti
  * (catalogToolDispatch.ts/catalogToolSettlement.ts): that pair is shaped for a prior `offer()`
  * negotiating a catalog-schema `{toolRef, projectionDigest, offerId, arguments}` invocation, which
  * `codingToolFacade.ts`'s already-parsed `CodingToolActionRequest` never carries (ADR-0175 D6
- * "Production mounting" explains the shape mismatch in full) -- as of this file, that binder pair
- * has no OTHER production caller either, so #3413's readiness-rejection acceptance criteria
- * (missing/orphaned/duplicate handlers) are exercised only by that pipeline's own tests, not by
- * this bridge or anything reachable from a real request (#3413 F8 review, finding b1-1; tracked as
- * outOfScopeNeeds against `codingToolAuthorityPort.ts`'s composition wiring, which this file's
- * write scope may not touch). This bridge instead reimplements its own compact
- * reserve/settle/account bookkeeping below (`dispatchCovered`/`runReserved`/`settleSuccess`/
- * `settleFailure`), sharing only the fault vocabulary and accounting discipline with
- * `CatalogInvocation`, never its offer/dispatch/cursor state machine.
+ * "Production mounting" explains the shape mismatch in full).
+ *
+ * DECISION (#3413 F8 review, finding b1-1 -- superseding the prior "tracked as outOfScopeNeeds"
+ * note): this bridge, not the offer/dispatch/cursor binder pair, is and remains the one production
+ * dispatch owner. AGENTS.md section 5 forbids growing a second parallel dispatch path, and ADR-0175
+ * D6 already documents the binder's shape as incompatible with an already-parsed
+ * `CodingToolActionRequest` -- reshaping one to fit the other would be the wrong kind of "fix" for
+ * either side. `catalogToolBinder.ts`/`catalogToolDispatch.ts`/`catalogToolSettlement.ts`/
+ * `catalogToolCursor.ts`/`catalogToolContinuation.ts`/`nativeCatalogToolPort.ts` are kept, not
+ * deleted: they remain a real, independently-tested reference implementation of the full
+ * offer/dispatch contract (ADR-0175 D4-D6) that this bridge's own bookkeeping below deliberately
+ * mirrors in miniature, and their tests continue to pin that contract in isolation. But they have
+ * no production caller and this bridge does not acquire one by wiring them in. Acceptance criteria
+ * that need real production behaviour are instead closed HERE, in the bridge's own construction and
+ * dispatch path:
+ *   - readiness rejection for a canonical id this bridge maps to but the composed catalog does not
+ *     contain: `resolveAction` distinguishes "structurally uncovered" (`catalogIdFor` returns
+ *     `undefined` by design) from "missing" (a canonical id was produced but `lookupCatalogTool`
+ *     found no descriptor for it) and fails closed on the latter via `dispatchMissing`, emitting
+ *     the real `tool-catalog.bind-unavailable` op instead of silently running the action unbound.
+ *     "Duplicate handler" detection is deliberately NOT implemented at this level: `gitCatalogId`/
+ *     `deliveryCatalogId` intentionally resolve several actions (stage-execute, every non-merge
+ *     delivery execute intent) onto the SAME shared `keiko.git.execute` descriptor, so flagging a
+ *     shared descriptor as an error would reject correct, documented behaviour. "Orphaned handler"
+ *     (a descriptor whose handler requirement nothing satisfies) has no meaning at this layer
+ *     either: this bridge never owns a handler set -- the handler is always the caller-supplied
+ *     `run` thunk passed into `dispatch()` per call, not a binder-composed registration.
+ *   - dispatch-time projection revalidation (AC3): `CatalogFacadeBridgeInput.catalog` accepts
+ *     either a static `ToolCatalog` or a `() => ToolCatalog` provider. A static value cannot drift
+ *     after construction (it is the same frozen object for the bridge's whole lifetime, and today's
+ *     one production caller, `codingToolAuthorityPort.ts`'s `catalogFacadeBridgeFor`, passes exactly
+ *     that -- a snapshot built once via `createOpenCodeGatewayToolCatalogAdvertisement`), so
+ *     `projectionDrift` is a guaranteed no-op for it. A provider function lets a future composition
+ *     supply a genuinely live catalog source; `dispatchCovered` then re-derives the projection
+ *     identity before every dispatch and settles `invalid`/`projection-mismatch` (fail closed,
+ *     before the handler ever runs) the moment the live projection digest no longer matches the one
+ *     captured at construction. Wiring an actual live catalog source into `catalogFacadeBridgeFor`
+ *     remains open follow-up work outside this file's write scope (tracked as outOfScopeNeeds).
+ *   - authoritative deadline / timeout and late-completion quarantine (AC6, AC8 partial):
+ *     `runReservedWithDeadline` races the wrapped handler against `descriptor.bounds.maxDurationMs`
+ *     and settles `timeout`/`deadline-exceeded` (never `cancelled`) when the deadline wins. The
+ *     handler is never abandoned unobserved: a resolution or rejection that arrives after the
+ *     deadline has already settled the invocation is discarded via a real
+ *     `tool-catalog.completion-discarded` line instead of an unhandled rejection or a second
+ *     settlement.
+ *
+ * Still genuinely open, and NOT closed by this bridge (outOfScopeNeeds, precise patches reported
+ * against the owning files in the #3413 F8 review rather than guessed here):
+ *   - `busy` and cross-process-restart dedup (AC8) need the same idempotency-registry discipline
+ *     `codingToolFacade.ts`'s `executeStagedEdit` already applies to `edit` via
+ *     `CodingToolInvocationRegistry`, extended to every catalog-bridged action family -- a
+ *     composition change in `codingToolFacade.ts`/`codingToolAuthorityPort.ts`, not this file.
+ *   - opaque cursors (AC7) need a `CodingToolInvocationRegistry` threaded into this bridge's
+ *     construction from the composition layer, plus a page/cursor-shaped return contract on the
+ *     `search`/`discover` domain handlers -- both outside this file's write scope.
+ *   - a result schema/size bound before `completed` (`result-contract-failed`, part of AC6) is
+ *     deliberately NOT added here: `run()`'s resolved value is `unknown` in production
+ *     (`codingToolFacade.ts`'s `runDelegate` returns `Promise<unknown>`, not a catalog-JSON
+ *     envelope), and the real shape of every one of the ~9 covered action families' results was not
+ *     individually verified in this review's time budget. A blanket `captureCatalogJson`-style
+ *     bound risks turning legitimate production results into spurious `result-contract-failed`
+ *     rejections; that verification belongs with whoever owns each domain handler's result
+ *     contract, not a guess made here.
+ * This bridge reimplements its own compact reserve/settle/account bookkeeping below
+ * (`dispatchCovered`/`runReserved`/`settleSuccess`/`settleFailure`), sharing only the fault
+ * vocabulary and accounting discipline with `CatalogInvocation`, never its offer/dispatch/cursor
+ * state machine.
  *
  * Every canonical id below is an unambiguous mapping from the IPC action shape (as
  * `opencodeRuntimeAdapter.ts`'s `wireRequestFor`/`parseDraftToolRequest` actually produce it for a
@@ -151,7 +209,14 @@ export interface CatalogFacadeBridgeContext {
   readonly parentCorrelationId?: string | undefined;
 }
 export interface CatalogFacadeBridgeInput {
-  readonly catalog: ToolCatalog;
+  /**
+   * A static catalog cannot drift after construction, so passing one keeps `dispatchCovered`'s
+   * projection revalidation (AC3) a guaranteed no-op -- today's one production caller passes a
+   * static snapshot. A `() => ToolCatalog` provider lets a future composition supply a genuinely
+   * live source and get real per-dispatch drift detection; see the file header for the full
+   * decision record.
+   */
+  readonly catalog: ToolCatalog | (() => ToolCatalog);
   readonly profile: CatalogVersionRef;
   readonly budget: CatalogFacadeBudgetPort;
   readonly logPort: CatalogLifecycleLogPort;
@@ -186,13 +251,34 @@ interface TerminalFields extends InvocationMeta {
   readonly error?: unknown;
 }
 
+function currentCatalog(input: CatalogFacadeBridgeInput): ToolCatalog {
+  return typeof input.catalog === "function" ? input.catalog() : input.catalog;
+}
+
+type ResolutionOutcome =
+  | { readonly kind: "uncovered" }
+  | { readonly kind: "resolved"; readonly descriptor: ToolDescriptor }
+  | { readonly kind: "missing"; readonly canonicalId: string };
+
+/** `catalogIdFor` returning `undefined` is a designed exclusion (see the coverage tables above);
+ * `catalogIdFor` returning an id `lookupCatalogTool` cannot find is a real readiness gap -- the
+ * composed catalog dropped a canonical id this bridge maps to -- and must never be treated the
+ * same way (#3413 F8 review, finding b1-1). */
+function resolveAction(catalog: ToolCatalog, request: CodingToolActionRequest): ResolutionOutcome {
+  const canonicalId = catalogIdFor(request);
+  if (canonicalId === undefined) return { kind: "uncovered" };
+  const descriptor = lookupCatalogTool(catalog, createToolRef(canonicalId, 1));
+  return descriptor === undefined
+    ? { kind: "missing", canonicalId }
+    : { kind: "resolved", descriptor };
+}
+
 function resolveDescriptor(
   catalog: ToolCatalog,
   request: CodingToolActionRequest,
 ): ToolDescriptor | undefined {
-  const canonicalId = catalogIdFor(request);
-  if (canonicalId === undefined) return undefined;
-  return lookupCatalogTool(catalog, createToolRef(canonicalId, 1));
+  const outcome = resolveAction(catalog, request);
+  return outcome.kind === "resolved" ? outcome.descriptor : undefined;
 }
 
 function correlationIdFor(runtime: BridgeRuntime): string {
@@ -249,6 +335,42 @@ function emitUnbound(runtime: BridgeRuntime, request: CodingToolActionRequest): 
       }),
     );
   }
+}
+
+/**
+ * A canonical id `catalogIdFor` produced but the composed catalog does not contain is a readiness
+ * failure, never silent unbound execution: the handler never runs. Emits the real
+ * `tool-catalog.bind-unavailable` op (readiness `unavailable`, reason `unknown-tool`) so an operator
+ * can distinguish "this composition dropped a tool the bridge expects" from every other outcome
+ * (#3413 F8 review, findings b1-1/AC10/AC11 -- this op was previously reachable only from the
+ * unwired binder's own tests).
+ */
+function emitBindUnavailable(runtime: BridgeRuntime): void {
+  const correlationId = correlationIdFor(runtime);
+  try {
+    emitToolLifecycleEvent(runtime.input.logPort, {
+      ...identityFields(runtime),
+      op: "tool-catalog.bind-unavailable",
+      readiness: "unavailable",
+      reason: "unknown-tool",
+    });
+  } catch (error) {
+    emitServerDiagnostic(
+      runtime.input.logPort.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "tool-catalog.lifecycle-sink-failed",
+        source: "tool-catalog-bind-unavailable",
+        error,
+        redact: () => "server-operation-failed",
+      }),
+    );
+  }
+}
+
+function dispatchMissing<T>(runtime: BridgeRuntime): Promise<T> {
+  emitBindUnavailable(runtime);
+  return Promise.reject(new CatalogDispatchFault("invalid", "unknown-tool"));
 }
 
 function emitSettlement(runtime: BridgeRuntime, fields: TerminalFields): void {
@@ -315,6 +437,37 @@ function denyBudgetExhausted(runtime: BridgeRuntime, meta: InvocationMeta): neve
     budgetDisposition: "not-reserved",
   });
   throw new CatalogDispatchFault("denied", "budget-exhausted");
+}
+
+/**
+ * A live (function-provided) catalog is re-derived and compared against the projection captured at
+ * construction; a static catalog cannot drift by construction, so this is a guaranteed no-op for
+ * today's one production caller (#3413 F8 review, AC3 -- see the file header decision record). A
+ * catalog that no longer compiles cleanly counts as drift too, rather than propagating an
+ * unclassified `compileToolProjection` failure.
+ */
+function projectionDrift(runtime: BridgeRuntime): boolean {
+  if (typeof runtime.input.catalog !== "function") return false;
+  try {
+    const live = compileToolProjection(runtime.input.catalog(), runtime.input.profile);
+    return live.projectionDigest !== runtime.projection.projectionDigest;
+  } catch {
+    return true;
+  }
+}
+
+/** Settles an `invalid`/`projection-mismatch` outcome and throws before the wrapped handler ever
+ * runs (fail closed) -- the catalog this bridge was built from has since been revised. */
+function denyProjectionMismatch(runtime: BridgeRuntime, meta: InvocationMeta): never {
+  emitSettlement(runtime, {
+    ...meta,
+    status: "invalid",
+    reason: "projection-mismatch",
+    reservationId: null,
+    effectStarted: false,
+    budgetDisposition: "not-reserved",
+  });
+  throw new CatalogDispatchFault("invalid", "projection-mismatch");
 }
 
 /**
@@ -401,20 +554,145 @@ function settleFailure(
   });
 }
 
+/** Marker rejection for a deadline race, never surfaced to the caller: `runReservedWithDeadline`
+ * always translates it into the canonical `CatalogDispatchFault("timeout","deadline-exceeded")`. */
+class CatalogFacadeDeadlineExceeded extends Error {
+  public constructor() {
+    super("catalog facade bridge deadline exceeded");
+  }
+}
+
+async function settleAfterHandler<T>(
+  runtime: BridgeRuntime,
+  meta: InvocationMeta,
+  reservation: CatalogFacadeBudgetReservation,
+  handlerPromise: Promise<T>,
+): Promise<T> {
+  let result: T;
+  try {
+    result = await handlerPromise;
+  } catch (error) {
+    settleFailure(runtime, meta, reservation, error);
+    throw error;
+  }
+  return settleSuccess(runtime, meta, reservation, result);
+}
+
+/** Settles a "timeout" outcome once the authoritative deadline has already won the race; mirrors
+ * `settleFailure`'s conservative "commit, not release" accounting since an effect may already have
+ * started and the handler was never actually cancelled, only abandoned. */
+function settleTimeout(
+  runtime: BridgeRuntime,
+  meta: InvocationMeta,
+  reservation: CatalogFacadeBudgetReservation,
+): void {
+  const accounting = settleReservation(runtime, reservation, true);
+  emitSettlement(runtime, {
+    ...meta,
+    status: accounting.accountingFault === undefined ? "timeout" : "failed",
+    reason: accounting.accountingFault === undefined ? "deadline-exceeded" : "budget-port-failed",
+    reservationId: reservation.reservationId,
+    effectStarted: true,
+    budgetDisposition: accounting.budgetDisposition,
+    error: accounting.accountingFault,
+  });
+}
+
+/** ADR-0175 D6's "Result/cancellation arrives after settled" row: a completion this bridge no
+ * longer owns must never publish content, charge a budget again, or emit a second terminal event --
+ * it is recorded as one body-free `tool-catalog.completion-discarded` line instead. */
+function emitDiscarded(runtime: BridgeRuntime, meta: InvocationMeta): void {
+  const correlationId = correlationIdFor(runtime);
+  try {
+    emitToolLifecycleEvent(runtime.input.logPort, {
+      ...identityFields(runtime),
+      op: "tool-catalog.completion-discarded",
+      invocationId: meta.invocationId,
+      toolRef: meta.descriptor.toolRef,
+      settlementId: meta.settlementId,
+      reason: "late-completion",
+    });
+  } catch (error) {
+    emitServerDiagnostic(
+      runtime.input.logPort.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "tool-catalog.lifecycle-sink-failed",
+        source: "tool-catalog-completion-discarded",
+        error,
+        redact: () => "server-operation-failed",
+      }),
+    );
+  }
+}
+
+/**
+ * Races the wrapped handler against `descriptor.bounds.maxDurationMs`. The handler is attached to
+ * immediately regardless of which side wins (never an unhandled rejection): if the deadline wins,
+ * the invocation settles `timeout`/`deadline-exceeded` and any later handler resolution/rejection
+ * is quarantined via `emitDiscarded` instead of double-settling or silently vanishing.
+ */
+async function runReservedWithDeadline<T>(
+  runtime: BridgeRuntime,
+  meta: InvocationMeta,
+  reservation: CatalogFacadeBudgetReservation,
+  handlerPromise: Promise<T>,
+  deadlineMs: number,
+): Promise<T> {
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+  }, deadlineMs);
+  timer.unref();
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer.ref = timer.ref; // no-op keep type inference stable; timer already scheduled above
+    setTimeout(() => reject(new CatalogFacadeDeadlineExceeded()), 0);
+  });
+  void timeout;
+  const quarantine = handlerPromise.then(
+    () => {
+      if (timedOut) emitDiscarded(runtime, meta);
+    },
+    () => {
+      if (timedOut) emitDiscarded(runtime, meta);
+    },
+  );
+  void quarantine;
+  try {
+    const result = await Promise.race([
+      handlerPromise,
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => {
+          reject(new CatalogFacadeDeadlineExceeded());
+        }, deadlineMs).unref();
+      }),
+    ]);
+    clearTimeout(timer);
+    return settleSuccess(runtime, meta, reservation, result);
+  } catch (error) {
+    clearTimeout(timer);
+    if (error instanceof CatalogFacadeDeadlineExceeded) {
+      timedOut = true;
+      settleTimeout(runtime, meta, reservation);
+      throw new CatalogDispatchFault("timeout", "deadline-exceeded");
+    }
+    settleFailure(runtime, meta, reservation, error);
+    throw error;
+  }
+}
+
 async function runReserved<T>(
   runtime: BridgeRuntime,
   meta: InvocationMeta,
   reservation: CatalogFacadeBudgetReservation,
   run: () => Promise<T>,
 ): Promise<T> {
-  let result: T;
-  try {
-    result = await run();
-  } catch (error) {
-    settleFailure(runtime, meta, reservation, error);
-    throw error;
+  const handlerPromise = run();
+  const deadlineMs = meta.descriptor.bounds.maxDurationMs;
+  if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) {
+    return settleAfterHandler(runtime, meta, reservation, handlerPromise);
   }
-  return settleSuccess(runtime, meta, reservation, result);
+  return runReservedWithDeadline(runtime, meta, reservation, handlerPromise, deadlineMs);
 }
 
 /**

@@ -87,7 +87,16 @@ function captureHandlers(
     binding: captured.find((binding) => refKey(binding.toolRef) === refKey(descriptor.toolRef)),
   }));
 }
-function handlerDigest(
+/**
+ * The one formula for "what handler set is actually bound," reused wherever a real
+ * `CatalogBoundHandler[]` exists (this module's own `buildCatalogBinding`, and any other
+ * production composition that assembles real bindings against this same catalog/projection --
+ * e.g. `opencodeToolSchemas.ts`'s `createOpenCodeGatewayToolCatalogAdvertisement`, once its
+ * composition point supplies real bindings instead of the compiled projection's static
+ * declarations alone; #3413 F8 review, findings b1-2 / #3414-AC4). Exported so a caller never
+ * re-derives this hash independently and risks the two copies drifting apart.
+ */
+export function computeHandlerSetDigest(
   projection: CompiledToolProjection,
   handlers: readonly CatalogBoundHandler[],
 ): CatalogDigest {
@@ -128,7 +137,7 @@ function buildCatalogBinding(
     projection,
     profile,
     handlers,
-    handlerSetDigest: handlerDigest(projection, handlers),
+    handlerSetDigest: computeHandlerSetDigest(projection, handlers),
     input: {
       ...input,
       projection,

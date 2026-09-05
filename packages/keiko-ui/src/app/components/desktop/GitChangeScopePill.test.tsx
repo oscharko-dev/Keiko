@@ -340,6 +340,57 @@ describe("GitChangeScopePill", () => {
     });
   });
 
+  // B5-3 (epic #3384 audit): `GitChangeScopePill` is never remounted on a chat switch (a
+  // mounted chat window can be rebound to a DIFFERENT existing chat in place —
+  // SelectionAwareWorkspaceHosts.tsx's `updateCfg({ chatId })` handoff). Before the fix,
+  // `prevSignatureRef` alone survived the switch, so landing on a different chat whose scope
+  // signature merely differed from the PREVIOUS chat's fired the same announcement a genuine
+  // in-chat connect/disconnect/stale transition would — even though nothing changed for the
+  // chat now bound. Every other announcer test above rerenders with the SAME default chat id
+  // ("chat-1"), so none of them can catch this. This one uses two distinct ids.
+  it("stays silent on a plain chat switch even when the landing chat's scope signature differs", async () => {
+    // A non-empty starting scope so the announcer span is always mounted (an empty scope with
+    // an empty announcement renders nothing at all), and so the "connected" baseline is set at
+    // mount, never announced.
+    const chatA = makeChat({
+      id: "chat-1",
+      gitChangeScopes: [makeGitChangeScope({ relationshipId: "rel-1" })],
+    });
+    const { rerender } = render(
+      <GitChangeScopePill chat={chatA} updateScopes={vi.fn()} refreshScope={vi.fn()} />,
+    );
+    expect(screen.getByTestId("git-change-scope-announcer")).toHaveTextContent("");
+
+    // Rerender the SAME mounted instance bound to a DIFFERENT chat, connected to an unrelated
+    // scope (different relationshipId, so a different signature) — mirrors an in-place chat
+    // rebind (SelectionAwareWorkspaceHosts.tsx), never a remount, so this is a genuine chat
+    // switch, not a connect/reconnect event on chat-1.
+    const chatB = makeChat({
+      id: "chat-2",
+      gitChangeScopes: [makeGitChangeScope({ relationshipId: "rel-2" })],
+    });
+    rerender(<GitChangeScopePill chat={chatB} updateScopes={vi.fn()} refreshScope={vi.fn()} />);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByTestId("git-change-scope-announcer")).toHaveTextContent("");
+
+    // A genuine transition WITHIN chat-2 (still connected -> stale) must still announce.
+    rerender(
+      <GitChangeScopePill
+        chat={makeChat({
+          id: "chat-2",
+          gitChangeScopes: [makeGitChangeScope({ relationshipId: "rel-2", descriptionStatus: "stale" })],
+        })}
+        updateScopes={vi.fn()}
+        refreshScope={vi.fn()}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("git-change-scope-announcer")).toHaveTextContent(
+        "Connected Git change is stale; refresh to continue.",
+      );
+    });
+  });
+
   it("jest-axe: no violations with one connected git-change scope", async () => {
     const chat = makeChat({ gitChangeScopes: [makeGitChangeScope()] });
     const { container } = render(

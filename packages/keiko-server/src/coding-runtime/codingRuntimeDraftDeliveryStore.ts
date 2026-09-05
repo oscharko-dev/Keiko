@@ -119,6 +119,7 @@ export function recordDraftDelivery(
   read: (runId: string) => CodingRuntimeSnapshot | undefined,
   value: DraftDeliveryRecord,
   expectedRevision: number | null,
+  recordedAt: string = new Date().toISOString(),
 ): CodingRuntimeSnapshot {
   if (!isDraftDeliveryRecord(value)) throw new TypeError("invalid draft delivery record");
   const snapshot = read(value.binding.runId);
@@ -132,7 +133,7 @@ export function recordDraftDelivery(
   if (value.phase === "push-proposed")
     assertDraftDeliveryVerifiedSource(snapshot, value, read, readSource);
   const source = localDraftDeliverySource(snapshot, value, readSource(snapshot));
-  return persistDraft(db, snapshot, value, source);
+  return persistDraft(db, snapshot, value, source, recordedAt);
 }
 
 function sourceJson(db: DatabaseSync, runId: string): string | null {
@@ -143,28 +144,33 @@ function sourceJson(db: DatabaseSync, runId: string): string | null {
   return row.draft_delivery_source_receipt;
 }
 
+// Bumps `revision`/`updated_at` on the row like every other mutating transition (#3384 batch-1
+// B5-6): the existing CAS predicate below already refuses a concurrent write, but without this the
+// accepted write itself was a same-revision no-op a poller or SSE catch-up could miss.
 function persistDraft(
   db: DatabaseSync,
   snapshot: CodingRuntimeSnapshot,
   value: DraftDeliveryRecord,
   source: VerifiedCommitResult | undefined,
+  recordedAt: string,
 ): CodingRuntimeSnapshot {
   const current = snapshot.draftDelivery;
   const previous = current === undefined ? null : JSON.stringify(current);
   const previousSource = sourceJson(db, snapshot.runId);
   const update = db
     .prepare(
-      "UPDATE coding_runtime_snapshots SET draft_delivery_record = ?, draft_delivery_source_receipt = ? WHERE run_id = ? AND draft_delivery_record IS ? AND draft_delivery_source_receipt IS ?",
+      "UPDATE coding_runtime_snapshots SET draft_delivery_record = ?, draft_delivery_source_receipt = ?, revision = revision + 1, updated_at = ? WHERE run_id = ? AND draft_delivery_record IS ? AND draft_delivery_source_receipt IS ?",
     )
     .run(
       JSON.stringify(value),
       source === undefined ? null : JSON.stringify(source),
+      recordedAt,
       value.binding.runId,
       previous,
       previousSource,
     );
   if (Number(update.changes) !== 1) throw new TypeError("concurrent draft delivery update");
-  return { ...snapshot, draftDelivery: value };
+  return { ...snapshot, draftDelivery: value, revision: snapshot.revision + 1, updatedAt: recordedAt };
 }
 
 function assertRecoveryStart(snapshot: CodingRuntimeSnapshot, value: DraftDeliveryRecord): void {
@@ -216,6 +222,7 @@ export function adoptDraftDeliveryFromPredecessor(
   db: DatabaseSync,
   read: (runId: string) => CodingRuntimeSnapshot | undefined,
   value: DraftDeliveryRecord,
+  recordedAt: string = new Date().toISOString(),
 ): CodingRuntimeSnapshot {
   if (!isDraftDeliveryRecord(value)) throw new TypeError("invalid draft delivery record");
   const snapshot = read(value.binding.runId);
@@ -231,5 +238,5 @@ export function adoptDraftDeliveryFromPredecessor(
     )
   )
     throw new TypeError("draft recovery has no bounded verified predecessor source");
-  return persistDraft(db, snapshot, value, undefined);
+  return persistDraft(db, snapshot, value, undefined, recordedAt);
 }

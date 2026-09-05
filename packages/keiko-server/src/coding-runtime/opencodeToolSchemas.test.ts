@@ -13,6 +13,7 @@ import {
   OPENCODE_MODEL_VISIBLE_TOOLS,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   projectedGatewaySchema,
+  type OpenCodeGatewayHandlerCoverage,
 } from "./opencodeToolSchemas.js";
 import { mintProposalId, proposalIdPattern } from "../gitDelivery/proposalId.js";
 
@@ -248,6 +249,106 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
     expect(first.offered.offerId).not.toBe(second.offered.offerId);
     expect(first.projection.projectionDigest).toBe(second.projection.projectionDigest);
     expect(first.offered.expiresAt).toBe(new Date(31_000).toISOString());
+  });
+
+  // AC5 (#3413-AC5): the advertisement crosses a BFF-owned trust boundary (today BFF -> model
+  // gateway -> sidecar/model, per its own composing-module doc comment above) and must contain
+  // only the approved descriptor/result-safe projection -- structurally, never merely by
+  // convention. Mirrors catalogToolBinder.test.ts:28's real-binder proof against THIS module's
+  // actually-wired advertisement, which had no equivalent exact-shape assertion before.
+  it("is JSON-safe and carries no handler/authority/secret-bearing material (#3413-AC5)", () => {
+    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0);
+    const serialized = JSON.stringify(advertisement.offered);
+    expect(serialized).not.toMatch(
+      /private|authority|handlerBindings|execute|environment|workspaceRoot|password|secret|token/iu,
+    );
+    // Round-trips through JSON with no loss (no function/undefined/symbol survives serialization).
+    expect(JSON.parse(serialized)).toEqual(JSON.parse(JSON.stringify(JSON.parse(serialized))));
+    expect(Object.keys(advertisement.offered).sort()).toEqual([
+      "binding",
+      "expiresAt",
+      "offerId",
+      "toolRefs",
+    ]);
+    expect(Object.keys(advertisement.offered.binding).sort()).toEqual([
+      "catalogRevision",
+      "handlerSetDigest",
+      "profile",
+      "projectionDigest",
+      "readiness",
+    ]);
+  });
+});
+
+// #3413 F8 review, findings b1-1/b1-2 and #3414-AC4/AC9: this module has no reach into which
+// handler ids the running dispatcher actually has bound, so it must accept that ground truth from
+// its caller rather than fabricate it. These pin the accepting primitive in isolation (a
+// synthetic, obviously-real coverage map) since no production composition wires a real one through
+// yet -- that wiring is tracked outOfScopeNeeds against codingToolAuthorityPort.ts's
+// catalogFacadeBridgeFor.
+describe("createOpenCodeGatewayToolCatalogAdvertisement with real handlerCoverage", () => {
+  function coverageFrom(
+    readiness: (canonicalId: string) => "ready" | "unavailable",
+  ): OpenCodeGatewayHandlerCoverage {
+    const base = createOpenCodeGatewayToolCatalogAdvertisement(0);
+    const readinessByToolId = new Map(
+      base.projection.tools.map((tool) => [tool.toolRef.canonicalId, readiness(tool.toolRef.canonicalId)]),
+    );
+    return { readinessByToolId, handlerSetDigest: "real-handler-set-digest" as never };
+  }
+
+  it("preserves the prior structural-only behaviour byte-for-byte when coverage is omitted", () => {
+    const withoutCoverage = createOpenCodeGatewayToolCatalogAdvertisement(0);
+    expect(withoutCoverage.offered.toolRefs).toHaveLength(16);
+    expect(withoutCoverage.offered.binding.readiness).toBe("ready");
+    expect(withoutCoverage.offered.binding.handlerSetDigest).toBe(
+      withoutCoverage.projection.projectionDigest,
+    );
+  });
+
+  it("drops a tool from the offered set when its real binding is not ready, without killing the rest", () => {
+    const coverage = coverageFrom((id) => (id === "keiko.repo.search" ? "unavailable" : "ready"));
+    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0, coverage);
+    expect(advertisement.offered.toolRefs.map((ref) => ref.canonicalId)).not.toContain(
+      "keiko.repo.search",
+    );
+    expect(advertisement.offered.toolRefs).toHaveLength(15);
+    // One unready optional tool must not swing the whole advertisement to unavailable, matching
+    // catalogToolBinder.ts's own per-tool offer semantics (buildCatalogOffer) -- but the TOP-LEVEL
+    // readiness signal still reflects that at least one real binding was not ready.
+    expect(advertisement.offered.binding.readiness).toBe("unavailable");
+  });
+
+  it("treats a tool absent from the coverage map as unavailable (fail closed)", () => {
+    const base = createOpenCodeGatewayToolCatalogAdvertisement(0);
+    const partial = new Map(
+      base.projection.tools
+        .filter((tool) => tool.toolRef.canonicalId !== "keiko.repo.search")
+        .map((tool) => [tool.toolRef.canonicalId, "ready" as const]),
+    );
+    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0, {
+      readinessByToolId: partial,
+      handlerSetDigest: "real-handler-set-digest" as never,
+    });
+    expect(advertisement.offered.toolRefs.map((ref) => ref.canonicalId)).not.toContain(
+      "keiko.repo.search",
+    );
+  });
+
+  it("is ready, and offers every tool, only when every real binding is ready", () => {
+    const coverage = coverageFrom(() => "ready");
+    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0, coverage);
+    expect(advertisement.offered.binding.readiness).toBe("ready");
+    expect(advertisement.offered.toolRefs).toHaveLength(16);
+  });
+
+  it("uses the caller-supplied real handlerSetDigest verbatim, never the projection digest alias (#3414-AC4)", () => {
+    const coverage = coverageFrom(() => "ready");
+    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0, coverage);
+    expect(advertisement.offered.binding.handlerSetDigest).toBe("real-handler-set-digest");
+    expect(advertisement.offered.binding.handlerSetDigest).not.toBe(
+      advertisement.projection.projectionDigest,
+    );
   });
 });
 

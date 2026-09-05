@@ -12,7 +12,7 @@ const COMMON_KEYS = new Set(["type", "description", "enum", "const"]);
 const TYPE_KEYS: Readonly<Record<string, ReadonlySet<string>>> = Object.freeze({
   object: new Set(["properties", "required", "additionalProperties"]),
   array: new Set(["items", "minItems", "maxItems"]),
-  string: new Set(["minLength", "maxLength"]),
+  string: new Set(["minLength", "maxLength", "pattern"]),
   number: new Set(["minimum", "maximum"]),
   integer: new Set(["minimum", "maximum"]),
   boolean: new Set<string>(),
@@ -106,13 +106,33 @@ function normalizeSchema(schema: CatalogJsonObject): CatalogJsonObject {
   return normalizeTypedSchema(normalized, type);
 }
 
+// #3414 AC1: an ECMA regex source, valid only if `new RegExp` accepts it. `pattern` is authored by
+// the catalog owner at compile time (never attacker-supplied input — the values it later matches
+// against are, but those are already bounded to `TOOL_CATALOG_LIMITS.maxStringBytes` by
+// `copyCatalogJson` before this dialect ever sees them), the same trust boundary the rest of this
+// closed dialect already assumes for every other keyword.
+function isValidRegexSource(source: string): boolean {
+  try {
+    new RegExp(source);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function stringSchema(schema: CatalogJsonObject): void {
+  numericBounds(schema, "minLength", "maxLength", true);
+  if (schema.pattern === undefined) return;
+  requireCatalog(isValidRegexSource(catalogString(schema.pattern)), "invalid-schema");
+}
+
 function normalizeTypedSchema(schema: CatalogJsonObject, type: string): CatalogJsonObject {
   if (type === "object") return objectSchema(schema);
   if (type === "array") {
     numericBounds(schema, "minItems", "maxItems", true);
     return { ...schema, items: normalizeSchema(catalogObject(schema.items)) };
   }
-  if (type === "string") numericBounds(schema, "minLength", "maxLength", true);
+  if (type === "string") stringSchema(schema);
   if (type === "number" || type === "integer") numericBounds(schema, "minimum", "maximum", false);
   return schema;
 }
@@ -167,10 +187,19 @@ function typeMatches(schema: CatalogJsonObject, value: CatalogJsonValue): boolea
     );
   if (type === "array") return arrayMatches(schema, value);
   if (!scalarMatches(type, value)) return false;
-  if (typeof value === "string")
-    return withinNumericBounds(schema, Array.from(value).length, "minLength", "maxLength");
+  if (typeof value === "string") return stringMatches(schema, value);
   if (typeof value === "number") return withinNumericBounds(schema, value, "minimum", "maximum");
   return true;
+}
+
+// `schema.pattern` is only ever reached here already validated by `stringSchema` (every schema
+// this dialect matches against was produced by `compileCatalogSchema`), so `new RegExp` cannot
+// throw on it.
+function stringMatches(schema: CatalogJsonObject, value: string): boolean {
+  if (!withinNumericBounds(schema, Array.from(value).length, "minLength", "maxLength"))
+    return false;
+  const pattern = schema.pattern;
+  return pattern === undefined || new RegExp(catalogString(pattern)).test(value);
 }
 
 function schemaMatches(schema: CatalogJsonObject, value: CatalogJsonValue): boolean {

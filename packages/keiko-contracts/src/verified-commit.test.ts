@@ -1,6 +1,14 @@
 import { validateCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "./coding-workbench-runtime-approval-review.js";
 import { describe, expect, it } from "vitest";
 import { isVerifiedCommitResult, type VerifiedCommitResult } from "./verified-commit.js";
+import {
+  GIT_CHANGE_SNAPSHOT_DEFAULT_LIMITS,
+  GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
+  summarizeGitChangeSnapshotCompleteness,
+  validateGitChangeSnapshotResult,
+  type GitChangeSnapshot,
+  type GitChangeSnapshotEntry,
+} from "./git-change-snapshot.js";
 
 const receipt: VerifiedCommitResult = {
   schemaVersion: "1",
@@ -162,5 +170,73 @@ describe("transient verified commit review", () => {
         }).ok,
       ).toBe(false);
     }
+  });
+});
+
+// #3386 AC11: the interactive runtime diff (this file's VerifiedCommitResult) and #3397's
+// immutable merge-base-to-head PR snapshot (GitChangeSnapshot) are two distinct contracts with
+// disjoint closed-key validators — this proves neither is ever accepted where the other belongs.
+// The snapshot fixture below derives its `completeness` field from the snapshot module's own
+// production builder (`summarizeGitChangeSnapshotCompleteness`) rather than hand-copying the
+// count/kind bookkeeping it owns; the snapshot validator does not itself recompute a digest (any
+// 64-hex value is accepted, per that module's own test fixtures), so `snapshotDigest`/`evidenceId`
+// need only be digest-shaped, not cryptographically derived.
+describe("#3386 AC11 — a PR snapshot never satisfies a commit-review validator or vice versa", () => {
+  const snapshotEntry: GitChangeSnapshotEntry = {
+    kind: "modify",
+    evidenceId: "9".repeat(64),
+    pathDigest: "8".repeat(64),
+    oldMode: "100644",
+    newMode: "100644",
+    oldObjectId: "1".repeat(40),
+    newObjectId: "2".repeat(40),
+    additions: 1,
+    deletions: 1,
+    omittedHunks: 0,
+    truncated: false,
+    hunks: [
+      {
+        hunkDigest: "7".repeat(64),
+        oldStart: 1,
+        oldCount: 2,
+        newStart: 1,
+        newCount: 2,
+        additions: 1,
+        deletions: 1,
+      },
+    ],
+  };
+  const gitChangeSnapshot: GitChangeSnapshot = {
+    schemaVersion: GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
+    repositoryId: "repo-test",
+    baseRef: "main",
+    baseSha: "3".repeat(40),
+    headRef: "issue/test",
+    headSha: "4".repeat(40),
+    mergeBaseSha: "3".repeat(40),
+    capturedAt: "2026-09-04T10:00:00.000Z",
+    expiresAt: "2026-09-04T10:15:00.000Z",
+    outcome: "complete",
+    limits: GIT_CHANGE_SNAPSHOT_DEFAULT_LIMITS,
+    completeness: summarizeGitChangeSnapshotCompleteness({
+      entries: [snapshotEntry],
+      totalFiles: 1,
+      bytes: 128,
+    }),
+    entries: [snapshotEntry],
+    localDivergence: { stagedCount: 0, unstagedCount: 0, untrackedCount: 0, conflictedCount: 0 },
+    snapshotDigest: "6".repeat(64),
+  };
+
+  it("is itself a well-formed GitChangeSnapshot (the fixture's own precondition)", () => {
+    expect(validateGitChangeSnapshotResult(gitChangeSnapshot)).toMatchObject({ ok: true });
+  });
+
+  it("rejects a well-formed GitChangeSnapshot as a VerifiedCommitResult", () => {
+    expect(isVerifiedCommitResult(gitChangeSnapshot)).toBe(false);
+  });
+
+  it("rejects a well-formed VerifiedCommitResult as a GitChangeSnapshotResult", () => {
+    expect(validateGitChangeSnapshotResult(receipt)).toMatchObject({ ok: false });
   });
 });

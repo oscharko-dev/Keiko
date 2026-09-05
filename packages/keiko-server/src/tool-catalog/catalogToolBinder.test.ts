@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createInitialToolCatalog, compileToolProjection } from "@oscharko-dev/keiko-tool-catalog";
 import {
   catalogBoundToolSet,
+  computeHandlerSetDigest,
   createCatalogBinding,
   createCatalogOffer,
   lifecycleIdentity,
@@ -162,6 +163,19 @@ describe("catalog handler binding and offered projection", () => {
     });
     expect(invalid.correlationId).toBe(UNKNOWN_CORRELATION_ID);
     expect(invalid).not.toHaveProperty("parentCorrelationId");
+  });
+  // #3413 F8 review, finding b1-2 / #3414-AC4: `handlerSetDigest` must be the ONE real digest a
+  // caller outside this module (e.g. opencodeToolSchemas.ts's advertisement, once its composition
+  // supplies real bindings) can reuse rather than re-deriving independently -- this pins that the
+  // exported formula is exactly what `createCatalogBinding` itself stamps onto the binding state,
+  // and that it actually changes when the bound handler identity changes (not a constant alias).
+  it("exports the real handler-set digest formula, reused verbatim by createCatalogBinding", () => {
+    const fixture = catalogToolFixture();
+    const state = createCatalogBinding(fixture.input, fixture.options);
+    expect(state.handlerSetDigest).toBe(computeHandlerSetDigest(state.projection, state.handlers));
+    expect(state.handlerSetDigest).toMatch(/^[a-f0-9]{64}$/u);
+    const unbound = createCatalogBinding({ ...fixture.input, handlerBindings: [] }, fixture.options);
+    expect(unbound.handlerSetDigest).not.toBe(state.handlerSetDigest);
   });
   it("passes a well-formed correlation and parent correlation id through unchanged", () => {
     const fixture = catalogToolFixture();

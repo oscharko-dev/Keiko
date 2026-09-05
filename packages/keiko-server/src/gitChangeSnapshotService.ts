@@ -409,7 +409,7 @@ export function createGitChangeSnapshotService(
     recheck: async (reference, input): Promise<GitChangeSnapshotRecheck> =>
       await recheckSnapshot(ctx, reference, input),
     reserve: (reference, scope, correlationId) => registry.reserve(reference, scope, correlationId),
-    release: (reference, scope, correlationId) => {
+    release: (reference, scope, correlationId): void => {
       registry.release(reference, scope, correlationId);
     },
     close: (): void => {

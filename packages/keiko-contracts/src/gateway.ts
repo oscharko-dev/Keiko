@@ -272,6 +272,19 @@ export interface ModelCapability {
    * provider that advertises speech output.
    */
   readonly supportedVoicePersonas?: readonly VoicePersona[] | undefined;
+  /**
+   * Optional per-token USD pricing (live-journey-readiness-1). Absent means the model carries no
+   * known dollar cost: a caller enforcing a spend budget against an un-priced model must fail
+   * closed (reason `spend-pricing-unavailable`) rather than silently treat it as free. Content-free
+   * — a public list price, never a negotiated rate or an account-specific discount.
+   */
+  readonly pricing?: ModelCapabilityPricing | undefined;
+}
+
+/** Public per-million-token USD list price for a model capability. See {@link ModelCapability.pricing}. */
+export interface ModelCapabilityPricing {
+  readonly inputUsdPerMillionTokens: number;
+  readonly outputUsdPerMillionTokens: number;
 }
 
 function normalizedCodingUseCase(value: string): string {

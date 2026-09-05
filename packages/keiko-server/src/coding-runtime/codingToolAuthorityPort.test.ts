@@ -17,7 +17,11 @@ import {
 } from "./codingToolApprovalBridge.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingToolGovernedPorts } from "./codingToolGovernedDelegate.js";
-import type { CodingRuntimeCapabilityDelegationInput } from "./runtimeAuthorityService.js";
+import {
+  codingRuntimeActionClassesForMode,
+  codingRuntimeCommandPolicyForMode,
+  type CodingRuntimeCapabilityDelegationInput,
+} from "./runtimeAuthorityService.js";
 import { createBufferedServerLogSink } from "../observability/server-log.js";
 
 const DIGEST = "a".repeat(64);
@@ -173,6 +177,83 @@ describe("CodingToolAuthorityPort", () => {
     ).toBe(false);
     expect(authority.resolveCapabilityForDelegation).not.toHaveBeenCalled();
   });
+  // B3-2/authority-matrix-2: codingRuntimeNetworkPolicyForMode now populates
+  // networkPolicy.connectorScopes at every mode (not only autonomous-delivery), which is the fix
+  // this port relies on for CI to ever be admittable outside autonomous-delivery. That population
+  // alone must never be sufficient: CI still requires internetPolicyAllowed (an approval proof, or
+  // the mode's own internet effect already being "allowed"), so a mode-derived envelope that now
+  // carries the connector scope stays denied at governed-assist without a proof.
+  it("still denies CI at governed-assist once the connector scope is present but no internet-policy allowance exists", () => {
+    const envelope = restrictedEnvelope({
+      effectiveMode: "governed-assist",
+      networkPolicy: {
+        mode: "deny-all",
+        connectorScopes: ["source-control.read", "source-control.write"],
+      },
+    });
+    const authority = {
+      revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+    };
+    const port = createCodingToolAuthorityPort(authority, runtimeContext);
+    expect(
+      port.admit("capability", {
+        action: "git",
+        operation: "ci",
+        actionId: "ci-1",
+        idempotencyKey: "ci-1",
+      }).ok,
+    ).toBe(false);
+  });
+  it("admits CI at autonomous-delivery with the mode-derived connector scope and internet policy", () => {
+    const envelope = restrictedEnvelope({
+      effectiveMode: "autonomous-delivery",
+      networkPolicy: {
+        mode: "connector-scoped-egress",
+        connectorScopes: ["source-control.read", "source-control.write"],
+      },
+    });
+    const authority = {
+      revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+    };
+    const port = createCodingToolAuthorityPort(authority, runtimeContext);
+    expect(
+      port.admit("capability", {
+        action: "git",
+        operation: "ci",
+        actionId: "ci-1",
+        idempotencyKey: "ci-1",
+      }).ok,
+    ).toBe(true);
+  });
+  // B2-4: a raw git "write" bypasses the propose/stage review path entirely, so it carries
+  // delivery's risk class and must require an approval proof unconditionally, in every mode --
+  // never merely the connector scope alone, which (per deliveryScopeGranted) is present at every
+  // mode by design and would otherwise leave this port silently open the moment any caller wires a
+  // real git write request through it.
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "denies git write without an approval proof at %s",
+    (effectiveMode) => {
+      const envelope = restrictedEnvelope({
+        effectiveMode,
+        connectorScopes: ["source-control.read", "source-control.write"],
+      });
+      const authority = {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+      };
+      const port = createCodingToolAuthorityPort(authority, runtimeContext);
+      expect(
+        port.admit("capability", {
+          action: "git",
+          operation: "write",
+          actionId: "write-1",
+          idempotencyKey: "write-1",
+        }).ok,
+      ).toBe(false);
+    },
+  );
   it("never turns a hard command denial into an approval request", () => {
     const envelope = restrictedEnvelope({
       commandPolicy: {
@@ -831,14 +912,15 @@ describe("CodingToolAuthorityPort", () => {
   it.each(["verification", "command"] as const)(
     "admits a governed-assist %s only with its exact approved proof",
     (action) => {
+      // B3-1/authority-matrix-1 (AGENTS.md §7 fixture rule): derive the envelope's actionClasses
+      // and commandPolicy from the real production mint functions instead of hand-restating their
+      // output, so a future regression in codingRuntimeCommandPolicyForMode/
+      // codingRuntimeActionClassesForMode (e.g. governed-assist reverting to a hard "deny") fails
+      // this test instead of leaving it green against a shape production can no longer produce.
       const envelope = restrictedEnvelope({
         effectiveMode: "governed-assist",
-        commandPolicy: {
-          mode: "governed",
-          allow: [],
-          deny: [],
-          requirePerCommandApproval: true,
-        },
+        actionClasses: codingRuntimeActionClassesForMode("governed-assist", undefined),
+        commandPolicy: codingRuntimeCommandPolicyForMode("governed-assist"),
       });
       const authority = {
         revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
