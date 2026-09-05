@@ -67,7 +67,11 @@ import type {
   CodingRuntimeDescriptionJobStore,
   WorkbenchDescriptionScope,
 } from "./codingRuntimeDescriptionJobStore.js";
-import type { WorkbenchDescriptionReason } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
+import {
+  WORKBENCH_DESCRIPTION_REASON_STATES,
+  type WorkbenchDescriptionReason,
+  type WorkbenchDescriptionStatus,
+} from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
 export type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
 
 // #3401: the outcome a wired generator reports for one dispatched scope. `snapshotDigest` and
@@ -224,6 +228,14 @@ function recordRuntimeRunSettled(
   });
 }
 
+function descriptionSettleOp(
+  reason: WorkbenchDescriptionReason,
+): "generated" | "blocked" | "failed" {
+  const state = WORKBENCH_DESCRIPTION_REASON_STATES[reason];
+  if (state === "failed") return "failed";
+  return state === "blocked" ? "blocked" : "generated";
+}
+
 function runtimeResultLogFields(
   result: CodingWorkbenchRuntimeResult | undefined,
 ): Readonly<Record<string, unknown>> {
@@ -341,7 +353,7 @@ export class CodingRuntimeOrchestrator {
       serial: <T>(work: () => Promise<T>): Promise<T> => this.serial(work),
       advanceRevision: (current, eventKind): CodingRuntimeOrchestratorResult =>
         this.advanceRevision(current, eventKind),
-      publicSnapshot: (current): PublicSnapshot => this.projection.publicSnapshot(current),
+      publicSnapshot: (current): PublicSnapshot => this.publicSnapshotWithDescription(current),
       taskDispatcher: deps.taskDispatcher,
       settleTask: (runId, outcome): void => {
         this.queueTaskSettlement(runId, outcome);
@@ -404,14 +416,14 @@ export class CodingRuntimeOrchestrator {
     const visibleRunId = this.activeRunId ?? this.settledRunId;
     return visibleRunId === undefined
       ? this.projection.idle()
-      : this.projection.publicSnapshot(this.deps.snapshots.get(visibleRunId));
+      : this.publicSnapshotWithDescription(this.deps.snapshots.get(visibleRunId));
   }
   status(): PublicSnapshot {
     return this.snapshot();
   }
   getSnapshot(runId: string): PublicSnapshot | undefined {
     const snapshot = this.deps.snapshots.get(runId);
-    return snapshot ? this.projection.publicSnapshot(snapshot) : undefined;
+    return snapshot ? this.publicSnapshotWithDescription(snapshot) : undefined;
   }
 
   submitFollowUp(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
@@ -789,7 +801,7 @@ export class CodingRuntimeOrchestrator {
       )
         return this.fail("invalid-intent");
       this.deps.snapshots.acknowledgeRecovery(current.runId, this.now().toISOString());
-      return { ok: true, snapshot: this.projection.publicSnapshot(this.current()) };
+      return { ok: true, snapshot: this.publicSnapshotWithDescription(this.current()) };
     });
   }
 
@@ -820,7 +832,7 @@ export class CodingRuntimeOrchestrator {
     if (event.kind === "permission-requested" && !this.stashApproval(current, event)) {
       return this.fail("invalid-intent");
     }
-    return { ok: true, snapshot: this.projection.publicSnapshot(current) };
+    return { ok: true, snapshot: this.publicSnapshotWithDescription(current) };
   }
 
   private ingestActiveEvent(
@@ -941,7 +953,7 @@ export class CodingRuntimeOrchestrator {
     auxiliary?: AuxiliaryEventFacts,
   ): CodingRuntimeOrchestratorResult {
     return this.projection.publish(current, eventKind, auxiliary)
-      ? { ok: true, snapshot: this.projection.publicSnapshot(current) }
+      ? { ok: true, snapshot: this.publicSnapshotWithDescription(current) }
       : this.transition(current, "recovery-required", "recovery-required");
   }
 
@@ -956,6 +968,11 @@ export class CodingRuntimeOrchestrator {
   /** Synchronous bootstrap boundary used before the HTTP dependency graph becomes observable. */
   startupReconcileNow(): void {
     this.deps.snapshots.markNonterminalRecoveryRequired(this.now().toISOString());
+    // #3401: a description attempt still `dispatched` from a prior process has no live promise to
+    // resume — it is reconciled to a closed blocked status, never silently re-run or lost.
+    for (const runId of this.description?.jobs.reconcileInterrupted(this.now().toISOString()) ?? []) {
+      this.logDescriptionEvent({ runId }, "blocked", { reason: "interrupted" });
+    }
     for (const snapshot of this.deps.snapshots
       .listRecentActive(1)
       .filter(({ state }) => state === "recovery-required")) {
@@ -1224,7 +1241,7 @@ export class CodingRuntimeOrchestrator {
       updatedAt: this.now().toISOString(),
     });
     return this.projection.publish(next, eventKind)
-      ? { ok: true, snapshot: this.projection.publicSnapshot(next) }
+      ? { ok: true, snapshot: this.publicSnapshotWithDescription(next) }
       : this.transition(next, "recovery-required", "recovery-required");
   }
 
@@ -1287,7 +1304,7 @@ export class CodingRuntimeOrchestrator {
   ): CodingRuntimeOrchestratorResult {
     return kind === "stop"
       ? this.transition(current, "stopping")
-      : { ok: true as const, snapshot: this.projection.publicSnapshot(current) };
+      : { ok: true as const, snapshot: this.publicSnapshotWithDescription(current) };
   }
 
   private async executeEndRequest(
@@ -1324,7 +1341,7 @@ export class CodingRuntimeOrchestrator {
       settled !== undefined &&
       TERMINAL_STATES.has(settled.state)
     ) {
-      return { ok: true, snapshot: this.projection.publicSnapshot(settled) };
+      return { ok: true, snapshot: this.publicSnapshotWithDescription(settled) };
     }
     return undefined;
   }
@@ -1355,7 +1372,7 @@ export class CodingRuntimeOrchestrator {
       return this.transition(next, "recovery-required", "recovery-required");
     }
     this.finalizeTransitionIfTerminal(next, state, failureCode);
-    return { ok: true, snapshot: this.projection.publicSnapshot(next) };
+    return { ok: true, snapshot: this.publicSnapshotWithDescription(next) };
   }
 
   private createTransitionSnapshot(
@@ -1410,6 +1427,133 @@ export class CodingRuntimeOrchestrator {
     }
     recordRuntimeRunSettled(this.deps.activityLog, next, state, failureCode);
     this.publishSettlement(next, state, failureCode);
+    if (state === "succeeded") this.dispatchDescriptionIfEligible(next);
+  }
+
+  /**
+   * #3401: overlays the durable description status onto every public snapshot projection. The
+   * underlying value is read fresh from the job store on every call (never cached on
+   * `CodingRuntimeSnapshot`), so a status written by an in-flight dispatch after `next`/`current`
+   * was captured is still visible on the very next poll or transition response.
+   */
+  private publicSnapshotWithDescription(snapshot: CodingRuntimeSnapshot | undefined): PublicSnapshot {
+    const base = this.projection.publicSnapshot(snapshot);
+    const status = snapshot === undefined ? undefined : this.description?.jobs.current(snapshot.runId);
+    return status === undefined ? base : { ...base, descriptionStatus: status };
+  }
+
+  /**
+   * #3401 AC "a repaired head after CI repair regenerates": the CI-repair loop (#3388) pushes a new
+   * verified commit for an ALREADY-succeeded run, well after this orchestrator's one-time terminal
+   * transition already fired. That owner calls this after recording the new successful commit so
+   * the same dedup/coalesce/supersede path in `dispatchDescriptionIfEligible` reconsiders the
+   * bound run's description job for the new head — a public seam rather than a second dispatcher.
+   */
+  notifyVerifiedHeadAdvanced(runId: string): void {
+    const snapshot = this.deps.snapshots.get(runId);
+    if (snapshot !== undefined) this.dispatchDescriptionIfEligible(snapshot);
+  }
+
+  // #3401: fires only for a stable succeeded head with a persisted VerifiedCommitResult (correction
+  // 5 — the workspace's best-effort `lastVerifiedHead` is never the trigger). Dispatches AT MOST
+  // ONE generation attempt per (runId, remoteDigest, baseSha, headSha); a repeated identical signal
+  // or a still-in-flight attempt for the same head coalesces, and a new head supersedes.
+  private dispatchDescriptionIfEligible(next: CodingRuntimeSnapshot): void {
+    const support = this.description;
+    if (support === undefined) return;
+    const commit = this.deps.snapshots.getLastSuccessfulVerifiedCommit?.(next.runId);
+    if (commit?.headSha === undefined) return;
+    const scope: WorkbenchDescriptionScope = {
+      runId: next.runId,
+      remoteDigest: commit.repositoryDigest,
+      baseSha: commit.baseSha,
+      headSha: commit.headSha,
+    };
+    const nowIso = this.now().toISOString();
+    const decision = support.jobs.beginDispatch(scope, nowIso);
+    if (decision.kind === "coalesced") {
+      this.logDescriptionEvent(scope, "coalesced", { generationVersion: decision.status?.generationVersion });
+      return;
+    }
+    if (decision.kind === "budget-exhausted") {
+      this.logDescriptionEvent(scope, "blocked", { reason: "budget-exhausted" as const });
+      return;
+    }
+    if (decision.supersededPriorAttempt) this.logDescriptionEvent(scope, "superseded", {});
+    this.runDescriptionDispatch(support, scope, decision.generationVersion, decision.revision, nowIso);
+  }
+
+  private runDescriptionDispatch(
+    support: CodingRuntimeDescriptionSupport,
+    scope: WorkbenchDescriptionScope,
+    generationVersion: number,
+    revision: number,
+    nowIso: string,
+  ): void {
+    this.logDescriptionEvent(scope, "dispatched", { generationVersion });
+    if (support.dispatcher === undefined) {
+      support.jobs.recordBlocked(scope, "generation-unavailable", generationVersion, revision, nowIso);
+      this.logDescriptionEvent(scope, "blocked", { reason: "generation-unavailable" as const });
+      return;
+    }
+    const controller = new AbortController();
+    this.descriptionDispatchAbort.get(scope.runId)?.abort();
+    this.descriptionDispatchAbort.set(scope.runId, controller);
+    support.dispatcher
+      .generate(scope, controller.signal)
+      .then((outcome) => {
+        this.settleDescriptionDispatch(support, scope, generationVersion, revision, outcome);
+      })
+      .catch(() => {
+        support.jobs.recordBlocked(
+          scope,
+          "provider-failed",
+          generationVersion,
+          revision,
+          this.now().toISOString(),
+        );
+      });
+  }
+
+  private settleDescriptionDispatch(
+    support: CodingRuntimeDescriptionSupport,
+    scope: WorkbenchDescriptionScope,
+    generationVersion: number,
+    revision: number,
+    outcome: WorkbenchDescriptionDispatchOutcome,
+  ): void {
+    const observedAt = this.now().toISOString();
+    const status: WorkbenchDescriptionStatus = {
+      schemaVersion: "1",
+      runId: scope.runId,
+      remoteDigest: scope.remoteDigest,
+      baseSha: scope.baseSha,
+      headSha: scope.headSha,
+      generationVersion,
+      state: WORKBENCH_DESCRIPTION_REASON_STATES[outcome.reason],
+      reason: outcome.reason,
+      snapshotDigest: outcome.snapshotDigest ?? null,
+      draftDigest: outcome.draftDigest ?? null,
+      artifactOutcome: outcome.artifactOutcome ?? null,
+      observedAt,
+    };
+    const accepted = support.jobs.settle(scope, generationVersion, revision, status, observedAt);
+    this.logDescriptionEvent(scope, accepted ? descriptionSettleOp(outcome.reason) : "superseded", {
+      generationVersion,
+    });
+  }
+
+  private logDescriptionEvent(
+    identity: { readonly runId: string; readonly remoteDigest?: string },
+    event: "dispatched" | "coalesced" | "superseded" | "blocked" | "generated" | "failed",
+    extra: Readonly<Record<string, unknown>>,
+  ): void {
+    this.deps.activityLog?.write({
+      category: "process",
+      op: `coding-runtime.description.${event}`,
+      correlationId: runtimeDiagnosticCorrelationId(identity.runId),
+      extra: { runId: identity.runId, remoteDigest: identity.remoteDigest, ...extra },
+    });
   }
 
   private purgeExplicitlyEndedActivity(
@@ -1512,8 +1656,9 @@ function resumeAdmission(
 
 export function createCodingRuntimeOrchestrator(
   deps: CodingRuntimeOrchestratorDeps,
+  description?: CodingRuntimeDescriptionSupport,
 ): CodingRuntimeOrchestrator {
-  return new CodingRuntimeOrchestrator(deps);
+  return new CodingRuntimeOrchestrator(deps, description);
 }
 
 /** The most recently updated terminal row, if any — the run a restarted BFF still shows as settled. */

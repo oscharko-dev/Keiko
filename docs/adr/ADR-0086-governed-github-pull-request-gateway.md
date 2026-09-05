@@ -196,6 +196,48 @@ without copying approval or a successful commit into that run. Reconciliation mu
 effect proposal. Referenced predecessor snapshots are retained against pruning so retry cannot
 silently lose its verification source.
 
+### D10 — A dedicated `pr-description-apply` action kind, its own mint route, and a description authority that admits it outside a running Code task (#3399, epic #3384 correction 4)
+
+V1 places a validated, Model-Gateway-generated description into the one versioned managed body
+region without title, base, or draft-state authority. `GitPullRequestAdapter.updatePullRequest`
+always patches title, body and base together and may toggle draft state, so it is not safe for
+this body-only guarantee. The apply is a distinct `GitDeliveryActionKind` —
+`"pr-description-apply"` — never a reuse of `"pr-update"`: a shared kind would let the policy-pack
+layer hold only one decision for two operations with different blast radii (full metadata mutation
+versus a byte-bounded body region), collapsing a real authority distinction the pack exists to
+express. `KEIKO_DEFAULT_PR_POLICY_PACK` carries an explicit `approval-gated` rule for it
+(`requiredApprovers: []`, ADR-0080 D5's "any approver" shape), mirroring `pr-create`/`pr-update`'s
+entries; its real, unconditional enforcement is the description service's own approval
+continuation (`PrDescriptionApprovals`, mint via `issueApproval`, redeem via
+`consumeApproval`/`executeApproved`) at the route/service layer, exactly as the commit, push, and
+PR mint routes (`/api/git-delivery/{commit,push,pr}/approve`) enforce ADR-0138 D2 unconditionally
+rather than through the pack's own decision — `evaluateGitPullRequestEffectivePolicy`
+(keiko-tools/git-pr-gateway.ts) remains closed over `"pr-create" | "pr-update"`, so the pack rule
+does not (yet) reach that kernel evaluator; the description service's own base-branch check reuses
+the `pr-update` constraint as a documented proxy pending that kernel's own extension.
+
+The apply is reachable from two admission sources. Under a running Code task, the existing
+run-bound `gitDeliveryAuthorityGate` for the `"pull-request"` operation admits it exactly as it
+already admits `pr-create`/`pr-update`. Outside a running run — a Git-connected Chat turn or a
+post-terminal Workbench job — `authorizeGitDelivery` (runBoundAuthority.ts) additionally accepts a
+server-minted, bounded **description authority** (`CodingRuntimeAuthorityService`, the same owner
+as `ActiveGitDeliveryRunAuthority`) for this one operation only. The authority is minted for a
+single immutable `(remoteDigest, PR identity or base/head pair, snapshotDigest)` scope, its
+`effectiveMode` is `resolveEffectiveCodingWorkbenchMode(requested, deploymentCeiling)`, and it
+carries no workspace-write or command action classes — a scope change, TTL expiry, or explicit
+revocation removes it, and admission always re-derives the scope fresh rather than trusting a
+value cached at a prior call. The SAME authority separately admits model egress of snapshot
+content for description generation (`authorizeGitDeliveryModelEgress`), since that effect has no
+Git operation shape (no argv, adapter, or branch target) to gate through
+`GitDeliveryAuthorityRequest.operation`. `prDescriptionRoutes.ts` composes one stateful
+`PrDescriptionApplicationService` per (project, repository, PR), created lazily and reused across
+the preview → approve → apply lifecycle so the in-flight proposal and its approval continuation
+survive across the separate HTTP calls; the `context()` provider re-derives admission fresh on
+every internal call rather than caching it, so a revoked or drifted authority is observed on the
+very next call. Full production composition of description generation (Model Gateway config and
+capability) remains #3398's scope; until composed, the route fails closed as unavailable rather
+than degrading to a fabricated or unvalidated description.
+
 ## Consequences
 
 ### Positive
@@ -259,6 +301,10 @@ silently lose its verification source.
 - Issue #478: Merge governance (next child; extends provider execution; NOT in this slice)
 - Issue #470: Epic — governed end-to-end Git delivery
 - ADR-0087: Governed merge gateway (downstream merge authority and protected-branch enforcement)
+- ADR-0138: Monotonic product-wide autonomy semantics (the mint-route-plus-unconditional-approval
+  pattern D10's `pr-description-apply` follows, mirroring the commit/push/PR mint routes)
+- Epic #3384 / Issue #3399: Apply a managed Keiko description through the governed pull request
+  update path (D10's action kind, mint route, and description authority)
 
 ## Date
 

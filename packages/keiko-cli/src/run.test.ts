@@ -274,6 +274,66 @@ describe("runAgentCli dry-run", () => {
     expect(await result).toBe(1);
     expect(c.err()).toContain("model gateway configuration problem");
   });
+
+  // #3409 catalog-B audit: `keiko run` must stay the documented nonproductive dry-run readiness
+  // mode (docs/architecture/governed-tool-migration.md row `cli-composition`; the command's own
+  // usage text says "All tasks run in dry-run mode for tools/files"). ADR-0175 D1 assigns
+  // bound/ready/offer/dispatch to server composition (#3413) and D4 requires an Authority
+  // Envelope before any productive tool is offered -- a bare CLI invocation holds none. Spies on
+  // the real, unmocked createSession to prove no `bindToolCatalog` factory reaches HarnessDeps and
+  // the composed ToolPort is the real DryRunToolPort: it advertises the compiled legacy-native
+  // catalog for honest discovery yet refuses every one of those tools with a closed reason. A
+  // regression that wires a productive catalog into this CLI path without an authority path fails
+  // this test.
+  it("composes explain-plan as the documented nonproductive dry-run readiness mode", async () => {
+    vi.resetModules();
+    const actualHarness = await vi.importActual<typeof import("@oscharko-dev/keiko-harness")>(
+      "@oscharko-dev/keiko-harness",
+    );
+    const capturedConfigs: Parameters<typeof actualHarness.createSession>[1][] = [];
+    const capturedDeps: Parameters<typeof actualHarness.createSession>[2][] = [];
+    vi.doMock("@oscharko-dev/keiko-harness", () => ({
+      ...actualHarness,
+      createSession: (
+        ...args: Parameters<typeof actualHarness.createSession>
+      ): ReturnType<typeof actualHarness.createSession> => {
+        capturedConfigs.push(args[1]);
+        capturedDeps.push(args[2]);
+        return actualHarness.createSession(...args);
+      },
+    }));
+    try {
+      const { runAgentCli: runAgentCliFresh } = await import("./run.js");
+      const c = capture();
+      const code = await runAgentCliFresh(
+        ["explain-plan", "--file", "src/foo.ts", "--no-evidence", "--model", "test-model"],
+        c.io,
+        {},
+        { model: testModel() },
+      );
+      expect(code).toBe(0);
+      expect(capturedConfigs).toHaveLength(1);
+      expect(capturedConfigs[0]?.dryRun).toBe(true);
+      expect(capturedDeps).toHaveLength(1);
+      const deps = capturedDeps[0];
+      expect(deps).not.toHaveProperty("bindToolCatalog");
+      const advertised = deps?.tools.listTools() ?? [];
+      expect(advertised.length).toBeGreaterThan(0);
+      const first = advertised[0];
+      if (first === undefined) throw new Error("expected an advertised legacy tool");
+      await expect(
+        deps?.tools.execute({
+          toolCallId: "tc-cli-explain",
+          toolName: first.name,
+          arguments: {},
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toThrow("unavailable");
+    } finally {
+      vi.doUnmock("@oscharko-dev/keiko-harness");
+      vi.resetModules();
+    }
+  });
 });
 
 describe("runAgentCli evidence-by-default", () => {

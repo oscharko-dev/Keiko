@@ -234,7 +234,8 @@
     "generate:tool-catalog": "node scripts/check-tool-catalog-conformance.mjs --write",
     "test:e2e:coding-issue-delivery": "playwright test --config tests/e2e/config/playwright.coding-issue-delivery.config.ts --project=chromium",
     "test:e2e:coding-issue-ci": "playwright test --config tests/e2e/config/playwright.coding-issue-ci.config.ts --project=chromium",
-    "test:e2e:coding-issue-journey:live": "playwright test --config tests/e2e/config/playwright.coding-issue-journey.config.ts --project=chromium"
+    "test:e2e:coding-issue-journey:live": "playwright test --config tests/e2e/config/playwright.coding-issue-journey.config.ts --project=chromium",
+    "test:e2e:coding-issue-handoff": "playwright test --config tests/e2e/config/playwright.coding-issue-handoff.config.ts --project=chromium"
   },
   "overrides": {
     "aria-query": "5.3.2",

@@ -19,6 +19,8 @@
     "coding-runtime-2387-server.mts",
     "coding-runtime-2483-real-binary-server.mts",
     "coding-runtime-server-shared.mts",
-    "coding-issue-journey-server.mts"
+    "coding-issue-journey-server.mts",
+    "coding-issue-handoff-server.mts",
+    "coding-issue-handoff-transport.mts"
   ]
 }

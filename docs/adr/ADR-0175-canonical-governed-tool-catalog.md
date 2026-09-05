@@ -45,6 +45,31 @@ not reference the server. Browser types remain JSON-safe BFF projections with no
 Authority Envelopes, approval proofs, environment, credentials, filesystem handles or server roots.
 No package or runtime scaffolding is introduced by #3411.
 
+**#3409 catalog-B disposition (native-catalog composition).** `createNativeCatalogToolPort` and
+`WorkspaceToolHost` exist and are unit-tested but were never wired into the CLI or server dry-run
+compositions (`packages/keiko-cli/src/run.ts`, `packages/keiko-server/src/run-engine.ts`), which
+still construct `DryRunToolPort` with no `bindToolCatalog`. This decision keeps it that way: both
+call sites run their sessions with `AgentConfig.dryRun: true`, and `session.ts` binds a catalog only
+when `dryRun` is false, so wiring `bindToolCatalog` there today would be dead composition — it could
+never take effect without also flipping `dryRun`. Flipping it is out of scope for #3409 because
+neither call site holds a server-validated Authority Envelope (ADR-0129/ADR-0138): the CLI is an
+unauthenticated local process invocation and the server's `dispatchExplain` composition is a
+read-only, single-model-call plan explainer with no bound/ready/offer/dispatch owner of its own —
+that responsibility belongs solely to server composition under #3413 (D1's table, above), which has
+not landed. Wiring a productive catalog here ahead of #3413 would let a bare invocation gain
+executable tools outside any validated authority boundary, which ADR-0129's monotonic-authority
+invariant forbids. The native harness therefore stays intentionally non-productive for these two
+call sites: `DryRunToolPort` advertises the compiled `legacy-native@1` catalog projection for honest
+discovery (`listTools()`, sourced from the real `keiko-tool-catalog` producer, never a restated
+list) while unconditionally refusing every execution with a closed harness error, and its
+`legacyDefinitions` constructor parameter — dead since no caller definitions could ever make it
+productive — is removed. The productive path for these tasks remains the managed OpenCode runtime
+(#3414) once #3413's binder exists; #3409 does not anticipate that work by pre-wiring a factory
+nothing yet authorizes. `docs/architecture/governed-tool-migration.md`'s `cli-composition` and
+`server-composition` rows, and the frozen inventory's identical "default dry-run remains
+nonproductive" scope text, already record and gate-check this disposition (`checkInventoryProbes`
+requires each row's `DryRunToolPort` probe substring to remain present).
+
 ### D2 — Identity and independent version axes
 
 The normative version-1 table is [governed-tool-contract.v1.json](../architecture/governed-tool-contract.v1.json).

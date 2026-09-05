@@ -18,10 +18,18 @@ import type {
 import {
   createCodingRuntimeOrchestrator,
   MAX_APPROVAL_CHALLENGE_TTL_MS,
+  type CodingRuntimeDescriptionSupport,
   type CodingRuntimeIssueIntake,
   type CodingRuntimeOrchestratorResult,
   type CodingRuntimeLaunchResolver,
+  type WorkbenchDescriptionDispatchOutcome,
+  type WorkbenchDescriptionDispatcher,
 } from "./codingRuntimeOrchestrator.js";
+import type { CodingRuntimeDescriptionJobStore } from "./codingRuntimeDescriptionJobStore.js";
+import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import { DatabaseSync } from "node:sqlite";
+import { runMigrations } from "../store/schema.js";
+import { createCodingRuntimeDescriptionJobStore } from "./codingRuntimeDescriptionJobStore.js";
 import {
   CodingRuntimeLaunchRejectedError,
   CodingRuntimeLaunchResolutionError,
@@ -96,6 +104,8 @@ function fixture(
   diagnostics?: ServerDiagnosticSink,
   activityLog?: ServerLogSink,
   issueIntake?: CodingRuntimeIssueIntake,
+  descriptionSupport?: CodingRuntimeDescriptionSupport,
+  verifiedCommits?: ReadonlyMap<string, VerifiedCommitResult>,
 ) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
@@ -113,6 +123,9 @@ function fixture(
       rows.set(result.runId, next);
       return next;
     },
+    // #3401: the durable last-successful-head reader the description dispatch hook reads (never
+    // the mutable `verifiedCommitResult` field above, which can show a later failed proposal).
+    getLastSuccessfulVerifiedCommit: (id) => verifiedCommits?.get(id),
     create: (row) => (rows.set(row.runId, row), row),
     transition: (id, change) => {
       const current = rowFor(rows, id);
@@ -274,7 +287,7 @@ function fixture(
     ...(issueIntake ? { issueIntake } : {}),
     now: clock ?? ((): Date => new Date("2026-01-01T00:00:00.000Z")),
     newRunId: () => `run-${String(rows.size + 1)}`,
-  });
+  }, descriptionSupport);
   return {
     orchestrator,
     manager,
@@ -2369,5 +2382,198 @@ describe("issue-bound runs (#3385)", () => {
     expect(
       captured.records.find((event) => event.op === "coding-runtime.run.issue-binding-refused"),
     ).toMatchObject({ extra: { stage: "revalidation" } });
+  });
+});
+
+// #3401: the terminal-run automatic-description dispatch hook. The dedup/coalesce/supersede/
+// restart-recovery decision itself is proven exhaustively against a real store in
+// codingRuntimeDescriptionJobStore.test.ts; these tests prove the ORCHESTRATOR wiring — scope
+// construction from the durable verified-commit reader, gating on its presence, calling the
+// dispatcher only when admitted, and projecting the settled status onto the public snapshot.
+describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)", () => {
+  const REMOTE = "d".repeat(64);
+  const BASE_SHA = "1".repeat(40);
+  const HEAD_SHA = "2".repeat(40);
+
+  function verifiedCommit(overrides: Partial<VerifiedCommitResult> = {}): VerifiedCommitResult {
+    return {
+      schemaVersion: "1",
+      status: "succeeded",
+      reason: "completed",
+      recordedAt: "2026-01-01T00:00:00.000Z",
+      proposalId: "proposal-1",
+      runId: "run-1",
+      envelopeDigest: "e".repeat(64),
+      runtimeAuthorityDigest: "f".repeat(64),
+      workspaceDigest: "w".repeat(64),
+      repositoryDigest: REMOTE,
+      baseSha: BASE_SHA,
+      parentSha: BASE_SHA,
+      stagedTreeDigest: "s".repeat(64),
+      verificationEvidenceId: "evidence-1",
+      messageDigest: "m".repeat(64),
+      headSha: HEAD_SHA,
+      ...overrides,
+    };
+  }
+
+  function jobStore(): CodingRuntimeDescriptionJobStore {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    return createCodingRuntimeDescriptionJobStore(db);
+  }
+
+  function fakeDispatcher(
+    outcome: WorkbenchDescriptionDispatchOutcome,
+  ): WorkbenchDescriptionDispatcher & { readonly calls: number } {
+    let calls = 0;
+    return {
+      get calls() {
+        return calls;
+      },
+      generate: vi.fn(() => {
+        calls += 1;
+        return Promise.resolve(outcome);
+      }),
+    };
+  }
+
+  async function settleRun(
+    f: ReturnType<typeof fixture>,
+    verifiedCommits: Map<string, VerifiedCommitResult>,
+  ): Promise<void> {
+    let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: new Promise<"succeeded">((resolve) => {
+        resolveCompletion = resolve;
+      }),
+    });
+    expect(successfulSnapshot(await f.orchestrator.start(start)).state).toBe("running");
+    verifiedCommits.set("run-1", verifiedCommit());
+    resolveCompletion?.("succeeded");
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+  }
+
+  it("dispatches exactly one generation attempt for a stable succeeded head and projects the result", async () => {
+    const jobs = jobStore();
+    const dispatcher = fakeDispatcher({
+      reason: "generated",
+      snapshotDigest: "a".repeat(64),
+      draftDigest: "b".repeat(64),
+      artifactOutcome: "complete",
+    });
+    const verifiedCommits = new Map<string, VerifiedCommitResult>();
+    const f = fixture(undefined, undefined, [], undefined, undefined, undefined, { jobs, dispatcher }, verifiedCommits);
+
+    await settleRun(f, verifiedCommits);
+    await vi.waitFor(() => {
+      expect(dispatcher.calls).toBe(1);
+    });
+    expect(dispatcher.generate).toHaveBeenCalledWith(
+      { runId: "run-1", remoteDigest: REMOTE, baseSha: BASE_SHA, headSha: HEAD_SHA },
+      expect.any(AbortSignal),
+    );
+    await vi.waitFor(() => {
+      expect(f.orchestrator.status()).toMatchObject({
+        descriptionStatus: { state: "current", reason: "generated", generationVersion: 1 },
+      });
+    });
+  });
+
+  it("produces no draft and calls no dispatcher when the succeeded run has no verified commit", async () => {
+    const jobs = jobStore();
+    const dispatcher = fakeDispatcher({ reason: "generated" });
+    const f = fixture(undefined, undefined, [], undefined, undefined, undefined, { jobs, dispatcher });
+
+    let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: new Promise<"succeeded">((resolve) => {
+        resolveCompletion = resolve;
+      }),
+    });
+    await f.orchestrator.start(start);
+    resolveCompletion?.("succeeded");
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+
+    expect(dispatcher.generate).not.toHaveBeenCalled();
+    expect(f.orchestrator.status().descriptionStatus).toBeUndefined();
+  });
+
+  it("never dispatches for a non-succeeded terminal state", async () => {
+    const jobs = jobStore();
+    const dispatcher = fakeDispatcher({ reason: "generated" });
+    const verifiedCommits = new Map<string, VerifiedCommitResult>();
+    verifiedCommits.set("run-1", verifiedCommit());
+    const f = fixture(undefined, undefined, [], undefined, undefined, undefined, { jobs, dispatcher }, verifiedCommits);
+
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: new Promise<"succeeded">(() => undefined),
+    });
+    await f.orchestrator.start(start);
+    await f.orchestrator.stop("run-1", { requestId: "run-1" });
+
+    expect(dispatcher.generate).not.toHaveBeenCalled();
+  });
+
+  it("records a closed blocked status without calling the model when authority is denied", async () => {
+    const jobs = jobStore();
+    const dispatcher = fakeDispatcher({ reason: "authority-expired" });
+    const verifiedCommits = new Map<string, VerifiedCommitResult>();
+    const f = fixture(undefined, undefined, [], undefined, undefined, undefined, { jobs, dispatcher }, verifiedCommits);
+
+    await settleRun(f, verifiedCommits);
+    await vi.waitFor(() => {
+      expect(f.orchestrator.status()).toMatchObject({
+        descriptionStatus: { state: "blocked", reason: "authority-expired" },
+      });
+    });
+  });
+
+  it("records a closed blocked status and calls no model when no dispatcher is wired", async () => {
+    const jobs = jobStore();
+    const verifiedCommits = new Map<string, VerifiedCommitResult>();
+    const f = fixture(undefined, undefined, [], undefined, undefined, undefined, { jobs }, verifiedCommits);
+
+    await settleRun(f, verifiedCommits);
+    expect(f.orchestrator.status()).toMatchObject({
+      descriptionStatus: { state: "blocked", reason: "generation-unavailable" },
+    });
+  });
+
+  it("emits body-free activity log lines with a threaded correlation id", async () => {
+    const captured = captureActivityLog();
+    const jobs = jobStore();
+    const dispatcher = fakeDispatcher({ reason: "generated", snapshotDigest: "a".repeat(64) });
+    const verifiedCommits = new Map<string, VerifiedCommitResult>();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      captured.activityLog,
+      undefined,
+      { jobs, dispatcher },
+      verifiedCommits,
+    );
+
+    await settleRun(f, verifiedCommits);
+    await vi.waitFor(() => {
+      expect(captured.records.some((event) => event.op === "coding-runtime.description.generated")).toBe(
+        true,
+      );
+    });
+    const dispatched = captured.records.find(
+      (event) => event.op === "coding-runtime.description.dispatched",
+    );
+    expect(dispatched).toMatchObject({ correlationId: "run-1", extra: { runId: "run-1" } });
+    const serialized = JSON.stringify(captured.records);
+    expect(serialized).not.toContain(start.taskIntent);
   });
 });
