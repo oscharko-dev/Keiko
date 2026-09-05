@@ -447,9 +447,7 @@ describe("Coding Workbench issue/journey/PR-description lazy adapter (epic #3384
     expect(eagerContractsRuntimeImports).not.toContain("isJourneyOutcome");
     expect(eagerContractsRuntimeImports).not.toContain("PR_DESCRIPTION_LANGUAGES");
     expect(eagerContractsRuntimeImports).not.toContain("isPrDescriptionApplicationStatus");
-    expect(eagerContractsRuntimeImports).not.toContain(
-      "PR_DESCRIPTION_APPLICATION_REASON_STATES",
-    );
+    expect(eagerContractsRuntimeImports).not.toContain("PR_DESCRIPTION_APPLICATION_REASON_STATES");
     expect(API_SOURCE).toContain('import("./coding-workbench-lazy-fetchers")');
   });
 });

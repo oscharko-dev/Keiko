@@ -863,10 +863,18 @@ describe("git-change description-authority admission (#3400)", () => {
 // to import to reach that path, so a call through it during `applyGitChangeDescription` would be
 // directly observable — proving the absence is not merely "no import happens to exist today".
 const executeGovernedPullRequestSpy = vi.hoisted(() => vi.fn());
-vi.mock("./gitDelivery/prExecution.js", () => ({
-  executeGovernedPullRequest: executeGovernedPullRequestSpy,
-  KEIKO_DEFAULT_PR_POLICY_PACK: {},
-}));
+// F5's own preview -> approve -> apply round trip (below) exercises the REAL
+// `PrDescriptionApplicationService.allowed()`, which reads the REAL `KEIKO_DEFAULT_PR_POLICY_PACK`
+// through this exact module — so only `executeGovernedPullRequest` is replaced; the real pack
+// (and everything else this module exports) passes through via `importActual`, never a
+// hand-rolled `{}` stand-in that would throw inside `assertPolicyPackMintable`.
+vi.mock("./gitDelivery/prExecution.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./gitDelivery/prExecution.js")>(
+      "./gitDelivery/prExecution.js",
+    );
+  return { ...actual, executeGovernedPullRequest: executeGovernedPullRequestSpy };
+});
 
 // The GitHub-reader grant itself is proven elsewhere (gitChangeRoutes.test.ts, coding-context's own
 // suite); stubbed here — mirroring gitChangeRoutes.test.ts's own convention for this exact module —
@@ -983,8 +991,6 @@ describe("createHandleGitChangeApplyDescription — the real handler Chat reache
       }),
       deps,
     );
-    // eslint-disable-next-line no-console
-    console.log("DEBUG previewRes", JSON.stringify(previewRes));
     const proposalId = (previewRes.body as { preview: { proposalId: string } }).preview.proposalId;
     await createHandlePrDescriptionApprove(fixtureOptions())(
       requestContext({

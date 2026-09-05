@@ -74,10 +74,7 @@ function isIssueNumber(value: unknown): value is number {
 function issuePreviewProvenanceReasons(value: unknown): readonly string[] {
   if (!isRecordValue(value)) return ["preview.provenance must be an object"];
   const reasons: string[] = [];
-  if (
-    !isBoundedText(value.ownerAndRepo, 256) ||
-    !isGitHubOwnerAndRepo(value.ownerAndRepo)
-  ) {
+  if (!isBoundedText(value.ownerAndRepo, 256) || !isGitHubOwnerAndRepo(value.ownerAndRepo)) {
     reasons.push("preview.provenance.ownerAndRepo must be owner/repo");
   }
   if (!isIssueNumber(value.issueNumber)) {
