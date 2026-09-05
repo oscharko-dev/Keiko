@@ -2486,7 +2486,8 @@ describe("issue-bound runs (#3385)", () => {
     expect(
       captured.records.find(
         (event) =>
-          event.op === "coding-runtime.run.issue-context-attached" && event.correlationId === "run-2",
+          event.op === "coding-runtime.run.issue-context-attached" &&
+          event.correlationId === "run-2",
       ),
     ).toMatchObject({ extra: { runId: "run-2", issueNumber: 3385 } });
   });
@@ -2500,7 +2501,9 @@ describe("issue-bound runs (#3385)", () => {
     const f = await acknowledgedIssueBoundRecovery(intake, captured.activityLog);
     intake.buildContext.mockClear();
 
-    const started = successfulSnapshot(await f.orchestrator.start({ ...start, requestId: "request-2" }));
+    const started = successfulSnapshot(
+      await f.orchestrator.start({ ...start, requestId: "request-2" }),
+    );
 
     expect(started.runId).toBe("run-2");
     expect(started.issueBinding).toEqual(ISSUE_BINDING);
@@ -2510,7 +2513,8 @@ describe("issue-bound runs (#3385)", () => {
     expect(
       captured.records.find(
         (event) =>
-          event.op === "coding-runtime.run.issue-context-attached" && event.correlationId === "run-2",
+          event.op === "coding-runtime.run.issue-context-attached" &&
+          event.correlationId === "run-2",
       ),
     ).toBeDefined();
   });

@@ -8,7 +8,10 @@
 // silently start context-free, and never blanket-refuse a still-readable issue either.
 
 import { describe, expect, it, vi } from "vitest";
-import type { CodingWorkbenchIssueBinding, CodingWorkbenchRuntimeStartRequest } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchIssueBinding,
+  CodingWorkbenchRuntimeStartRequest,
+} from "@oscharko-dev/keiko-contracts";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 import {
@@ -58,15 +61,20 @@ function intake(
     readonly buildContext: CodingRuntimeIssueIntake["buildContext"];
   }> = {},
 ): CodingRuntimeIssueIntake {
+  const defaultResolve: CodingRuntimeIssueIntake["resolve"] = () =>
+    Promise.resolve({ ok: true, binding: ISSUE_BINDING });
+  const defaultBuildContext: CodingRuntimeIssueIntake["buildContext"] = () =>
+    Promise.resolve({ ok: true, attachment: ISSUE_ATTACHMENT });
   return {
-    resolve: vi.fn(overrides.resolve ?? (() => Promise.resolve({ ok: true, binding: ISSUE_BINDING }))),
-    buildContext: vi.fn(
-      overrides.buildContext ?? (() => Promise.resolve({ ok: true, attachment: ISSUE_ATTACHMENT })),
-    ),
+    resolve: vi.fn(overrides.resolve ?? defaultResolve),
+    buildContext: vi.fn(overrides.buildContext ?? defaultBuildContext),
   };
 }
 
-function captureActivityLog(): { readonly activityLog: ServerLogSink; readonly records: ServerLogEvent[] } {
+function captureActivityLog(): {
+  readonly activityLog: ServerLogSink;
+  readonly records: ServerLogEvent[];
+} {
   const records: ServerLogEvent[] = [];
   return { activityLog: { write: (event) => void records.push(event) }, records };
 }
@@ -101,7 +109,9 @@ describe("admitCodingRuntimeIssue — durable-binding reattach (#3390)", () => {
   });
 
   it("refuses with the closed issue-context-unavailable code when re-resolution fails, logging body-free", async () => {
-    const port = intake({ buildContext: () => Promise.resolve({ ok: false, failure: "issue-unavailable" }) });
+    const port = intake({
+      buildContext: () => Promise.resolve({ ok: false, failure: "issue-unavailable" }),
+    });
     const captured = captureActivityLog();
 
     const result = await admitCodingRuntimeIssue({
@@ -166,7 +176,11 @@ describe("admitCodingRuntimeIssue — durable-binding reattach (#3390)", () => {
     const result = await admitCodingRuntimeIssue({
       request: { ...REQUEST, issueRef: undefined },
       active: {
-        instance: { repositoryId: "a-different-repository", repositoryRoot: "/repo", baseBranch: "dev" },
+        instance: {
+          repositoryId: "a-different-repository",
+          repositoryRoot: "/repo",
+          baseBranch: "dev",
+        },
       } as unknown as ActiveWorkspaceView,
       runId: "run-2",
       priorBinding: ISSUE_BINDING,

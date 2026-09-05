@@ -54,9 +54,7 @@ export type CodingRuntimeIssueAdmission =
   | {
       readonly ok: false;
       readonly failureCode:
-        | "invalid-intent"
-        | "authority-resolution-failed"
-        | "issue-context-unavailable";
+        "invalid-intent" | "authority-resolution-failed" | "issue-context-unavailable";
       readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure;
     };
 
