@@ -208,28 +208,20 @@ import {
   EDITOR_TEST_GENERATION_SCHEMA_VERSION,
   EDITOR_PATCH_APPLY_SCHEMA_VERSION,
 } from "./types";
+// Runtime primitives shared with `./coding-workbench-lazy-fetchers.ts`: both files import them
+// from this leaf module instead of one importing them from the other, so `api.ts`'s
+// `await import("./coding-workbench-lazy-fetchers")` below is never a load-order-sensitive cycle
+// (review finding, epic #3384 final-audit F18). `api.ts` re-exports every name here so no existing
+// caller of `./api` needs to change.
+import {
+  ApiError,
+  GITHUB_ISSUE_BINDING_ID_MAX_CHARS,
+  isBoundedText,
+  isRecordValue,
+  SHA256_HEX,
+} from "./api-shared-primitives";
 
-// ---------------------------------------------------------------------------
-// Error type
-// ---------------------------------------------------------------------------
-
-export class ApiError extends Error {
-  // RB-6 (GEN-OBS-CORRELATION-103/601): the server-issued request correlation id for this failure,
-  // when the response carried one (X-Keiko-Correlation-Id header or `error.correlationId`). Optional
-  // and set after construction so the many `new ApiError(code, message, status)` call sites are
-  // unchanged; error surfaces can show it as a copyable support id that ties the UI failure to exactly
-  // one server-side diagnostic record.
-  public correlationId?: string;
-
-  constructor(
-    public readonly code: string,
-    message: string,
-    public readonly status: number,
-  ) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
+export { ApiError, GITHUB_ISSUE_BINDING_ID_MAX_CHARS, isBoundedText, isRecordValue, SHA256_HEX };
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -3358,28 +3350,10 @@ export type CodingWorkbenchIssuePreviewRequest = CodingWorkbenchIssuePreviewRequ
 // from that contract module CodingWorkbenchIssueIntake.tsx still needs synchronously (a
 // `maxLength` prop outside the dynamic() boundary), so it stays an eager re-export here.
 export const GITHUB_ISSUE_REFERENCE_MAX_CHARS = CONTRACT_GITHUB_ISSUE_REFERENCE_MAX_CHARS;
-export const GITHUB_ISSUE_BINDING_ID_MAX_CHARS = 128;
-export const SHA256_HEX = /^[0-9a-f]{64}$/u;
-
-export function isRecordValue(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-// eslint-disable-next-line no-control-regex -- the class IS the control range being refused
-const CONTROL_CHARACTER = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u;
-
-export function isBoundedText(
-  value: unknown,
-  maxChars: number,
-  allowEmpty = false,
-): value is string {
-  return (
-    typeof value === "string" &&
-    (allowEmpty || value.trim().length > 0) &&
-    value.length <= maxChars &&
-    !CONTROL_CHARACTER.test(value)
-  );
-}
+// GITHUB_ISSUE_BINDING_ID_MAX_CHARS, SHA256_HEX, isRecordValue and isBoundedText live in
+// `./api-shared-primitives.ts` (imported and re-exported near the top of this file) so this
+// module and `./coding-workbench-lazy-fetchers.ts` both depend on that leaf instead of on each
+// other -- see the comment there for why.
 
 /**
  * Resolve and preview a GitHub issue for the repository at `input.repositoryPath` (#3385). The

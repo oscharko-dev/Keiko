@@ -447,6 +447,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Bereitstellungsrichtlinie deaktiviert die Gateway-Quelle der Coding-Runtime.",
   "codingWorkbench.source.unavailableReason.subscription-source":
     "Die Abo-Quelle ist ausgewählt; das Gateway wird nicht verwendet.",
+  "codingWorkbench.source.unavailableReason.model-context-window-insufficient":
+    "Das Kontextfenster des konfigurierten Modells ist für einen Coding-Lauf zu klein (mindestens 32.000 Tokens). Vergrößere das Kontextfenster des Modells oder wähle unter Einstellungen → Modelle ein größeres Modell.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI über Gateway",
   "codingWorkbench.modelSource.codexSubscription": "ChatGPT/Codex-Abonnement",

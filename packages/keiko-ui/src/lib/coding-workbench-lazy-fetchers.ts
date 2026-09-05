@@ -35,21 +35,28 @@ import {
   isPrDescriptionApplicationStatus,
   PR_DESCRIPTION_APPLICATION_REASON_STATES,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
+// Runtime values come from the shared leaf module, never from `./api` directly: `api.ts` reaches
+// this module through `await import("./coding-workbench-lazy-fetchers")` (see the file banner
+// above), so a static value import back into `./api` here would make that dynamic import
+// load-order-sensitive on this module's own top-level evaluation of `./api` (review finding, epic
+// #3384 final-audit F18). `./api.ts` imports the exact same names from this same leaf.
 import {
   ApiError,
   GITHUB_ISSUE_BINDING_ID_MAX_CHARS,
   isBoundedText,
   isRecordValue,
   SHA256_HEX,
-  type CodingWorkbenchIssuePreviewRequest,
-  type CodingWorkbenchJourneyRefreshResult,
-  type GitDeliveryPrDescriptionApproveResponse,
-  type GitDeliveryPrDescriptionPreviewInput,
-  type GitDeliveryPrDescriptionProposalInput,
-  type GitDeliveryPrDescriptionTarget,
-  type GitHubIssuePreviewResponseWire,
-  type PrDescriptionApplicationResultWire,
-  type PrDescriptionPreviewWire,
+} from "./api-shared-primitives";
+import type {
+  CodingWorkbenchIssuePreviewRequest,
+  CodingWorkbenchJourneyRefreshResult,
+  GitDeliveryPrDescriptionApproveResponse,
+  GitDeliveryPrDescriptionPreviewInput,
+  GitDeliveryPrDescriptionProposalInput,
+  GitDeliveryPrDescriptionTarget,
+  GitHubIssuePreviewResponseWire,
+  PrDescriptionApplicationResultWire,
+  PrDescriptionPreviewWire,
 } from "./api";
 
 // Matches `api.ts`'s own private `fetchJson<T>` exactly: the shared fetch scaffold (deadline

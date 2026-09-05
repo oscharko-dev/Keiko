@@ -16,6 +16,12 @@ import type { PrDescriptionArtifact } from "@oscharko-dev/keiko-contracts/runtim
 import type { PrDescription } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkbenchDescriptionScope } from "./codingRuntimeDescriptionJobStore.js";
 import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "../observability/index.js";
+import {
   createCodexRuntimeTurnPort,
   createOpenCodeRuntimeTurnPort,
   createProductionRuntimeManager,
@@ -799,6 +805,13 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
     return { current: () => undefined };
   }
 
+  // #3400/#3401 final-audit F1: a port that CAN tell a record for this exact scope existed and has
+  // since passed its `expiresAt`, distinct from `denyingPort()` above which reports no record ever
+  // having existed for the scope.
+  function expiredPort(): GitDeliveryDescriptionAuthorityPort {
+    return { current: () => undefined, expired: () => true };
+  }
+
   function fakeDeps(
     overrides: Partial<ProductionWorkbenchDescriptionDeps> = {},
   ): ProductionWorkbenchDescriptionDeps {
@@ -890,6 +903,38 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
     const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
     expect(outcome).toEqual({ reason: "model-egress-denied" });
     expect(generatePrDescriptionMock).not.toHaveBeenCalled();
+  });
+
+  // #3400/#3401 final-audit F1: before the read-port discriminant existed, `authorizeGitDelivery
+  // ModelEgress` collapsed an expired record and an absent one into the SAME `undefined`, so this
+  // dispatcher could only ever report `model-egress-denied` here — never the more specific
+  // `authority-expired` reason `WORKBENCH_DESCRIPTION_REASON_STATES` already carries. This is the
+  // failing-before case for that mapping, plus its body-free activity-log line.
+  it("reports authority-expired (not model-egress-denied) when the port reports a past record", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+        fakeDeps({
+          snapshots: fakeSnapshots(() =>
+            Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+          ),
+          descriptionAuthority: expiredPort(),
+        }),
+      );
+      const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+      expect(outcome).toEqual({ reason: "authority-expired" });
+      expect(generatePrDescriptionMock).not.toHaveBeenCalled();
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "security",
+          op: "pr-description.workbench.egress.denied",
+          errorKind: "authority-expired",
+        }),
+      );
+    } finally {
+      resetServerLogger();
+    }
   });
 
   it("reports generation-unavailable when admitted but no model profile is configured", async () => {

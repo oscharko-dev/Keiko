@@ -297,6 +297,38 @@ describe("CatalogFacadeBridge (#3413 F8)", () => {
     expect(JSON.stringify(settled)).not.toContain("handler exploded");
   });
 
+  // Review finding: ADR-0175 D6's "Mid-flight abort" row requires `cancelled`/`parent-cancelled`,
+  // not the generic `failed`/`handler-failed` classification -- the wrapped handler rejects with
+  // the same `AbortError` shape a fired `AbortSignal` produces (`DOMException(..., "AbortError")`,
+  // the exact shape `generationPort.ts`/`judgePort.ts` fabricate and `errorKindOf` -- already
+  // imported here for the settlement's `errorKind` field -- already classifies specifically), and
+  // `classifyFailure` must recognize it instead of falling through to the opaque-rejection branch.
+  it("records cancelled/parent-cancelled and releases the reservation when the handler rejects with an AbortError", async () => {
+    const commit = vi.fn();
+    const release = vi.fn();
+    const budget: CatalogFacadeBudgetPort = {
+      available: () => true,
+      reserve: () => ({ reservationId: "reservation-1" }),
+      commit,
+      release,
+    };
+    const { bridge, log } = bridgeFixture(budget);
+    const aborted = new DOMException("The operation was aborted.", "AbortError");
+    const run = vi.fn(() => Promise.reject(aborted));
+
+    await expect(bridge.dispatch(discoverRequest, run)).rejects.toBe(aborted);
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(commit).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledWith({ reservationId: "reservation-1" });
+    expect(log.events[1]?.op).toBe("tool-catalog.invocation-settled");
+    const settled = log.events[1]?.extra as Record<string, unknown>;
+    expect(settled.status).toBe("cancelled");
+    expect(settled.reason).toBe("parent-cancelled");
+    expect(settled.budgetDisposition).toBe("released");
+    expect(settled.reservationId).toBe("reservation-1");
+  });
+
   // Review finding on #3413 F8: the bridge must never call both `commit()` and `release()` for the
   // same reservation when accounting itself fails partway through -- mirroring
   // `CatalogInvocation.account()` (catalogToolSettlement.ts) rather than re-deriving a thinner,

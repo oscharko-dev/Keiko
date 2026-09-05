@@ -776,7 +776,63 @@ describe("git-change description-authority admission (#3400)", () => {
           category: "security",
           op: "pr-description.chat.turn.denied",
           correlationId: "corr-git-change-1",
-          errorKind: "authority-denied",
+          errorKind: "model-egress-denied",
+          extra: { relationshipId: "rel-1" },
+        }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      resetServerLogger();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
+  // #3400/#3401 final-audit F1: before this discriminant existed, an expired description
+  // authority record and no record at all were indistinguishable at the Chat admission — both
+  // logged the SAME generic `errorKind: "authority-denied"`. This is the failing-before case: a
+  // port that can tell a record for this exact scope existed and has passed its `expiresAt` must
+  // deny with `authority-expired`, never the generic absent reason.
+  it("denies with authority-expired when the description authority record has expired", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const fetchSpy = vi.fn(() => {
+      throw new Error("must not reach the network");
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      attachGitChangeScope(fixture.deps, fixture.chatId);
+      const expiredDeps = {
+        ...fixture.deps,
+        gitChangeDescriptionAuthorityPort: {
+          current: (): undefined => undefined,
+          expired: (): boolean => true,
+        },
+      } as unknown as UiHandlerDeps;
+      const result = await handleSendDesktopChat(
+        requestContext(
+          {
+            chatId: fixture.chatId,
+            projectPath: fixture.projectPath,
+            modelId: "breaker-chat",
+            content: "refine the description",
+          },
+          "corr-git-change-expired",
+        ),
+        expiredDeps,
+      );
+
+      expect(result.status).toBe(409);
+      expect(result.body).toMatchObject({
+        error: { code: "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED" },
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "security",
+          op: "pr-description.chat.turn.denied",
+          correlationId: "corr-git-change-expired",
+          errorKind: "authority-expired",
           extra: { relationshipId: "rel-1" },
         }),
       );

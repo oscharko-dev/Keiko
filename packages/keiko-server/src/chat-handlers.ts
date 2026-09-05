@@ -2616,34 +2616,54 @@ export function gitChangeDescriptionAuthorityScopeFor(
   };
 }
 
+// #3400/#3401 final-audit F1: the closed reason a denied Chat admission carries — distinguishes a
+// description authority record that existed for the exact scope but has passed its `expiresAt`
+// from every other closed case (no port wired at all, or a scope that was never minted), reusing
+// `authorizeGitDeliveryModelEgress`'s own expired-vs-absent discriminant rather than a second one.
+export type GitChangeDescriptionTurnDenial = "authority-expired" | "model-egress-denied";
+
+export type GitChangeDescriptionTurnAdmission =
+  | { readonly admitted: true }
+  | { readonly admitted: false; readonly reason: GitChangeDescriptionTurnDenial };
+
 /**
- * True only when a live, unexpired description authority record exists for the EXACT scope
+ * Admits only when a live, unexpired description authority record exists for the EXACT scope
  * (remoteDigest, base/head, snapshotDigest) the caller re-derived just now — never a cached or
- * assumed admission.
+ * assumed admission. A denial carries the closed reason: `authority-expired` when the record was
+ * minted for this exact scope and has since expired, `model-egress-denied` for every other closed
+ * case (no port wired, or a scope that was never minted).
  */
 export function admitGitChangeDescriptionTurn(
   deps: UiHandlerDeps,
   scope: ChatGitChangeScope,
   nowIso: string,
-): boolean {
+): GitChangeDescriptionTurnAdmission {
   const port = deps.gitChangeDescriptionAuthorityPort;
-  if (port === undefined) return false;
-  return (
-    authorizeGitDeliveryModelEgress(port, gitChangeDescriptionAuthorityScopeFor(scope), nowIso) !==
-    undefined
+  if (port === undefined) return { admitted: false, reason: "model-egress-denied" };
+  const decision = authorizeGitDeliveryModelEgress(
+    port,
+    gitChangeDescriptionAuthorityScopeFor(scope),
+    nowIso,
   );
+  if (decision.allowed) return { admitted: true };
+  return {
+    admitted: false,
+    reason: decision.reason === "authority-expired" ? "authority-expired" : "model-egress-denied",
+  };
 }
 
 function logGitChangeTurnAuthority(
   correlationId: string | undefined,
-  admitted: boolean,
+  admission: GitChangeDescriptionTurnAdmission,
   relationshipId: string,
 ): void {
-  getServerLogger()[admitted ? "info" : "warn"]({
+  getServerLogger()[admission.admitted ? "info" : "warn"]({
     category: "security",
-    op: admitted ? "pr-description.chat.turn.admitted" : "pr-description.chat.turn.denied",
+    op: admission.admitted
+      ? "pr-description.chat.turn.admitted"
+      : "pr-description.chat.turn.denied",
     correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    ...(admitted ? {} : { errorKind: "authority-denied" }),
+    ...(admission.admitted ? {} : { errorKind: admission.reason }),
     extra: { relationshipId },
   });
 }
@@ -2670,9 +2690,9 @@ export function admitGitChangeScopedTurn(
 ): RouteResult | undefined {
   const scope = activeGitChangeScope(chat);
   if (scope === undefined) return undefined;
-  const admitted = admitGitChangeDescriptionTurn(deps, scope, new Date().toISOString());
-  logGitChangeTurnAuthority(correlationId, admitted, scope.relationshipId);
-  if (admitted) return undefined;
+  const admission = admitGitChangeDescriptionTurn(deps, scope, new Date().toISOString());
+  logGitChangeTurnAuthority(correlationId, admission, scope.relationshipId);
+  if (admission.admitted) return undefined;
   return {
     status: 409,
     body: errorBody(

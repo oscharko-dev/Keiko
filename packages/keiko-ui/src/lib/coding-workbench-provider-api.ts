@@ -63,6 +63,9 @@ const CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS = new Set([
   "non-coding-capable",
   "deployment-policy-disabled",
   "subscription-source",
+  // #3390 closeout: an otherwise-configured, probed profile whose derived `maxPromptTokens` is
+  // below the coding runtime's minimum (epic #3384 readiness gap).
+  "model-context-window-insufficient",
 ]);
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {

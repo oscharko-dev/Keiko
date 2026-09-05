@@ -770,11 +770,33 @@ describe("authorizeGitDeliveryModelEgress (#3399)", () => {
     const port: GitDeliveryDescriptionAuthorityPort = {
       current: () => ({ scope: SCOPE, effectiveMode: "supervised-coding", expiresAt: NOW }),
     };
-    expect(authorizeGitDeliveryModelEgress(port, SCOPE, NOW)).toBe("supervised-coding");
+    expect(authorizeGitDeliveryModelEgress(port, SCOPE, NOW)).toEqual({
+      allowed: true,
+      effectiveMode: "supervised-coding",
+    });
   });
 
-  it("denies (undefined) when no live record matches", () => {
+  it("denies authority-absent when no live record matches and the port cannot tell why", () => {
     const port: GitDeliveryDescriptionAuthorityPort = { current: () => undefined };
-    expect(authorizeGitDeliveryModelEgress(port, SCOPE, NOW)).toBeUndefined();
+    expect(authorizeGitDeliveryModelEgress(port, SCOPE, NOW)).toEqual({
+      allowed: false,
+      reason: "authority-absent",
+    });
+  });
+
+  // #3400/#3401 final-audit F1: before this discriminant existed, an expired record and no record
+  // at all were indistinguishable from this function's own return value (both collapsed to
+  // `undefined`). This is the failing-before case: a port whose `current` reports no live record
+  // (correctly, since the record IS expired) but whose new `expired` reports it was minted for
+  // this exact scope must surface `authority-expired`, never the generic absent reason.
+  it("denies authority-expired when the port reports a past record for the exact scope", () => {
+    const port: GitDeliveryDescriptionAuthorityPort = {
+      current: () => undefined,
+      expired: (scope) => scope.snapshotDigest === SCOPE.snapshotDigest,
+    };
+    expect(authorizeGitDeliveryModelEgress(port, SCOPE, NOW)).toEqual({
+      allowed: false,
+      reason: "authority-expired",
+    });
   });
 });

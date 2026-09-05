@@ -46,6 +46,10 @@ const SOURCE_UNAVAILABLE_REASON_KEYS: Readonly<Record<string, CodingWorkbenchMes
   "deployment-policy-disabled":
     "codingWorkbench.source.unavailableReason.deployment-policy-disabled",
   "subscription-source": "codingWorkbench.source.unavailableReason.subscription-source",
+  // #3390 closeout: the source reported "available" with a context window too small for one
+  // real request to survive (readiness gap, epic #3384). Appended, never renumbered.
+  "model-context-window-insufficient":
+    "codingWorkbench.source.unavailableReason.model-context-window-insufficient",
 };
 
 /** The operator-facing sentence for an unavailable source's reason, or null when it has none. */

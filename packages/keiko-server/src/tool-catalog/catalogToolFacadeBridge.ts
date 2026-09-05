@@ -305,10 +305,16 @@ function denyBudgetExhausted(runtime: BridgeRuntime, meta: InvocationMeta): neve
 /**
  * Classifies a rejection exactly the way `CatalogInvocation.fail()` does: a `CatalogDispatchFault`
  * carries its own settled `status`/`reason` (e.g. a budget port failure surfaced through
- * `catalogBudgetOperation`); anything else is an opaque handler rejection.
+ * `catalogBudgetOperation`). A mid-flight `AbortSignal` firing (ADR-0175 D6's "Mid-flight abort"
+ * row) settles `cancelled`/`parent-cancelled` exactly as `catalogToolSettlement.ts`'s
+ * `checkStopped()` does for the real binder path -- detected through `errorKindOf`, the same
+ * content-free classifier this bridge already uses for the settlement's `errorKind` field, rather
+ * than a second abort-detection helper. Anything else is an opaque handler rejection.
  */
 function classifyFailure(error: unknown): { status: ToolResultStatus; reason: ToolResultReason } {
   if (error instanceof CatalogDispatchFault) return { status: error.status, reason: error.reason };
+  if (errorKindOf(error) === "AbortError")
+    return { status: "cancelled", reason: "parent-cancelled" };
   return { status: "failed", reason: "handler-failed" };
 }
 

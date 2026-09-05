@@ -6,6 +6,8 @@ import {
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
+import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { getServerLogger } from "../observability/index.js";
 import type {
   CodingRuntimeTaskDispatchResult,
   CodingRuntimeTaskDispatchRequest,
@@ -694,11 +696,11 @@ async function admitAndGenerate(
   };
   const nowIso = new Date(deps.now()).toISOString();
   deps.mintDescriptionAuthority?.(authorityScope, nowIso);
-  const admitted =
-    deps.descriptionAuthority !== undefined &&
-    authorizeGitDeliveryModelEgress(deps.descriptionAuthority, authorityScope, nowIso) !==
-      undefined;
-  if (!admitted) return { reason: "model-egress-denied" };
+  const denialReason = modelEgressDenialReason(deps.descriptionAuthority, authorityScope, nowIso);
+  if (denialReason !== undefined) {
+    logWorkbenchModelEgressDenied(scope.runId, denialReason);
+    return { reason: denialReason };
+  }
   if (deps.generation === undefined) return { reason: "generation-unavailable" };
   const result = await PrDescription.generatePrDescription(
     {
@@ -724,6 +726,35 @@ async function admitAndGenerate(
     },
   );
   return workbenchDescriptionOutcome(result);
+}
+
+// #3400/#3401 final-audit F1: reports `undefined` (admitted) once a live description-authority
+// record matches the exact scope, and otherwise the closed reason the Workbench snapshot should
+// carry — `authority-expired` when the read port can tell a record for this exact scope existed
+// and has passed its `expiresAt`, `model-egress-denied` for every other closed case (no port
+// wired at all, or a scope that was never minted). Reuses `authorizeGitDeliveryModelEgress`'s own
+// expired-vs-absent discriminant rather than a second formula.
+function modelEgressDenialReason(
+  descriptionAuthority: GitDeliveryDescriptionAuthorityPort | undefined,
+  authorityScope: GitDeliveryDescriptionAuthorityScope,
+  nowIso: string,
+): Extract<WorkbenchDescriptionReason, "authority-expired" | "model-egress-denied"> | undefined {
+  if (descriptionAuthority === undefined) return "model-egress-denied";
+  const admission = authorizeGitDeliveryModelEgress(descriptionAuthority, authorityScope, nowIso);
+  if (admission.allowed) return undefined;
+  return admission.reason === "authority-expired" ? "authority-expired" : "model-egress-denied";
+}
+
+function logWorkbenchModelEgressDenied(
+  runId: string,
+  reason: Extract<WorkbenchDescriptionReason, "authority-expired" | "model-egress-denied">,
+): void {
+  getServerLogger().warn({
+    category: "security",
+    op: "pr-description.workbench.egress.denied",
+    correlationId: isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID,
+    errorKind: reason,
+  });
 }
 
 function resolveWorkbenchSnapshot(

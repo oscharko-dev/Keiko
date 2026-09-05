@@ -1241,6 +1241,30 @@ describe("CodingRuntimeAuthorityService description authority", () => {
     expect(port.current(SCOPE, "2026-07-11T12:00:01.500Z")).toBeUndefined();
   });
 
+  // #3400/#3401 final-audit F1: before `expired()` existed, `current()` alone could not tell
+  // `authorizeGitDeliveryModelEgress` whether a record for this exact scope had passed its
+  // `expiresAt` or had never been minted at all — both were the SAME `undefined`. This is the
+  // failing-before case for the read path: `expired()` must report `true` once the TTL has
+  // elapsed, and `false` for a scope that was never minted, even though `current()` returns
+  // `undefined` for both.
+  it("expired() distinguishes a past record from one that was never minted for this scope", () => {
+    const authority = service();
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: SCOPE,
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      nowIso: NOW,
+      ttlMs: 1_000,
+    });
+    const port = authority.gitDeliveryDescriptionAuthorityPort();
+    const laterIso = "2026-07-11T12:00:01.500Z";
+    expect(port.current(SCOPE, laterIso)).toBeUndefined();
+    expect(port.expired?.(SCOPE, laterIso)).toBe(true);
+    const neverMinted = { ...SCOPE, snapshotDigest: "f".repeat(64) };
+    expect(port.current(neverMinted, laterIso)).toBeUndefined();
+    expect(port.expired?.(neverMinted, laterIso)).toBe(false);
+  });
+
   it("revokes the record explicitly on a scope change or stale re-check the caller detected", () => {
     const authority = service();
     authority.mintGitDeliveryDescriptionAuthority({

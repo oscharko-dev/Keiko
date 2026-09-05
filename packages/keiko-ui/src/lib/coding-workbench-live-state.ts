@@ -296,8 +296,7 @@ function acceptStreamProjection(
  */
 function isAcknowledgedRecoveryRequired(state: CodingWorkbenchRuntimeState): boolean {
   return (
-    state.run.value?.state === "recovery-required" &&
-    state.run.value.recoveryAcknowledged === true
+    state.run.value?.state === "recovery-required" && state.run.value.recoveryAcknowledged === true
   );
 }
 

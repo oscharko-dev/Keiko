@@ -3436,3 +3436,134 @@ describe("coding-sidecar gateway", () => {
     );
   });
 });
+
+// #3390 closeout: every 400/403 rejection the gateway route hands back must leave a body-free
+// activity-log line carrying the REASON (AGENTS.md §8) — before this the only evidence was the
+// generic `http`/`request` line's opaque status. These pin the two rejection classes the task
+// names explicitly; `classifyBadRequestReason`/`emitGatewayToolContractDiagnostic` cover the rest.
+describe("coding sidecar gateway rejection activity log", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("logs a body-free rejection line when estimated prompt tokens exceed the profile budget", async () => {
+    const sink = captureServerLog("warn");
+    const deps = depsValue(configValue(provider(), capability({ contextWindow: 16 })));
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "x".repeat(400) }] }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 400 });
+    expect(sink.events).toEqual([
+      {
+        level: "warn",
+        category: "gateway",
+        op: "coding-sidecar.gateway.rejected",
+        correlationId: "unknown-correlation-id",
+        durationMs: undefined,
+        status: 400,
+        errorKind: undefined,
+        extra: { reason: "prompt-tokens-exceeded", runId: "run-gateway-test" },
+      },
+    ]);
+  });
+
+  it("logs a body-free rejection line naming the mismatching tool identifiers for a tool-contract-drift rejection", async () => {
+    const sink = captureServerLog("warn");
+    const deps = runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-1" } }));
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "private runtime content" }],
+        tools: modelVisibleTools().slice(0, 2),
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 403 });
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      level: "warn",
+      category: "gateway",
+      op: "coding-sidecar.gateway.rejected",
+      correlationId: "unknown-correlation-id",
+      status: 403,
+      extra: {
+        reason: "tool-contract-drift",
+        runId: "run-1",
+        expectedToolCount: 18,
+        receivedToolCount: 2,
+        unexpectedToolNames: [],
+      },
+    });
+    const extra = sink.events[0]?.extra as { missingToolNames?: readonly string[] } | undefined;
+    expect(extra?.missingToolNames).toHaveLength(16);
+    expect(JSON.stringify(sink.events)).not.toContain("private runtime content");
+  });
+});
+
+// #3390 closeout: a profile can be "available" per config and probe yet still be unusable because
+// its derived `maxPromptTokens` cannot survive one real request. The readiness projection must
+// demote it to a closed, named reason instead of reporting "ready".
+describe("coding sidecar gateway readiness — insufficient context window", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  function profileContext(): RouteContext {
+    return {
+      req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
+      res: mockResponse().res,
+      params: {},
+      url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+      correlationId: undefined,
+    } satisfies RouteContext;
+  }
+
+  it("demotes an available profile whose setup-placeholder capability cannot survive one request", () => {
+    const sink = captureServerLog("warn");
+    // #3390 live incident: a coding-safe model configured with the setup placeholder capability
+    // (contextWindow 4096 / maxOutputTokens 0) reported "available" and died on the first gateway
+    // call with "estimated prompt tokens exceed profile maxPromptTokens (4096)".
+    const deps = depsValue(
+      configValue(provider(), capability({ contextWindow: 4_096, maxOutputTokens: 0 })),
+    );
+
+    const result = handleCodingSidecarGatewayProfile(profileContext(), deps);
+
+    expect(result).toEqual({
+      status: 200,
+      body: { status: "unavailable", reason: "model-context-window-insufficient" },
+    });
+    expect(sink.events).toEqual([
+      {
+        level: "warn",
+        category: "gateway",
+        op: "coding-sidecar.gateway.readiness-insufficient",
+        correlationId: "unknown-correlation-id",
+        durationMs: undefined,
+        status: undefined,
+        errorKind: undefined,
+        extra: {
+          reason: "model-context-window-insufficient",
+          maxPromptTokens: 4_096,
+          minimumRequiredPromptTokens: 32_768,
+        },
+      },
+    ]);
+  });
+
+  it("keeps reporting available when the derived prompt budget clears the minimum", () => {
+    const sink = captureServerLog("warn");
+    const deps = depsValue(configValue(provider(), capability()));
+
+    const result = handleCodingSidecarGatewayProfile(profileContext(), deps);
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ status: "available" });
+    expect(sink.events).toHaveLength(0);
+  });
+});

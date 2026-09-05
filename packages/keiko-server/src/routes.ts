@@ -46,6 +46,7 @@ import {
 } from "./store-handlers.js";
 import { WORKSPACE_MANIFEST_ROUTE_GROUP } from "./workspace-manifest-routes.js";
 import {
+  createHandleGitChangeApplyDescription,
   handleCreateDesktopChat,
   handleRegenerateDesktopChat,
   handleSendDesktopChat,
@@ -1529,6 +1530,20 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // relationship. CSRF + JSON content-type enforced centrally for POST; the per-checkout
   // GitHub-reader grant gates the PR-by-head read, never a fetch or silent remote adoption.
   ...GIT_CHANGE_ROUTE_GROUP,
+  // #3400 Chat's apply action (final-audit F5): a body-only PR-description apply for a connected,
+  // PR-resolved git-change scope, reusing the SAME #3399 per-(project, repository, PR)
+  // `PrDescriptionApplicationService` the existing pr-description preview/approve/apply routes
+  // above use -- never a second write path. Mounted here, not inside GIT_CHANGE_ROUTE_GROUP,
+  // so gitChangeRoutes.test.ts's Frozen Product Decision 6 structural pin (connect/refresh only,
+  // exactly two routes) stays exactly as strict: this endpoint adds no branch/fetch/pull/push/
+  // PR-create/merge/close effect of its own -- it only consumes a one-use description-apply
+  // approval and executes through the existing governed body-only PATCH. CSRF + JSON content-type
+  // enforced centrally for POST, same posture as connect/refresh above.
+  {
+    method: "POST",
+    pattern: "/api/git-change/apply-description",
+    handler: createHandleGitChangeApplyDescription(),
+  },
   // #2256 left the browser-owned Authority Envelope confirmation/execution routes unmounted;
   // #2958 (KEIKO-0115/KEIKO-0135) deleted them outright, together with the policy and approval
   // store behind them, so there is no second front door left to mount by accident. The one

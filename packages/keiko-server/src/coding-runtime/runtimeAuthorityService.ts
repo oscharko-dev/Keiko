@@ -404,6 +404,7 @@ export class CodingRuntimeAuthorityService {
     return {
       current: (scope, nowIso): ActiveGitDeliveryDescriptionAuthority | undefined =>
         this.currentGitDeliveryDescriptionAuthority(scope, nowIso),
+      expired: (scope, nowIso): boolean => this.gitDeliveryDescriptionAuthorityExpired(scope, nowIso),
     };
   }
 
@@ -426,6 +427,20 @@ export class CodingRuntimeAuthorityService {
       effectiveMode: stored.effectiveMode,
       expiresAt: new Date(stored.expiresAtMs).toISOString(),
     };
+  }
+
+  // #3400/#3401 final-audit F1: consulted only by `authorizeGitDeliveryModelEgress` once `current`
+  // has already returned `undefined` for this exact scope. Distinguishes a record that WAS minted
+  // for this scope but has since passed its `expiresAt` (`true`) from no record ever having
+  // existed for it (`false`) — the same map lookup `currentGitDeliveryDescriptionAuthority` already
+  // performs, read for its expiry state instead of being discarded on it.
+  private gitDeliveryDescriptionAuthorityExpired(
+    scope: GitDeliveryDescriptionAuthorityScope,
+    nowIso: string,
+  ): boolean {
+    const nowMs = Date.parse(nowIso);
+    const stored = this.descriptionAuthorities.get(descriptionAuthorityScopeDigest(scope));
+    return stored !== undefined && !Number.isNaN(nowMs) && stored.expiresAtMs <= nowMs;
   }
 
   private pruneDescriptionAuthorities(nowMs: number): void {

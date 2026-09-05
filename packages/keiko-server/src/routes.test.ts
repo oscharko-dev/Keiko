@@ -1,11 +1,14 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { API_ROUTES, isApiPath, matchRoute, STREAMING, type RouteContext } from "./routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
-import { createInMemoryUiStore } from "./store/index.js";
+import { createInMemoryUiStore, type ChatGitChangeScope } from "./store/index.js";
 
 const emptyCtx: RouteContext = {
   correlationId: undefined,
@@ -641,6 +644,126 @@ describe("run routes are wired (Task B)", () => {
     }
     expect(result.status).toBe(404);
     expect(result.body).toMatchObject({ error: { code: "NOT_FOUND" } });
+  });
+});
+
+// #3400 final-audit F5: before this route was mounted, the real apply handler
+// (`createHandleGitChangeApplyDescription`, chat-handlers.ts) had zero production callers --
+// `matchRoute` returned `undefined` for this exact pattern and every request below would 404 at
+// dispatch before ever reaching the handler. These tests drive the route entry as pulled straight
+// out of `API_ROUTES` (never a separately re-imported handler), so a regression that unmounts it
+// again fails here first.
+describe("git-change chat apply-description route is wired (#3400 final-audit F5)", () => {
+  function applyDescriptionCtx(body: Record<string, unknown>): RouteContext {
+    const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]);
+    const res = {
+      destroyed: false,
+      closed: false,
+      writableEnded: false,
+      once(): void {
+        // The exercised handler never registers response events on this deterministic stub.
+      },
+      off(): void {
+        // The exercised handler never unregisters response events on this deterministic stub.
+      },
+    };
+    return {
+      correlationId: undefined,
+      req: req as unknown as IncomingMessage,
+      res: res as unknown as ServerResponse,
+      params: {},
+      url: new URL("http://127.0.0.1/api/git-change/apply-description"),
+    };
+  }
+
+  it("is reachable as POST /api/git-change/apply-description", () => {
+    const match = matchRoute("POST", "/api/git-change/apply-description");
+    expect(match).not.toBe("method-not-allowed");
+    if (match === undefined || match === "method-not-allowed") {
+      throw new Error("expected a route match");
+    }
+    const route = API_ROUTES.find(
+      (r) => r.method === "POST" && r.pattern === "/api/git-change/apply-description",
+    );
+    expect(route).toBeDefined();
+    expect(route?.handler).toBe(match.definition.handler);
+  });
+
+  it("stays outside GIT_CHANGE_ROUTE_GROUP's own connect/refresh-only surface", () => {
+    // Frozen Product Decision 6's structural pin in gitChangeRoutes.test.ts asserts that group
+    // stays at exactly two routes; this route lives in the top-level table instead precisely so
+    // that pin never has to move.
+    const matches = API_ROUTES.filter((r) => r.pattern === "/api/git-change/apply-description");
+    expect(matches).toHaveLength(1);
+  });
+
+  it("blocks with 404 (approval-required-shaped: nothing to approve) when no connected scope names the relationship", async () => {
+    const route = API_ROUTES.find(
+      (r) => r.method === "POST" && r.pattern === "/api/git-change/apply-description",
+    );
+    const deps: UiHandlerDeps = { ...stubDeps, store: createInMemoryUiStore() };
+    const result = await route?.handler(
+      applyDescriptionCtx({
+        schemaVersion: "1",
+        chatId: "unknown-chat",
+        relationshipId: "rel-1",
+        proposalId: "proposal-1",
+      }),
+      deps,
+    );
+    if (result === undefined || result === STREAMING) {
+      throw new Error("expected a RouteResult");
+    }
+    expect(result.status).toBe(404);
+    expect(result.body).toMatchObject({ error: { code: "GIT_CHANGE_SCOPE_NOT_FOUND" } });
+  });
+
+  it("blocks with 409 when the connected scope has no resolved pull request", async () => {
+    const store = createInMemoryUiStore();
+    const projectRoot = mkdtempSync(join(tmpdir(), "git-change-apply-route-"));
+    try {
+      const project = store.createProject(projectRoot);
+      const chat = store.createChat(project.path, "t", "m");
+      const scope: ChatGitChangeScope = {
+        kind: "git-change",
+        relationshipId: "rel-no-pr",
+        remoteDigest: "d".repeat(64),
+        comparisonLabel: "main...feature",
+        baseRef: "main",
+        headRef: "feature",
+        baseSha: "a".repeat(40),
+        headSha: "b".repeat(40),
+        mergeBaseSha: "a".repeat(40),
+        snapshotDigest: "c".repeat(64),
+        fileCount: 1,
+        totalFiles: 1,
+        omittedFiles: 0,
+        truncatedFiles: 0,
+        descriptionStatus: "current",
+        connectedAtMs: Date.now(),
+      };
+      store.updateChat(chat.id, { gitChangeScopes: [scope] });
+      const route = API_ROUTES.find(
+        (r) => r.method === "POST" && r.pattern === "/api/git-change/apply-description",
+      );
+      const deps: UiHandlerDeps = { ...stubDeps, store };
+      const result = await route?.handler(
+        applyDescriptionCtx({
+          schemaVersion: "1",
+          chatId: chat.id,
+          relationshipId: "rel-no-pr",
+          proposalId: "proposal-1",
+        }),
+        deps,
+      );
+      if (result === undefined || result === STREAMING) {
+        throw new Error("expected a RouteResult");
+      }
+      expect(result.status).toBe(409);
+      expect(result.body).toMatchObject({ error: { code: "GIT_CHANGE_APPLY_UNAVAILABLE" } });
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
   });
 });
 

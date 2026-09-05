@@ -60,6 +60,15 @@ export interface GitDeliveryDescriptionAuthorityPort {
     scope: GitDeliveryDescriptionAuthorityScope,
     nowIso: string,
   ): ActiveGitDeliveryDescriptionAuthority | undefined;
+  // #3400/#3401 final-audit F1: consulted by `authorizeGitDeliveryModelEgress` ONLY once `current`
+  // has already returned `undefined`, to distinguish a record that WAS minted for this exact scope
+  // but is past its `expiresAt` from no record ever having existed for it — the same
+  // expired-vs-absent discriminant `authorizeGitDelivery` already derives for the run-bound
+  // authority (its own `expired(nowIso, active.authority.expiresAt)` check above), reused here
+  // instead of a second formula. Optional so a port that never needs the distinction (every
+  // existing `admitByDescriptionAuthority` caller, and every fixture that predates this method)
+  // keeps compiling unchanged; a port that omits it is treated as "no record", never "expired".
+  expired?(scope: GitDeliveryDescriptionAuthorityScope, nowIso: string): boolean;
 }
 // The two effects the description authority may admit — deliberately a SMALL, LOCAL union rather
 // than a `GitRepositoryAgentOperationKind` member: "model-egress" is not a Git operation at all
@@ -328,17 +337,37 @@ export function authorizeGitDelivery(
   return resolveModeDecision(active, request, requirement, redeemApproval);
 }
 
+// #3400/#3401 final-audit F1: the closed reason `authorizeGitDeliveryModelEgress` reports when no
+// live record admits the exact scope. Deliberately its own small, local union (never reusing
+// `GitDeliveryAuthorityDenial`) because this admission is not a Git operation and does not carry
+// that union's run-bound reasons (`workspace-out-of-envelope`, `permission-scope-missing`, …) —
+// only the same expired-vs-absent split `authorizeGitDelivery` derives for the run-bound
+// authority, applied here to the description authority instead.
+export type GitDeliveryModelEgressDenial = "authority-expired" | "authority-absent";
+
+export type GitDeliveryModelEgressDecision =
+  | { readonly allowed: true; readonly effectiveMode: CodingWorkbenchMode }
+  | { readonly allowed: false; readonly reason: GitDeliveryModelEgressDenial };
+
 /**
  * #3399: the description authority's second admitted effect — model egress of snapshot content
  * through the Model Gateway for description generation. Not a Git operation (no argv, adapter, or
  * branch target), so it is a sibling check rather than a `GitDeliveryAuthorityRequest.operation`
- * value. Returns the admitted effective mode (never workspace-write or command capable) or
- * `undefined` when no live record matches the exact scope.
+ * value. Returns the admitted effective mode (never workspace-write or command capable), or a
+ * closed denial that distinguishes a record past its `expiresAt` (`authority-expired`) from no
+ * record ever having been minted for this exact scope (`authority-absent`) — #3400/#3401
+ * final-audit F1's discriminant, reused from `authorizeGitDelivery`'s own `expired()` check rather
+ * than restated.
  */
 export function authorizeGitDeliveryModelEgress(
   port: GitDeliveryDescriptionAuthorityPort,
   scope: GitDeliveryDescriptionAuthorityScope,
   nowIso: string,
-): CodingWorkbenchMode | undefined {
-  return port.current(scope, nowIso)?.effectiveMode;
+): GitDeliveryModelEgressDecision {
+  const active = port.current(scope, nowIso);
+  if (active !== undefined) return { allowed: true, effectiveMode: active.effectiveMode };
+  return {
+    allowed: false,
+    reason: port.expired?.(scope, nowIso) === true ? "authority-expired" : "authority-absent",
+  };
 }

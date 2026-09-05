@@ -6,9 +6,11 @@ import type {
   CodingWorkbenchEvidenceRecord,
   CodingWorkbenchPermissionRequest,
   CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchSidecarGatewayUnavailable,
 } from "./index.js";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
+  CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS,
   CODING_WORKBENCH_MODEL_SOURCES,
   CODING_WORKBENCH_MODES,
   CODING_WORKBENCH_RUNTIME_EVENT_KINDS,
@@ -1900,5 +1902,24 @@ describe("redactCodingWorkbenchEvidenceText", () => {
     expect(redacted).not.toMatch(/\bsrc\b/i);
     expect(redacted).not.toMatch(/\ba\.ts\b/i);
     expect(redacted).not.toMatch(/\bb\.ts\b/i);
+  });
+});
+
+// #3390 closeout: the readiness vocabulary appended for the sidecar gateway's "otherwise available
+// but the context window cannot survive one request" state. Append-only per AGENTS.md — this test
+// exists so a future edit that narrows the union or drifts the constant fails loudly here first.
+describe("coding workbench sidecar gateway readiness — context window floor", () => {
+  it("defines the minimum coding-context prompt-token floor as a positive integer", () => {
+    expect(Number.isSafeInteger(CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS)).toBe(true);
+    expect(CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS).toBeGreaterThan(0);
+  });
+
+  it("accepts the appended reason on an unavailable sidecar gateway projection", () => {
+    const unavailable: CodingWorkbenchSidecarGatewayUnavailable = {
+      status: "unavailable",
+      reason: "model-context-window-insufficient",
+    };
+
+    expect(unavailable.reason).toBe("model-context-window-insufficient");
   });
 });

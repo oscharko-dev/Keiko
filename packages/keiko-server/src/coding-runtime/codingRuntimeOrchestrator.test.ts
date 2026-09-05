@@ -161,7 +161,12 @@ function fixture(
     // like any other mutating transition (#3390 recovery-ack-restart).
     acknowledgeRecovery: (id, at) => {
       const row = rowFor(rows, id);
-      const next = { ...row, recoveryAcknowledgedAt: at, revision: row.revision + 1, updatedAt: at };
+      const next = {
+        ...row,
+        recoveryAcknowledgedAt: at,
+        revision: row.revision + 1,
+        updatedAt: at,
+      };
       rows.set(id, next);
       return next;
     },
