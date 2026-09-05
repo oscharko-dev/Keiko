@@ -6,15 +6,38 @@ import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import type { GitChangeSnapshotService } from "../gitChangeSnapshotService.js";
+import {
+  GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
+  type GitChangeSnapshot,
+} from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
+import type { GitDeliveryDescriptionAuthorityPort } from "../gitDelivery/runBoundAuthority.js";
+import type { PrDescription } from "@oscharko-dev/keiko-model-gateway";
+import type { WorkbenchDescriptionScope } from "./codingRuntimeDescriptionJobStore.js";
 import {
   createCodexRuntimeTurnPort,
   createOpenCodeRuntimeTurnPort,
   createProductionRuntimeManager,
   createProductionRuntimeOperationGuard,
   createProductionRuntimeTaskDispatcher,
+  createProductionWorkbenchDescriptionDispatcher,
   renderInitialTurnContext,
   type ProductionRuntimeRunRecord,
+  type ProductionWorkbenchDescriptionDeps,
 } from "./productionCodingRuntimePorts.js";
+
+// #3401: `createProductionWorkbenchDescriptionDispatcher` composes #3398's real
+// `PrDescription.generatePrDescription` core. Every other describe block in this file exercises
+// Codex/OpenCode ports and never touches the Model Gateway, so mocking it here is scoped to this
+// one suite (see the "generated" happy-path test) without disturbing the rest of the file.
+const generatePrDescriptionMock = vi.hoisted(() => vi.fn());
+vi.mock("@oscharko-dev/keiko-model-gateway", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-model-gateway")>();
+  return {
+    ...actual,
+    PrDescription: { ...actual.PrDescription, generatePrDescription: generatePrDescriptionMock },
+  };
+});
 
 describe("production coding runtime turn ports", () => {
   it("submits initial and follow-up OpenCode turns through the run-bound port", async () => {
@@ -687,3 +710,262 @@ function codexControl(input: {
     terminalStatus: (_runId, turnId) => input.statuses.get(turnId),
   };
 }
+
+describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
+  const REMOTE = "d".repeat(64);
+  const BASE_SHA = "1".repeat(40);
+  const HEAD_SHA = "2".repeat(40);
+  const SCOPE: WorkbenchDescriptionScope = {
+    runId: "run-1",
+    remoteDigest: REMOTE,
+    baseSha: BASE_SHA,
+    headSha: HEAD_SHA,
+  };
+
+  function snapshotFixture(overrides: Partial<GitChangeSnapshot> = {}): GitChangeSnapshot {
+    return {
+      schemaVersion: GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
+      repositoryId: "repo_fixture",
+      remoteDigest: REMOTE,
+      baseRef: "dev",
+      baseSha: BASE_SHA,
+      headRef: "feature/x",
+      headSha: HEAD_SHA,
+      mergeBaseSha: BASE_SHA,
+      capturedAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2026-01-01T00:10:00.000Z",
+      outcome: "complete",
+      limits: { maxFiles: 400, maxHunksPerFile: 256, maxPatchBytes: 262144, maxTotalBytes: 2097152 },
+      completeness: {
+        totalFiles: 1,
+        files: 1,
+        hunks: 1,
+        bytes: 16,
+        omittedFiles: 0,
+        omittedHunks: 0,
+        truncatedFiles: 0,
+        kinds: {
+          add: 1,
+          modify: 0,
+          delete: 0,
+          rename: 0,
+          copy: 0,
+          "mode-change": 0,
+          binary: 0,
+          submodule: 0,
+        },
+        omissions: [],
+      },
+      entries: [],
+      localDivergence: { stagedCount: 0, unstagedCount: 0, untrackedCount: 0, conflictedCount: 0 },
+      snapshotDigest: "a".repeat(64),
+      ...overrides,
+    };
+  }
+
+  function fakeSnapshots(
+    capture: GitChangeSnapshotService["capture"] = () =>
+      Promise.reject(new Error("unexpected capture")),
+  ): GitChangeSnapshotService {
+    return {
+      capture,
+      read: () => undefined,
+      recheck: () => Promise.reject(new Error("unexpected recheck")),
+      close: () => undefined,
+    };
+  }
+
+  function admittingPort(): GitDeliveryDescriptionAuthorityPort {
+    return {
+      current: () => ({
+        scope: {
+          remoteDigest: REMOTE,
+          pr: { baseRef: BASE_SHA, headRef: HEAD_SHA },
+          snapshotDigest: "a".repeat(64),
+        },
+        effectiveMode: "supervised-coding",
+        expiresAt: "2026-01-01T00:10:00.000Z",
+      }),
+    };
+  }
+
+  function denyingPort(): GitDeliveryDescriptionAuthorityPort {
+    return { current: () => undefined };
+  }
+
+  function fakeDeps(
+    overrides: Partial<ProductionWorkbenchDescriptionDeps> = {},
+  ): ProductionWorkbenchDescriptionDeps {
+    return {
+      activeWorkspaceRoot: () => "/workspace",
+      snapshots: fakeSnapshots(),
+      generation: undefined,
+      descriptionAuthority: undefined,
+      now: () => Date.parse("2026-01-01T00:00:00.000Z"),
+      ...overrides,
+    };
+  }
+
+  it("reports generation-unavailable and never captures a snapshot without an active workspace", async () => {
+    const capture = vi.fn(() => Promise.resolve({ snapshot: snapshotFixture() }));
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({ activeWorkspaceRoot: () => undefined, snapshots: fakeSnapshots(capture) }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toEqual({ reason: "generation-unavailable" });
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  it("maps a failed snapshot capture to provider-failed", async () => {
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: fakeSnapshots(() =>
+          Promise.resolve({
+            snapshot: {
+              schemaVersion: GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
+              repositoryId: "repo_fixture",
+              capturedAt: "2026-01-01T00:00:00.000Z",
+              outcome: "failed",
+              reason: "git-unavailable",
+              errorKind: "internal",
+            },
+          }),
+        ),
+      }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toEqual({ reason: "provider-failed" });
+  });
+
+  it("maps an unavailable snapshot capture to generation-unavailable", async () => {
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: fakeSnapshots(() =>
+          Promise.resolve({
+            snapshot: {
+              schemaVersion: GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
+              repositoryId: "repo_fixture",
+              capturedAt: "2026-01-01T00:00:00.000Z",
+              outcome: "unavailable",
+              reason: "not-a-repository",
+            },
+          }),
+        ),
+      }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toEqual({ reason: "generation-unavailable" });
+  });
+
+  it("treats a captured remote digest that no longer matches the scope as generation-unavailable", async () => {
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: fakeSnapshots(() =>
+          Promise.resolve({
+            reference: "ref-1",
+            snapshot: snapshotFixture({ remoteDigest: "f".repeat(64) }),
+          }),
+        ),
+      }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toEqual({ reason: "generation-unavailable" });
+  });
+
+  it("denies model egress and never calls the Model Gateway when no description authority admits the scope", async () => {
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: fakeSnapshots(() =>
+          Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+        ),
+        descriptionAuthority: denyingPort(),
+      }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toEqual({ reason: "model-egress-denied" });
+    expect(generatePrDescriptionMock).not.toHaveBeenCalled();
+  });
+
+  it("reports generation-unavailable when admitted but no model profile is configured", async () => {
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: fakeSnapshots(() =>
+          Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+        ),
+        descriptionAuthority: admittingPort(),
+        generation: undefined,
+      }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toEqual({ reason: "generation-unavailable" });
+    expect(generatePrDescriptionMock).not.toHaveBeenCalled();
+  });
+
+  it("mints the description authority for the exact captured scope before checking admission", async () => {
+    const mint = vi.fn();
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: fakeSnapshots(() =>
+          Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+        ),
+        descriptionAuthority: denyingPort(),
+        mintDescriptionAuthority: mint,
+      }),
+    );
+    await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(mint).toHaveBeenCalledExactlyOnceWith(
+      {
+        remoteDigest: REMOTE,
+        pr: { baseRef: BASE_SHA, headRef: HEAD_SHA },
+        snapshotDigest: "a".repeat(64),
+      },
+      "2026-01-01T00:00:00.000Z",
+    );
+  });
+
+  it("generates through the Model Gateway core once admitted and maps a complete artifact", async () => {
+    const artifact: PrDescription.PrDescriptionArtifact = {
+      schemaVersion: "1",
+      renderingVersion: "1",
+      binding: { ...snapshotFixture(), snapshotDigest: "a".repeat(64) },
+      language: "en",
+      outcome: "complete",
+      reason: "none",
+      coverage: {
+        snapshot: snapshotFixture().completeness,
+        suppliedEvidenceCount: 0,
+        processedEvidenceCount: 0,
+        omittedEvidenceCount: 0,
+      },
+      candidate: { summary: [], keyChanges: [], risks: [], reviewerFocus: [] },
+      markdown: "Summary",
+      artifactDigest: "b".repeat(64),
+    };
+    const generated: PrDescription.PrDescriptionGenerationResult = {
+      status: "generated",
+      artifact,
+    };
+    generatePrDescriptionMock.mockResolvedValueOnce(generated);
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: fakeSnapshots(() =>
+          Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+        ),
+        descriptionAuthority: admittingPort(),
+        generation: {
+          gateway: { chat: vi.fn() },
+          config: {} as PrDescription.PrDescriptionDeps["config"],
+          log: { write: () => undefined },
+        },
+      }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toEqual({
+      reason: "generated",
+      snapshotDigest: "a".repeat(64),
+      draftDigest: "b".repeat(64),
+      artifactOutcome: "complete",
+    });
+    expect(generatePrDescriptionMock).toHaveBeenCalledOnce();
+  });
+});

@@ -390,6 +390,82 @@ function useSubmit(
   };
 }
 
+// The <dialog>/<form> chrome, extracted so ConnectToChatDialog itself stays under the
+// max-lines-per-function bar. Owns only layout, the Escape handler, and the tab trap ref — every
+// field lives in ConnectDialogFields.
+function DialogChrome({
+  dialogRef,
+  title,
+  onClose,
+  onSubmit,
+  children,
+}: {
+  readonly dialogRef: RefObject<HTMLDialogElement | null>;
+  readonly title: string;
+  readonly onClose: () => void;
+  readonly onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- the native dialog owns Escape handling while the shared hook owns Tab containment.
+    <dialog
+      open
+      ref={dialogRef}
+      aria-modal="true"
+      aria-label={title}
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          onClose();
+          event.preventDefault();
+        }
+      }}
+      style={OVERLAY_STYLE}
+    >
+      <form style={FORM_STYLE} onSubmit={onSubmit}>
+        {children}
+      </form>
+    </dialog>
+  );
+}
+
+interface ConnectDialogState {
+  readonly chatId: string;
+  readonly setChatId: (id: string) => void;
+  readonly mode: ConnectMode;
+  readonly setMode: (mode: ConnectMode) => void;
+  readonly baseRef: string;
+  readonly setBaseRef: (name: string) => void;
+  readonly busy: boolean;
+  readonly error: string | null;
+  readonly canSubmit: boolean;
+  readonly submit: () => void;
+}
+
+// Consolidates the dialog's own form state with the submit flow so ConnectToChatDialog's body
+// stays under the max-lines-per-function bar.
+function useConnectDialogState(
+  currentBranch: string | undefined,
+  baseBranchName: string | undefined,
+  connect: typeof connectGitChangeToChat,
+  onClose: () => void,
+  t: I18nTranslate,
+): ConnectDialogState {
+  const [chatId, setChatId] = useState("");
+  const [mode, setMode] = useState<ConnectMode>("comparison");
+  const [baseRef, setBaseRef] = useState(baseBranchName ?? "");
+  const { busy, error, canSubmit, submit } = useSubmit(
+    chatId,
+    mode,
+    currentBranch,
+    baseRef,
+    connect,
+    onClose,
+    t,
+  );
+  return { chatId, setChatId, mode, setMode, baseRef, setBaseRef, busy, error, canSubmit, submit };
+}
+
 export function ConnectToChatDialog({
   projectId,
   currentBranch,
@@ -401,87 +477,38 @@ export function ConnectToChatDialog({
 }: ConnectToChatDialogProps): ReactNode {
   const t = useTranslate();
   const catalog = useChatCatalog(projectId, listChats, t);
-  const [chatId, setChatId] = useState("");
-  const [mode, setMode] = useState<ConnectMode>("comparison");
-  const [baseRef, setBaseRef] = useState(baseBranchName ?? "");
+  const state = useConnectDialogState(currentBranch, baseBranchName, connect, onClose, t);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   useDialogTabTrap(dialogRef);
   useModalInteractionLock({ initialFocusRef: dialogRef });
-  const { busy, error, canSubmit, submit } = useSubmit(
-    chatId,
-    mode,
-    currentBranch,
-    baseRef,
-    connect,
-    onClose,
-    t,
-  );
 
   const dialog = (
-    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- the native dialog owns Escape handling while the shared hook owns Tab containment.
-    <dialog
-      open
-      ref={dialogRef}
-      aria-modal="true"
-      aria-label={t("gitChangeScope.connect.title")}
-      tabIndex={-1}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          onClose();
-          event.preventDefault();
-        }
-      }}
-      style={{
-        position: "fixed",
-        inset: 0,
-        width: "auto",
-        maxWidth: "none",
-        height: "auto",
-        maxHeight: "none",
-        margin: 0,
-        padding: 0,
-        border: 0,
-        zIndex: 100,
-        display: "grid",
-        placeItems: "center",
-        background: "color-mix(in oklch, var(--surface-primary) 45%, transparent)",
+    <DialogChrome
+      dialogRef={dialogRef}
+      title={t("gitChangeScope.connect.title")}
+      onClose={onClose}
+      onSubmit={(event) => {
+        event.preventDefault();
+        state.submit();
       }}
     >
-      <form
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: "var(--space-4)",
-          width: "min(440px, calc(100vw - 48px))",
-          padding: "var(--space-5)",
-          border: "1px solid var(--border-subtle)",
-          borderRadius: "var(--radius-lg)",
-          background: "var(--surface-primary)",
-          boxShadow: "var(--shadow-pop)",
-        }}
-        onSubmit={(event) => {
-          event.preventDefault();
-          submit();
-        }}
-      >
-        <ConnectDialogFields
-          chatId={chatId}
-          onChatIdChange={setChatId}
-          catalog={catalog}
-          mode={mode}
-          onModeChange={setMode}
-          currentBranch={currentBranch}
-          baseRef={baseRef}
-          onBaseRefChange={setBaseRef}
-          baseBranchChoices={baseBranchChoices}
-          error={error}
-          busy={busy}
-          canSubmit={canSubmit}
-          onCancel={onClose}
-          t={t}
-        />
-      </form>
-    </dialog>
+      <ConnectDialogFields
+        chatId={state.chatId}
+        onChatIdChange={state.setChatId}
+        catalog={catalog}
+        mode={state.mode}
+        onModeChange={state.setMode}
+        currentBranch={currentBranch}
+        baseRef={state.baseRef}
+        onBaseRefChange={state.setBaseRef}
+        baseBranchChoices={baseBranchChoices}
+        error={state.error}
+        busy={state.busy}
+        canSubmit={state.canSubmit}
+        onCancel={onClose}
+        t={t}
+      />
+    </DialogChrome>
   );
 
   return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);

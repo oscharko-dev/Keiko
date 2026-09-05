@@ -1102,6 +1102,27 @@ describe("GitClientWindow — toolbar actions", () => {
     expect(screen.queryByRole("button", { name: /Open Files/ })).not.toBeInTheDocument();
   });
 
+  // Issue #3400 — the Git window's own "Connect to Chat" affordance: before RepositoryToolbar and
+  // GitClientWindow were wired to ConnectToChatDialog, no button existed anywhere in this window to
+  // start connecting a comparison to a Chat, making the entire server-side git-change feature
+  // unreachable from the product.
+  it("Connect to Chat opens the connect-to-chat dialog for the active repository", async () => {
+    const client = makeClient();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.listBranches).toHaveBeenCalled());
+
+    expect(screen.queryByRole("dialog", { name: /Connect Git change to chat/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Connect to Chat/i }));
+    expect(
+      await screen.findByRole("dialog", { name: /Connect Git change to chat/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("Connect to Chat is absent when no repository is selected", () => {
+    render(<GitClientWindow client={makeClient()} />);
+    expect(screen.queryByRole("button", { name: /Connect to Chat/i })).not.toBeInTheDocument();
+  });
+
   it("Sync status renders with a text label", async () => {
     const client = makeClient({
       getStatus: vi.fn(async () => makeStatus({ clean: true })),

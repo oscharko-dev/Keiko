@@ -124,6 +124,7 @@ import { VoiceDialogInterruptButton, VoiceDialogModeSwitch } from "./VoiceDialog
 import styles from "./ChatWindow.module.css";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
+import { GitChangeScopePill } from "./GitChangeScopePill";
 import type { ChatEditorApplyOutcome } from "@/lib/chat-editor-apply";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
@@ -4085,6 +4086,11 @@ function ChatScopeHeaderImpl({
         catalog={catalog}
         connected={connected}
       />
+      {/* Issue #3400 — the git-change comparison connected via the Git window's "Connect to
+          Chat" action renders here, alongside the grounding scope control, so its current /
+          stale / blocked status and refresh/disconnect actions are visible where a turn is
+          actually sent. Renders nothing when the chat has no connected git-change scope. */}
+      <GitChangeScopePill chat={chat} onDisconnect={onChatChanged} onRefreshed={onChatChanged} />
       {memoryControl !== undefined ? (
         <div className="chat-scope-header-actions">{memoryControl}</div>
       ) : null}

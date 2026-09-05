@@ -17,10 +17,14 @@ import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js
 import type { CodingRuntimeIssueAttachment } from "./codingRuntimeIssueIntake.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
-import type { PrDescriptionOutcome } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
+import type {
+  PrDescriptionOutcome,
+  PrDescriptionReason,
+} from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import type { WorkbenchDescriptionReason } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
 import { PrDescription } from "@oscharko-dev/keiko-model-gateway";
 import type { GitChangeSnapshotService } from "../gitChangeSnapshotService.js";
+import type { GitChangeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import {
   authorizeGitDeliveryModelEgress,
   type GitDeliveryDescriptionAuthorityPort,
@@ -583,4 +587,197 @@ async function abortRuntimeTask(
   } finally {
     record.controller.abort();
   }
+}
+
+// ─── #3401: production WorkbenchDescriptionDispatcher composition ──────────────────────────────
+//
+// The dispatcher deps.ts composes and attaches to the orchestrator
+// (`CodingRuntimeOrchestrator.attachDescriptionSupport`) after the control plane is built. It
+// captures the run's immutable snapshot (#3397), revalidates the server-owned description
+// authority for the exact (remoteDigest, base/head, snapshotDigest) scope (#3399), admits model
+// egress through that SAME authority, and generates through #3398's Model Gateway core -- never
+// publishing (epic correction 1: remote PR-body mutation stays #3399's approval-gated apply lane).
+//
+// `mintDescriptionAuthority` is `undefined` until a follow-up threads the server-owned
+// authority-minting capability through the runtime host chain (productionCodingRuntimeResolver.ts
+// -> productionCodingRuntimeHost.ts -> codingRuntimeControlPlane.ts -> deps.ts), mirroring how
+// `gitDeliveryDescriptionAuthority`'s READ port is already threaded there -- chat-handlers.ts's own
+// `admitGitChangeDescriptionTurn` comment names the same open item for its Chat-originated scope.
+// Until that lands, every scope admits closed (`model-egress-denied`), never open: the absence of a
+// minting capability is exactly the same as no live authority record ever having been minted.
+export interface ProductionWorkbenchDescriptionDeps {
+  /** Best-effort: the single-slot active workspace root at dispatch time, never a stored path. */
+  readonly activeWorkspaceRoot: () => string | undefined;
+  readonly snapshots: GitChangeSnapshotService;
+  /** `undefined` -- no configured model profile for this deployment (#3399's own closed reason). */
+  readonly generation: Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot"> | undefined;
+  readonly descriptionAuthority: GitDeliveryDescriptionAuthorityPort | undefined;
+  readonly mintDescriptionAuthority?: (
+    scope: GitDeliveryDescriptionAuthorityScope,
+    nowIso: string,
+  ) => void;
+  readonly now: () => number;
+}
+
+export interface ProductionWorkbenchDescriptionOutcome {
+  readonly reason: WorkbenchDescriptionReason;
+  readonly snapshotDigest?: string;
+  readonly draftDigest?: string;
+  readonly artifactOutcome?: PrDescriptionOutcome;
+}
+
+export interface ProductionWorkbenchDescriptionDispatcher {
+  readonly generate: (
+    scope: WorkbenchDescriptionScope,
+    signal: AbortSignal,
+  ) => Promise<ProductionWorkbenchDescriptionOutcome>;
+}
+
+export function createProductionWorkbenchDescriptionDispatcher(
+  deps: ProductionWorkbenchDescriptionDeps,
+): ProductionWorkbenchDescriptionDispatcher {
+  return { generate: (scope, signal) => dispatchWorkbenchDescription(deps, scope, signal) };
+}
+
+function minimalWorkspaceInfo(root: string): WorkspaceInfo {
+  return {
+    root,
+    selectedRoot: root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
+}
+
+async function dispatchWorkbenchDescription(
+  deps: ProductionWorkbenchDescriptionDeps,
+  scope: WorkbenchDescriptionScope,
+  signal: AbortSignal,
+): Promise<ProductionWorkbenchDescriptionOutcome> {
+  const root = deps.activeWorkspaceRoot();
+  if (root === undefined) return { reason: "generation-unavailable" };
+  const accessScope = {};
+  const capture = await deps.snapshots.capture({
+    workspace: minimalWorkspaceInfo(root),
+    baseRef: scope.baseSha,
+    headRef: scope.headSha,
+    accessScope,
+    correlationId: scope.runId,
+    signal,
+  });
+  const captured = capture.snapshot;
+  if (captured.outcome === "failed") return { reason: "provider-failed" };
+  if (captured.outcome === "unavailable") return { reason: "generation-unavailable" };
+  if (capture.reference === undefined || captured.remoteDigest !== scope.remoteDigest) {
+    return { reason: "generation-unavailable" };
+  }
+  return admitAndGenerate(deps, scope, captured, capture.reference, accessScope, signal);
+}
+
+async function admitAndGenerate(
+  deps: ProductionWorkbenchDescriptionDeps,
+  scope: WorkbenchDescriptionScope,
+  captured: GitChangeSnapshot,
+  reference: string,
+  accessScope: object,
+  signal: AbortSignal,
+): Promise<ProductionWorkbenchDescriptionOutcome> {
+  const authorityScope: GitDeliveryDescriptionAuthorityScope = {
+    remoteDigest: scope.remoteDigest,
+    pr: { baseRef: scope.baseSha, headRef: scope.headSha },
+    snapshotDigest: captured.snapshotDigest,
+  };
+  const nowIso = new Date(deps.now()).toISOString();
+  deps.mintDescriptionAuthority?.(authorityScope, nowIso);
+  const admitted =
+    deps.descriptionAuthority !== undefined &&
+    authorizeGitDeliveryModelEgress(deps.descriptionAuthority, authorityScope, nowIso) !==
+      undefined;
+  if (!admitted) return { reason: "model-egress-denied" };
+  if (deps.generation === undefined) return { reason: "generation-unavailable" };
+  const result = await PrDescription.generatePrDescription(
+    {
+      snapshotReference: reference,
+      language: "en",
+      authority: {
+        authorityDigest: sha256Hex(canonicalise(authorityScope)),
+        correlationId: scope.runId,
+      },
+      signal,
+    },
+    {
+      ...deps.generation,
+      resolveSnapshot: (supplied, sig) =>
+        resolveWorkbenchSnapshot(
+          deps.snapshots,
+          reference,
+          scope.runId,
+          accessScope,
+          supplied,
+          sig,
+        ),
+    },
+  );
+  return workbenchDescriptionOutcome(result);
+}
+
+function resolveWorkbenchSnapshot(
+  snapshots: GitChangeSnapshotService,
+  reference: string,
+  correlationId: string,
+  accessScope: object,
+  supplied: string,
+  signal: AbortSignal,
+): Promise<PrDescription.PrDescriptionResolvedSnapshot | undefined> {
+  if (supplied !== reference || signal.aborted) return Promise.resolve(undefined);
+  const content = snapshots.read(reference, accessScope, correlationId);
+  return Promise.resolve(
+    content === undefined
+      ? undefined
+      : {
+          snapshot: content.snapshot,
+          evidence: content.files.map((file) => ({
+            evidenceId: file.evidenceId,
+            text: JSON.stringify(file),
+          })),
+        },
+  );
+}
+
+const GENERATED_REASON: Record<PrDescriptionOutcome, WorkbenchDescriptionReason> = {
+  complete: "generated",
+  partial: "partial-generated",
+  fallback: "fallback-generated",
+  failed: "provider-failed",
+};
+
+const UNAVAILABLE_REASON: Record<PrDescriptionReason, WorkbenchDescriptionReason> = {
+  none: "provider-failed",
+  "model-unavailable": "provider-failed",
+  "invalid-model-output": "provider-failed",
+  "unsafe-model-output": "provider-failed",
+  "provider-failed": "provider-failed",
+  "budget-exhausted": "budget-exhausted",
+  cancelled: "provider-failed",
+  timeout: "provider-failed",
+  "snapshot-unavailable": "stale-snapshot",
+  "invalid-snapshot": "stale-snapshot",
+  "invalid-request": "provider-failed",
+};
+
+function workbenchDescriptionOutcome(
+  result: PrDescription.PrDescriptionGenerationResult,
+): ProductionWorkbenchDescriptionOutcome {
+  if (result.status !== "generated") return { reason: UNAVAILABLE_REASON[result.reason] };
+  const { artifact } = result;
+  return {
+    reason: GENERATED_REASON[artifact.outcome],
+    snapshotDigest: artifact.binding.snapshotDigest,
+    draftDigest: artifact.artifactDigest,
+    artifactOutcome: artifact.outcome,
+  };
 }
