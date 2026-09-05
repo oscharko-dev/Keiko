@@ -1265,6 +1265,38 @@ describe("CodingRuntimeAuthorityService description authority", () => {
     expect(port.expired?.(neverMinted, laterIso)).toBe(false);
   });
 
+  // Review repair (final-audit F1): `mintGitDeliveryDescriptionAuthority` used to sweep every
+  // expired entry out of the map on EVERY mint, for any scope. That meant a wholly unrelated mint
+  // for scope B, happening after scope A's record had passed its `expiresAt`, silently erased
+  // scope A's record before anyone asked `expired()` about it — collapsing "A had an authority
+  // that expired" back into the indistinguishable "A was never minted" case the whole audit item
+  // exists to fix. This is the failing-before case for that erasure: `expired(A)` must still
+  // report `true` after an intervening, unrelated mint for scope B.
+  it("keeps reporting authority-expired for a scope after an unrelated scope is minted", () => {
+    const authority = service();
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: SCOPE,
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      nowIso: NOW,
+      ttlMs: 1_000,
+    });
+    const port = authority.gitDeliveryDescriptionAuthorityPort();
+    const laterIso = "2026-07-11T12:00:01.500Z";
+    expect(port.expired?.(SCOPE, laterIso)).toBe(true);
+
+    const unrelatedScope = { ...SCOPE, snapshotDigest: "e".repeat(64) };
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: unrelatedScope,
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      nowIso: laterIso,
+      ttlMs: 1_000,
+    });
+
+    expect(port.expired?.(SCOPE, laterIso)).toBe(true);
+  });
+
   it("revokes the record explicitly on a scope change or stale re-check the caller detected", () => {
     const authority = service();
     authority.mintGitDeliveryDescriptionAuthority({

@@ -383,7 +383,7 @@ export class CodingRuntimeAuthorityService {
     );
     const nowMs = Date.parse(input.nowIso);
     const expiresAtMs = nowMs + (input.ttlMs ?? DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS);
-    this.pruneDescriptionAuthorities(nowMs);
+    this.pruneDescriptionAuthorities();
     const digest = descriptionAuthorityScopeDigest(input.scope);
     this.descriptionAuthorities.set(digest, { scope: input.scope, effectiveMode, expiresAtMs });
     return {
@@ -444,10 +444,15 @@ export class CodingRuntimeAuthorityService {
     return stored !== undefined && !Number.isNaN(nowMs) && stored.expiresAtMs <= nowMs;
   }
 
-  private pruneDescriptionAuthorities(nowMs: number): void {
-    for (const [digest, record] of this.descriptionAuthorities) {
-      if (record.expiresAtMs <= nowMs) this.descriptionAuthorities.delete(digest);
-    }
+  // #3400/#3401 final-audit F1 repair: this used to also sweep every entry whose TTL had passed,
+  // on every mint, for any scope. That made the expired-vs-absent discriminant `expired()` exists
+  // to provide non-durable: an unrelated mint for a different scope would erase the very record
+  // that answers "this scope had an authority that expired", collapsing it back into the
+  // indistinguishable "never minted" case. The size cap alone already bounds memory (a fresh
+  // scope evicts the oldest one once the map exceeds `MAX_DESCRIPTION_AUTHORITIES`), so an expired
+  // record now survives — and stays truthfully readable by `current()`/`expired()` — until it
+  // ages out of that bound, never because some other scope happened to be minted.
+  private pruneDescriptionAuthorities(): void {
     while (this.descriptionAuthorities.size > MAX_DESCRIPTION_AUTHORITIES) {
       const first = this.descriptionAuthorities.keys().next().value;
       if (first === undefined) break;
