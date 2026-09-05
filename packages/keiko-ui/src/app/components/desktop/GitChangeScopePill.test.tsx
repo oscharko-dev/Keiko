@@ -197,6 +197,54 @@ describe("GitChangeScopePill", () => {
     });
   });
 
+  // Owner audit b1-6 — before the fix, `runRefresh` merged the *chat prop captured at click time*
+  // instead of the latest one, so a title rename (or any other chat field change) that landed
+  // while the refresh round trip was in flight got silently reverted by the merge. Failing-before:
+  // `onRefreshed` was called with `title: "t"` (the stale click-time value) instead of the renamed
+  // title that committed before the response resolved.
+  it("merges a refresh response onto the latest chat, not the one captured at click time", async () => {
+    const chat = makeChat({ gitChangeScopes: [makeGitChangeScope()] });
+    let resolveRefresh: ((value: GitChangeRefreshResponse) => void) | undefined;
+    const refreshScope = vi.fn(
+      () =>
+        new Promise<GitChangeRefreshResponse>((resolve) => {
+          resolveRefresh = resolve;
+        }),
+    );
+    const onRefreshed = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <GitChangeScopePill
+        chat={chat}
+        updateScopes={vi.fn()}
+        refreshScope={refreshScope}
+        onRefreshed={onRefreshed}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Refresh main...feature/x" }));
+    await waitFor(() => {
+      expect(refreshScope).toHaveBeenCalledWith("chat-1", "rel-1");
+    });
+    // A title rename lands (via the normal chat-list prop update) while the refresh is in flight.
+    const renamedChat = { ...chat, title: "renamed while refresh was in flight" };
+    rerender(
+      <GitChangeScopePill
+        chat={renamedChat}
+        updateScopes={vi.fn()}
+        refreshScope={refreshScope}
+        onRefreshed={onRefreshed}
+      />,
+    );
+    const refreshed: GitChangeRefreshResponse = { status: "current", scope: makeGitChangeScope() };
+    resolveRefresh?.(refreshed);
+    await waitFor(() => {
+      expect(onRefreshed).toHaveBeenCalledWith({
+        ...renamedChat,
+        gitChangeScopes: [refreshed.scope],
+      });
+    });
+  });
+
   it("shows a stale scope after a refresh detects a moved head", async () => {
     const chat = makeChat({ gitChangeScopes: [makeGitChangeScope()] });
     const staleScope = makeGitChangeScope({

@@ -374,18 +374,27 @@ function projectRuntimeGit(
   return undefined;
 }
 
+// Owner audit finding b2-5: a `draftDelivery` payload shaped `{ status: "unavailable", reason }`
+// (no lease granted, or the delivery service busy — CodingRuntimeDeliveryResult, contracts) proves
+// nothing was recorded. Reporting it as a "completed" delivery tells the model its push or PR
+// succeeded when it did not. Only `status: "recorded"` rides out as completed; `"unavailable"`
+// collapses to the facade's own closed "failed" reasonCode vocabulary, the same shape
+// `projectGovernedFailure` already uses for a governed refusal.
+function projectDraftDelivery(value: unknown): CodingToolResult {
+  if (!isCodingRuntimeDeliveryResult(value)) return projected("failed");
+  if (value.status === "unavailable") return projected("failed", value.reason, true);
+  return {
+    status: "completed",
+    evidence: [{ kind: "governed-delegate", code: "completed" }],
+    draftDelivery: value,
+  };
+}
+
 function projectVerifiedCommit(
   request: CodingToolActionRequest,
   value: Record<string, unknown>,
 ): CodingToolResult | undefined {
-  if (isDraftToolRequest(request))
-    return isCodingRuntimeDeliveryResult(value.draftDelivery)
-      ? {
-          status: "completed",
-          evidence: [{ kind: "governed-delegate", code: "completed" }],
-          draftDelivery: value.draftDelivery,
-        }
-      : projected("failed");
+  if (isDraftToolRequest(request)) return projectDraftDelivery(value.draftDelivery);
   if (request.action === "delivery" && request.intent === "commit") {
     return isVerifiedCommitResult(value.verifiedCommit)
       ? {

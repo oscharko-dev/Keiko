@@ -7,6 +7,8 @@ import {
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
 } from "@oscharko-dev/keiko-tool-catalog";
 import type { GatewayToolCatalogAdvertisement } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+import type { CompiledCatalogTool } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type { ToolHandlerReadiness } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { CODING_REPOSITORY_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import {
@@ -607,6 +609,30 @@ const OPENCODE_GATEWAY_OFFER_LIFETIME_MS = 30_000;
 const OPENCODE_GATEWAY_CATALOG = createKeikoToolCatalog([opencodeRegistrationSet()]);
 
 /**
+ * A tool the advertisement offers can never be a working binding when its declared
+ * `handlerRequirement` is empty or shared with another catalog tool -- no handler, or one handler
+ * silently double-registered, is wrong no matter what the runtime later wires up. This module has
+ * no reach into which handler ids the running dispatcher actually has bound (that verification is
+ * `catalogToolBinder.ts`'s `catalogHandlerReadiness`, over a real `CatalogToolHandlerBinding` this
+ * advertisement-only path never receives), so "ready" here means "structurally sound to
+ * advertise," not "verified bound" -- but it replaces a bare `"ready"` literal with a real,
+ * regression-catching check computed from the compiled projection this function already builds
+ * (#3413 F8 review, finding b1-2): a copy-pasted or emptied `handlerRequirement.id` now flips the
+ * whole advertisement `"unavailable"` instead of being silently advertised as ready to the model.
+ */
+export function deriveGatewayCatalogReadiness(
+  tools: readonly CompiledCatalogTool[],
+): ToolHandlerReadiness {
+  const seenHandlerIds = new Set<string>();
+  for (const tool of tools) {
+    const handlerId = tool.handlerRequirement.id;
+    if (handlerId.length === 0 || seenHandlerIds.has(handlerId)) return "unavailable";
+    seenHandlerIds.add(handlerId);
+  }
+  return "ready";
+}
+
+/**
  * Builds the "bound" `toolCatalog` advertisement for one outgoing coding-sidecar-gateway request.
  * The model-gateway bridge derives the actual forwarded `tools` from this projection; the caller
  * must never also forward a raw `tools` field alongside it (ADR-0175 D1/D4).
@@ -625,7 +651,7 @@ export function createOpenCodeGatewayToolCatalogAdvertisement(
         profile: projection.profile,
         projectionDigest: projection.projectionDigest,
         handlerSetDigest: projection.projectionDigest,
-        readiness: "ready",
+        readiness: deriveGatewayCatalogReadiness(projection.tools),
       },
       offerId: `opencode-gateway-${randomUUID()}`,
       toolRefs: projection.tools.map((tool) => tool.toolRef),

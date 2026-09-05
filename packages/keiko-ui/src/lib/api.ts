@@ -7,6 +7,7 @@
 import type {
   BffError,
   ChatConnectedScope,
+  ChatGitChangeDescriptionStatus,
   ChatGitChangeScope,
   ChatLocalKnowledgeScope,
   ChatResponse,
@@ -189,6 +190,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
 import {
+  CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
   GIT_CHANGE_BLOCKED_REASONS,
   isDesktopChatStreamEvent,
@@ -3430,6 +3432,12 @@ export async function updateGitHubIssueReaderAuthorization(
 // (F30 in the epic #3384 final audit).
 const GIT_CHANGE_BLOCKED_REASON_SET: ReadonlySet<string> = new Set(GIT_CHANGE_BLOCKED_REASONS);
 
+// Owner audit b1-12 — the closed `descriptionStatus` vocabulary is owned once by keiko-contracts
+// (bff-wire.ts) and imported here rather than restated, mirroring the blocked-reason set above.
+const CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET: ReadonlySet<string> = new Set(
+  CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
+);
+
 export type { GitChangeBlockedReason };
 
 export type GitChangeConnectResponse =
@@ -3451,6 +3459,15 @@ function isGitCommitShaHex(value: unknown): value is string {
   return typeof value === "string" && GIT_COMMIT_SHA_HEX.test(value);
 }
 
+// Owner audit b1-12 — the sibling `blocked` reason is checked against the closed set below; this
+// mirrors it for `descriptionStatus` instead of accepting any bounded string, so an unrecognised
+// value is rejected here rather than reaching the pill's status-badge lookup and throwing.
+function isChatGitChangeDescriptionStatus(
+  value: unknown,
+): value is ChatGitChangeDescriptionStatus {
+  return typeof value === "string" && CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET.has(value);
+}
+
 function hasChatGitChangeScopeTextFields(value: Record<string, unknown>): boolean {
   return (
     isBoundedText(value.relationshipId, 256) &&
@@ -3462,7 +3479,7 @@ function hasChatGitChangeScopeTextFields(value: Record<string, unknown>): boolea
     isGitCommitShaHex(value.headSha) &&
     isGitCommitShaHex(value.mergeBaseSha) &&
     isSha256Hex(value.snapshotDigest) &&
-    isBoundedText(value.descriptionStatus, 16)
+    isChatGitChangeDescriptionStatus(value.descriptionStatus)
   );
 }
 

@@ -3701,6 +3701,28 @@ describe("Git-to-Chat connect/refresh API (#3400)", () => {
     ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED" });
   });
 
+  // Owner audit b1-12 — descriptionStatus was only bounded-text checked (<=16 chars), so any
+  // short string the server (or an intermediary) claimed for that field passed validation and
+  // would have reached the pill's closed STATUS_BADGE_CLASS/STATUS_LABEL_KEY lookups, which throw
+  // on an unmapped key. Failing-before: this rejected with `CONTRACT_VALIDATION_FAILED` only after
+  // the fix; before it, "not-a-real-status" (13 chars) passed bounded-text and the promise
+  // resolved instead of rejecting.
+  it("rejects a connected response whose scope has an unrecognised descriptionStatus", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonOk({
+          status: "connected",
+          scope: { ...gitChangeScopeFixture(), descriptionStatus: "unknown" },
+        }),
+      ),
+    );
+
+    await expect(
+      connectGitChangeToChat({ chatId: "chat-1", mode: "pull-request", headRef: "feature/x" }),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED" });
+  });
+
   it("posts the refresh request with only chatId and relationshipId", async () => {
     const staleScope = { ...gitChangeScopeFixture(), descriptionStatus: "stale" };
     const fetchMock = vi.fn().mockResolvedValue(jsonOk({ status: "stale", scope: staleScope }));

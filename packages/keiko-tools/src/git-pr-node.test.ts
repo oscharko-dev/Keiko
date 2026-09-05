@@ -99,7 +99,13 @@ describe("node PR adapter — canonical reconciliation reads", () => {
     expect(spawn.calls()[0]?.args).toContain("github.com");
   });
 
-  it("reads all-state head matches without pagination or body fields", async () => {
+  // Owner audit finding b3-11: `state=all` with `per_page=2` and the API's default `created desc`
+  // ordering can push an older open PR off the page when a closed PR was created more recently,
+  // so the "ambiguous pull request" fail-closed check in `resolvePullRequestByHead` (which filters
+  // this result to `state === "open"`) would see one open PR where two actually exist. Restricting
+  // the query itself to `state=open` means every slot returned is one the caller's open-filter can
+  // count.
+  it("reads open head matches, scoped server-side, without pagination or body fields", async () => {
     const spawn = scriptedSpawn([{ stdout: JSON.stringify([PR_IDENTITY]) }]);
 
     const result = await makeAdapter(spawn).findPullRequestsByHead({
@@ -109,7 +115,10 @@ describe("node PR adapter — canonical reconciliation reads", () => {
 
     expect(result).toEqual({ ok: true, value: [PR_IDENTITY] });
     const args = spawn.calls()[0]?.args ?? [];
-    expect(args.some((arg) => arg.includes("state=all") && arg.includes("per_page=2"))).toBe(true);
+    expect(args.some((arg) => arg.includes("state=open") && arg.includes("per_page=2"))).toBe(
+      true,
+    );
+    expect(args.some((arg) => arg.includes("state=all"))).toBe(false);
     expect(args).not.toContain("--paginate");
     expect(args.at(-1)).not.toMatch(/title|body|user|email/u);
   });
@@ -490,6 +499,22 @@ describe("node PR adapter — markPullRequestReady (#3389)", () => {
       { stdout: "PR_kwDO123\n", exit: 0 },
       { exit: 0 },
       { stdout: JSON.stringify(PR_IDENTITY) }, // post-read: still a draft
+    ]);
+    const result = await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("precondition-failed");
+  });
+
+  // Owner audit finding b1-7: the post-mutation drift check compared isDraft and headSha only,
+  // silently accepting a base retarget that happened between the pre-read and the mutation even
+  // though the approval is bound to base+head and the docstring above promises refusal on any
+  // head/base mismatch.
+  it("drift: reports failure when the post-read shows the base SHA moved during the mutation", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: JSON.stringify(PR_IDENTITY) }, // pre-read: matches
+      { stdout: "PR_kwDO123\n", exit: 0 },
+      { exit: 0 },
+      { stdout: JSON.stringify({ ...READY_IDENTITY, baseSha: "c".repeat(40) }) }, // post-read: base retargeted
     ]);
     const result = await makeAdapter(spawn).markPullRequestReady(MARK_READY_REQ);
     expect(result.outcome).toBe("failed");

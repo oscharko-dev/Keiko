@@ -6,6 +6,7 @@
     "@oscharko-dev/keiko-memory-consolidation",
     "@oscharko-dev/keiko-quality-intelligence",
     "@oscharko-dev/keiko-sandbox",
+    "@oscharko-dev/keiko-tool-catalog",
     "ws"
   ],
   "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3", "pgrep"],

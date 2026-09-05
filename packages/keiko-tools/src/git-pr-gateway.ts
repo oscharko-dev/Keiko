@@ -208,7 +208,11 @@ export function buildPrReadByHeadArgv(req: GitPrReadHeadRequest): readonly strin
   const branch = inspectionBranch(req.headBranchName);
   const owner = repo.split("/")[0] ?? "";
   // Two results already prove ambiguity. Omitting base ensures retargeted PRs remain visible.
-  const query = `state=all&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=2&page=1`;
+  // `state=open` (owner audit finding b3-11): the provider's default `created desc` ordering means
+  // an unscoped `state=all&per_page=2` can push an older open PR off the page behind a more
+  // recently created closed one, hiding it from a caller that filters the page to open PRs after
+  // the fact. Scoping the query itself keeps every one of the (at most) two returned slots open.
+  const query = `state=open&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=2&page=1`;
   return buildGitHubApiGetArgv(`/repos/${repo}/pulls?${query}`, `[.[] | ${GIT_PR_IDENTITY_JQ}]`);
 }
 

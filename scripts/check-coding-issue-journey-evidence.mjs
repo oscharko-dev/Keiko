@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { deriveGateVerdict, evidenceGateFailures } from "./lib/coding-issue-journey-evidence.mjs";
 import { sha256File } from "./lib/digest.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { readJsonFile } from "./lib/json.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -25,11 +26,12 @@ const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 const RECEIPT_SUFFIX = ".receipt.json";
 
 function gitHeadShas(root) {
-  const sourceCommitSha = execFileSync("git", ["rev-parse", "HEAD"], {
+  const git = resolveHostExecutable("git");
+  const sourceCommitSha = execFileSync(git, ["rev-parse", "HEAD"], {
     cwd: root,
     encoding: "utf8",
   }).trim();
-  const sourceTreeSha = execFileSync("git", ["rev-parse", "HEAD^{tree}"], {
+  const sourceTreeSha = execFileSync(git, ["rev-parse", "HEAD^{tree}"], {
     cwd: root,
     encoding: "utf8",
   }).trim();

@@ -554,6 +554,14 @@ function useGitChangePillActions(props: GitChangePillItemProps): GitChangePillAc
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const disconnectRef = useRef<HTMLButtonElement | null>(null);
+  // Owner audit b1-6 — `chat`/`allScopes` are the render's props, closed over when `runRefresh`
+  // starts. A refresh is a round trip; if the chat changes underneath it (title rename, connector
+  // disconnect, model switch) before the response lands, building the merged chat from those
+  // stale closures would revert every field the in-flight refresh did not itself touch. This ref
+  // is kept current on every render (not only at click time), so the merge below always starts
+  // from the latest committed chat instead of the one captured when the button was pressed.
+  const latestChatRef = useRef(chat);
+  latestChatRef.current = chat;
 
   async function runDisconnect(): Promise<void> {
     setError(null);
@@ -581,8 +589,12 @@ function useGitChangePillActions(props: GitChangePillItemProps): GitChangePillAc
         setError(gitChangeBlockedReasonMessage(result.reason, t));
         return;
       }
-      const remaining = otherScopes(allScopes, scope.relationshipId);
-      onRefreshed?.({ ...chat, gitChangeScopes: [...remaining, result.scope] });
+      // Merge onto the freshest chat, not the one captured when the button was clicked (b1-6):
+      // every field the refresh itself did not change survives whatever landed while it was in
+      // flight.
+      const latestChat = latestChatRef.current;
+      const remaining = otherScopes(latestChat.gitChangeScopes ?? allScopes, scope.relationshipId);
+      onRefreshed?.({ ...latestChat, gitChangeScopes: [...remaining, result.scope] });
     } catch (error_) {
       setError(formatRefreshErrorMessage(error_, t));
     } finally {

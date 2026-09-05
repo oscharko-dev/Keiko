@@ -363,7 +363,11 @@ function isPostMutationDrift(
   identity: GitPullRequestIdentity,
   req: GitPrMarkReadyExecRequest,
 ): boolean {
-  return identity.isDraft || identity.headSha !== req.expectedHeadSha;
+  return (
+    identity.isDraft ||
+    identity.headSha !== req.expectedHeadSha ||
+    identity.baseSha !== req.expectedBaseSha
+  );
 }
 
 type MarkReadyMutationOutcome =

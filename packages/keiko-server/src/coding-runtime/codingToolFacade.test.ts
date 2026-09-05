@@ -390,6 +390,59 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  // Owner audit finding b2-5: a draft-delivery attempt (push/pull-request, propose/execute/reconcile)
+  // whose delegate outcome carries `draftDelivery: { status: "unavailable", reason }` — no lease
+  // granted, or a busy delivery service — must never report "completed": nothing was recorded.
+  it("fails closed when a draft delivery attempt could not be recorded", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        evidence: [],
+        draftDelivery: { status: "unavailable", reason: "provider-unavailable" },
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "delivery", intent: "push", phase: "reconcile" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "provider-unavailable" }],
+      reasonCode: "provider-unavailable",
+    });
+  });
+
+  it("reports a recorded draft delivery as completed", async () => {
+    const ports = facade();
+    const draftDelivery = {
+      status: "recorded" as const,
+      record: {
+        phase: "push-proposed" as const,
+        runId: "run-1",
+        headBranch: "claude/issue-1",
+      },
+    };
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "completed", evidence: [], draftDelivery }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "delivery", intent: "push", phase: "reconcile" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+      draftDelivery,
+    });
+  });
+
   it("accepts only the exact bounded repository-read shape and never trusts a runtime root or authority", async () => {
     const ports = facade();
     const subject = createCodingToolFacade(ports);
