@@ -215,6 +215,10 @@ function functionalBackend(
     portable: input.portable,
     runtimeStateRoot: input.runtimeStateRoot,
     gatewayUrl: input.gatewayUrl,
+    // ADR-0043 D11-D14 (#3390): the SAME single attested loopback origin as `gatewayUrl` above,
+    // never a second listener's own port -- derived from it exactly the way
+    // productionOpenCodeActivation.ts derives both from ONE `loopback` origin.
+    toolFacadeUrl: `${new URL(input.gatewayUrl).origin}/api/coding-sidecar/tool`,
     runtimeEvidence: input.runtimeEvidence,
     gatewayReadiness: readiness,
     createSupervisor: input.createSupervisor,

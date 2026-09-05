@@ -1124,10 +1124,20 @@ export class CodingRuntimeOrchestrator {
   ): Promise<CodingRuntimeOrchestratorResult> {
     const ready = this.transitionActive("ready");
     if (!ready.ok) return ready;
+    // #3390: the sidecar's first model call -- admitted by runtimeAuthorityService
+    // .reservePromptTokens -- can reach the model gateway before this dispatch even resolves.
+    // Settling into "running" BEFORE dispatch, instead of only after the sidecar accepts, keeps
+    // the run's own public projection truthful for the entire in-flight window (an operator never
+    // observes "ready" while a model call is already outstanding) and closes the state race a
+    // provider without OpenCode's ~500ms retry would have failed the run on. "running" is a legal
+    // target out of "ready" (LEGAL_TRANSITIONS), and "running" itself still has legal "failed" /
+    // "recovery-required" exits, so the dispatch-failure branches below are unaffected.
+    const running = this.transitionActive("running");
+    if (!running.ok) return running;
     const initialTurn = await this.operations.startInitialTurn({
       runId,
       requestId: request.requestId,
-      expectedRevision: ready.snapshot.revision,
+      expectedRevision: running.snapshot.revision,
       taskIntent: request.taskIntent,
       ...(attachment === undefined ? {} : { initialContext: renderInitialTurnContext(attachment) }),
     });
@@ -1144,7 +1154,7 @@ export class CodingRuntimeOrchestrator {
         },
       });
     }
-    if (initialTurn === "accepted") return this.transitionActive("running");
+    if (initialTurn === "accepted") return running;
     if (initialTurn === "failed") {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-dispatch");
       return this.transitionActive("failed", "runtime-failed");

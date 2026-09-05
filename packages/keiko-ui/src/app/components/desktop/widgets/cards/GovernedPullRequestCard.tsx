@@ -13,7 +13,7 @@
 // (ADR-0051 gate).
 
 import { useCallback, useId, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, Dispatch, ReactNode, SetStateAction } from "react";
 import {
   ApiError,
   fetchGitDeliveryPrApprove,
@@ -340,105 +340,138 @@ function PrTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
   );
 }
 
-function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
-  const prNumberHintId = useId();
-  const prIdInvalid =
-    form.kind === "pr-update" && form.prExternalId !== "" && !isValidPrNumber(form.prExternalId);
+// Action (Create/Update) fieldset — extracted from PrMetadataFields (AGENTS.md §6 max-lines-per-function).
+function PrActionFieldset({ form, busy, onChange }: FieldsProps): ReactNode {
   return (
-    <section style={SECTION_STYLE} aria-label="Pull Request metadata">
-      <h3 style={HEADING_STYLE}>
-        <GitIcon size={12} /> Metadata
-      </h3>
-      <fieldset
-        style={{
-          border: "1px solid var(--border-default)",
-          borderRadius: "var(--radius-control)",
-          padding: "var(--space-2)",
-        }}
-      >
-        <legend style={KV_LABEL}>Action</legend>
-        <div style={ROW_STYLE}>
-          <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
-            <input
-              type="radio"
-              name="pull-request-action"
-              checked={form.kind === "pr-create"}
-              disabled={busy}
-              onChange={() => onChange("kind", "pr-create")}
-            />{" "}
-            Create
-          </label>
-          <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
-            <input
-              type="radio"
-              name="pull-request-action"
-              checked={form.kind === "pr-update"}
-              disabled={busy}
-              onChange={() => onChange("kind", "pr-update")}
-            />{" "}
-            Update
-          </label>
-        </div>
-      </fieldset>
-      {form.kind === "pr-update" ? (
-        <div style={ROW_STYLE}>
-          <label style={{ ...LABEL_STYLE, flex: 1 }}>
-            Pull Request number{" "}
-            <input
-              style={FIELD_STYLE}
-              inputMode="numeric"
-              value={form.prExternalId}
-              disabled={busy}
-              onChange={(e) => onChange("prExternalId", e.target.value)}
-              aria-label="Pull Request number"
-              aria-invalid={prIdInvalid}
-              aria-describedby={prIdInvalid ? prNumberHintId : undefined}
-            />
-            {prIdInvalid ? (
-              <p
-                id={prNumberHintId}
-                data-testid="gpr-pr-number-hint"
-                style={{ font: "var(--text-caption)", color: "var(--feedback-danger)", margin: 0 }}
-              >
-                Enter the numeric Pull Request number, for example 1499.
-              </p>
-            ) : null}
-          </label>
-          <label style={{ ...LABEL_STYLE, flex: 1 }}>
-            Draft state{" "}
-            <select
-              style={FIELD_STYLE}
-              value={form.draftTransition}
-              disabled={busy}
-              onChange={(e) =>
-                onChange("draftTransition", e.target.value as PrForm["draftTransition"])
-              }
-              aria-label="Draft state"
-            >
-              <option value="none">No change</option>
-              <option value="to-draft">Convert to draft</option>
-            </select>
-            <span
-              style={{ font: "var(--text-caption)", color: "var(--fg-muted)" }}
-              data-testid="gpr-mark-ready-hint"
-            >
-              To mark this pull request ready for review, use Propose ready on the Coding Workbench
-              journey outcome — it binds the exact revision and re-verifies it before executing.
-            </span>
-          </label>
-        </div>
+    <fieldset
+      style={{
+        border: "1px solid var(--border-default)",
+        borderRadius: "var(--radius-control)",
+        padding: "var(--space-2)",
+      }}
+    >
+      <legend style={KV_LABEL}>Action</legend>
+      <div style={ROW_STYLE}>
+        <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
+          <input
+            type="radio"
+            name="pull-request-action"
+            checked={form.kind === "pr-create"}
+            disabled={busy}
+            onChange={() => onChange("kind", "pr-create")}
+          />{" "}
+          Create
+        </label>
+        <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
+          <input
+            type="radio"
+            name="pull-request-action"
+            checked={form.kind === "pr-update"}
+            disabled={busy}
+            onChange={() => onChange("kind", "pr-update")}
+          />{" "}
+          Update
+        </label>
+      </div>
+    </fieldset>
+  );
+}
+
+// PR number field, shown only for the "pr-update" action. `prNumberHintId` is generated by the
+// always-mounted PrMetadataFields (not here) so the id stays stable across kind switches instead
+// of being re-minted whenever this conditionally-rendered block mounts.
+interface UpdateOnlyFieldsProps extends FieldsProps {
+  readonly prNumberHintId: string;
+  readonly prIdInvalid: boolean;
+}
+
+function PrUpdatePrNumberField({
+  form,
+  busy,
+  onChange,
+  prNumberHintId,
+  prIdInvalid,
+}: UpdateOnlyFieldsProps): ReactNode {
+  return (
+    <label style={{ ...LABEL_STYLE, flex: 1 }}>
+      Pull Request number{" "}
+      <input
+        style={FIELD_STYLE}
+        inputMode="numeric"
+        value={form.prExternalId}
+        disabled={busy}
+        onChange={(e) => onChange("prExternalId", e.target.value)}
+        aria-label="Pull Request number"
+        aria-invalid={prIdInvalid}
+        aria-describedby={prIdInvalid ? prNumberHintId : undefined}
+      />
+      {prIdInvalid ? (
+        <p
+          id={prNumberHintId}
+          data-testid="gpr-pr-number-hint"
+          style={{ font: "var(--text-caption)", color: "var(--feedback-danger)", margin: 0 }}
+        >
+          Enter the numeric Pull Request number, for example 1499.
+        </p>
       ) : null}
-      <label style={LABEL_STYLE}>
-        Head branch{" "}
-        <input
-          style={FIELD_STYLE}
-          value={form.headBranchName}
-          disabled={busy}
-          onChange={(e) => onChange("headBranchName", e.target.value)}
-          aria-label="Head branch"
-        />
-      </label>
-      <PrTargetFields form={form} busy={busy} onChange={onChange} />
+    </label>
+  );
+}
+
+function PrUpdateDraftStateField({ form, busy, onChange }: FieldsProps): ReactNode {
+  return (
+    <label style={{ ...LABEL_STYLE, flex: 1 }}>
+      Draft state{" "}
+      <select
+        style={FIELD_STYLE}
+        value={form.draftTransition}
+        disabled={busy}
+        onChange={(e) => onChange("draftTransition", e.target.value as PrForm["draftTransition"])}
+        aria-label="Draft state"
+      >
+        <option value="none">No change</option>
+        <option value="to-draft">Convert to draft</option>
+      </select>
+      <span
+        style={{ font: "var(--text-caption)", color: "var(--fg-muted)" }}
+        data-testid="gpr-mark-ready-hint"
+      >
+        To mark this pull request ready for review, use Propose ready on the Coding Workbench
+        journey outcome — it binds the exact revision and re-verifies it before executing.
+      </span>
+    </label>
+  );
+}
+
+// Wraps the two update-only fields in their shared row — thin composition, kept for the same reason
+// PrMetadataFields itself is: DOM order and grouping must stay exactly as before the decomposition.
+function PrUpdateOnlyFields(props: UpdateOnlyFieldsProps): ReactNode {
+  return (
+    <div style={ROW_STYLE}>
+      <PrUpdatePrNumberField {...props} />
+      <PrUpdateDraftStateField {...props} />
+    </div>
+  );
+}
+
+function PrHeadBranchField({ form, busy, onChange }: FieldsProps): ReactNode {
+  return (
+    <label style={LABEL_STYLE}>
+      Head branch{" "}
+      <input
+        style={FIELD_STYLE}
+        value={form.headBranchName}
+        disabled={busy}
+        onChange={(e) => onChange("headBranchName", e.target.value)}
+        aria-label="Head branch"
+      />
+    </label>
+  );
+}
+
+function PrTitleBodyFields({ form, busy, onChange }: FieldsProps): ReactNode {
+  return (
+    <>
       <label style={LABEL_STYLE}>
         Title{" "}
         <input
@@ -459,16 +492,48 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
           aria-label="Pull Request body"
         />
       </label>
-      <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
-        <input
-          type="checkbox"
-          checked={form.kind === "pr-create" ? form.isDraft : false}
-          disabled={busy || form.kind !== "pr-create"}
-          onChange={(e) => onChange("isDraft", e.target.checked)}
-          aria-label="Open as draft"
-        />{" "}
-        Open as draft
-      </label>
+    </>
+  );
+}
+
+function PrDraftCheckbox({ form, busy, onChange }: FieldsProps): ReactNode {
+  return (
+    <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
+      <input
+        type="checkbox"
+        checked={form.kind === "pr-create" ? form.isDraft : false}
+        disabled={busy || form.kind !== "pr-create"}
+        onChange={(e) => onChange("isDraft", e.target.checked)}
+        aria-label="Open as draft"
+      />{" "}
+      Open as draft
+    </label>
+  );
+}
+
+function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
+  const prNumberHintId = useId();
+  const prIdInvalid =
+    form.kind === "pr-update" && form.prExternalId !== "" && !isValidPrNumber(form.prExternalId);
+  return (
+    <section style={SECTION_STYLE} aria-label="Pull Request metadata">
+      <h3 style={HEADING_STYLE}>
+        <GitIcon size={12} /> Metadata
+      </h3>
+      <PrActionFieldset form={form} busy={busy} onChange={onChange} />
+      {form.kind === "pr-update" ? (
+        <PrUpdateOnlyFields
+          form={form}
+          busy={busy}
+          onChange={onChange}
+          prNumberHintId={prNumberHintId}
+          prIdInvalid={prIdInvalid}
+        />
+      ) : null}
+      <PrHeadBranchField form={form} busy={busy} onChange={onChange} />
+      <PrTargetFields form={form} busy={busy} onChange={onChange} />
+      <PrTitleBodyFields form={form} busy={busy} onChange={onChange} />
+      <PrDraftCheckbox form={form} busy={busy} onChange={onChange} />
     </section>
   );
 }
@@ -1176,15 +1241,7 @@ function liveTextFor(async: Pick<PrAsyncState, "busy" | "error" | "outcome" | "p
   return "";
 }
 
-function GovernedPullRequestBody({
-  client,
-  projectId,
-  headBranchName,
-  ownerAndRepo,
-  baseBranchName,
-  titleId,
-  liveId,
-}: {
+interface GovernedPullRequestBodyProps {
   readonly client: GovernedPullRequestClient;
   readonly projectId: string;
   readonly headBranchName: string | undefined;
@@ -1192,19 +1249,153 @@ function GovernedPullRequestBody({
   readonly baseBranchName?: string | undefined;
   readonly titleId: string;
   readonly liveId: string;
-}): ReactNode {
-  const [form, setForm] = useState<PrForm>(() =>
-    initialForm({ headBranchName, ownerAndRepo, baseBranchName }),
-  );
-  // Target keys the loaded preview / last started action are valid for. A preview, outcome, or
-  // error is rendered only while the form still names the exact target it was produced for.
-  const [previewedKey, setPreviewedKey] = useState("");
-  const [actionKey, setActionKey] = useState("");
-  const async = useGovernedPrActions(client);
-  const onChange = useCallback(<K extends keyof PrForm>(key: K, value: PrForm[K]): void => {
-    setForm((f) => ({ ...f, [key]: value }));
-  }, []);
+}
 
+const CARD_BODY_STYLE: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "var(--space-3)",
+  padding: "var(--space-3)",
+  overflow: "auto",
+  height: "100%",
+};
+const LIVE_REGION_STYLE: CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+};
+
+// The visible title + visually-hidden aria-live status line — extracted from GovernedPullRequestBody
+// (AGENTS.md §6 max-lines-per-function). A Fragment, so this adds no DOM node of its own.
+function PrBodyHeader({
+  titleId,
+  liveId,
+  liveText,
+}: {
+  readonly titleId: string;
+  readonly liveId: string;
+  readonly liveText: string;
+}): ReactNode {
+  return (
+    <>
+      <h2 id={titleId} style={{ ...HEADING_STYLE, font: "var(--text-title)" }}>
+        <GitIcon size={14} /> Pull Request
+      </h2>
+      <p id={liveId} data-testid="gpr-live" role="status" aria-live="polite" style={LIVE_REGION_STYLE}>
+        {liveText}
+      </p>
+    </>
+  );
+}
+
+function prSubmitLabel(kind: GitDeliveryPrKind): string {
+  return kind === "pr-create" ? "Create Pull Request" : "Update Pull Request";
+}
+
+function PrFormActionButtons({
+  busy,
+  canPreview,
+  canExecute,
+  kind,
+  onPreview,
+  onExecute,
+}: {
+  readonly busy: boolean;
+  readonly canPreview: boolean;
+  readonly canExecute: boolean;
+  readonly kind: GitDeliveryPrKind;
+  readonly onPreview: () => void;
+  readonly onExecute: () => void;
+}): ReactNode {
+  return (
+    <div style={ROW_STYLE}>
+      <button type="button" style={GHOST_BTN} disabled={busy || !canPreview} onClick={onPreview}>
+        Preview
+      </button>
+      <button
+        type="button"
+        style={PRIMARY_BTN}
+        disabled={busy || !canExecute}
+        onClick={onExecute}
+        data-testid="gpr-submit"
+      >
+        {prSubmitLabel(kind)}
+      </button>
+    </div>
+  );
+}
+
+// Preview only needs the targets (it SYNTHESIZES a title/body suggestion); execute also needs a title.
+function derivePrFormFlags(form: PrForm): { canPreview: boolean; canExecute: boolean } {
+  const canPreview =
+    form.ownerAndRepo !== "" &&
+    form.headBranchName !== "" &&
+    form.baseBranchName !== "" &&
+    (form.kind === "pr-create" || isValidPrNumber(form.prExternalId));
+  return { canPreview, canExecute: canPreview && form.title !== "" };
+}
+
+interface PrVisibleState {
+  readonly visiblePreview: GitDeliveryPrPreviewResponse | null;
+  readonly visibleOutcome: GitDeliveryPrExecuteResponse | null;
+  readonly visibleError: string | null;
+}
+
+// A preview, outcome, or error is surfaced only while the form still names the exact target it was
+// produced for (targetKey), never a stale one left over from a previous target.
+function derivePrVisibleState(
+  async: Pick<PrAsyncState, "preview" | "outcome" | "error">,
+  previewedKey: string,
+  actionKey: string,
+  targetKey: string,
+): PrVisibleState {
+  return {
+    visiblePreview: previewedKey === targetKey ? async.preview : null,
+    visibleOutcome: actionKey === targetKey ? async.outcome : null,
+    visibleError: actionKey === targetKey ? async.error : null,
+  };
+}
+
+interface PrRenderState extends PrVisibleState {
+  readonly canPreview: boolean;
+  readonly canExecute: boolean;
+  readonly liveText: string;
+}
+
+// Bundles the pure per-render derivations (form validity, target-scoped visibility, the live-region
+// text) so GovernedPullRequestBody itself stays a thin composition.
+function derivePrRenderState(
+  form: PrForm,
+  async: PrAsyncState,
+  previewedKey: string,
+  actionKey: string,
+): PrRenderState {
+  const { canPreview, canExecute } = derivePrFormFlags(form);
+  const visible = derivePrVisibleState(async, previewedKey, actionKey, prTargetKeyOf(form));
+  const liveText = liveTextFor({
+    busy: async.busy,
+    error: visible.visibleError,
+    outcome: visible.visibleOutcome,
+    preview: visible.visiblePreview,
+  });
+  return { canPreview, canExecute, ...visible, liveText };
+}
+
+// The preview/execute submit handlers — extracted from GovernedPullRequestBody (AGENTS.md §6
+// max-lines-per-function). `setForm`/`setPreviewedKey`/`setActionKey` are the stable setters
+// returned by the parent's own `useState` calls, so omitting them from the dependency arrays below
+// (as the original inline callbacks did) keeps `onPreview`/`onExecute` referentially identical
+// across renders that only change unrelated state.
+function usePrFormActionHandlers(
+  form: PrForm,
+  setForm: Dispatch<SetStateAction<PrForm>>,
+  projectId: string,
+  async: PrAsync,
+  setPreviewedKey: Dispatch<SetStateAction<string>>,
+  setActionKey: Dispatch<SetStateAction<string>>,
+): { onPreview: () => void; onExecute: () => void } {
   const onPreview = useCallback((): void => {
     const previewedTarget = prTargetKeyOf(form);
     setActionKey(previewedTarget);
@@ -1218,80 +1409,64 @@ function GovernedPullRequestBody({
         body: f.body === "" ? preview.composedBody : f.body,
       }));
     });
-  }, [async, form, projectId]);
+    // `setActionKey`/`setForm`/`setPreviewedKey` are the stable setters returned by the caller's own
+    // `useState` calls (guaranteed referentially stable by React) — listed here only to satisfy
+    // exhaustive-deps now that they arrive as parameters instead of same-scope closures; including
+    // them does not change when this callback is recreated.
+  }, [async, form, projectId, setActionKey, setForm, setPreviewedKey]);
 
   const onExecute = useCallback((): void => {
     setActionKey(prTargetKeyOf(form));
     async.runExecute(formToInput(form, projectId));
-  }, [async, form, projectId]);
+  }, [async, form, projectId, setActionKey]);
 
-  // Preview only needs the targets (it SYNTHESIZES a title/body suggestion); execute also needs a title.
-  const canPreview =
-    form.ownerAndRepo !== "" &&
-    form.headBranchName !== "" &&
-    form.baseBranchName !== "" &&
-    (form.kind === "pr-create" || isValidPrNumber(form.prExternalId));
-  const canExecute = canPreview && form.title !== "";
-  const targetKey = prTargetKeyOf(form);
-  const visiblePreview = previewedKey === targetKey ? async.preview : null;
-  const visibleOutcome = actionKey === targetKey ? async.outcome : null;
-  const visibleError = actionKey === targetKey ? async.error : null;
+  return { onPreview, onExecute };
+}
+
+function GovernedPullRequestBody({
+  client,
+  projectId,
+  headBranchName,
+  ownerAndRepo,
+  baseBranchName,
+  titleId,
+  liveId,
+}: GovernedPullRequestBodyProps): ReactNode {
+  const [form, setForm] = useState<PrForm>(() =>
+    initialForm({ headBranchName, ownerAndRepo, baseBranchName }),
+  );
+  // Target keys the loaded preview / last started action are valid for. A preview, outcome, or
+  // error is rendered only while the form still names the exact target it was produced for.
+  const [previewedKey, setPreviewedKey] = useState("");
+  const [actionKey, setActionKey] = useState("");
+  const async = useGovernedPrActions(client);
+  const onChange = useCallback(<K extends keyof PrForm>(key: K, value: PrForm[K]): void => {
+    setForm((f) => ({ ...f, [key]: value }));
+  }, []);
+  const { onPreview, onExecute } = usePrFormActionHandlers(
+    form,
+    setForm,
+    projectId,
+    async,
+    setPreviewedKey,
+    setActionKey,
+  );
+  const { canPreview, canExecute, visiblePreview, visibleOutcome, visibleError, liveText } =
+    derivePrRenderState(form, async, previewedKey, actionKey);
+
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "var(--space-3)",
-        padding: "var(--space-3)",
-        overflow: "auto",
-        height: "100%",
-      }}
-      aria-labelledby={titleId}
-    >
-      <h2 id={titleId} style={{ ...HEADING_STYLE, font: "var(--text-title)" }}>
-        <GitIcon size={14} /> Pull Request
-      </h2>
-      <p
-        id={liveId}
-        data-testid="gpr-live"
-        role="status"
-        aria-live="polite"
-        style={{
-          position: "absolute",
-          width: 1,
-          height: 1,
-          overflow: "hidden",
-          clip: "rect(0 0 0 0)",
-        }}
-      >
-        {liveTextFor({
-          busy: async.busy,
-          error: visibleError,
-          outcome: visibleOutcome,
-          preview: visiblePreview,
-        })}
-      </p>
+    <div style={CARD_BODY_STYLE} aria-labelledby={titleId}>
+      <PrBodyHeader titleId={titleId} liveId={liveId} liveText={liveText} />
       <PrMetadataFields form={form} busy={async.busy} onChange={onChange} />
       {visiblePreview !== null ? <PrReadinessPanel preview={visiblePreview} /> : null}
-      <div style={ROW_STYLE}>
-        <button
-          type="button"
-          style={GHOST_BTN}
-          disabled={async.busy || !canPreview}
-          onClick={onPreview}
-        >
-          Preview
-        </button>
-        <button
-          type="button"
-          style={PRIMARY_BTN}
-          disabled={async.busy || !canExecute}
-          onClick={onExecute}
-          data-testid="gpr-submit"
-        >
-          {form.kind === "pr-create" ? "Create Pull Request" : "Update Pull Request"}
-        </button>
-      </div>
+      <PrFormActionButtons
+        busy={async.busy}
+        canPreview={canPreview}
+        canExecute={canExecute}
+        kind={form.kind}
+        onPreview={onPreview}
+        onExecute={onExecute}
+      />
       <PrOutcome outcome={visibleOutcome} error={visibleError} />
       <PrDescriptionPanel client={client} projectId={projectId} ownerAndRepo={ownerAndRepo} />
     </div>
