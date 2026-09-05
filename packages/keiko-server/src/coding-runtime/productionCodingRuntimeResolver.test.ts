@@ -141,6 +141,70 @@ describe("production coding runtime resolver", () => {
     ).toBeUndefined();
   });
 
+  // #3401 (epic #3384 closeout, description-composition-closeout): the MINT capability, closing
+  // the gap the comment above's own predecessor left open. Before this change the resolver's
+  // composed runtime carried no `mintDescriptionAuthority` field at all, so
+  // `createProductionWorkbenchDescriptionDispatcher` deterministically denied every scope
+  // (`model-egress-denied`) in production regardless of what `gitDeliveryDescriptionAuthority`
+  // would have found, because nothing ever minted a record for it to find.
+  it("mints a live description authority clamped to the deployment ceiling through the real production chain", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    expect(host.mintDescriptionAuthority).toBeDefined();
+    const scope = {
+      remoteDigest: "a".repeat(64),
+      pr: { ownerAndRepo: "owner/repo", prNumber: 1 },
+      snapshotDigest: "b".repeat(64),
+    };
+    const nowIso = new Date(fixture.nowMs()).toISOString();
+    host.mintDescriptionAuthority?.(scope, nowIso);
+    expect(host.gitDeliveryDescriptionAuthority?.current(scope, nowIso)).toMatchObject({
+      scope,
+      // The fixture's deployment ceiling ("supervised-coding") is the SAME clamp
+      // `resolveEffectiveCodingWorkbenchMode` applies to every other minted authority in this
+      // file -- a mint outside a live run never assumes the ceiling is a widening default.
+      effectiveMode: "supervised-coding",
+    });
+  });
+
+  // #3401 CI-repair notify: the orchestrator that owns `notifyVerifiedHeadAdvanced` is built by
+  // `codingRuntimeControlPlane.ts` after this resolver, so the resolver exposes a setter the
+  // control plane calls once the real method exists. Before this change the resolver carried no
+  // such seam, so a CI-repair controller's notification hook (constructed deep inside a per-run
+  // composition) had nothing reachable to call.
+  it("forwards a repaired head to whichever notifier is attached after composition", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    expect(host.attachVerifiedHeadNotifier).toBeDefined();
+    const notified: string[] = [];
+    host.attachVerifiedHeadNotifier?.((runId) => notified.push(runId));
+    // A run started before an attempt to notify still reaches the LATEST attached notifier: the
+    // resolver's launch closures read the mutable slot at call time, never a snapshot taken at
+    // `mintLaunch` construction.
+    confirmations.issue(
+      resolveProductionRuntimeStartConfirmationClaim(
+        fixture.authority,
+        launchRequest(fixture.workspace),
+      ),
+    );
+    host.launchResolver.resolve(launchRequest(fixture.workspace));
+    expect(notified).toEqual([]);
+  });
+
   it("is unavailable without a trusted confirmation consumer and causes no backend side effects", () => {
     const fixture = workspaceFixture();
     const createRun = vi.fn();

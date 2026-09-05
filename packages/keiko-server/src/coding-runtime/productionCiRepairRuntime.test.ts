@@ -1,7 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import { createDraftRun, AT, DIGEST } from "../gitDelivery/ciObservationTest/_support.js";
+import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
+import { isDraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import { createDraftRun, readySnapshot, AT, DIGEST } from "../gitDelivery/ciObservationTest/_support.js";
 import type { DraftDeliveryDependencies } from "../gitDelivery/draftDeliveryTypes.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { redactLogFields } from "../observability/log-redaction.js";
@@ -364,5 +366,58 @@ describe("production CI repair accounting availability", () => {
     const budget = createProductionCiRepairBudget(undefined, undefined, test.current);
     expect(budget?.chargePrompt(1)).toBe(false);
     expect(budget?.admitTool(request)).toBeUndefined();
+  });
+
+  // #3401 (epic #3384 closeout, description-composition-closeout): before this change
+  // `createProductionCiRepairBudget` constructed `CodingRuntimeCiRepairController` without a
+  // `notifyVerifiedHeadAdvanced` callback at all -- there was no 4th parameter to pass one
+  // through, so a repaired head reaching CI-green in production could never regenerate the run's
+  // automatic description (#3388/#3401's own closeout requirement).
+  it("forwards a caller-supplied notifier so a repaired head observed CI-green regenerates the run's description", () => {
+    const db = new DatabaseSync(":memory:");
+    databases.push(db);
+    const snapshots = createDraftRun(db);
+    const events: ServerLogEvent[] = [];
+    const { deps, verified } = dependencies(snapshots, events);
+    const initial = snapshots.get("run-1");
+    if (initial === undefined) throw new Error("missing initial snapshot");
+    const notify = vi.fn();
+    const budget = createProductionCiRepairBudget(deps, verified, binding(initial), notify);
+    const failedReadiness: ReadinessSnapshot = {
+      ...readySnapshot(),
+      state: "failed",
+      failureSignatureDigest: DIGEST,
+      reason: "required-checks-failed",
+      requiredChecks: { total: 1, passed: 0, failed: 1, pending: 0, blocked: 0, unknown: 0 },
+    };
+    expect(snapshots.ciReadiness?.complete(snapshots.ciReadiness.begin("run-1"), failedReadiness)).toBe(
+      true,
+    );
+    expect(budget?.admitTool(request)?.check()).toBe(true);
+    // Simulate the CI-repair loop (#3388) pushing a new commit for the SAME draft PR: the draft
+    // binding's head advances to a repaired commit before CI reports that repaired head green.
+    const repairedHeadSha = "4".repeat(40);
+    const row = db
+      .prepare("SELECT draft_delivery_record FROM coding_runtime_snapshots WHERE run_id = ?")
+      .get("run-1") as { draft_delivery_record: string };
+    const draft: unknown = JSON.parse(row.draft_delivery_record);
+    if (!isDraftDeliveryRecord(draft)) throw new Error("expected a valid draft delivery record");
+    db.prepare("UPDATE coding_runtime_snapshots SET draft_delivery_record = ? WHERE run_id = ?").run(
+      JSON.stringify({
+        ...draft,
+        binding: { ...draft.binding, headSha: repairedHeadSha },
+        pullRequest:
+          draft.pullRequest === undefined
+            ? undefined
+            : { ...draft.pullRequest, headSha: repairedHeadSha },
+      }),
+      "run-1",
+    );
+    const repaired: ReadinessSnapshot = { ...readySnapshot(), headSha: repairedHeadSha };
+    expect(snapshots.ciReadiness?.complete(snapshots.ciReadiness.begin("run-1"), repaired)).toBe(
+      true,
+    );
+    budget?.observed(repaired);
+    expect(notify).toHaveBeenCalledExactlyOnceWith("run-1");
   });
 });
