@@ -310,17 +310,17 @@ const WRITE_KEYS: Readonly<Record<GitRepositoryAgentOperationKind, ReadonlySet<s
   "branch-list": new Set(),
   // "approval" (final-audit F1+F2/#3390): forwarded verbatim to the delegated route, which is the
   // ONLY place that ever parses/consumes it (`delegatedBody` spreads `...payload` unchanged) — this
-  // facade never reads it. Allows a caller holding a claim minted directly through the delegated
-  // route's own `/approve` endpoint to redeem it via this facade too, exactly as if it had called
-  // the delegated route directly. Omitted for `commit` (redirected to the verified runtime commit
-  // service above) and `fetch`/`pull` (no mint route exists for either yet).
+  // facade never reads it. Allows a caller holding a claim minted through the delegated route's
+  // own `/approve` endpoint to redeem it via this facade too, exactly as if it had called the
+  // delegated route directly. Omitted only for `commit`, which is redirected to the verified
+  // runtime commit service above.
   "branch-create": new Set(["branchName", "baseBranchName", "startPointRefHash", "approval"]),
   "branch-switch": new Set(["branchName", "approval"]),
   stage: new Set(["pathspecs", "includeUntracked", "approval"]),
   unstage: new Set(["pathspecs", "approval"]),
   commit: new Set(["messageDraft", "message", "allowEmpty"]),
-  fetch: new Set(["remote"]),
-  pull: new Set(["remote"]),
+  fetch: new Set(["remote", "approval"]),
+  pull: new Set(["remote", "approval"]),
   push: new Set([
     "remoteAlias",
     "remoteBranchName",

@@ -3795,13 +3795,14 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
         category: "gateway",
         op: "coding-sidecar.gateway.readiness-insufficient",
         correlationId: "unknown-correlation-id",
+        parentCorrelationId: undefined,
         durationMs: undefined,
         status: undefined,
         errorKind: undefined,
         extra: {
           reason: "model-context-window-insufficient",
           maxPromptTokens: 4_096,
-          minimumRequiredPromptTokens: 32_768,
+          minimumRequiredPromptTokens: 32_000,
         },
       },
     ]);
@@ -3815,6 +3816,22 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
 
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ status: "available" });
+    expect(sink.events).toHaveLength(0);
+  });
+
+  it("keeps the repository's real 32k coding profile available", () => {
+    const sink = captureServerLog("warn");
+    const deps = depsValue(
+      configValue(provider(), capability({ contextWindow: 32_000, maxOutputTokens: 2_048 })),
+    );
+
+    const result = handleCodingSidecarGatewayProfile(profileContext(), deps);
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      status: "available",
+      runMetadata: { maxPromptTokens: 32_000 },
+    });
     expect(sink.events).toHaveLength(0);
   });
 });

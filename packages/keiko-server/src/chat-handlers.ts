@@ -2842,12 +2842,10 @@ export function validateCurrentDesktopChatSend(
 // (correction 6) plus `baseRef`/`headRef` are present on every connected git-change scope whether
 // or not a pull request was resolved, while the PR-identity variant of
 // `GitDeliveryDescriptionAuthorityScope` needs an `ownerAndRepo` slug this wire shape deliberately
-// does not carry (correction 2 admits only safe, server-issued facts). Whichever module mints this
-// authority for a Chat-originated scope (#3399/#3401) must mint it under the SAME
-// (remoteDigest, {baseRef, headRef}, snapshotDigest) key for this admission check to find it.
-// Exported (final-audit F4, #3400) so the git-change connect flow (gitChangeRoutes.ts) can mint an
-// authority record under the EXACT SAME scope shape this admission check derives — one formula,
-// never a second, independently-drifting copy of it at the mint call site.
+// does not carry (correction 2 admits only safe, server-issued facts). The accepted buffered or
+// streamed turn mints this scope immediately before admission, using the accepted per-turn mode;
+// connect/refresh only persists context and never grants later model egress. The shared scope
+// producer keeps turn admission, artifact retention and governed apply on one exact identity.
 // #3400/#3401 final-audit F1: the closed reason a denied Chat admission carries — distinguishes a
 // description authority record that existed for the exact scope but has passed its `expiresAt`
 // from every other closed case (no port wired at all, or a scope that was never minted), reusing

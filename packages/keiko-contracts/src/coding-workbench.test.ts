@@ -1911,7 +1911,7 @@ describe("redactCodingWorkbenchEvidenceText", () => {
 describe("coding workbench sidecar gateway readiness — context window floor", () => {
   it("defines the minimum coding-context prompt-token floor as a positive integer", () => {
     expect(Number.isSafeInteger(CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS)).toBe(true);
-    expect(CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS).toBeGreaterThan(0);
+    expect(CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS).toBe(32_000);
   });
 
   it("accepts the appended reason on an unavailable sidecar gateway projection", () => {

@@ -32,9 +32,7 @@ import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
  */
 export function createProductionPrDescriptionGeneration(
   runtimeConfig: RuntimeGatewayConfigSource | undefined,
-):
-  | Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot" | "revalidateAuthority">
-  | undefined {
+): Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot" | "revalidateAuthority"> | undefined {
   if (runtimeConfig === undefined) return undefined;
   const config = runtimeConfig.current();
   if (config === undefined) return undefined;

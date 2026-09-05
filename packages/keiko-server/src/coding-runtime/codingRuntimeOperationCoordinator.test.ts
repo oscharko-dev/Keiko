@@ -243,6 +243,26 @@ describe("CodingRuntimeOperationCoordinator", () => {
     });
   });
 
+  it("reports a runtime-refused answer as question-answer-rejected and leaves its request id retryable", async () => {
+    let calls = 0;
+    const port = questionPort({
+      answer: () => Promise.resolve(++calls > 1),
+    });
+    const subject = coordinator({ port });
+    const answer = {
+      requestId: "req-answer-retry",
+      expectedRevision: 3,
+      questionId: "que_1",
+      answers: [["Continue"]],
+    };
+
+    await expect(subject.answerQuestion("run-1", answer)).resolves.toEqual({
+      ok: false,
+      failureCode: "question-answer-rejected",
+    });
+    await expect(subject.answerQuestion("run-1", answer)).resolves.toMatchObject({ ok: true });
+  });
+
   it("fails closed when answering throws and routes rejections to the reject surface", async () => {
     const port = questionPort({
       answer: () => Promise.reject(new Error("protocol failure")),

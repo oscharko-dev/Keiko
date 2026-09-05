@@ -1022,7 +1022,7 @@
     {
       "op": "<dynamic>",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:373",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:383",
       "package": "keiko-server"
     },
     {
@@ -1213,7 +1213,14 @@
     {
       "op": "POST /api/git-delivery/pr/mark-ready/execute",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:479",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:483",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/git-delivery/pr/mark-ready/execute",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:598",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1399,6 +1406,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-runtime.authority.minted",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:476",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-runtime.description",
       "category": "process",
       "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1892",
@@ -1407,19 +1420,19 @@
     {
       "op": "coding-runtime.description-authority",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:555",
+      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:568",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.dev-lane.activated",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:172",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:190",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.dev-lane.refused",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:187",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:205",
       "package": "keiko-server"
     },
     {
@@ -1453,7 +1466,7 @@
     {
       "op": "coding-runtime.functional-workspace-read",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.ts:426",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.ts:436",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1921,43 +1934,55 @@
     {
       "op": "git-change.chat.apply",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-handlers.ts:3173",
+      "site": "packages/keiko-server/src/chat-handlers.ts:3171",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:562",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:510",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:593",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:628",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git-change.chat.blocked",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:659",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git-change.chat.blocked",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:703",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.connected",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:500",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:515",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.description-target.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/chat-handlers.ts:3111",
+      "site": "packages/keiko-server/src/chat-handlers.ts:3109",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.refreshed",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:695",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:758",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.stale",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:645",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:708",
       "package": "keiko-server"
     },
     {
@@ -2070,6 +2095,12 @@
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/gitDelivery/execution.ts:814",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.mutation.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/prMarkReadyExecution.ts:362",
       "package": "keiko-server"
     },
     {
@@ -2597,13 +2628,13 @@
     {
       "op": "pr-description.chat.turn.admitted",
       "category": "security",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2894",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2892",
       "package": "keiko-server"
     },
     {
       "op": "pr-description.chat.turn.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2894",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2892",
       "package": "keiko-server"
     },
     {
@@ -3097,6 +3128,7 @@
     "coding-repository-handler.settled",
     "coding-repository-handler.started",
     "coding-runtime.approval-revocation",
+    "coding-runtime.authority.minted",
     "coding-runtime.description",
     "coding-runtime.description-authority",
     "coding-runtime.dev-lane.activated",

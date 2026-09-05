@@ -515,7 +515,7 @@ export type CodingWorkbenchSidecarGatewayUnavailableReason =
  * then dies on the first real request with "estimated prompt tokens exceed profile
  * maxPromptTokens". Demoting readiness here catches that before a run ever starts.
  */
-export const CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS = 32_768;
+export const CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS = 32_000;
 
 export interface CodingWorkbenchSidecarGatewayRunMetadata {
   readonly maxPromptTokens: number;

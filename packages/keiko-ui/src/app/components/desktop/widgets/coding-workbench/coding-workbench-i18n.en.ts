@@ -255,6 +255,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.pairing.unpaired": "Workbench is not paired. Open Keiko from the launcher.",
   "codingWorkbench.questions.answerFailed":
     "Your answer was not accepted ({code}). The question is still open — send it again.",
+  "codingWorkbench.questions.answerRejected":
+    "Choose from the listed options for every question. Enter free text only when a Custom option is available. The question is still open ({code}).",
   "codingWorkbench.questions.rejectFailed":
     "Rejecting the question was not accepted ({code}). The question is still open — try again.",
   "codingWorkbench.questions.retry": "Check again",

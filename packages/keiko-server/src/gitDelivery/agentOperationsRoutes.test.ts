@@ -746,6 +746,42 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
       "approval-required",
     );
   });
+
+  it.each(["fetch", "pull"] as const)(
+    "forwards a minted %s approval through the facade at governed-assist",
+    async (operation) => {
+      const status = [
+        "# branch.oid abcdef1234567890",
+        "# branch.head main",
+        "# branch.upstream origin/main",
+        "# branch.ab +0 -0",
+        "",
+      ].join("\0");
+      const runner = vi.fn<GitProcessRunner>((args) => {
+        if (args.includes("status")) return Promise.resolve(ok(status));
+        if (args.at(-1) === "remote") return Promise.resolve(ok("origin\n"));
+        return Promise.resolve(ok(""));
+      });
+      const command = { kind: operation, remote: "origin" };
+      const issued = DEFAULT_GIT_DELIVERY_APPROVAL_STORE.issue({
+        binding: { projectId: root, operation, command },
+        approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
+        nowMs: Date.now(),
+      });
+      const body = executeRequest(operation, `${operation}-agent-approved`);
+      body.payload = { remote: "origin", approval: issued.approval };
+
+      const result = await handleGitAgentOperation(ctx(body), deps(runner, "governed-assist"));
+
+      expect(result.body).toMatchObject({
+        status: "delegated",
+        operation,
+        routeStatus: 409,
+        response: { error: { code: "GIT_DELIVERY_SYNC_WORKTREE_UNAVAILABLE" } },
+      });
+      expect(result.status).toBe(409);
+    },
+  );
 });
 
 describe("agent idempotency cache lifecycle through the handler", () => {

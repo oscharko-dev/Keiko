@@ -37,9 +37,13 @@ import {
   type ServerDiagnosticSink,
 } from "../../diagnostics-log.js";
 import type { VerificationRunnerManager } from "../../editor/verificationRunner.js";
+import { editorAgentWorkspaceRootDigest } from "../../editor/agentAuthorityRegistry.js";
 import type { WorkspaceLifecycleService } from "../../task-workspace/types.js";
 import type { CodingRuntimeEvidenceAggregator } from "../codingRuntimeEvidenceAggregator.js";
-import type { CodingRuntimeEditorMutationLeaseBroker } from "../codingRuntimeEditorMutationLeaseCoordinator.js";
+import type {
+  CodingRuntimeEditorMutationLeaseBroker,
+  CodingRuntimeEditorMutationLeaseRequest,
+} from "../codingRuntimeEditorMutationLeaseCoordinator.js";
 import { createAuthenticatedSessionStartConfirmationPlane } from "../codingRuntimeStartConfirmationPlane.js";
 import type { ProductionCodingRuntimeResolver } from "../productionCodingRuntimeHost.js";
 import { createProductionCodingRuntimeResolver } from "../productionCodingRuntimeResolver.js";
@@ -97,7 +101,7 @@ interface FunctionalRuntimeResolverBaseInput {
   readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport">;
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   /** Shares the resolver's per-run coordinators with the BFF editor commit boundary. */
-  readonly runtimeMutationLeaseBroker?: Pick<CodingRuntimeEditorMutationLeaseBroker, "attach">;
+  readonly runtimeMutationLeaseBroker?: CodingRuntimeEditorMutationLeaseBroker;
   readonly createSupervisor: NonNullable<ProductionOpenCodeBackendInput["createSupervisor"]>;
   readonly diagnostics?: ServerDiagnosticSink;
   /** Uses the same configured-profile qualification as the mounted gateway when supplied. */
@@ -187,7 +191,7 @@ export function createFunctionalRuntimeResolver(
     ...(input.draftDelivery === undefined ? {} : { draftDelivery: input.draftDelivery }),
     backend: functionalBackend(input, readiness),
     secureWorkspaceTextRead: functionalWorkspaceRead(activeRoot, input.diagnostics),
-    editorAgentClient: functionalEditorAgentClient(activeRoot),
+    editorAgentClient: functionalEditorAgentClient(activeRoot, input.runtimeMutationLeaseBroker),
     verificationRunner: input.verificationRunner,
     resolveWorkspaceRootAccess: (requestedRoot) =>
       requestedRoot === activeRoot()
@@ -455,6 +459,7 @@ function isEnoent(error: unknown): boolean {
  */
 function functionalEditorAgentClient(
   resolveRoot: () => string | undefined,
+  runtimeMutationLeaseBroker: CodingRuntimeEditorMutationLeaseBroker | undefined,
 ): FunctionalEditorAgentClient {
   return {
     action: (action, signal): Promise<FunctionalEditorActionResult> => {
@@ -465,13 +470,25 @@ function functionalEditorAgentClient(
       if (!changesetMatchesPatch(root, action)) {
         return Promise.resolve(editorDenied("RUNTIME_EDIT_CHANGESET_INVALID"));
       }
+      const leaseRequest = functionalMutationLeaseRequest(action, root);
+      if (
+        runtimeMutationLeaseBroker !== undefined &&
+        (leaseRequest === undefined || !runtimeMutationLeaseBroker.claim(leaseRequest))
+      ) {
+        return Promise.resolve(editorDenied("RUNTIME_EDIT_AUTHORITY_INVALID"));
+      }
+      let succeeded = false;
       try {
         applyPatch(workspace(root), action.changeset?.patch ?? "", {
           applyEnabled: true,
           signal,
         });
+        succeeded = true;
       } catch {
         return Promise.resolve(editorDenied("RUNTIME_EDIT_APPLY_FAILED"));
+      } finally {
+        if (leaseRequest !== undefined)
+          runtimeMutationLeaseBroker?.complete(leaseRequest, succeeded);
       }
       return Promise.resolve({
         ok: true as const,
@@ -485,6 +502,22 @@ function functionalEditorAgentClient(
         },
       });
     },
+  };
+}
+
+function functionalMutationLeaseRequest(
+  action: FunctionalEditorAction,
+  workspaceRoot: string,
+): CodingRuntimeEditorMutationLeaseRequest | undefined {
+  const authorityRef = action.authorityRef;
+  if (authorityRef === undefined) return undefined;
+  return {
+    authorityRef,
+    runId: authorityRef.runId,
+    envelopeDigest: authorityRef.envelopeDigest,
+    workspaceRootDigest: editorAgentWorkspaceRootDigest(workspaceRoot),
+    actionId: action.actionId,
+    idempotencyKey: action.idempotencyKey,
   };
 }
 

@@ -70,7 +70,13 @@ type PreparedAnswerOperation =
 
 type QuestionMutationOutcome =
   | { readonly ok: true }
-  | { readonly ok: false; readonly reason: "invalid-intent" | "authority-resolution-failed" };
+  | {
+      readonly ok: false;
+      readonly reason:
+        | "invalid-intent"
+        | "authority-resolution-failed"
+        | "question-answer-rejected";
+    };
 
 const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
   "running",
@@ -251,7 +257,7 @@ export class CodingRuntimeOperationCoordinator {
         questionId: operation.value.questionId,
         answers: operation.value.answers,
       });
-      return accepted ? { ok: true } : { ok: false, reason: "authority-resolution-failed" };
+      return accepted ? { ok: true } : { ok: false, reason: "question-answer-rejected" };
     } catch {
       return { ok: false, reason: "authority-resolution-failed" };
     }

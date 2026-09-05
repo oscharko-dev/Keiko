@@ -184,6 +184,22 @@ describe("CodingWorkbenchQuestions", () => {
     expect(screen.getByRole("button", { name: "Reject question" })).toBeEnabled();
   });
 
+  it("explains how to correct an answer whose shape the runtime rejected", () => {
+    renderQuestions(
+      hookResult({
+        status: "stale",
+        mutationFailure: {
+          action: "answer",
+          code: "CODING_RUNTIME_QUESTION_ANSWER_REJECTED",
+        },
+      }),
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Choose from the listed options for every question. Enter free text only when a Custom option is available. The question is still open (CODING_RUNTIME_QUESTION_ANSWER_REJECTED).",
+    );
+  });
+
   it("supports explicit rejection and has no serious or critical axe violations", async () => {
     const user = userEvent.setup();
     const result = renderQuestions();

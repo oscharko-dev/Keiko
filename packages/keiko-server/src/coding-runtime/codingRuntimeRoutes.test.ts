@@ -386,6 +386,51 @@ describe("coding runtime routes", () => {
     ]);
   });
 
+  it("returns and logs the closed question-answer-rejected reason from the runtime", async () => {
+    const session = pairedAppSession();
+    const records: unknown[] = [];
+    const deps = runtime({
+      codingAppSessionChannel: session.channel,
+      activityLog: { write: (event: unknown) => void records.push(event) },
+    });
+    (
+      deps.codingRuntimeOrchestrator as unknown as {
+        answerQuestion: () => Promise<{
+          readonly ok: false;
+          readonly failureCode: "question-answer-rejected";
+        }>;
+      }
+    ).answerQuestion = () =>
+      Promise.resolve({ ok: false, failureCode: "question-answer-rejected" });
+
+    const refused = await handleCodingRuntimeQuestionAnswer(
+      context(
+        JSON.stringify({
+          requestId: "req-answer-rejected",
+          expectedRevision: 2,
+          questionId: "que_1",
+          answers: [["free text"]],
+        }),
+        { runId: "run-1" },
+        "/api/coding-workbench/runtime/runs",
+        session.cookie,
+      ),
+      deps,
+    );
+
+    expect(refused).toMatchObject({
+      status: 400,
+      body: { error: { code: "CODING_RUNTIME_QUESTION_ANSWER_REJECTED" } },
+    });
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        op: "coding-runtime.operation.refused",
+        extra: { operation: "answer", runId: "run-1", reason: "question-answer-rejected" },
+      }),
+    );
+    expect(JSON.stringify(records)).not.toContain("free text");
+  });
+
   it("#2478: serves the paired question list as the channel payload with the active session facet", async () => {
     const session = pairedAppSession();
     const listed = await handleCodingRuntimeQuestionList(

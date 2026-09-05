@@ -126,6 +126,7 @@ describe("Coding Workbench translations", () => {
   it.each([
     "codingWorkbench.composer.workspaceMismatch",
     "codingWorkbench.approval.evidenceRequired",
+    "codingWorkbench.questions.answerRejected",
   ] as const)("localizes %s in both catalogs", (key) => {
     const en = translateCodingWorkbench("en", key);
     const de = translateCodingWorkbench("de", key);
