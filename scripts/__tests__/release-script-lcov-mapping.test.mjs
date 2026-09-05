@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_NPM_INSTALL_TIMEOUT_MS,
@@ -9,6 +9,18 @@ import {
   parsePositiveTimeoutEnv,
 } from "../installable-package-smoke.mjs";
 import { createStagedPublishPackage } from "../stage-publish-package.mjs";
+
+let stagedPublishPackage;
+
+// Building the genuine publish fixture includes every vendored workspace and is the measured cold
+// cost; stage it once with a setup-only budget, then keep assertion bodies on their original limits.
+beforeAll(() => {
+  stagedPublishPackage = createStagedPublishPackage();
+}, 180_000);
+
+afterAll(() => {
+  stagedPublishPackage?.cleanup();
+});
 
 afterEach(() => {
   delete globalThis.__keikoPackageSurfaceCoverageSeam;
@@ -26,8 +38,8 @@ describe("release script LCOV mapping seams", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("version-consistency: PASS"));
   });
 
-  // The guarded module imports and stages the built package surface, which can take longer than
-  // Vitest's default timeout to instrument on a cold V8 coverage run.
+  // The guarded module still imports and instruments the real staged package surface, so retain
+  // its existing 60-second body budget independently of the one-time staging hook above.
   it("covers the package-surface runtime and vendored workspace requirements", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.spyOn(process, "exit").mockImplementation((code) => {
@@ -37,7 +49,6 @@ describe("release script LCOV mapping seams", () => {
     let seamCalled = false;
     process.env.KEIKO_PACKAGE_SURFACE_COVERAGE_IMPORT_ONLY = "1";
     globalThis.__keikoPackageSurfaceCoverageSeam = (surface) => {
-      const staged = createStagedPublishPackage();
       try {
         seamCalled = true;
         surface.assertTypeScriptRuntimeSurface([
@@ -49,13 +60,13 @@ describe("release script LCOV mapping seams", () => {
         expect(() => {
           surface.assertTypeScriptRuntimeSurface([]);
         }).toThrow("process.exit(1)");
-        const paths = staged.vendorPackages.map(({ archivePath }) => archivePath);
-        surface.assertVendoredPayload(paths, staged.vendorPackages);
-        surface.assertVendoredWorkspaceExportArtifacts(staged.vendorPackages);
-        surface.assertWorkflowHandoffSubpath(staged.vendorPackages);
-        surface.assertContractsMemorySubpath(staged.vendorPackages);
-        surface.assertLocalKnowledgeDistPath(staged.vendorPackages);
-        expect(surface.collectBuildOutputs(staged.vendorPackages)).toContain(
+        const paths = stagedPublishPackage.vendorPackages.map(({ archivePath }) => archivePath);
+        surface.assertVendoredPayload(paths, stagedPublishPackage.vendorPackages);
+        surface.assertVendoredWorkspaceExportArtifacts(stagedPublishPackage.vendorPackages);
+        surface.assertWorkflowHandoffSubpath(stagedPublishPackage.vendorPackages);
+        surface.assertContractsMemorySubpath(stagedPublishPackage.vendorPackages);
+        surface.assertLocalKnowledgeDistPath(stagedPublishPackage.vendorPackages);
+        expect(surface.collectBuildOutputs(stagedPublishPackage.vendorPackages)).toContain(
           "packages/keiko-server/dist/index.js",
         );
         expect(() => surface.assertVendoredPayload(paths, [])).toThrow("process.exit(1)");
@@ -63,19 +74,19 @@ describe("release script LCOV mapping seams", () => {
         expect(() => surface.assertWorkflowHandoffSubpath([])).toThrow("process.exit(1)");
         expect(() => surface.assertContractsMemorySubpath([])).toThrow("process.exit(1)");
         expect(() =>
-          surface.assertContractsMemorySubpath(staged.vendorPackages, {
+          surface.assertContractsMemorySubpath(stagedPublishPackage.vendorPackages, {
             types: "./src/memory.ts",
             import: "./src/memory.js",
           }),
         ).toThrow("process.exit(1)");
         expect(() =>
-          surface.assertContractsMemorySubpath(staged.vendorPackages, {
+          surface.assertContractsMemorySubpath(stagedPublishPackage.vendorPackages, {
             types: "./dist/memory.d.ts",
             import: "./dist/memory.js",
             default: "./dist/memory.js",
           }),
         ).toThrow("process.exit(1)");
-        const withoutMemoryTypes = staged.vendorPackages.map((vendorPackage) =>
+        const withoutMemoryTypes = stagedPublishPackage.vendorPackages.map((vendorPackage) =>
           vendorPackage.name === "@oscharko-dev/keiko-contracts"
             ? {
                 ...vendorPackage,
@@ -89,8 +100,6 @@ describe("release script LCOV mapping seams", () => {
         expect(() => surface.assertLocalKnowledgeDistPath([])).toThrow("process.exit(1)");
       } catch (error_) {
         seamError = error_;
-      } finally {
-        staged.cleanup();
       }
     };
 
