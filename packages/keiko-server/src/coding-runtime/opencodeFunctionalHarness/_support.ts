@@ -23,7 +23,11 @@ import type {
   ProductionOpenCodeBackendInput,
 } from "../productionOpenCodeBackend.js";
 import { parseOpenCodeHistory } from "../opencodeProtocol.js";
-import { OPENCODE_MODEL_VISIBLE_TOOLS, OPENCODE_PINNED_VERSION } from "../opencodeToolSchemas.js";
+import {
+  OPENCODE_MODEL_VISIBLE_TOOLS,
+  OPENCODE_PINNED_VERSION,
+  projectedGatewaySchema,
+} from "../opencodeToolSchemas.js";
 import {
   OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
   projectOpenCodeProtocolSurface,
@@ -209,18 +213,6 @@ const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeProtocolSurface(
   FUNCTIONAL_OPENCODE_OPENAPI,
 ).digest;
 
-/** OpenCode v1.17.17 strips unsupported JSON Schema keywords before forwarding this tool. */
-const VERIFICATION_PROJECTED_SCHEMA = {
-  type: "object",
-  properties: {
-    verifierId: {
-      type: "string",
-      enum: ["test", "targeted-test", "typecheck", "lint", "build"],
-    },
-  },
-  required: ["verifierId"],
-} as const;
-
 /** One OpenAI-compatible function-tool entry a scripted child advertises to the gateway. */
 export interface FunctionalGatewayTool {
   readonly type: "function";
@@ -231,14 +223,14 @@ export interface FunctionalGatewayTool {
  * The exact model-visible tool projection an OpenCode child presents to the gateway. Exported so a
  * test can derive a deliberately incomplete projection (e.g. `.filter(...)` out one tool) for a
  * live fail-closed proof against the real sidecar gateway route, without restating this mapping.
+ * Derives every entry's parameters from `opencodeToolSchemas.ts`'s own `projectedGatewaySchema`
+ * (the single source for OpenCode's v1.17.17 wire projection) so this scripted advertisement can
+ * never drift from the incoming trust check it is meant to satisfy.
  */
 export function functionalGatewayTools(): readonly FunctionalGatewayTool[] {
   return OPENCODE_MODEL_VISIBLE_TOOLS.map(({ name, parameters }) => ({
     type: "function",
-    function: {
-      name,
-      parameters: name === "keiko_verification" ? VERIFICATION_PROJECTED_SCHEMA : parameters,
-    },
+    function: { name, parameters: projectedGatewaySchema(name, parameters) },
   }));
 }
 

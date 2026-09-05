@@ -469,8 +469,22 @@ const CHILD_AGENT_SCHEMA = {
 // tools, independently hand-typed here (never imported from opencodeToolSchemas.ts) so this file
 // keeps pinning the real OpenCode 1.17.17 wire contract against a second, independently authored
 // source rather than the production array it verifies.
-const GIT_STATUS_SCHEMA = { type: "object", properties: {}, required: [] } as const;
-const GIT_PUSH_SCHEMA = { type: "object", properties: {}, required: [] } as const;
+//
+// #3390 live-run evidence: OpenCode v1.17.17 does NOT advertise a zero-argument tool's source
+// shape (`{"type":"object","properties":{},"required":[]}`) verbatim -- it drops the empty
+// `required: []` array and adds a `$schema` marker instead. This is the real wire shape for
+// keiko_git_status/keiko_git_push, captured live and pinned in
+// coding-runtime/opencodeToolSchemas.opencode-1.17.17-advertised.fixture.json.
+const GIT_STATUS_SCHEMA = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  properties: {},
+} as const;
+const GIT_PUSH_SCHEMA = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  properties: {},
+} as const;
 const GIT_DIFF_SCHEMA = {
   type: "object",
   properties: {
@@ -973,11 +987,16 @@ describe("coding-sidecar gateway", () => {
       ["keiko_research_fetch", "8510b5132cc06c627c2b46c20df92c3fcca392f0d16a621b7006eb41d2bf02b5"],
       ["keiko_skill", "c3a50e828f78a32481ce662f8cd92e04dd6375af8df916f3c588b0628ff2de2d"],
       ["keiko_child_agent", "aa977e5c893cef8e1c7f6e5185836e039bb0a874e35c476d6a896a14441cb0ab"],
-      ["keiko_git_status", "c8a1ac469a826ea3547ac220c7bbfdcd6b58080d4ec596ff2a0149c5ccb9b699"],
+      // #3390 live-run evidence: digests recomputed against the real OpenCode 1.17.17
+      // advertisement (opencodeToolSchemas.opencode-1.17.17-advertised.fixture.json), which drops
+      // the empty `required: []` array and adds a `$schema` marker instead of sending the
+      // zero-argument source shape verbatim -- the prior digest pinned the source shape, which the
+      // real binary never actually sends, so the sidecar gateway refused every real request.
+      ["keiko_git_status", "93ab7499dc3c616f8db8780fed0d9f69270803cda913882ad2ef3943db8d7225"],
       ["keiko_git_diff", "fa6966974e9e03d9fb30fb9b95a9f3dd53935ba03f991ce5b6575c5d5ee17a10"],
       ["keiko_git_stage", "647e9587fc6f6fff73280f3dca63fe3f66a7614eb14652a467acff7de2192dc4"],
       ["keiko_git_commit", "2df8d578416a283a3a72f8c71c4102264305107ae7c4e7b0e5d1806c3b066112"],
-      ["keiko_git_push", "c8a1ac469a826ea3547ac220c7bbfdcd6b58080d4ec596ff2a0149c5ccb9b699"],
+      ["keiko_git_push", "93ab7499dc3c616f8db8780fed0d9f69270803cda913882ad2ef3943db8d7225"],
       ["keiko_pull_request", "459ee94f01b4f6fe7581ea0d365a6adfc702c298d8eec915c51c4da311967c0a"],
       // Digest recomputed: proposalId.pattern gained the "commit" prefix alongside stage/delivery
       // (fixed the commit-proposal-id pattern gap -- the prior pattern rejected every real
@@ -1594,7 +1613,11 @@ describe("coding-sidecar gateway", () => {
           },
           {
             name: "keiko_git_status",
-            parameters: { required: [], properties: {}, type: "object" },
+            parameters: {
+              type: "object",
+              $schema: "https://json-schema.org/draft/2020-12/schema",
+              properties: {},
+            },
           },
           {
             name: "keiko_git_diff",
@@ -1622,7 +1645,11 @@ describe("coding-sidecar gateway", () => {
           },
           {
             name: "keiko_git_push",
-            parameters: { required: [], properties: {}, type: "object" },
+            parameters: {
+              properties: {},
+              $schema: "https://json-schema.org/draft/2020-12/schema",
+              type: "object",
+            },
           },
           {
             name: "keiko_pull_request",

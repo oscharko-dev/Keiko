@@ -526,11 +526,51 @@ function schemaDigest(schema: Readonly<Record<string, unknown>>): string {
   return createHash("sha256").update(stableJson(schema), "utf8").digest("hex");
 }
 
+/**
+ * OpenCode v1.17.17 drops an empty `required: []` array and adds a `$schema` marker for a
+ * zero-argument tool's parameters (live-run evidence: #3390 real OpenCode 1.17.17 on macOS,
+ * captured in `opencodeToolSchemas.opencode-1.17.17-advertised.fixture.json`).
+ */
+const OPENCODE_EMPTY_PARAMETER_PROJECTED_SCHEMA = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  properties: {},
+} as const;
+
+function isEmptyParameterSourceSchema(schema: Readonly<Record<string, unknown>>): boolean {
+  const { properties, required } = schema;
+  return (
+    isRecord(properties) &&
+    Object.keys(properties).length === 0 &&
+    Array.isArray(required) &&
+    required.length === 0
+  );
+}
+
+/**
+ * Gateway requests contain OpenCode's v1.17.17 projection of a tool's schema, not the generated
+ * source schema: it strips the unsupported `additionalProperties` keyword from
+ * `keiko_verification` (`VERIFICATION_PROJECTED_SCHEMA`), and, for a zero-argument tool such as
+ * `keiko_git_status`/`keiko_git_push`, drops the empty `required: []` array and adds a `$schema`
+ * marker instead (`OPENCODE_EMPTY_PARAMETER_PROJECTED_SCHEMA`). Exported so the incoming trust
+ * check's expected digests, the scripted `FakeOpenCodeChild` advertisement, and this module's own
+ * tests all derive the projection from this one formula rather than each restating it.
+ */
+export function projectedGatewaySchema(
+  name: string,
+  parameters: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  if (name === "keiko_verification") return VERIFICATION_PROJECTED_SCHEMA;
+  return isEmptyParameterSourceSchema(parameters)
+    ? OPENCODE_EMPTY_PARAMETER_PROJECTED_SCHEMA
+    : parameters;
+}
+
 /** Gateway requests contain OpenCode's v1.17.17 projection, not the generated source schema. */
 const EXPECTED_GATEWAY_SCHEMA_DIGESTS: ReadonlyMap<string, string> = new Map(
   OPENCODE_MODEL_VISIBLE_TOOLS.map(({ name, parameters }) => [
     name,
-    schemaDigest(name === "keiko_verification" ? VERIFICATION_PROJECTED_SCHEMA : parameters),
+    schemaDigest(projectedGatewaySchema(name, parameters)),
   ]),
 );
 

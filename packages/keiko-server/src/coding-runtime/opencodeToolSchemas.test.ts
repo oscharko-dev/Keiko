@@ -6,6 +6,7 @@ import {
   hasExactOpenCodeVisibleToolContract,
   OPENCODE_MODEL_VISIBLE_TOOLS,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
+  projectedGatewaySchema,
 } from "./opencodeToolSchemas.js";
 import { mintProposalId, proposalIdPattern } from "../gitDelivery/proposalId.js";
 
@@ -15,20 +16,27 @@ function projectedTools(): readonly {
 }[] {
   return OPENCODE_MODEL_VISIBLE_TOOLS.map(({ name, parameters }) => ({
     name,
-    parameters:
-      name === "keiko_verification"
-        ? {
-            type: "object",
-            properties: {
-              verifierId: {
-                type: "string",
-                enum: ["test", "targeted-test", "typecheck", "lint", "build"],
-              },
-            },
-            required: ["verifierId"],
-          }
-        : parameters,
+    parameters: projectedGatewaySchema(name, parameters),
   }));
+}
+
+interface RealAdvertisedTool {
+  readonly name: string;
+  readonly parameters: Readonly<Record<string, unknown>>;
+}
+
+/** #3390 live-run capture: the real OpenCode 1.17.17 binary's actual `tools` advertisement. */
+function realAdvertisementFixture(): readonly RealAdvertisedTool[] {
+  const path = new URL(
+    "./opencodeToolSchemas.opencode-1.17.17-advertised.fixture.json",
+    import.meta.url,
+  );
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as readonly {
+    readonly name: string;
+    readonly description: string;
+    readonly parameters: Readonly<Record<string, unknown>>;
+  }[];
+  return parsed.map(({ name, parameters }) => ({ name, parameters }));
 }
 
 describe("OpenCode visible tool contract", () => {
@@ -212,5 +220,42 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
     expect(first.offered.offerId).not.toBe(second.offered.offerId);
     expect(first.projection.projectionDigest).toBe(second.projection.projectionDigest);
     expect(first.offered.expiresAt).toBe(new Date(31_000).toISOString());
+  });
+});
+
+// #3390: a real OpenCode 1.17.17 run on macOS with the pinned binary refused every chat
+// completion with 403 CODING_GATEWAY_TOOL_CONTRACT_DRIFT because OpenCode projects an
+// empty-parameter tool's schema differently from every other tool: for `keiko_git_status` and
+// `keiko_git_push` (source `{"type":"object","properties":{},"required":[]}`) the real binary
+// sends `{"$schema":"https://json-schema.org/draft/2020-12/schema","properties":{},"type":
+// "object"}` -- no `required` key. The fixture below is that exact live capture, unmodified.
+describe("OpenCode 1.17.17 real advertisement fidelity (#3390 live-run evidence)", () => {
+  it("accepts the real OpenCode 1.17.17 advertisement byte-for-byte", () => {
+    expect(hasExactOpenCodeVisibleToolContract(realAdvertisementFixture())).toBe(true);
+  });
+
+  it("denies the real advertisement with one tool removed", () => {
+    const withoutOneTool = realAdvertisementFixture().slice(1);
+    expect(hasExactOpenCodeVisibleToolContract(withoutOneTool)).toBe(false);
+  });
+
+  it("denies the real advertisement with one schema altered", () => {
+    const tampered = realAdvertisementFixture().map((tool) =>
+      tool.name === "keiko_git_status"
+        ? { ...tool, parameters: { ...tool.parameters, properties: { extra: { type: "string" } } } }
+        : tool,
+    );
+    expect(hasExactOpenCodeVisibleToolContract(tampered)).toBe(false);
+  });
+
+  it("denies the pinned source schemas unprojected for the two empty-parameter tools", () => {
+    // Regression for the #3390 defect itself: the raw generated source shape (`required: []`,
+    // no `$schema`) that the sidecar gateway was wrongly requiring must never be re-accepted.
+    const sourceShaped = realAdvertisementFixture().map((tool) =>
+      tool.name === "keiko_git_status" || tool.name === "keiko_git_push"
+        ? { ...tool, parameters: { type: "object", properties: {}, required: [] } }
+        : tool,
+    );
+    expect(hasExactOpenCodeVisibleToolContract(sourceShaped)).toBe(false);
   });
 });
