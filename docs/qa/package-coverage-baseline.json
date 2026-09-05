@@ -6,15 +6,15 @@
   "policy": "Packages below target are ratcheted at their recorded baseline until domain tests raise them; non-strict ratchet floors allow 0.10 percentage points of platform noise. Per-file floors are governed per entry: \"ratcheted\" floors are re-derived from measurement and allow 0.50 points, \"absolute\" floors encode policy, survive regeneration and allow none.",
   "packages": {
     "keiko-cli": {
-      "files": 49,
+      "files": 50,
       "uncoveredFiles": 0,
-      "uncoveredLines": 392,
-      "totalLines": 5336,
+      "uncoveredLines": 419,
+      "totalLines": 5836,
       "coverage": {
-        "lines": 92.65,
-        "statements": 90.95,
-        "branches": 85.97,
-        "functions": 93.91
+        "lines": 92.82,
+        "statements": 91.01,
+        "branches": 86.24,
+        "functions": 94.19
       }
     },
     "keiko-connectors": {
@@ -30,26 +30,26 @@
       }
     },
     "keiko-contracts": {
-      "files": 194,
-      "uncoveredFiles": 4,
-      "uncoveredLines": 885,
-      "totalLines": 14121,
+      "files": 219,
+      "uncoveredFiles": 5,
+      "uncoveredLines": 1100,
+      "totalLines": 15445,
       "coverage": {
-        "lines": 93.73,
-        "statements": 92.25,
-        "branches": 90.11,
-        "functions": 97.4
+        "lines": 92.88,
+        "statements": 91.36,
+        "branches": 88.33,
+        "functions": 96.18
       }
     },
     "keiko-editor": {
       "files": 79,
       "uncoveredFiles": 0,
       "uncoveredLines": 167,
-      "totalLines": 2874,
+      "totalLines": 2872,
       "coverage": {
         "lines": 94.19,
-        "statements": 93.28,
-        "branches": 87.3,
+        "statements": 93.27,
+        "branches": 87.31,
         "functions": 91.88
       }
     },
@@ -57,11 +57,11 @@
       "files": 83,
       "uncoveredFiles": 0,
       "uncoveredLines": 33,
-      "totalLines": 1550,
+      "totalLines": 1555,
       "coverage": {
-        "lines": 97.87,
-        "statements": 97.42,
-        "branches": 90.75,
+        "lines": 97.88,
+        "statements": 97.43,
+        "branches": 90.81,
         "functions": 98.8
       }
     },
@@ -80,37 +80,37 @@
     "keiko-git": {
       "files": 8,
       "uncoveredFiles": 0,
-      "uncoveredLines": 4,
-      "totalLines": 157,
+      "uncoveredLines": 6,
+      "totalLines": 271,
       "coverage": {
-        "lines": 97.45,
-        "statements": 96.65,
-        "branches": 89.6,
-        "functions": 95.65
+        "lines": 97.79,
+        "statements": 96.87,
+        "branches": 92.07,
+        "functions": 97.3
       }
     },
     "keiko-harness": {
-      "files": 25,
+      "files": 32,
       "uncoveredFiles": 0,
-      "uncoveredLines": 15,
-      "totalLines": 483,
+      "uncoveredLines": 25,
+      "totalLines": 712,
       "coverage": {
-        "lines": 96.89,
-        "statements": 96.91,
-        "branches": 89.35,
-        "functions": 99.28
+        "lines": 96.49,
+        "statements": 96.34,
+        "branches": 87.65,
+        "functions": 99.5
       }
     },
     "keiko-local-knowledge": {
       "files": 129,
       "uncoveredFiles": 0,
-      "uncoveredLines": 726,
-      "totalLines": 9434,
+      "uncoveredLines": 711,
+      "totalLines": 9545,
       "coverage": {
-        "lines": 92.3,
-        "statements": 89.97,
-        "branches": 81.35,
-        "functions": 94.53
+        "lines": 92.55,
+        "statements": 90.16,
+        "branches": 81.52,
+        "functions": 94.78
       }
     },
     "keiko-memory-capture": {
@@ -165,24 +165,24 @@
       "files": 23,
       "uncoveredFiles": 0,
       "uncoveredLines": 79,
-      "totalLines": 1063,
+      "totalLines": 1066,
       "coverage": {
-        "lines": 92.57,
-        "statements": 91.35,
-        "branches": 86.67,
-        "functions": 91.94
+        "lines": 92.59,
+        "statements": 91.3,
+        "branches": 86.76,
+        "functions": 91.69
       }
     },
     "keiko-model-gateway": {
-      "files": 44,
+      "files": 52,
       "uncoveredFiles": 0,
-      "uncoveredLines": 193,
-      "totalLines": 3323,
+      "uncoveredLines": 210,
+      "totalLines": 3802,
       "coverage": {
-        "lines": 94.19,
-        "statements": 93.19,
-        "branches": 87.22,
-        "functions": 96.93
+        "lines": 94.48,
+        "statements": 93.49,
+        "branches": 88.06,
+        "functions": 97.26
       }
     },
     "keiko-quality-intelligence": {
@@ -198,15 +198,15 @@
       }
     },
     "keiko-sandbox": {
-      "files": 9,
+      "files": 10,
       "uncoveredFiles": 0,
-      "uncoveredLines": 2,
-      "totalLines": 234,
+      "uncoveredLines": 3,
+      "totalLines": 301,
       "coverage": {
-        "lines": 99.15,
-        "statements": 95.97,
-        "branches": 94.55,
-        "functions": 98.73
+        "lines": 99,
+        "statements": 95.74,
+        "branches": 94.71,
+        "functions": 99.02
       }
     },
     "keiko-sdk": {
@@ -224,60 +224,72 @@
     "keiko-security": {
       "files": 26,
       "uncoveredFiles": 0,
-      "uncoveredLines": 0,
-      "totalLines": 661,
+      "uncoveredLines": 18,
+      "totalLines": 887,
       "coverage": {
-        "lines": 100,
-        "statements": 99.86,
-        "branches": 98.96,
-        "functions": 100
+        "lines": 97.97,
+        "statements": 97.34,
+        "branches": 95.8,
+        "functions": 98.2
       }
     },
     "keiko-server": {
-      "files": 601,
+      "files": 694,
       "uncoveredFiles": 0,
-      "uncoveredLines": 4473,
-      "totalLines": 57506,
+      "uncoveredLines": 4976,
+      "totalLines": 66796,
       "coverage": {
-        "lines": 92.22,
-        "statements": 89.5,
-        "branches": 82.08,
-        "functions": 95.01
+        "lines": 92.55,
+        "statements": 89.75,
+        "branches": 82.8,
+        "functions": 95.03
+      }
+    },
+    "keiko-tool-catalog": {
+      "files": 19,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 4,
+      "totalLines": 595,
+      "coverage": {
+        "lines": 99.33,
+        "statements": 98.76,
+        "branches": 99.35,
+        "functions": 97.07
       }
     },
     "keiko-tools": {
-      "files": 40,
+      "files": 70,
       "uncoveredFiles": 0,
-      "uncoveredLines": 276,
-      "totalLines": 3309,
+      "uncoveredLines": 403,
+      "totalLines": 4988,
       "coverage": {
-        "lines": 91.66,
-        "statements": 90.15,
-        "branches": 83,
-        "functions": 94.25
+        "lines": 91.92,
+        "statements": 89.77,
+        "branches": 84.16,
+        "functions": 94.75
       }
     },
     "keiko-ui": {
-      "files": 424,
+      "files": 448,
       "uncoveredFiles": 3,
-      "uncoveredLines": 2931,
-      "totalLines": 39798,
+      "uncoveredLines": 2947,
+      "totalLines": 41689,
       "coverage": {
-        "lines": 92.64,
-        "statements": 89.73,
-        "branches": 82.06,
-        "functions": 91.47
+        "lines": 92.93,
+        "statements": 90.05,
+        "branches": 82.6,
+        "functions": 91.74
       }
     },
     "keiko-verification": {
       "files": 11,
       "uncoveredFiles": 0,
-      "uncoveredLines": 12,
+      "uncoveredLines": 13,
       "totalLines": 407,
       "coverage": {
-        "lines": 97.05,
-        "statements": 95.83,
-        "branches": 89.65,
+        "lines": 96.81,
+        "statements": 95.6,
+        "branches": 89.45,
         "functions": 100
       }
     },
@@ -294,23 +306,43 @@
       }
     },
     "keiko-workspace": {
-      "files": 64,
+      "files": 71,
       "uncoveredFiles": 0,
-      "uncoveredLines": 499,
-      "totalLines": 7524,
+      "uncoveredLines": 629,
+      "totalLines": 9637,
       "coverage": {
-        "lines": 93.37,
-        "statements": 92.22,
-        "branches": 85.57,
-        "functions": 97.3
+        "lines": 93.47,
+        "statements": 91.77,
+        "branches": 85.68,
+        "functions": 97.34
       }
     }
   },
   "fileFloors": {
+    "packages/keiko-contracts/src/coding-runtime-ci.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 0
+    },
     "packages/keiko-contracts/src/debug/debug-lifecycle.ts": {
       "governance": "absolute",
       "tolerance": 0,
       "lines": 95
+    },
+    "packages/keiko-contracts/src/git-ci-failure-context.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 2.83
+    },
+    "packages/keiko-contracts/src/git-journey-freshness.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 39.5
+    },
+    "packages/keiko-contracts/src/git-preflight.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 49.5
     },
     "packages/keiko-contracts/src/memory-consolidation-wire.ts": {
       "governance": "ratcheted",
@@ -345,7 +377,7 @@
     "packages/keiko-local-knowledge/src/crawl/manual-page-fs.ts": {
       "governance": "ratcheted",
       "tolerance": 0.5,
-      "lines": 41.17
+      "lines": 43.94
     },
     "packages/keiko-local-knowledge/src/retrieval/types.ts": {
       "governance": "ratcheted",
@@ -486,6 +518,11 @@
       "governance": "ratcheted",
       "tolerance": 0.5,
       "lines": 0
+    },
+    "packages/keiko-ui/src/test-utils/workspace-api-fixture.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 49.5
     },
     "scripts/check-lcov-source-mapping.mjs": {
       "governance": "absolute",
