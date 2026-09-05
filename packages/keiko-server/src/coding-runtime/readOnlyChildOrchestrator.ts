@@ -84,7 +84,34 @@ export interface ReadOnlyChildRunnerResult {
   readonly resultDigest: CodeTaskFact<string>;
 }
 
-/** The bounded child engine. In production an adapter over keiko-harness `runLoop`. */
+/** Bounded, content-free reasons a runner rejects `run` because the CHILD breached the trust
+ * boundary, not because the runner's infrastructure failed. */
+export type ReadOnlyChildTrustViolationReason =
+  "fabricated-tool-denied" | "malformed-tool-arguments-denied";
+
+/**
+ * A runner throws this instead of resolving `run` when the child itself fabricates a tool call
+ * outside the single tool it was offered, or sends arguments that do not match that tool's
+ * declared shape. Both are anomalies the runner detects internally (e.g. a mandatory tool-catalog
+ * bind failing before any tool executes) that the orchestrator's own gate never sees a
+ * `ReadOnlyChildToolAttempt` for, because the runner correctly never let the call reach it. This is
+ * a closed governance refusal — the workspace was never touched and the run is over — not lost
+ * infrastructure, so the orchestrator classifies it as `denied` with the matching reason code
+ * instead of the generic `unavailable`/`child-runner-error` reserved for a genuine runner fault.
+ */
+export class ReadOnlyChildTrustViolationError extends Error {
+  public constructor(public readonly reasonCode: ReadOnlyChildTrustViolationReason) {
+    super(`read-only child trust boundary violated: ${reasonCode}`);
+    this.name = "ReadOnlyChildTrustViolationError";
+  }
+}
+
+/**
+ * The bounded child engine. In production an adapter over keiko-harness `runLoop`. `run` MUST
+ * reject with a `ReadOnlyChildTrustViolationError` (never a plain `Error`) when the child itself —
+ * not the runner's infrastructure — breached the trust boundary, so the orchestrator can classify
+ * the outcome correctly.
+ */
 export interface ReadOnlyChildRunner {
   readonly run: (input: ReadOnlyChildRunnerInput) => Promise<ReadOnlyChildRunnerResult>;
 }
@@ -259,13 +286,20 @@ async function runChild(
       gate,
     });
     return finalizeOutcome(deps, context, state, result);
-  } catch {
-    // Fail closed on a runner fault: prefer a latched governance terminal, else content-free error.
-    // Either way, a redacted diagnostic ties the opaque outcome to a correlatable event record.
+  } catch (error) {
+    // Fail closed on a runner fault: prefer a latched governance terminal, then a closed
+    // trust-boundary refusal the runner itself signaled (the child fabricated a tool call or sent
+    // malformed arguments — a governance outcome, not lost infrastructure), else a content-free
+    // `unavailable`. Either way, a redacted diagnostic ties the opaque outcome to a correlatable
+    // event record.
     emitRunnerFault(deps, context.parentAuthority.runId);
-    return state.latched !== undefined
-      ? rejectedOutcome(state.latched.terminal, state.latched.reasonCode)
-      : rejectedOutcome("unavailable", "child-runner-error");
+    if (state.latched !== undefined) {
+      return rejectedOutcome(state.latched.terminal, state.latched.reasonCode);
+    }
+    if (error instanceof ReadOnlyChildTrustViolationError) {
+      return rejectedOutcome("denied", error.reasonCode);
+    }
+    return rejectedOutcome("unavailable", "child-runner-error");
   } finally {
     cleanup();
   }

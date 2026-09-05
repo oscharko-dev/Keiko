@@ -25,7 +25,9 @@ export function composedProductionCatalog(producer) {
 export function rawCatalogValue(catalog) {
   return {
     descriptors: catalog.descriptors,
-    profiles: catalog.profiles.map(({ catalogRevision: _catalogRevision, ...declaration }) => declaration),
+    profiles: catalog.profiles.map(
+      ({ catalogRevision: _catalogRevision, ...declaration }) => declaration,
+    ),
     compatibility: catalog.compatibility,
   };
 }
@@ -50,9 +52,10 @@ export function expectRejection(attempt) {
       return { rejected: true, reason: result.reason };
     return { rejected: false, reason: undefined };
   } catch (error) {
-    const reason = error !== null && typeof error === "object" && "reason" in error
-      ? String(error.reason)
-      : undefined;
+    const reason =
+      error !== null && typeof error === "object" && "reason" in error
+        ? String(error.reason)
+        : undefined;
     return { rejected: true, reason };
   }
 }

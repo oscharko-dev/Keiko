@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { gitChangeSnapshotEntryIdentityFields } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
-import type { GitChangeSnapshotEntry, GitChangeSnapshotLimits } from "@oscharko-dev/keiko-contracts";
+import type { GitChangeSnapshotLimits } from "@oscharko-dev/keiko-contracts";
 import { snapshotEntries } from "./gitChangeSnapshotEntries.js";
 import type { SnapshotFileMetadata } from "./gitChangeSnapshotMetadata.js";
 
@@ -54,15 +54,7 @@ describe("snapshot entries: boundary caps", () => {
 
   it("caps hunks at limits.maxHunksPerFile and reports the drop as an omission", () => {
     const patch = patchText(
-      section(
-        "file.txt",
-        "@@ -1,1 +1,1 @@",
-        "-one",
-        "+two",
-        "@@ -3,1 +3,1 @@",
-        "-three",
-        "+four",
-      ),
+      section("file.txt", "@@ -1,1 +1,1 @@", "-one", "+two", "@@ -3,1 +3,1 @@", "-three", "+four"),
     );
     const result = snapshotEntries([modifyMeta()], patch, false, {
       ...LIMITS,
@@ -118,9 +110,7 @@ describe("snapshot entries: malformed patch lanes", () => {
 
 describe("snapshot entries: hostile inputs", () => {
   it("never attributes an untrusted patch-header path to a differently-identified metadata entry", () => {
-    const patch = patchText(
-      section("../../etc/passwd", "@@ -1,1 +1,1 @@", "-one", "+two"),
-    );
+    const patch = patchText(section("../../etc/passwd", "@@ -1,1 +1,1 @@", "-one", "+two"));
     const result = snapshotEntries([modifyMeta({ path: "safe.txt" })], patch, false, LIMITS);
     expect(result.entries).toHaveLength(1);
     expect(result.entries[0]?.pathDigest).toBe(sha256Hex("safe.txt"));
@@ -174,7 +164,8 @@ describe("snapshot entries: entry classification", () => {
   it("marks a binary entry contentless and omits it as binary", () => {
     const meta = modifyMeta({ binary: true, additions: 3, deletions: 2 });
     const result = snapshotEntries([meta], "", false, LIMITS);
-    const entry = result.entries[0] as GitChangeSnapshotEntry;
+    const entry = result.entries[0];
+    if (entry === undefined) throw new Error("expected one entry");
     expect(entry.kind).toBe("binary");
     expect(entry.additions).toBe(0);
     expect(entry.deletions).toBe(0);
@@ -191,7 +182,11 @@ describe("snapshot entries: entry classification", () => {
   });
 
   it("classifies a same-blob mode-only change with no omission", () => {
-    const meta = modifyMeta({ oldObjectId: OLD_OBJECT, newObjectId: OLD_OBJECT, newMode: "100755" });
+    const meta = modifyMeta({
+      oldObjectId: OLD_OBJECT,
+      newObjectId: OLD_OBJECT,
+      newMode: "100755",
+    });
     const result = snapshotEntries([meta], "", false, LIMITS);
     expect(result.entries[0]?.kind).toBe("mode-change");
     expect(result.entries[0]?.omission).toBeUndefined();
@@ -204,19 +199,17 @@ describe("snapshot entries: entry classification", () => {
       change: "rename",
       similarity: 90,
     });
-    const patch = patchText(
-      [
-        "diff --git a/old.txt b/new.txt",
-        "rename from old.txt",
-        "rename to new.txt",
-        "@@ -1,1 +1,1 @@",
-        "-one",
-        "+two",
-      ],
-    );
+    const patch = patchText([
+      "diff --git a/old.txt b/new.txt",
+      "rename from old.txt",
+      "rename to new.txt",
+      "@@ -1,1 +1,1 @@",
+      "-one",
+      "+two",
+    ]);
     const result = snapshotEntries([meta], patch, false, LIMITS);
     const entry = result.entries[0];
-    if (entry === undefined || entry.kind !== "rename") throw new Error("expected a rename entry");
+    if (entry?.kind !== "rename") throw new Error("expected a rename entry");
     expect(entry.oldPathDigest).toBe(sha256Hex("old.txt"));
     expect(entry.similarity).toBe(90);
   });

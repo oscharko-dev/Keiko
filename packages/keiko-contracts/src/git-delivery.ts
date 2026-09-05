@@ -26,6 +26,7 @@ export type GitDeliveryActionKind =
   | "push"
   | "pr-create"
   | "pr-update"
+  | "pr-description-apply"
   | "merge"
   | "abort"
   | "recovery";
@@ -39,6 +40,7 @@ export const GIT_DELIVERY_ACTION_KINDS: readonly GitDeliveryActionKind[] = [
   "push",
   "pr-create",
   "pr-update",
+  "pr-description-apply",
   "merge",
   "abort",
   "recovery",
@@ -83,6 +85,7 @@ export const GIT_DELIVERY_ACTION_RISK_DEFAULTS: Readonly<
   push: "publish",
   "pr-create": "protected-or-merge",
   "pr-update": "protected-or-merge",
+  "pr-description-apply": "protected-or-merge",
   merge: "protected-or-merge",
   abort: "local-mutation",
   recovery: "recovery-or-rewrite",
@@ -154,6 +157,18 @@ export interface GitDeliveryPrUpdateInputs {
   readonly convertFromDraft: boolean;
 }
 
+// #3399 (epic #3384 correction 4): a body-only managed-description apply, deliberately a separate
+// action kind from "pr-update" so the policy-pack layer can hold a distinct decision for it — title,
+// base, and draft-state are never part of this kind's inputs, matching the body-only command the
+// gateway dispatches.
+export interface GitDeliveryPrDescriptionApplyInputs {
+  readonly kind: "pr-description-apply";
+  readonly prExternalId: string; // opaque provider-assigned ID
+  readonly headBranchName: string;
+  readonly baseBranchName: string;
+  readonly finalBodyByteLength: number;
+}
+
 export type GitDeliveryMergeStrategyHint =
   "squash" | "rebase" | "merge-commit" | "provider-default";
 
@@ -217,6 +232,7 @@ export type GitDeliveryResolvedInputs =
   | GitDeliveryPushInputs
   | GitDeliveryPrCreateInputs
   | GitDeliveryPrUpdateInputs
+  | GitDeliveryPrDescriptionApplyInputs
   | GitDeliveryMergeInputs
   | GitDeliveryAbortInputs
   | GitDeliveryRecoveryInputs;
@@ -447,7 +463,7 @@ export interface GitDeliveryEvidenceRef {
 // ─── Lifecycle envelope (AC1) ───────────────────────────────────────────────────
 // Sound discriminated union: kind === resolvedInputs.kind holds by construction. Each member is
 // parameterised by its per-kind resolved-input type; GitDeliveryActionEnvelope is the union over
-// all ten members.
+// all eleven members.
 
 export interface GitDeliveryActionEnvelopeFor<I extends GitDeliveryResolvedInputs> {
   readonly schemaVersion: typeof GIT_DELIVERY_SCHEMA_VERSION;
@@ -470,6 +486,7 @@ export type GitDeliveryActionEnvelope =
   | GitDeliveryActionEnvelopeFor<GitDeliveryPushInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryPrCreateInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryPrUpdateInputs>
+  | GitDeliveryActionEnvelopeFor<GitDeliveryPrDescriptionApplyInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryMergeInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryAbortInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryRecoveryInputs>;
@@ -776,6 +793,15 @@ function isPrUpdateInputs(value: Record<string, unknown>): boolean {
   );
 }
 
+function isPrDescriptionApplyInputs(value: Record<string, unknown>): boolean {
+  return (
+    isNonEmptyString(value.prExternalId) &&
+    isNonEmptyString(value.headBranchName) &&
+    isNonEmptyString(value.baseBranchName) &&
+    isNonNegativeInteger(value.finalBodyByteLength)
+  );
+}
+
 function isMergeInputs(value: Record<string, unknown>): boolean {
   return (
     isNonEmptyString(value.prExternalId) &&
@@ -809,6 +835,7 @@ const RESOLVED_INPUT_GUARDS: Readonly<
   push: isPushInputs,
   "pr-create": isPrCreateInputs,
   "pr-update": isPrUpdateInputs,
+  "pr-description-apply": isPrDescriptionApplyInputs,
   merge: isMergeInputs,
   abort: isAbortInputs,
   recovery: isRecoveryInputs,

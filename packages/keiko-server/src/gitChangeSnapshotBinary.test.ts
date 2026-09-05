@@ -47,26 +47,34 @@ describe("resolveSnapshotBinaryFiles: empty input", () => {
 
 describe("resolveSnapshotBinaryFiles: boundary — maxFiles", () => {
   it("checks only the first maxFiles entries, passing the remainder through untouched", async () => {
-    const runner: GitProcessRunner = async (args) => {
-      if (args[0] === "cat-file" && args[2] === OLD_OBJECT) return ok("text content\n");
-      if (args[0] === "cat-file" && args[2] === NEW_OBJECT) return ok("text content\n");
+    const runner: GitProcessRunner = (args) => {
+      if (args[0] === "cat-file" && args[2] === OLD_OBJECT)
+        return Promise.resolve(ok("text content\n"));
+      if (args[0] === "cat-file" && args[2] === NEW_OBJECT)
+        return Promise.resolve(ok("text content\n"));
       throw new Error(`unexpected invocation past the cap: ${args.join(" ")}`);
     };
     const checked = meta({ path: "checked.txt" });
     const untouched = meta({ path: "untouched.bin", binary: true });
-    const result = await resolveSnapshotBinaryFiles(reader(runner), [checked, untouched], 1, REVISIONS);
+    const result = await resolveSnapshotBinaryFiles(
+      reader(runner),
+      [checked, untouched],
+      1,
+      REVISIONS,
+    );
     expect(result[0]?.binary).toBe(false);
     expect(result[1]).toBe(untouched);
   });
 
   it("never probes an empty-object (add) or gitlink side, whatever its object id", async () => {
     const calls: string[] = [];
-    const runner: GitProcessRunner = async (args) => {
-      if (args[0] !== "cat-file") throw new Error(`unexpected non-cat-file call: ${args.join(" ")}`);
+    const runner: GitProcessRunner = (args) => {
+      if (args[0] !== "cat-file")
+        throw new Error(`unexpected non-cat-file call: ${args.join(" ")}`);
       const objectId = args[2] ?? "";
       if (objectId === ZERO_OBJECT) throw new Error("must not probe the empty object");
       calls.push(objectId);
-      return ok("plain text\n");
+      return Promise.resolve(ok("plain text\n"));
     };
     const added = meta({ path: "new.txt", oldObjectId: ZERO_OBJECT, additions: 1 });
     // Both sides carry a real (non-zero) object id here — the gitlink mode alone must skip them.
@@ -85,9 +93,9 @@ describe("resolveSnapshotBinaryFiles: boundary — maxFiles", () => {
 
 describe("resolveSnapshotBinaryFiles: hostile — binary masquerading as text", () => {
   it("reclassifies a NUL-bearing blob as binary and zeroes its numstat statistics", async () => {
-    const runner: GitProcessRunner = async (args) => {
-      if (args[2] === OLD_OBJECT) return ok("plain text\n");
-      if (args[2] === NEW_OBJECT) return ok("binary\0payload");
+    const runner: GitProcessRunner = (args) => {
+      if (args[2] === OLD_OBJECT) return Promise.resolve(ok("plain text\n"));
+      if (args[2] === NEW_OBJECT) return Promise.resolve(ok("binary\0payload"));
       throw new Error(`unexpected invocation: ${args.join(" ")}`);
     };
     const entry = meta({ additions: 4, deletions: 1, binary: false });
@@ -98,12 +106,15 @@ describe("resolveSnapshotBinaryFiles: hostile — binary masquerading as text", 
   });
 
   it("recovers true statistics for content force-marked binary by .gitattributes", async () => {
-    const patch = ["diff --git a/file.bin b/file.bin", "@@ -0,0 +1,2 @@", "+line one", "+line two"].join(
-      "\n",
-    );
-    const runner: GitProcessRunner = async (args) => {
-      if (args[0] === "cat-file") return ok("plain text, no NUL byte here\n");
-      if (args.includes("diff")) return ok(patch);
+    const patch = [
+      "diff --git a/file.bin b/file.bin",
+      "@@ -0,0 +1,2 @@",
+      "+line one",
+      "+line two",
+    ].join("\n");
+    const runner: GitProcessRunner = (args) => {
+      if (args[0] === "cat-file") return Promise.resolve(ok("plain text, no NUL byte here\n"));
+      if (args.includes("diff")) return Promise.resolve(ok(patch));
       throw new Error(`unexpected invocation: ${args.join(" ")}`);
     };
     const entry = meta({ additions: 0, deletions: 0, binary: true });
@@ -116,26 +127,27 @@ describe("resolveSnapshotBinaryFiles: hostile — binary masquerading as text", 
 
 describe("resolveSnapshotBinaryFiles: malformed statistics-repair lane", () => {
   it("fails closed when the repair patch has no section for a reclassified entry", async () => {
-    const runner: GitProcessRunner = async (args) => {
-      if (args[0] === "cat-file") return ok("plain text, no NUL byte here\n");
-      if (args.includes("diff")) return ok("");
+    const runner: GitProcessRunner = (args) => {
+      if (args[0] === "cat-file") return Promise.resolve(ok("plain text, no NUL byte here\n"));
+      if (args.includes("diff")) return Promise.resolve(ok(""));
       throw new Error(`unexpected invocation: ${args.join(" ")}`);
     };
     const entry = meta({ binary: true });
-    await expect(resolveSnapshotBinaryFiles(reader(runner), [entry], 10, REVISIONS)).rejects.toThrow(
-      "Git snapshot read failed",
-    );
+    await expect(
+      resolveSnapshotBinaryFiles(reader(runner), [entry], 10, REVISIONS),
+    ).rejects.toThrow("Git snapshot read failed");
   });
 
   it("fails closed when the repair patch's own header cannot be parsed", async () => {
-    const runner: GitProcessRunner = async (args) => {
-      if (args[0] === "cat-file") return ok("plain text, no NUL byte here\n");
-      if (args.includes("diff")) return ok("diff --git badheader\n@@ -0,0 +1,1 @@\n+x");
+    const runner: GitProcessRunner = (args) => {
+      if (args[0] === "cat-file") return Promise.resolve(ok("plain text, no NUL byte here\n"));
+      if (args.includes("diff"))
+        return Promise.resolve(ok("diff --git badheader\n@@ -0,0 +1,1 @@\n+x"));
       throw new Error(`unexpected invocation: ${args.join(" ")}`);
     };
     const entry = meta({ binary: true });
-    await expect(resolveSnapshotBinaryFiles(reader(runner), [entry], 10, REVISIONS)).rejects.toThrow(
-      "Git snapshot read failed",
-    );
+    await expect(
+      resolveSnapshotBinaryFiles(reader(runner), [entry], 10, REVISIONS),
+    ).rejects.toThrow("Git snapshot read failed");
   });
 });

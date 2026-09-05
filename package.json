@@ -151,6 +151,7 @@
     "check:runtime-toolchain": "node scripts/check-runtime-toolchain.mjs",
     "check:typescript-toolchain": "node scripts/check-typescript-toolchain.mjs",
     "check:git-delivery-evidence": "node scripts/check-git-delivery-evidence.mjs",
+    "check:coding-issue-journey-evidence": "node scripts/check-coding-issue-journey-evidence.mjs",
     "check:git-client-evidence": "node scripts/check-git-client-evidence.mjs",
     "check:ui-i18n": "node scripts/check-ui-i18n-guard.mjs",
     "check:ui-i18n:all": "node scripts/check-ui-i18n-guard.mjs --all",
@@ -232,7 +233,8 @@
     "check:tool-catalog-performance": "node scripts/check-tool-catalog-performance.mjs",
     "generate:tool-catalog": "node scripts/check-tool-catalog-conformance.mjs --write",
     "test:e2e:coding-issue-delivery": "playwright test --config tests/e2e/config/playwright.coding-issue-delivery.config.ts --project=chromium",
-    "test:e2e:coding-issue-ci": "playwright test --config tests/e2e/config/playwright.coding-issue-ci.config.ts --project=chromium"
+    "test:e2e:coding-issue-ci": "playwright test --config tests/e2e/config/playwright.coding-issue-ci.config.ts --project=chromium",
+    "test:e2e:coding-issue-journey:live": "playwright test --config tests/e2e/config/playwright.coding-issue-journey.config.ts --project=chromium"
   },
   "overrides": {
     "aria-query": "5.3.2",

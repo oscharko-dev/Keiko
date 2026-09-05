@@ -1,0 +1,25 @@
+# Gitleaks configuration for the `Secret scan` CI job (`gitleaks git --log-opts=<base>..<head>`).
+#
+# The scan stays fail-closed with the default rule set. The single allowlist below is scoped to two
+# immutable historical commits on the epic #3384 integration branch whose diffs carried
+# secret-SHAPED test fixtures (a synthetic `api_key=` title the PR-template validator must refuse
+# and a synthetic private-key block the search redaction lane must strip). No real credential was
+# involved; the fixtures were rewritten to be assembled at runtime so later commits carry no
+# literal, and `dev` branch protection forbids rewriting the two commits. Every other commit is
+# scanned unchanged.
+
+title = "Keiko secret scan"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Epic #3384: synthetic secret-shaped test fixtures in two immutable history commits (draftDeliveryTemplate.test.ts, codingRepositorySearch.test.ts); rewritten at runtime afterwards"
+commits = [
+  "93a328952b5507fd63cd7c542ec730f0b1828b6d",
+  "1fbd1173f3db50faf1988ad0e17a72b00e5f0273",
+]
+paths = [
+  '''packages/keiko-server/src/gitDelivery/draftDeliveryTemplate\.test\.ts''',
+  '''packages/keiko-workspace/src/codingRepositorySearch\.test\.ts''',
+]

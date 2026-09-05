@@ -135,6 +135,19 @@ function journeyReaderRoot(deps: JourneyReadCompositionDeps, repositoryId: strin
 }
 
 /**
+ * The registered checkout root for one content-free repository identity, or undefined when no
+ * registered project resolves to it. Shared by `createProductionJourneyReader` and the journey
+ * observation route's read-only description-status lookup so both resolve the SAME checkout the
+ * per-checkout GitHub-reader grant was evaluated for.
+ */
+export function resolveJourneyCheckoutRoot(
+  deps: JourneyReadCompositionDeps,
+  repositoryId: string,
+): string | undefined {
+  return journeyReaderRoot(deps, repositoryId);
+}
+
+/**
  * Builds a read-only journey reader admitted by the per-checkout GitHub-reader grant alone — never
  * the run-bound mutation authority `DraftDeliveryFactory.journeyReader` above wires for an active
  * draft-delivery run. The journey observation route (#3389 AC5/AC6) uses this so refresh and

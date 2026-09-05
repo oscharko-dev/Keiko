@@ -63,9 +63,7 @@ const sortedByName = (values) =>
  * without duplicating this formula in a test-owned copy (AGENTS.md §7 fixture rule).
  */
 export function legacyProjectionDiffers(definitions, legacyDefinitions) {
-  return (
-    canonicalise(sortedByName(definitions)) !== canonicalise(sortedByName(legacyDefinitions))
-  );
+  return canonicalise(sortedByName(definitions)) !== canonicalise(sortedByName(legacyDefinitions));
 }
 export async function checkToolCatalogConformance(root = process.cwd()) {
   const errors = checkToolCatalogInventory(root);
@@ -104,6 +102,75 @@ export async function checkToolCatalogMigrationCloseout(root = process.cwd()) {
         `migration inventory not empty at closeout: ${String(migration.inventory.length)} row(s) remain`,
       ];
 }
+const CATALOG_NEGATIVE_FIXTURES_DIR = "tests/architecture/fixtures/tool-catalog-negatives";
+// One row per attack class named by #3415 (issue-3415, AC2). Each fixture module derives its
+// base data from the real producer (see the shared builder's header comment) and applies exactly
+// one named mutation; `cases` lists every exported attempt function on that module together with
+// the specific `CatalogFailureReason` the real producer must reject it with, so a fixture that
+// stops throwing (a regression in the producer) AND a fixture that throws for the WRONG reason
+// (a different, unintended rule catching it) both fail this gate.
+const CATALOG_SEMANTIC_NEGATIVE_FIXTURES = Object.freeze([
+  { file: "missing-handler.mjs", cases: [{ fn: "attempt", reason: "invalid-shape" }] },
+  { file: "orphan-handler.mjs", cases: [{ fn: "attempt", reason: "invalid-identity" }] },
+  { file: "duplicate-handler.mjs", cases: [{ fn: "attempt", reason: "duplicate-identity" }] },
+  {
+    file: "version-mismatched-handler.mjs",
+    cases: [{ fn: "attempt", reason: "incompatible-version" }],
+  },
+  {
+    file: "alias-collision-or-confusable.mjs",
+    cases: [
+      { fn: "attemptCollision", reason: "duplicate-identity" },
+      { fn: "attemptConfusable", reason: "invalid-identity" },
+    ],
+  },
+  { file: "projection-drift.mjs", cases: [{ fn: "attempt", reason: "invalid-identity" }] },
+  { file: "policy-effect-mismatch.mjs", cases: [{ fn: "attempt", reason: "ambiguous-effects" }] },
+  {
+    file: "stale-downgraded-compatibility.mjs",
+    cases: [
+      { fn: "attemptStale", reason: "expired-compatibility" },
+      { fn: "attemptDowngraded", reason: "invalid-compatibility" },
+    ],
+  },
+]);
+/**
+ * Runs the full catalog-semantic negative-fixture matrix (#3415 AC2) against the real producer.
+ * Complements `checkToolCatalogConformanceNegatives` (AST-level literal-registry detection):
+ * this validates the pure compiler's own invariants (descriptor, profile, projection,
+ * compatibility) plus the legacy-table drift comparator this script owns.
+ */
+export async function checkToolCatalogSemanticNegatives(root = process.cwd()) {
+  const producer = await loadToolCatalogProducer(root);
+  const fixturesDir = join(root, CATALOG_NEGATIVE_FIXTURES_DIR);
+  const errors = [];
+  for (const { file, cases } of CATALOG_SEMANTIC_NEGATIVE_FIXTURES) {
+    const fixture = await import(pathToFileURL(join(fixturesDir, file)).href);
+    for (const { fn, reason } of cases) {
+      try {
+        fixture[fn](producer);
+        errors.push(`tool catalog negative fixture escaped: ${file}#${fn}`);
+      } catch (error) {
+        const actual =
+          error !== null && typeof error === "object" && "reason" in error
+            ? error.reason
+            : undefined;
+        if (actual !== reason)
+          errors.push(
+            `tool catalog negative fixture ${file}#${fn} rejected with reason ` +
+              `"${String(actual)}", expected "${reason}"`,
+          );
+      }
+    }
+  }
+  const legacyFixture = await import(
+    pathToFileURL(join(fixturesDir, "legacy-table-reintroduction.mjs")).href
+  );
+  const legacyResult = await legacyFixture.attempt(producer, root, legacyProjectionDiffers);
+  if (legacyResult.rejectedByComparison !== true)
+    errors.push("tool catalog negative fixture escaped: legacy-table-reintroduction.mjs#attempt");
+  return errors;
+}
 export function checkToolCatalogConformanceNegatives() {
   const outside = "packages/keiko-server/src/unregistered-tools.ts";
   const sources = [
@@ -132,6 +199,7 @@ if (isMainModule(import.meta.url)) {
   const errors = [
     ...(await checkToolCatalogConformance()),
     ...checkToolCatalogConformanceNegatives(),
+    ...(await checkToolCatalogSemanticNegatives()),
     ...(closeout ? await checkToolCatalogMigrationCloseout() : []),
   ];
   for (const error of errors) console.error(`tool-catalog-conformance: ${error}`);

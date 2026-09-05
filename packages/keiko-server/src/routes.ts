@@ -381,6 +381,7 @@ import { GIT_DELIVERY_PR_ROUTE_GROUP } from "./gitDelivery/prRoutes.js";
 import { GIT_DELIVERY_MERGE_ROUTE_GROUP } from "./gitDelivery/mergeRoutes.js";
 import { GIT_DELIVERY_SYNC_ROUTE_GROUP } from "./gitDelivery/syncRoutes.js";
 import { GIT_AGENT_OPERATION_ROUTE_GROUP } from "./gitDelivery/agentOperationsRoutes.js";
+import { GIT_DELIVERY_JOURNEY_ROUTE_GROUP } from "./gitDelivery/journeyRoutes.js";
 import { handleClientDiagnosticIngest } from "./client-diagnostics-routes.js";
 
 export interface ApiError {
@@ -1510,6 +1511,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // #1577 agent repository operations: typed facade over existing Git read and governed delivery
   // handlers. No shell/provider authority is introduced; command-shaped payloads are denied first.
   ...GIT_AGENT_OPERATION_ROUTE_GROUP,
+  // #3389 read-only journey observation/reconciliation: admitted by the per-checkout GitHub-reader
+  // grant alone, never gitDeliveryAuthorityGate, so refresh keeps working after the originating run
+  // has terminated. Never mints merge or issue-close authority.
+  ...GIT_DELIVERY_JOURNEY_ROUTE_GROUP,
   // #2256 left the browser-owned Authority Envelope confirmation/execution routes unmounted;
   // #2958 (KEIKO-0115/KEIKO-0135) deleted them outright, together with the policy and approval
   // store behind them, so there is no second front door left to mount by accident. The one

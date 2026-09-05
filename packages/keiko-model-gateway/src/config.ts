@@ -1763,7 +1763,9 @@ function parseGatewayBrandingConfig(raw: unknown): GatewayBrandingConfig | undef
  * publicly hosted HTTPS SVG"; an absent or invalid `branding.logoUrl` yields `{}`, which the
  * renderer's own fallback turns into text-only "by Keiko" attribution — never a thrown error.
  */
-export function resolvePrDescriptionBrandingFromConfig(config: GatewayConfig): PrDescriptionBranding {
+export function resolvePrDescriptionBrandingFromConfig(
+  config: GatewayConfig,
+): PrDescriptionBranding {
   const logoUrl = config.branding?.logoUrl;
   if (logoUrl === undefined) {
     return {};

@@ -6,7 +6,10 @@ import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
 
-import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  codingWorkbenchPolicyEffectFor,
+  resolveEffectiveCodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { validateCodingWorkbenchIssueBinding } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 
 import type {
@@ -57,9 +60,25 @@ export interface ProductionWorkspaceAuthorityInput {
     | undefined;
 }
 
-// The base workspace action classes, plus network-egress only when research egress is activated.
-// Kept in lock-step with the network policy below so validateNetworkPolicyActionClassConsistency
-// holds (mode !== "deny-all" iff the action classes include network-egress).
+// ADR-0138 D2 / epic #3384 correction 5: the "delivery" resource scope is never `denied` for any
+// mode — it is `approval-required` in every one of them, including Full access — so withholding the
+// `source-control.*` connector scopes and the `delivery-substrate` action class below
+// `autonomous-delivery` cannot be what stands between a lower mode and an unapproved delivery
+// effect; approval is that control (`runBoundAuthority.ts`'s mode/redemption decision). Deriving the
+// grant from the matrix, instead of hardcoding it to one mode, means a future matrix edit that
+// actually introduced a `denied` cell here would withhold the scope automatically. Reads uniformly
+// at "medium": every risk tier resolves identically for a fixed (mode, scope) pair (ADR-0138 D2).
+function deliveryScopeGranted(mode: CodingWorkbenchMode): boolean {
+  return codingWorkbenchPolicyEffectFor(mode, "delivery", "medium") !== "denied";
+}
+
+// The base workspace action classes, plus the delivery-substrate/connector-access pair whenever the
+// matrix does not deny the "delivery" scope for this mode (see `deliveryScopeGranted`), plus
+// network-egress only when research egress is activated. Kept in lock-step with the network policy
+// below so validateNetworkPolicyActionClassConsistency holds (mode !== "deny-all" iff the action
+// classes include network-egress) and with `runtimeConnectorScopes` below so
+// validateConnectorScopeActionClassConsistency holds (connectorScopes non-empty iff action classes
+// include connector-access).
 function runtimeActionClasses(
   mode: CodingWorkbenchMode,
   researchEgressEnabled: boolean | undefined,
@@ -70,9 +89,7 @@ function runtimeActionClasses(
     "verification",
   ];
   if (mode !== "governed-assist") actionClasses.push("command-execution");
-  if (mode === "autonomous-delivery") {
-    actionClasses.push("delivery-substrate", "connector-access");
-  }
+  if (deliveryScopeGranted(mode)) actionClasses.push("delivery-substrate", "connector-access");
   if (researchEgressEnabled === true || mode === "autonomous-delivery") {
     actionClasses.push("network-egress");
   }
@@ -87,6 +104,38 @@ export const DELIVERY_CONNECTOR_SCOPES: readonly CodingWorkbenchConnectorScope[]
   "source-control.read",
   "source-control.write",
 ];
+
+// Mirrors `deliveryScopeGranted` above: the source-control connector scopes are the Git-delivery
+// authority's own scope (used by both local workspace-contained writes — stage/unstage/branch-create
+// /branch-switch — and delivery-scoped writes — commit/push/pull-request/merge — see
+// `gitOperationRequirements.ts`), so they follow the same not-denied rule rather than being withheld
+// until `autonomous-delivery`. `productionGitDeliveryModeGrants` below is the single per-mode
+// projection both this module and `gitDelivery/runBoundAuthority.test-support.ts`'s fixture derive
+// from.
+function runtimeConnectorScopes(mode: CodingWorkbenchMode): readonly CodingWorkbenchConnectorScope[] {
+  return deliveryScopeGranted(mode) ? DELIVERY_CONNECTOR_SCOPES : [];
+}
+
+export interface ProductionGitDeliveryModeGrants {
+  readonly actionClasses: readonly CodingWorkbenchActionClass[];
+  readonly connectorScopes: readonly CodingWorkbenchConnectorScope[];
+}
+
+// The smallest pure per-mode projection of what this module mints, exported so a Git-delivery test
+// fixture can derive the exact production shape instead of restating the formula above (AGENTS.md
+// §7 / epic #3384 correction 5, item 2: `runBoundAuthority.test-support.ts`'s
+// `productionScopedGitDeliveryAuthority` calls this rather than keeping its own copy). Holds
+// `researchEgressEnabled` at its production default (`false`) — the network-egress action class is
+// not part of the Git-delivery admission surface this projects for (network policy stays a separate,
+// intentionally mode-gated fixture concern owned by #3387).
+export function productionGitDeliveryModeGrants(
+  mode: CodingWorkbenchMode,
+): ProductionGitDeliveryModeGrants {
+  return {
+    actionClasses: runtimeActionClasses(mode, false),
+    connectorScopes: runtimeConnectorScopes(mode),
+  };
+}
 
 function runtimeNetworkPolicy(
   mode: CodingWorkbenchMode,
@@ -163,7 +212,7 @@ function contextFromActive(
     deploymentCeiling: input.deploymentCeiling,
     runtimeSource: runtimeProfile.runtimeSource,
     actionClasses: runtimeActionClasses(effectiveMode, input.researchEgressEnabled),
-    connectorScopes: effectiveMode === "autonomous-delivery" ? DELIVERY_CONNECTOR_SCOPES : [],
+    connectorScopes: runtimeConnectorScopes(effectiveMode),
     modelProfile: {
       profileId: runtimeProfile.profileId,
       source: runtimeProfile.modelSource,

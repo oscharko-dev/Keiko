@@ -3829,6 +3829,7 @@ export type {
   GitDeliveryPushInputs,
   GitDeliveryPrCreateInputs,
   GitDeliveryPrUpdateInputs,
+  GitDeliveryPrDescriptionApplyInputs,
   GitDeliveryMergeInputs,
   GitDeliveryAbortInputs,
   GitDeliveryRecoveryInputs,

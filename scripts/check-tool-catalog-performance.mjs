@@ -85,7 +85,12 @@ export function buildSyntheticRegistrationSet(producer, toolCount) {
         actionMapping: [{ action: alias, effects: ["workspace-read"] }],
         policyReferences: ["workspace-read"],
         handlerRequirement: { id: SYNTHETIC_HANDLER_ID, contractVersion: 1 },
-        bounds: { maxArgumentBytes: 1024, maxResultBytes: 1024, maxResultCount: 1, maxDurationMs: 1000 },
+        bounds: {
+          maxArgumentBytes: 1024,
+          maxResultBytes: 1024,
+          maxResultCount: 1,
+          maxDurationMs: 1000,
+        },
         idempotency: "read-only",
         cancellation: "cooperative",
       }),
@@ -119,7 +124,10 @@ function toolCatalogCases(producer) {
 }
 /** Comparisons per sample are fixed by this budget, not by wall-clock duration. */
 export function deriveLookupIterations(toolCount) {
-  return Math.max(1, Math.floor(TOOL_CATALOG_PERFORMANCE_PROCEDURE.lookupOperationBudget / toolCount));
+  return Math.max(
+    1,
+    Math.floor(TOOL_CATALOG_PERFORMANCE_PROCEDURE.lookupOperationBudget / toolCount),
+  );
 }
 function measure(producer, testCase, clock) {
   const start = clock();
@@ -147,37 +155,38 @@ function measure(producer, testCase, clock) {
     projectionDigest: projection.projectionDigest,
   };
 }
-export function validateToolCatalogPerformanceSamples(samples) {
+function sampleErrors(sample, first) {
   const errors = [];
+  if (
+    ![sample.coldCompileMs, sample.lookupBatchMs].every(
+      (value) => Number.isFinite(value) && value > 0,
+    )
+  )
+    errors.push("invalid catalog timing");
+  // Never a hardcoded tool count: every sample of one measurement run must agree with the
+  // FIRST sample's own toolCount (self-consistency), not with a number restated here. A
+  // producer that grows the legacy profile (new native extensions, more legacy tools) or adds
+  // a profile this script measures moves `first.toolCount` with it automatically.
+  if (
+    !Number.isSafeInteger(sample.toolCount) ||
+    sample.toolCount <= 0 ||
+    sample.toolCount !== first.toolCount
+  )
+    errors.push("catalog tool count is not self-consistent across samples");
+  if (sample.lookups !== deriveLookupIterations(sample.toolCount) * sample.toolCount)
+    errors.push("incomplete catalog fixture work");
+  for (const key of ["catalogRevision", "projectionDigest"])
+    if (!/^[a-f0-9]{64}$/u.test(sample[key]) || sample[key] !== first[key])
+      errors.push("catalog performance identity mismatch");
+  return errors;
+}
+export function validateToolCatalogPerformanceSamples(samples) {
   const count =
     TOOL_CATALOG_PERFORMANCE_PROCEDURE.batches * TOOL_CATALOG_PERFORMANCE_PROCEDURE.samplesPerBatch;
   if (!Array.isArray(samples) || samples.length !== count)
     return ["catalog performance requires thirty samples"];
   const [first] = samples;
-  for (const sample of samples) {
-    if (
-      ![sample.coldCompileMs, sample.lookupBatchMs].every(
-        (value) => Number.isFinite(value) && value > 0,
-      )
-    )
-      errors.push("invalid catalog timing");
-    // Never a hardcoded tool count: every sample of one measurement run must agree with the
-    // FIRST sample's own toolCount (self-consistency), not with a number restated here. A
-    // producer that grows the legacy profile (new native extensions, more legacy tools) or adds
-    // a profile this script measures moves `first.toolCount` with it automatically.
-    if (
-      !Number.isSafeInteger(sample.toolCount) ||
-      sample.toolCount <= 0 ||
-      sample.toolCount !== first.toolCount
-    )
-      errors.push("catalog tool count is not self-consistent across samples");
-    if (sample.lookups !== deriveLookupIterations(sample.toolCount) * sample.toolCount)
-      errors.push("incomplete catalog fixture work");
-    for (const key of ["catalogRevision", "projectionDigest"])
-      if (!/^[a-f0-9]{64}$/u.test(sample[key]) || sample[key] !== first[key])
-        errors.push("catalog performance identity mismatch");
-  }
-  return errors;
+  return samples.flatMap((sample) => sampleErrors(sample, first));
 }
 function measureCase(producer, testCase, clock) {
   for (let index = 0; index < TOOL_CATALOG_PERFORMANCE_PROCEDURE.warmups; index += 1)
@@ -222,7 +231,10 @@ export async function measureToolCatalogPerformance(
 ) {
   const producer = await loadToolCatalogProducer(root);
   const cases = Object.fromEntries(
-    toolCatalogCases(producer).map((testCase) => [testCase.id, measureCase(producer, testCase, clock)]),
+    toolCatalogCases(producer).map((testCase) => [
+      testCase.id,
+      measureCase(producer, testCase, clock),
+    ]),
   );
   const overflow = measureToolCatalogOverflowRejection(producer);
   if (!overflow.rejected || overflow.reason !== "input-bound")

@@ -1,0 +1,59 @@
+{
+  "kind": "code-task-qualification-manifest",
+  "schemaVersion": 1,
+  "epicIssue": 3384,
+  "childIssue": 3390,
+  "sourceCommitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "sourceTreeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "runtimeIdentity": "opencode-1.17.17",
+  "modelIdentity": "gateway-profile:coding-issue-journey",
+  "fixtureRevision": "controlled-fixture-rev-1",
+  "rubricDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "issueReference": {
+    "outcome": "known",
+    "value": "controlled/repo#101"
+  },
+  "pullRequestReference": {
+    "outcome": "known",
+    "value": "controlled/repo#102"
+  },
+  "runReference": {
+    "outcome": "known",
+    "value": "run-20260904-01"
+  },
+  "readinessSnapshotDigest": {
+    "outcome": "known",
+    "value": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "journeyOutcomeDigest": {
+    "outcome": "known",
+    "value": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "auditReference": {
+    "outcome": "known",
+    "value": "keiko-issue-audit-20260904"
+  },
+  "auditDigest": {
+    "outcome": "known",
+    "value": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "knownLimitations": ["packaged Windows x64 reference run is a documented external dependency"],
+  "scenarios": [
+    {
+      "scenarioId": "issue-to-pr-full-access",
+      "evidenceClass": "playwright-journey",
+      "platform": "macos-arm64",
+      "provenance": "real-model",
+      "outcome": "passed",
+      "recordedAt": "2026-09-04T12:00:00Z",
+      "blockedReason": {
+        "outcome": "absent"
+      },
+      "artifactDigests": ["4daef1c4bbef5bda017747aa46911f5a3dff5adf8b48fac83c1bc787d572f09e"],
+      "receiptDigest": {
+        "outcome": "known",
+        "value": "4daef1c4bbef5bda017747aa46911f5a3dff5adf8b48fac83c1bc787d572f09e"
+      }
+    }
+  ]
+}

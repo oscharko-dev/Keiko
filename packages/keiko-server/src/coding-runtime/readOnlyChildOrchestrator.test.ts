@@ -8,7 +8,10 @@ import type {
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchRuntimeEvent,
 } from "@oscharko-dev/keiko-contracts";
-import { createReadOnlyChildOrchestrator } from "./readOnlyChildOrchestrator.js";
+import {
+  createReadOnlyChildOrchestrator,
+  ReadOnlyChildTrustViolationError,
+} from "./readOnlyChildOrchestrator.js";
 import type {
   ReadOnlyChildBudgetCharger,
   ReadOnlyChildCancellationSource,
@@ -409,6 +412,85 @@ describe("createReadOnlyChildOrchestrator", () => {
     expect(eventOfKind(events, "child-run-completed")).toMatchObject({
       auxiliaryOutcome: "unavailable",
     });
+  });
+
+  // Residual finding from the #3407 catalog migration review: the child's mandatory tool-catalog
+  // bind now rejects a fabricated tool call or malformed arguments strictly before any tool -- and
+  // so before any workspace read -- ever executes (productionReadOnlyChildRunner.test.ts: "fails
+  // closed when the model calls a tool it was never given" / "fails closed on a non-string
+  // relativePath"). That refusal never reaches this orchestrator's gate, so a runner MUST signal it
+  // with `ReadOnlyChildTrustViolationError` rather than an opaque throw -- a trust-boundary refusal
+  // is a closed `denied`, never the `unavailable` this file reserves for lost infrastructure.
+  it("classifies a fabricated tool call as denied, not unavailable, charging nothing", async () => {
+    let charges = 0;
+    const charger: ReadOnlyChildBudgetCharger = {
+      chargeParentToolCall: () => {
+        charges += 1;
+        return true;
+      },
+    };
+    const runner: ReadOnlyChildRunner = {
+      run: () => Promise.reject(new ReadOnlyChildTrustViolationError("fabricated-tool-denied")),
+    };
+    const { events, deps } = harness(runner, { charger });
+    const outcome = await createReadOnlyChildOrchestrator(deps).handleChildRequest(
+      childRequest(),
+      contextFor(),
+    );
+    expect(outcome).toMatchObject({ status: "denied", reasonCode: "fabricated-tool-denied" });
+    // No tool call was ever charged against the parent budget -- nothing reached the point where a
+    // read could have touched the workspace.
+    expect(charges).toBe(0);
+    expect(eventOfKind(events, "child-run-completed")).toMatchObject({
+      auxiliaryOutcome: "denied",
+      childResultCount: 0,
+    });
+  });
+
+  it("classifies malformed tool arguments as denied, not unavailable, charging nothing", async () => {
+    let charges = 0;
+    const charger: ReadOnlyChildBudgetCharger = {
+      chargeParentToolCall: () => {
+        charges += 1;
+        return true;
+      },
+    };
+    const runner: ReadOnlyChildRunner = {
+      run: () =>
+        Promise.reject(new ReadOnlyChildTrustViolationError("malformed-tool-arguments-denied")),
+    };
+    const { events, deps } = harness(runner, { charger });
+    const outcome = await createReadOnlyChildOrchestrator(deps).handleChildRequest(
+      childRequest(),
+      contextFor(),
+    );
+    expect(outcome).toMatchObject({
+      status: "denied",
+      reasonCode: "malformed-tool-arguments-denied",
+    });
+    expect(charges).toBe(0);
+    expect(eventOfKind(events, "child-run-completed")).toMatchObject({
+      auxiliaryOutcome: "denied",
+      childResultCount: 0,
+    });
+  });
+
+  it("still latches a governance terminal reached before a trust-violation-shaped throw", async () => {
+    // If the gate already latched a real governance terminal (e.g. a parent stop) before the
+    // runner rejects, that latched terminal is authoritative -- never overridden by the error the
+    // runner happened to throw on its way out.
+    const runner: ReadOnlyChildRunner = {
+      run: (input) => {
+        input.gate({ toolClass: "workspace-write" });
+        return Promise.reject(new ReadOnlyChildTrustViolationError("fabricated-tool-denied"));
+      },
+    };
+    const { deps } = harness(runner);
+    const outcome = await createReadOnlyChildOrchestrator(deps).handleChildRequest(
+      childRequest(),
+      contextFor(),
+    );
+    expect(outcome).toMatchObject({ status: "denied", reasonCode: "workspace-write-denied" });
   });
 
   it("emits a content-free redacted diagnostic tying the opaque runner fault to an event id", async () => {

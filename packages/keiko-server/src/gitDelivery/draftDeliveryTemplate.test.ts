@@ -18,6 +18,10 @@ import {
   DRAFT_DELIVERY_TEMPLATE_DIRECTORY_MAX_ENTRIES,
 } from "./draftDeliveryTemplate.js";
 
+// Secret-shaped fixture assembled at runtime: the validator must refuse this exact shape, but the
+// source tree must not carry a literal that secret scanners flag as a credential.
+const SECRET_SHAPED_TEXT = ["api", "key"].join("_") + "=sk-" + "1234567890".repeat(3);
+
 const roots: string[] = [];
 const issueBinding: CodingWorkbenchIssueBinding = {
   schemaVersion: "1",
@@ -130,7 +134,7 @@ describe("issue-bound default pull request template composition", () => {
     expect(
       resolveDraftDeliveryTemplate({
         ...f.input,
-        title: "api_key=sk-123456789012345678901234567890",
+        title: SECRET_SHAPED_TEXT,
       }),
     ).toEqual({ status: "blocked", reason: "title-invalid" });
   });
@@ -340,7 +344,7 @@ describe("bounded governed template reads", () => {
     new Uint8Array([0xff, 0xff, 0xff]),
     "hidden\u0000payload",
     "unsafe\u202epayload",
-    "api_key=sk-123456789012345678901234567890",
+    SECRET_SHAPED_TEXT,
   ])("refuses undecodable, hidden or secret-bearing text without rewriting it", async (text) => {
     const f = await fixture();
     await f.write("pull_request_template.md", text);

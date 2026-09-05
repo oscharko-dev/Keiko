@@ -13,9 +13,7 @@ export const ATTACK_CLASS = "legacy-table-reintroduction";
 export const EXPECTED_REASON = "legacy-projection-drift";
 
 export async function attempt(producer, root, legacyProjectionDiffers) {
-  const legacy = await import(
-    new URL(`file://${root}/packages/keiko-tools/dist/schemas.js`).href
-  );
+  const legacy = await import(new URL(`file://${root}/packages/keiko-tools/dist/schemas.js`).href);
   const catalog = composedProductionCatalog(producer);
   const definitions = producer.gatewayToolDefinitions(catalog, { id: "legacy-native", version: 1 });
   const reintroduced = legacy.TOOL_DEFINITIONS.map((tool, index) =>

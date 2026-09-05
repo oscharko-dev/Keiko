@@ -26,7 +26,10 @@ import {
   countImportPolicyViolationsByRule,
 } from "./check-import-policy.mjs";
 import { checkGovernedToolContractNegatives } from "./check-governed-tool-contract.mjs";
-import { checkToolCatalogConformanceNegatives } from "./check-tool-catalog-conformance.mjs";
+import {
+  checkToolCatalogConformanceNegatives,
+  checkToolCatalogSemanticNegatives,
+} from "./check-tool-catalog-conformance.mjs";
 import { runBareSpecifierVisibilityProbe } from "./lib/bare-specifier-visibility-probe.mjs";
 
 const RULES_FILE = ".dependency-cruiser.cjs";
@@ -204,6 +207,7 @@ if (missingDist.length > 0) {
 const contractNegativeErrors = [
   ...checkGovernedToolContractNegatives(process.cwd()),
   ...checkToolCatalogConformanceNegatives(),
+  ...(await checkToolCatalogSemanticNegatives(process.cwd())),
 ];
 if (contractNegativeErrors.length > 0) {
   for (const error of contractNegativeErrors) console.error(`arch-check-negative: ${error}`);

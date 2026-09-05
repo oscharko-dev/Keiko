@@ -1,0 +1,264 @@
+// Read-only Git delivery journey observation route (#3389 AC5/AC6, epic #3384).
+//
+//   * POST /api/git-delivery/journey/refresh — READ-ONLY. Reconciles the observed GitHub facts for
+//       one accepted draft delivery run's confirmed pull request: canonical PR identity, merged /
+//       draft / base / head state, required approvals, unresolved review conversations and the bound
+//       issue's actual open/closed state, joined with the existing CI readiness projection and the
+//       current PR-description status. Produces a JourneyOutcome or a typed unavailable reason.
+//       Never mutates, never grants merge or issue-close authority.
+//
+// Admitted by the per-checkout GitHub-reader grant alone (`isGitHubIssueReaderAuthorized`, reused
+// through `createProductionJourneyReader`), never `gitDeliveryAuthorityGate` — the run-bound mutation
+// authority a terminated or recovered run no longer holds. Restart/reopen/refresh therefore keeps
+// working without resuming mutation authority (AC6): the accepted draft/PR binding is read from the
+// existing durable `coding_runtime_snapshots` row, and the provider read is admitted by the same
+// persisted read grant every checkout-scoped read already consults.
+//
+// Content-free in evidence: only ids, digests, states, reasons and counts leave the observation on
+// the activity log (JourneyObservationController); the response body carries the typed JourneyOutcome
+// contract, never a raw provider payload.
+
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
+import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
+import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
+import type { UiHandlerDeps } from "../deps.js";
+import { redactEvidenceString } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  createProductionJourneyReader,
+  resolveJourneyCheckoutRoot,
+} from "../coding-runtime/productionDraftDeliveryDependencies.js";
+import {
+  hasOnlyAllowedKeys,
+  isPlainObject,
+  readParsedGitDeliveryBody,
+} from "./requestGuards.js";
+import {
+  JourneyObservationController,
+  type JourneyObservationContext,
+  type JourneyObservationOptions,
+  type JourneyObservationResult,
+} from "./journeyObservationService.js";
+import type { GitJourneyOutcomeStore } from "./journeyOutcome.js";
+import { createPrDescriptionReceiptStore } from "./prDescriptionReceiptStore.js";
+import type { PrDescriptionContext } from "./prDescriptionTypes.js";
+
+// ─── Error envelope ─────────────────────────────────────────────────────────────────────────────
+
+type GitDeliveryJourneyErrorCode =
+  | "GIT_DELIVERY_JOURNEY_BAD_REQUEST"
+  | "GIT_DELIVERY_JOURNEY_PAYLOAD_TOO_LARGE";
+
+const SAFE_MESSAGES: Readonly<Record<GitDeliveryJourneyErrorCode, string>> = {
+  GIT_DELIVERY_JOURNEY_BAD_REQUEST: "The request body is not a valid journey observation request.",
+  GIT_DELIVERY_JOURNEY_PAYLOAD_TOO_LARGE: "The journey observation request exceeds the maximum size.",
+};
+
+function errResult(status: number, code: GitDeliveryJourneyErrorCode): RouteResult {
+  return { status, body: { error: { code, message: SAFE_MESSAGES[code] } } };
+}
+
+// ─── Request parsing ────────────────────────────────────────────────────────────────────────────
+
+const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set(["schemaVersion", "runId"]);
+const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+
+function parseRunId(value: unknown): string | undefined {
+  if (!isPlainObject(value) || !hasOnlyAllowedKeys(value, TOP_LEVEL_KEYS)) return undefined;
+  if (value.schemaVersion !== "1") return undefined;
+  const { runId } = value;
+  return typeof runId === "string" && RUN_ID_PATTERN.test(runId) ? runId : undefined;
+}
+
+function unavailableResult(reason: Extract<JourneyObservationResult, { status: "unavailable" }>["reason"]): RouteResult {
+  return { status: 200, body: { status: "unavailable", reason } satisfies JourneyObservationResult };
+}
+
+// ─── Description-status read (#3389 AC9) ───────────────────────────────────────────────────────
+
+/**
+ * Reads the current PR-description status through the existing receipt store read hook. Never
+ * generates, refines or applies a description — a missing or unreadable receipt is a closed
+ * "unavailable" fact (mapped to JourneyOutcome's own "description-unavailable" reason), never a
+ * fabricated current state.
+ */
+function readDescriptionStatus(
+  deps: UiHandlerDeps,
+  workspace: WorkspaceInfo,
+  repository: string,
+  prNumber: number,
+  correlationId: string,
+): PrDescriptionApplicationStatus | null {
+  const store = createPrDescriptionReceiptStore({
+    evidenceStore: deps.evidenceStore,
+    redact: (value: string): string => redactEvidenceString(deps.redactor, value),
+  });
+  const context: PrDescriptionContext = {
+    workspace,
+    repository,
+    prNumber,
+    accessScope: {},
+    // A read-only lookup mints no authority of its own; this digest only satisfies the receipt
+    // store's shape guard (a valid 64-hex string) and is never compared against a real authority.
+    authorityDigest: sha256Hex(
+      canonicalise({ domain: "keiko-journey-description-read-v1", repository, prNumber }),
+    ),
+    correlationId,
+    stillAuthorized: (): boolean => true,
+  };
+  const read = store.readStatus(context);
+  return read.ok && read.status !== undefined ? read.status : null;
+}
+
+function contentFreeReadWorkspace(root: string): WorkspaceInfo {
+  return {
+    root,
+    selectedRoot: root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
+}
+
+// ─── Options (test-only override seam, mirrors GitDeliveryPrRouteOptions) ─────────────────────
+
+export interface GitDeliveryJourneyRouteOptions {
+  readonly reader?: JourneyObservationOptions["reader"];
+  readonly readiness?: JourneyObservationOptions["readiness"];
+  readonly description?: JourneyObservationOptions["description"];
+  /**
+   * Durable CAS projection (#3389 AC6). Production composition does not yet supply this — the
+   * SQLite-backed `createGitJourneyOutcomeStore` (journeyOutcome.ts) is implemented and unit-tested,
+   * but reaching the live `coding_runtime_snapshots` database from a route requires a small addition
+   * to `codingRuntimeSnapshotStore.ts` exposing it the same way `ciReadiness`/`ciRepairBudget` already
+   * are (out of this change's write scope; see the delivery report). Until then, an observation
+   * always records successfully and durability across a process restart is proven at the store's own
+   * unit level, not yet through this route.
+   */
+  readonly outcomes?: GitJourneyOutcomeStore;
+}
+
+function readerFor(
+  deps: UiHandlerDeps,
+  options: GitDeliveryJourneyRouteOptions,
+  repositoryId: string,
+): JourneyObservationOptions["reader"] {
+  return (
+    options.reader ??
+    ((context): ReturnType<typeof createProductionJourneyReader> =>
+      createProductionJourneyReader(deps, {
+        repositoryId,
+        correlationId: context.correlationId,
+        ...(context.signal === undefined ? {} : { signal: context.signal }),
+      }))
+  );
+}
+
+function readinessFor(
+  options: GitDeliveryJourneyRouteOptions,
+  readiness: ReadinessSnapshot | undefined,
+): JourneyObservationOptions["readiness"] {
+  return options.readiness ?? ((): Promise<ReadinessSnapshot | null> => Promise.resolve(readiness ?? null));
+}
+
+function descriptionFor(
+  deps: UiHandlerDeps,
+  options: GitDeliveryJourneyRouteOptions,
+  repositoryId: string,
+  repository: string,
+  prNumber: number,
+): JourneyObservationOptions["description"] {
+  if (options.description !== undefined) return options.description;
+  return (context): Promise<PrDescriptionApplicationStatus | null> => {
+    const root = resolveJourneyCheckoutRoot(deps, repositoryId);
+    if (root === undefined) return Promise.resolve(null);
+    return Promise.resolve(
+      readDescriptionStatus(
+        deps,
+        contentFreeReadWorkspace(root),
+        repository,
+        prNumber,
+        context.correlationId,
+      ),
+    );
+  };
+}
+
+// ─── Handler ────────────────────────────────────────────────────────────────────────────────────
+
+async function handleJourneyRefresh(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  options: GitDeliveryJourneyRouteOptions,
+): Promise<RouteResult> {
+  const parsed = await readParsedGitDeliveryBody(
+    ctx.req,
+    () => errResult(413, "GIT_DELIVERY_JOURNEY_PAYLOAD_TOO_LARGE"),
+    () => errResult(400, "GIT_DELIVERY_JOURNEY_BAD_REQUEST"),
+  );
+  if (!parsed.ok) return parsed.result;
+  const runId = parseRunId(parsed.value);
+  if (runId === undefined) return errResult(400, "GIT_DELIVERY_JOURNEY_BAD_REQUEST");
+
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+  const snapshot = deps.codingRuntimeSnapshotStore?.get(runId);
+  const draft = snapshot?.draftDelivery;
+  const issueBinding = snapshot?.issueBinding;
+  if (snapshot === undefined || draft?.pullRequest === undefined || issueBinding === undefined) {
+    return unavailableResult("draft-unavailable");
+  }
+
+  const repositoryId = issueBinding.repositoryId;
+  let context: JourneyObservationContext;
+  const reader = readerFor(deps, options, repositoryId);
+  context = {
+    draft,
+    accessScope: {},
+    correlationId,
+    stillAuthorized: (): boolean => reader(context) !== undefined,
+  };
+  const observationOptions: JourneyObservationOptions = {
+    context: () => context,
+    reader,
+    readiness: readinessFor(options, snapshot.ciReadiness),
+    description: descriptionFor(
+      deps,
+      options,
+      repositoryId,
+      draft.binding.repository,
+      draft.pullRequest.number,
+    ),
+    recordOutcome: (_context, outcome): boolean =>
+      options.outcomes === undefined ? true : options.outcomes.record(outcome),
+    ...(deps.activityLog === undefined ? {} : { activityLog: deps.activityLog }),
+  };
+  const result = await new JourneyObservationController(observationOptions).observe();
+  return { status: 200, body: result };
+}
+
+// ─── Route group ────────────────────────────────────────────────────────────────────────────────
+
+const createHandleJourneyRefresh = (
+  options: GitDeliveryJourneyRouteOptions,
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  return (ctx, deps) => handleJourneyRefresh(ctx, deps, options);
+};
+
+export const createGitDeliveryJourneyRouteGroup = (
+  options: GitDeliveryJourneyRouteOptions = {},
+): readonly RouteDefinition[] => [
+  {
+    method: "POST",
+    pattern: "/api/git-delivery/journey/refresh",
+    handler: createHandleJourneyRefresh(options),
+  },
+];
+
+export const GIT_DELIVERY_JOURNEY_ROUTE_GROUP: readonly RouteDefinition[] =
+  createGitDeliveryJourneyRouteGroup();

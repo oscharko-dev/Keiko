@@ -6,6 +6,7 @@ import type {
   CodingWorkbenchNetworkPolicy,
 } from "@oscharko-dev/keiko-contracts";
 
+import { productionGitDeliveryModeGrants } from "../coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import type { GitDeliveryRunAuthorityPort } from "./runBoundAuthority.js";
 
 const TEST_AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
@@ -51,36 +52,31 @@ const TEST_AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
 };
 
 // Production-realistic per-mode grant, restricted to the three facts `authorizeGitDelivery` reads
-// (actionClasses, connectorScopes, networkPolicy). The actual producer is
-// productionRuntimeWorkspaceAuthority.ts's `runtimeActionClasses` / `DELIVERY_CONNECTOR_SCOPES` /
-// `runtimeNetworkPolicy` (~lines 63-100), but that module lives under `coding-runtime/**` — out of
-// this item's write scope — and exports only `DELIVERY_CONNECTOR_SCOPES`; the other two are private,
-// so they cannot be imported here. This restates their exact, verified per-mode shape (holding
-// `researchEgressEnabled` at its production default of `false`, the case that matters for Git
-// delivery) instead of `permittedGitDeliveryAuthority`'s mode-independent full grant below, which is
-// what let the ADR-0138 D2 admission gap ship undetected: with a fully-permissive fixture, no test
-// could ever observe `hasRequiredScopes` short-circuiting a lower mode before the mode/approval
-// matrix ran. `productionRuntimeWorkspaceAuthority.test.ts` pins the producer's own values directly,
-// so a future divergence between that producer and this restatement is caught there first, not here.
+// (actionClasses, connectorScopes, networkPolicy). `actionClasses` and `connectorScopes` are the
+// exact production per-mode projection: `productionGitDeliveryModeGrants` (exported by
+// productionRuntimeWorkspaceAuthority.ts for exactly this purpose, epic #3384 correction 5 item 2) is
+// the producer both this fixture and the real minting path call, so the two can never diverge
+// silently — a change to the production formula is observed here on the next run, not restated by
+// hand. `network-egress` is not part of that shared projection (it stays a separate, intentionally
+// mode-gated concern owned by #3387) and is appended here only for `autonomous-delivery`, matching
+// `runtimeActionClasses`'s own `mode === "autonomous-delivery"` branch. This exists instead of
+// `permittedGitDeliveryAuthority`'s mode-independent full grant below, which is what let the
+// ADR-0138 D2 admission gap ship undetected: with a fully-permissive fixture, no test could ever
+// observe `hasRequiredScopes` short-circuiting a lower mode before the mode/approval matrix ran.
 function productionRuntimeActionClasses(
   mode: CodingWorkbenchMode,
 ): readonly CodingWorkbenchActionClass[] {
   const actionClasses: CodingWorkbenchActionClass[] = [
-    "workspace-read",
-    "workspace-write",
-    "verification",
+    ...productionGitDeliveryModeGrants(mode).actionClasses,
   ];
-  if (mode !== "governed-assist") actionClasses.push("command-execution");
-  if (mode === "autonomous-delivery") {
-    actionClasses.push("delivery-substrate", "connector-access", "network-egress");
-  }
+  if (mode === "autonomous-delivery") actionClasses.push("network-egress");
   return actionClasses;
 }
 
 function productionRuntimeConnectorScopes(
   mode: CodingWorkbenchMode,
 ): readonly CodingWorkbenchConnectorScope[] {
-  return mode === "autonomous-delivery" ? ["source-control.read", "source-control.write"] : [];
+  return productionGitDeliveryModeGrants(mode).connectorScopes;
 }
 
 function productionRuntimeNetworkPolicy(mode: CodingWorkbenchMode): CodingWorkbenchNetworkPolicy {
