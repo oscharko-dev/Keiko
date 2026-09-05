@@ -138,7 +138,15 @@ int main(void) {
 #include <sys/stat.h>
 #include <unistd.h>
 
+static char mutation_path[256];
+static char replacement_parent[256];
+static char displaced_parent[256];
+static int mutation_mode;
+static int mutation_attempted;
+static void mutate_after_file_digest(const char *name);
+#define KEIKO_TREE_POSIX_AFTER_FILE_DIGEST(name) mutate_after_file_digest(name)
 #include "keiko-portable-tree-hash.h"
+#undef KEIKO_TREE_POSIX_AFTER_FILE_DIGEST
 
 static void write_fixture(const char *path, const char *value) {
   int descriptor = open(path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0600);
@@ -147,13 +155,86 @@ static void write_fixture(const char *path, const char *value) {
   assert(close(descriptor) == 0);
 }
 
+static void overwrite_fixture(const char *path, const char *value) {
+  int descriptor = open(path, O_WRONLY | O_TRUNC | O_NOFOLLOW);
+  assert(descriptor != -1);
+  assert(write(descriptor, value, strlen(value)) == (ssize_t)strlen(value));
+  assert(fsync(descriptor) == 0);
+  assert(close(descriptor) == 0);
+}
+
+static void mutate_after_file_digest(const char *name) {
+  char child[256];
+  if (mutation_mode == 0 || strcmp(name, "a.txt") != 0) return;
+  mutation_attempted = 1;
+  if (mutation_mode == 1) {
+    overwrite_fixture(mutation_path, "changed-after-digest");
+    return;
+  }
+  assert(rename(replacement_parent, displaced_parent) == 0);
+  assert(mkdir(replacement_parent, 0700) == 0);
+  assert(snprintf(child, sizeof(child), "%s/b.txt", replacement_parent) > 0);
+  write_fixture(child, "same-content");
+}
+
+static void test_rejects_post_digest_mutation(void) {
+  char root[] = "/tmp/keiko-tree-coherence.XXXXXX";
+  char path[256], digest[65];
+  char later[128u * 1024u];
+  memset(later, 'b', sizeof(later) - 1u);
+  later[sizeof(later) - 1u] = '\0';
+  assert(mkdtemp(root) != NULL);
+  assert(snprintf(mutation_path, sizeof(mutation_path), "%s/a.txt", root) > 0);
+  write_fixture(mutation_path, "original");
+  assert(snprintf(path, sizeof(path), "%s/b-large.txt", root) > 0);
+  write_fixture(path, later);
+  mutation_mode = 1;
+  mutation_attempted = 0;
+  assert(!keiko_tree_hash_posix(root, keiko_tree_now_ms() + 5000u, digest));
+  mutation_mode = 0;
+  assert(mutation_attempted == 1);
+  assert(unlink(path) == 0);
+  assert(unlink(mutation_path) == 0);
+  assert(rmdir(root) == 0);
+}
+
+static void test_rejects_parent_rebind(void) {
+  char root[] = "/tmp/keiko-tree-parent.XXXXXX";
+  char path[256], digest[65];
+  assert(mkdtemp(root) != NULL);
+  assert(snprintf(path, sizeof(path), "%s/a.txt", root) > 0);
+  write_fixture(path, "first");
+  assert(snprintf(replacement_parent, sizeof(replacement_parent), "%s/z", root) > 0);
+  assert(snprintf(displaced_parent, sizeof(displaced_parent), "%s/z-original", root) > 0);
+  assert(mkdir(replacement_parent, 0700) == 0);
+  assert(snprintf(path, sizeof(path), "%s/b.txt", replacement_parent) > 0);
+  write_fixture(path, "same-content");
+  mutation_mode = 2;
+  mutation_attempted = 0;
+  assert(!keiko_tree_hash_posix(root, keiko_tree_now_ms() + 5000u, digest));
+  mutation_mode = 0;
+  assert(mutation_attempted == 1);
+  assert(unlink(path) == 0);
+  assert(rmdir(replacement_parent) == 0);
+  assert(snprintf(path, sizeof(path), "%s/b.txt", displaced_parent) > 0);
+  assert(unlink(path) == 0);
+  assert(rmdir(displaced_parent) == 0);
+  assert(snprintf(path, sizeof(path), "%s/a.txt", root) > 0);
+  assert(unlink(path) == 0);
+  assert(rmdir(root) == 0);
+}
+
 int main(void) {
   char root[] = "/tmp/keiko-tree-hash.XXXXXX";
   char path[256], digest[65];
+  keiko_tree_names invalid_names = {.count = 1u, .capacity = 0u};
   keiko_tree_walk_budget exhausted_entries = {KEIKO_TREE_MAX_ENTRIES, 0};
   keiko_tree_walk_budget exhausted_paths = {0, KEIKO_TREE_MAX_PATH_BYTES};
   assert(!keiko_tree_record_entry(&exhausted_entries, "x"));
   assert(!keiko_tree_record_entry(&exhausted_paths, "x"));
+  assert(!keiko_tree_names_add(&invalid_names, "x"));
+  test_rejects_post_digest_mutation();
+  test_rejects_parent_rebind();
   assert(mkdtemp(root) != NULL);
   assert(snprintf(path, sizeof(path), "%s/alpha", root) > 0);
   write_fixture(path, "one");

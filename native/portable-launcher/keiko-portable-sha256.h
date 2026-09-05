@@ -7,9 +7,11 @@
 
 #if defined(_WIN32)
 
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
-#include <bcrypt.h>
+#endif
 #include <windows.h>
+#include <bcrypt.h>
 
 #if defined(_MSC_VER)
 #pragma comment(lib, "bcrypt.lib")
