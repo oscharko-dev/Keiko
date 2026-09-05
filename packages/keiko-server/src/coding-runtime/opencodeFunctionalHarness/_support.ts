@@ -1235,9 +1235,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Narrows one durable history row to its completed tool-call result, when it carries one. */
-function completedToolResult(
-  row: FakeHistoryRow,
-): readonly ScriptedGovernedTranscriptToolResult[] {
+function completedToolResult(row: FakeHistoryRow): readonly ScriptedGovernedTranscriptToolResult[] {
   if (row.type !== "message.part.updated.1") return [];
   const part = row.data.part;
   if (!isRecord(part) || part.type !== "tool" || !isRecord(part.state)) return [];
@@ -1384,9 +1382,7 @@ export interface ScriptedGovernedTranscriptChild {
    * model decides from it. Resolves once the turn ends (no further tool calls) and returns every
    * tool result the turn produced, in call order.
    */
-  readonly runTurn: (
-    userText: string,
-  ) => Promise<readonly ScriptedGovernedTranscriptToolResult[]>;
+  readonly runTurn: (userText: string) => Promise<readonly ScriptedGovernedTranscriptToolResult[]>;
   readonly close: () => Promise<void>;
 }
 

@@ -846,9 +846,13 @@ interface DescriptionFieldsProps {
 function PrDescriptionPrNumberField({ form, busy, onChange, t }: DescriptionFieldsProps): ReactNode {
   const prNumberHintId = useId();
   const prNumberInvalid = form.prNumber !== "" && !isValidDescriptionPrNumber(form.prNumber);
+  // The visible label text intentionally matches the aria-label below (both say "Description pull
+  // request number", not the bare "Pull Request number" the create/update form above uses) — two
+  // fields with identical accessible names in the same DOM tree are ambiguous for assistive tech
+  // and for any `getByLabelText` query, even though they serve distinct forms.
   return (
     <label style={{ ...LABEL_STYLE, flex: 1 }}>
-      {t("governedPullRequestCard.description.field.prNumber")}{" "}
+      {t("governedPullRequestCard.description.field.prNumberAria")}{" "}
       <input
         style={FIELD_STYLE}
         inputMode="numeric"
@@ -894,10 +898,13 @@ function PrDescriptionLanguageField({ form, busy, onChange, t }: DescriptionFiel
 
 function PrDescriptionFields(props: DescriptionFieldsProps): ReactNode {
   const { form, busy, onChange, t } = props;
+  // Same rationale as PrDescriptionPrNumberField above: the visible label matches the aria-label
+  // ("Description repository (owner/repo)"), never the create/update form's bare "Repository
+  // (owner/repo)", so the two fields never share an ambiguous accessible name.
   return (
     <div style={ROW_STYLE}>
       <label style={{ ...LABEL_STYLE, flex: 1 }}>
-        {t("governedPullRequestCard.description.field.repository")}{" "}
+        {t("governedPullRequestCard.description.field.repositoryAria")}{" "}
         <input
           style={FIELD_STYLE}
           value={form.ownerAndRepo}

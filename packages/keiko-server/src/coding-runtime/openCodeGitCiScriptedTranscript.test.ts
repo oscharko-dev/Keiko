@@ -6,7 +6,10 @@ import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { VerificationReport } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimeEvent,
+  VerificationReport,
+} from "@oscharko-dev/keiko-contracts";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { runMigrations } from "../store/schema.js";
@@ -31,6 +34,12 @@ import {
   ScriptedGovernedTools,
   type ScriptedToolPhase,
 } from "./opencodeFunctionalHarness/_governedTools.js";
+import {
+  createScriptedGovernedTranscriptChild,
+  type FakeGatewayTurn,
+  type FakeToolCall,
+  type ScriptedGovernedTranscriptToolResult,
+} from "./opencodeFunctionalHarness/_support.js";
 
 const DIGEST = "a".repeat(64);
 const roots: string[] = [];
@@ -113,22 +122,75 @@ function requestBodyText(body: unknown): string {
 }
 
 /** A scripted "model" call: the exact tool-call shape a real OpenCode transcript hands the server. */
-function toolCall(
-  name: string,
-  args: Record<string, unknown>,
-  id: string,
-): { readonly id: string; readonly name: string; readonly args: Record<string, unknown> } {
+function toolCall(name: string, args: Record<string, unknown>, id: string): FakeToolCall {
   return { id, name, args };
 }
 
-async function jsonResult(
-  tools: ScriptedGovernedTools,
-  name: string,
-  args: Record<string, unknown>,
-  id: string,
-): Promise<Record<string, unknown>> {
-  const output = await tools.execute(toolCall(name, args, id), new AbortController().signal);
-  return JSON.parse(output) as Record<string, unknown>;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** The scripted model's only "context window": the last tool result it was handed, parsed. */
+function lastToolResult(
+  transcript: readonly Record<string, unknown>[],
+): Record<string, unknown> | undefined {
+  for (let index = transcript.length - 1; index >= 0; index -= 1) {
+    const message = transcript[index];
+    if (isRecord(message) && message.role === "tool" && typeof message.content === "string") {
+      return JSON.parse(message.content) as Record<string, unknown>;
+    }
+  }
+  return undefined;
+}
+
+type ScriptedStep = (last: Record<string, unknown> | undefined) => FakeToolCall;
+
+/**
+ * A scripted "model" turn function: on every gateway call it picks the NEXT step from a fixed
+ * plan, choosing the tool call solely from the transcript's last tool result -- exactly the
+ * information a real model reads from the conversation to decide its next call -- then stops the
+ * turn (no further tool calls) once the plan is exhausted. This is the seam
+ * `FakeOpenCodeChild.callGateway` fetches over HTTP in the full harness; here it is supplied
+ * directly so the SAME `agentLoop`/`executeToolCall` dispatch runs with a swappable plan instead
+ * of a live gateway.
+ */
+function scriptedModelPlan(
+  steps: readonly ScriptedStep[],
+): (transcript: readonly Record<string, unknown>[]) => FakeGatewayTurn {
+  let cursor = 0;
+  return (transcript): FakeGatewayTurn => {
+    const step = steps[cursor];
+    if (step === undefined) return { content: "", toolCalls: [] };
+    cursor += 1;
+    return { content: "", toolCalls: [step(lastToolResult(transcript))] };
+  };
+}
+
+/**
+ * One scripted OpenCode child conversation whose "model" plan can be swapped between turns --
+ * models a multi-turn transcript (propose, pause for human approval, resume) on the SAME
+ * in-process child, the same way a real OpenCode session keeps one conversation across turns.
+ */
+function swappableModelTurn(): {
+  readonly modelTurn: (transcript: readonly Record<string, unknown>[]) => FakeGatewayTurn;
+  readonly use: (steps: readonly ScriptedStep[]) => void;
+} {
+  let current = scriptedModelPlan([]);
+  return {
+    modelTurn: (transcript): FakeGatewayTurn => current(transcript),
+    use: (steps): void => {
+      current = scriptedModelPlan(steps);
+    },
+  };
+}
+
+function toolResult(
+  results: readonly ScriptedGovernedTranscriptToolResult[],
+  callId: string,
+): Record<string, unknown> {
+  const found = results.find((result) => result.callId === callId);
+  if (found === undefined) throw new Error(`missing scripted tool result: ${callId}`);
+  return JSON.parse(found.output) as Record<string, unknown>;
 }
 
 /**
@@ -136,12 +198,19 @@ async function jsonResult(
  * the real generated OpenCode tool source (`createGeneratedOpenCodeBundle`, the same bundle the
  * sidecar hands the real OpenCode 1.17.17 child) and, through it, VerifiedCommitService and
  * RuntimeGitService in the production composition -- exactly the code path
- * `createProductionManagedWorktreeToolFacade` wires for a real run. The model never commits
- * directly: keiko_git_stage/keiko_git_commit only PROPOSE, the existing approval bridge
- * (`codingToolApprovalBridge.ts`'s `issueStage`/`issueCommit`, the same call the orchestrator's
- * `decideApproval` makes once a human approves) is exercised explicitly, and only then does the
- * shared keiko_git_execute redemption tool -- itself the only tool the model can reach the write
- * outcome through -- reach the real service and produce a REAL commit in a real git repository.
+ * `createProductionManagedWorktreeToolFacade` wires for a real run. The tool-call SELECTION comes
+ * from a scripted model plan (`scriptedModelPlan`/`swappableModelTurn`) driving the harness's own
+ * `createScriptedGovernedTranscriptChild` -- the SAME `FakeOpenCodeChild` agent loop
+ * (`callGateway` -> `executeToolCall` -> `callToolFacade`) a full scripted pipeline run drives,
+ * not a test-authored call sequence. The model never commits directly: keiko_git_stage/
+ * keiko_git_commit only PROPOSE, the existing approval bridge (`codingToolApprovalBridge.ts`'s
+ * `issueStage`/`issueCommit`, the same call the orchestrator's `decideApproval` makes once a human
+ * approves) is exercised explicitly between the two turns, and only then does the shared
+ * keiko_git_execute redemption tool -- itself the only tool the model can reach the write outcome
+ * through -- reach the real service and produce a REAL commit in a real git repository. The
+ * commit proposal's outcome is asserted directly on the run's tool-event stream
+ * (`commitFacadeFixture`'s `events`, the same `onRuntimeEvent` sink
+ * `createProductionManagedWorktreeToolFacade` publishes through for a real run).
  */
 describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitService (#3386)", () => {
   function repo(): string {
@@ -161,8 +230,9 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
   }
 
   function fixture(root: string): {
-    readonly tools: ScriptedGovernedTools;
+    readonly facadeFetch: typeof globalThis.fetch;
     readonly bridge: ReturnType<typeof commitFacadeFixture>["bridge"];
+    readonly events: CodingWorkbenchRuntimeEvent[];
   } {
     const db = new DatabaseSync(":memory:");
     runMigrations(db);
@@ -245,7 +315,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       mode: (): "autonomous-delivery" => "autonomous-delivery",
       invalidateVerification: (): void => undefined,
     });
-    const { facade, bridge } = commitFacadeFixture({
+    const { facade, bridge, events } = commitFacadeFixture({
       service,
       gitService,
       root,
@@ -253,50 +323,72 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       live: () => true,
       report: () => passingReport(root),
     });
-    const fetch = async (_url: unknown, init: { readonly body?: unknown }): Promise<Response> => {
+    const facadeFetch = async (
+      _url: unknown,
+      init: { readonly body?: unknown },
+    ): Promise<Response> => {
       const result = await facade.execute({
         body: requestBodyText(init.body),
         capability: "scripted-fixture-capability",
       });
       return new Response(JSON.stringify(result));
     };
-    const tools = new ScriptedGovernedTools({
-      env: {
-        KEIKO_CODING_MODE: "autonomous-delivery",
-        KEIKO_CODING_RUN_ID: "run-3386",
-        KEIKO_TOOL_FACADE_URL: "http://scripted-fixture.invalid/tool-facade",
-        KEIKO_TOOL_FACADE_CAPABILITY: "scripted-fixture-capability",
-      },
-      sessionId: "ses_scripted0000000003386",
-      broadcast: (): void => undefined,
-      fetch: fetch as typeof globalThis.fetch,
-    });
-    return { tools, bridge };
+    return { facadeFetch, bridge, events };
   }
 
-  it("routes status, diff, a stage propose/approve/execute cycle and a real commit through the production facade", async () => {
+  it("routes status, diff, a scripted-model stage/commit propose cycle and a real approved commit through the production facade", async () => {
     const root = repo();
-    const { tools, bridge } = fixture(root);
+    const { facadeFetch, bridge, events } = fixture(root);
+    const plan = swappableModelTurn();
+    const child = createScriptedGovernedTranscriptChild({
+      runId: "run-3386",
+      toolFacadeFetch: facadeFetch,
+      modelTurn: plan.modelTurn,
+    });
 
-    const status = await jsonResult(tools, "keiko_git_status", {}, "call-status");
+    plan.use([
+      (): FakeToolCall => toolCall("keiko_git_status", {}, "call-status"),
+      (): FakeToolCall =>
+        toolCall("keiko_git_diff", { scope: "working-tree", paths: ["code.js"] }, "call-diff"),
+      (): FakeToolCall => toolCall("keiko_git_stage", { paths: ["code.js"] }, "call-stage-propose"),
+      (last): FakeToolCall => {
+        const stage = (last as { readonly git: { readonly proposalId: string } }).git;
+        return toolCall(
+          "keiko_git_execute",
+          { kind: "stage", proposalId: stage.proposalId },
+          "call-stage-execute",
+        );
+      },
+      (): FakeToolCall =>
+        toolCall("keiko_verification", { verifierId: "typecheck" }, "call-verify"),
+      (): FakeToolCall =>
+        toolCall(
+          "keiko_git_commit",
+          { message: "feat: authorized scripted-transcript change" },
+          "call-commit-propose",
+        ),
+    ]);
+    const turn1 = await child.runTurn("stage and commit the pending workspace change");
+    // The dispatch order was decided by the scripted model plan, not authored imperatively here --
+    // this is what the loop ACTUALLY executed, in the order it executed it.
+    expect(turn1.map((result) => result.tool)).toEqual([
+      "keiko_git_status",
+      "keiko_git_diff",
+      "keiko_git_stage",
+      "keiko_git_execute",
+      "keiko_verification",
+      "keiko_git_commit",
+    ]);
+
+    const status = toolResult(turn1, "call-status");
     expect(status.status).toBe("completed");
     expect((status.git as { readonly kind: string }).kind).toBe("status");
 
-    const diff = await jsonResult(
-      tools,
-      "keiko_git_diff",
-      { scope: "working-tree", paths: ["code.js"] },
-      "call-diff",
-    );
+    const diff = toolResult(turn1, "call-diff");
     expect(diff.status).toBe("completed");
     expect((diff.git as { readonly kind: string }).kind).toBe("diff");
 
-    const stagePropose = await jsonResult(
-      tools,
-      "keiko_git_stage",
-      { paths: ["code.js"] },
-      "call-stage-propose",
-    );
+    const stagePropose = toolResult(turn1, "call-stage-propose");
     const stage = stagePropose.git as { readonly status: string; readonly proposalId: string };
     // Staging a workspace-contained change is routine, contained authority in autonomous-delivery
     // (ADR-0129/ADR-0138): the propose call is immediately "ready", with no approval hold -- only
@@ -305,54 +397,61 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     expect(stage.status).toBe("ready");
     expect(stage.proposalId).toMatch(/^stage-\d+$/u);
 
-    const stageExecute = await jsonResult(
-      tools,
-      "keiko_git_execute",
-      { kind: "stage", proposalId: stage.proposalId },
-      "call-stage-execute",
-    );
-    const staged = stageExecute.git as { readonly status: string };
+    const staged = toolResult(turn1, "call-stage-execute").git as { readonly status: string };
     expect(staged.status).toBe("succeeded");
     expect(git(root, ["diff", "--cached", "--name-only"])).toBe("code.js");
 
-    const verification = await jsonResult(
-      tools,
-      "keiko_verification",
-      { verifierId: "typecheck" },
-      "call-verify",
-    );
+    const verification = toolResult(turn1, "call-verify");
     expect(verification.status).toBe("completed");
-
-    const commitPropose = await jsonResult(
-      tools,
-      "keiko_git_commit",
-      { message: "feat: authorized scripted-transcript change" },
-      "call-commit-propose",
+    expect(events).toContainEqual(
+      expect.objectContaining({ kind: "verification-summarized", verificationStatus: "passed" }),
     );
+
+    const commitPropose = toolResult(turn1, "call-commit-propose");
     const commit = commitPropose.verifiedCommit as {
       readonly status: string;
       readonly proposalId: string;
     };
     expect(commit.status).toBe("approval-required");
+    // The commit proposal's outcome is visible on the run's tool-event stream -- the same
+    // permission-requested record the orchestrator's approval UI reads -- before a human ever
+    // approves it: `createProductionManagedWorktreeToolFacade`'s own `onRuntimeEvent` sink, not a
+    // second, test-invented notion of "the tool-event stream".
+    const commitPermissionEvent = events.find((event) => event.kind === "permission-requested");
+    expect(commitPermissionEvent).toMatchObject({
+      kind: "permission-requested",
+      runId: "run-1",
+      permissionRequest: {
+        requestId: commit.proposalId,
+        actionKind: "commit",
+        reasonCode: "commit-approval-required",
+      },
+    });
 
     expect(bridge.issueCommit?.("run-1", commit.proposalId)).toBeDefined();
 
+    plan.use([
+      (): FakeToolCall =>
+        toolCall(
+          "keiko_git_execute",
+          { kind: "commit", proposalId: commit.proposalId },
+          "call-commit-execute",
+        ),
+    ]);
     const beforeHead = git(root, ["rev-parse", "HEAD"]);
-    const commitExecute = await jsonResult(
-      tools,
-      "keiko_git_execute",
-      { kind: "commit", proposalId: commit.proposalId },
-      "call-commit-execute",
-    );
-    const executed = commitExecute.verifiedCommit as { readonly status: string };
+    const turn2 = await child.runTurn("the commit has been approved -- proceed");
+    const executed = toolResult(turn2, "call-commit-execute").verifiedCommit as {
+      readonly status: string;
+    };
     expect(executed.status).toBe("succeeded");
     expect(git(root, ["rev-parse", "HEAD"])).not.toBe(beforeHead);
     expect(git(root, ["log", "-1", "--format=%s"])).toBe(
       "feat: authorized scripted-transcript change",
     );
+    await child.close();
   });
 
-  it("bounds a scripted repair loop with the same cumulative CI repair budget the production controller enforces (#3388)", async () => {
+  it("bounds a scripted-model observe-then-repair loop with the same cumulative CI repair budget the production controller enforces (#3388)", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-ci-repair-transcript-")));
     roots.push(root);
     const db = new DatabaseSync(":memory:");
@@ -438,6 +537,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       },
     };
 
+    const events: CodingWorkbenchRuntimeEvent[] = [];
     const facade = createProductionManagedWorktreeToolFacade({
       ciObservationService,
       ciRepairBudget: repairController,
@@ -489,44 +589,53 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       },
       invocationRegistry: createCodingToolInvocationRegistry(),
       verificationRunner: { runToReport: () => Promise.resolve(failingReport(root)) },
-      onRuntimeEvent: (): void => undefined,
+      onRuntimeEvent: (event): void => {
+        events.push(event);
+      },
     });
-    const fetch = async (_url: unknown, init: { readonly body?: unknown }): Promise<Response> => {
+    const facadeFetch = async (
+      _url: unknown,
+      init: { readonly body?: unknown },
+    ): Promise<Response> => {
       const result = await facade.execute({
         body: requestBodyText(init.body),
         capability: "scripted-fixture-capability",
       });
       return new Response(JSON.stringify(result));
     };
-    const tools = new ScriptedGovernedTools({
-      env: {
-        KEIKO_CODING_MODE: "autonomous-delivery",
-        KEIKO_CODING_RUN_ID: "run-3388",
-        KEIKO_TOOL_FACADE_URL: "http://scripted-fixture.invalid/tool-facade",
-        KEIKO_TOOL_FACADE_CAPABILITY: "scripted-fixture-capability",
-      },
-      sessionId: "ses_scripted0000000003388",
-      broadcast: (): void => undefined,
-      fetch: fetch as typeof globalThis.fetch,
+
+    const plan = swappableModelTurn();
+    const child = createScriptedGovernedTranscriptChild({
+      runId: "run-3388",
+      toolFacadeFetch: facadeFetch,
+      modelTurn: plan.modelTurn,
     });
 
-    // Three observe-then-repair cycles: the model calls keiko_ci_status (a fresh failed
-    // readiness observation), then keiko_verification in response -- each verification attempt
-    // fails, charging the SAME cumulative CI repair budget CI_REPAIR_MAX_FAILED_ATTEMPTS bounds.
-    const reasonCodes: unknown[] = [];
+    // Four scripted observe-then-repair cycles in one continuous transcript: the model calls
+    // keiko_ci_status (a fresh failed readiness observation), then keiko_verification in response
+    // -- each verification attempt fails, charging the SAME cumulative CI repair budget
+    // CI_REPAIR_MAX_FAILED_ATTEMPTS bounds. Which tool runs next is picked by the scripted model
+    // plan from the transcript, not authored as a direct call sequence.
+    plan.use(
+      Array.from({ length: 4 }, (_unused, cycle): readonly ScriptedStep[] => [
+        (): FakeToolCall => toolCall("keiko_ci_status", {}, `call-ci-${String(cycle)}`),
+        (): FakeToolCall =>
+          toolCall(
+            "keiko_verification",
+            { verifierId: "typecheck" },
+            `call-verify-${String(cycle)}`,
+          ),
+      ]).flat(),
+    );
+    const turn = await child.runTurn("observe CI and repair the failing checks");
     for (let cycle = 0; cycle < 4; cycle += 1) {
-      const ci = await jsonResult(tools, "keiko_ci_status", {}, `call-ci-${String(cycle)}`);
+      const ci = toolResult(turn, `call-ci-${String(cycle)}`);
       expect(ci.status).toBe("completed");
       expect((ci.ci as { readonly status: string }).status).toBe("observed");
-      const verify = await jsonResult(
-        tools,
-        "keiko_verification",
-        { verifierId: "typecheck" },
-        `call-verify-${String(cycle)}`,
-      );
-      expect(verify.status).toBe("failed");
-      reasonCodes.push(verify.reasonCode);
     }
+    const reasonCodes = [0, 1, 2, 3].map(
+      (cycle) => toolResult(turn, `call-verify-${String(cycle)}`).reasonCode,
+    );
     // The first CI_REPAIR_MAX_FAILED_ATTEMPTS (3) failing repair attempts are admitted and
     // executed -- each fails on its own verification merits (VERIFICATION_FAILED). The loop does
     // not run unbounded: by the fourth cycle the cumulative budget is already exhausted, and the
@@ -539,14 +648,25 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       "VERIFICATION_FAILED",
     ]);
     expect(reasonCodes[3]).toBe("ci-repair-budget-blocked");
+    // The bound is visible on the run's tool-event stream too: exactly the three attempts that
+    // actually executed published a verification-summarized event -- the budget-blocked fourth
+    // call never reached the verifier, so it never published a fourth.
+    const verificationEvents = events.filter((event) => event.kind === "verification-summarized");
+    expect(verificationEvents).toHaveLength(3);
+    expect(verificationEvents.every((event) => event.verificationStatus === "failed")).toBe(true);
+
     // The bound holds for any further call, not just the one that tripped it.
-    const denied = await jsonResult(
-      tools,
-      "keiko_verification",
-      { verifierId: "typecheck" },
-      "call-verify-exhausted",
-    );
-    expect(denied).toMatchObject({ status: "failed", reasonCode: "ci-repair-budget-blocked" });
+    plan.use([
+      (): FakeToolCall =>
+        toolCall("keiko_verification", { verifierId: "typecheck" }, "call-verify-exhausted"),
+    ]);
+    const extra = await child.runTurn("try the verifier again");
+    expect(toolResult(extra, "call-verify-exhausted")).toMatchObject({
+      status: "failed",
+      reasonCode: "ci-repair-budget-blocked",
+    });
+    expect(events.filter((event) => event.kind === "verification-summarized")).toHaveLength(3);
+    await child.close();
   });
 });
 

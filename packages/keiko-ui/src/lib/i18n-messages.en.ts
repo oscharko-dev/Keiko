@@ -2421,10 +2421,8 @@ export const EN_MESSAGES = {
   "governedPullRequestCard.description.state.failed": "Failed — not applied",
   "governedPullRequestCard.description.previewCaption":
     "Preview — repository template and human text preserved outside the managed region",
-  "governedPullRequestCard.description.field.repository": "Repository (owner/repo)",
   "governedPullRequestCard.description.field.repositoryAria":
     "Description repository (owner/repo)",
-  "governedPullRequestCard.description.field.prNumber": "Pull Request number",
   "governedPullRequestCard.description.field.prNumberAria": "Description pull request number",
   "governedPullRequestCard.description.field.prNumberHint":
     "Enter the numeric Pull Request number, for example 1499.",

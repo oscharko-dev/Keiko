@@ -2499,10 +2499,8 @@ export const DE_MESSAGES = {
   "governedPullRequestCard.description.state.failed": "Fehlgeschlagen — nicht übernommen",
   "governedPullRequestCard.description.previewCaption":
     "Vorschau — Repository-Vorlage und von Menschen verfasster Text außerhalb des verwalteten Bereichs bleiben erhalten",
-  "governedPullRequestCard.description.field.repository": "Repository (Besitzer/Repo)",
   "governedPullRequestCard.description.field.repositoryAria":
     "Beschreibung Repository (Besitzer/Repo)",
-  "governedPullRequestCard.description.field.prNumber": "Pull-Request-Nummer",
   "governedPullRequestCard.description.field.prNumberAria": "Beschreibung Pull-Request-Nummer",
   "governedPullRequestCard.description.field.prNumberHint":
     "Geben Sie die numerische Pull-Request-Nummer ein, zum Beispiel 1499.",

@@ -11,6 +11,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createDefaultChatCapability,
   parseGatewayConfig,
   PrDescription,
   type GatewayConfig,
@@ -131,7 +132,24 @@ describe("createProductionPrDescriptionGeneration (#3399)", () => {
   // hand-building a `GitChangeSnapshot` — that digest formula is owned by
   // `gitChangeSnapshotDigestFields`/`GitChangeSnapshotService`, never restated here (AGENTS.md §7).
   it("generates a real description through the production composition and a fake Model Gateway HTTP transport", async () => {
-    const generation = createProductionPrDescriptionGeneration(source(config()));
+    const cfgWithCapability = parseGatewayConfig({
+      providers: [
+        {
+          modelId: "test-chat",
+          baseUrl: "https://gateway.example.com/v1",
+          apiKey: "test-token",
+        },
+      ],
+      capabilities: [
+        {
+          ...createDefaultChatCapability("test-chat"),
+          contextWindow: 32_768,
+          maxOutputTokens: 2048,
+        },
+      ],
+      branding: { logoUrl: `https://cdn.example.org/${"a".repeat(40)}/keiko-logo.svg` },
+    });
+    const generation = createProductionPrDescriptionGeneration(source(cfgWithCapability));
     if (generation === undefined) throw new Error("expected a composed generation");
     const fixture = new DescriptionFixture();
     try {
@@ -144,10 +162,15 @@ describe("createProductionPrDescriptionGeneration (#3399)", () => {
       });
       if (captured.reference === undefined) throw new Error("expected a captured snapshot");
       const reference = captured.reference;
-      const fetchSpy = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-        const raw: unknown = JSON.parse(String(init?.body ?? "{}"));
+      const fetchSpy = vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+        const rawBody = typeof init?.body === "string" ? init.body : "{}";
+        const raw: unknown = JSON.parse(rawBody);
         const serialized = JSON.stringify(raw);
-        const evidenceId = /"evidenceId":"([a-f0-9]{64})"/u.exec(serialized)?.[1] ?? "";
+        // The evidence payload is nested one JSON-string level inside the chat request's own
+        // "content" field, so a literal `"evidenceId":"..."` key match would need to account for
+        // that extra escaping layer -- matching the bare 64-hex-character id anywhere is simpler
+        // and just as unambiguous (it is the only such token in this fixture's request).
+        const evidenceId = /([a-f0-9]{64})/u.exec(serialized)?.[1] ?? "";
         const statement = { text: "Change the exported value.", evidenceIds: [evidenceId] };
         return new Response(
           JSON.stringify({
@@ -207,7 +230,6 @@ describe("createProductionPrDescriptionGeneration (#3399)", () => {
           },
         },
       );
-      console.log("DEBUG result", JSON.stringify(result));
       expect(fetchSpy).toHaveBeenCalled();
       expect(result.status).toBe("generated");
       if (result.status !== "generated") throw new Error("expected a generated artifact");

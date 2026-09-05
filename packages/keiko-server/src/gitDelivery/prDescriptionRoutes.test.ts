@@ -13,8 +13,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createDefaultChatCapability } from "@oscharko-dev/keiko-model-gateway";
 import type { ServerLogEvent } from "../observability/index.js";
-import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
+import {
+  buildRedactor,
+  buildUiHandlerDeps,
+  createRunRegistry,
+  type UiHandlerDeps,
+} from "../index.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
@@ -445,6 +454,101 @@ describe("pr-description routes — real composition through deps.prDescriptionG
     const approveRes = await approveHandler(ctxFor(APPROVE, body({ proposalId })), composedDeps);
     expect(approveRes.status).toBe(200);
     expect((approveRes.body as { proposalId: string }).proposalId).toBe(proposalId);
+  });
+
+  // description-composition-closeout (task 5): the tests above inject `fixture.options.generation`
+  // directly, proving the ROUTE reaches whatever `deps.prDescriptionGeneration` holds -- not that
+  // `assembleUiHandlerDeps`'s OWN production composition (`createProductionPrDescriptionGeneration`,
+  // deps.ts) is what actually lands there. This test builds a real `buildUiHandlerDeps()` graph with
+  // a configured model profile and threads its OWN `prDescriptionGeneration` field through, so the
+  // 503 GIT_DELIVERY_PR_DESCRIPTION_UNAVAILABLE fallback is proven unreachable once a model profile
+  // is configured -- not merely typed as compatible.
+  it("reaches a live model call through assembleUiHandlerDeps's OWN composed prDescriptionGeneration", async () => {
+    const evidenceDir = mkdtempSync(join(tmpdir(), "keiko-pr-description-deps-"));
+    const configPath = join(evidenceDir, "keiko.config.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "pr-description-model",
+            baseUrl: "https://gateway.example.com/v1",
+            apiKey: "fake-test-key",
+            timeoutMs: 30000,
+            maxRetries: 2,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+        capabilities: [
+          {
+            ...createDefaultChatCapability("pr-description-model"),
+            contextWindow: 32_768,
+            maxOutputTokens: 2048,
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const composedStore = createInMemoryUiStore();
+    const composed = buildUiHandlerDeps({
+      configPath,
+      evidenceDir,
+      env: {},
+      store: composedStore,
+    });
+    try {
+      expect(composed.prDescriptionGeneration).toBeDefined();
+      const fetchSpy = vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+        const rawBody = typeof init?.body === "string" ? init.body : "{}";
+        const serialized = JSON.stringify(JSON.parse(rawBody));
+        // Same nested-escaping reasoning as prDescriptionGeneration.test.ts's own fake transport:
+        // the evidenceId is inside the request's stringified "content" field.
+        const evidenceId = /([a-f0-9]{64})/u.exec(serialized)?.[1] ?? "";
+        const statement = {
+          text: "Reaches deps.prDescriptionGeneration.",
+          evidenceIds: [evidenceId],
+        };
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: JSON.stringify({
+                    summary: [statement],
+                    keyChanges: [statement],
+                    risks: [],
+                    reviewerFocus: [],
+                  }),
+                },
+                finish_reason: "stop",
+              },
+            ],
+            usage: { prompt_tokens: 10, completion_tokens: 20 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+      const composedDeps = deps({
+        gitChangeSnapshotService: fixture.snapshots,
+        // The clock override is test-only plumbing (`fixture.snapshots` stamps captures with its
+        // own fixed clock, and `createProductionPrDescriptionGeneration` composes no `now` of its
+        // own) -- gateway, config, branding and log all come from the REAL composition unchanged.
+        prDescriptionGeneration: { ...composed.prDescriptionGeneration, now: () => fixture.now },
+      });
+      const previewHandler = createHandlePrDescriptionPreview(productionCompositionOptions());
+      const res = await previewHandler(ctxFor(PREVIEW, body({ language: "en" })), composedDeps);
+      expect(fetchSpy).toHaveBeenCalled();
+      expect(res.status).toBe(200);
+      expect(JSON.stringify(res.body)).toContain("Reaches deps.prDescriptionGeneration.");
+    } finally {
+      vi.unstubAllGlobals();
+      await composed.dispose?.();
+      composedStore.close();
+      rmSync(evidenceDir, { recursive: true, force: true });
+    }
   });
 });
 

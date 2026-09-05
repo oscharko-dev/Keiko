@@ -67,7 +67,8 @@ test("connects the Git window's current branch to a Chat and shows the scope pil
   const label = `${fixture.baseRef}...${fixture.headRef}`;
   await expect(chatWindow.getByText(label)).toBeVisible();
   await expect(chatWindow.getByText("Current")).toBeVisible();
-  await expect(chatWindow.getByText("1 files changed")).toBeVisible();
+  // Exactly one file is changed by the fixture — the singular count message, not "1 files changed".
+  await expect(chatWindow.getByText("1 file changed")).toBeVisible();
   await expect(
     chatWindow.getByRole("button", { name: `Disconnect ${label} from chat` }),
   ).toBeVisible();

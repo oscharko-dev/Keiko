@@ -376,7 +376,7 @@ describe("CI repair accounting around admitted model work", () => {
       store: rejectingStore,
       readiness: test.readiness,
       context: (): CiRepairBudgetContext => test.context,
-      now: () => test.clock.now,
+      now: (): number => test.clock.now,
       notifyVerifiedHeadAdvanced: notify,
     });
     controller.observed(repaired);

@@ -152,11 +152,7 @@ export function createCodingRuntimeControlPlane(
   receiver.ingest = (event: CodingWorkbenchRuntimeEvent): void => {
     void orchestrator.ingest(event);
   };
-  // #3401: fills the runtime host's notify slot with the orchestrator's real, public
-  // `notifyVerifiedHeadAdvanced` seam now that it exists -- never a second dispatcher.
-  input.runtimeHost?.attachVerifiedHeadNotifier?.((runId) =>
-    orchestrator.notifyVerifiedHeadAdvanced(runId),
-  );
+  attachVerifiedHeadNotifier(input.runtimeHost, orchestrator);
   orchestrator.startupReconcileNow();
   return {
     orchestrator,
@@ -202,6 +198,18 @@ function createControlPlaneOrchestrator(
       : {}),
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     ...(input.activityLog ? { activityLog: input.activityLog } : {}),
+  });
+}
+
+// #3401: fills the runtime host's notify slot with the orchestrator's real, public
+// `notifyVerifiedHeadAdvanced` seam now that it exists -- never a second dispatcher. Extracted so
+// `createCodingRuntimeControlPlane` stays under AGENTS.md §6's complexity <=10 ceiling.
+function attachVerifiedHeadNotifier(
+  runtimeHost: CodingRuntimeHost | undefined,
+  orchestrator: CodingRuntimeOrchestrator,
+): void {
+  runtimeHost?.attachVerifiedHeadNotifier?.((runId: string): void => {
+    orchestrator.notifyVerifiedHeadAdvanced(runId);
   });
 }
 

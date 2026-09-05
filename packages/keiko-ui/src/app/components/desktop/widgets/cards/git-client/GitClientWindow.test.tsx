@@ -486,7 +486,7 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       actionKind: "push",
     })),
     prPreview: vi.fn<GitClientSeam["prPreview"]>(async () => makePrPreview()),
-    prApprove: vi.fn<GitClientSeam["prApprove"]>(async () => ({
+    prApprove: vi.fn<NonNullable<GitClientSeam["prApprove"]>>(async () => ({
       schemaVersion: "1",
       approval: { schemaVersion: "1", approvalId: "gda_gcw_pr", approvalToken: "token-gcw-pr" },
       expiresAt: "2026-01-01T00:00:00.000Z",
@@ -497,20 +497,20 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       actionKind: "pr-create",
       createdPrExternalId: "1577",
     })),
-    prDescriptionPreview: vi.fn<GitClientSeam["prDescriptionPreview"]>(async () => ({
+    prDescriptionPreview: vi.fn<NonNullable<GitClientSeam["prDescriptionPreview"]>>(async () => ({
       outcome: "blocked",
       reason: "approval-required",
     })),
-    prDescriptionApprove: vi.fn<GitClientSeam["prDescriptionApprove"]>(async () => ({
+    prDescriptionApprove: vi.fn<NonNullable<GitClientSeam["prDescriptionApprove"]>>(async () => ({
       schemaVersion: "1",
       proposalId: "prop-gcw",
       expiresAt: "2026-01-01T00:00:00.000Z",
     })),
-    prDescriptionApply: vi.fn<GitClientSeam["prDescriptionApply"]>(async () => ({
+    prDescriptionApply: vi.fn<NonNullable<GitClientSeam["prDescriptionApply"]>>(async () => ({
       outcome: "blocked",
       reason: "approval-required",
     })),
-    prDescriptionStatus: vi.fn<GitClientSeam["prDescriptionStatus"]>(async () => ({
+    prDescriptionStatus: vi.fn<NonNullable<GitClientSeam["prDescriptionStatus"]>>(async () => ({
       outcome: "blocked",
       reason: "approval-required",
     })),
@@ -1211,7 +1211,12 @@ describe("GitClientWindow — toolbar actions", () => {
     expect(panel).toBeInTheDocument();
     expect(within(panel).getByLabelText("Head branch")).toHaveValue("feat/issue-1577");
     expect(within(panel).getByLabelText("Base branch")).toHaveValue("main");
-    expect(within(panel).getByDisplayValue("oscharko-dev/Keiko")).toBeInTheDocument();
+    // Not getByDisplayValue: the Description panel below (#3399) now also renders once the
+    // seam is fully wired, and its own repository field independently prefills to the same
+    // inferred owner/repo — so two distinct fields legitimately share this value.
+    expect(within(panel).getByLabelText("Repository (owner/repo)")).toHaveValue(
+      "oscharko-dev/Keiko",
+    );
     expect(client.getHistory).not.toHaveBeenCalled();
 
     await user.click(within(panel).getByRole("button", { name: "Preview" }));
