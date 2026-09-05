@@ -205,6 +205,10 @@ function toolPartSignal(
   occurredAt: string,
 ): CodingSafeActivitySignalOutcome {
   const state = record(part.state)?.status;
+  // A completed part is a silent no-op: the Keiko tool facade supplies "succeeded" once its
+  // closed result for a facade-dispatched (keiko_*) tool is known
+  // (opencodeRuntimeComposition.ts settleTool), so inferring it again here would race a value
+  // the facade already owns.
   if (state === "completed") return undefined;
   const normalizedState = toolPartState(state);
   const messageId = string(part.messageID);
