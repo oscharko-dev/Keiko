@@ -53,7 +53,10 @@ export type CodingRuntimeIssueAdmission =
     }
   | {
       readonly ok: false;
-      readonly failureCode: "invalid-intent" | "authority-resolution-failed";
+      readonly failureCode:
+        | "invalid-intent"
+        | "authority-resolution-failed"
+        | "issue-context-unavailable";
       readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure;
     };
 
@@ -67,7 +70,7 @@ interface AdmissionInput {
   readonly deploymentCeiling?: CodingWorkbenchMode | undefined;
 }
 
-type Stage = "admission" | "resolution" | "revalidation" | "base-branch" | "context";
+type Stage = "admission" | "resolution" | "revalidation" | "base-branch" | "context" | "reattach";
 
 function refused(
   input: AdmissionInput,
@@ -92,12 +95,22 @@ function refused(
   });
   return {
     ok: false,
-    failureCode:
-      failure === "auth-required" || failure === "authority-denied"
-        ? "authority-resolution-failed"
-        : "invalid-intent",
+    failureCode: failureCodeFor(stage, failure),
     ...(failure === undefined ? {} : { issueBindingFailure: failure }),
   };
+}
+
+// A durable-binding reattach (no fresh pasted reference — a retry/resume whose transient
+// attachment was lost, #3390) is its own closed code so the Workbench can tell the operator to
+// preview the issue again, instead of the generic rejection a malformed request gets.
+function failureCodeFor(
+  stage: Stage,
+  failure: CodingWorkbenchIssueBindingFailure | undefined,
+): "invalid-intent" | "authority-resolution-failed" | "issue-context-unavailable" {
+  if (stage === "reattach") return "issue-context-unavailable";
+  return failure === "auth-required" || failure === "authority-denied"
+    ? "authority-resolution-failed"
+    : "invalid-intent";
 }
 
 function bindingFailure(
@@ -129,11 +142,59 @@ function bindingFailure(
   return undefined;
 }
 
+function effectiveModeOf(input: AdmissionInput): CodingWorkbenchMode {
+  return resolveEffectiveCodingWorkbenchMode(
+    input.request.requestedMode,
+    input.deploymentCeiling ?? input.request.requestedMode,
+  );
+}
+
+function buildAttachment(
+  intake: CodingRuntimeIssueIntake,
+  input: AdmissionInput,
+  binding: CodingWorkbenchIssueBinding,
+): ReturnType<CodingRuntimeIssueIntake["buildContext"]> {
+  return intake.buildContext({
+    runId: input.runId,
+    repositoryRoot: input.active.instance.repositoryRoot,
+    binding,
+    effectiveMode: effectiveModeOf(input),
+    correlationId: input.runId,
+  });
+}
+
+/**
+ * A run starting against a durable issue binding with no freshly pasted reference — a retry or
+ * resume whose transient in-memory attachment did not survive (a server restart is the real #3390
+ * case) — re-resolves the attachment through the SAME authorized reader/intake path the preview
+ * uses (`buildContext` re-reads the issue by its durable number and verifies identity, exactly as
+ * it does for a fresh paste), rather than either silently starting context-free or refusing a
+ * still-readable issue outright. Only an actual re-resolution failure fails closed, and it does so
+ * with its own closed code so the Workbench can tell the operator to preview the issue again.
+ */
+async function reattachDurableIssue(
+  input: AdmissionInput,
+  binding: CodingWorkbenchIssueBinding,
+): Promise<CodingRuntimeIssueAdmission> {
+  if (input.intake === undefined) return refused(input, "reattach");
+  const invalid = bindingFailure(input, binding);
+  if (invalid !== undefined) return invalid;
+  try {
+    const context = await buildAttachment(input.intake, input, binding);
+    if (!context.ok) return refused(input, "reattach", context.failure);
+    return { ok: true, binding, attachment: context.attachment };
+  } catch (error) {
+    return refused(input, "reattach", "issue-unavailable", error);
+  }
+}
+
 export async function admitCodingRuntimeIssue(
   input: AdmissionInput,
 ): Promise<CodingRuntimeIssueAdmission> {
-  if (input.request.issueRef === undefined)
-    return input.priorBinding === undefined ? { ok: true } : refused(input, "revalidation");
+  if (input.request.issueRef === undefined) {
+    if (input.priorBinding === undefined) return { ok: true };
+    return reattachDurableIssue(input, input.priorBinding);
+  }
   if (input.intake === undefined) return refused(input, "admission");
   let stage: Stage = "resolution";
   try {
@@ -146,16 +207,7 @@ export async function admitCodingRuntimeIssue(
     const invalid = bindingFailure(input, resolution.binding);
     if (invalid !== undefined) return invalid;
     stage = "context";
-    const context = await input.intake.buildContext({
-      runId: input.runId,
-      repositoryRoot: input.active.instance.repositoryRoot,
-      binding: resolution.binding,
-      effectiveMode: resolveEffectiveCodingWorkbenchMode(
-        input.request.requestedMode,
-        input.deploymentCeiling ?? input.request.requestedMode,
-      ),
-      correlationId: input.runId,
-    });
+    const context = await buildAttachment(input.intake, input, resolution.binding);
     if (!context.ok) return refused(input, stage, context.failure);
     return { ok: true, binding: resolution.binding, attachment: context.attachment };
   } catch (error) {

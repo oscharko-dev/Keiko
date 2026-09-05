@@ -3503,6 +3503,226 @@ describe("coding sidecar gateway rejection activity log", () => {
     expect(extra?.missingToolNames).toHaveLength(16);
     expect(JSON.stringify(sink.events)).not.toContain("private runtime content");
   });
+
+  // #3390 root cause: the server sends the first turn as TWO text parts (opencodeHttpClient.ts
+  // `promptParts`: the task text plus the issue context as a synthetic part), so OpenCode's
+  // AI-SDK provider forwards the outgoing user message as an OpenAI content-part ARRAY instead of
+  // a bare string. `parseMessageBase` accepted only `typeof content === "string"`, dropping the
+  // entry, so `parseMessages` returned `undefined` and the request was refused 400 under the
+  // misleading `body-empty-messages` reason -- every real ISSUE-BOUND run died on its first model
+  // call while a bare-string run (no issue context) never hit this path. These four tests pin the
+  // fix: the two-text-part shape is accepted and joined, a non-text part is rejected under its own
+  // reason, an unparsable entry is distinguished from an empty array, and the two previously
+  // unlogged 403 refusals now leave the same body-free rejection line as every other one.
+  it("keeps a plain string message content unchanged (regression: the multipart fix must not alter the pre-existing single-part path)", async () => {
+    const seenRequests: GatewayRequest[] = [];
+    const deps = depsValue(
+      configValue(provider(), capability()),
+      (
+        _config: GatewayConfig,
+        modelId: string,
+      ): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
+        return (request: GatewayRequest): Promise<NormalizedResponse> => {
+          seenRequests.push(request);
+          return Promise.resolve(assistantResponse(modelId));
+        };
+      },
+    );
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({
+        model: "azure-coding-model",
+        messages: [{ role: "user", content: "bounded task" }],
+      }),
+      deps,
+    );
+
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.messages).toEqual([{ role: "user", content: "bounded task" }]);
+  });
+
+  it("accepts a user message whose content is the OpenAI content-part ARRAY OpenCode's AI-SDK provider sends for a multi-part prompt, joining the parts into one string", async () => {
+    const seenRequests: GatewayRequest[] = [];
+    const deps = depsValue(
+      configValue(provider(), capability()),
+      (
+        _config: GatewayConfig,
+        modelId: string,
+      ): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
+        return (request: GatewayRequest): Promise<NormalizedResponse> => {
+          seenRequests.push(request);
+          return Promise.resolve(assistantResponse(modelId));
+        };
+      },
+    );
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({
+        model: "azure-coding-model",
+        messages: [
+          {
+            role: "user",
+            // Real producer shape, pinned in opencodeHttpClient.test.ts's
+            // "pins the two-part prompt shape sent for a prompt with initial context".
+            content: [
+              { type: "text", text: "bounded task" },
+              { type: "text", text: "issue context", synthetic: true },
+            ],
+          },
+        ],
+      }),
+      deps,
+    );
+
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.messages).toEqual([
+      { role: "user", content: "bounded task\n\nissue context" },
+    ]);
+  });
+
+  it("logs a body-free rejection line and returns BAD_REQUEST content-part-unsupported for a non-text content part", async () => {
+    const sink = captureServerLog("warn");
+    const deps = depsValue(configValue(provider(), capability()));
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "bounded task" },
+              { type: "image_url", image_url: { url: "https://example.invalid/x.png" } },
+            ],
+          },
+        ],
+      }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: "Request body message content included an unsupported content part.",
+        },
+      },
+    });
+    expect(sink.events).toEqual([
+      {
+        level: "warn",
+        category: "gateway",
+        op: "coding-sidecar.gateway.rejected",
+        correlationId: "unknown-correlation-id",
+        durationMs: undefined,
+        status: 400,
+        errorKind: undefined,
+        extra: { reason: "content-part-unsupported", runId: "run-gateway-test" },
+      },
+    ]);
+  });
+
+  it("logs a body-free rejection line and returns BAD_REQUEST message-shape-invalid for an unparsable message entry, distinct from an empty messages array", async () => {
+    const sink = captureServerLog("warn");
+    const deps = depsValue(configValue(provider(), capability()));
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user" }] }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: "Request body messages must be well-formed chat messages (entries: 1).",
+        },
+      },
+    });
+    expect(sink.events).toEqual([
+      {
+        level: "warn",
+        category: "gateway",
+        op: "coding-sidecar.gateway.rejected",
+        correlationId: "unknown-correlation-id",
+        durationMs: undefined,
+        status: 400,
+        errorKind: undefined,
+        extra: { reason: "message-shape-invalid", runId: "run-gateway-test" },
+      },
+    ]);
+  });
+
+  it("logs a body-free rejection line for a browser-origin request refused before authentication runs", async () => {
+    const sink = captureServerLog("warn");
+    const deps = depsValue(configValue(provider(), capability()));
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext(
+        { messages: [{ role: "user", content: "continue" }] },
+        "https://example.invalid",
+      ),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 403,
+      body: { error: { code: "FORBIDDEN", message: "Coding sidecar gateway request is denied." } },
+    });
+    expect(sink.events).toEqual([
+      {
+        level: "warn",
+        category: "gateway",
+        op: "coding-sidecar.gateway.rejected",
+        correlationId: "unknown-correlation-id",
+        durationMs: undefined,
+        status: 403,
+        errorKind: undefined,
+        extra: { reason: "origin-not-allowed" },
+      },
+    ]);
+  });
+
+  it("logs a body-free rejection line when the runtime prompt-budget reservation is denied", async () => {
+    const sink = captureServerLog("warn");
+    const deps: UiHandlerDeps = {
+      ...depsValue(configValue(provider(), capability())),
+      runtimeCapabilityAuthenticator: {
+        authenticate: (capability: string, audience: "model-gateway" | "tool-facade") =>
+          capability === "gateway-capability-material-0000000001" && audience === "model-gateway"
+            ? { ok: true, binding: { runId: "run-gateway-test" } }
+            : { ok: false },
+        reservePromptTokens: () => ({ ok: false }),
+      },
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "continue" }] }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 403,
+      body: { error: { code: "FORBIDDEN", message: "Coding sidecar gateway request is denied." } },
+    });
+    expect(sink.events).toEqual([
+      {
+        level: "warn",
+        category: "gateway",
+        op: "coding-sidecar.gateway.rejected",
+        correlationId: "unknown-correlation-id",
+        durationMs: undefined,
+        status: 403,
+        errorKind: undefined,
+        extra: { reason: "runtime-prompt-budget-denied", runId: "run-gateway-test" },
+      },
+    ]);
+  });
 });
 
 // #3390 closeout: a profile can be "available" per config and probe yet still be unusable because

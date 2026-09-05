@@ -2444,19 +2444,105 @@ describe("issue-bound runs (#3385)", () => {
     ).toMatchObject({ extra: { stage: "revalidation", issueBindingFailure: "issue-unavailable" } });
   });
 
-  it("refuses a retry of an issue-bound run that no longer names the issue", async () => {
+  // #3390: the real #3390 run's defect. The issue attachment is transient (held only in memory
+  // from "Use this issue"); the ledger's issue binding is durable. A retry after that transient
+  // attachment was lost — a server restart is the real case, simulated here by never re-supplying
+  // `issueRef` — must not silently start context-free, and must not blanket-refuse a still-readable
+  // issue either: it re-resolves the attachment through the SAME authorized intake the fresh-paste
+  // path uses, keyed off the durable binding's own issue number, and attaches it before the first
+  // turn. This replaces the old blanket "no issueRef -> refuse" pin: that pin's real invariant — a
+  // retry can never silently continue without confirmed, verified issue content — is preserved (and
+  // strengthened below) by requiring the re-resolution to actually succeed.
+  it("re-resolves and reattaches the durable issue context on retry when no fresh reference is pasted", async () => {
     const captured = captureActivityLog();
     const intake = issueIntake();
     const f = await acknowledgedIssueBoundRecovery(intake, captured.activityLog);
+    intake.resolve.mockClear();
+    intake.buildContext.mockClear();
+
+    const retried = successfulSnapshot(
+      await f.orchestrator.retry("run-1", { ...start, requestId: "request-2" }),
+    );
+
+    expect(retried.runId).toBe("run-2");
+    expect(retried.issueBinding).toEqual(ISSUE_BINDING);
+    expect(f.rows.get("run-2")?.predecessorRunId).toBe("run-1");
+    // The same authorized reader/intake path the preview uses — never a second issue reader — and
+    // never the user-pasted string this request never carried.
+    expect(intake.resolve).not.toHaveBeenCalled();
+    expect(intake.buildContext).toHaveBeenCalledWith({
+      runId: "run-2",
+      repositoryRoot: "/repo",
+      binding: ISSUE_BINDING,
+      effectiveMode: "supervised-coding",
+      correlationId: "run-2",
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-2",
+        initialContext: renderInitialTurnContext(ISSUE_ATTACHMENT),
+      }),
+    );
+    expect(
+      captured.records.find(
+        (event) =>
+          event.op === "coding-runtime.run.issue-context-attached" && event.correlationId === "run-2",
+      ),
+    ).toMatchObject({ extra: { runId: "run-2", issueNumber: 3385 } });
+  });
+
+  // Same reattachment, reached through a plain "Start coding run" against an acknowledged
+  // recovery-required predecessor (`start` auto-detects it, #3381) rather than the explicit retry
+  // route — the orchestrator's `start -> admitIssue -> runInitialTurn` path is what #3390 named.
+  it("re-attaches durable issue context on a plain start against an acknowledged recovery-required predecessor", async () => {
+    const captured = captureActivityLog();
+    const intake = issueIntake();
+    const f = await acknowledgedIssueBoundRecovery(intake, captured.activityLog);
+    intake.buildContext.mockClear();
+
+    const started = successfulSnapshot(await f.orchestrator.start({ ...start, requestId: "request-2" }));
+
+    expect(started.runId).toBe("run-2");
+    expect(started.issueBinding).toEqual(ISSUE_BINDING);
+    expect(intake.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-2", binding: ISSUE_BINDING }),
+    );
+    expect(
+      captured.records.find(
+        (event) =>
+          event.op === "coding-runtime.run.issue-context-attached" && event.correlationId === "run-2",
+      ),
+    ).toBeDefined();
+  });
+
+  // The tightened half of the relocated pin: an actually unresolvable durable binding (authorization
+  // revoked, issue gone, provider failure) still fails closed — with its own closed code so the
+  // Workbench can tell the operator to preview the issue again, never a context-free run.
+  it("refuses a retry whose durable issue context cannot be re-resolved, with a body-free log line", async () => {
+    const captured = captureActivityLog();
+    const intake = issueIntake();
+    const f = await acknowledgedIssueBoundRecovery(intake, captured.activityLog);
+    intake.buildContext.mockResolvedValueOnce({ ok: false, failure: "issue-unavailable" });
 
     const result = await f.orchestrator.retry("run-1", { ...start, requestId: "request-2" });
 
-    expect(result).toEqual({ ok: false, failureCode: "invalid-intent" });
+    expect(result).toEqual({
+      ok: false,
+      failureCode: "issue-context-unavailable",
+      issueBindingFailure: "issue-unavailable",
+    });
     expect(f.rows.has("run-2")).toBe(false);
     expect(f.rows.get("run-1")?.state).toBe("recovery-required");
-    expect(
-      captured.records.find((event) => event.op === "coding-runtime.run.issue-binding-refused"),
-    ).toMatchObject({ extra: { stage: "revalidation" } });
+    const refusal = captured.records.find(
+      (event) => event.op === "coding-runtime.run.issue-binding-refused",
+    );
+    expect(refusal).toMatchObject({
+      extra: { stage: "reattach", issueBindingFailure: "issue-unavailable" },
+    });
+    const logged = JSON.stringify(captured.records);
+    for (const secret of [ISSUE_TITLE, ISSUE_BODY, ISSUE_ATTACHMENT.text, ISSUE_REF]) {
+      expect(logged).not.toContain(secret);
+    }
   });
 });
 

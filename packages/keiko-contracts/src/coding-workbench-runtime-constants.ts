@@ -72,7 +72,14 @@ export type CodingWorkbenchRuntimeFailureCode =
   // (RuntimeOperationReplayCoordinator.reserve returns undefined at committed.size >= 512).
   // Distinct from "invalid-intent" so callers can distinguish a malformed request from a
   // long-lived run whose replay budget is spent.
-  | "replay-cap-exhausted";
+  | "replay-cap-exhausted"
+  // #3390: a start against a durable issue binding with no fresh pasted reference (a retry/resume
+  // after the transient in-memory attachment was lost, e.g. a server restart) re-resolves the
+  // attachment through the same authorized reader the preview uses. Distinct from "invalid-intent"
+  // so the Workbench can render a specific, actionable message instead of a generic rejection when
+  // that re-resolution itself fails (authorization revoked, issue gone, provider failure) — the
+  // start never proceeds context-free.
+  | "issue-context-unavailable";
 
 export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
   Object.freeze([
@@ -95,4 +102,5 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "revoked",
     "recovery-required",
     "replay-cap-exhausted",
+    "issue-context-unavailable",
   ] as const);
