@@ -19,6 +19,7 @@ import type {
   GitChangedFile,
   GitHistoryEntry,
   GitHistoryResponse,
+  GitRepositoryDiffResponse,
   GitRepositorySummary,
   GitSyncPreview,
   ProjectWithAvailability,
@@ -31,6 +32,7 @@ import type {
   GitDeliveryPushPreviewResponse,
 } from "@/lib/api";
 import type { GitRepositoryStatusResponse } from "@/lib/types";
+import type { GitEditorDiffResponse } from "@oscharko-dev/keiko-contracts";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import type { GitClientSeam } from "./git-client-seam";
 import { GitClientWindow } from "./GitClientWindow";
@@ -278,11 +280,16 @@ function makeHistoryPage(
   });
 }
 
-function makeProjectResponse(repo: ProjectWithAvailability) {
+function makeProjectResponse(repo: ProjectWithAvailability): {
+  readonly project: ProjectWithAvailability;
+} {
   return { project: repo };
 }
 
-function makeDiffResponse(diff: string, overrides: { readonly truncated?: boolean } = {}) {
+function makeDiffResponse(
+  diff: string,
+  overrides: { readonly truncated?: boolean } = {},
+): GitRepositoryDiffResponse {
   return {
     schemaVersion: "1" as const,
     root: "/repos/alpha",
@@ -540,7 +547,10 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
   };
 }
 
-function makeStructuredDiffResponse(diff = "", scope: "staged" | "unstaged" = "unstaged") {
+function makeStructuredDiffResponse(
+  diff = "",
+  scope: "staged" | "unstaged" = "unstaged",
+): GitEditorDiffResponse {
   const parsed = parseUnifiedDiff(diff);
   return {
     schemaVersion: "1" as const,

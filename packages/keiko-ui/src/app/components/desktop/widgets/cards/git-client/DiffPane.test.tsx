@@ -101,7 +101,10 @@ function makeSeam(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
   };
 }
 
-function renderPane(props: Partial<Parameters<typeof DiffPane>[0]> = {}) {
+function renderPane(props: Partial<Parameters<typeof DiffPane>[0]> = {}): {
+  readonly client: GitClientSeam;
+  readonly onScopeChange: ReturnType<typeof vi.fn<(scope: GitDiffScope) => void>>;
+} {
   const onScopeChange = vi.fn<(scope: GitDiffScope) => void>();
   const client = props.client ?? makeSeam();
   render(

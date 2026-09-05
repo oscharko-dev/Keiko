@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   parseGatewayConfig,
@@ -15,12 +15,26 @@ import {
   applyGitChangeDescription,
   chatTurnShapeFields,
   captureDesktopChatExecutionAdmission,
+  createHandleGitChangeApplyDescription,
   handleCreateDesktopChat,
   handleSendDesktopChat,
   parseClientTurnId,
   parseExpectedGroundingScopeIdentity,
 } from "./chat-handlers.js";
 import { buildRedactor, buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
+// Final-audit F5 (#3400): the production-composition proof for the Chat apply path reuses the
+// SAME real fixture and route handlers prDescriptionRoutes.test.ts already proves a full
+// preview -> approve -> apply round trip against (a real git repo, a real GitHub-shaped body-only
+// PATCH capture) — never a second, hand-rolled description-service fixture.
+import { DescriptionFixture } from "./gitDelivery/prDescriptionTestSupport.js";
+import {
+  createHandlePrDescriptionApprove,
+  createHandlePrDescriptionPreview,
+  type PrDescriptionRouteOptions,
+} from "./gitDelivery/prDescriptionRoutes.js";
+import { permittedGitDeliveryAuthority } from "./gitDelivery/runBoundAuthority.test-support.js";
+import { codingWorkbenchRemoteDigest } from "./coding-context/githubIssueResolution.js";
+import type { ChatGitChangeScope } from "./store/index.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
@@ -854,6 +868,15 @@ vi.mock("./gitDelivery/prExecution.js", () => ({
   KEIKO_DEFAULT_PR_POLICY_PACK: {},
 }));
 
+// The GitHub-reader grant itself is proven elsewhere (gitChangeRoutes.test.ts, coding-context's own
+// suite); stubbed here — mirroring gitChangeRoutes.test.ts's own convention for this exact module —
+// so this file's F5 tests isolate what THEY must prove: admission, service reuse, and the one-use
+// approval reaching `executeApproved`.
+vi.mock("./coding-context/githubIssueReaderAuthorization.js", () => ({
+  isGitHubIssueReaderAuthorized: (): boolean => true,
+  githubRemoteOwnerAndRepoFor: (): Promise<string> => Promise.resolve("owner/repo"),
+}));
+
 describe("applyGitChangeDescription routes only through the description application service (#3400)", () => {
   afterEach(() => {
     executeGovernedPullRequestSpy.mockClear();
@@ -879,6 +902,208 @@ describe("applyGitChangeDescription routes only through the description applicat
     expect(result).toEqual({ outcome: "applied" });
     expect(executeApproved).toHaveBeenCalledWith("proposal-1", lease);
     expect(executeApproved).toHaveBeenCalledTimes(1);
+    expect(executeGovernedPullRequestSpy).not.toHaveBeenCalled();
+  });
+});
+
+// Final-audit F5 (#3400): `applyGitChangeDescription` above had zero production callers.
+// `createHandleGitChangeApplyDescription` is the real handler Chat reaches for the apply action —
+// proven here against a REAL `PrDescriptionApplicationService` (the `DescriptionFixture` prDescriptionRoutes.test.ts
+// itself proves a full preview -> approve -> apply round trip against) reused through the SAME
+// admitted, per-(project, repository, PR) service factory, never a second surface.
+describe("createHandleGitChangeApplyDescription — the real handler Chat reaches (final-audit F5)", () => {
+  let fixture: DescriptionFixture;
+  let store: ReturnType<typeof createInMemoryUiStore>;
+  let projectId: string;
+
+  beforeEach(() => {
+    fixture = new DescriptionFixture();
+    store = createInMemoryUiStore();
+    projectId = store.createProject(fixture.root).path;
+    executeGovernedPullRequestSpy.mockClear();
+  });
+  afterEach(() => {
+    fixture.close();
+    store.close();
+  });
+
+  function fixtureDeps(): UiHandlerDeps {
+    return {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+      env: {},
+      redactor: buildRedactor({}),
+      registry: createRunRegistry(),
+      modelPortFactory: () => undefined,
+      store,
+      gitDeliveryAuthority: permittedGitDeliveryAuthority(
+        () => projectId,
+        () => fixture.root,
+        "autonomous-delivery",
+        { headRef: "feature", baseRef: "main", allowDetachedHead: false, allowedPrefixes: ["feature"] },
+      ),
+    } as unknown as UiHandlerDeps;
+  }
+
+  function fixtureOptions(): PrDescriptionRouteOptions {
+    return { execution: {}, serviceFactory: () => fixture.service };
+  }
+
+  function connectedScope(relationshipId: string): ChatGitChangeScope {
+    return {
+      kind: "git-change",
+      relationshipId,
+      remoteDigest: codingWorkbenchRemoteDigest("owner/repo"),
+      comparisonLabel: "PR #123",
+      baseRef: "main",
+      headRef: "feature",
+      baseSha: fixture.remote.identity.baseSha,
+      headSha: fixture.remote.identity.headSha,
+      mergeBaseSha: fixture.remote.identity.baseSha,
+      snapshotDigest: "a".repeat(64),
+      pullRequestNumber: 123,
+      fileCount: 1,
+      totalFiles: 1,
+      omittedFiles: 0,
+      truncatedFiles: 0,
+      descriptionStatus: "current",
+      connectedAtMs: Date.now(),
+    };
+  }
+
+  async function heldProposalId(deps: UiHandlerDeps): Promise<string> {
+    const previewRes = await createHandlePrDescriptionPreview(fixtureOptions())(
+      requestContext({
+        schemaVersion: "1",
+        projectId,
+        ownerAndRepo: "owner/repo",
+        prNumber: 123,
+        language: "en",
+      }),
+      deps,
+    );
+    // eslint-disable-next-line no-console
+    console.log("DEBUG previewRes", JSON.stringify(previewRes));
+    const proposalId = (previewRes.body as { preview: { proposalId: string } }).preview.proposalId;
+    await createHandlePrDescriptionApprove(fixtureOptions())(
+      requestContext({
+        schemaVersion: "1",
+        projectId,
+        ownerAndRepo: "owner/repo",
+        prNumber: 123,
+        proposalId,
+      }),
+      deps,
+    );
+    return proposalId;
+  }
+
+  it("reaches executeApproved with a one-use approval and applies the real body-only PATCH", async () => {
+    const deps = fixtureDeps();
+    const chat = store.createChat(projectId, "t", "m");
+    const relationshipId = "rel-apply-1";
+    store.updateChat(chat.id, { gitChangeScopes: [connectedScope(relationshipId)] });
+    const proposalId = await heldProposalId(deps);
+
+    const applyHandler = createHandleGitChangeApplyDescription(fixtureOptions());
+    const result = await applyHandler(
+      requestContext({ schemaVersion: "1", chatId: chat.id, relationshipId, proposalId }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect((result.body as { outcome: string }).outcome).toBe("observed");
+    expect(fixture.writes).toHaveLength(1);
+
+    // The SAME approval is one-use: a second apply with the SAME proposal id must not re-execute.
+    const replay = await applyHandler(
+      requestContext({ schemaVersion: "1", chatId: chat.id, relationshipId, proposalId }),
+      deps,
+    );
+    expect(replay.status).toBe(409);
+    expect(fixture.writes).toHaveLength(1);
+    expect(executeGovernedPullRequestSpy).not.toHaveBeenCalled();
+  });
+
+  it("blocks with 404 when the relationship names no connected git-change scope", async () => {
+    const deps = fixtureDeps();
+    const chat = store.createChat(projectId, "t", "m");
+
+    const applyHandler = createHandleGitChangeApplyDescription(fixtureOptions());
+    const result = await applyHandler(
+      requestContext({
+        schemaVersion: "1",
+        chatId: chat.id,
+        relationshipId: "rel-unknown",
+        proposalId: "proposal-x",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(404);
+    expect(executeGovernedPullRequestSpy).not.toHaveBeenCalled();
+  });
+
+  it("blocks with 409 when the connected scope has no resolved pull request", async () => {
+    const deps = fixtureDeps();
+    const chat = store.createChat(projectId, "t", "m");
+    const relationshipId = "rel-no-pr";
+    const scope: ChatGitChangeScope = { ...connectedScope(relationshipId), pullRequestNumber: undefined };
+    store.updateChat(chat.id, { gitChangeScopes: [scope] });
+
+    const applyHandler = createHandleGitChangeApplyDescription(fixtureOptions());
+    const result = await applyHandler(
+      requestContext({
+        schemaVersion: "1",
+        chatId: chat.id,
+        relationshipId,
+        proposalId: "proposal-x",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ error: { code: "GIT_CHANGE_APPLY_UNAVAILABLE" } });
+  });
+
+  // Epic negative qualification: this handler's own module never imports the commit/push/PR-create/
+  // merge/close execution paths at all (only #3399's own body-only apply service), so a Chat apply —
+  // even a well-formed one carrying a held, approved proposal — can reach ONLY that one effect.
+  it("never reaches executeGovernedPullRequest (commit/push/PR-create/merge/close) through this path", async () => {
+    const deps = fixtureDeps();
+    const chat = store.createChat(projectId, "t", "m");
+    const relationshipId = "rel-negative";
+    store.updateChat(chat.id, { gitChangeScopes: [connectedScope(relationshipId)] });
+    const proposalId = await heldProposalId(deps);
+
+    const applyHandler = createHandleGitChangeApplyDescription(fixtureOptions());
+    await applyHandler(
+      requestContext({ schemaVersion: "1", chatId: chat.id, relationshipId, proposalId }),
+      deps,
+    );
+
+    expect(executeGovernedPullRequestSpy).not.toHaveBeenCalled();
+    // The captured write is body-only: no title, base, or merge/close-shaped field ever reaches it.
+    expect(Object.keys(fixture.writes[0] ?? {})).toEqual(["body"]);
+  });
+
+  // A request smuggling an operation-shaped field (mirrors prDescriptionRoutes.ts's own
+  // "binding smuggling" guard) is rejected before any scope lookup or service resolution runs.
+  it("rejects a request carrying an extra field before any lookup runs", async () => {
+    const deps = fixtureDeps();
+    const applyHandler = createHandleGitChangeApplyDescription(fixtureOptions());
+    const result = await applyHandler(
+      requestContext({
+        schemaVersion: "1",
+        chatId: "chat-1",
+        relationshipId: "rel-1",
+        proposalId: "proposal-1",
+        mergeMethod: "squash",
+      }),
+      deps,
+    );
+    expect(result.status).toBe(400);
     expect(executeGovernedPullRequestSpy).not.toHaveBeenCalled();
   });
 });

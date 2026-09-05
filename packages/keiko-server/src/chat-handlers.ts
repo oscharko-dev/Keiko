@@ -120,7 +120,12 @@ import {
 import { resolveChatRepository } from "./gitChangeRoutes.js";
 import { observedGitRunner } from "./gitProcessActivity.js";
 import { defaultGitProcessRunner } from "@oscharko-dev/keiko-git";
-import { githubRemoteOwnerAndRepoFor } from "./coding-context/githubIssueReaderAuthorization.js";
+import {
+  githubRemoteOwnerAndRepoFor,
+  isGitHubIssueReaderAuthorized,
+} from "./coding-context/githubIssueReaderAuthorization.js";
+import { hasOnlyAllowedKeys } from "./gitDelivery/requestGuards.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import {
   currentAuditRedactString,
   currentConversationReady,
@@ -2856,7 +2861,7 @@ export const createHandleGitChangeApplyDescription = (
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-    const parsed = await readJsonObject(ctx.req, ctx.signal);
+    const parsed = await readJsonObject(ctx.req);
     if (isRouteResult(parsed)) return parsed;
     const request = parseGitChangeApplyDescriptionRequest(parsed);
     if (request === undefined) {

@@ -414,6 +414,46 @@ describe("Coding Workbench provider API isolation (issue #2639)", () => {
   });
 });
 
+describe("Coding Workbench issue/journey/PR-description lazy adapter (epic #3384 final-audit F18)", () => {
+  it("keeps the issue-preview, journey-refresh and PR-description-application validators out of api.ts's eager imports", () => {
+    // `previewCodingWorkbenchIssue`, `fetchCodingWorkbenchJourneyRefresh` and the
+    // `fetchGitDeliveryPrDescription*` fetchers keep their names, signatures and behaviour in
+    // api.ts (every existing caller — in and out of the Coding Workbench tree — is unaffected), but
+    // their contract validators moved to ./coding-workbench-lazy-fetchers, loaded only through
+    // `await import(...)` at call time (the same technique already proven by
+    // managed-lsp-response-validators.ts above). Before this fix these five bindings landed in
+    // api.ts's own eager `@oscharko-dev/keiko-contracts/runtime/*` imports, pulling
+    // `coding-workbench-runtime` (via `isGitHubOwnerAndRepo` and the issue-preview bounds),
+    // `git-journey-validation` (via `isJourneyOutcome`), `pr-description` (via
+    // `PR_DESCRIPTION_LANGUAGES`) and `pr-description-application` (via
+    // `isPrDescriptionApplicationStatus`/`PR_DESCRIPTION_APPLICATION_REASON_STATES`) into the
+    // desktop shell's first-load chunk (~11 KiB gzip).
+    const eagerContractsRuntimeImports = [
+      ...API_SOURCE.matchAll(
+        /import\s+(?:type\s+)?\{([\s\S]*?)\}\s*from\s*["']@oscharko-dev\/keiko-contracts\/runtime\/[^"']+["'];/gu,
+      ),
+    ]
+      .map((match) => match[1] ?? "")
+      .join("\n");
+
+    expect(eagerContractsRuntimeImports).not.toContain("isGitHubOwnerAndRepo");
+    expect(eagerContractsRuntimeImports).not.toContain(
+      "CODING_WORKBENCH_ISSUE_PREVIEW_TITLE_MAX_CHARS",
+    );
+    expect(eagerContractsRuntimeImports).not.toContain(
+      "CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS",
+    );
+    expect(eagerContractsRuntimeImports).not.toContain("GITHUB_ISSUE_NUMBER_MAX");
+    expect(eagerContractsRuntimeImports).not.toContain("isJourneyOutcome");
+    expect(eagerContractsRuntimeImports).not.toContain("PR_DESCRIPTION_LANGUAGES");
+    expect(eagerContractsRuntimeImports).not.toContain("isPrDescriptionApplicationStatus");
+    expect(eagerContractsRuntimeImports).not.toContain(
+      "PR_DESCRIPTION_APPLICATION_REASON_STATES",
+    );
+    expect(API_SOURCE).toContain('import("./coding-workbench-lazy-fetchers")');
+  });
+});
+
 describe("requestEditorCompletion (Issue #1199)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
