@@ -349,11 +349,14 @@ function childRunSpec(): OpenCodeToolSpec {
 }
 
 // #3386/#3387/#3388: the Git status/diff/stage/commit, push/pull-request and CI-observation
-// specs. Effects mirror packages/keiko-server/src/coding-runtime/gitOperationRequirements.ts's own
-// per-operation classification exactly (the live authority-envelope classification this catalog
-// must never disagree with) -- status/diff read-only, stage a local write, commit/push/pull-request
-// delivery-substrate (push/pull-request additionally network-egress), CI observation a
-// delivery-substrate network read. None of these five schemas can express the format-level regexes
+// specs. For status/diff/stage/commit/push/pull-request, effects mirror
+// packages/keiko-server/src/coding-runtime/gitOperationRequirements.ts's own per-operation
+// classification exactly (the live authority-envelope classification this catalog must never
+// disagree with) -- status/diff read-only, stage a local write, commit delivery-substrate,
+// push/pull-request delivery-substrate plus network-egress. gitOperationRequirements.ts has no CI
+// entry at all -- CI observation's effects instead mirror that file's FETCH_REQUIREMENT, its
+// closest analog for a delivery-substrate network read. None of these five schemas can express the
+// format-level regexes
 // (proposalId prefix, control-character-free title) the real OpenCode wire schemas pin in
 // packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts -- the same documented
 // `pattern`-keyword gap this file's header comment already covers for `keiko.changeset.edit`; those

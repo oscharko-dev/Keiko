@@ -308,7 +308,16 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
       outcome,
       expectedRevision: record.revision,
     });
-    if (outcome === "succeeded" && result.status !== "blocked")
+    // A rejected CAS (stale revision, unknown attempt, a replay of a DIFFERENT outcome, ...)
+    // returns the record as it stood BEFORE this call, so the settled attempt never actually
+    // reached `outcome` in it. `result.status` alone cannot tell the two apart: a write that DID
+    // apply can still report "blocked" when it also just exhausted the budget (`persist()`'s own
+    // post-write policy check) -- checking the returned attempt's own status is the one signal
+    // that is true exactly when the CAS actually applied this outcome to this attempt.
+    const applied = result.record?.attempts.some(
+      (attempt) => attempt.attemptId === attemptId && attempt.status === outcome,
+    );
+    if (outcome === "succeeded" && applied === true)
       this.deps.notifyVerifiedHeadAdvanced?.(context.runId);
   }
 }

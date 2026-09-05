@@ -13,6 +13,7 @@ import {
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { GitStageCommand } from "@oscharko-dev/keiko-tools";
 import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
+import { mintProposalId } from "./proposalId.js";
 import type {
   VerifiedCommitRunContext,
   VerifiedCommitServiceOptions,
@@ -54,7 +55,7 @@ function buildStageProposal(
   diff: import("@oscharko-dev/keiko-contracts").GitEditorDiffResponse,
   nowMs: number,
 ): RuntimeGitProposal {
-  const proposalId = `stage-${BigInt(`0x${randomBytes(16).toString("hex")}`).toString(10)}`;
+  const proposalId = mintProposalId("stage");
   const command: GitStageCommand = {
     kind: "stage",
     pathspecs: [...paths],

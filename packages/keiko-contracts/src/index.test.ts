@@ -927,7 +927,9 @@ describe("keiko-contracts package surface", () => {
     expect(GIT_DELIVERY_PROVIDER_SCHEMA_VERSION).toBe("1");
 
     // Count assertions are intentional surface pins; bump deliberately when #472+ extends the surface.
-    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(11);
+    // #3389 (epic #3384 correction 7): 11 -> 13 with "pr-description-apply" (#3399) and
+    // "pr-mark-ready"; the same pin lives in git-delivery.test.ts and moves together with this one.
+    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(13);
     expect(GIT_DELIVERY_RISK_CLASSES).toHaveLength(4);
     // Includes the server-owned continuity guard's typed authority-denied audit outcome.
     expect(GIT_DELIVERY_BLOCK_REASONS).toHaveLength(9);

@@ -3800,9 +3800,15 @@ export async function refreshGitChangeScope(
 //
 // A separate, narrower client from the generic pr-create/pr-update pair above: the draft->ready
 // transition never carries title/body/base — only the exact facts the one-use approval binds
-// (owner/repo, PR number, base/head SHA, a digest over the readiness snapshot that justified the
-// proposal). Consumed by the Coding Workbench journey outcome's propose-ready control, never by
-// GovernedPullRequestCard (which has neither the SHAs nor the readiness digest to bind).
+// (owner/repo, PR number, base/head SHA, the PR's base branch NAME, a digest over the readiness
+// snapshot that justified the proposal). Consumed by the Coding Workbench journey outcome's
+// propose-ready control, never by GovernedPullRequestCard (which has neither the SHAs nor the
+// readiness digest to bind).
+//
+// `baseRef` mirrors `PrMarkReadyCommand.baseRef` (prMarkReadyExecution.ts): the server's mint route
+// requires it unconditionally (`buildMarkReadyCommand`'s `isBaseBranchName` check) so the live
+// requirements/conflict re-read can address GitHub's branch-keyed endpoints — omitting it fails the
+// mint with a clean 400 (#3389 repair).
 
 export interface GitDeliveryPrMarkReadyInput {
   readonly projectId: string;
@@ -3810,6 +3816,7 @@ export interface GitDeliveryPrMarkReadyInput {
   readonly prExternalId: string;
   readonly headSha: string;
   readonly baseSha: string;
+  readonly baseRef: string;
   readonly readinessDigest: string;
   readonly approval?: GitDeliveryApprovalClaim | undefined;
 }
@@ -3836,6 +3843,7 @@ function gitDeliveryPrMarkReadyBody(input: GitDeliveryPrMarkReadyInput): string 
     prExternalId: input.prExternalId,
     headSha: input.headSha,
     baseSha: input.baseSha,
+    baseRef: input.baseRef,
     readinessDigest: input.readinessDigest,
     ...(input.approval === undefined ? {} : { approval: input.approval }),
   });

@@ -2,7 +2,7 @@ import { hasIssueClosingDirective } from "@oscharko-dev/keiko-contracts/runtime/
 import { readGitRawWorktreeSnapshot } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { runtimeGitReadDeps } from "./runtimeGitRead.js";
 import { readVerifiedCommitReview } from "./verifiedCommitReview.js";
-import { randomBytes } from "node:crypto";
+import { mintProposalId } from "./proposalId.js";
 import type {
   VerificationReport,
   GitDeliveryApprovalClaim,
@@ -331,7 +331,7 @@ class VerifiedCommitController implements VerifiedCommitService {
     message: string,
   ): VerifiedCommitBinding {
     return {
-      proposalId: `commit-${BigInt(`0x${randomBytes(16).toString("hex")}`).toString(10)}`,
+      proposalId: mintProposalId("commit"),
       runId: context.runId,
       envelopeDigest: context.envelopeDigest,
       runtimeAuthorityDigest: context.runtimeAuthorityDigest,

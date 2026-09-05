@@ -3,6 +3,7 @@
 import { useEffect, type ReactNode } from "react";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
+import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { proposePrMarkReady, type GitDeliveryPrMarkReadyInput } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
@@ -46,12 +47,23 @@ export interface CodingWorkbenchJourneyOutcomeProps {
   readonly markReadyAvailable?: boolean;
 }
 
+// The server's mint route requires `baseRef` to be a base branch NAME, never a fully-qualified ref
+// (`isBaseBranchName`, prMarkReadyExecution.ts): the same `isSafeGitRefName` + "not refs/-prefixed"
+// composition `GitPullRequestIdentity`'s own `baseRef` field is validated with at the wire boundary
+// (git-pull-request-identity.ts's `validBranch`), reused here rather than restated so a value this
+// helper accepts can never fail the server's stricter-in-spirit, format-compatible check.
+function isKnownBaseRef(value: string | undefined): value is string {
+  return value !== undefined && isSafeGitRefName(value) && !value.startsWith("refs/");
+}
+
 /**
  * Derives the exact pr-mark-ready mint/execute request from a JourneyOutcome's own observed remote
- * identity and CI readiness snapshot — undefined when either is missing. An incomplete or stale
- * observation can never be proposed as ready: every field this binds is a fact the journey read
- * actually observed, never guessed or defaulted (AC3's "base/head SHAs, a readiness digest, the
- * current draft state" binding).
+ * identity and CI readiness snapshot — undefined when any bound fact, including the PR's base
+ * branch name, is missing or unusable. An incomplete or stale observation can never be proposed as
+ * ready: every field this binds is a fact the journey read actually observed, never guessed or
+ * defaulted (AC3's "base/head SHAs, a readiness digest, the current draft state" binding; #3389
+ * repair: `baseRef` must come from the observed identity, never a default, or the control stays
+ * unavailable rather than sending a request the server's mint route unconditionally rejects).
  */
 export function prMarkReadyProposalRequestFor(
   outcome: JourneyOutcome,
@@ -60,12 +72,15 @@ export function prMarkReadyProposalRequestFor(
   const identity = outcome.remote?.identity;
   const readinessDigest = outcome.readiness?.requirementsDigest ?? undefined;
   if (identity === undefined || readinessDigest === undefined) return undefined;
+  const baseRef = identity.baseRef;
+  if (!isKnownBaseRef(baseRef)) return undefined;
   return {
     projectId,
     ownerAndRepo: identity.repository,
     prExternalId: String(identity.number),
     headSha: identity.headSha,
     baseSha: identity.baseSha,
+    baseRef,
     readinessDigest,
   };
 }

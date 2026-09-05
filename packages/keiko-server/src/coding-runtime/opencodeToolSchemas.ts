@@ -13,6 +13,7 @@ import {
   CODING_TOOL_READ_MAX_START_LINE,
   CODING_TOOL_READ_MAX_WINDOW_LINES,
 } from "./codingToolIpc.js";
+import { proposalIdPattern } from "../gitDelivery/proposalId.js";
 
 export const OPENCODE_PINNED_VERSION = "1.17.17";
 export const OPENCODE_GOVERNED_ACTION_PERMISSION = "keiko_governed_action";
@@ -291,15 +292,11 @@ const GIT_CI_STATUS_SCHEMA = {
 // The four write-class proposals (stage/commit/push/pull-request) share one redemption tool: once
 // the Workbench approval channel admits a proposal, the model redeems it by kind + proposalId
 // rather than each proposal type growing its own execute-phase tool.
-// The proposalId prefix bound below must accept every shape the server actually mints for the
-// four redeemable kinds: "stage" (packages/keiko-server/src/gitDelivery/runtimeGitService.ts,
-// `stage-${...}`), "commit" (packages/keiko-server/src/gitDelivery/verifiedCommitService.ts's
-// VerifiedCommitService.propose(), `commit-${...}`), and "push"/"pull-request" (both minted via
-// draftDeliveryId("delivery") in packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts,
-// `delivery-${...}`) -- three prefixes for four kinds, not two. gitDelivery/** does not export a
-// single shared prefix constant these three call sites and this schema could all import (each
-// mints its id inline); until one exists, this pattern is the schema's own bound projection of
-// those three shapes and must be kept in exact sync with them by hand.
+// The proposalId pattern below is derived from gitDelivery/proposalId.ts's PROPOSAL_ID_PREFIXES,
+// the single source of truth for the three prefixes the server actually mints for these four
+// redeemable kinds: "stage" (runtimeGitService.ts), "commit" (verifiedCommitService.ts's
+// VerifiedCommitService.propose()), and "push"/"pull-request" (both minted via
+// draftDeliveryId("delivery") in draftDeliveryFacts.ts) -- three prefixes for four kinds, not two.
 const GIT_EXECUTE_SCHEMA = {
   type: "object",
   properties: {
@@ -308,7 +305,7 @@ const GIT_EXECUTE_SCHEMA = {
       type: "string",
       minLength: 1,
       maxLength: 64,
-      pattern: "^(?:stage|delivery|commit)-[0-9]{1,39}$",
+      pattern: proposalIdPattern(),
       description: "The proposalId returned by the matching propose-phase tool call.",
     },
   },

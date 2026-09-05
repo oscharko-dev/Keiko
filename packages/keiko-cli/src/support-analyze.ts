@@ -918,6 +918,10 @@ const JOURNEY_OP_PHASE = new Map<string, IssueToPrJourneyPhase>([
   ["git.delivery.pr-mark-ready.drift", "readiness"],
   ["git.pr-description", "description"],
   ["git.pr-description.receipt", "description"],
+  // #3401: the coding-runtime automatic-description dispatch lifecycle (dispatched/coalesced/
+  // superseded/blocked/generated/failed) — one fixed op, the sub-step carried in its own `event`
+  // extra field, ahead of `git.pr-description`'s apply/receipt evidence in the same phase.
+  ["coding-runtime.description", "description"],
   // Chat's own admission gate ahead of the Model Gateway for a git-change-connected turn
   // (chat-handlers.ts `logGitChangeTurnAuthority`) — the description-generation admission decision
   // itself, distinct from the apply/receipt evidence above.

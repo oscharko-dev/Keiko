@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import type {
   DraftDeliveryBinding,
   DraftDeliveryRecord,
@@ -16,6 +15,7 @@ import { readGitTreeDigest } from "@oscharko-dev/keiko-tools/internal/git-mutati
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
 import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
 import { runtimeGitReadDeps } from "./runtimeGitRead.js";
+import { mintProposalId } from "./proposalId.js";
 import {
   DraftDeliveryFailure,
   type DraftDeliveryDependencies,
@@ -23,7 +23,7 @@ import {
 } from "./draftDeliveryTypes.js";
 
 export function draftDeliveryId(prefix: "delivery" | "recovery"): string {
-  return `${prefix}-${BigInt(`0x${randomBytes(16).toString("hex")}`).toString(10)}`;
+  return mintProposalId(prefix);
 }
 
 export function assertDraftAuthority(context: DraftDeliveryRunContext): void {

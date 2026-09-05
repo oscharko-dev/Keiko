@@ -441,30 +441,7 @@ describe("production CI repair accounting availability", () => {
     );
     const repaired: ReadinessSnapshot = { ...readySnapshot(), headSha: repairedHeadSha };
     expect(readiness.complete(readiness.begin("run-1"), repaired)).toBe(true);
-    console.log(
-      "DEBUG readiness.get evidenceRef",
-      readiness.get("run-1")?.evidenceRef,
-      "repaired evidenceRef",
-      repaired.evidenceRef,
-      "repaired.state",
-      repaired.state,
-    );
     budget?.observed(repaired);
-    console.log(
-      "DEBUG record after observed",
-      JSON.stringify(
-        repairBudgetStore.read({
-          runId: "run-1",
-          remoteDigest: DIGEST,
-          prNumber: 17,
-          correlationId: "run-1",
-          stillAuthorized: () => true,
-          limits: { maxRuntimeMs: 60000, maxToolCalls: 20, maxPromptTokens: 1000 },
-        }),
-        null,
-        2,
-      ),
-    );
     expect(notify).toHaveBeenCalledExactlyOnceWith("run-1");
   });
 });

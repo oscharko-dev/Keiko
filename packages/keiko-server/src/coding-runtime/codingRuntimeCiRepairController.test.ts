@@ -321,4 +321,68 @@ describe("CI repair accounting around admitted model work", () => {
     test.controller.admitTool(verify("verify-1"))?.settle({ status: "failed" });
     expect(notify).not.toHaveBeenCalled();
   });
+  // Review repair (#3401 accepted-review minor 3b): a rejected CAS (stale revision -- a
+  // concurrent write already moved the record past the revision this settle read) must never be
+  // mistaken for a successful settle. `result.status` alone cannot carry this: a write that DID
+  // apply can still come back "blocked" purely from `persist()`'s own post-write exhaustion
+  // policy (pinned by the "exactly once" test above, which uses the same repaired-head scenario
+  // but with the real store) -- so the rejected-CAS case is reproduced by wrapping the REAL store
+  // and forcing only `settle` to return the record exactly as a stale-revision rejection would:
+  // unchanged, with the attempt still "active".
+  it("never notifies notifyVerifiedHeadAdvanced when the settling CAS is rejected (stale revision)", () => {
+    const notify = vi.fn();
+    const test = fixture({}, notify);
+    expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
+    const repairedHeadSha = "4".repeat(40);
+    const row = test.db
+      .prepare("SELECT draft_delivery_record FROM coding_runtime_snapshots WHERE run_id = ?")
+      .get("run-1") as { draft_delivery_record: string };
+    const draft: unknown = JSON.parse(row.draft_delivery_record);
+    if (!isDraftDeliveryRecord(draft)) throw new Error("expected a valid draft delivery record");
+    const repairedCommit = JSON.stringify({ ...COMMIT, headSha: repairedHeadSha });
+    test.db
+      .prepare(
+        "UPDATE coding_runtime_snapshots SET draft_delivery_record = ?, verified_commit_result = ?, draft_delivery_source_receipt = ? WHERE run_id = ?",
+      )
+      .run(
+        JSON.stringify({
+          ...draft,
+          binding: { ...draft.binding, headSha: repairedHeadSha },
+          pullRequest:
+            draft.pullRequest === undefined
+              ? undefined
+              : { ...draft.pullRequest, headSha: repairedHeadSha },
+        }),
+        repairedCommit,
+        repairedCommit,
+        "run-1",
+      );
+    const repaired = { ...readySnapshot(), headSha: repairedHeadSha };
+    expect(test.readiness.complete(test.readiness.begin("run-1"), repaired)).toBe(true);
+    const staleRecord = test.store.read(test.context).record;
+    if (staleRecord === undefined) throw new Error("expected an active repair record");
+    const rejectingStore: typeof test.store = {
+      read: test.store.read.bind(test.store),
+      accept: test.store.accept.bind(test.store),
+      begin: test.store.begin.bind(test.store),
+      charge: test.store.charge.bind(test.store),
+      settle: (): ReturnType<typeof test.store.settle> => ({
+        status: "blocked",
+        reason: "stale-revision",
+        record: staleRecord,
+      }),
+    };
+    const controller = new CodingRuntimeCiRepairController({
+      store: rejectingStore,
+      readiness: test.readiness,
+      context: (): CiRepairBudgetContext => test.context,
+      now: () => test.clock.now,
+      notifyVerifiedHeadAdvanced: notify,
+    });
+    controller.observed(repaired);
+    expect(notify).not.toHaveBeenCalled();
+    // The real store was never actually written through the rejecting wrapper, so the attempt it
+    // began is still active in the underlying storage -- the assertion above is not vacuous.
+    expect(test.store.read(test.context).record?.attempts[0]?.status).toBe("active");
+  });
 });

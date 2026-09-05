@@ -140,6 +140,8 @@ timeline as every other operation — `git.delivery.*` (including
 `git.delivery.pr-mark-ready.approval.required`/`.minted`/`.executed`/`.drift`),
 `git.pr-description`/`git.pr-description.receipt`, `pr-description.chat.turn.admitted`/`.denied`
 (Chat's own description-generation admission gate ahead of the Model Gateway),
+`coding-runtime.description` (the server-side automatic-description dispatch lifecycle — dispatched,
+coalesced, superseded, blocked, generated, failed — named in its own `event` extra field),
 `git.journey-observation`/`git.journey-outcome.recorded`, `coding-context.github*` and
 `git-change.chat.*` lines simply appear on it like any other line, and `--clusters` groups them the
 same way. `keiko support

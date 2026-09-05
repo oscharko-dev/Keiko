@@ -49,7 +49,7 @@ import {
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
 import type {
   CodingRuntimeLaunchResolver,
   CodingRuntimeOrchestratorDeps,
@@ -1543,13 +1543,19 @@ export class CodingRuntimeOrchestrator {
       .then((outcome) => {
         this.settleDescriptionDispatch(support, scope, generationVersion, revision, outcome);
       })
-      .catch(() => {
-        support.jobs.recordBlocked(
+      .catch((error: unknown) => {
+        const accepted = support.jobs.recordBlocked(
           scope,
           "provider-failed",
           generationVersion,
           revision,
           this.now().toISOString(),
+        );
+        this.logDescriptionEvent(
+          scope,
+          accepted ? "blocked" : "superseded",
+          { reason: "provider-failed" as const },
+          errorKindOf(error),
         );
       });
   }
@@ -1582,16 +1588,24 @@ export class CodingRuntimeOrchestrator {
     });
   }
 
+  // #3401 review: `op` used to be a template literal (`coding-runtime.description.${event}`),
+  // which the op-catalog generator cannot resolve to a fixed set of literals and which
+  // `support-analyze.ts`'s issue-to-PR journey phase map cannot recognise under any name. One
+  // fixed literal op with `event` carried in `extra` (mirroring how every other dispatch-lifecycle
+  // event on this file's sibling ops is distinguished by an `extra` field, not by the op string
+  // itself) keeps this catalog-resolvable and journey-reconstructable.
   private logDescriptionEvent(
     identity: { readonly runId: string; readonly remoteDigest?: string },
     event: "dispatched" | "coalesced" | "superseded" | "blocked" | "generated" | "failed",
     extra: Readonly<Record<string, unknown>>,
+    errorKind?: string,
   ): void {
     this.deps.activityLog?.write({
       category: "process",
-      op: `coding-runtime.description.${event}`,
+      op: "coding-runtime.description",
       correlationId: runtimeDiagnosticCorrelationId(identity.runId),
-      extra: { runId: identity.runId, remoteDigest: identity.remoteDigest, ...extra },
+      ...(errorKind === undefined ? {} : { errorKind }),
+      extra: { runId: identity.runId, remoteDigest: identity.remoteDigest, event, ...extra },
     });
   }
 

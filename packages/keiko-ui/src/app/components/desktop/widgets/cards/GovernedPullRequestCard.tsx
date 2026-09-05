@@ -33,6 +33,8 @@ import {
   type PrDescriptionApplicationStatus,
   type PrDescriptionLanguage,
 } from "@/lib/api";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-messages.en";
 import { Icons } from "../../Icons";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -772,26 +774,30 @@ function descriptionReasonOf(
 }
 
 // Text + icon only — never colour alone (WCAG 2.2 AA), matching PrOutcome above.
-const DESCRIPTION_STATE_LABEL: Readonly<Record<PrDescriptionApplicationStatus["state"], string>> = {
-  current: "Applied and confirmed",
-  stale: "Stale — refresh the preview",
-  partial: "Applied — partially generated",
-  fallback: "Applied — generated without the model",
-  blocked: "Blocked — not applied",
-  failed: "Failed — not applied",
+const DESCRIPTION_STATE_LABEL_KEY: Readonly<
+  Record<PrDescriptionApplicationStatus["state"], MessageKey>
+> = {
+  current: "governedPullRequestCard.description.state.current",
+  stale: "governedPullRequestCard.description.state.stale",
+  partial: "governedPullRequestCard.description.state.partial",
+  fallback: "governedPullRequestCard.description.state.fallback",
+  blocked: "governedPullRequestCard.description.state.blocked",
+  failed: "governedPullRequestCard.description.state.failed",
 };
 
 function PrDescriptionStatusBadge({
   result,
+  t,
 }: {
   readonly result: PrDescriptionApplicationResultWire | null;
+  readonly t: I18nTranslate;
 }): ReactNode {
   const state = descriptionStateOf(result);
   if (state === undefined) return null;
   const reason = descriptionReasonOf(result);
   return (
     <p style={KV_LABEL} data-testid="gpr-description-state" data-state={state}>
-      <InfoIcon size={12} /> {DESCRIPTION_STATE_LABEL[state]}
+      <InfoIcon size={12} /> {t(DESCRIPTION_STATE_LABEL_KEY[state])}
       {reason !== undefined ? ` (${reason})` : ""}
     </p>
   );
@@ -802,13 +808,15 @@ function PrDescriptionStatusBadge({
 // (epic #3384 Frozen Decisions 10/11) and must never be recomposed or re-derived in the browser.
 function PrDescriptionPreviewBody({
   result,
+  t,
 }: {
   readonly result: PrDescriptionApplicationResultWire | null;
+  readonly t: I18nTranslate;
 }): ReactNode {
   if (result === null || result.outcome !== "preview") return null;
   return (
     <div style={LABEL_STYLE}>
-      <span>Preview — repository template and human text preserved outside the managed region</span>
+      <span>{t("governedPullRequestCard.description.previewCaption")}</span>
       <pre
         data-testid="gpr-description-preview"
         style={{
@@ -832,21 +840,22 @@ interface DescriptionFieldsProps {
   readonly form: DescriptionForm;
   readonly busy: boolean;
   readonly onChange: <K extends keyof DescriptionForm>(key: K, value: DescriptionForm[K]) => void;
+  readonly t: I18nTranslate;
 }
 
-function PrDescriptionPrNumberField({ form, busy, onChange }: DescriptionFieldsProps): ReactNode {
+function PrDescriptionPrNumberField({ form, busy, onChange, t }: DescriptionFieldsProps): ReactNode {
   const prNumberHintId = useId();
   const prNumberInvalid = form.prNumber !== "" && !isValidDescriptionPrNumber(form.prNumber);
   return (
     <label style={{ ...LABEL_STYLE, flex: 1 }}>
-      Pull Request number{" "}
+      {t("governedPullRequestCard.description.field.prNumber")}{" "}
       <input
         style={FIELD_STYLE}
         inputMode="numeric"
         value={form.prNumber}
         disabled={busy}
         onChange={(e) => onChange("prNumber", e.target.value)}
-        aria-label="Description pull request number"
+        aria-label={t("governedPullRequestCard.description.field.prNumberAria")}
         aria-invalid={prNumberInvalid}
         aria-describedby={prNumberInvalid ? prNumberHintId : undefined}
       />
@@ -855,23 +864,23 @@ function PrDescriptionPrNumberField({ form, busy, onChange }: DescriptionFieldsP
           id={prNumberHintId}
           style={{ font: "var(--text-caption)", color: "var(--feedback-danger)", margin: 0 }}
         >
-          Enter the numeric Pull Request number, for example 1499.
+          {t("governedPullRequestCard.description.field.prNumberHint")}
         </p>
       ) : null}
     </label>
   );
 }
 
-function PrDescriptionLanguageField({ form, busy, onChange }: DescriptionFieldsProps): ReactNode {
+function PrDescriptionLanguageField({ form, busy, onChange, t }: DescriptionFieldsProps): ReactNode {
   return (
     <label style={{ ...LABEL_STYLE, flex: 1 }}>
-      Language{" "}
+      {t("governedPullRequestCard.description.field.language")}{" "}
       <select
         style={FIELD_STYLE}
         value={form.language}
         disabled={busy}
         onChange={(e) => onChange("language", e.target.value as PrDescriptionLanguage)}
-        aria-label="Description language"
+        aria-label={t("governedPullRequestCard.description.field.languageAria")}
       >
         {PR_DESCRIPTION_LANGUAGES.map((language) => (
           <option key={language} value={language}>
@@ -884,17 +893,17 @@ function PrDescriptionLanguageField({ form, busy, onChange }: DescriptionFieldsP
 }
 
 function PrDescriptionFields(props: DescriptionFieldsProps): ReactNode {
-  const { form, busy, onChange } = props;
+  const { form, busy, onChange, t } = props;
   return (
     <div style={ROW_STYLE}>
       <label style={{ ...LABEL_STYLE, flex: 1 }}>
-        Repository (owner/repo){" "}
+        {t("governedPullRequestCard.description.field.repository")}{" "}
         <input
           style={FIELD_STYLE}
           value={form.ownerAndRepo}
           disabled={busy}
           onChange={(e) => onChange("ownerAndRepo", e.target.value)}
-          aria-label="Description repository (owner/repo)"
+          aria-label={t("governedPullRequestCard.description.field.repositoryAria")}
         />
       </label>
       <PrDescriptionPrNumberField {...props} />
@@ -911,6 +920,7 @@ interface DescriptionButtonsProps {
   readonly onPreview: () => void;
   readonly onApprove: () => void;
   readonly onApply: () => void;
+  readonly t: I18nTranslate;
 }
 
 function PrDescriptionButtons({
@@ -921,6 +931,7 @@ function PrDescriptionButtons({
   onPreview,
   onApprove,
   onApply,
+  t,
 }: DescriptionButtonsProps): ReactNode {
   return (
     <div style={ROW_STYLE}>
@@ -931,7 +942,7 @@ function PrDescriptionButtons({
         onClick={onPreview}
         data-testid="gpr-description-preview-button"
       >
-        Preview description
+        {t("governedPullRequestCard.description.action.preview")}
       </button>
       <button
         type="button"
@@ -940,7 +951,7 @@ function PrDescriptionButtons({
         onClick={onApprove}
         data-testid="gpr-description-approve-button"
       >
-        Approve
+        {t("governedPullRequestCard.description.action.approve")}
       </button>
       <button
         type="button"
@@ -949,7 +960,7 @@ function PrDescriptionButtons({
         onClick={onApply}
         data-testid="gpr-description-apply-button"
       >
-        Apply
+        {t("governedPullRequestCard.description.action.apply")}
       </button>
     </div>
   );
@@ -959,11 +970,12 @@ function descriptionRefreshHint(
   hasPreviewed: boolean,
   stillValid: boolean,
   state: string | undefined,
+  t: I18nTranslate,
 ): ReactNode {
   if (!hasPreviewed || (stillValid && state !== "stale")) return null;
   const message = stillValid
-    ? "This preview is stale — the pull request changed since it was generated. Preview again before approving or applying."
-    : "The repository or Pull Request number changed since the last preview. Preview again before approving or applying.";
+    ? t("governedPullRequestCard.description.refreshHint.stale")
+    : t("governedPullRequestCard.description.refreshHint.targetChanged");
   return (
     <p
       role="alert"
@@ -1045,15 +1057,17 @@ function derivePrDescriptionPanelFlags(
 function PrDescriptionPanelStatus({
   flags,
   error,
+  t,
 }: {
   readonly flags: DescriptionPanelFlags;
   readonly error: string | null;
+  readonly t: I18nTranslate;
 }): ReactNode {
   return (
     <>
-      {descriptionRefreshHint(flags.hasPreviewed, flags.stillValid, flags.state)}
-      <PrDescriptionStatusBadge result={flags.visibleResult} />
-      <PrDescriptionPreviewBody result={flags.visibleResult} />
+      {descriptionRefreshHint(flags.hasPreviewed, flags.stillValid, flags.state, t)}
+      <PrDescriptionStatusBadge result={flags.visibleResult} t={t} />
+      <PrDescriptionPreviewBody result={flags.visibleResult} t={t} />
       {error !== null ? (
         <p role="alert" style={{ font: "var(--text-body-sm)", color: "var(--feedback-danger)" }}>
           <InfoIcon size={12} /> {error}
@@ -1096,6 +1110,7 @@ function PrDescriptionPanel({
     },
     [],
   );
+  const t = useTranslate();
   const descriptionClient = requiredPrDescriptionClient(client);
   const async = useGovernedPrDescriptionActions(descriptionClient);
   const flags = derivePrDescriptionPanelFlags(form, async);
@@ -1106,13 +1121,13 @@ function PrDescriptionPanel({
   return (
     <section
       style={SECTION_STYLE}
-      aria-label="Pull Request description"
+      aria-label={t("governedPullRequestCard.description.regionAria")}
       data-testid="gpr-description"
     >
       <h3 style={HEADING_STYLE}>
-        <GitIcon size={12} /> Description
+        <GitIcon size={12} /> {t("governedPullRequestCard.description.heading")}
       </h3>
-      <PrDescriptionFields form={form} busy={async.busy} onChange={onChange} />
+      <PrDescriptionFields form={form} busy={async.busy} onChange={onChange} t={t} />
       <PrDescriptionButtons
         busy={async.busy}
         canPreview={flags.canPreview}
@@ -1121,8 +1136,9 @@ function PrDescriptionPanel({
         onPreview={onPreview}
         onApprove={async.runApprove}
         onApply={async.runApply}
+        t={t}
       />
-      <PrDescriptionPanelStatus flags={flags} error={async.error} />
+      <PrDescriptionPanelStatus flags={flags} error={async.error} t={t} />
     </section>
   );
 }

@@ -2700,20 +2700,76 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     await settleRun(f, verifiedCommits);
     await vi.waitFor(() => {
       expect(
-        captured.records.some((event) => event.op === "coding-runtime.description.generated"),
+        captured.records.some(
+          (event) => event.op === "coding-runtime.description" && event.extra?.event === "generated",
+        ),
       ).toBe(true);
     });
+    // #3401 review finding 20: `op` is ONE fixed catalog literal (`coding-runtime.description`),
+    // never a template literal per lifecycle event — the event name lives in `extra.event` so
+    // `check:op-catalog` and `support-analyze.ts`'s journey phase map can both resolve it.
     const dispatched = captured.records.find(
-      (event) => event.op === "coding-runtime.description.dispatched",
+      (event) => event.op === "coding-runtime.description" && event.extra?.event === "dispatched",
     );
     // Fixture run ids ("run-1") are too short for `SAFE_CORRELATION_ID`; the safe fallback is the
     // same one `recordRuntimeRunSettled` already produces for this file's other ops.
     expect(dispatched).toMatchObject({
       correlationId: UNKNOWN_CORRELATION_ID,
-      extra: { runId: "run-1" },
+      extra: { runId: "run-1", event: "dispatched" },
     });
+    expect(captured.records.every((event) => event.op !== "coding-runtime.description.dispatched"))
+      .toBe(true);
     const serialized = JSON.stringify(captured.records);
     expect(serialized).not.toContain(start.taskIntent);
+  });
+
+  // #3401 review finding 15/19: the async provider-failure branch of the dispatch used to record
+  // NO activity-log line at all (the `.catch()` discarded the error entirely), breaking the
+  // ADR-0173 machine-reconstruction contract for that one failure path. Red before the fix: this
+  // test fails with "expected false to be true" because no `blocked`/`provider-failed` line ever
+  // appears.
+  it("logs a blocked/provider-failed activity-log line when the dispatcher's generate() rejects", async () => {
+    const captured = captureActivityLog();
+    const jobs = jobStore();
+    const dispatcher: WorkbenchDescriptionDispatcher = {
+      generate: vi.fn(() => Promise.reject(new Error("model gateway unavailable"))),
+    };
+    const verifiedCommits = new Map<string, VerifiedCommitResult>();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      captured.activityLog,
+      undefined,
+      { jobs, dispatcher },
+      verifiedCommits,
+    );
+
+    await settleRun(f, verifiedCommits);
+    await vi.waitFor(() => {
+      expect(
+        captured.records.some(
+          (event) =>
+            event.op === "coding-runtime.description" &&
+            event.extra?.event === "blocked" &&
+            event.extra?.reason === "provider-failed",
+        ),
+      ).toBe(true);
+    });
+    const blocked = captured.records.find(
+      (event) => event.op === "coding-runtime.description" && event.extra?.event === "blocked",
+    );
+    expect(blocked).toMatchObject({
+      correlationId: UNKNOWN_CORRELATION_ID,
+      errorKind: "Error",
+      extra: { runId: "run-1", reason: "provider-failed" },
+    });
+    expect(f.orchestrator.status()).toMatchObject({
+      descriptionStatus: { state: "blocked", reason: "provider-failed" },
+    });
+    const serialized = JSON.stringify(captured.records);
+    expect(serialized).not.toContain("model gateway unavailable");
   });
 
   // #3401 composition gap: `createCodingRuntimeOrchestrator` is constructed inside

@@ -326,6 +326,7 @@ describe("pr-mark-ready proposal wiring", () => {
       prExternalId: String(identity.number),
       headSha: identity.headSha,
       baseSha: identity.baseSha,
+      baseRef: identity.baseRef,
       readinessDigest: outcome.readiness?.requirementsDigest,
     });
   });
@@ -333,6 +334,26 @@ describe("pr-mark-ready proposal wiring", () => {
   it("returns undefined when the observation has no remote identity (never guesses a request)", () => {
     const { outcome } = journeyFixture();
     const request = prMarkReadyProposalRequestFor({ ...outcome, remote: null }, PROJECT_ID);
+    expect(request).toBeUndefined();
+  });
+
+  // #3389 repair: the review found the client never sent `baseRef` at all, so no test caught a
+  // request missing the field the server's mint route unconditionally requires. Failing-before: with
+  // the pre-repair `prMarkReadyProposalRequestFor` (which never read `identity.baseRef`), this case
+  // was unreachable — the helper always returned a request, with or without a usable base ref — so
+  // this pins that an empty or fully-qualified base ref (never sent to git, `refs/...`) now closes
+  // the control instead of building a request the server would reject with a 400.
+  it.each([
+    ["empty", ""],
+    ["fully-qualified", "refs/heads/main"],
+  ])("returns undefined when the observed base ref is %s (never a default)", (_label, baseRef) => {
+    const { outcome } = journeyFixture();
+    if (outcome.remote === null) throw new Error("Expected fixture remote facts");
+    const identity = outcome.remote.identity;
+    const request = prMarkReadyProposalRequestFor(
+      { ...outcome, remote: { ...outcome.remote, identity: { ...identity, baseRef } } },
+      PROJECT_ID,
+    );
     expect(request).toBeUndefined();
   });
 

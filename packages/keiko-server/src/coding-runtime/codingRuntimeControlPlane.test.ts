@@ -272,7 +272,84 @@ describe("coding runtime control plane", () => {
       ),
     ).toBeUndefined();
   });
+
+  // #3401 (epic #3384 closeout, description-composition-closeout): the MINT half of the
+  // description authority above -- threaded through the exact same
+  // RUNTIME_HOST_CAPABILITY_KEYS pass-through the READ port already uses.
+  it("threads a runtime host's mint capability onto the exposed control plane surface", () => {
+    const mint = vi.fn();
+    const runtimeHost: CodingRuntimeHost = {
+      createManager: () => unqualifiedManager(),
+      launchResolver: { resolve: () => qualifiedLaunch() },
+      approvalAuthority: {
+        issue: () => ({ ok: false, failureCode: "runtime-stopped", retryable: false }),
+      },
+      cancellationRegistry: { signalFor: () => undefined },
+      mintDescriptionAuthority: mint,
+    };
+    const control = createCodingRuntimeControlPlane({
+      ...minimalControlPlaneSnapshots(),
+      workspaceLifecycle: { getActive: () => undefined } as never,
+      serverPrincipal: () => "local-operator",
+      runtimeHost,
+    });
+    expect(control.mintDescriptionAuthority).toBe(mint);
+  });
+
+  // #3401 CI-repair notify: before this change `CodingRuntimeHost` had no
+  // `attachVerifiedHeadNotifier` seam at all, so a CI-repair controller built deep inside the
+  // runtime resolver (long before this orchestrator exists) had nothing reachable to call once a
+  // repaired head settled succeeded.
+  it("fills a runtime host's notify slot with the orchestrator's real notifyVerifiedHeadAdvanced", () => {
+    let attached: ((runId: string) => void) | undefined;
+    const runtimeHost: CodingRuntimeHost = {
+      createManager: () => unqualifiedManager(),
+      launchResolver: { resolve: () => qualifiedLaunch() },
+      approvalAuthority: {
+        issue: () => ({ ok: false, failureCode: "runtime-stopped", retryable: false }),
+      },
+      cancellationRegistry: { signalFor: () => undefined },
+      attachVerifiedHeadNotifier: (notify): void => {
+        attached = notify;
+      },
+    };
+    const control = createCodingRuntimeControlPlane({
+      ...minimalControlPlaneSnapshots(),
+      workspaceLifecycle: { getActive: () => undefined } as never,
+      serverPrincipal: () => "local-operator",
+      runtimeHost,
+    });
+    expect(attached).toBeDefined();
+    const notifySpy = vi.spyOn(control.orchestrator, "notifyVerifiedHeadAdvanced");
+    attached?.("run-1");
+    expect(notifySpy).toHaveBeenCalledExactlyOnceWith("run-1");
+  });
 });
+
+function minimalControlPlaneSnapshots(): {
+  readonly snapshots: Parameters<typeof createCodingRuntimeControlPlane>[0]["snapshots"];
+  readonly evidence: Parameters<typeof createCodingRuntimeControlPlane>[0]["evidence"];
+} {
+  return {
+    snapshots: {
+      create: vi.fn(),
+      recordVerifiedCommit: vi.fn(),
+      recordDraftDelivery: vi.fn(),
+      adoptDraftDeliveryFromPredecessor: vi.fn(),
+      transition: vi.fn(),
+      get: vi.fn(),
+      listRecentActive: vi.fn(() => []),
+      listAll: vi.fn(() => []),
+      markNonterminalRecoveryRequired: vi.fn(() => []),
+      acknowledgeRecovery: vi.fn(),
+      releaseRecoveryForRetry: vi.fn(),
+      delete: vi.fn(),
+      listPrunableSettled: vi.fn(() => []),
+      deletePruned: vi.fn(),
+    },
+    evidence: { observe: vi.fn(), settle: vi.fn(), deletePruned: vi.fn() },
+  };
+}
 
 function unqualifiedManager(): ReturnType<CodingRuntimeHost["createManager"]> {
   return {

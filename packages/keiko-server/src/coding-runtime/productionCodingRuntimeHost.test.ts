@@ -107,4 +107,27 @@ describe("production coding runtime host", () => {
     const host = createProductionCodingRuntimeHost({ resolve: () => qualifiedRuntime() });
     expect(host).not.toHaveProperty("gitDeliveryDescriptionAuthority");
   });
+
+  // #3401 (epic #3384 closeout, description-composition-closeout): the MINT capability and the
+  // CI-repair notify setter, threaded through the SAME optional pass-through mechanism as
+  // `gitDeliveryDescriptionAuthority` above.
+  it("forwards a qualified runtime's mint capability and notify-attach setter onto the host", () => {
+    const mint = vi.fn();
+    const attach = vi.fn();
+    const host = createProductionCodingRuntimeHost({
+      resolve: () => ({
+        ...qualifiedRuntime(),
+        mintDescriptionAuthority: mint,
+        attachVerifiedHeadNotifier: attach,
+      }),
+    });
+    expect(host?.mintDescriptionAuthority).toBe(mint);
+    expect(host?.attachVerifiedHeadNotifier).toBe(attach);
+  });
+
+  it("omits the mint capability and notify-attach setter when the runtime carries neither", () => {
+    const host = createProductionCodingRuntimeHost({ resolve: () => qualifiedRuntime() });
+    expect(host).not.toHaveProperty("mintDescriptionAuthority");
+    expect(host).not.toHaveProperty("attachVerifiedHeadNotifier");
+  });
 });

@@ -7,6 +7,7 @@ import {
   OPENCODE_MODEL_VISIBLE_TOOLS,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
 } from "./opencodeToolSchemas.js";
+import { mintProposalId, proposalIdPattern } from "../gitDelivery/proposalId.js";
 
 function projectedTools(): readonly {
   readonly name: string;
@@ -120,15 +121,18 @@ describe("OpenCode visible tool contract", () => {
       "push",
       "pull-request",
     ]);
+    // The schema pattern is derived from proposalId.ts's shared PROPOSAL_ID_PREFIXES rather than
+    // hand-typed, so this equality catches the two sources drifting apart.
+    expect(pattern).toBe(proposalIdPattern());
     const accepted = new RegExp(pattern, "u");
     // stage-* (runtimeGitService.ts), delivery-* (draftDeliveryFacts.ts, push/pull-request), and
     // commit-* (verifiedCommitService.ts's VerifiedCommitService.propose()) are the three shapes
     // the server actually mints; a real minted commit proposal id must be redeemable through this
     // tool (regression: the pattern previously omitted "commit", making #3386's commit-redemption
     // path unreachable through the model-visible schema even though "commit" is a valid `kind`).
-    expect(accepted.test("stage-1")).toBe(true);
-    expect(accepted.test("delivery-1")).toBe(true);
-    expect(accepted.test("commit-1")).toBe(true);
+    expect(accepted.test(mintProposalId("stage"))).toBe(true);
+    expect(accepted.test(mintProposalId("delivery"))).toBe(true);
+    expect(accepted.test(mintProposalId("commit"))).toBe(true);
     expect(accepted.test("other-1")).toBe(false);
   });
 

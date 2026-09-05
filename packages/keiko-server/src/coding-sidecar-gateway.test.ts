@@ -26,6 +26,7 @@ import {
   createOpenCodeGatewayToolCatalogAdvertisement,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
 } from "./coding-runtime/opencodeToolSchemas.js";
+import { proposalIdPattern } from "./gitDelivery/proposalId.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
@@ -495,8 +496,11 @@ const GIT_CI_STATUS_SCHEMA = {
 } as const;
 // Kept in exact sync with opencodeToolSchemas.ts's own GIT_EXECUTE_SCHEMA by hand (this file pins
 // the real wire schema independently of that module's export, on purpose, as its own regression
-// check) -- stage-/delivery-/commit- are the three prefixes the server actually mints; see that
-// module's GIT_EXECUTE_SCHEMA comment for the exact minting call sites.
+// check) -- stage-/delivery-/commit- are the three prefixes the server actually mints, from
+// gitDelivery/proposalId.ts's PROPOSAL_ID_PREFIXES. The literal pattern below may only keep
+// restating that string because a test ("keeps the hand-typed proposalId pin in sync with the
+// derived pattern", below) asserts it equals proposalIdPattern() -- if that assertion ever fails,
+// fix this literal, not the test.
 const GIT_EXECUTE_SCHEMA = {
   type: "object",
   properties: {
@@ -901,6 +905,10 @@ describe("coding-sidecar gateway", () => {
 
     expect(result).toMatchObject({ status: 403 });
     expect(chat).not.toHaveBeenCalled();
+  });
+
+  it("keeps the hand-typed proposalId pin in sync with the derived pattern", () => {
+    expect(GIT_EXECUTE_SCHEMA.properties.proposalId.pattern).toBe(proposalIdPattern());
   });
 
   it("accepts exactly the pinned OpenCode v1.17.17 visible schemas by canonical digest", async () => {

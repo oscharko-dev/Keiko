@@ -49,14 +49,19 @@ export interface CodingRuntimeDescriptionJobStore {
     status: WorkbenchDescriptionStatus,
     nowIso: string,
   ) => boolean;
-  /** Records a closed blocked outcome for an attempt that WAS dispatched (a settle path). */
+  /**
+   * Records a closed blocked outcome for an attempt that WAS dispatched (a settle path). Returns
+   * false, exactly like `settle`, when a newer head superseded this attempt meanwhile (the
+   * `revision` guard rejected the write) — the caller logs that as `superseded`, never `blocked`,
+   * so a race between a late provider failure and a fresh head never overwrites the newer status.
+   */
   readonly recordBlocked: (
     scope: WorkbenchDescriptionScope,
     reason: WorkbenchDescriptionReason,
     generationVersion: number,
     revision: number,
     nowIso: string,
-  ) => void;
+  ) => boolean;
   /**
    * Records a closed "budget-exhausted" outcome for a `beginDispatch` call that was rejected
    * BEFORE any attempt was allocated — no generationVersion/revision exists to settle against, so
@@ -322,9 +327,15 @@ export function createCodingRuntimeDescriptionJobStore(
       beginDispatch(statements, maxConcurrentDispatches, scope, nowIso),
     settle: (scope, generationVersion, revision, status, nowIso): boolean =>
       settle(statements, scope, generationVersion, revision, status, nowIso),
-    recordBlocked(scope, reason, generationVersion, revision, nowIso): void {
+    recordBlocked(scope, reason, generationVersion, revision, nowIso): boolean {
       const status = blockedStatus(scope, reason, generationVersion, nowIso);
-      statements.settleRow.run(JSON.stringify(status), nowIso, scope.runId, revision);
+      const result = statements.settleRow.run(
+        JSON.stringify(status),
+        nowIso,
+        scope.runId,
+        revision,
+      );
+      return Number(result.changes) === 1;
     },
     recordBudgetExhausted(scope, nowIso): void {
       recordBudgetExhausted(statements, scope, nowIso);
