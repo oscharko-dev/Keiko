@@ -186,7 +186,7 @@ class InvocationRegistry implements CodingToolInvocationRegistry {
     const keyOwner = this.idempotencyIndex.get(idempotencyIdentity(request));
     const ownership = collisionOwnership(actionOwner, keyOwner, key);
     if (ownership === "none") return undefined;
-    if (ownership !== "same") return ownership;
+    if (ownership === "conflict") return { kind: "conflict" };
     const live = this.entries.get(key);
     if (live !== undefined) {
       return { kind: live.digest === request.digest ? "duplicate" : "conflict" };
@@ -312,9 +312,9 @@ function collisionOwnership(
   actionOwner: string | undefined,
   keyOwner: string | undefined,
   key: string,
-): "none" | "same" | CodingToolInvocationStageResult {
+): "none" | "same" | "conflict" {
   if (actionOwner === undefined && keyOwner === undefined) return "none";
-  return actionOwner === key && keyOwner === key ? "same" : { kind: "conflict" };
+  return actionOwner === key && keyOwner === key ? "same" : "conflict";
 }
 
 function wipeClaimed(entry: ClaimedEntry): void {

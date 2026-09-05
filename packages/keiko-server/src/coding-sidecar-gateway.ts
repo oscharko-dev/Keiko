@@ -1823,37 +1823,67 @@ function upstreamGatewayStreamingSupported(
   return advertisedSupport || deps.codingSidecarGatewayChatStreamFactory !== undefined;
 }
 
+/** A single explicit result shape for `runtimeGatewayAdmissionResponse`: every branch returns an
+ * object literal discriminated on `kind`, instead of mixing a `RouteResult`/`STREAMING` payload
+ * with a bare `undefined` "proceed" signal. */
+type RuntimeGatewayAdmission =
+  | { readonly kind: "handled"; readonly result: RouteResult | typeof STREAMING }
+  | { readonly kind: "proceed" };
+
+/** The unmanaged-tool-contract rejection applies before authentication is even known, so it stays
+ * its own check: extracting it keeps `runtimeGatewayAdmissionResponse` and
+ * `authenticatedGatewayAdmission` each under the complexity ceiling instead of one function
+ * carrying every branch. */
+function rejectUnmanagedGatewayToolContract(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  authentication: AuthenticatedGatewayRequest,
+): RouteResult | undefined {
+  const declaresTools = parsed.tools !== undefined && parsed.tools.length > 0;
+  if (!declaresTools || isExactManagedToolSet(parsed.tools)) return undefined;
+  emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed.tools);
+  return forbiddenGatewayRequest();
+}
+
 function runtimeGatewayAdmissionResponse(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   parsed: CodingSidecarGatewayChatCompletionRequest,
   authentication: AuthenticatedGatewayRequest,
   modelAlias: string,
-): RouteResult | typeof STREAMING | undefined {
-  if (
-    parsed.tools !== undefined &&
-    parsed.tools.length > 0 &&
-    !isExactManagedToolSet(parsed.tools)
-  ) {
-    emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed.tools);
-    return forbiddenGatewayRequest();
-  }
-  if (!authentication.runtimeAuthenticated) return undefined;
+): RuntimeGatewayAdmission {
+  const contractRejection = rejectUnmanagedGatewayToolContract(ctx, deps, parsed, authentication);
+  if (contractRejection !== undefined) return { kind: "handled", result: contractRejection };
+  if (!authentication.runtimeAuthenticated) return { kind: "proceed" };
+  return authenticatedGatewayAdmission(ctx, deps, parsed, authentication, modelAlias);
+}
+
+function authenticatedGatewayAdmission(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  authentication: AuthenticatedGatewayRequest,
+  modelAlias: string,
+): RuntimeGatewayAdmission {
   const registry = gatewayReadinessRegistry(deps);
   if (!isAdmittedManagedToolSet(parsed.tools, registry, authentication.runId)) {
     emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed.tools);
-    return forbiddenGatewayRequest();
+    return { kind: "handled", result: forbiddenGatewayRequest() };
   }
   if (
     isExactManagedToolSet(parsed.tools) &&
     isRuntimeReadinessProbe(parsed) &&
     registry?.claim(authentication.runId) === true
   ) {
-    return fixedReadinessResponse(ctx, modelAlias, parsed.stream === true);
+    return {
+      kind: "handled",
+      result: fixedReadinessResponse(ctx, modelAlias, parsed.stream === true),
+    };
   }
   if (isExactManagedToolSet(parsed.tools)) registry?.verifyObserved(authentication.runId);
   noteToolAdoptionGap(ctx, deps, authentication.runId, parsed.messages);
-  return undefined;
+  return { kind: "proceed" };
 }
 
 export async function handleCodingSidecarGatewayChatCompletions(
@@ -1929,7 +1959,7 @@ async function runHandleCodingSidecarGatewayChatCompletions(
     authentication,
     resolved.result.modelAlias,
   );
-  if (admission !== undefined) return admission;
+  if (admission.kind === "handled") return admission.result;
   return executeBudgetedGatewayChat(ctx, deps, resolved, parsed, authentication, {
     modelAlias: resolved.result.modelAlias,
     maxOutputTokens: resolved.result.runMetadata.maxOutputTokens,

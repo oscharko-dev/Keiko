@@ -128,28 +128,33 @@ export class DescriptionFixture {
         ...this.generation(),
         revalidateAuthority: (_authority, signal) =>
           !signal.aborted && this.context.stillAuthorized(),
-        resolveSnapshot: (reference) => {
-          const content = this.snapshots.read(
-            reference,
-            this.context.accessScope,
-            this.context.correlationId,
-          );
-          return Promise.resolve(
-            content === undefined
-              ? undefined
-              : {
-                  snapshot: content.snapshot,
-                  evidence: content.files.map((file) => ({
-                    evidenceId: file.evidenceId,
-                    text: JSON.stringify(file),
-                  })),
-                },
-          );
-        },
+        resolveSnapshot: (reference) => this.resolveFixtureSnapshot(reference),
       },
     );
     if (result.status !== "generated") throw new Error("description generation unavailable");
     return result.artifact;
+  }
+  // Extracted purely to keep `generateArtifact` under the repo's max-lines-per-function bar
+  // (AGENTS.md §6) -- no behavioral seam of its own.
+  private resolveFixtureSnapshot(
+    reference: string,
+  ): Promise<PrDescription.PrDescriptionResolvedSnapshot | undefined> {
+    const content = this.snapshots.read(
+      reference,
+      this.context.accessScope,
+      this.context.correlationId,
+    );
+    return Promise.resolve(
+      content === undefined
+        ? undefined
+        : {
+            snapshot: content.snapshot,
+            evidence: content.files.map((file) => ({
+              evidenceId: file.evidenceId,
+              text: JSON.stringify(file),
+            })),
+          },
+    );
   }
   private git(args: string[]): string {
     return execFileSync(GIT_EXECUTABLE, args, {

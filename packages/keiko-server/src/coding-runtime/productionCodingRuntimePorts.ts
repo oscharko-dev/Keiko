@@ -817,14 +817,20 @@ function guardedWorkbenchGeneration(
   };
 }
 
-async function admitAndGenerate(
+interface WorkbenchGenerationAdmission {
+  readonly authorityScope: GitDeliveryDescriptionAuthorityScope;
+  readonly denialReason?: WorkbenchDescriptionReason;
+}
+
+// Extracted purely to keep `admitAndGenerate` under the repo's max-lines-per-function bar
+// (AGENTS.md §6) -- no behavioral seam of its own. Mints the description authority for this exact
+// scope, then reports the closed reason model egress should be denied for, if any (already logged
+// here so every caller gets the same body-free `pr-description.workbench.egress.denied` line).
+function admitWorkbenchGenerationAuthority(
   deps: ProductionWorkbenchDescriptionDeps,
   scope: WorkbenchDescriptionScope,
   captured: GitChangeSnapshot,
-  reference: string,
-  captureInput: GitChangeSnapshotCaptureInput,
-  signal: AbortSignal,
-): Promise<ProductionWorkbenchDescriptionOutcome> {
+): WorkbenchGenerationAdmission {
   const authorityScope: GitDeliveryDescriptionAuthorityScope = {
     remoteDigest: scope.remoteDigest,
     pr: {
@@ -836,10 +842,22 @@ async function admitAndGenerate(
   const nowIso = new Date(deps.now()).toISOString();
   mintWorkbenchDescriptionAuthority(deps, scope, authorityScope, nowIso);
   const denialReason = modelEgressDenialReason(deps.descriptionAuthority, authorityScope, nowIso);
-  if (denialReason !== undefined) {
-    logWorkbenchModelEgressDenied(scope.runId, denialReason);
-    return { reason: denialReason };
-  }
+  if (denialReason === undefined) return { authorityScope };
+  logWorkbenchModelEgressDenied(scope.runId, denialReason);
+  return { authorityScope, denialReason };
+}
+
+async function admitAndGenerate(
+  deps: ProductionWorkbenchDescriptionDeps,
+  scope: WorkbenchDescriptionScope,
+  captured: GitChangeSnapshot,
+  reference: string,
+  captureInput: GitChangeSnapshotCaptureInput,
+  signal: AbortSignal,
+): Promise<ProductionWorkbenchDescriptionOutcome> {
+  const admission = admitWorkbenchGenerationAuthority(deps, scope, captured);
+  if (admission.denialReason !== undefined) return { reason: admission.denialReason };
+  const { authorityScope } = admission;
   const guarded = guardedWorkbenchGeneration(deps, scope, captureInput, reference, authorityScope);
   if (guarded === undefined) return { reason: "generation-unavailable" };
   const result = await PrDescription.generatePrDescription(
@@ -898,10 +916,32 @@ async function recheckWorkbenchDescription(
       : { reason: "generation-unavailable" };
   }
   if (input.signal === undefined) return { reason: "stale-snapshot" };
-  const proposalId = await deps.artifactRetention.retain(scope, result.artifact, input.signal);
+  const proposalId = await deps.artifactRetention.retain(
+    scope,
+    result.artifact,
+    retentionOperationSignal(),
+  );
   return proposalId === undefined
     ? { reason: "stale-snapshot" }
     : workbenchDescriptionOutcome(result, proposalId);
+}
+
+// Epic #3384 closeout: a durably retained artifact (`ProductionWorkbenchArtifactRetention.retain`)
+// is reviewed through an ordinary HTTP preview/approve/apply round trip that can happen long after
+// this dispatch, so its signal MUST NOT be the run's own long-lived dispatch controller
+// (`codingRuntimeOrchestrator.ts`'s `descriptionDispatchAbort`), which is aborted independently of
+// the retained proposal's own lifecycle -- on supersede by a fresh head, or on eventual run
+// pruning. `resolveWorkbenchApplicationRetention` (deps.ts) bakes whatever signal it is given into
+// the `PrDescriptionContext` a cached `PrDescriptionApplicationService` reuses for the FULL life of
+// that proposal (`prDescriptionService.ts`'s `held()`/`current()` re-check `context.signal.aborted`
+// on every future call). Forwarding the caller's dispatch signal verbatim therefore meant a later,
+// wholly unrelated supersede/prune permanently blocked every subsequent HTTP review of an
+// already-retained artifact (owner handoff: "retained HTTP review remains blocked by a cached
+// operation AbortSignal"). `workbenchSnapshotStillCurrent`/the `undefined` guard above already
+// prove the dispatch signal was NOT aborted up to this point; a fresh, otherwise-unreferenced
+// signal preserves that "not cancelled yet" fact for `retain()` without ever being abortable later.
+function retentionOperationSignal(): AbortSignal {
+  return new AbortController().signal;
 }
 
 function workbenchSnapshotStillCurrent(

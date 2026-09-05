@@ -30,6 +30,7 @@ import {
   createProductionWorkbenchDescriptionDispatcher,
   renderInitialTurnContext,
   type ProductionRuntimeRunRecord,
+  type ProductionWorkbenchArtifactRetention,
   type ProductionWorkbenchDescriptionDeps,
 } from "./productionCodingRuntimePorts.js";
 
@@ -1231,7 +1232,17 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
   it("retains the exact generated artifact once and exposes that same proposal", async () => {
     const generated = generatedDescription();
     generatePrDescriptionMock.mockResolvedValueOnce(generated);
-    const retain = vi.fn(() => Promise.resolve("pr-description-1"));
+    let retainedSignal: AbortSignal | undefined;
+    const retain: ProductionWorkbenchArtifactRetention["retain"] = vi.fn(
+      (
+        _scope: WorkbenchDescriptionScope,
+        _artifact: PrDescriptionArtifact,
+        signal: AbortSignal,
+      ) => {
+        retainedSignal = signal;
+        return Promise.resolve("pr-description-1");
+      },
+    );
     const hasProposal = vi.fn(() => true);
     const reviewDraft = vi.fn(() => undefined);
     const dispatcher = createProductionWorkbenchDescriptionDispatcher(
@@ -1251,13 +1262,24 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
         artifactRetention: { retain, hasProposal, reviewDraft },
       }),
     );
-    const signal = new AbortController().signal;
+    const controller = new AbortController();
 
-    await expect(dispatcher.generate(PR_SCOPE, signal)).resolves.toMatchObject({
+    await expect(dispatcher.generate(PR_SCOPE, controller.signal)).resolves.toMatchObject({
       reason: "generated",
       proposalId: "pr-description-1",
     });
-    expect(retain).toHaveBeenCalledExactlyOnceWith(PR_SCOPE, generated.artifact, signal);
+    expect(retain).toHaveBeenCalledExactlyOnceWith(PR_SCOPE, generated.artifact, retainedSignal);
+    // Epic #3384 closeout ("retained HTTP review remains blocked by a cached operation
+    // AbortSignal"): retain() must never receive the run's OWN dispatch signal verbatim — that
+    // signal is later aborted independently of this artifact's retained lifecycle (supersede or
+    // eventual run pruning in codingRuntimeOrchestrator.ts), and gets baked into the retained
+    // proposal's PrDescriptionContext for the full life of the proposal (deps.ts's
+    // workbenchDescriptionContextProvider / prDescriptionService.ts's held()). Aborting the
+    // dispatch controller AFTER retention must never reach the signal retain() was given.
+    expect(retainedSignal).not.toBe(controller.signal);
+    expect(retainedSignal?.aborted).toBe(false);
+    controller.abort();
+    expect(retainedSignal?.aborted).toBe(false);
     expect(dispatcher.hasProposal(PR_SCOPE, "pr-description-1", "a".repeat(64))).toBe(true);
     expect(hasProposal).toHaveBeenCalledExactlyOnceWith(
       PR_SCOPE,
@@ -1270,7 +1292,17 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
   it("retains a generic generated artifact without inventing a PR target", async () => {
     const generated = generatedDescription();
     generatePrDescriptionMock.mockResolvedValueOnce(generated);
-    const retain = vi.fn(() => Promise.resolve("draft-description-1"));
+    let retainedSignal: AbortSignal | undefined;
+    const retain: ProductionWorkbenchArtifactRetention["retain"] = vi.fn(
+      (
+        _scope: WorkbenchDescriptionScope,
+        _artifact: PrDescriptionArtifact,
+        signal: AbortSignal,
+      ) => {
+        retainedSignal = signal;
+        return Promise.resolve("draft-description-1");
+      },
+    );
     const dispatcher = createProductionWorkbenchDescriptionDispatcher(
       fakeDeps({
         snapshots: {
@@ -1292,13 +1324,19 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
         },
       }),
     );
-    const signal = new AbortController().signal;
+    const controller = new AbortController();
 
-    await expect(dispatcher.generate(SCOPE, signal)).resolves.toMatchObject({
+    await expect(dispatcher.generate(SCOPE, controller.signal)).resolves.toMatchObject({
       reason: "generated",
       proposalId: "draft-description-1",
     });
-    expect(retain).toHaveBeenCalledExactlyOnceWith(SCOPE, generated.artifact, signal);
+    expect(retain).toHaveBeenCalledExactlyOnceWith(SCOPE, generated.artifact, retainedSignal);
+    // Same decoupling requirement as the PR-targeted case above: a draft retention must also
+    // survive the run's dispatch signal being aborted after the artifact is already retained.
+    expect(retainedSignal).not.toBe(controller.signal);
+    expect(retainedSignal?.aborted).toBe(false);
+    controller.abort();
+    expect(retainedSignal?.aborted).toBe(false);
     expect(SCOPE.applicationTarget).toBeUndefined();
   });
 

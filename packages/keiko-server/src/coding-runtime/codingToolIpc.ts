@@ -434,7 +434,7 @@ function approvableNamedRequest(
     identity === undefined ||
     !hasAllowedKeys(value, ["action", "actionId", "idempotencyKey", key, "approvalProof"]) ||
     !nonEmpty(value[key]) ||
-    approvalProof === "invalid"
+    approvalProof.kind === "invalid"
   )
     return undefined;
   if (action === "command")
@@ -442,20 +442,26 @@ function approvableNamedRequest(
       ...identity,
       action,
       commandId: value[key],
-      ...(approvalProof === undefined ? {} : { approvalProof }),
+      ...(approvalProof.kind === "present" ? { approvalProof: approvalProof.proof } : {}),
     };
   return {
     ...identity,
     action,
     verifierId: value[key],
-    ...(approvalProof === undefined ? {} : { approvalProof }),
+    ...(approvalProof.kind === "present" ? { approvalProof: approvalProof.proof } : {}),
   };
 }
 
-function optionalApprovalProof(
-  value: Record<string, unknown>,
-): CodingToolApprovalProof | undefined | "invalid" {
-  if (!Object.hasOwn(value, "approvalProof")) return undefined;
+/** A single explicit result shape: `optionalApprovalProof` always returns an object literal
+ * discriminated on `kind`, instead of mixing an object payload with the `"invalid"` string
+ * sentinel and a bare `undefined` "not supplied" signal. */
+type ApprovalProofOutcome =
+  | { readonly kind: "absent" }
+  | { readonly kind: "invalid" }
+  | { readonly kind: "present"; readonly proof: CodingToolApprovalProof };
+
+function optionalApprovalProof(value: Record<string, unknown>): ApprovalProofOutcome {
+  if (!Object.hasOwn(value, "approvalProof")) return { kind: "absent" };
   const proof = value.approvalProof;
   if (
     !isRecord(proof) ||
@@ -464,9 +470,12 @@ function optionalApprovalProof(
     typeof proof.approvalDigest !== "string" ||
     !/^[0-9a-f]{64}$/u.test(proof.approvalDigest)
   ) {
-    return "invalid";
+    return { kind: "invalid" };
   }
-  return { approvalId: proof.approvalId, approvalDigest: proof.approvalDigest };
+  return {
+    kind: "present",
+    proof: { approvalId: proof.approvalId, approvalDigest: proof.approvalDigest },
+  };
 }
 
 function simpleNamedRequest(
@@ -534,7 +543,7 @@ function commitExecutionRequest(
   if (value.phase !== "execute" || !nonEmpty(value.proposalId)) return undefined;
   const approvalProof = optionalApprovalProof(value);
   if (
-    approvalProof === "invalid" ||
+    approvalProof.kind === "invalid" ||
     !hasAllowedKeys(value, [
       "action",
       "actionId",
@@ -552,7 +561,7 @@ function commitExecutionRequest(
     intent: "commit",
     phase: "execute",
     proposalId: value.proposalId,
-    ...(approvalProof === undefined ? {} : { approvalProof }),
+    ...(approvalProof.kind === "present" ? { approvalProof: approvalProof.proof } : {}),
   };
 }
 function commitProposalRequest(
