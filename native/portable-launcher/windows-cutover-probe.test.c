@@ -331,7 +331,7 @@ static void set_rename_failure(keiko_first_failure_step *failure_step, DWORD *fa
 
 static int rename_pending_diagnostic(const keiko_paths *paths, keiko_first_failure_step *failure_step,
                                      DWORD *failure_error) {
-  const wchar_t *target_name = L"active.bin";
+  const wchar_t *target_name = paths->active;
   const size_t target_bytes = wcslen(target_name) * sizeof(wchar_t);
   const size_t info_size = sizeof(FILE_RENAME_INFO) + target_bytes;
   FILE_RENAME_INFO *info = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, info_size);
@@ -415,7 +415,7 @@ static int rename_pending_diagnostic(const keiko_paths *paths, keiko_first_failu
     goto cleanup;
   }
   info->Flags = FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
-  info->RootDirectory = directory;
+  info->RootDirectory = NULL;
   info->FileNameLength = (DWORD)target_bytes;
   memcpy(info->FileName, target_name, target_bytes);
   renamed = SetFileInformationByHandle(source, FileRenameInfoEx, info, (DWORD)info_size) != 0;
