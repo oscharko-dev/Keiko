@@ -26,6 +26,14 @@ export interface CiRepairExecutionBudget {
   readonly chargePrompt: (promptTokens: number) => boolean;
   readonly chargeDelegatedRead?: (delegationId: string, idempotencyKey: string) => boolean;
   readonly observed: (snapshot: ReadinessSnapshot) => void;
+  /**
+   * The raw exhaustion fact behind this run's repair ledger (#3384 B5-1): true when the store
+   * reports the deadline, tool-call, prompt-token, or attempt-count budget spent. A read-only
+   * check -- it neither begins, charges, nor settles an attempt. Optional so an existing
+   * `CiRepairExecutionBudget` implementer keeps compiling; a caller that omits it treats the
+   * budget as never exhausted.
+   */
+  readonly repairBudgetExhausted?: () => boolean;
 }
 interface Dependencies {
   readonly store: CodingRuntimeCiRepairBudgetStore;
@@ -201,6 +209,13 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
         promptTokens: 0,
       }) !== undefined
     );
+  }
+  /** Read-only raw fact for `produceCiReadinessSnapshot` (#3384 B5-1); never mutates the ledger. */
+  public repairBudgetExhausted(): boolean {
+    const context = this.deps.context();
+    if (context === undefined) return false;
+    const result = this.deps.store.read(context);
+    return result.status === "blocked" && TIGHTENABLE_EXHAUSTION.has(result.reason);
   }
   public observed(snapshot: ReadinessSnapshot): void {
     const context = this.deps.context();

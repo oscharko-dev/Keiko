@@ -847,7 +847,13 @@ function validateGitChangeScopeAccess(
       'Field "gitChangeScopes" contains an entry that is not an active, server-issued git-change relationship for this chat.',
     );
   }
-  return scope;
+  const canonical = canonicalGitChangeScope(chat, scope.relationshipId);
+  if (canonical === undefined) {
+    throw new InvalidRequest(
+      'Field "gitChangeScopes" contains an entry this chat does not currently hold.',
+    );
+  }
+  return canonical;
 }
 
 function validateScopeConnectedAtMs(value: unknown): number {

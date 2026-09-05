@@ -527,4 +527,45 @@ describe("CI repair accounting around admitted model work", () => {
     expect(notify).not.toHaveBeenCalled();
     expect(firstAttempt(test)?.status).toBe("failed");
   });
+  // #3384 B5-1: the readiness composer needs a read-only raw fact for an exhausted repair budget --
+  // `repairBudgetExhausted()` must report it through the same store the accounting itself uses,
+  // without beginning, charging, or settling an attempt.
+  describe("repairBudgetExhausted (#3384 B5-1)", () => {
+    it("is false before any repair attempt is recorded", () => {
+      const test = fixture();
+      expect(test.controller.repairBudgetExhausted()).toBe(false);
+    });
+    it("is false while an active attempt still has room under every limit", () => {
+      const test = fixture();
+      expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
+      expect(test.controller.repairBudgetExhausted()).toBe(false);
+    });
+    it("is true once the deadline for the active attempt has passed", () => {
+      const test = fixture({ maxRuntimeMs: 100 });
+      test.controller.admitTool(verify("verify-1"));
+      test.clock.now += 100;
+      expect(test.controller.repairBudgetExhausted()).toBe(true);
+    });
+    it("is true once the tool-call limit for the active attempt is spent", () => {
+      const test = fixture({ maxToolCalls: 1 });
+      test.controller.admitTool(verify("verify-1"));
+      expect(test.controller.repairBudgetExhausted()).toBe(true);
+    });
+    it("is true after the third cumulative failed attempt exhausts the attempt count", () => {
+      const test = fixture();
+      for (let index = 1; index <= 3; index++) {
+        expect(test.readiness.complete(test.readiness.begin("run-1"), failed())).toBe(true);
+        const lease = test.controller.admitTool(verify(`verify-${String(index)}`));
+        lease?.settle({ status: "failed" });
+        lease?.settle({ status: "failed" });
+      }
+      expect(test.controller.repairBudgetExhausted()).toBe(true);
+    });
+    it("is false when the run's authority is no longer current", () => {
+      const test = fixture();
+      test.controller.admitTool(verify("verify-1"));
+      test.clock.live = false;
+      expect(test.controller.repairBudgetExhausted()).toBe(false);
+    });
+  });
 });

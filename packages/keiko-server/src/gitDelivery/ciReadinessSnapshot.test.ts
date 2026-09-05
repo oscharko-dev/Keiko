@@ -178,4 +178,34 @@ describe("durable exact-revision readiness producer", () => {
       ),
     ).toBe(false);
   });
+  it("overrides a still-failing reason with the exhausted repair budget's raw fact (#3384 B5-1)", () => {
+    const test = fixture();
+    const result = produceCiReadinessSnapshot(
+      test.draft,
+      failedSource(test.facts.identity, "build"),
+      Date.parse(AT),
+      true,
+    );
+    expect(result.snapshot).toMatchObject({ reason: "repair-budget-exhausted", state: "blocked" });
+    // The underlying failure identity is untouched -- only the surfaced reason changes.
+    expect(result.snapshot.failureSignatureDigest).toMatch(/^[a-f0-9]{64}$/u);
+  });
+  it("never overrides an already-passing reason with an exhausted repair budget", () => {
+    const test = fixture();
+    const result = produceCiReadinessSnapshot(test.draft, test.facts, Date.parse(AT), true);
+    expect(result.snapshot).toMatchObject({
+      reason: "required-checks-passed",
+      state: "technical-ready",
+    });
+  });
+  it("leaves the reason untouched when the repair budget is not exhausted", () => {
+    const test = fixture();
+    const result = produceCiReadinessSnapshot(
+      test.draft,
+      failedSource(test.facts.identity, "build"),
+      Date.parse(AT),
+      false,
+    );
+    expect(result.snapshot).toMatchObject({ reason: "required-checks-failed", state: "failed" });
+  });
 });

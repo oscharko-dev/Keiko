@@ -7,6 +7,9 @@ import type {
   GitCiProviderReader,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { createCodingRuntimeCiReadinessStore } from "../coding-runtime/codingRuntimeCiReadinessStore.js";
+import { createCodingRuntimeCiRepairBudgetStore } from "../coding-runtime/codingRuntimeCiRepairBudgetStore.js";
+import { CodingRuntimeCiRepairController } from "../coding-runtime/codingRuntimeCiRepairController.js";
+import type { CiRepairBudgetContext } from "../coding-runtime/codingRuntimeCiRepairBudgetTypes.js";
 import { redactLogFields } from "../observability/log-redaction.js";
 import { DraftDeliveryFixture } from "./draftDeliveryServiceTestSupport.js";
 import { CiObservationController, type CiObservationOptions } from "./ciObservationService.js";
@@ -337,5 +340,55 @@ describe("run-bound CI observations through existing draft authority", () => {
       correlationId: fixture.context.correlationId,
     });
     expect(JSON.stringify(line)).not.toContain("raw provider secret payload");
+  });
+  // #3384 B5-1: threads the CI repair budget owner's raw exhaustion fact into the emitted
+  // readiness reason, through the real production classes rather than a stub -- an actual
+  // `CodingRuntimeCiRepairController` backed by a real `CodingRuntimeCiRepairBudgetStore` on the
+  // same run, still failing required checks, whose ledger has spent its (tiny, test-only) deadline.
+  it("surfaces the repair budget's exhaustion as the readiness reason through the production controller", async () => {
+    const test = configured(() => Promise.resolve(failedFacts()));
+    const draft = fixture.snapshots.get("run-1")?.draftDelivery;
+    const prNumber = draft?.pullRequest?.number;
+    if (draft === undefined || prNumber === undefined) throw new Error("Missing fixture draft");
+    const budgetStore = createCodingRuntimeCiRepairBudgetStore({
+      db: fixture.db,
+      snapshots: fixture.snapshots,
+      activityLog: { write: () => undefined },
+      now: () => fixture.now,
+    });
+    const repairContext: CiRepairBudgetContext = {
+      runId: "run-1",
+      correlationId: fixture.context.correlationId,
+      remoteDigest: draft.binding.remoteDigest,
+      prNumber,
+      limits: { maxRuntimeMs: 1, maxToolCalls: 10, maxPromptTokens: 10 },
+      stillAuthorized: () => fixture.live,
+    };
+    expect(
+      budgetStore.begin(repairContext, {
+        attemptId: "repair-1",
+        headSha: draft.binding.headSha,
+        baseSha: draft.binding.baseSha,
+        kind: "workspace-edit",
+        failureSignatureDigest: "b".repeat(64),
+        expectedRevision: null,
+      }).status,
+    ).toBe("recorded");
+    fixture.now += 2;
+    const repairController = new CodingRuntimeCiRepairController({
+      store: budgetStore,
+      readiness: test.options.persistence,
+      now: () => fixture.now,
+      context: () => repairContext,
+    });
+    expect(repairController.repairBudgetExhausted()).toBe(true);
+    const observed = new CiObservationController({
+      ...test.options,
+      repairBudgetExhausted: () => repairController.repairBudgetExhausted(),
+    });
+    expect(await observed.observe()).toMatchObject({
+      status: "observed",
+      snapshot: { reason: "repair-budget-exhausted", state: "blocked" },
+    });
   });
 });

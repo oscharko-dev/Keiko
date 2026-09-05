@@ -45,6 +45,21 @@ export class GitChangeSnapshotRegistry {
       if (oldest === undefined) break;
       this.remove(oldest);
     }
+    // Reviewer 3941816392 [P2] — the loop above only evicts UNRESERVED entries
+    // (`oldestEvictable`), so when reservations hold every retained slot it `break`s having
+    // reclaimed nothing. Both caps (32 entries, 64 MiB) are independent and the entry cap alone
+    // does not bound bytes (reproduced: seven ~10 MiB reserved records retained 71,798,419 bytes
+    // against the 67,108,864-byte cap). Re-check both limits after eviction and fail closed
+    // instead of inserting past either one.
+    if (this.records.size >= 32 || this.bytes + bytes > 64 * 1024 * 1024) {
+      this.log.write({
+        category: "process",
+        op: "git.snapshot.capacity-denied",
+        correlationId,
+        extra: { reservedCount: this.reserved.size, recordCount: this.records.size },
+      });
+      throw new RangeError("Snapshot registry capacity exceeded");
+    }
     const reference = `gcs_${randomBytes(16).toString("hex")}`;
     const timer = setTimeout(
       () => {

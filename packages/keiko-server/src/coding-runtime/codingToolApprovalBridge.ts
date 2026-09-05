@@ -6,17 +6,54 @@ import type { VerifiedCommitService } from "../gitDelivery/verifiedCommitTypes.j
 import type { GitDeliveryIssuedApproval } from "../gitDelivery/approvalStore.js";
 import { createHash, timingSafeEqual } from "node:crypto";
 
-import type { CodingToolActionRequest, CodingToolApprovalProof } from "./codingToolIpc.js";
+import type {
+  CodingToolActionRequest,
+  CodingToolApprovalProof,
+  CodingToolRequestIdentity,
+} from "./codingToolIpc.js";
 
 const MAX_PENDING_RECORDS = 64;
 const MAX_APPROVED_RECORDS = 64;
 const MAX_BINDING_RECORDS = 64;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 
-export type ApprovableToolRequest = Extract<
-  CodingToolActionRequest,
-  { readonly action: "command" | "verification" }
->;
+/**
+ * 3941816393 / authority-matrix-2 redemption: a "git ci" observation and a generic "connector"
+ * read carry the same bounded-action risk as command/verification -- allowed only with a consumed,
+ * per-run approval in governed-assist/supervised-coding -- so they are approvable through the exact
+ * same pendingPermission review flow (observePermission/activatePermission/matches/consume), never
+ * a second mechanism. Today's wire schema (codingToolIpc.ts) does not yet parse an `approvalProof`
+ * for these two actions, so `approvalProof` stays structurally optional and always reads as
+ * `undefined` from a real request until that parser is extended; the shapes below are additive and
+ * change nothing for a real request that omits the field.
+ */
+export interface ApprovableCiObservationRequest extends CodingToolRequestIdentity {
+  readonly action: "git";
+  readonly operation: "ci";
+  readonly approvalProof?: CodingToolApprovalProof | undefined;
+}
+export interface ApprovableConnectorRequest extends CodingToolRequestIdentity {
+  readonly action: "connector";
+  readonly scope: string;
+  readonly approvalProof?: CodingToolApprovalProof | undefined;
+}
+
+export type ApprovableToolRequest =
+  | Extract<CodingToolActionRequest, { readonly action: "command" | "verification" }>
+  | ApprovableCiObservationRequest
+  | ApprovableConnectorRequest;
+
+/** The one predicate every caller uses to decide whether a request can carry a redeemable proof. */
+export function isApprovableToolRequest(
+  request: CodingToolActionRequest,
+): request is ApprovableToolRequest {
+  return (
+    request.action === "command" ||
+    request.action === "verification" ||
+    request.action === "connector" ||
+    (request.action === "git" && request.operation === "ci")
+  );
+}
 
 interface ApprovalBinding {
   readonly runId: string;
@@ -92,19 +129,23 @@ export interface CodingToolApprovalBridge extends CodingToolApprovalProofVerifie
   readonly invalidateRun: (runId: string) => void;
 }
 
+export type ApprovalDigestInput =
+  | Pick<
+      Extract<ApprovableToolRequest, { readonly action: "command" }>,
+      "action" | "actionId" | "commandId" | "idempotencyKey"
+    >
+  | Pick<
+      Extract<ApprovableToolRequest, { readonly action: "verification" }>,
+      "action" | "actionId" | "idempotencyKey" | "verifierId"
+    >
+  | Pick<ApprovableConnectorRequest, "action" | "actionId" | "idempotencyKey" | "scope">
+  | Pick<ApprovableCiObservationRequest, "action" | "actionId" | "idempotencyKey" | "operation">;
+
 export function codingToolApprovalBindingDigest(
   runId: string,
-  request:
-    | Pick<
-        Extract<ApprovableToolRequest, { readonly action: "command" }>,
-        "action" | "actionId" | "commandId" | "idempotencyKey"
-      >
-    | Pick<
-        Extract<ApprovableToolRequest, { readonly action: "verification" }>,
-        "action" | "actionId" | "idempotencyKey" | "verifierId"
-      >,
+  request: ApprovalDigestInput,
 ): string {
-  const targetId = request.action === "command" ? request.commandId : request.verifierId;
+  const targetId = requestTargetId(request);
   const payload = JSON.stringify([
     "coding-tool-approval-v1",
     runId,
@@ -293,7 +334,7 @@ function approvedActionMatches(
     record.action === request.action,
     record.actionId === request.actionId,
     record.idempotencyKey === request.idempotencyKey,
-    record.targetId === targetId(request),
+    record.targetId === requestTargetId(request),
     record.proof.approvalId === proof.approvalId,
     proof.approvalId === request.actionId,
     DIGEST_PATTERN.test(record.approvalAuthorityDigest),
@@ -317,16 +358,36 @@ function validBinding(input: CodingToolApprovalObservation): boolean {
 }
 
 function bindingDigest(input: ApprovalBinding): string {
-  return codingToolApprovalBindingDigest(
-    input.runId,
-    input.action === "command"
-      ? { ...input, action: "command", commandId: input.targetId }
-      : { ...input, action: "verification", verifierId: input.targetId },
-  );
+  if (input.action === "command")
+    return codingToolApprovalBindingDigest(input.runId, {
+      ...input,
+      action: "command",
+      commandId: input.targetId,
+    });
+  if (input.action === "verification")
+    return codingToolApprovalBindingDigest(input.runId, {
+      ...input,
+      action: "verification",
+      verifierId: input.targetId,
+    });
+  if (input.action === "connector")
+    return codingToolApprovalBindingDigest(input.runId, {
+      ...input,
+      action: "connector",
+      scope: input.targetId,
+    });
+  return codingToolApprovalBindingDigest(input.runId, { ...input, action: "git", operation: "ci" });
 }
 
-function targetId(request: ApprovableToolRequest): string {
-  return request.action === "command" ? request.commandId : request.verifierId;
+// The one implicit target of a "git ci" observation is the run's CI status itself -- unlike
+// command/verification/connector, there is no caller-chosen identifier to bind to.
+const CI_OBSERVATION_TARGET_ID = "ci";
+
+function requestTargetId(request: ApprovalDigestInput): string {
+  if (request.action === "command") return request.commandId;
+  if (request.action === "verification") return request.verifierId;
+  if (request.action === "connector") return request.scope;
+  return CI_OBSERVATION_TARGET_ID;
 }
 
 function permissionKey(runId: string, requestId: string): string {

@@ -22,7 +22,10 @@ import {
   type CodingToolGovernedPorts,
 } from "./codingToolGovernedDelegate.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
-import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
+import {
+  isApprovableToolRequest,
+  type CodingToolApprovalProofVerifier,
+} from "./codingToolApprovalBridge.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import { createOpenCodeGatewayToolCatalogAdvertisement } from "./opencodeToolSchemas.js";
 import {
@@ -724,12 +727,11 @@ function verifyApprovalProof(
   // A proof is required only when the ordinary policy denies this action without one. Keeping this
   // guard inverted prevents an unrelated proof from becoming authority for an already-allowed act.
   if (additionalPolicyAllowed(envelope, request, false)) return false;
-  if (
-    verifier === undefined ||
-    context.runId === undefined ||
-    (request.action !== "command" && request.action !== "verification") ||
-    request.approvalProof === undefined
-  ) {
+  // 3941816393 / authority-matrix-2: "git ci" and "connector" carry the same bounded-action risk
+  // as command/verification and are redeemable through the exact same per-run pendingPermission
+  // approval (see isApprovableToolRequest); a request whose action cannot carry a proof at all, or
+  // that omits one, is rejected the same way verifier.matches already rejects a missing proof.
+  if (verifier === undefined || context.runId === undefined || !isApprovableToolRequest(request)) {
     return false;
   }
   const nowMs = Date.parse(context.nowIso);
@@ -765,11 +767,7 @@ function consumeApprovalProof(
   request: CodingToolActionRequest,
   verifier: CodingToolApprovalProofVerifier | undefined,
 ): boolean {
-  if (
-    verifier === undefined ||
-    context.runId === undefined ||
-    (request.action !== "command" && request.action !== "verification")
-  ) {
+  if (verifier === undefined || context.runId === undefined || !isApprovableToolRequest(request)) {
     return false;
   }
   const nowMs = Date.parse(context.nowIso);

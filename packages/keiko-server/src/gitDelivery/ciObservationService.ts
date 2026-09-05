@@ -32,6 +32,13 @@ export interface CiObservationOptions extends DraftDeliveryDependencies {
   readonly context: () => DraftDeliveryRunContext | undefined;
   readonly persistence: CodingRuntimeCiReadinessStore;
   readonly onChanged: (snapshot: ReadinessSnapshot) => void;
+  /**
+   * Read-only raw fact from the run's CI repair budget owner (#3384 B5-1): true once the ledger
+   * reports its deadline, tool-call, prompt-token, or attempt-count budget spent.
+   * `produceCiReadinessSnapshot` is the one place this becomes the emitted `repair-budget-exhausted`
+   * reason. Absent is a deliberate closed default -- no caller means never exhausted.
+   */
+  readonly repairBudgetExhausted?: () => boolean;
 }
 interface Observation {
   readonly context: DraftDeliveryRunContext;
@@ -143,6 +150,7 @@ export class CiObservationController implements CiObservationService {
       observation.draft,
       facts,
       observation.startedAt,
+      this.options.repairBudgetExhausted?.() ?? false,
     );
     const failureContext = await readFailureContext(snapshot, facts, reader);
     if (failureContext?.status === "superseded")

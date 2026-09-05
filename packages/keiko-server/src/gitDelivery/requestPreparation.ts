@@ -17,6 +17,8 @@ import type { UiHandlerDeps } from "../deps.js";
 import { CORRELATION_RESPONSE_HEADER, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/index.js";
+import { errorKindOf } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { resolveProjectWorkspace } from "./execution.js";
 import { readParsedGitDeliveryBody } from "./requestGuards.js";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
@@ -383,13 +385,20 @@ export function gitDeliveryAuthorityDenial(
 // same `codingWorkbenchRemoteDigest` every PR-lifecycle command already hashes its `ownerAndRepo`
 // through — so a case-insensitive match still binds, exactly like every other repository-identity
 // comparison in this package.
+// Body-free evidence for a read failure underneath the repository-binding check (reviewer
+// 3941877976): the closed `errorKind` vocabulary, the dist-anchored Keiko-code stack, and the
+// cause chain — never the raw error message, which may embed a path or command output.
+export interface GitDeliveryRepositoryReadFailure {
+  readonly errorKind: string;
+  readonly frames: readonly string[];
+  readonly causeChain: readonly string[];
+}
+
 export async function gitDeliveryRepositoryBindingMismatch(
   workspace: WorkspaceInfo,
   ownerAndRepo: string,
+  onReadFailure?: (failure: GitDeliveryRepositoryReadFailure) => void,
 ): Promise<boolean> {
-  // Fails closed on a read failure (an unreadable or non-Git worktree, a broken `git`) exactly like
-  // `githubRemoteOwnerAndRepoFor`'s own resolver already does for the coding-context surface: a
-  // denial that is really a broken read is still a denial, never a silent admit.
   let remote: string | undefined;
   try {
     remote = await readVerifiedGitHubOwnerAndRepo({ workspace });
@@ -400,12 +409,23 @@ export async function gitDeliveryRepositoryBindingMismatch(
   return codingWorkbenchRemoteDigest(remote) !== codingWorkbenchRemoteDigest(ownerAndRepo);
 }
 
-function logGitDeliveryRepositoryMismatch(ctx: RouteContext, logSink: ServerLogSink): void {
+function logGitDeliveryRepositoryMismatch(
+  ctx: RouteContext,
+  logSink: ServerLogSink,
+  readFailure?: GitDeliveryRepositoryReadFailure,
+): void {
   logSink.write({
+    level: readFailure === undefined ? "info" : "warn",
     category: "security",
     op: "git.delivery.repository.mismatch",
     correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
     status: 403,
+    ...(readFailure === undefined
+      ? {}
+      : {
+          errorKind: readFailure.errorKind,
+          extra: { frames: readFailure.frames, causeChain: readFailure.causeChain },
+        }),
   });
 }
 
@@ -432,12 +452,16 @@ export const prepareGitDeliveryRequest = async <V extends { readonly projectId: 
   const workspace = resolveProjectWorkspace(deps, validation.value.projectId);
   if (workspace === undefined) return { ok: false, result: errors.unknownProject };
   if (ownerAndRepoOf !== undefined) {
+    let readFailure: GitDeliveryRepositoryReadFailure | undefined;
     const mismatch = await gitDeliveryRepositoryBindingMismatch(
       workspace,
       ownerAndRepoOf(validation.value),
+      (failure) => {
+        readFailure = failure;
+      },
     );
     if (mismatch) {
-      logGitDeliveryRepositoryMismatch(ctx, processServerLogSink());
+      logGitDeliveryRepositoryMismatch(ctx, processServerLogSink(), readFailure);
       return { ok: false, result: errors.repositoryMismatch ?? errors.badRequest };
     }
   }

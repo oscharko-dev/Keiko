@@ -74,23 +74,36 @@ export function _resetActiveCodingGatewayRequestsForTests(): void {
 
 // live-journey-readiness-1: KEIKO_QUALIFICATION_SPEND_BUDGET_USD previously had no reader anywhere
 // in production — it was validated as test/manifest metadata but enforced no real-dollar ceiling
-// before dispatch. `cumulativeSpendUsd` is a process-wide, in-memory USD ledger that accumulates
-// ONLY from a completed call's REPORTED usage (never the pre-call estimate), so — unlike the
-// per-run authority prompt-token budget — it never needs a settle/reconcile step: nothing
-// provisional is ever booked into it, only real observed cost. The pre-call check previews
-// `cumulative + this call's estimate` against the budget without mutating the ledger.
+// before dispatch. `cumulativeSpendUsd` is a process-wide, in-memory USD ledger of SETTLED cost;
+// `reservedSpendUsd` is the sum of outstanding pre-call reservations for calls currently in
+// flight. Admission below reads `cumulative + reserved + thisEstimate` against the budget, so
+// concurrent calls cannot each observe the same stale `cumulative` and all pass (reviewer
+// 3941877971): the reservation is booked synchronously, in the same tick as the admission check,
+// before the calling code ever awaits the provider.
 export const QUALIFICATION_SPEND_BUDGET_USD_ENV = "KEIKO_QUALIFICATION_SPEND_BUDGET_USD";
 let cumulativeSpendUsd = 0;
+let reservedSpendUsd = 0;
 
 export function _resetCumulativeSpendUsdForTests(): void {
   cumulativeSpendUsd = 0;
+  reservedSpendUsd = 0;
 }
 
-function qualificationSpendBudgetUsd(env: UiHandlerDeps["env"]): number | undefined {
+type SpendBudgetConfig =
+  | { readonly kind: "none" }
+  | { readonly kind: "invalid" }
+  | { readonly kind: "configured"; readonly budgetUsd: number };
+
+// reviewer 3941877974: absence (no ceiling — unrestricted) must never be conflated with a
+// present-but-unusable ceiling (fail closed). `Number(...)` (not `Number.parseFloat`) rejects
+// trailing garbage such as "50oops" by requiring the whole trimmed string to parse; a negative
+// value is invalid, and a configured `0` is a valid ceiling that denies any priced spend.
+function qualificationSpendBudgetConfig(env: UiHandlerDeps["env"]): SpendBudgetConfig {
   const raw = env[QUALIFICATION_SPEND_BUDGET_USD_ENV];
-  if (raw === undefined || raw.trim().length === 0) return undefined;
-  const parsed = Number.parseFloat(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  if (raw === undefined || raw.trim().length === 0) return { kind: "none" };
+  const parsed = Number(raw.trim());
+  if (!Number.isFinite(parsed) || parsed < 0) return { kind: "invalid" };
+  return { kind: "configured", budgetUsd: parsed };
 }
 
 function capabilityPricingFor(
@@ -111,37 +124,84 @@ function callCostUsd(
   );
 }
 
-/** Body-free spend-ledger update: no prompt/response content, only the two token counts. */
-function accumulateActualSpend(
+function actualCostUsdFor(
   config: GatewayConfig,
   modelId: string,
   usage: Pick<NormalizedResponse["usage"], "promptTokens" | "completionTokens">,
-): void {
+): number | undefined {
   const pricing = capabilityPricingFor(config, modelId);
-  if (pricing === undefined) return;
-  cumulativeSpendUsd += callCostUsd(pricing, usage.promptTokens, usage.completionTokens);
+  return pricing === undefined
+    ? undefined
+    : callCostUsd(pricing, usage.promptTokens, usage.completionTokens);
 }
 
-type SpendBudgetRejectionReason = "spend-pricing-unavailable" | "spend-budget-exceeded";
+/** One outstanding pre-call reservation. `settled` guards exactly-once release/settlement. */
+interface SpendReservation {
+  readonly reservedUsd: number;
+  settled: boolean;
+}
+
+/** Releases a reservation that never reached the provider: no cost is booked, ever. */
+function releaseSpendReservation(reservation: SpendReservation): void {
+  if (reservation.settled) return;
+  reservation.settled = true;
+  reservedSpendUsd = Math.max(0, reservedSpendUsd - reservation.reservedUsd);
+}
 
 /**
- * Fail-closed pre-call monetary ceiling. Absent when no budget is configured. A budget configured
- * against a model with no declared `pricing` fails closed before the first call rather than
- * silently treating the model as free.
+ * Settles a reservation whose call WAS dispatched. `actualCostUsd` is the provider's real
+ * reported cost when known; when the outcome is uncertain (the call was sent but no usage was
+ * ever observed — a mid-flight failure or cancellation) the full reserved estimate is kept as
+ * spent rather than released, per the conservative-accounting requirement in 3941877971 review.
+ * A no-op past the first call, so callers may settle defensively from more than one exit path.
  */
-function spendBudgetRejectionFor(
+function settleSpendReservation(reservation: SpendReservation, actualCostUsd?: number): void {
+  if (reservation.settled) return;
+  reservation.settled = true;
+  reservedSpendUsd = Math.max(0, reservedSpendUsd - reservation.reservedUsd);
+  cumulativeSpendUsd += actualCostUsd ?? reservation.reservedUsd;
+}
+
+type SpendBudgetRejectionReason =
+  | "spend-budget-invalid"
+  | "spend-pricing-unavailable"
+  | "spend-budget-exceeded";
+
+type SpendBudgetOutcome =
+  | { readonly kind: "rejected"; readonly reason: SpendBudgetRejectionReason }
+  | { readonly kind: "reserved"; readonly reservation: SpendReservation };
+
+/**
+ * Fail-closed pre-call monetary ceiling. Reserves the estimated cost synchronously (before the
+ * caller ever dispatches to the provider) so concurrent in-flight calls are admitted against
+ * `spent + reserved`, not only completed spend. A budget configured against a model with no
+ * declared `pricing`, or an unparsable/negative configured ceiling, fails closed rather than
+ * silently allowing unrestricted dispatch.
+ */
+function reserveSpendBudget(
   env: UiHandlerDeps["env"],
   config: GatewayConfig,
   modelId: string,
   estimatedPromptTokens: number,
   maxOutputTokens: number,
-): SpendBudgetRejectionReason | undefined {
-  const budget = qualificationSpendBudgetUsd(env);
-  if (budget === undefined) return undefined;
+): SpendBudgetOutcome {
+  const budget = qualificationSpendBudgetConfig(env);
+  if (budget.kind === "invalid") {
+    return { kind: "rejected", reason: "spend-budget-invalid" };
+  }
+  if (budget.kind === "none") {
+    return { kind: "reserved", reservation: { reservedUsd: 0, settled: false } };
+  }
   const pricing = capabilityPricingFor(config, modelId);
-  if (pricing === undefined) return "spend-pricing-unavailable";
+  if (pricing === undefined) {
+    return { kind: "rejected", reason: "spend-pricing-unavailable" };
+  }
   const estimatedCostUsd = callCostUsd(pricing, estimatedPromptTokens, maxOutputTokens);
-  return cumulativeSpendUsd + estimatedCostUsd > budget ? "spend-budget-exceeded" : undefined;
+  if (cumulativeSpendUsd + reservedSpendUsd + estimatedCostUsd > budget.budgetUsd) {
+    return { kind: "rejected", reason: "spend-budget-exceeded" };
+  }
+  reservedSpendUsd += estimatedCostUsd;
+  return { kind: "reserved", reservation: { reservedUsd: estimatedCostUsd, settled: false } };
 }
 
 const CODING_SIDECAR_GATEWAY_ERROR_CODE = "CODING_SIDECAR_UNAVAILABLE";
@@ -186,6 +246,7 @@ type CodingSidecarGatewayRejectionReason =
   | "capability-authenticator-unavailable"
   | "capability-missing"
   | "capability-invalid"
+  | "spend-budget-invalid"
   | "spend-pricing-unavailable"
   | "spend-budget-exceeded"
   | "unclassified-rejection";
@@ -1395,6 +1456,7 @@ interface GatewayChatDelivery {
   readonly maxOutputTokens: number;
   readonly upstreamStreamingSupported: boolean;
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
+  readonly spendReservation: SpendReservation;
 }
 
 interface PinnedGatewayBinding {
@@ -1426,7 +1488,7 @@ async function executeGatewayChat(
   runId: string,
   delivery: GatewayChatDelivery,
 ): Promise<RouteResult | typeof STREAMING> {
-  const { modelAlias, upstreamStreamingSupported } = delivery;
+  const { modelAlias, upstreamStreamingSupported, spendReservation } = delivery;
   const cancellation = gatewayRequestCancellation(ctx, deps, binding.config, modelAlias, runId);
   const request = requestForGatewayDelivery(ctx, parsed, delivery, cancellation.signal);
   let bufferedStream: BufferedOpenAiStreamSession | undefined;
@@ -1440,6 +1502,7 @@ async function executeGatewayChat(
         request,
         runId,
         cancellation.signal,
+        spendReservation,
       );
     }
     if (parsed.stream) bufferedStream = beginBufferedOpenAiStream(ctx, modelAlias);
@@ -1451,10 +1514,14 @@ async function executeGatewayChat(
       runId,
       cancellation.signal,
       bufferedStream,
+      spendReservation,
     );
   } catch (error) {
     recordGatewayOutcome(deps, runId, cancellation.signal.aborted ? "cancelled" : "failed", 0, 0);
     emitGatewayFailureDiagnostic(ctx, deps, error);
+    // The call may or may not have reached the provider before throwing; settle conservatively
+    // (idempotent — a no-op if the reservation was already settled with real usage below).
+    settleSpendReservation(spendReservation);
     return bufferedStream === undefined
       ? unavailableError()
       : settleBufferedOpenAiStreamError(bufferedStream, "error");
@@ -1471,9 +1538,13 @@ async function executeBufferedGatewayChat(
   runId: string,
   cancellationSignal: AbortSignal,
   stream: BufferedOpenAiStreamSession | undefined,
+  spendReservation: SpendReservation,
 ): Promise<RouteResult | typeof STREAMING> {
   const response = await chatFactoryFor(deps, binding.gateway)(binding.config, modelAlias)(request);
-  accumulateActualSpend(binding.config, modelAlias, response.usage);
+  settleSpendReservation(
+    spendReservation,
+    actualCostUsdFor(binding.config, modelAlias, response.usage),
+  );
   const metrics = outputMetrics(response);
   if (cancellationSignal.aborted) {
     recordGatewayOutcome(deps, runId, "cancelled", metrics.completionTokens, metrics.outputBytes);
@@ -1508,6 +1579,7 @@ async function streamGatewayChat(
   request: GatewayRequest,
   runId: string,
   cancellationSignal: AbortSignal,
+  spendReservation: SpendReservation,
 ): Promise<RouteResult | typeof STREAMING> {
   let iterator: AsyncIterator<GatewayStreamChunk>;
   try {
@@ -1518,6 +1590,7 @@ async function streamGatewayChat(
   } catch (error) {
     recordGatewayOutcome(deps, runId, "failed", 0, 0);
     emitGatewayFailureDiagnostic(ctx, deps, error);
+    settleSpendReservation(spendReservation);
     return unavailableError();
   }
   const session = createGatewayStreamSession(
@@ -1529,21 +1602,29 @@ async function streamGatewayChat(
     runId,
     cancellationSignal,
     iterator,
+    spendReservation,
   );
-  if (!beginGatewayStream(session)) return STREAMING;
-  const cancelIterator = (): void => {
-    void iterator.return?.();
-  };
-  cancellationSignal.addEventListener("abort", cancelIterator, { once: true });
   try {
-    await pumpGatewayStream(session);
-  } catch (error) {
-    emitGatewayStreamFailureDiagnostic(ctx, deps, error);
-    settleGatewayStreamError(session);
+    if (!beginGatewayStream(session)) return STREAMING;
+    const cancelIterator = (): void => {
+      void iterator.return?.();
+    };
+    cancellationSignal.addEventListener("abort", cancelIterator, { once: true });
+    try {
+      await pumpGatewayStream(session);
+    } catch (error) {
+      emitGatewayStreamFailureDiagnostic(ctx, deps, error);
+      settleGatewayStreamError(session);
+    } finally {
+      cancellationSignal.removeEventListener("abort", cancelIterator);
+    }
+    return STREAMING;
   } finally {
-    cancellationSignal.removeEventListener("abort", cancelIterator);
+    // Every exit path above returns/throws without necessarily having observed real usage
+    // (cancelled before the first chunk, mid-stream failure, or budget/cancellation cutoff).
+    // Idempotent: a no-op once `streamGatewayResponse` has already settled with real usage.
+    settleSpendReservation(session.spendReservation);
   }
-  return STREAMING;
 }
 
 interface GatewayStreamSession {
@@ -1558,6 +1639,7 @@ interface GatewayStreamSession {
   readonly runId: string;
   readonly cancellationSignal: AbortSignal;
   readonly iterator: AsyncIterator<GatewayStreamChunk>;
+  readonly spendReservation: SpendReservation;
   readonly metrics: {
     completionTokens: number;
     promptTokens: number;
@@ -1575,6 +1657,7 @@ function createGatewayStreamSession(
   runId: string,
   cancellationSignal: AbortSignal,
   iterator: AsyncIterator<GatewayStreamChunk>,
+  spendReservation: SpendReservation,
 ): GatewayStreamSession {
   return {
     ctx,
@@ -1587,6 +1670,7 @@ function createGatewayStreamSession(
     runId,
     cancellationSignal,
     iterator,
+    spendReservation,
     metrics: {
       completionTokens: 0,
       promptTokens: 0,
@@ -1689,12 +1773,13 @@ async function streamGatewayResponse(
   session: GatewayStreamSession,
   response: NormalizedResponse,
 ): Promise<void> {
-  const { ctx, id, created, modelId, config, request, iterator, metrics } = session;
+  const { ctx, id, created, modelId, config, request, iterator, metrics, spendReservation } =
+    session;
   const outcome = outputMetrics(response);
   metrics.completionTokens = outcome.completionTokens;
   metrics.outputBytes = outcome.outputBytes;
   metrics.promptTokens = response.usage.promptTokens;
-  accumulateActualSpend(config, modelId, response.usage);
+  settleSpendReservation(spendReservation, actualCostUsdFor(config, modelId, response.usage));
   if (exceedsOutputBudget(outcome, request.maxOutputTokens ?? 1)) {
     await iterator.return?.();
     recordSessionOutcome(session, "output-limit");
@@ -2081,22 +2166,28 @@ function executeBudgetedGatewayChat(
     readonly upstreamStreamingSupported: boolean;
   },
 ): Promise<RouteResult | typeof STREAMING> {
-  const spendRejection = spendBudgetRejectionFor(
+  const spendBudget = reserveSpendBudget(
     deps.env,
     binding.config,
     profile.modelAlias,
     promptTokenEstimate(parsed),
     profile.maxOutputTokens,
   );
-  if (spendRejection !== undefined) {
-    logGatewayRejection(ctx, authentication.runId, 403, spendRejection);
+  if (spendBudget.kind === "rejected") {
+    logGatewayRejection(ctx, authentication.runId, 403, spendBudget.reason);
     return Promise.resolve(forbiddenGatewayRequest());
   }
   if (!reserveGatewayPromptBudget(deps, authentication.capability, authentication.runId, parsed)) {
+    // The dollar reservation above was never dispatched to a provider: release it without
+    // booking any cost, rather than settling it as spent.
+    releaseSpendReservation(spendBudget.reservation);
     logGatewayRejection(ctx, authentication.runId, 403, "runtime-prompt-budget-denied");
     return Promise.resolve(forbiddenGatewayRequest());
   }
-  return executeGatewayChat(ctx, deps, binding, parsed, authentication.runId, profile);
+  return executeGatewayChat(ctx, deps, binding, parsed, authentication.runId, {
+    ...profile,
+    spendReservation: spendBudget.reservation,
+  });
 }
 
 function fixedReadinessResponse(

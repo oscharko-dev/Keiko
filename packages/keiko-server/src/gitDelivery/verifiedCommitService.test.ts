@@ -7,7 +7,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync, existsSync, chmodSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   VerificationReport,
   GitDeliveryApprovalClaim,
@@ -24,6 +24,20 @@ import type {
   VerifiedCommitServiceOptions,
 } from "./verifiedCommitTypes.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
+
+// #3386 AC11: the interactive staged-diff review this service owns must never reach for #3397's
+// immutable merge-base-to-head PR snapshot service. A throwing fake proves it structurally — if
+// `readVerifiedCommitReview`'s call graph ever imported/invoked `createGitChangeSnapshotService`,
+// the propose() flow below would throw instead of returning "approval-required".
+const gitChangeSnapshotServiceSpy = vi.hoisted(() => vi.fn());
+vi.mock("../gitChangeSnapshotService.js", () => ({
+  createGitChangeSnapshotService: (...args: unknown[]): never => {
+    gitChangeSnapshotServiceSpy(...args);
+    throw new Error(
+      "gitChangeSnapshotService must never be constructed by the verified-commit review path (#3386 AC11)",
+    );
+  },
+}));
 
 let root: string;
 let db: DatabaseSync;
@@ -197,6 +211,14 @@ async function claim(proposalId: string): Promise<GitDeliveryApprovalClaim> {
   if (approval === undefined) throw new Error("approval unavailable");
   return approval;
 }
+
+describe("#3386 AC11 — readVerifiedCommitReview never consults gitChangeSnapshotService", () => {
+  it("builds the interactive staged-diff review without ever constructing the PR-snapshot service", async () => {
+    const proposalId = await verifiedProposal();
+    expect(gitChangeSnapshotServiceSpy).not.toHaveBeenCalled();
+    expect(service.review(proposalId)?.review.paths).toEqual(["code.js"]);
+  });
+});
 
 describe("verified Code-task commit service", () => {
   it("revokes an already captured execution when verification authority is invalidated before mutation", async () => {

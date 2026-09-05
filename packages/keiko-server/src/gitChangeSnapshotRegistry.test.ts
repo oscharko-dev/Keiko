@@ -62,6 +62,32 @@ function content(digest: string): GitSnapshotContent {
   return { snapshot: fixtureSnapshot({ snapshotDigest: digest }), files: [] };
 }
 
+// Reviewer 3941816392 [P2] — a record padded to a known approximate byte size so several of them
+// together exceed the registry's independent 64 MiB byte cap while staying far under its 32-entry
+// cap (the exact scenario the reviewer reproduced: seven ~10 MiB reserved records retaining
+// 71,798,419 bytes against the 67,108,864-byte limit).
+function bigContent(digest: string, headerBytes: number): GitSnapshotContent {
+  return {
+    snapshot: fixtureSnapshot({ snapshotDigest: digest }),
+    files: [
+      {
+        evidenceId: "ev-big",
+        path: "big.txt",
+        hunks: [
+          {
+            header: "x".repeat(headerBytes),
+            oldStart: 1,
+            oldCount: 1,
+            newStart: 1,
+            newCount: 1,
+            lines: [],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function buildRegistry(): { registry: GitChangeSnapshotRegistry; events: ServerLogEvent[] } {
   const events: ServerLogEvent[] = [];
   const registry = new GitChangeSnapshotRegistry(
@@ -155,5 +181,40 @@ describe("GitChangeSnapshotRegistry reservation (B2-8)", () => {
     // Re-using the same reference string after revocation must not resurrect the old reservation:
     // `reserve` only succeeds against a live record with a matching scope.
     expect(registry.reserve(first, scope, correlationId)).toBe(false);
+  });
+
+  it("refuses to insert past the 64 MiB byte cap when every retained entry is reserved (reviewer 3941816392)", () => {
+    const { registry, events } = buildRegistry();
+    const BYTES_PER_RECORD = 10 * 1024 * 1024; // ~10 MiB
+    const BYTE_CAP = 64 * 1024 * 1024;
+
+    // Six reserved ~10 MiB records fit under the 64 MiB cap (60 MiB) and nowhere near the
+    // 32-entry cap, so the entry-count limit alone cannot explain what happens next.
+    let retainedBytes = 0;
+    for (let index = 0; index < 6; index += 1) {
+      const scope = {};
+      const ref = registry.put(
+        bigContent(index.toString(16).padStart(64, "0"), BYTES_PER_RECORD),
+        scope,
+        correlationId,
+      );
+      expect(registry.reserve(ref, scope, correlationId)).toBe(true);
+      retainedBytes += BYTES_PER_RECORD;
+    }
+    expect(retainedBytes).toBeLessThan(BYTE_CAP);
+
+    // A seventh ~10 MiB record would push total retained bytes to ~70 MiB, past the 64 MiB cap.
+    // Every existing entry is reserved, so `oldestEvictable()` has nothing to reclaim: the fix
+    // must refuse this insertion (closed capacity failure) rather than silently exceeding the cap
+    // the way the pre-fix registry did (reproduced: 71,798,419 bytes retained).
+    const seventhScope = {};
+    expect(() =>
+      registry.put(bigContent("7".repeat(64), BYTES_PER_RECORD), seventhScope, correlationId),
+    ).toThrow(RangeError);
+
+    // The failed insertion must not have been admitted: still exactly the six reserved records,
+    // and total retained bytes must never have crossed the cap.
+    expect(events.some((event) => event.op === "git.snapshot.capacity-denied")).toBe(true);
+    expect(retainedBytes).toBeLessThan(BYTE_CAP);
   });
 });

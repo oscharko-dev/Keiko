@@ -96,25 +96,40 @@ function snapshotFields(
     humanReview: summary.humanReview,
   };
 }
+/** Overrides an otherwise not-yet-passing summary with the raw exhaustion fact from the CI repair
+ * budget owner (#3384 B5-1). This is the one place a raw fact becomes an emitted reason -- the
+ * repair controller's own budget-exhaustion vocabulary never leaks past this seam, and a summary
+ * that already reports the required checks passed is never overridden. */
+function withRepairBudgetExhaustion(
+  summary: Omit<GitCiAssessment, "checks">,
+  repairBudgetExhausted: boolean,
+): Omit<GitCiAssessment, "checks"> {
+  return repairBudgetExhausted && summary.reason !== "required-checks-passed"
+    ? { ...summary, reason: "repair-budget-exhausted" }
+    : summary;
+}
 /** Only body-free counts and exact identity enter durable runtime evidence; transient source IDs remain outside. */
 export function produceCiReadinessSnapshot(
   draft: DraftDeliveryRecord,
   result: GitCiFactsResult,
   observedAtMs: number,
+  repairBudgetExhausted = false,
 ): CiSnapshotResult {
   if (!isDraftDeliveryRecord(draft) || !Number.isSafeInteger(observedAtMs) || observedAtMs < 0)
     throw new TypeError("Invalid CI observation binding or time");
   if (!boundFacts(draft, result))
     throw new TypeError("CI observation does not match accepted draft");
   const assessment = result.status === "observed" ? assessGitCiFacts(result) : undefined;
-  const summary =
+  const summary = withRepairBudgetExhaustion(
     assessment ??
-    fallback(
-      draft,
-      result.status === "unavailable"
-        ? result.failure
-        : { state: "unknown", reason: "malformed-response" },
-    );
+      fallback(
+        draft,
+        result.status === "unavailable"
+          ? result.failure
+          : { state: "unknown", reason: "malformed-response" },
+      ),
+    repairBudgetExhausted,
+  );
   const fields = {
     ...snapshotFields(draft, result, observedAtMs, summary),
     ...failureIdentity(assessment),
