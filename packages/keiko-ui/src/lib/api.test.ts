@@ -109,6 +109,7 @@ import {
   fetchGitDeliveryPrDescriptionApprove,
   fetchGitDeliveryPrDescriptionApply,
   fetchGitDeliveryPrDescriptionStatus,
+  applyGitChangeChatDescription,
   type GitHubIssuePreviewResponseWire,
 } from "./api";
 import {
@@ -4304,6 +4305,145 @@ describe("Governed PR-description application API (#3399)", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonOk({ outcome: "unknown" })));
 
     await expect(fetchGitDeliveryPrDescriptionStatus(TARGET)).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+    });
+  });
+});
+
+// #3400 final-audit F5: Chat's apply action for a connected git-change scope. Before the
+// `/api/git-change/apply-description` route was mounted, `applyGitChangeChatDescription` was
+// undefined and every test below failed with "applyGitChangeChatDescription is not a function".
+// The request carries only chat/relationship/proposal ids -- never `ownerAndRepo` -- proving the
+// browser never re-authors the repository identity the server already re-derived at connect time.
+describe("Chat's git-change apply-description action (#3400 final-audit F5)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonOk(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  function statusFixture(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      schemaVersion: "1",
+      state: "current",
+      reason: "applied",
+      binding: {
+        repositoryId: "repo-1",
+        remoteDigest: "a".repeat(64),
+        repository: "oscharko-dev/Keiko",
+        prNumber: 1499,
+        prExternalId: "1499",
+        baseRef: "dev",
+        baseSha: "b".repeat(40),
+        headRepository: "oscharko-dev/Keiko",
+        headRef: "feature/x",
+        headSha: "c".repeat(40),
+        isDraft: false,
+        snapshotDigest: "d".repeat(64),
+        draftDigest: "e".repeat(64),
+        renderingVersion: "1",
+        expectedBodyDigest: "f".repeat(64),
+        outsideRegionDigest: "0".repeat(64),
+        finalBodyDigest: "1".repeat(64),
+        providerUpdatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      observedAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2026-01-01T00:00:30.000Z",
+      completeness: "complete",
+      effect: "confirmed",
+      concurrency: "read-check-write-verify",
+      ...overrides,
+    };
+  }
+
+  const INPUT = { chatId: "chat-1", relationshipId: "rel-1", proposalId: "prop-1" };
+
+  it("posts exactly chatId, relationshipId and proposalId — never ownerAndRepo", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonOk({ outcome: "observed", status: statusFixture() }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await applyGitChangeChatDescription(INPUT);
+
+    expect(result).toEqual({ outcome: "observed", status: statusFixture() });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-change/apply-description");
+    expect(JSON.parse(init.body as string)).toEqual({ schemaVersion: "1", ...INPUT });
+  });
+
+  it("returns a blocked outcome with a reason in the closed vocabulary", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ outcome: "blocked", reason: "stale-pr" })),
+    );
+
+    const result = await applyGitChangeChatDescription(INPUT);
+
+    expect(result).toEqual({ outcome: "blocked", reason: "stale-pr" });
+  });
+
+  it("rejects a blocked outcome whose reason is outside the closed vocabulary", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ outcome: "blocked", reason: "not-a-real-reason" })),
+    );
+
+    await expect(applyGitChangeChatDescription(INPUT)).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
+  });
+
+  it("rejects an observed status whose declared state disagrees with its reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonOk({ outcome: "observed", status: statusFixture({ state: "failed" }) }),
+        ),
+    );
+
+    await expect(applyGitChangeChatDescription(INPUT)).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+    });
+  });
+
+  // This action never produces a preview envelope (it only ever consumes an already-approved
+  // proposal) -- a "preview" outcome from this specific route is itself a contract violation.
+  it("rejects a preview outcome as invalid for this action", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonOk({
+          outcome: "preview",
+          preview: {
+            proposalId: "prop-1",
+            expiresAt: "2026-01-01T00:00:30.000Z",
+            status: statusFixture(),
+            finalBody: "x",
+            managedRegion: "x",
+            concurrencyLimitation: "x",
+          },
+        }),
+      ),
+    );
+
+    await expect(applyGitChangeChatDescription(INPUT)).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+    });
+  });
+
+  it("rejects an unknown outcome discriminant", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonOk({ outcome: "unknown" })));
+
+    await expect(applyGitChangeChatDescription(INPUT)).rejects.toMatchObject({
       code: "CONTRACT_VALIDATION_FAILED",
     });
   });

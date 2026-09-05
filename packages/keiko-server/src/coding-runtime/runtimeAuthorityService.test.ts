@@ -1285,7 +1285,7 @@ describe("CodingRuntimeAuthorityService description authority", () => {
     const laterIso = "2026-07-11T12:00:01.500Z";
     expect(port.expired?.(SCOPE, laterIso)).toBe(true);
 
-    const unrelatedScope = { ...SCOPE, snapshotDigest: "e".repeat(64) };
+    const unrelatedScope = { ...SCOPE, snapshotDigest: "c".repeat(64) };
     authority.mintGitDeliveryDescriptionAuthority({
       scope: unrelatedScope,
       requestedMode: "governed-assist",

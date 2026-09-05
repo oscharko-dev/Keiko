@@ -3884,3 +3884,70 @@ export async function fetchGitDeliveryPrDescriptionStatus(
   const adapter = await import("./coding-workbench-lazy-fetchers");
   return adapter.fetchGitDeliveryPrDescriptionStatus(fetchJson, input, signal);
 }
+
+// ─── Issue #3400 final-audit F5 — Chat's apply action (body-only, shared #3399 service) ─────────
+//
+// The ONLY write action Chat's connected git-change scope exposes (Frozen Product Decision 6):
+// applies an already-approved PR-description proposal through the SAME #3399
+// `PrDescriptionApplicationService` the pr-description preview/approve/apply routes above reuse.
+// The browser sends only the chat/relationship/proposal ids -- never `ownerAndRepo` -- so the
+// server re-derives the repository identity live from the SAME trusted checkout the scope was
+// connected against (chat-handlers.ts's `createHandleGitChangeApplyDescription`), never a
+// browser-authored identity.
+
+export interface ApplyGitChangeChatDescriptionInput {
+  readonly chatId: string;
+  readonly relationshipId: string;
+  readonly proposalId: string;
+}
+
+/**
+ * Rejects any wire body the shared contract does not sanction, the SAME closed vocabulary
+ * `coding-workbench-lazy-fetchers.ts`'s `validatePrDescriptionApplicationResultWire` enforces for
+ * the sibling preview/approve/apply/status fetchers above -- never a second, looser vocabulary.
+ * The contract module is imported lazily here too (not `preview`, which this action never
+ * produces), so it costs nothing on the desktop shell's first-load chunk until a user applies.
+ */
+async function validateGitChangeApplyDescriptionResponse(
+  value: unknown,
+): Promise<GitRepositoryValidation> {
+  if (!isRecordValue(value)) return { ok: false, reasons: ["response must be an object"] };
+  const contract = await import("@oscharko-dev/keiko-contracts/runtime/pr-description-application");
+  if (value.outcome === "observed") {
+    return contract.isPrDescriptionApplicationStatus(value.status)
+      ? { ok: true }
+      : { ok: false, reasons: ["observed status failed contract validation"] };
+  }
+  if (value.outcome === "blocked") {
+    return typeof value.reason === "string" &&
+      Object.hasOwn(contract.PR_DESCRIPTION_APPLICATION_REASON_STATES, value.reason)
+      ? { ok: true }
+      : { ok: false, reasons: ["blocked reason is not in the closed vocabulary"] };
+  }
+  return { ok: false, reasons: ["response.outcome must be observed or blocked"] };
+}
+
+/**
+ * Applies an already-approved description proposal for a Chat-connected git-change scope. One-use:
+ * the server consumes the approval on the first call and answers 409 on any replay.
+ */
+export async function applyGitChangeChatDescription(
+  input: ApplyGitChangeChatDescriptionInput,
+  signal?: AbortSignal,
+): Promise<PrDescriptionApplicationResultWire> {
+  const value = await fetchJson<unknown>("/api/git-change/apply-description", {
+    method: "POST",
+    body: JSON.stringify({ schemaVersion: "1", ...input }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+  const validation = await validateGitChangeApplyDescriptionResponse(value);
+  if (!validation.ok) {
+    const reason = validation.reasons[0] ?? "unknown validation failure";
+    throw new ApiError(
+      "CONTRACT_VALIDATION_FAILED",
+      `BFF response for /api/git-change/apply-description failed contract validation: ${reason}`,
+      502,
+    );
+  }
+  return value as PrDescriptionApplicationResultWire;
+}
