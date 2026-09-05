@@ -31,6 +31,7 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { PrDescription } from "@oscharko-dev/keiko-model-gateway";
 import { PR_DESCRIPTION_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import type { GitPullRequestBodyAdapter } from "@oscharko-dev/keiko-tools";
+import { createNodeGitPullRequestAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -333,6 +334,15 @@ function unavailableService(): RouteResult {
   return errResult(503, "GIT_DELIVERY_PR_DESCRIPTION_UNAVAILABLE");
 }
 
+// Production defaults come from `deps`, never from a hard-coded value here — mirrors every other
+// Git delivery route (pushExecution.ts/prExecution.ts's own `*AdapterFor`), which reads its real
+// adapter/evidence/approval wiring from the request's `deps: UiHandlerDeps` rather than importing a
+// composed value from deps.ts directly (route modules are never composition roots — ADR-0019).
+function defaultAdapterFactory(seams: PrDescriptionRouteExecutionSeams) {
+  return (workspace: WorkspaceInfo): GitPullRequestBodyAdapter =>
+    createNodeGitPullRequestAdapter({ workspace, processEnv: process.env, now: seams.now });
+}
+
 function buildServiceOptions(
   deps: UiHandlerDeps,
   seams: PrDescriptionRouteExecutionSeams,
@@ -340,23 +350,25 @@ function buildServiceOptions(
   contextProvider: () => PrDescriptionContext | undefined,
 ): PrDescriptionServiceOptions | undefined {
   const snapshots = seams.snapshots ?? deps.gitChangeSnapshotService;
-  const generation = seams.generation;
+  // #3398 owns real production Model Gateway composition (generatePrDescription config/gateway); no
+  // seam and no `deps.prDescriptionGeneration` yet composed means this route fails closed as
+  // unavailable rather than silently degrading to a fabricated or unvalidated description.
+  const generation = seams.generation ?? deps.prDescriptionGeneration;
   if (snapshots === undefined || generation === undefined) return undefined;
-  const adapterFactory =
-    seams.adapterFactory ?? ((): GitPullRequestBodyAdapter | undefined => undefined);
+  const adapterFactory = seams.adapterFactory ?? defaultAdapterFactory(seams);
   return {
     context: contextProvider,
     snapshots,
     generation,
-    adapter: (): GitPullRequestBodyAdapter | undefined => adapterFactory(workspace),
+    adapter: (): GitPullRequestBodyAdapter => adapterFactory(workspace),
     mutationDeps: deps,
     execution: {
       now: seams.now,
       approvalStore: seams.approvalStore,
       activityLog: seams.activityLog,
     },
-    recordStatus: seams.recordStatus ?? ((): boolean => false),
-    readStatus: seams.readStatus ?? ((): undefined => undefined),
+    recordStatus: seams.recordStatus ?? deps.prDescriptionRecordStatus ?? ((): boolean => false),
+    readStatus: seams.readStatus ?? deps.prDescriptionReadStatus ?? ((): undefined => undefined),
   };
 }
 

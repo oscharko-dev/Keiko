@@ -63,7 +63,42 @@ import {
   type CodingRuntimeIssueAttachment,
 } from "./codingRuntimeIssueIntake.js";
 import { renderInitialTurnContext } from "./productionCodingRuntimePorts.js";
+import type {
+  CodingRuntimeDescriptionJobStore,
+  WorkbenchDescriptionScope,
+} from "./codingRuntimeDescriptionJobStore.js";
+import type { WorkbenchDescriptionReason } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
 export type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
+
+// #3401: the outcome a wired generator reports for one dispatched scope. `snapshotDigest` and
+// `draftDigest` are present only for the reasons that produce them (see
+// `WORKBENCH_DESCRIPTION_REASON_STATES`); the caller never invents a digest a reason does not use.
+export interface WorkbenchDescriptionDispatchOutcome {
+  readonly reason: WorkbenchDescriptionReason;
+  readonly snapshotDigest?: string;
+  readonly draftDigest?: string;
+  readonly artifactOutcome?: "complete" | "partial" | "fallback" | "failed";
+}
+
+/**
+ * The one seam this orchestrator calls to actually generate a description (#3397 snapshot capture,
+ * #3399 description-authority admission and model-egress check, #3398 narrative rendering). It is
+ * deliberately NOT part of `CodingRuntimeOrchestratorDeps`: this file owns only the dedup/coalesce/
+ * supersede dispatch DECISION, never the generation itself, so a fake in a unit test can stand in
+ * for the full chain without this file depending on the model gateway or #3399's routes.
+ */
+export interface WorkbenchDescriptionDispatcher {
+  generate(
+    scope: WorkbenchDescriptionScope,
+    signal: AbortSignal,
+  ): Promise<WorkbenchDescriptionDispatchOutcome>;
+}
+
+/** Optional support the terminal-run hook consumes; absent means the feature is not yet wired. */
+export interface CodingRuntimeDescriptionSupport {
+  readonly jobs: CodingRuntimeDescriptionJobStore;
+  readonly dispatcher?: WorkbenchDescriptionDispatcher;
+}
 
 function runtimePauseFailureCode(
   code:
@@ -277,8 +312,12 @@ export class CodingRuntimeOrchestrator {
   private readonly projection: CodingRuntimeOrchestratorState;
   private readonly now: () => Date;
   private readonly newRunId: () => string;
+  private readonly descriptionDispatchAbort = new Map<string, AbortController>();
 
-  constructor(private readonly deps: CodingRuntimeOrchestratorDeps) {
+  constructor(
+    private readonly deps: CodingRuntimeOrchestratorDeps,
+    private readonly description?: CodingRuntimeDescriptionSupport,
+  ) {
     this.now = deps.now ?? ((): Date => new Date());
     // The run id becomes `authority.runId` inside the minted Authority Envelope, whose contract
     // admits only content-free evidence-safe labels; a raw UUID's hex segments are rejected there,

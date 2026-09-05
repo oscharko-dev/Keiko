@@ -31,6 +31,7 @@ import {
   type OpenAIEmbeddingBatchRequest,
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
+  type PrDescription,
   type RealtimeNegotiationOutcome,
   type RealtimeNegotiationRequest,
   type RerankOutcome,
@@ -744,6 +745,16 @@ export interface UiHandlerDeps {
   // Issue #208 — explicit, bounded in-memory consolidation job registry for MemoriaViva polling.
   readonly consolidationJobs?: ConsolidationJobRegistry | undefined;
   readonly gitChangeSnapshotService?: GitChangeSnapshotService | undefined;
+  // #3399: the durable recordStatus/readStatus bridge over the shared node evidence store
+  // (createPrDescriptionReceiptStatusBridge), so the PR-description application service persists
+  // status across restarts. Composed once in production; a route that receives neither this nor a
+  // test-only override cannot record or read status and treats the service as unavailable.
+  readonly prDescriptionRecordStatus?: PrDescriptionReceiptStatusHooks["recordStatus"] | undefined;
+  readonly prDescriptionReadStatus?: PrDescriptionReceiptStatusHooks["readStatus"] | undefined;
+  // #3398 owns real production composition (Model Gateway config + chat capability); absent means
+  // PR-description generation is unavailable, never a fabricated or unvalidated description.
+  readonly prDescriptionGeneration?:
+    Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot"> | undefined;
   // Runtime gateway config supports first-run UI onboarding. It starts from the CLI/env/local config
   // and can be updated after a successful credential test without restarting the loopback server.
   readonly gatewayConfig?: RuntimeGatewayConfig | undefined;
@@ -3786,6 +3797,10 @@ interface UiHandlerRuntimeServices {
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const dapRuntime = createDapRuntimeReference(args.options);
   const services = assembleUiHandlerRuntimeServices(args, dapRuntime);
+  // #3399: one shared hook instance, so recordStatus/readStatus coordinate through the SAME
+  // in-process expected-version cache (createPrDescriptionReceiptStatusHooks's own contract) rather
+  // than each call building an independent, uncoordinated bridge over the same durable store.
+  const prDescriptionReceiptStatus = createPrDescriptionReceiptStatusBridge(args.evidenceStore);
   // #2906 round 2: constructed here (once per composed deps graph) rather than inline inside
   // buildIntegrationUiHandlerDeps, so createUiHandlerDispose can capture and reset the SAME
   // instances this graph's deps object exposes -- see its own comment for why disposal must reach
@@ -3803,6 +3818,11 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     ...atlassianRegistries,
     codingAppSessionDenialWindows,
     gitChangeSnapshotService: services.gitChangeSnapshotService,
+    // #3399: the durable PR-description status bridge over the SAME node evidence store every
+    // other durable surface in this graph shares. `prDescriptionGeneration` is intentionally not
+    // composed here — #3398 owns real production Model Gateway wiring for it.
+    prDescriptionRecordStatus: prDescriptionReceiptStatus.recordStatus,
+    prDescriptionReadStatus: prDescriptionReceiptStatus.readStatus,
     dispose: createUiHandlerDispose(
       args,
       services,

@@ -93,8 +93,7 @@ function record(value: unknown): value is Record<string, unknown> {
 
 function keys(value: Record<string, unknown>): boolean {
   return (
-    Reflect.ownKeys(value).length === KEYS.length &&
-    KEYS.every((key) => Object.hasOwn(value, key))
+    Reflect.ownKeys(value).length === KEYS.length && KEYS.every((key) => Object.hasOwn(value, key))
   );
 }
 
@@ -126,8 +125,7 @@ function validArtifact(value: Record<string, unknown>): boolean {
   );
 }
 
-export function isWorkbenchDescriptionStatus(value: unknown): value is WorkbenchDescriptionStatus {
-  if (!record(value) || !keys(value)) return false;
+function validIdentity(value: Record<string, unknown>): boolean {
   return (
     value.schemaVersion === WORKBENCH_DESCRIPTION_STATUS_SCHEMA_VERSION &&
     typeof value.runId === "string" &&
@@ -135,12 +133,25 @@ export function isWorkbenchDescriptionStatus(value: unknown): value is Workbench
     typeof value.remoteDigest === "string" &&
     DIGEST.test(value.remoteDigest) &&
     isGitObjectId(value.baseSha) &&
-    isGitObjectId(value.headSha) &&
+    isGitObjectId(value.headSha)
+  );
+}
+
+function validVersioning(value: Record<string, unknown>): boolean {
+  return (
     Number.isSafeInteger(value.generationVersion) &&
     Number(value.generationVersion) >= 1 &&
     nullableDigest(value.snapshotDigest) &&
-    validReasonState(value) &&
-    validArtifact(value) &&
     timestamp(value.observedAt)
+  );
+}
+
+export function isWorkbenchDescriptionStatus(value: unknown): value is WorkbenchDescriptionStatus {
+  if (!record(value) || !keys(value)) return false;
+  return (
+    validIdentity(value) &&
+    validVersioning(value) &&
+    validReasonState(value) &&
+    validArtifact(value)
   );
 }

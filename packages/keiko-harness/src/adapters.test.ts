@@ -6,9 +6,10 @@ import {
   type GatewayStreamChunk,
   type ModelGatewayLogContext,
   type NormalizedResponse,
-  type ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
+import { createInitialToolCatalog, gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
 import { DryRunToolPort, GatewayModelPort } from "./adapters.js";
+import { HARNESS_CODES } from "./errors.js";
 
 function response(): NormalizedResponse {
   return {
@@ -158,12 +159,8 @@ describe("GatewayModelPort", () => {
 });
 
 describe("DryRunToolPort", () => {
-  const tools: readonly ToolDefinition[] = [
-    { name: "read_file", description: "read", parameters: {} },
-  ];
-
   it("does not fabricate completed output for an unavailable dry-run handler", async () => {
-    const port = new DryRunToolPort(tools);
+    const port = new DryRunToolPort();
     await expect(
       port.execute({
         toolCallId: "tc-1",
@@ -175,14 +172,37 @@ describe("DryRunToolPort", () => {
     expect(port.calls()).toHaveLength(0);
   });
 
-  it("does not advertise productive tools even when legacy definitions are supplied", () => {
-    expect(new DryRunToolPort(tools).listTools()).toEqual([]);
+  // Relocates the prior pin "does not advertise productive tools even when legacy definitions are
+  // supplied" (adapters.ts previously took a caller-supplied `legacyDefinitions` constructor
+  // argument that could never make the port productive). That injection vector is now removed
+  // entirely -- the constructor takes no arguments -- so the fabrication-prevention invariant it
+  // guarded is now proven directly by execute() always refusing (the two tests in this file), and
+  // this test instead pins the ADR-0175 D1/D4 disposition: honest advertisement of the fixed
+  // compiled `legacy-native@1` projection (derived from the real producer, not restated here),
+  // paired with the same unconditional refusal for every one of the tools it lists.
+  it("advertises the compiled legacy-native catalog projection and refuses execution with a closed reason", async () => {
+    const port = new DryRunToolPort();
+    const advertised = port.listTools();
+    expect(advertised).toEqual(
+      gatewayToolDefinitions(createInitialToolCatalog(), { id: "legacy-native", version: 1 }),
+    );
+    expect(advertised.length).toBeGreaterThan(0);
+    for (const tool of advertised) {
+      const outcome = port.execute({
+        toolCallId: `tc-${tool.name}`,
+        toolName: tool.name,
+        arguments: {},
+        signal: new AbortController().signal,
+      });
+      await expect(outcome).rejects.toMatchObject({ category: HARNESS_CODES.TOOL_ERROR });
+    }
+    expect(port.calls()).toHaveLength(0);
   });
 
   it("rejects with CancelledError when the signal is already aborted", async () => {
     const controller = new AbortController();
     controller.abort("stop");
-    const port = new DryRunToolPort(tools);
+    const port = new DryRunToolPort();
     await expect(
       port.execute({
         toolCallId: "tc-2",

@@ -305,9 +305,12 @@ describe("pr-description routes — apply-lifecycle activity log (AGENTS.md §8 
       deps(),
     );
 
-    const ops = events.map((event) => event.op);
-    expect(ops).toEqual(["pr-description.apply.started", "pr-description.apply.succeeded"]);
-    for (const event of events) {
+    const applyOps = events.filter((event) => event.op.startsWith("pr-description.apply."));
+    expect(applyOps.map((event) => event.op)).toEqual([
+      "pr-description.apply.started",
+      "pr-description.apply.succeeded",
+    ]);
+    for (const event of applyOps) {
       expect(event.correlationId).toBe("corr-pr-description-apply-1");
     }
     expect(JSON.stringify(events)).not.toContain("Human template");
@@ -325,9 +328,9 @@ describe("pr-description routes — apply-lifecycle activity log (AGENTS.md §8 
 
     await applyHandler(ctxFor(APPLY, body({ proposalId })), deps());
 
-    expect(events.map((event) => event.op)).toEqual([
-      "pr-description.apply.started",
-      "pr-description.apply.blocked",
-    ]);
+    const applyOps = events
+      .filter((event) => event.op.startsWith("pr-description.apply."))
+      .map((event) => event.op);
+    expect(applyOps).toEqual(["pr-description.apply.started", "pr-description.apply.blocked"]);
   });
 });

@@ -1,7 +1,18 @@
 // Production-side port adapters. GatewayModelPort wraps the ADR-0003 Gateway and
 // propagates the run's AbortSignal as GatewayRequest.cancellationSignal. DryRunToolPort
 // exposes no productive handlers and rejects attempts without fabricating a successful result.
-
+//
+// ADR-0175 D1/D6 assign bound/ready/offer/dispatch to server composition (#3413); this harness
+// retains only its outer run counters and AbortSignal/run settlement (#3409). The CLI and server
+// run engine compose their sessions with `dryRun: true` (packages/keiko-cli/src/run.ts,
+// packages/keiko-server/src/run-engine.ts) and never supply `bindToolCatalog`, so `session.ts`
+// structurally never binds a catalog for them (`resolveDryRun(config) === true` short-circuits
+// `bindHarnessCatalog`). That composition is intentionally non-productive: dry-run stays the
+// nonproductive readiness mode for those two call sites (docs/architecture/tool-catalog
+// -migration inventory rows `cli-composition`/`server-composition`, owner #3409). `listTools()`
+// still advertises the compiled `legacy-native@1` catalog projection for honest discovery — what
+// the profile declares — while `execute()` unconditionally refuses with a closed harness error so
+// no advertised tool is ever reported as available or executed.
 import {
   CancelledError,
   type GatewayCallRequest,
@@ -9,9 +20,18 @@ import {
   type NormalizedResponse,
   type ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
+import { createInitialToolCatalog, gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
 import { HarnessCatalogError } from "./catalog-errors.js";
 import { HARNESS_CODES } from "./errors.js";
 import type { ModelPort, ToolCallRequest, ToolCallResult, ToolPort } from "./ports.js";
+
+// The one implemented legacy-tool profile (packages/keiko-tool-catalog/src/legacy.ts). Computed
+// once at module load: the catalog/profile are fixed local declarations, never customer input.
+const LEGACY_NATIVE_PROFILE = { id: "legacy-native", version: 1 } as const;
+const LEGACY_NATIVE_TOOL_DEFINITIONS: readonly ToolDefinition[] = gatewayToolDefinitions(
+  createInitialToolCatalog(),
+  LEGACY_NATIVE_PROFILE,
+);
 
 // The minimal Gateway surface the model port depends on. Depending on this structural
 // type (not the concrete Gateway class) keeps the harness decoupled and trivially fakeable.
@@ -56,12 +76,6 @@ export interface RecordedToolCall {
 }
 
 export class DryRunToolPort implements ToolPort {
-  // Retain only the finite constructor transport during issue3409 migration. Definitions cannot
-  // make this unavailable executor productive.
-  constructor(legacyDefinitions: readonly ToolDefinition[] = []) {
-    void legacyDefinitions;
-  }
-
   execute(request: ToolCallRequest): Promise<ToolCallResult> {
     if (request.signal.aborted) {
       return Promise.reject(new CancelledError("tool execution aborted before start"));
@@ -71,8 +85,11 @@ export class DryRunToolPort implements ToolPort {
     );
   }
 
+  // Advertisement only (ADR-0175 D4: "dry-run ... backends are readiness states, never
+  // productive availability"). The list is the fixed compiled legacy-native@1 projection, never
+  // caller input, and execute() above refuses every one of these names unconditionally.
   listTools(): readonly ToolDefinition[] {
-    return [];
+    return LEGACY_NATIVE_TOOL_DEFINITIONS;
   }
 
   calls(): readonly RecordedToolCall[] {

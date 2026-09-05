@@ -357,6 +357,87 @@ describe("startRun explain-plan dispatch", () => {
       vi.resetModules();
     }
   });
+
+  // #3409 catalog-B audit: dispatchExplain must stay the documented nonproductive dry-run
+  // composition (docs/architecture/governed-tool-migration.md rows `cli-composition`/
+  // `server-composition`; ADR-0175 D1 assigns bound/ready/offer/dispatch to server composition
+  // #3413, not this harness). Spies on the real, unmocked createSession/AgentConfig to prove: no
+  // `bindToolCatalog` factory reaches HarnessDeps (session.ts would otherwise bind a productive
+  // catalog once dryRun flips), the config stays `dryRun: true`, and the composed ToolPort is the
+  // real DryRunToolPort — which advertises the compiled legacy-native catalog for honest discovery
+  // yet refuses every one of those tools with a closed reason. A regression that wires a
+  // productive bindToolCatalog or flips dryRun to false without an Authority Envelope fails this.
+  it("composes explain-plan as the documented nonproductive dry-run readiness mode", async () => {
+    mkdirSync(join(workspaceRoot, "src"));
+    writeFileSync(join(workspaceRoot, "src", "discounts.ts"), "export const discount = 100;\n");
+    vi.resetModules();
+    const actualHarness = await vi.importActual<typeof import("@oscharko-dev/keiko-harness")>(
+      "@oscharko-dev/keiko-harness",
+    );
+    const capturedConfigs: Parameters<typeof actualHarness.createSession>[1][] = [];
+    const capturedDeps: Parameters<typeof actualHarness.createSession>[2][] = [];
+    vi.doMock("@oscharko-dev/keiko-harness", () => ({
+      ...actualHarness,
+      createSession: (
+        ...args: Parameters<typeof actualHarness.createSession>
+      ): ReturnType<typeof actualHarness.createSession> => {
+        capturedConfigs.push(args[1]);
+        capturedDeps.push(args[2]);
+        return actualHarness.createSession(...args);
+      },
+    }));
+    try {
+      const { startRun: startRunFresh } = await import("./run-engine.js");
+      const model: ModelPort = {
+        call: (request): Promise<NormalizedResponse> =>
+          Promise.resolve({
+            modelId: request.modelId,
+            content: "grounded explanation",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "req",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "low",
+            },
+          }),
+      };
+      const request = ok(
+        parseRunRequest(
+          JSON.stringify({
+            taskType: "explain-plan",
+            modelId: "m",
+            input: { workspaceRoot, filePath: "src/discounts.ts" },
+          }),
+        ),
+      );
+      const result = startRunFresh({ request, model, registry }, (v) => v);
+      await waitForTerminal(result.runId);
+      expect(capturedConfigs).toHaveLength(1);
+      expect(capturedConfigs[0]?.dryRun).toBe(true);
+      expect(capturedDeps).toHaveLength(1);
+      const deps = capturedDeps[0];
+      expect(deps).not.toHaveProperty("bindToolCatalog");
+      const advertised = deps?.tools.listTools() ?? [];
+      expect(advertised.length).toBeGreaterThan(0);
+      const first = advertised[0];
+      if (first === undefined) throw new Error("expected an advertised legacy tool");
+      await expect(
+        deps?.tools.execute({
+          toolCallId: "tc-explain",
+          toolName: first.name,
+          arguments: {},
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toThrow("unavailable");
+    } finally {
+      vi.doUnmock("@oscharko-dev/keiko-harness");
+      vi.resetModules();
+    }
+  });
 });
 
 describe("probeNetworkIsolationSafely", () => {
