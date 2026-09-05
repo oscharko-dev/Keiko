@@ -53,8 +53,10 @@ function firstUnfencedIndex(body: string, marker: string, fenced: ReadonlySet<nu
 // when a fence delimiter is actually present, so the common unfenced body pays no extra cost.
 // Returns undefined when every marker occurrence in a fenced body is inside a fence — pure
 // documentation, no managed region at all — so `split` never mistakes it for a malformed one.
-function findMarkerBounds(body: string): { start: number; end: number } | undefined {
-  const fenced = bodyHasFence(body) ? fencedOffsets(body) : undefined;
+function findMarkerBounds(
+  body: string,
+  fenced: ReadonlySet<number> | undefined,
+): { start: number; end: number } | undefined {
   const start =
     fenced === undefined ? body.indexOf(START) : firstUnfencedIndex(body, START, fenced);
   const end = fenced === undefined ? body.indexOf(END) : firstUnfencedIndex(body, END, fenced);
@@ -62,17 +64,38 @@ function findMarkerBounds(body: string): { start: number; end: number } | undefi
   return { start, end };
 }
 
+// Same fence-aware interpretation as `findMarkerBounds`: a byte range that falls entirely inside a
+// fenced span (e.g. a maintainer's documentation example) must never trip the duplicate/nested
+// check just because the plain marker regex still matches inside a fence. `rangeStart` is this
+// slice's offset in the original body, so it can be checked against the body-wide `fenced` set.
+function containsUnfencedMarker(
+  slice: string,
+  rangeStart: number,
+  fenced: ReadonlySet<number> | undefined,
+): boolean {
+  if (fenced === undefined) return containsPrDescriptionMarker(slice);
+  const chars: string[] = [];
+  for (let i = 0; i < slice.length; i += 1) {
+    if (!fenced.has(rangeStart + i)) chars.push(slice.charAt(i));
+  }
+  return containsPrDescriptionMarker(chars.join(""));
+}
+
 function split(body: string): { prefix: string; region: string; suffix: string } | undefined {
   if (!containsPrDescriptionMarker(body)) return undefined;
-  const bounds = findMarkerBounds(body);
+  const fenced = bodyHasFence(body) ? fencedOffsets(body) : undefined;
+  const bounds = findMarkerBounds(body, fenced);
   if (bounds === undefined) return undefined;
   const { start, end } = bounds;
   if (start < 0 || end < start) throw new TypeError("Malformed PR description region");
   const prefix = body.slice(0, start);
   const region = body.slice(start + START.length, end);
   const suffix = body.slice(end + END.length);
-  if ([prefix, region, suffix].some(containsPrDescriptionMarker))
-    throw new TypeError("Duplicate or nested PR description region");
+  const isDuplicate =
+    containsUnfencedMarker(prefix, 0, fenced) ||
+    containsUnfencedMarker(region, start + START.length, fenced) ||
+    containsUnfencedMarker(suffix, end + END.length, fenced);
+  if (isDuplicate) throw new TypeError("Duplicate or nested PR description region");
   if (hasIssueClosingDirective(region))
     throw new TypeError("Closing directive inside replaceable PR description region");
   return { prefix, region, suffix };

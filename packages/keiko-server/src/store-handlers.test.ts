@@ -1298,6 +1298,13 @@ describe("PATCH /api/chats", () => {
         chat.id,
         digest,
       );
+      // Mirrors production: `persistConnectedScope` (gitChangeRoutes.ts) writes the canonical
+      // scope to the chat's own `gitChangeScopes` in the same connect that creates the
+      // relationship — a relationship never exists without a matching canonical entry already
+      // persisted on the chat.
+      store.updateChat(chat.id, {
+        gitChangeScopes: [gitChangeScopeFixture({ relationshipId, snapshotDigest: digest })],
+      });
 
       const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
         method: "PATCH",
@@ -1309,6 +1316,50 @@ describe("PATCH /api/chats", () => {
 
       expect(res.status).toBe(200);
       expect(store.findChatById(chat.id)?.gitChangeScopes).toMatchObject([{ relationshipId }]);
+    });
+
+    // Reviewer 3941860533 [P2] — a PATCH that keeps the two fields the relationship binds
+    // (`relationshipId`, `snapshotDigest`) but changes every other identity field must be
+    // rejected in effect: the persisted entry must still be the server's own canonical record,
+    // never the browser's tampered values. Repro basis: reviewer extended the acceptance test
+    // with a second PATCH changing `pullRequestNumber` to 999 and `headSha` to another valid
+    // hash and observed the real (pre-fix) endpoint return 200 with the tampered values stored.
+    it("ignores tampered identity fields and persists the chat's own canonical scope", async () => {
+      const { relationship } = buildRelationshipDeps();
+      await restartWithDeps({ relationship });
+      store.createProject(projDir);
+      const chat = store.createChat(projDir, "t", "m");
+      const digest = "e".repeat(64);
+      const relationshipId = createActiveGitChangeRelationship(
+        relationship,
+        "ws-1",
+        chat.id,
+        digest,
+      );
+      const canonical = gitChangeScopeFixture({ relationshipId, snapshotDigest: digest });
+      store.updateChat(chat.id, { gitChangeScopes: [canonical] });
+
+      const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: JSON.stringify({
+          gitChangeScopes: [
+            gitChangeScopeFixture({
+              relationshipId,
+              snapshotDigest: digest,
+              pullRequestNumber: 999,
+              headSha: "f".repeat(40),
+              remoteDigest: "9".repeat(64),
+            }),
+          ],
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const persisted = store.findChatById(chat.id)?.gitChangeScopes;
+      expect(persisted).toMatchObject([{ relationshipId, headSha: "b".repeat(40) }]);
+      expect(persisted?.[0]).not.toHaveProperty("pullRequestNumber", 999);
+      expect(persisted?.[0]?.remoteDigest).toBe("d".repeat(64));
     });
   });
 

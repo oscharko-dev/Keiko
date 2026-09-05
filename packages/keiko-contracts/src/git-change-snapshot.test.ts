@@ -22,6 +22,7 @@ import {
   type GitChangeSnapshotHunk,
   type GitChangeSnapshotLimits,
 } from "./git-change-snapshot.js";
+import { isVerifiedCommitResult, type VerifiedCommitResult } from "./verified-commit.js";
 
 // Deterministic, content-free stand-ins with the exact shape the validator demands. The validator
 // never recomputes a digest (the contracts leaf has no crypto), so any 64-hex value is a digest.
@@ -708,5 +709,42 @@ describe("limits, digests and references", () => {
     expect(isGitChangeSnapshotReference(`gcs_${"a1".repeat(15)}`)).toBe(false);
     expect(isGitChangeSnapshotReference("gcs_/Users/x/repo")).toBe(false);
     expect(isGitChangeSnapshotReference(42)).toBe(false);
+  });
+});
+
+// #3386 AC11 (this file's counterpart to verified-commit.test.ts's symmetric assertion): the
+// immutable merge-base-to-head PR snapshot this module owns and #3397's interactive runtime diff
+// receipt (VerifiedCommitResult) are two distinct contracts with disjoint closed-key validators.
+// The fixture below is typed against the actual production `VerifiedCommitResult` (imported, not
+// hand-restated) and proven well-formed by that module's own `isVerifiedCommitResult` guard before
+// being handed to this module's validator, so the negative result below cannot be an artifact of
+// an already-malformed fixture.
+describe("#3386 AC11 — validateGitChangeSnapshotResult rejects a well-formed VerifiedCommitResult", () => {
+  const verifiedCommitResult: VerifiedCommitResult = {
+    schemaVersion: "1",
+    proposalId: "commit-1",
+    runId: "run-1",
+    envelopeDigest: hex64("envelope"),
+    runtimeAuthorityDigest: hex64("authority"),
+    workspaceDigest: hex64("workspace"),
+    repositoryDigest: hex64("repository"),
+    baseSha: sha("base"),
+    parentSha: sha("parent"),
+    stagedTreeDigest: hex64("staged-tree"),
+    verificationEvidenceId: "verification-1",
+    messageDigest: hex64("message"),
+    status: "succeeded",
+    reason: "completed",
+    headSha: sha("head"),
+    committedTreeDigest: hex64("staged-tree"),
+    recordedAt: CAPTURED_AT,
+  };
+
+  it("is itself a well-formed VerifiedCommitResult (the fixture's own precondition)", () => {
+    expect(isVerifiedCommitResult(verifiedCommitResult)).toBe(true);
+  });
+
+  it("rejects a well-formed VerifiedCommitResult as a GitChangeSnapshot", () => {
+    expect(validateGitChangeSnapshotResult(verifiedCommitResult)).toMatchObject({ ok: false });
   });
 });

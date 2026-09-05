@@ -216,6 +216,57 @@ function liveCatalogFixture(sequence: readonly ToolCatalog[]): {
   return { log, bridge };
 }
 
+type DeadlineOrdering = "handler-first" | "deadline-first";
+
+/**
+ * Drives one ordering of the handler-vs-deadline race under fake timers, capturing any
+ * `unhandledRejection` raised while the dispatch settles (reviewer 3941827920, P1). Returns what
+ * was captured rather than asserting inline, so both orderings share one small helper.
+ */
+async function runDeadlineRaceOrdering(ordering: DeadlineOrdering): Promise<{
+  readonly unhandled: readonly unknown[];
+  readonly settledCount: number;
+}> {
+  vi.useFakeTimers();
+  const unhandled: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandledRejection);
+  try {
+    const { bridge, log } = bridgeFixture();
+    let releaseHandler: (() => void) | undefined;
+    const handlerGate = new Promise<{ status: "completed" }>((resolve) => {
+      releaseHandler = (): void => {
+        resolve({ status: "completed" });
+      };
+    });
+    const run = vi.fn(() => handlerGate);
+    const dispatchPromise = bridge.dispatch(discoverRequest, run).catch((error: unknown) => error);
+
+    if (ordering === "handler-first") {
+      releaseHandler?.();
+      await dispatchPromise;
+      await vi.advanceTimersByTimeAsync(60_000);
+    } else {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await dispatchPromise;
+      releaseHandler?.();
+      await vi.runAllTimersAsync();
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const settledCount = log.events.filter(
+      (event) => event.op === "tool-catalog.invocation-settled",
+    ).length;
+    return { unhandled, settledCount };
+  } finally {
+    process.off("unhandledRejection", onUnhandledRejection);
+    vi.useRealTimers();
+  }
+}
+
 describe("CatalogFacadeBridge (#3413 F8)", () => {
   it.each(COVERAGE_TABLE)(
     "resolves %s to its exact catalog descriptor (or stays uncovered)",
@@ -600,4 +651,18 @@ describe("CatalogFacadeBridge (#3413 F8)", () => {
       vi.useRealTimers();
     }
   });
+
+  // Reviewer 3941827920 (P1): the deadline path must produce exactly one settlement and never an
+  // unhandled rejection, in EITHER ordering of the handler-vs-deadline race -- not only the
+  // deadline-wins ordering already covered above. A detached, unraced timeout promise (the prior
+  // bug) rejects unconditionally on the next tick regardless of which side "wins", so this must be
+  // checked for both orderings, not just one.
+  it.each(["handler-first", "deadline-first"] as const)(
+    "produces no unhandled rejection and settles exactly once when %s wins the deadline race",
+    async (ordering) => {
+      const { unhandled, settledCount } = await runDeadlineRaceOrdering(ordering);
+      expect(unhandled).toEqual([]);
+      expect(settledCount).toBe(1);
+    },
+  );
 });

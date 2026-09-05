@@ -700,7 +700,7 @@ describe("coding context pack route", () => {
       ctx,
       depsFor({
         codingContextGitHubPort: hostileGitHubPort,
-        activityLog: { write: (event) => void events.push(event as Record<string, unknown>) },
+        activityLog: { write: (event) => void events.push(event) },
       }),
     );
 

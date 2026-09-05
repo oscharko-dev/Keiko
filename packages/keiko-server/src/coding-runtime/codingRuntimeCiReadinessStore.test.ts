@@ -57,7 +57,13 @@ describe("CI readiness in the existing runtime snapshot row", () => {
   it("does not complete an observation after stop or restore authority through reopening", () => {
     const test = fixture();
     const ticket = test.ci.begin("run-1");
-    test.snapshots.transition("run-1", { state: "cancelled", revision: 1, updatedAt: AT });
+    const current = test.snapshots.get("run-1");
+    if (!current) throw new Error("missing fixture snapshot");
+    test.snapshots.transition("run-1", {
+      state: "cancelled",
+      revision: current.revision + 1,
+      updatedAt: AT,
+    });
     expect(test.ci.complete(ticket, readySnapshot())).toBe(false);
     expect(() => test.ci.begin("run-1")).toThrow("live confirmed draft");
     expect(() =>

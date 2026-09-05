@@ -814,6 +814,20 @@ function gitChangeRelationshipMatches(
   );
 }
 
+// Reviewer 3941860533 [P2] — the relationship check above binds only `relationshipId` and
+// `snapshotDigest`; every other identity field (pullRequestNumber, refs/SHAs, remoteDigest, the
+// held proposal metadata) must never be taken from the browser's PATCH body, because
+// `holdChatDescriptionProposal`/`resolveGitChangeApplyTarget` (chat-handlers.ts) trust this
+// persisted scope to resolve the PR they act on. The legitimate browser flow (GitChangeScopePill's
+// detach, api.ts's `updateChatGitChangeScopes`) only ever echoes back entries this chat's OWN
+// `gitChangeScopes` already holds (minted server-side by connect/refresh) — so the canonical
+// record lives on `chat`, never on the request body. Look it up by `relationshipId` and return
+// THAT, ignoring every other field the browser sent; an entry with no matching canonical record is
+// an identity mismatch and is rejected exactly like an unbound relationship.
+function canonicalGitChangeScope(chat: Chat, relationshipId: string): ChatGitChangeScope | undefined {
+  return (chat.gitChangeScopes ?? []).find((entry) => entry.relationshipId === relationshipId);
+}
+
 function validateGitChangeScopeAccess(
   deps: UiHandlerDeps,
   chat: Chat,

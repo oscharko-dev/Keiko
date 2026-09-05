@@ -24,3 +24,14 @@ paths = [
   '''packages/keiko-server/src/gitDelivery/draftDeliveryTemplate\.test\.ts''',
   '''packages/keiko-workspace/src/codingRepositorySearch\.test\.ts''',
 ]
+
+[[allowlists]]
+description = "Epic #3384: design-system evidence proofs pin the SHA-256 of `packages/keiko-ui/src/lib/api.ts`; the key name ends in `api` and the value is a 64-hex digest, which the generic-api-key rule mistakes for a credential. Scoped to the tracked evidence proof files and to 64-hex values only; a real key never matches this shape."
+matchCondition = "AND"
+paths = [
+  '''docs/design-system/evidence/[^/]+/(journey|visual)-proof\.json''',
+]
+regexTarget = "line"
+regexes = [
+  '''"packages/keiko-ui/src/lib/api\.ts": "[0-9a-f]{64}"''',
+]

@@ -88,4 +88,52 @@ describe("managed PR region byte preservation", () => {
     ].join("\n");
     expect(() => reconcilePrDescriptionRegion(body, framePrDescriptionRegion("new"))).toThrow();
   });
+
+  // Reviewer 3941860530: `firstUnfencedIndex` correctly locates the real region for splitting, but
+  // the duplicate-marker check must apply the same fence-aware interpretation, or a fenced example
+  // that sits OUTSIDE the real managed region (in prefix or suffix) is wrongly flagged as a
+  // duplicate on every subsequent reconciliation.
+  it("does not flag a fenced example as a duplicate when it precedes the real managed region on a repeated reconciliation", () => {
+    const example = [
+      "# Human template",
+      "",
+      "Example of the managed markers Keiko uses:",
+      "```",
+      START,
+      "old content",
+      END,
+      "```",
+      "",
+      "Closes #42",
+    ].join("\n");
+    const region = framePrDescriptionRegion("new");
+    const first = reconcilePrDescriptionRegion(example, region);
+    expect(first.finalBody).toBe(example + "\n\n" + region);
+    // Second reconciliation against the SAME already-managed body must succeed (idempotent
+    // update), not throw "Duplicate or nested PR description region" because of the fenced
+    // example that now sits in the prefix.
+    const updatedRegion = framePrDescriptionRegion("updated");
+    const second = reconcilePrDescriptionRegion(first.finalBody, updatedRegion);
+    expect(second.finalBody).toBe(example + "\n\n" + updatedRegion);
+    expect(second.prefix).toBe(example + "\n\n");
+    expect(second.suffix).toBe("");
+  });
+
+  it("does not flag a fenced example as a duplicate when it follows the real managed region", () => {
+    const region = framePrDescriptionRegion("old");
+    const example = [
+      "",
+      "Example of the managed markers Keiko uses:",
+      "```",
+      START,
+      "old content",
+      END,
+      "```",
+    ].join("\n");
+    const body = region + example;
+    const updatedRegion = framePrDescriptionRegion("updated");
+    const result = reconcilePrDescriptionRegion(body, updatedRegion);
+    expect(result.finalBody).toBe(updatedRegion + example);
+    expect(result.suffix).toBe(example);
+  });
 });

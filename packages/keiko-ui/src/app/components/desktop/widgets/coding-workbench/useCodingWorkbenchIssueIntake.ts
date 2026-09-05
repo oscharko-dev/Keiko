@@ -17,8 +17,13 @@ export interface AcceptedWorkbenchIssue {
   readonly binding: CodingWorkbenchIssueBindingProjection;
 }
 
+// #3384 B5-13: a rate limit, a GitHub-side 5xx, or a wall-time timeout on the issue read is
+// reported by the server as CODING_WORKBENCH_ISSUE_READ_TRANSIENT_FAILURE — a free error code, not
+// a member of the closed CodingWorkbenchIssueBindingFailure wire vocabulary
+// (coding-workbench-issue-errors.ts stays closed on purpose). This UI-local state distinguishes it
+// from a genuinely unreadable issue so the retry-worded copy can be shown instead of "unknown".
 export type IssueIntakeFailure =
-  CodingWorkbenchIssueBindingFailure | "unknown" | "unavailable-runtime";
+  CodingWorkbenchIssueBindingFailure | "unknown" | "unavailable-runtime" | "read-transient-failure";
 type IssueIntakeState =
   | { readonly kind: "empty" | "loading" | "cancelled" }
   | { readonly kind: "ready"; readonly response: GitHubIssuePreviewResponseWire }
@@ -28,8 +33,11 @@ type IssueIntakeState =
       readonly correlationId: string | undefined;
     };
 
+const READ_TRANSIENT_FAILURE_CODE = "CODING_WORKBENCH_ISSUE_READ_TRANSIENT_FAILURE";
+
 function issueFailure(error: unknown): IssueIntakeFailure {
   if (typeof error !== "object" || error === null || !("code" in error)) return "unknown";
+  if (error.code === READ_TRANSIENT_FAILURE_CODE) return "read-transient-failure";
   return codingWorkbenchIssueFailure(error.code) ?? "unknown";
 }
 

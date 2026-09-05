@@ -24,7 +24,7 @@ same-user process-containment qualification is claimed.
 
 ## Reproduction
 
-Run `npm run test:e2e:coding-issue-delivery`. The configuration builds packages, the static UI and
+Run `npm run test:e2e:coding-issue-publish`. The configuration builds packages, the static UI and
 the existing browser server assembly before starting a fresh server. By default, evidence goes to
 `test-results/e2e-evidence/`. Use `KEIKO_WRITE_TRACKED_EVIDENCE=1` with the same command to regenerate
 these tracked artifacts deliberately. The lane is registered in the extended browser CI matrix.
