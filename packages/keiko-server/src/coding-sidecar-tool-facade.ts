@@ -166,7 +166,10 @@ function toolFacadeRouteResult(
   }
   const mapping = TOOL_FACADE_STATUS_MAPPINGS.get(result.status) ?? TOOL_FACADE_DEFAULT_MAPPING;
   if (mapping.reason !== undefined) logToolFacadeRejection(ctx, result.status, mapping.reason);
-  return { status: result.status, body: errorBody(mapping.code, mapping.message, ctx.correlationId) };
+  return {
+    status: result.status,
+    body: errorBody(mapping.code, mapping.message, ctx.correlationId),
+  };
 }
 
 /**
@@ -192,7 +195,11 @@ export async function handleCodingSidecarToolFacade(
   }
   const parsed = await readJsonObject(ctx.req, CODING_TOOL_MAX_BODY_BYTES);
   if (isRouteResult(parsed)) {
-    logToolFacadeRejection(ctx, parsed.status, parsed.status === 413 ? "body-too-large" : "body-invalid");
+    logToolFacadeRejection(
+      ctx,
+      parsed.status,
+      parsed.status === 413 ? "body-too-large" : "body-invalid",
+    );
     return parsed;
   }
   const disconnect = bindRouteDisconnect(ctx);

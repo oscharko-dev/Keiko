@@ -92,8 +92,7 @@ export interface CodingRuntimeHost {
   // the Seatbelt egress profile denies. `resolve` returns `undefined` when no run is active; at
   // most one run's bridge is ever current (the singleton-run governance gate).
   readonly toolFacadeBridge?:
-    | { readonly resolve: () => CodingRuntimeToolFacadeBridge | undefined }
-    | undefined;
+    { readonly resolve: () => CodingRuntimeToolFacadeBridge | undefined } | undefined;
 }
 
 /**

@@ -279,7 +279,7 @@ function composeRuntime(
       receiver = onRuntimeEvent;
       return manager;
     },
-    mintLaunch: launchResolver(
+    mintLaunch: composedMintLaunch(
       input,
       authority,
       runs,
@@ -287,9 +287,7 @@ function composeRuntime(
       (event): void => {
         receiver(event);
       },
-      (runId): void => {
-        verifiedHeadNotifier.current(runId);
-      },
+      verifiedHeadNotifier,
       toolFacadeBridge,
     ),
     toolFacadeBridge: { resolve: (): OpenCodeToolBridge | undefined => toolFacadeBridge.current },
@@ -328,6 +326,31 @@ function composeRuntime(
       ? { safeActivityProjection: input.backend.safeActivityProjection }
       : {}),
   };
+}
+
+// Extracted so `composeRuntime` stays under AGENTS.md §6's 50-line ceiling: bundles the
+// verified-head and tool-facade-bridge notification slots onto `launchResolver`'s call, which
+// `composeRuntime` otherwise builds inline.
+function composedMintLaunch(
+  input: ProductionCodingRuntimeResolverInput,
+  authority: CodingRuntimeAuthorityService,
+  runs: Map<string, ResolverRunRecord>,
+  research: ResearchComposition,
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+  verifiedHeadNotifier: { current: (runId: string) => void },
+  toolFacadeBridge: { current: OpenCodeToolBridge | undefined },
+): QualifiedProductionCodingRuntime["mintLaunch"] {
+  return launchResolver(
+    input,
+    authority,
+    runs,
+    research,
+    onRuntimeEvent,
+    (runId): void => {
+      verifiedHeadNotifier.current(runId);
+    },
+    toolFacadeBridge,
+  );
 }
 
 function runtimeCapabilityAuthenticatorFor(
@@ -415,9 +438,8 @@ function launchResolver(
           research,
           onRuntimeEvent,
           notifyVerifiedHeadAdvanced,
-          toolFacadeBridge,
         );
-        runs.set(request.runId, record);
+        runs.set(request.runId, withCurrentToolFacadeBridge(record, toolFacadeBridge));
         return launchRequest(record, context, minted);
       } catch (error) {
         authority.abandonUnlaunched(request.runId, runtimeNow(input).toISOString());
@@ -666,7 +688,6 @@ function createRunRecord(
   research: ResearchComposition,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
   notifyVerifiedHeadAdvanced: (runId: string) => void,
-  toolFacadeBridge: { current: OpenCodeToolBridge | undefined },
 ): ResolverRunRecord {
   const controller = new AbortController();
   const surface = createRunToolSurface(
@@ -680,7 +701,6 @@ function createRunRecord(
     controller.signal,
     notifyVerifiedHeadAdvanced,
   );
-  const { invocationRegistry, leases, explicitSkills } = surface;
   const backend = createBackendRun({
     input,
     request,
@@ -692,26 +712,41 @@ function createRunRecord(
     research,
     onRuntimeEvent,
   });
-  const detachLease = attachRuntimeMutationLease(input, leases, invocationRegistry);
-  // ADR-0043 D11-D14 (#3390): this run becomes "the current" tool bridge the BFF route dispatches
-  // to. Overwrites any prior value -- safe because the singleton-run governance gate guarantees a
-  // prior run has already fully disposed (and cleared itself, see createRunDisposer) before a new
-  // one can reach here.
-  toolFacadeBridge.current = backend.toolBridge;
+  const detachLease = attachRuntimeMutationLease(input, surface.leases, surface.invocationRegistry);
   return {
     manager: backend.manager,
     ciRepairBudget: surface.ciRepairBudget,
     launch: backend.launch,
-    turnPort: bindExplicitSkillTurns(backend.turnPort, explicitSkills),
+    turnPort: bindExplicitSkillTurns(backend.turnPort, surface.explicitSkills),
     controller,
     operationGuard: createProductionRuntimeOperationGuard(request.runId, () =>
       runtimeAuthorityLive(input, context, minted, authority),
     ),
-    waitForPendingMutations: (signal) => leases.waitForIdle(signal),
+    waitForPendingMutations: (signal) => surface.leases.waitForIdle(signal),
     ...(backend.questionPort ? { questionPort: backend.questionPort } : {}),
     ...(backend.permissionPort ? { permissionPort: backend.permissionPort } : {}),
     toolBridge: backend.toolBridge,
-    dispose: createRunDisposer(detachLease, leases, invocationRegistry, backend, toolFacadeBridge),
+    dispose: createRunDisposer(detachLease, surface.leases, surface.invocationRegistry, backend),
+  };
+}
+
+// ADR-0043 D11-D14 (#3390): registers this run's tool bridge as "the current" one the BFF route
+// dispatches to, and wraps disposal so it clears itself -- identity-guarded so a disposal that
+// settles after a NEWER run has already composed its own bridge can never clear the newer one.
+// Kept outside `createRunRecord`/`createRunDisposer` (AGENTS.md §6's 50-line ceiling) since only
+// `launchResolver`'s `resolve` closure, where the record is about to be stored, needs it.
+function withCurrentToolFacadeBridge(
+  record: ResolverRunRecord,
+  toolFacadeBridge: { current: OpenCodeToolBridge | undefined },
+): ResolverRunRecord {
+  toolFacadeBridge.current = record.toolBridge;
+  const dispose = record.dispose;
+  return {
+    ...record,
+    dispose: async (): Promise<void> => {
+      if (toolFacadeBridge.current === record.toolBridge) toolFacadeBridge.current = undefined;
+      await dispose?.();
+    },
   };
 }
 
@@ -757,12 +792,8 @@ function createRunDisposer(
   leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
   invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
   backend: QualifiedProductionRuntimeRun,
-  toolFacadeBridge: { current: OpenCodeToolBridge | undefined },
 ): () => Promise<void> {
   return async (): Promise<void> => {
-    // Identity-guarded: only clear the slot if it is STILL this run's bridge, so a disposal that
-    // settles after a newer run has already composed its own bridge never clears the newer one.
-    if (toolFacadeBridge.current === backend.toolBridge) toolFacadeBridge.current = undefined;
     detachLease?.();
     leases.dispose();
     invocationRegistry.dispose();

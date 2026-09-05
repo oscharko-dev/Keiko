@@ -608,8 +608,7 @@ export interface UiHandlerDeps {
   // coding-sidecar-tool-facade.ts over the SAME attested loopback port as the model gateway
   // instead of a second listener. `resolve()` is `undefined` whenever no run is active.
   readonly toolFacadeBridge?:
-    | { readonly resolve: () => CodingRuntimeToolFacadeBridge | undefined }
-    | undefined;
+    { readonly resolve: () => CodingRuntimeToolFacadeBridge | undefined } | undefined;
   readonly codingSidecarGatewayCancellationRegistry?:
     { readonly signalFor: (runId: string) => AbortSignal | undefined } | undefined;
   readonly codingSidecarGatewayEvidenceAggregator?:
