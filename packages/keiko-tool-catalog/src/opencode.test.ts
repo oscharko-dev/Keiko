@@ -86,14 +86,14 @@ describe("opencode registration set", () => {
     for (const alias of GIT_DELIVERY_ALIASES) expect(aliases).toContain(alias);
   });
 
-  it("declares exactly fifteen governed tools with unique canonical identities and aliases", () => {
+  it("declares exactly sixteen governed tools with unique canonical identities and aliases", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
-    expect(projection.tools).toHaveLength(15);
+    expect(projection.tools).toHaveLength(16);
     const canonicalIds = projection.tools.map((tool) => tool.toolRef.canonicalId);
     const aliases = projection.tools.map((tool) => tool.alias);
-    expect(new Set(canonicalIds).size).toBe(15);
-    expect(new Set(aliases).size).toBe(15);
+    expect(new Set(canonicalIds).size).toBe(16);
+    expect(new Set(aliases).size).toBe(16);
   });
 
   it("classifies push, pull-request and CI observation as delivery-substrate with network-egress, matching gitOperationRequirements.ts", () => {
@@ -119,12 +119,19 @@ describe("opencode registration set", () => {
     expect(execute?.effects).toEqual(["delivery-substrate"]);
   });
 
-  it("never registers the repository-search identity (H1 handler not yet bound)", () => {
+  // #3414: #3386's H1 local repository-search handler is implemented and mounted server-side, so
+  // this issue projects it as the model-visible tool `keiko_repository_search` under its reserved
+  // canonical identity `keiko.repo.search@1`. Read-only, search-only: `keiko_workspace_discover`
+  // stays path-only and `keiko_workspace_read` remains the bounded-range read handoff.
+  it("registers the repository-search identity now that the H1 handler is bound (#3414)", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
     const canonicalIds = projection.tools.map((tool) => tool.toolRef.canonicalId);
-    expect(canonicalIds).not.toContain("keiko.repo.search");
-    expect(projection.tools.map((tool) => tool.alias)).not.toContain("keiko_repository_search");
+    expect(canonicalIds).toContain("keiko.repo.search");
+    const tool = projection.tools.find((entry) => entry.alias === "keiko_repository_search");
+    if (tool === undefined) throw new Error("Missing tool: keiko_repository_search");
+    expect(tool.toolRef).toEqual({ canonicalId: "keiko.repo.search", contractVersion: 1 });
+    expect(tool.effects).toEqual(["workspace-read"]);
   });
 
   it("declares question and todowrite as native extensions, never as tool descriptors", () => {
@@ -149,8 +156,8 @@ describe("opencode registration set", () => {
   it("is the source coding-sidecar-gateway.ts derives its outgoing gateway advertisement from", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const definitions = gatewayToolDefinitions(catalog, OPENCODE_PROFILE);
-    expect(definitions).toHaveLength(15);
-    expect(new Set(definitions.map((tool) => tool.name)).size).toBe(15);
+    expect(definitions).toHaveLength(16);
+    expect(new Set(definitions.map((tool) => tool.name)).size).toBe(16);
     for (const tool of definitions) expect(tool.description.length).toBeGreaterThan(0);
   });
 

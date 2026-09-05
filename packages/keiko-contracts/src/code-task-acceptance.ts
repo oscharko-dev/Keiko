@@ -62,6 +62,7 @@ export type CodeTaskIsoInstant = CodeTaskBranded<"CodeTaskIsoInstant", string>;
 const GIT_SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const SHA_256_PATTERN = /^[a-f0-9]{64}$/u;
 const SCENARIO_ID_PATTERN = /^[a-z0-9][a-z0-9-]{2,63}$/u;
+const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{1,63}$/u;
 const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
 const REPO_RELATIVE_PATH_PATTERN = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/u;
 const CONTENT_FREE_NOTE_PATTERN = /^[\x20-\x7E]{1,200}$/u;
@@ -81,6 +82,12 @@ export function isCodeTaskSha256Digest(value: unknown): value is CodeTaskSha256D
 
 export function isCodeTaskScenarioId(value: unknown): value is CodeTaskScenarioId {
   return typeof value === "string" && SCENARIO_ID_PATTERN.test(value);
+}
+
+/** A governed-tool catalog name (e.g. `keiko_changeset_edit`): content-free by construction, never
+ * a prompt, argument, or result. */
+export function isCodeTaskToolName(value: unknown): value is string {
+  return typeof value === "string" && TOOL_NAME_PATTERN.test(value);
 }
 
 export function isCodeTaskIsoInstant(value: unknown): value is CodeTaskIsoInstant {
@@ -603,6 +610,16 @@ export interface CodeTaskQualificationManifestV1 {
    * is carried here -- the validator checks the binding and never executes or reproduces it. */
   readonly auditReference: CodeTaskFact<string>;
   readonly auditDigest: CodeTaskFact<CodeTaskSha256Digest>;
+  /** Human merge/closure attestation (issue #3390 contract-correction 5): supplements, and can
+   * never replace, #3389's machine-observed merge/closure facts referenced by
+   * `journeyOutcomeDigest`. Required to be "known" whenever `journeyOutcomeDigest` is known --
+   * this manifest cannot itself see whether that referenced outcome claims merged/closed, so the
+   * fail-closed rule asks for the attestation whenever the outcome digest exists at all. */
+  readonly humanMergeAttestationDigest: CodeTaskFact<CodeTaskSha256Digest>;
+  /** Catalog tool names (issue #3390 contract-correction 4) the controlled fixture's rubric
+   * requires; content-free by construction (a name, never a prompt or result). The evidence gate
+   * rejects any entry absent from the model-visible tool set on the head under qualification. */
+  readonly requiredTools: readonly string[];
   readonly scenarios: readonly CodeTaskQualificationScenarioV1[];
   readonly knownLimitations: readonly string[];
 }
@@ -637,6 +654,8 @@ const QUALIFICATION_MANIFEST_KEYS = [
   "journeyOutcomeDigest",
   "auditReference",
   "auditDigest",
+  "humanMergeAttestationDigest",
+  "requiredTools",
   "scenarios",
   "knownLimitations",
 ] as const;
@@ -765,12 +784,28 @@ function qualificationManifestReferenceErrors(value: Record<string, unknown>): r
     ),
     ...factErrors(ownField(value, "auditReference"), "auditReference", isCodeTaskContentFreeNote),
     ...factErrors(ownField(value, "auditDigest"), "auditDigest", isCodeTaskSha256Digest),
+    ...factErrors(
+      ownField(value, "humanMergeAttestationDigest"),
+      "humanMergeAttestationDigest",
+      isCodeTaskSha256Digest,
+    ),
   );
   return errors;
 }
 
+function qualificationManifestRequiredToolsErrors(value: Record<string, unknown>): readonly string[] {
+  const requiredTools = ownField(value, "requiredTools");
+  if (!Array.isArray(requiredTools) || !requiredTools.every((tool) => isCodeTaskToolName(tool))) {
+    return ["requiredTools must be an array of catalog tool names"];
+  }
+  return [];
+}
+
 function qualificationManifestBodyErrors(value: Record<string, unknown>): readonly string[] {
-  const errors: string[] = [...qualificationManifestReferenceErrors(value)];
+  const errors: string[] = [
+    ...qualificationManifestReferenceErrors(value),
+    ...qualificationManifestRequiredToolsErrors(value),
+  ];
   const scenarios = ownField(value, "scenarios");
   if (Array.isArray(scenarios)) {
     scenarios.forEach((scenario, index) => {
@@ -848,6 +883,28 @@ export function codeTaskQualificationManifestFailures(
   const registered = new Set(binding.registeredScenarioIds);
   for (const scenario of manifest.scenarios) {
     failures.push(...scenarioQualificationFailures(scenario, registered));
+  }
+  // #3390 audit F3: a manifest that omits a required scenario entirely (rather than reporting it
+  // as failed or blocked) previously passed unnoticed -- the loop above only ever validates
+  // scenarios the manifest DOES carry. Every id the binding declares required must actually be
+  // present, not merely absent from complaints.
+  const present = new Set<string>(manifest.scenarios.map((scenario) => scenario.scenarioId));
+  for (const requiredId of binding.registeredScenarioIds) {
+    if (!present.has(requiredId)) {
+      failures.push(`missing required scenario: ${requiredId}`);
+    }
+  }
+  if (manifest.journeyOutcomeDigest.outcome === "known" &&
+    manifest.humanMergeAttestationDigest.outcome !== "known") {
+    // #3390 audit F9 / issue #3390 contract-correction 5: a human merge attestation supplements
+    // #3389's machine-observed merge/closure facts and can never replace them, but the manifest
+    // cannot itself see whether the referenced journey outcome claims merged/closed -- it only
+    // holds an opaque digest. Requiring the attestation whenever the outcome digest is known (not
+    // only when it is known to claim merged/closed) is the fail-closed reading: an unattested
+    // merge/closure can never slip through because the manifest could not tell the two cases apart.
+    failures.push(
+      "humanMergeAttestationDigest required when journeyOutcomeDigest is known",
+    );
   }
   return failures;
 }

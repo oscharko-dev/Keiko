@@ -49,6 +49,7 @@ import {
   createFunctionalSupervisor,
   createScriptedOpenCodeHarness,
   functionalArtifactAvailable,
+  functionalGatewayTools,
   scriptedFunctionalPortable,
   stagedFunctionalPortable,
   type ScriptedOpenCodeHarness,
@@ -162,6 +163,51 @@ describe("production OpenCode backend functional pipeline", () => {
     expect(snapshot).not.toContain(OVERSIZED_CALL_ID);
     await stopRun(pipeline.baseUrl, run.runId);
   }, 120_000);
+
+  it(
+    "denies a live scripted child mid-run through the real sidecar gateway when one of the eight " +
+      "#3386/#3387/#3388 tools is missing from the advertised set",
+    async () => {
+      // #3386/#3387/#3388 fail-closed proof at the INTEGRATION layer, not in isolation: a live
+      // scripted child's own `/chat/completions` call reaches the REAL
+      // `handleCodingSidecarGatewayChatCompletions` route mounted on the real production server
+      // (the same route the real OpenCode 1.17.17 binary calls), which enforces
+      // `hasExactOpenCodeVisibleToolContract` on the incoming request. Dropping one tool from the
+      // advertised set must be denied by that live route mid-run, not only by calling the guard
+      // function directly against a hand-built array.
+      const fixture = await setupWorkspace();
+      const fullToolSet = functionalGatewayTools();
+      const droppedToolSet = fullToolSet.filter((tool) => tool.function.name !== "keiko_git_stage");
+      expect(droppedToolSet).toHaveLength(fullToolSet.length - 1);
+      const scripted = createScriptedOpenCodeHarness({ gatewayToolsOverride: droppedToolSet });
+      disposers.push(() => scripted.closeAll());
+      const portable = scriptedFunctionalPortable(fixture.root);
+      const pipeline = await bootPipeline(fixture, portable, scripted.createSupervisor);
+      const started = await post(
+        pipeline.baseUrl,
+        "/api/coding-workbench/runtime/runs",
+        startBody("gateway-tool-contract-drift"),
+      );
+      expect(started.status).toBe(200);
+      await waitForChildTurns(scripted, 1);
+      await vi.waitFor(
+        () => {
+          expect(pipeline.diagnostics).toContainEqual(
+            expect.objectContaining({
+              errorClass: "CodingSidecarGatewayToolContractRejection",
+              code: "CODING_GATEWAY_TOOL_CONTRACT_DRIFT",
+            }),
+          );
+        },
+        { timeout: 30_000, interval: 100 },
+      );
+      // The denial happened before any governed tool ever reached the facade: the child's one and
+      // only completed turn produced no tool-call evidence at all.
+      const child = scripted.children.at(-1);
+      expect(child?.fixtureFailures()).toEqual([]);
+    },
+    120_000,
+  );
 
   it("keeps the coding-runtime control plane when a store is injected with its snapshot companion", async () => {
     // The shared Playwright journey (tests/e2e/servers/coding-runtime-server-shared.mts) injects

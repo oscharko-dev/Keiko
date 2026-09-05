@@ -391,6 +391,41 @@ describe("pr-description routes — preview/approve/apply round trip (#3399)", (
     });
     expect(fixture.writes).toHaveLength(0);
   });
+
+  // Final-audit F2/#3390 (ADR-0138 D2): before this fix, `admitDescription`'s coarse admission
+  // gate hard-denied preview/approve/apply with "approval-required" below `autonomous-delivery` and
+  // no production path ever redeemed it — every round trip above only ever exercised the fixture
+  // default (autonomous-delivery). FAILING BEFORE THE FIX: `modeDeps()`'s preview call returned 403
+  // GIT_DELIVERY_AUTHORITY_DENIED at `admitDescription`'s `gitDeliveryAuthorityGate` call, never
+  // reaching the service.
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "completes a preview -> approve -> apply round trip at %s",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => fixture.root,
+          mode,
+          { headRef: "feature", baseRef: "main", allowDetachedHead: false, allowedPrefixes: ["feature"] },
+        ),
+      });
+      const previewHandler = createHandlePrDescriptionPreview(optionsWithFixtureService());
+      const approveHandler = createHandlePrDescriptionApprove(optionsWithFixtureService());
+      const applyHandler = createHandlePrDescriptionApply(optionsWithFixtureService());
+
+      const previewRes = await previewHandler(ctxFor(PREVIEW, body({ language: "en" })), modeDeps);
+      expect(previewRes.status).toBe(200);
+      const proposalId = (previewRes.body as { preview: { proposalId: string } }).preview
+        .proposalId;
+
+      const approveRes = await approveHandler(ctxFor(APPROVE, body({ proposalId })), modeDeps);
+      expect(approveRes.status).toBe(200);
+
+      const applyRes = await applyHandler(ctxFor(APPLY, body({ proposalId })), modeDeps);
+      expect(applyRes.status).toBe(200);
+      expect((applyRes.body as { outcome: string }).outcome).toBe("observed");
+    },
+  );
 });
 
 // Review repair (description-production-wiring item): every test above injects a fully fake

@@ -848,6 +848,67 @@ describe("merge approve (mints the approval execute consumes)", () => {
     );
     expect(res.status).toBe(404);
   });
+
+  // Final-audit F2/#3390 (ADR-0138 D2): before this fix, the coarse admission gate hard-denied both
+  // merge/approve and merge/execute with "approval-required" below `autonomous-delivery` and no
+  // production path ever redeemed it — every test above only ever exercised the fixture default
+  // (autonomous-delivery). FAILING BEFORE THE FIX: `modeDeps()`'s approve call returned 403
+  // GIT_DELIVERY_AUTHORITY_DENIED at the `gitDeliveryAuthorityGate` call inside
+  // `createHandleMergeApprove`, never reaching `store.issue()`.
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "mints and consumes a merge approval end to end at %s",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+          { headRef: "feat/x", baseRef: "main", allowDetachedHead: false, allowedPrefixes: ["feat/"] },
+        ),
+      });
+      const adapter = recordingMergeAdapter(READY_PROVIDER);
+      const approvalStore = createInMemoryGitDeliveryApprovalStore();
+      const approveHandler = createHandleMergeApprove({
+        execution: seams({ approvalStore, mergeAdapterFactory: () => adapter.adapter }),
+      });
+      const approveRes = await approveHandler(ctxFor(APPROVE, mergeBody()), modeDeps);
+      expect(approveRes.status).toBe(200);
+      const approveBody = approveRes.body as { approval: GitDeliveryApprovalClaim };
+
+      const executeHandler = createHandleMergeExecute({
+        execution: seams({ approvalStore, mergeAdapterFactory: () => adapter.adapter }),
+      });
+      const executeRes = await executeHandler(
+        ctxFor(EXECUTE, mergeBody({ approval: approveBody.approval })),
+        modeDeps,
+      );
+      const executeBody = executeRes.body as GitDeliveryMergeExecuteResponseBody;
+      expect(executeBody.status).toBe("succeeded");
+      expect(adapter.merges()).toBe(1);
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "still returns approval-required (never mode-denied) at %s when execute carries no approval",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+          { headRef: "feat/x", baseRef: "main", allowDetachedHead: false, allowedPrefixes: ["feat/"] },
+        ),
+      });
+      const adapter = recordingMergeAdapter(READY_PROVIDER);
+      const executeHandler = createHandleMergeExecute({
+        execution: seams({ mergeAdapterFactory: () => adapter.adapter }),
+      });
+      const res = await executeHandler(ctxFor(EXECUTE, mergeBody()), modeDeps);
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ status: "approval-required" });
+      expect(adapter.merges()).toBe(0);
+    },
+  );
 });
 
 describe("merge request validation", () => {

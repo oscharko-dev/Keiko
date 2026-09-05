@@ -579,6 +579,7 @@ const RUBRIC_DIGEST = "e".repeat(64);
 const READINESS_DIGEST = "f".repeat(64);
 const OUTCOME_DIGEST = "1".repeat(64);
 const AUDIT_DIGEST = "2".repeat(64);
+const HUMAN_MERGE_ATTESTATION_DIGEST = "3".repeat(64);
 
 function validQualificationManifest(): CodeTaskQualificationManifestV1 {
   const parsed: unknown = JSON.parse(
@@ -600,6 +601,8 @@ function validQualificationManifest(): CodeTaskQualificationManifestV1 {
       journeyOutcomeDigest: { outcome: "known", value: OUTCOME_DIGEST },
       auditReference: { outcome: "known", value: "keiko-issue-audit-20260904" },
       auditDigest: { outcome: "known", value: AUDIT_DIGEST },
+      humanMergeAttestationDigest: { outcome: "known", value: HUMAN_MERGE_ATTESTATION_DIGEST },
+      requiredTools: ["keiko_changeset_edit"],
       scenarios: [
         {
           scenarioId: "issue-to-pr-full-access",
@@ -706,6 +709,35 @@ describe("validateCodeTaskQualificationManifest", () => {
       true,
     );
   });
+
+  it("rejects a manifest missing humanMergeAttestationDigest (#3390 audit F9)", () => {
+    const base: Record<string, unknown> = { ...validQualificationManifest() };
+    delete base.humanMergeAttestationDigest;
+    const result = validateCodeTaskQualificationManifest(base);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(
+      result.errors.some((error) => error.includes("humanMergeAttestationDigest")),
+    ).toBe(true);
+  });
+
+  it("rejects requiredTools entries that are not catalog tool names (#3390 audit F10)", () => {
+    const result = validateCodeTaskQualificationManifest(
+      mutatedManifest({ requiredTools: ["keiko_changeset_edit", "not a tool name!"] }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toContain("requiredTools must be an array of catalog tool names");
+  });
+
+  it("rejects a manifest missing requiredTools entirely", () => {
+    const base: Record<string, unknown> = { ...validQualificationManifest() };
+    delete base.requiredTools;
+    const result = validateCodeTaskQualificationManifest(base);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toContain("requiredTools must be an array of catalog tool names");
+  });
 });
 
 describe("codeTaskQualificationManifestFailures and codeTaskQualificationVerdictFor", () => {
@@ -800,5 +832,36 @@ describe("codeTaskQualificationManifestFailures and codeTaskQualificationVerdict
     };
     expect(codeTaskQualificationManifestFailures(blocked, binding)).toEqual([]);
     expect(codeTaskQualificationVerdictFor(blocked, binding)).toBe("blocked");
+  });
+
+  it("fails a manifest that omits a scenario the binding requires, never silently qualifying (#3390 audit F3)", () => {
+    const manifest = validQualificationManifest();
+    const requiringBinding: CodeTaskAcceptanceBinding = {
+      ...binding,
+      registeredScenarioIds: ["issue-to-pr-full-access", "issue-to-pr-supervised-coding"],
+    };
+    expect(codeTaskQualificationManifestFailures(manifest, requiringBinding)).toContain(
+      "missing required scenario: issue-to-pr-supervised-coding",
+    );
+    expect(codeTaskQualificationVerdictFor(manifest, requiringBinding)).toBe("blocked");
+  });
+
+  it("requires a known human merge attestation whenever the journey outcome digest is known (#3390 audit F9)", () => {
+    const manifest = validQualificationManifest();
+    const withoutAttestation: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      humanMergeAttestationDigest: { outcome: "absent" },
+    };
+    expect(codeTaskQualificationManifestFailures(withoutAttestation, binding)).toContain(
+      "humanMergeAttestationDigest required when journeyOutcomeDigest is known",
+    );
+    expect(codeTaskQualificationVerdictFor(withoutAttestation, binding)).toBe("blocked");
+    // A manifest with no journey outcome yet does not require the attestation either.
+    const noOutcomeYet: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      journeyOutcomeDigest: { outcome: "unknown" },
+      humanMergeAttestationDigest: { outcome: "absent" },
+    };
+    expect(codeTaskQualificationManifestFailures(noOutcomeYet, binding)).toEqual([]);
   });
 });

@@ -3,7 +3,7 @@
   "schemaVersion": 1,
   "epicIssue": 3384,
   "childIssue": 3390,
-  "sourceCommitSha": "9999999999999999999999999999999999999999",
+  "sourceCommitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "sourceTreeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "runtimeIdentity": "opencode-1.17.17",
   "modelIdentity": "gateway-profile:coding-issue-journey",
@@ -38,8 +38,7 @@
     "value": "2222222222222222222222222222222222222222222222222222222222222222"
   },
   "humanMergeAttestationDigest": {
-    "outcome": "known",
-    "value": "3333333333333333333333333333333333333333333333333333333333333333"
+    "outcome": "absent"
   },
   "requiredTools": [
     "keiko_changeset_edit"
@@ -59,11 +58,11 @@
         "outcome": "absent"
       },
       "artifactDigests": [
-        "e92a7003ede2a8e51016d67a59d50c21c1c634b4bed883234b9ab3f637069b0e"
+        "3a43045fb6b93a02d4e49dfd35dee041abb15a052747f6d3486f17bfc39711e2"
       ],
       "receiptDigest": {
         "outcome": "known",
-        "value": "e92a7003ede2a8e51016d67a59d50c21c1c634b4bed883234b9ab3f637069b0e"
+        "value": "3a43045fb6b93a02d4e49dfd35dee041abb15a052747f6d3486f17bfc39711e2"
       }
     }
   ]

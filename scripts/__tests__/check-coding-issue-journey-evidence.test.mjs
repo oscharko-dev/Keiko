@@ -104,6 +104,38 @@ describe("checkCodingIssueJourneyEvidence", () => {
     expect(verdict).toBe("blocked");
     expect(failures).toContain("manifest: unregistered scenario: issue-to-pr-full-access");
   });
+
+  it("rejects a manifest that omits a scenario the binding requires (#3390 audit F3)", async () => {
+    const { verdict, failures } = await runFixture("missing-scenario", {
+      headShas: HEAD_SHAS,
+      binding: {
+        ...BASE_BINDING,
+        registeredScenarioIds: ["issue-to-pr-full-access", "issue-to-pr-supervised-coding"],
+      },
+    });
+    expect(verdict).toBe("blocked");
+    expect(failures).toContain(
+      "manifest: missing required scenario: issue-to-pr-supervised-coding",
+    );
+  });
+
+  it("rejects a known journey outcome with no human merge attestation (#3390 audit F9)", async () => {
+    const { verdict, failures } = await runFixture("missing-human-merge-attestation");
+    expect(verdict).toBe("blocked");
+    expect(failures).toContain(
+      "manifest: humanMergeAttestationDigest required when journeyOutcomeDigest is known",
+    );
+  });
+
+  it("rejects a requiredTools entry absent from the model-visible tool catalog (#3390 audit F10)", async () => {
+    const { verdict, failures } = await runFixture("missing-required-tool");
+    expect(verdict).toBe("blocked");
+    expect(
+      failures.includes(
+        "requiredTools: keiko_shell_execute is not in the model-visible tool catalog",
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("platformKeyFor", () => {

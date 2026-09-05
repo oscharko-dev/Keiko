@@ -464,6 +464,11 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       status: "succeeded",
       actionKind: "commit",
     })),
+    commitPropose: vi.fn<GitClientSeam["commitPropose"]>(async () => ({
+      schemaVersion: "1",
+      status: "succeeded",
+      actionKind: "commit",
+    })),
     syncPreview: vi.fn<GitClientSeam["syncPreview"]>(async (input) =>
       makeSyncPreview(input.operation),
     ),
@@ -481,6 +486,11 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
     })),
     pushPreview: vi.fn<GitClientSeam["pushPreview"]>(async () => makePushPreview()),
     pushExecute: vi.fn<GitClientSeam["pushExecute"]>(async () => ({
+      schemaVersion: "1",
+      status: "succeeded",
+      actionKind: "push",
+    })),
+    pushPropose: vi.fn<GitClientSeam["pushPropose"]>(async () => ({
       schemaVersion: "1",
       status: "succeeded",
       actionKind: "push",
@@ -1973,7 +1983,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
         setUpstreamTracking: true,
       }),
     );
-    expect(client.pushExecute).toHaveBeenCalledWith({
+    expect(client.pushPropose).toHaveBeenCalledWith({
       projectId: REPO_A.path,
       remoteAlias: "origin",
       remoteBranchName: "feature/local",
@@ -2035,7 +2045,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     const user = userEvent.setup();
     const client = makeClient({
       getSummary: vi.fn(async () => makeSummary({ ahead: 2 })),
-      pushExecute: vi.fn<GitClientSeam["pushExecute"]>(async () => ({
+      pushPropose: vi.fn<GitClientSeam["pushPropose"]>(async () => ({
         schemaVersion: "1",
         status: "failed",
         actionKind: "push",
@@ -2048,7 +2058,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
     await user.click(await screen.findByRole("button", { name: "Run sync: Push" }));
-    await waitFor(() => expect(client.pushExecute).toHaveBeenCalled());
+    await waitFor(() => expect(client.pushPropose).toHaveBeenCalled());
 
     const pill = await screen.findByRole("alert");
     expect(pill).toHaveTextContent(/newer commits/i);
@@ -2891,7 +2901,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     await user.click(button);
 
     await waitFor(() =>
-      expect(client.commitExecute).toHaveBeenCalledWith({
+      expect(client.commitPropose).toHaveBeenCalledWith({
         projectId: REPO_A.path,
         message: "feat: wire commit composer",
       }),
@@ -3081,7 +3091,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     await user.click(button);
 
     await waitFor(() =>
-      expect(client.commitExecute).toHaveBeenCalledWith({
+      expect(client.commitPropose).toHaveBeenCalledWith({
         projectId: REPO_A.path,
         message: "feat: subject\n\nBody line.",
       }),
@@ -3129,7 +3139,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
 
     expect(button).toBeDisabled();
     await user.click(button);
-    expect(client.commitExecute).not.toHaveBeenCalled();
+    expect(client.commitPropose).not.toHaveBeenCalled();
   });
 
   it("opens the new branch dialog when the commit preview blocks the protected branch", async () => {
@@ -3164,7 +3174,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     await user.click(screen.getByRole("button", { name: "Create branch first" }));
 
     expect(screen.getByRole("dialog", { name: "New branch" })).toBeInTheDocument();
-    expect(client.commitExecute).not.toHaveBeenCalled();
+    expect(client.commitPropose).not.toHaveBeenCalled();
   });
 });
 

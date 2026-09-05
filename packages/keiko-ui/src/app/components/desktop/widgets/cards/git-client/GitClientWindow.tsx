@@ -535,7 +535,7 @@ function runPushSync(
         );
         return undefined;
       }
-      return client.pushExecute(input);
+      return client.pushPropose(input);
     })
     .then(
       (result) => {
@@ -1383,7 +1383,7 @@ export function GitClientWindow({
   const commitChanges = useCallback(
     (message: string): void => {
       if (selectedPath === null) return;
-      commit.runMutation(() => client.commitExecute({ projectId: selectedPath, message }));
+      commit.runMutation(() => client.commitPropose({ projectId: selectedPath, message }));
     },
     [client, commit, selectedPath],
   );

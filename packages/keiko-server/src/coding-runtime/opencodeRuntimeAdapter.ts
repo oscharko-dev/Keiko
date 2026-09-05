@@ -902,6 +902,7 @@ export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
 type GeneratedToolAction =
   | "read"
   | "discover"
+  | "repository-search"
   | "edit"
   | "verification"
   | "egress"
@@ -925,6 +926,12 @@ function wireRequestFor(
   action: GeneratedToolAction,
 ): { readonly action: string; readonly literal: Readonly<Record<string, unknown>> } | undefined {
   switch (action) {
+    // #3406/#3414: projects #3386's H1 search handler through the same "search" wire action
+    // codingToolIpc.ts's `searchRequest` parser already accepts; `toolSource` below nests the
+    // model-supplied arguments under `repositoryRequest` instead of the flat top-level fields
+    // every other action uses (see the `repository-search` special case there).
+    case "repository-search":
+      return { action: "search", literal: {} };
     case "git-status":
       return { action: "git", literal: { operation: "status" } };
     case "git-diff":
@@ -990,6 +997,14 @@ function toolDescription(action: GeneratedToolAction): string {
       "a generous maxLines for a whole small file); the result reports totalLines plus " +
       "nextStartLine when truncated, and the whole-file SHA-256 digest that " +
       "keiko_changeset_edit requires as expectedContentHash."
+    );
+  }
+  if (action === "repository-search") {
+    return (
+      "Search the workspace's tracked text content through Keiko governance. Pick exactly one " +
+      "mode: lexical (natural-language keywords), literal (exact substring), regex (bounded, " +
+      "ReDoS-safe pattern) or symbol (exact identifier). Returns bounded excerpts with path and " +
+      "line range; use keiko_workspace_read on a hit's path/startLine/endLine to read more."
     );
   }
   if (action === "egress") {
@@ -1106,6 +1121,15 @@ function toolSource(
     '      if (args.kind === "stage") request.operation = "stage";',
     "      else request.intent = args.kind;",
     "      delete request.kind;",
+    "    }",
+    // repository-search is the one action whose wire shape nests the model-supplied arguments:
+    // codingToolIpc.ts's `searchRequest` parser requires the exact keys
+    // `["action","actionId","idempotencyKey","repositoryRequest"]`, so the flat fields the loop
+    // above just set are moved under `repositoryRequest` (with the fixed `kind: "search"`) and
+    // removed from the top level rather than left alongside it.
+    '    if (action === "repository-search") {',
+    '      request.repositoryRequest = { kind: "search", mode: args.mode, query: args.query, caseSensitive: args.caseSensitive, includeGlobs: args.includeGlobs, excludeGlobs: args.excludeGlobs, maxResults: args.maxResults };',
+    "      for (const name of argumentNames) delete request[name];",
     "    }",
     "    const approvalProof = await toolApprovalProof(request);",
     "    await askForGovernedPermission(args, context, approvalProof);",

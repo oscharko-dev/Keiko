@@ -44,6 +44,8 @@ import {
   fetchGitSummary,
   fetchGitStatus,
   fetchProjects,
+  proposeCommit,
+  proposePush,
   reconnectProject,
   type GitDeliveryCommitPreviewResponse,
   type GitDeliveryMutationResponse,
@@ -80,10 +82,19 @@ export interface GitClientSeam {
   readonly unstage: typeof fetchGitDeliveryUnstage;
   readonly commitPreview: typeof fetchGitDeliveryCommitPreview;
   readonly commitExecute: typeof fetchGitDeliveryCommitExecute;
+  // F3 (epic #3384 final audit): the standalone Git Client Window's commit/push actions must
+  // satisfy the epic's unconditional approval requirement (correction 5) themselves — unlike
+  // `prApprove`/`prExecute` and `mergeApprove`/`mergeExecute`, whose mint-then-execute pairing is
+  // composed by their own card, `commitChanges`/`runPushSync` compose nothing: they call these
+  // single mint-then-execute seam entries, which resolve to the static "approval-required"
+  // outcome when the mint itself is denied rather than dead-ending (see `proposeCommit`/
+  // `proposePush`, api.ts).
+  readonly commitPropose: typeof proposeCommit;
   readonly syncPreview: typeof fetchGitDeliverySyncPreview;
   readonly syncExecute: typeof fetchGitDeliverySyncExecute;
   readonly pushPreview: typeof fetchGitDeliveryPushPreview;
   readonly pushExecute: typeof fetchGitDeliveryPushExecute;
+  readonly pushPropose: typeof proposePush;
   readonly prPreview: typeof fetchGitDeliveryPrPreview;
   // #3387/#3399 (epic #3384): GovernedPullRequestCard's own client declares these five as optional
   // (an older seam degrades to the pre-#3387 unapproved execute / a hidden Description panel) — kept
@@ -121,10 +132,12 @@ export const DEFAULT_GIT_CLIENT: GitClientSeam = {
   unstage: fetchGitDeliveryUnstage,
   commitPreview: fetchGitDeliveryCommitPreview,
   commitExecute: fetchGitDeliveryCommitExecute,
+  commitPropose: proposeCommit,
   syncPreview: fetchGitDeliverySyncPreview,
   syncExecute: fetchGitDeliverySyncExecute,
   pushPreview: fetchGitDeliveryPushPreview,
   pushExecute: fetchGitDeliveryPushExecute,
+  pushPropose: proposePush,
   prPreview: fetchGitDeliveryPrPreview,
   prApprove: fetchGitDeliveryPrApprove,
   prExecute: fetchGitDeliveryPrExecute,

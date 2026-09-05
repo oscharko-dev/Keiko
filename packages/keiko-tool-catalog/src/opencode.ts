@@ -1,8 +1,10 @@
 // #3414 (extended by #3386/#3387/#3388): the "opencode" registration set. ADR-0175 D2 reserves the
-// fifteen managed-OpenCode canonical identities below (the original seven workspace/verification
-// tools plus the eight Git status/diff/stage/commit, push/pull-request and CI-observation tools)
-// plus the two exhaustively-declared native extensions (`question`, `todowrite` -- adapter-native,
-// never Keiko tool descriptors, per D2's explicit "not Keiko tools or compatibility exceptions").
+// sixteen managed-OpenCode canonical identities below (the original seven workspace/verification
+// tools, the eight Git status/diff/stage/commit, push/pull-request and CI-observation tools, plus
+// #3386's H1 local repository-search handler projected as `keiko.repo.search@1` / alias
+// `keiko_repository_search` -- see `repositorySearchSpec` below) plus the two exhaustively-declared
+// native extensions (`question`, `todowrite` -- adapter-native, never Keiko tool descriptors, per
+// D2's explicit "not Keiko tools or compatibility exceptions").
 // packages/keiko-server/src/coding-sidecar-gateway.ts uses this set to build the `toolCatalog`
 // advertisement it forwards to the real model provider (the schema shown to the underlying LLM as
 // a function-calling interface -- advisory only; the provider performs no server-side schema
@@ -38,6 +40,7 @@
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
+import { CODING_REPOSITORY_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import type {
   CatalogEffect,
   CatalogIdempotency,
@@ -239,6 +242,60 @@ function readSpec(): OpenCodeToolSpec {
     effects: ["workspace-read"],
     idempotency: "read-only",
     handlerId: "opencode-workspace-read-port",
+  };
+}
+
+// #3406/#3414: projects #3386's H1 local repository-search handler (executeCodingRepositoryRequest
+// in packages/keiko-workspace/src/codingRepositorySearch.ts, mounted server-side by
+// packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts's
+// `repositorySearch` port) as the model-visible tool `keiko_repository_search` under its reserved
+// canonical identity `keiko.repo.search@1`. Field bounds are read back from the handler's own
+// `CODING_REPOSITORY_LIMITS` (packages/keiko-contracts/src/coding-repository-search.ts) rather than
+// restated, so a limit change there cannot silently diverge from the schema shown to the model.
+// This is a search-only tool: `keiko_workspace_discover` remains path-only discovery and
+// `keiko_workspace_read` remains the bounded-range read handoff a hit's `path`/`startLine`/
+// `endLine` feeds into -- no semantic reranking and no read-kind request is ever projected here.
+function repositorySearchSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.repo.search",
+    alias: "keiko_repository_search",
+    description:
+      "Search the workspace's tracked text content for lexical, literal, regex or symbol " +
+      "matches, returning bounded content excerpts with file path and line range.",
+    inputSchema: managedObjectSchema(
+      {
+        mode: { type: "string", enum: ["lexical", "literal", "regex", "symbol"] },
+        query: { type: "string", minLength: 1, maxLength: CODING_REPOSITORY_LIMITS.queryChars },
+        caseSensitive: { type: "boolean" },
+        includeGlobs: {
+          type: "array",
+          maxItems: CODING_REPOSITORY_LIMITS.globs,
+          items: {
+            type: "string",
+            minLength: 1,
+            maxLength: CODING_REPOSITORY_LIMITS.globChars,
+          },
+        },
+        excludeGlobs: {
+          type: "array",
+          maxItems: CODING_REPOSITORY_LIMITS.globs,
+          items: {
+            type: "string",
+            minLength: 1,
+            maxLength: CODING_REPOSITORY_LIMITS.globChars,
+          },
+        },
+        maxResults: {
+          type: "integer",
+          minimum: 1,
+          maximum: CODING_REPOSITORY_LIMITS.returnedHits,
+        },
+      },
+      ["mode", "query", "caseSensitive", "includeGlobs", "excludeGlobs", "maxResults"],
+    ),
+    effects: ["workspace-read"],
+    idempotency: "read-only",
+    handlerId: "opencode-repository-search-port",
   };
 }
 
@@ -490,15 +547,16 @@ function ciStatusSpec(): OpenCodeToolSpec {
 }
 
 /**
- * The canonical "opencode" registration set (ADR-0175 D2). Declares the fifteen managed-OpenCode
+ * The canonical "opencode" registration set (ADR-0175 D2). Declares the sixteen managed-OpenCode
  * governed tools plus the two exhaustively-declared native extensions (`nativeExtensions` is
  * derived from `OPENCODE_NATIVE_EXTENSION_DEFINITIONS` above, the same single source consumers use
- * for their pinned wire schemas). `keiko_repository_search` (H1, #3386) is not yet a member --
- * H1's handler is not implemented; see the #3414 report. `keiko.changeset.edit`'s descriptor is a
- * structurally-equivalent, strictly LOOSER projection of the real wire schema (all fields
- * required, nested `additionalProperties` stripped-as-true) -- see `changesetEditSpec` above for
- * exactly why and why that is safe for its one consumer; the eight #3386/#3387/#3388 Git/CI specs
- * above have the same relationship to their own hand-authored real wire schemas.
+ * for their pinned wire schemas). `keiko_repository_search` (H1, #3386) is a member as of #3414:
+ * its handler is implemented and mounted server-side; see `repositorySearchSpec` above.
+ * `keiko.changeset.edit`'s descriptor is a structurally-equivalent, strictly LOOSER projection of
+ * the real wire schema (all fields required, nested `additionalProperties` stripped-as-true) --
+ * see `changesetEditSpec` above for exactly why and why that is safe for its one consumer; the
+ * eight #3386/#3387/#3388 Git/CI specs above have the same relationship to their own hand-authored
+ * real wire schemas.
  *
  * `packages/keiko-model-gateway/src/toolCatalogBridge.ts`'s bridge merges these native extensions
  * into a bound advertisement's model-visible tool list and passes a call to one of their aliases
@@ -519,6 +577,7 @@ export function opencodeRegistrationSet(): CatalogRegistrationSet {
     entries: [
       discoverSpec(),
       readSpec(),
+      repositorySearchSpec(),
       changesetEditSpec(),
       verificationSpec(),
       researchFetchSpec(),

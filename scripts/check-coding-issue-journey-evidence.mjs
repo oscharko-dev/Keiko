@@ -66,6 +66,19 @@ async function loadContracts(root) {
   );
 }
 
+/**
+ * Loads the server package's model-visible OpenCode tool catalog (#3390 audit F10), the same
+ * built-dist import pattern as `loadContracts` above. Exposed so tests can inject a fixture double
+ * instead of depending on the built server package.
+ */
+async function loadToolCatalog(root) {
+  return import(
+    pathToFileURL(
+      resolve(root, "packages/keiko-server/dist/coding-runtime/opencodeToolSchemas.js"),
+    ).href
+  );
+}
+
 export async function checkCodingIssueJourneyEvidence({
   manifestPath,
   receiptsDir,
@@ -73,10 +86,15 @@ export async function checkCodingIssueJourneyEvidence({
   root = REPO_ROOT,
   headShas,
   contracts,
+  toolCatalog,
 }) {
   const { sourceCommitSha: headCommitSha, sourceTreeSha: headTreeSha } =
     headShas ?? gitHeadShas(root);
   const contractsModule = contracts ?? (await loadContracts(root));
+  const toolCatalogModule = toolCatalog ?? (await loadToolCatalog(root));
+  const modelVisibleToolNames = new Set(
+    toolCatalogModule.OPENCODE_MODEL_VISIBLE_TOOLS.map((tool) => tool.name),
+  );
   const manifestValidation = contractsModule.validateCodeTaskQualificationManifest(
     readJsonFile(manifestPath),
   );
@@ -93,6 +111,7 @@ export async function checkCodingIssueJourneyEvidence({
     headCommitSha,
     headTreeSha,
     receiptsByScenarioId: readReceipts(receiptsDir),
+    modelVisibleToolNames,
   });
   const contractVerdict = manifestValidation.ok
     ? contractsModule.codeTaskQualificationVerdictFor(manifestValidation.value, resolvedBinding)

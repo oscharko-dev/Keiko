@@ -3935,28 +3935,46 @@ export async function fetchGitDeliveryPrApprove(
 /**
  * Mints then immediately redeems the one-use commit approval — the mint/execute pair a single
  * "Commit" action performs as one governed action (epic #3384 correction 5: an unconditional
- * approval requirement, never mode-denied). A mint failure (network, bad request, deployment-mode
- * denial) rejects before any execute attempt is made, mirroring `proposePrMarkReady`.
+ * approval requirement, never mode-denied). Mirrors `proposePrMarkReady`, with one addition the
+ * standalone Git Client Window needs (F3 in the epic #3384 final audit): when the mint step
+ * itself is denied (network, bad request, deployment-mode denial), this resolves to the SAME
+ * static `"approval-required"` outcome shape `commitApprovalRequiredBlock` (commitRoutes.ts)
+ * already returns for the pack-driven approval-gated path, rather than rejecting with a raw
+ * error — so the caller's existing outcome renderer (STATUS_LABEL) shows one consistent label
+ * instead of a dead end. An execute-step failure, after a successful mint, still rejects: that
+ * is a real execution failure, not an unmet approval.
  */
 export async function proposeCommit(
   input: Omit<GitDeliveryCommitExecuteInput, "approval">,
   signal?: AbortSignal,
 ): Promise<GitDeliveryMutationResponse> {
-  const minted = await fetchGitDeliveryCommitApprove(input, signal);
+  let minted: GitDeliveryCommitApproveResponse;
+  try {
+    minted = await fetchGitDeliveryCommitApprove(input, signal);
+  } catch {
+    return { schemaVersion: "1", status: "approval-required", actionKind: "commit" };
+  }
   return fetchGitDeliveryCommitExecute({ ...input, approval: minted.approval }, signal);
 }
 
 /**
  * Mints then immediately redeems the one-use push approval — the mint/execute pair a single
  * "Push" action performs as one governed action (epic #3384 correction 5: an unconditional
- * approval requirement, never mode-denied). A mint failure (network, bad request, deployment-mode
- * denial) rejects before any execute attempt is made, mirroring `proposePrMarkReady`.
+ * approval requirement, never mode-denied). Mirrors `proposePrMarkReady`, with the same mint-
+ * denial fallback as `proposeCommit` (F3 in the epic #3384 final audit): a denied mint resolves
+ * to the SAME static `"approval-required"` outcome shape `pushApprovalRequiredBlock`
+ * (pushRoutes.ts) already returns, instead of rejecting. An execute-step failure still rejects.
  */
 export async function proposePush(
   input: Omit<GitDeliveryPushInput, "approval">,
   signal?: AbortSignal,
 ): Promise<GitDeliveryPushExecuteResponse> {
-  const minted = await fetchGitDeliveryPushApprove(input, signal);
+  let minted: GitDeliveryPushApproveResponse;
+  try {
+    minted = await fetchGitDeliveryPushApprove(input, signal);
+  } catch {
+    return { schemaVersion: "1", status: "approval-required", actionKind: "push" };
+  }
   return fetchGitDeliveryPushExecute({ ...input, approval: minted.approval }, signal);
 }
 

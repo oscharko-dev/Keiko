@@ -76,6 +76,19 @@ function scenarioReceiptFailures(scenario, receiptsByScenarioId, headCommitSha) 
 }
 
 /**
+ * Flags a `requiredTools` entry the model-visible tool catalog on the head under qualification
+ * does not project (#3390 audit F10 / issue #3390 contract-correction 4): the fixture rubric
+ * would be unsolvable by the real model, and no scenario outcome can compensate for that.
+ * `modelVisibleToolNames` is a `Set<string>` supplied by the caller so this module stays
+ * dependency-free -- it never imports the built server package itself.
+ */
+function requiredToolFailures(requiredTools, modelVisibleToolNames) {
+  return requiredTools
+    .filter((tool) => !modelVisibleToolNames.has(tool))
+    .map((tool) => `requiredTools: ${tool} is not in the model-visible tool catalog`);
+}
+
+/**
  * Cross-references a structurally validated qualification manifest against the qualified git
  * head and the receipts actually found on disk. Structural/binding failures already produced by
  * the contract layer (`codeTaskQualificationManifestFailures`) are passed in as `manifestFailures`
@@ -88,6 +101,7 @@ export function evidenceGateFailures({
   headCommitSha,
   headTreeSha,
   receiptsByScenarioId,
+  modelVisibleToolNames,
 }) {
   if (!manifestValidation.ok) {
     return manifestValidation.errors.map((error) => `manifest: ${error}`);
@@ -103,6 +117,7 @@ export function evidenceGateFailures({
   for (const failure of manifestFailures) {
     failures.push(`manifest: ${failure}`);
   }
+  failures.push(...requiredToolFailures(manifest.requiredTools, modelVisibleToolNames));
   for (const scenario of manifest.scenarios) {
     failures.push(...scenarioReceiptFailures(scenario, receiptsByScenarioId, headCommitSha));
   }

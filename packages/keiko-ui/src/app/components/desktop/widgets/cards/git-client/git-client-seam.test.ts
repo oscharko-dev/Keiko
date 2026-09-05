@@ -34,6 +34,8 @@ import {
   fetchGitSummary,
   fetchGitStatus,
   fetchProjects,
+  proposeCommit,
+  proposePush,
   reconnectProject,
 } from "@/lib/api";
 import type { GitDeliveryCommitPreviewResponse } from "@/lib/api";
@@ -118,6 +120,13 @@ describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
     expect(DEFAULT_GIT_CLIENT.commitExecute).toBe(fetchGitDeliveryCommitExecute);
   });
 
+  // F3 (epic #3384 final audit): commitPropose is the mint-then-execute entry point
+  // commitChanges (GitClientWindow.tsx) actually calls, so it must wire to the real
+  // mint-then-execute wrapper, not to the bare execute call.
+  it("commitPropose is proposeCommit", () => {
+    expect(DEFAULT_GIT_CLIENT.commitPropose).toBe(proposeCommit);
+  });
+
   it("syncPreview is fetchGitDeliverySyncPreview", () => {
     expect(DEFAULT_GIT_CLIENT.syncPreview).toBe(fetchGitDeliverySyncPreview);
   });
@@ -132,6 +141,13 @@ describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
 
   it("pushExecute is fetchGitDeliveryPushExecute", () => {
     expect(DEFAULT_GIT_CLIENT.pushExecute).toBe(fetchGitDeliveryPushExecute);
+  });
+
+  // F3 (epic #3384 final audit): pushPropose is the mint-then-execute entry point runPushSync
+  // (GitClientWindow.tsx) actually calls, so it must wire to the real mint-then-execute
+  // wrapper, not to the bare execute call.
+  it("pushPropose is proposePush", () => {
+    expect(DEFAULT_GIT_CLIENT.pushPropose).toBe(proposePush);
   });
 
   // #3387/#3399 (epic #3384): before this pass, DEFAULT_GIT_CLIENT had no prApprove or

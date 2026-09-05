@@ -975,6 +975,7 @@ export type {
   CODE_TASK_QUALIFICATION_VERDICTS,
   codeTaskQualificationManifestFailures,
   codeTaskQualificationVerdictFor,
+  isCodeTaskToolName,
   validateCodeTaskQualificationManifest,
 } from "./code-task-acceptance.js";
 

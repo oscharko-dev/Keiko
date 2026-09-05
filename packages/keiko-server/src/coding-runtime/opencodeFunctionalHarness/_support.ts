@@ -221,8 +221,18 @@ const VERIFICATION_PROJECTED_SCHEMA = {
   required: ["verifierId"],
 } as const;
 
-/** The exact model-visible tool projection an OpenCode child presents to the gateway. */
-function functionalGatewayTools(): readonly Record<string, unknown>[] {
+/** One OpenAI-compatible function-tool entry a scripted child advertises to the gateway. */
+export interface FunctionalGatewayTool {
+  readonly type: "function";
+  readonly function: { readonly name: string; readonly parameters: unknown };
+}
+
+/**
+ * The exact model-visible tool projection an OpenCode child presents to the gateway. Exported so a
+ * test can derive a deliberately incomplete projection (e.g. `.filter(...)` out one tool) for a
+ * live fail-closed proof against the real sidecar gateway route, without restating this mapping.
+ */
+export function functionalGatewayTools(): readonly FunctionalGatewayTool[] {
   return OPENCODE_MODEL_VISIBLE_TOOLS.map(({ name, parameters }) => ({
     type: "function",
     function: {
@@ -553,6 +563,7 @@ export interface ScriptedModelTurnInput {
 class FakeOpenCodeChild {
   private readonly governedTools: ScriptedGovernedTools | undefined;
   private readonly scriptedModelTurn: ScriptedModelTurnInput["modelTurn"] | undefined;
+  private readonly gatewayToolsOverride: readonly FunctionalGatewayTool[] | undefined;
   private readonly password: string;
   private readonly gatewayUrl: string;
   private readonly gatewayCapability: string;
@@ -584,7 +595,9 @@ class FakeOpenCodeChild {
     generatedTools = false,
     observePhase?: (event: ScriptedToolPhase) => void,
     scriptedModel?: ScriptedModelTurnInput,
+    gatewayToolsOverride?: readonly FunctionalGatewayTool[],
   ) {
+    this.gatewayToolsOverride = gatewayToolsOverride;
     this.governedTools = generatedTools
       ? new ScriptedGovernedTools({
           env,
@@ -987,7 +1000,7 @@ class FakeOpenCodeChild {
       body: JSON.stringify({
         model: "coding",
         messages: this.transcript,
-        tools: functionalGatewayTools(),
+        tools: this.gatewayToolsOverride ?? functionalGatewayTools(),
       }),
     });
     if (!response.ok) throw new Error("functional-gateway-denied");
@@ -1259,12 +1272,19 @@ class ScriptedChildBackend implements RuntimeProcessBackend {
     private readonly children: FakeOpenCodeChild[],
     private readonly generatedTools: boolean,
     private readonly observePhase?: (event: ScriptedToolPhase) => void,
+    private readonly gatewayToolsOverride?: readonly FunctionalGatewayTool[],
   ) {}
 
   public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
-    const child = new FakeOpenCodeChild(request.env, this.generatedTools, this.observePhase);
+    const child = new FakeOpenCodeChild(
+      request.env,
+      this.generatedTools,
+      this.observePhase,
+      undefined,
+      this.gatewayToolsOverride,
+    );
     this.children.push(child);
     const tree: ScriptedTree = {
       treeId: request.recoveryHandle,
@@ -1340,6 +1360,14 @@ export function createScriptedOpenCodeHarness(
   options: {
     readonly generatedTools?: boolean;
     readonly observePhase?: (event: ScriptedToolPhase) => void;
+    /**
+     * Test-only fail-closed seam: overrides the `tools` array a scripted child advertises to the
+     * REAL sidecar gateway route on every `/chat/completions` call, instead of the full
+     * `functionalGatewayTools()` projection. Lets a live run prove the sidecar gateway's
+     * `hasExactOpenCodeVisibleToolContract` admission denies an incomplete advertised set, not
+     * only in isolation.
+     */
+    readonly gatewayToolsOverride?: readonly FunctionalGatewayTool[];
   } = {},
 ): ScriptedOpenCodeHarness {
   const children: FakeOpenCodeChild[] = [];
@@ -1356,6 +1384,7 @@ export function createScriptedOpenCodeHarness(
           children,
           options.generatedTools === true,
           options.observePhase,
+          options.gatewayToolsOverride,
         ),
         qualifications: [portable.qualification],
       }),

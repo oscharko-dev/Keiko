@@ -921,6 +921,74 @@ describe("pr approve — mints the server-issued claim execute consumes (#3387)"
     });
     expect(JSON.stringify(events[0])).not.toContain("governed pull request command center");
   });
+
+  // Final-audit F2/#3390 (ADR-0138 D2): before this fix, the coarse admission gate hard-denied both
+  // pr/approve and pr/execute with "approval-required" below `autonomous-delivery` and no
+  // production path ever redeemed it — every test above only ever exercised the fixture default
+  // (autonomous-delivery). FAILING BEFORE THE FIX: `modeDeps()`'s approve call returned 403
+  // GIT_DELIVERY_AUTHORITY_DENIED at the `gitDeliveryAuthorityGate` call inside
+  // `createHandlePrApprove`, never reaching `store.issue()`.
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "mints and consumes a pr approval end to end at %s",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+          {
+            headRef: "claude/issue-477-github-pr-command-center",
+            baseRef: "dev",
+            allowDetachedHead: false,
+            allowedPrefixes: ["claude/"],
+          },
+        ),
+      });
+      const approvalStore = createInMemoryGitDeliveryApprovalStore();
+      const approveHandler = createHandlePrApprove({ execution: seams({ approvalStore }) });
+      const minted = await approveHandler(
+        ctxFor("/api/git-delivery/pr/approve", createBody()),
+        modeDeps,
+      );
+      expect(minted.status).toBe(200);
+      const approval = (minted.body as { approval: GitDeliveryApprovalClaim }).approval;
+
+      const adapter = recordingPrAdapter();
+      const executeHandler = createHandlePrExecute({
+        execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
+      });
+      const res = await executeHandler(ctxFor(EXECUTE, createBody({ approval })), modeDeps);
+      expect((res.body as GitDeliveryPrExecuteResponseBody).status).toBe("succeeded");
+      expect(adapter.creates()).toBe(1);
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "still returns approval-required (never mode-denied) at %s when execute carries no approval",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+          {
+            headRef: "claude/issue-477-github-pr-command-center",
+            baseRef: "dev",
+            allowDetachedHead: false,
+            allowedPrefixes: ["claude/"],
+          },
+        ),
+      });
+      const adapter = recordingPrAdapter();
+      const executeHandler = createHandlePrExecute({
+        execution: seams({ prAdapterFactory: () => adapter.adapter }),
+      });
+      const res = await executeHandler(ctxFor(EXECUTE, createBody()), modeDeps);
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ status: "approval-required" });
+      expect(adapter.creates()).toBe(0);
+    },
+  );
 });
 
 // ─── F1: the default PR adapter (no prAdapterFactory seam) — audit finding: this branch
@@ -1464,6 +1532,65 @@ describe("pr mark-ready routes (#3389)", () => {
     expect(drift).toHaveLength(1);
     expect(drift[0]).toMatchObject({ correlationId: "corr-mark-ready-drift" });
   });
+
+  // Final-audit F2/#3390 (ADR-0138 D2): before this fix, the coarse admission gate hard-denied both
+  // pr/mark-ready/approve and pr/mark-ready/execute with "approval-required" below
+  // `autonomous-delivery` and no production path ever redeemed it — every test above only ever
+  // exercised the fixture default (autonomous-delivery). FAILING BEFORE THE FIX: `modeDeps()`'s
+  // approve call returned 403 GIT_DELIVERY_AUTHORITY_DENIED at the `gitDeliveryAuthorityGate` call
+  // inside `createHandlePrMarkReadyApprove`, never reaching `store.issue()`.
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "mints and consumes a pr-mark-ready approval end to end at %s",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId, () => projectId, mode),
+      });
+      const approvalStore = createInMemoryGitDeliveryApprovalStore();
+      const approveRes = await createHandlePrMarkReadyApprove({
+        approvalStore,
+        now: () => 1_700_000_000_000,
+      })(ctxFor(MARK_READY_APPROVE, markReadyBody()), modeDeps);
+      expect(approveRes.status).toBe(200);
+      const approval = (approveRes.body as GitDeliveryPrMarkReadyApproveResponseBody).approval;
+
+      const adapter = recordingMarkReadyAdapter({
+        schemaVersion: "1",
+        outcome: "succeeded",
+        durationMs: 5,
+      });
+      const executeRes = await createHandlePrMarkReadyExecute({
+        approvalStore,
+        now: () => 1_700_000_000_001,
+        adapterFactory: () => adapter.adapter,
+        ciReaderFactory: cleanCiReaderFactory,
+      })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), modeDeps);
+      const body = executeRes.body as GitDeliveryPrMarkReadyExecuteResponseBody;
+      expect(body).toMatchObject({ actionKind: "pr-mark-ready", status: "succeeded" });
+      expect(adapter.calls()).toHaveLength(1);
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "still returns approval-required (never mode-denied) at %s when execute carries no approval",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId, () => projectId, mode),
+      });
+      const approvalStore = createInMemoryGitDeliveryApprovalStore();
+      const adapter = recordingMarkReadyAdapter({
+        schemaVersion: "1",
+        outcome: "succeeded",
+        durationMs: 5,
+      });
+      const res = await createHandlePrMarkReadyExecute({
+        approvalStore,
+        adapterFactory: () => adapter.adapter,
+      })(ctxFor(MARK_READY_EXECUTE, markReadyBody()), modeDeps);
+      const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
+      expect(body.status).toBe("approval-required");
+      expect(adapter.calls()).toHaveLength(0);
+    },
+  );
 
   // AC4 (epic #3384): the coding runtime exposes neither merge nor auto-merge scheduling nor
   // issue-close mutations. The full PR route group (create/update/preview/mark-ready) carries no

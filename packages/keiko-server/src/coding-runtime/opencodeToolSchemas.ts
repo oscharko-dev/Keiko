@@ -8,6 +8,7 @@ import {
 } from "@oscharko-dev/keiko-tool-catalog";
 import type { GatewayToolCatalogAdvertisement } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
+import { CODING_REPOSITORY_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import {
   CODING_TOOL_DISCOVER_MAX_RESULTS,
   CODING_TOOL_READ_MAX_START_LINE,
@@ -58,6 +59,51 @@ const WORKSPACE_READ_SCHEMA = {
   // OpenCode v1.17.17 declares every custom-tool argument as required in its provider
   // projection, so the pinned model-visible contract must require the window fields too.
   required: ["relativePath", "startLine", "maxLines"],
+} as const;
+
+// #3406/#3414: projects #3386's H1 local repository-search handler (executeCodingRepositoryRequest
+// in packages/keiko-workspace/src/codingRepositorySearch.ts) as the model-visible tool
+// `keiko_repository_search`. Bounds are read back from the handler's own `CODING_REPOSITORY_LIMITS`
+// (packages/keiko-contracts/src/coding-repository-search.ts), never restated. Search-only: a hit's
+// path/startLine/endLine feeds keiko_workspace_read for the bounded-range read handoff; there is no
+// read kind here and no semantic reranking.
+const REPOSITORY_SEARCH_SCHEMA = {
+  type: "object",
+  properties: {
+    mode: {
+      type: "string",
+      enum: ["lexical", "literal", "regex", "symbol"],
+      description:
+        "lexical: natural-language keyword match. literal: exact substring. regex: bounded, " +
+        "ReDoS-safe pattern. symbol: exact identifier (no whitespace).",
+    },
+    query: {
+      type: "string",
+      minLength: 1,
+      maxLength: CODING_REPOSITORY_LIMITS.queryChars,
+      description: "Search text for the selected mode.",
+    },
+    caseSensitive: { type: "boolean" },
+    includeGlobs: {
+      type: "array",
+      maxItems: CODING_REPOSITORY_LIMITS.globs,
+      items: { type: "string", minLength: 1, maxLength: CODING_REPOSITORY_LIMITS.globChars },
+      description: "Workspace-relative glob patterns to restrict the search to.",
+    },
+    excludeGlobs: {
+      type: "array",
+      maxItems: CODING_REPOSITORY_LIMITS.globs,
+      items: { type: "string", minLength: 1, maxLength: CODING_REPOSITORY_LIMITS.globChars },
+      description: "Workspace-relative glob patterns to exclude from the search.",
+    },
+    maxResults: {
+      type: "integer",
+      minimum: 1,
+      maximum: CODING_REPOSITORY_LIMITS.returnedHits,
+      description: "Maximum number of bounded content excerpts to return.",
+    },
+  },
+  required: ["mode", "query", "caseSensitive", "includeGlobs", "excludeGlobs", "maxResults"],
 } as const;
 
 const WORKSPACE_DISCOVER_SCHEMA = {
@@ -316,6 +362,7 @@ export const OPENCODE_MODEL_VISIBLE_TOOLS = [
   { name: "question", parameters: QUESTION_SCHEMA },
   { name: "keiko_workspace_discover", parameters: WORKSPACE_DISCOVER_SCHEMA },
   { name: "keiko_workspace_read", parameters: WORKSPACE_READ_SCHEMA },
+  { name: "keiko_repository_search", parameters: REPOSITORY_SEARCH_SCHEMA },
   { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
   { name: "keiko_verification", parameters: VERIFICATION_SCHEMA },
   { name: "keiko_research_fetch", parameters: RESEARCH_FETCH_SCHEMA },
@@ -352,6 +399,18 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
       relativePath: WORKSPACE_READ_SCHEMA.properties.relativePath,
       startLine: WORKSPACE_READ_SCHEMA.properties.startLine,
       maxLines: WORKSPACE_READ_SCHEMA.properties.maxLines,
+    },
+  },
+  {
+    name: "keiko_repository_search",
+    action: "repository-search",
+    arguments: {
+      mode: REPOSITORY_SEARCH_SCHEMA.properties.mode,
+      query: REPOSITORY_SEARCH_SCHEMA.properties.query,
+      caseSensitive: REPOSITORY_SEARCH_SCHEMA.properties.caseSensitive,
+      includeGlobs: REPOSITORY_SEARCH_SCHEMA.properties.includeGlobs,
+      excludeGlobs: REPOSITORY_SEARCH_SCHEMA.properties.excludeGlobs,
+      maxResults: REPOSITORY_SEARCH_SCHEMA.properties.maxResults,
     },
   },
   {
