@@ -1158,6 +1158,10 @@ describe("GitClientWindow — toolbar actions", () => {
     );
   });
 
+  // #3389 (epic #3384 correction 1): the approval-less draft->ready transition through this generic
+  // embedded panel is closed — "Mark ready" ("to-ready") is no longer a Draft state option, so this
+  // pin is relocated to "Convert to draft" (still a plain pr-update) to keep proving the embedded
+  // panel forwards repository context and the draft-transition flag correctly.
   it("updates a Pull Request from the embedded panel with selected repository context", async () => {
     const user = userEvent.setup();
     const client = makeClient({
@@ -1185,7 +1189,7 @@ describe("GitClientWindow — toolbar actions", () => {
     await user.click(within(panel).getByLabelText("Update"));
     await user.type(within(panel).getByLabelText("Pull Request number"), "1640");
     await user.type(within(panel).getByLabelText("Pull Request title"), "fix: harden pr path");
-    await user.selectOptions(within(panel).getByLabelText("Draft state"), "to-ready");
+    await user.selectOptions(within(panel).getByLabelText("Draft state"), "to-draft");
     await user.click(within(panel).getByRole("button", { name: "Update Pull Request" }));
 
     await waitFor(() =>
@@ -1197,10 +1201,38 @@ describe("GitClientWindow — toolbar actions", () => {
           headBranchName: "feat/issue-1577",
           baseBranchName: "main",
           prExternalId: "1640",
-          convertFromDraft: true,
+          convertToDraft: true,
+          convertFromDraft: false,
         }),
       ),
     );
+  });
+
+  // #3389 (epic #3384 correction 1): failing-before-fix — before this change, selecting "to-ready"
+  // reached the generic pr-update execute call with convertFromDraft: true. The option no longer
+  // exists in the DOM at all.
+  it("does not offer Mark ready in the embedded panel's Draft state select", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () => makeSummary({ branch: "feat/issue-1577" })),
+      getRemotes: vi.fn(async () => ({
+        schemaVersion: "1" as const,
+        root: REPO_A.path,
+        state: "available" as const,
+        available: true,
+        remotes: [{ name: "origin", fetchUrl: "git@github.com:oscharko-dev/Keiko.git" }],
+        truncated: false,
+      })),
+      getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+    await user.click(screen.getByRole("button", { name: /Create pull request/ }));
+    const panel = await screen.findByRole("region", { name: "Pull Request" });
+    await user.click(within(panel).getByLabelText("Update"));
+    const select = within(panel).getByLabelText("Draft state");
+    const optionValues = [...select.querySelectorAll("option")].map((option) => option.value);
+    expect(optionValues).toEqual(["none", "to-draft"]);
   });
 
   it("surfaces embedded Pull Request provider-auth failures without sensitive text", async () => {

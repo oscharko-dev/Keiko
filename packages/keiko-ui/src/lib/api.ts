@@ -3785,3 +3785,83 @@ export async function refreshGitChangeScope(
     validateGitChangeRefreshResponse,
   );
 }
+
+// ─── Governed PR mark-ready intent (#3389, epic #3384, ADR-0086) ──────────────────────────────────
+//
+// A separate, narrower client from the generic pr-create/pr-update pair above: the draft->ready
+// transition never carries title/body/base — only the exact facts the one-use approval binds
+// (owner/repo, PR number, base/head SHA, a digest over the readiness snapshot that justified the
+// proposal). Consumed by the Coding Workbench journey outcome's propose-ready control, never by
+// GovernedPullRequestCard (which has neither the SHAs nor the readiness digest to bind).
+
+export interface GitDeliveryPrMarkReadyInput {
+  readonly projectId: string;
+  readonly ownerAndRepo: string;
+  readonly prExternalId: string;
+  readonly headSha: string;
+  readonly baseSha: string;
+  readonly readinessDigest: string;
+  readonly approval?: GitDeliveryApprovalClaim | undefined;
+}
+
+export interface GitDeliveryPrMarkReadyApproveResponse {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+export interface GitDeliveryPrMarkReadyExecuteResponse {
+  readonly schemaVersion: "1";
+  readonly actionKind: "pr-mark-ready";
+  readonly status: "succeeded" | "failed" | "aborted" | "approval-required";
+  readonly executionErrorCode?: string;
+  readonly rejectionReason?: string;
+}
+
+function gitDeliveryPrMarkReadyBody(input: GitDeliveryPrMarkReadyInput): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    ownerAndRepo: input.ownerAndRepo,
+    prExternalId: input.prExternalId,
+    headSha: input.headSha,
+    baseSha: input.baseSha,
+    readinessDigest: input.readinessDigest,
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
+  });
+}
+
+export async function fetchGitDeliveryPrMarkReadyApprove(
+  input: GitDeliveryPrMarkReadyInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrMarkReadyApproveResponse> {
+  return fetchJson("/api/git-delivery/pr/mark-ready/approve", {
+    method: "POST",
+    body: gitDeliveryPrMarkReadyBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPrMarkReadyExecute(
+  input: GitDeliveryPrMarkReadyInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrMarkReadyExecuteResponse> {
+  return fetchJson("/api/git-delivery/pr/mark-ready/execute", {
+    method: "POST",
+    body: gitDeliveryPrMarkReadyBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+/**
+ * Mints then immediately redeems the one-use pr-mark-ready approval — the mint/execute pair a
+ * single "Propose ready" click performs as one governed action. A mint failure (network, bad
+ * request, deployment-mode denial) rejects before any execute attempt is made.
+ */
+export async function proposePrMarkReady(
+  input: Omit<GitDeliveryPrMarkReadyInput, "approval">,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrMarkReadyExecuteResponse> {
+  const minted = await fetchGitDeliveryPrMarkReadyApprove(input, signal);
+  return fetchGitDeliveryPrMarkReadyExecute({ ...input, approval: minted.approval }, signal);
+}

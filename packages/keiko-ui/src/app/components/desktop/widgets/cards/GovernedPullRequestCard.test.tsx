@@ -140,7 +140,7 @@ describe("GovernedPullRequestCard", () => {
       target: { value: "claude/issue-477-x" },
     });
     fireEvent.change(screen.getByLabelText("Pull Request number"), { target: { value: "1499" } });
-    fireEvent.change(screen.getByLabelText("Draft state"), { target: { value: "to-ready" } });
+    fireEvent.change(screen.getByLabelText("Draft state"), { target: { value: "to-draft" } });
 
     fireEvent.click(screen.getByTestId("gpr-submit"));
 
@@ -150,11 +150,24 @@ describe("GovernedPullRequestCard", () => {
         projectId: PROJECT,
         kind: "pr-update",
         prExternalId: "1499",
-        convertFromDraft: true,
-        convertToDraft: false,
+        convertFromDraft: false,
+        convertToDraft: true,
       }),
     );
     expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("pr-update: succeeded");
+  });
+
+  // #3389 (epic #3384 correction 1): the approval-less draft->ready transition through this generic
+  // command center is closed. "Mark ready" is no longer an option in the Draft state select — the
+  // failing-before-fix case is exactly the removed test above, which selected "to-ready" and
+  // asserted `convertFromDraft: true` reached the generic pr-update execute call.
+  it("does not offer Mark ready — the draft->ready transition moved to the dedicated pr-mark-ready intent", () => {
+    render(<GovernedPullRequestCard projectId={PROJECT} client={makeClient({})} />);
+    fireEvent.click(screen.getByLabelText("Update"));
+    const select = screen.getByLabelText("Draft state");
+    const optionValues = [...select.querySelectorAll("option")].map((option) => option.value);
+    expect(optionValues).toEqual(["none", "to-draft"]);
+    expect(screen.getByTestId("gpr-mark-ready-hint")).toHaveTextContent("Propose ready");
   });
 
   it("surfaces a policy-blocked outcome with its reason", async () => {

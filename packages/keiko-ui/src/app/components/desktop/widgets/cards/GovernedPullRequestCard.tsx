@@ -105,6 +105,11 @@ const KV_LABEL: CSSProperties = {
 
 // ─── Form state ───────────────────────────────────────────────────────────────────────────────────
 
+// #3389 (epic #3384 correction 1): "to-ready" (mark ready) is deliberately NOT a member of this
+// union. The draft->ready transition now requires the dedicated pr-mark-ready one-use approval,
+// bound to base/head SHAs and a readiness digest this generic command-center card never resolves —
+// it is offered only from the Coding Workbench's journey outcome, where those facts are already on
+// hand from the journey read. "to-draft" (ready->draft) is unaffected; it stays a plain pr-update.
 interface PrForm {
   readonly kind: GitDeliveryPrKind;
   readonly ownerAndRepo: string;
@@ -114,7 +119,7 @@ interface PrForm {
   readonly body: string;
   readonly isDraft: boolean;
   readonly prExternalId: string;
-  readonly draftTransition: "none" | "to-ready" | "to-draft";
+  readonly draftTransition: "none" | "to-draft";
 }
 
 function initialForm({
@@ -156,7 +161,7 @@ function formToInput(form: PrForm, projectId: string): GitDeliveryPrInput {
     kind: "pr-update",
     prExternalId: form.prExternalId,
     convertToDraft: form.draftTransition === "to-draft",
-    convertFromDraft: form.draftTransition === "to-ready",
+    convertFromDraft: false,
   };
 }
 
@@ -359,9 +364,15 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
               aria-label="Draft state"
             >
               <option value="none">No change</option>
-              <option value="to-ready">Mark ready</option>
               <option value="to-draft">Convert to draft</option>
             </select>
+            <span
+              style={{ font: "var(--text-caption)", color: "var(--fg-muted)" }}
+              data-testid="gpr-mark-ready-hint"
+            >
+              To mark this pull request ready for review, use Propose ready on the Coding Workbench
+              journey outcome — it binds the exact revision and re-verifies it before executing.
+            </span>
           </label>
         </div>
       ) : null}
