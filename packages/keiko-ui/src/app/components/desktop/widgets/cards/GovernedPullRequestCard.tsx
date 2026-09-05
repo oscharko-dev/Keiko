@@ -16,12 +16,22 @@ import { useCallback, useId, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import {
   ApiError,
+  fetchGitDeliveryPrApprove,
   fetchGitDeliveryPrExecute,
   fetchGitDeliveryPrPreview,
+  fetchGitDeliveryPrDescriptionApply,
+  fetchGitDeliveryPrDescriptionApprove,
+  fetchGitDeliveryPrDescriptionPreview,
+  PR_DESCRIPTION_LANGUAGES,
+  type GitDeliveryPrDescriptionPreviewInput,
+  type GitDeliveryPrDescriptionTarget,
   type GitDeliveryPrExecuteResponse,
   type GitDeliveryPrInput,
   type GitDeliveryPrKind,
   type GitDeliveryPrPreviewResponse,
+  type PrDescriptionApplicationResultWire,
+  type PrDescriptionApplicationStatus,
+  type PrDescriptionLanguage,
 } from "@/lib/api";
 import { Icons } from "../../Icons";
 
@@ -34,12 +44,29 @@ const CheckIcon = Icons.check;
 
 export interface GovernedPullRequestClient {
   readonly prPreview: typeof fetchGitDeliveryPrPreview;
+  // #3387: the create/update mutation now requires an actually consumed, server-issued approval
+  // claim unconditionally (epic #3384 correction 5) — never mode-denied merely because the mode is
+  // lower. `runExecute` mints it from the identical command and attaches it before calling execute.
+  // Optional so an existing injected client that has not yet added it (e.g. a shared multi-card
+  // seam) degrades to the pre-#3387 unapproved call instead of a hard TypeScript break; the real
+  // BFF route already rejects that unapproved call, so the caller sees "approval-required", never a
+  // silently accepted mutation.
+  readonly prApprove?: typeof fetchGitDeliveryPrApprove | undefined;
   readonly prExecute: typeof fetchGitDeliveryPrExecute;
+  // #3399: the governed PR-description preview -> approve -> apply lifecycle. Optional for the same
+  // reason as `prApprove` above — the panel renders nothing when a caller's client omits any of them.
+  readonly prDescriptionPreview?: typeof fetchGitDeliveryPrDescriptionPreview | undefined;
+  readonly prDescriptionApprove?: typeof fetchGitDeliveryPrDescriptionApprove | undefined;
+  readonly prDescriptionApply?: typeof fetchGitDeliveryPrDescriptionApply | undefined;
 }
 
 const DEFAULT_CLIENT: GovernedPullRequestClient = {
   prPreview: fetchGitDeliveryPrPreview,
+  prApprove: fetchGitDeliveryPrApprove,
   prExecute: fetchGitDeliveryPrExecute,
+  prDescriptionPreview: fetchGitDeliveryPrDescriptionPreview,
+  prDescriptionApprove: fetchGitDeliveryPrDescriptionApprove,
+  prDescriptionApply: fetchGitDeliveryPrDescriptionApply,
 };
 
 function formatError(err: unknown): string {
@@ -234,12 +261,23 @@ function useGovernedPrActions(client: GovernedPullRequestClient): PrAsync {
     [client, handleError],
   );
 
+  // #3387: mints the approval the create/update mutation now requires unconditionally FIRST, from
+  // the EXACT SAME input, then attaches the returned claim to the identical input before execute —
+  // the mint route binds to that exact typed command, so the claim it returns is redeemable only
+  // for this same target/title/body combination (mirrors GovernedMergeCard's runExecute).
   const runExecute = useCallback(
     (input: GitDeliveryPrInput): void => {
       const token = (seq.current += 1);
       setState((s) => ({ ...s, busy: true, error: null, outcome: null }));
-      void client
-        .prExecute(input)
+      const prApprove = client.prApprove;
+      const readyToExecute: Promise<GitDeliveryPrInput> =
+        prApprove === undefined
+          ? Promise.resolve(input)
+          : prApprove(input).then(
+              (approved): GitDeliveryPrInput => ({ ...input, approval: approved.approval }),
+            );
+      void readyToExecute
+        .then((executeInput) => client.prExecute(executeInput))
         .then((outcome) => {
           if (token !== seq.current) return;
           setState((s) => ({ ...s, busy: false, outcome }));
@@ -526,6 +564,438 @@ function PrOutcome({
   );
 }
 
+// ─── PR-description application (#3399, epic #3384 correction 4/7/10/11) ────────────────────────────
+//
+// Preview -> approve -> apply for the reviewed Keiko-generated description. The server renders
+// `finalBody`/`managedRegion` — repository template and human text preserved outside one versioned
+// managed region, the "by Keiko" attribution added by trusted code after model validation — so this
+// panel shows that text byte-for-byte and never composes or edits it. The approval is one-use: a
+// successful (or failed) apply always clears the local proposal so a second Apply click can never
+// replay a spent approval; the fields must be re-previewed to mint a new one.
+
+interface DescriptionForm {
+  readonly ownerAndRepo: string;
+  readonly prNumber: string;
+  readonly language: PrDescriptionLanguage;
+  readonly refinement: string;
+}
+
+function initialDescriptionForm(ownerAndRepo: string | undefined): DescriptionForm {
+  return { ownerAndRepo: ownerAndRepo ?? "", prNumber: "", language: "en", refinement: "" };
+}
+
+function isValidDescriptionPrNumber(value: string): boolean {
+  return /^\d+$/u.test(value);
+}
+
+function descriptionTargetKeyOf(ownerAndRepo: string, prNumber: string): string {
+  return `${ownerAndRepo} ${prNumber}`;
+}
+
+interface DescriptionAsyncState {
+  readonly result: PrDescriptionApplicationResultWire | null;
+  // The exact target the current result/proposal was produced for — never the live form fields,
+  // so an approve/apply can never be sent for a PR the user has since retargeted (mirrors
+  // GovernedPullRequestBody's previewedKey/targetKey gate for the create/update form above).
+  readonly target: GitDeliveryPrDescriptionTarget | null;
+  readonly proposalId: string | null;
+  readonly approved: boolean;
+  readonly error: string | null;
+  readonly busy: boolean;
+}
+
+interface DescriptionAsync extends DescriptionAsyncState {
+  readonly runPreview: (input: GitDeliveryPrDescriptionPreviewInput) => void;
+  readonly runApprove: () => void;
+  readonly runApply: () => void;
+}
+
+// The three description methods, narrowed to non-optional: `PrDescriptionPanel` builds this only
+// once all three are present on the injected client, so the hook below never has to branch on a
+// partially-populated client mid-lifecycle (preview present but approve missing, etc.).
+interface RequiredPrDescriptionClient {
+  readonly prDescriptionPreview: typeof fetchGitDeliveryPrDescriptionPreview;
+  readonly prDescriptionApprove: typeof fetchGitDeliveryPrDescriptionApprove;
+  readonly prDescriptionApply: typeof fetchGitDeliveryPrDescriptionApply;
+}
+
+function useGovernedPrDescriptionActions(
+  client: RequiredPrDescriptionClient | undefined,
+): DescriptionAsync {
+  const [state, setState] = useState<DescriptionAsyncState>({
+    result: null,
+    target: null,
+    proposalId: null,
+    approved: false,
+    error: null,
+    busy: false,
+  });
+  const seq = useRef(0);
+
+  const handleError = useCallback((err: unknown, token: number): void => {
+    if (token !== seq.current) return;
+    setState((s) => ({ ...s, busy: false, error: formatError(err) }));
+  }, []);
+
+  const runPreview = useCallback(
+    (input: GitDeliveryPrDescriptionPreviewInput): void => {
+      if (client === undefined) return;
+      const token = (seq.current += 1);
+      const target: GitDeliveryPrDescriptionTarget = {
+        projectId: input.projectId,
+        ownerAndRepo: input.ownerAndRepo,
+        prNumber: input.prNumber,
+      };
+      setState((s) => ({ ...s, busy: true, error: null }));
+      void client
+        .prDescriptionPreview(input)
+        .then((result) => {
+          if (token !== seq.current) return;
+          const proposalId = result.outcome === "preview" ? result.preview.proposalId : null;
+          setState({ result, target, proposalId, approved: false, error: null, busy: false });
+        })
+        .catch((err: unknown) => handleError(err, token));
+    },
+    [client, handleError],
+  );
+
+  const runApprove = useCallback((): void => {
+    if (client === undefined || state.proposalId === null || state.target === null) return;
+    const token = (seq.current += 1);
+    const { target, proposalId } = state;
+    setState((s) => ({ ...s, busy: true, error: null }));
+    void client
+      .prDescriptionApprove({ ...target, proposalId })
+      .then(() => {
+        if (token !== seq.current) return;
+        setState((s) => ({ ...s, busy: false, approved: true }));
+      })
+      .catch((err: unknown) => handleError(err, token));
+  }, [client, handleError, state]);
+
+  const runApply = useCallback((): void => {
+    if (client === undefined || state.proposalId === null || state.target === null || !state.approved)
+      return;
+    const token = (seq.current += 1);
+    const { target, proposalId } = state;
+    setState((s) => ({ ...s, busy: true, error: null }));
+    void client
+      .prDescriptionApply({ ...target, proposalId })
+      .then((result) => {
+        if (token !== seq.current) return;
+        // One-use: a spent approval never carries forward to a second apply of the same preview.
+        setState({ result, target: null, proposalId: null, approved: false, error: null, busy: false });
+      })
+      .catch((err: unknown) => handleError(err, token));
+  }, [client, handleError, state]);
+
+  return { ...state, runPreview, runApprove, runApply };
+}
+
+function descriptionStateOf(
+  result: PrDescriptionApplicationResultWire | null,
+): PrDescriptionApplicationStatus["state"] | undefined {
+  if (result === null) return undefined;
+  if (result.outcome === "preview") return result.preview.status.state;
+  if (result.outcome === "observed") return result.status.state;
+  return "blocked";
+}
+
+function descriptionReasonOf(result: PrDescriptionApplicationResultWire | null): string | undefined {
+  if (result === null) return undefined;
+  if (result.outcome === "preview") return result.preview.status.reason;
+  if (result.outcome === "observed") return result.status.reason;
+  return result.reason;
+}
+
+// Text + icon only — never colour alone (WCAG 2.2 AA), matching PrOutcome above.
+const DESCRIPTION_STATE_LABEL: Readonly<Record<PrDescriptionApplicationStatus["state"], string>> = {
+  current: "Applied and confirmed",
+  stale: "Stale — refresh the preview",
+  partial: "Applied — partially generated",
+  fallback: "Applied — generated without the model",
+  blocked: "Blocked — not applied",
+  failed: "Failed — not applied",
+};
+
+function PrDescriptionStatusBadge({
+  result,
+}: {
+  readonly result: PrDescriptionApplicationResultWire | null;
+}): ReactNode {
+  const state = descriptionStateOf(result);
+  if (state === undefined) return null;
+  const reason = descriptionReasonOf(result);
+  return (
+    <p style={KV_LABEL} data-testid="gpr-description-state" data-state={state}>
+      <InfoIcon size={12} /> {DESCRIPTION_STATE_LABEL[state]}
+      {reason !== undefined ? ` (${reason})` : ""}
+    </p>
+  );
+}
+
+// Renders the server-rendered final body byte-for-byte: the repository template, human-authored
+// text outside the managed region, and the trusted "by Keiko" attribution are composed server-side
+// (epic #3384 Frozen Decisions 10/11) and must never be recomposed or re-derived in the browser.
+function PrDescriptionPreviewBody({
+  result,
+}: {
+  readonly result: PrDescriptionApplicationResultWire | null;
+}): ReactNode {
+  if (result === null || result.outcome !== "preview") return null;
+  return (
+    <div style={LABEL_STYLE}>
+      <span>Preview — repository template and human text preserved outside the managed region</span>
+      <pre
+        data-testid="gpr-description-preview"
+        style={{
+          ...FIELD_STYLE,
+          whiteSpace: "pre-wrap",
+          maxHeight: 220,
+          overflow: "auto",
+          margin: 0,
+        }}
+      >
+        {result.preview.finalBody}
+      </pre>
+      <span style={{ font: "var(--text-caption)", color: "var(--fg-muted)" }}>
+        {result.preview.concurrencyLimitation}
+      </span>
+    </div>
+  );
+}
+
+function PrDescriptionFields({
+  form,
+  busy,
+  onChange,
+}: {
+  readonly form: DescriptionForm;
+  readonly busy: boolean;
+  readonly onChange: <K extends keyof DescriptionForm>(key: K, value: DescriptionForm[K]) => void;
+}): ReactNode {
+  const prNumberHintId = useId();
+  const prNumberInvalid = form.prNumber !== "" && !isValidDescriptionPrNumber(form.prNumber);
+  return (
+    <div style={ROW_STYLE}>
+      <label style={{ ...LABEL_STYLE, flex: 1 }}>
+        Repository (owner/repo){" "}
+        <input
+          style={FIELD_STYLE}
+          value={form.ownerAndRepo}
+          disabled={busy}
+          onChange={(e) => onChange("ownerAndRepo", e.target.value)}
+          aria-label="Description repository (owner/repo)"
+        />
+      </label>
+      <label style={{ ...LABEL_STYLE, flex: 1 }}>
+        Pull Request number{" "}
+        <input
+          style={FIELD_STYLE}
+          inputMode="numeric"
+          value={form.prNumber}
+          disabled={busy}
+          onChange={(e) => onChange("prNumber", e.target.value)}
+          aria-label="Description pull request number"
+          aria-invalid={prNumberInvalid}
+          aria-describedby={prNumberInvalid ? prNumberHintId : undefined}
+        />
+        {prNumberInvalid ? (
+          <p
+            id={prNumberHintId}
+            style={{ font: "var(--text-caption)", color: "var(--feedback-danger)", margin: 0 }}
+          >
+            Enter the numeric Pull Request number, for example 1499.
+          </p>
+        ) : null}
+      </label>
+      <label style={{ ...LABEL_STYLE, flex: 1 }}>
+        Language{" "}
+        <select
+          style={FIELD_STYLE}
+          value={form.language}
+          disabled={busy}
+          onChange={(e) => onChange("language", e.target.value as PrDescriptionLanguage)}
+          aria-label="Description language"
+        >
+          {PR_DESCRIPTION_LANGUAGES.map((language) => (
+            <option key={language} value={language}>
+              {language.toUpperCase()}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
+interface DescriptionButtonsProps {
+  readonly busy: boolean;
+  readonly canPreview: boolean;
+  readonly canApprove: boolean;
+  readonly canApply: boolean;
+  readonly onPreview: () => void;
+  readonly onApprove: () => void;
+  readonly onApply: () => void;
+}
+
+function PrDescriptionButtons({
+  busy,
+  canPreview,
+  canApprove,
+  canApply,
+  onPreview,
+  onApprove,
+  onApply,
+}: DescriptionButtonsProps): ReactNode {
+  return (
+    <div style={ROW_STYLE}>
+      <button
+        type="button"
+        style={GHOST_BTN}
+        disabled={busy || !canPreview}
+        onClick={onPreview}
+        data-testid="gpr-description-preview-button"
+      >
+        Preview description
+      </button>
+      <button
+        type="button"
+        style={GHOST_BTN}
+        disabled={busy || !canApprove}
+        onClick={onApprove}
+        data-testid="gpr-description-approve-button"
+      >
+        Approve
+      </button>
+      <button
+        type="button"
+        style={PRIMARY_BTN}
+        disabled={busy || !canApply}
+        onClick={onApply}
+        data-testid="gpr-description-apply-button"
+      >
+        Apply
+      </button>
+    </div>
+  );
+}
+
+function descriptionRefreshHint(
+  hasPreviewed: boolean,
+  stillValid: boolean,
+  state: string | undefined,
+): ReactNode {
+  if (!hasPreviewed || (stillValid && state !== "stale")) return null;
+  const message = stillValid
+    ? "This preview is stale — the pull request changed since it was generated. Preview again before approving or applying."
+    : "The repository or Pull Request number changed since the last preview. Preview again before approving or applying.";
+  return (
+    <p
+      role="alert"
+      style={{ font: "var(--text-body-sm)", color: "var(--feedback-danger)" }}
+      data-testid="gpr-description-refresh-hint"
+    >
+      <InfoIcon size={12} /> {message}
+    </p>
+  );
+}
+
+function PrDescriptionPanel({
+  client,
+  projectId,
+  ownerAndRepo,
+}: {
+  readonly client: GovernedPullRequestClient;
+  readonly projectId: string;
+  readonly ownerAndRepo: string | undefined;
+}): ReactNode {
+  const [form, setForm] = useState<DescriptionForm>(() => initialDescriptionForm(ownerAndRepo));
+  const onChange = useCallback(
+    <K extends keyof DescriptionForm>(key: K, value: DescriptionForm[K]): void => {
+      setForm((f) => ({ ...f, [key]: value }));
+    },
+    [],
+  );
+  // Present only once ALL three description methods are on the injected client (Frozen Decision 7:
+  // the whole preview -> approve -> apply lifecycle or none of it) — never a partially wired panel.
+  const descriptionClient: RequiredPrDescriptionClient | undefined =
+    client.prDescriptionPreview === undefined ||
+    client.prDescriptionApprove === undefined ||
+    client.prDescriptionApply === undefined
+      ? undefined
+      : {
+          prDescriptionPreview: client.prDescriptionPreview,
+          prDescriptionApprove: client.prDescriptionApprove,
+          prDescriptionApply: client.prDescriptionApply,
+        };
+  const async = useGovernedPrDescriptionActions(descriptionClient);
+
+  const targetKey = descriptionTargetKeyOf(form.ownerAndRepo, form.prNumber);
+  const previewedKey =
+    async.target === null ? "" : descriptionTargetKeyOf(async.target.ownerAndRepo, String(async.target.prNumber));
+  const stillValid = previewedKey !== "" && previewedKey === targetKey;
+  const visibleResult = stillValid ? async.result : null;
+  const state = stillValid ? descriptionStateOf(visibleResult) : undefined;
+
+  const canPreview = form.ownerAndRepo !== "" && isValidDescriptionPrNumber(form.prNumber);
+  const canApprove = stillValid && async.proposalId !== null && !async.approved && state !== "stale";
+  const canApply = stillValid && async.proposalId !== null && async.approved && state !== "stale";
+
+  const onPreview = useCallback((): void => {
+    if (!canPreview) return;
+    async.runPreview({
+      projectId,
+      ownerAndRepo: form.ownerAndRepo,
+      prNumber: Number(form.prNumber),
+      language: form.language,
+      ...(form.refinement === "" ? {} : { refinement: form.refinement }),
+    });
+  }, [async, canPreview, form.language, form.ownerAndRepo, form.prNumber, form.refinement, projectId]);
+
+  if (descriptionClient === undefined) return null;
+
+  return (
+    <section
+      style={SECTION_STYLE}
+      aria-label="Pull Request description"
+      data-testid="gpr-description"
+    >
+      <h3 style={HEADING_STYLE}>
+        <GitIcon size={12} /> Description
+      </h3>
+      <PrDescriptionFields form={form} busy={async.busy} onChange={onChange} />
+      <label style={LABEL_STYLE}>
+        Refinement (optional){" "}
+        <textarea
+          style={{ ...FIELD_STYLE, minHeight: 60, resize: "vertical" }}
+          value={form.refinement}
+          disabled={async.busy}
+          onChange={(e) => onChange("refinement", e.target.value)}
+          aria-label="Description refinement"
+        />
+      </label>
+      <PrDescriptionButtons
+        busy={async.busy}
+        canPreview={canPreview}
+        canApprove={canApprove}
+        canApply={canApply}
+        onPreview={onPreview}
+        onApprove={async.runApprove}
+        onApply={async.runApply}
+      />
+      {descriptionRefreshHint(async.target !== null, stillValid, state)}
+      <PrDescriptionStatusBadge result={visibleResult} />
+      <PrDescriptionPreviewBody result={visibleResult} />
+      {async.error !== null ? (
+        <p role="alert" style={{ font: "var(--text-body-sm)", color: "var(--feedback-danger)" }}>
+          <InfoIcon size={12} /> {async.error}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 // ─── Card body ─────────────────────────────────────────────────────────────────────────────────────
 
 function liveTextFor(async: Pick<PrAsyncState, "busy" | "error" | "outcome" | "preview">): string {
@@ -654,6 +1124,7 @@ function GovernedPullRequestBody({
         </button>
       </div>
       <PrOutcome outcome={visibleOutcome} error={visibleError} />
+      <PrDescriptionPanel client={client} projectId={projectId} ownerAndRepo={ownerAndRepo} />
     </div>
   );
 }

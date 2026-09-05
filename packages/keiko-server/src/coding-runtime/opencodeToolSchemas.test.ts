@@ -179,13 +179,12 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
   });
 
   // Every model-visible tool is accounted for by exactly one of two sources: the catalog
-  // projection (plus its native extensions), or the #3386/#3387/#3388 reserved Git/CI aliases
-  // that are hand-authored here pending #3414's catalog-driven generation (opencode.ts's own
-  // "never registers a reserved Git/CI identity" test pins the other half of this partition).
-  // #3386/#3387/#3388 registered the Git/CI tools into the same catalog registration set the
-  // original seven tools already came from, so this stays one exact-equality invariant rather
-  // than a two-source partition: every model-visible tool is either a catalog-projected tool or
-  // one of its two native extensions.
+  // projection, or its two exhaustively-declared native extensions (`question`, `todowrite`).
+  // #3386/#3387/#3388 registered the eight Git/CI tools into the same catalog registration set
+  // the original seven tools already came from (opencode.test.ts's "declares all eight
+  // #3386/#3387/#3388 Git/CI tools under their canonical identities" test pins that registration),
+  // so this stays one exact-equality invariant rather than a two-source partition: every
+  // model-visible tool is either a catalog-projected tool or one of its two native extensions.
   it("names all seventeen OpenCode 1.17.17 model-visible tools once native extensions are included", () => {
     const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0);
     const modelVisibleNames = new Set([

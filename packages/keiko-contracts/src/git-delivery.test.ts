@@ -37,8 +37,10 @@ import {
   parseGitDeliveryResolvedInputs,
 } from "./git-delivery.js";
 import type {
+  GitDeliveryActionEnvelope,
   GitDeliveryBranchPattern,
   GitDeliveryPolicyDecision,
+  GitDeliveryPrMarkReadyInputs,
   GitDeliveryPushInputs,
   GitDeliveryResolvedInputs,
 } from "./git-delivery.js";
@@ -676,6 +678,39 @@ describe("parseGitDeliveryActionEnvelope (soundness: kind === resolvedInputs.kin
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errors.some((e) => e.includes("preview"))).toBe(true);
+    }
+  });
+
+  // Review finding (#3389 repair): GitDeliveryActionEnvelope's own union previously omitted the
+  // GitDeliveryActionEnvelopeFor<GitDeliveryPrMarkReadyInputs> member (it stopped at
+  // pr-description-apply), so an exhaustive switch over a parsed envelope's `kind` could silently
+  // drop this kind with no compile error. Failing before the fix: TS2367/"unreachable" style
+  // narrowing made the "pr-mark-ready" branch below dead code (its `envelope` was typed `never`
+  // there), because no union member could ever narrow to that kind.
+  it("parses a sound pr-mark-ready envelope, and its kind is a live member of the exhaustive union", () => {
+    const validMarkReadyInputs: GitDeliveryPrMarkReadyInputs = {
+      kind: "pr-mark-ready",
+      prExternalId: "1499",
+      headSha: "a".repeat(40),
+      baseSha: "b".repeat(40),
+      readinessDigest: "c".repeat(64),
+      currentDraftState: true,
+      transitionPayloadDigest: "d".repeat(64),
+    };
+    const result = parseGitDeliveryActionEnvelope({
+      ...baseEnvelope(),
+      kind: "pr-mark-ready",
+      resolvedInputs: validMarkReadyInputs,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const envelope: GitDeliveryActionEnvelope = result.value;
+    switch (envelope.kind) {
+      case "pr-mark-ready":
+        expect(envelope.resolvedInputs.readinessDigest).toBe("c".repeat(64));
+        break;
+      default:
+        throw new Error("expected the pr-mark-ready branch to be reachable and exhaustive");
     }
   });
 });

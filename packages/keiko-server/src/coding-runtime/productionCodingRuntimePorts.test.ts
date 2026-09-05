@@ -12,6 +12,7 @@ import {
   type GitChangeSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import type { GitDeliveryDescriptionAuthorityPort } from "../gitDelivery/runBoundAuthority.js";
+import type { PrDescriptionArtifact } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import type { PrDescription } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkbenchDescriptionScope } from "./codingRuntimeDescriptionJobStore.js";
 import {
@@ -735,7 +736,12 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
       capturedAt: "2026-01-01T00:00:00.000Z",
       expiresAt: "2026-01-01T00:10:00.000Z",
       outcome: "complete",
-      limits: { maxFiles: 400, maxHunksPerFile: 256, maxPatchBytes: 262144, maxTotalBytes: 2097152 },
+      limits: {
+        maxFiles: 400,
+        maxHunksPerFile: 256,
+        maxPatchBytes: 262144,
+        maxTotalBytes: 2097152,
+      },
       completeness: {
         totalFiles: 1,
         files: 1,
@@ -826,7 +832,7 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
               repositoryId: "repo_fixture",
               capturedAt: "2026-01-01T00:00:00.000Z",
               outcome: "failed",
-              reason: "git-unavailable",
+              reason: "git-error",
               errorKind: "internal",
             },
           }),
@@ -847,7 +853,7 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
               repositoryId: "repo_fixture",
               capturedAt: "2026-01-01T00:00:00.000Z",
               outcome: "unavailable",
-              reason: "not-a-repository",
+              reason: "missing-ref",
             },
           }),
         ),
@@ -924,7 +930,7 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
   });
 
   it("generates through the Model Gateway core once admitted and maps a complete artifact", async () => {
-    const artifact: PrDescription.PrDescriptionArtifact = {
+    const artifact: PrDescriptionArtifact = {
       schemaVersion: "1",
       renderingVersion: "1",
       binding: { ...snapshotFixture(), snapshotDigest: "a".repeat(64) },

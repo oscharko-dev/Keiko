@@ -125,6 +125,8 @@ import styles from "./ChatWindow.module.css";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { GitChangeScopePill } from "./GitChangeScopePill";
+import { ConnectedScopePill } from "./ConnectedScopePill";
+import { ConnectorScopePill } from "./ConnectorScopePill";
 import type { ChatEditorApplyOutcome } from "@/lib/chat-editor-apply";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
@@ -4063,6 +4065,18 @@ function LocalKnowledgeScopeControl({
   );
 }
 
+// uiux-fix F041 (C172) — the same catalog load that feeds the grounding select's option lists
+// also names the connector pills, so a connected capsule/capsule-set shows its display name
+// instead of a raw id (ConnectorScopePill falls back to the id when a key is absent).
+function connectorScopeLabels(catalog: KnowledgeCatalog): ReadonlyMap<string, string> {
+  const labels = new Map<string, string>();
+  for (const capsule of catalog.capsules) labels.set(`capsule:${capsule.id}`, capsule.displayName);
+  for (const capsuleSet of catalog.capsuleSets) {
+    labels.set(`set:${capsuleSet.id}`, capsuleSet.displayName);
+  }
+  return labels;
+}
+
 function ChatScopeHeaderImpl({
   chat,
   onChatChanged,
@@ -4085,6 +4099,12 @@ function ChatScopeHeaderImpl({
         onChatChanged={onChatChanged}
         catalog={catalog}
         connected={connected}
+      />
+      <ConnectedScopePill chat={chat} onDisconnect={onChatChanged} />
+      <ConnectorScopePill
+        chat={chat}
+        onDisconnect={onChatChanged}
+        labels={connectorScopeLabels(catalog)}
       />
       {/* Issue #3400 — the git-change comparison connected via the Git window's "Connect to
           Chat" action renders here, alongside the grounding scope control, so its current /

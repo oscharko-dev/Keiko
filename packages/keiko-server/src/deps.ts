@@ -302,6 +302,10 @@ import {
   type CodingRuntimeSnapshotStore,
 } from "./coding-runtime/codingRuntimeSnapshotStore.js";
 import {
+  createCodingRuntimeDescriptionJobStore,
+  type CodingRuntimeDescriptionJobStore,
+} from "./coding-runtime/codingRuntimeDescriptionJobStore.js";
+import {
   createCodingRuntimeEvidenceAggregator,
   type CodingRuntimeEvidenceAggregator,
 } from "./coding-runtime/codingRuntimeEvidenceAggregator.js";
@@ -317,6 +321,10 @@ import {
   createProductionCodingRuntimeHost,
   type ProductionCodingRuntimeResolver,
 } from "./coding-runtime/productionCodingRuntimeHost.js";
+import {
+  createProductionWorkbenchDescriptionDispatcher,
+  type ProductionWorkbenchDescriptionDispatcher,
+} from "./coding-runtime/productionCodingRuntimePorts.js";
 import type {
   GitDeliveryDescriptionAuthorityPort,
   GitDeliveryRunAuthorityPort,
@@ -1015,6 +1023,16 @@ export interface BuildHandlerDepsOptions {
   // `unqualified:undefined` for two weeks after #2835 injected a store without one). Ignored
   // when no store is injected — the UI-database path composes its own over the shared handle.
   readonly codingRuntimeSnapshotStore?: CodingRuntimeSnapshotStore | undefined;
+  // #3401: companion to an injected `store`, mirroring `codingRuntimeSnapshotStore` immediately
+  // above — a composition that injects a UiStore must inject this alongside it or the automatic
+  // description-dispatch job store (schema.ts §V29) is silently unavailable. Ignored when no store
+  // is injected — the UI-database path composes its own over the shared handle.
+  readonly codingRuntimeDescriptionJobStore?: CodingRuntimeDescriptionJobStore | undefined;
+  // #3401: full override for the composed `WorkbenchDescriptionDispatcher` (a fake gateway
+  // response in tests/e2e, or a real production one built elsewhere). When absent, production
+  // composes `createProductionWorkbenchDescriptionDispatcher` from this graph's own snapshot
+  // service, Model Gateway generation, and description-authority read port.
+  readonly codingRuntimeDescriptionDispatcher?: ProductionWorkbenchDescriptionDispatcher | undefined;
   // Optional injected governed update session manager (tests); production creates the real
   // state-dir-backed updater session manager.
   readonly updateSession?: UpdateSessionManager | undefined;
@@ -1989,6 +2007,10 @@ interface ComposedPersistence {
   // silently loses the entire coding runtime (the daily real-binary lane failed exactly this
   // way for two weeks after #2835 injected a store without one).
   readonly codingRuntimeSnapshotStore: CodingRuntimeSnapshotStore | undefined;
+  // #3401: the durable, deduplicated automatic-description job store (schema.ts §V29), composed
+  // over the SAME DatabaseSync handle. Undefined only when a UiStore is injected without also
+  // supplying one (mirrors `codingRuntimeSnapshotStore`'s own injection contract above).
+  readonly codingRuntimeDescriptionJobStore: CodingRuntimeDescriptionJobStore | undefined;
 }
 
 // A `UiStoreSchemaVersionError` or unrecoverable corruption here crashes startup — correctly: this
@@ -2017,6 +2039,7 @@ function openUiDatabaseForComposition(
 function composePersistence(
   injected: UiStore | undefined,
   injectedCodingRuntimeSnapshots: CodingRuntimeSnapshotStore | undefined,
+  injectedCodingRuntimeDescriptionJobStore: CodingRuntimeDescriptionJobStore | undefined,
   resolvedUiDbPath: string,
   redactString: (value: string) => string,
   env: EnvSource,
@@ -2030,6 +2053,7 @@ function composePersistence(
       workspaceInstanceStore: undefined,
       activeWorkspacePointerStore: undefined,
       codingRuntimeSnapshotStore: injectedCodingRuntimeSnapshots,
+      codingRuntimeDescriptionJobStore: injectedCodingRuntimeDescriptionJobStore,
     };
   }
   const db = openUiDatabaseForComposition(resolvedUiDbPath, diagnostics);
@@ -2058,6 +2082,7 @@ function composePersistence(
     workspaceInstanceStore: buildWorkspaceInstanceStoreOverDatabase(db),
     activeWorkspacePointerStore: buildActiveWorkspacePointerStoreOverDatabase(db),
     codingRuntimeSnapshotStore: createCodingRuntimeSnapshotStore(db),
+    codingRuntimeDescriptionJobStore: createCodingRuntimeDescriptionJobStore(db),
   };
 }
 
@@ -3151,6 +3176,7 @@ interface PersistenceBundle {
   readonly managedTaskWorkspaceRoot: string | undefined;
   readonly preferredProjectPath: string | undefined;
   readonly codingRuntimeSnapshotStore: CodingRuntimeSnapshotStore | undefined;
+  readonly codingRuntimeDescriptionJobStore: CodingRuntimeDescriptionJobStore | undefined;
 }
 
 // The optional correlationId is threaded by the callers that have one in scope — the verification
@@ -3346,12 +3372,14 @@ function buildPersistenceBundle(
   const persistence = composePersistence(
     options.store,
     options.codingRuntimeSnapshotStore,
+    options.codingRuntimeDescriptionJobStore,
     resolvedUiDbPath,
     redactString,
     options.env,
     options.diagnostics,
   );
-  const { store, dispose, relationship, codingRuntimeSnapshotStore } = persistence;
+  const { store, dispose, relationship, codingRuntimeSnapshotStore, codingRuntimeDescriptionJobStore } =
+    persistence;
   try {
     const { workspaceScriptTrust, services } = composePersistenceTaskWorkspaceServices(
       options,
@@ -3371,6 +3399,7 @@ function buildPersistenceBundle(
       dispose,
       relationship,
       codingRuntimeSnapshotStore,
+      codingRuntimeDescriptionJobStore,
       ...services,
       managedTaskWorkspaceRoot,
       preferredProjectPath: seedInitialProject(store, resolvedUiDbPath, options.initialProjectPath),

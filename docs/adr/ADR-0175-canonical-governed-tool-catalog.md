@@ -99,6 +99,8 @@ Initial identity reservations (all version 1):
 | Managed path discovery/ranged read/changeset/verification | `keiko.workspace.discover`, `keiko.workspace.read`, `keiko.changeset.edit`, `keiko.verification.run` | Existing managed aliases in `managed-opencode@1` |
 | Managed research/skill/child | `keiko.research.fetch`, `keiko.skill.invoke`, `keiko.child.run` | Absent from offers unless bound, ready and authorized |
 | Local content search | `keiko.repo.search` | #3414 alone owns `keiko_repository_search`; H1 owns no alias |
+| Managed Git status/diff/stage and delivery proposal (propose-phase only; the model never commits, pushes or opens a pull request directly) | `keiko.git.status`, `keiko.git.diff`, `keiko.git.stage`, `keiko.git.commit`, `keiko.git.push`, `keiko.git.pullrequest` | New `keiko_git_status`/`keiko_git_diff`/`keiko_git_stage`/`keiko_git_commit`/`keiko_git_push`/`keiko_pull_request` aliases in `managed-opencode@1` (#3386/#3387) |
+| Shared approved-proposal redemption and CI observation | `keiko.git.execute`, `keiko.ci.status` | New `keiko_git_execute`/`keiko_ci_status` aliases in `managed-opencode@1`; execution redemption is gated on the existing VerifiedCommitService/draft-delivery approval channel, never on model authority alone (#3386/#3387/#3388) |
 | Read-only child read | `keiko.child.workspace.read` | New `keiko_child_workspace_read`; old `read_file` only in expiring old-digest profile |
 | Editor | `keiko.editor.sessions`, `keiko.editor.snapshot`, `keiko.editor.navigate`, `keiko.editor.symbol`, `keiko.editor.search`, `keiko.editor.git`, `keiko.editor.edit`, `keiko.editor.changeset`, `keiko.editor.verify` | Existing nine aliases in versioned Editor profile; active subset is separately governed |
 

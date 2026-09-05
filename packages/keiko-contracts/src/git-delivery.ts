@@ -484,7 +484,7 @@ export interface GitDeliveryEvidenceRef {
 // ─── Lifecycle envelope (AC1) ───────────────────────────────────────────────────
 // Sound discriminated union: kind === resolvedInputs.kind holds by construction. Each member is
 // parameterised by its per-kind resolved-input type; GitDeliveryActionEnvelope is the union over
-// all eleven members.
+// all thirteen GitDeliveryActionKind members.
 
 export interface GitDeliveryActionEnvelopeFor<I extends GitDeliveryResolvedInputs> {
   readonly schemaVersion: typeof GIT_DELIVERY_SCHEMA_VERSION;
@@ -508,6 +508,7 @@ export type GitDeliveryActionEnvelope =
   | GitDeliveryActionEnvelopeFor<GitDeliveryPrCreateInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryPrUpdateInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryPrDescriptionApplyInputs>
+  | GitDeliveryActionEnvelopeFor<GitDeliveryPrMarkReadyInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryMergeInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryAbortInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryRecoveryInputs>;

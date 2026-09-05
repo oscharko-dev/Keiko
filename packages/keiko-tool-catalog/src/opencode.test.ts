@@ -108,6 +108,15 @@ describe("opencode registration set", () => {
     expect(stage?.effects).toEqual(["workspace-write"]);
     const status = projection.tools.find((entry) => entry.alias === "keiko_git_status");
     expect(status?.effects).toEqual(["workspace-read"]);
+    // Matches gitOperationRequirements.ts's COMMIT_REQUIREMENT: a local commit is
+    // delivery-substrate but never network-egress (the model proposes; it never touches a remote).
+    const commit = projection.tools.find((entry) => entry.alias === "keiko_git_commit");
+    expect(commit?.effects).toEqual(["delivery-substrate"]);
+    // keiko_git_execute redeems any approved stage/commit/push/pull-request proposal; its own
+    // declared effect is the shared delivery-substrate floor, never network-egress by itself --
+    // the redeemed action's own effects (e.g. push's network-egress) apply at execution time.
+    const execute = projection.tools.find((entry) => entry.alias === "keiko_git_execute");
+    expect(execute?.effects).toEqual(["delivery-substrate"]);
   });
 
   it("never registers the repository-search identity (H1 handler not yet bound)", () => {

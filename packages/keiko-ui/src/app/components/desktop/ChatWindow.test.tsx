@@ -492,6 +492,44 @@ describe("ChatWindow cancel button", () => {
     expect(container.querySelector(".chat-ctx")).toBeNull();
   });
 
+  // Issue #3400 — before GitChangeScopePill was mounted into ChatScopeHeaderImpl, a chat
+  // connected to a git-change comparison rendered no indication of it anywhere: the status,
+  // counts, and refresh/disconnect actions this component provides were unreachable.
+  it("renders the connected git-change scope in the chat header", () => {
+    const chat = makeChat({
+      gitChangeScopes: [
+        {
+          kind: "git-change",
+          relationshipId: "rel-chat-header-1",
+          remoteDigest: "d".repeat(64),
+          comparisonLabel: "main...feature/chat-header",
+          baseRef: "main",
+          headRef: "feature/chat-header",
+          baseSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+          mergeBaseSha: "c".repeat(40),
+          snapshotDigest: "e".repeat(64),
+          fileCount: 3,
+          totalFiles: 3,
+          omittedFiles: 0,
+          truncatedFiles: 0,
+          descriptionStatus: "current",
+          connectedAtMs: 10,
+        },
+      ],
+    });
+    const { container } = render(
+      <ChatSessionProvider value={makeSession({ activeChat: chat })}>
+        <ChatWindow linkedRoot="/proj" />
+      </ChatSessionProvider>,
+    );
+
+    expect(document.querySelector(".chat-scope-header")).toContainElement(
+      container.querySelector(".scope-pill"),
+    );
+    expect(screen.getByText("main...feature/chat-header")).toBeInTheDocument();
+  });
+
   it("does not render the cancel button when not sending", () => {
     const chat = makeChat({
       connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 },
