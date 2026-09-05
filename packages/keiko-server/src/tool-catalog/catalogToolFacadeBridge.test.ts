@@ -63,7 +63,11 @@ const COVERAGE_TABLE: readonly (readonly [string, CodingToolActionRequest, strin
       { ...identity, action: "verification", verifierId: "test" },
       "keiko.verification.run",
     ],
-    ["egress", { ...identity, action: "egress", target: "https://example.com" }, "keiko.research.fetch"],
+    [
+      "egress",
+      { ...identity, action: "egress", target: "https://example.com" },
+      "keiko.research.fetch",
+    ],
     ["skill", { ...identity, action: "skill", skillId: "skill-1" }, "keiko.skill.invoke"],
     [
       "child-agent",
@@ -96,7 +100,13 @@ const COVERAGE_TABLE: readonly (readonly [string, CodingToolActionRequest, strin
     ],
     [
       "delivery commit execute",
-      { ...identity, action: "delivery", intent: "commit", phase: "execute", proposalId: "delivery-1" },
+      {
+        ...identity,
+        action: "delivery",
+        intent: "commit",
+        phase: "execute",
+        proposalId: "delivery-1",
+      },
       "keiko.git.execute",
     ],
     [
@@ -106,7 +116,13 @@ const COVERAGE_TABLE: readonly (readonly [string, CodingToolActionRequest, strin
     ],
     [
       "delivery push execute",
-      { ...identity, action: "delivery", intent: "push", phase: "execute", proposalId: "delivery-1" },
+      {
+        ...identity,
+        action: "delivery",
+        intent: "push",
+        phase: "execute",
+        proposalId: "delivery-1",
+      },
       "keiko.git.execute",
     ],
     [
@@ -127,7 +143,13 @@ const COVERAGE_TABLE: readonly (readonly [string, CodingToolActionRequest, strin
     ],
     [
       "delivery merge (no tool models it)",
-      { ...identity, action: "delivery", intent: "merge", phase: "execute", proposalId: "delivery-1" },
+      {
+        ...identity,
+        action: "delivery",
+        intent: "merge",
+        phase: "execute",
+        proposalId: "delivery-1",
+      },
       undefined,
     ],
     [

@@ -56,11 +56,8 @@ function gitCatalogId(
     case "ci":
       return "keiko.ci.status";
     case "stage":
-      return request.phase === "propose"
-        ? "keiko.git.stage"
-        : request.phase === "execute"
-          ? "keiko.git.execute"
-          : undefined;
+      // RuntimeGitRequest's stage variant is exhaustively "propose" | "execute" -- no third phase.
+      return request.phase === "propose" ? "keiko.git.stage" : "keiko.git.execute";
     default:
       // "read" | "write": the lower-level git port, never produced by a model tool call today.
       return undefined;
@@ -74,7 +71,8 @@ function gitCatalogId(
 function deliveryCatalogId(
   request: Extract<CodingToolActionRequest, { readonly action: "delivery" }>,
 ): string | undefined {
-  if (request.phase === "execute") return request.intent === "merge" ? undefined : "keiko.git.execute";
+  if (request.phase === "execute")
+    return request.intent === "merge" ? undefined : "keiko.git.execute";
   if (request.phase !== "propose") return undefined; // "reconcile" or no phase: not model-facing
   switch (request.intent) {
     case "commit":

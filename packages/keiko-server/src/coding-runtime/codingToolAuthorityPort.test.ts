@@ -976,5 +976,66 @@ describe("CodingToolAuthorityPort", () => {
       expect(fields?.budgetDisposition).toBe("released");
       expect(JSON.stringify(settled)).not.toContain("discover blew up");
     });
+
+    it("settles a second covered action family (verification) end to end, not only discover", async () => {
+      const log = createBufferedServerLogSink();
+      const verificationRunner = vi.fn(() => Promise.resolve({ status: "completed" as const }));
+      const runtime = createRuntimeCodingToolFacade(
+        authority,
+        () => ({ ...runtimeContext(), correlationId: "c".repeat(36) }),
+        { ...governedPorts(), verificationRunner: { execute: verificationRunner } },
+        { catalogActivityLog: log },
+      );
+
+      const result = await runtime.execute({
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verify-1",
+          idempotencyKey: "verify-1",
+          verifierId: "typecheck",
+        }),
+        capability: "runtime-capability-secret",
+      });
+
+      expect(result.status).toBe("completed");
+      expect(verificationRunner).toHaveBeenCalledOnce();
+      const catalogEvents = log.events.filter((event) => event.op.startsWith("tool-catalog."));
+      expect(catalogEvents.map((event) => event.op)).toEqual([
+        "tool-catalog.invocation-started",
+        "tool-catalog.invocation-settled",
+      ]);
+      for (const event of catalogEvents) expect(event.correlationId).toBe("c".repeat(36));
+      const started = catalogEvents[0]?.extra as Record<string, unknown>;
+      expect((started.toolRef as { canonicalId: string }).canonicalId).toBe(
+        "keiko.verification.run",
+      );
+    });
+
+    it("runs an action the catalog does not cover (command) unwrapped with one dispatch-unbound line", async () => {
+      const log = createBufferedServerLogSink();
+      const commandRunner = vi.fn(() => Promise.resolve({ status: "completed" as const }));
+      const runtime = createRuntimeCodingToolFacade(
+        authority,
+        runtimeContext,
+        { ...governedPorts(), commandRunner: { execute: commandRunner } },
+        { catalogActivityLog: log },
+      );
+
+      const result = await runtime.execute({
+        body: JSON.stringify({
+          action: "command",
+          actionId: "command-1",
+          idempotencyKey: "command-1",
+          commandId: "test",
+        }),
+        capability: "runtime-capability-secret",
+      });
+
+      expect(result.status).toBe("completed");
+      expect(commandRunner).toHaveBeenCalledOnce();
+      const catalogEvents = log.events.filter((event) => event.op.startsWith("tool-catalog."));
+      expect(catalogEvents.map((event) => event.op)).toEqual(["tool-catalog.dispatch-unbound"]);
+      expect(catalogEvents[0]?.extra).toEqual({ action: "command" });
+    });
   });
 });

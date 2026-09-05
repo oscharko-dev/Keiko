@@ -269,19 +269,32 @@ receives a validated, IPC-shaped `CodingToolActionRequest` with no catalog offer
 bridge that actually mounts the real production catalog (the same
 `createOpenCodeGatewayToolCatalogAdvertisement` catalog the model-visible schema is compiled from)
 onto that path: `createRuntimeCodingToolFacade` (`codingToolAuthorityPort.ts`) resolves a real
-catalog descriptor for each dispatched action covered by `CATALOG_FACADE_TOOL_IDS`, and settles
+catalog descriptor for each dispatched action `catalogIdFor` covers, and settles
 success/denied/handler-failed around the existing governed delegate call using the same
 `tool-catalog.invocation-started` / `tool-catalog.invocation-settled` operations, receipt shape and
 body-free redaction this section describes -- without a second authority check (the existing
 `CodingToolAuthorityPort` admission is reused verbatim as the dispatch's authority disposition,
-never re-derived) and without moving the existing admission boundary. Coverage is deliberately the
-reachable subset: `discover` (`keiko.workspace.discover`) today, because its IPC shape carries no
-optional fields and needs no approval, so it settles without inventing IPC<->catalog argument
-translation. Widening this bridge to `read` (once its optional `startLine`/`maxLines` defaults are
-reconciled with the catalog's required-field schema), `edit`, `verification`, `egress`, `skill` and
-`child-agent`, and to the full offer/dispatch cursor and idempotency-registry machinery the rest of
-this section describes, remains open follow-up work; `git`, `delivery`, `search`, `command` and
-`connector` have no canonical catalog descriptor yet and stay uncovered until one exists.
+never re-derived) and without moving the existing admission boundary. Coverage is every action with
+a real, unambiguous production catalog descriptor: `discover`, `search`, `edit`, `verification`,
+`egress` (`keiko.research.fetch`), `skill`, `child-agent`, `git`'s `status`/`diff`/`stage`
+(`propose` -> `keiko.git.stage`, `execute` -> `keiko.git.execute`)/`ci` operations, and `delivery`'s
+`commit`/`push`/`pull-request` intents (`propose` -> their own proposal tool, `execute` -> the one
+shared `keiko.git.execute` redemption tool regardless of which intent is being redeemed). An action
+request this bridge does not cover -- `read` (below), `command` and `connector` (no catalog
+descriptor models either one yet), `git`'s low-level `read`/`write` operations, `delivery`'s
+`merge` intent (no proposal tool models it) and a `delivery` request with no `phase` (not
+model-facing) -- keeps its exact prior dispatch behaviour AND now records one body-free
+`tool-catalog.dispatch-unbound` line (the dispatched `action` only) instead of running with zero
+catalog evidence, so an operator reading the activity log can always tell "not catalog-covered"
+apart from "the catalog silently dropped this call". `read` is the one action with a real 1:1
+catalog tool (`keiko.workspace.read`) left deliberately uncovered: the catalog's model-facing schema
+requires `startLine`/`maxLines` (`opencode.ts`'s `readSpec`, matching the real wire schema in
+`opencodeToolSchemas.ts`, which already requires both) while `CodingToolActionRequest`'s `read`
+variant keeps them optional for internal callers outside this work's reach
+(`codingToolIpc.ts`'s `readRequest` parser, `opencodeRuntimeAdapter.ts`); binding it without a
+verified-safe default for every internal caller would risk silently changing read-window bounds, so
+it is reported rather than guessed. Widening to the full offer/dispatch cursor and
+idempotency-registry machinery the rest of this section describes remains open follow-up work.
 
 The bridge does not, however, re-derive its own exception vocabulary alongside `CatalogInvocation`'s
 (`catalogToolSettlement.ts`). It reuses the same lower-level primitives `catalogToolRuntimeAuthority.ts`
@@ -296,11 +309,17 @@ also mirrors `CatalogInvocation.account()`'s discipline of accounting a reservat
 a commit failure after a successful handler run settles as `budget-port-failed` /
 `commit-uncertain` (the same canonical `ToolBudgetDisposition` values `CatalogInvocation` emits) and
 fails the call closed, rather than additionally calling `release()` on a reservation whose true
-state the failed commit already left uncertain. What remains genuinely unshared between the two
-implementations is the offer/dispatch/cursor/idempotency-registry state machine itself -- the part
-that requires a prior `offer()` and a catalog-schema `arguments` object neither of which
-`codingToolFacade.ts`'s already-parsed `CodingToolActionRequest` carries -- not the fault-shaping or
-accounting discipline, which are shared.
+state the failed commit already left uncertain. The bridge also mirrors `executeInvocation`'s
+(`catalogToolDispatch.ts`) guarantee that a failure BEFORE reservation is never silently unlogged:
+if the budget port's `available()` or `reserve()` call itself throws, the bridge settles a
+`failed`/`budget-port-failed` terminal record (`reservationId=null`,
+`budgetDisposition="not-reserved"`) before rethrowing, exactly as it would for a handler failure
+after reservation -- a pre-reservation budget-port exception used to propagate with zero
+`tool-catalog.*` evidence even though the call still failed closed to the caller. What remains
+genuinely unshared between the two implementations is the offer/dispatch/cursor/idempotency-registry
+state machine itself -- the part that requires a prior `offer()` and a catalog-schema `arguments`
+object neither of which `codingToolFacade.ts`'s already-parsed `CodingToolActionRequest` carries --
+not the fault-shaping or accounting discipline, which are shared.
 
 ### D7 — Phase-valid activity evidence
 

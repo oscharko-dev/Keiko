@@ -174,8 +174,7 @@ function connectSnippet(port: number): string {
   ].join("");
 }
 
-// Writes the connect probe to a file so it can be run as a genuinely FORKED grandchild (a shell's
-// `-c` script forking a separate `node` program) without shell-quoting the script text itself.
+// Writes the connect probe to a file so a genuinely spawned grandchild `node` process can run it.
 function writeForkConnectScript(dir: string, port: number): string {
   const path = join(dir, "fork-connect.cjs");
   writeFileSync(
@@ -187,6 +186,28 @@ function writeForkConnectScript(dir: string, port: number): string {
       "s.on('connect', () => { process.stdout.write('CONNECTED'); s.destroy(); process.exit(0); });",
       "s.on('error', () => { process.stdout.write('BLOCKED'); process.exit(3); });",
       "s.on('timeout', () => { process.stdout.write('TIMEOUT'); s.destroy(); process.exit(3); });",
+    ].join("\n"),
+  );
+  return path;
+}
+
+// Writes a "parent" script that itself calls `child_process.spawnSync` to launch the connect
+// probe as a genuinely forked grandchild — the same mechanism OpenCode uses to spawn `git`
+// (posix_spawn/fork, not a shell's exec-in-place optimization). If `(deny process-fork)` is
+// present, `spawnSync` fails closed with an EPERM-shaped `result.error` and the parent reports
+// SPAWN_DENIED instead of relaying the child's probe result — this is what makes the test able to
+// detect a reinstated fork denial, unlike a `/bin/sh -c` single-command wrapper, which macOS's
+// shell execs in place without ever calling fork().
+function writeForkingParentScript(dir: string, childScriptPath: string): string {
+  const path = join(dir, "fork-parent.cjs");
+  writeFileSync(
+    path,
+    [
+      "const { spawnSync } = require('child_process');",
+      `const result = spawnSync(process.execPath, ['${childScriptPath}'], { timeout: 5000 });`,
+      "if (result.error) { process.stdout.write('SPAWN_DENIED'); process.exit(4); }",
+      "process.stdout.write(result.stdout ? result.stdout.toString('utf8') : 'NO_OUTPUT');",
+      "process.exit(result.status === null ? 5 : result.status);",
     ].join("\n"),
   );
   return path;
@@ -253,9 +274,13 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
 
   // Real OS-level proof that removing `(deny process-fork)` (#3390: OpenCode forks `git` for its
   // own session/history endpoints) does not weaken egress confinement: on macOS a Seatbelt profile
-  // is inherited by every descendant process, so a FORKED grandchild (a shell script's `node`
-  // subprocess, not the top-level wrapped command itself) must still be denied a hostile loopback
-  // destination and permitted only the configured gateway port.
+  // is inherited by every descendant process, so a genuinely FORKED grandchild (spawned from
+  // *inside* the sandboxed process via `child_process.spawnSync`, the same posix_spawn/fork path
+  // OpenCode uses to run `git` — not a shell's `-c` single-command exec-in-place, which never
+  // calls fork() and so cannot detect a reinstated denial) must still be denied a hostile loopback
+  // destination and permitted only the configured gateway port. If `(deny process-fork)` were
+  // reinstated, `spawnSync` inside the sandboxed parent would fail closed and this test would fail
+  // with a SPAWN_DENIED result instead of the expected connect outcome.
   it.skipIf(!canProveOnThisHost)(
     "denies a hostile loopback destination from a forked grandchild while permitting the gateway port",
     async () => {
@@ -269,18 +294,19 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
         });
 
         const hostileScript = writeForkConnectScript(scriptDir, hostile.port);
-        const hostileWrapped = buildRuntimeGatewaySeatbeltCommand(policy, "/bin/sh", [
-          "-c",
-          `'${process.execPath}' '${hostileScript}'`,
+        const hostileParent = writeForkingParentScript(scriptDir, hostileScript);
+        const hostileWrapped = buildRuntimeGatewaySeatbeltCommand(policy, process.execPath, [
+          hostileParent,
         ]);
         const denied = run(hostileWrapped.command, hostileWrapped.args);
         expect(["BLOCKED", "TIMEOUT"]).toContain(denied.stdout);
         expect(denied.stdout).not.toBe("CONNECTED");
+        expect(denied.stdout).not.toBe("SPAWN_DENIED");
 
         const gatewayScript = writeForkConnectScript(scriptDir, gateway.port);
-        const gatewayWrapped = buildRuntimeGatewaySeatbeltCommand(policy, "/bin/sh", [
-          "-c",
-          `'${process.execPath}' '${gatewayScript}'`,
+        const gatewayParent = writeForkingParentScript(scriptDir, gatewayScript);
+        const gatewayWrapped = buildRuntimeGatewaySeatbeltCommand(policy, process.execPath, [
+          gatewayParent,
         ]);
         const allowed = run(gatewayWrapped.command, gatewayWrapped.args);
         expect(allowed.stdout).toBe("CONNECTED");
