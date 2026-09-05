@@ -1,10 +1,9 @@
 # Epic 3384 implementation and qualification plan
 
-**Stopped on owner request, 2026-09-05:** all outstanding work is being published
-as an incomplete checkpoint in PR #3394. The
-[work-in-progress handoff](epic-3384-work-in-progress-handoff.md) records implemented
-source, unfinished work and actual checkpoint checks. It supersedes completion
-implications below; final combined-head qualification was not completed.
+**Active owner-authorized completion audit, 2026-09-05:** implementation, review repairs and
+qualification continue in PR #3394. The [acceptance evidence map](epic-3384-acceptance-evidence-map.md)
+records current findings and remaining verification. Earlier stopped-work handoffs and the
+baseline inventory below are historical; neither constitutes final combined-head qualification.
 
 Audit baseline: PR #3394, `epic/3384-issue-to-pr`, commit
 `30fb85b54f863e86585d5db27a6ba2e6e4e660c6` (2026-09-04). The three latest commits
@@ -15,9 +14,12 @@ of that tree. This document records work in progress, not release qualification.
 
 The repository owner requested completion of the epic and, on 2026-09-04, explicitly included open
 dependencies in other epics where required for correct operation or the specified qualification.
-Dependency implementation is part of this delivery, not a deferred workaround. External signing
-identities, protected secrets, approved live-model inputs and platform receipts must still be real;
-their absence cannot be converted to passing evidence.
+Dependency implementation is part of this delivery. The owner's 2026-09-05 scope clarification
+excludes Apple/Windows/other platform signing and notarization, and Atlassian work. Those excluded
+release qualifications must not block this accepted epic, acquire fabricated passing receipts,
+or cause separate signing/Atlassian issues to be closed. Coding confinement and performance remain
+in scope. The owner supplied a controlled repository and the existing model configuration, with
+a hard aggregate ceiling of USD 50 for all real-model attempts and retries.
 
 Preserve the current integration branch and settled review repairs. Use one accountable integrator
 and disjoint agent write scopes. Keep the existing PR. The recorded epic-specific owner review and
@@ -59,7 +61,7 @@ producer's types, digests and stale/failure vocabulary rather than recomputing t
 | #3414 and its canonical-catalog prerequisites | Model-visible search and generated OpenCode tool projection             | Consume H1's verified source identity in the same PR; no duplicate projection or absent backend                                                                       |
 | #2951                                         | Attested sidecar containment                                            | Enforce gateway-only egress through existing sandbox owners and prove hostile-socket negatives                                                                        |
 | #2952, coding-runtime portion                 | Measured startup/readiness/streaming/output budgets                     | Extend existing measurement framework; derive budgets from reference samples                                                                                          |
-| #2198, required release-signing children      | Required signed portable installation receipts                          | Existing implementation merged through #2261 at `e51e2c1b836408f64772a041bf0a44cd8895bb5b`; reuse and qualify the existing pipeline with real signatures/notarization |
+| #2198, release-signing children | Excluded by the owner's 2026-09-05 scope clarification | Keep separate release-signing qualification open; make no signed/notarized artifact claim for this epic |
 
 These issues were open at audit time. Their open state alone does not prove absent implementation;
 each needs the same code-to-acceptance audit before edits. Unrelated functionality in those epics
@@ -219,11 +221,11 @@ The controlled-repository checkout, the real-model profile and the bounded spend
 longer blocked in every environment: the orchestrator machine now provisions an operator-authorized
 controlled repository (`oscharko/Wegwerf-Repo`, with a seeded failing issue `#1` and an external
 pull request `#2`), a real Model Gateway profile, and a bounded evaluation spend budget, so
-`test:e2e:coding-issue-journey:live` can run against a real model there. What remains blocked in
-every environment is the signed platform evidence tracked by the still-open #2198 (signed/notarized
-macOS reference installation), #2951 (sidecar egress attestation), #2952 (coding-runtime
-performance budgets) and #3421, plus the operator-run `keiko-issue-audit` reviewer reference, which
-runs outside this repository entirely. The mandated human merge/close checkpoint remains the
-repository owner's, never an agent's. Full detail, including which manifest rows are `blocked` on
-which issue, is in
+`test:e2e:coding-issue-journey:live` can be qualified against a real model there once its pre-call
+spend enforcement and complete journey are verified. Configuration availability is not a passing
+model-run receipt. Coding confinement (#2951), coding performance (#2952), complete live journeys,
+and final review/gate evidence remain in scope. Platform signing and Atlassian qualifications are
+excluded by the later owner decision above. Existing full-release manifest validators continue
+to report missing release evidence truthfully. The mandated human merge/close checkpoint remains
+the repository owner's. Detailed evidence limitations are recorded in
 [`docs/design-system/evidence/3390/README.md`](../design-system/evidence/3390/README.md).

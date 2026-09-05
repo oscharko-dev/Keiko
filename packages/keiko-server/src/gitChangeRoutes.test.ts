@@ -35,6 +35,7 @@ import {
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { STREAMING } from "./routes.js";
+import type { ServerLogEvent } from "./observability/server-log.js";
 
 const connectHandler = handleGitChangeConnect;
 const refreshHandler = handleGitChangeRefresh;
@@ -420,8 +421,7 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     vi.spyOn(chatStore, "updateChat").mockImplementationOnce(() => {
       throw invalidRequest("simulated malformed persisted scope");
     });
-    const events: { readonly op: string; readonly extra?: Readonly<Record<string, unknown>> }[] =
-      [];
+    const events: ServerLogEvent[] = [];
     const wiredDeps = {
       ...deps,
       activityLog: { write: (event): void => void events.push(event) },
@@ -676,8 +676,7 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
       getEtag: (workspaceId, id) =>
         id === oldRelationshipId ? undefined : realStore.getEtag(workspaceId, id),
     };
-    const events: { readonly op: string; readonly extra?: Readonly<Record<string, unknown>> }[] =
-      [];
+    const events: ServerLogEvent[] = [];
     const wiredDeps: UiHandlerDeps = {
       ...deps,
       relationship: { ...relationship, store: missingOldEtagStore },
