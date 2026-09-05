@@ -13,9 +13,11 @@ import {
   repairTaskWorkspace,
   setActiveTaskWorkspace,
   type ActiveWorkspaceView,
+  type TaskWorkspaceProvisionInput,
 } from "./task-workspace-api";
 import type {
   TaskWorkspaceDriftMarker,
+  CodingWorkbenchIssueBindingFailure,
   WorkspaceFailureClass,
   WorkspaceInstance,
   WorkspaceRecoveryStrategy,
@@ -25,6 +27,7 @@ import {
   isWorkspaceFailureClass,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
+import { runtimeIssueFailure } from "./coding-workbench-issue-errors";
 import { reportClientDiagnostic } from "./client-diagnostics";
 
 export type VerifiedTaskWorkspaceBindFailureReason = "branch-conflict";
@@ -50,6 +53,7 @@ export interface VerifiedTaskWorkspaceBindFailure {
   readonly stage: VerifiedTaskWorkspaceBindStage;
   // The server's structured task-workspace error code, when the failure carried one.
   readonly code?: string;
+  readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure | undefined;
   readonly reason?: VerifiedTaskWorkspaceBindFailureReason;
   readonly failureClass?: WorkspaceFailureClass;
   readonly repair?: VerifiedTaskWorkspaceRepairOffer;
@@ -58,13 +62,9 @@ export interface VerifiedTaskWorkspaceBindFailure {
 export type VerifiedTaskWorkspaceBindResult =
   { readonly ok: true } | VerifiedTaskWorkspaceBindFailure;
 
-export interface VerifiedTaskWorkspaceBindInput {
-  readonly root: string;
-  readonly taskId: string;
-  readonly baseBranch: string;
-  readonly requestedBy: string;
+export type VerifiedTaskWorkspaceBindInput = TaskWorkspaceProvisionInput & {
   readonly onProvisioned?: (() => void) | undefined;
-}
+};
 
 // Same bounded console idiom as GEN-STAB-WINDOW-002: the caller-visible result stays the
 // sanitized stage label, but the underlying failure remains diagnosable in the local console.
@@ -87,6 +87,9 @@ function boundedBindFailure(
   if (typeof error !== "object" || error === null) return { ok: false, stage };
   const candidate = error as { readonly code?: unknown; readonly failureClass?: unknown };
   const code = typeof candidate.code === "string" ? candidate.code : undefined;
+  const issueBindingFailure = runtimeIssueFailure(error);
+  if (issueBindingFailure !== undefined)
+    return { ok: false, stage, ...(code === undefined ? {} : { code }), issueBindingFailure };
   if (!isWorkspaceFailureClass(candidate.failureClass)) {
     return code === undefined ? { ok: false, stage } : { ok: false, stage, code };
   }
@@ -231,7 +234,7 @@ export async function bindVerifiedTaskWorkspace(
     const provisioned = await provisionTaskWorkspace({
       root: input.root,
       taskId: input.taskId,
-      baseBranch: input.baseBranch,
+      ...(input.source === undefined ? { baseBranch: input.baseBranch } : { source: input.source }),
       requestedBy: input.requestedBy,
     });
     workspaceId = provisioned.instance.workspaceId;

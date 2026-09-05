@@ -1,3 +1,4 @@
+import { renderInitialTurnContext } from "./productionCodingRuntimePorts.js";
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local test fixture callbacks are contextually typed. */
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -19,9 +20,8 @@ import {
   MAX_APPROVAL_CHALLENGE_TTL_MS,
   type CodingRuntimeIssueIntake,
   type CodingRuntimeOrchestratorResult,
-  type CodingRuntimeStartResult,
+  type CodingRuntimeLaunchResolver,
 } from "./codingRuntimeOrchestrator.js";
-import { composeInitialTurnText } from "./productionCodingRuntimePorts.js";
 import {
   CodingRuntimeLaunchRejectedError,
   CodingRuntimeLaunchResolutionError,
@@ -38,7 +38,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_ISSUE_BINDING_FAILURES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 
-function successfulSnapshot(result: CodingRuntimeStartResult) {
+function successfulSnapshot(result: CodingRuntimeOrchestratorResult) {
   if (!result.ok) throw new Error(`expected success, received ${result.failureCode}`);
   return result.snapshot;
 }
@@ -101,6 +101,18 @@ function fixture(
   const listPrunableSettled = vi.fn((): readonly string[] => []);
   const deletePruned = vi.fn();
   const store: CodingRuntimeSnapshotStore = {
+    adoptDraftDeliveryFromPredecessor: vi.fn(() => {
+      throw new Error("unexpected draft adoption");
+    }),
+    recordDraftDelivery: vi.fn(() => {
+      throw new Error("draft delivery is not exercised by this fixture");
+    }),
+    recordVerifiedCommit: (result) => {
+      const row = rowFor(rows, result.runId);
+      const next = { ...row, verifiedCommitResult: result };
+      rows.set(result.runId, next);
+      return next;
+    },
     create: (row) => (rows.set(row.runId, row), row),
     transition: (id, change) => {
       const current = rowFor(rows, id);
@@ -206,7 +218,7 @@ function fixture(
     abort: vi.fn(() => Promise.resolve(true)),
   } satisfies CodingRuntimeTaskDispatcher;
   const launchResolver = {
-    resolve: vi.fn(() => ({
+    resolve: vi.fn<CodingRuntimeLaunchResolver["resolve"]>(() => ({
       taskRef: "task-1",
       treeBindingId: "tree",
       adapterKind: "codex-cli",
@@ -249,7 +261,7 @@ function fixture(
         binding: { activeRoot: "/workspace" },
       }),
     } as never,
-    launchResolver: launchResolver as never,
+    launchResolver,
     taskDispatcher,
     questionPort,
     permissionPort,
@@ -417,13 +429,12 @@ function issueIntake(
         (() => Promise.resolve({ ok: true, binding: ISSUE_BINDING, preview: ISSUE_PREVIEW })),
     ),
     buildContext: vi.fn<CodingRuntimeIssueIntake["buildContext"]>(
-      overrides.buildContext ??
-        (() => Promise.resolve({ ok: true, attachment: ISSUE_ATTACHMENT })),
+      overrides.buildContext ?? (() => Promise.resolve({ ok: true, attachment: ISSUE_ATTACHMENT })),
     ),
   };
 }
 
-function refusedStart(result: CodingRuntimeStartResult) {
+function refusedStart(result: CodingRuntimeOrchestratorResult) {
   if (result.ok) throw new Error("expected a refused start");
   return result;
 }
@@ -1988,6 +1999,24 @@ describe("approval challenge lifetime ceiling", () => {
 });
 
 describe("issue-bound runs (#3385)", () => {
+  it("refuses a changed accepted-preview digest before minting or building model context", async () => {
+    const intake = issueIntake();
+    const f = fixture(undefined, undefined, [], undefined, undefined, intake);
+    expect(
+      await f.orchestrator.start({
+        ...start,
+        issueRef: ISSUE_REF,
+        expectedIssueBindingDigest: "0".repeat(64),
+      }),
+    ).toMatchObject({
+      ok: false,
+      issueBindingFailure: "issue-unavailable",
+    });
+    expect(f.rows.size).toBe(0);
+    expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+    expect(intake.buildContext).not.toHaveBeenCalled();
+  });
+
   it("refuses an issue reference while no issue intake is composed, minting no run", async () => {
     const captured = captureActivityLog();
     const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
@@ -2039,14 +2068,14 @@ describe("issue-bound runs (#3385)", () => {
     expect(f.launchResolver.resolve).toHaveBeenCalledWith(
       expect.objectContaining({ issueBinding: ISSUE_BINDING }),
     );
-    // The model receives the intent PLUS the labelled pack, composed by the one renderer, exactly
-    // once — on the first turn.
+    // Only the first server-owned dispatch carries context; user intent stays separate.
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledWith({
       runId: "run-1",
       requestId: start.requestId,
       expectedRevision: 2,
-      taskIntent: composeInitialTurnText(start.taskIntent, ISSUE_ATTACHMENT),
+      taskIntent: start.taskIntent,
+      initialContext: renderInitialTurnContext(ISSUE_ATTACHMENT),
     });
     const attached = captured.records.find(
       (event) => event.op === "coding-runtime.run.issue-context-attached",
@@ -2070,7 +2099,9 @@ describe("issue-bound runs (#3385)", () => {
   it("does not attach the issue context to a follow-up turn", async () => {
     const intake = issueIntake();
     const f = fixture(undefined, undefined, [], undefined, undefined, intake);
-    const started = successfulSnapshot(await f.orchestrator.start({ ...start, issueRef: ISSUE_REF }));
+    const started = successfulSnapshot(
+      await f.orchestrator.start({ ...start, issueRef: ISSUE_REF }),
+    );
 
     await f.orchestrator.submitFollowUp("run-1", {
       requestId: "follow-up-1",
@@ -2162,7 +2193,9 @@ describe("issue-bound runs (#3385)", () => {
     expect(f.launchResolver.resolve).not.toHaveBeenCalled();
     expect(
       captured.records.find((event) => event.op === "coding-runtime.run.issue-binding-refused"),
-    ).toMatchObject({ extra: { stage: "base-branch", issueBindingFailure: "repository-mismatch" } });
+    ).toMatchObject({
+      extra: { stage: "base-branch", issueBindingFailure: "repository-mismatch" },
+    });
   });
 
   it("refuses a binding that names a repository other than the active workspace's", async () => {
@@ -2282,7 +2315,11 @@ describe("issue-bound runs (#3385)", () => {
     const f = await acknowledgedIssueBoundRecovery(intake);
 
     const retried = successfulSnapshot(
-      await f.orchestrator.retry("run-1", { ...start, requestId: "request-2", issueRef: ISSUE_REF }),
+      await f.orchestrator.retry("run-1", {
+        ...start,
+        requestId: "request-2",
+        issueRef: ISSUE_REF,
+      }),
     );
 
     expect(retried.runId).toBe("run-2");

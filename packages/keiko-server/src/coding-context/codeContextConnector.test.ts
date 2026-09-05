@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildCodeContextPack,
+  GITHUB_CODE_CONTEXT_OBJECT_JQ,
   buildGitHubCodeContextArgv,
   buildGitHubCodeContextCommentsArgv,
   type CodeContextConnector,
@@ -354,7 +355,7 @@ describe("CodeContextConnector", () => {
       "api",
       "/repos/oscharko-dev/Keiko/issues/1989",
       "--jq",
-      "{title:.title,body:.body,comments:.comments,url:.html_url}",
+      GITHUB_CODE_CONTEXT_OBJECT_JQ,
     ]);
     expect(
       buildGitHubCodeContextCommentsArgv({
@@ -514,12 +515,7 @@ describe("CodeContextConnector", () => {
       comments: [{ id: "1001", body: "review context comment" }],
     });
     expect(calls).toEqual([
-      [
-        "api",
-        "/repos/oscharko-dev/Keiko/issues/1989",
-        "--jq",
-        "{title:.title,body:.body,comments:.comments,url:.html_url}",
-      ],
+      ["api", "/repos/oscharko-dev/Keiko/issues/1989", "--jq", GITHUB_CODE_CONTEXT_OBJECT_JQ],
       [
         "api",
         "/repos/oscharko-dev/Keiko/issues/1989/comments?per_page=50",

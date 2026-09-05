@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "issue": 3385,
+  "evidenceClass": "production-composed-deterministic-browser",
+  "modelQualification": false,
+  "capturedAt": "2026-09-04T20:46:40.332Z",
+  "gitHead": "30fb85b54f863e86585d5db27a6ba2e6e4e660c6",
+  "sourceHashes": {
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchIssueIntake.tsx": "68ed7c45abdda0615f1d16120802af8e4b891230078b4740032d271b1c5eb0d0",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchIssueIntake.module.css": "674b8102d25ce6d5e11cb57f162ea7d82c3cb2b02d3e4ec1f78d0ca999fa94e3",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchSetup.tsx": "4e0a1df1e93a5c77c2dd5e5648fb0a3cdd69036f0f1edd71b64bba1cc0ad4000",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.tsx": "58146e0f118fe236702771790a0b0bf016e0f99c4d9de8c20bbe470442841b83",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css": "4faa14219ed1dd9fa727686106b269669e9ad9f89f15385dcaf6dd6637d6889a"
+  },
+  "captures": [
+    {
+      "name": "01-dark",
+      "theme": "dark",
+      "screenshot": "docs/design-system/evidence/3385/01-dark.png",
+      "screenshotSha256": "1f2d1ba66472070161ac1d28732b8444f636f33312017aa563d8e86c4a0fe6a3",
+      "seriousOrCriticalViolations": 0,
+      "violations": [],
+      "horizontalOverflow": false,
+      "contextLabelsOverlap": false
+    },
+    {
+      "name": "02-light",
+      "theme": "light",
+      "screenshot": "docs/design-system/evidence/3385/02-light.png",
+      "screenshotSha256": "ac42794a2b60450d2023a90cb79eef90623670d5aa75c67e5a04e87b4658386e",
+      "seriousOrCriticalViolations": 0,
+      "violations": [],
+      "horizontalOverflow": false,
+      "contextLabelsOverlap": false
+    },
+    {
+      "name": "03-dark-high-contrast",
+      "theme": "dark",
+      "highContrast": true,
+      "screenshot": "docs/design-system/evidence/3385/03-dark-high-contrast.png",
+      "screenshotSha256": "7b9b8cf3a5c1c16992173573c584421c02ceac2dfedf3c8baea6a5e53cfe5cf7",
+      "seriousOrCriticalViolations": 0,
+      "violations": [],
+      "horizontalOverflow": false,
+      "contextLabelsOverlap": false
+    },
+    {
+      "name": "04-light-high-contrast",
+      "theme": "light",
+      "highContrast": true,
+      "screenshot": "docs/design-system/evidence/3385/04-light-high-contrast.png",
+      "screenshotSha256": "438bca2f56d039c3670f296bbf59a2f16c6eb3a24a997d8f0ac5d5a5f2b4e0a5",
+      "seriousOrCriticalViolations": 0,
+      "violations": [],
+      "horizontalOverflow": false,
+      "contextLabelsOverlap": false
+    },
+    {
+      "name": "05-prefers-contrast",
+      "theme": "dark",
+      "contrast": "more",
+      "screenshot": "docs/design-system/evidence/3385/05-prefers-contrast.png",
+      "screenshotSha256": "7b9b8cf3a5c1c16992173573c584421c02ceac2dfedf3c8baea6a5e53cfe5cf7",
+      "seriousOrCriticalViolations": 0,
+      "violations": [],
+      "horizontalOverflow": false,
+      "contextLabelsOverlap": false
+    },
+    {
+      "name": "06-forced-colors",
+      "theme": "dark",
+      "forcedColors": "active",
+      "screenshot": "docs/design-system/evidence/3385/06-forced-colors.png",
+      "screenshotSha256": "750e09a64a2a394a28b56b8002f83af20467738bc9f3350cbf4e69f958a36317",
+      "seriousOrCriticalViolations": 0,
+      "violations": [],
+      "horizontalOverflow": false,
+      "contextLabelsOverlap": false
+    },
+    {
+      "name": "07-reduced-motion",
+      "theme": "dark",
+      "reducedMotion": "reduce",
+      "screenshot": "docs/design-system/evidence/3385/07-reduced-motion.png",
+      "screenshotSha256": "db1d8e0dab378c735fd6d098ce9d1f72be0499b4dbb9a55671c09da303f0036b",
+      "seriousOrCriticalViolations": 0,
+      "violations": [],
+      "horizontalOverflow": false,
+      "contextLabelsOverlap": false
+    },
+    {
+      "name": "08-compact",
+      "theme": "dark",
+      "width": 360,
+      "screenshot": "docs/design-system/evidence/3385/08-compact.png",
+      "screenshotSha256": "a0d1005990d509af1fa4274e1a033831fb4fe2a78dcc4c43bdbb36e5ed5a09a1",
+      "seriousOrCriticalViolations": 0,
+      "violations": [],
+      "horizontalOverflow": false,
+      "contextLabelsOverlap": false
+    }
+  ],
+  "capturedState": "ready-preview",
+  "completedPrePreviewChecks": [
+    "empty",
+    "auth-required",
+    "repository-mismatch",
+    "invalid-reference"
+  ],
+  "transientFixtureContentOnly": true
+}

@@ -137,6 +137,12 @@ export function markSseStreamBackpressureKilled(res: ServerResponse): void {
   if (state !== undefined) state.backpressureKilled = true;
 }
 
+/** Marks a caught transport failure before destroy(error), which need not emit a response error. */
+export function markSseStreamServerErrored(res: ServerResponse): void {
+  const state = sseStreamCounters.get(res);
+  if (state !== undefined) state.serverErrored = true;
+}
+
 /**
  * Writes `frame` to `res`. When `res.write` returns false (TCP send-buffer full / slow client),
  * aborts `controller` (stops the upstream producer) and destroys the socket.

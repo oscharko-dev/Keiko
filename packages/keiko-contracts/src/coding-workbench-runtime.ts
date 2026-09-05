@@ -44,6 +44,8 @@ import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
 // the preview request names a repository the same way, so it takes the same bound rather than a
 // second number that could drift from it.
 import { MAX_GITHUB_ISSUE_READER_REPOSITORY_PATH_CHARS } from "./bff-wire.js";
+import { validateCodingWorkbenchIssueBinding } from "./coding-workbench-issue-binding.js";
+export { validateCodingWorkbenchIssueBinding } from "./coding-workbench-issue-binding.js";
 
 export {
   canonicalGitHubOwnerAndRepo,
@@ -113,6 +115,7 @@ export interface CodingWorkbenchRuntimeExecutionBinding {
   readonly workspaceRootDigest: string;
   readonly branchRef: string;
   readonly branchHeadDigest: string;
+  readonly issueBinding?: CodingWorkbenchIssueBinding | undefined;
 }
 
 /**
@@ -225,6 +228,8 @@ export interface CodingWorkbenchIssuePreview {
   readonly bodyExcerpt: string;
   readonly bodyExcerptTruncated: boolean;
   readonly commentCount: number;
+  readonly comments?: readonly string[] | undefined;
+  readonly commentsTruncated?: boolean | undefined;
   readonly state: CodingWorkbenchIssueState;
   readonly provenance: CodingWorkbenchIssuePreviewProvenance;
 }
@@ -578,6 +583,22 @@ function validateIssuePreviewText(value: Record<string, unknown>, errors: string
   }
 }
 
+function validateIssuePreviewComments(value: Record<string, unknown>, errors: string[]): void {
+  if (
+    value.comments !== undefined &&
+    (!Array.isArray(value.comments) ||
+      value.comments.length > 8 ||
+      value.comments.some(
+        (comment: unknown) => typeof comment !== "string" || comment.length > 1_024,
+      ))
+  ) {
+    errors.push("issuePreview.comments must contain at most eight bounded excerpts");
+  }
+  if (value.commentsTruncated !== undefined && typeof value.commentsTruncated !== "boolean") {
+    errors.push("issuePreview.commentsTruncated must be a boolean");
+  }
+}
+
 function validateIssuePreviewProvenance(value: unknown, errors: string[]): void {
   if (!isRecord(value)) {
     errors.push("issuePreview.provenance must be an object");
@@ -607,6 +628,8 @@ export function validateCodingWorkbenchIssuePreview(
       "bodyExcerpt",
       "bodyExcerptTruncated",
       "commentCount",
+      "comments",
+      "commentsTruncated",
       "state",
       "provenance",
     ],
@@ -614,6 +637,7 @@ export function validateCodingWorkbenchIssuePreview(
   );
   if (value.untrusted !== true) errors.push("issuePreview.untrusted must be true");
   validateIssuePreviewText(value, errors);
+  validateIssuePreviewComments(value, errors);
   if (!Number.isSafeInteger(value.commentCount) || Number(value.commentCount) < 0) {
     errors.push("issuePreview.commentCount must be a non-negative integer");
   }
@@ -660,6 +684,7 @@ function validateBinding(value: unknown, errors: string[]): void {
         "workspaceRootDigest",
         "branchRef",
         "branchHeadDigest",
+        "issueBinding",
       ],
       "binding",
     ),
@@ -669,6 +694,10 @@ function validateBinding(value: unknown, errors: string[]): void {
   }
   for (const key of ["projectDigest", "workspaceRootDigest", "branchHeadDigest"] as const) {
     validateDigest(value[key], `binding.${key}`, errors);
+  }
+  if (value.issueBinding !== undefined) {
+    const issue = validateCodingWorkbenchIssueBinding(value.issueBinding);
+    if (!issue.ok) errors.push(...issue.errors);
   }
 }
 

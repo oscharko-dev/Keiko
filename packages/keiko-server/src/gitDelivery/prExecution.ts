@@ -1,4 +1,4 @@
-// Governed GitHub pull request execution core for the #477 PR routes (Epic #470, ADR-0064).
+// Governed GitHub pull request execution core for the #477 PR routes (Epic #470, ADR-0086).
 //
 // The PR preview + execute routes share ONE path: resolve and authorize the project workspace, build a
 // TRUSTWORTHY snapshot from the live worktree, drive the #477 PR gateway `runGitPullRequest` (the

@@ -11,6 +11,7 @@ import type {
   CodingWorkbenchCommandPolicy,
   CodingWorkbenchConnectorScope,
   CodingWorkbenchGate,
+  CodingWorkbenchIssueBinding,
   CodingWorkbenchMode,
   CodingWorkbenchModelProfile,
   CodingWorkbenchNetworkPolicy,
@@ -70,6 +71,13 @@ const OPERATOR_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> =
 ]);
 
 export interface CodingRuntimeTrustedContext {
+  /** Captured before start confirmation; absent legacy contexts cannot execute verified commits. */
+  readonly repositoryIdentity?: {
+    readonly kind: "github-origin" | "local";
+    readonly digest: string;
+  };
+  /** Server-resolved launch identity; absent legacy contexts cannot adopt a committed head. */
+  readonly runId?: string;
   readonly operatorId: string;
   readonly taskId: string;
   readonly projectId: string;
@@ -78,6 +86,7 @@ export interface CodingRuntimeTrustedContext {
   readonly workspaceRoot: string;
   readonly branchRef: string;
   readonly branchHeadDigest: string;
+  readonly issueBinding?: CodingWorkbenchIssueBinding | undefined;
   readonly branch: CodingWorkbenchBranchConstraints;
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly runtimeSource: CodingWorkbenchRuntimeSource;
@@ -928,6 +937,7 @@ function projectedIdentity(
       workspaceRootDigest: rootDigest,
       branchRef: projectRuntimeAuthorityValue("branch", context.branchRef),
       branchHeadDigest: context.branchHeadDigest,
+      ...(context.issueBinding === undefined ? {} : { issueBinding: context.issueBinding }),
     },
   };
 }

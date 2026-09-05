@@ -35,6 +35,7 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerLogLevel, ServerLogSink } from "../observability/index.js";
 import { errorKindOf } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 import {
   buildGitHubCodeContextArgv,
@@ -66,11 +67,23 @@ export type GitHubIssueResolution =
       readonly ok: true;
       readonly binding: CodingWorkbenchIssueBinding;
       readonly preview: CodingWorkbenchIssuePreview;
+      /** Transient, server-private source for the existing context-pack builder. */
+      readonly contextObject: CodeContextRawObject;
     }
-  | { readonly ok: false; readonly failure: CodingWorkbenchIssueBindingFailure };
+  | {
+      readonly ok: false;
+      readonly failure: CodingWorkbenchIssueBindingFailure;
+      /** Internal classification; HTTP owners project only the established public failure. */
+      readonly failureReason?: GitHubIssueResolutionReason;
+    };
+
+export type GitHubIssueResolutionDeps = Pick<
+  UiHandlerDeps,
+  "store" | "env" | "codingContextGitHubPort" | "codingContextGitHubRemoteResolver" | "activityLog"
+>;
 
 export type GitHubIssueResolver = (
-  deps: UiHandlerDeps,
+  deps: GitHubIssueResolutionDeps,
   input: GitHubIssueResolutionInput,
 ) => Promise<GitHubIssueResolution>;
 
@@ -126,15 +139,15 @@ export function codingWorkbenchIssueBindingDigest(
   return sha256Hex(canonicalise(fields));
 }
 
-/** sha256 of the canonical (lower-cased) `owner/repo`; the same value for every clone of one repository. */
+/** Digest of the canonical host/owner/repository identity, shared by all remote URL spellings. */
 export function codingWorkbenchRemoteDigest(ownerAndRepo: string): string {
-  return sha256Hex(canonicalGitHubOwnerAndRepo(ownerAndRepo));
+  return sha256Hex(`github.com/${canonicalGitHubOwnerAndRepo(ownerAndRepo)}`);
 }
 
 // ─── the resolution ────────────────────────────────────────────────────────────────────────
 
 interface ResolutionContext {
-  readonly deps: UiHandlerDeps;
+  readonly deps: GitHubIssueResolutionDeps;
   readonly input: GitHubIssueResolutionInput;
   readonly ports: GitHubIssueResolverPorts;
   readonly activityLog: ServerLogSink;
@@ -145,19 +158,35 @@ interface Refusal {
   readonly failure: CodingWorkbenchIssueBindingFailure;
   readonly reason: GitHubIssueResolutionReason;
   readonly errorKind?: string | undefined;
+  readonly frames?: readonly string[] | undefined;
+  readonly causeChain?: ReturnType<typeof causeChain> | undefined;
   /** Present once the reference parsed: evidence of WHICH issue was refused, never its text. */
   readonly issueNumber?: number | undefined;
 }
 
 // A step either produces its value or the refusal that ends the resolution.
-type Step<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly refusal: Refusal };
+type Step<T> =
+  { readonly ok: true; readonly value: T } | { readonly ok: false; readonly refusal: Refusal };
 
 function refuse(
   failure: CodingWorkbenchIssueBindingFailure,
   reason: GitHubIssueResolutionReason,
-  errorKind?: string,
+  error?: unknown,
 ): Step<never> {
-  return { ok: false, refusal: { failure, reason, ...(errorKind === undefined ? {} : { errorKind }) } };
+  return {
+    ok: false,
+    refusal: {
+      failure,
+      reason,
+      ...(error === undefined
+        ? {}
+        : {
+            errorKind: errorKindOf(error),
+            frames: keikoStackFrames(error),
+            causeChain: causeChain(error),
+          }),
+    },
+  };
 }
 
 function produce<T>(value: T): Step<T> {
@@ -209,11 +238,13 @@ async function resolveRemote(ctx: ResolutionContext): Promise<Step<string>> {
     ctx.input.repositoryRoot,
     ctx.deps.env,
     ctx.deps.codingContextGitHubRemoteResolver,
-    { correlationId: ctx.correlationId, activityLog: ctx.activityLog },
+    { correlationId: ctx.correlationId, activityLog: ctx.activityLog, signal: ctx.input.signal },
   );
   const aborted = cancelledIfAborted(ctx.input.signal);
   if (!aborted.ok) return aborted;
-  return remote === undefined ? refuse("repository-mismatch", "remote-unresolved") : produce(remote);
+  return remote === undefined
+    ? refuse("repository-mismatch", "remote-unresolved")
+    : produce(remote);
 }
 
 // Step 2: parse, then pin the reference to the checkout. A reference naming another repository
@@ -256,12 +287,19 @@ async function readIssue(
   let raw: CodeContextRawObject;
   try {
     const [objectJson, commentsJson] = await Promise.all([
-      port.readJson(buildGitHubCodeContextArgv(ref)),
-      port.readJson(buildGitHubCodeContextCommentsArgv(ref)),
+      port.readJson(buildGitHubCodeContextArgv(ref), {
+        signal: ctx.input.signal,
+        correlationId: ctx.correlationId,
+      }),
+      port.readJson(buildGitHubCodeContextCommentsArgv(ref), {
+        signal: ctx.input.signal,
+        correlationId: ctx.correlationId,
+      }),
     ]);
     raw = gitHubCodeContextRawObjectFrom(ref, objectJson, commentsJson);
   } catch (error) {
-    return refuse("issue-unavailable", "read-failed", errorKindOf(error));
+    if (ctx.input.signal?.aborted === true) return refuse("cancelled", "aborted");
+    return refuse("issue-unavailable", "read-failed", error);
   }
   const aborted = cancelledIfAborted(ctx.input.signal);
   return aborted.ok ? produce(raw) : aborted;
@@ -276,13 +314,14 @@ function issueUnavailableReason(
   ownerAndRepo: string,
   issueNumber: number,
 ): GitHubIssueResolutionReason | undefined {
-  if (raw.providerId === undefined) return "identity-missing";
+  if (raw.providerNodeId === undefined) return "identity-missing";
   if (raw.isPullRequest === undefined || raw.state === undefined) return "state-unknown";
   if (raw.isPullRequest) return "pull-request-as-issue";
   if (raw.state !== "open") return "closed";
   const provenance = parseGitHubIssueReference(raw.url ?? "");
   if (!provenance.ok) return "provenance-unreadable";
-  if (!sameGitHubOwnerAndRepo(provenance.reference.ownerAndRepo, ownerAndRepo)) return "transferred";
+  if (!sameGitHubOwnerAndRepo(provenance.reference.ownerAndRepo, ownerAndRepo))
+    return "transferred";
   if (provenance.reference.issueNumber !== issueNumber) return "renumbered";
   return undefined;
 }
@@ -301,11 +340,13 @@ async function resolveDefaultBranch(ctx: ResolutionContext): Promise<Step<string
   } catch (error) {
     const aborted = cancelledIfAborted(ctx.input.signal);
     if (!aborted.ok) return aborted;
-    return refuse("clone-failed", "default-branch-read-failed", errorKindOf(error));
+    return refuse("clone-failed", "default-branch-read-failed", error);
   }
   const aborted = cancelledIfAborted(ctx.input.signal);
   if (!aborted.ok) return aborted;
-  return branch === undefined ? refuse("clone-failed", "default-branch-unresolved") : produce(branch);
+  return branch === undefined
+    ? refuse("clone-failed", "default-branch-unresolved")
+    : produce(branch);
 }
 
 function bindingFor(
@@ -320,14 +361,17 @@ function bindingFor(
     repositoryId,
     remoteDigest: codingWorkbenchRemoteDigest(ownerAndRepo),
     issueNumber,
-    issueIdDigest: sha256Hex(raw.providerId ?? ""),
+    issueIdDigest: sha256Hex(raw.providerNodeId ?? ""),
     defaultBaseRef,
     contentRevisionDigest: codeContextContentDigest(raw),
   };
   return { ...fields, bindingDigest: codingWorkbenchIssueBindingDigest(fields) };
 }
 
-function boundedText(value: string, maxChars: number): { readonly text: string; readonly truncated: boolean } {
+function boundedText(
+  value: string,
+  maxChars: number,
+): { readonly text: string; readonly truncated: boolean } {
   const safe = stripUnsafeFormatChars(value);
   return safe.length <= maxChars
     ? { text: safe, truncated: false }
@@ -346,6 +390,10 @@ function previewFor(
     bodyExcerpt: excerpt.text,
     bodyExcerptTruncated: excerpt.truncated,
     commentCount: raw.commentCount ?? raw.comments.length,
+    comments: raw.comments.slice(0, 8).map((comment) => boundedText(comment.body, 1_024).text),
+    commentsTruncated:
+      (raw.commentCount ?? raw.comments.length) > 8 ||
+      raw.comments.slice(0, 8).some((comment) => boundedText(comment.body, 1_024).truncated),
     state: "open",
     provenance: {
       ownerAndRepo,
@@ -358,7 +406,10 @@ function previewFor(
 
 // Success is debug (a healthy deployment does not pay for a line per preview), an expected
 // refusal is information, and a fault someone has to look at is a warning.
-function levelFor(outcome: CodingWorkbenchIssueBindingFailure | "resolved", errorKind: string | undefined): ServerLogLevel {
+function levelFor(
+  outcome: CodingWorkbenchIssueBindingFailure | "resolved",
+  errorKind: string | undefined,
+): ServerLogLevel {
   if (outcome === "resolved") return "debug";
   return errorKind === undefined ? "info" : "warn";
 }
@@ -369,6 +420,8 @@ function record(
   detail: {
     readonly reason?: GitHubIssueResolutionReason | undefined;
     readonly errorKind?: string | undefined;
+    readonly frames?: readonly string[] | undefined;
+    readonly causeChain?: ReturnType<typeof causeChain> | undefined;
     readonly issueNumber?: number | undefined;
     readonly repositoryId?: string | undefined;
   },
@@ -384,6 +437,9 @@ function record(
       ...(detail.issueNumber === undefined ? {} : { issueNumber: detail.issueNumber }),
       ...(detail.repositoryId === undefined ? {} : { repositoryId: detail.repositoryId }),
       ...(detail.reason === undefined ? {} : { reason: detail.reason }),
+      ...(detail.frames === undefined
+        ? {}
+        : { frames: detail.frames, causeChain: detail.causeChain }),
     },
   });
 }
@@ -392,6 +448,7 @@ interface Resolved {
   readonly binding: CodingWorkbenchIssueBinding;
   readonly preview: CodingWorkbenchIssuePreview;
   readonly issueNumber: number;
+  readonly contextObject: CodeContextRawObject;
 }
 
 // The steps in order; each one ends the resolution with its refusal or hands its value on.
@@ -403,7 +460,8 @@ async function runSteps(ctx: ResolutionContext, repositoryId: string): Promise<S
   const reference = resolveReference(ctx, remote.value);
   if (!reference.ok) return reference;
   const { ownerAndRepo, issueNumber } = reference.value;
-  if (ctx.input.signal?.aborted === true) return numbered(refuse("cancelled", "aborted"), issueNumber);
+  if (ctx.input.signal?.aborted === true)
+    return numbered(refuse("cancelled", "aborted"), issueNumber);
   const reader = resolveReader(ctx);
   if (!reader.ok) return numbered(reader, issueNumber);
   const ref: GitHubCodeContextRef = {
@@ -416,7 +474,7 @@ async function runSteps(ctx: ResolutionContext, repositoryId: string): Promise<S
   if (!raw.ok) return numbered(raw, issueNumber);
   const unavailable = issueUnavailableReason(raw.value, ownerAndRepo, issueNumber);
   if (unavailable !== undefined) {
-    return numbered(refuse("issue-unavailable", unavailable), issueNumber);
+    return numbered(refuse(failureForReason(unavailable), unavailable), issueNumber);
   }
   const defaultBaseRef = await resolveDefaultBranch(ctx);
   if (!defaultBaseRef.ok) return numbered(defaultBaseRef, issueNumber);
@@ -424,7 +482,13 @@ async function runSteps(ctx: ResolutionContext, repositoryId: string): Promise<S
     binding: bindingFor(repositoryId, ownerAndRepo, issueNumber, raw.value, defaultBaseRef.value),
     preview: previewFor(ownerAndRepo, issueNumber, raw.value),
     issueNumber,
+    contextObject: raw.value,
   });
+}
+
+function failureForReason(reason: GitHubIssueResolutionReason): CodingWorkbenchIssueBindingFailure {
+  if (reason === "pull-request-as-issue") return "invalid-reference";
+  return reason === "transferred" ? "repository-mismatch" : "issue-unavailable";
 }
 
 /**
@@ -445,12 +509,17 @@ export function createGitHubIssueResolver(
     const repositoryId = githubIssueReaderRepositoryId(input.repositoryRoot);
     if (repositoryId === undefined) {
       record(ctx, "repository-mismatch", { reason: "repository-unresolved" });
-      return { ok: false, failure: "repository-mismatch" };
+      return { ok: false, failure: "repository-mismatch", failureReason: "repository-unresolved" };
     }
     const outcome = await runSteps(ctx, repositoryId);
     if (outcome.ok) {
       record(ctx, "resolved", { issueNumber: outcome.value.issueNumber, repositoryId });
-      return { ok: true, binding: outcome.value.binding, preview: outcome.value.preview };
+      return {
+        ok: true,
+        binding: outcome.value.binding,
+        preview: outcome.value.preview,
+        contextObject: outcome.value.contextObject,
+      };
     }
     record(ctx, outcome.refusal.failure, {
       reason: outcome.refusal.reason,
@@ -458,7 +527,7 @@ export function createGitHubIssueResolver(
       issueNumber: outcome.refusal.issueNumber,
       repositoryId,
     });
-    return { ok: false, failure: outcome.refusal.failure };
+    return { ok: false, failure: outcome.refusal.failure, failureReason: outcome.refusal.reason };
   };
 }
 

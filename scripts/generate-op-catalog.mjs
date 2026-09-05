@@ -10,7 +10,7 @@
 // vocabulary from the instrumentation sites instead, so `docs/observability/op-catalog.generated.json`
 // is checked-in, generated output pinned by a drift test, never a restated copy.
 //
-// TWO SHAPES AN OP LITERAL TAKES IN THIS CODEBASE, BOTH HANDLED:
+// THREE SHAPES AN OP LITERAL TAKES IN THIS CODEBASE:
 //   1. An object-literal property: `{ category: "gateway", op: "gateway.retry.scheduled", ... }`.
 //      Most call sites in packages/keiko-server and packages/keiko-local-knowledge use this shape
 //      directly against a logger (`log.warn({ op: "...", ... })`).
@@ -19,6 +19,10 @@
 //      Most of packages/keiko-model-gateway uses this shape. A helper not listed in
 //      POSITIONAL_OP_HELPERS below is invisible to this generator — promote it there, never infer
 //      it dynamically, so the table stays an auditable, checked-in fact rather than a guess.
+//   3. A top-level `operation` field passed to an approved diagnostic API. These retain the
+//      diagnostic owner's label rules and a `diagnostic-operation` source kind; arbitrary payload
+//      fields are not operations. Future lifecycle vocabulary is a linked contract, never a
+//      fabricated source site. The diagnostic label validator requires built server packages.
 //
 // WHAT THIS DELIBERATELY DOES NOT DO: parse a full TypeScript AST. A bracket-depth-aware scan
 // (splitTopLevelArgs / readValueSpan below) is enough to find the `op` argument or property
@@ -54,8 +58,14 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { format } from "prettier";
 
+import { serverDiagnosticFromError } from "../packages/keiko-server/dist/diagnostics-log.js";
 import { isMainModule } from "./lib/is-main-module.mjs";
+import {
+  TOOL_CATALOG_OPERATIONS_PATH,
+  toolCatalogOperationsBytes,
+} from "./lib/tool-catalog-operations.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = dirname(SCRIPT_DIR);
@@ -152,6 +162,28 @@ const POSITIONAL_OP_HELPERS = [
   },
 ];
 
+// Exact diagnostic API shapes. Arbitrary `operation` payload fields are not instrumentation.
+const DIAGNOSTIC_OBJECT_APIS = [
+  { name: "emitServerDiagnostic", argIndex: 1 },
+  { name: "serverDiagnosticFromError", argIndex: 0 },
+  { name: "defaultServerDiagnosticSink.record", argIndex: 0 },
+  {
+    name: "sink.record",
+    argIndex: 0,
+    file: "packages/keiko-server/src/grounded-entailment-stage.ts",
+  },
+  {
+    name: "diagnostics.record",
+    argIndex: 0,
+    file: "packages/keiko-server/src/coding-runtime/codingRuntimeEventHub.ts",
+  },
+  {
+    name: "diagnostics.record",
+    argIndex: 0,
+    file: "packages/keiko-server/src/coding-app-session/sessionChannel.ts",
+  },
+];
+
 // Functions that receive the whole log-event object literal as an argument and hardcode their own
 // `category` before forwarding it to the sink (orchestrator.ts's logIndexing/logEmbeddingRun/
 // logDocument, #2902 W5). Unlike POSITIONAL_OP_HELPERS, `op` here is a NAMED PROPERTY inside the
@@ -203,16 +235,24 @@ function walkTsFiles(dir) {
   return files;
 }
 
-// Top-level `const UPPER_SNAKE_NAME = "literal";` declarations in a file, so an op that is
-// referenced by a well-known constant (e.g. `LOG_FAILURE_NOTICE_OP`) resolves to its real literal
-// instead of being reported as dynamic — the constant's value is exactly as static as an inline
-// string, it is only spelled once.
+// Simple `const UPPER_SNAKE_NAME = "literal";` declarations resolve a repeated literal. Ignore
+// quoted prose and reject conflicting or non-literal declarations of the same name instead of
+// choosing the last declaration. This remains a conservative source scan, not a binding resolver.
 function collectConstStrings(source) {
   const constMap = new Map();
-  const pattern = /\bconst\s+([A-Z][A-Z0-9_]*)\s*=\s*"([^"\\]*)"\s*;/g;
-  for (const match of source.matchAll(pattern)) {
-    constMap.set(match[1], match[2]);
+  const conflicting = new Set();
+  const code = blankQuotedText(source);
+  const pattern = /\b(?:const|let|var)\s+([A-Z][A-Z0-9_]*)\b/g;
+  for (const match of code.matchAll(pattern)) {
+    const name = match[1];
+    const { value, stopChar } = readValueSpan(source, match.index + match[0].length);
+    const literal = /^\s*=\s*"([^"\\]*)"\s*$/u.exec(value)?.[1];
+    if (!/^const\b/u.test(match[0]) || literal === undefined || stopChar !== ";")
+      conflicting.add(name);
+    else if (constMap.has(name) && constMap.get(name) !== literal) conflicting.add(name);
+    else constMap.set(name, literal);
   }
+  for (const name of conflicting) constMap.delete(name);
   return constMap;
 }
 
@@ -711,6 +751,164 @@ function scanHelperCalls(source, offsets, constMap, relPath, helper) {
   return entries;
 }
 
+// Call discovery uses blanked quotes, while argument parsing keeps original literals and offsets.
+function blankQuotedText(source) {
+  let out = "";
+  const appendChar = (text) => {
+    out += text;
+  };
+  let stringChar = null;
+  let index = 0;
+  while (index < source.length) {
+    const ch = source[index];
+    if (stringChar !== null) {
+      const next = stepInsideString(source, index, stringChar, (text) =>
+        appendBlanked(text, appendChar),
+      );
+      index = next.index;
+      stringChar = next.stringChar;
+    } else if (ch === '"' || ch === "'" || ch === "`") {
+      stringChar = ch;
+      appendBlanked(ch, appendChar);
+      index += 1;
+    } else {
+      appendChar(ch);
+      index += 1;
+    }
+  }
+  return out;
+}
+
+function diagnosticArgument(source, parenIndex, argIndex) {
+  const { args } = splitTopLevelArgs(source, parenIndex);
+  const text = args[argIndex];
+  if (text === undefined) return undefined;
+  const offset =
+    parenIndex + 1 + args.slice(0, argIndex).reduce((sum, value) => sum + value.length + 1, 0);
+  const leading = text.length - text.trimStart().length;
+  return { text: text.trim(), offset: offset + leading };
+}
+
+function objectProperties(source) {
+  const properties = [];
+  if (!source.startsWith("{") || scanBalanced(source, 1, (ch) => ch === "}") !== source.length - 1)
+    return undefined;
+  let cursor = 1;
+  while (cursor < source.length - 1) {
+    const stop = scanBalanced(source, cursor, (ch) => ch === "," || ch === "}");
+    const text = source.slice(cursor, stop);
+    if (text.trim() !== "") properties.push({ text, offset: cursor });
+    cursor = stop + 1;
+  }
+  return properties;
+}
+
+function staticPropertyName(property) {
+  const match = /^\s*(?:([A-Za-z_$][\w$]*)|"([^"\\]*)"|'([^'\\]*)')\s*(?::|\(|$)/u.exec(property);
+  return match?.[1] ?? match?.[2] ?? match?.[3];
+}
+
+function closedObjectPreservesOperation(expression) {
+  const properties = objectProperties(expression.trim());
+  return (
+    properties !== undefined &&
+    properties.every(({ text }) => {
+      const name = staticPropertyName(text);
+      return name !== undefined && name !== "operation";
+    })
+  );
+}
+
+// Only inline objects with statically named keys, or a conditional between two such objects,
+// prove a trailing spread cannot overwrite the operation. Identifiers and computed keys remain
+// dynamic. This covers the existing diagnostic owner's `...(code ? { code } : {})` shape.
+function spreadPreservesOperation(property) {
+  let expression = property.trim().slice(3).trim();
+  if (
+    expression.startsWith("(") &&
+    scanBalanced(expression, 1, (ch) => ch === ")") === expression.length - 1
+  )
+    expression = expression.slice(1, -1).trim();
+  if (closedObjectPreservesOperation(expression)) return true;
+  const question = scanBalanced(expression, 0, (ch) => ch === "?");
+  const colon = scanBalanced(expression, question + 1, (ch) => ch === ":");
+  return (
+    colon < expression.length &&
+    closedObjectPreservesOperation(expression.slice(question + 1, colon)) &&
+    closedObjectPreservesOperation(expression.slice(colon + 1))
+  );
+}
+
+function propertyPreservesOperation(property) {
+  if (property.trimStart().startsWith("...")) return spreadPreservesOperation(property);
+  const name = staticPropertyName(property);
+  return name !== undefined && name !== "operation";
+}
+
+function diagnosticOperationProperty(argument) {
+  const properties = objectProperties(argument.text);
+  if (properties === undefined) return undefined;
+  let selected;
+  for (const property of properties) {
+    const match = /^\s*(?:operation|"operation"|'operation')\s*:\s*/u.exec(property.text);
+    if (match)
+      selected = {
+        value: property.text.slice(match[0].length).trim(),
+        offset: argument.offset + property.offset + match[0].length,
+      };
+    else if (!propertyPreservesOperation(property.text)) selected = undefined;
+  }
+  return selected;
+}
+
+function diagnosticCallEntries(source, offsets, constMap, helper, matchIndex, relPath) {
+  const parenIndex = source.indexOf("(", matchIndex + helper.name.length);
+  const argument = diagnosticArgument(source, parenIndex, helper.argIndex);
+  // The nested approved builder supplies the actual operation site; do not count its forwarding call twice.
+  if (
+    helper.name === "emitServerDiagnostic" &&
+    argument?.text.startsWith("serverDiagnosticFromError(")
+  )
+    return [];
+  const property = argument === undefined ? undefined : diagnosticOperationProperty(argument);
+  const line = lineNumberAt(offsets, property?.offset ?? matchIndex);
+  const literals = property === undefined ? null : resolveLiteralValues(property.value, constMap);
+  return [...new Set(literals ?? ["<dynamic>"])].map((op) => ({
+    ...siteEntry(op, "diagnostic", relPath, line),
+    sourceKind: "diagnostic-operation",
+  }));
+}
+
+function scanDiagnosticOperations(source, offsets, constMap, relPath) {
+  const code = blankQuotedText(source);
+  const entries = [];
+  for (const helper of DIAGNOSTIC_OBJECT_APIS) {
+    if (helper.file !== undefined && helper.file !== relPath) continue;
+    const escaped = helper.name.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+    const pattern = new RegExp(String.raw`(?<![\w$.])${escaped}\s*\(`, "g");
+    for (const match of code.matchAll(pattern)) {
+      if (!isFunctionDeclarationSite(code, match.index))
+        entries.push(
+          ...diagnosticCallEntries(source, offsets, constMap, helper, match.index, relPath),
+        );
+    }
+  }
+  return entries;
+}
+
+function validDiagnosticOperation(op) {
+  // Reuse the diagnostic owner's exact label/route reduction. No record is emitted here.
+  const record = serverDiagnosticFromError({
+    correlationId: "op-catalog-fixture",
+    operation: op,
+    source: "op-catalog",
+    error: undefined,
+    redact: () => "server-operation-failed",
+    now: () => 0,
+  });
+  return record.operation === op;
+}
+
 function applicableHelpers(relPath) {
   return POSITIONAL_OP_HELPERS.filter(
     (helper) => helper.file === undefined || helper.file === relPath,
@@ -730,6 +928,7 @@ function entriesForFile(absPath, relPath) {
   const constMap = collectConstStrings(source);
   const entries = [
     ...scanObjectLiteralOps(source, lines, offsets, constMap, relPath),
+    ...scanDiagnosticOperations(source, offsets, constMap, relPath),
     ...applicableHelpers(relPath).flatMap((helper) =>
       scanHelperCalls(source, offsets, constMap, relPath, helper),
     ),
@@ -747,7 +946,13 @@ function compareEntries(left, right) {
 
 function violationsIn(entries) {
   return entries
-    .filter((entry) => entry.op !== "<dynamic>" && !OP_NAME_PATTERN.test(entry.op))
+    .filter(
+      (entry) =>
+        entry.op !== "<dynamic>" &&
+        !(entry.sourceKind === "diagnostic-operation"
+          ? validDiagnosticOperation(entry.op)
+          : OP_NAME_PATTERN.test(entry.op)),
+    )
     .map((entry) => ({ op: entry.op, package: entry.package, site: entry.site }));
 }
 
@@ -770,20 +975,31 @@ export function generateOpCatalog(repoRoot = REPO_ROOT) {
   return {
     $schema: "keiko-op-catalog/1",
     generatedBy: "scripts/generate-op-catalog.mjs",
+    operationContracts: [TOOL_CATALOG_OPERATIONS_PATH],
     entries: sorted,
+    operations: [
+      ...new Set(sorted.map((entry) => entry.op).filter((op) => op !== "<dynamic>")),
+    ].toSorted(compareCodepoints),
     violations: violationsIn(sorted),
   };
 }
 
-function main() {
+async function main() {
   const catalog = generateOpCatalog();
+  const operationsBytes = await toolCatalogOperationsBytes(REPO_ROOT);
+  const catalogBytes = await format(`${JSON.stringify(catalog, null, 2)}\n`, {
+    parser: "json",
+    printWidth: 100,
+    tabWidth: 2,
+  });
   const outPath = join(REPO_ROOT, ...OUTPUT_RELATIVE_PATH.split("/"));
   mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, `${JSON.stringify(catalog, null, 2)}\n`, "utf8");
+  writeFileSync(outPath, catalogBytes, "utf8");
+  writeFileSync(join(REPO_ROOT, TOOL_CATALOG_OPERATIONS_PATH), operationsBytes, "utf8");
   const dynamicCount = catalog.entries.filter((entry) => entry.op === "<dynamic>").length;
   console.log(
     `generate:op-catalog OK — ${catalog.entries.length} entries (${dynamicCount} dynamic), ` +
-      `${catalog.violations.length} OP_NAME_PATTERN violation(s). Wrote ${OUTPUT_RELATIVE_PATH}.`,
+      `${catalog.violations.length} operation-name violation(s). Wrote ${OUTPUT_RELATIVE_PATH}.`,
   );
   if (catalog.violations.length > 0) {
     console.log(`  violations: ${JSON.stringify(catalog.violations)}`);
@@ -791,5 +1007,5 @@ function main() {
 }
 
 if (isMainModule(import.meta.url)) {
-  main();
+  await main();
 }

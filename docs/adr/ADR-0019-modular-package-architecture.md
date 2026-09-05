@@ -4,7 +4,7 @@ Status: Accepted
 
 Date: 2026-06-03
 
-Version: 1.1
+Version: 1.2
 
 ## Decision
 
@@ -65,8 +65,8 @@ The package graph must be a directed acyclic graph. The intended direction is:
 
 1. `contracts` is the leaf package. It must not import from other Keiko packages.
 2. `security` may depend on `contracts`.
-3. `model-gateway`, `workspace`, `tools`, and `evidence` may depend on `contracts` and `security` where needed.
-4. `harness` may depend on `contracts`, `security`, `model-gateway`, `workspace`, `tools`, and `evidence` only through public package surfaces.
+3. `model-gateway`, `workspace`, `tools`, and `evidence` may depend on `contracts` and `security` where needed. The model gateway and tools also consume the pure `tool-catalog` compiler, descriptors and validation surface (ADR-0175, #3409); execution handlers, authority, storage and workspace I/O remain outside that dependency.
+4. `harness` may depend on `contracts`, `security`, `model-gateway`, `workspace`, `tools`, `tool-catalog`, and `evidence` only through public package surfaces. Its catalog dependency supplies pure invocation and descriptor semantics; runtime composition injects the existing authority and counter ports without a dependency on the server.
 5. `workflows` may depend on `contracts`, `security`, `model-gateway`, `workspace`, `tools`, `harness`, and `evidence` only through public package surfaces.
 6. `server` wires runtime dependencies and may depend on domain packages, but domain packages must not depend on `server`.
 7. `cli` may depend on `server` and domain packages for launch and command surfaces, but domain packages must not depend on `cli`.
@@ -181,5 +181,12 @@ This ADR is the anchor for the architecture sprint. If a package boundary, depen
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.2 | 2026-09-04 | Reserve the pure contracts/security-only governed-tool catalog boundary and server-owned runtime binding in ADR-0175 (#3411); runtime package creation remains #3406. |
 | 1.1 | 2026-07-27 | Narrowly permit the statically checked, egress-free USearch ANN worker boundary while preserving the general Local Knowledge worker/network denial. |
 | 1.0 | 2026-06-03 | Accepted modular package architecture as Keiko's next foundation before major feature expansion. |
+
+## Canonical tool catalog amendment (#3411)
+
+ADR-0175 reserves one pure keiko-tool-catalog package depending only on keiko-contracts and keiko-security. It owns concrete descriptors, profiles, compatibility and compiler projections; generic types remain in contracts and canonicalization/hash primitives remain in security. Runtime I/O, logging, handlers, authority/policy evaluation, readiness and credentials are forbidden in that package. #3406 owns package creation and the corresponding package-graph/public-export gates; #3411 adds no package or runtime edge. See [ADR-0175](ADR-0175-canonical-governed-tool-catalog.md).
+
+The #3409 gateway bridge consumes compiled catalog projections through the catalog public surface. Its dependency is metadata-only: it normalizes offered tool calls but cannot execute handlers or own runtime authority. The source-graph and package-manifest gates retain that distinction.

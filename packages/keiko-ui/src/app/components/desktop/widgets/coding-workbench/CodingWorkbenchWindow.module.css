@@ -690,6 +690,28 @@
   color: var(--text-tertiary);
 }
 
+.cmp-approval-commit-message {
+  max-block-size: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: var(--space-2) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+}
+
+.cmp-approval-commit-message:focus-visible,
+.cmp-approval-commit-summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.cmp-approval-commit-summary {
+  cursor: pointer;
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+}
+
 .approvalChangedFiles {
   margin: var(--space-2) 0 0;
   padding: 0;
@@ -1082,6 +1104,26 @@
 }
 
 @container (max-width: 520px) {
+  .contextBar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    overflow-x: visible;
+  }
+
+  .contextItem {
+    flex-direction: column;
+    gap: var(--space-1);
+    align-items: flex-start;
+    border-inline-end: 0;
+    padding: 0;
+  }
+
+  .contextValue {
+    max-width: 100%;
+  }
+
   .sourceControl {
     display: none;
   }
@@ -1157,4 +1199,15 @@
     color: ButtonText;
     background: ButtonFace;
   }
+}
+
+.cmp-draft-delivery-link {
+  color: var(--text-accent);
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+
+.cmp-draft-delivery-link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }

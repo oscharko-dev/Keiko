@@ -20,6 +20,12 @@ export function restoreV13SchemaFixture(db: DatabaseSync): void {
   }
 
   db.exec(`
+    DROP TABLE coding_runtime_ci_repair_budgets;
+    ALTER TABLE coding_runtime_snapshots DROP COLUMN ci_observation_revision;
+    ALTER TABLE coding_runtime_snapshots DROP COLUMN ci_readiness_record;
+    ALTER TABLE coding_runtime_snapshots DROP COLUMN draft_delivery_source_receipt;
+    ALTER TABLE coding_runtime_snapshots DROP COLUMN draft_delivery_record;
+    ALTER TABLE coding_runtime_snapshots DROP COLUMN verified_commit_result;
     ALTER TABLE coding_runtime_snapshots DROP COLUMN issue_binding_digest;
     ALTER TABLE coding_runtime_snapshots DROP COLUMN issue_content_revision_digest;
     ALTER TABLE coding_runtime_snapshots DROP COLUMN issue_default_base_ref;

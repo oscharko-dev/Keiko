@@ -13,7 +13,11 @@ import {
   type CodingAppSessionChannelSnapshot,
 } from "./channelContract.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { emitServerDiagnostic, DEFAULT_SERVER_DIAGNOSTIC_SUMMARY } from "../diagnostics-log.js";
+import {
+  emitServerDiagnostic,
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   STREAMING,
@@ -23,6 +27,7 @@ import {
   type RouteResult,
 } from "../routes.js";
 import { SSE_HEADERS } from "../sse.js";
+import { createSessionStreamWriter, createSessionStreamTransport } from "./sessionStreamWriter.js";
 import { resolveCodingAppSessionDenialWindows } from "./denialWindows.js";
 import {
   APP_SESSION_COOKIE_MAX_AGE_SECONDS,
@@ -166,6 +171,8 @@ export function handleCodingAppSessionChannelStream(
     ctx.req,
     deps.codingAppSessionChannel,
     readSessionCookie(ctx.req),
+    ctx.correlationId,
+    deps.diagnostics,
   );
   return STREAMING;
 }
@@ -175,29 +182,31 @@ export function openCodingAppSessionStream(
   req: IncomingMessage,
   channel: UiHandlerDeps["codingAppSessionChannel"],
   cookieToken: string | undefined,
+  correlationId?: string,
+  diagnostics?: ServerDiagnosticSink,
 ): void {
   res.writeHead(200, SSE_HEADERS);
-  const write = (snapshot: CodingAppSessionChannelSnapshot): boolean =>
-    res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
+  const transport = createSessionStreamTransport(res, correlationId, diagnostics);
   if (channel === undefined) {
-    write(contentFreeCodingAppSessionChannelSnapshot());
-    res.end();
+    transport.write(contentFreeCodingAppSessionChannelSnapshot());
+    if (!res.writableEnded && !res.destroyed) res.end();
     return;
   }
   let closeStream = (): void => undefined;
-  const subscription = channel.subscribe(cookieToken, (snapshot): boolean => {
-    const accepted = write(snapshot);
-    if (!accepted || snapshot.content === null) queueMicrotask(closeStream);
-    return accepted && snapshot.content !== null;
-  });
-  if (!write(subscription.snapshot) || !subscription.live) {
+  const writer = createSessionStreamWriter(
+    res,
+    () => {
+      closeStream();
+    },
+    correlationId,
+  );
+  const subscription = channel.subscribe(cookieToken, writer.publish);
+  if (writer.isClosing() || !transport.write(subscription.snapshot) || !subscription.live) {
     subscription.detach();
-    res.end();
+    if (!res.writableEnded && !res.destroyed) res.end();
     return;
   }
-  const heartbeat = setInterval(() => {
-    if (!res.write(": heartbeat\n\n")) res.destroy();
-  }, 15_000);
+  const heartbeat = setInterval(transport.heartbeat, 15_000);
   heartbeat.unref();
   let closed = false;
   const close = (): void => {

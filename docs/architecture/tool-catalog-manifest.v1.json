@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "catalogRevision": "cf3a85bfc09331307564c426b5be395710954c173ca5d861f8995d3c01704936",
+  "profile": {
+    "id": "legacy-native",
+    "version": 1
+  },
+  "projectionDigest": "3c3dca8f64ffc9e9e8b57748137d090ab56ea18dffb77b78dcd4d225f995cff1",
+  "toolRefs": [
+    {
+      "canonicalId": "keiko.command.run",
+      "contractVersion": 1
+    },
+    {
+      "canonicalId": "keiko.file.list",
+      "contractVersion": 1
+    },
+    {
+      "canonicalId": "keiko.file.read",
+      "contractVersion": 1
+    },
+    {
+      "canonicalId": "keiko.package.scripts",
+      "contractVersion": 1
+    },
+    {
+      "canonicalId": "keiko.patch.apply",
+      "contractVersion": 1
+    },
+    {
+      "canonicalId": "keiko.patch.propose",
+      "contractVersion": 1
+    }
+  ],
+  "descriptorDigests": [
+    "119a2e54a9e6ed386af970ca807c4d0dd162e8789a2f391fcd45c8ac0867a6ed",
+    "d2d16507f1bcae202cd519a942e0bca2826adbabb5ff571243bee3649f2f3a56",
+    "fbf5139caab00c453785c25bf7b03ba3cfe518c2ce775b33f737708ecc65ac0d",
+    "d28e0cc79d81f794a09da74f26c088717ccc075d3e5291439adc752669ac0c91",
+    "1b816f991cd18819d5c58c8d581e415fe38c85a3b1e47d869a6c27279cc98a7d",
+    "6dd8c1cab8f7a9c76f54c9828118d38d80242287651d41fa6b9927bc4dd6a92f"
+  ],
+  "bounds": [
+    {
+      "maxArgumentBytes": 262144,
+      "maxResultBytes": 262144,
+      "maxResultCount": 1,
+      "maxDurationMs": 30000
+    },
+    {
+      "maxArgumentBytes": 262144,
+      "maxResultBytes": 262144,
+      "maxResultCount": 1,
+      "maxDurationMs": 30000
+    },
+    {
+      "maxArgumentBytes": 262144,
+      "maxResultBytes": 262144,
+      "maxResultCount": 1,
+      "maxDurationMs": 30000
+    },
+    {
+      "maxArgumentBytes": 262144,
+      "maxResultBytes": 262144,
+      "maxResultCount": 1,
+      "maxDurationMs": 30000
+    },
+    {
+      "maxArgumentBytes": 262144,
+      "maxResultBytes": 262144,
+      "maxResultCount": 1,
+      "maxDurationMs": 30000
+    },
+    {
+      "maxArgumentBytes": 262144,
+      "maxResultBytes": 262144,
+      "maxResultCount": 1,
+      "maxDurationMs": 30000
+    }
+  ],
+  "compatibility": []
+}

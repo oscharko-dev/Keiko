@@ -81,6 +81,7 @@ export async function readGitDefaultBranch(
   remoteAlias: string = DEFAULT_REMOTE_ALIAS,
 ): Promise<string | undefined> {
   if (!isSafeGitRefName(remoteAlias)) throw new GitWorktreeReadError("remote alias is unsafe");
+  const runDeps = { ...runDepsFor(deps), onTerminated: deps.onTerminated };
   let result: CommandResult;
   try {
     result = await runCommand(
@@ -91,7 +92,7 @@ export async function readGitDefaultBranch(
         timeoutMs: deps.timeoutMs,
         signal: deps.signal ?? new AbortController().signal,
       },
-      runDepsFor(deps),
+      runDeps,
     );
   } catch {
     throw new GitWorktreeReadError("git rev-parse failed to run");

@@ -1,5 +1,14 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
+import {
+  buildRuntimeGatewaySeatbeltCommand,
+  copyRuntimeGatewayConfinement,
+  isRuntimeGatewayConfinement,
+  type RuntimeGatewayConfinement,
+} from "@oscharko-dev/keiko-sandbox";
+import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { processServerLogSink } from "../process-log-sink.js";
 
 import {
   invalidRequest,
@@ -17,12 +26,9 @@ import type {
 /**
  * Development-lane process backend for macOS dev checkouts (#2475, ADR-0140).
  *
- * Posture: this backend deliberately forgoes the release-qualified runtime supervisor's
- * long-lived-process containment and orphan-reaping guarantees (ADR-0137 D5). It spawns the
- * managed runtime as the leader of a fresh POSIX process group and terminates the whole group,
- * but a descendant that leaves the group survives unobserved — group termination is best effort,
- * never a containment proof. It is reachable only through dev-lane discovery, which is
- * structurally confined to repository checkouts; packaged installs never compose it.
+ * The existing dev/evaluation backend wraps the runtime in a deny-by-default network profile.
+ * Fork and service-based process escapes are denied; only the exact gateway TCP family/port is
+ * reachable. Release signatures and platform qualification remain separate requirements.
  */
 export interface DevLaneRuntimeBackendIdentity {
   readonly platform: "darwin";
@@ -38,7 +44,7 @@ export interface DevLaneRuntimeChildProcess {
   settled(): boolean;
   kill(signal: NodeJS.Signals): boolean;
   onExit(listener: (code: number | null) => void): void;
-  onError(listener: () => void): void;
+  onError(listener: (error: unknown) => void): void;
 }
 
 export type DevLaneRuntimeSpawn = (
@@ -56,6 +62,8 @@ export interface DevLaneRuntimeProcessBackendOptions {
   readonly identity: DevLaneRuntimeBackendIdentity;
   /** The verified staged runtime root; every launched executable must resolve inside it. */
   readonly runtimeRoot: string;
+  readonly gatewayConfinement?: RuntimeGatewayConfinement | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   readonly spawnRuntime?: DevLaneRuntimeSpawn | undefined;
   readonly killProcessGroup?: ((pid: number, signal: NodeJS.Signals) => void) | undefined;
 }
@@ -75,6 +83,8 @@ export function createDevLaneRuntimeProcessBackend(
     safeRealDirectory(options.runtimeRoot),
     options.spawnRuntime ?? spawnDevLaneChild,
     options.killProcessGroup ?? killGroup,
+    copyRuntimeGatewayConfinement(options.gatewayConfinement),
+    options.activityLog ?? processServerLogSink(),
   );
 }
 
@@ -87,19 +97,53 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     private readonly runtimeRoot: string,
     private readonly spawnRuntime: DevLaneRuntimeSpawn,
     private readonly killProcessGroup: (pid: number, signal: NodeJS.Signals) => void,
+    private readonly gatewayConfinement: RuntimeGatewayConfinement | undefined,
+    private readonly activityLog: ServerLogSink,
   ) {}
 
   public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
+    try {
+      return this.spawnConfinedTree(request);
+    } catch (error) {
+      recordConfinementFailure(this.activityLog, request.runId, error);
+      throw error;
+    }
+  }
+
+  private spawnConfinedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
+    const policy = this.gatewayConfinement;
+    if (!isRuntimeGatewayConfinement(policy))
+      throw new Error("runtime-gateway-confinement-required");
+    if (policy.runId !== request.runId || policy.treeBindingId !== request.treeBindingId)
+      throw new Error("runtime-gateway-confinement-drift");
     const executable = safeRealFile(request.executable);
     if (!pathIsContained(this.runtimeRoot, executable)) invalidRequest();
     const cwd = safeRealDirectory(request.cwd);
-    const child = this.spawnRuntime(executable, request.args, {
+    const wrapper = buildRuntimeGatewaySeatbeltCommand(policy, executable, request.args);
+    const child = this.spawnRuntime(wrapper.command, wrapper.args, {
       cwd,
       env: request.env,
       detached: true,
       shell: false,
     });
-    const tree = ownTree(`dev-lane-opencode-${String(this.nextTreeId++)}`, child);
+    this.activityLog.write({
+      category: "process",
+      op: "runtime.confinement.spawned",
+      correlationId: request.runId,
+      extra: {
+        backend: "seatbelt",
+        policyDigest: policy.policyDigest,
+        authorityDigest: policy.envelopeDigest,
+        runtimeArtifactDigest: policy.runtimeArtifactDigest,
+        modelProfileDigest: policy.modelProfileDigest,
+        treeBindingId: policy.treeBindingId,
+        profile: policy.profile,
+        childProcessesAllowed: false,
+      },
+    });
+    const tree = ownTree(`dev-lane-opencode-${String(this.nextTreeId++)}`, child, (error) => {
+      recordConfinementFailure(this.activityLog, request.runId, error);
+    });
     this.ownedTrees.add(tree);
     return tree;
   }
@@ -150,7 +194,22 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
   }
 }
 
-function ownTree(treeId: string, child: DevLaneRuntimeChildProcess): DevLaneTree {
+function recordConfinementFailure(sink: ServerLogSink, runId: string, error: unknown): void {
+  sink.write({
+    category: "process",
+    level: "error",
+    op: "runtime.confinement.failed",
+    correlationId: runId,
+    errorKind: errorKindOf(error),
+    extra: { frames: keikoStackFrames(error), causeChain: causeChain(error) },
+  });
+}
+
+function ownTree(
+  treeId: string,
+  child: DevLaneRuntimeChildProcess,
+  recordError: (error: unknown) => void,
+): DevLaneTree {
   const tree: DevLaneTree = {
     treeId,
     child,
@@ -172,8 +231,11 @@ function ownTree(treeId: string, child: DevLaneRuntimeChildProcess): DevLaneTree
     tree.exits.clear();
   };
   child.onExit(settle);
-  child.onError(() => {
-    settle(null);
+  child.onError((error) => {
+    recordError(error);
+    // Node also emits `error` for failed kill/send operations on a live process. Only a failed
+    // spawn with no PID, or the child's actual settled state, proves there is no process left.
+    if (child.pid === undefined || child.settled()) settle(null);
   });
   return tree;
 }

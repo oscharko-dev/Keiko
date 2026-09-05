@@ -43,6 +43,9 @@ describe("coding runtime start confirmation binding", () => {
       { runtimeSource: "codex-cli-adapter" as const },
       { modelSource: "chatgpt-codex-subscription-profile" as const },
       { modelProfileId: "codex-subscription" },
+      { issueBindingDigest: "e".repeat(64) },
+      { repositoryIdentity: { kind: "github-origin" as const, digest: "f".repeat(64) } },
+      { repositoryIdentity: { kind: "local" as const, digest: "f".repeat(64) } },
     ]) {
       expect(
         codingRuntimeStartConfirmationClaim({ ...facts, ...changed }, 1).bindingDigest,

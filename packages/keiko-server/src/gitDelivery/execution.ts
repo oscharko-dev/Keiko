@@ -81,6 +81,10 @@ export const KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK: GitDeliveryRepoPolicyPack = {
 };
 
 export interface GitDeliveryExecutionSeams {
+  readonly processEnv?: NodeJS.ProcessEnv | undefined;
+  readonly beforeCommitRefUpdate?: (() => boolean) | undefined;
+  readonly beforeIndexUpdate?: (() => boolean) | undefined;
+  readonly signal?: AbortSignal | undefined;
   readonly adapterFactory?: ((workspace: WorkspaceInfo) => GitLocalMutationAdapter) | undefined;
   readonly snapshotReader?:
     ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>) | undefined;
@@ -522,8 +526,11 @@ function adapterFor(
 ): GitLocalMutationAdapter {
   if (seams.adapterFactory !== undefined) return seams.adapterFactory(workspace);
   return createNodeGitMutationAdapter({
+    beforeCommitRefUpdate: seams.beforeCommitRefUpdate,
+    beforeIndexUpdate: seams.beforeIndexUpdate,
+    signal: seams.signal,
     workspace,
-    processEnv: process.env,
+    processEnv: seams.processEnv ?? process.env,
     now,
     // Deps-level evidence port (PR #3354 review 3887021650): a governed git mutation that times
     // out or is aborted must leave its Windows tree-kill disposition in the activity log, tagged

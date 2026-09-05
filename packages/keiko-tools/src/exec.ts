@@ -163,6 +163,8 @@ export type {
 } from "@oscharko-dev/keiko-contracts";
 
 export interface RunCommandInput {
+  /** Server-owned bounded input for fixed command plans; never part of a model or HTTP schema. */
+  readonly stdin?: string | Uint8Array | undefined;
   readonly command: string;
   readonly args: readonly string[];
   readonly cwd: string | undefined;
@@ -751,7 +753,8 @@ function assertExecutableOutsideWorkspace(
   }
 }
 
-function defaultResolveExecutable(command: string, deps: ExecutableResolverDeps): string {
+/** Shared internal trust check for the launched command and its fixed, first-party helpers. */
+export function defaultResolveExecutable(command: string, deps: ExecutableResolverDeps): string {
   assertBareExecutable(command);
   const fs = deps.fs ?? nodeWorkspaceFs;
   const lexicalWorkspaceRoot = deps.workspace.root;
@@ -969,13 +972,18 @@ function buildResult(options: BuildResultOptions): CommandResult {
       ...attest,
     };
   }
+  const originalOut = Buffer.concat(buffers.out).toString("utf8");
+  const originalErr = Buffer.concat(buffers.err).toString("utf8");
+  const stdout = redact(originalOut, secrets);
+  const stderr = redact(originalErr, secrets);
   return {
     command: input.command,
     args: input.args,
     exitCode,
     signal: termSignal,
-    stdout: redact(Buffer.concat(buffers.out).toString("utf8"), secrets),
-    stderr: redact(Buffer.concat(buffers.err).toString("utf8"), secrets),
+    stdout,
+    stderr,
+    ...(stdout === originalOut && stderr === originalErr ? {} : { outputRedacted: true as const }),
     durationMs: deps.now() - startedAt,
     timedOut: state.timedOut,
     truncated: buffers.truncated,
@@ -1251,7 +1259,15 @@ function asError(error: unknown, fallback: string): Error {
   return error instanceof Error ? error : new Error(fallback);
 }
 
+function validStdin(value: unknown): boolean {
+  if (typeof value === "string") return Buffer.byteLength(value, "utf8") <= 16_384;
+  return value instanceof Uint8Array && value.byteLength <= 65_536;
+}
+
 function validateRunCommandInput(input: RunCommandInput, deps: RunCommandDeps): void {
+  if (input.stdin !== undefined && !validStdin(input.stdin)) {
+    throw new CommandDeniedError("command input exceeds the bounded stdin contract", input.command);
+  }
   if (!Array.isArray(deps.policy.envAllowlist) || deps.policy.envAllowlist.length === 0) {
     throw new CommandDeniedError("sandbox envAllowlist must be a non-empty array", input.command);
   }
@@ -1355,6 +1371,7 @@ function spawnChild(
   state: RunState,
 ): ChildProcess {
   try {
+    if (input.signal.aborted) throw new CommandCancelledError("command cancelled before spawn");
     const child = deps.spawn(target.command, target.args, {
       cwd,
       env,
@@ -1381,7 +1398,26 @@ function runSpawnedChild(ctx: ExecContext): Promise<CommandResult> {
       return;
     }
     armTimersAndAbort(ctx);
+    writeBoundedInput(ctx);
   });
+}
+
+function writeBoundedInput(ctx: ExecContext): void {
+  if (ctx.input.stdin === undefined || ctx.state.terminalReason !== undefined) return;
+  const inputFailed = (): void => {
+    ctx.state.childProcessError = new Error("command input could not be delivered");
+    terminate(ctx.child, ctx.deps, ctx.state, ctx.input, "child-process-error");
+  };
+  if (ctx.child.stdin === null) {
+    inputFailed();
+    return;
+  }
+  ctx.child.stdin.once("error", inputFailed);
+  try {
+    ctx.child.stdin.end(ctx.input.stdin, "utf8");
+  } catch {
+    inputFailed();
+  }
 }
 
 // Runs an allowlisted command. Rejects with CommandDeniedError (before spawn) for a denied
@@ -1390,6 +1426,7 @@ function runSpawnedChild(ctx: ExecContext): Promise<CommandResult> {
 // failure paths are Promise rejections — the function never throws synchronously.
 export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promise<CommandResult> {
   try {
+    if (input.signal.aborted) throw new CommandCancelledError("command cancelled before spawn");
     validateRunCommandInput(input, deps);
     const executable = resolveExecutable(input, deps);
     const cwd = resolveCwd(deps, input.cwd);

@@ -13,6 +13,11 @@ import type {
 } from "./coding-workbench-live-state";
 import type { RuntimeMutationActions, RuntimeResources } from "./coding-workbench-runtime-hooks";
 
+export interface CodingWorkbenchIssueStartIntent {
+  readonly issueRef: string;
+  readonly expectedIssueBindingDigest: string;
+}
+
 export interface CodingWorkbenchRuntimeActions {
   readonly setRequestedMode: (mode: CodingWorkbenchMode) => void;
   readonly setRuntimePreference: (preference: CodingWorkbenchRuntimePreference) => void;
@@ -24,7 +29,7 @@ export interface CodingWorkbenchRuntimeActions {
   readonly refreshSource: () => Promise<void>;
   readonly refreshRuntime: () => Promise<void>;
   readonly refreshRun: () => Promise<void>;
-  readonly start: (taskIntent: string) => Promise<void>;
+  readonly start: (taskIntent: string, issue?: CodingWorkbenchIssueStartIntent) => Promise<void>;
   readonly decideApproval: (decision: CodingWorkbenchRuntimeApprovalDecision) => Promise<void>;
   readonly stop: () => Promise<void>;
   readonly takeover: () => Promise<void>;

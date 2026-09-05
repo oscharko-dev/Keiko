@@ -10,6 +10,7 @@ import { createGovernedJiraCodeContextHttpPort } from "./jiraCodeContextPort.js"
 import { GOVERNED_GIT_REMOTE_SANDBOX_POLICY, type SpawnFn } from "@oscharko-dev/keiko-tools";
 import type { AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import type { ServerLogEvent } from "../observability/server-log.js";
 
 const WORKSPACE: WorkspaceInfo = {
   root: process.cwd(),
@@ -36,6 +37,53 @@ function githubPortWith(spawn: SpawnFn): ReturnType<typeof createGitHubCodeConte
 const READ_ARGV: readonly string[] = ["api", "repos/oscharko-dev/Keiko/issues/1"];
 
 describe("github code context port", () => {
+  it("threads read correlation to termination evidence and cancels before spawning", async () => {
+    const events: ServerLogEvent[] = [];
+    let spawned = 0;
+    const port = createGitHubCodeContextApiPort({
+      workspace: WORKSPACE,
+      processEnv: { PATH: process.env.PATH },
+      spawn: (() => {
+        spawned += 1;
+        return fakeChild(0, "{}");
+      }) as SpawnFn,
+      resolveExecutable: () => "/test-bin/gh",
+      activityLog: {
+        write: (event) => {
+          events.push(event);
+        },
+      },
+    });
+    await expect(
+      port.readJson(READ_ARGV, { signal: AbortSignal.abort(), correlationId: "read-cancelled" }),
+    ).rejects.toMatchObject({ code: "gh-failed" });
+    expect(spawned).toBe(0);
+    await port.readJson(READ_ARGV, { correlationId: "read-issue-42" });
+    expect(events).toContainEqual(expect.objectContaining({ correlationId: "read-issue-42" }));
+    expect(JSON.stringify(events)).not.toContain("repos/oscharko-dev");
+  });
+
+  it("preserves repository provenance while scrubbing credentials in an issue response", async () => {
+    const response = {
+      url: "https://github.com/owner/repo/issues/42",
+      body: "token: credential-value-3385",
+    };
+    const port = createGitHubCodeContextApiPort({
+      workspace: WORKSPACE,
+      processEnv: {
+        PATH: process.env.PATH,
+        GITHUB_REPOSITORY: "owner/repo",
+        GH_TOKEN: "credential-value-3385",
+      },
+      spawn: (() => fakeChild(0, JSON.stringify(response))) as SpawnFn,
+      resolveExecutable: () => "/test-bin/gh",
+      timeoutMs: 1_000,
+    });
+    const result = await port.readJson(["api", "repos/owner/repo/issues/42"]);
+    expect(result).toMatchObject({ url: response.url });
+    expect(JSON.stringify(result)).not.toContain("credential-value-3385");
+  });
+
   it("rejects non-api subcommands, mutation flags, and non-repos endpoints before spawn", async () => {
     let spawned = 0;
     const port = githubPortWith(() => {

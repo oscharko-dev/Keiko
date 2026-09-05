@@ -13,7 +13,8 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 // approval-gated (actionSheetRoutes.ts always sets `approvalRequirement: { required: false }`
 // and never touches the approval store), so the member was pure type-noise that suggested a
 // non-existent binding could be constructed.
-export type GitDeliveryApprovalOperation = "local-mutation" | "commit" | "push" | "pr" | "merge";
+export type GitDeliveryApprovalOperation =
+  "local-mutation" | "commit" | "push" | "pr" | "merge" | "pr-description-apply";
 
 export interface GitDeliveryApprovalBinding {
   readonly projectId: string;
@@ -23,6 +24,13 @@ export interface GitDeliveryApprovalBinding {
   // durable human proof to the exact Authority Envelope that admitted both mint and redemption.
   readonly runId?: string | undefined;
   readonly envelopeDigest?: string | undefined;
+  readonly workspaceDigest?: string;
+  readonly repositoryDigest?: string;
+  readonly baseSha?: string;
+  readonly headSha?: string;
+  readonly stagedTreeDigest?: string;
+  readonly verificationEvidenceId?: string;
+  readonly proposalId?: string;
 }
 
 export interface GitDeliveryApprovalIssueInput {
@@ -48,6 +56,23 @@ export interface GitDeliveryApprovalConsumeInput {
 
 export interface GitDeliveryApprovalStore {
   issue(input: GitDeliveryApprovalIssueInput): GitDeliveryIssuedApproval;
+  matches(input: GitDeliveryApprovalConsumeInput): boolean;
+  /** Server-only continuation of an already approved exact runtime commit; never an HTTP claim. */
+  matchesCommitBinding(binding: GitDeliveryApprovalBinding, nowMs: number): boolean;
+  consumeCommitBinding(
+    binding: GitDeliveryApprovalBinding,
+    nowMs: number,
+  ): GitDeliveryApprovalRequirement | undefined;
+  matchesStageBinding?(binding: GitDeliveryApprovalBinding, nowMs: number): boolean;
+  consumeStageBinding?(
+    binding: GitDeliveryApprovalBinding,
+    nowMs: number,
+  ): GitDeliveryApprovalRequirement | undefined;
+  matchesDeliveryBinding?(binding: GitDeliveryApprovalBinding, nowMs: number): boolean;
+  consumeDeliveryBinding?(
+    binding: GitDeliveryApprovalBinding,
+    nowMs: number,
+  ): GitDeliveryApprovalRequirement | undefined;
   consume(input: GitDeliveryApprovalConsumeInput): GitDeliveryApprovalRequirement | undefined;
 }
 
@@ -93,6 +118,46 @@ function pruneExpired(
   }
 }
 
+function matchingRecord(
+  records: Map<string, StoredApprovalRecord>,
+  input: GitDeliveryApprovalConsumeInput,
+): StoredApprovalRecord | undefined {
+  const record = records.get(input.approval.approvalId);
+  if (record === undefined || record.expiresAtMs <= input.nowMs) return undefined;
+  if (record.bindingHash !== gitDeliveryApprovalBindingHash(input.binding)) return undefined;
+  return constantTimeHexEqual(record.tokenHash, hashToken(input.approval.approvalToken))
+    ? record
+    : undefined;
+}
+
+function commitBindingRecord(
+  records: Map<string, StoredApprovalRecord>,
+  binding: GitDeliveryApprovalBinding,
+  nowMs: number,
+  operation: "commit" | "local-mutation" | "push" | "pr" = "commit",
+): readonly [string, StoredApprovalRecord] | undefined {
+  if (
+    binding.operation !== operation ||
+    binding.proposalId === undefined ||
+    binding.runId === undefined ||
+    binding.envelopeDigest === undefined
+  )
+    return undefined;
+  const digest = gitDeliveryApprovalBindingHash(binding);
+  return [...records].find(
+    ([, record]) => record.bindingHash === digest && record.expiresAtMs > nowMs,
+  );
+}
+function requirementFor(record: StoredApprovalRecord): GitDeliveryApprovalRequirement {
+  return {
+    required: true,
+    approvalTokenHash: record.tokenHash,
+    approvedByUserId: record.approvedByUserId,
+    approvedAtMs: record.approvedAtMs,
+    expiresAtMs: record.expiresAtMs,
+  };
+}
+
 // eslint-disable-next-line max-lines-per-function -- approval issue/consume state machine is intentionally co-located.
 export function createInMemoryGitDeliveryApprovalStore(
   options: {
@@ -130,18 +195,51 @@ export function createInMemoryGitDeliveryApprovalStore(
         expiresAtMs,
       };
     },
+    matchesStageBinding(binding, nowMs): boolean {
+      pruneExpired(records, nowMs, maxRecords);
+      return commitBindingRecord(records, binding, nowMs, "local-mutation") !== undefined;
+    },
+    consumeStageBinding(binding, nowMs): GitDeliveryApprovalRequirement | undefined {
+      pruneExpired(records, nowMs, maxRecords);
+      const matched = commitBindingRecord(records, binding, nowMs, "local-mutation");
+      if (matched === undefined) return undefined;
+      records.delete(matched[0]);
+      return requirementFor(matched[1]);
+    },
+    matchesDeliveryBinding(binding, nowMs): boolean {
+      pruneExpired(records, nowMs, maxRecords);
+      return (
+        (binding.operation === "push" || binding.operation === "pr") &&
+        commitBindingRecord(records, binding, nowMs, binding.operation) !== undefined
+      );
+    },
+    consumeDeliveryBinding(binding, nowMs): GitDeliveryApprovalRequirement | undefined {
+      pruneExpired(records, nowMs, maxRecords);
+      if (binding.operation !== "push" && binding.operation !== "pr") return undefined;
+      const matched = commitBindingRecord(records, binding, nowMs, binding.operation);
+      if (matched === undefined) return undefined;
+      records.delete(matched[0]);
+      return requirementFor(matched[1]);
+    },
+    matchesCommitBinding(binding, nowMs): boolean {
+      pruneExpired(records, nowMs, maxRecords);
+      return commitBindingRecord(records, binding, nowMs) !== undefined;
+    },
+    consumeCommitBinding(binding, nowMs): GitDeliveryApprovalRequirement | undefined {
+      pruneExpired(records, nowMs, maxRecords);
+      const matched = commitBindingRecord(records, binding, nowMs);
+      if (matched === undefined) return undefined;
+      records.delete(matched[0]);
+      return requirementFor(matched[1]);
+    },
+    matches(input): boolean {
+      pruneExpired(records, input.nowMs, maxRecords);
+      return matchingRecord(records, input) !== undefined;
+    },
     consume(input): GitDeliveryApprovalRequirement | undefined {
       pruneExpired(records, input.nowMs, maxRecords);
-      const record = records.get(input.approval.approvalId);
+      const record = matchingRecord(records, input);
       if (record === undefined) return undefined;
-      if (record.expiresAtMs <= input.nowMs) {
-        records.delete(input.approval.approvalId);
-        return undefined;
-      }
-      if (record.bindingHash !== gitDeliveryApprovalBindingHash(input.binding)) return undefined;
-      if (!constantTimeHexEqual(record.tokenHash, hashToken(input.approval.approvalToken))) {
-        return undefined;
-      }
       records.delete(input.approval.approvalId);
       return {
         required: true,

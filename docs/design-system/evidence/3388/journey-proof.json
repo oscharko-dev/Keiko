@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "issue": 3388,
+  "checkedAt": "2026-09-05T03:12:22.910Z",
+  "passed": true,
+  "evidenceClass": "production-composed-deterministic-browser",
+  "modelQualification": false,
+  "liveAuthenticationQualification": false,
+  "cases": [
+    "#3388 @coding-issue-ci pending failure approved repair new head and technical readiness",
+    "#3388 @coding-issue-ci incomplete visibility and wrong PR or head never become ready"
+  ],
+  "correlatedObservationCount": 12,
+  "correlatedDisplayCount": 3,
+  "sourceHashes": {
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchCiReadiness.tsx": "9d8e5d10d2be6d951fa51e0d087ababaf929dd4e513bc2af46f05ffa01c4b752",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchCiReadiness.module.css": "015fda13fc6bf47dd0bf986de33fb8205b49ebeb1f54a88eb9508f85616af99c",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/coding-workbench-i18n.en.ts": "4d0ffa863cb43dbee7682d99bc645928e4ccf41d2237610997475ba076997401",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/coding-workbench-i18n.de.ts": "0d594df07fedeeb8460436ddc1d1739276524b6eaab57a464edfffd3167fa591",
+    "tests/e2e/coding-issue-ci.spec.ts": "d7207403770e76ddb250ff350e9fede30e2588bbf673ee89a80117637730aa32",
+    "tests/e2e/servers/coding-issue-ci-fixture.mts": "59be298be7b2d833783d42aa4866a09d73565d6a6ad1c6f085337c1b28329b6e",
+    "tests/e2e/servers/coding-issue-ci-driver.mts": "c0003632ea93dffb1f9a511d7cacc970ceebcd7079a257fbece020b6fbb383da",
+    "packages/keiko-server/src/coding-runtime/productionCiObservationRuntime.ts": "becde7acf5e48090873c74a5d9a931de40ce244852e64499a7faf1eeaecea85f",
+    "packages/keiko-server/src/gitDelivery/ciObservationService.ts": "3863aab5ffa88b535862041fa412fce0dc6bb6de6ebe0ededb7f8d94d728da42",
+    "packages/keiko-server/src/gitDelivery/ciReadinessSnapshot.ts": "1c538f881a628d7197e8e6737c5db33022331d743f88c928ef6a706734c9b7f4",
+    "packages/keiko-tools/src/git-ci-facts.ts": "4285be04aff4bcba5d1f40b8c34321c400f9c7851db059f69b2fd512ffc491ed"
+  },
+  "rawContentRecorded": false
+}

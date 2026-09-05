@@ -5,7 +5,7 @@
     "fileCount": 273
   },
   "b1": {
-    "firstLoadScriptCount": 19,
+    "firstLoadScriptCount": 18,
     "monacoMarkersInFirstLoad": 0,
     "ok": true
   },
@@ -78,5 +78,5 @@
       "workerLabel": "editor"
     }
   ],
-  "measurementSha256": "63a3cb02c83e260cdf38599c08596ed1ff6b603fb09ed15dc5e953d9b572103d"
+  "measurementSha256": "471dd617fd1265de85a6c6e7eb0069e2340c2e7f95c99a4e7b4b24d47003a82e"
 }

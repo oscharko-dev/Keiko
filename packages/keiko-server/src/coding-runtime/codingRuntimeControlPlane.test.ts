@@ -14,6 +14,9 @@ describe("coding runtime control plane", () => {
   it("constructs one fail-closed aggregate when no runtime host is qualified", async () => {
     const snapshots = {
       create: vi.fn(),
+      recordVerifiedCommit: vi.fn(),
+      recordDraftDelivery: vi.fn(),
+      adoptDraftDeliveryFromPredecessor: vi.fn(),
       transition: vi.fn(),
       get: vi.fn(),
       listRecentActive: vi.fn(() => []),
@@ -112,6 +115,9 @@ describe("coding runtime control plane", () => {
     const control = createCodingRuntimeControlPlane({
       snapshots: {
         create: vi.fn(),
+        recordVerifiedCommit: vi.fn(),
+        recordDraftDelivery: vi.fn(),
+        adoptDraftDeliveryFromPredecessor: vi.fn(),
         transition: vi.fn(),
         get: vi.fn(),
         listRecentActive: vi.fn(() => []),

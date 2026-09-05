@@ -195,14 +195,10 @@ describe("git repository agent operation contract", () => {
 // authority class without asking first, and the unconfigured case is the narrowest mode.
 describe("agent facade autonomy admission", () => {
   const READS = ["status", "diff", "branch-list"] as const;
-  const WORKSPACE_WRITES = [
-    "branch-create",
-    "branch-switch",
-    "stage",
-    "unstage",
-    "commit",
-  ] as const;
-  const DELIVERY = ["fetch", "pull", "push", "pull-request", "merge"] as const;
+  const WORKSPACE_WRITES = ["branch-create", "branch-switch", "stage", "unstage"] as const;
+  // #3386: local commit is delivery too; its verified runtime action needs a distinct human
+  // approval even in Full access. The boolean facade cannot mint or substitute that approval.
+  const DELIVERY = ["commit", "fetch", "pull", "push", "pull-request", "merge"] as const;
 
   it("classifies every operation exactly once", () => {
     for (const operation of GIT_REPOSITORY_AGENT_OPERATION_KINDS) {

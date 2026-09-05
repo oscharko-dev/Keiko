@@ -47,6 +47,9 @@ import {
   gitDeliveryDefaultRiskClass,
 } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import { gitPrRejectionToDisposition } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
+import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
+import { isGitHubOwnerAndRepo } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { evaluateGitPreflight } from "./git-mutation-preflight.js";
 import type {
@@ -56,6 +59,9 @@ import type {
 import type { GitMutationFailureCategory } from "./git-mutation-taxonomy.js";
 import { gitMutationCategoryForExecutionResult } from "./git-mutation-taxonomy.js";
 import { resolveGitDeliveryApprovalGate } from "./git-approval-gate.js";
+
+import { GIT_PR_IDENTITY_JQ } from "./git-pr-identity.js";
+export { GIT_PR_IDENTITY_JQ } from "./git-pr-identity.js";
 
 const UTF8 = new TextEncoder();
 
@@ -72,6 +78,8 @@ export interface GitPrCreateCommand {
   readonly title: string;
   readonly body: string;
   readonly isDraft: boolean;
+  /** Issue-bound delivery pins the provider host and retains complete reconciliation facts. */
+  readonly canonicalGitHubIdentity?: true;
 }
 
 export interface GitPrUpdateCommand {
@@ -95,6 +103,8 @@ export interface GitPrCreateExecRequest {
   readonly title: string;
   readonly body: string;
   readonly isDraft: boolean;
+  /** Issue-bound delivery pins the provider host and retains complete reconciliation facts. */
+  readonly canonicalGitHubIdentity?: true;
 }
 
 export interface GitPrUpdateExecRequest {
@@ -113,11 +123,79 @@ export interface GitPrUpdateExecRequest {
 export interface GitPrExecResult extends GitDeliveryExecutionResult {
   readonly rejectionReason?: GitPullRequestRejectionReason | undefined;
   readonly createdPrExternalId?: string | undefined;
+  readonly createdPrIdentity?: GitPullRequestIdentity | undefined;
 }
 
 export interface GitPullRequestAdapter {
   createPullRequest(req: GitPrCreateExecRequest): Promise<GitPrExecResult>;
   updatePullRequest(req: GitPrUpdateExecRequest): Promise<GitPrExecResult>;
+  readPullRequest?: GitPullRequestInspectionAdapter["readPullRequest"];
+  findPullRequestsByHead?: GitPullRequestInspectionAdapter["findPullRequestsByHead"];
+  readBranchHead?: GitPullRequestInspectionAdapter["readBranchHead"];
+}
+
+export type GitPrInspectionResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly reason: GitPullRequestRejectionReason | "invalid-response" };
+
+export interface GitPrReadRequest {
+  readonly ownerAndRepo: string;
+  readonly prExternalId: string;
+}
+
+export interface GitPrReadHeadRequest {
+  readonly ownerAndRepo: string;
+  readonly headBranchName: string;
+}
+
+/** Read methods share the existing provider adapter and credential boundary. */
+export interface GitPullRequestInspectionAdapter extends GitPullRequestAdapter {
+  readPullRequest(req: GitPrReadRequest): Promise<GitPrInspectionResult<GitPullRequestIdentity>>;
+  findPullRequestsByHead(
+    req: GitPrReadHeadRequest,
+  ): Promise<GitPrInspectionResult<readonly GitPullRequestIdentity[]>>;
+  readBranchHead(req: GitPrReadHeadRequest): Promise<GitPrInspectionResult<string>>;
+}
+
+function inspectionRepository(value: string): string {
+  if (!isGitHubOwnerAndRepo(value)) throw new GitPrArgvError("Invalid repository identity");
+  return value;
+}
+
+function inspectionBranch(value: string): string {
+  if (!isSafeGitRefName(value) || value.startsWith("refs/"))
+    throw new GitPrArgvError("Invalid branch identity");
+  return value;
+}
+
+function inspectionArgv(endpoint: string, projection: string): readonly string[] {
+  return ["api", "--hostname", "github.com", "--method", "GET", endpoint, "--jq", projection];
+}
+
+export function buildPrReadArgv(req: GitPrReadRequest): readonly string[] {
+  const repo = inspectionRepository(req.ownerAndRepo);
+  return inspectionArgv(
+    `/repos/${repo}/pulls/${assertPrNumber(req.prExternalId)}`,
+    GIT_PR_IDENTITY_JQ,
+  );
+}
+
+export function buildPrReadByHeadArgv(req: GitPrReadHeadRequest): readonly string[] {
+  const repo = inspectionRepository(req.ownerAndRepo);
+  const branch = inspectionBranch(req.headBranchName);
+  const owner = repo.split("/")[0] ?? "";
+  // Two results already prove ambiguity. Omitting base ensures retargeted PRs remain visible.
+  const query = `state=all&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=2&page=1`;
+  return inspectionArgv(`/repos/${repo}/pulls?${query}`, `[.[] | ${GIT_PR_IDENTITY_JQ}]`);
+}
+
+export function buildPrReadBranchHeadArgv(req: GitPrReadHeadRequest): readonly string[] {
+  const repo = inspectionRepository(req.ownerAndRepo);
+  const branch = inspectionBranch(req.headBranchName);
+  return inspectionArgv(
+    `/repos/${repo}/git/ref/heads/${encodeURIComponent(branch)}`,
+    "{ref,sha:.object.sha,type:.object.type}",
+  );
 }
 
 // ─── Dedicated gh-api allowlist ─────────────────────────────────────────────────────────────────────
@@ -224,6 +302,13 @@ function assertBody(value: string): string {
   return value;
 }
 
+function canonicalCreateHost(value: unknown, repository: string): readonly string[] {
+  if (value === undefined) return [];
+  if (value !== true || !isGitHubOwnerAndRepo(repository))
+    throw new GitPrArgvError("canonical GitHub identity requires a valid repository");
+  return ["--hostname", "github.com"];
+}
+
 // `gh api --method POST /repos/{owner}/{repo}/pulls -f title=… -f body=… -f head=… -f base=… -F draft=…`.
 // `-f` (raw-field) sends a literal string (no `@file` interpretation); `-F` typed-field carries the
 // boolean draft flag. The body may contain newlines and `=`; gh splits each `field=value` on the FIRST
@@ -239,6 +324,7 @@ export function buildPrCreateArgv(req: GitPrCreateExecRequest): readonly string[
     "--method",
     "POST",
     `/repos/${repo}/pulls`,
+    ...canonicalCreateHost(req.canonicalGitHubIdentity, req.ownerAndRepo),
     "-f",
     `title=${title}`,
     "-f",
@@ -472,6 +558,7 @@ export interface GitPullRequestLifecycleResult {
   readonly lifecycle: GitMutationLifecycleResult;
   readonly rejection?: GitPullRequestRejection | undefined;
   readonly createdPrExternalId?: string | undefined;
+  readonly createdPrIdentity?: GitPullRequestIdentity | undefined;
 }
 
 function prResolvedInputs(
@@ -663,6 +750,9 @@ async function runPrAdapter(
         title: command.title,
         body: command.body,
         isDraft: command.isDraft,
+        ...(command.canonicalGitHubIdentity === undefined
+          ? {}
+          : { canonicalGitHubIdentity: command.canonicalGitHubIdentity }),
       });
     }
     return await adapter.updatePullRequest({
@@ -682,6 +772,33 @@ async function runPrAdapter(
       errorCode: "internal-error",
     };
   }
+}
+
+function prExecutionEvidence(result: GitPrExecResult): GitDeliveryExecutionResult {
+  const { schemaVersion, outcome, durationMs, externalId, errorCode, partialDetail } = result;
+  return {
+    schemaVersion,
+    outcome,
+    durationMs,
+    ...(externalId === undefined ? {} : { externalId }),
+    ...(errorCode === undefined ? {} : { errorCode }),
+    ...(partialDetail === undefined
+      ? {}
+      : {
+          partialDetail: {
+            attemptedUnitCount: partialDetail.attemptedUnitCount,
+            succeededUnitCount: partialDetail.succeededUnitCount,
+          },
+        }),
+  };
+}
+
+function createdIdentityResult(
+  result: GitPrExecResult,
+): Pick<GitPullRequestLifecycleResult, "createdPrIdentity"> {
+  return result.outcome === "succeeded" && result.createdPrIdentity !== undefined
+    ? { createdPrIdentity: result.createdPrIdentity }
+    : {};
 }
 
 /**
@@ -723,9 +840,10 @@ export async function runGitPullRequest(
   }
 
   const result = await runPrAdapter(request.command, deps.adapter);
-  const outcome = prOutcomeFor(result);
-  const lifecycle = lifecycleFor(prep, request.approval, outcome, "result", result);
-  const createdPrExternalId = result.createdPrExternalId;
+  const executionEvidence = prExecutionEvidence(result);
+  const outcome = prOutcomeFor(executionEvidence);
+  const lifecycle = lifecycleFor(prep, request.approval, outcome, "result", executionEvidence);
+  const { createdPrExternalId } = result;
   if (result.outcome !== "succeeded" && result.outcome !== "aborted") {
     const reason = result.rejectionReason ?? "unknown";
     return {
@@ -737,9 +855,12 @@ export async function runGitPullRequest(
   return {
     lifecycle,
     ...(createdPrExternalId !== undefined ? { createdPrExternalId } : {}),
+    ...createdIdentityResult(result),
   };
 }
 
 // Re-export the contract bridges so the server/UI consume the error-code mapping from this gateway,
 // keeping the publish/PR gateway surfaces symmetric.
 export { gitPrRejectionToErrorCode } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
+
+export * from "./git-pr-body.js";

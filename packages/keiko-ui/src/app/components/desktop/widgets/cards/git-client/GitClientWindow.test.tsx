@@ -881,6 +881,50 @@ describe("GitClientWindow — repository selector combobox (toolbar)", () => {
 });
 
 describe("GitClientWindow — add-repository dialog", () => {
+  it("consumes a Coding Workbench clone handoff and returns only the reconnected project", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    const updateCfg = vi.fn();
+    const connected = vi.fn();
+    render(
+      <GitClientWindow
+        client={client}
+        initialRepositoryDialog="clone"
+        onRepositoryConnected={connected}
+        updateCfg={updateCfg}
+      />,
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Add repository" });
+    expect(updateCfg).toHaveBeenCalledWith({ repositoryDialog: "" });
+    expect(connected).not.toHaveBeenCalled();
+    await user.type(
+      within(dialog).getByLabelText("Repository URL"),
+      "https://github.com/org/repo.git",
+    );
+    await user.type(within(dialog).getByLabelText("Clone to folder"), "/tmp/repo");
+    await user.click(within(dialog).getAllByRole("button", { name: "Clone repository" }).at(-1)!);
+    await waitFor(() => expect(connected).toHaveBeenCalledWith(REPO_A.path));
+    expect(client.reconnectRepository).toHaveBeenCalledWith(REPO_A.path);
+  });
+
+  it("cancelling a handed-off clone never returns a project or calls the clone route", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    const connected = vi.fn();
+    render(
+      <GitClientWindow
+        client={client}
+        initialRepositoryDialog="clone"
+        onRepositoryConnected={connected}
+      />,
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Add repository" });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(client.cloneRepository).not.toHaveBeenCalled();
+    expect(connected).not.toHaveBeenCalled();
+  });
+
   it("opens the dialog when the connect-repository button is clicked", async () => {
     const user = userEvent.setup();
     render(<GitClientWindow client={makeClient()} />);

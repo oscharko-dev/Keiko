@@ -311,11 +311,14 @@ import {
   createCodingRuntimeControlPlane,
   type CodingRuntimeHost,
 } from "./coding-runtime/codingRuntimeControlPlane.js";
+import { createProductionCodingRuntimeIssueIntake } from "./coding-context/codingRuntimeIssueIntake.js";
 import {
   createProductionCodingRuntimeHost,
   type ProductionCodingRuntimeResolver,
 } from "./coding-runtime/productionCodingRuntimeHost.js";
 import type { GitDeliveryRunAuthorityPort } from "./gitDelivery/runBoundAuthority.js";
+import { createProductionVerifiedCommitDependencies } from "./coding-runtime/productionVerifiedCommitDependencies.js";
+import { createProductionDraftDeliveryDependencies } from "./coding-runtime/productionDraftDeliveryDependencies.js";
 import {
   createProductionCodingRuntimeResolver,
   type ProductionCodingRuntimeResolverInput,
@@ -349,6 +352,10 @@ import { AtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js"
 import { AtlassianSyncJobRegistry } from "./atlassian/syncService.js";
 import { createNodeManagedLspControl } from "./editor/lsp/managedLspControlFactory.js";
 import { shutdownHostLspPool } from "./editor/lsp/hostLanguageOperation.js";
+import {
+  createGitChangeSnapshotService,
+  type GitChangeSnapshotService,
+} from "./gitChangeSnapshotService.js";
 import type { ManagedLspControlService } from "./editor/lsp/managedLspControl.js";
 import { createNodeEditorSettingsControl } from "./editor/settings/editorSettingsControlFactory.js";
 import type { EditorSettingsControlService } from "./editor/settings/editorSettingsControl.js";
@@ -724,6 +731,7 @@ export interface UiHandlerDeps {
     QualityIntelligenceReviewPrincipalResolver | undefined;
   // Issue #208 — explicit, bounded in-memory consolidation job registry for MemoriaViva polling.
   readonly consolidationJobs?: ConsolidationJobRegistry | undefined;
+  readonly gitChangeSnapshotService?: GitChangeSnapshotService | undefined;
   // Runtime gateway config supports first-run UI onboarding. It starts from the CLI/env/local config
   // and can be updated after a successful credential test without restarting the loopback server.
   readonly gatewayConfig?: RuntimeGatewayConfig | undefined;
@@ -895,6 +903,8 @@ export interface UiHandlerDeps {
 }
 
 export interface BuildHandlerDepsOptions {
+  /** Server-composed upstream seam shared by preview, provisioning and runtime intake. */
+  readonly codingContextGitHubPort?: GitHubCodeContextApiPort | undefined;
   // Path to a gateway config file (`keiko ui --config`); undefined → no config inspector data.
   readonly configPath: string | undefined;
   // Evidence directory (`keiko ui --evidence-dir`); resolved via the audit precedence rules.
@@ -3746,6 +3756,7 @@ function activityAwareWorkspaceLifecycle(
 }
 
 interface UiHandlerRuntimeServices {
+  readonly gitChangeSnapshotService: GitChangeSnapshotService;
   readonly dapRuntime: DapRuntimeReference;
   readonly codingRuntimeEvidenceAggregator: ReturnType<
     typeof createCodingRuntimeEvidenceAggregator
@@ -3779,6 +3790,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     ...buildOptionalUiHandlerDeps(args, services),
     ...atlassianRegistries,
     codingAppSessionDenialWindows,
+    gitChangeSnapshotService: services.gitChangeSnapshotService,
     dispose: createUiHandlerDispose(
       args,
       services,
@@ -3810,6 +3822,7 @@ function assembleUiHandlerRuntimeServices(
     args,
     peripherals.commandRunner,
     peripherals.verificationRunner,
+    peripherals.editorSettingsControl,
     codingRuntimeEvidenceAggregator,
     codingRuntimeCeiling,
   );
@@ -3840,6 +3853,7 @@ function assembleUiHandlerRuntimeServices(
   );
   return {
     dapRuntime,
+    gitChangeSnapshotService: createGitChangeSnapshotService({ logSink: processServerLogSink() }),
     codingRuntimeEvidenceAggregator,
     peripherals,
     dapProduction,
@@ -3870,6 +3884,13 @@ function buildUiCodingRuntimeControlPlane(
 ): ReturnType<typeof createCodingRuntimeControlPlane> | undefined {
   if (!args.bundle.codingRuntimeSnapshotStore || !args.bundle.workspaceLifecycle) return undefined;
   return createCodingRuntimeControlPlane({
+    issueIntake: createProductionCodingRuntimeIssueIntake({
+      store: args.bundle.uiStore,
+      env: args.options.env,
+      codingContextGitHubPort: args.options.codingContextGitHubPort,
+      activityLog: processServerLogSink(),
+    }),
+    deploymentCeiling: resolveCodingRuntimeDeploymentCeiling(args.options),
     snapshots: args.bundle.codingRuntimeSnapshotStore,
     evidence: codingRuntimeEvidenceAggregator,
     workspaceLifecycle: args.bundle.workspaceLifecycle,
@@ -4045,7 +4066,7 @@ function buildOptionalUiHandlerDeps(
 }
 
 function buildCodingContextPortsDependency(
-  _args: UiHandlerDepsAssemblyArgs,
+  args: UiHandlerDepsAssemblyArgs,
 ): Pick<UiHandlerDeps, "codingContextGitHubPort"> {
   // #3385: production composes NO port here.
   //
@@ -4059,7 +4080,9 @@ function buildCodingContextPortsDependency(
   // The field survives as an injection seam so a test can substitute a fake `gh` without spawning a
   // process. That is also why the `??` order is correct rather than accidental: an injected port
   // must win, and in production there is none to win.
-  return {};
+  return args.options.codingContextGitHubPort === undefined
+    ? {}
+    : { codingContextGitHubPort: args.options.codingContextGitHubPort };
 }
 
 function createUiHandlerDispose(
@@ -4072,6 +4095,7 @@ function createUiHandlerDispose(
     try {
       await services.codingRuntimeControlPlane?.orchestrator.shutdown();
     } finally {
+      services.gitChangeSnapshotService.close();
       services.runtimeComposition.dispose?.();
       services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll("shutdown");
       await shutdownHostLspPool();
@@ -4295,6 +4319,8 @@ function runtimeWorkspaceAuthority(
     managedTaskWorkspaceRoot,
     deploymentCeiling,
     readWorkspaceHead: readProductionWorkspaceHead,
+    verifiedCommitResult: (runId) =>
+      args.bundle.codingRuntimeSnapshotStore?.getLastSuccessfulVerifiedCommit?.(runId),
     researchEgressEnabled: args.options.codingRuntimeResearchEgressEnabled ?? true,
     resolveManagedModelProfile: (
       modelId,
@@ -4336,6 +4362,7 @@ function productionRuntimeResolver(
   args: UiHandlerDepsAssemblyArgs,
   commandRunner: PeripheralManagers["commandRunner"],
   verificationRunner: PeripheralManagers["verificationRunner"],
+  editorSettingsControl: PeripheralManagers["editorSettingsControl"],
   runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
   deploymentCeiling: CodingWorkbenchMode,
 ): ProductionRuntimeComposition {
@@ -4369,6 +4396,7 @@ function productionRuntimeResolver(
       runtimeMutationLeaseBroker,
       commandRunner,
       verificationRunner,
+      editorSettingsControl,
       workspaceLifecycle,
     }),
     readiness,
@@ -4389,6 +4417,7 @@ interface QualifiedRuntimeResolverInput {
   >;
   readonly commandRunner: PeripheralManagers["commandRunner"];
   readonly verificationRunner: PeripheralManagers["verificationRunner"];
+  readonly editorSettingsControl: PeripheralManagers["editorSettingsControl"];
   readonly workspaceLifecycle: WorkspaceLifecycleService;
 }
 
@@ -4398,6 +4427,8 @@ function qualifiedRuntimeResolver(
   const { args } = input;
   const confirmationConsumer = runtimeStartConfirmationConsumer(args, input.activated);
   const resolveWorkspaceRootAccess = createWorkspaceRootAccessResolver(args.bundle);
+  const verifiedCommit = runtimeVerifiedCommitDependencies(input);
+  const draftDelivery = runtimeDraftDeliveryDependencies(input);
   return createProductionCodingRuntimeResolver({
     workspaceAuthority: runtimeWorkspaceAuthority(
       args,
@@ -4408,6 +4439,8 @@ function qualifiedRuntimeResolver(
     ...input.ports,
     commandRunner: input.commandRunner,
     verificationRunner: input.verificationRunner,
+    ...(verifiedCommit === undefined ? {} : { verifiedCommit }),
+    ...(draftDelivery === undefined ? {} : { draftDelivery }),
     runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker,
     resolveWorkspaceRootAccess: collapsedWorkspaceRootAccessResolver(resolveWorkspaceRootAccess),
     gatewayEgress: () => args.runtimeConfig.current()?.egress ?? args.egress,
@@ -4423,6 +4456,46 @@ function qualifiedRuntimeResolver(
     diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
   });
+}
+
+function runtimeVerifiedCommitDependencies(
+  input: QualifiedRuntimeResolverInput,
+): ReturnType<typeof createProductionVerifiedCommitDependencies> {
+  const { args } = input;
+  return createProductionVerifiedCommitDependencies(
+    {
+      store: args.bundle.uiStore,
+      evidenceStore: args.evidenceStore,
+      redactor: args.liveRedactor,
+      env: args.options.env,
+      activityLog: processServerLogSink(),
+      editorSettingsControl: input.editorSettingsControl,
+      managedTaskWorkspaceRoot: input.managedTaskWorkspaceRoot,
+      workspaceProvisioning: args.bundle.workspaceProvisioning,
+    },
+    args.bundle.codingRuntimeSnapshotStore,
+  );
+}
+
+function runtimeDraftDeliveryDependencies(
+  input: QualifiedRuntimeResolverInput,
+): ReturnType<typeof createProductionDraftDeliveryDependencies> {
+  const { args } = input;
+  return createProductionDraftDeliveryDependencies(
+    {
+      store: args.bundle.uiStore,
+      evidenceStore: args.evidenceStore,
+      redactor: args.liveRedactor,
+      env: args.options.env,
+      activityLog: processServerLogSink(),
+      editorSettingsControl: input.editorSettingsControl,
+      managedTaskWorkspaceRoot: input.managedTaskWorkspaceRoot,
+      workspaceProvisioning: args.bundle.workspaceProvisioning,
+      workspaceLifecycle: input.workspaceLifecycle,
+      codingContextGitHubPort: args.options.codingContextGitHubPort,
+    },
+    args.bundle.codingRuntimeSnapshotStore,
+  );
 }
 
 function qualifiedProductionRuntimeComposition(

@@ -34,7 +34,8 @@
   },
   "dependencies": {
     "@oscharko-dev/keiko-contracts": "0.3.17",
-    "@oscharko-dev/keiko-security": "0.3.17"
+    "@oscharko-dev/keiko-security": "0.3.17",
+    "@oscharko-dev/keiko-tool-catalog": "0.3.17"
   },
   "private": true
 }

@@ -175,7 +175,7 @@ export interface OpenCodeRuntimeComposition {
 }
 
 export interface OpenCodeRunPort {
-  readonly submitTask: (runId: string, text: string) => Promise<boolean>;
+  readonly submitTask: (runId: string, text: string, initialContext?: string) => Promise<boolean>;
   readonly abortTask: (runId: string) => Promise<boolean>;
   readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<boolean>;
   readonly listQuestions: (runId: string) => Promise<readonly OpenCodeQuestionRequest[]>;
@@ -275,13 +275,13 @@ function createSubmitTask(
   readyRun: ReadyRunLookup,
   diagnostics: ServerDiagnosticSink | undefined,
 ): OpenCodeRunPort["submitTask"] {
-  return async (runId, text): Promise<boolean> => {
+  return async (runId, text, initialContext): Promise<boolean> => {
     const run = readyRun(runId);
     if (run === undefined) return false;
     if (!(await synchronizeTurnBaseline(run))) return false;
     if (!run.runtimeAdapter.armTurn()) return false;
     try {
-      await run.client.promptAsync(run.sessionId, text);
+      await run.client.promptAsync(run.sessionId, text, { initialContext });
       return run.ready;
     } catch (error) {
       recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
@@ -688,6 +688,7 @@ async function handshake(
       eventIdleTimeoutMs: request.timeoutMs,
     });
     const adapter = createOpenCodeRuntimeAdapter({
+      correlationId: request.runId,
       readiness: readinessPorts(input, bridge, run, client, parsed.endpoint, request),
       governedSink: input.governedEventSink,
       ...(input.safeActivity

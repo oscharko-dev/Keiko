@@ -15,6 +15,7 @@ import {
   GIT_WORKTREE_READ_COMMAND_RULES,
   GitWorktreeReadError,
   readGitRemoteUrl,
+  readGitPushRemoteUrls,
   readGitWorktreeSnapshot,
   readStagedConflictMarkerFileCount,
   readStagedPaths,
@@ -130,6 +131,11 @@ describe("readGitWorktreeSnapshot", () => {
     expect([...snap.existingLocalBranchNames].sort()).toEqual(["feature/x", "main"]);
     expect(snap.hasUpstream).toBe(false);
     expect(snap.remoteAliases).toEqual([]);
+    expect(snap.headSha).toBe(git(["rev-parse", "HEAD"]).trim());
+    expect(snap.stagedTreeDigest).toMatch(/^[a-f0-9]{64}$/u);
+    const stagedDigest = snap.stagedTreeDigest;
+    git(["add", "a.txt"]);
+    expect((await readGitWorktreeSnapshot(deps())).stagedTreeDigest).not.toBe(stagedDigest);
   });
 
   it("reports a detached HEAD", async () => {
@@ -444,5 +450,35 @@ describe("readStagedConflictMarkerFileCount", () => {
     } finally {
       rmSync(bare, { recursive: true, force: true });
     }
+  });
+});
+
+describe("effective push destination inspection", () => {
+  it("retains every push URL so the issue-bound owner can reject multiplicity", async () => {
+    git(["remote", "add", "origin", CONFIGURED_REMOTE_URL]);
+    git(["config", "--add", "remote.origin.pushurl", "https://github.com/owner/first.git"]);
+    git(["config", "--add", "remote.origin.pushurl", "https://github.com/owner/second.git"]);
+    expect(await readGitPushRemoteUrls(deps(), "origin")).toEqual([
+      "https://github.com/owner/first.git",
+      "https://github.com/owner/second.git",
+    ]);
+  });
+  it("observes user push rewrites while the existing fetch-identity reader stays isolated", async () => {
+    git(["remote", "add", "origin", CONFIGURED_REMOTE_URL]);
+    const home = makeRewritingConfigDir("home", "https://elsewhere.example/");
+    const input = { ...deps(), processEnv: { PATH: process.env.PATH, HOME: home } };
+    expect(await readGitPushRemoteUrls(input, "origin")).toEqual([
+      "https://elsewhere.example/alicedev-team/App.git",
+    ]);
+    expect(await readGitRemoteUrl(input, "origin")).toBe(CONFIGURED_REMOTE_URL);
+  });
+  it("fails closed on truncated destination metadata", async () => {
+    git(["remote", "add", "origin", CONFIGURED_REMOTE_URL]);
+    await expect(
+      readGitPushRemoteUrls(
+        { ...deps(), policy: { ...DEFAULT_SANDBOX_POLICY, maxOutputBytes: 8 } },
+        "origin",
+      ),
+    ).rejects.toThrow("truncated");
   });
 });

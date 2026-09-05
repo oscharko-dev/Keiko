@@ -151,6 +151,48 @@ describe("evaluateGitPublishEffectivePolicy", () => {
 });
 
 describe("buildPushArgv", () => {
+  it.each([40, 64])(
+    "uses only the approved %i-character object identity as the source",
+    (length) => {
+      const verifiedCommitSha = "a".repeat(length);
+      expect(buildPushArgv(command({ verifiedCommitSha }))).toEqual([
+        "push",
+        "origin",
+        `${verifiedCommitSha}:refs/heads/feat/x`,
+      ]);
+    },
+  );
+
+  it.each([
+    "",
+    "HEAD",
+    "a".repeat(39),
+    "a".repeat(41),
+    "A".repeat(40),
+    "+HEAD",
+    "HEAD:other",
+    "a".repeat(65),
+  ])("refuses a non-immutable verified source %j", (verifiedCommitSha) => {
+    expect(() => buildPushArgv(command({ verifiedCommitSha }))).toThrow(GitPublishArgvError);
+  });
+
+  it.each(["refs/tags/release", "refs/heads/other", "feat/*", "feat/a..b", "feat/name.lock"])(
+    "refuses a verified push outside one literal feature-branch ref %j",
+    (remoteBranchName) => {
+      expect(() =>
+        buildPushArgv(command({ verifiedCommitSha: "a".repeat(40), remoteBranchName })),
+      ).toThrow(GitPublishArgvError);
+    },
+  );
+
+  it("cannot mix an immutable push with a moving tracking update or force", () => {
+    for (const override of [{ setUpstreamTracking: true }, { forcePush: true }]) {
+      expect(() =>
+        buildPushArgv(command({ verifiedCommitSha: "a".repeat(40), ...override })),
+      ).toThrow(GitPublishArgvError);
+    }
+  });
+
   it("builds an explicit refspec push", () => {
     expect(buildPushArgv(command())).toEqual(["push", "origin", "feat/x:feat/x"]);
   });
@@ -287,6 +329,33 @@ describe("classifyGitPublishRejection", () => {
 });
 
 describe("runGitPublish — preflight gate", () => {
+  it("publishes an explicit verified SHA to a fresh feature branch without creating tracking", async () => {
+    const { adapter, publish } = fakeAdapter(SUCCESS);
+    const verifiedCommitSha = "a".repeat(40);
+    const approved = command({ verifiedCommitSha });
+    const result = await runGitPublish(
+      { command: approved, approval: NO_APPROVAL },
+      {
+        adapter,
+        snapshot: snapshot({ hasUpstream: false }),
+        repoPolicyPack: safePack(),
+        now: () => 0,
+        newActionId: () => "fresh-verified-push",
+      },
+    );
+    expect(result.lifecycle.outcome.status).toBe("succeeded");
+    expect(publish).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        verifiedCommitSha: approved.verifiedCommitSha,
+        setUpstreamTracking: false,
+        remoteAlias: "origin",
+        remoteBranchName: "feat/x",
+      }),
+    );
+    expect(buildPushArgv(approved)).toContain(`${verifiedCommitSha}:refs/heads/feat/x`);
+    expect(buildPushArgv(approved)).not.toContain("--set-upstream");
+  });
+
   it("blocks a missing remote alias before policy or execution", async () => {
     const { adapter, publish } = fakeAdapter(SUCCESS);
     const result = await runGitPublish(

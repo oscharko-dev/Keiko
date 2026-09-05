@@ -214,7 +214,7 @@ interface OpenCodeRuntimeComposition {
     }): Promise<{ readonly status: number; readonly body: string }>;
   };
   readonly runPort: {
-    readonly submitTask: (runId: string, text: string) => Promise<boolean>;
+    readonly submitTask: (runId: string, text: string, initialContext?: string) => Promise<boolean>;
     readonly abortTask: (runId: string) => Promise<boolean>;
     readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<boolean>;
     readonly listQuestions: (runId: string) => Promise<readonly TestQuestionRequest[]>;
@@ -1387,6 +1387,7 @@ describe("private OpenCode run control", () => {
 
   it("accepts status omission only when causal terminal history exists", async () => {
     const prompt = "SENTINEL_PRIVATE_RUN_PROMPT";
+    const initialContext = "SENTINEL_UNTRUSTED_ISSUE_CONTEXT";
     const governedEvents: Readonly<Record<string, unknown>>[] = [];
     let history: readonly Readonly<Record<string, unknown>>[] = completedTurnHistory().slice(0, 1);
     const runControl = {
@@ -1410,7 +1411,9 @@ describe("private OpenCode run control", () => {
     });
 
     await expect(fixture.runtime.runPort.submitTask("unknown-run", prompt)).resolves.toBe(false);
-    await expect(fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, prompt)).resolves.toBe(true);
+    await expect(
+      fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, prompt, initialContext),
+    ).resolves.toBe(true);
     history = completedTurnHistory();
     const terminalWait = new AbortController();
     const terminalDeadline = setTimeout(() => {
@@ -1424,7 +1427,12 @@ describe("private OpenCode run control", () => {
     await expect(fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID)).resolves.toBe(true);
     expect(runControl.abortSessions).toEqual(["ses_tool"]);
     expect(runControl.promptBodies).toEqual([
-      JSON.stringify({ parts: [{ type: "text", text: prompt }] }),
+      JSON.stringify({
+        parts: [
+          { type: "text", text: prompt },
+          { type: "text", text: initialContext, synthetic: true },
+        ],
+      }),
     ]);
 
     const aborted = new AbortController();
@@ -1439,6 +1447,7 @@ describe("private OpenCode run control", () => {
       readFileSync(join(runRoot, "config", "opencode", "tools", "keiko_changeset_edit.ts"), "utf8"),
     ].join("\n");
     expect(retained).not.toContain(prompt);
+    expect(retained).not.toContain(initialContext);
 
     await fixture.stop();
     await expect(fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "after stop")).resolves.toBe(

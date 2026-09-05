@@ -448,6 +448,34 @@ function executeRequest(
 // all. The gate resolves the SERVER-OWNED product-wide ceiling and fails closed when none is
 // configured (ADR-0129 modes, ADR-0138 monotonic semantics).
 describe("agent facade — autonomy admission (fail-closed)", () => {
+  it.each(CODING_WORKBENCH_MODES)(
+    "requires the verified runtime commit service instead of delegating to manual commit in %s",
+    async (mode) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+      const result = await handleGitAgentOperation(
+        {
+          ...ctx(executeRequest("commit", `unverified-${mode}`)),
+          correlationId: "commit-boundary",
+        },
+        deps(runner, mode),
+      );
+      expect(result.status).toBe(403);
+      expect(result.body).toMatchObject({ status: "denied", operation: "commit" });
+      expect(runner).not.toHaveBeenCalled();
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          op: "git.delivery.authority.denied",
+          correlationId: "commit-boundary",
+          extra: { operation: "commit", phase: "admission", reason: "verified-commit-required" },
+        }),
+      );
+      expect(JSON.stringify(sink.events)).not.toContain("add a thing");
+      expect(JSON.stringify(sink.events)).not.toContain(root);
+    },
+  );
+
   it.each(WRITE_OPERATIONS)(
     "denies %s execute when no deployment ceiling is configured, without delegating",
     async (operation) => {

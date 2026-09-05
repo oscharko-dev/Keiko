@@ -135,7 +135,11 @@ function authorityIdentityChanged(
 export function logGitDeliveryAuthorityDenial(
   ctx: RouteContext,
   operation: GitRepositoryAgentOperationKind,
-  reason: GitDeliveryAuthorityDenial | "authority-changed" | "workspace-unresolvable",
+  reason:
+    | GitDeliveryAuthorityDenial
+    | "authority-changed"
+    | "workspace-unresolvable"
+    | "verified-commit-required",
   phase: GitDeliveryAuthorityPhase = "admission",
   logSink: ServerLogSink = processServerLogSink(),
 ): void {

@@ -129,6 +129,16 @@ const ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS = new Set([
   "issue_default_base_ref",
   "issue_content_revision_digest",
   "issue_binding_digest",
+  // #3386 / schema v23: one bounded JSON receipt, guarded by the closed verified-commit validator.
+  // The sibling snapshot-store tests reject nested bodies/claims both at write and durable read.
+  "verified_commit_result",
+  // V24: closed, bounded remote intent; V25: its original succeeded body-free commit proof.
+  // Draft source read tests reject nested payloads and changed authority/head bindings.
+  "draft_delivery_record",
+  "draft_delivery_source_receipt",
+  // V26: independent read-observation CAS and closed exact-head readiness, separate from accounting.
+  "ci_observation_revision",
+  "ci_readiness_record",
 ]);
 
 // V11 (issue #2521) persisted workspace-trust records. Content-free by construction: an opaque
@@ -161,6 +171,7 @@ const EXPECTED_TABLES = new Set([
   "chat_messages",
   "chats",
   "coding_runtime_snapshots",
+  "coding_runtime_ci_repair_budgets",
   "github_issue_reader_authorization",
   "memory_autonomy_policy",
   "projects",
@@ -303,6 +314,21 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
       for (const forbidden of FORBIDDEN_SUBSTRINGS) {
         expect(lower).not.toContain(forbidden);
       }
+    }
+  });
+
+  it("V26 CI repair accounting has only bounded identity and a closed receipt column", () => {
+    const inspector = openMigratedSchema(join(tmpDir, "budget.db"));
+    try {
+      expect(columnNames(inspector, "coding_runtime_ci_repair_budgets")).toEqual([
+        "task_digest",
+        "remote_digest",
+        "pr_number",
+        "revision",
+        "record_json",
+      ]);
+    } finally {
+      inspector.close();
     }
   });
 

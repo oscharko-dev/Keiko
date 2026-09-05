@@ -174,7 +174,8 @@ describe("validateGitChangeSnapshotResult — captured snapshots", () => {
   it("returns the input by reference, never a copy", () => {
     const input = snapshot();
     const validation = validateGitChangeSnapshotResult(input);
-    expect(validation.ok && validation.value === input).toBe(true);
+    expect(validation.ok).toBe(true);
+    if (validation.ok) expect(validation.value).toBe(input);
   });
 
   it("freezes the outcome vocabulary: `stale` is not an outcome", () => {
@@ -449,7 +450,7 @@ describe("validateGitChangeSnapshotResult — hostile inputs", () => {
       "--upload-pack=/bin/sh",
       "main..dev",
       "a/../b",
-      "refs/heads/x y",
+      "refs/heads/x\0y",
       "",
       " main",
     ]) {
@@ -509,6 +510,17 @@ describe("validateGitChangeSnapshotResult — unavailable and failed", () => {
     const shapes: readonly Record<string, unknown>[] = [
       unavailable("invalid-ref", { headRef: undefined }),
       unavailable("missing-ref", { baseSha: sha("1") }),
+      unavailable("unsupported-object-format"),
+      unavailable("revision-mismatch", {
+        baseSha: sha("1"),
+        headSha: sha("2"),
+        mergeBaseSha: sha("1"),
+      }),
+      unavailable("head-mismatch", {
+        baseSha: sha("1"),
+        headSha: sha("2"),
+        mergeBaseSha: sha("1"),
+      }),
       unavailable("identical-revisions", { baseSha: sha("1"), headSha: sha("1") }),
       unavailable("no-merge-base", { baseSha: sha("1"), headSha: sha("2") }),
       unavailable("head-behind-base", {
@@ -614,7 +626,6 @@ describe("limits, digests and references", () => {
     const fields = gitChangeSnapshotDigestFields(captured);
     expect(Object.keys(fields)).toEqual([
       "schemaVersion",
-      "repositoryId",
       "remoteDigest",
       "baseRef",
       "baseSha",
@@ -627,6 +638,14 @@ describe("limits, digests and references", () => {
     ]);
     const withoutRemote = snapshot() as unknown as GitChangeSnapshot;
     expect("remoteDigest" in gitChangeSnapshotDigestFields(withoutRemote)).toBe(false);
+    // Epic correction 6: canonical remote identity binds clones; a local locator cannot do so.
+    expect(fields).not.toHaveProperty("repositoryId");
+    expect(
+      gitChangeSnapshotDigestFields({ ...captured, repositoryId: "repo_another_clone" }),
+    ).toEqual(fields);
+    expect(gitChangeSnapshotDigestFields(withoutRemote).repositoryId).toBe(
+      withoutRemote.repositoryId,
+    );
     expect(gitChangeSnapshotEntryIdentityFields(textual("add", "1"))).toEqual({
       kind: "add",
       pathDigest: hex64("p1"),
@@ -661,6 +680,16 @@ describe("limits, digests and references", () => {
       omittedFiles: 2,
       omittedHunks: 3,
       truncatedFiles: 2,
+      kinds: {
+        add: 1,
+        modify: 2,
+        delete: 0,
+        rename: 0,
+        copy: 0,
+        "mode-change": 0,
+        binary: 1,
+        submodule: 0,
+      },
       omissions: [
         { reason: "byte-cap", files: 2, hunks: 3 },
         { reason: "file-cap", files: 2, hunks: 0 },

@@ -681,7 +681,10 @@ function runtimeBindingDrift(
   expected: CodingWorkbenchRuntimeAuthorityFacts,
   actual: CodingWorkbenchRuntimeAuthorityFacts,
 ): CodingWorkbenchRuntimeFailureCode | undefined {
-  if (expected.binding.taskId !== actual.binding.taskId) return "task-drift";
+  if (
+    expected.binding.taskId !== actual.binding.taskId ||
+    issueBindingDiffers(expected, actual)
+  ) return "task-drift";
   if (
     expected.binding.workspaceId !== actual.binding.workspaceId ||
     expected.binding.workspaceRootDigest !== actual.binding.workspaceRootDigest
@@ -696,6 +699,13 @@ function runtimeBindingDrift(
     expected.binding.branchHeadDigest !== actual.binding.branchHeadDigest
     ? "branch-drift"
     : undefined;
+}
+
+function issueBindingDiffers(
+  expected: CodingWorkbenchRuntimeAuthorityFacts,
+  actual: CodingWorkbenchRuntimeAuthorityFacts,
+): boolean {
+  return canonicalJson(expected.binding.issueBinding ?? null) !== canonicalJson(actual.binding.issueBinding ?? null);
 }
 
 function localBridgeAuthorityEnvelope(

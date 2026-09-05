@@ -1147,7 +1147,8 @@ describe("computeStoreFingerprint (Wave 4a, epic #3233 §6.2)", () => {
   });
 
   // Schema v22 (#3385) widened `coding_runtime_snapshots` with the issue-binding columns and created
-  // no table, so the fingerprint table list is exactly what v21 left it. This pins both halves: the
+  // no table. V26 separately adds cumulative CI accounting; it must not become another issue-binding
+  // store. This pins both halves: the
   // columns landed on the already-fingerprinted table (a support bundle keeps counting issue-bound
   // runs through the same row count), and no second, unfingerprinted store appeared for them.
   it("keeps the v22 issue-binding columns on the fingerprinted coding_runtime_snapshots table", () => {
@@ -1157,7 +1158,22 @@ describe("computeStoreFingerprint (Wave 4a, epic #3233 §6.2)", () => {
       const codingRuntimeTables = UI_STORE_FINGERPRINT_TABLES.filter((table) =>
         table.startsWith("coding_runtime"),
       );
-      expect(codingRuntimeTables).toEqual(["coding_runtime_snapshots"]);
+      expect(codingRuntimeTables).toEqual([
+        "coding_runtime_snapshots",
+        "coding_runtime_ci_repair_budgets",
+      ]);
+      const budgetColumns = (
+        db.prepare("PRAGMA table_info(coding_runtime_ci_repair_budgets)").all() as {
+          name: string;
+        }[]
+      ).map((row) => row.name);
+      expect(budgetColumns).toEqual([
+        "task_digest",
+        "remote_digest",
+        "pr_number",
+        "revision",
+        "record_json",
+      ]);
       const columns = (
         db.prepare("PRAGMA table_info(coding_runtime_snapshots)").all() as { name: string }[]
       ).map((row) => row.name);

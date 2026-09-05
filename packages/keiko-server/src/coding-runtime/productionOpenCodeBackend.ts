@@ -7,7 +7,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
-import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-sandbox";
+import {
+  createRuntimeGatewayConfinement,
+  type LongLivedRuntimeQualification,
+} from "@oscharko-dev/keiko-sandbox";
 
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
@@ -39,6 +42,7 @@ import {
   type RuntimeProcessSupervisor,
 } from "./runtimeProcessSupervisor.js";
 import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
+import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
 
 const OPEN_CODE_START_TIMEOUT_MS = 120_000;
 
@@ -165,7 +169,7 @@ function composeOpenCodeRun(
     safeActivity,
     gatewayReadiness: input.gatewayReadiness,
     fetch: input.fetch ?? globalThis.fetch,
-    supervisor: runtimeSupervisor(input, run.context.workspaceRoot),
+    supervisor: runtimeSupervisor(input, run),
     diagnostics: input.diagnostics,
     onRuntimeEvent: run.onRuntimeEvent,
     authorityLifecycle: run.authorityLifecycle,
@@ -375,16 +379,17 @@ function assertOpenCodeRun(run: ProductionRuntimeBackendInput): void {
 
 function runtimeSupervisor(
   input: ProductionOpenCodeBackendInput,
-  workspaceRoot: string,
+  run: ProductionRuntimeBackendInput,
 ): RuntimeProcessSupervisor {
+  const workspaceRoot = run.context.workspaceRoot;
   if (input.createSupervisor) {
     return input.createSupervisor({ workspaceRoot, portable: input.portable });
   }
   if (isDevLaneRuntime(input.portable)) {
-    return devLaneSupervisor(input.portable, workspaceRoot);
+    return devLaneSupervisor(input.portable, input, run);
   }
   if (isEvaluationLaneRuntime(input.portable) && input.portable.target !== "windows-x64") {
-    return appSandboxSupervisor(input.portable);
+    return appSandboxSupervisor(input.portable, input, run);
   }
   return createRuntimeProcessSupervisor({
     backend: createNativeRuntimeProcessBackend({
@@ -399,16 +404,17 @@ function runtimeSupervisor(
 
 function devLaneSupervisor(
   portable: DevLanePortableOpenCodeRuntime,
-  workspaceRoot: string,
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
 ): RuntimeProcessSupervisor {
-  if (portable.target !== "windows-x64") return appSandboxSupervisor(portable);
+  if (portable.target !== "windows-x64") return appSandboxSupervisor(portable, input, run);
   if (portable.nativeHelperPath === undefined) throw new Error("dev-lane-supervisor-missing");
   return createRuntimeProcessSupervisor({
     backend: createNativeRuntimeProcessBackend({
       helperPath: portable.nativeHelperPath,
       expectedHelperSha256: portable.nativeHelperSha256,
       runtimeRoots: [join(portable.installRoot, portable.sidecar.payloadRootPath)],
-      workspaceRoot,
+      workspaceRoot: run.context.workspaceRoot,
       identity: portable.qualification,
     }),
     qualifications: [portable.qualification],
@@ -416,11 +422,9 @@ function devLaneSupervisor(
 }
 
 /**
- * The weaker, honestly declared macOS app-sandbox supervision for the lanes that cannot have the
- * release supervisor. It spawns the verified staged payload directly and terminates its POSIX
- * process group; it carries none of the release-qualified descendant-containment or orphan-reaping
- * guarantees, and each lane's evidence class records that posture. Windows dev-lane runs use the
- * native Job Object supervisor through devLaneSupervisor instead.
+ * The macOS dev/evaluation supervisor enforces the exact gateway TCP endpoint and denies forks
+ * and service-based escape. Its evidence class still carries no release signature or platform
+ * qualification. Windows dev-lane runs use the native Job Object supervisor.
  *
  * Dev lane (#2475, ADR-0140): no packaged install exists to supervise natively.
  * Evaluation lane (ADR-0163 D9): the native supervisor connects to the runtime monitor socket served
@@ -434,6 +438,8 @@ function devLaneSupervisor(
  */
 function appSandboxSupervisor(
   portable: QualifiedPortableOpenCodeRuntime | DevLanePortableOpenCodeRuntime,
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
 ): RuntimeProcessSupervisor {
   return createRuntimeProcessSupervisor({
     backend: createDevLaneRuntimeProcessBackend({
@@ -443,6 +449,14 @@ function appSandboxSupervisor(
         backend: "macos-app-sandbox",
       },
       runtimeRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
+      gatewayConfinement: createRuntimeGatewayConfinement({
+        gatewayUrl: input.gatewayUrl,
+        runId: run.minted.authorityRef.runId,
+        treeBindingId: run.minted.treeBindingId,
+        envelopeDigest: run.minted.authorityRef.envelopeDigest,
+        runtimeArtifactDigest: portable.sidecar.shippedExecutableSha256,
+        modelProfileDigest: codingRuntimeFactDigest(run.context.modelProfile),
+      }),
     }),
     qualifications: [portable.qualification],
   });

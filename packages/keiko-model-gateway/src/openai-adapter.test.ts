@@ -1,3 +1,4 @@
+import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenAiAdapter, STREAM_IDLE_TIMEOUT_MS } from "./openai-adapter.js";
 import {
@@ -384,8 +385,8 @@ describe("OpenAiAdapter.call", () => {
                   {
                     id: "call_1",
                     function: {
-                      name: "search",
-                      arguments: JSON.stringify({ token: customSecret }),
+                      name: "read_file",
+                      arguments: JSON.stringify({ path: customSecret }),
                     },
                   },
                 ],
@@ -396,7 +397,10 @@ describe("OpenAiAdapter.call", () => {
         }),
       ),
     );
-    const result = await adapter.call(REQUEST, { ...CONFIG, apiKey: customSecret });
+    const result = await adapter.call(
+      { ...REQUEST, toolCatalog: gatewayCatalogAdvertisement(0, ["read_file"]) },
+      { ...CONFIG, apiKey: customSecret },
+    );
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain(customSecret);
     expect(serialized).toContain("[REDACTED]");
@@ -451,7 +455,7 @@ describe("OpenAiAdapter.call", () => {
     await adapter.call(
       {
         ...REQUEST,
-        tools: [{ name: "search", description: "find", parameters: { type: "object" } }],
+        toolCatalog: gatewayCatalogAdvertisement(0, ["read_file"]),
         responseFormat: {
           type: "json_schema",
           name: "test_schema",
@@ -468,7 +472,7 @@ describe("OpenAiAdapter.call", () => {
         json_schema: { name?: string; strict?: boolean; schema?: unknown };
       };
     };
-    expect(body.tools[0]?.function.name).toBe("search");
+    expect(body.tools[0]?.function.name).toBe("read_file");
     expect(body.response_format.type).toBe("json_schema");
     expect(body.response_format.json_schema).toMatchObject({
       name: "test_schema",

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { ScriptedGovernedTools, type ScriptedToolPhase } from "./_governedTools.js";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import {
   chmodSync,
@@ -544,6 +545,7 @@ const FAKE_TOOL_ACTIONS: Readonly<
  * `question` tool calls through the /question endpoints — exactly the loop the real binary runs.
  */
 class FakeOpenCodeChild {
+  private readonly governedTools: ScriptedGovernedTools | undefined;
   private readonly password: string;
   private readonly gatewayUrl: string;
   private readonly gatewayCapability: string;
@@ -570,7 +572,21 @@ class FakeOpenCodeChild {
   private closed = false;
   private closing: Promise<void> | undefined;
 
-  public constructor(env: Readonly<Record<string, string>>) {
+  public constructor(
+    env: Readonly<Record<string, string>>,
+    generatedTools = false,
+    observePhase?: (event: ScriptedToolPhase) => void,
+  ) {
+    this.governedTools = generatedTools
+      ? new ScriptedGovernedTools({
+          env,
+          ...(observePhase === undefined ? {} : { observePhase }),
+          sessionId: FAKE_SESSION_ID,
+          broadcast: (type, properties): void => {
+            this.broadcast(type, properties);
+          },
+        })
+      : undefined;
     this.password = requiredEnv(env, "OPENCODE_SERVER_PASSWORD");
     this.gatewayUrl = requiredEnv(env, "KEIKO_MODEL_GATEWAY_URL");
     this.gatewayCapability = requiredEnv(env, "KEIKO_MODEL_GATEWAY_CAPABILITY");
@@ -618,6 +634,7 @@ class FakeOpenCodeChild {
   private async shutdown(): Promise<void> {
     this.closed = true;
     this.turnController?.abort();
+    this.governedTools?.close();
     for (const pending of this.questions.values()) pending.settle({ kind: "rejected" });
     this.questions.clear();
     for (const client of this.sseClients) client.destroy();
@@ -665,6 +682,8 @@ class FakeOpenCodeChild {
       json(response, [{ id: FAKE_SESSION_ID }]);
     } else if (method === "GET" && path === "/session/status") {
       json(response, this.busy ? { [FAKE_SESSION_ID]: { type: "busy" } } : {});
+    } else if (method === "GET" && path === "/permission") {
+      json(response, this.governedTools?.rows() ?? []);
     } else if (method === "GET" && path === "/question") {
       json(
         response,
@@ -672,9 +691,25 @@ class FakeOpenCodeChild {
       );
     } else if (method === "POST" && path === "/sync/history") {
       json(response, this.historyRows);
+    } else if (this.routePermission(method, path, body, response)) {
+      return;
     } else {
       this.routeDynamic(method, path, body, response);
     }
+  }
+
+  private routePermission(
+    method: string,
+    path: string,
+    body: string,
+    response: ServerResponse,
+  ): boolean {
+    const permission = /^\/permission\/([^/]+)\/reply$/u.exec(path);
+    if (method === "POST" && permission !== null) {
+      json(response, this.governedTools?.reply(permission[1] ?? "", body) ?? false);
+      return true;
+    }
+    return false;
   }
 
   private routeDynamic(method: string, path: string, body: string, response: ServerResponse): void {
@@ -972,6 +1007,7 @@ class FakeOpenCodeChild {
       tool: call.name,
       provider: "keiko",
     });
+    if (this.governedTools !== undefined) return this.governedTools.execute(call, signal);
     const response = await fetch(this.toolFacadeUrl, {
       method: "POST",
       signal,
@@ -1171,12 +1207,14 @@ class ScriptedChildBackend implements RuntimeProcessBackend {
   public constructor(
     public readonly identity: RuntimeProcessBackend["identity"],
     private readonly children: FakeOpenCodeChild[],
+    private readonly generatedTools: boolean,
+    private readonly observePhase?: (event: ScriptedToolPhase) => void,
   ) {}
 
   public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
-    const child = new FakeOpenCodeChild(request.env);
+    const child = new FakeOpenCodeChild(request.env, this.generatedTools, this.observePhase);
     this.children.push(child);
     const tree: ScriptedTree = {
       treeId: request.recoveryHandle,
@@ -1248,7 +1286,12 @@ export interface ScriptedOpenCodeHarness {
 }
 
 /** Scripted supervisor seam for `createProductionOpenCodeBackend`; no real binary is required. */
-export function createScriptedOpenCodeHarness(): ScriptedOpenCodeHarness {
+export function createScriptedOpenCodeHarness(
+  options: {
+    readonly generatedTools?: boolean;
+    readonly observePhase?: (event: ScriptedToolPhase) => void;
+  } = {},
+): ScriptedOpenCodeHarness {
   const children: FakeOpenCodeChild[] = [];
   return {
     children,
@@ -1261,6 +1304,8 @@ export function createScriptedOpenCodeHarness(): ScriptedOpenCodeHarness {
             backend: portable.qualification.backend,
           },
           children,
+          options.generatedTools === true,
+          options.observePhase,
         ),
         qualifications: [portable.qualification],
       }),

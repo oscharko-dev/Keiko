@@ -156,3 +156,11 @@ export function normalizeChatResponse(
     expectStructured && content.length > 0 ? parseStructuredOutput(content) : null;
   return { modelId, content, finishReason, toolCalls, structuredOutput, usage };
 }
+
+/** Apply the captured catalog binding after the existing provider-secret redaction. */
+export function bindNormalizedToolCalls(
+  response: NormalizedResponse,
+  bind: (calls: readonly NormalizedToolCall[]) => readonly NormalizedToolCall[],
+): NormalizedResponse {
+  return { ...response, toolCalls: bind(response.toolCalls) };
+}

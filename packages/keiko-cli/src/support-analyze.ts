@@ -37,8 +37,20 @@
 // can be exercised on an in-memory string.
 
 import { createHash } from "node:crypto";
+import {
+  readToolCatalogEvidence,
+  toolCatalogWarnings,
+  type ToolCatalogLogEvidence,
+  type ToolLifecycleValidator,
+  type ToolDiagnosticRedactor,
+} from "./support-tool-catalog.js";
 import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
 import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
+
+export interface SupportAnalyzeOptions {
+  readonly toolLifecycleValidator?: ToolLifecycleValidator;
+  readonly toolDiagnosticRedactor?: ToolDiagnosticRedactor;
+}
 
 const KNOWN_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
   "ts",
@@ -58,6 +70,7 @@ const KNOWN_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 export interface ServerLogLineView {
+  readonly toolCatalog?: ToolCatalogLogEvidence;
   readonly ts: string;
   readonly pid?: number | undefined;
   readonly instanceId?: string | undefined;
@@ -224,19 +237,27 @@ function buildView(
   op: string,
   record: Record<string, unknown>,
   identity: Identity,
+  options: SupportAnalyzeOptions,
 ): ServerLogLineView {
+  const toolCatalog = readToolCatalogEvidence(
+    record,
+    options.toolLifecycleValidator,
+    options.toolDiagnosticRedactor,
+  );
+  const fields = toolCatalogFields(record, toolCatalog);
   const level = optionalString(record, "level");
-  const errorKind = optionalString(record, "errorKind");
-  const durationMs = optionalNumber(record, "durationMs");
-  const status = optionalNumber(record, "status");
-  const frames = optionalStringArray(record.frames);
-  const causeChain = optionalStringArray(record.causeChain);
-  const extra = extraFields(record);
+  const errorKind = optionalString(fields, "errorKind");
+  const durationMs = optionalNumber(fields, "durationMs");
+  const status = optionalNumber(fields, "status");
+  const frames = optionalStringArray(fields.frames);
+  const causeChain = optionalStringArray(fields.causeChain);
+  const extra = toolCatalog === undefined ? extraFields(record) : undefined;
   return {
     ts,
     category,
     op,
     ...identityFields(identity),
+    ...(toolCatalog === undefined ? {} : { toolCatalog }),
     ...(level === undefined ? {} : { level }),
     ...(errorKind === undefined ? {} : { errorKind }),
     ...(durationMs === undefined ? {} : { durationMs }),
@@ -245,6 +266,16 @@ function buildView(
     ...(causeChain === undefined ? {} : { causeChain }),
     ...(extra === undefined ? {} : { extra }),
   };
+}
+
+function toolCatalogFields(
+  record: Record<string, unknown>,
+  evidence: ToolCatalogLogEvidence | undefined,
+): Record<string, unknown> {
+  if (evidence === undefined) return record;
+  if (evidence.kind === "lifecycle") return { ...evidence.event };
+  if (evidence.kind === "sink-failure") return { ...evidence };
+  return {};
 }
 
 interface ParsedLine {
@@ -262,7 +293,11 @@ type LineClassification =
 // A line is malformed when it is not valid JSON, or is valid JSON that is not shaped like a log
 // record (missing ts/category/op) — evidence of corruption, per AGENTS.md §7 never silently
 // skipped. A `$section`-tagged line is bundle metadata, not corruption: it is skipped, not counted.
-function classifyLine(raw: string, fileIndex: number): LineClassification {
+function classifyLine(
+  raw: string,
+  fileIndex: number,
+  options: SupportAnalyzeOptions,
+): LineClassification {
   const record = tryParseJsonObject(raw);
   if (record === undefined) return { kind: "malformed" };
   if (typeof record.$section === "string") return { kind: "section" };
@@ -276,7 +311,7 @@ function classifyLine(raw: string, fileIndex: number): LineClassification {
   return {
     kind: "line",
     parsed: {
-      view: buildView(ts, category, op, record, identity),
+      view: buildView(ts, category, op, record, identity, options),
       correlationId: optionalString(record, "correlationId"),
       hasFullIdentity:
         identity.pid !== undefined &&
@@ -534,14 +569,17 @@ function buildWarnings(legacyLineCount: number): readonly string[] {
 // every line that could not be read as a log record. A line with no correlationId at all
 // (`process.*` lines, a first-ever request before any id was assigned) belongs to no timeline and
 // is neither malformed nor counted — this module only reconstructs correlated request/run stories.
-export function analyzeLogText(text: string): AnalyzeAllResult {
+export function analyzeLogText(
+  text: string,
+  options: SupportAnalyzeOptions = {},
+): AnalyzeAllResult {
   const lines = splitLines(text);
   const kind = detectSourceKind(lines[0]);
   const contentLines = kind === "bundle" ? lines.slice(1) : lines;
   const parsedLines: ParsedLine[] = [];
   let malformedLineCount = 0;
   for (const [index, raw] of contentLines.entries()) {
-    const classification = classifyLine(raw, index);
+    const classification = classifyLine(raw, index, options);
     if (classification.kind === "malformed") malformedLineCount += 1;
     if (classification.kind === "line") parsedLines.push(classification.parsed);
   }
@@ -569,6 +607,7 @@ function renderEventLine(view: ServerLogLineView): string {
   const suffix = [
     view.errorKind === undefined ? undefined : `[${view.errorKind}]`,
     view.durationMs === undefined ? undefined : `[${String(view.durationMs)}ms]`,
+    view.toolCatalog === undefined ? undefined : `toolCatalog=${JSON.stringify(view.toolCatalog)}`,
   ]
     .filter((part): part is string => part !== undefined)
     .join(" ");
@@ -855,6 +894,7 @@ export interface ReproductionSeed {
   readonly correlationId: string;
   readonly timeline: readonly ServerLogLineView[];
   readonly gatewayScript?: GatewayReplayScript | undefined;
+  readonly toolCatalog?: readonly ToolCatalogLogEvidence[];
   readonly httpRequest?: HttpRequestSeed | undefined;
   readonly storeFingerprint?: readonly StoreFingerprint[] | undefined;
   readonly indexingJob?: IndexingJobSeed | undefined;
@@ -923,6 +963,12 @@ function buildSeedWarnings(input: SeedWarningInputs): readonly string[] {
   ].filter((warning): warning is string => warning !== undefined);
 }
 
+function toolCatalogSeed(
+  toolCatalog: readonly ToolCatalogLogEvidence[],
+): Pick<ReproductionSeed, "toolCatalog"> {
+  return toolCatalog.length === 0 ? {} : { toolCatalog };
+}
+
 // Assembles a full `ReproductionSeed` for one correlationId out of `text` (a raw server.log or a
 // support bundle — auto-detected, same as `analyzeLogText`). Undefined when no timeline exists for
 // `correlationId`, mirroring `findTimeline`. `generatedAt` is caller-supplied (never `new Date()`
@@ -931,8 +977,9 @@ export function buildReproductionSeed(
   text: string,
   correlationId: string,
   generatedAt: Date,
+  options: SupportAnalyzeOptions = {},
 ): ReproductionSeed | undefined {
-  const timeline = findTimeline(analyzeLogText(text), correlationId);
+  const timeline = findTimeline(analyzeLogText(text, options), correlationId);
   if (timeline === undefined) return undefined;
 
   const kind = detectSourceKind(splitLines(text)[0]);
@@ -942,6 +989,9 @@ export function buildReproductionSeed(
   const storeFingerprint = extractManifestStoreFingerprints(text);
   const stackFrames = timeline.frames ?? [];
   const causeChain = aggregateCauseChain(timeline.lines);
+  const toolCatalog = timeline.lines.flatMap((line) =>
+    line.toolCatalog === undefined ? [] : [line.toolCatalog],
+  );
 
   return {
     schemaVersion: REPRODUCTION_SEED_SCHEMA_VERSION,
@@ -950,18 +1000,22 @@ export function buildReproductionSeed(
     correlationId,
     timeline: timeline.lines,
     ...(gatewayScript === undefined ? {} : { gatewayScript }),
+    ...toolCatalogSeed(toolCatalog),
     ...(httpRequest === undefined ? {} : { httpRequest }),
     ...(storeFingerprint === undefined ? {} : { storeFingerprint }),
     ...(indexingJob === undefined ? {} : { indexingJob }),
     ...(stackFrames.length === 0 ? {} : { stackFrames }),
     ...(causeChain.length === 0 ? {} : { causeChain }),
-    warnings: buildSeedWarnings({
-      kind,
-      frames: stackFrames,
-      gatewayScript,
-      httpRequest,
-      storeFingerprint,
-    }),
+    warnings: [
+      ...toolCatalogWarnings(toolCatalog),
+      ...buildSeedWarnings({
+        kind,
+        frames: stackFrames,
+        gatewayScript,
+        httpRequest,
+        storeFingerprint,
+      }),
+    ],
   };
 }
 
@@ -1056,6 +1110,8 @@ export function renderHumanReproductionSeed(seed: ReproductionSeed): string {
   if (seed.gatewayScript !== undefined) {
     lines.push(`gatewayScript: ${JSON.stringify(seed.gatewayScript)}`);
   }
+  if (seed.toolCatalog !== undefined)
+    lines.push(`toolCatalog: ${JSON.stringify(seed.toolCatalog)}`);
   if (seed.httpRequest !== undefined) {
     lines.push(`httpRequest: ${JSON.stringify(seed.httpRequest)}`);
   }

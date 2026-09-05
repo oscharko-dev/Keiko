@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "issue": 3388,
+  "checkedAt": "2026-09-05T03:11:45.270Z",
+  "evidenceClass": "production-composed-deterministic-browser",
+  "modelQualification": false,
+  "sourceHashes": {
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchCiReadiness.tsx": "9d8e5d10d2be6d951fa51e0d087ababaf929dd4e513bc2af46f05ffa01c4b752",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchCiReadiness.module.css": "015fda13fc6bf47dd0bf986de33fb8205b49ebeb1f54a88eb9508f85616af99c",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/coding-workbench-i18n.en.ts": "4d0ffa863cb43dbee7682d99bc645928e4ccf41d2237610997475ba076997401",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/coding-workbench-i18n.de.ts": "0d594df07fedeeb8460436ddc1d1739276524b6eaab57a464edfffd3167fa591",
+    "tests/e2e/coding-issue-ci.spec.ts": "d7207403770e76ddb250ff350e9fede30e2588bbf673ee89a80117637730aa32",
+    "tests/e2e/servers/coding-issue-ci-fixture.mts": "59be298be7b2d833783d42aa4866a09d73565d6a6ad1c6f085337c1b28329b6e",
+    "tests/e2e/servers/coding-issue-ci-driver.mts": "c0003632ea93dffb1f9a511d7cacc970ceebcd7079a257fbece020b6fbb383da",
+    "packages/keiko-server/src/coding-runtime/productionCiObservationRuntime.ts": "becde7acf5e48090873c74a5d9a931de40ce244852e64499a7faf1eeaecea85f",
+    "packages/keiko-server/src/gitDelivery/ciObservationService.ts": "3863aab5ffa88b535862041fa412fce0dc6bb6de6ebe0ededb7f8d94d728da42",
+    "packages/keiko-server/src/gitDelivery/ciReadinessSnapshot.ts": "1c538f881a628d7197e8e6737c5db33022331d743f88c928ef6a706734c9b7f4",
+    "packages/keiko-tools/src/git-ci-facts.ts": "4285be04aff4bcba5d1f40b8c34321c400f9c7851db059f69b2fd512ffc491ed"
+  },
+  "captures": [
+    {
+      "name": "01-dark",
+      "theme": "dark",
+      "screenshot": "docs/design-system/evidence/3388/01-dark.png",
+      "screenshotSha256": "2f99d0288ae328e0097cd37576d6800834a91656bb8bbf3f2a404c81c3c7c940",
+      "seriousOrCriticalViolations": 0,
+      "horizontalOverflow": false,
+      "violations": []
+    },
+    {
+      "name": "02-light",
+      "theme": "light",
+      "screenshot": "docs/design-system/evidence/3388/02-light.png",
+      "screenshotSha256": "b55a7cbaf186dc1be465b5da9acea40fd928f3f4fcbcfba5c573cbcb8d406d4b",
+      "seriousOrCriticalViolations": 0,
+      "horizontalOverflow": false,
+      "violations": []
+    },
+    {
+      "name": "03-dark-high-contrast",
+      "theme": "dark",
+      "highContrast": true,
+      "screenshot": "docs/design-system/evidence/3388/03-dark-high-contrast.png",
+      "screenshotSha256": "b2696d2d6e57142e25c2f7ebcc32db15ee52b8f2ced7be7836da50dc4e4da055",
+      "seriousOrCriticalViolations": 0,
+      "horizontalOverflow": false,
+      "violations": []
+    },
+    {
+      "name": "04-light-high-contrast",
+      "theme": "light",
+      "highContrast": true,
+      "screenshot": "docs/design-system/evidence/3388/04-light-high-contrast.png",
+      "screenshotSha256": "d0c825fc6f135d361d43b4708fa919add8a4d5d65839aaf9d543fc7dd1cfd125",
+      "seriousOrCriticalViolations": 0,
+      "horizontalOverflow": false,
+      "violations": []
+    },
+    {
+      "name": "05-prefers-contrast",
+      "theme": "dark",
+      "contrast": "more",
+      "screenshot": "docs/design-system/evidence/3388/05-prefers-contrast.png",
+      "screenshotSha256": "b2696d2d6e57142e25c2f7ebcc32db15ee52b8f2ced7be7836da50dc4e4da055",
+      "seriousOrCriticalViolations": 0,
+      "horizontalOverflow": false,
+      "violations": []
+    },
+    {
+      "name": "06-forced-colors",
+      "theme": "dark",
+      "forcedColors": "active",
+      "screenshot": "docs/design-system/evidence/3388/06-forced-colors.png",
+      "screenshotSha256": "b971624889880e123beb642735e647c1242687f5c665a0ba1f9a5b6a6ec598de",
+      "seriousOrCriticalViolations": 0,
+      "horizontalOverflow": false,
+      "violations": []
+    },
+    {
+      "name": "07-reduced-motion",
+      "theme": "dark",
+      "reducedMotion": "reduce",
+      "screenshot": "docs/design-system/evidence/3388/07-reduced-motion.png",
+      "screenshotSha256": "4a1fc18bfd7d373a7ed31b5bddcbfce95923fc198686c04163ea650578bd8abb",
+      "seriousOrCriticalViolations": 0,
+      "horizontalOverflow": false,
+      "violations": []
+    },
+    {
+      "name": "08-compact",
+      "theme": "dark",
+      "width": 360,
+      "screenshot": "docs/design-system/evidence/3388/08-compact.png",
+      "screenshotSha256": "e540bb0c3a4fa3e5392a20806f1129b2104785300c23e68916444de378424f8d",
+      "seriousOrCriticalViolations": 0,
+      "horizontalOverflow": false,
+      "violations": []
+    }
+  ]
+}

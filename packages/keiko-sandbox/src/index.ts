@@ -23,6 +23,14 @@ export {
 } from "./debug-capsule.js";
 export { probeBackends, currentPlatform, isExecutableOnPath } from "./probe.js";
 export {
+  createRuntimeGatewayConfinement,
+  copyRuntimeGatewayConfinement,
+  isRuntimeGatewayConfinement,
+  buildRuntimeGatewaySeatbeltCommand,
+  type RuntimeGatewayConfinement,
+  type RuntimeGatewayConfinementInput,
+} from "./runtime-gateway.js";
+export {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
   PRODUCTION_RUNTIME_QUALIFICATIONS,
   qualificationFromReceipt,

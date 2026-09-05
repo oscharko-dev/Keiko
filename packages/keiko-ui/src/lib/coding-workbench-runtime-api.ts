@@ -2,6 +2,7 @@
 
 import type {
   CodingWorkbenchMode,
+  CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
   CodingWorkbenchRuntimeQuestionsChannelPayload,
@@ -29,6 +30,7 @@ import { validateCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
 import { createSameOriginApiEventSource } from "./safe-event-source";
+import { runtimeIssueFailure } from "./coding-workbench-issue-errors";
 import { secureRandomId } from "./secure-random";
 
 const RUNTIME_ROOT = "/api/coding-workbench/runtime";
@@ -43,6 +45,7 @@ export interface CodingWorkbenchRuntimeApiError {
    * server-side diagnostic record — a rejected start must never be a dead button (F-09a).
    */
   readonly correlationId?: string;
+  readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure | undefined;
 }
 
 export function codingWorkbenchRuntimeApiError(error: unknown): CodingWorkbenchRuntimeApiError {
@@ -53,6 +56,9 @@ export function codingWorkbenchRuntimeApiError(error: unknown): CodingWorkbenchR
       retryable:
         error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500,
       ...(error.correlationId === undefined ? {} : { correlationId: error.correlationId }),
+      ...(runtimeIssueFailure(error) === undefined
+        ? {}
+        : { issueBindingFailure: runtimeIssueFailure(error) }),
     };
   }
   return {
@@ -123,6 +129,11 @@ function runPath(runId: string, suffix = ""): string {
   return `${RUNTIME_ROOT}/runs/${encodeURIComponent(runId)}${suffix}`;
 }
 
+function enrichRuntimeIssueFailure(error: ApiError, envelope: unknown): void {
+  const failure = runtimeIssueFailure(envelope);
+  if (failure !== undefined) Object.assign(error, { issueBindingFailure: failure });
+}
+
 function postSnapshot<T>(
   path: string,
   body: T,
@@ -136,7 +147,7 @@ function postSnapshot<T>(
       body: JSON.stringify(body),
       ...(signal ? { signal } : {}),
     },
-    { validator: snapshotValidator },
+    { validator: snapshotValidator, enrichError: enrichRuntimeIssueFailure },
   );
 }
 

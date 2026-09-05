@@ -289,6 +289,9 @@ export {
   buildPrConvertDraftGraphqlArgv,
   buildPrCreateArgv,
   buildPrMarkReadyGraphqlArgv,
+  buildPrReadArgv,
+  buildPrReadByHeadArgv,
+  buildPrReadBranchHeadArgv,
   buildPrUpdateArgv,
   classifyGitPullRequestRejection,
   evaluateGitPullRequestEffectivePolicy,
@@ -305,6 +308,10 @@ export {
   type GitPrUpdateCommand,
   type GitPrUpdateExecRequest,
   type GitPullRequestAdapter,
+  type GitPullRequestInspectionAdapter,
+  type GitPrInspectionResult,
+  type GitPrReadRequest,
+  type GitPrReadHeadRequest,
   type GitPullRequestCommand,
   type GitPullRequestEffectivePolicy,
   type GitPullRequestLifecycleResult,
@@ -401,3 +408,13 @@ export { KEIKO_TOOLS_VERSION } from "./version.js";
 // run's base ref to. Same dedicated read allowlist and remote-URL read policy as the worktree
 // snapshot reader; carries the Node spawn effect like `runCommand` above.
 export { readGitDefaultBranch } from "./git-default-branch-node.js";
+
+export {
+  type GitPullRequestBodyAdapter,
+  type GitPrBody,
+  type GitPrBodyUpdateRequest,
+  buildPrBodyReadArgv,
+  buildPrBodyUpdateArgv,
+  validGitPrBodyText,
+  GIT_PR_BODY_MAX_BYTES,
+} from "./git-pr-body.js";

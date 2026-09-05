@@ -1,8 +1,13 @@
+import {
+  isVerifiedCommitResult,
+  type VerifiedCommitResult,
+} from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
 
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { validateCodingWorkbenchIssueBinding } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 
 import type {
   CodingWorkbenchActionClass,
@@ -32,7 +37,9 @@ const RUNTIME_TTL_MS = 30 * 60_000;
 type LaunchResolutionInput = Parameters<CodingRuntimeLaunchResolver["resolve"]>[0];
 
 export interface ProductionWorkspaceAuthorityInput {
-  readonly workspaceLifecycle: WorkspaceLifecycleService;
+  /** Retained last successful runtime receipt; latest proposals never replace HEAD provenance. */
+  readonly verifiedCommitResult?: (runId: string) => VerifiedCommitResult | undefined;
+  readonly workspaceLifecycle: Pick<WorkspaceLifecycleService, "getActive">;
   readonly managedTaskWorkspaceRoot: string;
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly readWorkspaceHead: (workspaceRoot: string, repositoryRoot: string) => string | undefined;
@@ -133,6 +140,7 @@ function contextFromActive(
     input.deploymentCeiling,
   );
   return {
+    runId: request.runId,
     operatorId: request.serverPrincipal,
     taskId: instance.taskId,
     projectId: instance.repositoryId,
@@ -141,6 +149,7 @@ function contextFromActive(
     workspaceRoot: request.workspaceRoot,
     branchRef: branch,
     branchHeadDigest: digest(head),
+    ...issueBindingFromRequest(request, instance),
     branch: {
       baseRef: instance.baseBranch,
       headRef: branch,
@@ -177,6 +186,21 @@ function contextFromActive(
     },
     expiresAt: new Date(now.getTime() + RUNTIME_TTL_MS).toISOString(),
   };
+}
+
+function issueBindingFromRequest(
+  request: LaunchResolutionInput,
+  instance: WorkspaceInstance,
+): Pick<CodingRuntimeTrustedContext, "issueBinding"> {
+  if (request.issueBinding === undefined) return {};
+  const binding = validateCodingWorkbenchIssueBinding(request.issueBinding);
+  if (
+    !binding.ok ||
+    binding.value.repositoryId !== instance.repositoryId ||
+    binding.value.defaultBaseRef !== instance.baseBranch
+  )
+    invalidWorkspace();
+  return { issueBinding: structuredClone(binding.value) };
 }
 
 type TrustedRuntimeProfile = Pick<CodingRuntimeTrustedContext, "runtimeSource"> & {
@@ -264,6 +288,7 @@ export function productionRuntimeAuthorityFacts(
       workspaceRootDigest: digest(context.workspaceRoot),
       branchRef: projectRuntimeAuthorityValue("branch", context.branchRef),
       branchHeadDigest: context.branchHeadDigest,
+      ...(context.issueBinding === undefined ? {} : { issueBinding: context.issueBinding }),
     },
     actionClasses: context.actionClasses,
     connectorScopes: context.connectorScopes,
@@ -310,7 +335,7 @@ export function productionWorkspaceMatches(
     return (
       trustedIdentityMatches(active.instance, context) &&
       trustedBranchMatches(active.instance, context) &&
-      trustedHeadMatches(active.instance, context, head)
+      trustedHeadMatches(input, active.instance, context, head)
     );
   } catch {
     return false;
@@ -344,15 +369,22 @@ function trustedBranchMatches(
 }
 
 function trustedHeadMatches(
+  input: ProductionWorkspaceAuthorityInput,
   instance: WorkspaceInstance,
   context: CodingRuntimeTrustedContext,
   head: string | undefined,
 ): boolean {
-  return (
-    head !== undefined &&
-    instance.lastVerifiedHead === head &&
-    digest(head) === context.branchHeadDigest
-  );
+  if (head === undefined || instance.lastVerifiedHead !== head) return false;
+  if (digest(head) === context.branchHeadDigest) return true;
+  if (context.runId === undefined) return false;
+  const receipt = input.verifiedCommitResult?.(context.runId);
+  if (!isVerifiedCommitResult(receipt) || receipt.status !== "succeeded") return false;
+  return [
+    receipt.runId === context.runId,
+    receipt.headSha === head,
+    receipt.workspaceDigest === digest(context.workspaceRoot),
+    receipt.issueBindingDigest === context.issueBinding?.bindingDigest,
+  ].every(Boolean);
 }
 
 export function trustedManagedWorkspaceRoot(root: string): boolean {

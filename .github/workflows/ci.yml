@@ -1400,6 +1400,12 @@ jobs:
         env:
           KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: npm run check:perf-evidence:workspace
+      # Coding-runtime samples are produced only on the declared native reference host.
+      # Hosted CI checks their closed schema, derived budgets and measurement-toolchain binding.
+      - name: Validate coding runtime performance evidence
+        env:
+          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: npm run check:perf-evidence:coding-runtime
       - name: Performance evidence freshness + budget gate
         if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: npm run check:perf-evidence

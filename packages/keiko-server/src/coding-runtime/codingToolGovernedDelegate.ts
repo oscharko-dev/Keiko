@@ -1,6 +1,19 @@
-import type { AuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contracts";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
+import type { CodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
+import type {
+  AuxiliaryCapabilityOutcomeV1,
+  VerifiedCommitResult,
+  CodingRuntimeGitResult,
+} from "@oscharko-dev/keiko-contracts";
 
 import type { CodingToolDelegatePort, CodingToolMutationGuard } from "./codingToolFacadePorts.js";
+import type {
+  CiRepairExecutionBudget,
+  CiRepairExecutionLease,
+} from "./codingRuntimeCiRepairController.js";
 import type {
   CodingToolActionRequest,
   CodingToolEgressReadResult,
@@ -21,11 +34,15 @@ export interface GovernedCodingToolPort<Kind extends CodingToolActionRequest["ac
 }
 
 type GovernedCodingToolRead = CodingToolReadResult | CodingToolEgressReadResult;
-type GovernedCodingToolResult =
+export type GovernedCodingToolResult =
   | {
       readonly status: "completed";
       readonly read?: GovernedCodingToolRead | undefined;
       readonly auxiliary?: AuxiliaryCapabilityOutcomeV1 | undefined;
+      readonly draftDelivery?: CodingRuntimeDeliveryResult;
+      readonly verifiedCommit?: VerifiedCommitResult;
+      readonly git?: CodingRuntimeGitResult;
+      readonly ci?: CodingRuntimeCiResult;
     }
   // `reasonCode` is a closed-vocabulary marker. The facade forwards only its own allowlisted,
   // body-free codes and collapses every unrecognized value to a bare failed outcome.
@@ -47,15 +64,66 @@ export interface CodingToolGovernedPorts {
 
 export function createCodingToolGovernedDelegate(
   ports: CodingToolGovernedPorts,
+  budget?: CiRepairExecutionBudget,
+  activityLog: ServerLogSink = processServerLogSink(),
 ): CodingToolDelegatePort {
   return {
     execute: async (request, signal, mutationGuard): Promise<unknown> => {
       if (signal?.aborted === true) return { outcome: "failed" };
       if (!mutationGuard.check()) return { outcome: "failed" };
-      const result = await dispatch(ports, request, signal, mutationGuard);
-      return governedOutcome(request.action, result);
+      const lease = budget?.admitTool(request);
+      if (budget !== undefined && lease === undefined)
+        return { outcome: "failed", reasonCode: "ci-repair-budget-blocked" };
+      const guard = withRepairLease(mutationGuard, lease, budget);
+      let result: GovernedCodingToolResult | undefined;
+      try {
+        result = await dispatch(ports, request, signal, guard);
+        if (!completionLive(result, guard, signal)) {
+          return discardedResult(activityLog, request, guard);
+        }
+        return governedOutcome(request.action, result);
+      } finally {
+        lease?.settle(result);
+      }
     },
   };
+}
+
+function discardedResult(
+  activityLog: ServerLogSink,
+  request: CodingToolActionRequest,
+  guard: CodingToolMutationGuard,
+): { readonly outcome: "failed" } {
+  activityLog.write({
+    category: "process",
+    op: "coding-runtime.tool-result",
+    correlationId: guard.binding?.runId ?? UNKNOWN_CORRELATION_ID,
+    extra: { actionKind: request.action, state: "discarded", reason: "authority-denied" },
+  });
+  return { outcome: "failed" };
+}
+
+function withRepairLease(
+  guard: CodingToolMutationGuard,
+  lease: CiRepairExecutionLease | undefined,
+  budget: CiRepairExecutionBudget | undefined,
+): CodingToolMutationGuard {
+  return lease === undefined
+    ? guard
+    : {
+        ...guard,
+        check: (): boolean => guard.check() && lease.check(),
+        chargeDelegatedRead: (delegationId, idempotencyKey): boolean =>
+          guard.chargeDelegatedRead?.(delegationId, idempotencyKey) === true &&
+          budget?.chargeDelegatedRead?.(delegationId, idempotencyKey) === true,
+      };
+}
+function completionLive(
+  result: GovernedCodingToolResult,
+  guard: CodingToolMutationGuard,
+  signal: AbortSignal | undefined,
+): boolean {
+  return result.status !== "completed" || (signal?.aborted !== true && guard.check());
 }
 
 // Repository reads AND research fetches (#2387) carry their governed payload back; skills and
@@ -80,6 +148,8 @@ function governedOutcome(
     return { outcome: "failed", reasonCode: result.reasonCode };
   }
   if (result.status !== "completed") return { outcome: result.status };
+  const git = gitOutcome(action, result);
+  if (git !== undefined) return git;
   if (READ_BEARING_ACTIONS.has(action) && result.read !== undefined) {
     return { outcome: "completed", read: result.read };
   }
@@ -87,6 +157,20 @@ function governedOutcome(
     return { outcome: "completed", auxiliary: result.auxiliary };
   }
   return { outcome: result.status };
+}
+
+function gitOutcome(
+  action: CodingToolActionRequest["action"],
+  result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
+): unknown {
+  if (action === "git" && result.ci !== undefined) return { outcome: "completed", ci: result.ci };
+  if (action === "git" && result.git !== undefined)
+    return { outcome: "completed", git: result.git };
+  if (action === "delivery" && result.draftDelivery !== undefined)
+    return { outcome: "completed", draftDelivery: result.draftDelivery };
+  if (action === "delivery" && result.verifiedCommit !== undefined)
+    return { outcome: "completed", verifiedCommit: result.verifiedCommit };
+  return undefined;
 }
 
 // One exhaustive line per governed action class: the switch IS the routing table and the compiler

@@ -1,6 +1,200 @@
 import type { CodingWorkbenchMessageCatalog } from "./coding-workbench-i18n.en";
 
 export const DE_CODING_WORKBENCH_MESSAGES = {
+  "codingWorkbench.journey.title": "Issue-Übergabe",
+  "codingWorkbench.journey.state.awaiting-ready-approval":
+    "Freigabe für Review-Bereitschaft erforderlich",
+  "codingWorkbench.journey.state.keiko-technical-ready": "Technische Keiko-Arbeit bereit",
+  "codingWorkbench.journey.state.ready-for-human-review": "Bereit für menschliches Review",
+  "codingWorkbench.journey.state.awaiting-human-requirements":
+    "Menschliche Review-Anforderungen sind noch offen",
+  "codingWorkbench.journey.state.merged-awaiting-issue-closure":
+    "Zusammengeführt; Issue-Abschluss ausstehend",
+  "codingWorkbench.journey.state.completed": "Issue-Ablauf abgeschlossen",
+  "codingWorkbench.journey.state.blocked": "Übergabe blockiert",
+  "codingWorkbench.journey.state.cancelled": "Übergabe abgebrochen",
+  "codingWorkbench.journey.state.recovery-required": "Abgleich der Übergabe erforderlich",
+  "codingWorkbench.journey.state.stale": "Übergabe-Beobachtung ist veraltet",
+  "codingWorkbench.journey.staleHelp":
+    "Dies sind datierte Beobachtungen. Aktualisiere den Status, bevor du dich auf aktuelle Bereitschaft oder Issue-Abschluss verlässt.",
+  "codingWorkbench.journey.refresh": "Beobachteten Status aktualisieren",
+  "codingWorkbench.journey.proposeReady": "Anfrage zur Review-Bereitschaft prüfen",
+  "codingWorkbench.journey.readyHelp":
+    "Prüfe den Wechsel vom Entwurf zur Review-Bereitschaft, bevor du ihn einmalig freigibst.",
+  "codingWorkbench.journey.busy": "Übergabestatus wird aktualisiert…",
+  "codingWorkbench.journey.actionError.refresh":
+    "Statusaktualisierung fehlgeschlagen. Die gespeicherten Beobachtungen bleiben sichtbar.",
+  "codingWorkbench.journey.actionError.propose-ready":
+    "Die Anfrage zur Review-Bereitschaft ist fehlgeschlagen. Aktualisiere den beobachteten Status vor einem neuen Versuch.",
+  "codingWorkbench.journey.issueLink": "Issue #{number}",
+  "codingWorkbench.journey.prLink": "Pull Request #{number}",
+  "codingWorkbench.journey.ci": "Technische Prüfungen",
+  "codingWorkbench.journey.checkCounts":
+    "{passed} von {total} erforderlichen Prüfungen bestanden · {failed} beratende Fehler",
+  "codingWorkbench.journey.description": "Keiko-PR-Beschreibung",
+  "codingWorkbench.journey.description.current": "Beschreibung ist aktuell",
+  "codingWorkbench.journey.description.partial": "Teilweise Beschreibung angewendet",
+  "codingWorkbench.journey.description.fallback": "Ersatzbeschreibung angewendet",
+  "codingWorkbench.journey.description.stale": "Bestätigung der Beschreibung ist veraltet",
+  "codingWorkbench.journey.description.blocked": "Anwendung der Beschreibung blockiert",
+  "codingWorkbench.journey.description.failed": "Anwendung der Beschreibung fehlgeschlagen",
+  "codingWorkbench.journey.description.unavailable": "Beschreibungsstatus nicht verfügbar",
+  "codingWorkbench.journey.descriptionApplied": "Beschreibung auf den beobachteten PR angewendet",
+  "codingWorkbench.journey.descriptionUnconfirmed":
+    "Aktuelle Anwendung der Beschreibung ist nicht bestätigt",
+  "codingWorkbench.journey.completeness.complete": "Vollständigkeit: vollständig",
+  "codingWorkbench.journey.completeness.partial":
+    "Vollständigkeit: teilweise. Einige Änderungsdetails konnten nicht beschrieben werden.",
+  "codingWorkbench.journey.completeness.fallback":
+    "Vollständigkeit: Ersatz. Die Beschreibung verwendet eine eingeschränkte Ersatzzusammenfassung.",
+  "codingWorkbench.journey.remoteUnknown":
+    "Aktuelle PR-, Review- und Issue-Fakten konnten nicht beobachtet werden.",
+  "codingWorkbench.journey.review.approved": "Menschliches Review freigegeben",
+  "codingWorkbench.journey.review.changes-requested": "Reviewer haben Änderungen angefordert",
+  "codingWorkbench.journey.review.review-required": "Menschliches Review erforderlich",
+  "codingWorkbench.journey.review.unknown": "Menschlicher Review-Status unbekannt",
+  "codingWorkbench.journey.conversations": "Review-Unterhaltungen",
+  "codingWorkbench.journey.conversationCounts":
+    "{unresolved} ungelöst · {resolved} gelöst · {total} insgesamt",
+  "codingWorkbench.journey.merge": "Beobachteter Merge-Zeitpunkt",
+  "codingWorkbench.journey.notMerged": "Merge nicht beobachtet",
+  "codingWorkbench.journey.issueState": "Beobachteter Issue-Status",
+  "codingWorkbench.journey.issue.open": "Issue offen",
+  "codingWorkbench.journey.issue.closed": "Issue geschlossen",
+  "codingWorkbench.journey.closedAt": "Beobachteter Issue-Abschlusszeitpunkt",
+  "codingWorkbench.journey.reason.ready-approval-required":
+    "Die beobachtete Revision kann zur einmaligen Freigabe der Review-Bereitschaft vorgeschlagen werden.",
+  "codingWorkbench.journey.reason.technical-ready":
+    "Die technische Arbeit ist bereit; Review- und Merge-Anforderungen bleiben getrennt.",
+  "codingWorkbench.journey.reason.human-review-ready":
+    "Der beobachtete PR ist bereit für menschliches Review.",
+  "codingWorkbench.journey.reason.required-reviews-missing":
+    "Erforderliche menschliche Freigaben fehlen noch.",
+  "codingWorkbench.journey.reason.changes-requested":
+    "Angeforderte Review-Änderungen sind noch offen.",
+  "codingWorkbench.journey.reason.unresolved-conversations":
+    "Die verbleibenden Review-Unterhaltungen müssen geklärt werden.",
+  "codingWorkbench.journey.reason.review-visibility-unknown":
+    "Die Review-Sichtbarkeit ist unvollständig; die Review-Bereitschaft ist daher unbekannt.",
+  "codingWorkbench.journey.reason.issue-closure-pending":
+    "Der Merge wurde beobachtet, aber das gebundene Issue ist noch offen.",
+  "codingWorkbench.journey.reason.merge-and-closure-observed":
+    "Sowohl der PR-Merge als auch der Abschluss des gebundenen Issues wurden beobachtet.",
+  "codingWorkbench.journey.reason.closed-unmerged":
+    "Der PR wurde ohne beobachteten Merge geschlossen.",
+  "codingWorkbench.journey.reason.issue-closed-without-merge":
+    "Das Issue wurde ohne beobachteten PR-Merge geschlossen.",
+  "codingWorkbench.journey.reason.retargeted":
+    "Das PR-Ziel entspricht nicht mehr dem akzeptierten Standardbranch.",
+  "codingWorkbench.journey.reason.head-changed":
+    "Der PR-Stand hat sich seit der akzeptierten Lieferung geändert.",
+  "codingWorkbench.journey.reason.readiness-unavailable":
+    "Die CI-Bereitschaft wurde nicht bestätigt.",
+  "codingWorkbench.journey.reason.readiness-stale": "Aktualisiere die veraltete CI-Beobachtung.",
+  "codingWorkbench.journey.reason.checks-not-ready":
+    "Erforderliche technische Prüfungen sind noch nicht bereit.",
+  "codingWorkbench.journey.reason.description-unavailable":
+    "Die angewendete PR-Beschreibung wurde nicht beobachtet.",
+  "codingWorkbench.journey.reason.description-stale":
+    "Die Beschreibung hat keine aktuelle Revisionsbestätigung mehr.",
+  "codingWorkbench.journey.reason.description-not-applied":
+    "Die ausgewählte Beschreibung wurde im PR-Text noch nicht bestätigt.",
+  "codingWorkbench.journey.reason.provider-unavailable":
+    "Provider-Fakten konnten nicht bestätigt werden.",
+  "codingWorkbench.journey.reason.authority-denied":
+    "Die aktuelle Berechtigung erlaubt diesen Übergabeschritt nicht.",
+  "codingWorkbench.journey.reason.observation-superseded":
+    "Eine neuere Beobachtung hat diese Statusabfrage ersetzt.",
+  "codingWorkbench.journey.reason.cancelled": "Der Übergabeschritt wurde abgebrochen.",
+  "codingWorkbench.journey.reason.ready-effect-uncertain":
+    "Der Bereitschaftswechsel konnte nicht bestätigt werden. Aktualisiere den Status zum Abgleich mit dem tatsächlichen PR-Zustand.",
+  "codingWorkbench.ci.title": "CI-Status",
+  "codingWorkbench.ci.state.technical-ready": "Technische Prüfungen bestanden",
+  "codingWorkbench.ci.state.pending": "CI-Prüfungen ausstehend",
+  "codingWorkbench.ci.state.failed": "CI-Prüfungen fehlgeschlagen",
+  "codingWorkbench.ci.state.blocked": "CI-Beobachtung blockiert",
+  "codingWorkbench.ci.state.unknown": "CI-Status unbekannt",
+  "codingWorkbench.ci.state.stale": "CI-Beobachtung ist veraltet",
+  "codingWorkbench.ci.state.unobserved": "Noch keine CI-Beobachtung",
+  "codingWorkbench.ci.help":
+    "Technische Prüfungen, Entwurfsstatus und menschliches Review sind getrennt. Diese Beobachtung erlaubt keinen Merge.",
+  "codingWorkbench.ci.staleHelp":
+    "Historische Beobachtung. Eine neue Beobachtung in einem aktiven Lauf muss die aktuellen Prüfungen bestätigen.",
+  "codingWorkbench.ci.required": "Erforderliche Prüfungen",
+  "codingWorkbench.ci.advisory": "Informative Prüfungen",
+  "codingWorkbench.ci.count.total": "Gesamt",
+  "codingWorkbench.ci.count.passed": "Bestanden",
+  "codingWorkbench.ci.count.failed": "Fehlgeschlagen",
+  "codingWorkbench.ci.count.pending": "Ausstehend",
+  "codingWorkbench.ci.count.blocked": "Blockiert",
+  "codingWorkbench.ci.count.unknown": "Unbekannt",
+  "codingWorkbench.ci.head": "Beobachteter Commit",
+  "codingWorkbench.ci.observedAt": "Beobachtet am",
+  "codingWorkbench.ci.expiresAt": "Gültig bis",
+  "codingWorkbench.ci.completeness": "Beobachtungsumfang",
+  "codingWorkbench.ci.complete": "Vollständig",
+  "codingWorkbench.ci.incomplete": "Unvollständig — CI-Status kann nicht bestätigt werden",
+  "codingWorkbench.ci.pullRequest": "Pull Request",
+  "codingWorkbench.ci.draft": "Entwurfsstatus",
+  "codingWorkbench.ci.isDraft": "Pull-Request-Entwurf",
+  "codingWorkbench.ci.notDraft": "Kein Entwurf",
+  "codingWorkbench.ci.humanReview": "Menschliches Review",
+  "codingWorkbench.ci.reviewUnknown": "Review-Sichtbarkeit ist unbekannt",
+  "codingWorkbench.ci.reviewCounts":
+    "{approved} genehmigt · {required} erforderlich · {changes} Änderungswünsche",
+  "codingWorkbench.ci.pr.open": "Offen",
+  "codingWorkbench.ci.pr.closed": "Geschlossen",
+  "codingWorkbench.ci.pr.merged": "Zusammengeführt",
+  "codingWorkbench.ci.conflict": "Merge-Konflikte",
+  "codingWorkbench.ci.conflict.clear": "Kein beobachteter Konflikt",
+  "codingWorkbench.ci.conflict.conflicting": "Konflikte müssen behoben werden",
+  "codingWorkbench.ci.conflict.unknown": "Konfliktstatus unbekannt",
+  "codingWorkbench.ci.baseCurrency": "Basisrevision",
+  "codingWorkbench.ci.base.current": "Aktuell",
+  "codingWorkbench.ci.base.behind": "Hinter dem Basisbranch",
+  "codingWorkbench.ci.base.unknown": "Aktualität der Basis unbekannt",
+  "codingWorkbench.ci.reason.required-checks-passed":
+    "Die beobachteten erforderlichen Prüfungen wurden bestanden.",
+  "codingWorkbench.ci.reason.required-checks-pending":
+    "Erforderliche Prüfungen sind noch nicht abgeschlossen.",
+  "codingWorkbench.ci.reason.required-checks-failed":
+    "Erforderliche Prüfungen haben Fehler gemeldet.",
+  "codingWorkbench.ci.reason.required-checks-blocked":
+    "Erforderliche Prüfungen können nicht fortgesetzt werden.",
+  "codingWorkbench.ci.reason.required-checks-unknown":
+    "Ergebnisse erforderlicher Prüfungen sind unvollständig oder unbekannt.",
+  "codingWorkbench.ci.reason.pull-request-closed": "Der Pull Request ist nicht mehr offen.",
+  "codingWorkbench.ci.reason.merge-conflict": "Die beobachtete Revision hat Merge-Konflikte.",
+  "codingWorkbench.ci.reason.base-outdated": "Der Basisbranch hat sich geändert.",
+  "codingWorkbench.ci.reason.merge-context-unknown":
+    "Der aktuelle Merge-Kontext konnte nicht bestätigt werden.",
+  "codingWorkbench.ci.reason.repair-budget-exhausted":
+    "Das Budget zur CI-Reparatur ist ausgeschöpft.",
+  "codingWorkbench.ci.reason.authority-denied":
+    "Die aktuelle Berechtigung erlaubt diese Beobachtung nicht.",
+  "codingWorkbench.ci.reason.auth-required": "Eine GitHub-Authentifizierung ist erforderlich.",
+  "codingWorkbench.ci.reason.invalid-binding":
+    "Die akzeptierte Pull-Request-Bindung konnte nicht bestätigt werden.",
+  "codingWorkbench.ci.reason.cancelled": "Die Beobachtung wurde abgebrochen.",
+  "codingWorkbench.ci.reason.provider-forbidden":
+    "Der Anbieter hat das Lesen dieser Prüfungen nicht erlaubt.",
+  "codingWorkbench.ci.reason.provider-not-found":
+    "Der Anbieter konnte den angeforderten Prüfungskontext nicht bereitstellen.",
+  "codingWorkbench.ci.reason.rate-limited": "Der Anbieter hat Anfragen vorübergehend begrenzt.",
+  "codingWorkbench.ci.reason.provider-unavailable":
+    "Der Anbieter ist vorübergehend nicht verfügbar.",
+  "codingWorkbench.ci.reason.timeout": "Das Zeitlimit der Beobachtung wurde erreicht.",
+  "codingWorkbench.ci.reason.pagination-exhausted": "Die Beobachtung hat ihr Seitenlimit erreicht.",
+  "codingWorkbench.ci.reason.output-truncated": "Die Beobachtung hat ihr Ausgabelimit erreicht.",
+  "codingWorkbench.ci.reason.malformed-response":
+    "Die Antwort des Anbieters konnte nicht validiert werden.",
+  "codingWorkbench.ci.reason.visibility-unknown":
+    "Die Sichtbarkeit erforderlicher Prüfungen konnte nicht bestätigt werden.",
+  "codingWorkbench.ci.reason.requirements-ambiguous":
+    "Die erforderlichen Prüfungen konnten nicht eindeutig bestimmt werden.",
+  "codingWorkbench.ci.reason.revision-changed":
+    "Die Pull-Request-Revision hat sich während der Beobachtung geändert.",
+
   "codingWorkbench.status.checking": "Prüfe",
   "codingWorkbench.header.eyebrow": "Coding",
   "codingWorkbench.header.summary":
@@ -324,6 +518,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.risk.high": "Hoch",
   "codingWorkbench.approval.risk.critical": "Kritisch",
   "codingWorkbench.approval.actionKind.file-edit": "Dateibearbeitung",
+  "codingWorkbench.approval.actionKind.git-stage": "Änderungen vormerken",
   "codingWorkbench.approval.actionKind.verification-command": "Verifikationsbefehl",
   "codingWorkbench.approval.actionKind.research": "Recherche",
   "codingWorkbench.approval.actionKind.commit": "Commit",
@@ -361,6 +556,149 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.research.unavailable":
     "Ziel nicht abrufbar. Fenster erneut koppeln, um es vor der Entscheidung zu sehen.",
   "codingWorkbench.approval.research.retry": "Ziel erneut laden",
+  "codingWorkbench.draftDelivery.title": "Repository-Übermittlung",
+  "codingWorkbench.draftDelivery.phase.push-proposed": "Push wartet auf Freigabe",
+  "codingWorkbench.draftDelivery.phase.pushing": "Push läuft",
+  "codingWorkbench.draftDelivery.phase.pushed": "Commit übertragen",
+  "codingWorkbench.draftDelivery.phase.pr-proposed": "Pull-Request-Entwurf wartet auf Freigabe",
+  "codingWorkbench.draftDelivery.phase.creating-pr": "Pull-Request-Entwurf wird erstellt",
+  "codingWorkbench.draftDelivery.phase.draft-created": "Pull-Request-Entwurf erstellt",
+  "codingWorkbench.draftDelivery.phase.recovery-required": "Übermittlung muss abgeglichen werden",
+  "codingWorkbench.draftDelivery.reason.approval-required":
+    "Die gespeicherte Vorlage benötigt vor der Übermittlung die passende Freigabe.",
+  "codingWorkbench.draftDelivery.reason.in-flight":
+    "Der Vorgang wurde gestartet. Sein Ergebnis auf dem Server ist noch nicht bestätigt.",
+  "codingWorkbench.draftDelivery.reason.completed":
+    "Das Ergebnis auf dem Server wurde für diesen gespeicherten Übermittlungsschritt bestätigt.",
+  "codingWorkbench.draftDelivery.reason.authority-denied":
+    "Die akzeptierte Berechtigung erlaubt diese Übermittlung nicht mehr.",
+  "codingWorkbench.draftDelivery.reason.remote-drift":
+    "Der Zustand auf dem Server weicht vom freigegebenen Ziel ab und muss geprüft werden.",
+  "codingWorkbench.draftDelivery.reason.issue-drift":
+    "Die akzeptierte Issue-Bindung hat sich geändert. Die Übermittlung muss geprüft werden.",
+  "codingWorkbench.draftDelivery.reason.provider-failed":
+    "Der Anbieter hat den Vorgang nicht bestätigt. Vor einem erneuten Versuch muss der Zustand auf dem Server geprüft werden.",
+  "codingWorkbench.draftDelivery.reason.ambiguous-remote":
+    "Das Ergebnis auf dem Server konnte dieser Aufgabe nicht eindeutig zugeordnet werden.",
+  "codingWorkbench.draftDelivery.reason.approval-invalid":
+    "Die Freigabe fehlt, ist abgelaufen oder passt nicht zu dieser Vorlage.",
+  "codingWorkbench.draftDelivery.reason.payload-changed":
+    "Die vorgesehene Übermittlung hat sich seit der Prüfung geändert.",
+  "codingWorkbench.draftDelivery.reason.restart-reconciliation":
+    "Die Übermittlung wurde unterbrochen. Vor dem Fortsetzen muss der Zustand auf dem Server geprüft werden.",
+  "codingWorkbench.draftDelivery.reason.preflight-failed":
+    "Die Voraussetzungen für die Übermittlung waren nicht erfüllt.",
+  "codingWorkbench.draftDelivery.pullRequest": "Pull Request #{number}",
+  "codingWorkbench.draftDelivery.remoteState": "Zuletzt beobachteter PR-Status",
+  "codingWorkbench.draftDelivery.remoteHead": "Zuletzt beobachteter PR-Commit",
+  "codingWorkbench.draftDelivery.remoteBase": "Zuletzt beobachteter PR-Basis-Commit",
+  "codingWorkbench.draftDelivery.remote.open": "Offen",
+  "codingWorkbench.draftDelivery.remote.closed": "Geschlossen",
+  "codingWorkbench.draftDelivery.remote.draft": "Entwurf",
+  "codingWorkbench.draftDelivery.remote.notDraft": "Kein Entwurf",
+  "codingWorkbench.draftDelivery.details": "Gespeichertes Übermittlungsziel",
+  "codingWorkbench.draftDelivery.repository": "Repository",
+  "codingWorkbench.draftDelivery.issue": "Akzeptiertes Issue",
+  "codingWorkbench.draftDelivery.headRef": "Feature-Branch",
+  "codingWorkbench.draftDelivery.headSha": "Freigegebener Commit",
+  "codingWorkbench.draftDelivery.baseRef": "Ziel-Branch",
+  "codingWorkbench.draftDelivery.baseSha": "Freigegebener Basis-Commit",
+  "codingWorkbench.draftDelivery.proposal": "Vorlage",
+  "codingWorkbench.draftDelivery.recordedAt": "Erfasst am",
+  "codingWorkbench.commitResult.title": "Commit-Ergebnis",
+  "codingWorkbench.commitResult.head": "Erstellter Commit",
+  "codingWorkbench.commitResult.findings": "Git-Prüfungen",
+  "codingWorkbench.commitResult.status.succeeded": "Commit erstellt",
+  "codingWorkbench.commitResult.status.approval-required": "Commit wartet auf Freigabe",
+  "codingWorkbench.commitResult.status.blocked": "Commit blockiert",
+  "codingWorkbench.commitResult.status.failed": "Commit fehlgeschlagen",
+  "codingWorkbench.commitResult.status.recovery-required": "Commit erfordert Wiederherstellung",
+  "codingWorkbench.commitResult.status.verification-failed": "Commit-Verifizierung fehlgeschlagen",
+  "codingWorkbench.commitResult.status.drift": "Commit-Vorschlag hat sich geändert",
+  "codingWorkbench.commitResult.reason.approval-required":
+    "Prüfe den vorgeschlagenen Commit vor der Entscheidung.",
+  "codingWorkbench.commitResult.reason.approval-invalid":
+    "Die Freigabe passt nicht mehr zu diesem Vorschlag. Fordere eine neue Prüfung an.",
+  "codingWorkbench.commitResult.reason.authority-denied":
+    "Die aktuelle Berechtigung erlaubt diesen Commit nicht.",
+  "codingWorkbench.commitResult.reason.verification-missing":
+    "Führe die erforderliche Verifizierung aus, bevor du diesen Commit vorschlägst.",
+  "codingWorkbench.commitResult.reason.verification-failed":
+    "Die erforderliche Verifizierung war nicht erfolgreich.",
+  "codingWorkbench.commitResult.reason.verification-stale":
+    "Die Verifizierung passt nicht mehr zur vorgemerkten Änderung. Verifiziere sie erneut.",
+  "codingWorkbench.commitResult.reason.candidate-drift":
+    "Die vorgemerkte Änderung passt nicht mehr zu diesem Vorschlag. Fordere eine neue Prüfung an.",
+  "codingWorkbench.commitResult.reason.repository-drift":
+    "Das Repository hat sich seit der Prüfung geändert. Prüfe seinen aktuellen Zustand.",
+  "codingWorkbench.commitResult.reason.message-policy":
+    "Die Commit-Nachricht erfüllt die Nachrichtenrichtlinie nicht.",
+  "codingWorkbench.commitResult.reason.review-incomplete":
+    "Die vorgemerkte Änderung konnte nicht vollständig geprüft werden.",
+  "codingWorkbench.commitResult.reason.issue-directive":
+    "Die Commit-Nachricht enthält eine nicht unterstützte Anweisung zum Schließen eines Issues.",
+  "codingWorkbench.commitResult.reason.conflict-markers":
+    "Die vorgemerkte Änderung enthält ungelöste Konfliktmarkierungen.",
+  "codingWorkbench.commitResult.reason.policy-block":
+    "Die Git-Richtlinie hat diesen Commit verhindert. Prüfe den folgenden Befund.",
+  "codingWorkbench.commitResult.reason.preflight-block":
+    "Eine Git-Prüfung hat diesen Commit verhindert. Prüfe die folgenden Befunde.",
+  "codingWorkbench.commitResult.reason.execution-failed":
+    "Git konnte diesen Commit nicht erstellen.",
+  "codingWorkbench.commitResult.reason.execution-uncertain":
+    "Das Commit-Ergebnis ist unklar. Gleiche den Repository-Zustand vor einem weiteren Versuch ab.",
+  "codingWorkbench.commitResult.reason.restart-reconciliation":
+    "Dieser Commit muss nach einem Neustart abgeglichen werden.",
+  "codingWorkbench.commitResult.reason.completed":
+    "Der erstellte Commit entspricht dem geprüften vorgemerkten Baum.",
+  "codingWorkbench.commitResult.preflight.detached-head": "Kein Branch ist ausgecheckt",
+  "codingWorkbench.commitResult.preflight.branch-already-exists": "Der Branch existiert bereits",
+  "codingWorkbench.commitResult.preflight.base-branch-missing": "Der Basis-Branch fehlt",
+  "codingWorkbench.commitResult.preflight.switch-target-missing": "Der Ziel-Branch fehlt",
+  "codingWorkbench.commitResult.preflight.no-changes-to-stage":
+    "Keine Änderungen zum Vormerken vorhanden",
+  "codingWorkbench.commitResult.preflight.nothing-staged-to-unstage":
+    "Keine vorgemerkten Änderungen zum Zurücknehmen vorhanden",
+  "codingWorkbench.commitResult.preflight.nothing-staged-to-commit":
+    "Für diesen Commit sind keine Änderungen vorgemerkt",
+  "codingWorkbench.commitResult.preflight.untracked-files-impacted":
+    "Nicht verfolgte Dateien wären betroffen",
+  "codingWorkbench.commitResult.preflight.no-upstream-configured":
+    "Kein Upstream-Branch ist konfiguriert",
+  "codingWorkbench.commitResult.preflight.nothing-to-push": "Keine Commits zum Pushen vorhanden",
+  "codingWorkbench.commitResult.preflight.non-fast-forward": "Der Remote-Verlauf ist abgewichen",
+  "codingWorkbench.commitResult.preflight.remote-alias-missing": "Der Remote-Alias fehlt",
+  "codingWorkbench.commitResult.preflight.remote-unreachable": "Das Remote ist nicht erreichbar",
+  "codingWorkbench.commitResult.preflight.operation-in-progress":
+    "Eine Git-Operation läuft bereits",
+  "codingWorkbench.commitResult.preflight.no-operation-to-abort":
+    "Keine Git-Operation kann abgebrochen werden",
+  "codingWorkbench.commitResult.preflight.recovery-target-unset":
+    "Kein Wiederherstellungsziel ist festgelegt",
+  "codingWorkbench.commitResult.preflight.dirty-worktree-impacts-recovery":
+    "Workspace-Änderungen verhindern eine sichere Wiederherstellung",
+  "codingWorkbench.approval.commit.message": "Geprüfte Commit-Nachricht",
+  "codingWorkbench.approval.commit.binding": "Exakte Commit-Bindung",
+  "codingWorkbench.approval.commit.proposal": "Vorschlag",
+  "codingWorkbench.approval.commit.verification": "Verifizierungsnachweis",
+  "codingWorkbench.approval.commit.base": "Basis-Commit",
+  "codingWorkbench.approval.commit.parent": "Übergeordneter Commit",
+  "codingWorkbench.approval.commit.tree": "Digest des vorgemerkten Baums",
+  "codingWorkbench.approval.commit.messageDigest": "Nachrichten-Digest",
+  "codingWorkbench.approval.commit.files": "Vorgemerkte Dateien für diesen Commit",
+  "codingWorkbench.approval.delivery.target": "Geprüftes Übermittlungsziel",
+  "codingWorkbench.approval.delivery.loading": "Übermittlungsprüfung wird geladen…",
+  "codingWorkbench.approval.delivery.unavailable":
+    "Die Übermittlungsprüfung ist nicht verfügbar. Erneut laden oder diese Anfrage ablehnen.",
+  "codingWorkbench.approval.delivery.retry": "Übermittlungsprüfung erneut laden",
+  "codingWorkbench.approval.delivery.title": "Geprüfter Pull-Request-Titel",
+  "codingWorkbench.approval.delivery.body": "Geprüfte Pull-Request-Beschreibung",
+  "codingWorkbench.approval.delivery.pushHelp":
+    "Diesen exakten Commit und Branch für einen Push in das angezeigte Repository freigeben. Das Erstellen eines Pull Requests erfordert eine eigene Freigabe.",
+  "codingWorkbench.approval.delivery.prHelp":
+    "Einen Draft Pull Request mit diesem exakten Titel, dieser Beschreibung und diesem Ziel freigeben. Diese Freigabe führt den Pull Request nicht zusammen.",
+  "codingWorkbench.approval.commit.help":
+    "Die Freigabe gilt einmalig für diese geprüfte Nachricht und vorgemerkte Änderung. Ein geänderter Vorschlag erfordert eine erneute Prüfung.",
   "codingWorkbench.approval.changes.title": "Dateien, die diese Änderung schreiben würde",
   "codingWorkbench.approval.changes.files": "Dateien",
   "codingWorkbench.approval.changes.lines": "Zeilen",
@@ -509,7 +847,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.issue.help":
     "Optional. Füge eine Issue-URL oder #Nummer aus diesem Repository ein. Keiko zeigt das Issue als nicht vertrauenswürdigen Text an und bindet den Lauf an das serverseitig aufgelöste Issue, Repository, Remote und den Standardbranch.",
   "codingWorkbench.issue.reference": "Issue-URL oder #Nummer",
-  "codingWorkbench.issue.referencePlaceholder": "https://github.com/owner/repo/issues/123 oder #123",
+  "codingWorkbench.issue.referencePlaceholder":
+    "https://github.com/owner/repo/issues/123 oder #123",
   "codingWorkbench.issue.preview": "Issue-Vorschau",
   "codingWorkbench.issue.previewing": "Vorschau wird geladen…",
   "codingWorkbench.issue.cancel": "Abbrechen",
@@ -522,6 +861,11 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.issue.previewRegion": "Issue-Vorschau",
   "codingWorkbench.issue.untrustedNote":
     "Issue-Text wird als reiner Text angezeigt und niemals als Anweisung oder Freigabe behandelt.",
+  "codingWorkbench.issue.commentLabel": "Kommentar {index}",
+  "codingWorkbench.issue.commentsLabel": "Auszüge aus Issue-Kommentaren",
+  "codingWorkbench.issue.commentsTruncated":
+    "Weitere Kommentare oder Textteile wurden in dieser begrenzten Vorschau ausgelassen.",
+  "codingWorkbench.issue.bodyTruncated": "Der Issue-Text wurde in dieser Vorschau gekürzt.",
   "codingWorkbench.issue.fact.state": "Status",
   "codingWorkbench.issue.fact.comments": "Kommentare",
   "codingWorkbench.issue.fact.provenance": "Quelle",
@@ -565,8 +909,6 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.issue.supportId": "Support-ID: {correlationId}.",
   "codingWorkbench.composer.issue.label": "Issue {issue}",
   "codingWorkbench.composer.issue.remove": "Issue {issue} aus diesem Lauf entfernen",
-  "codingWorkbench.composer.issue.startUnavailable":
-    "Dieser Build kann die Issue-Referenz noch nicht mit der Startanfrage übertragen, daher wird kein issue-gebundener Lauf gestartet. Entferne das Issue, um einen generischen Lauf zu starten.",
   "codingWorkbench.githubAccess.title": "GitHub-Issue-Zugriff",
   "codingWorkbench.githubAccess.description":
     "Erlaubt der Coding Workbench, GitHub-Issues und Kommentare des ausgewählten Repositorys über die lokale gh-CLI zu lesen. Die Freigabe wird pro lokalem Checkout gespeichert; Zugangsdaten gelangen nie in Keiko.",

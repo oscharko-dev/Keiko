@@ -237,6 +237,44 @@ most one nightly cycle; it can no longer be silently wrong, hand-edited, or meas
 different toolchain. This supersedes the D2/D3 expectation that a pull request touching a measured
 surface regenerates timing evidence in-flight.
 
+### D11 — Coding-runtime performance has a native reference and its own ruler (#2952)
+
+The coding runtime has its own performance target, calibration, and measured document. Its
+deterministic pull-request judge is `check:perf-evidence:coding-runtime`. It validates the closed,
+body-free schema, canonical bytes, sample-derived aggregates, reviewed calibration anchor, measured
+budgets, and the ruler digest when the current diff moved that ruler. It does not start a sidecar
+or assert a hosted runner's wall clock. An unresolved diff base enforces ruler freshness.
+
+The native producer, `perf:evidence:coding-runtime`, exercises production discovery of the approved
+macOS arm64 OpenCode payload, the native supervisor, real managed Git workspaces, authenticated
+mounted HTTP routes, and the protected activity channel. Only the provider response is a bounded,
+deterministic fixture. The recorded class is functional performance evidence; it does not qualify a
+live model, a platform signature, or the complete release journey. Cold start means a new sidecar
+process and new runtime state, with operating-system caches left intact. Readiness is the public
+preflight request; first byte is the first runtime SSE data frame, including its initial replay;
+bounded throughput measures the fixed streamed response through native completion and separately
+requires exact output delivery in the authenticated channel.
+
+This target uses a dedicated, explicitly stamped native macOS arm64 reference. It must not inherit
+the editor's Linux container numbers or compare them with hosted Linux/macOS measurements. Two
+warmups precede thirty retained samples. Initial p95 ceilings derive mechanically from each
+metric's observed maximum plus its full observed range; all samples remain in the calibration.
+The frozen calibration digest and derived ceilings live in the reviewed budget document. Regular
+generation never changes them. Recalibration is a separate, explicit review of the ruler and
+reference class, not an automatic response to a regression. The evidence judge remains responsible
+for overruns after the producer writes trustworthy measurements (ADR-0156 D1/D5).
+
+The producer refuses dirty or changing measured inputs. The reference/release judge adds
+`--enforce-source-freshness`; scheduled hosted automation checks drift and reports the native
+regeneration command rather than producing incomparable timings. ADR-0162 applies unchanged:
+`--report-subject-drift` reports source-tree and candidate-lockfile drift as advisories only when
+full source evaluation is enabled; dirty inputs, ruler drift and evidence defects remain fatal.
+The measured subject includes
+the server and its production package dependencies, entry wiring, native helpers, TypeScript
+configuration and lockfile. UI/editor sources, tests and documentation are excluded; imported
+fixture support and measurement scripts are bound by the separate ruler digest. The complete
+procedure and artifact locations are in [the performance runbook](../qa/perf-evidence.md).
+
 ## Invariants that do not change
 
 Performance budgets, coverage ratchet floors and per-file floors, architecture and trust-boundary

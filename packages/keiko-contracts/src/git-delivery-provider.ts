@@ -19,6 +19,32 @@ import {
   isGitDeliveryProviderCapability,
 } from "./git-delivery.js";
 
+export {
+  GIT_DELIVERY_OBSERVATION_FAILURE_STATES,
+  gitDeliveryObservationFailure,
+  isGitDeliveryObservationFailure,
+  isGitDeliveryReadCompleteness,
+} from "./git-delivery-observation.js";
+export type {
+  GitDeliveryObservationFailure,
+  GitDeliveryObservationFailureReason,
+  GitDeliveryReadCompleteness,
+} from "./git-delivery-observation.js";
+
+export {
+  GIT_CI_READINESS_REASON_STATES,
+  isGitCiCheckCounts,
+  isReadinessSnapshot,
+} from "./git-ci-readiness.js";
+export type {
+  GitCiReadinessReason,
+  GitCiReadinessState,
+  GitCiCheckCounts,
+  GitCiPullRequestContext,
+  GitCiHumanReviewState,
+  ReadinessSnapshot,
+} from "./git-ci-readiness.js";
+
 export const GIT_DELIVERY_PROVIDER_SCHEMA_VERSION = "1" as const;
 
 // ─── Branch protection ───────────────────────────────────────────────────────────
@@ -237,3 +263,5 @@ export function isGitDeliveryRemoteTargetPolicy(
     typeof value.forcePushGloballyDenied === "boolean"
   );
 }
+
+export * from "./git-ci-failure-context.js";

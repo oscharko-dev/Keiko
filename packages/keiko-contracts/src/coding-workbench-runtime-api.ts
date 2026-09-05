@@ -34,8 +34,12 @@ import {
   type CodingWorkbenchRuntimeStateName,
 } from "./coding-workbench-runtime.js";
 import { MODEL_REASONING_EFFORTS, type ModelReasoningEffort } from "./gateway.js";
-import { isSafeGitRefName } from "./git-repository.js";
+import { validateCodingWorkbenchIssueBinding } from "./coding-workbench-issue-binding.js";
+export { CODING_WORKBENCH_ISSUE_NUMBER_MAX } from "./coding-workbench-issue-binding.js";
 import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
+import { isVerifiedCommitResult, type VerifiedCommitResult } from "./verified-commit.js";
+import { isDraftDeliveryRecord, type DraftDeliveryRecord } from "./draft-delivery.js";
+import { isReadinessSnapshot, type ReadinessSnapshot } from "./git-ci-readiness.js";
 
 /** Browser-level preference, deliberately not an adapter, model, profile, or endpoint selector. */
 export type CodingWorkbenchRuntimePreference = "managed-gateway" | "codex-subscription";
@@ -108,9 +112,6 @@ export interface CodingWorkbenchRuntimeReadiness {
   readonly runtimeEvidenceClass?: CodingWorkbenchRuntimeEvidenceClass | undefined;
 }
 
-/** GitHub issue numbers are positive and, in practice, far below this bound. */
-export const CODING_WORKBENCH_ISSUE_NUMBER_MAX = 1_000_000_000;
-
 export interface CodingWorkbenchRuntimeStartRequest {
   readonly requestId: string;
   /** Transient model input; no response, snapshot, SSE projection, or evidence may retain it. */
@@ -128,6 +129,8 @@ export interface CodingWorkbenchRuntimeStartRequest {
    * intent like `taskIntent`: it is parsed, never persisted.
    */
   readonly issueRef?: string | undefined;
+  /** Optimistic precondition from the accepted preview; never authority. */
+  readonly expectedIssueBindingDigest?: string | undefined;
 }
 
 /** The retry route has the same fresh, transient intent shape as start. */
@@ -238,6 +241,12 @@ export interface CodingWorkbenchRuntimeSnapshot {
    * number and a branch name only — the issue's text never crosses this boundary.
    */
   readonly issueBinding?: CodingWorkbenchIssueBinding | undefined;
+  /** Latest durable commit receipt; no message, paths, command or approval token. */
+  readonly verifiedCommitResult?: VerifiedCommitResult | undefined;
+  /** Durable repository delivery facts; no authored text, command, credentials or approval grant. */
+  readonly draftDelivery?: DraftDeliveryRecord | undefined;
+  /** Last bounded CI observation. Its timestamp and head binding confer no execution authority. */
+  readonly ciReadiness?: ReadinessSnapshot | undefined;
 }
 
 export type CodingWorkbenchRuntimeStatus = CodingWorkbenchRuntimeSnapshot;
@@ -355,6 +364,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
       "modelId",
       "reasoningEffort",
       "issueRef",
+      "expectedIssueBindingDigest",
     ],
     "startRequest",
   );
@@ -367,6 +377,14 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   validateRuntimeModelId(value.modelId, errors);
   validateReasoningEffort(value.reasoningEffort, errors);
   validateIssueRef(value.issueRef, errors);
+  if (
+    value.expectedIssueBindingDigest !== undefined &&
+    (value.issueRef === undefined ||
+      typeof value.expectedIssueBindingDigest !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(value.expectedIssueBindingDigest))
+  ) {
+    errors.push("expectedIssueBindingDigest requires an issue reference and sha256 digest");
+  }
   return result(value, errors);
 }
 
@@ -528,11 +546,17 @@ export function validateCodingWorkbenchRuntimeSnapshot(
       "pendingPermission",
       "result",
       "issueBinding",
+      "verifiedCommitResult",
+      "draftDelivery",
+      "ciReadiness",
     ],
     "runtimeSnapshot",
   );
   validateSnapshotFields(value, errors);
   validateIssueBinding(value.issueBinding, errors);
+  validateSnapshotVerifiedCommit(value, errors);
+  validateSnapshotDraftDelivery(value, errors);
+  validateSnapshotCiReadiness(value, errors);
   validateRuntimeResult(value.result, errors);
   if (
     value.result !== undefined &&
@@ -543,80 +567,70 @@ export function validateCodingWorkbenchRuntimeSnapshot(
   return result(value, errors);
 }
 
-const SHA256_DIGEST = /^[0-9a-f]{64}$/u;
-
-const ISSUE_BINDING_DIGEST_FIELDS = [
-  "remoteDigest",
-  "issueIdDigest",
-  "contentRevisionDigest",
-  "bindingDigest",
-] as const;
-
-const ISSUE_BINDING_KEYS = [
-  "schemaVersion",
-  "repositoryId",
-  "remoteDigest",
-  "issueNumber",
-  "issueIdDigest",
-  "defaultBaseRef",
-  "contentRevisionDigest",
-  "bindingDigest",
-] as const;
-
-function isBoundedIssueNumber(value: unknown): boolean {
-  return (
-    typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value >= 1 &&
-    value <= CODING_WORKBENCH_ISSUE_NUMBER_MAX
-  );
-}
-
-function isSafeGitRef(value: unknown): boolean {
-  // One predicate, shared with the git boundary that will actually use this ref. A second formula
-  // here accepted names (`main/`, `main.`, `.hidden`) that `isSafeGitRefName` and git both refuse,
-  // so a snapshot could pass contract validation and then be rejected downstream.
-  return typeof value === "string" && isSafeGitRefName(value);
-}
-
-function validateIssueBindingDigests(value: Record<string, unknown>, errors: string[]): void {
-  for (const field of ISSUE_BINDING_DIGEST_FIELDS) {
-    const digest = value[field];
-    if (typeof digest !== "string" || !SHA256_DIGEST.test(digest)) {
-      errors.push(`issueBinding.${field} must be a sha256 digest`);
-    }
-  }
-}
-
-/**
- * The snapshot's issue projection is content-free by construction: four digests, a number, a branch
- * name and the contract version. This validator is what keeps it that way — an unknown key is
- * rejected, so a later change cannot quietly add the issue title to a projection that already
- * crosses the browser boundary.
- */
 function validateIssueBinding(value: unknown, errors: string[]): void {
   if (value === undefined) return;
-  if (!isRecord(value)) {
-    errors.push("issueBinding must be an object");
+  const validated = validateCodingWorkbenchIssueBinding(value);
+  if (!validated.ok) errors.push(...validated.errors);
+}
+
+function validateSnapshotVerifiedCommit(snapshot: Record<string, unknown>, errors: string[]): void {
+  const receipt = snapshot.verifiedCommitResult;
+  if (receipt === undefined) return;
+  if (!isVerifiedCommitResult(receipt)) {
+    errors.push("verifiedCommitResult must be a closed verified commit receipt");
     return;
   }
-  errors.push(...exactKeys(value, ISSUE_BINDING_KEYS, "issueBinding"));
-  if (value.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION) {
-    errors.push("issueBinding.schemaVersion is invalid");
+  const issue = snapshot.issueBinding;
+  const issueDigest = isRecord(issue) ? issue.bindingDigest : undefined;
+  if (receipt.runId !== snapshot.runId || receipt.issueBindingDigest !== issueDigest) {
+    errors.push("verifiedCommitResult must match the snapshot run and issue binding");
   }
-  validateSafeId(
-    value.repositoryId,
-    "issueBinding.repositoryId",
-    errors,
-    CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
-  );
-  validateIssueBindingDigests(value, errors);
-  if (!isBoundedIssueNumber(value.issueNumber)) {
-    errors.push("issueBinding.issueNumber must be a bounded positive integer");
+}
+
+function validateSnapshotDraftDelivery(snapshot: Record<string, unknown>, errors: string[]): void {
+  const delivery = snapshot.draftDelivery;
+  if (delivery === undefined) return;
+  if (!isDraftDeliveryRecord(delivery)) {
+    errors.push("draftDelivery must be a closed durable delivery record");
+    return;
   }
-  if (!isSafeGitRef(value.defaultBaseRef)) {
-    errors.push("issueBinding.defaultBaseRef must be a bounded safe git ref");
+  const issue = snapshot.issueBinding;
+  const target = delivery.binding;
+  if (
+    !isRecord(issue) ||
+    ![
+      target.runId === snapshot.runId,
+      target.issueBindingDigest === issue.bindingDigest,
+      target.remoteDigest === issue.remoteDigest,
+      target.issueIdDigest === issue.issueIdDigest,
+      target.issueNumber === issue.issueNumber,
+      target.baseRef === issue.defaultBaseRef,
+    ].every(Boolean)
+  ) {
+    errors.push("draftDelivery must match the snapshot run and frozen issue binding");
   }
+}
+
+function validateSnapshotCiReadiness(snapshot: Record<string, unknown>, errors: string[]): void {
+  const readiness = snapshot.ciReadiness;
+  if (readiness === undefined) return;
+  const draft = snapshot.draftDelivery;
+  if (!isReadinessSnapshot(readiness) || !isDraftDeliveryRecord(draft)) {
+    errors.push("ciReadiness must be a closed observation of a confirmed delivery");
+    return;
+  }
+  if (
+    ![
+      readiness.runId === snapshot.runId,
+      readiness.remoteDigest === draft.binding.remoteDigest,
+      readiness.repository.toLowerCase() === draft.binding.repository.toLowerCase(),
+      readiness.prNumber === draft.pullRequest?.number,
+      readiness.headRef === draft.binding.headRef,
+      readiness.headSha === draft.binding.headSha,
+      readiness.baseRef === draft.binding.baseRef,
+    ].every(Boolean)
+  )
+    errors.push("ciReadiness must match the snapshot run and confirmed delivery target");
 }
 
 function validateRuntimeResult(value: unknown, errors: string[]): void {

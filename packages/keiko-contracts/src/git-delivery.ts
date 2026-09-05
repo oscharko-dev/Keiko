@@ -7,10 +7,11 @@
 // This is the CORE atom module for the git-delivery surface. It imports NOTHING from its two
 // siblings (git-delivery-policy.ts / git-delivery-provider.ts). The siblings import FROM here, so
 // the dependency graph is a one-directional DAG with no cycles (verified by arch:check). The only
-// internal import is `./workflow-handoff.js` for `isApprovalTokenShape` (a legal intra-package
-// relative import; keiko-contracts modules may reference each other).
+// internal helpers come from workflow-handoff (approval shape) and git-repository (Git identity);
+// both are legal intra-package relative imports.
 
 import { isApprovalTokenShape } from "./workflow-handoff.js";
+import { isGitObjectId } from "./git-repository.js";
 
 export const GIT_DELIVERY_SCHEMA_VERSION = "1" as const;
 
@@ -125,6 +126,7 @@ export interface GitDeliveryCommitInputs {
 
 export interface GitDeliveryPushInputs {
   readonly kind: "push";
+  readonly verifiedCommitSha?: string;
   readonly sourceBranchName: string;
   readonly remoteAlias: string;
   readonly remoteBranchName: string;
@@ -739,6 +741,7 @@ function isCommitInputs(value: Record<string, unknown>): boolean {
 
 function isPushInputs(value: Record<string, unknown>): boolean {
   return (
+    (value.verifiedCommitSha === undefined || isGitObjectId(value.verifiedCommitSha)) &&
     isNonEmptyString(value.sourceBranchName) &&
     isNonEmptyString(value.remoteAlias) &&
     isNonEmptyString(value.remoteBranchName) &&

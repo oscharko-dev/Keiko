@@ -1,4 +1,8 @@
 import { isAbsolute } from "node:path";
+import { correlationIdOrUnknown } from "../correlation.js";
+import { describeError } from "../diagnostics-log.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { processServerLogSink } from "../process-log-sink.js";
 
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 
@@ -75,6 +79,8 @@ export interface GeneratedOpenCodeBundle {
 }
 
 export interface OpenCodeRuntimeAdapterPorts {
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly correlationId?: string | undefined;
   readonly readiness: {
     readonly verifiedTarget: { readonly executable: string; readonly attestationDigest: string };
     readonly configDigest: string;
@@ -544,7 +550,15 @@ async function startAdapter(
       return fail("sse-history-reconciliation");
     }
     return { ok: true, endpoint, sessionId, configDigest: readiness.configDigest };
-  } catch {
+  } catch (error) {
+    (ports.activityLog ?? processServerLogSink()).write({
+      category: "process",
+      level: "error",
+      op: "coding-runtime.readiness.failed",
+      correlationId: correlationIdOrUnknown(ports.correlationId),
+      errorKind: "internal",
+      extra: { phase, ...describeError(error) },
+    });
     return fail(phase);
   }
 }

@@ -152,6 +152,8 @@ export interface GitClientWindowProps {
   readonly projectId?: string | undefined;
   readonly initialPath?: string | undefined;
   readonly initialCommit?: string | undefined;
+  readonly initialRepositoryDialog?: "clone" | "open" | undefined;
+  readonly onRepositoryConnected?: ((root: string) => void) | undefined;
   readonly onOpenFiles?: ((root: string) => void) | undefined;
   readonly onOpenEditor?: ((root: string) => void) | undefined;
   readonly onOpenEditorFile?: ((request: OpenEditorFileRequest) => void) | undefined;
@@ -764,6 +766,8 @@ export function GitClientWindow({
   projectId,
   initialPath,
   initialCommit,
+  initialRepositoryDialog,
+  onRepositoryConnected,
   onOpenFiles,
   onOpenEditor,
   onOpenEditorFile,
@@ -808,6 +812,13 @@ export function GitClientWindow({
   const [commitNonce, setCommitNonce] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<"clone" | "open">("clone");
+  useEffect(() => {
+    if (initialRepositoryDialog === undefined) return;
+    setDialogMode(initialRepositoryDialog);
+    setDialogOpen(true);
+    updateCfg?.({ repositoryDialog: "" });
+    reportClientDiagnostic(`[keiko] git repository dialog handoff: ${initialRepositoryDialog}`);
+  }, [initialRepositoryDialog, updateCfg]);
   const [newBranchOpen, setNewBranchOpen] = useState(false);
   const [worktreeConfirmation, setWorktreeConfirmation] =
     useState<WorktreeMutationConfirmation | null>(null);
@@ -1203,9 +1214,10 @@ export function GitClientWindow({
       }
       setReposError(null);
       applyRepositorySelection(project.path);
+      onRepositoryConnected?.(project.path);
       return true;
     },
-    [applyRepositorySelection, optionalT],
+    [applyRepositorySelection, onRepositoryConnected, optionalT],
   );
 
   const reconnectRepository = useCallback(

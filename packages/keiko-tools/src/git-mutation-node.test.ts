@@ -155,9 +155,13 @@ async function identityLaneEnv(): Promise<Record<string, string>> {
   const ad = identityLaneAdapter(rec);
   const pending = ad.commit({ message: "feat: governed commit", allowEmpty: false });
   await continuePastUnsignedSigningPolicy(rec);
+  const commitEnv = rec.calls().at(-1)?.options.env ?? {};
+  rec.child.emit("close", 0, null);
+  await expect.poll(() => rec.calls()).toHaveLength(3);
+  rec.child.stdout.emit("data", Buffer.from(`${"a".repeat(40)}\n`));
   rec.child.emit("close", 0, null);
   await pending;
-  return rec.calls().at(-1)?.options.env ?? {};
+  return commitEnv;
 }
 
 describe("node git mutation adapter — the user's git identity reaches the commit", () => {

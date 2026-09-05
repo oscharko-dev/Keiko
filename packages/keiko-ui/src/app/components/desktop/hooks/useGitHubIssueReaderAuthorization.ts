@@ -131,11 +131,11 @@ function useGrantController(
           setState(projected(wire));
           setError(after);
         })
-        .catch((failure: unknown): void => {
+        .catch((error_: unknown): void => {
           if (!current(request)) return;
-          diagnose("read", failure);
+          diagnose("read", error_);
           setState(NO_GRANT);
-          setError(isUnknownRepository(failure) ? "unknown-repository" : "hydrate");
+          setError(isUnknownRepository(error_) ? "unknown-repository" : "hydrate");
         })
         .finally((): void => {
           if (current(request)) setPending(false);
@@ -175,15 +175,15 @@ function useGrantChange(
           setState(projected(wire));
           setPending(false);
         })
-        .catch((failure: unknown): void => {
+        .catch((error_: unknown): void => {
           if (!current(request)) return;
-          if (isConflict(failure)) {
-            diagnose("conflict", failure);
+          if (isConflict(error_)) {
+            diagnose("conflict", error_);
             read(repositoryPath, "conflict");
             return;
           }
-          diagnose("write", failure);
-          setError(persistFailureError(failure));
+          diagnose("write", error_);
+          setError(persistFailureError(error_));
           setPending(false);
         });
     },
@@ -209,7 +209,7 @@ export function useGitHubIssueReaderAuthorization(
   const load = options.load ?? fetchGitHubIssueReaderAuthorization;
   const persist = options.persist ?? updateGitHubIssueReaderAuthorization;
   const grant = useGrantController(load, repositoryPath);
-  const { read, nextSequence, current, setPending, setError, setState } = grant;
+  const { read, nextSequence, setPending, setError, setState } = grant;
 
   // Hydrate for the named repository; a path change retires the previous read. No repository
   // means nothing to read and nothing to grant — the control states that instead of guessing.

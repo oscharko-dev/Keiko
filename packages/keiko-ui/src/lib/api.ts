@@ -104,7 +104,8 @@ import type {
   WorkflowsResponse,
 } from "./types";
 import type {
-  CodingWorkbenchIssueBinding,
+  CodingWorkbenchIssuePreviewResponseWire,
+  CodingWorkbenchIssuePreviewRequestWire,
   CodingWorkbenchMode,
   GitHubIssueReaderAuthorizationWire,
   UpdateGitHubIssueReaderAuthorizationWire,
@@ -221,15 +222,22 @@ export class ApiError extends Error {
 
 type ResponseValidator = (value: unknown) => GitRepositoryValidation;
 
-function validateBffResponse<T>(path: string, value: unknown, validator: ResponseValidator): T {
+function validateBffResponse<T>(
+  path: string,
+  value: unknown,
+  validator: ResponseValidator,
+  correlationId: string | null = null,
+): T {
   const validation = validator(value);
   if (validation.ok) return value as T;
   const reason = validation.reasons[0] ?? "unknown validation failure";
-  throw new ApiError(
+  const error = new ApiError(
     "CONTRACT_VALIDATION_FAILED",
     `BFF response for ${path} failed contract validation: ${reason}`,
     502,
   );
+  if (correlationId !== null) error.correlationId = correlationId;
+  throw error;
 }
 
 // GEN-RES-FETCH-001 — reads against the loopback BFF must not hang the UI when the BFF
@@ -315,7 +323,9 @@ async function fetchJson<T>(
   }
 
   const value = (await res.json()) as unknown;
-  return validator === undefined ? (value as T) : validateBffResponse<T>(path, value, validator);
+  return validator === undefined
+    ? (value as T)
+    : validateBffResponse<T>(path, value, validator, res.headers.get(CORRELATION_HEADER));
 }
 
 // The `ApiError` for a non-2xx BFF response: code and message from the `{ error }` envelope when it
@@ -3281,39 +3291,12 @@ export async function fetchGitDeliveryMergeExecute(
  * renderer; the server bounds the same values first, and a body outside them is a contract failure,
  * never something to truncate quietly.
  */
-export interface GitHubIssuePreviewProvenanceWire {
-  readonly ownerAndRepo: string;
-  readonly issueNumber: number;
-  readonly url: string;
-}
-
-export interface GitHubIssuePreviewWire {
-  readonly title: string;
-  readonly bodyExcerpt: string;
-  readonly commentCount: number;
-  readonly state: string;
-  readonly provenance: GitHubIssuePreviewProvenanceWire;
-}
-
-/**
- * `binding` is the content-free, immutable issue binding the server resolved for the preview
- * (`CodingWorkbenchIssueBinding`); the UI only ever echoes its opaque values back and never
- * authors one.
- */
-export interface GitHubIssuePreviewResponseWire {
-  readonly preview: GitHubIssuePreviewWire;
-  readonly binding: CodingWorkbenchIssueBinding;
-}
-
-export interface CodingWorkbenchIssuePreviewRequest {
-  readonly repositoryPath: string;
-  readonly issueRef: string;
-}
+export type GitHubIssuePreviewResponseWire = CodingWorkbenchIssuePreviewResponseWire;
+export type CodingWorkbenchIssuePreviewRequest = CodingWorkbenchIssuePreviewRequestWire;
 
 export const GITHUB_ISSUE_PREVIEW_TITLE_MAX_CHARS = 512;
 export const GITHUB_ISSUE_PREVIEW_EXCERPT_MAX_CHARS = 8_192;
 export const GITHUB_ISSUE_REFERENCE_MAX_CHARS = 512;
-const GITHUB_ISSUE_PREVIEW_STATE_MAX_CHARS = 32;
 const GITHUB_ISSUE_PROVENANCE_REPO_MAX_CHARS = 256;
 const GITHUB_ISSUE_PROVENANCE_URL_MAX_CHARS = 2_048;
 const GITHUB_ISSUE_BINDING_ID_MAX_CHARS = 128;
@@ -3323,13 +3306,11 @@ const GITHUB_ISSUE_NUMBER_MAX = 2_147_483_647;
 const SHA256_HEX = /^[0-9a-f]{64}$/u;
 const OWNER_AND_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const ISSUE_BINDING_KEYS: ReadonlySet<string> = new Set([
-  "schemaVersion",
   "repositoryId",
   "remoteDigest",
   "issueNumber",
   "issueIdDigest",
   "defaultBaseRef",
-  "contentRevisionDigest",
   "bindingDigest",
 ]);
 
@@ -3376,6 +3357,23 @@ function issuePreviewProvenanceReasons(value: unknown): readonly string[] {
   return reasons;
 }
 
+function issueCommentReasons(value: Record<string, unknown>): readonly string[] {
+  const comments = value.comments;
+  const reasons: string[] = [];
+  if (
+    comments !== undefined &&
+    (!Array.isArray(comments) ||
+      comments.length > 8 ||
+      !comments.every((comment: unknown) => isBoundedText(comment, 1024, true)))
+  )
+    reasons.push("preview.comments must be bounded text excerpts");
+  if (value.commentsTruncated !== undefined && typeof value.commentsTruncated !== "boolean")
+    reasons.push("preview.commentsTruncated must be boolean");
+  if (typeof value.bodyExcerptTruncated !== "boolean")
+    reasons.push("preview.bodyExcerptTruncated must be boolean");
+  return reasons;
+}
+
 function issuePreviewReasons(value: unknown): readonly string[] {
   if (!isRecordValue(value)) return ["preview must be an object"];
   const reasons: string[] = [];
@@ -3388,19 +3386,14 @@ function issuePreviewReasons(value: unknown): readonly string[] {
   if (!Number.isSafeInteger(value.commentCount) || Number(value.commentCount) < 0) {
     reasons.push("preview.commentCount must be a non-negative integer");
   }
-  if (!isBoundedText(value.state, GITHUB_ISSUE_PREVIEW_STATE_MAX_CHARS)) {
-    reasons.push("preview.state must be bounded text");
-  }
-  reasons.push(...issuePreviewProvenanceReasons(value.provenance));
+  if (value.state !== "open" && value.state !== "closed")
+    reasons.push("preview.state must be open or closed");
+  if (value.untrusted !== true) reasons.push("preview.untrusted must be true");
+  reasons.push(...issuePreviewProvenanceReasons(value.provenance), ...issueCommentReasons(value));
   return reasons;
 }
 
-const ISSUE_BINDING_DIGEST_FIELDS = [
-  "remoteDigest",
-  "issueIdDigest",
-  "contentRevisionDigest",
-  "bindingDigest",
-] as const;
+const ISSUE_BINDING_DIGEST_FIELDS = ["remoteDigest", "issueIdDigest", "bindingDigest"] as const;
 
 function issueBindingDigestReasons(value: Record<string, unknown>): readonly string[] {
   const reasons: string[] = [];
@@ -3415,7 +3408,6 @@ function issueBindingDigestReasons(value: Record<string, unknown>): readonly str
 
 function issueBindingIdentityReasons(value: Record<string, unknown>): readonly string[] {
   const reasons: string[] = [];
-  if (!isBoundedText(value.schemaVersion, 16)) reasons.push("binding.schemaVersion is invalid");
   if (!isBoundedText(value.repositoryId, GITHUB_ISSUE_BINDING_ID_MAX_CHARS)) {
     reasons.push("binding.repositoryId must be a bounded id");
   }
@@ -3458,7 +3450,7 @@ export function validateGitHubIssuePreviewResponse(value: unknown): GitRepositor
     ...issueBindingReasons(value.binding),
     ...issuePreviewCoherenceReasons(value),
   ];
-  return reasons.length === 0 ? { ok: true, reasons: [] } : { ok: false, reasons };
+  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 
 /**
@@ -3494,7 +3486,7 @@ export function validateGitHubIssueReaderAuthorization(value: unknown): GitRepos
   if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 0) {
     reasons.push("authorization.revision must be a non-negative integer");
   }
-  return reasons.length === 0 ? { ok: true, reasons: [] } : { ok: false, reasons };
+  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 
 /** The per-checkout GitHub issue reader grant for a registered project path (#3385). */

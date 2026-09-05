@@ -1,7 +1,6 @@
 // Production-side port adapters. GatewayModelPort wraps the ADR-0003 Gateway and
 // propagates the run's AbortSignal as GatewayRequest.cancellationSignal. DryRunToolPort
-// records tool calls without executing them — the Wave-1 no-op executor that keeps the
-// CLI dry-run path free of any side effect (real executors land in issue #6).
+// exposes no productive handlers and rejects attempts without fabricating a successful result.
 
 import {
   CancelledError,
@@ -10,6 +9,8 @@ import {
   type NormalizedResponse,
   type ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
+import { HarnessCatalogError } from "./catalog-errors.js";
+import { HARNESS_CODES } from "./errors.js";
 import type { ModelPort, ToolCallRequest, ToolCallResult, ToolPort } from "./ports.js";
 
 // The minimal Gateway surface the model port depends on. Depending on this structural
@@ -55,27 +56,26 @@ export interface RecordedToolCall {
 }
 
 export class DryRunToolPort implements ToolPort {
-  private readonly recorded: RecordedToolCall[] = [];
-
-  constructor(private readonly tools: readonly ToolDefinition[] = []) {}
+  // Retain only the finite constructor transport during issue3409 migration. Definitions cannot
+  // make this unavailable executor productive.
+  constructor(legacyDefinitions: readonly ToolDefinition[] = []) {
+    void legacyDefinitions;
+  }
 
   execute(request: ToolCallRequest): Promise<ToolCallResult> {
     if (request.signal.aborted) {
       return Promise.reject(new CancelledError("tool execution aborted before start"));
     }
-    this.recorded.push({
-      toolCallId: request.toolCallId,
-      toolName: request.toolName,
-      arguments: request.arguments,
-    });
-    return Promise.resolve({ toolCallId: request.toolCallId, output: "", durationMs: 0 });
+    return Promise.reject(
+      new HarnessCatalogError(HARNESS_CODES.TOOL_ERROR, "Dry-run tool handler unavailable"),
+    );
   }
 
   listTools(): readonly ToolDefinition[] {
-    return this.tools;
+    return [];
   }
 
   calls(): readonly RecordedToolCall[] {
-    return this.recorded;
+    return [];
   }
 }

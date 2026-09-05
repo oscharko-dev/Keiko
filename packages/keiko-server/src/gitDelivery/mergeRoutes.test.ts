@@ -923,6 +923,37 @@ describe("readMergeProviderReadiness — default merge-adapter termination wirin
     createNodeGitMergeAdapterCalls.length = 0;
   });
 
+  it("records unknown readiness and structured throws without provider bodies", async () => {
+    const events: ServerLogEvent[] = [];
+    const result = await readMergeProviderReadiness(
+      WIRING_COMMAND,
+      testWorkspace("/repo"),
+      {
+        activityLog: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        mergeAdapterFactory: () => ({
+          readMergeReadiness: (): Promise<never> =>
+            Promise.reject(new Error("private provider body")),
+          mergePullRequest: (): Promise<never> => Promise.reject(new Error("must not merge")),
+        }),
+      },
+      () => 1,
+      "readiness-correlation",
+    );
+    expect(result.providerError).toBe(true);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "git.delivery.readiness.observed",
+      correlationId: "readiness-correlation",
+      errorKind: "internal",
+      extra: { state: "unknown", providerError: true },
+    });
+    expect(JSON.stringify(events)).not.toContain("private provider body");
+  });
+
   it("wires the caller's activityLog + correlationId into the default createNodeGitMergeAdapter call", async () => {
     const activity: ServerLogEvent[] = [];
     await readMergeProviderReadiness(
@@ -946,9 +977,9 @@ describe("readMergeProviderReadiness — default merge-adapter termination wirin
       childPid: 9012,
       windowsTreeKill: "not-attempted",
     });
-    expect(activity).toHaveLength(1);
-    expect(activity[0]?.op).toBe("command.terminated");
-    expect(activity[0]?.correlationId).toBe("request-correlation-merge-wiring");
-    expect(activity[0]?.extra?.childPid).toBe(9012);
+    const terminated = activity.filter((event) => event.op === "command.terminated");
+    expect(terminated).toHaveLength(1);
+    expect(terminated[0]?.correlationId).toBe("request-correlation-merge-wiring");
+    expect(terminated[0]?.extra?.childPid).toBe(9012);
   });
 });

@@ -1,3 +1,4 @@
+import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts";
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local authority fixtures are contextually typed. */
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -43,6 +44,8 @@ describe("production runtime workspace authority", () => {
     const workspace = join(managed, "repo", "workspace");
     mkdirSync(workspace, { recursive: true });
     let head = "1".repeat(40);
+    let verifiedHead = head;
+    let commitResult: VerifiedCommitResult | undefined;
     const lifecycle = {
       getActive: () => ({
         instance: {
@@ -53,7 +56,7 @@ describe("production runtime workspace authority", () => {
           taskId: "task-private",
           taskBranch: "issue/2376-runtime",
           baseBranch: "dev",
-          lastVerifiedHead: "1".repeat(40),
+          lastVerifiedHead: verifiedHead,
           lifecycleState: "active",
           health: "healthy",
           driftMarkers: [],
@@ -66,6 +69,7 @@ describe("production runtime workspace authority", () => {
       managedTaskWorkspaceRoot: managed,
       deploymentCeiling: "supervised-coding" as const,
       readWorkspaceHead: () => head,
+      verifiedCommitResult: (): VerifiedCommitResult | undefined => commitResult,
       now: () => new Date("2026-07-13T12:00:00.000Z"),
     };
     const context = resolveProductionRuntimeContext(input, {
@@ -85,7 +89,39 @@ describe("production runtime workspace authority", () => {
       workspaceId: "workspace-private",
     });
     expect(productionWorkspaceMatches(input, context)).toBe(true);
+    const workspaceDigest = productionRuntimeAuthorityFacts(input, context).binding
+      .workspaceRootDigest;
     head = "2".repeat(40);
+    expect(productionWorkspaceMatches(input, context)).toBe(false);
+    verifiedHead = head;
+    // The existing manual restamp still cannot bless an external HEAD move for a runtime.
+    expect(productionWorkspaceMatches(input, context)).toBe(false);
+    const receipt: VerifiedCommitResult = {
+      schemaVersion: "1",
+      proposalId: "commit-1",
+      runId: "run-1",
+      envelopeDigest: "a".repeat(64),
+      runtimeAuthorityDigest: "b".repeat(64),
+      workspaceDigest,
+      repositoryDigest: "c".repeat(64),
+      baseSha: "1".repeat(40),
+      parentSha: "1".repeat(40),
+      headSha: head,
+      stagedTreeDigest: "d".repeat(64),
+      committedTreeDigest: "d".repeat(64),
+      messageDigest: "e".repeat(64),
+      verificationEvidenceId: "verification-1",
+      status: "succeeded",
+      reason: "completed",
+      recordedAt: "2026-07-13T12:00:00.000Z",
+    };
+    commitResult = { ...receipt, runId: "other-run" };
+    expect(productionWorkspaceMatches(input, context)).toBe(false);
+    commitResult = { ...receipt, workspaceDigest: "0".repeat(64) };
+    expect(productionWorkspaceMatches(input, context)).toBe(false);
+    commitResult = receipt;
+    expect(productionWorkspaceMatches(input, context)).toBe(true);
+    head = "3".repeat(40);
     expect(productionWorkspaceMatches(input, context)).toBe(false);
   });
 

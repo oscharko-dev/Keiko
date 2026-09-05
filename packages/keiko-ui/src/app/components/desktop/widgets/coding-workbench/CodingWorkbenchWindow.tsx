@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  CodingWorkbenchDeliveryReview,
+  approvalHelpKey,
+  isDeliveryPermission,
+} from "./CodingWorkbenchDeliveryReview";
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import type {
   CodingWorkbenchActionClass,
@@ -22,6 +27,15 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { isCodingWorkbenchModel } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { useTranslate } from "@/lib/i18n";
+import { CodingWorkbenchCiReadiness } from "./CodingWorkbenchCiReadiness";
+import { CodingWorkbenchDraftDelivery } from "./CodingWorkbenchDraftDelivery";
+import { CodingWorkbenchCommitResult } from "./CodingWorkbenchCommitResult";
+import {
+  CodingWorkbenchCommitReview,
+  reviewForPermission,
+  approvalReviewRequestId,
+  StageReviewDiagnostic,
+} from "./CodingWorkbenchCommitReview";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -93,6 +107,11 @@ import {
   visibleAlert,
 } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
+import {
+  codingWorkbenchIssueTaskId,
+  type AcceptedWorkbenchIssue,
+} from "./useCodingWorkbenchIssueIntake";
+import { CodingWorkbenchIssueChip } from "./CodingWorkbenchIssueChip";
 
 const EMPTY_WORKSPACE = {
   activeBinding: null,
@@ -281,6 +300,7 @@ function selectedResumeMode(
 export interface CodingWorkbenchGitTarget {
   readonly root: string | null;
   readonly binding: "repository" | "task-workspace";
+  readonly repositoryDialog?: "clone" | "open" | undefined;
 }
 
 function noopOpenGit(_target: CodingWorkbenchGitTarget): void {}
@@ -526,13 +546,27 @@ function WorkbenchColumns({
   runWorkspace,
 }: Omit<WorkbenchContentProps, "alert" | "t" | "workbenchLabel">): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  const [issueSetup, setIssueSetup] = useState(false);
+  const [acceptedIssue, setAcceptedIssue] = useState<AcceptedWorkbenchIssue | null>(null);
+  const activeIssueRepository = activeWorkspace.activeInstance?.repositoryId;
+  const activeIssueTask = activeWorkspace.activeBinding?.taskId;
+  useEffect(() => {
+    if (
+      acceptedIssue !== null &&
+      !issueSetup &&
+      activeIssueTask !== undefined &&
+      (activeIssueTask !== codingWorkbenchIssueTaskId(acceptedIssue.binding.issueNumber) ||
+        activeIssueRepository !== acceptedIssue.binding.repositoryId)
+    )
+      setAcceptedIssue(null);
+  }, [acceptedIssue, activeIssueTask, activeIssueRepository, issueSetup]);
   const [resumeSelection, setResumeSelection] = useState<ResumeModeSelection | null>(null);
   // The bootstrap Code setup (#2385) renders whenever no active task-workspace binding exists, so a
   // hand-bound repository can be bound → verified → started entirely from the UI (#2476). It no longer
   // hides behind runtime availability: on an unactivated install it stays reachable and honestly
   // explains why a run cannot start yet (#2476 AC4). Once a binding lands it yields to the task-start
   // flow. The honest note shows only once readiness has RESOLVED as unavailable, never during load.
-  const showSetup = bootstrapSetupVisible(state, activeWorkspace);
+  const showSetup = issueSetup || bootstrapSetupVisible(state, activeWorkspace);
   const runtimePosture = useRuntimeAssurancePosture(state);
   // Monotonic, not a count: the event buffer is capped (CODING_WORKBENCH_EVENT_RETENTION_LIMIT), so
   // its length plateaus on a long run and every change-driven resync — questions and the activity
@@ -611,7 +645,12 @@ function WorkbenchColumns({
           // Capture the workspace identity the Start is submitted against BEFORE the request goes
           // out: the run id only arrives with the response, by which time the pointer may have moved.
           runWorkspace.captureSubmission();
-          void actions.start(taskIntent.trim());
+          if (acceptedIssue === null) void actions.start(taskIntent.trim());
+          else
+            void actions.start(taskIntent.trim(), {
+              issueRef: acceptedIssue.issueRef,
+              expectedIssueBindingDigest: acceptedIssue.binding.bindingDigest,
+            });
         },
         onPause: () => void actions.pause(),
         onResume: () => {
@@ -658,15 +697,26 @@ function WorkbenchColumns({
     return (
       <div className={styles.emptySession}>
         <CodingWorkbenchSetup
-          selectedRoot={selectedRoot}
-          refreshWorkspace={() => activeWorkspace.refresh()}
+          selectedRoot={selectedRoot ?? activeWorkspace.activeInstance?.repositoryRoot}
+          refreshWorkspace={async (): Promise<boolean> => {
+            const refreshed = await activeWorkspace.refresh();
+            if (refreshed) setIssueSetup(false);
+            return refreshed;
+          }}
           runtimePosture={runtimePosture}
+          acceptedIssue={acceptedIssue}
+          onAcceptedIssue={setAcceptedIssue}
+          onOpenGit={() =>
+            onOpenGit({ root: null, binding: "repository", repositoryDialog: "clone" })
+          }
         />
       </div>
     );
   }
   const showWelcome =
     welcomeEligibleState(state.run.value?.state) &&
+    state.run.value?.verifiedCommitResult === undefined &&
+    state.run.value?.draftDelivery === undefined &&
     state.events.length === 0 &&
     activity.feed === null &&
     questions.questions.length === 0 &&
@@ -687,6 +737,12 @@ function WorkbenchColumns({
           tabIndex={0}
         >
           <PermissionPrompt state={state} research={research} onDecision={onDecision} />
+          <CodingWorkbenchCiReadiness snapshot={state.run.value ?? undefined} />
+          <CodingWorkbenchDraftDelivery snapshot={state.run.value ?? undefined} />
+          <CodingWorkbenchCommitResult
+            result={state.run.value?.verifiedCommitResult}
+            runId={runId}
+          />
           <ChangesetReviewPanel
             review={editorBridge.pendingReview}
             onApprove={editorBridge.approve}
@@ -718,6 +774,23 @@ function WorkbenchColumns({
         </div>
       )}
       <div className={styles.composerDock}>
+        <div className={styles.composerContext}>
+          <CodingWorkbenchIssueChip
+            accepted={acceptedIssue}
+            snapshot={state.run.value}
+            onRemove={() => setAcceptedIssue(null)}
+          />
+          {showWelcome && acceptedIssue === null ? (
+            <button
+              type="button"
+              className={styles.button}
+              disabled={state.mutation.status === "pending"}
+              onClick={() => setIssueSetup(true)}
+            >
+              {t("codingWorkbench.issue.title")}
+            </button>
+          ) : null}
+        </div>
         <CodexSubscriptionAuthCard state={state} actions={actions} />
         <RunWorkspaceMismatchNotice visible={runIsActive && runWorkspace.mismatched} />
         <RuntimeControls
@@ -960,7 +1033,7 @@ function approvalEvidenceBound(
   approvalReview: UseCodingWorkbenchApprovalReviewResult,
   research: UseCodingWorkbenchResearchResult,
 ): boolean {
-  if (request.actionKind === "file-edit") {
+  if (approvalReviewRequestId(request) !== undefined) {
     const review = approvalReview.status === "ready" ? approvalReview.review : null;
     if (review?.requestId !== request.requestId) return false;
   }
@@ -983,12 +1056,16 @@ function PermissionPrompt({
   const t = useCodingWorkbenchTranslate();
   const request = state.run.value?.pendingPermission;
   // Called before the early return so the hook order is stable; an absent request scopes it to idle.
-  const approvalReview = useCodingWorkbenchApprovalReview({
+  const rawApprovalReview = useCodingWorkbenchApprovalReview({
     runId: state.run.value?.runId,
-    permissionRequestId: request?.actionKind === "file-edit" ? request.requestId : undefined,
+    permissionRequestId: approvalReviewRequestId(request),
   });
   if (request === undefined) return null;
-  const busy = state.mutation.status === "pending";
+  const approvalReview = reviewForPermission(
+    rawApprovalReview,
+    request,
+    state.run.value ?? undefined,
+  );
   const evidenceBound = approvalEvidenceBound(request, approvalReview, research);
   return (
     <section className={cx(styles.card, styles.permission)} aria-labelledby="permission-title">
@@ -996,16 +1073,42 @@ function PermissionPrompt({
         {t("codingWorkbench.approval.title")}
       </PanelTitle>
       <ApprovalFacts request={request} t={t} />
-      <ApprovalChangedFiles state={approvalReview} t={t} />
+      <ApprovalReviewContent kind={request.actionKind} review={approvalReview} t={t} />
       {request.kind === "network-egress" ? <ResearchDestination state={research} t={t} /> : null}
-      <p className={styles.helpText}>{t("codingWorkbench.approval.help")}</p>
+      <p className={styles.helpText}>{t(approvalHelpKey(request.actionKind))}</p>
       <ApprovalDecisionControls
-        busy={busy}
+        busy={state.mutation.status === "pending"}
         evidenceBound={evidenceBound}
         onDecision={onDecision}
         t={t}
       />
     </section>
+  );
+}
+
+function ApprovalReviewContent({
+  kind,
+  review,
+  t,
+}: {
+  readonly kind: CodingWorkbenchRuntimePendingPermission["actionKind"];
+  readonly review: UseCodingWorkbenchApprovalReviewResult;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <>
+      <StageReviewDiagnostic
+        kind={kind}
+        status={review.status}
+        fileCount={review.review?.fileCount ?? 0}
+      />
+      {isDeliveryPermission(kind) ? (
+        <CodingWorkbenchDeliveryReview state={review} t={t} />
+      ) : (
+        <ApprovalChangedFiles state={review} commit={kind === "commit"} t={t} />
+      )}
+      <CodingWorkbenchCommitReview commit={review.review?.verifiedCommit} t={t} />
+    </>
   );
 }
 
@@ -1230,19 +1333,21 @@ function ApprovalReviewBody({
  */
 function ApprovalChangedFiles({
   state,
+  commit,
   t,
 }: {
   readonly state: UseCodingWorkbenchApprovalReviewResult;
+  readonly commit: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   if (state.status === "idle") return null;
   const review = state.review;
+  const title = t(
+    commit ? "codingWorkbench.approval.commit.files" : "codingWorkbench.approval.changes.title",
+  );
   return (
-    <fieldset
-      className={styles.approvalResearch}
-      aria-label={t("codingWorkbench.approval.changes.title")}
-    >
-      <p className={styles.approvalResearchTitle}>{t("codingWorkbench.approval.changes.title")}</p>
+    <fieldset className={styles.approvalResearch} aria-label={title}>
+      <p className={styles.approvalResearchTitle}>{title}</p>
       {review === null ? (
         <RetryMessage {...detailMessageProps(state, t, APPROVAL_CHANGES_MESSAGE_KEYS)} />
       ) : (
@@ -1342,6 +1447,7 @@ const ACTION_KIND_MESSAGE_KEYS: Record<
   CodingWorkbenchMessageKey
 > = {
   "file-edit": "codingWorkbench.approval.actionKind.file-edit",
+  "git-stage": "codingWorkbench.approval.actionKind.git-stage",
   "verification-command": "codingWorkbench.approval.actionKind.verification-command",
   research: "codingWorkbench.approval.actionKind.research",
   commit: "codingWorkbench.approval.actionKind.commit",

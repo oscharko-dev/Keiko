@@ -7,9 +7,11 @@
  */
 
 import { ApiError, fetchGitStatus } from "./api";
+import { runtimeIssueFailure } from "./coding-workbench-issue-errors";
 import { bffFetchJson } from "./http";
 import type {
   TaskWorkspaceDriftMarker,
+  CodingWorkbenchIssueBindingFailure,
   WorkspaceBinding,
   WorkspaceFailureClass,
   WorkspaceInstance,
@@ -27,6 +29,7 @@ import { isWorkspaceFailureClass } from "@oscharko-dev/keiko-contracts/runtime/t
 // originate from the structured task-workspace taxonomy.
 export type TaskWorkspaceApiError = ApiError & {
   readonly failureClass?: WorkspaceFailureClass | undefined;
+  readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure | undefined;
 };
 
 // The active view the BFF returns: the durable instance, the DERIVED binding, and the pointer
@@ -61,7 +64,7 @@ async function taskWorkspaceFetch<T>(path: string, init?: RequestInit): Promise<
       const failureClass: WorkspaceFailureClass | undefined = isWorkspaceFailureClass(raw)
         ? raw
         : undefined;
-      Object.assign(error, { failureClass });
+      Object.assign(error, { failureClass, issueBindingFailure: runtimeIssueFailure(envelope) });
     },
   });
 }
@@ -69,12 +72,26 @@ async function taskWorkspaceFetch<T>(path: string, init?: RequestInit): Promise<
 // Provision (create or idempotently resume) a managed task workspace from a repository root via the
 // #445 route. #446 exposes it so the switcher can create the workspaces it then binds; the governed
 // worktree/branch creation and all policy stay owned by #445 — this is only the wire call.
-export async function provisionTaskWorkspace(input: {
+export type TaskWorkspaceProvisionSource =
+  | { readonly baseBranch: string; readonly source?: never }
+  | {
+      readonly baseBranch?: never;
+      readonly source: {
+        readonly kind: "github-issue";
+        readonly issueRef: string;
+        readonly expectedBindingDigest: string;
+      };
+    };
+
+export type TaskWorkspaceProvisionInput = TaskWorkspaceProvisionSource & {
   readonly root: string;
   readonly taskId: string;
-  readonly baseBranch: string;
   readonly requestedBy: string;
-}): Promise<WorkspaceMutationResult & { readonly created: boolean }> {
+};
+
+export async function provisionTaskWorkspace(
+  input: TaskWorkspaceProvisionInput,
+): Promise<WorkspaceMutationResult & { readonly created: boolean }> {
   return taskWorkspaceFetch("/api/task-workspaces", {
     method: "POST",
     body: JSON.stringify(input),

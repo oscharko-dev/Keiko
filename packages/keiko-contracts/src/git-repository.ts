@@ -48,6 +48,11 @@ export function isSafeGitRefName(value: string): boolean {
   return !/[~^:?*[\\ ]/u.test(value);
 }
 
+/** A complete immutable Git object identity, never a ref, abbreviation or revision expression. */
+export function isGitObjectId(value: unknown): value is string {
+  return typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value);
+}
+
 export const GIT_REPOSITORY_STATES = ["available", "unavailable", "unsafe", "error"] as const;
 export type GitRepositoryState = (typeof GIT_REPOSITORY_STATES)[number];
 

@@ -3,6 +3,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
+  CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
   CodingWorkbenchRuntimeFailureCode,
@@ -72,15 +73,19 @@ function failureStatus(failureCode: CodingWorkbenchRuntimeFailureCode): number {
 function failureResult(
   failureCode: CodingWorkbenchRuntimeFailureCode,
   correlationId?: string,
+  issueBindingFailure?: CodingWorkbenchIssueBindingFailure,
 ): RouteResult {
   const status = failureStatus(failureCode);
   return {
     status,
-    body: errorBody(
-      `CODING_RUNTIME_${failureCode.replaceAll("-", "_").toUpperCase()}`,
-      "Runtime request was rejected.",
-      correlationId,
-    ),
+    body: {
+      ...errorBody(
+        `CODING_RUNTIME_${failureCode.replaceAll("-", "_").toUpperCase()}`,
+        "Runtime request was rejected.",
+        correlationId,
+      ),
+      ...(issueBindingFailure === undefined ? {} : { issueBindingFailure }),
+    },
   };
 }
 
@@ -201,7 +206,7 @@ async function mutation(
     const result = await operation(required.orchestrator, body);
     return result.ok
       ? { status: 200, body: result.snapshot }
-      : failureResult(result.failureCode, ctx.correlationId);
+      : failureResult(result.failureCode, ctx.correlationId, result.issueBindingFailure);
   }, ctx.correlationId);
 }
 

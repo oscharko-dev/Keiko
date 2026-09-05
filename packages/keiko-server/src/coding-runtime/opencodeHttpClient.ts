@@ -91,7 +91,7 @@ export interface OpenCodeHttpClient {
   promptAsync(
     sessionId: string,
     text: string,
-    requestOptions?: OpenCodeHttpRequestOptions,
+    requestOptions?: OpenCodePromptRequestOptions,
   ): Promise<void>;
   abortSession(sessionId: string, requestOptions?: OpenCodeHttpRequestOptions): Promise<boolean>;
   sessionStatuses(
@@ -124,6 +124,9 @@ export interface OpenCodeHttpClient {
 export interface OpenCodeHttpRequestOptions {
   readonly signal?: AbortSignal | undefined;
   readonly timeoutMs?: number | undefined;
+}
+export interface OpenCodePromptRequestOptions extends OpenCodeHttpRequestOptions {
+  readonly initialContext?: string | undefined;
 }
 export interface OpenCodeHttpClientOptions {
   readonly endpoint: string;
@@ -347,9 +350,10 @@ async function promptAsync(
   auth: string,
   sessionId: string,
   text: string,
-  requestOptions: OpenCodeHttpRequestOptions,
+  requestOptions: OpenCodePromptRequestOptions,
 ): Promise<void> {
-  if (!SESSION_ID.test(sessionId) || !validPromptText(text))
+  const initialContext = requestOptions.initialContext;
+  if (!SESSION_ID.test(sessionId) || !validPromptParts(text, initialContext))
     throw new Error("opencode-prompt-invalid");
   const cancellation = requestCancellation(options, requestOptions);
   try {
@@ -359,7 +363,7 @@ async function promptAsync(
       auth,
       "POST",
       `/session/${sessionId}/prompt_async`,
-      { parts: [{ type: "text", text }] },
+      { parts: promptParts(text, initialContext) },
       cancellation.signal,
     );
     if (response?.status !== 204) throw new Error("opencode-prompt-failed");
@@ -442,6 +446,33 @@ async function sessionStatuses(
         : status;
   }
   return statuses;
+}
+
+function validPromptParts(text: string, initialContext?: string): boolean {
+  if (!validPromptText(text)) return false;
+  if (initialContext === undefined) return true;
+  return (
+    validPromptText(initialContext) &&
+    Buffer.byteLength(text, "utf8") + Buffer.byteLength(initialContext, "utf8") + 2 <=
+      MAX_PROMPT_TEXT_BYTES
+  );
+}
+
+function promptParts(
+  text: string,
+  initialContext?: string,
+): readonly {
+  readonly type: "text";
+  readonly text: string;
+  readonly synthetic?: true;
+}[] {
+  // Pinned OpenCode v1.17.17 TextPartInput accepts synthetic while retaining text for the model.
+  return initialContext === undefined
+    ? [{ type: "text", text }]
+    : [
+        { type: "text", text },
+        { type: "text", text: initialContext, synthetic: true },
+      ];
 }
 
 function validPromptText(text: string): boolean {

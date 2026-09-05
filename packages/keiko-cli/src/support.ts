@@ -19,11 +19,11 @@ import { type AuditCliDeps, AuditLoadError, auditLocalStateResult } from "./audi
 // KEIKO-0655: shared argv-parsing helper replaces the byte-identical flagValue copy this file held.
 import { flagValue } from "./cli-arg-parsing.js";
 // GEN-PERF-CLI-001 — the evidence graph (and, below, the server module graph) load at dispatch,
-// and only for `export`; `analyze` never needs either. Store-fingerprint collection (ui,
+// and only for `export`; tool-lifecycle analysis lazily loads its narrow validator subpath. Store-fingerprint collection (ui,
 // local-knowledge, memory-vault) is owned by keiko-server (ADR-0019 direction rule 7: keiko-cli
 // is a leaf consumer and must not import keiko-local-knowledge directly) and reached through the
 // same lazily-loaded server module, via `server.collectStoreFingerprints`.
-import { loadEvidence, loadServer } from "./lazy-modules.js";
+import { loadEvidence, loadServer, loadToolLifecycle } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import { resolveStateDir } from "./state-paths.js";
 import {
@@ -36,6 +36,7 @@ import {
   renderHumanReproductionSeed,
   renderHumanTimeline,
   type AnalyzeAllResult,
+  type SupportAnalyzeOptions,
   type LogTimeline,
   type OpCluster,
   type ReproductionSeed,
@@ -747,7 +748,13 @@ function emitSeedResult(
 // `--seed` / `--emit-fixture` (both require --correlation-id, enforced by `parseAnalyzeArgs`):
 // builds one `ReproductionSeed`, optionally writes the fixture derived from its `gatewayScript`,
 // then reports according to which of the two flags were actually requested.
-function runSeedAndFixture(text: string, args: AnalyzeArgs, cwd: string, io: CliIo): number {
+function runSeedAndFixture(
+  text: string,
+  args: AnalyzeArgs,
+  cwd: string,
+  io: CliIo,
+  options: SupportAnalyzeOptions,
+): number {
   const correlationId = args.correlationId;
   if (correlationId === undefined) {
     // Unreachable in practice: parseAnalyzeArgs rejects --seed/--emit-fixture without
@@ -756,7 +763,7 @@ function runSeedAndFixture(text: string, args: AnalyzeArgs, cwd: string, io: Cli
     io.err(`keiko support analyze: --seed/--emit-fixture require --correlation-id.\n${USAGE}`);
     return 2;
   }
-  const seed = buildReproductionSeed(text, correlationId, new Date());
+  const seed = buildReproductionSeed(text, correlationId, new Date(), options);
   if (seed === undefined) return reportMissingCorrelationId(correlationId, io);
 
   const fixtureOutcome = emitFixtureIfRequested(seed, args.emitFixture, correlationId, cwd, io);
@@ -771,20 +778,54 @@ function runSeedAndFixture(text: string, args: AnalyzeArgs, cwd: string, io: Cli
   return 0;
 }
 
-function runSupportAnalyze(args: AnalyzeArgs, io: CliIo, deps: SupportCliDeps): number {
+async function loadToolAnalysisOptions(
+  result: AnalyzeAllResult,
+  io: CliIo,
+): Promise<SupportAnalyzeOptions> {
+  if (
+    !result.timelines.some((timeline) =>
+      timeline.lines.some(
+        (line) =>
+          line.toolCatalog?.kind === "unavailable" ||
+          (line.toolCatalog?.kind === "sink-failure" &&
+            line.toolCatalog.diagnostics === "unavailable"),
+      ),
+    )
+  )
+    return {};
+  try {
+    const { validateToolLifecycleEvent, redactLogFields } = await loadToolLifecycle();
+    return {
+      toolLifecycleValidator: validateToolLifecycleEvent,
+      toolDiagnosticRedactor: redactLogFields,
+    };
+  } catch (error) {
+    io.err(
+      `keiko support analyze: tool lifecycle validator unavailable — ${describeErrorKind(error)}\n`,
+    );
+    return {};
+  }
+}
+
+async function runSupportAnalyze(
+  args: AnalyzeArgs,
+  io: CliIo,
+  deps: SupportCliDeps,
+): Promise<number> {
   const cwd = deps.cwd ?? process.cwd();
   const filePath = isAbsolute(args.file) ? args.file : resolve(cwd, args.file);
   const text = readAnalyzeSource(filePath, io);
   if (typeof text === "number") return text;
 
-  if (args.clusters) {
-    return emitClusters(analyzeLogText(text).clusters, args.json, io);
-  }
+  const basic = analyzeLogText(text);
+  if (args.clusters) return emitClusters(basic.clusters, args.json, io);
+  const options = await loadToolAnalysisOptions(basic, io);
   if (args.seed || args.emitFixture !== undefined) {
-    return runSeedAndFixture(text, args, cwd, io);
+    return runSeedAndFixture(text, args, cwd, io, options);
   }
 
-  const result = analyzeLogText(text);
+  const result =
+    options.toolLifecycleValidator === undefined ? basic : analyzeLogText(text, options);
   if (args.correlationId === undefined) {
     return emitAllTimelines(result, args.json, io);
   }

@@ -1,3 +1,10 @@
+import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import { runDraftDeliveryRequest } from "./productionDraftDeliveryRuntime.js";
+import type { DraftDeliveryService } from "../gitDelivery/draftDeliveryTypes.js";
+import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
+import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
+import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
+import type { VerifiedCommitService } from "../gitDelivery/verifiedCommitTypes.js";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeAdapterKind,
@@ -30,7 +37,7 @@ import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js"
 import { createRuntimeCodingToolFacade } from "./codingToolAuthorityPort.js";
 import type { GovernedVerificationReasonCode } from "./codingToolFacade.js";
 import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
-import type { CodingToolFacade } from "./codingToolFacadePorts.js";
+import type { CodingToolFacade, CodingToolMutationGuard } from "./codingToolFacadePorts.js";
 import type {
   CodingToolGovernedPorts,
   GovernedCodingToolPort,
@@ -54,6 +61,14 @@ import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 export interface ProductionManagedWorktreeToolInput {
+  readonly ciRepairBudget?: CiRepairExecutionBudget;
+  readonly ciObservationService?: CiObservationService;
+  readonly draftDeliveryService?: DraftDeliveryService;
+  readonly requestDraftDeliveryApproval?: (proposalId: string) => void;
+  readonly verifiedCommitService?: VerifiedCommitService;
+  readonly runtimeGitService?: RuntimeGitService;
+  readonly requestStageApproval?: (proposalId: string) => void;
+  readonly requestCommitApproval?: (proposalId: string) => void;
   readonly authority: Pick<
     CodingRuntimeAuthorityService,
     "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
@@ -114,6 +129,7 @@ export function createProductionManagedWorktreeToolFacade(
     governedPorts(input, readEdit),
     {
       invocationRegistry: input.invocationRegistry,
+      ...(input.ciRepairBudget === undefined ? {} : { ciRepairBudget: input.ciRepairBudget }),
       reserveEditDelegation: true,
       ...(input.approvalProofVerifier === undefined
         ? {}
@@ -175,14 +191,99 @@ function governedPorts(
     ...auxiliaryPorts(input, catalog),
     commandRunner: buildCommandRunner(input),
     verificationRunner: buildVerificationRunner(input),
-    gitAuthority: buildSidecarCapabilityPort<"git">(input, "git-authority-revoked"),
-    deliveryAuthority: buildSidecarCapabilityPort<"delivery">(input, "delivery-authority-revoked"),
+    gitAuthority: buildRuntimeGitPort(input),
+    deliveryAuthority: buildVerifiedCommitPort(input),
     connectorAuthority: buildSidecarCapabilityPort<"connector">(
       input,
       "connector-authority-revoked",
     ),
     egressAuthority: buildEgressAuthority(input, failed),
   };
+}
+
+function buildRuntimeGitPort(
+  input: ProductionManagedWorktreeToolInput,
+): GovernedCodingToolPort<"git"> {
+  return {
+    execute: async (
+      request,
+      signal,
+      guard,
+    ): ReturnType<GovernedCodingToolPort<"git">["execute"]> => {
+      if (signalAborted(signal) || !guard.check() || !live(input))
+        return { status: "failed", reasonCode: "git-authority-revoked" };
+      if (request.operation === "ci") return runCiObservation(input.ciObservationService);
+      if (
+        input.runtimeGitService === undefined ||
+        request.operation === "read" ||
+        request.operation === "write"
+      )
+        return { status: "failed", reasonCode: "capability-backend-unavailable" };
+      const result = await input.runtimeGitService.execute(request, guard, signal);
+      if (result === undefined) return { status: "failed", reasonCode: "git-authority-revoked" };
+      requestStageReview(input, result);
+      return { status: "completed", git: result };
+    },
+  };
+}
+
+async function runCiObservation(
+  service: CiObservationService | undefined,
+): Promise<import("./codingToolGovernedDelegate.js").GovernedCodingToolResult> {
+  return service === undefined
+    ? { status: "failed", reasonCode: "capability-backend-unavailable" }
+    : { status: "completed", ci: await service.observe() };
+}
+
+function requestStageReview(
+  input: ProductionManagedWorktreeToolInput,
+  result: import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult,
+): void {
+  if (result.kind === "stage" && result.status === "approval-required")
+    input.requestStageApproval?.(result.proposalId);
+}
+
+function buildVerifiedCommitPort(
+  input: ProductionManagedWorktreeToolInput,
+): GovernedCodingToolPort<"delivery"> {
+  return {
+    execute: async (
+      request,
+      signal,
+      guard,
+    ): ReturnType<GovernedCodingToolPort<"delivery">["execute"]> => {
+      if (signalAborted(signal) || !guard.check() || !live(input))
+        return { status: "failed", reasonCode: "delivery-authority-revoked" };
+      if (isDraftToolRequest(request))
+        return runDraftDeliveryRequest(input, request, guard, signal);
+      const service = input.verifiedCommitService;
+      if (service === undefined || request.intent !== "commit")
+        return { status: "failed", reasonCode: "capability-backend-unavailable" };
+      const result = await runCommitRequest(service, request, guard, signal);
+      if (result === undefined)
+        return { status: "failed", reasonCode: "delivery-authority-revoked" };
+      if (result.status === "approval-required") input.requestCommitApproval?.(result.proposalId);
+      return { status: "completed", verifiedCommit: result };
+    },
+  };
+}
+function runCommitRequest(
+  service: VerifiedCommitService,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "delivery" }
+  >,
+  guard: import("./codingToolFacadePorts.js").CodingToolMutationGuard,
+  signal: AbortSignal | undefined,
+): ReturnType<VerifiedCommitService["executeApproved"]> {
+  if (request.phase === "propose" && request.message !== undefined)
+    return service.propose(request.message);
+  return request.proposalId === undefined || guard.deliveryApproval === undefined
+    ? Promise.resolve(undefined)
+    : service.executeApproved(request.proposalId, guard.deliveryApproval, {
+        check: guard.check,
+        signal,
+      });
 }
 
 function buildCommandRunner(
@@ -327,30 +428,70 @@ function buildVerificationRunner(
         return verificationPortRefusal(input, "verification-verifier-unsupported");
       }
       let report: VerificationReport;
+      let ticket: object | undefined;
       try {
+        ticket = await input.verifiedCommitService?.beginVerification();
+        if (!verificationCompletionLive(input, guard, signal)) {
+          return verificationPortRefusal(input, "verification-authority-revoked");
+        }
         report = await input.verificationRunner.runToReport(
           verificationRunInput(input, request.actionId, kind),
           signal ?? new AbortController().signal,
         );
+        if (!verificationCompletionLive(input, guard, signal)) {
+          return verificationPortRefusal(input, "verification-authority-revoked");
+        }
+        await completeCandidateVerification(input, ticket, report, guard, signal);
       } catch (error) {
         return verificationRefused(input, error);
       }
+      if (!verificationCompletionLive(input, guard, signal)) {
+        return verificationPortRefusal(input, "verification-authority-revoked");
+      }
       verificationSequence += 1;
       publishVerification(input, verificationSequence, report);
-      if (report.overallStatus !== "passed") {
-        return {
-          status: "failed",
-          reasonCode: VERIFICATION_OUTCOME_REASON_CODES[report.overallStatus],
-        };
-      }
-      // The run passed and only the authority behind it lapsed. Calling that VERIFICATION_FAILED
-      // would send the model back to the code over a green verification, so the revocation keeps
-      // its own code here too.
-      return live(input)
-        ? { status: "completed" }
-        : verificationPortRefusal(input, "verification-authority-revoked");
+      return verificationOutcome(input, report, guard, signal);
     },
   };
+}
+
+function verificationOutcome(
+  input: ProductionManagedWorktreeToolInput,
+  report: VerificationReport,
+  guard: CodingToolMutationGuard,
+  signal: AbortSignal | undefined,
+): VerificationPortResult {
+  if (report.overallStatus !== "passed") {
+    return {
+      status: "failed",
+      reasonCode: VERIFICATION_OUTCOME_REASON_CODES[report.overallStatus],
+    };
+  }
+  // A passing runner whose authority lapsed is a refusal, never a failed test run.
+  return verificationCompletionLive(input, guard, signal)
+    ? { status: "completed" }
+    : verificationPortRefusal(input, "verification-authority-revoked");
+}
+
+async function completeCandidateVerification(
+  input: ProductionManagedWorktreeToolInput,
+  ticket: object | undefined,
+  report: VerificationReport,
+  guard: CodingToolMutationGuard,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (ticket !== undefined)
+    await input.verifiedCommitService?.completeVerification(ticket, report, {
+      check: guard.check,
+      signal,
+    });
+}
+function verificationCompletionLive(
+  input: ProductionManagedWorktreeToolInput,
+  guard: CodingToolMutationGuard,
+  signal: AbortSignal | undefined,
+): boolean {
+  return !signalAborted(signal) && guard.check() && live(input);
 }
 
 // The runner keys its run-started/step/terminal evidence and its own "execution failed

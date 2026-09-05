@@ -421,6 +421,34 @@ describe("runGitPullRequest lifecycle gates", () => {
     expect(inputs.kind).toBe("pr-create");
   });
 
+  it("retains canonical identity for reconciliation outside the evidence envelope", async () => {
+    const identity = {
+      number: 1499,
+      externalId: "PR_kwDO123",
+      url: "https://github.com/oscharko-dev/Keiko/pull/1499",
+      repository: "oscharko-dev/Keiko",
+      headRepository: "oscharko-dev/Keiko",
+      headRef: "claude/issue-477-x",
+      headSha: "a".repeat(40),
+      baseRef: "dev",
+      baseSha: "b".repeat(40),
+      state: "open" as const,
+      isDraft: true,
+    };
+    const { adapter, create } = fakeAdapter({ ...SUCCESS, createdPrIdentity: identity });
+    const result = await runGitPullRequest(
+      {
+        command: createCommand({ isDraft: true, canonicalGitHubIdentity: true }),
+        approval: NO_APPROVAL,
+      },
+      deps({ adapter, pack: safePack() }),
+    );
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ canonicalGitHubIdentity: true }));
+    expect(result.createdPrIdentity).toEqual(identity);
+    expect(JSON.stringify(result.lifecycle.envelope)).not.toContain(identity.url);
+    expect(JSON.stringify(result.lifecycle.envelope)).not.toContain(identity.externalId);
+  });
+
   it("attaches a rejection descriptor when the provider rejects an executed create", async () => {
     const rejected: GitPrExecResult = {
       schemaVersion: "1",

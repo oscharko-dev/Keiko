@@ -4,6 +4,7 @@
 // contract. `readonly` everywhere; optional props are `| undefined` because
 // exactOptionalPropertyTypes is on. Imports end `.js`, double quotes, `type` keyword.
 
+import type { CatalogToolPort } from "./governed-tool-bridge.js";
 import type { ToolDefinition } from "./gateway.js";
 import type { ContextToolObservation } from "./context-observations.js";
 import { deepFreeze } from "./deep-freeze.js";
@@ -59,8 +60,8 @@ export interface SandboxPolicy {
   //     command whose output is diagnostic — a stray secret must never survive into evidence.
   //   "credentials-only": only credential values are scrubbed — the governed credential names, any
   //     name that looks credential-bearing, and `credentialEnvAllowlist` — while ordinary context
-  //     values survive. For the ONE kind of read whose stdout IS the value the caller needs: a
-  //     configured remote URL legitimately contains an owner/repository name, and that name is
+  //     values survive. For governed reads whose stdout IS transient source data: configured
+  //     remote URLs and GitHub issue provenance legitimately contain an owner/repository name, which is
   //     also what a CI runner puts in GITHUB_REPOSITORY, what a user is called in USER, what a
   //     shell exports in a dozen harmless variables. Under the default mode such a read came back
   //     as `https://github.com/[REDACTED].git` and every consumer addressed a repository that does
@@ -400,6 +401,8 @@ export interface CommandRunInput {
 }
 
 export interface CommandResult {
+  /** Owning runner changed captured output during redaction; exact-content readers must refuse. */
+  readonly outputRedacted?: true;
   readonly command: string;
   readonly args: readonly string[];
   readonly exitCode: number | null;
@@ -527,6 +530,7 @@ export interface ToolHostConfigInput {
 
 // ─── Hexagonal tool ports (shared between harness consumer and tools implementer) ──────
 
+/** Legacy migration transport only; new producers use GovernedToolCallRequest. */
 export interface ToolCallRequest {
   readonly toolCallId: string;
   readonly toolName: string;
@@ -588,6 +592,8 @@ export interface ToolCallResult {
 }
 
 export interface ToolPort {
+  /** Absence is unavailable for governed callers, never permission to use the legacy methods. */
+  readonly catalog?: CatalogToolPort | undefined;
   readonly execute: (request: ToolCallRequest) => Promise<ToolCallResult>;
   readonly listTools: () => readonly ToolDefinition[];
 }

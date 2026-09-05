@@ -46,6 +46,41 @@ describe("checkArchitectureImportPolicy", () => {
     await expect(checkArchitectureImportPolicy(root)).resolves.toEqual([]);
   });
 
+  it("keeps the pure tool catalog on its contracts/security boundary in every import form", async () => {
+    root = makeRoot("catalog-import-policy-");
+    writeText(
+      root,
+      "packages/keiko-tool-catalog/src/invalid.ts",
+      [
+        'import { readFile } from "node:fs/promises";',
+        'export const remote = import("node:https");',
+        'export const vm = require("node:vm");',
+        'fetch("https://example.invalid");',
+        'import "../../keiko-server/src/index.js";',
+        'import "@oscharko-dev/keiko-contracts-extra";',
+      ].join("\n"),
+    );
+    const violations = await checkArchitectureImportPolicy(root);
+    expect(violations).toHaveLength(6);
+    expect(violations.every((entry) => entry.rule === "adr-0175-tool-catalog-pure-imports")).toBe(
+      true,
+    );
+  });
+
+  it("allows the catalog's own modules and existing pure contract/security owners", async () => {
+    root = makeRoot("catalog-import-policy-");
+    writeText(
+      root,
+      "packages/keiko-tool-catalog/src/valid.ts",
+      [
+        'import type { ToolProfile } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";',
+        'import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";',
+        'import { compile } from "./compiler.js";',
+      ].join("\n"),
+    );
+    await expect(checkArchitectureImportPolicy(root)).resolves.toEqual([]);
+  });
+
   it("allows only the reviewed Local Knowledge ANN worker boundary", async () => {
     root = makeRoot("import-policy-");
     writeText(
@@ -131,6 +166,8 @@ describe("checkArchitectureImportPolicy", () => {
     );
 
     expect(Object.fromEntries([...counts.entries()].sort())).toEqual({
+      "adr-0175-tool-catalog-pure-imports": 1,
+      "adr-0165-raw-coordinate-owner": 1,
       "adr-0005-owned-root-authority-implementation-private": 1,
       "adr-0005-owned-root-containment-allowed-callers": 1,
       "adr-0005-owned-root-lookup-allowed-callers": 1,

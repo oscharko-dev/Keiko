@@ -198,6 +198,23 @@ describe("DiffPane — states", () => {
     expect(metaText.closest(".rv-line")?.querySelector(".rv-gutter")).toHaveTextContent("");
   });
 
+  it("#3386: makes the shared diff viewport keyboard reachable without logging its content", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    renderPane({
+      client: makeSeam({
+        getStructuredDiff: vi.fn(async () => makeDiffResponse([makeDiffFile()])),
+      }),
+    });
+    const header = await screen.findByLabelText("Hunk header @@ -7,1 +7,1 @@");
+    const body = header.closest(".rv-code");
+    expect(body).toHaveAttribute("tabindex", "0");
+    if (body === null) throw new Error("Expected the diff viewport");
+    fireEvent.focus(body);
+    expect(warn).toHaveBeenCalledWith("[keiko] shared diff viewport focused");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("src/index.ts");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("const a =");
+  });
+
   it("issue #2710 — makes the diff body selectable while gutters and sr-only labels opt back out", async () => {
     renderPane({
       client: makeSeam({

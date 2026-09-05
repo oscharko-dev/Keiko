@@ -16,7 +16,7 @@ import {
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs, WorkspaceInfo, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
@@ -119,6 +119,42 @@ function tmp(prefix: string): string {
   const d = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   tmpDirs.push(d);
   return d;
+}
+
+function snapshotWorkspace(): WorkspaceInfo {
+  const root = tmp("snapshot-composition-");
+  const git = (...args: string[]): void => {
+    execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
+      cwd: root,
+      stdio: "ignore",
+      env: {
+        PATH: process.env.PATH,
+        HOME: "/nonexistent",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+      },
+    });
+  };
+  git("init", "-q", "-b", "main");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  writeFileSync(join(root, "source.txt"), "transient snapshot content\n");
+  git("add", "source.txt");
+  git("commit", "-qm", "base");
+  git("checkout", "-qb", "feature");
+  writeFileSync(join(root, "source.txt"), "changed transient snapshot content\n");
+  git("commit", "-qam", "change");
+  return {
+    root,
+    selectedRoot: root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
 }
 
 function isolatedMemoryEnv(env: Readonly<Record<string, string>> = {}): Record<string, string> {
@@ -485,6 +521,44 @@ describe("buildRedactor", () => {
 });
 
 describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
+  it("keeps snapshot content scoped to one live server composition and discards it on disposal", async () => {
+    const workspace = snapshotWorkspace();
+    const depsA = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("snapshot-evidence-a-"),
+      env: {},
+    });
+    const depsB = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("snapshot-evidence-b-"),
+      env: {},
+    });
+    const a = depsA.gitChangeSnapshotService;
+    const b = depsB.gitChangeSnapshotService;
+    try {
+      if (a === undefined || b === undefined) throw new Error("snapshot service not composed");
+      const input = {
+        workspace,
+        baseRef: "main",
+        headRef: "feature",
+        accessScope: {},
+        correlationId: "snapshot-composition",
+      };
+      const first = await a.capture(input);
+      const second = await b.capture(input);
+      if (first.reference === undefined || second.reference === undefined)
+        throw new Error("snapshot capture failed");
+      expect(a.read(first.reference, input.accessScope, input.correlationId)).toBeDefined();
+      expect(b.read(first.reference, input.accessScope, input.correlationId)).toBeUndefined();
+      await depsA.dispose?.();
+      expect(a.read(first.reference, input.accessScope, input.correlationId)).toBeUndefined();
+      expect(b.read(second.reference, input.accessScope, input.correlationId)).toBeDefined();
+    } finally {
+      await depsA.dispose?.();
+      await depsB.dispose?.();
+    }
+  });
+
   it("uses the injected store unchanged when supplied", () => {
     const store = createInMemoryUiStore();
     const evidenceDir = tmp("ev-");

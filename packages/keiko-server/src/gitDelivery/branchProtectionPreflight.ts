@@ -13,6 +13,7 @@ export type GitDeliverySignatureRequirement = "required" | "not-required" | "una
 export type GitDeliveryBranchProtectionPreflight =
   | { readonly outcome: "protected"; readonly protection: GitDeliveryBranchProtection }
   | { readonly outcome: "unprotected" }
+  | { readonly outcome: "unknown" }
   | { readonly outcome: "unavailable" };
 
 export type GitDeliveryBranchProtectionReader = (
@@ -111,7 +112,7 @@ export function createTrustedGitDeliveryBranchProtectionReader(
 export function signatureRequirementOf(
   preflight: GitDeliveryBranchProtectionPreflight,
 ): GitDeliverySignatureRequirement {
-  if (preflight.outcome === "unavailable") return "unavailable";
+  if (preflight.outcome === "unavailable" || preflight.outcome === "unknown") return "unavailable";
   if (preflight.outcome === "unprotected") return "not-required";
   return preflight.protection.signaturesRequired ? "required" : "not-required";
 }

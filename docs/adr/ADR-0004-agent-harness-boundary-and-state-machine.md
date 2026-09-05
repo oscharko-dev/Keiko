@@ -904,3 +904,7 @@ All tests use injected fakes (no real Gateway, no real tools, no network I/O, no
 ## Date
 
 2026-05-28
+
+## Catalog invocation ownership amendment (#3411)
+
+ADR-0175 D6 separates the one tool-invocation state machine owned by the server binder (#3413) from this ADR’s existing outer harness run (#3409). The binder owns effect/idempotency/approval reservation and exactly-one invocation settlement through the harness-injected budget port. The harness retains run/model/tool/command/wall-time counters, run AbortSignal and one run terminal, and consumes the binder receipt without charging or terminalizing that invocation again. This is a prerequisite architecture contract; implementation follows in #3413/#3409. See [ADR-0175](ADR-0175-canonical-governed-tool-catalog.md).

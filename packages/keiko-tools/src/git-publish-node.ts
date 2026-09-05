@@ -16,6 +16,16 @@
 // the Node execution effect; the pure port, builder, and rules it implements are on the package barrel.
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import {
+  withGitPublishView,
+  type GitPublishView,
+} from "@oscharko-dev/keiko-workspace/internal/git-publish";
+import { gitEnv } from "@oscharko-dev/keiko-git";
+import { canonicalGitHubPushUrl } from "./git-push-destination.js";
+import {
+  prepareGitHubPushAuthentication,
+  type GitHubPushAuthentication,
+} from "./git-push-authentication.js";
 import type { GitDeliveryExecutionResult } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
@@ -30,6 +40,7 @@ import {
 import { CommandCancelledError, CommandTimeoutError } from "./errors.js";
 import {
   nodeSpawnFn,
+  nodeHomeProvider,
   runCommand,
   type ExecutableResolver,
   type HomeProvider,
@@ -44,6 +55,11 @@ import {
 } from "./types.js";
 
 export interface NodeGitPublishAdapterDeps {
+  /** Exact canonical destination approved by the owning run; never supplied by a tool or form. */
+  readonly verifiedRemoteUrl?: string;
+  readonly beforeRemoteDispatch?: () => boolean;
+  /** Owning server logs the failure through its existing structured diagnostic port. */
+  readonly onPreparationFailure?: (error: unknown) => void;
   // The repository root the push runs in. Reused as the spawn-boundary workspace root.
   readonly workspace: WorkspaceInfo;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
@@ -181,6 +197,9 @@ export function createNodeGitPublishAdapter(
   deps: NodeGitPublishAdapterDeps,
 ): GitRemotePublishAdapter {
   const ctx = buildRunContext(deps);
+  const remoteUrl = canonicalGitHubPushUrl(deps.verifiedRemoteUrl);
+  const beforeRemoteDispatch = deps.beforeRemoteDispatch;
+  const onPreparationFailure = deps.onPreparationFailure;
   return {
     publish: (req: GitPublishExecRequest): Promise<GitPublishExecResult> => {
       let argv: readonly string[];
@@ -191,7 +210,78 @@ export function createNodeGitPublishAdapter(
       } catch {
         return Promise.resolve(executionResult("failed", 0, { errorCode: "internal-error" }));
       }
-      return runPush(ctx, argv);
+      return req.verifiedCommitSha === undefined
+        ? runPush(ctx, argv)
+        : runVerifiedPush(ctx, { ...req }, remoteUrl, beforeRemoteDispatch, onPreparationFailure);
     },
   };
+}
+
+async function runVerifiedPush(
+  ctx: RunContext,
+  request: GitPublishExecRequest,
+  remoteUrl: string | undefined,
+  beforeRemoteDispatch: (() => boolean) | undefined,
+  onPreparationFailure: ((error: unknown) => void) | undefined,
+): Promise<GitPublishExecResult> {
+  const commit = request.verifiedCommitSha;
+  if (remoteUrl === undefined || commit === undefined)
+    return executionResult("failed", 0, { errorCode: "precondition-failed" });
+  try {
+    return await withPrivatePublishMetadata(ctx.runDeps.workspace.root, commit, async (view) => {
+      if (ctx.signal.aborted || !view.isCurrent() || beforeRemoteDispatch?.() === false)
+        return executionResult("aborted", 0);
+      const authentication = prepareGitHubPushAuthentication(remoteUrl, ctx.runDeps);
+      if (!view.isCurrent() || beforeRemoteDispatch?.() === false)
+        return executionResult("aborted", 0);
+      return runPush(verifiedRunContext(ctx, view, authentication), [
+        ...authentication.configArgs,
+        "-c",
+        "http.followRedirects=false",
+        "push",
+        remoteUrl,
+        `${commit}:refs/heads/${request.remoteBranchName}`,
+      ]);
+    });
+  } catch (error) {
+    onPreparationFailure?.(error);
+    return failureFromThrow(error, 0);
+  }
+}
+
+async function withPrivatePublishMetadata<T>(
+  workspaceRoot: string,
+  commit: string,
+  publish: (view: GitPublishView) => Promise<T>,
+): Promise<T> {
+  const privateRoot = nodeHomeProvider.make();
+  try {
+    return await withGitPublishView(workspaceRoot, commit, publish, privateRoot);
+  } finally {
+    nodeHomeProvider.cleanup(privateRoot);
+  }
+}
+
+function verifiedRunContext(
+  ctx: RunContext,
+  view: GitPublishView,
+  authentication: GitHubPushAuthentication,
+): RunContext {
+  const policy = ctx.runDeps.policy;
+  const pinnedEnv = {
+    ...policy.pinnedEnv,
+    ...Object.fromEntries(
+      Object.entries(gitEnv({})).filter(([key]) => key.startsWith("GIT_CONFIG_")),
+    ),
+    ...authentication.pinnedEnv,
+    GIT_DIR: view.gitDirectory,
+    GIT_CONFIG_COUNT: "0",
+    GIT_CONFIG_PARAMETERS: "",
+    GIT_COMMON_DIR: view.gitDirectory,
+    GIT_OBJECT_DIRECTORY: view.objectDirectory,
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: "",
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_NO_LAZY_FETCH: "1",
+  };
+  return { ...ctx, runDeps: { ...ctx.runDeps, policy: { ...policy, pinnedEnv } } };
 }

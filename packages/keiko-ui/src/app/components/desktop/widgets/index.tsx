@@ -591,17 +591,20 @@ registerWindowRender("runtime", (cfg, ctx) => {
     </BoundRootSurface>
   );
 });
-registerWindowRender("coding", (_cfg, ctx) => (
+registerWindowRender("coding", (cfg, ctx) => (
   <CodingWorkbenchWindow
-    selectedRoot={ctx.selectedRoot ?? undefined}
-    onOpenGit={({ root, binding }) => {
+    selectedRoot={str(cfg, "repositoryPath") ?? ctx.selectedRoot ?? undefined}
+    onOpenGit={({ root, binding, repositoryDialog }) => {
       ctx.openWindow(
         "governedGit",
-        root === null
+        repositoryDialog === undefined && root === null
           ? undefined
           : {
-              projectPath: root,
+              ...(root === null ? {} : { projectPath: root }),
               ...(binding === "repository" ? { rootBinding: CODING_REPOSITORY_BINDING } : {}),
+              ...(repositoryDialog === undefined
+                ? {}
+                : { repositoryDialog, repositoryReturnWindow: ctx.windowId }),
             },
       );
     }}
@@ -623,6 +626,8 @@ registerWindowRender("governedGit", (cfg, ctx) => {
     ctx.activeBinding === null && isCodingRepositoryBinding(cfg, configuredRoot);
   const initialCommit = gitObjectId(str(cfg, "commit"));
   const initialPath = str(cfg, "path");
+  const dialog = str(cfg, "repositoryDialog");
+  const initialRepositoryDialog = dialog === "clone" || dialog === "open" ? dialog : undefined;
   return (
     <BoundRootSurface
       ctx={ctx}
@@ -637,6 +642,14 @@ registerWindowRender("governedGit", (cfg, ctx) => {
           projectId={projectId}
           initialPath={initialPath}
           initialCommit={initialCommit}
+          initialRepositoryDialog={initialRepositoryDialog}
+          onRepositoryConnected={(root: string) => {
+            const returnWindow = str(cfg, "repositoryReturnWindow");
+            if (!returnWindow) return;
+            ctx.updateWindow(returnWindow, { cfg: { repositoryPath: root } });
+            ctx.focusWindow(returnWindow);
+            ctx.updateCfg({ repositoryReturnWindow: "" });
+          }}
           onOpenFiles={(root: string) => ctx.openWindow("files", { root })}
           onOpenEditor={(root: string) => ctx.openWindow("editor", { root })}
           onOpenEditorFile={ctx.openEditorFile}

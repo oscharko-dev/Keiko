@@ -313,9 +313,9 @@ describe("issue-bound snapshots (#3385, schema v22)", () => {
 
     runMigrations(db);
     expect(columnNames(db)).toEqual(fresh);
-    expect(
-      (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
-    ).toBe(SCHEMA_VERSION);
+    expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(
+      SCHEMA_VERSION,
+    );
     const s = createCodingRuntimeSnapshotStore(db);
     s.create({ ...snapshot(), issueBinding: ISSUE_BINDING });
     expect(s.get("run-1")?.issueBinding).toEqual(ISSUE_BINDING);
@@ -336,13 +336,96 @@ describe("issue-bound snapshots (#3385, schema v22)", () => {
       ["issue_content_revision_digest", "'short'"],
       ["issue_binding_digest", "'short'"],
     ] as const) {
-      expect(
-        () =>
-          db.exec(
-            `UPDATE coding_runtime_snapshots SET ${column} = ${value} WHERE run_id = 'run-1'`,
-          ),
-        `${column}=${value}`,
-      ).toThrow(/CHECK/u);
+      expect(() => {
+        db.exec(`UPDATE coding_runtime_snapshots SET ${column} = ${value} WHERE run_id = 'run-1'`);
+      }, `${column}=${value}`).toThrow(/CHECK/u);
     }
+  });
+});
+
+function commitReceipt(): import("@oscharko-dev/keiko-contracts").VerifiedCommitResult {
+  return {
+    schemaVersion: "1",
+    proposalId: "commit-1",
+    runId: "run-1",
+    envelopeDigest: "b".repeat(64),
+    runtimeAuthorityDigest: digest,
+    workspaceDigest: digest,
+    repositoryDigest: "c".repeat(64),
+    baseSha: "1".repeat(40),
+    parentSha: "2".repeat(40),
+    stagedTreeDigest: "d".repeat(64),
+    verificationEvidenceId: "verification-1",
+    messageDigest: "e".repeat(64),
+    status: "recovery-required",
+    reason: "execution-uncertain",
+    recordedAt: at,
+  };
+}
+
+describe("verified commit persistence (#3386, schema v23)", () => {
+  it("round-trips the closed receipt through recovery without saving a live approval", () => {
+    const s = store();
+    s.create(snapshot());
+    const receipt = commitReceipt();
+    expect(s.recordVerifiedCommit(receipt).verifiedCommitResult).toEqual(receipt);
+    s.markNonterminalRecoveryRequired(at);
+    expect(s.get("run-1")?.verifiedCommitResult).toEqual(receipt);
+    expect(JSON.stringify(s.get("run-1"))).not.toContain("approvalToken");
+  });
+  it.each([
+    "approvalToken",
+    "approval",
+    "command",
+    "args",
+    "env",
+    "message",
+    "output",
+    "diff",
+    "path",
+    "secret",
+  ])("rejects hostile %s on write, initial create, and persisted read", (field) => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    const hostile = { ...commitReceipt(), [field]: { body: "private fixture" } };
+    expect(() => s.create({ ...snapshot(), verifiedCommitResult: hostile })).toThrow(
+      "invalid verified commit",
+    );
+    s.create(snapshot());
+    expect(() => s.recordVerifiedCommit(hostile)).toThrow("invalid verified commit");
+    expect(s.get("run-1")?.verifiedCommitResult).toBeUndefined();
+    db.prepare("UPDATE coding_runtime_snapshots SET verified_commit_result = ?").run(
+      JSON.stringify(hostile),
+    );
+    expect(() => s.get("run-1")).toThrow("invalid persisted verified commit");
+    db.close();
+  });
+  it("refuses nested-body substitution and mismatched accepted run bindings", () => {
+    const s = store();
+    s.create(snapshot());
+    for (const change of [
+      { messageDigest: { secret: "private fixture" } },
+      { workspaceDigest: "0".repeat(64) },
+      { runtimeAuthorityDigest: "0".repeat(64) },
+      { issueBindingDigest: "0".repeat(64) },
+      { runId: "run-2" },
+    ]) {
+      const value = {
+        ...commitReceipt(),
+        ...change,
+      } as import("@oscharko-dev/keiko-contracts").VerifiedCommitResult;
+      expect(() => s.recordVerifiedCommit(value)).toThrow();
+    }
+    expect(s.get("run-1")?.verifiedCommitResult).toBeUndefined();
+  });
+  it("enforces bounded valid JSON in SQLite as well as the typed persistence boundary", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    createCodingRuntimeSnapshotStore(db).create(snapshot());
+    const update = db.prepare("UPDATE coding_runtime_snapshots SET verified_commit_result = ?");
+    expect(() => update.run("not-json")).toThrow();
+    expect(() => update.run(JSON.stringify({ body: "x".repeat(8192) }))).toThrow();
+    db.close();
   });
 });

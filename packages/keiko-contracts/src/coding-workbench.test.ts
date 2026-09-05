@@ -186,6 +186,7 @@ describe("coding-workbench constants", () => {
     expect(CODING_WORKBENCH_ACTION_CLASSES).toContain("delivery-substrate");
     expect(CODING_WORKBENCH_SUPERVISED_ACTION_KINDS).toEqual([
       "file-edit",
+      "git-stage",
       "verification-command",
       "research",
       "commit",
@@ -648,11 +649,12 @@ describe("supervised coding action authority", () => {
     const autoAdmitted = CODING_WORKBENCH_SUPERVISED_ACTION_KINDS.filter(
       (kind) => !supervisedCodingActionRequiresApproval(kind),
     );
-    expect(autoAdmitted).toEqual(["file-edit", "verification-command"]);
+    expect(autoAdmitted).toEqual(["file-edit", "git-stage", "verification-command"]);
   });
 
   it("maps supervised actions to the existing permission classes", () => {
     expect(permissionKindForSupervisedCodingAction("file-edit")).toBe("workspace-write");
+    expect(permissionKindForSupervisedCodingAction("git-stage")).toBe("workspace-write");
     expect(permissionKindForSupervisedCodingAction("verification-command")).toBe(
       "command-execution",
     );

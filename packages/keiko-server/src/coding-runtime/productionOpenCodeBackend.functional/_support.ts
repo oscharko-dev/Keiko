@@ -47,7 +47,10 @@ import {
   type ProductionOpenCodeBackendInput,
   type ResolvedPortableOpenCodeRuntime,
 } from "../productionOpenCodeBackend.js";
-import type { ProductionCodingRuntimeResolverInput } from "../productionCodingRuntimeResolver.js";
+import type {
+  ProductionCodingRuntimeResolverInput,
+  ProductionRuntimeBackendInput,
+} from "../productionCodingRuntimeResolver.js";
 import type { SecureWorkspaceTextReadPort } from "../secureWorkspaceTextRead.js";
 
 const MAX_READ_BYTES = 65_536;
@@ -79,6 +82,11 @@ type FunctionalEditorAction = Parameters<FunctionalEditorAgentClient["action"]>[
 type FunctionalEditorActionResult = Awaited<ReturnType<FunctionalEditorAgentClient["action"]>>;
 
 interface FunctionalRuntimeResolverBaseInput {
+  /** Uses the same real Git/approval/snapshot bundle as production composition. */
+  readonly verifiedCommit?: ProductionCodingRuntimeResolverInput["verifiedCommit"];
+  readonly draftDelivery?: ProductionCodingRuntimeResolverInput["draftDelivery"];
+  /** A composed fixture can invoke the admitted facade without inventing a model tool catalog. */
+  readonly observeBackendRun?: (input: ProductionRuntimeBackendInput) => void;
   readonly portable: ResolvedPortableOpenCodeRuntime;
   readonly runtimeStateRoot: string;
   readonly gatewayUrl: string;
@@ -89,6 +97,8 @@ interface FunctionalRuntimeResolverBaseInput {
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly createSupervisor: NonNullable<ProductionOpenCodeBackendInput["createSupervisor"]>;
   readonly diagnostics?: ServerDiagnosticSink;
+  /** Uses the same configured-profile qualification as the mounted gateway when supplied. */
+  readonly resolveManagedModelProfile?: ProductionCodingRuntimeResolverInput["workspaceAuthority"]["resolveManagedModelProfile"];
   /** #2387: opens the network-egress class so the research approval loop is reachable. */
   readonly researchEgressEnabled?: boolean | undefined;
   /** #2387 hermetic research transport; tests never touch the real network. */
@@ -163,21 +173,16 @@ export function createFunctionalRuntimeResolver(
       managedTaskWorkspaceRoot: input.managedTaskWorkspaceRoot,
       deploymentCeiling: "autonomous-delivery",
       readWorkspaceHead: input.readWorkspaceHead,
-      ...(input.researchEgressEnabled === undefined
-        ? {}
-        : { researchEgressEnabled: input.researchEgressEnabled }),
+      verifiedCommitResult: (runId) =>
+        input.verifiedCommit?.snapshots.getLastSuccessfulVerifiedCommit?.(runId),
+      resolveManagedModelProfile: input.resolveManagedModelProfile,
+      researchEgressEnabled: input.researchEgressEnabled,
     },
     ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
     ...resolveFunctionalChildModelInput(input),
-    backend: createProductionOpenCodeBackend({
-      portable: input.portable,
-      runtimeStateRoot: input.runtimeStateRoot,
-      gatewayUrl: input.gatewayUrl,
-      runtimeEvidence: input.runtimeEvidence,
-      gatewayReadiness: readiness,
-      createSupervisor: input.createSupervisor,
-      ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
-    }),
+    ...(input.verifiedCommit === undefined ? {} : { verifiedCommit: input.verifiedCommit }),
+    ...(input.draftDelivery === undefined ? {} : { draftDelivery: input.draftDelivery }),
+    backend: functionalBackend(input, readiness),
     secureWorkspaceTextRead: functionalWorkspaceRead(activeRoot, input.diagnostics),
     editorAgentClient: functionalEditorAgentClient(activeRoot),
     verificationRunner: input.verificationRunner,
@@ -198,6 +203,29 @@ export function createFunctionalRuntimeResolver(
       return qualified === undefined
         ? undefined
         : { ...qualified, openCodeGatewayReadinessRegistry: readiness };
+    },
+  };
+}
+
+function functionalBackend(
+  input: FunctionalRuntimeResolverInput,
+  readiness: ReturnType<typeof createOpenCodeGatewayReadinessRegistry>,
+): ReturnType<typeof createProductionOpenCodeBackend> {
+  const backend = createProductionOpenCodeBackend({
+    portable: input.portable,
+    runtimeStateRoot: input.runtimeStateRoot,
+    gatewayUrl: input.gatewayUrl,
+    runtimeEvidence: input.runtimeEvidence,
+    gatewayReadiness: readiness,
+    createSupervisor: input.createSupervisor,
+    ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
+  });
+  return {
+    ...backend,
+    createRun: (run): ReturnType<typeof backend.createRun> => {
+      const created = backend.createRun(run);
+      input.observeBackendRun?.(run);
+      return created;
     },
   };
 }

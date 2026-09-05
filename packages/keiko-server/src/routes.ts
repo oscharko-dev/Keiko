@@ -90,6 +90,7 @@ import {
   handleGetGitHubIssueReaderAuthorization,
   handlePutGitHubIssueReaderAuthorization,
 } from "./coding-context/githubAuthorizationRoutes.js";
+import { handleCodingWorkbenchIssuePreview } from "./coding-context/issuePreviewRoutes.js";
 import {
   handleGetMemoryAutonomyPolicy,
   handlePutMemoryAutonomyPolicy,
@@ -1186,6 +1187,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // checkout (not to the remote whose issues it reads — see githubIssueReaderAuthorization.ts). The
   // caller names a registered project; the server refuses an unregistered path and derives the
   // content-free identity itself.
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/issue/preview",
+    handler: handleCodingWorkbenchIssuePreview,
+  },
   {
     method: "GET",
     pattern: "/api/coding-workbench/github-authorization",

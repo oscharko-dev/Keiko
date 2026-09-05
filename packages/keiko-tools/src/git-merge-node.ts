@@ -31,6 +31,7 @@ import type {
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
   buildBranchProtectionArgv,
+  buildBranchMetadataArgv,
   buildCheckRunsArgv,
   buildDeleteMergedBranchArgv,
   buildMergeArgv,
@@ -49,7 +50,16 @@ import {
   type GitMergeReadinessRequest,
   type RawMergeReadiness,
 } from "./git-merge-gateway.js";
-import { CommandCancelledError, CommandTimeoutError } from "./errors.js";
+import {
+  CommandCancelledError,
+  CommandDeniedError,
+  CommandTimeoutError,
+  OutputLimitError,
+} from "./errors.js";
+import { readGitCiFacts, type GitCiProviderReader } from "./git-ci-facts.js";
+import { readGitCiFailureContext } from "./git-ci-failure-context.js";
+import { readGitJourneyFacts, type GitJourneyReader } from "./git-journey-facts.js";
+import type { GitProviderReadRunner } from "./git-provider-observation.js";
 import {
   nodeSpawnFn,
   runCommand,
@@ -439,23 +449,23 @@ function approvedReviewCountFrom(reviews: readonly RawReview[]): number {
   return approved;
 }
 
-// Best-effort read of the PR's received approval count. A read failure (network, permission, or an
-// unparseable body) yields 0 — the same "no known approvals" default the hardcoded value used to
-// report unconditionally, but now only as a fallback rather than the permanent answer.
+// Reads the PR approval count. Transport, visibility, truncation or parse failures remain unknown
+// so missing review evidence cannot be mistaken for a verified zero-approval requirement.
 async function readReceivedApprovalCount(
   ctx: RunContext,
   req: GitMergeReadinessRequest,
-): Promise<number> {
+): Promise<number | undefined> {
   let argv: readonly string[];
   try {
     argv = buildPullRequestReviewsArgv(req);
   } catch {
-    return 0;
+    return undefined;
   }
   const result = await runGh(ctx, argv);
-  if (result instanceof Error || result.exitCode !== 0) return 0;
+  if (result instanceof Error || result.exitCode !== 0 || result.truncated || result.timedOut)
+    return undefined;
   const reviews = parseJsonArray(result.stdout);
-  return reviews === undefined ? 0 : approvedReviewCountFrom(reviews);
+  return reviews === undefined ? undefined : approvedReviewCountFrom(reviews);
 }
 
 interface BranchProtectionProjection {
@@ -527,6 +537,7 @@ function parseBranchProtection(stdout: string): BranchProtectionProjection | und
 type BranchProtectionRead =
   | { readonly outcome: "protected"; readonly projection: BranchProtectionProjection }
   | { readonly outcome: "unprotected" }
+  | { readonly outcome: "unknown" }
   | { readonly outcome: "error" };
 
 function isNotFound(result: CommandResult): boolean {
@@ -545,15 +556,30 @@ async function readBranchProtection(
   }
   const result = await runGh(ctx, argv);
   if (result instanceof Error) return { outcome: "error" };
-  if (isNotFound(result)) return { outcome: "unprotected" };
+  if (result.truncated || result.timedOut) return { outcome: "unknown" };
+  if (isNotFound(result)) return confirmUnprotectedBranch(ctx, req);
   if (result.exitCode !== 0) return { outcome: "error" };
   const projection = parseBranchProtection(result.stdout);
   return projection === undefined ? { outcome: "error" } : { outcome: "protected", projection };
 }
 
+async function confirmUnprotectedBranch(
+  ctx: RunContext,
+  req: GitBranchProtectionRequest,
+): Promise<BranchProtectionRead> {
+  const result = await runGh(ctx, buildBranchMetadataArgv(req));
+  if (result instanceof Error || result.exitCode !== 0 || result.truncated || result.timedOut)
+    return { outcome: "unknown" };
+  const branch = parseJsonObject(result.stdout);
+  return branch?.name === req.baseBranchName && branch.protected === false
+    ? { outcome: "unprotected" }
+    : { outcome: "unknown" };
+}
+
 export type GitBranchProtectionReadResult =
   | { readonly outcome: "protected"; readonly protection: GitDeliveryBranchProtection }
   | { readonly outcome: "unprotected" }
+  | { readonly outcome: "unknown" }
   | { readonly outcome: "unavailable" };
 
 export async function readNodeGitBranchProtection(
@@ -564,7 +590,7 @@ export async function readNodeGitBranchProtection(
   if (result.outcome === "protected") {
     return { outcome: "protected", protection: result.projection.protection };
   }
-  return result.outcome === "unprotected" ? { outcome: "unprotected" } : { outcome: "unavailable" };
+  return result.outcome === "error" ? { outcome: "unavailable" } : result;
 }
 
 // Reads the PR object (facts only, un-enriched with approval counts). Returns undefined on any
@@ -655,8 +681,12 @@ async function readMergeReadiness(
     readReceivedApprovalCount(ctx, req),
     readBranchProtection(ctx, req),
   ]);
-  if (branchProtection.outcome === "error") {
-    return { providerCapableStrategies, providerError: true };
+  if (
+    branchProtection.outcome === "error" ||
+    branchProtection.outcome === "unknown" ||
+    receivedApprovalCount === undefined
+  ) {
+    return unknownProviderReadiness(factsOnly, providerCapableStrategies);
   }
   const projection =
     branchProtection.outcome === "protected" ? branchProtection.projection : undefined;
@@ -668,6 +698,22 @@ async function readMergeReadiness(
     receivedApprovalCount,
     projection,
   );
+}
+
+function unknownProviderReadiness(
+  facts: RawMergeReadiness,
+  providerCapableStrategies: readonly GitDeliveryMergeStrategyHint[],
+): GitMergeProviderReadiness {
+  const pullRequest = mapRawMergeReadiness(facts);
+  return {
+    providerCapableStrategies,
+    providerError: true,
+    pullRequest: {
+      ...pullRequest,
+      mergeReadiness: { ...pullRequest.mergeReadiness, ready: false },
+    },
+    ...(facts.headSha === undefined ? {} : { headRefHash: facts.headSha }),
+  };
 }
 
 // ─── Merge execute (+ guarded, non-fatal branch deletion) ─────────────────────────────────────────────
@@ -721,5 +767,98 @@ export function createNodeGitMergeAdapter(deps: NodeGitMergeAdapterDeps): GitMer
       readMergeReadiness(ctx, req),
     mergePullRequest: (req: GitMergeExecRequest): Promise<GitMergeExecResult> =>
       mergePullRequest(ctx, req),
+  };
+}
+
+export interface NodeGitCiReaderDeps extends NodeGitMergeAdapterDeps {
+  /** Existing run/checkout admission owner, checked before every bounded provider read. */
+  readonly stillAuthorized: () => boolean;
+  readonly redactText?: (text: string) => string;
+}
+
+interface CiBudget {
+  calls: number;
+  bytes: number;
+  readonly startedAt: number;
+}
+
+function ciAdmissionFailure(
+  deps: NodeGitCiReaderDeps,
+  ctx: RunContext,
+  budget: CiBudget,
+  now: number,
+): Error | undefined {
+  if (ctx.signal.aborted) return new CommandCancelledError("CI observation cancelled");
+  if (!deps.stillAuthorized())
+    return new CommandDeniedError("CI observation authority denied", "gh");
+  if (
+    !Number.isFinite(now) ||
+    !Number.isFinite(budget.startedAt) ||
+    now < budget.startedAt ||
+    now - budget.startedAt >= 30_000
+  )
+    return new CommandTimeoutError("CI observation deadline exhausted", 30_000);
+  if (budget.calls >= 32 || budget.bytes >= 1_048_576)
+    return new OutputLimitError("CI observation budget exhausted", 1_048_576);
+  return undefined;
+}
+
+function boundedCiRunner(ctx: RunContext, deps: NodeGitCiReaderDeps): GitProviderReadRunner {
+  const now = deps.now ?? Date.now;
+  const budget: CiBudget = { calls: 0, bytes: 0, startedAt: now() };
+  return async (argv): Promise<CommandResult | Error> => {
+    const current = now();
+    const failure = ciAdmissionFailure(deps, ctx, budget, current);
+    if (failure !== undefined) return failure;
+    budget.calls += 1;
+    const timeoutMs = Math.max(
+      1,
+      Math.min(ctx.timeoutMs ?? 10_000, budget.startedAt + 30_000 - current),
+    );
+    const result = await runGh({ ...ctx, timeoutMs }, argv);
+    if (!(result instanceof Error))
+      budget.bytes +=
+        Buffer.byteLength(result.stdout, "utf8") + Buffer.byteLength(result.stderr, "utf8");
+    const after = ciAdmissionFailure(deps, ctx, { ...budget, calls: budget.calls - 1 }, now());
+    return after ?? result;
+  };
+}
+
+/** Read-only port over the existing governed gh boundary; it exposes no merge or workflow effect. */
+export function createNodeGitCiReader(deps: NodeGitCiReaderDeps): GitCiProviderReader {
+  const ctx = buildRunContext(deps);
+  const captured = { ...deps };
+  const run = boundedCiRunner(ctx, captured);
+  return {
+    readFacts: (target) =>
+      readGitCiFacts({
+        target,
+        run,
+        signal: ctx.signal,
+      }),
+    readFailureContext: (facts) =>
+      readGitCiFailureContext({
+        facts,
+        run,
+        signal: ctx.signal,
+        stillAuthorized: captured.stillAuthorized,
+        ...(captured.redactText === undefined ? {} : { redactText: captured.redactText }),
+      }),
+  };
+}
+
+/** Read-only human review and closure facts over the same bounded governed GitHub boundary. */
+export function createNodeGitJourneyReader(deps: NodeGitCiReaderDeps): GitJourneyReader {
+  const captured = { ...deps };
+  const ctx = buildRunContext(captured);
+  const run = boundedCiRunner(ctx, captured);
+  return {
+    readJourney: (target) =>
+      readGitJourneyFacts({
+        target,
+        run,
+        signal: ctx.signal,
+        stillAuthorized: captured.stillAuthorized,
+      }),
   };
 }

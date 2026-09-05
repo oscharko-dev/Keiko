@@ -106,6 +106,10 @@
   line-height: var(--leading-normal);
 }
 
+.cmp-issue-facts > div {
+  display: contents;
+}
+
 .cmp-issue-facts dt {
   color: var(--text-tertiary);
   font-weight: var(--weight-semibold);

@@ -28,6 +28,38 @@ afterEach(() => {
 });
 
 describe("production coding runtime resolver", () => {
+  it("carries the admitted issue through the production context and start confirmation", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const issueBinding = {
+      schemaVersion: "1" as const,
+      repositoryId: "repository-private",
+      remoteDigest: "a".repeat(64),
+      issueNumber: 42,
+      issueIdDigest: "b".repeat(64),
+      defaultBaseRef: "dev",
+      contentRevisionDigest: "c".repeat(64),
+      bindingDigest: "d".repeat(64),
+    };
+    const request = { ...launchRequest(fixture.workspace), issueBinding };
+    const approved = resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request);
+    const generic = resolveProductionRuntimeStartConfirmationClaim(
+      fixture.authority,
+      launchRequest(fixture.workspace),
+    );
+    expect(approved.bindingDigest).not.toBe(generic.bindingDigest);
+    confirmations.issue(approved);
+    host.launchResolver.resolve(request);
+    expect(createRun.mock.calls[0]?.[0].context.issueBinding).toEqual(issueBinding);
+  });
+
   it("starts an approved research grant lifetime at operator approval time", async () => {
     const fixture = workspaceFixture();
     const confirmations = confirmationFixture();

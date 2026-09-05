@@ -11,6 +11,10 @@
   },
   "include": [
     "coding-runtime-2385-server.mts",
+    "coding-issue-intake-server.mts",
+    "coding-issue-commit-server.mts",
+    "coding-issue-delivery-server.mts",
+    "coding-issue-ci-server.mts",
     "coding-runtime-2386-server.mts",
     "coding-runtime-2387-server.mts",
     "coding-runtime-2483-real-binary-server.mts",

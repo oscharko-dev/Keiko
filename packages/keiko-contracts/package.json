@@ -726,6 +726,82 @@
     "./runtime/workspace-ui": {
       "types": "./dist/workspace-ui.d.ts",
       "import": "./dist/workspace-ui.js"
+    },
+    "./runtime/git-change-snapshot": {
+      "types": "./dist/git-change-snapshot.d.ts",
+      "import": "./dist/git-change-snapshot.js"
+    },
+    "./runtime/pr-description": {
+      "types": "./dist/pr-description.d.ts",
+      "import": "./dist/pr-description.js"
+    },
+    "./runtime/git-journey-outcome": {
+      "types": "./dist/git-journey-outcome.d.ts",
+      "import": "./dist/git-journey-outcome.js"
+    },
+    "./runtime/git-journey-freshness": {
+      "types": "./dist/git-journey-freshness.d.ts",
+      "import": "./dist/git-journey-freshness.js"
+    },
+    "./runtime/git-journey-validation": {
+      "types": "./dist/git-journey-validation.d.ts",
+      "import": "./dist/git-journey-validation.js"
+    },
+    "./runtime/pr-description-application": {
+      "types": "./dist/pr-description-application.d.ts",
+      "import": "./dist/pr-description-application.js"
+    },
+    "./runtime/pr-description-region": {
+      "types": "./dist/pr-description-region.d.ts",
+      "import": "./dist/pr-description-region.js"
+    },
+    "./runtime/git-preflight": {
+      "types": "./dist/git-preflight.d.ts",
+      "import": "./dist/git-preflight.js"
+    },
+    "./runtime/verified-commit": {
+      "types": "./dist/verified-commit.d.ts",
+      "import": "./dist/verified-commit.js"
+    },
+    "./runtime/coding-repository-search": {
+      "types": "./dist/coding-repository-search.d.ts",
+      "default": "./dist/coding-repository-search.js"
+    },
+    "./runtime/coding-runtime-git": {
+      "types": "./dist/coding-runtime-git.d.ts",
+      "default": "./dist/coding-runtime-git.js"
+    },
+    "./runtime/draft-delivery": {
+      "types": "./dist/draft-delivery.d.ts",
+      "import": "./dist/draft-delivery.js"
+    },
+    "./runtime/deep-freeze": {
+      "types": "./dist/deep-freeze.d.ts",
+      "import": "./dist/deep-freeze.js"
+    },
+    "./runtime/governed-tool-catalog": {
+      "types": "./dist/governed-tool-catalog.d.ts",
+      "import": "./dist/governed-tool-catalog.js"
+    },
+    "./runtime/issue-closing-directive": {
+      "types": "./dist/issue-closing-directive.d.ts",
+      "import": "./dist/issue-closing-directive.js"
+    },
+    "./runtime/coding-runtime-delivery": {
+      "types": "./dist/coding-runtime-delivery.d.ts",
+      "import": "./dist/coding-runtime-delivery.js"
+    },
+    "./runtime/governed-tool-lifecycle": {
+      "types": "./dist/governed-tool-lifecycle.d.ts",
+      "import": "./dist/governed-tool-lifecycle.js"
+    },
+    "./runtime/coding-runtime-ci": {
+      "types": "./dist/coding-runtime-ci.d.ts",
+      "import": "./dist/coding-runtime-ci.js"
+    },
+    "./runtime/governed-tool-bridge": {
+      "types": "./dist/governed-tool-bridge.d.ts",
+      "import": "./dist/governed-tool-bridge.js"
     }
   },
   "scripts": {

@@ -1,4 +1,4 @@
-import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import type { CodingWorkbenchRuntimeEvent, CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
 import type { GitDeliveryRunAuthorityPort } from "../gitDelivery/runBoundAuthority.js";
@@ -20,6 +20,7 @@ import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.
 import type { CodingRuntimePermissionPort } from "./codingRuntimePermissionPort.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
+import type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
 
 export interface CodingRuntimeHost {
   readonly createManager: (
@@ -66,6 +67,8 @@ export interface CodingRuntimeHost {
 }
 
 export interface CodingRuntimeControlPlaneInput {
+  readonly issueIntake?: CodingRuntimeIssueIntake | undefined;
+  readonly deploymentCeiling?: CodingWorkbenchMode | undefined;
   readonly snapshots: CodingRuntimeSnapshotStore;
   readonly evidence: CodingRuntimeEvidenceAggregator;
   readonly workspaceLifecycle: WorkspaceLifecycleService;
@@ -144,6 +147,8 @@ function createControlPlaneOrchestrator(
   launchResolver: CodingRuntimeLaunchResolver,
 ): CodingRuntimeOrchestrator {
   return createCodingRuntimeOrchestrator({
+    issueIntake: input.issueIntake,
+    deploymentCeiling: input.deploymentCeiling,
     manager,
     approvalAuthority,
     eventHub,

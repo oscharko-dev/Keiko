@@ -1,8 +1,14 @@
+import { parseDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
+import type { CodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
+import { parseRuntimeGitRequest, type RuntimeGitRequest } from "./codingRuntimeGitIpc.js";
 import { isUtf8 } from "node:buffer";
 
 import type {
   AuxiliaryCapabilityOutcomeV1,
   EditorAgentChangeset,
+  VerifiedCommitResult,
+  CodingRuntimeGitResult,
 } from "@oscharko-dev/keiko-contracts";
 import { isCodeTaskSkillId } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 import { isEditorAgentChangeset } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
@@ -69,10 +75,18 @@ export type CodingToolActionRequest =
       readonly verifierId: string;
       readonly approvalProof?: CodingToolApprovalProof | undefined;
     })
-  | (CodingToolRequestIdentity & { readonly action: "git"; readonly operation: "read" | "write" })
+  | (CodingToolRequestIdentity & { readonly action: "git"; readonly operation: "read" })
+  | (CodingToolRequestIdentity & { readonly action: "git"; readonly operation: "write" })
+  | (CodingToolRequestIdentity & { readonly action: "git"; readonly operation: "ci" })
+  | RuntimeGitRequest
   | (CodingToolRequestIdentity & {
       readonly action: "delivery";
       readonly intent: "commit" | "push" | "pull-request" | "merge";
+      readonly phase?: "propose" | "execute" | "reconcile";
+      readonly title?: string;
+      readonly message?: string;
+      readonly proposalId?: string;
+      readonly approvalProof?: CodingToolApprovalProof | undefined;
     })
   | (CodingToolRequestIdentity & { readonly action: "connector"; readonly scope: string })
   | (CodingToolRequestIdentity & { readonly action: "egress"; readonly target: string })
@@ -84,6 +98,26 @@ export type CodingToolActionRequest =
     });
 
 export type CodingToolResult =
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      readonly ci: CodingRuntimeCiResult;
+    }
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      readonly draftDelivery: CodingRuntimeDeliveryResult;
+    }
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      readonly git: CodingRuntimeGitResult;
+    }
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      readonly verifiedCommit: VerifiedCommitResult;
+    }
   | {
       readonly status: "completed";
       readonly evidence: readonly CodingToolEvidence[];
@@ -416,20 +450,73 @@ function simpleNamedRequest(
 
 function gitRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
   const identity = requestIdentity(value);
+  const operation = value.operation;
+  const simple = operation === "read" || operation === "write" || operation === "ci";
+  if (identity !== undefined && !simple) return parseRuntimeGitRequest(value, identity);
   return identity !== undefined &&
     hasExactKeys(value, ["action", "actionId", "idempotencyKey", "operation"]) &&
-    (value.operation === "read" || value.operation === "write")
-    ? { ...identity, action: "git", operation: value.operation }
+    simple
+    ? { ...identity, action: "git", operation }
     : undefined;
 }
 
 function deliveryRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
   const identity = requestIdentity(value);
-  return identity !== undefined &&
-    hasExactKeys(value, ["action", "actionId", "idempotencyKey", "intent"]) &&
-    deliveryIntent(value.intent)
-    ? { ...identity, action: "delivery", intent: value.intent }
-    : undefined;
+  if (identity === undefined || !deliveryIntent(value.intent)) return undefined;
+  if (value.phase === undefined)
+    return hasExactKeys(value, ["action", "actionId", "idempotencyKey", "intent"])
+      ? { ...identity, action: "delivery", intent: value.intent }
+      : undefined;
+  if (value.intent !== "commit") return parseDraftToolRequest(value, identity);
+  if (value.phase === "propose") return commitProposalRequest(value, identity);
+  return commitExecutionRequest(value, identity);
+}
+function commitExecutionRequest(
+  value: Record<string, unknown>,
+  identity: CodingToolRequestIdentity,
+): CodingToolActionRequest | undefined {
+  if (value.phase !== "execute" || !nonEmpty(value.proposalId)) return undefined;
+  const approvalProof = optionalApprovalProof(value);
+  if (
+    approvalProof === "invalid" ||
+    !hasAllowedKeys(value, [
+      "action",
+      "actionId",
+      "idempotencyKey",
+      "intent",
+      "phase",
+      "proposalId",
+      "approvalProof",
+    ])
+  )
+    return undefined;
+  return {
+    ...identity,
+    action: "delivery",
+    intent: "commit",
+    phase: "execute",
+    proposalId: value.proposalId,
+    ...(approvalProof === undefined ? {} : { approvalProof }),
+  };
+}
+function commitProposalRequest(
+  value: Record<string, unknown>,
+  identity: CodingToolRequestIdentity,
+): CodingToolActionRequest | undefined {
+  if (
+    !hasExactKeys(value, ["action", "actionId", "idempotencyKey", "intent", "phase", "message"]) ||
+    !nonEmpty(value.message)
+  )
+    return undefined;
+  if (Buffer.byteLength(value.message, "utf8") > 8192 || value.message.includes("\0"))
+    return undefined;
+  return {
+    ...identity,
+    action: "delivery",
+    intent: "commit",
+    phase: "propose",
+    message: value.message,
+  };
 }
 
 function requestIdentity(value: Record<string, unknown>): CodingToolRequestIdentity | undefined {

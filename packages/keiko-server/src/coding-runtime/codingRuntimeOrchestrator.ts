@@ -13,6 +13,7 @@ import type {
   CodingWorkbenchRuntimeStartRequest,
   CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
   CodingWorkbenchRuntimeStateName,
+  CodingWorkbenchIssueBinding,
 } from "@oscharko-dev/keiko-contracts";
 import { isLegalCodingWorkbenchRuntimeTransition } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import {
@@ -57,6 +58,12 @@ import type {
 } from "./codingRuntimeOrchestratorTypes.js";
 import { classifyLaunchRejection, launchRejectionDiagnosticReason } from "./launchFailure.js";
 import type { CodingRuntimeTaskOutcome } from "./productionCodingRuntimeHost.js";
+import {
+  admitCodingRuntimeIssue,
+  type CodingRuntimeIssueAttachment,
+} from "./codingRuntimeIssueIntake.js";
+import { renderInitialTurnContext } from "./productionCodingRuntimePorts.js";
+export type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
 
 function runtimePauseFailureCode(
   code:
@@ -969,7 +976,15 @@ export class CodingRuntimeOrchestrator {
     const principal = this.deps.serverPrincipal();
     if (!active || !principal) return this.fail("authority-resolution-failed");
     const runId = this.newRunId();
-    const resolved = this.resolveLaunch(parsed.value, active, principal, runId);
+    const issue = await this.admitIssue(parsed.value, active, runId, predecessorRunId);
+    if (!issue.ok) return issue;
+    const resolved = await this.resolveLaunch(
+      parsed.value,
+      active,
+      principal,
+      runId,
+      issue.binding,
+    );
     if (!resolved.ok) return this.fail(resolved.failureCode);
     const launch = resolved.launch;
     const snapshot = this.buildStartSnapshot(
@@ -979,6 +994,7 @@ export class CodingRuntimeOrchestrator {
       runId,
       launch,
       predecessorRunId,
+      issue.binding,
     );
     this.deps.snapshots.create(snapshot);
     this.activeRunId = runId;
@@ -989,12 +1005,33 @@ export class CodingRuntimeOrchestrator {
     this.projection.publish(snapshot);
     const started = await this.startManagedRuntime(parsed.value, active, runId, launch);
     if (started !== undefined) return started;
-    return this.runInitialTurn(parsed.value, runId);
+    return this.runInitialTurn(parsed.value, runId, issue.attachment);
+  }
+
+  private admitIssue(
+    request: CodingWorkbenchRuntimeStartRequest,
+    active: ActiveWorkspaceView,
+    runId: string,
+    predecessorRunId?: string,
+  ): ReturnType<typeof admitCodingRuntimeIssue> {
+    return admitCodingRuntimeIssue({
+      request,
+      active,
+      runId,
+      priorBinding:
+        predecessorRunId === undefined
+          ? undefined
+          : this.deps.snapshots.get(predecessorRunId)?.issueBinding,
+      intake: this.deps.issueIntake,
+      activityLog: this.deps.activityLog,
+      deploymentCeiling: this.deps.deploymentCeiling,
+    });
   }
 
   private async runInitialTurn(
     request: CodingWorkbenchRuntimeStartRequest,
     runId: string,
+    attachment?: CodingRuntimeIssueAttachment,
   ): Promise<CodingRuntimeOrchestratorResult> {
     const ready = this.transitionActive("ready");
     if (!ready.ok) return ready;
@@ -1003,7 +1040,21 @@ export class CodingRuntimeOrchestrator {
       requestId: request.requestId,
       expectedRevision: ready.snapshot.revision,
       taskIntent: request.taskIntent,
+      ...(attachment === undefined ? {} : { initialContext: renderInitialTurnContext(attachment) }),
     });
+    if (initialTurn === "accepted" && attachment !== undefined) {
+      this.deps.activityLog?.write({
+        category: "process",
+        op: "coding-runtime.run.issue-context-attached",
+        correlationId: runId,
+        extra: {
+          runId,
+          issueNumber: attachment.issueNumber,
+          itemCount: attachment.itemCount,
+          byteCount: attachment.byteCount,
+        },
+      });
+    }
     if (initialTurn === "accepted") return this.transitionActive("running");
     if (initialTurn === "failed") {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-dispatch");
@@ -1013,16 +1064,18 @@ export class CodingRuntimeOrchestrator {
     return this.transitionActive("recovery-required", "recovery-required");
   }
 
-  private resolveLaunch(
+  private async resolveLaunch(
     request: CodingWorkbenchRuntimeStartRequest,
     active: ActiveWorkspaceView,
     principal: string,
     runId: string,
-  ):
+    issueBinding?: CodingWorkbenchIssueBinding,
+  ): Promise<
     | { readonly ok: true; readonly launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]> }
-    | { readonly ok: false; readonly failureCode: CodingWorkbenchRuntimeFailureCode } {
+    | { readonly ok: false; readonly failureCode: CodingWorkbenchRuntimeFailureCode }
+  > {
     try {
-      const launch = this.deps.launchResolver.resolve({
+      const input = {
         runId,
         requestId: request.requestId,
         taskIntent: request.taskIntent,
@@ -1033,7 +1086,10 @@ export class CodingRuntimeOrchestrator {
         workspaceId: active.instance.workspaceId,
         workspaceRoot: active.binding.activeRoot,
         serverPrincipal: principal,
-      });
+        ...(issueBinding === undefined ? {} : { issueBinding }),
+      };
+      await this.deps.launchResolver.prepare?.(input);
+      const launch = this.deps.launchResolver.resolve(input);
       return { ok: true, launch };
     } catch (error) {
       // Never a bare `catch {}`: a rejected launch used to lose its identity here and surface as
@@ -1050,6 +1106,7 @@ export class CodingRuntimeOrchestrator {
     runId: string,
     launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]>,
     predecessorRunId?: string,
+    issueBinding?: CodingWorkbenchIssueBinding,
   ): CodingRuntimeSnapshot {
     const now = this.now().toISOString();
     return {
@@ -1072,6 +1129,7 @@ export class CodingRuntimeOrchestrator {
       patchByteCount: 0,
       modelRequestCount: 0,
       ...(predecessorRunId ? { predecessorRunId } : {}),
+      ...(issueBinding === undefined ? {} : { issueBinding }),
     };
   }
 

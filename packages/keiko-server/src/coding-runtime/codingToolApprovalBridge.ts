@@ -1,3 +1,9 @@
+import type { DraftDeliveryService } from "../gitDelivery/draftDeliveryTypes.js";
+import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
+import type { GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
+import type { VerifiedCommitService } from "../gitDelivery/verifiedCommitTypes.js";
+import type { GitDeliveryIssuedApproval } from "../gitDelivery/approvalStore.js";
 import { createHash, timingSafeEqual } from "node:crypto";
 
 import type { CodingToolActionRequest, CodingToolApprovalProof } from "./codingToolIpc.js";
@@ -45,7 +51,14 @@ export interface CodingToolApprovalActivation {
   readonly nowMs: number;
 }
 
+export type CommitToolRequest = Extract<CodingToolActionRequest, { readonly action: "delivery" }>;
 export interface CodingToolApprovalProofVerifier {
+  readonly matchesDelivery?: (runId: string, request: CommitToolRequest) => boolean;
+  readonly consumeDelivery?: (runId: string, request: CommitToolRequest) => object | undefined;
+  readonly matchesStage?: (runId: string, proposalId: string) => boolean;
+  readonly consumeStage?: (runId: string, proposalId: string) => object | undefined;
+  readonly matchesCommit?: (runId: string, request: CommitToolRequest) => boolean;
+  readonly consumeCommit?: (runId: string, request: CommitToolRequest) => object | undefined;
   readonly matches: (input: {
     readonly runId: string;
     readonly request: ApprovableToolRequest;
@@ -59,6 +72,21 @@ export interface CodingToolApprovalProofVerifier {
 }
 
 export interface CodingToolApprovalBridge extends CodingToolApprovalProofVerifier {
+  readonly deliveryService?: DraftDeliveryService;
+  readonly issueDelivery?: (
+    runId: string,
+    proposalId: string,
+  ) => GitDeliveryIssuedApproval | undefined;
+  readonly gitService?: RuntimeGitService;
+  readonly issueStage?: (
+    runId: string,
+    proposalId: string,
+  ) => GitDeliveryIssuedApproval | undefined;
+  readonly issueCommit?: (
+    runId: string,
+    proposalId: string,
+  ) => GitDeliveryIssuedApproval | undefined;
+  readonly commitService?: VerifiedCommitService;
   readonly observePermission: (input: CodingToolApprovalObservation) => boolean;
   readonly activatePermission: (input: CodingToolApprovalActivation) => boolean;
   readonly invalidateRun: (runId: string) => void;
@@ -88,19 +116,81 @@ export function codingToolApprovalBindingDigest(
   return createHash("sha256").update(payload, "utf8").digest("hex");
 }
 
-export function createCodingToolApprovalBridge(): CodingToolApprovalBridge {
+export function createCodingToolApprovalBridge(
+  commitService?: VerifiedCommitService,
+  gitService?: RuntimeGitService,
+  deliveryService?: DraftDeliveryService,
+): CodingToolApprovalBridge {
   const pending = new Map<string, PendingApproval>();
   const approved = new Map<string, ApprovedAction>();
   const bindings = new Map<string, number>();
   return {
+    ...(commitService === undefined ? {} : commitApprovalMethods(commitService)),
+    ...(gitService === undefined ? {} : stageApprovalMethods(gitService)),
+    ...(deliveryService === undefined ? {} : deliveryApprovalMethods(deliveryService)),
     observePermission: (input): boolean => observePermission(pending, approved, bindings, input),
     activatePermission: (input): boolean => activatePermission(pending, approved, bindings, input),
     matches: (input): boolean => matchesApprovedAction(approved, input),
     consume: (input): boolean => consumeApprovedAction(approved, input),
     invalidateRun: (runId): void => {
       invalidateRun(pending, approved, bindings, runId);
+      commitService?.invalidate();
+      gitService?.invalidate();
+      deliveryService?.invalidate();
     },
   };
+}
+
+function stageApprovalMethods(
+  service: RuntimeGitService,
+): Pick<CodingToolApprovalBridge, "gitService" | "matchesStage" | "consumeStage" | "issueStage"> {
+  return {
+    gitService: service,
+    matchesStage: (runId, id) => service.review(id)?.runId === runId && service.matchesApproval(id),
+    consumeStage: (runId, id) =>
+      service.review(id)?.runId === runId ? service.consumeApproval(id) : undefined,
+    issueStage: (runId, id) =>
+      service.review(id)?.runId === runId ? service.issueApproval(id) : undefined,
+  };
+}
+
+function commitApprovalMethods(
+  service: VerifiedCommitService,
+): Pick<
+  CodingToolApprovalBridge,
+  "matchesCommit" | "consumeCommit" | "issueCommit" | "commitService"
+> {
+  return {
+    commitService: service,
+    matchesCommit: (runId, request): boolean =>
+      matchingCommit(service, runId, request) &&
+      service.matchesApproval(request.proposalId ?? "", commitClaim(request)),
+    consumeCommit: (runId, request): object | undefined =>
+      matchingCommit(service, runId, request)
+        ? service.consumeApproval(request.proposalId ?? "", commitClaim(request))
+        : undefined,
+    issueCommit: (runId, proposalId): GitDeliveryIssuedApproval | undefined =>
+      service.review(proposalId)?.binding.runId === runId
+        ? service.issueApproval(proposalId)
+        : undefined,
+  };
+}
+function matchingCommit(
+  service: VerifiedCommitService,
+  runId: string,
+  request: CommitToolRequest,
+): boolean {
+  return (
+    request.intent === "commit" &&
+    request.phase === "execute" &&
+    service.review(request.proposalId ?? "")?.binding.runId === runId
+  );
+}
+function commitClaim(request: CommitToolRequest): GitDeliveryApprovalClaim | undefined {
+  const proof = request.approvalProof;
+  return proof === undefined
+    ? undefined
+    : { schemaVersion: "1", approvalId: proof.approvalId, approvalToken: proof.approvalDigest };
 }
 
 function observePermission(
@@ -294,4 +384,38 @@ function invalidateRun(
   for (const key of bindings.keys()) {
     if (key.startsWith(prefix)) bindings.delete(key);
   }
+}
+
+function matchingDelivery(
+  service: DraftDeliveryService,
+  runId: string,
+  request: CommitToolRequest,
+): boolean {
+  if (!isDraftToolRequest(request) || request.phase !== "execute") return false;
+  const review = service.review(request.proposalId ?? "");
+  return (
+    review?.record.binding.runId === runId &&
+    (review.record.phase === "push-proposed"
+      ? request.intent === "push"
+      : request.intent === "pull-request")
+  );
+}
+function deliveryApprovalMethods(
+  service: DraftDeliveryService,
+): Pick<
+  CodingToolApprovalBridge,
+  "deliveryService" | "issueDelivery" | "matchesDelivery" | "consumeDelivery"
+> {
+  return {
+    deliveryService: service,
+    issueDelivery: (runId, id) =>
+      service.review(id)?.record.binding.runId === runId ? service.issueApproval(id) : undefined,
+    matchesDelivery: (runId, request) =>
+      matchingDelivery(service, runId, request) &&
+      service.matchesApproval(request.proposalId ?? ""),
+    consumeDelivery: (runId, request) =>
+      matchingDelivery(service, runId, request)
+        ? service.consumeApproval(request.proposalId ?? "")
+        : undefined,
+  };
 }

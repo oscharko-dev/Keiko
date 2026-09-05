@@ -15,9 +15,14 @@
 // scope inference and are never persisted into evidence.
 
 import { gitEnv } from "@oscharko-dev/keiko-git";
+import { createHash } from "node:crypto";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { CommandRule, CommandResult, SandboxPolicy } from "./types.js";
-import { DEFAULT_SANDBOX_POLICY, GOVERNED_GIT_IDENTITY_SANDBOX_POLICY } from "./types.js";
+import {
+  DEFAULT_SANDBOX_POLICY,
+  GOVERNED_GIT_IDENTITY_SANDBOX_POLICY,
+  GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
+} from "./types.js";
 import {
   nodeSpawnFn,
   runCommand,
@@ -29,13 +34,23 @@ import {
 } from "./exec.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { isSafeGitRefName } from "./git-worktree-adapter.js";
+import { gitIndexTreeDigest, parseGitIndexEntries, type IndexEntry } from "./git-index-identity.js";
 
 // The dedicated READ-ONLY allowlist. Mirrors the mutation rules' defence-in-depth flag denials but
 // permits only inspection subcommands — no `branch <name>`, no `add`, no `commit`, no network verb.
 export const GIT_WORKTREE_READ_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   {
     executable: "git",
-    allowedSubcommands: Object.freeze(["status", "rev-parse", "branch", "remote", "diff"]),
+    allowedSubcommands: Object.freeze([
+      "status",
+      "rev-parse",
+      "branch",
+      "remote",
+      "diff",
+      "ls-files",
+      "ls-tree",
+      "cat-file",
+    ]),
     valueFlags: Object.freeze([
       "-C",
       "-c",
@@ -120,11 +135,27 @@ interface ReadContext {
   readonly timeoutMs: number | undefined;
 }
 
+function immutableReadPolicy(policy: SandboxPolicy): SandboxPolicy {
+  return {
+    ...policy,
+    pinnedEnv: {
+      ...policy.pinnedEnv,
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_0: "core.fsmonitor",
+      GIT_CONFIG_VALUE_0: "false",
+      GIT_CONFIG_KEY_1: "core.hooksPath",
+      GIT_CONFIG_VALUE_1: process.platform === "win32" ? "NUL" : "/dev/null",
+      GIT_NO_REPLACE_OBJECTS: "1",
+      GIT_NO_LAZY_FETCH: "1",
+    },
+  };
+}
+
 function buildReadContext(deps: NodeGitWorktreeReaderDeps): ReadContext {
   return {
     runDeps: {
       workspace: deps.workspace,
-      policy: deps.policy ?? DEFAULT_SANDBOX_POLICY,
+      policy: immutableReadPolicy(deps.policy ?? DEFAULT_SANDBOX_POLICY),
       commandRules: GIT_WORKTREE_READ_COMMAND_RULES,
       spawn: deps.spawn ?? nodeSpawnFn,
       processEnv: deps.processEnv ?? process.env,
@@ -150,11 +181,24 @@ export class GitWorktreeReadError extends Error {
 }
 
 async function runRead(ctx: ReadContext, argv: readonly string[]): Promise<string> {
+  const result = await runReadResult(ctx, argv);
+  if (result.truncated) throw new GitWorktreeReadError("git inspection output was truncated");
+  return result.stdout;
+}
+
+async function runReadResult(ctx: ReadContext, argv: readonly string[]): Promise<CommandResult> {
+  const runDeps: RunCommandDeps = { ...ctx.runDeps, onTerminated: ctx.runDeps.onTerminated };
   let result: CommandResult;
   try {
     result = await runCommand(
-      { command: "git", args: argv, cwd: undefined, timeoutMs: ctx.timeoutMs, signal: ctx.signal },
-      ctx.runDeps,
+      {
+        command: "git",
+        args: ["--no-lazy-fetch", "--no-replace-objects", ...argv],
+        cwd: undefined,
+        timeoutMs: ctx.timeoutMs,
+        signal: ctx.signal,
+      },
+      runDeps,
     );
   } catch {
     throw new GitWorktreeReadError(`git ${argv[0] ?? "?"} failed to run`);
@@ -162,7 +206,7 @@ async function runRead(ctx: ReadContext, argv: readonly string[]): Promise<strin
   if (result.exitCode !== 0) {
     throw new GitWorktreeReadError(`git ${argv[0] ?? "?"} exited ${String(result.exitCode)}`);
   }
-  return result.stdout;
+  return result;
 }
 
 // ─── porcelain=v2 parsing ───────────────────────────────────────────────────────────────────
@@ -249,13 +293,18 @@ export async function readGitWorktreeSnapshot(
   deps: NodeGitWorktreeReaderDeps,
 ): Promise<GitWorktreeSnapshot> {
   const ctx = buildReadContext(deps);
-  const [statusOut, branchOut, remoteOut] = await Promise.all([
+  const [statusOut, branchOut, remoteOut, indexOut] = await Promise.all([
     runRead(ctx, ["status", "--porcelain=v2", "--branch"]),
     runRead(ctx, ["branch", "--list", "--format=%(refname:short)"]),
     runRead(ctx, ["remote"]),
+    runRead(ctx, ["ls-files", "--stage", "-z"]),
   ]);
   const c = parsePorcelain(statusOut);
   return {
+    ...(statusOut.includes("# branch.oid (initial)")
+      ? {}
+      : { headSha: await readGitRevision(deps, "HEAD") }),
+    stagedTreeDigest: gitIndexTreeDigest(indexOut),
     headDetached: c.headDetached,
     ...(c.currentBranchName !== undefined ? { currentBranchName: c.currentBranchName } : {}),
     stagedFileCount: c.staged,
@@ -269,10 +318,181 @@ export async function readGitWorktreeSnapshot(
   };
 }
 
+/** Bounded configured aliases only; this never contacts a remote. */
+function metadataReadContext(deps: NodeGitWorktreeReaderDeps): ReadContext {
+  const policy = deps.policy ?? DEFAULT_SANDBOX_POLICY;
+  return buildReadContext({
+    ...deps,
+    policy: {
+      ...policy,
+      maxOutputBytes: Math.min(deps.policy?.maxOutputBytes ?? 4_194_304, 4_194_304),
+    },
+  });
+}
+
+export async function readGitIndexTreeDigest(deps: NodeGitWorktreeReaderDeps): Promise<string> {
+  return gitIndexTreeDigest(
+    await runRead(metadataReadContext(deps), ["ls-files", "--stage", "-z", "--"]),
+  );
+}
+
+export async function readGitIndexStat(deps: NodeGitWorktreeReaderDeps): Promise<string> {
+  return runRead(metadataReadContext(deps), ["ls-files", "--debug", "-z", "--"]);
+}
+
+export async function readGitIndexEntries(
+  deps: NodeGitWorktreeReaderDeps,
+): Promise<readonly IndexEntry[]> {
+  return parseGitIndexEntries(
+    await runRead(metadataReadContext(deps), ["ls-files", "--stage", "-z", "--"]),
+    false,
+  );
+}
+export async function readGitTreeEntries(
+  deps: NodeGitWorktreeReaderDeps,
+  sha: string,
+): Promise<readonly IndexEntry[]> {
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(sha)) throw new TypeError("git-tree-sha-invalid");
+  return parseGitIndexEntries(
+    await runRead(metadataReadContext(deps), ["ls-tree", "-r", "-z", "--full-tree", sha]),
+    true,
+  );
+}
+export async function readGitUntrackedPaths(
+  deps: NodeGitWorktreeReaderDeps,
+): Promise<readonly string[]> {
+  const output = await runRead(metadataReadContext(deps), [
+    "ls-files",
+    "--others",
+    "--exclude-standard",
+    "-z",
+    "--",
+  ]);
+  if (output === "") return [];
+  if (!output.endsWith("\0") || output.includes("\uFFFD"))
+    throw new TypeError("git-path-list-incomplete");
+  return output.slice(0, -1).split("\0");
+}
+export async function readGitBlobText(
+  deps: NodeGitWorktreeReaderDeps,
+  sha: string,
+): Promise<string> {
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(sha)) throw new TypeError("git-blob-sha-invalid");
+  return runRead(
+    buildReadContext({ ...deps, policy: { ...DEFAULT_SANDBOX_POLICY, maxOutputBytes: 65_536 } }),
+    ["cat-file", "blob", sha],
+  );
+}
+
+export async function readGitRemoteAliases(
+  deps: NodeGitWorktreeReaderDeps,
+): Promise<readonly string[]> {
+  return parseLines(await runRead(buildReadContext(deps), ["remote"]));
+}
+
+/** Resolves a caller-validated ref to an exact immutable commit; never permits revision options. */
+export async function readGitRevision(
+  deps: NodeGitWorktreeReaderDeps,
+  ref: string,
+): Promise<string> {
+  if (!isSafeGitRefName(ref)) throw new GitWorktreeReadError("git revision is unsafe");
+  const value = (
+    await runRead(buildReadContext(deps), [
+      "rev-parse",
+      "--verify",
+      "--end-of-options",
+      `${ref}^{commit}`,
+    ])
+  ).trim();
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value)) {
+    throw new GitWorktreeReadError("git revision did not resolve uniquely");
+  }
+  return value;
+}
+
+/** Resolves the exact named ref used by a compare-and-swap ref transaction. */
+export async function readGitFullRef(
+  deps: NodeGitWorktreeReaderDeps,
+  ref: string,
+): Promise<string> {
+  if (!isSafeGitRefName(ref)) throw new GitWorktreeReadError("git revision is unsafe");
+  const value = (
+    await runRead(buildReadContext(deps), [
+      "rev-parse",
+      "--symbolic-full-name",
+      "--verify",
+      "--end-of-options",
+      ref,
+    ])
+  ).trim();
+  if (!/^refs\/(?:heads|remotes)\//u.test(value) || !isSafeGitRefName(value))
+    throw new GitWorktreeReadError("git named revision is unavailable");
+  return value;
+}
+
+/** Reads the same full-tree digest from an immutable tree or commit object. */
+export async function readGitTreeDigest(
+  deps: NodeGitWorktreeReaderDeps,
+  objectId: string,
+): Promise<string> {
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(objectId))
+    throw new GitWorktreeReadError("git tree identity is invalid");
+  return gitIndexTreeDigest(
+    await runRead(buildReadContext(deps), ["ls-tree", "-r", "-z", "--full-tree", objectId]),
+    true,
+  );
+}
+
+export interface GitCommitIdentity {
+  readonly headSha: string;
+  readonly parentShas: readonly string[];
+  readonly treeDigest: string;
+  readonly messageDigest: string;
+}
+
+/** Body-free identity for reconciling an uncertain commit. Raw commit data stays inside this lane. */
+export async function readGitCommitIdentity(
+  deps: NodeGitWorktreeReaderDeps,
+  ref: string,
+): Promise<GitCommitIdentity> {
+  const headSha = await readGitRevision(deps, ref);
+  const output = await runRead(buildReadContext(deps), ["cat-file", "commit", headSha]);
+  const boundary = output.indexOf("\n\n");
+  if (boundary < 0) throw new GitWorktreeReadError("git commit object is incomplete");
+  const parentShas = output
+    .slice(0, boundary)
+    .split("\n")
+    .filter((line) => line.startsWith("parent "))
+    .map((line) => line.slice(7));
+  if (parentShas.some((sha) => !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(sha)))
+    throw new GitWorktreeReadError("git commit parent is invalid");
+  return {
+    headSha,
+    parentShas,
+    treeDigest: await readGitTreeDigest(deps, headSha),
+    messageDigest: createHash("sha256")
+      .update(output.slice(boundary + 2))
+      .digest("hex"),
+  };
+}
+
 /**
  * Reads the relative paths currently staged for commit (`git diff --cached --name-only`). Used by the
  * server for commit-intent scope inference; the paths stay in-process and are never persisted.
  */
+/** Bounded staged patch for the existing interactive review parser; never evidence or a PR snapshot. */
+export async function readGitStagedDiff(deps: NodeGitWorktreeReaderDeps): Promise<string> {
+  return runRead(buildReadContext(deps), [
+    "diff",
+    "--cached",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--unified=3",
+    "--",
+  ]);
+}
+
 export async function readStagedPaths(deps: NodeGitWorktreeReaderDeps): Promise<readonly string[]> {
   const ctx = buildReadContext(deps);
   const out = await runRead(ctx, ["diff", "--cached", "--name-only"]);
@@ -323,6 +543,35 @@ export async function readGitRemoteUrl(
     throw new GitWorktreeReadError("remote URL could not be resolved uniquely");
   }
   return lines[0] ?? "";
+}
+
+/**
+ * Effective destinations use the publish lane's config scope, including user URL rewrites.
+ * This local inspection carries no credential and never contacts a destination. Multiplicity is
+ * retained for the caller to refuse; the checkout's isolated fetch-identity reader is unchanged.
+ */
+export async function readGitPushRemoteUrls(
+  deps: NodeGitWorktreeReaderDeps,
+  remoteAlias: string,
+): Promise<readonly string[]> {
+  if (!isSafeGitRefName(remoteAlias)) throw new GitWorktreeReadError("remote alias is unsafe");
+  const policy = deps.policy ?? GOVERNED_GIT_REMOTE_SANDBOX_POLICY;
+  const ctx = buildReadContext({
+    ...deps,
+    policy: {
+      ...policy,
+      credentialEnvAllowlist: undefined,
+      outputScrub: "credentials-only",
+      maxOutputBytes: Math.min(policy.maxOutputBytes, 8192),
+    },
+  });
+  const output = await runRead(ctx, ["remote", "get-url", "--push", "--all", "--", remoteAlias]);
+  if (!output.endsWith("\n"))
+    throw new GitWorktreeReadError("push destination metadata incomplete");
+  const urls = output.slice(0, -1).split("\n");
+  if (urls.length > 32 || urls.some((url) => url.length === 0 || url.includes("\r")))
+    throw new GitWorktreeReadError("push destination metadata invalid");
+  return urls;
 }
 
 // Matches git's own "leftover conflict marker" diagnostic line, e.g.

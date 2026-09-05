@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "issue": 3386,
+  "checkedAt": "2026-09-05T01:07:51.530Z",
+  "passed": true,
+  "evidenceClass": "production-composed-deterministic-browser",
+  "modelQualification": false,
+  "cases": [
+    "approved-exactly-once-and-reloaded-autonomous-delivery",
+    "approved-exactly-once-and-reloaded-supervised-coding",
+    "approved-exactly-once-and-reloaded-governed-assist",
+    "dirty-worktree-refused",
+    "staged-drift-refused",
+    "explicit-ui-denial-revokes-execution"
+  ],
+  "correlatedCommitLogCount": 27,
+  "rawContentRecorded": false
+}

@@ -14,6 +14,8 @@ export interface CodingRuntimeRunOperation {
 
 export interface CodingRuntimeTaskDispatchRequest extends CodingRuntimeRunOperation {
   readonly taskIntent: string;
+  /** Transient server-owned context; never user intent, persistence or skill authorization. */
+  readonly initialContext?: string | undefined;
 }
 
 export interface CodingRuntimeTaskDispatcher {

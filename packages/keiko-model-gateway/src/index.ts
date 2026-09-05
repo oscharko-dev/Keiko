@@ -324,3 +324,7 @@ export type {
 // deterministic planner, the structured generator, the provider-neutral renderers, and the validate
 // primitives used by the workflow's optional model-assisted refinement stage.
 export * as PromptEnhancer from "./promptEnhancer/index.js";
+export * as PrDescription from "./prDescription/index.js";
+
+export { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
+export type { GatewayToolCatalogBridge } from "./toolCatalogBridge.js";

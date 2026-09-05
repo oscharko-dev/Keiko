@@ -571,7 +571,7 @@ describe("runLoop — limit breaches each map to their category", () => {
   });
 
   it("HARNESS_INTERNAL when a non-run_command tool claims commandExecuted:true", async (): Promise<void> => {
-    // Issue #2638 hardening: the pre-execution budget check is name-scoped to `run_command` while
+    // Issue #2638 hardening: the pre-execution budget check uses canonical descriptor effects while
     // the counter increments on any result. A tool that claims a command under a different name
     // could bypass the budget; the post-execution contract guard in runOneTool must fail closed.
     const { port } = scriptedModel([

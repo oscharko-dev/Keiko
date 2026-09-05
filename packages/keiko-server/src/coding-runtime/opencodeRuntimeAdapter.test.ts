@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import { OPENCODE_PINNED_BUILT_IN_TOOLS } from "./opencodeToolSchemas.js";
+import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 
 const DIGEST = "a".repeat(64);
 const SECRET = "SENTINEL_OPENCODE_RUNTIME_SECRET";
@@ -87,6 +88,8 @@ interface OpenCodeRuntimeAdapterModule {
 }
 
 interface OpenCodeRuntimeAdapterPorts {
+  readonly activityLog?: ServerLogSink;
+  readonly correlationId?: string;
   readonly readiness: {
     readonly verifiedTarget: { readonly executable: string; readonly attestationDigest: string };
     readonly configDigest: string;
@@ -267,6 +270,42 @@ function readinessPorts(failAt?: ReadinessPhase): {
 }
 
 describe("OpenCode runtime adapter readiness", () => {
+  it("records the failing readiness phase and body-free cause before cleanup", async () => {
+    const harness = readinessPorts();
+    const events: ServerLogEvent[] = [];
+    harness.ports.readiness.subscribe = (): AsyncIterable<OpenCodeSyncHint> => ({
+      [Symbol.asyncIterator]: (): AsyncIterator<OpenCodeSyncHint> => ({
+        next: (): Promise<IteratorResult<OpenCodeSyncHint>> =>
+          Promise.reject(new TypeError(SECRET)),
+      }),
+    });
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      correlationId: "run-handshake-1",
+      activityLog: {
+        write: (entry): void => {
+          events.push(entry);
+        },
+      },
+    });
+    await expect(adapter.start()).resolves.toMatchObject({
+      ok: false,
+      phase: "sse-history-reconciliation",
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "coding-runtime.readiness.failed",
+      correlationId: "run-handshake-1",
+      errorKind: "internal",
+      extra: {
+        phase: "sse-history-reconciliation",
+        errorClass: "TypeError",
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain(SECRET);
+    expect(harness.effects).toContain("require-manager-reap");
+  });
+
   it("bounds a turn at thirty minutes while allowing caller cancellation to shorten it", async () => {
     expect((await adapterModule()).OPEN_CODE_MAX_TURN_WAIT_MS).toBe(30 * 60_000);
   });

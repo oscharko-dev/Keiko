@@ -699,3 +699,240 @@ describe("diagnosticSummary field guard (ADR-0173 D11 g29)", () => {
     });
   });
 });
+
+describe("issue intake client diagnostic redaction", () => {
+  it.each([
+    "[keiko] coding workbench issue preview requested",
+    "[keiko] coding workbench issue preview cancelled",
+    "[keiko] coding workbench issue preview ready: issue 42",
+    "[keiko] coding workbench issue accepted: issue 42 binding abcdef012345",
+    "[keiko] coding workbench issue removed before start",
+    "[keiko] coding workbench issue preview failed: auth-required",
+  ])("preserves the closed intake operation %s", (clientNote) => {
+    expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+  });
+
+  it.each([
+    "[keiko] coding workbench issue preview failed: /private/customer.txt",
+    "[keiko] coding workbench issue preview failed: untrusted body text",
+    "[keiko] coding workbench issue preview failed: token=fixture-secret",
+    "[keiko] coding workbench issue accepted: issue 42 binding customer-info",
+    "[keiko] coding workbench issue preview ready: issue 42\nprivate",
+  ])("refuses foreign content in intake-shaped messages %s", (clientNote) => {
+    expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
+  });
+
+  it("does not extend the exception to other fields or nested client notes", () => {
+    const note = "[keiko] coding workbench issue preview requested";
+    expect(redactLogFields({ label: note, nested: { clientNote: note } })).toEqual({
+      label: REDACTED_SHAPE,
+      nested: { clientNote: REDACTED_SHAPE },
+    });
+  });
+});
+
+describe("verified commit review client diagnostic redaction", () => {
+  it.each(["idle", "loading", "ready", "unavailable"])(
+    "preserves closed stage review %s",
+    (status) => {
+      const clientNote = `[keiko] git stage review ${status}: files 1`;
+      expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+    },
+  );
+  it.each(["/private/customer.txt", "token=fixture-secret", "customer-content", "1000001"])(
+    "refuses hostile stage review facts %s",
+    (content) => {
+      const clientNote = `[keiko] git stage review ready: files ${content}`;
+      expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
+    },
+  );
+  it("preserves the exact content-free shared diff focus event", () => {
+    const clientNote = "[keiko] shared diff viewport focused";
+    expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+  });
+  it.each(["/private/customer.txt", "token=fixture-secret", "customer-content"])(
+    "refuses content appended to shared diff focus %s",
+    (content) => {
+      const clientNote = `[keiko] shared diff viewport focused ${content}`;
+      expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
+    },
+  );
+  it.each(["succeeded", "blocked", "failed", "recovery-required", "verification-failed", "drift"])(
+    "preserves only closed %s result display facts",
+    (status) => {
+      const clientNote = `[keiko] verified commit result displayed: ${status} tree abcdef012345`;
+      expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+    },
+  );
+  it.each(["private message", "token=fixture-secret", "/private/customer.txt"])(
+    "refuses foreign result display text %s",
+    (status) => {
+      const clientNote = `[keiko] verified commit result displayed: ${status} tree abcdef012345`;
+      expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
+    },
+  );
+  it.each([
+    "push-proposed",
+    "pushing",
+    "pushed",
+    "pr-proposed",
+    "creating-pr",
+    "draft-created",
+    "recovery-required",
+  ])("preserves closed draft delivery phase %s", (phase) => {
+    const clientNote = `[keiko] draft delivery displayed: ${phase} reason completed head abcdef012345`;
+    expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+  });
+  it.each(["private content", "/private/customer.txt", "token=fixture-secret", "ABCDEF012345"])(
+    "refuses foreign draft delivery diagnostic text %s",
+    (value) => {
+      for (const clientNote of [
+        `[keiko] draft delivery displayed: ${value} reason completed head abcdef012345`,
+        `[keiko] draft delivery displayed: draft-created reason ${value} head abcdef012345`,
+        `[keiko] draft delivery displayed: draft-created reason completed head ${value}`,
+        `[keiko] draft delivery displayed: draft-created reason completed head abcdef012345 ${value}`,
+      ])
+        expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
+    },
+  );
+  it.each(["technical-ready", "pending", "failed", "blocked", "unknown", "stale", "unobserved"])(
+    "preserves exact CI display state %s",
+    (state) => {
+      const clientNote = `[keiko] CI readiness displayed: ${state} head abcdef012345`;
+      expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+    },
+  );
+  it.each([
+    "private content",
+    "/private/customer.txt",
+    "token=fixture-secret",
+    "ABCDEF012345",
+    "ready\nbody",
+  ])("rejects hostile CI display content %s", (value) => {
+    for (const clientNote of [
+      `[keiko] CI readiness displayed: ${value} head abcdef012345`,
+      `[keiko] CI readiness displayed: technical-ready head ${value}`,
+      `[keiko] CI readiness displayed: technical-ready head abcdef012345 ${value}`,
+    ])
+      expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
+  });
+  it.each(["push-proposed", "pr-proposed"])(
+    "preserves only closed %s pending delivery review",
+    (phase) => {
+      const clientNote = `[keiko] draft delivery review ready: ${phase} head abcdef012345`;
+      expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+    },
+  );
+  it.each(["idle", "loading", "ready", "unavailable"])(
+    "preserves bounded delivery review display %s",
+    (status) => {
+      const clientNote = `[keiko] draft delivery review displayed: ${status}`;
+      expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+    },
+  );
+  it.each(["/private/customer.txt", "token=fixture-secret", "private title", "ready\nbody"])(
+    "rejects content in delivery display %s",
+    (status) => {
+      const clientNote = `[keiko] draft delivery review displayed: ${status}`;
+      expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
+    },
+  );
+  it("preserves the closed delivery review mismatch", () => {
+    const clientNote = "[keiko] draft delivery review unavailable: binding-mismatch";
+    expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+  });
+  it.each([
+    "private title",
+    "/private/customer.txt",
+    "token=fixture-secret",
+    "ABCDEF012345",
+    "abcdef012345\nbody",
+    "draft-created",
+  ])("refuses hostile pending delivery facts %s", (value) => {
+    for (const clientNote of [
+      `[keiko] draft delivery review ready: ${value} head abcdef012345`,
+      `[keiko] draft delivery review ready: pr-proposed head ${value}`,
+      `[keiko] draft delivery review ready: pr-proposed head abcdef012345 ${value}`,
+      `[keiko] draft delivery review unavailable: ${value}`,
+    ])
+      expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
+  });
+  it("preserves only the closed binding failure", () => {
+    const clientNote = "[keiko] verified commit review unavailable: binding-mismatch";
+    expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+    const hostile = "[keiko] verified commit review unavailable: /private/customer.txt";
+    expect(redactLogFields({ clientNote: hostile })?.clientNote).not.toBe(hostile);
+  });
+  it.each([0, 1, 999_999, 1_000_000])("preserves bounded facts for %i files", (count) => {
+    const clientNote = `[keiko] verified commit review ready: files ${String(count)} tree abcdef012345`;
+    expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+  });
+
+  it.each([
+    "files 1000001 tree abcdef012345",
+    "files -1 tree abcdef012345",
+    "files 01 tree abcdef012345",
+    "files 1 tree /private/customer.txt",
+    "files 1 tree token=fixture-secret",
+    "files 1 tree customer-content",
+    "files 1 tree abcdef012345\nbody",
+    "files 1 tree abcdef01234",
+    "files 1 tree abcdef0123456",
+  ])("refuses hostile commit review facts %s", (facts) => {
+    const clientNote = `[keiko] verified commit review ready: ${facts}`;
+    expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
+  });
+
+  it("keeps the exception top-level and clientNote-only", () => {
+    const note = "[keiko] verified commit review ready: files 1 tree abcdef012345";
+    expect(redactLogFields({ label: note, nested: { clientNote: note } })).toEqual({
+      label: REDACTED_SHAPE,
+      nested: { clientNote: REDACTED_SHAPE },
+    });
+  });
+});
+
+describe("closed issue journey client diagnostics", () => {
+  it.each([
+    "awaiting-ready-approval",
+    "keiko-technical-ready",
+    "ready-for-human-review",
+    "awaiting-human-requirements",
+    "merged-awaiting-issue-closure",
+    "completed",
+    "blocked",
+    "cancelled",
+    "recovery-required",
+    "stale",
+  ])("retains the body-free %s display", (state) => {
+    const clientNote = `[keiko] journey displayed: ${state} head abcdef012345`;
+    expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+  });
+  it.each(["refresh", "propose-ready"])("retains the %s action lifecycle", (action) => {
+    for (const state of ["started", "completed", "failed"]) {
+      const clientNote = `[keiko] journey action: ${action} ${state}`;
+      expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+    }
+  });
+  it("retains the closed binding failure", () => {
+    const clientNote = "[keiko] journey unavailable: binding-mismatch";
+    expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+  });
+  it.each([
+    "private/customer.txt",
+    "https://private.example/api",
+    GITHUB_PAT,
+    "raw issue body",
+    "completed\nraw content",
+  ])("rejects hostile journey fields: %s", (value) => {
+    for (const clientNote of [
+      `[keiko] journey displayed: ${value} head abcdef012345`,
+      `[keiko] journey displayed: completed head ${value}`,
+      `[keiko] journey displayed: completed head abcdef012345 ${value}`,
+      `[keiko] journey action: refresh ${value}`,
+      `[keiko] journey action: ${value} failed`,
+      `[keiko] journey unavailable: ${value}`,
+    ])
+      expect(redactLogFields({ clientNote })).not.toEqual({ clientNote });
+  });
+});

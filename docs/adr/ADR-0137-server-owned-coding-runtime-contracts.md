@@ -38,6 +38,29 @@ model source. Stop, takeover, and recovery requests contain only a request id an
 validation rejects every additional field. Raw task intent is transient model input and is absent
 from durable runtime state, events, failures, and evidence.
 
+Issue #3385 adds an optional raw `issueRef` and accepted-preview digest to that intent. A paired
+local app session and the selected checkout's existing GitHub reader grant admit preview reads.
+The browser receives only the shared preview projection and bounded untrusted excerpts; it cannot
+submit a binding or select the issue's base branch. Existing task-workspace provisioning resolves
+the default base server-side and rechecks the accepted digest before creating a workspace.
+
+Before minting an issue-bound run, the server resolves the issue again and rejects PRs, closed or
+unreadable issues, changed provenance, stale content and missing authority. The immutable GitHub
+node id, canonical remote digest, checkout id, issue number, default base and content revision are
+bound into the existing execution binding and start confirmation. The same closed issue validator
+guards authority, public snapshots and the durable ledger. Retrying revalidates the previous
+binding; generic tasks retain their existing behavior. Bounded issue text enters only the initial
+model turn through the existing context-pack builder and never enters the durable projections.
+The orchestrator keeps the human task intent unchanged and carries labelled untrusted context in a
+separate server-only `initialContext` dispatch field. Explicit-skill tracking observes only the
+human text. The pinned OpenCode 1.17.17 prompt transport sends context as a separate `synthetic: true`
+text part: it reaches the model but the existing safe-activity projection omits its user-message echo.
+The combined prompt retains the existing byte ceiling. The Codex control port currently accepts
+only text, so its adapter composes the same labelled context after explicit-skill tracking; it never
+feeds that composed string back into skill authorization. Follow-up turns carry no implicit context.
+The existing body-free `coding-runtime.run.issue-context-attached` event records initial attachment;
+raw context stays absent from runtime snapshots, generated runtime configuration and activity logs.
+
 ### D2 — One server aggregate owns runtime authority
 
 The BFF resolves the authenticated local operator and the live active task workspace before minting.

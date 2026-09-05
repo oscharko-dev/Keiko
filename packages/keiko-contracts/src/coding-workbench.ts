@@ -145,6 +145,7 @@ export const CODING_WORKBENCH_PERMISSION_REQUEST_KINDS: readonly CodingWorkbench
 
 export type CodingWorkbenchSupervisedActionKind =
   | "file-edit"
+  | "git-stage"
   | "verification-command"
   | "research"
   | "commit"
@@ -158,6 +159,7 @@ export type CodingWorkbenchSupervisedActionKind =
 export const CODING_WORKBENCH_SUPERVISED_ACTION_KINDS: readonly CodingWorkbenchSupervisedActionKind[] =
   Object.freeze([
     "file-edit",
+    "git-stage",
     "verification-command",
     "research",
     "commit",
@@ -743,7 +745,7 @@ export function isCodingWorkbenchActionAllowedForMode(
 export function permissionKindForSupervisedCodingAction(
   actionKind: CodingWorkbenchSupervisedActionKind,
 ): CodingWorkbenchPermissionRequestKind {
-  if (actionKind === "file-edit") return "workspace-write";
+  if (actionKind === "file-edit" || actionKind === "git-stage") return "workspace-write";
   if (actionKind === "verification-command") return "command-execution";
   if (actionKind === "research") return "network-egress";
   if (actionKind === "connector-write" || actionKind === "external-write") {
@@ -755,7 +757,11 @@ export function permissionKindForSupervisedCodingAction(
 export function supervisedCodingActionRequiresApproval(
   actionKind: CodingWorkbenchSupervisedActionKind,
 ): boolean {
-  return actionKind !== "file-edit" && actionKind !== "verification-command";
+  return (
+    actionKind !== "file-edit" &&
+    actionKind !== "git-stage" &&
+    actionKind !== "verification-command"
+  );
 }
 
 function denyCodingWorkbenchAction(

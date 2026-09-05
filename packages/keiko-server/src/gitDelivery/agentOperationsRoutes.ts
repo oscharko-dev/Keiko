@@ -548,12 +548,32 @@ export async function handleGitAgentOperationWithDelegate(
   }
 }
 
+function verifiedCommitRequired(
+  ctx: RouteContext,
+  request: GitRepositoryAgentOperationRequest,
+): RouteResult {
+  logGitDeliveryAuthorityDenial(ctx, "commit", "verified-commit-required");
+  return {
+    status: 403,
+    body: denied(
+      request,
+      "autonomy-mode-denied",
+      "Agent commits require the verified runtime commit proposal and its one-use approval.",
+    ),
+  };
+}
+
 export async function handleGitAgentOperation(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   const parsed = await parseAgentRequest(ctx.req);
   if (!parsed.ok) return parsed.result;
+  // This server-owned route identifies delegated agent work. A run id or client payload cannot
+  // turn the manual Git client into the exact-tree, one-use approved runtime commit service.
+  if (parsed.request.operation === "commit" && parsed.request.mode === "execute") {
+    return verifiedCommitRequired(ctx, parsed.request);
+  }
   if (parsed.request.mode === "execute") {
     const workspace = resolveProjectWorkspace(deps, parsed.request.projectId);
     if (workspace === undefined) {

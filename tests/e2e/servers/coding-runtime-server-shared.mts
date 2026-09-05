@@ -1,8 +1,13 @@
+import type { DraftDeliveryDependencies } from "../../../packages/keiko-server/src/gitDelivery/draftDeliveryTypes.js";
 // Shared TEST-ONLY server composition for the Code-task browser journeys (#2483). The two
 // scripted entries and the real-binary production-discovery entry differ only in fixture identity,
 // question behavior, app-session pairing, and runtime source; the workspace, BFF, static UI, CSP,
 // shutdown, and deterministic provider-boundary wiring live here once.
 
+import {
+  createCodingIssueCommitFixture,
+  type CodingIssueCommitFixture,
+} from "./coding-issue-commit-fixture.mjs";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -18,10 +23,11 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type {
-  GatewayRequest,
-  GatewayStreamChunk,
-  NormalizedResponse,
+import {
+  resolveCodingSafeSidecarGatewayProfile,
+  type GatewayRequest,
+  type GatewayStreamChunk,
+  type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 
@@ -66,6 +72,7 @@ import { createWorkspaceMutexRegistry } from "../../../packages/keiko-server/src
 import { createWorkspaceProvisioningService } from "../../../packages/keiko-server/src/task-workspace/provisioning.js";
 import { createWorkspaceReconciliationService } from "../../../packages/keiko-server/src/task-workspace/reconciliation.js";
 import { buildWorkspaceInstanceStoreOverDatabase } from "../../../packages/keiko-server/src/task-workspace/store.js";
+import type { GitHubCodeContextApiPort } from "../../../packages/keiko-server/src/coding-context/githubCodeContextConnector.js";
 import { createWorkspaceScriptTrustService } from "../../../packages/keiko-server/src/workspace-script-trust.js";
 
 type WorkspaceAdapterFactory = (
@@ -116,6 +123,13 @@ export interface CodingRuntimeResearchJourneyConfig {
   readonly toolCallLogPath: (stateDir: string) => string;
 }
 
+export interface CodingRuntimeIssueJourneyConfig {
+  readonly remoteUrl: string;
+  readonly port: GitHubCodeContextApiPort;
+  readonly initialize: (stateDir: string) => void;
+  readonly observeGatewayRequest: (request: GatewayRequest, stateDir: string) => void;
+}
+
 export interface CodingRuntimeJourneyServerConfig {
   readonly fixtureId: string;
   readonly fixtureLabel: string;
@@ -131,6 +145,12 @@ export interface CodingRuntimeJourneyServerConfig {
   readonly launcherSessionSecret?: string | undefined;
   /** #2642: opt-in research runtime seams. Only meaningful when `runtime === "scripted"`. */
   readonly research?: CodingRuntimeResearchJourneyConfig | undefined;
+  readonly issue?: CodingRuntimeIssueJourneyConfig | undefined;
+  /** #3386: actual commit factory/facade with a controlled model response boundary. */
+  readonly commit?: boolean;
+  /** Controlled provider boundary for the actual issue-bound delivery adapters. */
+  readonly delivery?: boolean;
+  readonly ciReader?: DraftDeliveryDependencies["ciReader"];
 }
 
 interface JourneyComposition {
@@ -157,10 +177,21 @@ function createRepositoryFixture(config: CodingRuntimeJourneyServerConfig, state
   writeFileSync(join(repository, config.targetRelativePath), config.originalContent);
   writeFileSync(
     join(repository, "package.json"),
-    JSON.stringify({ scripts: { typecheck: 'node -e "process.exit(0)"' } }),
+    JSON.stringify({
+      scripts: {
+        typecheck:
+          config.commit === true ? "node --check src/example.ts" : 'node -e "process.exit(0)"',
+      },
+    }),
   );
   git(repository, ["add", "."]);
   git(repository, ["commit", "-q", "-m", `${config.fixtureId} fixture`]);
+  if (config.issue !== undefined) {
+    git(repository, ["remote", "add", "origin", config.issue.remoteUrl]);
+    git(repository, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(repository, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+    config.issue.initialize(stateDir);
+  }
 }
 
 function createWorkspaceServices(managedRoot: string): JourneyWorkspaceServices {
@@ -260,12 +291,18 @@ function scriptedModelDeps(
   deps: UiHandlerDeps,
   script: ScriptState,
   includeQuestion: boolean,
+  observeGatewayRequest?: (request: GatewayRequest) => void,
+  commit?: CodingIssueCommitFixture,
 ): UiHandlerDeps {
   // #2642: research mode reads the fenced-untrusted transcript to prove the granted page's directive
   // reaches the model without being complied with; productive/discovery/out-of-scope modes ignore
   // the transcript, so passing it always is behaviour-preserving.
-  const chat = (request?: GatewayRequest): Promise<NormalizedResponse> =>
-    Promise.resolve(nextScriptedTurn(script, includeQuestion, scriptedTranscript(request)));
+  const chat = async (request?: GatewayRequest): Promise<NormalizedResponse> => {
+    if (request !== undefined) observeGatewayRequest?.(request);
+    const response = nextScriptedTurn(script, includeQuestion, scriptedTranscript(request));
+    await commit?.beforeResponse(response);
+    return response;
+  };
   return {
     ...deps,
     config: functionalGatewayConfig(),
@@ -305,12 +342,26 @@ function researchResolverSeams(research: CodingRuntimeResearchJourneyConfig): {
   };
 }
 
+function scriptedManagedModelProfile(
+  modelId: string | undefined,
+  reasoningEffort: string | undefined,
+): { readonly profileId: string } {
+  const resolved = resolveCodingSafeSidecarGatewayProfile(functionalGatewayConfig(), {
+    ...(modelId === undefined ? {} : { modelId }),
+  });
+  if (resolved.status !== "available" || reasoningEffort !== undefined)
+    throw new Error("fixture-managed-model-unqualified");
+  return { profileId: resolved.modelAlias };
+}
+
 function scriptedResolver(
   config: CodingRuntimeJourneyServerConfig,
   stateDir: string,
   port: number,
   services: JourneyWorkspaceServices,
   scripted: ScriptedOpenCodeHarness,
+  commit?: CodingIssueCommitFixture,
+  resetScript?: () => void,
 ): ReturnType<typeof createFunctionalRuntimeResolver> {
   const input = {
     portable: scriptedFunctionalPortable(stateDir),
@@ -322,6 +373,19 @@ function scriptedResolver(
     verificationRunner: verificationRunner(config.fixtureLabel),
     runtimeEvidence: createCodingRuntimeEvidenceAggregator(createInMemoryEvidenceStore()),
     createSupervisor: scripted.createSupervisor,
+    resolveManagedModelProfile: scriptedManagedModelProfile,
+    ...(commit === undefined
+      ? {}
+      : {
+          verifiedCommit: commit.verifiedCommit,
+          ...(commit.draftDelivery === undefined ? {} : { draftDelivery: commit.draftDelivery }),
+          observeBackendRun: (
+            run: Parameters<CodingIssueCommitFixture["observeBackendRun"]>[0],
+          ): void => {
+            resetScript?.();
+            commit.observeBackendRun(run);
+          },
+        }),
   };
   return config.research === undefined
     ? createFunctionalRuntimeResolver(input)
@@ -341,16 +405,19 @@ function scriptedComposition(
   for (const dir of ["state", "ui-db", "evidence"]) {
     mkdirSync(join(bffStateRoot, dir), { recursive: true, mode: 0o700 });
   }
-  const scripted = createScriptedOpenCodeHarness();
   const script = journeyScript(config, stateDir);
-  const resolver = scriptedResolver(config, stateDir, port, services, scripted);
-  const env: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH ?? "",
-    KEIKO_STATE_DIR: join(bffStateRoot, "state"),
-    ...(config.launcherSessionSecret === undefined
+  const holder: { deps?: UiHandlerDeps } = {};
+  const commit = commitFixtureFor(config, stateDir, services, holder);
+  const scripted = createScriptedOpenCodeHarness({
+    generatedTools: config.commit === true,
+    ...(config.ciReader === undefined || commit === undefined
       ? {}
-      : { [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: config.launcherSessionSecret }),
-  };
+      : { observePhase: commit.observeToolPhase.bind(commit) }),
+  });
+  const resolver = scriptedResolver(config, stateDir, port, services, scripted, commit, () => {
+    script.calls = 0;
+  });
+  const env = scriptedEnvironment(config, bffStateRoot);
   const deps = buildUiHandlerDeps({
     configPath: undefined,
     evidenceDir: join(bffStateRoot, "evidence"),
@@ -363,11 +430,54 @@ function scriptedComposition(
     workspaceLifecycle: services.lifecycle,
     workspaceReconciliation: services.reconciliation,
     codingRuntimeResolver: resolver,
+    ...(config.issue === undefined ? {} : { codingContextGitHubPort: config.issue.port }),
     codingRuntimeDeploymentCeiling: "autonomous-delivery",
     codingRuntimeServerPrincipal: () => `${config.fixtureId}-operator`,
     autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
   });
-  return { deps: scriptedModelDeps(deps, script, config.includeQuestion), scripted };
+  const observe =
+    config.issue === undefined
+      ? undefined
+      : (request: GatewayRequest): void => config.issue?.observeGatewayRequest(request, stateDir);
+  holder.deps = deps;
+  return {
+    deps: scriptedModelDeps(deps, script, config.includeQuestion, observe, commit),
+    scripted,
+  };
+}
+
+function commitFixtureFor(
+  config: CodingRuntimeJourneyServerConfig,
+  stateDir: string,
+  services: JourneyWorkspaceServices,
+  holder: { readonly deps?: UiHandlerDeps },
+): CodingIssueCommitFixture | undefined {
+  if (config.commit !== true) return undefined;
+  return createCodingIssueCommitFixture({
+    deps: () => {
+      if (holder.deps === undefined) throw new Error("commit-fixture-assembly-incomplete");
+      return holder.deps;
+    },
+    snapshots: services.codingRuntimeSnapshots,
+    stateDir,
+    target: config.targetRelativePath,
+    delivery: config.delivery === true,
+    ...(config.ciReader === undefined ? {} : { ciReader: config.ciReader }),
+  });
+}
+
+function scriptedEnvironment(
+  config: CodingRuntimeJourneyServerConfig,
+  bffStateRoot: string,
+): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH ?? "",
+    ...(config.delivery === true ? { HOME: join(dirname(bffStateRoot), "provider-home") } : {}),
+    KEIKO_STATE_DIR: join(bffStateRoot, "state"),
+    ...(config.launcherSessionSecret === undefined
+      ? {}
+      : { [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: config.launcherSessionSecret }),
+  };
 }
 
 function journeyScript(config: CodingRuntimeJourneyServerConfig, stateDir: string): ScriptState {
@@ -580,6 +690,8 @@ export async function runCodingRuntimeJourneyServer(
   createRepositoryFixture(config, stateDir);
   const port = Number(process.env.KEIKO_E2E_UI_PORT ?? String(config.defaultPort));
   const services = createWorkspaceServices(managedRoot);
+  if (config.issue !== undefined || config.commit === true)
+    services.uiStore.createProject(config.repositoryRoot(stateDir), config.fixtureLabel);
   const composition =
     config.runtime === "scripted"
       ? scriptedComposition(config, stateDir, port, services)

@@ -1,3 +1,4 @@
+import { draftPendingApprovalReview } from "./productionDraftDeliveryRuntime.js";
 import { createHash } from "node:crypto";
 import { isDenied, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -930,6 +931,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (active.stopRequested || active.paused || active.status !== "ready") {
       return { ok: false, failureCode: "runtime-stopped", retryable: false };
     }
+    if (isOwnedGitApproval(request)) return this.issueCommitApproval(request);
     const binding = approvalBindingForIssue(active, request);
     const issued = issueSupervisedApproval(
       this.deps.approvalStore,
@@ -953,14 +955,59 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     };
   }
 
+  private issueCommitApproval(
+    request: CodingRuntimeApprovalIssueRequest,
+  ): CodingRuntimeApprovalIssueResult {
+    if (request.grantScope === "task")
+      return { ok: false, failureCode: "approval-activation-failed", retryable: false };
+    if (!draftApprovalKindMatches(this.deps.codingToolApprovals, request))
+      return { ok: false, failureCode: "approval-activation-failed", retryable: false };
+    const methods = {
+      "git-stage": this.deps.codingToolApprovals?.issueStage,
+      commit: this.deps.codingToolApprovals?.issueCommit,
+      push: this.deps.codingToolApprovals?.issueDelivery,
+      "pull-request": this.deps.codingToolApprovals?.issueDelivery,
+    };
+    const issuer = methods[request.actionKind as keyof typeof methods];
+    const issued = issuer?.(request.runId, request.requestId);
+    if (issued === undefined)
+      return { ok: false, failureCode: "approval-activation-failed", retryable: false };
+    return {
+      ok: true,
+      approval: {
+        approvalId: issued.approval.approvalId,
+        approvalToken: issued.approval.approvalToken,
+      },
+      approvalDigest: issued.approvalTokenHash,
+      expiresAtMs: issued.expiresAtMs,
+    };
+  }
+
   public pendingApprovalReview(
     runId: string,
     requestId: string,
   ): CodingWorkbenchRuntimePendingApprovalReview | undefined {
     const active = this.active;
     if (active?.context.runId !== runId) return undefined;
+    const git = this.gitApprovalReview(runId, requestId);
+    if (git !== undefined) return git;
     const review = active.pendingApprovalReview;
     return review?.requestId === requestId ? review : undefined;
+  }
+
+  private gitApprovalReview(
+    runId: string,
+    requestId: string,
+  ): CodingWorkbenchRuntimePendingApprovalReview | undefined {
+    const commit = this.deps.codingToolApprovals?.commitService?.review(requestId);
+    if (commit?.binding.runId === runId) return commit.review;
+    const stage = this.deps.codingToolApprovals?.gitService?.review(requestId);
+    if (stage?.runId === runId) return stage.review;
+    return draftPendingApprovalReview(
+      this.deps.codingToolApprovals?.deliveryService,
+      runId,
+      requestId,
+    );
   }
 
   public health(): CodingRuntimeHealthReport {
@@ -3268,4 +3315,21 @@ function permissionRequest(event: SidecarPermissionEvent): CodingWorkbenchPermis
     ...(event.connectorScopes === undefined ? {} : { connectorScopes: event.connectorScopes }),
     ...(event.commandLabel === undefined ? {} : { commandLabel: event.commandLabel }),
   };
+}
+
+function isOwnedGitApproval(request: CodingRuntimeApprovalIssueRequest): boolean {
+  return (
+    request.actionKind === "commit" ||
+    request.actionKind === "git-stage" ||
+    (request.requestId.startsWith("delivery-") &&
+      (request.actionKind === "push" || request.actionKind === "pull-request"))
+  );
+}
+function draftApprovalKindMatches(
+  bridge: CodingToolApprovalBridge | undefined,
+  request: CodingRuntimeApprovalIssueRequest,
+): boolean {
+  if (request.actionKind !== "push" && request.actionKind !== "pull-request") return true;
+  const phase = bridge?.deliveryService?.review(request.requestId)?.record.phase;
+  return phase === (request.actionKind === "push" ? "push-proposed" : "pr-proposed");
 }

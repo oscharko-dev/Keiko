@@ -1,3 +1,4 @@
+import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSupport.js";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -44,6 +45,7 @@ import {
   type RuntimeTreeSignal,
 } from "./runtimeProcessSupervisor.js";
 import { createInMemorySupervisedCodingApprovalStore } from "./supervisedCodingApprovalStore.js";
+import { createInMemoryGitDeliveryApprovalStore } from "../gitDelivery/approvalStore.js";
 import { computePortableSidecarPayloadTreeDigest } from "./devLanePortableCodingRuntime.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
@@ -4449,6 +4451,66 @@ describe("run-bound stop authority", () => {
  * dropped every one of them and no operator surface could recover them.
  */
 describe("governed-assist approval reviewability", () => {
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "issues only the exact one-action Git approval through its existing owner in %s",
+    async (mode) => {
+      const fixture = createManagedFixture();
+      const harness = createSpawnHarness();
+      const approvalStore = createInMemorySupervisedCodingApprovalStore();
+      const issueUnrelated = vi.spyOn(approvalStore, "issue");
+      const issued = createInMemoryGitDeliveryApprovalStore().issue({
+        binding: {
+          projectId: fixture.workspaceRoot,
+          operation: "commit",
+          command: {},
+          runId: "run-1988",
+          envelopeDigest: "a".repeat(64),
+        },
+        approvedByUserId: "operator",
+        nowMs: 1_000,
+      });
+      const issueCommit = vi.fn((runId: string, requestId: string) =>
+        runId === "run-1988" && requestId === "commit-123" ? issued : undefined,
+      );
+      const manager = createTestCodingRuntimeManager({
+        supervisor: testSupervisor(harness.spawn),
+        processEnv: {},
+        approvalStore,
+        codingToolApprovals: { ...createCodingToolApprovalBridge(), issueCommit },
+        now: () => 1_000,
+      });
+      await manager.start({
+        ...launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        requestedMode: mode,
+        effectiveMode: mode,
+      });
+      const request = {
+        runId: "run-1988",
+        requestId: "commit-123",
+        actionKind: "commit" as const,
+        approvedByUserId: "operator",
+      };
+      expect(manager.issueApproval({ ...request, grantScope: "task" }).ok).toBe(false);
+      expect(manager.issueApproval({ ...request, runId: "run-other" }).ok).toBe(false);
+      expect(issueCommit).not.toHaveBeenCalled();
+      expect(manager.issueApproval({ ...request, requestId: "commit-missing" }).ok).toBe(false);
+      expect(manager.issueApproval(request)).toMatchObject({
+        ok: true,
+        approval: {
+          approvalId: issued.approval.approvalId,
+          approvalToken: issued.approval.approvalToken,
+        },
+        approvalDigest: issued.approvalTokenHash,
+      });
+      expect(issueUnrelated).not.toHaveBeenCalled();
+      expect(manager.pause(request.runId).ok).toBe(true);
+      issueCommit.mockClear();
+      expect(manager.issueApproval(request).ok).toBe(false);
+      expect(issueCommit).not.toHaveBeenCalled();
+      await manager.stop(request.runId);
+    },
+  );
+
   it("retains the reviewable changeset facts of the pending file-edit approval", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
@@ -4532,4 +4594,66 @@ describe("governed-assist approval reviewability", () => {
     expect(manager.pendingApprovalReview("run-1991", "perm-2802-other")).toBeUndefined();
     expect(manager.pendingApprovalReview("run-2088", "perm-2802-escape")).toBeUndefined();
   });
+});
+
+describe("immutable draft delivery manager approvals", () => {
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "routes %s push approval through the existing exact one-action service",
+    async (mode) => {
+      const delivery = new DraftDeliveryFixture();
+      const managed = createManagedFixture();
+      const harness = createSpawnHarness();
+      const bridge = createCodingToolApprovalBridge(undefined, undefined, delivery.service);
+      const approvalStore = createInMemorySupervisedCodingApprovalStore();
+      const unrelated = vi.spyOn(approvalStore, "issue");
+      const manager = createTestCodingRuntimeManager({
+        supervisor: testSupervisor(harness.spawn),
+        processEnv: {},
+        codingToolApprovals: bridge,
+        approvalStore,
+        now: () => delivery.now,
+      });
+      try {
+        await delivery.recordVerifiedCommit();
+        const proposal = await delivery.service.proposePush();
+        if (proposal.status !== "recorded") throw new Error("missing proposal");
+        await manager.start({
+          ...launchRequest(managed.workspaceRoot, managed.managedRoot, managed.executablePath),
+          runId: "run-1",
+          requestedMode: mode,
+          effectiveMode: mode,
+        });
+        const request = {
+          runId: "run-1",
+          requestId: proposal.record.proposalId,
+          actionKind: "push" as const,
+          approvedByUserId: "operator",
+        };
+        expect(manager.pendingApprovalReview("run-1", request.requestId)).toMatchObject({
+          draftDelivery: { record: proposal.record },
+        });
+        expect(manager.issueApproval({ ...request, actionKind: "pull-request" }).ok).toBe(false);
+        expect(manager.issueApproval({ ...request, grantScope: "task" }).ok).toBe(false);
+        expect(manager.issueApproval({ ...request, runId: "other-run" }).ok).toBe(false);
+        expect(manager.issueApproval(request).ok).toBe(true);
+        expect(unrelated).not.toHaveBeenCalled();
+        const action = {
+          action: "delivery",
+          actionId: "a",
+          idempotencyKey: "a",
+          intent: "push",
+          phase: "execute",
+          proposalId: request.requestId,
+        } as const;
+        expect(bridge.matchesDelivery?.("run-1", action)).toBe(true);
+        expect(bridge.consumeDelivery?.("run-1", action)).toBeDefined();
+        expect(bridge.consumeDelivery?.("run-1", action)).toBeUndefined();
+        manager.pause("run-1");
+        expect(manager.issueApproval(request).ok).toBe(false);
+      } finally {
+        await manager.stop("run-1");
+        delivery.close();
+      }
+    },
+  );
 });

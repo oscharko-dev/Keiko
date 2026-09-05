@@ -3,6 +3,8 @@ import type {
   CodingWorkbenchRuntimeQuestionsResponse,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeStartRequest,
+  CodingWorkbenchIssueBinding,
+  CodingWorkbenchIssueBindingFailure,
 } from "@oscharko-dev/keiko-contracts";
 
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
@@ -23,8 +25,13 @@ import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js
 import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
 import type { PendingResearchApprovals } from "./researchApprovalIssuance.js";
 import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
+import type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
 
 export interface CodingRuntimeLaunchResolver {
+  /** Bounded server-only reads before the existing start-confirmation claim is consumed. */
+  readonly prepare?: (
+    input: Parameters<CodingRuntimeLaunchResolver["resolve"]>[0],
+  ) => Promise<void>;
   /** Resolves server-only launch material; the intent remains transient and must not be persisted. */
   resolve(input: {
     readonly runId: string;
@@ -37,6 +44,7 @@ export interface CodingRuntimeLaunchResolver {
     readonly workspaceId: string;
     readonly workspaceRoot: string;
     readonly serverPrincipal: string;
+    readonly issueBinding?: CodingWorkbenchIssueBinding | undefined;
   }): Omit<CodingRuntimeLaunchRequest, "runId" | "taskRef" | "workspaceRoot" | "requestedMode"> & {
     readonly taskRef: string;
   };
@@ -48,6 +56,8 @@ export interface CodingRuntimeApprovalAuthority {
 
 export interface CodingRuntimeOrchestratorDeps {
   readonly manager: CodingRuntimeManager;
+  readonly issueIntake?: CodingRuntimeIssueIntake | undefined;
+  readonly deploymentCeiling?: CodingWorkbenchRuntimeStartRequest["requestedMode"] | undefined;
   /** Central authority shared with runtime mediation; never a runtime-local approval registry. */
   readonly approvalAuthority: CodingRuntimeApprovalAuthority;
   readonly eventHub: CodingRuntimeEventHub;
@@ -80,7 +90,11 @@ export interface CodingRuntimeOrchestratorDeps {
 
 export type CodingRuntimeOrchestratorResult =
   | { readonly ok: true; readonly snapshot: CodingWorkbenchRuntimeSnapshot }
-  | { readonly ok: false; readonly failureCode: CodingWorkbenchRuntimeFailureCode };
+  | {
+      readonly ok: false;
+      readonly failureCode: CodingWorkbenchRuntimeFailureCode;
+      readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure;
+    };
 
 export type CodingRuntimeQuestionOperationResult =
   | {

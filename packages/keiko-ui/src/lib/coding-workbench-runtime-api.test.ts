@@ -55,6 +55,40 @@ describe("Coding Workbench runtime API", () => {
     vi.unstubAllGlobals();
   });
 
+  it("preserves a closed issue refusal from the mounted error envelope without retrying as generic", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          error: { code: "CODING_RUNTIME_INVALID_INTENT", message: "Issue binding refused" },
+          issueBindingFailure: "repository-mismatch",
+        },
+        409,
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    let failure: unknown;
+    try {
+      await startCodingWorkbenchRuntime({
+        requestId: "issue-start",
+        taskIntent: "implement",
+        requestedMode: "supervised-coding",
+        issueRef: "#42",
+        expectedIssueBindingDigest: "a".repeat(64),
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(codingWorkbenchRuntimeApiError(failure)).toMatchObject({
+      code: "CODING_RUNTIME_INVALID_INTENT",
+      issueBindingFailure: "repository-mismatch",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({
+      issueRef: "#42",
+      expectedIssueBindingDigest: "a".repeat(64),
+    });
+  });
+
   it("reads only the server-owned readiness projection and rejects a forged effective mode", async () => {
     const readiness = {
       schemaVersion: "1",
@@ -175,10 +209,6 @@ describe("Coding Workbench runtime API error mapping", () => {
 });
 
 describe("Coding Workbench runtime API endpoints", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   function stubFetch(body: unknown): ReturnType<typeof vi.fn> {
     // A fresh Response per call: the body of a Response is single-use.
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(body)));

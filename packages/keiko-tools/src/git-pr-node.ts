@@ -24,19 +24,38 @@
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { GitDeliveryExecutionResult } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
+import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import {
   buildPrConvertDraftGraphqlArgv,
   buildPrCreateArgv,
   buildPrMarkReadyGraphqlArgv,
+  buildPrReadArgv,
+  buildPrReadByHeadArgv,
+  buildPrReadBranchHeadArgv,
   buildPrUpdateArgv,
   classifyGitPullRequestRejection,
   GIT_PULL_REQUEST_COMMAND_RULES,
+  GIT_PR_IDENTITY_JQ,
   gitPrRejectionToErrorCode,
   type GitPrCreateExecRequest,
   type GitPrExecResult,
   type GitPrUpdateExecRequest,
-  type GitPullRequestAdapter,
+  type GitPullRequestInspectionAdapter,
+  type GitPrInspectionResult,
 } from "./git-pr-gateway.js";
+import {
+  parseCreatedGitPrIdentity,
+  parseGitPrBranchHead,
+  parseGitPrIdentity,
+  parseGitPrIdentityList,
+} from "./git-pr-identity.js";
+import {
+  buildPrBodyReadArgv,
+  buildPrBodyUpdateArgv,
+  parseGitPrBody,
+  type GitPullRequestBodyAdapter,
+  type GitPrBody,
+} from "./git-pr-body.js";
 import { CommandCancelledError, CommandTimeoutError } from "./errors.js";
 import {
   nodeSpawnFn,
@@ -169,9 +188,8 @@ async function createPullRequest(
 ): Promise<GitPrExecResult> {
   let argv: readonly string[];
   try {
-    // Append `--jq .number` so the success stdout is just the provider-assigned PR number (a clean,
-    // parse-robust value rather than the full PR JSON, which redaction or the output cap could disturb).
-    argv = [...buildPrCreateArgv(req), "--jq", ".number"];
+    const projection = req.canonicalGitHubIdentity === true ? GIT_PR_IDENTITY_JQ : ".number";
+    argv = [...buildPrCreateArgv(req), "--jq", projection];
   } catch {
     return executionResult("failed", 0, { errorCode: "internal-error" });
   }
@@ -179,9 +197,12 @@ async function createPullRequest(
   if (result instanceof Error) {
     return failureFromThrow(result, 0);
   }
-  if (result.exitCode !== 0) {
+  if (result.exitCode !== 0 || result.timedOut) {
     return rejectionFromExit(result);
   }
+  if (result.truncated)
+    return executionResult("failed", result.durationMs, { errorCode: "internal-error" });
+  if (req.canonicalGitHubIdentity === true) return canonicalCreateResult(req, result);
   const createdPrExternalId = parsePrNumber(result.stdout);
   if (createdPrExternalId === undefined) {
     // Exit 0 with an unparsable number (`--jq .number` emits `null` on an unexpected response
@@ -190,6 +211,19 @@ async function createPullRequest(
     return executionResult("failed", result.durationMs, { errorCode: "internal-error" });
   }
   return executionResult("succeeded", result.durationMs, { createdPrExternalId });
+}
+
+function canonicalCreateResult(
+  req: GitPrCreateExecRequest,
+  result: CommandResult,
+): GitPrExecResult {
+  const createdPrIdentity = parseCreatedGitPrIdentity(result.stdout, req);
+  return createdPrIdentity === undefined
+    ? executionResult("failed", result.durationMs, { errorCode: "internal-error" })
+    : executionResult("succeeded", result.durationMs, {
+        createdPrExternalId: String(createdPrIdentity.number),
+        createdPrIdentity,
+      });
 }
 
 // Performs the draft↔ready transition the REST update endpoint cannot: looks up the PR's GraphQL node
@@ -254,12 +288,90 @@ async function updatePullRequest(
 
 export function createNodeGitPullRequestAdapter(
   deps: NodeGitPullRequestAdapterDeps,
-): GitPullRequestAdapter {
+): GitPullRequestInspectionAdapter & GitPullRequestBodyAdapter {
   const ctx = buildRunContext(deps);
   return {
+    ...bodyAdapter(ctx),
     createPullRequest: (req: GitPrCreateExecRequest): Promise<GitPrExecResult> =>
-      createPullRequest(ctx, req),
+      createPullRequest(ctx, { ...req }),
     updatePullRequest: (req: GitPrUpdateExecRequest): Promise<GitPrExecResult> =>
       updatePullRequest(ctx, req),
+    readPullRequest: (req): Promise<GitPrInspectionResult<GitPullRequestIdentity>> => {
+      const input = { ...req };
+      return inspectRemote(
+        ctx,
+        () => buildPrReadArgv(input),
+        (value) => {
+          const identity = parseGitPrIdentity(value, input.ownerAndRepo);
+          return String(identity?.number) === input.prExternalId ? identity : undefined;
+        },
+      );
+    },
+    findPullRequestsByHead: (
+      req,
+    ): Promise<GitPrInspectionResult<readonly GitPullRequestIdentity[]>> => {
+      const input = { ...req };
+      return inspectRemote(
+        ctx,
+        () => buildPrReadByHeadArgv(input),
+        (value) => parseGitPrIdentityList(value, input.ownerAndRepo, input.headBranchName),
+      );
+    },
+    readBranchHead: (req): Promise<GitPrInspectionResult<string>> => {
+      const input = { ...req };
+      return inspectRemote(
+        ctx,
+        () => buildPrReadBranchHeadArgv(input),
+        (value) => parseGitPrBranchHead(value, input.headBranchName),
+      );
+    },
+  };
+}
+
+async function inspectRemote<T>(
+  ctx: RunContext,
+  argv: () => readonly string[],
+  parse: (value: unknown) => T | undefined,
+  exactOutput = false,
+): Promise<GitPrInspectionResult<T>> {
+  try {
+    const result = await runGh(ctx, argv());
+    if (result instanceof Error) return { ok: false, reason: "provider-unavailable" };
+    if (exactOutput && result.outputRedacted === true)
+      return { ok: false, reason: "invalid-response" };
+    if (result.timedOut || result.truncated) return { ok: false, reason: "provider-unavailable" };
+    if (result.exitCode !== 0)
+      return {
+        ok: false,
+        reason: classifyGitPullRequestRejection(`${result.stdout}\n${result.stderr}`),
+      };
+    const value = parse(JSON.parse(result.stdout) as unknown);
+    return value === undefined ? { ok: false, reason: "invalid-response" } : { ok: true, value };
+  } catch {
+    return { ok: false, reason: "invalid-response" };
+  }
+}
+
+function bodyAdapter(ctx: RunContext): GitPullRequestBodyAdapter {
+  return {
+    readPullRequestBody: (request): Promise<GitPrInspectionResult<GitPrBody>> => {
+      const input = { ...request };
+      return inspectRemote(
+        ctx,
+        () => buildPrBodyReadArgv(input),
+        (value) => parseGitPrBody(value, input),
+        true,
+      );
+    },
+    updatePullRequestBody: async (request): Promise<GitPrExecResult> => {
+      try {
+        const result = await runGh(ctx, buildPrBodyUpdateArgv({ ...request }));
+        if (result instanceof Error) return failureFromThrow(result, 0);
+        if (result.exitCode !== 0 || result.timedOut) return rejectionFromExit(result);
+        return executionResult("succeeded", result.durationMs);
+      } catch (error) {
+        return failureFromThrow(error, 0);
+      }
+    },
   };
 }

@@ -612,7 +612,7 @@ function collectStatusChanges(
 }
 
 // Porcelain parsing is intentionally centralized so Git XY semantics stay audited in one place.
-function parseStatus(
+export function parseStatus(
   stdout: string,
   root: string,
   repositoryRoot: string,

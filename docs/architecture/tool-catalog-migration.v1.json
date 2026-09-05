@@ -1,0 +1,234 @@
+{
+  "schemaVersion": 1,
+  "ownerIssue": 3406,
+  "closeoutIssue": 3415,
+  "sourceContract": "docs/architecture/governed-tool-contract.v1.json",
+  "sourceContractDigest": "ea685778b46bfd9d87e8c3d00d5a3d9c3b86e98b1a58e8a81ba4a335315d3bf6",
+  "inventory": [
+    {
+      "id": "generic-gateway",
+      "ownerIssue": 3409,
+      "disposition": "migrate/delete"
+    },
+    {
+      "id": "generic-tool-port",
+      "ownerIssue": 3409,
+      "disposition": "migrate/delete"
+    },
+    {
+      "id": "digest-primitives",
+      "ownerIssue": 3406,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "legacy-schema",
+      "ownerIssue": 3409,
+      "disposition": "derive projection"
+    },
+    {
+      "id": "legacy-host",
+      "ownerIssue": 3409,
+      "disposition": "migrate/delete"
+    },
+    {
+      "id": "editor-schema",
+      "ownerIssue": 3408,
+      "disposition": "derive projection"
+    },
+    {
+      "id": "editor-host",
+      "ownerIssue": 3408,
+      "disposition": "migrate/delete"
+    },
+    {
+      "id": "editor-route",
+      "ownerIssue": 3408,
+      "disposition": "derive projection"
+    },
+    {
+      "id": "opencode-schema",
+      "ownerIssue": 3414,
+      "disposition": "derive projection"
+    },
+    {
+      "id": "opencode-launch",
+      "ownerIssue": 3414,
+      "disposition": "derive projection"
+    },
+    {
+      "id": "opencode-source",
+      "ownerIssue": 3414,
+      "disposition": "derive projection"
+    },
+    {
+      "id": "opencode-protocol",
+      "ownerIssue": 3414,
+      "disposition": "derive projection"
+    },
+    {
+      "id": "opencode-ipc",
+      "ownerIssue": 3414,
+      "disposition": "derive projection"
+    },
+    {
+      "id": "sidecar-transport",
+      "ownerIssue": 3414,
+      "disposition": "derive projection"
+    },
+    {
+      "id": "live-authority",
+      "ownerIssue": 3413,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "governed-delegate",
+      "ownerIssue": 3413,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "handler-composition",
+      "ownerIssue": 3386,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "child-host",
+      "ownerIssue": 3407,
+      "disposition": "migrate/delete"
+    },
+    {
+      "id": "harness-executor",
+      "ownerIssue": 3409,
+      "disposition": "migrate/delete"
+    },
+    {
+      "id": "gateway-openai",
+      "ownerIssue": 3409,
+      "disposition": "derive projection"
+    },
+    {
+      "id": "realtime-compatibility",
+      "ownerIssue": 3409,
+      "disposition": "migrate/delete"
+    },
+    {
+      "id": "cli-composition",
+      "ownerIssue": 3409,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "server-composition",
+      "ownerIssue": 3409,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "sdk-composition",
+      "ownerIssue": 3409,
+      "disposition": "derive projection"
+    },
+    {
+      "id": "harness-sink",
+      "ownerIssue": 3409,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "workspace-search",
+      "ownerIssue": 3386,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "workspace-scan",
+      "ownerIssue": 3386,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "workspace-raw-read",
+      "ownerIssue": 3386,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "editor-raw-lane",
+      "ownerIssue": 3408,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "diagnostic-generator",
+      "ownerIssue": 3412,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "diagnostic-sink",
+      "ownerIssue": 3413,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "activity-redaction",
+      "ownerIssue": 3413,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "browser-contract",
+      "ownerIssue": 3413,
+      "disposition": "derive projection"
+    },
+    {
+      "id": "editor-policy",
+      "ownerIssue": 3408,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "coding-facade",
+      "ownerIssue": 3413,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "opencode-readiness",
+      "ownerIssue": 3413,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "opencode-composition",
+      "ownerIssue": 3414,
+      "disposition": "derive projection"
+    },
+    {
+      "id": "coding-port-composition",
+      "ownerIssue": 3413,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "codex-disabled",
+      "ownerIssue": 3413,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "support-analyzer",
+      "ownerIssue": 3413,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "gateway-normalization",
+      "ownerIssue": 3409,
+      "disposition": "derive projection"
+    },
+    {
+      "id": "coding-assist-policy",
+      "ownerIssue": 3413,
+      "disposition": "retain owner"
+    },
+    {
+      "id": "coding-delivery-policy",
+      "ownerIssue": 3413,
+      "disposition": "retain owner"
+    }
+  ],
+  "nonDispatchProbes": [
+    {
+      "id": "gateway-readiness-probe",
+      "ownerIssue": 3406,
+      "disposition": "non-dispatch-capability-probe",
+      "source": "packages/keiko-server/src/gateway-tool-calling-probe.ts",
+      "function": "toolCallingBody",
+      "contractDigest": "9d3dd16bff11d874ba705f8a3f10fe1e65cc7426bd8abe86f74b357f10596b17"
+    }
+  ]
+}

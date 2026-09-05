@@ -3159,6 +3159,8 @@ describe("Coding Workbench issue intake API (#3385)", () => {
   ): GitHubIssuePreviewResponseWire {
     return {
       preview: {
+        untrusted: true,
+        bodyExcerptTruncated: false,
         title: "Start a Code task from a GitHub issue",
         bodyExcerpt: "From the existing Coding Workbench, resolve a GitHub issue URL…",
         commentCount: 3,
@@ -3171,13 +3173,11 @@ describe("Coding Workbench issue intake API (#3385)", () => {
         ...overrides,
       },
       binding: {
-        schemaVersion: "1",
         repositoryId: "a".repeat(64),
         remoteDigest: "b".repeat(64),
         issueNumber: 3385,
         issueIdDigest: "c".repeat(64),
         defaultBaseRef: "dev",
-        contentRevisionDigest: "d".repeat(64),
         bindingDigest: "e".repeat(64),
         ...bindingOverrides,
       },
@@ -3209,12 +3209,50 @@ describe("Coding Workbench issue intake API (#3385)", () => {
 
   it.each([
     ["a missing preview", { preview: undefined }],
+    [
+      "a preview without an untrusted marker",
+      { preview: { ...previewResponse().preview, untrusted: undefined } },
+    ],
+    [
+      "a preview without its truncation marker",
+      { preview: { ...previewResponse().preview, bodyExcerptTruncated: undefined } },
+    ],
+    ["an unknown issue state", { preview: { ...previewResponse().preview, state: "unknown" } }],
+    [
+      "server-only binding schema",
+      { binding: { ...previewResponse().binding, schemaVersion: "1" } },
+    ],
+    [
+      "server-only content revision",
+      { binding: { ...previewResponse().binding, contentRevisionDigest: "d".repeat(64) } },
+    ],
     ["an oversized title", { preview: { ...previewResponse().preview, title: "x".repeat(513) } }],
     [
       "an oversized excerpt",
       { preview: { ...previewResponse().preview, bodyExcerpt: "x".repeat(8193) } },
     ],
     ["a negative comment count", { preview: { ...previewResponse().preview, commentCount: -1 } }],
+    [
+      "too many comment excerpts",
+      {
+        preview: {
+          ...previewResponse().preview,
+          comments: Array.from({ length: 9 }, () => "comment"),
+        },
+      },
+    ],
+    [
+      "an oversized comment excerpt",
+      { preview: { ...previewResponse().preview, comments: ["x".repeat(1025)] } },
+    ],
+    [
+      "a control character in a comment",
+      { preview: { ...previewResponse().preview, comments: ["bad\u0007comment"] } },
+    ],
+    [
+      "a nonboolean truncation marker",
+      { preview: { ...previewResponse().preview, commentsTruncated: "false" } },
+    ],
     [
       "a control character in the title",
       { preview: { ...previewResponse().preview, title: "bad\u0007title" } },
@@ -3259,6 +3297,26 @@ describe("Coding Workbench issue intake API (#3385)", () => {
     await expect(
       previewCodingWorkbenchIssue({ repositoryPath: "/repos/keiko", issueRef: "#3385" }),
     ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED", status: 502 });
+  });
+
+  it("retains the originating correlation id when a successful response fails validation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonOk(
+          { preview: {} },
+          {
+            [CORRELATION_HEADER]: "corr-invalid-preview-3385",
+          },
+        ),
+      ),
+    );
+    await expect(
+      previewCodingWorkbenchIssue({ repositoryPath: "/repos/keiko", issueRef: "#3385" }),
+    ).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      correlationId: "corr-invalid-preview-3385",
+    });
   });
 
   it("surfaces the server's closed failure code and correlation id on a refused preview", async () => {

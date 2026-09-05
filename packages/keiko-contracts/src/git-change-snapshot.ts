@@ -98,6 +98,9 @@ export const GIT_CHANGE_SNAPSHOT_UNAVAILABLE_REASONS = Object.freeze([
   "identical-revisions",
   "no-merge-base",
   "head-behind-base",
+  "unsupported-object-format",
+  "head-mismatch",
+  "revision-mismatch",
 ] as const);
 export type GitChangeSnapshotUnavailableReason =
   (typeof GIT_CHANGE_SNAPSHOT_UNAVAILABLE_REASONS)[number];
@@ -275,6 +278,8 @@ export interface GitChangeSnapshotCompleteness {
   readonly omittedFiles: number;
   readonly omittedHunks: number;
   readonly truncatedFiles: number;
+  /** Per-kind retained file counts; omittedFiles separately discloses unclassified omissions. */
+  readonly kinds: Readonly<Record<GitChangeSnapshotEntryKind, number>>;
   /** One record per reason present, in `GIT_CHANGE_SNAPSHOT_OMISSION_REASONS` order. */
   readonly omissions: readonly GitChangeSnapshotOmission[];
 }
@@ -373,10 +378,11 @@ export type GitChangeSnapshotDurableFields = Pick<
 
 export function gitChangeSnapshotDigestFields(
   snapshot: GitChangeSnapshotDurableFields,
-): GitChangeSnapshotDurableFields {
+): Omit<GitChangeSnapshotDurableFields, "repositoryId"> & { readonly repositoryId?: string } {
   return {
     schemaVersion: snapshot.schemaVersion,
-    repositoryId: snapshot.repositoryId,
+    // A checkout is only a locator when a canonical repository identity is available.
+    ...(snapshot.remoteDigest === undefined ? { repositoryId: snapshot.repositoryId } : {}),
     ...(snapshot.remoteDigest === undefined ? {} : { remoteDigest: snapshot.remoteDigest }),
     baseRef: snapshot.baseRef,
     baseSha: snapshot.baseSha,
@@ -407,7 +413,9 @@ export function gitChangeSnapshotEntryIdentityFields(
     kind: entry.kind,
     pathDigest: entry.pathDigest,
     oldPathDigest:
-      "oldPathDigest" in entry && entry.oldPathDigest !== undefined ? entry.oldPathDigest : null,
+      "oldPathDigest" in entry && typeof entry.oldPathDigest === "string"
+        ? entry.oldPathDigest
+        : null,
     oldMode: entry.oldMode,
     newMode: entry.newMode,
     oldObjectId: entry.oldObjectId,
@@ -481,8 +489,26 @@ export function summarizeGitChangeSnapshotCompleteness(
     omittedFiles,
     omittedHunks: entries.reduce((sum, entry) => sum + entry.omittedHunks, 0),
     truncatedFiles: entries.filter((entry) => entry.truncated).length,
+    kinds: snapshotKindCounts(entries),
     omissions: omissionRollUp(entries, omittedFiles),
   };
+}
+
+function snapshotKindCounts(
+  entries: readonly GitChangeSnapshotEntry[],
+): Record<GitChangeSnapshotEntryKind, number> {
+  const counts: Record<GitChangeSnapshotEntryKind, number> = {
+    add: 0,
+    modify: 0,
+    delete: 0,
+    rename: 0,
+    copy: 0,
+    "mode-change": 0,
+    binary: 0,
+    submodule: 0,
+  };
+  for (const entry of entries) counts[entry.kind] += 1;
+  return counts;
 }
 
 /** The opaque, server-issued handle a registry returns for a snapshot. Random, never path-derived. */
@@ -545,6 +571,7 @@ const COMPLETENESS_KEYS: readonly string[] = [
   "omittedFiles",
   "omittedHunks",
   "truncatedFiles",
+  "kinds",
   "omissions",
 ];
 const OMISSION_KEYS: readonly string[] = ["reason", "files", "hunks"];
@@ -932,6 +959,16 @@ function validateCompletenessRollUp(
   if (!sameOmissions(omissions, expected.omissions)) {
     reasons.push("completeness.omissions must roll up the entries' omissions in vocabulary order");
   }
+  const kinds = field(completeness, "kinds");
+  if (!isRecord(kinds)) {
+    reasons.push("completeness.kinds must be an object");
+    return;
+  }
+  closedKeys(kinds, GIT_CHANGE_SNAPSHOT_ENTRY_KINDS, "completeness.kinds", reasons);
+  for (const kind of GIT_CHANGE_SNAPSHOT_ENTRY_KINDS) {
+    if (field(kinds, kind) !== expected.kinds[kind])
+      reasons.push("completeness.kinds must roll up entries");
+  }
 }
 
 function validateCompleteness(
@@ -946,7 +983,7 @@ function validateCompleteness(
   }
   const before = reasons.length;
   closedKeys(value, COMPLETENESS_KEYS, "completeness", reasons);
-  requireCounts(value, COMPLETENESS_KEYS.slice(0, -1), "completeness", reasons);
+  requireCounts(value, COMPLETENESS_KEYS.slice(0, -2), "completeness", reasons);
   const omissions = field(value, "omissions");
   if (!Array.isArray(omissions)) {
     reasons.push("completeness.omissions must be an array");
@@ -1089,6 +1126,16 @@ function validateUnavailableConsistency(
   reason: GitChangeSnapshotUnavailableReason,
   reasons: string[],
 ): void {
+  if (reason === "unsupported-object-format") {
+    if (["baseSha", "headSha", "mergeBaseSha"].some((key) => field(record, key) !== undefined)) {
+      reasons.push("unsupported-object-format resolves no revisions");
+    }
+    return;
+  }
+  if (reason === "head-mismatch" || reason === "revision-mismatch") {
+    if (field(record, "headSha") === undefined) reasons.push(`${reason} requires headSha`);
+    return;
+  }
   if (reason === "invalid-ref" || reason === "missing-ref") {
     validateUnresolvedReason(record, reason, reasons);
   } else {

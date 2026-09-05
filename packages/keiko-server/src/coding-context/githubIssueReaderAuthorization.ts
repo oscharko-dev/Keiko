@@ -27,6 +27,7 @@ export type GitHubIssueReaderAuthorizationDecision =
  * same two things and belong to the same operation, so one correlation id threads both lines.
  */
 export interface GitHubIssueReaderAuthorizationObservation {
+  readonly signal?: AbortSignal | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly correlationId?: string | undefined;
 }
@@ -288,7 +289,11 @@ export async function githubRemoteOwnerAndRepoFor(
   let remoteUrl: string;
   try {
     remoteUrl = await readGitRemoteUrl(
-      { workspace: contentFreeWorkspaceFor(repositoryRoot), processEnv },
+      {
+        workspace: contentFreeWorkspaceFor(repositoryRoot),
+        processEnv,
+        signal: observation.signal,
+      },
       "origin",
     );
   } catch (error) {

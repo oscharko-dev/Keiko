@@ -1,3 +1,8 @@
+import {
+  captureToolInvocationReceipt,
+  type ToolInvocationReceipt,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
+
 export const CODING_TOOL_INVOCATION_MAX_LIVE_PER_RUN = 8;
 export const CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY = 262_144;
 export const CODING_TOOL_INVOCATION_MAX_AGGREGATE_BYTES = 2 * 1024 * 1024;
@@ -24,10 +29,15 @@ export type CodingToolInvocationTakeResult =
 
 type InvocationIdentity = Pick<CodingToolInvocationStage, "runId" | "actionId" | "idempotencyKey">;
 
+export type CodingToolInvocationInspection =
+  | { readonly kind: "missing" | "in-flight" | "revoked" }
+  | { readonly kind: "terminal"; readonly receipt?: ToolInvocationReceipt };
+
 export interface CodingToolInvocationRegistry {
   readonly stage: (request: CodingToolInvocationStage) => CodingToolInvocationStageResult;
   readonly take: (request: InvocationIdentity) => CodingToolInvocationTakeResult;
-  readonly settle: (request: InvocationIdentity) => boolean;
+  readonly settle: (request: InvocationIdentity, receipt?: ToolInvocationReceipt) => boolean;
+  readonly inspect: (request: InvocationIdentity) => CodingToolInvocationInspection;
   readonly revokeRun: (runId: string) => number;
   readonly dispose: () => void;
   readonly tombstoneFor: (
@@ -61,6 +71,7 @@ interface Tombstone {
   readonly digest: string;
   readonly expiresAt: number;
   readonly kind: "expired" | "replayed";
+  readonly receipt?: ToolInvocationReceipt;
 }
 
 class InvocationRegistry implements CodingToolInvocationRegistry {
@@ -105,13 +116,29 @@ class InvocationRegistry implements CodingToolInvocationRegistry {
     return { kind: "ready", payload: entry.payload, signal: entry.controller.signal };
   }
 
-  public settle(request: InvocationIdentity): boolean {
+  public settle(request: InvocationIdentity, receipt?: ToolInvocationReceipt): boolean {
     const key = identity(request);
     const entry = this.claimed.get(key);
     if (entry === undefined) return false;
+    const captured = receipt === undefined ? undefined : captureToolInvocationReceipt(receipt);
     this.claimed.delete(key);
     this.dropClaimed(key, entry);
+    const tombstone = this.tombstones.get(key);
+    if (tombstone !== undefined && captured !== undefined)
+      this.tombstones.set(key, { ...tombstone, receipt: captured });
     return true;
+  }
+
+  public inspect(request: InvocationIdentity): CodingToolInvocationInspection {
+    this.expire();
+    if (this.disposed || this.revoked.has(request.runId)) return { kind: "revoked" };
+    const key = identity(request);
+    if (this.entries.has(key) || this.claimed.has(key)) return { kind: "in-flight" };
+    const tombstone = this.tombstones.get(key);
+    if (tombstone === undefined) return { kind: "missing" };
+    return tombstone.receipt === undefined
+      ? { kind: "terminal" }
+      : { kind: "terminal", receipt: tombstone.receipt };
   }
 
   public revokeRun(runId: string): number {

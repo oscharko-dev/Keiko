@@ -8,8 +8,13 @@ import {
   type GitHubCodeContextRef,
 } from "./codeContextConnector.js";
 
+export interface GitHubCodeContextReadContext {
+  readonly signal?: AbortSignal | undefined;
+  readonly correlationId?: string | undefined;
+}
+
 export interface GitHubCodeContextApiPort {
-  readJson(argv: readonly string[]): Promise<unknown>;
+  readJson(argv: readonly string[], context?: GitHubCodeContextReadContext): Promise<unknown>;
 }
 
 export const GITHUB_CODE_CONTEXT_ALLOWED_SUBCOMMANDS: readonly string[] = Object.freeze(["api"]);

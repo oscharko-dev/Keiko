@@ -83,9 +83,9 @@ const OWNER_SEGMENT = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/u;
 // Repository rule: 1–100 characters from the documented set. `.` and `..` are legal by the
 // character class and are the two traversal spellings, so they are refused by name.
 const REPOSITORY_SEGMENT = /^[A-Za-z0-9._-]{1,100}$/u;
-// ASCII digits only, no leading zero. `\d` is ASCII-only in JavaScript even under `u`, but the
-// explicit class states the intent: a fullwidth "１２" is not a number here.
-const ISSUE_NUMBER = /^[1-9][0-9]{0,9}$/u;
+// ASCII digits only, no leading zero. `\d` remains ASCII-only under `u`:
+// a fullwidth "１２" is not a number here.
+const ISSUE_NUMBER = /^[1-9]\d{0,9}$/u;
 const ISSUE_URL_PREFIX = "https://github.com/";
 const RELATIVE_PREFIX = "#";
 
@@ -210,7 +210,7 @@ export function parseGitHubIssueReference(
 // to FIND a candidate); every candidate is then admitted or refused by `parseGitHubIssueReference`,
 // so the scan cannot accept a reference the parser would reject. Bounded quantifiers keep the scan
 // linear in the text length.
-const TEXT_CANDIDATE = /([A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100})#([0-9]{1,10})/gu;
+const TEXT_CANDIDATE = /([A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100})#(\d{1,10})/gu;
 
 /**
  * Every `owner/repo#n` reference in a free-text query, in order of appearance, at most `limit`.

@@ -7,6 +7,7 @@ import type {
 
 import {
   createCodingToolAuthorityPort,
+  createCodingToolAuthorityPreview,
   createRuntimeCodingToolFacade,
 } from "./codingToolAuthorityPort.js";
 import {
@@ -148,6 +149,98 @@ async function duplicateResults(
 }
 
 describe("CodingToolAuthorityPort", () => {
+  it.each([
+    { actionClasses: ["workspace-read"] },
+    { connectorScopes: ["source-control.write"] },
+    { networkPolicy: { mode: "deny-all", connectorScopes: ["source-control.read"] } },
+    { networkPolicy: { mode: "allowlist", connectorScopes: [] } },
+  ])("requires the existing source-control network grant for CI metadata %j", (restriction) => {
+    const envelope = restrictedEnvelope(restriction);
+    const authority = {
+      revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+    };
+    const port = createCodingToolAuthorityPort(authority, runtimeContext);
+    expect(
+      port.admit("capability", {
+        action: "git",
+        operation: "ci",
+        actionId: "ci-1",
+        idempotencyKey: "ci-1",
+      }).ok,
+    ).toBe(false);
+    expect(authority.resolveCapabilityForDelegation).not.toHaveBeenCalled();
+  });
+  it("never turns a hard command denial into an approval request", () => {
+    const envelope = restrictedEnvelope({
+      commandPolicy: {
+        mode: "governed",
+        allow: [],
+        deny: ["test"],
+        requirePerCommandApproval: true,
+      },
+    });
+    const resolveCapabilityForDelegation = vi.fn(() => ({ ok: true as const, envelope }));
+    const revalidateCapabilityForMutation = vi.fn(() => ({ ok: true as const, envelope }));
+    const preview = createCodingToolAuthorityPreview(
+      { resolveCapabilityForDelegation, revalidateCapabilityForMutation },
+      runtimeContext,
+    );
+    expect(preview("capability", approvableRequest("command"))).toEqual({
+      ok: false,
+      reason: "action-not-authorized",
+    });
+    expect(resolveCapabilityForDelegation).not.toHaveBeenCalled();
+  });
+  it("previews live authority without reserving delegation or returning mutation authority", () => {
+    const resolveCapabilityForDelegation = vi.fn(() => ({
+      ok: true as const,
+      envelope: fullyAuthorizedEnvelope,
+    }));
+    const revalidateCapabilityForMutation = vi.fn(() => ({
+      ok: true as const,
+      envelope: fullyAuthorizedEnvelope,
+    }));
+    const preview = createCodingToolAuthorityPreview(
+      { resolveCapabilityForDelegation, revalidateCapabilityForMutation },
+      runtimeContext,
+      { requireProducerBinding: true },
+    );
+    const request = {
+      action: "read" as const,
+      actionId: "preview",
+      idempotencyKey: "preview",
+      relativePath: "file.ts",
+    };
+    expect(preview("capability", request)).toEqual({ ok: true });
+    expect(resolveCapabilityForDelegation).not.toHaveBeenCalled();
+    expect(revalidateCapabilityForMutation).toHaveBeenCalledOnce();
+    expect(preview(undefined, request)).toEqual({ ok: false, reason: "capability-missing" });
+  });
+  it("keeps a matched approval unconsumed during preview and rechecks current policy", () => {
+    const envelope = restrictedEnvelope({
+      commandPolicy: { mode: "governed", allow: [], deny: [], requirePerCommandApproval: true },
+    });
+    const resolveCapabilityForDelegation = vi.fn(() => ({ ok: true as const, envelope }));
+    const revalidateCapabilityForMutation = vi.fn(() => ({ ok: true as const, envelope }));
+    const matches = vi.fn(() => true);
+    const consume = vi.fn(() => true);
+    const preview = createCodingToolAuthorityPreview(
+      { resolveCapabilityForDelegation, revalidateCapabilityForMutation },
+      runtimeContext,
+      { approvalProofVerifier: { matches, consume } },
+    );
+    const request = {
+      ...approvableRequest("command"),
+      approvalProof: { approvalId: "approval-1", approvalDigest: DIGEST },
+    };
+    expect(preview("capability", request)).toEqual({ ok: true });
+    expect(matches).toHaveBeenCalledOnce();
+    expect(consume).not.toHaveBeenCalled();
+    expect(resolveCapabilityForDelegation).not.toHaveBeenCalled();
+    matches.mockReturnValue(false);
+    expect(preview("capability", request)).toEqual({ ok: false, reason: "approval-required" });
+  });
   it("binds capability admission to live facts, replay identity, and usage", () => {
     const resolveCapabilityForDelegation = vi.fn(() => ({
       ok: true as const,

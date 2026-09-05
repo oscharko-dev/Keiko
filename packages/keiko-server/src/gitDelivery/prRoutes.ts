@@ -1,4 +1,4 @@
-// Governed GitHub pull request routes (Issue #477, Epic #470, ADR-0064).
+// Governed GitHub pull request routes (Issue #477, Epic #470, ADR-0086).
 //
 //   * POST /api/git-delivery/pr/preview  — READ-ONLY. Builds the pre-create context: the synthesized,
 //       user-editable metadata draft (title/body/risk narrative), the readiness summary (objectExists vs

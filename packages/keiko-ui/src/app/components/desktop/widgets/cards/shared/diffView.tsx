@@ -8,6 +8,7 @@
 // Behavior is preserved verbatim from ReviewWidget's prior local definitions; only the home moved.
 
 import type { ReactNode } from "react";
+import { reportClientDiagnostic } from "../../../../../../lib/client-diagnostics";
 import type { I18nTranslate } from "../../../../../../lib/i18n";
 import type { ChangedFile } from "../../../../../../lib/types";
 import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
@@ -211,6 +212,10 @@ export function DiffFileSection({
       <div
         className={`rv-code mono ${selectableTextStyles["cmp-selectable-text"]}`}
         data-text-selectable="true"
+        // Horizontal code scrolling must be reachable without a pointer.
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+        tabIndex={0}
+        onFocusCapture={() => reportClientDiagnostic("[keiko] shared diff viewport focused")}
       >
         {file.binary ? (
           <p className="rv-empty-p">

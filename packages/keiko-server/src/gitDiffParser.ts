@@ -102,10 +102,10 @@ function decodeQuotedPath(raw: string): string | undefined {
   const content = raw.slice(1, -1);
   let index = 0;
   while (index < content.length) {
-    const value = content[index] ?? "";
+    const value = String.fromCodePoint(content.codePointAt(index) ?? 0);
     if (value !== "\\") {
       bytes.push(...encoder.encode(value));
-      index += 1;
+      index += value.length;
       continue;
     }
     const escape = content[index + 1];
@@ -139,9 +139,8 @@ function decodeQuotedPath(raw: string): string | undefined {
 }
 
 function decodePath(raw: string): string | undefined {
-  const trimmed = raw.trim();
-  if (trimmed.includes("\uFFFD")) return undefined;
-  return trimmed.startsWith('"') ? decodeQuotedPath(trimmed) : trimmed;
+  if (raw.includes("\uFFFD")) return undefined;
+  return raw.startsWith('"') ? decodeQuotedPath(raw) : raw;
 }
 
 function withoutDiffPrefix(path: string): string {
@@ -168,7 +167,7 @@ function splitDiffHeader(line: string): readonly [string, string] | undefined {
   if (!line.startsWith("diff --git ")) return undefined;
   const value = line.slice("diff --git ".length);
   if (value.startsWith('"')) return splitQuotedHeader(value);
-  const separator = value.lastIndexOf(" b/");
+  const separator = Math.max(value.lastIndexOf(" b/"), value.lastIndexOf(' "b/'));
   return separator < 0 ? undefined : [value.slice(0, separator), value.slice(separator + 1)];
 }
 
@@ -205,7 +204,7 @@ function applyModeRecord(header: MutableFileHeader, kind: string, mode: string):
 function applyPairingRecord(header: MutableFileHeader, line: string): boolean | undefined {
   const match = /^(rename|copy) (from|to) (.+)$/u.exec(line);
   if (match === null) return undefined;
-  const path = decodeHeaderPath(match[3] ?? "");
+  const path = decodePath(match[3] ?? "");
   if (path === undefined) return false;
   if (match[2] === "from") header.oldPath = path;
   else {
@@ -217,7 +216,6 @@ function applyPairingRecord(header: MutableFileHeader, line: string): boolean | 
 
 // Git's file-header grammar is a closed sequence of mutually exclusive records; each branch
 // consumes exactly one shape. Returns false only when a record is present but undecodable.
-// eslint-disable-next-line complexity
 function applyHeaderRecord(header: MutableFileHeader, line: string): boolean {
   const mode = MODE_RECORD.exec(line);
   if (mode !== null) {
@@ -265,6 +263,10 @@ export function parseUnifiedDiffFileHeader(
     if (line.startsWith("@@ ")) break;
     if (!applyHeaderRecord(header, line)) return undefined;
   }
+  return completedHeader(header);
+}
+
+function completedHeader(header: MutableFileHeader): UnifiedDiffFileHeader {
   return {
     path: header.path,
     ...(header.oldPath === undefined ? {} : { oldPath: header.oldPath }),
@@ -289,13 +291,25 @@ function parseHunkHeader(header: string, maxHeaderChars: number): HunkCoordinate
   if (header.length > maxHeaderChars) return undefined;
   const match = HUNK_HEADER.exec(header);
   if (match === null) return undefined;
-  return {
+  const coordinates = {
     header,
     oldStart: Number(match[1]),
     oldCount: match[2] === undefined ? 1 : Number(match[2]),
     newStart: Number(match[3]),
     newCount: match[4] === undefined ? 1 : Number(match[4]),
   };
+  if (
+    ![coordinates.oldStart, coordinates.oldCount, coordinates.newStart, coordinates.newCount].every(
+      Number.isSafeInteger,
+    )
+  )
+    return undefined;
+  if (
+    !Number.isSafeInteger(coordinates.oldStart + coordinates.oldCount) ||
+    !Number.isSafeInteger(coordinates.newStart + coordinates.newCount)
+  )
+    return undefined;
+  return coordinates;
 }
 
 function diffLine(
@@ -516,24 +530,27 @@ function parseFile(
   if (identity === undefined) return undefined;
   const parsed = parseUnifiedHunks(lines, EDITOR_HUNK_LIMITS);
   if (parsed.fatal) return undefined;
-  const truncated = parsed.malformed || (isFinal && options.processTruncated);
-  const hunks = editorHunks(
-    isFinal && options.processTruncated && parsed.hunks.length > 0
-      ? parsed.hunks.slice(0, -1)
-      : parsed.hunks,
-  );
-  const totals = lineTotals(hunks);
+  const processTail = isFinal && options.processTruncated;
+  const truncated = parsed.malformed || processTail;
   return {
     path: identity.path,
     ...(identity.oldPath === undefined ? {} : { oldPath: identity.oldPath }),
     layer: options.scope === "staged" ? "staged" : "worktree",
     status: identity.status,
     binary: header.binary,
-    hunks: header.binary ? [] : hunks,
-    addedLines: header.binary ? 0 : totals.addedLines,
-    removedLines: header.binary ? 0 : totals.removedLines,
+    ...editorFileContent(parsed.hunks, header.binary, processTail),
     truncated,
   };
+}
+
+function editorFileContent(
+  parsed: readonly ParsedUnifiedHunk[],
+  binary: boolean,
+  processTail: boolean,
+): Pick<GitEditorDiffFile, "hunks" | "addedLines" | "removedLines"> {
+  if (binary) return { hunks: [], addedLines: 0, removedLines: 0 };
+  const hunks = editorHunks(processTail && parsed.length > 0 ? parsed.slice(0, -1) : parsed);
+  return { hunks, ...lineTotals(hunks) };
 }
 
 export function parseGitEditorUnifiedDiff(

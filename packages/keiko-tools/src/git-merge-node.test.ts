@@ -123,6 +123,20 @@ const CLEAN_PR = JSON.stringify({
 const REPO_CFG = JSON.stringify({ squash: true, merge: false, rebase: true });
 
 describe("readNodeGitBranchProtection", () => {
+  it.each([
+    { name: "main", protected: true },
+    { name: "different", protected: false },
+    { name: "main" },
+  ])("does not mistake an opaque protection 404 for absence: %j", async (branch) => {
+    const result = await readProtection(
+      scriptedSpawn([
+        { exit: 1, stderr: "HTTP 404: Not Found" },
+        { stdout: JSON.stringify(branch) },
+      ]),
+    );
+    expect(result.outcome).toBe("unknown");
+  });
+
   it("projects the signed-commit requirement through the governed gh read", async () => {
     const spawn = scriptedSpawn([{ stdout: NO_REQUIRED_REVIEWS }]);
     const result = await readProtection(spawn);
@@ -133,9 +147,14 @@ describe("readNodeGitBranchProtection", () => {
     expect(spawn.calls()[0]?.args).toContain("/repos/oscharko-dev/Keiko/branches/main/protection");
   });
 
-  it("distinguishes an unprotected branch from an unavailable provider read", async () => {
+  it("requires positive branch metadata to distinguish unprotected from unavailable", async () => {
     await expect(
-      readProtection(scriptedSpawn([{ exit: 1, stderr: "HTTP 404: Not Found" }])),
+      readProtection(
+        scriptedSpawn([
+          { exit: 1, stderr: "HTTP 404: Not Found" },
+          { stdout: JSON.stringify({ name: "main", protected: false }) },
+        ]),
+      ),
     ).resolves.toEqual({ outcome: "unprotected" });
     await expect(
       readProtection(scriptedSpawn([{ exit: 1, stderr: "provider unavailable" }])),
@@ -152,6 +171,34 @@ describe("readNodeGitBranchProtection", () => {
 });
 
 describe("readMergeReadiness", () => {
+  it("retains blocked PR facts without claiming protection visibility", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: CLEAN_PR.replace('"clean"', '"blocked"') },
+      { stdout: REPO_CFG },
+      { stdout: NO_REVIEWS },
+      { exit: 1, stderr: "HTTP 404: Not Found" },
+      { stdout: JSON.stringify({ name: "main", protected: true }) },
+    ]);
+    const readiness = await makeAdapter(spawn).readMergeReadiness(READINESS_REQ);
+    expect(readiness.providerError).toBe(true);
+    expect(readiness.pullRequest?.mergeReadiness).toMatchObject({
+      ready: false,
+      blockingReason: "branch-protection",
+    });
+  });
+
+  it("does not turn a failed review read into a trusted zero count", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: CLEAN_PR },
+      { stdout: REPO_CFG },
+      { exit: 1, stderr: "HTTP 500" },
+      { stdout: NO_REQUIRED_REVIEWS },
+    ]);
+    const readiness = await makeAdapter(spawn).readMergeReadiness(READINESS_REQ);
+    expect(readiness.providerError).toBe(true);
+    expect(readiness.pullRequest?.mergeReadiness.ready).not.toBe(true);
+  });
+
   it("maps a clean PR + repo config to neutral facts and capable strategies (no checks read)", async () => {
     const spawn = scriptedSpawn([
       { stdout: CLEAN_PR },
@@ -256,7 +303,7 @@ describe("readMergeReadiness", () => {
     expect(spawn.calls()[3]?.args[1]).toBe("/repos/oscharko-dev/Keiko/branches/main/protection");
   });
 
-  it("falls back to 0/0 (not a hard failure) when the reviews and branch-protection reads fail", async () => {
+  it("reports unknown provider facts when review and protection reads fail", async () => {
     const spawn = scriptedSpawn([
       { stdout: CLEAN_PR },
       { stdout: REPO_CFG },
@@ -265,9 +312,8 @@ describe("readMergeReadiness", () => {
     ]);
     const adapter = makeAdapter(spawn);
     const readiness = await adapter.readMergeReadiness(READINESS_REQ);
-    expect(readiness.providerError).toBeUndefined();
-    expect(readiness.pullRequest?.mergeReadiness.receivedApprovalCount).toBe(0);
-    expect(readiness.pullRequest?.mergeReadiness.requiredApprovalCount).toBe(0);
+    expect(readiness.providerError).toBe(true);
+    expect(readiness.pullRequest?.mergeReadiness.ready).toBe(false);
     expect(readiness.branchProtection).toBeUndefined();
   });
 

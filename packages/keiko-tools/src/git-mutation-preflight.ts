@@ -1,3 +1,4 @@
+import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 // Deterministic preflight evaluation for governed Git writes (Issue #472, Epic #470).
 //
 // Preflight is a PURE function over a content-free repository snapshot. Same (resolvedInputs,
@@ -24,6 +25,10 @@ import type {
 // serialize into preview/evidence and cannot leak file contents.
 
 export interface GitWorktreeSnapshot {
+  /** Absent only for unborn HEAD or a legacy injected snapshot. */
+  readonly headSha?: string | undefined;
+  /** Canonical identity of every staged mode, blob and path; no raw index data leaves the reader. */
+  readonly stagedTreeDigest?: string | undefined;
   readonly headDetached: boolean;
   // Present iff !headDetached. The branch HEAD currently points at.
   readonly currentBranchName?: string | undefined;
@@ -47,53 +52,21 @@ export interface GitWorktreeSnapshot {
 
 // ─── Finding taxonomy ─────────────────────────────────────────────────────────────────────
 
-export type GitPreflightFindingCode =
-  | "detached-head"
-  | "branch-already-exists"
-  | "base-branch-missing"
-  | "switch-target-missing"
-  | "no-changes-to-stage"
-  | "nothing-staged-to-unstage"
-  | "nothing-staged-to-commit"
-  | "untracked-files-impacted"
-  | "no-upstream-configured"
-  | "nothing-to-push"
-  | "non-fast-forward"
-  | "remote-alias-missing"
-  | "remote-unreachable"
-  | "operation-in-progress"
-  | "no-operation-to-abort"
-  | "recovery-target-unset"
-  | "dirty-worktree-impacts-recovery";
-
-export const GIT_PREFLIGHT_FINDING_CODES: readonly GitPreflightFindingCode[] = [
-  "detached-head",
-  "branch-already-exists",
-  "base-branch-missing",
-  "switch-target-missing",
-  "no-changes-to-stage",
-  "nothing-staged-to-unstage",
-  "nothing-staged-to-commit",
-  "untracked-files-impacted",
-  "no-upstream-configured",
-  "nothing-to-push",
-  "non-fast-forward",
-  "remote-alias-missing",
-  "remote-unreachable",
-  "operation-in-progress",
-  "no-operation-to-abort",
-  "recovery-target-unset",
-  "dirty-worktree-impacts-recovery",
-] as const;
-
-// A blocking finding halts the lifecycle before execution; an advisory finding is surfaced for the
-// caller (and preview/UX) but does not halt.
-export type GitPreflightSeverity = "blocking" | "advisory";
-
-// Intrinsic to each code: a user-actionable finding describes a repository condition the operator
-// can fix; an internal finding describes a kernel/caller construction fault. AC2 distinguishes these
-// so approval UX routes "you need to stage a file" differently from "the kernel was misconfigured".
-export type GitPreflightRemediation = "user-actionable" | "internal";
+export {
+  GIT_PREFLIGHT_FINDING_CODES,
+  isGitPreflightFindingCode,
+} from "@oscharko-dev/keiko-contracts/runtime/git-preflight";
+export type {
+  GitPreflightFindingCode,
+  GitPreflightSeverity,
+  GitPreflightRemediation,
+  GitPreflightFinding,
+} from "@oscharko-dev/keiko-contracts/runtime/git-preflight";
+import type {
+  GitPreflightFindingCode,
+  GitPreflightRemediation,
+  GitPreflightFinding,
+} from "@oscharko-dev/keiko-contracts/runtime/git-preflight";
 
 // Frozen, exhaustive code → remediation table. Keyed on every code so a new code forces an explicit
 // classification here (the Record is not Partial).
@@ -119,13 +92,6 @@ const FINDING_REMEDIATION: Readonly<Record<GitPreflightFindingCode, GitPreflight
 
 export function gitPreflightRemediationFor(code: GitPreflightFindingCode): GitPreflightRemediation {
   return FINDING_REMEDIATION[code];
-}
-
-export interface GitPreflightFinding {
-  readonly code: GitPreflightFindingCode;
-  readonly severity: GitPreflightSeverity;
-  readonly remediation: GitPreflightRemediation;
-  readonly phase: "preflight";
 }
 
 export interface GitPreflightReport {
@@ -257,6 +223,16 @@ function preflightCommit(
   return findings;
 }
 
+function pushNeedsUpstream(
+  inputs: Extract<GitDeliveryResolvedInputs, { kind: "push" }>,
+  snapshot: GitWorktreeSnapshot,
+): boolean {
+  // An immutable source plus an explicit remote destination needs no local tracking relation.
+  return (
+    !snapshot.hasUpstream && !inputs.setUpstreamTracking && !isGitObjectId(inputs.verifiedCommitSha)
+  );
+}
+
 function preflightPush(
   inputs: Extract<GitDeliveryResolvedInputs, { kind: "push" }>,
   snapshot: GitWorktreeSnapshot,
@@ -265,7 +241,7 @@ function preflightPush(
   if (!snapshot.remoteAliases.includes(inputs.remoteAlias)) {
     findings.push(blocking("remote-alias-missing"));
   }
-  if (!snapshot.hasUpstream && !inputs.setUpstreamTracking) {
+  if (pushNeedsUpstream(inputs, snapshot)) {
     findings.push(blocking("no-upstream-configured"));
   }
   if (snapshot.remoteReachable === false) {
@@ -360,9 +336,3 @@ export function evaluateGitPreflight(
 }
 
 // ─── Guards ─────────────────────────────────────────────────────────────────────────────────
-
-export function isGitPreflightFindingCode(value: unknown): value is GitPreflightFindingCode {
-  return (
-    typeof value === "string" && (GIT_PREFLIGHT_FINDING_CODES as readonly string[]).includes(value)
-  );
-}

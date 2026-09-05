@@ -37,7 +37,7 @@ import {
   RequestBodyTooLargeError,
   readBoundedRequestBody,
 } from "./bounded-request-body.js";
-import { isValidCorrelationId } from "./correlation.js";
+import { correlationIdOrUnknown, isValidCorrelationId } from "./correlation.js";
 import {
   createInlineCompletionRateLimiter,
   type InlineCompletionRateLimiter,
@@ -90,7 +90,7 @@ function dropNoticeThrottled(now: number): boolean {
 
 // Reports a rate-limited drop exactly once per window, carrying how many further drops that same
 // window suppressed — never the report content, which was never admitted past the limiter.
-function noticeRateLimitedDrop(now: number): void {
+function noticeRateLimitedDrop(now: number, correlationId: string | undefined): void {
   if (dropNoticeThrottled(now)) {
     dropNotice = { lastAt: dropNotice.lastAt, suppressed: dropNotice.suppressed + 1 };
     return;
@@ -100,6 +100,7 @@ function noticeRateLimitedDrop(now: number): void {
   getServerLogger().warn({
     category: "diagnostic",
     op: "client.diagnostic.rate-limited",
+    correlationId: correlationIdOrUnknown(correlationId),
     ...(suppressed > 0 ? { extra: { suppressedDrops: suppressed } } : {}),
   });
 }
@@ -107,18 +108,21 @@ function noticeRateLimitedDrop(now: number): void {
 // Projects the validated request onto the activity log. `message` is admitted only as
 // `extra.clientNote` (see module header); `readyState`/`kind` ride along as bounded, closed-shape
 // fields the value guards pass through unchanged.
-function logClientDiagnostic(request: ClientDiagnosticIngestRequest): void {
+function logClientDiagnostic(
+  request: ClientDiagnosticIngestRequest,
+  ingestCorrelationId: string | undefined,
+): void {
   const extra: Record<string, unknown> = { clientNote: request.message };
   if (request.readyState !== undefined) extra.readyState = request.readyState;
   if (request.kind !== undefined) extra.clientKind = request.kind;
   const correlationId =
     request.correlationId !== undefined && isValidCorrelationId(request.correlationId)
       ? request.correlationId
-      : undefined;
+      : correlationIdOrUnknown(ingestCorrelationId);
   getServerLogger().warn({
     category: "diagnostic",
     op: "client.diagnostic",
-    ...(correlationId === undefined ? {} : { correlationId }),
+    correlationId,
     ...(request.kind === undefined ? {} : { errorKind: request.kind }),
     extra,
   });
@@ -192,9 +196,9 @@ export async function handleClientDiagnosticIngest(ctx: RouteContext): Promise<R
   }
   const now = Date.now();
   if (!rateLimiter.tryAcquire(CLIENT_DIAGNOSTIC_RATE_LIMIT_KEY, now)) {
-    noticeRateLimitedDrop(now);
+    noticeRateLimitedDrop(now, ctx.correlationId);
     return { status: 204, body: null };
   }
-  logClientDiagnostic(parsed);
+  logClientDiagnostic(parsed, ctx.correlationId);
   return { status: 204, body: null };
 }

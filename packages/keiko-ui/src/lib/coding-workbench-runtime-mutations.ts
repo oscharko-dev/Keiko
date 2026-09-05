@@ -1,3 +1,4 @@
+import type { CodingWorkbenchIssueStartIntent } from "./coding-workbench-runtime-actions";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeApprovalDecision,
@@ -57,6 +58,7 @@ export function mutationResultMatchesCurrentTruth(
 export function createStartMutation(
   taskIntent: string,
   current: CodingWorkbenchRuntimeState,
+  issue?: CodingWorkbenchIssueStartIntent,
 ): CodingWorkbenchMutationCommand {
   if (!current.canStart)
     throw codingWorkbenchRuntimeActionError("The runtime is not ready to start.");
@@ -71,6 +73,7 @@ export function createStartMutation(
         requestedMode: current.requestedMode,
         runtimePreference: current.runtimePreference,
         ...managedGatewayModelSelection(current),
+        ...issue,
       }),
   };
 }

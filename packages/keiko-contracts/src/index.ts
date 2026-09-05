@@ -1243,6 +1243,7 @@ export type {
   CODING_WORKBENCH_ISSUE_STATES,
   parseCodingWorkbenchIssuePreviewRequest,
   validateCodingWorkbenchIssuePreview,
+  validateCodingWorkbenchIssueBinding,
 } from "./coding-workbench-runtime.js";
 export type {
   GitHubIssueReference,
@@ -4945,3 +4946,99 @@ export type {
 // it.
 export type { StoreFingerprint } from "./store-fingerprint.js";
 export type { isStoreFingerprint } from "./store-fingerprint.js";
+
+export type {
+  PR_DESCRIPTION_SCHEMA_VERSION,
+  PR_DESCRIPTION_RENDERING_VERSION,
+  PR_DESCRIPTION_LANGUAGES,
+  PrDescriptionLanguage,
+  PR_DESCRIPTION_OUTCOMES,
+  PrDescriptionOutcome,
+  PR_DESCRIPTION_SECTION_KEYS,
+  PrDescriptionSection,
+  PR_DESCRIPTION_TEXT_MAX_LENGTH,
+  PR_DESCRIPTION_SECTION_MAX_ITEMS,
+  PR_DESCRIPTION_REFERENCE_MAX_ITEMS,
+  PR_DESCRIPTION_CANDIDATE_MAX_BYTES,
+  PrDescriptionStatement,
+  PrDescriptionCandidate,
+  PrDescriptionBinding,
+  PR_DESCRIPTION_REASONS,
+  PrDescriptionReason,
+  PrDescriptionCoverage,
+  PrDescriptionArtifact,
+  PrDescriptionArtifactEvidence,
+  prDescriptionArtifactEvidence,
+  prDescriptionArtifactDigestFields,
+  freezePrDescriptionArtifact,
+  prDescriptionBinding,
+  PR_DESCRIPTION_CANDIDATE_SCHEMA,
+  PrDescriptionCandidateValidation,
+  isSafePrDescriptionText,
+  validatePrDescriptionCandidate,
+} from "./pr-description.js";
+
+export type {
+  PR_DESCRIPTION_REGION_VERSION,
+  PR_DESCRIPTION_REGION_START,
+  PR_DESCRIPTION_REGION_END,
+  PR_DESCRIPTION_ATTRIBUTION,
+  PR_DESCRIPTION_LOGO_SOURCE,
+  containsPrDescriptionMarker,
+  framePrDescriptionRegion,
+} from "./pr-description-region.js";
+
+export type {
+  VERIFIED_COMMIT_SCHEMA_VERSION,
+  VERIFIED_COMMIT_STATUSES,
+  VERIFIED_COMMIT_REASONS,
+  VerifiedCommitStatus,
+  VerifiedCommitReason,
+  VerifiedCommitBinding,
+  VerifiedCommitResult,
+  isVerifiedCommitResult,
+} from "./verified-commit.js";
+
+export type {
+  GitPreflightFindingCode,
+  GitPreflightSeverity,
+  GitPreflightRemediation,
+  GitPreflightFinding,
+  GIT_PREFLIGHT_FINDING_CODES,
+  isGitPreflightFindingCode,
+} from "./git-preflight.js";
+
+export type {
+  CodingRuntimeGitResult,
+  CodingRuntimeGitStatus,
+  CodingRuntimeGitDiff,
+  CodingRuntimeGitStage,
+} from "./coding-runtime-git.js";
+
+export type {
+  PrDescriptionApplicationStatus,
+  PrDescriptionApplicationBinding,
+  PrDescriptionApplicationReason,
+  PrDescriptionApplicationState,
+  PrDescriptionApplicationCompleteness,
+  PrDescriptionApplicationEffect,
+  PR_DESCRIPTION_APPLICATION_MAX_AGE_MS,
+  PR_DESCRIPTION_APPLICATION_REASON_STATES,
+  PR_DESCRIPTION_CONCURRENCY_LIMITATION,
+  isPrDescriptionApplicationBinding,
+  isPrDescriptionApplicationStatus,
+} from "./pr-description-application.js";
+
+export type {
+  GitJourneyBinding,
+  GitJourneyRemoteFacts,
+  GitJourneyReason,
+  GitJourneyState,
+  JourneyOutcome,
+  GIT_JOURNEY_REASON_STATES,
+} from "./git-journey-outcome.js";
+export type {
+  isGitJourneyBinding,
+  isGitJourneyRemoteFacts,
+  isJourneyOutcome,
+} from "./git-journey-validation.js";

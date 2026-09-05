@@ -1,3 +1,8 @@
+import { isCodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
+import { isCodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
+import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import { isCodingRuntimeGitResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
+import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 
@@ -92,6 +97,7 @@ const HTTP_ONLY_VERIFICATION_RUNNER_CODES: ReadonlySet<VerificationRunnerErrorCo
   VERIFICATION_RUNNER_ERROR_CODES.RUN_NOT_FOUND,
 ]);
 const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
+  "ci-repair-budget-blocked",
   "capability-backend-unavailable",
   "command-backend-unavailable",
   "command-authority-revoked",
@@ -263,6 +269,10 @@ function project(request: CodingToolActionRequest, input: unknown): CodingToolRe
   const editFailure = projectEditFailure(request, value);
   if (editFailure !== undefined) return editFailure;
   if (value.outcome === "failed") return projectGovernedFailure(value);
+  const git = projectRuntimeGit(request, value);
+  if (git !== undefined) return git;
+  const commit = projectVerifiedCommit(request, value);
+  if (commit !== undefined) return commit;
   const auxiliary = projectAuxiliary(request, value.auxiliary);
   if (auxiliary !== undefined) {
     return {
@@ -276,6 +286,53 @@ function project(request: CodingToolActionRequest, input: unknown): CodingToolRe
   return read === undefined
     ? projected(value.outcome)
     : { status: "completed", evidence: [{ kind: "governed-delegate", code: "completed" }], read };
+}
+
+function projectRuntimeGit(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult | undefined {
+  if (request.action === "git" && request.operation === "ci")
+    return isCodingRuntimeCiResult(value.ci)
+      ? {
+          status: "completed",
+          evidence: [{ kind: "governed-delegate", code: "completed" }],
+          ci: value.ci,
+        }
+      : projected("failed");
+  if (request.action === "git" && request.operation !== "read" && request.operation !== "write")
+    return isCodingRuntimeGitResult(value.git)
+      ? {
+          status: "completed",
+          evidence: [{ kind: "governed-delegate", code: "completed" }],
+          git: value.git,
+        }
+      : projected("failed");
+  return undefined;
+}
+
+function projectVerifiedCommit(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult | undefined {
+  if (isDraftToolRequest(request))
+    return isCodingRuntimeDeliveryResult(value.draftDelivery)
+      ? {
+          status: "completed",
+          evidence: [{ kind: "governed-delegate", code: "completed" }],
+          draftDelivery: value.draftDelivery,
+        }
+      : projected("failed");
+  if (request.action === "delivery" && request.intent === "commit") {
+    return isVerifiedCommitResult(value.verifiedCommit)
+      ? {
+          status: "completed",
+          evidence: [{ kind: "governed-delegate", code: value.verifiedCommit.status }],
+          verifiedCommit: value.verifiedCommit,
+        }
+      : projected("failed");
+  }
+  return undefined;
 }
 
 function projectGovernedFailure(value: Record<string, unknown>): CodingToolResult {

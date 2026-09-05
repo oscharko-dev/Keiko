@@ -492,6 +492,42 @@ describe("CodingRuntimeAuthorityService", () => {
     );
   });
 
+  it("binds admitted issue identity in the retained envelope and rejects rebinding on delegation", () => {
+    const authority = service();
+    const issueBinding = {
+      schemaVersion: "1" as const,
+      repositoryId: "repo_123",
+      remoteDigest: DIGEST,
+      issueNumber: 42,
+      issueIdDigest: "b".repeat(64),
+      defaultBaseRef: "dev",
+      contentRevisionDigest: "c".repeat(64),
+      bindingDigest: "d".repeat(64),
+    };
+    const trusted = { ...context(), issueBinding };
+    const confirmation = authority.confirmStart(intent, trusted.taskId, trusted.operatorId, NOW);
+    const minted = authority.mintStart(intent, trusted, confirmation, NOW);
+    if (!minted.ok) throw new Error("expected mint");
+    authority.transition(minted.authorityRef.runId, "ready", NOW);
+    authority.transition(minted.authorityRef.runId, "running", NOW);
+    const binding = { ...facts().binding, issueBinding };
+    expect(resolve(authority, minted.authorityRef, facts({ binding }))).toMatchObject({
+      ok: true,
+      envelope: { binding: { issueBinding } },
+    });
+    expect(
+      resolve(
+        authority,
+        minted.authorityRef,
+        facts({ binding: { ...binding, issueBinding: { ...issueBinding, issueNumber: 43 } } }),
+        "changed-issue",
+      ),
+    ).toMatchObject({
+      ok: false,
+      reason: "task-drift",
+    });
+  });
+
   it("keeps projected authority evidence separate from private runtime model binding", () => {
     const capabilities = createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.parse(NOW) });
     const authority = new CodingRuntimeAuthorityService(

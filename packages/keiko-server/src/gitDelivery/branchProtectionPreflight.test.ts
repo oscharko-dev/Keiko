@@ -78,6 +78,7 @@ describe("githubOwnerAndRepoFromRemoteUrl", () => {
 describe("signatureRequirementOf", () => {
   it("does not collapse provider unavailability into not-required", () => {
     expect(signatureRequirementOf({ outcome: "unavailable" })).toBe("unavailable");
+    expect(signatureRequirementOf({ outcome: "unknown" })).toBe("unavailable");
     expect(signatureRequirementOf({ outcome: "unprotected" })).toBe("not-required");
   });
 });

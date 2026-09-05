@@ -1,3 +1,4 @@
+import { draftDeliveryReview, draftDeliverySnapshot } from "./_draftDeliveryTestSupport";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
@@ -5,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
   AvailableCodingSafeActivityFeed,
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimePendingApprovalReview,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
   WorkspaceBinding,
@@ -359,7 +362,9 @@ describe("CodingWorkbenchWindow", () => {
     });
   }
 
-  function editApprovalState(): CodingWorkbenchRuntimeState {
+  function editApprovalState(
+    actionKind: "file-edit" | "git-stage" = "file-edit",
+  ): CodingWorkbenchRuntimeState {
     return liveState({
       run: {
         status: "ready",
@@ -372,7 +377,7 @@ describe("CodingWorkbenchWindow", () => {
             kind: "workspace-write",
             actionClass: "workspace-write",
             reasonCode: "approval-required",
-            actionKind: "file-edit",
+            actionKind,
             scopeLabel: "workspace-scope",
             risk: "medium",
             policyReason: "approval-required",
@@ -1142,29 +1147,12 @@ describe("CodingWorkbenchWindow", () => {
 
   it("binds one-time approval controls to live pending permission truth", async () => {
     const user = userEvent.setup();
-    const liveActions = renderWorkbench(
-      liveState({
-        run: {
-          status: "ready",
-          error: null,
-          value: snapshot({
-            state: "awaiting-approval",
-            runId: "run-1",
-            pendingPermission: {
-              requestId: "permission-1",
-              kind: "delivery-substrate",
-              actionClass: "delivery-substrate",
-              reasonCode: "approval-required",
-              actionKind: "push",
-              scopeLabel: "workspace-scope",
-              risk: "high",
-              policyReason: "approval-required",
-              expiresAt: "2026-07-13T12:05:00.000Z",
-            },
-          }),
-        },
-      }),
-    );
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: draftDeliveryReview("push"),
+      retry: vi.fn(),
+    });
+    const liveActions = renderWorkbench(deliveryApprovalState("push"));
 
     expect(screen.getByRole("heading", { name: "Review the bounded action" })).toBeInTheDocument();
     expect(screen.queryByText(/diff --git|Bearer|\/Users\//u)).not.toBeInTheDocument();
@@ -1336,6 +1324,409 @@ describe("CodingWorkbenchWindow", () => {
 
     expect(
       screen.queryByRole("button", { name: "Retry loading the changed files" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each(["loading", "unavailable"] as const)(
+    "#3386: git staging cannot be approved with %s review evidence",
+    (status) => {
+      approvalReviewHookMock.mockReturnValue({ status, review: null, retry: vi.fn() });
+      renderWorkbench(editApprovalState("git-stage"));
+      expect(approvalReviewHookMock).toHaveBeenCalledWith({
+        runId: "run-1",
+        permissionRequestId: "permission-7",
+      });
+      expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+    },
+  );
+
+  it("#3386: shows exact paths before one-use Git stage approval", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-7",
+        paths: ["src/stage-only.ts"],
+        pathsTruncated: false,
+        fileCount: 1,
+        addedLines: 4,
+        deletedLines: 2,
+      },
+      retry: vi.fn(),
+    });
+    const actions = renderWorkbench(editApprovalState("git-stage"));
+    expect(screen.getByText("Stage changes")).toBeInTheDocument();
+    expect(screen.getByText("src/stage-only.ts")).toBeInTheDocument();
+    expect(warning).toHaveBeenCalledWith("[keiko] git stage review ready: files 1");
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("src/stage-only.ts");
+    expect(
+      screen.queryByRole("region", { name: "Reviewed commit message" }),
+    ).not.toBeInTheDocument();
+    expect(actions.decideApproval).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Approve once" }));
+    expect(actions.decideApproval).toHaveBeenCalledExactlyOnceWith("approved");
+    warning.mockRestore();
+  });
+
+  function commitApprovalState(
+    mode: CodingWorkbenchMode = "governed-assist",
+  ): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "awaiting-approval",
+          runId: "run-1",
+          requestedMode: mode,
+          effectiveMode: mode,
+          pendingPermission: {
+            requestId: "proposal-3386",
+            kind: "delivery-substrate",
+            actionClass: "delivery-substrate",
+            actionKind: "commit",
+            reasonCode: "approval-required",
+            policyReason: "approval-required",
+            risk: "high",
+            expiresAt: "2026-07-13T12:05:00.000Z",
+          },
+        }),
+      },
+    });
+  }
+
+  function commitReview(): CodingWorkbenchRuntimePendingApprovalReview {
+    return {
+      requestId: "proposal-3386",
+      paths: ["src/actual.ts"],
+      pathsTruncated: false,
+      fileCount: 1,
+      addedLines: 7,
+      deletedLines: 2,
+      verifiedCommit: {
+        message: "fix: preserve exact verified commit\n\nUntrusted <script> content",
+        result: {
+          schemaVersion: "1",
+          status: "approval-required",
+          reason: "approval-required",
+          recordedAt: AT,
+          proposalId: "proposal-3386",
+          runId: "run-1",
+          envelopeDigest: "a".repeat(64),
+          runtimeAuthorityDigest: "b".repeat(64),
+          workspaceDigest: "c".repeat(64),
+          repositoryDigest: "d".repeat(64),
+          baseSha: "1".repeat(40),
+          parentSha: "2".repeat(40),
+          stagedTreeDigest: "3".repeat(64),
+          messageDigest: "4".repeat(64),
+          verificationEvidenceId: "verification-3386",
+        },
+      },
+    };
+  }
+
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "#3386: commit approval in %s requires its exact reviewed proposal",
+    async (mode) => {
+      const user = userEvent.setup();
+      approvalReviewHookMock.mockReturnValue({ status: "loading", review: null, retry: vi.fn() });
+      const liveActions = renderWorkbench(commitApprovalState(mode));
+      expect(approvalReviewHookMock).toHaveBeenCalledWith({
+        runId: "run-1",
+        permissionRequestId: "proposal-3386",
+      });
+      expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "Approve once" }));
+      expect(liveActions.decideApproval).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "#3386: displays the exact staged change and untrusted commit message before approval in %s",
+    async (mode) => {
+      const user = userEvent.setup();
+      approvalReviewHookMock.mockReturnValue({
+        status: "ready",
+        review: commitReview(),
+        retry: vi.fn(),
+      });
+      const liveActions = renderWorkbench(commitApprovalState(mode));
+      expect(liveActions.decideApproval).not.toHaveBeenCalled();
+      const message = screen.getByRole("region", { name: "Reviewed commit message" });
+      expect(message).toHaveTextContent("Untrusted <script> content");
+      expect(message.querySelector("script")).toBeNull();
+      const files = screen.getByRole("group", { name: "Staged files for this commit" });
+      expect(files).toHaveTextContent("src/actual.ts");
+      expect(files).toHaveTextContent("+7 / -2");
+      expect(screen.getByText("verification-3386")).toBeInTheDocument();
+      expect(screen.getByText("1".repeat(40))).toBeInTheDocument();
+      expect(screen.getByText("2".repeat(40))).toBeInTheDocument();
+      expect(screen.getByText("3".repeat(64))).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Approve once" }));
+      expect(liveActions.decideApproval).toHaveBeenCalledExactlyOnceWith("approved");
+      expect(await axe(document.body)).toHaveNoViolations();
+    },
+  );
+
+  it.each([
+    "missing-commit",
+    "wrong-run",
+    "wrong-proposal",
+    "invalid-message",
+    "blocked-pending",
+    "token-field",
+    "unsafe-path",
+  ])("#3386: refuses %s commit review without exposing its message", (shape) => {
+    const review = commitReview();
+    const commit = review.verifiedCommit;
+    if (commit === undefined) throw new Error("Fixture requires a commit");
+    const broken = { ...review, verifiedCommit: { ...commit, result: { ...commit.result } } };
+    if (shape === "missing-commit") Reflect.deleteProperty(broken, "verifiedCommit");
+    if (shape === "invalid-message") broken.verifiedCommit.message = "";
+    if (shape === "wrong-run") broken.verifiedCommit.result.runId = "other-run";
+    if (shape === "wrong-proposal") broken.verifiedCommit.result.proposalId = "other-proposal";
+    if (shape === "blocked-pending") Reflect.set(broken.verifiedCommit.result, "status", "blocked");
+    if (shape === "token-field")
+      Reflect.set(broken.verifiedCommit, "approvalToken", "fixture-token");
+    if (shape === "unsafe-path") broken.paths = ["../private.txt"];
+    approvalReviewHookMock.mockReturnValue({ status: "ready", review: broken, retry: vi.fn() });
+    renderWorkbench(commitApprovalState());
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.queryByText(/Untrusted <script>/u)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+  });
+
+  it("#3386: does not display a commit review beside a file-edit permission", () => {
+    const review = commitReview();
+    const commit = review.verifiedCommit;
+    if (commit === undefined) throw new Error("Fixture requires a commit");
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      retry: vi.fn(),
+      review: {
+        ...review,
+        requestId: "permission-7",
+        verifiedCommit: {
+          ...commit,
+          result: { ...commit.result, proposalId: "permission-7" },
+        },
+      },
+    });
+    renderWorkbench(editApprovalState());
+    expect(
+      screen.queryByRole("region", { name: "Reviewed commit message" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+  });
+
+  function deliveryApprovalState(
+    action: "push" | "pull-request",
+    mode: CodingWorkbenchMode = "governed-assist",
+  ): CodingWorkbenchRuntimeState {
+    const review = draftDeliveryReview(action);
+    return liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: {
+          ...draftDeliverySnapshot(),
+          state: "awaiting-approval",
+          requestedMode: mode,
+          effectiveMode: mode,
+          pendingPermission: {
+            requestId: review.requestId,
+            kind: "delivery-substrate",
+            actionClass: "delivery-substrate",
+            actionKind: action,
+            reasonCode: "approval-required",
+            policyReason: "approval-required",
+            risk: "high",
+            expiresAt: "2026-09-05T00:05:00.000Z",
+          },
+        },
+      },
+    });
+  }
+
+  const DELIVERY_CASES = (
+    ["governed-assist", "supervised-coding", "autonomous-delivery"] as const
+  ).flatMap((mode) => (["push", "pull-request"] as const).map((action) => ({ mode, action })));
+
+  it.each(DELIVERY_CASES)(
+    "#3387: $mode $action waits for authenticated review",
+    ({ mode, action }) => {
+      approvalReviewHookMock.mockReturnValue({ status: "loading", review: null, retry: vi.fn() });
+      renderWorkbench(deliveryApprovalState(action, mode));
+      expect(approvalReviewHookMock).toHaveBeenCalledWith({
+        runId: "run-1",
+        permissionRequestId: "delivery-1",
+      });
+      expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+    },
+  );
+
+  it.each(DELIVERY_CASES)(
+    "#3387: $mode reviews exact $action target before explicit approval",
+    async ({ mode, action }) => {
+      approvalReviewHookMock.mockReturnValue({
+        status: "ready",
+        review: draftDeliveryReview(action),
+        retry: vi.fn(),
+      });
+      const actions = renderWorkbench(deliveryApprovalState(action, mode));
+      const target = screen.getByRole("region", { name: "Reviewed delivery target" });
+      for (const value of [
+        "owner/repository",
+        "#42",
+        "feature/issue-42",
+        "main",
+        "3".repeat(40),
+        "1".repeat(40),
+      ])
+        expect(target).toHaveTextContent(value);
+      expect(screen.queryByRole("group", { name: "Changed files" })).not.toBeInTheDocument();
+      if (action === "pull-request") {
+        expect(
+          screen.getByRole("region", { name: "Reviewed pull request title" }),
+        ).toHaveTextContent("fix: exact reviewed delivery <script>");
+        const body = screen.getByRole("region", { name: "Reviewed pull request description" });
+        expect(body).toHaveTextContent("Original template <img src=x>");
+        expect(body).toHaveTextContent("Closes #42");
+        expect(body.querySelector("img")).toBeNull();
+      } else
+        expect(
+          screen.queryByRole("region", { name: "Reviewed pull request description" }),
+        ).not.toBeInTheDocument();
+      expect(actions.decideApproval).not.toHaveBeenCalled();
+      await userEvent.setup().click(screen.getByRole("button", { name: "Approve once" }));
+      expect(actions.decideApproval).toHaveBeenCalledExactlyOnceWith("approved");
+      expect(await axe(document.body)).toHaveNoViolations();
+    },
+  );
+
+  it.each([
+    "missing",
+    "wrong-run",
+    "wrong-issue",
+    "wrong-remote",
+    "wrong-number",
+    "wrong-base",
+    "wrong-request",
+    "wrong-phase",
+    "token",
+    "missing-body",
+    "mixed-commit",
+  ])("#3387: refuses %s PR review and hides its transient text", (shape) => {
+    const review = structuredClone(draftDeliveryReview("pull-request"));
+    const delivery = review.draftDelivery;
+    if (delivery === undefined) throw new Error("Fixture requires delivery");
+    if (shape === "missing") Reflect.deleteProperty(review, "draftDelivery");
+    const changedBinding: Readonly<Record<string, readonly [string, string | number]>> = {
+      "wrong-run": ["runId", "other-run"],
+      "wrong-issue": ["issueBindingDigest", "b".repeat(64)],
+      "wrong-remote": ["remoteDigest", "b".repeat(64)],
+      "wrong-number": ["issueNumber", 43],
+      "wrong-base": ["baseRef", "dev"],
+    };
+    const mutation = changedBinding[shape];
+    if (mutation !== undefined) Reflect.set(delivery.record.binding, ...mutation);
+    if (shape === "wrong-request") Reflect.set(review, "requestId", "other-request");
+    if (shape === "wrong-phase") Reflect.set(delivery.record, "phase", "push-proposed");
+    if (shape === "token") Reflect.set(delivery, "approvalToken", "fixture-secret");
+    if (shape === "missing-body") Reflect.deleteProperty(delivery, "body");
+    if (shape === "mixed-commit")
+      Reflect.set(review, "verifiedCommit", commitReview().verifiedCommit);
+    approvalReviewHookMock.mockReturnValue({ status: "ready", review, retry: vi.fn() });
+    renderWorkbench(deliveryApprovalState("pull-request"));
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.queryByText(/exact reviewed delivery/u)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+  });
+
+  it.each(["push", "pull-request"] as const)(
+    "#3387: refuses a valid review for the other delivery action beside %s",
+    (action) => {
+      const other = action === "push" ? "pull-request" : "push";
+      approvalReviewHookMock.mockReturnValue({
+        status: "ready",
+        review: draftDeliveryReview(other),
+        retry: vi.fn(),
+      });
+      renderWorkbench(deliveryApprovalState(action));
+      expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+      expect(
+        screen.queryByRole("region", { name: "Reviewed pull request description" }),
+      ).not.toBeInTheDocument();
+    },
+  );
+  it("#3387: records the unavailable delivery display without its rejected text", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: draftDeliveryReview("push"),
+      retry: vi.fn(),
+    });
+    renderWorkbench(deliveryApprovalState("pull-request"));
+    expect(warn).toHaveBeenCalledWith("[keiko] draft delivery review displayed: unavailable");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("Original template");
+  });
+
+  it("#3387: denies an unavailable delivery without granting and retries its existing review channel", async () => {
+    const retry = vi.fn();
+    approvalReviewHookMock.mockReturnValue({ status: "unavailable", review: null, retry });
+    const actions = renderWorkbench(deliveryApprovalState("push"));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Retry delivery review" }));
+    expect(retry).toHaveBeenCalledOnce();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Deny" }));
+    expect(actions.decideApproval).toHaveBeenCalledExactlyOnceWith("denied");
+  });
+
+  it("#3387: restores durable delivery after reload with no commit receipt or session events", () => {
+    renderWorkbench(
+      liveState({ run: { status: "ready", error: null, value: draftDeliverySnapshot() } }),
+    );
+    expect(screen.getByRole("region", { name: "Repository delivery" })).toHaveTextContent(
+      "Draft pull request created",
+    );
+    expect(screen.getByRole("link", { name: "Pull request #7" })).toHaveAttribute(
+      "href",
+      "https://github.com/owner/repository/pull/7",
+    );
+    expect(screen.queryByRole("button", { name: "Approve once" })).not.toBeInTheDocument();
+  });
+
+  it("#3386: restores the durable commit finding after reload even without session events", () => {
+    const commit = commitReview().verifiedCommit;
+    if (commit === undefined) throw new Error("Fixture requires a commit");
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "succeeded",
+            runId: "run-1",
+            verifiedCommitResult: {
+              ...commit.result,
+              status: "blocked",
+              reason: "policy-block",
+              blockReason: "protected-branch",
+            },
+          }),
+        },
+      }),
+    );
+    expect(screen.getByRole("region", { name: "Commit result" })).toHaveTextContent(
+      "Target is a protected branch",
+    );
+    expect(screen.queryByRole("button", { name: "Approve once" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "Reviewed commit message" }),
     ).not.toBeInTheDocument();
   });
 

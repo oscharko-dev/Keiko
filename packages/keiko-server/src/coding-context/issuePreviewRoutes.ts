@@ -23,13 +23,12 @@ import type {
 import { parseCodingWorkbenchIssuePreviewRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
-import {
-  GitDeliveryBodyTooLargeError,
-  readGitDeliveryBody,
-} from "../gitDelivery/requestGuards.js";
+import { GitDeliveryBodyTooLargeError, readGitDeliveryBody } from "../gitDelivery/requestGuards.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { createRequestCancellation } from "../request-cancellation.js";
 import { errorBody, type RouteContext, type RouteHandler, type RouteResult } from "../routes.js";
 import { resolveGitHubIssue, type GitHubIssueResolver } from "./githubIssueResolution.js";
 
@@ -152,16 +151,6 @@ function unknownRepository(correlationId: string | undefined): RouteResult {
   };
 }
 
-// A client that leaves mid-resolution should not keep `git` and `gh` running for a preview nobody
-// will read. `aborted` is the one event a request emits for exactly that.
-function abortSignalFor(ctx: RouteContext): AbortSignal {
-  const controller = new AbortController();
-  ctx.req.once("aborted", () => {
-    controller.abort();
-  });
-  return controller.signal;
-}
-
 function redactedPreview(
   deps: UiHandlerDeps,
   preview: CodingWorkbenchIssuePreview,
@@ -176,6 +165,7 @@ function redactedPreview(
     ...preview,
     title: redactText(preview.title),
     bodyExcerpt: redactText(preview.bodyExcerpt),
+    ...(preview.comments === undefined ? {} : { comments: preview.comments.map(redactText) }),
   };
 }
 
@@ -199,7 +189,7 @@ function recordPreview(
   detail: { readonly issueNumber?: number | undefined; readonly repositoryId?: string | undefined },
 ): void {
   (deps.activityLog ?? processServerLogSink()).write({
-    level: outcome === "resolved" ? "info" : "info",
+    level: "info",
     category: "http",
     op: "coding-workbench.issue.previewed",
     correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
@@ -226,7 +216,11 @@ function upstreamFailure(deps: UiHandlerDeps, ctx: RouteContext, error: unknown)
   );
   return {
     status: 502,
-    body: errorBody("CODING_WORKBENCH_ISSUE_PREVIEW_FAILED", "Issue preview failed.", correlationId),
+    body: errorBody(
+      "CODING_WORKBENCH_ISSUE_PREVIEW_FAILED",
+      "Issue preview failed.",
+      correlationId,
+    ),
   };
 }
 
@@ -236,22 +230,28 @@ function upstreamFailure(deps: UiHandlerDeps, ctx: RouteContext, error: unknown)
  */
 export function createCodingWorkbenchIssuePreviewHandler(
   resolver: GitHubIssueResolver = resolveGitHubIssue,
-): RouteHandler {
+): (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult> {
   return async (ctx, deps): Promise<RouteResult> => {
+    if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+      return failureResult("authority-denied", ctx.correlationId);
+    }
     const read = await readRequest(ctx);
     if (!read.ok) return read.result;
     const repositoryRoot = registeredCanonicalRoot(deps, read.request.repositoryPath);
     if (repositoryRoot === undefined) return unknownRepository(ctx.correlationId);
+    const cancellation = createRequestCancellation(ctx, "issue-preview-cancelled");
     let resolution;
     try {
       resolution = await resolver(deps, {
         repositoryRoot,
         issueRef: read.request.issueRef,
         correlationId: ctx.correlationId,
-        signal: abortSignalFor(ctx),
+        signal: cancellation.signal,
       });
     } catch (error) {
       return upstreamFailure(deps, ctx, error);
+    } finally {
+      cancellation.dispose();
     }
     if (!resolution.ok) {
       const result = failureResult(resolution.failure, ctx.correlationId);

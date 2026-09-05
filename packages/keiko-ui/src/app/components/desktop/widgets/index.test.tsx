@@ -446,10 +446,19 @@ vi.mock("./coding-workbench/CodingWorkbenchWindow", () => ({
     readonly onOpenGit?: (target: {
       readonly root: string | null;
       readonly binding: "repository" | "task-workspace";
+      readonly repositoryDialog?: "clone";
     }) => void;
   }) => (
     <div data-testid="coding-workbench-window">
       Coding Workbench
+      <button
+        type="button"
+        onClick={() =>
+          onOpenGit?.({ root: null, binding: "repository", repositoryDialog: "clone" })
+        }
+      >
+        Clone for issue
+      </button>
       <button
         type="button"
         onClick={() => onOpenGit?.({ root: selectedRoot ?? null, binding: "repository" })}
@@ -469,8 +478,12 @@ vi.mock("./cards/git-client/GitClientWindow", () => ({
   GitClientWindow: ({
     projectId,
     onOpenEditorFile,
+    initialRepositoryDialog,
+    onRepositoryConnected,
   }: {
     readonly projectId?: string;
+    readonly initialRepositoryDialog?: string;
+    readonly onRepositoryConnected?: (root: string) => void;
     readonly onOpenEditorFile?:
       | ((request: {
           readonly root: string;
@@ -481,6 +494,11 @@ vi.mock("./cards/git-client/GitClientWindow", () => ({
   }): ReactNode => (
     <div data-testid="git-client-window">
       {projectId ?? "unbound"}
+      {initialRepositoryDialog === "clone" ? (
+        <button type="button" onClick={() => onRepositoryConnected?.("/repos/cloned")}>
+          Complete issue clone
+        </button>
+      ) : null}
       <button
         type="button"
         onClick={() =>
@@ -1725,6 +1743,31 @@ describe("active workspace binding override (Issue #446)", () => {
     render(<>{WIN_TYPES.editor.render({}, boundCtx(null, selectedRoot))}</>);
 
     expect(await screen.findByTestId("editor-widget")).toHaveTextContent(`${selectedRoot}:`);
+  });
+
+  it("hands issue cloning to Git and selects the registered checkout in its originating Coding window", async () => {
+    const ctx = makeCtx();
+    const view = render(<>{WIN_TYPES.coding.render({}, ctx)}</>);
+    fireEvent.click(await screen.findByRole("button", { name: "Clone for issue" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("governedGit", {
+      rootBinding: "coding-repository",
+      repositoryDialog: "clone",
+      repositoryReturnWindow: ctx.windowId,
+    });
+    view.rerender(
+      <>
+        {WIN_TYPES.governedGit.render(
+          { repositoryDialog: "clone", repositoryReturnWindow: "coding-source" },
+          ctx,
+        )}
+      </>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Complete issue clone" }));
+    expect(ctx.updateWindow).toHaveBeenCalledWith("coding-source", {
+      cfg: { repositoryPath: "/repos/cloned" },
+    });
+    expect(ctx.focusWindow).toHaveBeenCalledWith("coding-source");
+    expect(ctx.updateCfg).toHaveBeenCalledWith({ repositoryReturnWindow: "" });
   });
 
   it("preserves an explicit dormant Coding Workbench repository selection for Git", async () => {

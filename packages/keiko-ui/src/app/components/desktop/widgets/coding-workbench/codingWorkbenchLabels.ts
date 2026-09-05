@@ -1,5 +1,6 @@
 import { gatewayVerificationContradictsReadiness } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
+  CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchMode,
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimeResearchGrant,
@@ -298,6 +299,7 @@ function eventOutcomeDetail(
  * three different layers and all three get the identical treatment.
  */
 export interface CodingWorkbenchFailureFacts {
+  readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure | undefined;
   readonly code: string;
   readonly correlationId?: string | undefined;
 }
@@ -313,7 +315,13 @@ export function actionFailureAlert(
   failure: CodingWorkbenchFailureFacts,
   t: CodingWorkbenchTranslate,
 ): string {
-  const summary = t(summaryKey, { code: failure.code });
+  const generic = t(summaryKey, { code: failure.code });
+  const issueSummary =
+    failure.issueBindingFailure === undefined
+      ? ""
+      : t(`codingWorkbench.issue.error.${failure.issueBindingFailure}`);
+  const summary =
+    failure.issueBindingFailure === undefined ? generic : `${issueSummary} ${generic}`;
   return failure.correlationId === undefined
     ? summary
     : `${summary} ${t("codingWorkbench.alert.actionFailedSupportId", {

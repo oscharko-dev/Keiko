@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { createRuntimeGatewayConfinement } from "@oscharko-dev/keiko-sandbox";
+import { createBufferedServerLogSink } from "../observability/index.js";
 
 import {
   createDevLaneRuntimeProcessBackend,
@@ -82,6 +84,17 @@ function stageFixture(): Fixture {
   return { runtimeRoot, executable, cwd, outside };
 }
 
+function gatewayConfinement(): ReturnType<typeof createRuntimeGatewayConfinement> {
+  return createRuntimeGatewayConfinement({
+    gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+    runId: "run-2475",
+    treeBindingId: "f".repeat(64),
+    envelopeDigest: "a".repeat(64),
+    runtimeArtifactDigest: "b".repeat(64),
+    modelProfileDigest: "c".repeat(64),
+  });
+}
+
 function launchRequest(fixture: Fixture, executable?: string): RuntimeSupervisorLaunchRequest {
   return {
     runId: "run-2475",
@@ -101,22 +114,97 @@ afterEach(() => {
 });
 
 describe("dev-lane runtime process backend", () => {
-  it("spawns a detached child from inside the runtime root and reports its exit", async () => {
+  it("does not mistake a live child's error event for a completed process tree", async () => {
     const fixture = stageFixture();
-    const spawned: { executable: string; options: Parameters<DevLaneRuntimeSpawn>[2] }[] = [];
     const child = fakeChild(4711);
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
       runtimeRoot: fixture.runtimeRoot,
-      spawnRuntime: (executable, _args, options) => {
-        spawned.push({ executable, options });
+      gatewayConfinement: gatewayConfinement(),
+      spawnRuntime: () => child,
+    });
+    const tree = backend.spawnOwnedTree(launchRequest(fixture));
+    child.emitter.emit("error", new Error("failed signal"));
+    await expect(backend.reconcileTreeExit(tree)).resolves.toBe(false);
+    child.settle(0);
+    await expect(backend.reconcileTreeExit(tree)).resolves.toBe(true);
+  });
+
+  it.each(["runId", "treeBindingId"] as const)(
+    "rejects %s drift before spawn with body-free evidence",
+    (key) => {
+      const fixture = stageFixture();
+      const activityLog = createBufferedServerLogSink();
+      let spawns = 0;
+      const backend = createDevLaneRuntimeProcessBackend({
+        identity: IDENTITY,
+        runtimeRoot: fixture.runtimeRoot,
+        gatewayConfinement: gatewayConfinement(),
+        activityLog,
+        spawnRuntime: () => {
+          spawns += 1;
+          return fakeChild(4711);
+        },
+      });
+      const request = { ...launchRequest(fixture), [key]: "different" };
+      expect(() => backend.spawnOwnedTree(request)).toThrow("runtime-gateway-confinement-drift");
+      expect(spawns).toBe(0);
+      expect(activityLog.events).toContainEqual(
+        expect.objectContaining({
+          op: "runtime.confinement.failed",
+          correlationId: request.runId,
+          errorKind: "Error",
+        }),
+      );
+      expect(JSON.stringify(activityLog.events)).not.toContain(fixture.runtimeRoot);
+    },
+  );
+
+  it("refuses a missing gateway confinement before spawning a sidecar (#2951)", () => {
+    const fixture = stageFixture();
+    const activityLog = createBufferedServerLogSink();
+    let spawns = 0;
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: fixture.runtimeRoot,
+      activityLog,
+      spawnRuntime: () => {
+        spawns += 1;
+        return fakeChild(4711);
+      },
+      killProcessGroup: () => undefined,
+    });
+    expect(() => backend.spawnOwnedTree(launchRequest(fixture))).toThrow(
+      "runtime-gateway-confinement-required",
+    );
+    expect(Array.isArray(activityLog.events[0]?.extra?.frames)).toBe(true);
+    expect(Array.isArray(activityLog.events[0]?.extra?.causeChain)).toBe(true);
+    expect(spawns).toBe(0);
+  });
+
+  it("spawns a detached child from inside the runtime root and reports its exit", async () => {
+    const fixture = stageFixture();
+    const spawned: {
+      executable: string;
+      args: readonly string[];
+      options: Parameters<DevLaneRuntimeSpawn>[2];
+    }[] = [];
+    const child = fakeChild(4711);
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
+      runtimeRoot: fixture.runtimeRoot,
+      spawnRuntime: (executable, args, options) => {
+        spawned.push({ executable, args, options });
         return child;
       },
       killProcessGroup: () => undefined,
     });
     const tree = backend.spawnOwnedTree(launchRequest(fixture));
     expect(spawned).toHaveLength(1);
-    expect(spawned[0]?.executable).toBe(fixture.executable);
+    expect(spawned[0]?.executable).toBe("/usr/bin/sandbox-exec");
+    expect(spawned[0]?.args.slice(2)).toEqual([fixture.executable, "serve"]);
+    expect(spawned[0]?.args[1]).toContain('(remote tcp4 "localhost:1983")');
     expect(spawned[0]?.options.detached).toBe(true);
     expect(spawned[0]?.options.shell).toBe(false);
     await expect(backend.reconcileTreeExit(tree)).resolves.toBe(false);
@@ -135,6 +223,7 @@ describe("dev-lane runtime process backend", () => {
     const fixture = stageFixture();
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
       runtimeRoot: fixture.runtimeRoot,
       spawnRuntime: () => fakeChild(1),
       killProcessGroup: () => undefined,
@@ -152,6 +241,7 @@ describe("dev-lane runtime process backend", () => {
     let groupKillFails = false;
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
       runtimeRoot: fixture.runtimeRoot,
       spawnRuntime: () => child,
       killProcessGroup: (pid, signal) => {
@@ -184,6 +274,7 @@ describe("dev-lane runtime process backend", () => {
     const groupKills: NodeJS.Signals[] = [];
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
       runtimeRoot: fixture.runtimeRoot,
       spawnRuntime: () => child,
       killProcessGroup: (_pid, signal) => {
@@ -203,6 +294,7 @@ describe("dev-lane runtime process backend", () => {
     const child = fakeChild(undefined);
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
       runtimeRoot: fixture.runtimeRoot,
       spawnRuntime: () => child,
       killProcessGroup: () => {
@@ -218,6 +310,7 @@ describe("dev-lane runtime process backend", () => {
     const fixture = stageFixture();
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
       runtimeRoot: fixture.runtimeRoot,
       spawnRuntime: () => fakeChild(1),
       killProcessGroup: () => undefined,
@@ -239,6 +332,7 @@ describe("dev-lane runtime process backend", () => {
     const child = fakeChild(1);
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
       runtimeRoot: fixture.runtimeRoot,
       spawnRuntime: () => child,
       killProcessGroup: () => undefined,
@@ -251,6 +345,7 @@ describe("dev-lane runtime process backend", () => {
     const fixture = stageFixture();
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
       runtimeRoot: fixture.runtimeRoot,
     });
     const tree = backend.spawnOwnedTree(launchRequest(fixture));

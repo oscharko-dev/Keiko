@@ -63,9 +63,9 @@ export interface CodeContextRawObject {
   readonly comments: readonly CodeContextRawComment[];
   readonly url?: string | undefined;
   /**
-   * Content-free provider identity (#3385), present when the read projected it. `providerId` is
-   * the immutable numeric id a transferred or renumbered issue does NOT keep, which is what an
-   * issue binding digests; `state` and `isPullRequest` are what let a resolver refuse a closed
+   * Content-free provider identity (#3385), present when the read projected it. The issue binding
+   * digests `providerNodeId`; provenance is checked separately to reject transferred or renumbered
+   * issues. `state` and `isPullRequest` let a resolver refuse a closed
    * issue or a pull request served from the issues endpoint; `commentCount` is the provider's own
    * total, which the bounded `comments` page may undercount.
    */
@@ -198,21 +198,24 @@ function identityFromGitHub(
   CodeContextRawObject,
   "providerId" | "providerNodeId" | "state" | "isPullRequest" | "commentCount"
 > {
-  const providerId = typeof object.id === "string" && /^[0-9]{1,20}$/u.test(object.id)
-    ? object.id
-    : undefined;
+  const providerId =
+    typeof object.id === "string" && /^\d{1,20}$/u.test(object.id) ? object.id : undefined;
   const state = object.state === "open" || object.state === "closed" ? object.state : undefined;
   return {
     ...(providerId === undefined ? {} : { providerId }),
-    ...(typeof object.nodeId === "string" && object.nodeId.length > 0
+    ...(typeof object.nodeId === "string" && /^[A-Za-z0-9_=-]{1,256}$/u.test(object.nodeId)
       ? { providerNodeId: object.nodeId }
       : {}),
     ...(state === undefined ? {} : { state }),
     ...(typeof object.isPullRequest === "boolean" ? { isPullRequest: object.isPullRequest } : {}),
-    ...(Number.isSafeInteger(object.comments) && Number(object.comments) >= 0
-      ? { commentCount: Number(object.comments) }
-      : {}),
+    ...commentCountFromGitHub(object.comments),
   };
+}
+
+function commentCountFromGitHub(value: unknown): Pick<CodeContextRawObject, "commentCount"> {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? { commentCount: value }
+    : {};
 }
 
 function commentsFromGitHub(value: unknown): readonly CodeContextRawComment[] {
@@ -381,6 +384,7 @@ export function codeContextContentDigest(raw: CodeContextRawObject): string {
       title: raw.title,
       body: raw.body,
       comments: raw.comments,
+      commentCount: raw.commentCount ?? raw.comments.length,
     }),
   );
 }

@@ -24,6 +24,30 @@ import {
 const AT = "2026-07-13T12:00:00.000Z";
 
 describe("Coding Workbench runtime API contracts", () => {
+  it("accepts only a bounded preview precondition attached to an issue intent", () => {
+    const start = {
+      requestId: "request-1",
+      taskIntent: "Fix issue",
+      requestedMode: "supervised-coding",
+    };
+    const accepted = { ...start, issueRef: "#42", expectedIssueBindingDigest: "a".repeat(64) };
+    expect(parseCodingWorkbenchRuntimeStartRequest(accepted)).toEqual({
+      ok: true,
+      value: accepted,
+    });
+    expect(
+      parseCodingWorkbenchRuntimeStartRequest({
+        ...start,
+        expectedIssueBindingDigest: accepted.expectedIssueBindingDigest,
+      }),
+    ).toMatchObject({ ok: false });
+    for (const expectedIssueBindingDigest of ["", "a".repeat(63), "A".repeat(64), {}, null]) {
+      expect(
+        parseCodingWorkbenchRuntimeStartRequest({ ...accepted, expectedIssueBindingDigest }),
+      ).toMatchObject({ ok: false });
+    }
+  });
+
   it("accepts browser start intent only and rejects forged runtime authority", () => {
     const start = {
       requestId: "request-1",
@@ -843,4 +867,91 @@ describe("Coding Workbench runtime API failure branches", () => {
       parseCodingWorkbenchRuntimeResearchRevokeRequest({ requestId: "req-1", grantId: "grant-1" }),
     ).toMatchObject({ ok: false });
   });
+});
+
+describe("durable issue-bound draft delivery on the runtime snapshot", () => {
+  const issue = {
+    schemaVersion: "1",
+    repositoryId: "repository-1",
+    remoteDigest: "a".repeat(64),
+    issueIdDigest: "b".repeat(64),
+    bindingDigest: "c".repeat(64),
+    contentRevisionDigest: "d".repeat(64),
+    issueNumber: 42,
+    defaultBaseRef: "main",
+  };
+  const draft = {
+    schemaVersion: "1",
+    revision: 0,
+    phase: "push-proposed",
+    reason: "approval-required",
+    proposalId: "push-1",
+    proposalDigest: "a".repeat(64),
+    recordedAt: AT,
+    binding: {
+      runId: "run-1",
+      workspaceDigest: "e".repeat(64),
+      runtimeAuthorityDigest: "f".repeat(64),
+      envelopeDigest: "a".repeat(64),
+      remoteDigest: issue.remoteDigest,
+      issueBindingDigest: issue.bindingDigest,
+      issueIdDigest: issue.issueIdDigest,
+      issueNumber: issue.issueNumber,
+      repository: "owner/repository",
+      remoteAlias: "origin",
+      baseRef: issue.defaultBaseRef,
+      baseSha: "1".repeat(40),
+      headRef: "feature/issue-42",
+      headSha: "2".repeat(40),
+      verifiedCommitProposalId: "commit-1",
+      recoveryId: "delivery-1",
+    },
+  };
+  const snapshot = {
+    schemaVersion: "1",
+    state: "running",
+    revision: 1,
+    updatedAt: AT,
+    runId: "run-1",
+    issueBinding: issue,
+    draftDelivery: draft,
+  };
+
+  it("admits only a closed durable record with its complete frozen issue tuple", () => {
+    expect(validateCodingWorkbenchRuntimeSnapshot(snapshot)).toEqual({ ok: true, value: snapshot });
+  });
+
+  it.each([
+    { runId: undefined },
+    { runId: "run-2" },
+    { issueBinding: undefined },
+    { issueBinding: null },
+    { draftDelivery: null },
+    { draftDelivery: { ...draft, body: "private text" } },
+    { draftDelivery: { ...draft, approvalToken: "fixture" } },
+  ])("refuses missing or contaminated enclosing facts %j", (override) => {
+    expect(validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, ...override }).ok).toBe(false);
+  });
+
+  it.each([
+    { bindingDigest: "e".repeat(64) },
+    { issueIdDigest: "e".repeat(64) },
+    { remoteDigest: "e".repeat(64) },
+    { issueNumber: 43 },
+    { defaultBaseRef: "dev" },
+  ])("refuses a different frozen issue component %j", (override) => {
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...snapshot,
+        issueBinding: { ...issue, ...override },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it.each(["idle", "succeeded", "recovery-required"])(
+    "preserves historical delivery facts in %s without implying a fresh grant",
+    (state) => {
+      expect(validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, state }).ok).toBe(true);
+    },
+  );
 });

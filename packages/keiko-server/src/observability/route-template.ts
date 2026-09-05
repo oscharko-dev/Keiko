@@ -166,6 +166,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "index",
   "inline-completion",
   "instrumentation",
+  "issue",
   "jobs",
   "json",
   "language",

@@ -88,7 +88,7 @@ function startApprovalReviewSync(
         scopeState(
           runId,
           permissionRequestId,
-          project(payload.session, payload.pending, permissionRequestId),
+          project(payload.session, payload.pending, permissionRequestId, runId),
         ),
       );
     } catch (error) {
@@ -124,10 +124,38 @@ function project(
   session: "active" | "unpaired",
   pending: CodingWorkbenchRuntimePendingApprovalReview | undefined,
   expectedRequestId: string,
+  expectedRunId: string,
 ): CodingWorkbenchApprovalReviewState {
   if (session === "unpaired" || pending === undefined) return UNAVAILABLE;
   if (pending.requestId !== expectedRequestId) return UNAVAILABLE;
+  if (!deliveryRunMatches(pending, expectedRunId)) return UNAVAILABLE;
+  const commit = pending.verifiedCommit;
+  if (commit !== undefined) {
+    if (commit.result.runId !== expectedRunId) {
+      reportClientDiagnostic("[keiko] verified commit review unavailable: binding-mismatch");
+      return UNAVAILABLE;
+    }
+    reportClientDiagnostic(
+      `[keiko] verified commit review ready: files ${String(pending.fileCount)} tree ${commit.result.stagedTreeDigest.slice(0, 12)}`,
+    );
+  }
   return { status: "ready", review: pending };
+}
+
+function deliveryRunMatches(
+  pending: CodingWorkbenchRuntimePendingApprovalReview,
+  expectedRunId: string,
+): boolean {
+  const delivery = pending.draftDelivery;
+  if (delivery === undefined) return true;
+  if (delivery.record.binding.runId !== expectedRunId) {
+    reportClientDiagnostic("[keiko] draft delivery review unavailable: binding-mismatch");
+    return false;
+  }
+  reportClientDiagnostic(
+    `[keiko] draft delivery review ready: ${delivery.record.phase} head ${delivery.record.binding.headSha.slice(0, 12)}`,
+  );
+  return true;
 }
 
 function inputState(

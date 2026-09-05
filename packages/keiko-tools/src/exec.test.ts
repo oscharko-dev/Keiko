@@ -516,6 +516,36 @@ describe("runCommand — timeout & cancellation (fake child)", () => {
     );
     spawn.child.emit("close", null, "SIGTERM");
     await expect(promise).rejects.toBeInstanceOf(CommandCancelledError);
+    expect(spawn.calls()).toHaveLength(0);
+  });
+
+  it("rechecks cancellation after preparation and cleans the reserved home without spawning", async () => {
+    const ctrl = controller();
+    const spawn = recordingSpawn();
+    const home = recordingHome();
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "1"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: ctrl.signal,
+      },
+      {
+        ...fakeDeps(spawn.fn),
+        home: {
+          make: (): string => {
+            const path = home.provider.make();
+            ctrl.abort();
+            return path;
+          },
+          cleanup: home.provider.cleanup,
+        },
+      },
+    );
+    await expect(promise).rejects.toBeInstanceOf(CommandCancelledError);
+    expect(spawn.calls()).toHaveLength(0);
+    expect(home.cleaned()).toEqual(home.made());
   });
 });
 
@@ -1062,6 +1092,23 @@ describe("runCommand — outputScrub: credentials-only", () => {
     );
 
     expect(result.stdout).toBe("https://github.com/alicedev-team/App.git");
+  });
+
+  it("marks changed output even when secret replacement preserves byte length", async () => {
+    const secret = "1234567890";
+    const result = await runCommand(
+      {
+        command: "node",
+        args: ["-e", echo(secret)],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      echoDeps({ PATH: process.env.PATH ?? "", API_TOKEN: secret }, true),
+    );
+    expect(result.stdout.length).toBe(secret.length);
+    expect(result.stdout).toBe("[REDACTED]");
+    expect(result.outputRedacted).toBe(true);
   });
 
   it("still redacts a credential value the parent carries", async () => {

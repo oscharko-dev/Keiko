@@ -15,6 +15,11 @@ import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegist
 import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { createProductionManagedWorktreeToolFacade } from "./productionManagedWorktreeTools.js";
+import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
+import type { VerifiedCommitService } from "../gitDelivery/verifiedCommitTypes.js";
+import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
+import { readySnapshot } from "../gitDelivery/ciObservationTest/_support.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
@@ -48,6 +53,88 @@ const FACTS: CodingWorkbenchRuntimeAuthorityFacts = {
 };
 
 describe("production managed worktree tools", () => {
+  it("routes a CI tool call to the confirmed-PR observer through the existing facade", async () => {
+    const observe = vi.fn<CiObservationService["observe"]>(() =>
+      Promise.resolve({ status: "observed", snapshot: readySnapshot(), retryAfterMs: 0 }),
+    );
+    const facade = verificationFacade({
+      runToReport: vi.fn(),
+      records: [],
+      ciObservationService: { observe },
+    });
+    const result = await facade.execute({
+      capability: "runtime-capability",
+      body: JSON.stringify({
+        action: "git",
+        operation: "ci",
+        actionId: "ci-1",
+        idempotencyKey: "ci-1",
+      }),
+    });
+    expect(result).toMatchObject({
+      status: "completed",
+      ci: { status: "observed", snapshot: readySnapshot() },
+    });
+    expect(observe).toHaveBeenCalledExactlyOnceWith();
+  });
+  it("keeps an unavailable CI backend explicit and rejects model-selected PR targets", async () => {
+    const facade = verificationFacade({ runToReport: vi.fn(), records: [] });
+    const request = { action: "git", operation: "ci", actionId: "ci-1", idempotencyKey: "ci-1" };
+    expect(
+      await facade.execute({ capability: "runtime-capability", body: JSON.stringify(request) }),
+    ).toMatchObject({ status: "failed", reasonCode: "capability-backend-unavailable" });
+    expect(
+      await facade.execute({
+        capability: "runtime-capability",
+        body: JSON.stringify({ ...request, prNumber: 99 }),
+      }),
+    ).toMatchObject({ status: "invalid" });
+  });
+  it("does not publish or complete verification after its repair lease expires in the runner", async () => {
+    let repairLive = true;
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const records: ServerDiagnosticRecord[] = [];
+    const completeVerification = vi.fn<VerifiedCommitService["completeVerification"]>(() =>
+      Promise.resolve(true),
+    );
+    const service = { ...verificationService(), completeVerification };
+    const settle = vi.fn();
+    const facade = verificationFacade({
+      records,
+      events,
+      verifiedCommitService: service,
+      ciRepairBudget: {
+        admitTool: () => ({ check: (): boolean => repairLive, settle }),
+        chargePrompt: () => true,
+        observed: vi.fn(),
+      },
+      runToReport: async () => {
+        await Promise.resolve();
+        repairLive = false;
+        return verificationReport("passed");
+      },
+    });
+    expect(
+      await facade.execute({
+        capability: "runtime-capability",
+        body: JSON.stringify({
+          action: "verification",
+          verifierId: "test",
+          actionId: "late",
+          idempotencyKey: "late",
+        }),
+      }),
+    ).toMatchObject({ status: "failed" });
+    expect(completeVerification).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        operation: "coding-runtime.verification",
+        errorClass: "verification-authority-revoked",
+      }),
+    );
+    expect(settle).toHaveBeenCalledOnce();
+  });
   it("routes reads through the secure workspace port and rechecks live authority", async () => {
     let live = true;
     const readText = vi.fn(() => Promise.resolve({ ok: true as const, text: "private source" }));
@@ -667,7 +754,7 @@ describe("production managed worktree tools", () => {
 
   it.each([
     ["git", { operation: "read" }],
-    ["delivery", { intent: "commit" }],
+    ["delivery", { intent: "commit", phase: "propose", message: "feat: reviewed candidate" }],
     ["connector", { scope: "source-control.read" }],
   ] as const)(
     "fails closed when the governed %s backend is unavailable",
@@ -757,10 +844,21 @@ function verificationReport(overallStatus: VerificationStatus): VerificationRepo
 // expiry decades away, so every refusal these tests observe comes from the run OUTCOME (or the
 // thrown error) and never from a liveness or policy check.
 function verificationFacade(options: {
+  readonly ciRepairBudget?: CiRepairExecutionBudget;
+  readonly verifiedCommitService?: VerifiedCommitService;
+  readonly events?: CodingWorkbenchRuntimeEvent[];
+  readonly ciObservationService?: CiObservationService;
   readonly runToReport: () => Promise<VerificationReport>;
   readonly records: ServerDiagnosticRecord[];
 }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
   return createProductionManagedWorktreeToolFacade({
+    ...(options.ciRepairBudget === undefined ? {} : { ciRepairBudget: options.ciRepairBudget }),
+    ...(options.verifiedCommitService === undefined
+      ? {}
+      : { verifiedCommitService: options.verifiedCommitService }),
+    ...(options.ciObservationService === undefined
+      ? {}
+      : { ciObservationService: options.ciObservationService }),
     authority: {
       revalidateCapabilityForMutation: () => ({
         ok: true as const,
@@ -792,8 +890,27 @@ function verificationFacade(options: {
     invocationRegistry: createCodingToolInvocationRegistry(),
     verificationRunner: { runToReport: options.runToReport },
     diagnostics: { record: (record): void => void options.records.push(record) },
-    onRuntimeEvent: vi.fn(),
+    onRuntimeEvent: (event): void => {
+      options.events?.push(event);
+    },
   });
+}
+
+function verificationService(): VerifiedCommitService {
+  return {
+    beginVerification: vi.fn(() => Promise.resolve({})),
+    completeVerification: vi.fn(() => Promise.resolve(true)),
+    propose: vi.fn(),
+    approve: vi.fn(),
+    issueApproval: vi.fn(),
+    execute: vi.fn(),
+    matchesApproval: vi.fn(),
+    consumeApproval: vi.fn(),
+    executeApproved: vi.fn(),
+    review: vi.fn(),
+    invalidate: vi.fn(),
+    reconcile: vi.fn(),
+  };
 }
 
 function authorizedEnvelope(network = false): never {

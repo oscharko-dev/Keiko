@@ -331,9 +331,9 @@ export function parseGitRepositoryAgentOperationRequest(
 export type GitRepositoryAgentAuthorityClass =
   // Inspection of the repository. No mutation, no network.
   | "repository-read"
-  // A workspace-contained write: index, branch pointer, local commit.
+  // A workspace-contained write: index or branch pointer.
   | "workspace-write"
-  // Leaves the machine or lets the network into it: fetch, pull, push, pull request, merge.
+  // Delivery requires a distinct action approval, including a local verified commit.
   | "repository-delivery";
 
 const AUTHORITY_CLASS_BY_OPERATION: Readonly<
@@ -346,7 +346,7 @@ const AUTHORITY_CLASS_BY_OPERATION: Readonly<
   "branch-switch": "workspace-write",
   stage: "workspace-write",
   unstage: "workspace-write",
-  commit: "workspace-write",
+  commit: "repository-delivery",
   fetch: "repository-delivery",
   pull: "repository-delivery",
   push: "repository-delivery",
@@ -366,8 +366,9 @@ const AUTHORITY_CLASS_BY_OPERATION: Readonly<
 //    so this entry exists only for the Record's exhaustiveness; "workspace-contained"/"low" is the
 //    closest honest choice if that ever changed. For "workspace-write" it preserves the existing
 //    threshold unchanged: allowed starting at supervised-coding, approval-required below it.
-//  - "repository-delivery" (fetch/pull/push/pull-request/merge -- leaves the machine or lets the
-//    network in) names "delivery". CODING_WORKBENCH_MODE_POLICIES declares "delivery"
+//  - "repository-delivery" (commit/fetch/pull/push/pull-request/merge) names "delivery".
+//    #3386 includes local commits because their exact verified tree and message require an
+//    independent action approval in every mode. CODING_WORKBENCH_MODE_POLICIES declares "delivery"
 //    approval-required at every risk tier in every mode, including autonomous-delivery, so the
 //    specific risk chosen here never changes the outcome; "high" is the most honest label for an
 //    action that can affect shared or remote state. This is the deliberate, owner-approved

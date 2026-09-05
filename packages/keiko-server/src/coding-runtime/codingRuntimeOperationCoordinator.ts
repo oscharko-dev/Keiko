@@ -10,6 +10,7 @@ import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
 import type {
   CodingRuntimeTaskDispatcher,
+  CodingRuntimeTaskDispatchRequest,
   CodingRuntimeTaskOutcome,
 } from "./productionCodingRuntimeHost.js";
 import type {
@@ -144,12 +145,9 @@ export class CodingRuntimeOperationCoordinator {
     return this.mutateQuestion(runId, input, "reject");
   }
 
-  public async startInitialTurn(input: {
-    readonly runId: string;
-    readonly requestId: string;
-    readonly expectedRevision: number;
-    readonly taskIntent: string;
-  }): Promise<"accepted" | "failed" | "recovery-required"> {
+  public async startInitialTurn(
+    input: CodingRuntimeTaskDispatchRequest,
+  ): Promise<"accepted" | "failed" | "recovery-required"> {
     const reserveOutcome = this.replay.reserve(
       input.runId,
       input.requestId,

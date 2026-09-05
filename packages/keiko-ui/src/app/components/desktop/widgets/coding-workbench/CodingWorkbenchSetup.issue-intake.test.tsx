@@ -65,9 +65,12 @@ function previewResponse(
 ): GitHubIssuePreviewResponseWire {
   return {
     preview: {
+      untrusted: true,
+      bodyExcerptTruncated: false,
       title: HOSTILE_TITLE,
       bodyExcerpt: HOSTILE_BODY,
       commentCount: 2,
+      comments: ["First bounded comment", "Second bounded comment"],
       state: "open",
       provenance: {
         ownerAndRepo: "oscharko-dev/Keiko",
@@ -77,20 +80,24 @@ function previewResponse(
       ...overrides,
     },
     binding: {
-      schemaVersion: "1",
       repositoryId: "a".repeat(64),
       remoteDigest: "b".repeat(64),
       issueNumber: 42,
       issueIdDigest: "c".repeat(64),
       defaultBaseRef: "dev",
-      contentRevisionDigest: "d".repeat(64),
       bindingDigest: "e".repeat(64),
     },
   };
 }
 
 function refusal(code: string, status = 409): ApiError {
-  const error = new ApiError(code, "sensitive server detail that must not be shown", status);
+  const codeSuffix =
+    code === "issue-unavailable" ? "UNAVAILABLE" : code.replaceAll("-", "_").toUpperCase();
+  const error = new ApiError(
+    `CODING_WORKBENCH_ISSUE_${codeSuffix}`,
+    "sensitive server detail that must not be shown",
+    status,
+  );
   error.correlationId = `corr-${code}`;
   return error;
 }
@@ -438,22 +445,25 @@ describe("CodingWorkbenchSetup issue intake (#3385)", () => {
     expect(provisionMock).toHaveBeenCalledWith({
       root: REPOSITORY_PATH,
       taskId: codingWorkbenchIssueTaskId(42),
-      baseBranch: "dev",
+      source: { kind: "github-issue", issueRef: ISSUE_URL, expectedBindingDigest: "e".repeat(64) },
       requestedBy: "studio-operator",
     });
     expect(codingWorkbenchIssueTaskId(42)).toBe("coding-workbench-issue-42");
 
-    // The binding lands: the composer names the issue and refuses a generic start for it.
+    // The binding lands: the real start request must carry the exact accepted issue and digest.
+    // This preserves the missing-backend regression: an issue intent is never sent as a generic run.
     rerender(workspaceApi(boundWorkspace(codingWorkbenchIssueTaskId(42))));
     const composerChip = await screen.findByTestId("coding-workbench-composer-issue");
     expect(composerChip).toHaveTextContent("Issue oscharko-dev/Keiko#42");
     expect(composerChip).not.toHaveTextContent(HOSTILE_TITLE);
     await user.type(screen.getByLabelText("Task instructions"), "Implement the issue");
     const start = screen.getByRole("button", { name: "Start coding run" });
-    expect(start).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByText(/cannot yet carry the issue reference/u)).toBeInTheDocument();
+    expect(start).not.toHaveAttribute("aria-disabled", "true");
     await user.click(start);
-    expect(runtimeActions.start).not.toHaveBeenCalled();
+    expect(runtimeActions.start).toHaveBeenCalledWith("Implement the issue", {
+      issueRef: ISSUE_URL,
+      expectedIssueBindingDigest: "e".repeat(64),
+    });
     await expectAxeClean(container);
 
     await user.click(
@@ -464,6 +474,91 @@ describe("CodingWorkbenchSetup issue intake (#3385)", () => {
       "aria-disabled",
       "true",
     );
+  });
+
+  it("refuses a generic bind while an entered issue is unresolved or failed", async () => {
+    const user = userEvent.setup();
+    previewMock.mockRejectedValue(refusal("auth-required", 403));
+    const { runtimeActions } = renderWorkbench(workspaceApi());
+    await enterRepositoryAndIssue(user);
+    expect(screen.getByRole("button", { name: "Bind workspace" })).toBeDisabled();
+    await user.click(previewButton());
+    await screen.findByTestId("coding-workbench-issue-alert");
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+    expect(provisionMock).not.toHaveBeenCalled();
+    expect(runtimeActions.start).not.toHaveBeenCalled();
+  });
+
+  it("opens the existing clone dialog with no checkout and creates no workspace", async () => {
+    const user = userEvent.setup();
+    const { onOpenGit } = renderWorkbench(workspaceApi());
+    await user.type(issueField(), ISSUE_URL);
+    expect(previewButton()).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Open Git client to clone or switch" }));
+    expect(onOpenGit).toHaveBeenCalledWith({
+      root: null,
+      binding: "repository",
+      repositoryDialog: "clone",
+    });
+    expect(provisionMock).not.toHaveBeenCalled();
+  });
+
+  it("restores the server-owned issue binding after reload without removable or raw issue content", () => {
+    const issueBinding = {
+      ...previewResponse().binding,
+      schemaVersion: "1" as const,
+      contentRevisionDigest: "d".repeat(64),
+    };
+    const state = liveState();
+    renderWorkbench(workspaceApi(boundWorkspace(codingWorkbenchIssueTaskId(42))), {
+      ...state,
+      run: {
+        status: "ready",
+        error: null,
+        value: {
+          schemaVersion: "1",
+          state: "running",
+          revision: 1,
+          updatedAt: "2026-09-04T12:00:00Z",
+          runId: "run-42",
+          issueBinding,
+        },
+      },
+    });
+    const chip = screen.getByTestId("coding-workbench-composer-issue");
+    expect(chip).toHaveTextContent("Issue #42 · base dev");
+    expect(chip).toHaveAttribute("data-binding-digest", issueBinding.bindingDigest);
+    expect(within(chip).queryByRole("button")).not.toBeInTheDocument();
+    expect(chip).not.toHaveTextContent(HOSTILE_BODY);
+  });
+
+  it("can start issue intake from an already bound generic workspace", async () => {
+    const user = userEvent.setup();
+    renderWorkbench(workspaceApi(boundWorkspace("coding-workbench-main")));
+    await user.click(screen.getByRole("button", { name: "Start from a GitHub issue" }));
+    expect(issueField()).toBeInTheDocument();
+    expect(screen.getByLabelText("Repository path")).toHaveValue(REPOSITORY_PATH);
+    expect(provisionMock).not.toHaveBeenCalled();
+  });
+
+  it("shows bounded comment text and truncation as untrusted preview content", async () => {
+    const user = userEvent.setup();
+    previewMock.mockResolvedValue(
+      previewResponse({
+        comments: ["<script>deny</script>"],
+        commentsTruncated: true,
+        bodyExcerptTruncated: true,
+      }),
+    );
+    const { container } = renderWorkbench(workspaceApi());
+    const preview = await previewReady(user);
+    expect(within(preview).getByRole("region", { name: "Comment 1" })).toHaveTextContent(
+      "<script>deny</script>",
+    );
+    expect(preview.querySelector("script")).toBeNull();
+    expect(preview).toHaveTextContent("Additional comments or text were omitted");
+    expect(preview).toHaveTextContent("The issue body is truncated");
+    await expectAxeClean(container);
   });
 
   it("drops an accepted issue when the active workspace is not the issue's own", async () => {
@@ -568,7 +663,11 @@ describe("CodingWorkbenchSetup issue intake (#3385)", () => {
     expect(screen.getByLabelText("Repository path")).toHaveFocus();
 
     await user.click(screen.getByRole("button", { name: "Open Git client to clone or switch" }));
-    expect(onOpenGit).toHaveBeenCalledWith({ root: null, binding: "repository" });
+    expect(onOpenGit).toHaveBeenCalledWith({
+      root: null,
+      binding: "repository",
+      repositoryDialog: "clone",
+    });
     expect(provisionMock).not.toHaveBeenCalled();
     expect(setActiveMock).not.toHaveBeenCalled();
   });

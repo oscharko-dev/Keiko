@@ -1,29 +1,80 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/keiko-connectors/tsconfig.json" },
-    { "path": "./packages/keiko-contracts/tsconfig.json" },
-    { "path": "./packages/keiko-git/tsconfig.json" },
-    { "path": "./packages/keiko-editor/tsconfig.json" },
-    { "path": "./packages/keiko-security/tsconfig.json" },
-    { "path": "./packages/keiko-quality-intelligence/tsconfig.json" },
-    { "path": "./packages/keiko-model-gateway/tsconfig.json" },
-    { "path": "./packages/keiko-workspace/tsconfig.json" },
-    { "path": "./packages/keiko-sandbox/tsconfig.json" },
-    { "path": "./packages/keiko-tools/tsconfig.json" },
-    { "path": "./packages/keiko-evidence/tsconfig.json" },
-    { "path": "./packages/keiko-harness/tsconfig.json" },
-    { "path": "./packages/keiko-verification/tsconfig.json" },
-    { "path": "./packages/keiko-local-knowledge/tsconfig.json" },
-    { "path": "./packages/keiko-memory-vault/tsconfig.json" },
-    { "path": "./packages/keiko-memory-capture/tsconfig.json" },
-    { "path": "./packages/keiko-memory-consolidation/tsconfig.json" },
-    { "path": "./packages/keiko-memory-governance/tsconfig.json" },
-    { "path": "./packages/keiko-memory-retrieval/tsconfig.json" },
-    { "path": "./packages/keiko-workflows/tsconfig.json" },
-    { "path": "./packages/keiko-evaluations/tsconfig.json" },
-    { "path": "./packages/keiko-sdk/tsconfig.json" },
-    { "path": "./packages/keiko-server/tsconfig.json" },
-    { "path": "./packages/keiko-cli/tsconfig.json" }
+    {
+      "path": "./packages/keiko-connectors/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-contracts/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-git/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-editor/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-security/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-tool-catalog/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-quality-intelligence/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-model-gateway/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-workspace/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-sandbox/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-tools/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-evidence/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-harness/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-verification/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-local-knowledge/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-memory-vault/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-memory-capture/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-memory-consolidation/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-memory-governance/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-memory-retrieval/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-workflows/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-evaluations/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-sdk/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-server/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-cli/tsconfig.json"
+    }
   ]
 }

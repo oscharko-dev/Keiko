@@ -26,6 +26,8 @@ import {
   SseIdleTimeoutError,
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
+import { createGatewayToolCatalogBridge } from "./toolCatalogBridge.js";
+import { bindNormalizedToolCalls } from "./normalize.js";
 import { normalizeChatResponse, textFromContent } from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import { assertValidGatewaySamplingParameters } from "./types.js";
@@ -546,7 +548,12 @@ export class OpenAiAdapter implements ProviderAdapter {
       );
     }
     const start = this.now();
-    const response = await this.dispatch(request, config, secrets);
+    const catalog = createGatewayToolCatalogBridge(request, this.now, this.log);
+    const response = await this.dispatch(
+      { ...request, tools: catalog.tools.length === 0 ? undefined : catalog.tools },
+      config,
+      secrets,
+    );
     if (!response.ok) {
       const errorPayload = await this.readErrorBody(response);
       mapHttpError(response, config.modelId, secrets, errorPayload);
@@ -563,7 +570,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       request.responseFormat?.type === "json_schema",
     );
     assertUsableAssistantResponse(normalized, config.modelId, secrets);
-    return redactResponse(normalized, secrets);
+    return bindNormalizedToolCalls(redactResponse(normalized, secrets), catalog.bindCalls);
   };
 
   // Streaming chat path (Layer 1): yields redacted content-delta tokens as they
@@ -582,7 +589,13 @@ export class OpenAiAdapter implements ProviderAdapter {
       );
     }
     const start = this.now();
-    const response = await this.dispatch(request, config, secrets, true);
+    const catalog = createGatewayToolCatalogBridge(request, this.now, this.log, true);
+    const response = await this.dispatch(
+      { ...request, tools: catalog.tools.length === 0 ? undefined : catalog.tools },
+      config,
+      secrets,
+      true,
+    );
     if (!response.ok) {
       const errorPayload = await this.readErrorBody(response);
       mapHttpError(response, config.modelId, secrets, errorPayload);

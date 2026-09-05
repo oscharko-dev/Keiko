@@ -8,7 +8,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 22;
+export const SCHEMA_VERSION = 26;
 
 interface Migration {
   readonly version: number;
@@ -685,6 +685,43 @@ ALTER TABLE coding_runtime_snapshots ADD COLUMN issue_binding_digest TEXT
   CHECK (issue_binding_digest IS NULL OR length(issue_binding_digest) = 64);
 `;
 
+const V23_SQL = `
+ALTER TABLE coding_runtime_snapshots ADD COLUMN verified_commit_result TEXT
+  CHECK (verified_commit_result IS NULL OR (length(verified_commit_result) <= 8192 AND json_valid(verified_commit_result)));
+`;
+
+// Additive even for checkouts that already ran the verified-commit migration.
+const V24_SQL = `
+ALTER TABLE coding_runtime_snapshots ADD COLUMN draft_delivery_record TEXT
+  CHECK (draft_delivery_record IS NULL OR (length(draft_delivery_record) <= 8192 AND json_valid(draft_delivery_record)));
+`;
+
+// Retains the original successful, body-free commit proof when a later proposal replaces the
+// latest result. Only the draft store writes this receipt, atomically with its bound remote intent.
+const V25_SQL = `
+ALTER TABLE coding_runtime_snapshots ADD COLUMN draft_delivery_source_receipt TEXT
+  CHECK (draft_delivery_source_receipt IS NULL OR (length(draft_delivery_source_receipt) <= 8192 AND json_valid(draft_delivery_source_receipt)));
+`;
+
+// Cumulative accounting is keyed to the accepted task and remote PR, not a runtime/head that
+// changes on recovery. Closed bounded receipts contain counts and identities, never authority.
+const V26_SQL = `
+ALTER TABLE coding_runtime_snapshots ADD COLUMN last_successful_verified_commit TEXT
+  CHECK (last_successful_verified_commit IS NULL OR (length(last_successful_verified_commit) <= 8192 AND json_valid(last_successful_verified_commit)));
+ALTER TABLE coding_runtime_snapshots ADD COLUMN ci_observation_revision INTEGER NOT NULL DEFAULT 0
+  CHECK (ci_observation_revision BETWEEN 0 AND 1000000);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN ci_readiness_record TEXT
+  CHECK (ci_readiness_record IS NULL OR (length(ci_readiness_record) <= 8192 AND json_valid(ci_readiness_record)));
+CREATE TABLE coding_runtime_ci_repair_budgets (
+  task_digest TEXT NOT NULL CHECK (length(task_digest) = 64),
+  remote_digest TEXT NOT NULL CHECK (length(remote_digest) = 64),
+  pr_number INTEGER NOT NULL CHECK (pr_number BETWEEN 1 AND 1000000000),
+  revision INTEGER NOT NULL CHECK (revision >= 0),
+  record_json TEXT NOT NULL CHECK (length(record_json) <= 65536 AND json_valid(record_json)),
+  PRIMARY KEY (task_digest, remote_digest, pr_number)
+) STRICT;
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
 // change.
@@ -711,6 +748,10 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 20, sql: V20_SQL },
   { version: 21, sql: V21_SQL },
   { version: 22, sql: V22_SQL },
+  { version: 23, sql: V23_SQL },
+  { version: 24, sql: V24_SQL },
+  { version: 25, sql: V25_SQL },
+  { version: 26, sql: V26_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

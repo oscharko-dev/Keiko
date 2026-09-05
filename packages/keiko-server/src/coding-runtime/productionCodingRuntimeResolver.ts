@@ -1,3 +1,28 @@
+import {
+  createProductionDraftDeliveryService,
+  requestDraftDeliveryApproval,
+} from "./productionDraftDeliveryRuntime.js";
+import type {
+  DraftDeliveryDependencies,
+  DraftDeliveryService,
+} from "../gitDelivery/draftDeliveryTypes.js";
+import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
+import { createProductionCiObservationService } from "./productionCiObservationRuntime.js";
+import { createProductionCiRepairBudget } from "./productionCiRepairRuntime.js";
+import { reservePromptWithCiRepair } from "./ciRepairPromptReservation.js";
+import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
+import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
+import {
+  createProductionRuntimeGitService,
+  requestRuntimeStageApproval,
+} from "./productionVerifiedCommitRuntime.js";
+import {
+  createProductionVerifiedCommitService,
+  requestVerifiedCommitApproval,
+  type VerifiedCommitRuntimeDependencies,
+} from "./productionVerifiedCommitRuntime.js";
+import type { VerifiedCommitService } from "../gitDelivery/verifiedCommitTypes.js";
+import { createRuntimeGitPreparation } from "./productionRuntimeGitPreparation.js";
 import { isAbsolute } from "node:path";
 
 import type {
@@ -122,6 +147,8 @@ export interface ProductionRuntimeBackendResolver {
 }
 
 export interface ProductionCodingRuntimeResolverInput {
+  readonly verifiedCommit?: VerifiedCommitRuntimeDependencies;
+  readonly draftDelivery?: DraftDeliveryDependencies;
   readonly workspaceAuthority: ProductionWorkspaceAuthorityInput;
   readonly backend: ProductionRuntimeBackendResolver;
   readonly secureWorkspaceTextRead: ProductionManagedWorktreeToolInput["secureWorkspaceTextRead"];
@@ -151,6 +178,7 @@ export interface ProductionCodingRuntimeResolverInput {
 }
 
 interface ResolverRunRecord extends ProductionRuntimeRunRecord {
+  readonly ciRepairBudget?: CiRepairExecutionBudget | undefined;
   readonly launch: LaunchMaterial;
   readonly questionPort?: CodingRuntimeQuestionPort | undefined;
   readonly permissionPort?: CodingRuntimePermissionPort | undefined;
@@ -245,13 +273,30 @@ function composeRuntime(
       authenticate: (capability, audience) =>
         authority.authenticateCapability(capability, audience),
       reservePromptTokens: (capability, promptTokens) =>
-        authority.reservePromptTokens(capability, promptTokens),
+        reservePromptWithCiRepair(
+          authority,
+          (runId) => runs.get(runId)?.ciRepairBudget,
+          capability,
+          promptTokens,
+        ),
     },
     gitDeliveryAuthority: authority.gitDeliveryAuthorityPort(),
     ...(input.backend.safeActivityProjection
       ? { safeActivityProjection: input.backend.safeActivityProjection }
       : {}),
   };
+}
+
+function repositoryPreparationFor(
+  input: ProductionCodingRuntimeResolverInput,
+): ReturnType<typeof createRuntimeGitPreparation> | undefined {
+  return input.verifiedCommit === undefined
+    ? undefined
+    : createRuntimeGitPreparation({
+        deps: input.verifiedCommit,
+        context: (request) => resolveProductionRuntimeContext(input.workspaceAuthority, request),
+        now: () => runtimeNow(input).getTime(),
+      });
 }
 
 function launchResolver(
@@ -261,25 +306,22 @@ function launchResolver(
   research: ResearchComposition,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): QualifiedProductionCodingRuntime["mintLaunch"] {
+  const preparation = repositoryPreparationFor(input);
   return {
+    ...(preparation === undefined ? {} : { prepare: preparation.prepare }),
     resolve: (request): ReturnType<QualifiedProductionCodingRuntime["mintLaunch"]["resolve"]> => {
-      const context = resolveProductionRuntimeContext(input.workspaceAuthority, request);
+      const context =
+        preparation === undefined
+          ? resolveProductionRuntimeContext(input.workspaceAuthority, request)
+          : preparation.consume(request);
       const intent = startIntent(request, context);
       const nowIso = runtimeNow(input).toISOString();
-      const confirmation = input.confirmationConsumer?.consume(
-        codingRuntimeStartConfirmationClaim(
-          confirmationFacts(request, context),
-          Date.parse(nowIso),
-        ),
-      );
-      if (!isConsumedRuntimeStartConfirmation(confirmation)) {
-        throw new Error("runtime-start-unconfirmed");
-      }
+      const approvalDigest = consumeStartConfirmation(input, request, context, nowIso);
       const minted = authority.mintConfirmedStartForRun(
         request.runId,
         intent,
         context,
-        confirmation.approvalDigest,
+        approvalDigest,
         nowIso,
       );
       if (!minted.ok) throw new Error(minted.reason);
@@ -303,6 +345,20 @@ function launchResolver(
   };
 }
 
+function consumeStartConfirmation(
+  input: ProductionCodingRuntimeResolverInput,
+  request: ProductionRuntimeBackendInput["request"],
+  context: CodingRuntimeTrustedContext,
+  nowIso: string,
+): string {
+  const confirmation = input.confirmationConsumer?.consume(
+    codingRuntimeStartConfirmationClaim(confirmationFacts(request, context), Date.parse(nowIso)),
+  );
+  if (!isConsumedRuntimeStartConfirmation(confirmation))
+    throw new Error("runtime-start-unconfirmed");
+  return confirmation.approvalDigest;
+}
+
 function confirmationFacts(
   request: ProductionRuntimeBackendInput["request"],
   context: CodingRuntimeTrustedContext,
@@ -318,6 +374,9 @@ function confirmationFacts(
     taskId: context.taskId,
     projectId: context.projectId,
     projectDigest: context.projectDigest,
+    ...(context.repositoryIdentity === undefined
+      ? {}
+      : { repositoryIdentity: context.repositoryIdentity }),
     workspaceId: context.workspaceId,
     workspaceRoot: context.workspaceRoot,
     branchRef: context.branchRef,
@@ -326,6 +385,9 @@ function confirmationFacts(
     runtimeSource: context.runtimeSource,
     modelSource: context.modelProfile.source,
     modelProfileId: context.modelProfile.profileId,
+    ...(context.issueBinding === undefined
+      ? {}
+      : { issueBindingDigest: context.issueBinding.bindingDigest }),
   };
 }
 
@@ -334,12 +396,105 @@ function confirmationFacts(
 // managed facade the runtime actually calls. Built as one unit because the facade closes over the
 // other three.
 interface RunToolSurface {
+  readonly ciRepairBudget: CiRepairExecutionBudget | undefined;
   readonly invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>;
   readonly leases: ReturnType<typeof createLeaseCoordinator>;
   readonly explicitSkills: ReturnType<typeof createExplicitSkillInvocationTracker>;
   readonly toolFacade: ReturnType<typeof createManagedToolFacade>;
   readonly codingToolApprovals: CodingToolApprovalBridge;
   readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+}
+
+function commitServiceFor(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  minted: MintedRuntime,
+  authority: CodingRuntimeAuthorityService,
+  signal: AbortSignal,
+): VerifiedCommitService | undefined {
+  return createProductionVerifiedCommitService(input.verifiedCommit, {
+    runId: minted.authorityRef.runId,
+    envelopeDigest: minted.authorityRef.envelopeDigest,
+    context,
+    signal,
+    stillAuthorized: () => runtimeMutationLive(input, context, minted, authority),
+  });
+}
+
+interface RuntimeGitServices {
+  readonly ciRepairBudget: CiRepairExecutionBudget | undefined;
+  readonly draftDeliveryService: DraftDeliveryService | undefined;
+  readonly ciObservationService: CiObservationService | undefined;
+  readonly verifiedCommitService: VerifiedCommitService | undefined;
+  readonly runtimeGitService: RuntimeGitService | undefined;
+  readonly codingToolApprovals: CodingToolApprovalBridge;
+}
+function runtimeGitServices(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  minted: MintedRuntime,
+  authority: CodingRuntimeAuthorityService,
+  signal: AbortSignal,
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+): RuntimeGitServices {
+  const binding = {
+    runId: minted.authorityRef.runId,
+    envelopeDigest: minted.authorityRef.envelopeDigest,
+    context,
+    signal,
+    stillAuthorized: (): boolean => runtimeMutationLive(input, context, minted, authority),
+  };
+  const verifiedCommitService = commitServiceFor(input, context, minted, authority, signal);
+  const { ciRepairBudget, ciObservationService } = runtimeCiServices(
+    input,
+    binding,
+    onRuntimeEvent,
+  );
+  const runtimeGitService = createProductionRuntimeGitService(
+    input.verifiedCommit,
+    binding,
+    () => authority.effectiveMode(),
+    () => verifiedCommitService?.invalidate(),
+  );
+  const draftDeliveryService = createProductionDraftDeliveryService(
+    input.draftDelivery,
+    input.verifiedCommit,
+    binding,
+    onRuntimeEvent,
+  );
+  const codingToolApprovals = createCodingToolApprovalBridge(
+    verifiedCommitService,
+    runtimeGitService,
+    draftDeliveryService,
+  );
+  return {
+    verifiedCommitService,
+    ciRepairBudget,
+    runtimeGitService,
+    draftDeliveryService,
+    ciObservationService,
+    codingToolApprovals,
+  };
+}
+
+function runtimeCiServices(
+  input: ProductionCodingRuntimeResolverInput,
+  binding: Parameters<typeof createProductionCiRepairBudget>[2],
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+): Pick<RuntimeGitServices, "ciRepairBudget" | "ciObservationService"> {
+  const ciRepairBudget = createProductionCiRepairBudget(
+    input.draftDelivery,
+    input.verifiedCommit,
+    binding,
+  );
+  const ciObservationService = createProductionCiObservationService(
+    input.draftDelivery,
+    input.verifiedCommit,
+    binding,
+    onRuntimeEvent,
+    ciRepairBudget,
+  );
+  return { ciRepairBudget, ciObservationService };
 }
 
 function createRunToolSurface(
@@ -350,16 +505,16 @@ function createRunToolSurface(
   authority: CodingRuntimeAuthorityService,
   research: ResearchComposition,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+  signal: AbortSignal,
 ): RunToolSurface {
   const invocationRegistry = createCodingToolInvocationRegistry();
-  const codingToolApprovals = createCodingToolApprovalBridge();
+  const services = runtimeGitServices(input, context, minted, authority, signal, onRuntimeEvent);
+  const { codingToolApprovals } = services;
   const leases = createLeaseCoordinator(invocationRegistry);
   const skillCatalog = createServerApprovedSkillCatalog();
   const explicitSkills = createExplicitSkillInvocationTracker(skillCatalog);
   const resolveWorkspaceRootAccess = runWorkspaceRootAccessResolver(input, context);
-  if (resolveWorkspaceRootAccess() === undefined) {
-    throw new Error("runtime-workspace-unqualified");
-  }
+  if (resolveWorkspaceRootAccess() === undefined) throw new Error("runtime-workspace-unqualified");
   explicitSkills.observeTurn(request.taskIntent);
   const toolFacade = createManagedToolFacade({
     input,
@@ -371,12 +526,13 @@ function createRunToolSurface(
     research,
     skillCatalog,
     explicitSkills,
-    codingToolApprovals,
+    ...services,
     onRuntimeEvent,
     resolveWorkspaceRootAccess,
   });
   return {
     invocationRegistry,
+    ciRepairBudget: services.ciRepairBudget,
     leases,
     explicitSkills,
     toolFacade,
@@ -403,26 +559,24 @@ function createRunRecord(
     authority,
     research,
     onRuntimeEvent,
+    controller.signal,
   );
-  const { invocationRegistry, leases, explicitSkills, toolFacade, codingToolApprovals } = surface;
+  const { invocationRegistry, leases, explicitSkills } = surface;
   const backend = createBackendRun({
     input,
     request,
     context,
     minted,
-    toolFacade,
-    codingToolApprovals,
+    ...surface,
     authority,
     controller,
-    invocationRegistry,
-    leases,
     research,
     onRuntimeEvent,
-    resolveWorkspaceRootAccess: surface.resolveWorkspaceRootAccess,
   });
   const detachLease = attachRuntimeMutationLease(input, leases, invocationRegistry);
   return {
     manager: backend.manager,
+    ciRepairBudget: surface.ciRepairBudget,
     launch: backend.launch,
     turnPort: bindExplicitSkillTurns(backend.turnPort, explicitSkills),
     controller,
@@ -448,14 +602,14 @@ function runWorkspaceRootAccessResolver(
   };
 }
 
-function bindExplicitSkillTurns(
+export function bindExplicitSkillTurns(
   turnPort: ProductionRuntimeTurnPort,
   explicitSkills: ExplicitSkillInvocationTracker,
 ): ProductionRuntimeTurnPort {
   return {
-    submitTurn: async (runId, text): Promise<boolean> => {
+    submitTurn: async (runId, text, initialContext): Promise<boolean> => {
       explicitSkills.observeTurn(text);
-      const accepted = await turnPort.submitTurn(runId, text);
+      const accepted = await turnPort.submitTurn(runId, text, initialContext);
       if (!accepted) explicitSkills.clear();
       return accepted;
     },
@@ -578,6 +732,11 @@ function createBackendRun({
 
 /** One parameter object: the facade needs the whole run context, not an argument list to mis-order. */
 interface ManagedToolFacadeInput {
+  readonly ciRepairBudget?: CiRepairExecutionBudget | undefined;
+  readonly ciObservationService?: CiObservationService | undefined;
+  readonly draftDeliveryService?: DraftDeliveryService | undefined;
+  readonly verifiedCommitService?: VerifiedCommitService | undefined;
+  readonly runtimeGitService?: RuntimeGitService | undefined;
   readonly input: ProductionCodingRuntimeResolverInput;
   readonly context: CodingRuntimeTrustedContext;
   readonly minted: MintedRuntime;
@@ -592,23 +751,65 @@ interface ManagedToolFacadeInput {
   readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
 }
 
-function createManagedToolFacade({
-  input,
-  context,
-  minted,
-  authority,
-  invocationRegistry,
-  leases,
-  research,
-  skillCatalog,
-  explicitSkills,
-  codingToolApprovals,
+function runtimeGitFacadeOptions({
+  ciObservationService,
+  verifiedCommitService,
+  runtimeGitService,
+  draftDeliveryService,
   onRuntimeEvent,
-  resolveWorkspaceRootAccess,
-}: ManagedToolFacadeInput): CodingToolFacade {
+}: Pick<
+  ManagedToolFacadeInput,
+  | "verifiedCommitService"
+  | "runtimeGitService"
+  | "draftDeliveryService"
+  | "ciObservationService"
+  | "onRuntimeEvent"
+>): Pick<
+  import("./productionManagedWorktreeTools.js").ProductionManagedWorktreeToolInput,
+  | "verifiedCommitService"
+  | "runtimeGitService"
+  | "requestStageApproval"
+  | "requestCommitApproval"
+  | "draftDeliveryService"
+  | "requestDraftDeliveryApproval"
+  | "ciObservationService"
+> {
+  return {
+    ...(ciObservationService === undefined ? {} : { ciObservationService }),
+    ...(verifiedCommitService === undefined ? {} : { verifiedCommitService }),
+    ...(runtimeGitService === undefined ? {} : { runtimeGitService }),
+    ...(draftDeliveryService === undefined ? {} : { draftDeliveryService }),
+    requestDraftDeliveryApproval: (id): void => {
+      requestDraftDeliveryApproval(draftDeliveryService, id, onRuntimeEvent);
+    },
+    requestStageApproval: (proposalId): void => {
+      requestRuntimeStageApproval(runtimeGitService, proposalId, onRuntimeEvent);
+    },
+    requestCommitApproval: (proposalId): void => {
+      requestVerifiedCommitApproval(verifiedCommitService, proposalId, onRuntimeEvent);
+    },
+  };
+}
+
+function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFacade {
+  const {
+    input,
+    context,
+    minted,
+    authority,
+    invocationRegistry,
+    leases,
+    research,
+    skillCatalog,
+    explicitSkills,
+    codingToolApprovals,
+    onRuntimeEvent,
+    resolveWorkspaceRootAccess,
+  } = options;
   const childModelId = input.childModelId?.();
   return createProductionManagedWorktreeToolFacade({
     authority,
+    ...(options.ciRepairBudget === undefined ? {} : { ciRepairBudget: options.ciRepairBudget }),
     authorityRef: minted.authorityRef,
     taskId: context.taskId,
     // The child agent talks to the gateway directly, so it needs the resolved PROVIDER model id —
@@ -621,8 +822,7 @@ function createManagedToolFacade({
     authorityExpiresAt: context.expiresAt,
     effectiveMode: minted.effectiveMode,
     effectiveModeNow: () => authority.effectiveMode(),
-    reservePromptTokens: (promptTokens): boolean =>
-      authority.reservePromptTokens(minted.modelGatewayCapability, promptTokens).ok,
+    reservePromptTokens: managedPromptReservation(options),
     deploymentCeiling: context.deploymentCeiling,
     liveFacts: () => productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
     secureWorkspaceTextRead: input.secureWorkspaceTextRead,
@@ -630,6 +830,7 @@ function createManagedToolFacade({
     mutationLeaseCoordinator: leases,
     invocationRegistry,
     approvalProofVerifier: codingToolApprovals,
+    ...runtimeGitFacadeOptions(options),
     skillCatalog,
     explicitSkillInvocations: explicitSkills,
     childModelPortFactory: input.childModelPortFactory,
@@ -638,6 +839,18 @@ function createManagedToolFacade({
     onRuntimeEvent,
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
   });
+}
+
+function managedPromptReservation(
+  options: ManagedToolFacadeInput,
+): (promptTokens: number) => boolean {
+  return (promptTokens): boolean =>
+    reservePromptWithCiRepair(
+      options.authority,
+      () => options.ciRepairBudget,
+      options.minted.modelGatewayCapability,
+      promptTokens,
+    ).ok;
 }
 
 function managedResearchOptions(
@@ -689,6 +902,26 @@ function researchApprovalRequester(
     const event = buildResearchPermissionEvent({ runId, requestId, sequence, nowMs });
     if (event !== undefined) onRuntimeEvent(event);
   };
+}
+
+function runtimeMutationLive(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  minted: MintedRuntime,
+  authority: CodingRuntimeAuthorityService,
+): boolean {
+  try {
+    return authority.revalidateCapabilityForMutation({
+      capability: minted.toolFacadeCapability,
+      adapterKind: adapterKind(context),
+      liveFacts: productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
+      workspaceRoot: context.workspaceRoot,
+      deploymentCeiling: context.deploymentCeiling,
+      nowIso: runtimeNow(input).toISOString(),
+    }).ok;
+  } catch {
+    return false;
+  }
 }
 
 function runtimeAuthorityLive(

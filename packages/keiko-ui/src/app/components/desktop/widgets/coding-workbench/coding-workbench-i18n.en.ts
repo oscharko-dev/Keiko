@@ -1,4 +1,182 @@
 export const EN_CODING_WORKBENCH_MESSAGES = {
+  "codingWorkbench.journey.title": "Issue handoff",
+  "codingWorkbench.journey.state.awaiting-ready-approval": "Ready-for-review approval required",
+  "codingWorkbench.journey.state.keiko-technical-ready": "Keiko technical work ready",
+  "codingWorkbench.journey.state.ready-for-human-review": "Ready for human review",
+  "codingWorkbench.journey.state.awaiting-human-requirements": "Human review requirements remain",
+  "codingWorkbench.journey.state.merged-awaiting-issue-closure": "Merged; issue closure pending",
+  "codingWorkbench.journey.state.completed": "Issue journey completed",
+  "codingWorkbench.journey.state.blocked": "Handoff blocked",
+  "codingWorkbench.journey.state.cancelled": "Handoff cancelled",
+  "codingWorkbench.journey.state.recovery-required": "Handoff reconciliation required",
+  "codingWorkbench.journey.state.stale": "Handoff observation is stale",
+  "codingWorkbench.journey.staleHelp":
+    "These are dated observations. Refresh the status before relying on current readiness or issue closure.",
+  "codingWorkbench.journey.refresh": "Refresh observed status",
+  "codingWorkbench.journey.proposeReady": "Review ready-for-review request",
+  "codingWorkbench.journey.readyHelp":
+    "Review the change from draft to ready for review before approving it once.",
+  "codingWorkbench.journey.busy": "Updating handoff status…",
+  "codingWorkbench.journey.actionError.refresh":
+    "Status refresh failed. The saved observations remain visible.",
+  "codingWorkbench.journey.actionError.propose-ready":
+    "The ready-for-review request failed. Refresh the observed status before trying again.",
+  "codingWorkbench.journey.issueLink": "Issue #{number}",
+  "codingWorkbench.journey.prLink": "Pull request #{number}",
+  "codingWorkbench.journey.ci": "Technical checks",
+  "codingWorkbench.journey.checkCounts":
+    "{passed} of {total} required checks passed · {failed} advisory failures",
+  "codingWorkbench.journey.description": "Keiko PR description",
+  "codingWorkbench.journey.description.current": "Description is current",
+  "codingWorkbench.journey.description.partial": "Partial description applied",
+  "codingWorkbench.journey.description.fallback": "Fallback description applied",
+  "codingWorkbench.journey.description.stale": "Description confirmation is stale",
+  "codingWorkbench.journey.description.blocked": "Description application blocked",
+  "codingWorkbench.journey.description.failed": "Description application failed",
+  "codingWorkbench.journey.description.unavailable": "Description status unavailable",
+  "codingWorkbench.journey.descriptionApplied": "Description applied to the observed PR",
+  "codingWorkbench.journey.descriptionUnconfirmed":
+    "Current description application is not confirmed",
+  "codingWorkbench.journey.completeness.complete": "Completeness: complete",
+  "codingWorkbench.journey.completeness.partial":
+    "Completeness: partial. Some change details could not be described.",
+  "codingWorkbench.journey.completeness.fallback":
+    "Completeness: fallback. The description uses a limited fallback summary.",
+  "codingWorkbench.journey.remoteUnknown":
+    "Current PR, review and issue facts could not be observed.",
+  "codingWorkbench.journey.review.approved": "Human review approved",
+  "codingWorkbench.journey.review.changes-requested": "Reviewers requested changes",
+  "codingWorkbench.journey.review.review-required": "Human review required",
+  "codingWorkbench.journey.review.unknown": "Human review status unknown",
+  "codingWorkbench.journey.conversations": "Review conversations",
+  "codingWorkbench.journey.conversationCounts":
+    "{unresolved} unresolved · {resolved} resolved · {total} total",
+  "codingWorkbench.journey.merge": "Observed merge time",
+  "codingWorkbench.journey.notMerged": "Merge not observed",
+  "codingWorkbench.journey.issueState": "Observed issue state",
+  "codingWorkbench.journey.issue.open": "Issue open",
+  "codingWorkbench.journey.issue.closed": "Issue closed",
+  "codingWorkbench.journey.closedAt": "Observed issue closure time",
+  "codingWorkbench.journey.reason.ready-approval-required":
+    "The observed revision can be proposed for a one-time ready-for-review approval.",
+  "codingWorkbench.journey.reason.technical-ready":
+    "Technical work is ready; review and merge requirements remain separate.",
+  "codingWorkbench.journey.reason.human-review-ready": "The observed PR is ready for human review.",
+  "codingWorkbench.journey.reason.required-reviews-missing":
+    "Required human approvals are still missing.",
+  "codingWorkbench.journey.reason.changes-requested":
+    "Requested review changes remain outstanding.",
+  "codingWorkbench.journey.reason.unresolved-conversations":
+    "Resolve the remaining review conversations.",
+  "codingWorkbench.journey.reason.review-visibility-unknown":
+    "Review visibility is incomplete, so review readiness is unknown.",
+  "codingWorkbench.journey.reason.issue-closure-pending":
+    "The merge was observed, but the bound issue remains open.",
+  "codingWorkbench.journey.reason.merge-and-closure-observed":
+    "Both the PR merge and the bound issue closure were observed.",
+  "codingWorkbench.journey.reason.closed-unmerged": "The PR was closed without an observed merge.",
+  "codingWorkbench.journey.reason.issue-closed-without-merge":
+    "The issue was closed without an observed PR merge.",
+  "codingWorkbench.journey.reason.retargeted":
+    "The PR target no longer matches the accepted default branch.",
+  "codingWorkbench.journey.reason.head-changed": "The PR head changed since the accepted delivery.",
+  "codingWorkbench.journey.reason.readiness-unavailable": "CI readiness has not been confirmed.",
+  "codingWorkbench.journey.reason.readiness-stale": "Refresh the dated CI observation.",
+  "codingWorkbench.journey.reason.checks-not-ready": "Required technical checks are not ready.",
+  "codingWorkbench.journey.reason.description-unavailable":
+    "The applied PR description has not been observed.",
+  "codingWorkbench.journey.reason.description-stale":
+    "The description no longer has a current revision confirmation.",
+  "codingWorkbench.journey.reason.description-not-applied":
+    "The selected description has not been confirmed in the PR body.",
+  "codingWorkbench.journey.reason.provider-unavailable": "Provider facts could not be confirmed.",
+  "codingWorkbench.journey.reason.authority-denied":
+    "The current authority does not permit this handoff operation.",
+  "codingWorkbench.journey.reason.observation-superseded":
+    "A newer observation replaced this status read.",
+  "codingWorkbench.journey.reason.cancelled": "The handoff operation was cancelled.",
+  "codingWorkbench.journey.reason.ready-effect-uncertain":
+    "The ready transition could not be confirmed. Refresh to reconcile the actual PR state.",
+  "codingWorkbench.ci.title": "CI readiness",
+  "codingWorkbench.ci.state.technical-ready": "Technical checks ready",
+  "codingWorkbench.ci.state.pending": "CI checks pending",
+  "codingWorkbench.ci.state.failed": "CI checks failed",
+  "codingWorkbench.ci.state.blocked": "CI observation blocked",
+  "codingWorkbench.ci.state.unknown": "CI readiness unknown",
+  "codingWorkbench.ci.state.stale": "CI observation is stale",
+  "codingWorkbench.ci.state.unobserved": "No CI observation yet",
+  "codingWorkbench.ci.help":
+    "Technical checks, draft status and human review are separate. This observation does not authorize a merge.",
+  "codingWorkbench.ci.staleHelp":
+    "Historical observation. A fresh observation in an active run is needed to confirm the current checks.",
+  "codingWorkbench.ci.required": "Required checks",
+  "codingWorkbench.ci.advisory": "Advisory checks",
+  "codingWorkbench.ci.count.total": "Total",
+  "codingWorkbench.ci.count.passed": "Passed",
+  "codingWorkbench.ci.count.failed": "Failed",
+  "codingWorkbench.ci.count.pending": "Pending",
+  "codingWorkbench.ci.count.blocked": "Blocked",
+  "codingWorkbench.ci.count.unknown": "Unknown",
+  "codingWorkbench.ci.head": "Observed commit",
+  "codingWorkbench.ci.observedAt": "Observed at",
+  "codingWorkbench.ci.expiresAt": "Valid until",
+  "codingWorkbench.ci.completeness": "Observation coverage",
+  "codingWorkbench.ci.complete": "Complete",
+  "codingWorkbench.ci.incomplete": "Incomplete — readiness cannot be confirmed",
+  "codingWorkbench.ci.pullRequest": "Pull request",
+  "codingWorkbench.ci.draft": "Draft status",
+  "codingWorkbench.ci.isDraft": "Draft pull request",
+  "codingWorkbench.ci.notDraft": "Not a draft",
+  "codingWorkbench.ci.humanReview": "Human review",
+  "codingWorkbench.ci.reviewUnknown": "Review visibility is unknown",
+  "codingWorkbench.ci.reviewCounts":
+    "{approved} approved · {required} required · {changes} changes requested",
+  "codingWorkbench.ci.pr.open": "Open",
+  "codingWorkbench.ci.pr.closed": "Closed",
+  "codingWorkbench.ci.pr.merged": "Merged",
+  "codingWorkbench.ci.conflict": "Merge conflicts",
+  "codingWorkbench.ci.conflict.clear": "No observed conflict",
+  "codingWorkbench.ci.conflict.conflicting": "Conflicts require resolution",
+  "codingWorkbench.ci.conflict.unknown": "Conflict state unknown",
+  "codingWorkbench.ci.baseCurrency": "Base revision",
+  "codingWorkbench.ci.base.current": "Current",
+  "codingWorkbench.ci.base.behind": "Behind the base branch",
+  "codingWorkbench.ci.base.unknown": "Base currency unknown",
+  "codingWorkbench.ci.reason.required-checks-passed": "The observed required checks passed.",
+  "codingWorkbench.ci.reason.required-checks-pending": "Required checks have not finished.",
+  "codingWorkbench.ci.reason.required-checks-failed": "Required checks reported failures.",
+  "codingWorkbench.ci.reason.required-checks-blocked": "Required checks cannot proceed.",
+  "codingWorkbench.ci.reason.required-checks-unknown":
+    "Required check results are incomplete or unknown.",
+  "codingWorkbench.ci.reason.pull-request-closed": "The pull request is no longer open.",
+  "codingWorkbench.ci.reason.merge-conflict": "The observed revision has merge conflicts.",
+  "codingWorkbench.ci.reason.base-outdated": "The base branch has changed.",
+  "codingWorkbench.ci.reason.merge-context-unknown":
+    "The current merge context could not be confirmed.",
+  "codingWorkbench.ci.reason.repair-budget-exhausted": "The CI repair budget is exhausted.",
+  "codingWorkbench.ci.reason.authority-denied":
+    "The current authority does not permit this observation.",
+  "codingWorkbench.ci.reason.auth-required": "GitHub authentication is required.",
+  "codingWorkbench.ci.reason.invalid-binding":
+    "The accepted pull request binding could not be confirmed.",
+  "codingWorkbench.ci.reason.cancelled": "The observation was cancelled.",
+  "codingWorkbench.ci.reason.provider-forbidden":
+    "The provider did not allow these checks to be read.",
+  "codingWorkbench.ci.reason.provider-not-found":
+    "The provider could not expose the requested check context.",
+  "codingWorkbench.ci.reason.rate-limited": "The provider has temporarily limited requests.",
+  "codingWorkbench.ci.reason.provider-unavailable": "The provider is temporarily unavailable.",
+  "codingWorkbench.ci.reason.timeout": "The observation timed out.",
+  "codingWorkbench.ci.reason.pagination-exhausted": "The observation reached its page limit.",
+  "codingWorkbench.ci.reason.output-truncated": "The observation reached its output limit.",
+  "codingWorkbench.ci.reason.malformed-response": "The provider response could not be validated.",
+  "codingWorkbench.ci.reason.visibility-unknown":
+    "Required check visibility could not be confirmed.",
+  "codingWorkbench.ci.reason.requirements-ambiguous":
+    "The required checks could not be determined unambiguously.",
+  "codingWorkbench.ci.reason.revision-changed":
+    "The pull request revision changed during observation.",
+
   "codingWorkbench.status.checking": "Checking",
   "codingWorkbench.header.eyebrow": "Coding",
   "codingWorkbench.header.summary":
@@ -319,6 +497,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.risk.high": "High",
   "codingWorkbench.approval.risk.critical": "Critical",
   "codingWorkbench.approval.actionKind.file-edit": "File edit",
+  "codingWorkbench.approval.actionKind.git-stage": "Stage changes",
   "codingWorkbench.approval.actionKind.verification-command": "Verification command",
   "codingWorkbench.approval.actionKind.research": "Research",
   "codingWorkbench.approval.actionKind.commit": "Commit",
@@ -355,6 +534,145 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.research.unavailable":
     "Destination unavailable. Re-pair this window to see it before deciding.",
   "codingWorkbench.approval.research.retry": "Retry loading the destination",
+  "codingWorkbench.draftDelivery.title": "Repository delivery",
+  "codingWorkbench.draftDelivery.phase.push-proposed": "Push awaits approval",
+  "codingWorkbench.draftDelivery.phase.pushing": "Push in progress",
+  "codingWorkbench.draftDelivery.phase.pushed": "Commit pushed",
+  "codingWorkbench.draftDelivery.phase.pr-proposed": "Draft pull request awaits approval",
+  "codingWorkbench.draftDelivery.phase.creating-pr": "Creating draft pull request",
+  "codingWorkbench.draftDelivery.phase.draft-created": "Draft pull request created",
+  "codingWorkbench.draftDelivery.phase.recovery-required": "Delivery needs reconciliation",
+  "codingWorkbench.draftDelivery.reason.approval-required":
+    "The saved proposal requires its matching approval before delivery.",
+  "codingWorkbench.draftDelivery.reason.in-flight":
+    "The operation was started. Its remote outcome is not yet confirmed.",
+  "codingWorkbench.draftDelivery.reason.completed":
+    "The remote result was confirmed for this saved delivery step.",
+  "codingWorkbench.draftDelivery.reason.authority-denied":
+    "The accepted authority no longer permits this delivery.",
+  "codingWorkbench.draftDelivery.reason.remote-drift":
+    "The remote state differs from the approved target and must be checked.",
+  "codingWorkbench.draftDelivery.reason.issue-drift":
+    "The accepted issue binding changed. Delivery needs review.",
+  "codingWorkbench.draftDelivery.reason.provider-failed":
+    "The provider did not confirm the operation. Check remote state before retrying.",
+  "codingWorkbench.draftDelivery.reason.ambiguous-remote":
+    "The remote result could not be matched unambiguously to this task.",
+  "codingWorkbench.draftDelivery.reason.approval-invalid":
+    "The approval is missing, expired or does not match this proposal.",
+  "codingWorkbench.draftDelivery.reason.payload-changed":
+    "The proposed delivery changed after review.",
+  "codingWorkbench.draftDelivery.reason.restart-reconciliation":
+    "Delivery was interrupted. Remote state must be checked before continuing.",
+  "codingWorkbench.draftDelivery.reason.preflight-failed":
+    "Delivery prerequisites were not satisfied.",
+  "codingWorkbench.draftDelivery.pullRequest": "Pull request #{number}",
+  "codingWorkbench.draftDelivery.remoteState": "Last observed PR state",
+  "codingWorkbench.draftDelivery.remoteHead": "Last observed PR commit",
+  "codingWorkbench.draftDelivery.remoteBase": "Last observed PR base commit",
+  "codingWorkbench.draftDelivery.remote.open": "Open",
+  "codingWorkbench.draftDelivery.remote.closed": "Closed",
+  "codingWorkbench.draftDelivery.remote.draft": "Draft",
+  "codingWorkbench.draftDelivery.remote.notDraft": "Not a draft",
+  "codingWorkbench.draftDelivery.details": "Saved delivery target",
+  "codingWorkbench.draftDelivery.repository": "Repository",
+  "codingWorkbench.draftDelivery.issue": "Accepted issue",
+  "codingWorkbench.draftDelivery.headRef": "Feature branch",
+  "codingWorkbench.draftDelivery.headSha": "Approved commit",
+  "codingWorkbench.draftDelivery.baseRef": "Target branch",
+  "codingWorkbench.draftDelivery.baseSha": "Approved base commit",
+  "codingWorkbench.draftDelivery.proposal": "Proposal",
+  "codingWorkbench.draftDelivery.recordedAt": "Recorded at",
+  "codingWorkbench.commitResult.title": "Commit result",
+  "codingWorkbench.commitResult.head": "Created commit",
+  "codingWorkbench.commitResult.findings": "Git checks",
+  "codingWorkbench.commitResult.status.succeeded": "Commit created",
+  "codingWorkbench.commitResult.status.approval-required": "Commit awaits approval",
+  "codingWorkbench.commitResult.status.blocked": "Commit blocked",
+  "codingWorkbench.commitResult.status.failed": "Commit failed",
+  "codingWorkbench.commitResult.status.recovery-required": "Commit needs recovery",
+  "codingWorkbench.commitResult.status.verification-failed": "Commit verification failed",
+  "codingWorkbench.commitResult.status.drift": "Commit proposal changed",
+  "codingWorkbench.commitResult.reason.approval-required":
+    "Review the proposed commit before deciding.",
+  "codingWorkbench.commitResult.reason.approval-invalid":
+    "The approval no longer matches this proposal. Request a fresh review.",
+  "codingWorkbench.commitResult.reason.authority-denied":
+    "Current authority does not permit this commit.",
+  "codingWorkbench.commitResult.reason.verification-missing":
+    "Run the required verification before proposing this commit.",
+  "codingWorkbench.commitResult.reason.verification-failed":
+    "The required verification did not pass.",
+  "codingWorkbench.commitResult.reason.verification-stale":
+    "The verification no longer matches the staged change. Verify it again.",
+  "codingWorkbench.commitResult.reason.candidate-drift":
+    "The staged change no longer matches this proposal. Request a fresh review.",
+  "codingWorkbench.commitResult.reason.repository-drift":
+    "The repository changed after review. Check its current state.",
+  "codingWorkbench.commitResult.reason.message-policy":
+    "The commit message does not satisfy the message policy.",
+  "codingWorkbench.commitResult.reason.review-incomplete":
+    "The staged change could not be reviewed completely.",
+  "codingWorkbench.commitResult.reason.issue-directive":
+    "The commit message contains an unsupported issue-closing directive.",
+  "codingWorkbench.commitResult.reason.conflict-markers":
+    "The staged change contains unresolved conflict markers.",
+  "codingWorkbench.commitResult.reason.policy-block":
+    "Git policy prevented this commit. Review the finding below.",
+  "codingWorkbench.commitResult.reason.preflight-block":
+    "A Git check prevented this commit. Review the findings below.",
+  "codingWorkbench.commitResult.reason.execution-failed": "Git could not create this commit.",
+  "codingWorkbench.commitResult.reason.execution-uncertain":
+    "The commit outcome is uncertain. Reconcile repository state before another attempt.",
+  "codingWorkbench.commitResult.reason.restart-reconciliation":
+    "This commit needs reconciliation after a restart.",
+  "codingWorkbench.commitResult.reason.completed":
+    "The created commit matches the reviewed staged tree.",
+  "codingWorkbench.commitResult.preflight.detached-head": "No branch is checked out",
+  "codingWorkbench.commitResult.preflight.branch-already-exists": "The branch already exists",
+  "codingWorkbench.commitResult.preflight.base-branch-missing": "The base branch is missing",
+  "codingWorkbench.commitResult.preflight.switch-target-missing": "The target branch is missing",
+  "codingWorkbench.commitResult.preflight.no-changes-to-stage": "No changes are available to stage",
+  "codingWorkbench.commitResult.preflight.nothing-staged-to-unstage":
+    "No staged changes are available to unstage",
+  "codingWorkbench.commitResult.preflight.nothing-staged-to-commit":
+    "No changes are staged for this commit",
+  "codingWorkbench.commitResult.preflight.untracked-files-impacted":
+    "Untracked files would be affected",
+  "codingWorkbench.commitResult.preflight.no-upstream-configured":
+    "No upstream branch is configured",
+  "codingWorkbench.commitResult.preflight.nothing-to-push": "No commits are available to push",
+  "codingWorkbench.commitResult.preflight.non-fast-forward": "The remote history has diverged",
+  "codingWorkbench.commitResult.preflight.remote-alias-missing": "The remote alias is missing",
+  "codingWorkbench.commitResult.preflight.remote-unreachable": "The remote is unreachable",
+  "codingWorkbench.commitResult.preflight.operation-in-progress":
+    "A Git operation is already in progress",
+  "codingWorkbench.commitResult.preflight.no-operation-to-abort": "No Git operation can be aborted",
+  "codingWorkbench.commitResult.preflight.recovery-target-unset": "No recovery target is set",
+  "codingWorkbench.commitResult.preflight.dirty-worktree-impacts-recovery":
+    "Workspace changes prevent safe recovery",
+  "codingWorkbench.approval.commit.message": "Reviewed commit message",
+  "codingWorkbench.approval.commit.binding": "Exact commit binding",
+  "codingWorkbench.approval.commit.proposal": "Proposal",
+  "codingWorkbench.approval.commit.verification": "Verification evidence",
+  "codingWorkbench.approval.commit.base": "Base commit",
+  "codingWorkbench.approval.commit.parent": "Parent commit",
+  "codingWorkbench.approval.commit.tree": "Staged tree digest",
+  "codingWorkbench.approval.commit.messageDigest": "Message digest",
+  "codingWorkbench.approval.commit.files": "Staged files for this commit",
+  "codingWorkbench.approval.delivery.target": "Reviewed delivery target",
+  "codingWorkbench.approval.delivery.loading": "Loading delivery review…",
+  "codingWorkbench.approval.delivery.unavailable":
+    "The delivery review is unavailable. Retry or deny this request.",
+  "codingWorkbench.approval.delivery.retry": "Retry delivery review",
+  "codingWorkbench.approval.delivery.title": "Reviewed pull request title",
+  "codingWorkbench.approval.delivery.body": "Reviewed pull request description",
+  "codingWorkbench.approval.delivery.pushHelp":
+    "Approve this exact commit and branch for one push to the displayed repository. Creating a pull request requires a separate approval.",
+  "codingWorkbench.approval.delivery.prHelp":
+    "Approve creation of one draft pull request with this exact title, description and target. This does not merge the pull request.",
+  "codingWorkbench.approval.commit.help":
+    "Approval applies once to this reviewed message and staged change. A changed proposal requires a new review.",
   "codingWorkbench.approval.changes.title": "Files this change would write",
   "codingWorkbench.approval.changes.files": "Files",
   "codingWorkbench.approval.changes.lines": "Lines",
@@ -507,6 +825,11 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.issue.previewRegion": "Issue preview",
   "codingWorkbench.issue.untrustedNote":
     "Issue text is shown as plain text and is never treated as instructions or approval.",
+  "codingWorkbench.issue.commentLabel": "Comment {index}",
+  "codingWorkbench.issue.commentsLabel": "Issue comment excerpts",
+  "codingWorkbench.issue.commentsTruncated":
+    "Additional comments or text were omitted from this bounded preview.",
+  "codingWorkbench.issue.bodyTruncated": "The issue body is truncated in this preview.",
   "codingWorkbench.issue.fact.state": "State",
   "codingWorkbench.issue.fact.comments": "Comments",
   "codingWorkbench.issue.fact.provenance": "Source",
@@ -547,8 +870,6 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.issue.supportId": "Support id: {correlationId}.",
   "codingWorkbench.composer.issue.label": "Issue {issue}",
   "codingWorkbench.composer.issue.remove": "Remove issue {issue} from this run",
-  "codingWorkbench.composer.issue.startUnavailable":
-    "This build cannot yet carry the issue reference on the start request, so an issue-bound run is not started. Remove the issue to start a generic run.",
   "codingWorkbench.githubAccess.title": "GitHub issue access",
   "codingWorkbench.githubAccess.description":
     "Lets the Coding Workbench read GitHub issues and comments for the selected repository through the local gh CLI. The grant is stored per local checkout; credentials never enter Keiko.",

@@ -1,0 +1,139 @@
+"use client";
+
+import { useEffect, type ReactNode } from "react";
+import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
+import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import { validateCodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import {
+  useCodingWorkbenchTranslate,
+  type CodingWorkbenchTranslate,
+} from "./coding-workbench-i18n";
+import styles from "./CodingWorkbenchWindow.module.css";
+
+/** Durable facts only. A restored proposal does not restore approval authority. */
+export function CodingWorkbenchDraftDelivery({
+  snapshot,
+}: {
+  readonly snapshot: CodingWorkbenchRuntimeSnapshot | undefined;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const parsed = validateCodingWorkbenchRuntimeSnapshot(snapshot);
+  const delivery = parsed.ok ? parsed.value.draftDelivery : undefined;
+  const note =
+    delivery === undefined
+      ? null
+      : `[keiko] draft delivery displayed: ${delivery.phase} reason ${delivery.reason} head ${delivery.binding.headSha.slice(0, 12)}`;
+  useEffect(() => {
+    if (note !== null) reportClientDiagnostic(note);
+  }, [note, snapshot?.runId]);
+  if (delivery === undefined) return null;
+  return (
+    <section className={styles.card} aria-label={t("codingWorkbench.draftDelivery.title")}>
+      <h3 className={styles.approvalResearchTitle}>{t("codingWorkbench.draftDelivery.title")}</h3>
+      <output>{t(`codingWorkbench.draftDelivery.phase.${delivery.phase}`)}</output>
+      <p className={styles.helpText}>
+        {t(`codingWorkbench.draftDelivery.reason.${delivery.reason}`)}
+      </p>
+      <ObservedPullRequest delivery={delivery} t={t} />
+      <DeliveryBinding delivery={delivery} t={t} />
+    </section>
+  );
+}
+
+function ObservedPullRequest({
+  delivery,
+  t,
+}: {
+  readonly delivery: DraftDeliveryRecord;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const pr = delivery.pullRequest;
+  if (pr === undefined) return null;
+  const draftLabel = pr.isDraft ? "draft" : "notDraft";
+  const observedState = t(`codingWorkbench.draftDelivery.remote.${pr.state}`);
+  const observedDraft = t(`codingWorkbench.draftDelivery.remote.${draftLabel}`);
+  return (
+    <div className={styles.approvalResearch}>
+      <a
+        className={styles["cmp-draft-delivery-link"]}
+        href={pr.url}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        {t("codingWorkbench.draftDelivery.pullRequest", { number: pr.number })}
+      </a>
+      <DeliveryFacts
+        facts={[
+          {
+            label: t("codingWorkbench.draftDelivery.remoteState"),
+            value: `${observedState} · ${observedDraft}`,
+          },
+          { label: t("codingWorkbench.draftDelivery.remoteHead"), value: pr.headSha },
+          { label: t("codingWorkbench.draftDelivery.remoteBase"), value: pr.baseSha },
+        ]}
+      />
+    </div>
+  );
+}
+
+function DeliveryBinding({
+  delivery,
+  t,
+}: {
+  readonly delivery: DraftDeliveryRecord;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <details className={styles.approvalResearch}>
+      <summary className={styles["cmp-approval-commit-summary"]}>
+        {t("codingWorkbench.draftDelivery.details")}
+      </summary>
+      <DeliveryBindingFacts delivery={delivery} t={t} />
+    </details>
+  );
+}
+
+export function DeliveryBindingFacts({
+  delivery,
+  t,
+}: {
+  readonly delivery: DraftDeliveryRecord;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const target = delivery.binding;
+  return (
+    <DeliveryFacts
+      facts={[
+        { label: t("codingWorkbench.draftDelivery.repository"), value: target.repository },
+        {
+          label: t("codingWorkbench.draftDelivery.issue"),
+          value: `#${String(target.issueNumber)}`,
+        },
+        { label: t("codingWorkbench.draftDelivery.headRef"), value: target.headRef },
+        { label: t("codingWorkbench.draftDelivery.headSha"), value: target.headSha },
+        { label: t("codingWorkbench.draftDelivery.baseRef"), value: target.baseRef },
+        { label: t("codingWorkbench.draftDelivery.baseSha"), value: target.baseSha },
+        { label: t("codingWorkbench.draftDelivery.proposal"), value: delivery.proposalId },
+        { label: t("codingWorkbench.draftDelivery.recordedAt"), value: delivery.recordedAt },
+      ]}
+    />
+  );
+}
+
+function DeliveryFacts({
+  facts,
+}: {
+  readonly facts: readonly { readonly label: string; readonly value: string }[];
+}): ReactNode {
+  return (
+    <dl className={styles.approvalFacts}>
+      {facts.map(({ label, value }) => (
+        <div className={styles.approvalFact} key={label}>
+          <dt>{label}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}

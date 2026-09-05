@@ -162,23 +162,21 @@ describe("DryRunToolPort", () => {
     { name: "read_file", description: "read", parameters: {} },
   ];
 
-  it("records the call without executing and returns an empty dry-run output", async () => {
+  it("does not fabricate completed output for an unavailable dry-run handler", async () => {
     const port = new DryRunToolPort(tools);
-    const result = await port.execute({
-      toolCallId: "tc-1",
-      toolName: "read_file",
-      arguments: { path: "src/foo.ts" },
-      signal: new AbortController().signal,
-    });
-    expect(result.toolCallId).toBe("tc-1");
-    expect(result.durationMs).toBe(0);
-    expect(port.calls()).toHaveLength(1);
-    expect(port.calls()[0]?.toolName).toBe("read_file");
-    expect(port.calls()[0]?.arguments).toEqual({ path: "src/foo.ts" });
+    await expect(
+      port.execute({
+        toolCallId: "tc-1",
+        toolName: "read_file",
+        arguments: { path: "src/foo.ts" },
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("unavailable");
+    expect(port.calls()).toHaveLength(0);
   });
 
-  it("listTools returns the registered list", () => {
-    expect(new DryRunToolPort(tools).listTools()).toEqual(tools);
+  it("does not advertise productive tools even when legacy definitions are supplied", () => {
+    expect(new DryRunToolPort(tools).listTools()).toEqual([]);
   });
 
   it("rejects with CancelledError when the signal is already aborted", async () => {
