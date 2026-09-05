@@ -4,12 +4,19 @@
 // commit-facts / editor-diff path (git-raw-worktree-node.ts -> verifiedCommitFacts.ts): it must
 // never report a stat "match" the caller can safely skip re-reading content for.
 
-import { writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { makeWorkspace } from "./_support.js";
-import { indexStatMatches, parseGitIndexStat, type GitIndexStat } from "./git-index-stat.js";
+import {
+  indexStatMatches,
+  parseGitIndexStat,
+  readGitIndexWriteTimeNs,
+  type GitIndexStat,
+} from "./git-index-stat.js";
 
 function debugFrame(path: string, ctime: string, mtime: string, size: number): string {
   return (
@@ -120,5 +127,85 @@ describe("indexStatMatches", () => {
     const { root } = makeWorkspace();
     const expected: GitIndexStat = { ctimeNs: "1", mtimeNs: "1", size: 0 };
     expect(() => indexStatMatches(root, "../outside.ts", expected)).toThrow();
+  });
+});
+
+// Owner audit finding b2-7 (corrected fix): `indexStatMatches`'s racy-clean guard needs the
+// `.git/index` file's OWN write time as `indexWriteTimeNs`. This is the fs-capable owner of that
+// resolution (never `git-worktree-snapshot-node.ts`, whose header bans direct FS access).
+describe("readGitIndexWriteTimeNs", () => {
+  const dirs: string[] = [];
+  function git(cwd: string, args: readonly string[]): string {
+    return execFileSync("git", [...args], {
+      cwd,
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH ?? "",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+      },
+    }).trim();
+  }
+  function tempRepoRoot(): string {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-index-write-time-")));
+    dirs.push(root);
+    return root;
+  }
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns undefined when there is no .git at all", () => {
+    const { root } = makeWorkspace();
+    expect(readGitIndexWriteTimeNs(root)).toBeUndefined();
+  });
+
+  it("returns undefined before the first stage (.git exists, but no index file yet)", () => {
+    const root = tempRepoRoot();
+    git(root, ["init", "-q", "-b", "master"]);
+    expect(readGitIndexWriteTimeNs(root)).toBeUndefined();
+  });
+
+  it("returns the real .git/index file's own mtimeNs once staged", () => {
+    const root = tempRepoRoot();
+    git(root, ["init", "-q", "-b", "master"]);
+    git(root, ["config", "user.name", "Keiko Test"]);
+    git(root, ["config", "user.email", "keiko@example.test"]);
+    writeFileSync(join(root, "a.txt"), "hi\n", "utf8");
+    git(root, ["add", "a.txt"]);
+    const indexStat = nodeWorkspaceFs.stat(join(root, ".git", "index"));
+    expect(readGitIndexWriteTimeNs(root)).toBe(indexStat.mtimeNs);
+  });
+
+  it("follows a linked worktree's gitdir pointer to ITS OWN separate index file", () => {
+    const root = tempRepoRoot();
+    git(root, ["init", "-q", "-b", "master"]);
+    git(root, ["config", "user.name", "Keiko Test"]);
+    git(root, ["config", "user.email", "keiko@example.test"]);
+    writeFileSync(join(root, "a.txt"), "hi\n", "utf8");
+    git(root, ["add", "a.txt"]);
+    git(root, ["commit", "-qm", "base"]);
+    const worktree = realpathSync(mkdtempSync(join(tmpdir(), "keiko-index-write-time-wt-")));
+    rmSync(worktree, { recursive: true, force: true });
+    dirs.push(worktree);
+    git(root, ["worktree", "add", "-q", "-b", "wt-branch", worktree]);
+    writeFileSync(join(worktree, "b.txt"), "hi\n", "utf8");
+    git(worktree, ["add", "b.txt"]);
+    // The linked worktree's OWN index lives under the main repo's `.git/worktrees/<name>/index`,
+    // never under `<worktree>/.git` (a plain file pointer, not a directory) — proving the pointer
+    // is actually followed rather than a bare `<root>/.git/index` guess.
+    const mainRepoIndex = nodeWorkspaceFs.exists(join(root, ".git", "index"))
+      ? nodeWorkspaceFs.stat(join(root, ".git", "index")).mtimeNs
+      : undefined;
+    const resolved = readGitIndexWriteTimeNs(worktree);
+    expect(resolved).toBeDefined();
+    expect(resolved).not.toBe(mainRepoIndex);
+  });
+
+  it("returns undefined for a malformed gitdir pointer file instead of throwing", () => {
+    const root = tempRepoRoot();
+    writeFileSync(join(root, ".git"), "not a real pointer\n", "utf8");
+    expect(readGitIndexWriteTimeNs(root)).toBeUndefined();
   });
 });

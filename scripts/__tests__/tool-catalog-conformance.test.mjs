@@ -1,12 +1,16 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   checkToolCatalogConformance,
   checkToolCatalogConformanceNegatives,
   checkToolCatalogMigrationCloseout,
   checkToolCatalogSemanticNegatives,
+  checkH1HandoffEvidence,
+  h1ProvenanceShapeFailures,
+  H1_PROVENANCE_PATH,
   activeToolCatalogMigrations,
   retiredBridgeMigrations,
   generatedToolCatalogManifest,
@@ -360,5 +364,177 @@ describe("#3415 catalog-semantic negative-fixture matrix", () => {
     // Fails-before: before this function existed, none of the above fixtures were exercised by
     // `npm run check:tool-catalog-conformance` or `npm run arch:check:negative` at all.
     expect(await checkToolCatalogSemanticNegatives(ROOT)).toEqual([]);
+  });
+});
+
+describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
+  const VALID_RECORD = Object.freeze({
+    schemaVersion: 1,
+    integrationPr: 3394,
+    sourceHead: "a".repeat(40),
+    treeDigest: "b".repeat(64),
+    verificationRef: "https://example.invalid/verification",
+    reviewRef: "https://example.invalid/review",
+    catalogRevision: "revision-1",
+    profile: { id: "legacy-native", version: 1 },
+    projectionDigest: "c".repeat(64),
+    handlerSetDigest: "d".repeat(64),
+    currentHead: "e".repeat(40),
+  });
+  let workDir;
+  afterEach(() => {
+    if (workDir !== undefined) rmSync(workDir, { recursive: true, force: true });
+    workDir = undefined;
+  });
+  it.each([
+    { integrationPr: 0 },
+    { sourceHead: "not-hex" },
+    { currentHead: "short" },
+    { treeDigest: "not-hex" },
+    { projectionDigest: "too-short" },
+    { handlerSetDigest: "not-hex" },
+    { profile: { id: "legacy-native" } },
+    { profile: "legacy-native" },
+    { catalogRevision: "" },
+    { verificationRef: "" },
+    { reviewRef: "" },
+  ])("rejects a malformed durable record %j", (patch) => {
+    expect(h1ProvenanceShapeFailures({ ...VALID_RECORD, ...patch }).length).toBeGreaterThan(0);
+  });
+  it("rejects a record missing or adding a field beyond the exact H1Provenance shape", () => {
+    const { schemaVersion: _schemaVersion, ...withoutSchemaVersion } = VALID_RECORD;
+    expect(h1ProvenanceShapeFailures(withoutSchemaVersion)).toEqual([
+      "H1 handoff evidence malformed: durable record does not carry exactly the H1Provenance fields",
+    ]);
+    expect(
+      h1ProvenanceShapeFailures({ ...VALID_RECORD, extraField: "x" }),
+    ).toEqual([
+      "H1 handoff evidence malformed: durable record does not carry exactly the H1Provenance fields",
+    ]);
+  });
+  it("accepts a fully well-formed durable record", () => {
+    expect(h1ProvenanceShapeFailures(VALID_RECORD)).toEqual([]);
+  });
+  it("passes while H1 has not landed to dev (both fields honestly null)", async () => {
+    expect(
+      await checkH1HandoffEvidence(ROOT, { landedDevCommit: null, landedTreeDigest: null }),
+    ).toEqual([]);
+  });
+  it("fails closed on a partially populated pending record", async () => {
+    expect(
+      await checkH1HandoffEvidence(ROOT, {
+        landedDevCommit: "a".repeat(40),
+        landedTreeDigest: null,
+      }),
+    ).toEqual([
+      "H1 handoff evidence partially populated: landedDevCommit and landedTreeDigest must be set together",
+    ]);
+  });
+  it("fails closed on a malformed landedDevCommit/landedTreeDigest shape", async () => {
+    expect(
+      await checkH1HandoffEvidence(ROOT, {
+        landedDevCommit: "not-a-sha",
+        landedTreeDigest: "b".repeat(64),
+      }),
+    ).toEqual([
+      "H1 handoff evidence malformed: pendingH1.landedDevCommit is not a 40-hex commit SHA",
+    ]);
+    expect(
+      await checkH1HandoffEvidence(ROOT, {
+        landedDevCommit: "a".repeat(40),
+        landedTreeDigest: "not-a-digest",
+      }),
+    ).toEqual([
+      "H1 handoff evidence malformed: pendingH1.landedTreeDigest is not a 64-hex digest",
+    ]);
+  });
+  it("fails closed when no durable H1Provenance record exists", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-"));
+    workDir = root;
+    const errors = await checkH1HandoffEvidence(root, {
+      landedDevCommit: "a".repeat(40),
+      landedTreeDigest: "b".repeat(64),
+    });
+    expect(errors).toEqual([`H1 handoff evidence missing: no ${H1_PROVENANCE_PATH}`]);
+  });
+  it("fails closed when the durable record exists but is malformed JSON", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-"));
+    workDir = root;
+    mkdirSync(join(root, "docs", "architecture"), { recursive: true });
+    writeFileSync(join(root, H1_PROVENANCE_PATH), "{not json");
+    expect(
+      await checkH1HandoffEvidence(root, {
+        landedDevCommit: "a".repeat(40),
+        landedTreeDigest: "b".repeat(64),
+      }),
+    ).toEqual(["H1 handoff evidence malformed: not valid JSON"]);
+  });
+  it("fails closed on a stale record (treeDigest/currentHead do not match pendingH1)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-"));
+    workDir = root;
+    mkdirSync(join(root, "docs", "architecture"), { recursive: true });
+    writeFileSync(join(root, H1_PROVENANCE_PATH), JSON.stringify(VALID_RECORD));
+    const errors = await checkH1HandoffEvidence(
+      root,
+      { landedDevCommit: "f".repeat(40), landedTreeDigest: "b".repeat(64) },
+      { execute: () => "", identityFailures: async () => [] },
+    );
+    expect(errors).toContain(
+      "H1 handoff evidence stale: durable record's currentHead does not match pendingH1.landedDevCommit",
+    );
+  });
+  it("fails closed when landedDevCommit is not reachable from dev", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-"));
+    workDir = root;
+    mkdirSync(join(root, "docs", "architecture"), { recursive: true });
+    const record = { ...VALID_RECORD, currentHead: VALID_RECORD.currentHead };
+    writeFileSync(join(root, H1_PROVENANCE_PATH), JSON.stringify(record));
+    const errors = await checkH1HandoffEvidence(
+      root,
+      { landedDevCommit: record.currentHead, landedTreeDigest: record.treeDigest },
+      {
+        execute: () => {
+          throw new Error("not an ancestor");
+        },
+        identityFailures: async () => [],
+      },
+    );
+    expect(errors).toEqual([
+      `H1 handoff evidence unreachable: landedDevCommit ${record.currentHead} is not an ancestor of dev`,
+    ]);
+  });
+  it("passes when the durable record is fresh, reachable, and identity-agreeing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-"));
+    workDir = root;
+    mkdirSync(join(root, "docs", "architecture"), { recursive: true });
+    const record = { ...VALID_RECORD };
+    writeFileSync(join(root, H1_PROVENANCE_PATH), JSON.stringify(record));
+    const errors = await checkH1HandoffEvidence(
+      root,
+      { landedDevCommit: record.currentHead, landedTreeDigest: record.treeDigest },
+      { execute: () => "", identityFailures: async () => [] },
+    );
+    expect(errors).toEqual([]);
+  });
+  it("fails closed on an identity mismatch against the current producer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-"));
+    workDir = root;
+    mkdirSync(join(root, "docs", "architecture"), { recursive: true });
+    const record = { ...VALID_RECORD };
+    writeFileSync(join(root, H1_PROVENANCE_PATH), JSON.stringify(record));
+    const errors = await checkH1HandoffEvidence(
+      root,
+      { landedDevCommit: record.currentHead, landedTreeDigest: record.treeDigest },
+      {
+        execute: () => "",
+        identityFailures: async () => ["H1 handoff evidence identity mismatch: catalogRevision does not match the current producer"],
+      },
+    );
+    expect(errors).toEqual([
+      "H1 handoff evidence identity mismatch: catalogRevision does not match the current producer",
+    ]);
+  });
+  it("checkToolCatalogMigrationCloseout stays green on the real repo (H1 not yet landed)", async () => {
+    expect(await checkToolCatalogMigrationCloseout(ROOT)).toEqual([]);
   });
 });

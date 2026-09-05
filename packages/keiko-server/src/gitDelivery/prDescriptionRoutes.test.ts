@@ -34,6 +34,7 @@ import type {
   ActiveGitDeliveryDescriptionAuthority,
   GitDeliveryDescriptionAuthorityPort,
   GitDeliveryDescriptionAuthorityScope,
+  GitDeliveryRunAuthorityPort,
 } from "./runBoundAuthority.js";
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import { CodingRuntimeAuthorityService } from "../coding-runtime/runtimeAuthorityService.js";
@@ -325,6 +326,40 @@ describe("pr-description routes — admission (#3399)", () => {
     expect(res.status).toBe(403);
   });
 
+  // #3384 B1-3/B1-13: an active run's own authority admits model egress only for the PR it is
+  // actually bound to. Same repository as the request ("owner/repo"), but bound to a different PR
+  // number (999, not the request's 123) — must be refused, not silently widened to cover it.
+  it("denies model egress when the active run's authority is bound to a different pull request", async () => {
+    const bound = permittedGitDeliveryAuthority(
+      () => projectId,
+      () => fixture.root,
+      "autonomous-delivery",
+      {
+        headRef: "feature",
+        baseRef: "main",
+        allowDetachedHead: false,
+        allowedPrefixes: ["feature"],
+      },
+    );
+    const boundToOtherPr: GitDeliveryRunAuthorityPort = {
+      current: (nowIso) => {
+        const active = bound.current(nowIso);
+        return active === undefined
+          ? undefined
+          : { ...active, pullRequest: { ownerAndRepo: "owner/repo", prNumber: 999 } };
+      },
+    };
+    const handler = createHandlePrDescriptionPreview(optionsWithFixtureService());
+    const res = await handler(
+      ctxFor(PREVIEW, body({ language: "en" })),
+      deps({ gitDeliveryAuthority: boundToOtherPr }),
+    );
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_PR_DESCRIPTION_MODEL_EGRESS_DENIED" },
+    });
+  });
+
   // #3399 (epic #3384 correction 4): a production-composition test spanning the FULL chain a live
   // server actually uses — mints through a real `CodingRuntimeAuthorityService`, threads the port
   // through a real `createCodingRuntimeControlPlane` (never a hand-rolled port passed straight into
@@ -445,6 +480,22 @@ describe("pr-description routes — validation (#3399)", () => {
     const res = await handler(ctxFor(STATUS, body({ projectId: "/no/such/project" })), deps());
     expect(res.status).toBe(404);
   });
+
+  // #3384 B5-8: a client-supplied `ownerAndRepo` naming a repository other than the resolved
+  // workspace's OWN `origin` remote (the fixture's real remote is "owner/repo") is refused before
+  // the description authority is even consulted — the workspace's live remote is the only
+  // repository this route may ever generate a description for or mutate.
+  it("refuses a well-formed ownerAndRepo that does not match this project's own Git remote", async () => {
+    const handler = createHandlePrDescriptionPreview(optionsWithFixtureService());
+    const res = await handler(
+      ctxFor(PREVIEW, body({ ownerAndRepo: "someone-else/other-repo", language: "en" })),
+      deps(),
+    );
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_PR_DESCRIPTION_REPOSITORY_MISMATCH" },
+    });
+  });
 });
 
 describe("pr-description routes — preview/approve/apply round trip (#3399)", () => {
@@ -468,6 +519,34 @@ describe("pr-description routes — preview/approve/apply round trip (#3399)", (
     expect((applyRes.body as { outcome: string }).outcome).toBe("observed");
     expect(fixture.writes).toHaveLength(1);
     expect(fixture.status?.state).toBe("current");
+  });
+
+  // #3384 T37: the one-use description-apply approval this route's own docstring claims
+  // ("Mints the one-use description-apply approval claim `apply` consumes") is proven end to end
+  // through the actual route handlers — not just generically at the approval-store layer
+  // (approvalStore.test.ts) — by consuming a real claim once, then presenting the SAME already-
+  // applied proposalId a second time and asserting the production guard rejects the replay.
+  it("rejects a second apply against the same already-consumed proposalId (one-use guard)", async () => {
+    const previewHandler = createHandlePrDescriptionPreview(optionsWithFixtureService());
+    const approveHandler = createHandlePrDescriptionApprove(optionsWithFixtureService());
+    const applyHandler = createHandlePrDescriptionApply(optionsWithFixtureService());
+
+    const previewRes = await previewHandler(ctxFor(PREVIEW, body({ language: "en" })), deps());
+    const proposalId = (previewRes.body as { preview: { proposalId: string } }).preview.proposalId;
+    await approveHandler(ctxFor(APPROVE, body({ proposalId })), deps());
+
+    const firstApply = await applyHandler(ctxFor(APPLY, body({ proposalId })), deps());
+    expect(firstApply.status).toBe(200);
+    expect((firstApply.body as { outcome: string }).outcome).toBe("observed");
+    expect(fixture.writes).toHaveLength(1);
+
+    const secondApply = await applyHandler(ctxFor(APPLY, body({ proposalId })), deps());
+    expect(secondApply.status).toBe(409);
+    expect(secondApply.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_PR_DESCRIPTION_UNKNOWN_PROPOSAL" },
+    });
+    // The replay performed no second write — the one-use guard fired before any PATCH.
+    expect(fixture.writes).toHaveLength(1);
   });
 
   it("apply fails closed with an unknown-proposal reason when the approval was never issued", async () => {

@@ -57,6 +57,42 @@ export function removeGitChangeChatFixture(root: string): void {
   rmSync(root, { recursive: true, force: true });
 }
 
+// T25 — advances the fixture's already-checked-out `feature/x` head by one commit so a
+// subsequent Refresh has a genuinely moved comparison to detect, proving the production
+// stale-detection path (gitChangeRoutes.ts's `persistStaleScope`) rather than only the
+// unchanged-comparison case the original journey covered.
+export function advanceGitChangeChatFixtureHead(fixture: GitChangeChatFixture): void {
+  writeFileSync(
+    join(fixture.root, "src.txt"),
+    "export const feature = true;\nexport const moved = true;\n",
+    "utf8",
+  );
+  git(["commit", "-am", "feat: move feature/x head"], fixture.root);
+}
+
+interface ChatListEntry {
+  readonly id: string;
+  readonly gitChangeScopes?: readonly unknown[];
+}
+
+// T25 — reads the chat's `gitChangeScopes` back through the REAL GET /api/chats?projectPath=...
+// route (the same route the desktop client itself uses to hydrate the chat list) so a Disconnect
+// click can be proven to have actually PATCHed the server, not merely repainted the pill locally.
+export async function fetchGitChangeScopes(
+  request: APIRequestContext,
+  projectPath: string,
+  chatId: string,
+): Promise<readonly unknown[] | undefined> {
+  const res = await request.get(`/api/chats?projectPath=${encodeURIComponent(projectPath)}`);
+  if (!res.ok()) {
+    throw new Error(`Chat list failed (${String(res.status())}): ${await res.text()}`);
+  }
+  const body = (await res.json()) as { readonly chats: readonly ChatListEntry[] };
+  const chat = body.chats.find((entry) => entry.id === chatId);
+  if (chat === undefined) throw new Error(`Chat ${chatId} missing from /api/chats list`);
+  return chat.gitChangeScopes;
+}
+
 interface CreatedChat {
   readonly id: string;
   readonly title: string;

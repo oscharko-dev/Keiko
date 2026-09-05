@@ -447,9 +447,9 @@ describe("verified commit persistence (#3386, schema v23)", () => {
       return originalPrepare(sql);
     }) as DatabaseSync["prepare"];
     try {
-      expect(() =>
-        s.recordVerifiedCommit({ ...commitReceipt(), proposalId: "commit-2" }),
-      ).toThrow("concurrent verified commit update");
+      expect(() => s.recordVerifiedCommit({ ...commitReceipt(), proposalId: "commit-2" })).toThrow(
+        "concurrent verified commit update",
+      );
     } finally {
       db.prepare = originalPrepare;
       db.close();

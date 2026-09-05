@@ -348,7 +348,13 @@ function workflowClass(
       sameRepositoryWorkflow(requirement, check, input) ||
       referencedWorkflow(requirement, check, input),
   );
-  if (matching.length !== 1) return "unknown";
+  // `checks` (from `workflowCandidate`, owner audit b5-9) is pre-filtered by name-suffix only, so it
+  // can admit an unrelated same-suffix run from a different repository — one that `matching`'s exact
+  // identity checks then correctly reject. Zero exact matches means the requirement has NO real
+  // candidate at all: that is "missing", not the more ambiguous "unknown" duplicate-or-conflicting-
+  // evidence case, which stays reserved for more than one exact match.
+  if (matching.length === 0) return "missing";
+  if (matching.length > 1) return "unknown";
   const check = matching[0];
   if (check === undefined) return "unknown";
   if (!exactWorkflowContext(check, input)) return "stale-or-wrong-app";

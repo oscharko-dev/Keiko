@@ -551,7 +551,14 @@ class VerifiedCommitController implements VerifiedCommitService {
   ): VerifiedCommitResult | undefined {
     const result = this.result(binding, "recovery-required", "execution-uncertain");
     if (
-      !this.persist(context, binding, "recovery-required", "execution-uncertain", result, "pre-effect")
+      !this.persist(
+        context,
+        binding,
+        "recovery-required",
+        "execution-uncertain",
+        result,
+        "pre-effect",
+      )
     )
       return result;
     this.log(context, "result", {

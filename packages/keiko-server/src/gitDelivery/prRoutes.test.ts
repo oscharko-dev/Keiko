@@ -1334,6 +1334,21 @@ describe("pr mark-ready routes (#3389)", () => {
     expect(adapter.calls()).toHaveLength(0);
   });
 
+  // #3384 B5-8: mark-ready's own client-supplied `ownerAndRepo` is refused when it does not match
+  // the resolved workspace's OWN Git remote — the mint route must never mint an approval binding
+  // (remoteDigest included) against a repository the workspace does not actually own.
+  it("refuses mark-ready mint for a well-formed ownerAndRepo that does not match this project's own Git remote", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const res = await createHandlePrMarkReadyApprove({ approvalStore })(
+      ctxFor(MARK_READY_APPROVE, markReadyBody({ ownerAndRepo: "someone-else/other-repo" })),
+      deps(),
+    );
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_PR_MARK_READY_REPOSITORY_MISMATCH" },
+    });
+  });
+
   // #3389 (correction 1/7): the failing-before-fix case — a claim minted for the GENERIC "pr"
   // operation (the same claim GovernedPullRequestCard's old convertFromDraft path consumed) must
   // never redeem the dedicated pr-mark-ready execute route.

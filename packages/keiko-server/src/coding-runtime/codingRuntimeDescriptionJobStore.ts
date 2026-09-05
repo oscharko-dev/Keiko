@@ -14,6 +14,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { isValidCorrelationId } from "../correlation.js";
 import {
   isWorkbenchDescriptionStatus,
   isWorkbenchDescriptionGenerationBinding,
@@ -113,21 +114,16 @@ interface Row {
 
 const DIGEST = /^[a-f0-9]{64}$/u;
 const OBJECT_ID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
-// `runId` is threaded downstream as a log `correlationId` (codingRuntimeOrchestrator.ts). The
-// alphabet below is deliberately the SAME one `correlation.ts`'s `SAFE_CORRELATION_ID` accepts
-// (letters, digits, `.`, `_`, `-`) so a scope this function admits can never carry a character the
-// log pipeline rejects and silently downgrades to `UNKNOWN_CORRELATION_ID` — owner audit finding
-// b3-22 (PR #3394) named `:` specifically, which this excludes. The MINIMUM LENGTH intentionally
-// stays at 1 (narrower than `SAFE_CORRELATION_ID`'s 8): fixture run ids shorter than 8 characters
-// are already load-bearing in codingRuntimeOrchestrator.test.ts (owned by another agent
-// concurrently), so raising the floor here needs a coordinated change to those fixtures too —
-// tracked as an out-of-scope need rather than landed unilaterally.
-const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 export const DEFAULT_MAX_CONCURRENT_DESCRIPTION_DISPATCHES = 4;
 
+// `runId` is threaded downstream as a log `correlationId` (codingRuntimeOrchestrator.ts), so it
+// must satisfy the SAME shape the log pipeline itself enforces — reusing `correlation.ts`'s
+// `isValidCorrelationId` directly (rather than a second, hand-tuned copy of its alphabet/length)
+// is the only way a scope this function admits can never carry a shape the log pipeline rejects
+// and silently downgrades to `UNKNOWN_CORRELATION_ID` (#3384 batch-1 B3-22).
 function assertScope(scope: WorkbenchDescriptionScope): void {
   if (
-    !RUN_ID.test(scope.runId) ||
+    !isValidCorrelationId(scope.runId) ||
     !DIGEST.test(scope.remoteDigest) ||
     !OBJECT_ID.test(scope.baseSha) ||
     !OBJECT_ID.test(scope.headSha) ||

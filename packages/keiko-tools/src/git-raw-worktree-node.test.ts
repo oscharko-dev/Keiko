@@ -2,10 +2,21 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { readGitRawWorktreeSnapshot } from "./git-raw-worktree-node.js";
 import { readGitWorktreeSnapshot } from "./git-worktree-snapshot-node.js";
+import { indexStatMatches, readGitIndexWriteTimeNs } from "./git-index-stat.js";
+
+// Owner audit finding b2-7: the racy-clean guard in `indexStatMatches` existed but was never
+// supplied the `.git/index` write time at this reader's production call site (`workingStatus` in
+// git-raw-worktree-node.ts), leaving it permanently unarmed. Spy on the real comparator (kept fully
+// functional via `importOriginal`) to prove the wiring, rather than the comparator's own guard logic
+// — that is already covered in isolation by git-index-stat.test.ts.
+vi.mock("./git-index-stat.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./git-index-stat.js")>();
+  return { ...actual, indexStatMatches: vi.fn(actual.indexStatMatches) };
+});
 
 let root: string;
 let remote: string;
@@ -72,5 +83,20 @@ describe("readGitRawWorktreeSnapshot documented tracking limits", () => {
     expect(raw.hasUpstream).toBe(false);
     expect(raw.aheadCount).toBe(0);
     expect(raw.behindCount).toBe(0);
+  });
+});
+
+describe("racy-clean guard wiring (owner audit finding b2-7)", () => {
+  it("supplies the real .git/index write time to indexStatMatches, not the unarmed 3-arg call", async () => {
+    const mocked = vi.mocked(indexStatMatches);
+    mocked.mockClear();
+    await readGitRawWorktreeSnapshot({ workspace });
+    const call = mocked.mock.calls.find(([, path]) => path === "code.txt");
+    expect(call).toBeDefined();
+    // Before the fix this 4th argument was always omitted (undefined), so the guard in
+    // indexStatMatches never triggered on this production path no matter how racy the real
+    // filesystem state was.
+    expect(call?.[3]).toBeDefined();
+    expect(call?.[3]).toBe(readGitIndexWriteTimeNs(root));
   });
 });

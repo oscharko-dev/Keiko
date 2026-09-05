@@ -122,7 +122,11 @@ describe("read-only lane git-version compatibility", () => {
   // version-incompatible duplicate. This pin fails if either flag reappears in the spawned argv.
   it("never passes --no-lazy-fetch/--no-replace-objects as CLI flags, only as pinned env vars", async () => {
     const spawn = recordingSpawn();
-    const pending = readGitRemoteAliases({ workspace: info, spawn: spawn.fn, now: () => Date.now() });
+    const pending = readGitRemoteAliases({
+      workspace: info,
+      spawn: spawn.fn,
+      now: () => Date.now(),
+    });
     spawn.child.stdout.emit("data", Buffer.from("origin\n", "utf8"));
     spawn.child.emit("close", 0, null);
     await pending;

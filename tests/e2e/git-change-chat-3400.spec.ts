@@ -1,7 +1,9 @@
 import { expect, test, type Locator } from "@playwright/test";
 import {
+  advanceGitChangeChatFixtureHead,
   buildGitChangeChatFixture,
   createChatForFixture,
+  fetchGitChangeScopes,
   interceptGovernedPrDescriptionLifecycle,
   interceptGitChangePullRequestConnect,
   interceptPrDescriptionLifecycle,
@@ -129,6 +131,43 @@ test("connects the Git window's current branch to a Chat and shows the scope pil
   // Refreshing an unchanged comparison stays "Current" (no head movement to detect).
   await chatWindow.getByRole("button", { name: `Refresh ${label}` }).click();
   await expect(chatWindow.getByText("Current")).toBeVisible();
+
+  // T25 — a REAL Chat turn on this git-change-connected chat must hit the production
+  // description-authority admission gate (chat-handlers.ts's `admitGitChangeScopedTurn`) and be
+  // denied closed with the exact safe message the server returns — server tests
+  // (chat-handlers.test.ts, chat-stream-handlers.test.ts) prove the gate itself; this proves the
+  // real browser composer surfaces that exact denial rather than silently succeeding or hanging.
+  // The connected scope pill must stay untouched by the failed send ("silent" w.r.t. the pill):
+  // still "Current", same label, same file count.
+  const composer = chatWindow.getByRole("textbox", { name: "Chat message" });
+  await composer.click();
+  await composer.fill("Please refine the description");
+  await chatWindow.getByRole("button", { name: "Send message" }).click();
+  await expect(
+    chatWindow.getByText(
+      "The description authority for this connected Git change is missing or has expired.",
+    ),
+  ).toBeVisible();
+  await expect(chatWindow.getByText(label)).toBeVisible();
+  await expect(chatWindow.getByText("Current")).toBeVisible();
+  await expect(chatWindow.getByText("1 file changed")).toBeVisible();
+
+  // T25 — move the fixture's head and refresh again: this must surface the production
+  // stale-detection path (gitChangeRoutes.ts's `persistStaleScope`, real server tests in
+  // gitChangeRoutes.test.ts), not only the unchanged-comparison case proven above.
+  advanceGitChangeChatFixtureHead(fixture);
+  await chatWindow.getByRole("button", { name: `Refresh ${label}` }).click();
+  await expect(chatWindow.getByText("Stale")).toBeVisible();
+  await expect(chatWindow.getByText(label)).toBeVisible();
+
+  // T25 — actually click Disconnect (not just assert visibility) and prove the PATCH landed on
+  // the real server by re-fetching the chat through the real GET /api/chats route, rather than
+  // only trusting the client's own repainted UI state.
+  await chatWindow.getByRole("button", { name: `Disconnect ${label} from chat` }).click();
+  await expect(chatWindow.getByText(label)).toBeHidden();
+  await expect
+    .poll(async () => await fetchGitChangeScopes(request, fixture.root, chat.id))
+    .toBeUndefined();
 });
 
 // #3400 browser wiring proof. Server tests exercise both real Chat transports, shared generation,

@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSupport.js";
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import { computeStoreFingerprint } from "../store/db.js";
@@ -248,6 +249,16 @@ describe("cumulative Code-task CI repair accounting", () => {
     expect(redactLogFields(event?.extra ?? {})).toEqual(event?.extra);
     expect(JSON.stringify(events)).not.toContain("feat: bounded change");
   });
+  // #3384 B3-16: this is the last line of defense before the write -- server-log.ts never
+  // shape-validates the primary `correlationId` field -- so a malformed value reaching this call
+  // site must be downgraded here rather than logged verbatim.
+  it("downgrades a malformed correlation id instead of logging it raw", () => {
+    begin("attempt-1", null, { ...context, correlationId: "not a valid id!" });
+    const event = events.find(
+      (line) => line.op === "git.ci-repair.budget" && line.extra?.phase === "begin",
+    );
+    expect(event?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+  });
 });
 
 describe("CI repair restart and monotonic limits", () => {
@@ -435,6 +446,24 @@ describe("CI repair accounting CAS and hostile input", () => {
       expect(JSON.stringify(events)).not.toContain("hostile private body");
     },
   );
+  // #3384 B3-16: the storage-unavailable catch path is a second, separate write site guarded by
+  // the same helper -- prove it independently of the "begin" phase's write above.
+  it("downgrades a malformed correlation id on the storage-unavailable catch path", () => {
+    const value = record(begin("attempt-1", null));
+    db.prepare("UPDATE coding_runtime_ci_repair_budgets SET record_json=?").run(
+      JSON.stringify({ ...value, attempts: value.attempts.map((a) => ({ ...a, body: "x" })) }),
+    );
+    expect(budget.read({ ...context, correlationId: "not a valid id!" })).toEqual({
+      status: "blocked",
+      reason: "storage-unavailable",
+    });
+    expect(events.at(-1)).toMatchObject({
+      op: "git.ci-repair.budget",
+      correlationId: UNKNOWN_CORRELATION_ID,
+      errorKind: "internal",
+      extra: { reason: "storage-unavailable" },
+    });
+  });
   it("reports enough body-free evidence to identify the charged repair attempt", () => {
     begin("attempt-1", null);
     charge(0, 2, 100);

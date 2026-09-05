@@ -10,6 +10,7 @@
 //           yet still record content-free evidence.
 //   * AC5 — a not-mergeable PR is blocked before the merge adapter is ever called.
 
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -280,10 +281,25 @@ async function startBound(overrides: Partial<UiHandlerDeps> = {}): Promise<void>
   port = started.port;
 }
 
+// #3384 B5-8: `prepareGitDeliveryRequest` now binds every request's `ownerAndRepo` to the resolved
+// workspace's own `origin` remote before admitting it, so this fixture's project root must be a
+// real checkout whose origin resolves to the SAME "oscharko-dev/Keiko" every test body in this file
+// already names — mirrors the identical fixture repair in prRoutes.test.ts.
+function initOriginFixture(root: string): void {
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: root });
+  execFileSync("git", ["remote", "add", "origin", "https://github.com/oscharko-dev/Keiko.git"], {
+    cwd: root,
+  });
+}
+
 beforeEach(() => {
   staticRoot = mkdtempSync(join(tmpdir(), "keiko-gd-merge-static-"));
   store = createInMemoryUiStore();
-  projectId = store.createProject(mkdtempSync(join(tmpdir(), "keiko-gd-merge-proj-"))).path;
+  const projectRoot = mkdtempSync(join(tmpdir(), "keiko-gd-merge-proj-"));
+  initOriginFixture(projectRoot);
+  projectId = store.createProject(projectRoot).path;
 });
 
 afterEach(() => {
@@ -954,6 +970,21 @@ describe("merge request validation", () => {
     const handler = createHandleMergePreview({ execution: seams() });
     const res = await handler(ctxFor(PREVIEW, mergeBody({ projectId: "/nope" })), deps());
     expect(res.status).toBe(404);
+  });
+
+  // #3384 B5-8: a client-supplied `ownerAndRepo` naming a repository other than the resolved
+  // workspace's OWN `origin` remote (fork, upstream, or an entirely unrelated repository) is refused
+  // — the workspace's live remote is the only repository this route may ever mutate. The workspace's
+  // real origin is "oscharko-dev/Keiko" (this file's shared beforeEach); "someone-else/other-repo" is
+  // format-valid but not that remote.
+  it("refuses a well-formed ownerAndRepo that does not match this project's own Git remote", async () => {
+    const handler = createHandleMergePreview({ execution: seams() });
+    const res = await handler(
+      ctxFor(PREVIEW, mergeBody({ ownerAndRepo: "someone-else/other-repo" })),
+      deps(),
+    );
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_MERGE_REPOSITORY_MISMATCH" } });
   });
 });
 

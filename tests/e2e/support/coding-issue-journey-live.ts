@@ -56,27 +56,36 @@ export async function pairLiveSession(page: Page): Promise<void> {
   await expect.poll(() => page.url()).not.toContain("keiko-app-session");
 }
 
+// Review 3941762920: this init script re-runs on EVERY navigation Playwright performs on this
+// page, including a later `page.reload()` a scenario issues after appending its own window (e.g.
+// `mountGovernedPullRequestCard`). Seeding `keiko.workspace.v4` unconditionally clobbered that
+// appended window back to the single "coding" layout on every such reload. Guarding the seed
+// behind "not already present" makes it one-shot per browser context: the first navigation of a
+// fresh context (empty storage) still seeds the initial layout, but a later reload of the SAME
+// context sees the already-populated key and leaves whatever the scenario has since appended.
 export async function openLiveWorkbench(page: Page, repositoryRoot: string): Promise<void> {
   await page.addInitScript(
     ({ root }) => {
       localStorage.setItem("keiko.theme", "dark");
-      localStorage.setItem(
-        "keiko.workspace.v4",
-        JSON.stringify([
-          {
-            id: "coding-issue-journey-live",
-            type: "coding",
-            x: 40,
-            y: 48,
-            w: 1120,
-            h: 1400,
-            z: 10,
-            zoom: 1,
-            cfg: { repositoryPath: root },
-            max: false,
-          },
-        ]),
-      );
+      if (localStorage.getItem("keiko.workspace.v4") === null) {
+        localStorage.setItem(
+          "keiko.workspace.v4",
+          JSON.stringify([
+            {
+              id: "coding-issue-journey-live",
+              type: "coding",
+              x: 40,
+              y: 48,
+              w: 1120,
+              h: 1400,
+              z: 10,
+              zoom: 1,
+              cfg: { repositoryPath: root },
+              max: false,
+            },
+          ]),
+        );
+      }
       localStorage.removeItem("keiko.conns.v1");
     },
     { root: repositoryRoot },

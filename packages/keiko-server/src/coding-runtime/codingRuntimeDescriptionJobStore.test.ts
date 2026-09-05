@@ -398,4 +398,15 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
     const store = openStore();
     expect(() => store.beginDispatch(scope({ runId: "run:0000001" }), NOW)).toThrow(TypeError);
   });
+
+  // Owner audit of PR #3394, finding b3-22 (residual): the colon fix above narrowed the gap from
+  // two causes to one -- a run id shorter than correlation.ts's 8-character SAFE_CORRELATION_ID
+  // floor still passed the old local RUN_ID pattern (minimum length 1) and was silently downgraded
+  // to UNKNOWN_CORRELATION_ID by any downstream logger. Reusing isValidCorrelationId directly
+  // (rather than a second, hand-tuned copy of its length/alphabet) closes this for good: the two
+  // validators can no longer drift apart.
+  it("rejects a run id shorter than the correlation-id log pipeline's 8-character floor", () => {
+    const store = openStore();
+    expect(() => store.beginDispatch(scope({ runId: "run-1" }), NOW)).toThrow(TypeError);
+  });
 });

@@ -90,10 +90,14 @@ export async function runDescriptionScenario(page: Page): Promise<ScenarioRunRes
   const env = resolveLiveJourneyEnv();
   const delivered = await deliverForDescription(page, env);
   const status = await waitForAutoDraftDescription(page);
-  await mountGovernedPullRequestCard(page, env.repositoryRoot, delivered.headRef);
-  await applyAutoDraftDescriptionThroughPrCard(page, delivered);
+  const retained = await mountGovernedPullRequestCard(page, env.repositoryRoot, delivered, status);
+  await applyAutoDraftDescriptionThroughPrCard(page, retained);
   return {
-    assertions: [`auto-draft-reason:${status.reason}`, "governed-apply-completed:true"],
+    assertions: [
+      `auto-draft-reason:${status.reason}`,
+      `retained-proposal:${retained.proposalId}`,
+      "governed-apply-completed:true",
+    ],
   };
 }
 

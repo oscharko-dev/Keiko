@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -6,12 +7,14 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { format } from "prettier";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { compareStrings } from "./lib/compare-strings.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import {
   checkToolCatalogInventory,
   scanToolRegistrySource,
   nonDispatchProbeDisposition,
 } from "./lib/tool-catalog-inventory.mjs";
 import { GOVERNED_TOOL_CONTRACT_PINS } from "./lib/governed-tool-contract-pins.mjs";
+import { REQUIRED_INTERFACE_FIELDS } from "./lib/governed-tool-contract-shape.mjs";
 
 export const TOOL_CATALOG_MANIFEST_PATH = "docs/architecture/tool-catalog-manifest.v1.json";
 export const TOOL_CATALOG_MIGRATION_PATH = "docs/architecture/tool-catalog-migration.v1.json";
@@ -171,11 +174,205 @@ export async function checkToolCatalogConformance(root = process.cwd()) {
  */
 export async function checkToolCatalogMigrationCloseout(root = process.cwd()) {
   const migration = JSON.parse(await toolCatalogMigrationBytes(root));
-  return migration.inventory.length === 0
-    ? []
-    : [
-        `migration inventory not empty at closeout: ${String(migration.inventory.length)} row(s) remain`,
-      ];
+  const inventoryErrors =
+    migration.inventory.length === 0
+      ? []
+      : [
+          `migration inventory not empty at closeout: ${String(migration.inventory.length)} row(s) remain`,
+        ];
+  return [...inventoryErrors, ...(await checkH1HandoffEvidence(root, migration.pendingH1))];
+}
+
+// #3414 AC7 / #3415 AC5-AC6: the durable, independently-verifiable H1 dev-landing record. #3414
+// alone may write it (once H1 actually reaches `dev` — see governed-tool-migration.md); this repo
+// has no such landing on this head, so nothing here fabricates one (AGENTS.md §7). What this DOES
+// provide now is the fail-closed RECHECK: if `pendingH1.landedDevCommit`/`landedTreeDigest` are
+// ever populated, this record must exist, pass shape validation, agree with them, be reachable
+// from `dev`, and agree with the real current producer's own identity — anything missing, stale,
+// or mismatched fails qualification rather than passing silently.
+export const H1_PROVENANCE_PATH = "docs/architecture/h1-provenance.v1.json";
+const HEX_64 = /^[a-f0-9]{64}$/u;
+const HEX_40 = /^[a-f0-9]{40}$/u;
+
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isCatalogProfileRef(value) {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof value.id === "string" &&
+    Number.isSafeInteger(value.version)
+  );
+}
+
+// One row per H1Provenance field: `test` reads the whole record so a check can span more than one
+// field (e.g. sourceHead/currentHead share a message) without growing this table's own branching.
+const H1_PROVENANCE_FIELD_CHECKS = Object.freeze([
+  {
+    test: (r) => Number.isSafeInteger(r.integrationPr) && r.integrationPr > 0,
+    message: "integrationPr is not a positive integer",
+  },
+  {
+    test: (r) => HEX_40.test(r.sourceHead) && HEX_40.test(r.currentHead),
+    message: "sourceHead/currentHead is not a 40-hex commit SHA",
+  },
+  {
+    test: (r) => HEX_64.test(r.treeDigest) && HEX_64.test(r.projectionDigest),
+    message: "treeDigest/projectionDigest is not a 64-hex digest",
+  },
+  // handlerSetDigest reflects the real SERVER's bound handler set (keiko-server composition, out
+  // of this pure-producer script's reach): format-checked here, never value-cross-checked.
+  {
+    test: (r) => HEX_64.test(r.handlerSetDigest),
+    message: "handlerSetDigest is not a 64-hex digest",
+  },
+  {
+    test: (r) => isCatalogProfileRef(r.profile),
+    message: "profile is not a {id, version} catalog profile ref",
+  },
+  {
+    test: (r) => isNonEmptyString(r.catalogRevision),
+    message: "catalogRevision is not a non-empty string",
+  },
+  {
+    test: (r) => isNonEmptyString(r.verificationRef),
+    message: "verificationRef is not a non-empty string",
+  },
+  { test: (r) => isNonEmptyString(r.reviewRef), message: "reviewRef is not a non-empty string" },
+]);
+
+export function h1ProvenanceShapeFailures(record) {
+  const fields = REQUIRED_INTERFACE_FIELDS.H1Provenance.split(",");
+  const keys = Object.keys(record).sort();
+  if (keys.length !== fields.length || ![...fields].sort().every((field, i) => field === keys[i]))
+    return [
+      "H1 handoff evidence malformed: durable record does not carry exactly the H1Provenance fields",
+    ];
+  return H1_PROVENANCE_FIELD_CHECKS.filter((check) => !check.test(record)).map(
+    (check) => `H1 handoff evidence malformed: ${check.message}`,
+  );
+}
+
+function readH1Provenance(root) {
+  let bytes;
+  try {
+    bytes = readFileSync(join(root, H1_PROVENANCE_PATH), "utf8");
+  } catch {
+    return {
+      record: null,
+      shapeFailures: [`H1 handoff evidence missing: no ${H1_PROVENANCE_PATH}`],
+    };
+  }
+  try {
+    const record = JSON.parse(bytes);
+    return { record, shapeFailures: h1ProvenanceShapeFailures(record) };
+  } catch {
+    return { record: null, shapeFailures: ["H1 handoff evidence malformed: not valid JSON"] };
+  }
+}
+
+function isAncestorOfDev(commit, root, execute) {
+  try {
+    execute(resolveHostExecutable("git"), ["merge-base", "--is-ancestor", commit, "dev"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function realProducerIdentityFailures(root, record) {
+  if (typeof record.profile?.id !== "string") return [];
+  try {
+    const producer = await loadToolCatalogProducer(root);
+    const catalog =
+      record.profile.id === "opencode"
+        ? producer.createKeikoToolCatalog([producer.opencodeRegistrationSet()])
+        : producer.createInitialToolCatalog();
+    const projection = producer.compileToolProjection(catalog, record.profile);
+    const failures = [];
+    if (projection.catalogRevision !== record.catalogRevision)
+      failures.push(
+        "H1 handoff evidence identity mismatch: catalogRevision does not match the current producer",
+      );
+    if (projection.projectionDigest !== record.projectionDigest)
+      failures.push(
+        "H1 handoff evidence identity mismatch: projectionDigest does not match the current producer",
+      );
+    return failures;
+  } catch {
+    return [
+      "H1 handoff evidence identity mismatch: durable record's profile cannot be compiled by the current producer",
+    ];
+  }
+}
+
+/**
+ * #3414 AC7 / #3415 AC5-AC6. Returns `[]` while H1 has not landed to `dev` (both fields honestly
+ * null — the expected state, never a failure). Once EITHER field is populated, every fact below
+ * must independently check out or this fails closed with a precise reason; nothing here trusts a
+ * caller-declared value it has not itself re-derived or cross-checked.
+ */
+// `null` return means "proceed to the durable-record recheck"; a non-null array is the final,
+// already-decided result (nothing landed yet, or the landed fields themselves are malformed).
+function pendingFieldFailures(landedDevCommit, landedTreeDigest) {
+  if (landedDevCommit === null && landedTreeDigest === null) return [];
+  if (landedDevCommit === null || landedTreeDigest === null) {
+    return [
+      "H1 handoff evidence partially populated: landedDevCommit and landedTreeDigest must be set together",
+    ];
+  }
+  if (!HEX_40.test(landedDevCommit))
+    return ["H1 handoff evidence malformed: pendingH1.landedDevCommit is not a 40-hex commit SHA"];
+  if (!HEX_64.test(landedTreeDigest))
+    return ["H1 handoff evidence malformed: pendingH1.landedTreeDigest is not a 64-hex digest"];
+  return null;
+}
+
+function staleRecordFailures(record, landedDevCommit, landedTreeDigest) {
+  const failures = [];
+  if (record.treeDigest !== landedTreeDigest)
+    failures.push(
+      "H1 handoff evidence stale: durable record's treeDigest does not match pendingH1.landedTreeDigest",
+    );
+  if (record.currentHead !== landedDevCommit)
+    failures.push(
+      "H1 handoff evidence stale: durable record's currentHead does not match pendingH1.landedDevCommit",
+    );
+  return failures;
+}
+
+async function landedEvidenceFailures(root, landedDevCommit, landedTreeDigest, deps) {
+  const { record, shapeFailures } = readH1Provenance(root);
+  if (record === null || shapeFailures.length > 0) return shapeFailures;
+  return [
+    ...staleRecordFailures(record, landedDevCommit, landedTreeDigest),
+    ...(isAncestorOfDev(landedDevCommit, root, deps.execute)
+      ? []
+      : [
+          `H1 handoff evidence unreachable: landedDevCommit ${landedDevCommit} is not an ancestor of dev`,
+        ]),
+    ...(await deps.identityFailures(root, record)),
+  ];
+}
+
+export async function checkH1HandoffEvidence(
+  root = process.cwd(),
+  pendingH1,
+  { execute = execFileSync, identityFailures = realProducerIdentityFailures } = {},
+) {
+  const migration = pendingH1 ?? JSON.parse(await toolCatalogMigrationBytes(root)).pendingH1;
+  const { landedDevCommit, landedTreeDigest } = migration;
+  const early = pendingFieldFailures(landedDevCommit, landedTreeDigest);
+  if (early !== null) return early;
+  return landedEvidenceFailures(root, landedDevCommit, landedTreeDigest, {
+    execute,
+    identityFailures,
+  });
 }
 const CATALOG_NEGATIVE_FIXTURES_DIR = "tests/architecture/fixtures/tool-catalog-negatives";
 // One row per attack class named by #3415 (issue-3415, AC2). Each fixture module derives its

@@ -10,6 +10,7 @@ import {
   COMMIT,
   DIGEST,
 } from "../gitDelivery/ciObservationTest/_support.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { DraftDeliveryDependencies } from "../gitDelivery/draftDeliveryTypes.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { redactLogFields } from "../observability/log-redaction.js";
@@ -274,9 +275,13 @@ describe("production CI repair accounting availability", () => {
       expect(run).not.toHaveBeenCalled();
       expect(budget?.chargePrompt(1)).toBe(false);
       expect(budget?.chargeDelegatedRead?.("child", "read")).toBe(false);
+      // #3384 B3-16: the fixture's "run-1"/"run-2" runIds are shorter than correlation.ts's
+      // 8-character SAFE_CORRELATION_ID floor, so correlationIdOrUnknown downgrades them here
+      // instead of writing the raw id -- proving this call site is now guarded rather than
+      // reproducing the pre-fix "log the raw runId verbatim" behavior.
       expect(test.events.find((event) => event.extra?.phase === "availability")).toMatchObject({
         op: "git.ci-repair.budget",
-        correlationId: test.current.runId,
+        correlationId: UNKNOWN_CORRELATION_ID,
         extra: { phase: "availability", reason: "storage-unavailable" },
       });
       const event = test.events.at(-1);

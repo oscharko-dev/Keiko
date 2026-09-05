@@ -170,7 +170,12 @@ function persistDraft(
       previousSource,
     );
   if (Number(update.changes) !== 1) throw new TypeError("concurrent draft delivery update");
-  return { ...snapshot, draftDelivery: value, revision: snapshot.revision + 1, updatedAt: recordedAt };
+  return {
+    ...snapshot,
+    draftDelivery: value,
+    revision: snapshot.revision + 1,
+    updatedAt: recordedAt,
+  };
 }
 
 function assertRecoveryStart(snapshot: CodingRuntimeSnapshot, value: DraftDeliveryRecord): void {

@@ -36,18 +36,29 @@ function bodyHasFence(body: string): boolean {
   return body.includes("```") || body.includes("~~~");
 }
 
+// Finds the first occurrence of `marker` that does NOT fall inside a fenced span, skipping any
+// fenced occurrence (a documentation example) to find a genuine, later real marker instead of
+// bailing out entirely. Returns -1 when every occurrence is fenced.
+function firstUnfencedIndex(body: string, marker: string, fenced: ReadonlySet<number>): number {
+  let from = 0;
+  for (;;) {
+    const index = body.indexOf(marker, from);
+    if (index < 0) return -1;
+    if (!fenced.has(index)) return index;
+    from = index + 1;
+  }
+}
+
 function split(body: string): { prefix: string; region: string; suffix: string } | undefined {
   if (!containsPrDescriptionMarker(body)) return undefined;
-  const start = body.indexOf(START);
-  const end = body.indexOf(END);
-  if (start < 0 || end < start) throw new TypeError("Malformed PR description region");
   // Only gate on fence membership when a fence delimiter is actually present, so the common
   // unfenced body pays no extra cost. A marker found only inside a fenced span is documentation,
-  // not the managed region: fall through to "no managed region" rather than treating it as real.
-  if (bodyHasFence(body)) {
-    const fenced = fencedOffsets(body);
-    if (fenced.has(start) || fenced.has(end)) return undefined;
-  }
+  // not the managed region: skip it and look for a genuine, unfenced pair instead.
+  const fenced = bodyHasFence(body) ? fencedOffsets(body) : undefined;
+  const start = fenced === undefined ? body.indexOf(START) : firstUnfencedIndex(body, START, fenced);
+  const end = fenced === undefined ? body.indexOf(END) : firstUnfencedIndex(body, END, fenced);
+  if (start < 0 && end < 0 && fenced !== undefined) return undefined;
+  if (start < 0 || end < start) throw new TypeError("Malformed PR description region");
   const prefix = body.slice(0, start);
   const region = body.slice(start + START.length, end);
   const suffix = body.slice(end + END.length);
