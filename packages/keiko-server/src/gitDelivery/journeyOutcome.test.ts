@@ -204,7 +204,7 @@ describe("observed exact-revision issue-to-PR handoff", () => {
 });
 
 describe("durable journey outcome projection (#3389 AC6)", () => {
-  it("reconstructs a recorded outcome after the observation context is recreated over the same db", () => {
+  it("reconstructs the bounded projection after the observation context is recreated over the same db", () => {
     const db = new DatabaseSync(":memory:");
     runMigrations(db);
     try {
@@ -214,11 +214,23 @@ describe("durable journey outcome projection (#3389 AC6)", () => {
       expect(first.record(outcome)).toBe(true);
 
       // A fresh store instance over the SAME database simulates a restarted observation context —
-      // no run authority, no live snapshot, only the persisted row.
+      // no run authority, no live snapshot, only the persisted row. Only the bounded projection
+      // survives (ids/digests/shas/statuses/timestamps/revision) — never the full nested outcome
+      // (repository name, PR URL, branch refs, readiness/description snapshots), which the route
+      // always re-derives from a fresh read rather than caching at rest.
       const restarted = createGitJourneyOutcomeStore(db);
-      expect(restarted.get(outcome.binding.remoteDigest, outcome.binding.prNumber)).toEqual(
-        outcome,
-      );
+      expect(restarted.get(outcome.binding.remoteDigest, outcome.binding.prNumber)).toEqual({
+        runId: outcome.binding.runId,
+        remoteDigest: outcome.binding.remoteDigest,
+        prNumber: outcome.binding.prNumber,
+        revision: 0,
+        state: outcome.state,
+        reason: outcome.reason,
+        headSha: outcome.binding.headSha,
+        evidenceRef: outcome.evidenceRef,
+        observedAt: outcome.observedAt,
+        updatedAt: outcome.observedAt,
+      });
     } finally {
       db.close();
     }
@@ -235,19 +247,24 @@ describe("durable journey outcome projection (#3389 AC6)", () => {
       });
       expect(store.record(newer)).toBe(true);
       expect(store.record(older)).toBe(false);
-      expect(store.get(newer.binding.remoteDigest, newer.binding.prNumber)).toEqual(newer);
+      expect(store.get(newer.binding.remoteDigest, newer.binding.prNumber)).toMatchObject({
+        state: newer.state,
+        reason: newer.reason,
+        observedAt: newer.observedAt,
+      });
     } finally {
       db.close();
     }
   });
-  it("refuses to persist a malformed outcome and never grows the stored record past its bound", () => {
+  it("refuses to persist a malformed outcome and never creates a row for it", () => {
     const db = new DatabaseSync(":memory:");
     runMigrations(db);
     try {
       const store = createGitJourneyOutcomeStore(db);
-      expect(
-        store.record({ ...produceJourneyOutcome(journeyFixture()), state: "bogus" } as never),
-      ).toBe(false);
+      const malformed = { ...produceJourneyOutcome(journeyFixture()), state: "bogus" } as never;
+      expect(store.record(malformed)).toBe(false);
+      const fixture = produceJourneyOutcome(journeyFixture());
+      expect(store.get(fixture.binding.remoteDigest, fixture.binding.prNumber)).toBeUndefined();
     } finally {
       db.close();
     }

@@ -34,6 +34,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNodeUiStore } from "./index.js";
+import { runMigrations } from "./schema.js";
+import { createGitJourneyOutcomeStore } from "../gitDelivery/journeyOutcome.js";
 
 // ── Allowed column sets (source of truth: src/ui/store/schema.ts) ──────────
 // These sets are intentionally replicated verbatim from the schema rather than
@@ -343,10 +345,14 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
     }
   });
 
-  // V27 (#3389) journey-outcome projection: only identity digests/ids, a closed state/reason pair,
-  // a monotonic revision, and one bounded validated JSON outcome record — never a title, body,
-  // diff or provider URL, and never keyed by a run's live/terminal state.
-  it("V27 journey outcome projection has only bounded identity and a closed outcome column", () => {
+  // V27 (#3389) journey-outcome projection: only identity digests/ids, a sha, a closed state/reason
+  // pair, a monotonic revision and timestamps — never a title, body, diff, provider URL, repository
+  // name or branch ref, and never a serialized blob that could smuggle any of those past a
+  // column-name check (PR #3394-wave finding: an earlier version of this table stored the entire
+  // JourneyOutcome, including plaintext repository identity and a PR URL, as one `outcome_json`
+  // TEXT column — content-free by column name only, not by content). This pin now also inspects
+  // stored CONTENT, not only column names, so a future blob column cannot recur unnoticed.
+  it("V27 journey outcome projection has only bounded identity, sha and closed-status columns", () => {
     const inspector = openMigratedSchema(join(tmpDir, "journey.db"));
     try {
       expect(columnNames(inspector, "git_journey_outcomes")).toEqual([
@@ -356,8 +362,9 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
         "revision",
         "state",
         "reason",
+        "head_sha",
+        "evidence_ref",
         "observed_at",
-        "outcome_json",
         "updated_at",
       ]);
       for (const col of columnNames(inspector, "git_journey_outcomes")) {
@@ -369,12 +376,65 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
           "diff",
           "url",
           "owner",
+          "json",
+          "repo",
+          "branch",
+          "ref",
         ]) {
           expect(lower).not.toContain(forbidden);
         }
       }
     } finally {
       inspector.close();
+    }
+  });
+
+  // Content-level guard: no column may hold a value that looks like a URL, a repository slug, or a
+  // JSON object — the failure mode that a column-name-only pin cannot see (this wave's finding).
+  it("V27 journey outcome projection never stores a URL, repository slug or serialized object as content", () => {
+    const db = new DatabaseSync(join(tmpDir, "journey-content.db"));
+    try {
+      runMigrations(db);
+      const store = createGitJourneyOutcomeStore(db);
+      const outcome = {
+        schemaVersion: "1" as const,
+        binding: {
+          runId: "run-content-check",
+          remoteDigest: "a".repeat(64),
+          issueBindingDigest: "b".repeat(64),
+          issueIdDigest: "c".repeat(64),
+          issueNumber: 1,
+          repository: "octocat/hello-world",
+          prNumber: 42,
+          prExternalId: "pr-42",
+          baseRef: "main",
+          headRef: "feature/x",
+          headSha: "d".repeat(40),
+        },
+        state: "blocked" as const,
+        reason: "provider-unavailable" as const,
+        observedAt: new Date(0).toISOString(),
+        expiresAt: new Date(60_000).toISOString(),
+        evidenceRef: `journey-${"e".repeat(64)}`,
+        remote: null,
+        observationFailure: null,
+        readiness: null,
+        description: null,
+        keikoDescriptionApplied: false,
+      };
+      expect(store.record(outcome)).toBe(true);
+      const row = db
+        .prepare("SELECT * FROM git_journey_outcomes WHERE remote_digest = ? AND pr_number = ?")
+        .get(outcome.binding.remoteDigest, outcome.binding.prNumber) as Record<string, unknown>;
+      for (const [column, value] of Object.entries(row)) {
+        if (typeof value !== "string") continue;
+        expect(value, `column ${column}`).not.toMatch(/^https?:\/\//i);
+        expect(value, `column ${column}`).not.toContain("octocat/hello-world");
+        expect(value, `column ${column}`).not.toContain("feature/x");
+        expect(value.startsWith("{") && value.endsWith("}")).toBe(false);
+      }
+    } finally {
+      db.close();
     }
   });
 

@@ -6,6 +6,15 @@
 // to the underlying LLM as a function-calling interface -- advisory only; the provider performs no
 // server-side schema enforcement of its own).
 //
+// `OPENCODE_NATIVE_EXTENSION_DEFINITIONS` below is the single source for the two native
+// extensions' exact pinned wire schemas. Unlike the seven managed tools, a native extension is
+// never compiled through the catalog dialect (no descriptor, no `pattern`-keyword gap: these are
+// plain literal JSON Schema objects, carried verbatim). packages/keiko-server/src/coding-runtime/
+// opencodeToolSchemas.ts imports them back to build `OPENCODE_MODEL_VISIBLE_TOOLS`, and
+// packages/keiko-model-gateway/src/toolCatalogBridge.ts imports them to append the two native
+// extensions to a bound advertisement's model-visible tool list -- one copy, two consumers
+// (#3414 follow-up: the model-gateway bridge no longer drops a profile's native extensions).
+//
 // This set is intentionally NOT the source for
 // packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts's `OPENCODE_MODEL_VISIBLE_TOOLS`/
 // `OPENCODE_TOOL_SOURCE_DEFINITIONS`: those pin what the real, pinned OpenCode 1.17.17 runtime
@@ -46,6 +55,101 @@ const OPENCODE_READ_MAX_WINDOW_LINES = 5_000;
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
 const OPENCODE_DIALECT = { id: "managed-runtime-json-schema", version: 1 } as const;
 const OPENCODE_RUNTIME = { id: "opencode", version: "1.17.17" } as const;
+
+export interface OpenCodeNativeExtensionDefinition {
+  readonly alias: "question" | "todowrite";
+  readonly contractVersion: 1;
+  readonly description: string;
+  readonly inputSchema: CatalogJsonObject;
+}
+
+// Exact v1.17.17 built-in `question` wire schema (pinned digest input; byte-identical to the
+// projection packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts pins for the
+// INCOMING sidecar trust check -- see this file's header comment for why this is the one source).
+const QUESTION_EXTENSION_SCHEMA: CatalogJsonObject = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  properties: {
+    questions: {
+      description: "Questions to ask",
+      items: {
+        properties: {
+          header: { description: "Very short label (max 30 chars)", type: "string" },
+          multiple: { description: "Allow selecting multiple choices", type: "boolean" },
+          options: {
+            description: "Available choices",
+            items: {
+              properties: {
+                description: { description: "Explanation of choice", type: "string" },
+                label: { description: "Display text (1-5 words, concise)", type: "string" },
+              },
+              required: ["label", "description"],
+              type: "object",
+            },
+            type: "array",
+          },
+          question: { description: "Complete question", type: "string" },
+        },
+        required: ["question", "header", "options"],
+        type: "object",
+      },
+      type: "array",
+    },
+  },
+  required: ["questions"],
+  type: "object",
+};
+
+// Exact v1.17.17 built-in `todowrite` wire schema (#2480); byte-identical to its source schema.
+const TODO_WRITE_EXTENSION_SCHEMA: CatalogJsonObject = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  properties: {
+    todos: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          content: { type: "string", description: "Brief description of the task" },
+          status: {
+            type: "string",
+            description: "Current status of the task: pending, in_progress, completed, cancelled",
+          },
+          priority: {
+            type: "string",
+            description: "Priority level of the task: high, medium, low",
+          },
+        },
+        required: ["content", "status", "priority"],
+      },
+      description: "The updated todo list",
+    },
+  },
+  required: ["todos"],
+};
+
+/**
+ * The two OpenCode-native extensions (ADR-0175 D2), exhaustively declared: never Keiko tool
+ * descriptors, never compiled through the catalog dialect. This is the single source for their
+ * pinned wire schemas -- packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts and
+ * packages/keiko-model-gateway/src/toolCatalogBridge.ts both import this constant rather than
+ * each holding their own copy.
+ */
+export const OPENCODE_NATIVE_EXTENSION_DEFINITIONS: readonly OpenCodeNativeExtensionDefinition[] =
+  [
+    {
+      alias: "question",
+      contractVersion: 1,
+      description:
+        "Ask the operator one or more structured clarifying questions before proceeding.",
+      inputSchema: QUESTION_EXTENSION_SCHEMA,
+    },
+    {
+      alias: "todowrite",
+      contractVersion: 1,
+      description: "Record or update the governed run's todo list.",
+      inputSchema: TODO_WRITE_EXTENSION_SCHEMA,
+    },
+  ];
 
 function managedObjectSchema(
   properties: CatalogJsonObject,
@@ -244,27 +348,29 @@ function childRunSpec(): OpenCodeToolSpec {
 
 /**
  * The canonical "opencode" registration set (ADR-0175 D2). Declares the seven managed-OpenCode
- * governed tools plus the two exhaustively-declared native extensions. `keiko_repository_search`
- * (H1, #3386) is not yet a member -- H1's handler is not implemented; see the #3414 report.
- * `keiko.changeset.edit`'s descriptor is a structurally-equivalent, strictly LOOSER projection of
- * the real wire schema (all fields required, nested `additionalProperties` stripped-as-true) --
- * see `changesetEditSpec` above for exactly why and why that is safe for its one consumer.
+ * governed tools plus the two exhaustively-declared native extensions (`nativeExtensions` is
+ * derived from `OPENCODE_NATIVE_EXTENSION_DEFINITIONS` above, the same single source consumers use
+ * for their pinned wire schemas). `keiko_repository_search` (H1, #3386) is not yet a member --
+ * H1's handler is not implemented; see the #3414 report. `keiko.changeset.edit`'s descriptor is a
+ * structurally-equivalent, strictly LOOSER projection of the real wire schema (all fields
+ * required, nested `additionalProperties` stripped-as-true) -- see `changesetEditSpec` above for
+ * exactly why and why that is safe for its one consumer.
  *
- * NOTE for consumers building a live gateway advertisement: `packages/keiko-model-gateway/src/
- * toolCatalogBridge.ts`'s `normalizerFor` (and `invocation.ts`'s `selectedTools`) do not yet merge
- * native extensions into the bound tool list -- both reject or silently drop them today. A caller
- * that must produce a bridge-compatible advertisement composes its own catalog from these same
- * entries with `nativeExtensions: []` until that merge lands (also #3414's report).
+ * `packages/keiko-model-gateway/src/toolCatalogBridge.ts`'s bridge merges these native extensions
+ * into a bound advertisement's model-visible tool list and passes a call to one of their aliases
+ * straight through to the sidecar, unbound (#3414 follow-up); a caller that must NOT expose the
+ * native extensions on its advertisement composes its own catalog from these same entries with
+ * `nativeExtensions: []`.
  */
 export function opencodeRegistrationSet(): CatalogRegistrationSet {
   return {
     profile: OPENCODE_PROFILE,
     adapterDialect: OPENCODE_DIALECT,
     adapterRuntime: OPENCODE_RUNTIME,
-    nativeExtensions: [
-      { alias: "question", contractVersion: 1 },
-      { alias: "todowrite", contractVersion: 1 },
-    ],
+    nativeExtensions: OPENCODE_NATIVE_EXTENSION_DEFINITIONS.map(({ alias, contractVersion }) => ({
+      alias,
+      contractVersion,
+    })),
     compatibility: [],
     entries: [
       discoverSpec(),

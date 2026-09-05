@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { opencodeRegistrationSet } from "./opencode.js";
+import { opencodeRegistrationSet, OPENCODE_NATIVE_EXTENSION_DEFINITIONS } from "./opencode.js";
 import { createKeikoToolCatalog } from "./composer.js";
 import { compileToolProjection, gatewayToolDefinitions } from "./projection.js";
 
@@ -88,5 +88,30 @@ describe("opencode registration set", () => {
     const first = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const second = createKeikoToolCatalog([opencodeRegistrationSet()]);
     expect(first.catalogRevision).toBe(second.catalogRevision);
+  });
+});
+
+describe("OPENCODE_NATIVE_EXTENSION_DEFINITIONS", () => {
+  it("is the single source for the profile's declared native extensions", () => {
+    const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
+    const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
+    expect(projection.nativeExtensions).toEqual(
+      OPENCODE_NATIVE_EXTENSION_DEFINITIONS.map(({ alias, contractVersion }) => ({
+        alias,
+        contractVersion,
+      })),
+    );
+  });
+
+  it("declares exactly question and todowrite, each with a non-empty description and an object schema", () => {
+    expect(OPENCODE_NATIVE_EXTENSION_DEFINITIONS.map((entry) => entry.alias).sort()).toEqual([
+      "question",
+      "todowrite",
+    ]);
+    for (const entry of OPENCODE_NATIVE_EXTENSION_DEFINITIONS) {
+      expect(entry.contractVersion).toBe(1);
+      expect(entry.description.length).toBeGreaterThan(0);
+      expect(entry.inputSchema.type).toBe("object");
+    }
   });
 });

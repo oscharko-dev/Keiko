@@ -5,6 +5,7 @@ import {
   type GitJourneyBinding,
   type GitJourneyRemoteFacts,
   type GitJourneyReason,
+  type GitJourneyState,
   type JourneyOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import {
@@ -181,25 +182,50 @@ export function produceJourneyOutcome(source: JourneyOutcomeInput): JourneyOutco
   return Object.freeze(outcome);
 }
 
-const JOURNEY_OUTCOME_MAX_BYTES = 8192;
+/**
+ * The durable projection of a JourneyOutcome (#3389 AC6): bounded identity ids/digests/shas, a
+ * closed state/reason pair, a monotonic revision and two timestamps — never the repository name,
+ * a provider URL, a branch ref, or any nested readiness/description snapshot. It is deliberately
+ * NOT a JourneyOutcome: reconstructing the full outcome after a restart means re-deriving it from
+ * a fresh provider/readiness/description read (the route always does this), not replaying cached
+ * content. This projection exists solely so that re-derivation can detect staleness (CAS by
+ * `observedAt`) across a process restart.
+ */
+export interface PersistedJourneyOutcome {
+  readonly runId: string;
+  readonly remoteDigest: string;
+  readonly prNumber: number;
+  readonly revision: number;
+  readonly state: GitJourneyState;
+  readonly reason: GitJourneyReason;
+  readonly headSha: string;
+  readonly evidenceRef: string;
+  readonly observedAt: string;
+  readonly updatedAt: string;
+}
 
 /**
  * Durable JourneyOutcome projection for restart/refresh (#3389 AC6). Independent of the run-bound
  * coding_runtime_snapshots row: keyed by the same-repository identity (`remoteDigest`) and PR
  * number, never by `repositoryId` or a run's live/terminal state, so a restarted process or a
- * terminated run still reconstructs the last observed outcome without resuming mutation authority.
- * CAS by `observedAt`: a write for an outcome no newer than the stored one is rejected rather than
- * silently republishing an older fact.
+ * terminated run still reaches the last observed outcome's bounded facts without resuming mutation
+ * authority. CAS by `observedAt`: a write for an outcome no newer than the stored one is rejected
+ * rather than silently republishing an older fact.
  */
 export interface GitJourneyOutcomeStore {
-  get(remoteDigest: string, prNumber: number): JourneyOutcome | undefined;
+  get(remoteDigest: string, prNumber: number): PersistedJourneyOutcome | undefined;
   record(outcome: JourneyOutcome): boolean;
 }
 
 interface JourneyOutcomeRow {
+  readonly run_id: string;
   readonly revision: number;
-  readonly outcome_json: string;
+  readonly state: string;
+  readonly reason: string;
+  readonly head_sha: string;
+  readonly evidence_ref: string;
   readonly observed_at: string;
+  readonly updated_at: string;
 }
 
 function journeyOutcomeRow(
@@ -209,24 +235,38 @@ function journeyOutcomeRow(
 ): JourneyOutcomeRow | undefined {
   return db
     .prepare(
-      "SELECT revision, outcome_json, observed_at FROM git_journey_outcomes WHERE remote_digest = ? AND pr_number = ?",
+      `SELECT run_id, revision, state, reason, head_sha, evidence_ref, observed_at, updated_at
+        FROM git_journey_outcomes WHERE remote_digest = ? AND pr_number = ?`,
     )
     .get(remoteDigest, prNumber) as JourneyOutcomeRow | undefined;
 }
 
-function parseStoredJourneyOutcome(json: string): JourneyOutcome {
-  const value: unknown = JSON.parse(json);
-  if (!isJourneyOutcome(value)) throw new TypeError("Invalid persisted journey outcome");
-  return value;
+function toPersistedOutcome(
+  row: JourneyOutcomeRow,
+  remoteDigest: string,
+  prNumber: number,
+): PersistedJourneyOutcome {
+  return {
+    runId: row.run_id,
+    remoteDigest,
+    prNumber,
+    revision: row.revision,
+    state: row.state as GitJourneyState,
+    reason: row.reason as GitJourneyReason,
+    headSha: row.head_sha,
+    evidenceRef: row.evidence_ref,
+    observedAt: row.observed_at,
+    updatedAt: row.updated_at,
+  };
 }
 
-function insertJourneyOutcome(db: DatabaseSync, outcome: JourneyOutcome, json: string): boolean {
-  const { runId, remoteDigest, prNumber } = outcome.binding;
+function insertJourneyOutcome(db: DatabaseSync, outcome: JourneyOutcome): boolean {
+  const { runId, remoteDigest, prNumber, headSha } = outcome.binding;
   const result = db
     .prepare(
       `INSERT INTO git_journey_outcomes
-        (remote_digest, pr_number, run_id, revision, state, reason, observed_at, outcome_json, updated_at)
-        VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+        (remote_digest, pr_number, run_id, revision, state, reason, head_sha, evidence_ref, observed_at, updated_at)
+        VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
     )
     .run(
       remoteDigest,
@@ -234,8 +274,9 @@ function insertJourneyOutcome(db: DatabaseSync, outcome: JourneyOutcome, json: s
       runId,
       outcome.state,
       outcome.reason,
+      headSha,
+      outcome.evidenceRef,
       outcome.observedAt,
-      json,
       outcome.observedAt,
     );
   return Number(result.changes) === 1;
@@ -244,24 +285,24 @@ function insertJourneyOutcome(db: DatabaseSync, outcome: JourneyOutcome, json: s
 function updateJourneyOutcome(
   db: DatabaseSync,
   outcome: JourneyOutcome,
-  json: string,
   existing: JourneyOutcomeRow,
 ): boolean {
   if (Date.parse(outcome.observedAt) <= Date.parse(existing.observed_at)) return false;
-  const { runId, remoteDigest, prNumber } = outcome.binding;
+  const { runId, remoteDigest, prNumber, headSha } = outcome.binding;
   const result = db
     .prepare(
       `UPDATE git_journey_outcomes
-        SET run_id = ?, revision = revision + 1, state = ?, reason = ?, observed_at = ?,
-            outcome_json = ?, updated_at = ?
+        SET run_id = ?, revision = revision + 1, state = ?, reason = ?, head_sha = ?,
+            evidence_ref = ?, observed_at = ?, updated_at = ?
         WHERE remote_digest = ? AND pr_number = ? AND revision = ?`,
     )
     .run(
       runId,
       outcome.state,
       outcome.reason,
+      headSha,
+      outcome.evidenceRef,
       outcome.observedAt,
-      json,
       outcome.observedAt,
       remoteDigest,
       prNumber,
@@ -272,19 +313,17 @@ function updateJourneyOutcome(
 
 export function createGitJourneyOutcomeStore(db: DatabaseSync): GitJourneyOutcomeStore {
   return {
-    get(remoteDigest, prNumber): JourneyOutcome | undefined {
+    get(remoteDigest, prNumber): PersistedJourneyOutcome | undefined {
       const row = journeyOutcomeRow(db, remoteDigest, prNumber);
-      return row === undefined ? undefined : parseStoredJourneyOutcome(row.outcome_json);
+      return row === undefined ? undefined : toPersistedOutcome(row, remoteDigest, prNumber);
     },
     record(outcome): boolean {
       if (!isJourneyOutcome(outcome)) return false;
-      const json = JSON.stringify(outcome);
-      if (Buffer.byteLength(json, "utf8") > JOURNEY_OUTCOME_MAX_BYTES) return false;
       const { remoteDigest, prNumber } = outcome.binding;
       const existing = journeyOutcomeRow(db, remoteDigest, prNumber);
       return existing === undefined
-        ? insertJourneyOutcome(db, outcome, json)
-        : updateJourneyOutcome(db, outcome, json, existing);
+        ? insertJourneyOutcome(db, outcome)
+        : updateJourneyOutcome(db, outcome, existing);
     },
   };
 }

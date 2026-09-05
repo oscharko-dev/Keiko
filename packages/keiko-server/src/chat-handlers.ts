@@ -81,6 +81,7 @@ import {
   UiStoreError,
   isProjectAvailable,
   type Chat,
+  type ChatGitChangeScope,
   type ChatMessage,
   type ChatTurnInspection,
   type Project,
@@ -94,6 +95,14 @@ import { validateProjectPath } from "./store/validation.js";
 import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
+// Issue #3400 (epic #3384, contract correction 4): the server-minted description authority
+// (#3399) that admits model egress of git-change snapshot content outside a running Code task.
+// Read-only consumption of the existing owning module — never redefined here.
+import {
+  authorizeGitDeliveryModelEgress,
+  type GitDeliveryDescriptionAuthorityPort,
+  type GitDeliveryDescriptionAuthorityScope,
+} from "./gitDelivery/runBoundAuthority.js";
 import {
   currentAuditRedactString,
   currentConversationReady,

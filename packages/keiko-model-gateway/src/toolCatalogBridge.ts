@@ -6,6 +6,7 @@ import type { ToolResultReason } from "@oscharko-dev/keiko-contracts/runtime/gov
 import {
   captureCatalogJson,
   createToolInvocationNormalizer,
+  OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
   type ToolInvocationNormalizer,
 } from "@oscharko-dev/keiko-tool-catalog";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
@@ -54,21 +55,51 @@ function capturedAdvertisement(input: unknown): GatewayToolCatalogAdvertisement 
   );
   return object as unknown as GatewayToolCatalogAdvertisement;
 }
+/**
+ * Native extensions (`question`, `todowrite`) are never Keiko tool descriptors (ADR-0175 D2) and
+ * carry no schema on the compiled projection -- their pinned wire schema is the single source
+ * `@oscharko-dev/keiko-tool-catalog`'s `OPENCODE_NATIVE_EXTENSION_DEFINITIONS`. A projection may
+ * only ever declare the closed `"question" | "todowrite"` alias set (contracts-enforced), so a
+ * missing definition here is an impossible-by-contract drift, not a request-shaped error.
+ */
+function nativeExtensionDefinition(
+  alias: "question" | "todowrite",
+): (typeof OPENCODE_NATIVE_EXTENSION_DEFINITIONS)[number] {
+  const definition = OPENCODE_NATIVE_EXTENSION_DEFINITIONS.find((entry) => entry.alias === alias);
+  if (definition === undefined)
+    throw new TypeError(`Missing native extension definition: ${alias}`);
+  return definition;
+}
+function nativeExtensionTools(normalizer: ToolInvocationNormalizer): readonly ToolDefinition[] {
+  return normalizer.binding.projection.nativeExtensions.map((extension) => {
+    const definition = nativeExtensionDefinition(extension.alias);
+    return Object.freeze({
+      name: definition.alias,
+      description: definition.description,
+      parameters: definition.inputSchema,
+    });
+  });
+}
 function definitions(normalizer: ToolInvocationNormalizer, now: number): readonly ToolDefinition[] {
   const tools = normalizer.tools(now);
   requireBridge(
     tools.every((tool) => tool.inputSchema.type === "object"),
     "unsupported-capability",
   );
-  return Object.freeze(
-    tools.map((tool) =>
+  return Object.freeze([
+    ...tools.map((tool) =>
       Object.freeze({
         name: tool.alias,
         description: tool.description,
         parameters: tool.inputSchema,
       }),
     ),
-  );
+    ...nativeExtensionTools(normalizer),
+  ]);
+}
+/** A native extension is transport data (ADR-0175 D2): no binder invocation, no handler call. */
+function isNativeExtensionAlias(normalizer: ToolInvocationNormalizer, alias: string): boolean {
+  return normalizer.binding.projection.nativeExtensions.some((extension) => extension.alias === alias);
 }
 
 function normalizerFor(advertisement: GatewayToolCatalogAdvertisement): ToolInvocationNormalizer {
@@ -77,12 +108,7 @@ function normalizerFor(advertisement: GatewayToolCatalogAdvertisement): ToolInvo
     projection: advertisement.projection,
     offered: advertisement.offered,
   };
-  const normalizer = createToolInvocationNormalizer(binding, advertisement.legacySession);
-  requireBridge(
-    normalizer.binding.projection.nativeExtensions.length === 0,
-    "unsupported-capability",
-  );
-  return normalizer;
+  return createToolInvocationNormalizer(binding, advertisement.legacySession);
 }
 function captureCall(input: NormalizedToolCall): NormalizedToolCall {
   const object = captureCatalogJson(input) as Readonly<Record<string, unknown>>;
@@ -125,6 +151,18 @@ function bindCall(
   try {
     const call = captureCall(input);
     requireBridge(normalizer !== undefined, "unoffered-tool");
+    if (isNativeExtensionAlias(normalizer, call.name)) {
+      log.write({
+        level: "info",
+        category: "gateway",
+        op: "gateway.tool-catalog.native-passthrough",
+        extra: {
+          projectionDigest: normalizer.binding.projection.projectionDigest,
+          toolCount: 1,
+        },
+      });
+      return call;
+    }
     const invocation = normalizer.bindAlias(call.name, call.arguments, now());
     log.write({
       level: "info",

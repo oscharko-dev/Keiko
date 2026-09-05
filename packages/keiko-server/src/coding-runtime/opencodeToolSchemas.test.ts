@@ -5,6 +5,7 @@ import {
   createOpenCodeGatewayToolCatalogAdvertisement,
   hasExactOpenCodeVisibleToolContract,
   OPENCODE_MODEL_VISIBLE_TOOLS,
+  OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
 } from "./opencodeToolSchemas.js";
 
 function projectedTools(): readonly {
@@ -97,10 +98,13 @@ describe("OpenCode visible tool contract", () => {
 });
 
 describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
-  it("binds the seven catalog-representable governed tools, no native extensions", () => {
+  it("binds the seven catalog-representable governed tools plus its two native extensions (#3414 follow-up)", () => {
     const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0);
     expect(advertisement.kind).toBe("bound");
-    expect(advertisement.projection.nativeExtensions).toEqual([]);
+    expect(advertisement.projection.nativeExtensions).toEqual([
+      { alias: "question", contractVersion: 1 },
+      { alias: "todowrite", contractVersion: 1 },
+    ]);
     expect(advertisement.projection.tools.map((tool) => tool.alias).sort()).toEqual(
       [
         "keiko_changeset_edit",
@@ -112,8 +116,19 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
         "keiko_workspace_read",
       ].sort(),
     );
+    // Catalog toolRefs never carry a native extension (ADR-0175 D2: never a Keiko tool
+    // descriptor) -- the offered set still names only the seven catalog-representable tools.
     expect(advertisement.offered.toolRefs).toHaveLength(7);
     expect(advertisement.offered.binding.readiness).toBe("ready");
+  });
+
+  it("names all nine OpenCode 1.17.17 model-visible tools once native extensions are included", () => {
+    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0);
+    const modelVisibleNames = new Set([
+      ...advertisement.projection.tools.map((tool) => tool.alias),
+      ...advertisement.projection.nativeExtensions.map((extension) => extension.alias),
+    ]);
+    expect(modelVisibleNames).toEqual(new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES));
   });
 
   it("issues a distinct offer identity and expiry per call", () => {

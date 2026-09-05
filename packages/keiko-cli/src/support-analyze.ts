@@ -374,9 +374,12 @@ function compareOrdered(a: OrderedLine, b: OrderedLine): number {
   return a.rank === b.rank ? a.within - b.within : a.rank - b.rank;
 }
 
-function distinctInOrder(values: readonly string[]): readonly string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
+// Generic over `T` (epic #3384): reused for `IssueToPrJourneyView.phasesObserved`
+// (`IssueToPrJourneyPhase[]`) as well as every existing `readonly string[]` caller below — one
+// dedup-in-first-occurrence-order implementation, not a second copy for a narrower element type.
+function distinctInOrder<T>(values: readonly T[]): readonly T[] {
+  const seen = new Set<T>();
+  const out: T[] = [];
   for (const value of values) {
     if (seen.has(value)) continue;
     seen.add(value);
@@ -852,6 +855,264 @@ function buildIndexingJobSeed(lines: readonly ServerLogLineView[]): IndexingJobS
   };
 }
 
+// ─── Epic #3384: issue-to-PR journey reconstruction ────────────────────────────────────────────
+//
+// Reconstructs the repository-delivery journey (intake -> mutation authority -> verified commit ->
+// push -> draft PR -> CI readiness -> description generation/apply -> journey outcome) from the
+// body-free `git.delivery.*`/`git.pr-description*`/`git.journey-*`/`coding-context.github*`/
+// `git-change.chat.*`/`coding-repository-handler.*` lines already present on a correlated timeline.
+// Every field a step carries is copied VERBATIM off the emitter's own closed-vocabulary `extra`
+// value (state/status/phase/decision/outcome/reason, plus the digest/id fields a replay needs) —
+// this reconstruction never invents a label the production emitter did not itself write.
+//
+// Fail-closed by construction: a step's `status`/`reason`/`digests` are read from the SAME
+// `redactLogFields` choke point the activity-log sink itself writes through (never the raw line),
+// so a value-shape violation (prose, a secret, a path) that a hostile or corrupted log line still
+// carries under an otherwise-innocuous field name is caught here exactly as it would be at write
+// time. When no redactor is supplied at all, a step is reported UNVERIFIED with no content fields
+// populated, rather than falling back to trusting the raw line (AGENTS.md §4).
+
+export type IssueToPrJourneyPhase =
+  | "intake"
+  | "authority"
+  | "commit"
+  | "push"
+  | "pr"
+  | "readiness"
+  | "description"
+  | "outcome";
+
+// Ops whose phase does not depend on their own `extra` — a straight lookup.
+const JOURNEY_OP_PHASE = new Map<string, IssueToPrJourneyPhase>([
+  ["coding-repository-handler.started", "intake"],
+  ["coding-repository-handler.settled", "intake"],
+  ["coding-context.github.read", "intake"],
+  ["coding-context.github-remote.evaluated", "intake"],
+  ["git-change.chat.connected", "intake"],
+  ["git-change.chat.refreshed", "intake"],
+  ["git-change.chat.stale", "intake"],
+  ["git-change.chat.blocked", "intake"],
+  ["coding-context.github-authorization.evaluated", "authority"],
+  ["coding-context.github-authorization.changed", "authority"],
+  ["git.delivery.authority.admitted", "authority"],
+  ["git.delivery.authority.denied", "authority"],
+  ["git.delivery.buffers.checked", "commit"],
+  ["git.delivery.commit.approval.required", "commit"],
+  ["git.delivery.commit.approval.minted", "commit"],
+  ["git.delivery.push.approval.required", "push"],
+  ["git.delivery.push.approval.minted", "push"],
+  ["git.delivery.pr.approval.required", "pr"],
+  ["git.delivery.pr.approval.minted", "pr"],
+  ["git.delivery.readiness.observed", "readiness"],
+  ["git.pr-description", "description"],
+  ["git.pr-description.receipt", "description"],
+  ["git.journey-observation", "outcome"],
+  ["git.journey-outcome.recorded", "outcome"],
+]);
+
+// Ops whose phase is carried on the `GitDeliveryActionKind` (`git-delivery.ts`) named in their own
+// `extra` rather than fixed by the op itself — one generic mutation-lifecycle op reports on every
+// action kind (AGENTS.md §5: one formatter, not one op per action kind).
+const JOURNEY_ACTION_KIND_PHASE: Readonly<Record<string, IssueToPrJourneyPhase>> = {
+  commit: "commit",
+  push: "push",
+  "pr-create": "pr",
+  "pr-update": "pr",
+  "pr-description-apply": "description",
+};
+const JOURNEY_ACTION_KIND_OPS: ReadonlySet<string> = new Set([
+  "git.delivery.mutation.completed",
+  "git.delivery.mutation.failed",
+  "git.delivery.dispatch.no-spawn",
+]);
+
+// Every op literal this reconstruction recognises, direct or action-kind-derived — the set
+// `hasIssueToPrJourneyOps` consults to decide whether a redaction verifier is worth loading at all.
+const ALL_JOURNEY_OPS: ReadonlySet<string> = new Set([
+  ...JOURNEY_OP_PHASE.keys(),
+  ...JOURNEY_ACTION_KIND_OPS,
+]);
+
+function actionKindPhase(source: Readonly<Record<string, unknown>>): IssueToPrJourneyPhase | undefined {
+  const kind = optionalString(source, "actionKind") ?? optionalString(source, "operation");
+  return kind === undefined ? undefined : JOURNEY_ACTION_KIND_PHASE[kind];
+}
+
+function phaseForLine(view: ServerLogLineView): IssueToPrJourneyPhase | undefined {
+  const direct = JOURNEY_OP_PHASE.get(view.op);
+  if (direct !== undefined) return direct;
+  if (!JOURNEY_ACTION_KIND_OPS.has(view.op)) return undefined;
+  return actionKindPhase(view.extra ?? {});
+}
+
+// Whether `result` carries any evidence this reconstruction covers — the whole-file `clusters`
+// view already groups every line by op regardless of correlationId, so this is a cheap, exact
+// membership check rather than a second scan of every line.
+export function hasIssueToPrJourneyOps(result: AnalyzeAllResult): boolean {
+  return result.clusters.some((cluster) => ALL_JOURNEY_OPS.has(cluster.op));
+}
+
+export interface IssueToPrJourneyStep {
+  readonly phase: IssueToPrJourneyPhase;
+  readonly op: string;
+  readonly ts: string;
+  // False exactly when no redactor was supplied — every other field is then omitted rather than
+  // read from the unverified raw line.
+  readonly redactionVerified: boolean;
+  readonly status?: string | undefined;
+  readonly reason?: string | undefined;
+  readonly errorKind?: string | undefined;
+  // The digest/id fields a replay needs (runId, headSha, evidenceRef, snapshotDigest, …), read
+  // off the SAME re-verified fields as status/reason — never off the raw line.
+  readonly digests?: Readonly<Record<string, string | number>> | undefined;
+  // Present only when re-running the line's own `extra` through `redactLogFields` produced a
+  // DIFFERENT value for one of its fields — evidence that the raw line carried a body-bearing
+  // value under that name. Names only, never the offending value itself.
+  readonly redactionViolations?: readonly string[] | undefined;
+}
+
+export interface IssueToPrJourneyView {
+  readonly steps: readonly IssueToPrJourneyStep[];
+  readonly phasesObserved: readonly IssueToPrJourneyPhase[];
+  readonly redactionViolationCount: number;
+}
+
+function extraString(
+  source: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): string | undefined {
+  const value = source?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function stepStatus(source: Readonly<Record<string, unknown>>): string | undefined {
+  return (
+    extraString(source, "state") ??
+    extraString(source, "status") ??
+    extraString(source, "phase") ??
+    extraString(source, "decision") ??
+    extraString(source, "outcome")
+  );
+}
+
+const JOURNEY_DIGEST_FIELDS: readonly string[] = [
+  "runId",
+  "headSha",
+  "evidenceRef",
+  "remoteDigest",
+  "remoteDigestPrefix",
+  "snapshotDigest",
+  "artifactDigest",
+  "bodyDigest",
+  "scopeDigest",
+  "relationshipId",
+  "revision",
+  "prExternalId",
+];
+
+function digestValue(
+  source: Readonly<Record<string, unknown>>,
+  key: string,
+): string | number | undefined {
+  const value = source[key];
+  return typeof value === "string" || typeof value === "number" ? value : undefined;
+}
+
+function journeyDigests(
+  source: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, string | number>> | undefined {
+  const out: Record<string, string | number> = {};
+  for (const key of JOURNEY_DIGEST_FIELDS) {
+    const value = digestValue(source, key);
+    if (value !== undefined) out[key] = value;
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
+}
+
+// A field-name violation (denylisted content) OR a value-shape violation (prose/secret/path caught
+// regardless of name) both show up the same way: `redactLogFields` replaces or drops the field, so
+// its re-verified value differs from what the raw line carried. `null` is excluded on purpose — the
+// production redactor drops it by design (it is not one of the allowed value types), which is
+// correct behaviour, not evidence of a leak.
+function redactionViolations(
+  raw: Readonly<Record<string, unknown>> | undefined,
+  verified: Readonly<Record<string, unknown>>,
+): readonly string[] | undefined {
+  if (raw === undefined) return undefined;
+  const violated = Object.keys(raw).filter((key) => {
+    const value = raw[key];
+    if (value === null) return false;
+    return JSON.stringify(value) !== JSON.stringify(verified[key]);
+  });
+  return violated.length === 0 ? undefined : violated;
+}
+
+function journeyStepFor(
+  view: ServerLogLineView,
+  phase: IssueToPrJourneyPhase,
+  redactor: ToolDiagnosticRedactor | undefined,
+): IssueToPrJourneyStep {
+  if (redactor === undefined) {
+    return { phase, op: view.op, ts: view.ts, redactionVerified: false };
+  }
+  const verified = redactor(view.extra ?? {}) ?? {};
+  const violations = redactionViolations(view.extra, verified);
+  const status = stepStatus(verified);
+  const reason = extraString(verified, "reason");
+  const digests = journeyDigests(verified);
+  return {
+    phase,
+    op: view.op,
+    ts: view.ts,
+    redactionVerified: true,
+    ...(status === undefined ? {} : { status }),
+    ...(reason === undefined ? {} : { reason }),
+    ...(view.errorKind === undefined ? {} : { errorKind: view.errorKind }),
+    ...(digests === undefined ? {} : { digests }),
+    ...(violations === undefined ? {} : { redactionViolations: violations }),
+  };
+}
+
+// Undefined when the timeline carries none of this reconstruction's ops at all — the same
+// "absent, not empty" convention `buildGatewayReplayScript`/`buildHttpRequestSeed` already use.
+function buildIssueToPrJourneyView(
+  lines: readonly ServerLogLineView[],
+  redactor: ToolDiagnosticRedactor | undefined,
+): IssueToPrJourneyView | undefined {
+  const steps: IssueToPrJourneyStep[] = [];
+  for (const view of lines) {
+    const phase = phaseForLine(view);
+    if (phase === undefined) continue;
+    steps.push(journeyStepFor(view, phase, redactor));
+  }
+  if (steps.length === 0) return undefined;
+  return {
+    steps,
+    phasesObserved: distinctInOrder(steps.map((step) => step.phase)),
+    redactionViolationCount: steps.filter((step) => step.redactionViolations !== undefined).length,
+  };
+}
+
+function issueToPrJourneyWarning(journey: IssueToPrJourneyView | undefined): string | undefined {
+  if (journey === undefined) {
+    return (
+      "no git-delivery/pr-description/journey-observation lines found for this correlationId — " +
+      "either no repository-delivery journey occurred on this run, or this artifact predates the " +
+      "issue-to-PR journey evidence"
+    );
+  }
+  if (journey.steps.some((step) => !step.redactionVerified)) {
+    return (
+      "no redaction verifier supplied — issueToPrJourney step fields were withheld rather than " +
+      "read from an unverified line"
+    );
+  }
+  return journey.redactionViolationCount > 0
+    ? `${String(journey.redactionViolationCount)} issueToPrJourney step(s) carried a field that ` +
+        "failed redaction re-verification and were withheld from this seed"
+    : undefined;
+}
+
 // A bundle's manifest line (index 0, `$section: "manifest"`) carries `storeFingerprints` when the
 // exporter is Wave-4a-or-later. `classifyLine` treats it as bundle metadata and never parses its
 // content, so this reads it directly, independent of `analyzeLogText`. Every candidate is
@@ -898,6 +1159,9 @@ export interface ReproductionSeed {
   readonly httpRequest?: HttpRequestSeed | undefined;
   readonly storeFingerprint?: readonly StoreFingerprint[] | undefined;
   readonly indexingJob?: IndexingJobSeed | undefined;
+  // Epic #3384: the issue-to-PR repository-delivery journey, when this correlationId's timeline
+  // carries any of its ops — undefined, never an empty view, when it carries none.
+  readonly issueToPrJourney?: IssueToPrJourneyView | undefined;
   readonly stackFrames?: readonly string[] | undefined;
   readonly causeChain?: readonly string[] | undefined;
   // What could NOT be reconstructed from this artifact, and why — GRAFTED FROM DESIGN C
@@ -951,6 +1215,7 @@ interface SeedWarningInputs {
   readonly gatewayScript: GatewayReplayScript | undefined;
   readonly httpRequest: HttpRequestSeed | undefined;
   readonly storeFingerprint: readonly StoreFingerprint[] | undefined;
+  readonly issueToPrJourney: IssueToPrJourneyView | undefined;
 }
 
 function buildSeedWarnings(input: SeedWarningInputs): readonly string[] {
@@ -960,6 +1225,7 @@ function buildSeedWarnings(input: SeedWarningInputs): readonly string[] {
     gatewayScriptWarning(input.gatewayScript),
     httpRequestWarning(input.httpRequest),
     storeFingerprintWarning(input.kind, input.storeFingerprint),
+    issueToPrJourneyWarning(input.issueToPrJourney),
   ].filter((warning): warning is string => warning !== undefined);
 }
 
@@ -992,6 +1258,10 @@ export function buildReproductionSeed(
   const toolCatalog = timeline.lines.flatMap((line) =>
     line.toolCatalog === undefined ? [] : [line.toolCatalog],
   );
+  const issueToPrJourney = buildIssueToPrJourneyView(
+    timeline.lines,
+    options.toolDiagnosticRedactor,
+  );
 
   return {
     schemaVersion: REPRODUCTION_SEED_SCHEMA_VERSION,
@@ -1004,6 +1274,7 @@ export function buildReproductionSeed(
     ...(httpRequest === undefined ? {} : { httpRequest }),
     ...(storeFingerprint === undefined ? {} : { storeFingerprint }),
     ...(indexingJob === undefined ? {} : { indexingJob }),
+    ...(issueToPrJourney === undefined ? {} : { issueToPrJourney }),
     ...(stackFrames.length === 0 ? {} : { stackFrames }),
     ...(causeChain.length === 0 ? {} : { causeChain }),
     warnings: [
@@ -1014,6 +1285,7 @@ export function buildReproductionSeed(
         gatewayScript,
         httpRequest,
         storeFingerprint,
+        issueToPrJourney,
       }),
     ],
   };
@@ -1120,6 +1392,9 @@ export function renderHumanReproductionSeed(seed: ReproductionSeed): string {
   }
   if (seed.storeFingerprint !== undefined) {
     lines.push(`storeFingerprint: ${JSON.stringify(seed.storeFingerprint)}`);
+  }
+  if (seed.issueToPrJourney !== undefined) {
+    lines.push(`issueToPrJourney: ${JSON.stringify(seed.issueToPrJourney)}`);
   }
   if (seed.stackFrames !== undefined && seed.stackFrames.length > 0) {
     const frameLines = seed.stackFrames.map((frame) => `  ${frame}`).join("\n");

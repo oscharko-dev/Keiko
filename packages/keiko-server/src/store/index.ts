@@ -27,6 +27,8 @@ export type {
   WorkspaceManifestRootProject,
   WorkspaceTrustRecordRow,
   WorkspaceTrustRecordRowInput,
+  ChatGitChangeScope,
+  ChatGitChangeDescriptionStatus,
 } from "./types.js";
 export {
   UiStoreError,

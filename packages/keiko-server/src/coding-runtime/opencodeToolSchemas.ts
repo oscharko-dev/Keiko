@@ -4,6 +4,7 @@ import {
   compileToolProjection,
   createKeikoToolCatalog,
   opencodeRegistrationSet,
+  OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
 } from "@oscharko-dev/keiko-tool-catalog";
 import type { GatewayToolCatalogAdvertisement } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import {
@@ -15,38 +16,18 @@ import {
 export const OPENCODE_PINNED_VERSION = "1.17.17";
 export const OPENCODE_GOVERNED_ACTION_PERMISSION = "keiko_governed_action";
 
-const QUESTION_SCHEMA = {
-  $schema: "https://json-schema.org/draft/2020-12/schema",
-  properties: {
-    questions: {
-      description: "Questions to ask",
-      items: {
-        properties: {
-          header: { description: "Very short label (max 30 chars)", type: "string" },
-          multiple: { description: "Allow selecting multiple choices", type: "boolean" },
-          options: {
-            description: "Available choices",
-            items: {
-              properties: {
-                description: { description: "Explanation of choice", type: "string" },
-                label: { description: "Display text (1-5 words, concise)", type: "string" },
-              },
-              required: ["label", "description"],
-              type: "object",
-            },
-            type: "array",
-          },
-          question: { description: "Complete question", type: "string" },
-        },
-        required: ["question", "header", "options"],
-        type: "object",
-      },
-      type: "array",
-    },
-  },
-  required: ["questions"],
-  type: "object",
-} as const;
+/**
+ * The two native extensions' exact pinned wire schemas live in
+ * `@oscharko-dev/keiko-tool-catalog`'s `OPENCODE_NATIVE_EXTENSION_DEFINITIONS` (one source,
+ * imported back here); see that package's opencode.ts header comment for why.
+ */
+function nativeExtensionSchema(alias: "question" | "todowrite"): Readonly<Record<string, unknown>> {
+  const definition = OPENCODE_NATIVE_EXTENSION_DEFINITIONS.find((entry) => entry.alias === alias);
+  if (definition === undefined) throw new TypeError(`Missing native extension definition: ${alias}`);
+  return definition.inputSchema;
+}
+
+const QUESTION_SCHEMA = nativeExtensionSchema("question");
 
 const WORKSPACE_READ_SCHEMA = {
   type: "object",
@@ -184,32 +165,7 @@ const VERIFICATION_PROJECTED_SCHEMA = {
  * strings upstream; Keiko enforces the closed status vocabulary at the safe-activity normalizer,
  * never here, or the gateway digest comparison would reject the child's declared contract.
  */
-const TODO_WRITE_SCHEMA = {
-  $schema: "https://json-schema.org/draft/2020-12/schema",
-  type: "object",
-  properties: {
-    todos: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          content: { type: "string", description: "Brief description of the task" },
-          status: {
-            type: "string",
-            description: "Current status of the task: pending, in_progress, completed, cancelled",
-          },
-          priority: {
-            type: "string",
-            description: "Priority level of the task: high, medium, low",
-          },
-        },
-        required: ["content", "status", "priority"],
-      },
-      description: "The updated todo list",
-    },
-  },
-  required: ["todos"],
-} as const;
+const TODO_WRITE_SCHEMA = nativeExtensionSchema("todowrite");
 
 // #2387 read-only public research: one exact https URL per call. The server side enforces the real
 // policy (grant, host allowlist, request-line binding, budgets); this schema only bounds the shape.
@@ -390,18 +346,15 @@ const OPENCODE_GATEWAY_OFFER_LIFETIME_MS = 30_000;
 /**
  * The catalog used to build the sidecar gateway's OUTGOING `toolCatalog` advertisement (the
  * function-calling schema shown to the underlying model). This composes the same seven governed
- * entries `@oscharko-dev/keiko-tool-catalog`'s `opencodeRegistrationSet()` declares, with
- * `nativeExtensions` cleared: `packages/keiko-model-gateway/src/toolCatalogBridge.ts`'s
- * `normalizerFor` and `@oscharko-dev/keiko-tool-catalog`'s `invocation.ts` (`selectedTools`) do
- * not yet merge native extensions into a bound tool list, so a profile that declares them cannot
- * bind here today. Until that bridge support lands, `question`/`todowrite` are not part of this
- * outgoing advertisement (#3414 report) -- unaffected: this catalog is never used to validate
- * incoming sidecar requests, which stays `hasExactOpenCodeVisibleToolContract` above, pinned to
- * the real OpenCode 1.17.17 runtime's own generated tool source.
+ * entries plus the two native extensions `@oscharko-dev/keiko-tool-catalog`'s
+ * `opencodeRegistrationSet()` declares, unmodified: `packages/keiko-model-gateway/src/
+ * toolCatalogBridge.ts`'s bridge merges a bound projection's native extensions into the
+ * model-visible tool list and passes a call to one of their aliases straight through to the
+ * sidecar, unbound (#3414 follow-up). This catalog is never used to validate incoming sidecar
+ * requests, which stays `hasExactOpenCodeVisibleToolContract` above, pinned to the real OpenCode
+ * 1.17.17 runtime's own generated tool source.
  */
-const OPENCODE_GATEWAY_CATALOG = createKeikoToolCatalog([
-  { ...opencodeRegistrationSet(), nativeExtensions: [] },
-]);
+const OPENCODE_GATEWAY_CATALOG = createKeikoToolCatalog([opencodeRegistrationSet()]);
 
 /**
  * Builds the "bound" `toolCatalog` advertisement for one outgoing coding-sidecar-gateway request.
