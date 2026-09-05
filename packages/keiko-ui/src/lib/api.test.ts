@@ -3797,9 +3797,25 @@ describe("Governed commit/push mint-then-execute (#3386/#3387, F3 epic #3384 fin
     });
   }
 
+  // The EXACT shape `deniedAuthorityGate` (requestPreparation.ts) issues for every admission-layer
+  // refusal — the only mint failure `proposeCommit`/`proposePush` may fall back on.
   function jsonDenied(): Response {
-    return new Response(JSON.stringify({ error: { code: "FORBIDDEN", message: "denied" } }), {
-      status: 403,
+    return new Response(
+      JSON.stringify({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED", message: "denied" } }),
+      {
+        status: 403,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  }
+
+  // A genuine mint failure that is NOT a policy denial — a server error, a malformed request, or a
+  // transport failure. Review finding (F3 major, epic #3384 final audit): a blanket `catch {}`
+  // relabelled this as the same static "approval-required" outcome as a real denial, discarding the
+  // actual error and its diagnostic value (AGENTS.md §7 no-silent-failures).
+  function jsonServerError(): Response {
+    return new Response(JSON.stringify({ error: { code: "INTERNAL", message: "boom" } }), {
+      status: 500,
       headers: { "Content-Type": "application/json" },
     });
   }
@@ -3902,6 +3918,33 @@ describe("Governed commit/push mint-then-execute (#3386/#3387, F3 epic #3384 fin
 
     await expect(proposeCommit({ projectId: "/repo", message: "feat: x" })).rejects.toThrow();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("proposeCommit rethrows when the mint fails for a reason other than authority denial (F3 major repair)", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonServerError());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(proposeCommit({ projectId: "/repo", message: "feat: x" })).rejects.toMatchObject({
+      code: "INTERNAL",
+      status: 500,
+    });
+    // The genuine failure never reaches execute, and is never relabelled as approval-required.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("proposePush rethrows when the mint fails for a reason other than authority denial (F3 major repair)", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonServerError());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      proposePush({
+        projectId: "/repo",
+        remoteAlias: "origin",
+        remoteBranchName: "feature/x",
+        sourceBranchName: "feature/x",
+      }),
+    ).rejects.toMatchObject({ code: "INTERNAL", status: 500 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

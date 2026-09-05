@@ -3932,17 +3932,37 @@ export async function fetchGitDeliveryPrApprove(
   });
 }
 
+// The single denial shape `gitDeliveryAuthorityGate` (requestPreparation.ts) issues for every
+// admission-layer refusal — deployment-mode denial, workspace-authority mismatch, run/envelope
+// mismatch — is always this exact HTTP 403 + code pair (`deniedAuthorityGate`,
+// requestPreparation.ts). It is the ONLY failure the mint (`/approve`) route can produce that
+// represents an actual policy denial rather than a genuine request/transport/server failure: a
+// validation failure from `prepareCommitExecution`/`preparePushExecution` (bad request, missing
+// workspace) is a 400, and any 5xx, network error, or malformed-JSON parse failure is not a
+// denial at all. `proposeCommit`/`proposePush` must fall back to the static "approval-required"
+// outcome ONLY for this shape and rethrow everything else, so a genuine mint failure still
+// surfaces through the caller's normal error path (`flow.error` / `formatGitError`) instead of
+// being silently relabelled as an unmet approval (final-audit review of F3, epic #3384).
+function isGitDeliveryAuthorityDenied(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 403 &&
+    error.code === "GIT_DELIVERY_AUTHORITY_DENIED"
+  );
+}
+
 /**
  * Mints then immediately redeems the one-use commit approval — the mint/execute pair a single
  * "Commit" action performs as one governed action (epic #3384 correction 5: an unconditional
  * approval requirement, never mode-denied). Mirrors `proposePrMarkReady`, with one addition the
- * standalone Git Client Window needs (F3 in the epic #3384 final audit): when the mint step
- * itself is denied (network, bad request, deployment-mode denial), this resolves to the SAME
- * static `"approval-required"` outcome shape `commitApprovalRequiredBlock` (commitRoutes.ts)
- * already returns for the pack-driven approval-gated path, rather than rejecting with a raw
- * error — so the caller's existing outcome renderer (STATUS_LABEL) shows one consistent label
- * instead of a dead end. An execute-step failure, after a successful mint, still rejects: that
- * is a real execution failure, not an unmet approval.
+ * standalone Git Client Window needs (F3 in the epic #3384 final audit): when the mint step is
+ * actually DENIED by the admission gate (`GIT_DELIVERY_AUTHORITY_DENIED`, see
+ * `isGitDeliveryAuthorityDenied`), this resolves to the SAME static `"approval-required"` outcome
+ * shape `commitApprovalRequiredBlock` (commitRoutes.ts) already returns for the pack-driven
+ * approval-gated path, rather than rejecting with a raw error — so the caller's existing outcome
+ * renderer (STATUS_LABEL) shows one consistent label instead of a dead end. Any other mint
+ * failure (network error, malformed response, a genuine 4xx/5xx that is not the denial shape) is
+ * NOT a denial and rethrows, same as an execute-step failure after a successful mint.
  */
 export async function proposeCommit(
   input: Omit<GitDeliveryCommitExecuteInput, "approval">,
@@ -3951,7 +3971,8 @@ export async function proposeCommit(
   let minted: GitDeliveryCommitApproveResponse;
   try {
     minted = await fetchGitDeliveryCommitApprove(input, signal);
-  } catch {
+  } catch (error) {
+    if (!isGitDeliveryAuthorityDenied(error)) throw error;
     return { schemaVersion: "1", status: "approval-required", actionKind: "commit" };
   }
   return fetchGitDeliveryCommitExecute({ ...input, approval: minted.approval }, signal);
@@ -3961,9 +3982,11 @@ export async function proposeCommit(
  * Mints then immediately redeems the one-use push approval — the mint/execute pair a single
  * "Push" action performs as one governed action (epic #3384 correction 5: an unconditional
  * approval requirement, never mode-denied). Mirrors `proposePrMarkReady`, with the same mint-
- * denial fallback as `proposeCommit` (F3 in the epic #3384 final audit): a denied mint resolves
- * to the SAME static `"approval-required"` outcome shape `pushApprovalRequiredBlock`
- * (pushRoutes.ts) already returns, instead of rejecting. An execute-step failure still rejects.
+ * denial fallback as `proposeCommit` (F3 in the epic #3384 final audit): a mint actually DENIED
+ * by the admission gate (`isGitDeliveryAuthorityDenied`) resolves to the SAME static
+ * `"approval-required"` outcome shape `pushApprovalRequiredBlock` (pushRoutes.ts) already
+ * returns, instead of rejecting. Any other mint failure is NOT a denial and rethrows, same as an
+ * execute-step failure.
  */
 export async function proposePush(
   input: Omit<GitDeliveryPushInput, "approval">,
@@ -3972,7 +3995,8 @@ export async function proposePush(
   let minted: GitDeliveryPushApproveResponse;
   try {
     minted = await fetchGitDeliveryPushApprove(input, signal);
-  } catch {
+  } catch (error) {
+    if (!isGitDeliveryAuthorityDenied(error)) throw error;
     return { schemaVersion: "1", status: "approval-required", actionKind: "push" };
   }
   return fetchGitDeliveryPushExecute({ ...input, approval: minted.approval }, signal);
