@@ -391,6 +391,56 @@ describe("CodingRuntimeAuthorityService", () => {
     ).toEqual({ ok: false, reason: "authority-resolution-failed" });
   });
 
+  it('admits a prompt reservation issued from inside the managed runtime\'s own start() -- while runtimeState is still "starting", ahead of any "ready"/"running" transition (#3390 real window), while a paused run or a mismatched run id are still refused', () => {
+    // #3390 (review repair): production wiring (productionCodingRuntimePorts.ts's
+    // startProductionRuntime) only transitions runtimeState to "ready" then "running" AFTER the
+    // managed runtime's own start() promise resolves. If the sidecar becomes reachable and issues
+    // its first model call while that start() call is still in flight, runtimeState is "starting"
+    // -- not "ready" -- so a reservation must be admissible in that exact state, with no
+    // transition call made at all (this is the actual real-world race window; the "ready" pin
+    // above covers the orchestrator's local, related-but-distinct dispatch ordering).
+    const capabilities = createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.parse(NOW) });
+    const authority = new CodingRuntimeAuthorityService(
+      new EditorAgentAuthorityRegistry(),
+      () => "run-1",
+      () => "nonce-1",
+      undefined,
+      capabilities,
+    );
+    const minted = mint(authority, intent, false);
+    if (!minted.ok) throw new Error("expected mint");
+    expect(authority.state()).toMatchObject({ state: "starting", runId: "run-1" });
+
+    expect(
+      authority.reservePromptTokens(minted.modelGatewayCapability, 100, Date.parse(NOW)),
+    ).toEqual({ ok: true, runId: "run-1" });
+
+    // A wrong run id must still be refused even while "starting": the widened state gate never
+    // substitutes for the per-run identity checks.
+    const wrongRun = capabilities.issue({
+      runId: "run-mismatch",
+      workspaceRootDigest: DIGEST,
+      envelopeDigest: DIGEST,
+      adapterKind: "model-gateway-sidecar",
+      audience: "model-gateway",
+      expiresAtMs: Date.parse(NOW) + 60_000,
+    });
+    if (!wrongRun.ok) throw new Error("expected wrong-run capability issue");
+    expect(authority.reservePromptTokens(wrongRun.capability, 1, Date.parse(NOW))).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
+
+    // A paused run must still be refused: reaching "starting" never substitutes for the sticky
+    // pause hold once the run has actually progressed past it.
+    expect(authority.transition("run-1", "ready", NOW)).toBe(true);
+    expect(authority.transition("run-1", "running", NOW)).toBe(true);
+    expect(authority.pause("run-1", NOW)).toMatchObject({ ok: true });
+    expect(
+      authority.reservePromptTokens(minted.modelGatewayCapability, 1, Date.parse(NOW)),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+  });
+
   it("fails retained prompt and pause or resume operations closed after runtime exhaustion", () => {
     const afterRuntimeBudget = "2026-07-11T12:01:00.001Z";
     const promptAuthority = promptBudgetService();

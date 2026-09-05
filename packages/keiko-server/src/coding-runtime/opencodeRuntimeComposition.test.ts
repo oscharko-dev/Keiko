@@ -1042,7 +1042,9 @@ describe("unmounted OpenCode runtime composition", () => {
           effectiveMode: "supervised-coding",
           executablePath: executable,
           managedRoot: join(resourceRoot, "runtime/sidecars/opencode-compatible"),
-          gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+          // Same loopback origin as `TOOL_FACADE_ORIGIN` (below) -- ADR-0043 D11-D14 (#3390):
+          // production derives both from ONE loopback origin (productionOpenCodeActivation.ts).
+          gatewayUrl: "http://127.0.0.1:4391/api/coding-sidecar/gateway",
           modelProfileId: "coding-safe-openai-compatible",
           args: ["--caller"],
           inheritedEnvAllowlist: [],
@@ -1092,6 +1094,16 @@ describe("unmounted OpenCode runtime composition", () => {
         launch?.env.OPENCODE_SERVER_PASSWORD,
       ]),
     ).toHaveLength(3);
+    // ADR-0043 D11-D14 (#3390): "the single loopback destination" invariant, proven on the actual
+    // env the spawned sidecar receives -- `KEIKO_TOOL_FACADE_URL` (this bridge's own
+    // `toolFacadeOrigin`, never a self-issued listener port) and `KEIKO_MODEL_GATEWAY_URL` (this
+    // run's `gatewayUrl`, merged into `launch.env` by codingRuntimeManager.ts) must share ONE
+    // origin -- both env values, and not just their construction-site source, agree.
+    expect(launch?.env.KEIKO_TOOL_FACADE_URL).toBeDefined();
+    expect(launch?.env.KEIKO_MODEL_GATEWAY_URL).toBeDefined();
+    expect(new URL(launch?.env.KEIKO_TOOL_FACADE_URL ?? "").origin).toBe(
+      new URL(launch?.env.KEIKO_MODEL_GATEWAY_URL ?? "").origin,
+    );
     for (const path of [
       runRoot,
       join(runRoot, "config"),
