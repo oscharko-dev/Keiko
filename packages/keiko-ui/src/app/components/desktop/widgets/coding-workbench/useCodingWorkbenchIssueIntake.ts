@@ -19,7 +19,7 @@ export interface AcceptedWorkbenchIssue {
 
 export type IssueIntakeFailure =
   CodingWorkbenchIssueBindingFailure | "unknown" | "unavailable-runtime";
-export type IssueIntakeState =
+type IssueIntakeState =
   | { readonly kind: "empty" | "loading" | "cancelled" }
   | { readonly kind: "ready"; readonly response: GitHubIssuePreviewResponseWire }
   | {

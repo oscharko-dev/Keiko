@@ -547,7 +547,7 @@ const FAKE_TOOL_ACTIONS: Readonly<
  * `question` tool calls through the /question endpoints — exactly the loop the real binary runs.
  */
 /** Test-only seam: plays the model's own tool-call selection for `FakeOpenCodeChild.callGateway`. */
-export interface ScriptedModelTurnInput {
+interface ScriptedModelTurnInput {
   readonly modelTurn: (transcript: readonly Record<string, unknown>[]) => FakeGatewayTurn;
   readonly toolFacadeFetch?: typeof globalThis.fetch;
 }

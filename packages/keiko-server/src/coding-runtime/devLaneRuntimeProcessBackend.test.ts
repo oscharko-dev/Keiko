@@ -246,7 +246,7 @@ describe("dev-lane runtime process backend", () => {
         extra: expect.objectContaining({
           profile: "keiko-gateway",
           childExecutablePolicy: "runtime-and-attested-git-only",
-          childExecutableDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          childExecutableDigest: expect.stringMatching(/^[a-f0-9]{64}$/u) as string,
         }) as unknown,
       }),
     );

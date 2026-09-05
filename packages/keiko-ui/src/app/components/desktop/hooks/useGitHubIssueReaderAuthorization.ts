@@ -24,7 +24,7 @@ import {
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 
-export type GitHubIssueReaderAuthorizationError =
+type GitHubIssueReaderAuthorizationError =
   "hydrate" | "persist" | "conflict" | "unknown-repository" | null;
 
 export interface GitHubIssueReaderAuthorization {
@@ -39,12 +39,12 @@ export interface GitHubIssueReaderAuthorization {
   readonly reload: () => void;
 }
 
-export type LoadGitHubIssueReaderAuthorization = (
+type LoadGitHubIssueReaderAuthorization = (
   repositoryPath: string,
   signal?: AbortSignal,
 ) => Promise<GitHubIssueReaderAuthorizationWire>;
 
-export type PersistGitHubIssueReaderAuthorization = (
+type PersistGitHubIssueReaderAuthorization = (
   input: UpdateGitHubIssueReaderAuthorizationWire,
   signal?: AbortSignal,
 ) => Promise<GitHubIssueReaderAuthorizationWire>;

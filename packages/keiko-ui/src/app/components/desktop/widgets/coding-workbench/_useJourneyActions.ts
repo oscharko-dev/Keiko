@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { correlationIdOf } from "@/lib/client-error-summary";
 
-export type JourneyAction = "refresh" | "propose-ready";
+type JourneyAction = "refresh" | "propose-ready";
 interface JourneyActions {
   readonly busy: boolean;
   readonly failure: JourneyAction | null;

@@ -252,12 +252,6 @@ export async function prepareDescriptionArtifact(
   now: number,
 ): Promise<PreparedPrDescription> {
   const previous = await readDescriptionBody(options, context);
-  if (
-    artifact.binding.baseRef !== previous.identity.baseRef ||
-    artifact.binding.headRef !== previous.identity.headRef
-  ) {
-    throw new PrDescriptionFailure("stale-snapshot");
-  }
   const input = captureInput(context, previous, artifact.binding);
   const captured = await options.snapshots.capture(input);
   const snapshot = captured.snapshot;

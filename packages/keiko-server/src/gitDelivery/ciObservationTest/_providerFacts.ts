@@ -5,8 +5,8 @@ import type { GitCiProviderFacts } from "@oscharko-dev/keiko-tools/internal/git-
 // directory already spell such blocks out literally (see ciReadinessSnapshot.test.ts).
 type ProviderPage = GitCiProviderFacts["lists"][keyof GitCiProviderFacts["lists"]];
 
-export const HEAD = "a".repeat(40);
-export const BASE = "b".repeat(40);
+const HEAD = "a".repeat(40);
+const BASE = "b".repeat(40);
 export const CHECK = {
   id: 123,
   name: "build",
@@ -20,7 +20,7 @@ export const CHECK = {
   annotationCount: 1,
 };
 
-export function page(values: readonly unknown[]): ProviderPage {
+function page(values: readonly unknown[]): ProviderPage {
   return {
     values,
     completeness: {
