@@ -281,7 +281,12 @@ jobs:
         # NOT gated by the feat/keiko-editor branch skip: the assured pre-filter executes untrusted
         # model-generated code, so the deny-by-default egress boundary must be proven on every run.
         # The egress test fails the job if an outbound connection from inside network:"none" succeeds.
-        run: npm --workspace @oscharko-dev/keiko-sandbox test
+        # keiko-sandbox imports the shared NetworkGatewayPolicy guard from keiko-contracts at runtime
+        # (ADR-0043 D11), and an isolated workspace test needs that package built first (AGENTS.md §2);
+        # `npm run typecheck` builds every package but runs later, so build the one dependency here.
+        run: |
+          npm --workspace @oscharko-dev/keiko-contracts run build
+          npm --workspace @oscharko-dev/keiko-sandbox test
       - name: Verify Keiko Editor package
         run: |
           npm --workspace @oscharko-dev/keiko-editor run build

@@ -1642,6 +1642,21 @@ describe("private OpenCode tool bridge", () => {
     };
   };
 
+  // #3390 (ADR-0043 D11-D14): a negative proof that no production path re-opens a second loopback
+  // listener for this bridge. The public port's OWN shape is the guard: it exposes exactly `url`
+  // (a fixed string, never a self-issued port) and `handle` -- no `listen`/`close`/socket accessor
+  // a caller could use to stand up an HTTP server, which is exactly what made the retired listener
+  // reachable from a Seatbelt-denied second port in the first place.
+  it("exposes exactly {url, handle} on the public bridge port -- no listener surface to reopen", async () => {
+    const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
+    const fixture = await startBridgeFixture(facade);
+    try {
+      expect(Object.keys(fixture.runtime.toolBridge).sort()).toEqual(["handle", "url"]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("closes an adapter whose handshake succeeds after manager timeout disposal", async () => {
     let releaseHistory: (() => void) | undefined;
     const historyResponse = new Promise<Response>((resolve) => {
