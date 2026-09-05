@@ -28,6 +28,7 @@
     "test:e2e:coding-issue-ci": "scheduled-nonblocking",
     "test:e2e:coding-issue-commit": "scheduled-nonblocking",
     "test:e2e:coding-issue-delivery": "scheduled-nonblocking",
+    "test:e2e:coding-issue-handoff": "scheduled-nonblocking",
     "test:e2e:coding-issue-intake": "scheduled-nonblocking",
     "test:e2e:coding-issue-journey:live": "unwired",
     "test:e2e:coding-workbench-1990": "unwired",

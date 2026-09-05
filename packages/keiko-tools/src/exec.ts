@@ -823,15 +823,43 @@ function resolveWrapperExecutable(name: string, deps: RunCommandDeps): string {
 // Decides what to spawn. Inherited network → run the executable directly. network:"none" → ask
 // keiko-sandbox for an enforcing wrapper; a fail-closed decision throws (the command never spawns),
 // so untrusted code is never executed without an enforced egress boundary.
+//
+// EXHAUSTIVE ON PURPOSE (#2951 residual finding): `SandboxPolicy.network` is `NetworkPolicy`
+// ("inherit" | "none" — keiko-contracts/tools.ts), a DIFFERENT, narrower type than
+// `NetworkGatewayPolicy` (the long-lived coding-sidecar gateway-allowlist shape), which is
+// deliberately NOT folded into this union (see tools.ts's comment on why that fold-in was
+// reverted). The old `deps.policy.network !== "none"` check treated ANYTHING that was not the
+// literal string "none" — including a misrouted `NetworkGatewayPolicy` object, or any other
+// non-conforming runtime value — as "inherited" and ran it on the fully unconfined path. A
+// `switch` over the closed two-value vocabulary with a `default` that fails closed removes that
+// hole: a value TypeScript never assigns to `NetworkPolicy` still cannot silently pass through as
+// "inherit" at runtime, and any FUTURE widening of `NetworkPolicy` fails to compile here until
+// this boundary explicitly decides what the new variant means for a general command run.
 function resolveSpawnTarget(
   input: RunCommandInput,
   deps: RunCommandDeps,
   executable: string,
   cwd: string,
 ): SpawnTarget {
-  if (deps.policy.network !== "none") {
-    return resolveInheritedSpawnTarget(executable, input.args, deps);
+  switch (deps.policy.network) {
+    case "inherit":
+      return resolveInheritedSpawnTarget(executable, input.args, deps);
+    case "none":
+      return resolveIsolatedSpawnTarget(input, deps, executable, cwd);
+    default:
+      throw new CommandDeniedError(
+        `unsupported sandbox network policy for runCommand: ${String(deps.policy.network)}`,
+        input.command,
+      );
   }
+}
+
+function resolveIsolatedSpawnTarget(
+  input: RunCommandInput,
+  deps: RunCommandDeps,
+  executable: string,
+  cwd: string,
+): SpawnTarget {
   const platform = deps.platform ?? process.platform;
   const availability = deps.sandboxAvailability ?? probeBackends(deps.processEnv, platform);
   const decision = planIsolatedRun(

@@ -10,6 +10,7 @@ import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contrac
 import {
   createRuntimeGatewayConfinement,
   type LongLivedRuntimeQualification,
+  type RuntimeGatewayConfinement,
 } from "@oscharko-dev/keiko-sandbox";
 
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
@@ -397,8 +398,34 @@ function runtimeSupervisor(
       runtimeRoots: [join(input.portable.installRoot, input.portable.sidecar.payloadRootPath)],
       workspaceRoot,
       identity: input.portable.qualification,
+      gatewayConfinement: nativeLaneGatewayConfinement(input, run, input.portable),
     }),
     qualifications: [input.portable.qualification],
+  });
+}
+
+/**
+ * Requests the same gateway-allowlist confinement `appSandboxSupervisor` requests for macOS, for
+ * every non-dev-lane native launch (ADR-0043 D14, #2951 residual finding): this backend has no OS
+ * primitive that can enforce it, so attaching the policy makes `nativeRuntimeProcessBackend.ts`
+ * refuse the launch outright rather than silently running the long-lived coding sidecar with no
+ * egress boundary at all — the asymmetry a review of #2951 flagged (macOS confines; every
+ * release-qualified and Windows-evaluation native launch ran unconfined with no complaint). The
+ * Windows DEV lane (`devLaneSupervisor`'s own native call) is deliberately excluded: it keeps its
+ * existing, already-accepted best-effort dev posture rather than becoming newly non-functional.
+ */
+function nativeLaneGatewayConfinement(
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+  portable: Pick<ResolvedPortableOpenCodeRuntime, "sidecar">,
+): RuntimeGatewayConfinement {
+  return createRuntimeGatewayConfinement({
+    gatewayUrl: input.gatewayUrl,
+    runId: run.minted.authorityRef.runId,
+    treeBindingId: run.minted.treeBindingId,
+    envelopeDigest: run.minted.authorityRef.envelopeDigest,
+    runtimeArtifactDigest: portable.sidecar.shippedExecutableSha256,
+    modelProfileDigest: codingRuntimeFactDigest(run.context.modelProfile),
   });
 }
 

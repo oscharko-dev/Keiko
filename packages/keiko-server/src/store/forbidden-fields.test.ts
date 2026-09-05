@@ -434,7 +434,14 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
       ]);
       for (const col of columnNames(inspector, "coding_runtime_description_jobs")) {
         const lower = col.toLowerCase();
-        for (const forbidden of [...FORBIDDEN_SUBSTRINGS, "title", "body", "diff", "prompt", "url"]) {
+        for (const forbidden of [
+          ...FORBIDDEN_SUBSTRINGS,
+          "title",
+          "body",
+          "diff",
+          "prompt",
+          "url",
+        ]) {
           expect(lower).not.toContain(forbidden);
         }
       }

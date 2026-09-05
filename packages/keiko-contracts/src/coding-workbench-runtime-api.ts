@@ -650,7 +650,10 @@ function validateSnapshotCiReadiness(snapshot: Record<string, unknown>, errors: 
 // reflects the most recent proposal attempt, which may be a later failed/blocked one, while the
 // description job binds the last SUCCESSFUL head — codingRuntimeVerifiedCommitAuthorityStore.ts /
 // epic #3384 correction 5), so only the run identity is cross-checked here.
-function validateSnapshotDescriptionStatus(snapshot: Record<string, unknown>, errors: string[]): void {
+function validateSnapshotDescriptionStatus(
+  snapshot: Record<string, unknown>,
+  errors: string[],
+): void {
   const status = snapshot.descriptionStatus;
   if (status === undefined) return;
   if (!isWorkbenchDescriptionStatus(status)) {

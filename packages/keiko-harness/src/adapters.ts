@@ -20,18 +20,10 @@ import {
   type NormalizedResponse,
   type ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
-import { createInitialToolCatalog, gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
+import { TOOL_DEFINITIONS } from "@oscharko-dev/keiko-tools";
 import { HarnessCatalogError } from "./catalog-errors.js";
 import { HARNESS_CODES } from "./errors.js";
 import type { ModelPort, ToolCallRequest, ToolCallResult, ToolPort } from "./ports.js";
-
-// The one implemented legacy-tool profile (packages/keiko-tool-catalog/src/legacy.ts). Computed
-// once at module load: the catalog/profile are fixed local declarations, never customer input.
-const LEGACY_NATIVE_PROFILE = { id: "legacy-native", version: 1 } as const;
-const LEGACY_NATIVE_TOOL_DEFINITIONS: readonly ToolDefinition[] = gatewayToolDefinitions(
-  createInitialToolCatalog(),
-  LEGACY_NATIVE_PROFILE,
-);
 
 // The minimal Gateway surface the model port depends on. Depending on this structural
 // type (not the concrete Gateway class) keeps the harness decoupled and trivially fakeable.
@@ -86,10 +78,13 @@ export class DryRunToolPort implements ToolPort {
   }
 
   // Advertisement only (ADR-0175 D4: "dry-run ... backends are readiness states, never
-  // productive availability"). The list is the fixed compiled legacy-native@1 projection, never
+  // productive availability"). The list is the canonical compiled legacy-native@1 projection
+  // owned by @oscharko-dev/keiko-tools (packages/keiko-tools/src/schemas.ts), reused here rather
+  // than recomputed — the same reuse pattern this package already follows for
+  // EDITOR_AGENT_TOOL_DEFINITIONS (packages/keiko-harness/src/editor-agent-catalog.ts). Never
   // caller input, and execute() above refuses every one of these names unconditionally.
   listTools(): readonly ToolDefinition[] {
-    return LEGACY_NATIVE_TOOL_DEFINITIONS;
+    return TOOL_DEFINITIONS;
   }
 
   calls(): readonly RecordedToolCall[] {

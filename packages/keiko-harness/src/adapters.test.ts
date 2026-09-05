@@ -7,7 +7,7 @@ import {
   type ModelGatewayLogContext,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import { createInitialToolCatalog, gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
+import { TOOL_DEFINITIONS } from "@oscharko-dev/keiko-tools";
 import { DryRunToolPort, GatewayModelPort } from "./adapters.js";
 import { HARNESS_CODES } from "./errors.js";
 
@@ -178,14 +178,14 @@ describe("DryRunToolPort", () => {
   // entirely -- the constructor takes no arguments -- so the fabrication-prevention invariant it
   // guarded is now proven directly by execute() always refusing (the two tests in this file), and
   // this test instead pins the ADR-0175 D1/D4 disposition: honest advertisement of the fixed
-  // compiled `legacy-native@1` projection (derived from the real producer, not restated here),
-  // paired with the same unconditional refusal for every one of the tools it lists.
+  // compiled `legacy-native@1` projection, asserted against the canonical producer
+  // (@oscharko-dev/keiko-tools's TOOL_DEFINITIONS, packages/keiko-tools/src/schemas.ts) rather
+  // than a locally recomputed copy, paired with the same unconditional refusal for every one of
+  // the tools it lists.
   it("advertises the compiled legacy-native catalog projection and refuses execution with a closed reason", async () => {
     const port = new DryRunToolPort();
     const advertised = port.listTools();
-    expect(advertised).toEqual(
-      gatewayToolDefinitions(createInitialToolCatalog(), { id: "legacy-native", version: 1 }),
-    );
+    expect(advertised).toEqual(TOOL_DEFINITIONS);
     expect(advertised.length).toBeGreaterThan(0);
     for (const tool of advertised) {
       const outcome = port.execute({

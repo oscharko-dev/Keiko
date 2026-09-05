@@ -587,6 +587,37 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.draftDelivery.baseSha": "Approved base commit",
   "codingWorkbench.draftDelivery.proposal": "Proposal",
   "codingWorkbench.draftDelivery.recordedAt": "Recorded at",
+  "codingWorkbench.descriptionStatus.title": "Pull request description draft",
+  "codingWorkbench.descriptionStatus.state.current": "Draft ready",
+  "codingWorkbench.descriptionStatus.state.stale": "Draft is stale",
+  "codingWorkbench.descriptionStatus.state.partial": "Draft partially generated",
+  "codingWorkbench.descriptionStatus.state.fallback": "Draft generated without the model",
+  "codingWorkbench.descriptionStatus.state.blocked": "Draft blocked",
+  "codingWorkbench.descriptionStatus.state.failed": "Draft generation failed",
+  "codingWorkbench.descriptionStatus.reason.generated":
+    "Generated from the latest verified commit.",
+  "codingWorkbench.descriptionStatus.reason.partial-generated":
+    "Generated with some evidence omitted.",
+  "codingWorkbench.descriptionStatus.reason.fallback-generated":
+    "Generated deterministically; the model was unavailable.",
+  "codingWorkbench.descriptionStatus.reason.stale-snapshot":
+    "The change moved since this draft was generated.",
+  "codingWorkbench.descriptionStatus.reason.authority-expired":
+    "Authority expired before generation could start.",
+  "codingWorkbench.descriptionStatus.reason.model-egress-denied":
+    "The model was not authorized for this attempt.",
+  "codingWorkbench.descriptionStatus.reason.budget-exhausted":
+    "Too many description drafts are in progress right now.",
+  "codingWorkbench.descriptionStatus.reason.pull-request-unavailable":
+    "No pull request is available for this draft yet.",
+  "codingWorkbench.descriptionStatus.reason.generation-unavailable":
+    "Automatic draft generation is not available yet.",
+  "codingWorkbench.descriptionStatus.reason.interrupted":
+    "Generation was interrupted and must be retried on the next change.",
+  "codingWorkbench.descriptionStatus.reason.provider-failed":
+    "The description provider failed while generating this draft.",
+  "codingWorkbench.descriptionStatus.head": "Head commit",
+  "codingWorkbench.descriptionStatus.generation": "Generation",
   "codingWorkbench.commitResult.title": "Commit result",
   "codingWorkbench.commitResult.head": "Created commit",
   "codingWorkbench.commitResult.findings": "Git checks",

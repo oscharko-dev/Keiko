@@ -75,10 +75,7 @@ function WorkbenchDescriptionCard({
   const t = useCodingWorkbenchTranslate();
   if (status === undefined) return null;
   return (
-    <section
-      className={styles.card}
-      aria-label={t("codingWorkbench.descriptionStatus.title")}
-    >
+    <section className={styles.card} aria-label={t("codingWorkbench.descriptionStatus.title")}>
       <h3 className={styles.approvalResearchTitle}>
         {t("codingWorkbench.descriptionStatus.title")}
       </h3>

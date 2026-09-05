@@ -609,6 +609,37 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.draftDelivery.baseSha": "Freigegebener Basis-Commit",
   "codingWorkbench.draftDelivery.proposal": "Vorlage",
   "codingWorkbench.draftDelivery.recordedAt": "Erfasst am",
+  "codingWorkbench.descriptionStatus.title": "Entwurf der Pull-Request-Beschreibung",
+  "codingWorkbench.descriptionStatus.state.current": "Entwurf bereit",
+  "codingWorkbench.descriptionStatus.state.stale": "Entwurf veraltet",
+  "codingWorkbench.descriptionStatus.state.partial": "Entwurf teilweise erstellt",
+  "codingWorkbench.descriptionStatus.state.fallback": "Entwurf ohne Modell erstellt",
+  "codingWorkbench.descriptionStatus.state.blocked": "Entwurf blockiert",
+  "codingWorkbench.descriptionStatus.state.failed": "Entwurfserstellung fehlgeschlagen",
+  "codingWorkbench.descriptionStatus.reason.generated":
+    "Aus dem zuletzt verifizierten Commit erstellt.",
+  "codingWorkbench.descriptionStatus.reason.partial-generated":
+    "Mit teilweise ausgelassenen Belegen erstellt.",
+  "codingWorkbench.descriptionStatus.reason.fallback-generated":
+    "Deterministisch erstellt; das Modell war nicht verfügbar.",
+  "codingWorkbench.descriptionStatus.reason.stale-snapshot":
+    "Die Änderung hat sich seit der Entwurfserstellung weiterentwickelt.",
+  "codingWorkbench.descriptionStatus.reason.authority-expired":
+    "Die Berechtigung ist vor Beginn der Erstellung abgelaufen.",
+  "codingWorkbench.descriptionStatus.reason.model-egress-denied":
+    "Das Modell war für diesen Versuch nicht autorisiert.",
+  "codingWorkbench.descriptionStatus.reason.budget-exhausted":
+    "Derzeit laufen zu viele Entwurfserstellungen gleichzeitig.",
+  "codingWorkbench.descriptionStatus.reason.pull-request-unavailable":
+    "Für diesen Entwurf ist noch kein Pull Request verfügbar.",
+  "codingWorkbench.descriptionStatus.reason.generation-unavailable":
+    "Die automatische Entwurfserstellung ist noch nicht verfügbar.",
+  "codingWorkbench.descriptionStatus.reason.interrupted":
+    "Die Erstellung wurde unterbrochen und muss bei der nächsten Änderung wiederholt werden.",
+  "codingWorkbench.descriptionStatus.reason.provider-failed":
+    "Der Beschreibungsdienst ist bei der Erstellung dieses Entwurfs fehlgeschlagen.",
+  "codingWorkbench.descriptionStatus.head": "Head-Commit",
+  "codingWorkbench.descriptionStatus.generation": "Generation",
   "codingWorkbench.commitResult.title": "Commit-Ergebnis",
   "codingWorkbench.commitResult.head": "Erstellter Commit",
   "codingWorkbench.commitResult.findings": "Git-Prüfungen",

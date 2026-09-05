@@ -3,6 +3,7 @@ import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodingWorkbenchDraftDelivery } from "./CodingWorkbenchDraftDelivery";
 import { draftDeliverySnapshot } from "./_draftDeliveryTestSupport";
+import { descriptionStatusSnapshot } from "./_workbenchDescriptionStatusTestSupport";
 import { translateCodingWorkbench } from "./coding-workbench-i18n";
 
 describe("durable repository delivery in the Code task", () => {
@@ -103,6 +104,58 @@ describe("durable repository delivery in the Code task", () => {
     expect(console.warn).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ["current", "generated", "Draft ready"],
+    ["stale", "stale-snapshot", "Draft is stale"],
+    ["partial", "partial-generated", "Draft partially generated"],
+    ["fallback", "fallback-generated", "Draft generated without the model"],
+    ["blocked", "authority-expired", "Draft blocked"],
+    ["failed", "provider-failed", "Draft generation failed"],
+  ] as const)(
+    "shows the automatic description status %s without blocking unrelated Workbench controls",
+    async (state, reason, label) => {
+      const artifactBearing = state === "current" || state === "partial" || state === "fallback";
+      const snapshot = descriptionStatusSnapshot({
+        state,
+        reason,
+        snapshotDigest: artifactBearing ? "b".repeat(64) : null,
+        draftDigest: artifactBearing ? "c".repeat(64) : null,
+        artifactOutcome: artifactBearing ? "complete" : null,
+      });
+      render(<CodingWorkbenchDraftDelivery snapshot={snapshot} />);
+      expect(
+        screen.getByRole("region", { name: "Pull request description draft" }),
+      ).toHaveTextContent(label);
+      expect(screen.queryByRole("button")).not.toBeInTheDocument();
+      expect(await axe(document.body)).toHaveNoViolations();
+    },
+  );
+
+  it("shows the description draft alongside repository delivery when both are present", () => {
+    const delivery = draftDeliverySnapshot();
+    const snapshot = {
+      ...delivery,
+      descriptionStatus: descriptionStatusSnapshot().descriptionStatus,
+    };
+    render(<CodingWorkbenchDraftDelivery snapshot={snapshot} />);
+    expect(screen.getByRole("region", { name: "Repository delivery" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Pull request description draft" }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders nothing for the description status when it is absent, without a diagnostic", () => {
+    const { container } = render(
+      <CodingWorkbenchDraftDelivery
+        snapshot={{ ...draftDeliverySnapshot(), descriptionStatus: undefined }}
+      />,
+    );
+    expect(container).not.toBeEmptyDOMElement();
+    expect(
+      screen.queryByRole("region", { name: "Pull request description draft" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("provides the same durable status and link labels in German", () => {
     expect(translateCodingWorkbench("de", "codingWorkbench.draftDelivery.title")).toBe(
       "Repository-Übermittlung",
@@ -113,5 +166,11 @@ describe("durable repository delivery in the Code task", () => {
     expect(
       translateCodingWorkbench("de", "codingWorkbench.draftDelivery.pullRequest", { number: 7 }),
     ).toBe("Pull Request #7");
+    expect(translateCodingWorkbench("de", "codingWorkbench.descriptionStatus.title")).toBe(
+      "Entwurf der Pull-Request-Beschreibung",
+    );
+    expect(translateCodingWorkbench("de", "codingWorkbench.descriptionStatus.state.blocked")).toBe(
+      "Entwurf blockiert",
+    );
   });
 });

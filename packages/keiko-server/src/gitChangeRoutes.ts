@@ -50,7 +50,10 @@ import {
   isSafeGitRef,
   readParsedGitDeliveryBody,
 } from "./gitDelivery/requestGuards.js";
-import type { CreateRelationshipInput, RelationshipMutationResult } from "./relationship-handlers.js";
+import type {
+  CreateRelationshipInput,
+  RelationshipMutationResult,
+} from "./relationship-handlers.js";
 import type { StoredRelationship } from "./store/relationships.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
@@ -300,9 +303,10 @@ function gitChangeObjectId(snapshotDigest: string): string {
   return `gc_${snapshotDigest}`;
 }
 
-function createdAuditFor(stored: StoredRelationship, etag: string): Parameters<
-  NonNullable<UiHandlerDeps["relationship"]>["store"]["recordAuditEntry"]
->[0] {
+function createdAuditFor(
+  stored: StoredRelationship,
+  etag: string,
+): Parameters<NonNullable<UiHandlerDeps["relationship"]>["store"]["recordAuditEntry"]>[0] {
   return {
     workspaceId: stored.workspaceId,
     kind: "relationship.created",
@@ -345,14 +349,17 @@ function archiveGitChangeRelationship(deps: UiHandlerDeps, workspaceId: string, 
   if (relationship === undefined) return;
   const etag = relationship.store.getEtag(workspaceId, id);
   if (etag === undefined) return;
-  relationship.store.updateLifecycle({ workspaceId, id, currentEtag: etag, to: "archived" }, (result) => ({
-    workspaceId,
-    kind: "relationship.updated",
-    relationshipId: result.relationship.id,
-    actor: { surface: "chat", redactedActorId: "git-change-refresh" },
-    summary: "git-change relationship archived on refresh",
-    payload: { lifecycle: result.relationship.lifecycleState },
-  }));
+  relationship.store.updateLifecycle(
+    { workspaceId, id, currentEtag: etag, to: "archived" },
+    (result) => ({
+      workspaceId,
+      kind: "relationship.updated",
+      relationshipId: result.relationship.id,
+      actor: { surface: "chat", redactedActorId: "git-change-refresh" },
+      summary: "git-change relationship archived on refresh",
+      payload: { lifecycle: result.relationship.lifecycleState },
+    }),
+  );
 }
 
 // ─── Scope assembly ─────────────────────────────────────────────────────────────────────────────
@@ -423,7 +430,12 @@ async function resolveConnectComparison(
   if (request.mode === "comparison") {
     return { baseRef: request.baseRef ?? "", headRef: request.headRef, prNumber: undefined };
   }
-  const resolved = await resolvePullRequestByHead(deps, repositoryRoot, request.headRef, correlationId);
+  const resolved = await resolvePullRequestByHead(
+    deps,
+    repositoryRoot,
+    request.headRef,
+    correlationId,
+  );
   if (typeof resolved === "string") return resolved;
   return {
     baseRef: resolved.identity.baseRef,
@@ -438,7 +450,11 @@ async function resolveConnectSnapshot(
   request: ConnectRequest,
   correlationId: string,
 ): Promise<CapturedComparison & { readonly prNumber: number | undefined }> {
-  const runner = observedGitRunner(defaultGitProcessRunner, deps.activityLog ?? processServerLogSink(), correlationId);
+  const runner = observedGitRunner(
+    defaultGitProcessRunner,
+    deps.activityLog ?? processServerLogSink(),
+    correlationId,
+  );
   const timeoutMs = 30_000;
   const repository = await resolveChatRepository(projectPath, runner, timeoutMs);
   if (repository === undefined) throw new GitChangeBlocked("chat-project-unavailable");
@@ -446,7 +462,12 @@ async function resolveConnectSnapshot(
   if (headState !== "attached") {
     throw new GitChangeBlocked(headState === "unborn" ? "unborn-head" : "detached-head");
   }
-  const comparison = await resolveConnectComparison(deps, repository.repositoryRoot, request, correlationId);
+  const comparison = await resolveConnectComparison(
+    deps,
+    repository.repositoryRoot,
+    request,
+    correlationId,
+  );
   if (typeof comparison === "string") throw new GitChangeBlocked(comparison);
   const captured = await captureComparison(
     deps,
@@ -475,7 +496,7 @@ function persistConnectedScope(
   existingScopes: readonly ChatGitChangeScope[],
   captured: CapturedComparison & { readonly prNumber: number | undefined },
   correlationId: string,
-): Promise<RouteResult> {
+): RouteResult {
   const workspaceId = deps.relationship?.scopeResolver(ctx.req)?.workspaceId;
   if (workspaceId === undefined) return errResult(503, "GIT_CHANGE_ENGINE_UNAVAILABLE");
   const mutation = createGitChangeRelationship(
@@ -503,7 +524,10 @@ function persistConnectedScope(
   return { status: 200, body: result };
 }
 
-async function handleGitChangeConnect(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
+async function handleGitChangeConnect(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
   const parsed = await readParsedGitDeliveryBody(
     ctx.req,
     () => errResult(413, "GIT_CHANGE_PAYLOAD_TOO_LARGE"),
@@ -549,7 +573,13 @@ function findGitChangeScope(
   deps: UiHandlerDeps,
   chatId: string,
   relationshipId: string,
-): { readonly chatProjectPath: string; readonly existing: readonly ChatGitChangeScope[]; readonly scope: ChatGitChangeScope } | undefined {
+):
+  | {
+      readonly chatProjectPath: string;
+      readonly existing: readonly ChatGitChangeScope[];
+      readonly scope: ChatGitChangeScope;
+    }
+  | undefined {
   const chat = deps.store.findChatById(chatId);
   if (chat === undefined) return undefined;
   const existing = chat.gitChangeScopes ?? [];
@@ -580,7 +610,7 @@ function persistStaleScope(
   found: FoundGitChangeScope,
   captured: CapturedComparison,
   correlationId: string,
-): Promise<RouteResult> {
+): RouteResult {
   const workspaceId = deps.relationship?.scopeResolver(ctx.req)?.workspaceId;
   if (workspaceId === undefined) return errResult(503, "GIT_CHANGE_ENGINE_UNAVAILABLE");
   archiveGitChangeRelationship(deps, workspaceId, found.scope.relationshipId);
@@ -601,7 +631,9 @@ function persistStaleScope(
     ),
     descriptionStatus: "stale",
   };
-  const remaining = found.existing.filter((entry) => entry.relationshipId !== found.scope.relationshipId);
+  const remaining = found.existing.filter(
+    (entry) => entry.relationshipId !== found.scope.relationshipId,
+  );
   deps.store.updateChat(chatId, { gitChangeScopes: [...remaining, staleScope] });
   logGitChangeEvent(deps, "git-change.chat.stale", correlationId, {
     relationshipId: staleScope.relationshipId,
@@ -618,7 +650,10 @@ function isCurrentComparison(captured: CapturedComparison, found: FoundGitChange
   );
 }
 
-async function handleGitChangeRefresh(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
+async function handleGitChangeRefresh(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
   const parsed = await readParsedGitDeliveryBody(
     ctx.req,
     () => errResult(413, "GIT_CHANGE_PAYLOAD_TOO_LARGE"),
@@ -631,7 +666,11 @@ async function handleGitChangeRefresh(ctx: RouteContext, deps: UiHandlerDeps): P
   const found = findGitChangeScope(deps, request.chatId, request.relationshipId);
   if (found === undefined) return errResult(404, "GIT_CHANGE_SCOPE_NOT_FOUND");
 
-  const runner = observedGitRunner(defaultGitProcessRunner, deps.activityLog ?? processServerLogSink(), correlationId);
+  const runner = observedGitRunner(
+    defaultGitProcessRunner,
+    deps.activityLog ?? processServerLogSink(),
+    correlationId,
+  );
   const repository = await resolveChatRepository(found.chatProjectPath, runner, 30_000);
   if (repository === undefined) {
     return blockedRefreshResult(deps, correlationId, "chat-project-unavailable");

@@ -1271,6 +1271,41 @@ describe("runCommand — enforced network egress (ADR-0043, network:'none')", ()
     expect(spawn.calls()[0]?.command).toBe("/abs/node");
     expect(result.attestation).toBeUndefined();
   });
+
+  // #2951 residual finding: `SandboxPolicy.network` is `NetworkPolicy` ("inherit" | "none"), a
+  // narrower type than the long-lived coding-sidecar `NetworkGatewayPolicy` — the two are
+  // deliberately NOT unioned (see keiko-contracts/tools.ts). The old `!== "none"` check could not
+  // tell a misrouted gateway-shaped object from "inherit": ANY non-"none" value fell onto the
+  // fully unconfined path. `as unknown as NetworkPolicy` simulates a value TypeScript would never
+  // let a caller construct honestly but that could still reach this boundary at runtime (a stale
+  // cast, an `any`-typed adapter, a deserialized policy). Failing-before: with the old
+  // `!== "none"` check this ran the command directly on the inherited path and never rejected.
+  it("fails closed when a gateway-shaped policy value reaches the general network switch", async () => {
+    const spawn = recordingSpawn();
+    const misroutedGatewayPolicy = {
+      mode: "gateway",
+      host: "127.0.0.1",
+      port: 1983,
+    } as unknown as SandboxPolicy["network"];
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn),
+      policy: { ...DEFAULT_SANDBOX_POLICY, network: misroutedGatewayPolicy },
+      resolveExecutable: absResolver,
+    };
+    await expect(
+      runCommand(
+        {
+          command: "node",
+          args: ["-e", "1"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        deps,
+      ),
+    ).rejects.toBeInstanceOf(CommandDeniedError);
+    expect(spawn.calls()).toHaveLength(0);
+  });
 });
 
 // ─── The governed credential lane (homeIsolation "inherit" + credentialEnvAllowlist) ───────────
