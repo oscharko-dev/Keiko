@@ -68,6 +68,11 @@ export interface ProductionOpenCodeBackendInput {
   readonly portable: ResolvedPortableOpenCodeRuntime;
   readonly runtimeStateRoot: string;
   readonly gatewayUrl: string;
+  /**
+   * ADR-0043 D11-D14 (#3390): the full loopback URL the tool facade rides -- the SAME attested
+   * origin as `gatewayUrl`, at `/api/coding-sidecar/tool` -- never a second listener.
+   */
+  readonly toolFacadeUrl: string;
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly gatewayReadiness: Pick<
     OpenCodeGatewayReadinessRegistry,
@@ -126,6 +131,7 @@ function createOpenCodeRun(
       turnPort,
       questionPort,
       permissionPort,
+      toolBridge: composition.toolBridge,
       dispose: (): void => {
         safeActivity.clear();
       },
@@ -154,6 +160,7 @@ function composeOpenCodeRun(
       modelGatewayCapability: run.minted.modelGatewayCapability,
       toolFacadeCapability: run.minted.toolFacadeCapability,
     },
+    toolFacadeOrigin: input.toolFacadeUrl,
     toolFacade: run.toolFacade,
     governedEventSink: idempotentEventSink(
       run.minted.authorityRef.runId,

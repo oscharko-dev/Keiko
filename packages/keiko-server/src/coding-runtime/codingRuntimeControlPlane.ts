@@ -87,6 +87,27 @@ export interface CodingRuntimeHost {
       }
     | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
+  // ADR-0043 D11-D14 (#3390): the currently active run's governed tool bridge, dispatched
+  // directly by the BFF's `/api/coding-sidecar/tool` route instead of a second loopback listener
+  // the Seatbelt egress profile denies. `resolve` returns `undefined` when no run is active; at
+  // most one run's bridge is ever current (the singleton-run governance gate).
+  readonly toolFacadeBridge?:
+    | { readonly resolve: () => CodingRuntimeToolFacadeBridge | undefined }
+    | undefined;
+}
+
+/**
+ * The dispatch surface a run's tool bridge exposes to the route -- deliberately just `handle`
+ * (never the bridge's internal admission/limits state), matching `OpenCodeToolBridge["handle"]`'s
+ * shape without importing the OpenCode-specific type into this transport-agnostic control plane.
+ */
+export interface CodingRuntimeToolFacadeBridge {
+  handle(input: {
+    readonly method: "POST";
+    readonly headers: Headers;
+    readonly body: string;
+    readonly signal?: AbortSignal;
+  }): Promise<{ readonly status: number; readonly body: string }>;
 }
 
 export interface CodingRuntimeControlPlaneInput {
@@ -117,6 +138,7 @@ export interface CodingRuntimeControlPlane {
   readonly gitDeliveryDescriptionAuthority?: CodingRuntimeHost["gitDeliveryDescriptionAuthority"];
   readonly mintDescriptionAuthority?: CodingRuntimeHost["mintDescriptionAuthority"];
   readonly openCodeGatewayReadinessRegistry?: CodingRuntimeHost["openCodeGatewayReadinessRegistry"];
+  readonly toolFacadeBridge?: CodingRuntimeHost["toolFacadeBridge"];
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
 }
 
@@ -243,6 +265,7 @@ const RUNTIME_HOST_CAPABILITY_KEYS = [
   "gitDeliveryDescriptionAuthority",
   "mintDescriptionAuthority",
   "openCodeGatewayReadinessRegistry",
+  "toolFacadeBridge",
 ] as const;
 
 type RuntimeHostCapabilities = Pick<

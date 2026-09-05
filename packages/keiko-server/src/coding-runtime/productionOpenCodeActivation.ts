@@ -102,6 +102,9 @@ export function resolveProductionOpenCodeActivation(
         portable: runtime.portable,
         runtimeStateRoot: input.runtimeStateDir,
         gatewayUrl: `${loopback}/api/coding-sidecar/gateway`,
+        // ADR-0043 D11-D14 (#3390): the SAME single attested loopback origin as the model
+        // gateway above, never a second listener's own port.
+        toolFacadeUrl: `${loopback}/api/coding-sidecar/tool`,
         runtimeEvidence: input.runtimeEvidence,
         gatewayReadiness: input.gatewayReadiness,
         ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),

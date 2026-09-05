@@ -386,9 +386,9 @@ describe("CodingRuntimeAuthorityService", () => {
     // window, never the sticky-pause hold.
     expect(authority.transition("run-1", "running", NOW)).toBe(true);
     expect(authority.pause("run-1", NOW)).toMatchObject({ ok: true });
-    expect(authority.reservePromptTokens(minted.modelGatewayCapability, 1, Date.parse(NOW))).toEqual(
-      { ok: false, reason: "authority-resolution-failed" },
-    );
+    expect(
+      authority.reservePromptTokens(minted.modelGatewayCapability, 1, Date.parse(NOW)),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
   });
 
   it("fails retained prompt and pause or resume operations closed after runtime exhaustion", () => {

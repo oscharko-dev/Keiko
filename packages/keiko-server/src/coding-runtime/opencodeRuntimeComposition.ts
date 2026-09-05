@@ -8,14 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import {
-  createServer,
-  type IncomingHttpHeaders,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
-import type { Socket } from "node:net";
+import { type IncomingHttpHeaders, type IncomingMessage } from "node:http";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -106,6 +99,14 @@ export interface OpenCodeRuntimeCompositionInput {
     readonly requestDeadlineMs: number;
     readonly maxInFlight: number;
   };
+  /**
+   * ADR-0043 D11-D14: the tool facade rides the SAME single attested loopback destination as the
+   * model gateway (`<loopback origin>/api/coding-sidecar/tool`) instead of a second ephemeral
+   * listener the Seatbelt egress profile would deny (#3390). Full URL, not a port -- the caller
+   * (productionOpenCodeActivation.ts) derives it from the one loopback origin, never a hard-coded
+   * port.
+   */
+  readonly toolFacadeOrigin: string;
   readonly toolFacade: CodingToolFacade;
   readonly codingToolApprovals?: CodingToolApprovalBridge | undefined;
   readonly governedEventSink: {
@@ -165,6 +166,13 @@ export interface OpenCodeToolBridge {
     readonly method: "POST";
     readonly headers: Headers;
     readonly body: string;
+    /**
+     * Caller-owned cancellation (e.g. the BFF route observing its client disconnect). Optional:
+     * a caller that has no disconnect signal of its own (the readiness challenge, this file's own
+     * tests) simply omits it. Merged with the admission gate's own deadline abort so both sources
+     * settle the SAME in-flight facade call through the one existing abort path.
+     */
+    readonly signal?: AbortSignal;
   }): Promise<{ readonly status: number; readonly body: string }>;
 }
 
@@ -224,6 +232,7 @@ export function createOpenCodeRuntimeComposition(
     input.toolBridge,
     input.safeActivity?.settleTool,
     input.diagnostics,
+    input.toolFacadeOrigin,
   );
   const runs = new Map<string, PreparedRun>();
   const lifecycle = lifecycleAdapter(input, bridge, runs);
@@ -1291,59 +1300,47 @@ interface ToolBridgeExecutionDeps {
   readonly diagnostics: ServerDiagnosticSink | undefined;
 }
 
+// #3390 (ADR-0043 D11-D14): the tool facade no longer opens its own loopback listener -- a second
+// attested destination is exactly the defect the Seatbelt egress profile exists to deny. `handle`
+// is the ONLY dispatch surface; the BFF route (coding-sidecar-tool-facade.ts) calls it directly
+// over the already-attested `/api/coding-sidecar/gateway` loopback port. `active`/`start`/`close`
+// stay so the composition's existing prepare/dispose lifecycle (which gates the readiness
+// challenge and rejects post-close calls with 503) is unchanged; only the transport underneath
+// them changes. A caller that still needs a real HTTP endpoint (the scripted functional harness's
+// fake sidecar) owns its OWN tiny listener wrapping this SAME `handle` -- never a second
+// production path (see opencodeFunctionalHarness/_support.ts).
 function createToolBridge(
   capability: string,
   facade: CodingToolFacade,
   configuredLimits: OpenCodeRuntimeCompositionInput["toolBridge"],
   settleTool: SafeToolSettlement | undefined,
   diagnostics: ServerDiagnosticSink | undefined,
+  toolFacadeOrigin: string,
 ): ToolBridgeController {
   const limits = normalizeToolBridgeLimits(configuredLimits);
-  let server: Server | undefined;
-  let url = "http://127.0.0.1:0/tool";
   let listening = false;
   const gate = createToolBridgeAdmissionGate(limits);
-  const sockets = new Set<Socket>();
   const deps: ToolBridgeExecutionDeps = { capability, facade, settleTool, diagnostics };
   const handle: OpenCodeToolBridge["handle"] = (request) =>
     handleDirectToolRequest(listening, deps, gate, request);
-  const listener = bridgeRequestListener(() => listening, deps, gate);
   const publicPort: OpenCodeToolBridge = {
     get url(): string {
-      return url;
+      return toolFacadeOrigin;
     },
     handle,
   };
   return {
     publicPort,
     active: () => listening,
-    start: async (): Promise<void> => {
-      if (listening) return;
-      server = configuredBridgeServer(limits, sockets, listener);
-      url = await listenBridge(server);
+    start: (): Promise<void> => {
       listening = true;
+      return Promise.resolve();
     },
-    close: async (): Promise<void> => {
+    close: (): Promise<void> => {
       listening = false;
-      const current = server;
-      server = undefined;
-      if (current === undefined) return;
       gate.abortAll();
-      for (const socket of sockets) socket.destroy();
-      await closeBridgeServer(current);
+      return Promise.resolve();
     },
-  };
-}
-
-// The listener reads `listening` through the accessor at request time, preserving the closure
-// semantics it replaces: a request that arrives after close() is rejected by the preflight.
-function bridgeRequestListener(
-  isListening: () => boolean,
-  deps: ToolBridgeExecutionDeps,
-  gate: ToolBridgeAdmissionGate,
-): (request: IncomingMessage, response: ServerResponse) => void {
-  return (request, response): void => {
-    void handleIncomingToolRequest(request, response, isListening(), deps, gate.admit);
   };
 }
 
@@ -1357,7 +1354,32 @@ function handleDirectToolRequest(
   if (rejection !== undefined) return Promise.resolve(rejection);
   const admission = gate.admit();
   if (admission === undefined) return Promise.resolve({ status: 429, body: "" });
-  return executeToolRequest(deps, input.headers, input.body, admission);
+  const detachExternalAbort = bindExternalAbort(input.signal, admission);
+  return executeToolRequest(deps, input.headers, input.body, admission).finally(
+    detachExternalAbort,
+  );
+}
+
+// The route's own disconnect signal (its client going away mid-execution) and the admission
+// gate's deadline timer settle the SAME in-flight facade call through the one existing abort
+// path (`executeToolRequest`'s `raceAbort`) -- this is the only place an external signal joins it,
+// so "abort-on-close" never grows a second cancellation mechanism.
+function bindExternalAbort(
+  signal: AbortSignal | undefined,
+  admission: AdmittedToolRequest,
+): () => void {
+  if (signal === undefined) return () => undefined;
+  if (signal.aborted) {
+    admission.controller.abort(new Error(DISCONNECT_ABORT));
+    return () => undefined;
+  }
+  const onAbort = (): void => {
+    admission.controller.abort(new Error(DISCONNECT_ABORT));
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  return (): void => {
+    signal.removeEventListener("abort", onAbort);
+  };
 }
 
 function createToolBridgeAdmissionGate(limits: ToolBridgeLimits): ToolBridgeAdmissionGate {
@@ -1389,42 +1411,6 @@ function createToolBridgeAdmissionGate(limits: ToolBridgeLimits): ToolBridgeAdmi
       for (const controller of controllers) controller.abort(new Error(CLOSE_ABORT));
     },
   };
-}
-
-function configuredBridgeServer(
-  limits: ToolBridgeLimits,
-  sockets: Set<Socket>,
-  handler: (request: IncomingMessage, response: ServerResponse) => void,
-): Server {
-  const server = createServer(handler);
-  server.headersTimeout = Math.min(limits.requestDeadlineMs, 10_000);
-  server.requestTimeout = limits.requestDeadlineMs;
-  server.keepAliveTimeout = 1_000;
-  server.timeout = limits.requestDeadlineMs;
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
-  });
-  return server;
-}
-
-async function listenBridge(server: Server): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (address === null || typeof address === "string") throw new Error("bridge-bind-failed");
-  return `http://127.0.0.1:${String(address.port)}/tool`;
-}
-
-async function closeBridgeServer(server: Server): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error === undefined) resolve();
-      else reject(error);
-    });
-  });
 }
 
 function normalizeToolBridgeLimits(
@@ -1653,66 +1639,17 @@ function safeEqual(left: string, right: string): boolean {
   return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
 }
 
-async function handleIncomingToolRequest(
-  request: IncomingMessage,
-  response: ServerResponse,
-  active: boolean,
-  deps: ToolBridgeExecutionDeps,
-  admit: () => AdmittedToolRequest | undefined,
-): Promise<void> {
-  if (request.method !== "POST" || request.url !== "/tool") {
-    response.writeHead(404).end();
-    return;
-  }
-  const headers = incomingHeaders(request.headers);
-  const rejection = preflightToolRequest(active, deps.capability, headers);
-  if (rejection !== undefined) {
-    response.writeHead(rejection.status).end();
-    return;
-  }
-  const admission = admit();
-  if (admission === undefined) {
-    response.writeHead(429).end();
-    return;
-  }
-  const removeDisconnectListeners = bindToolDisconnect(request, response, admission);
-  try {
-    const bytes = await readBoundedBody(request, admission.controller.signal);
-    const body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    const result = await executeToolRequest(deps, headers, body, admission);
-    if (!response.destroyed) {
-      response.writeHead(result.status, { "Content-Type": "application/json" }).end(result.body);
-    }
-  } catch {
-    admission.release();
-    if (response.destroyed) return;
-    const status = abortReason(admission.controller.signal) === DEADLINE_ABORT ? 408 : 400;
-    response.writeHead(status).end();
-  } finally {
-    removeDisconnectListeners();
-  }
-}
+// Retired production HTTP listener for this bridge (#3390 / ADR-0043 D11-D14): NOTHING in this
+// module calls `.listen()` any more -- `handle()` above is the one dispatch surface, reached over
+// the already-attested `/api/coding-sidecar/gateway` loopback port via
+// coding-sidecar-tool-facade.ts. The two small helpers below (Node headers -> `Headers`, and a
+// byte-budget-bounded body read) are kept, exported, for the ONE caller still allowed to own a
+// real HTTP endpoint around this same `handle`: the scripted functional harness's fake sidecar
+// (opencodeFunctionalHarness/_support.ts) -- never a second production path.
 
-function bindToolDisconnect(
-  request: IncomingMessage,
-  response: ServerResponse,
-  admission: AdmittedToolRequest,
-): () => void {
-  const abortDisconnect = (): void => {
-    admission.controller.abort(new Error(DISCONNECT_ABORT));
-  };
-  const responseClosed = (): void => {
-    if (!response.writableFinished) abortDisconnect();
-  };
-  request.once("aborted", abortDisconnect);
-  response.once("close", responseClosed);
-  return (): void => {
-    request.removeListener("aborted", abortDisconnect);
-    response.removeListener("close", responseClosed);
-  };
-}
-
-function incomingHeaders(values: IncomingHttpHeaders): Headers {
+/** Node's multi-valued header shape flattened onto the Fetch `Headers` `preflightToolRequest` and
+ * the BFF route both read. */
+export function incomingHeaders(values: IncomingHttpHeaders): Headers {
   const headers = new Headers();
   for (const [name, value] of Object.entries(values)) {
     if (typeof value === "string") headers.set(name, value);
@@ -1721,7 +1658,10 @@ function incomingHeaders(values: IncomingHttpHeaders): Headers {
   return headers;
 }
 
-function readBoundedBody(request: IncomingMessage, signal: AbortSignal): Promise<Buffer> {
+/** Same byte budget (`CODING_TOOL_MAX_BODY_BYTES`) as `preflightToolRequest`'s declared-length
+ * check, enforced against the ACTUAL stream as it arrives rather than a (possibly absent or
+ * understated) `content-length` header. */
+export function readBoundedBody(request: IncomingMessage, signal: AbortSignal): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let bytes = 0;

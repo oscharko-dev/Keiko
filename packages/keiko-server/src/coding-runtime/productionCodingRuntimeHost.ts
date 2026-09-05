@@ -89,6 +89,7 @@ const OPTIONAL_RUNTIME_CAPABILITY_KEYS = [
   "mintDescriptionAuthority",
   "attachVerifiedHeadNotifier",
   "openCodeGatewayReadinessRegistry",
+  "toolFacadeBridge",
 ] as const;
 
 type OptionalRuntimeCapabilities = Pick<

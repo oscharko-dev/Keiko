@@ -319,6 +319,7 @@ import type { CodingSafeActivityProjection } from "./coding-runtime/codingSafeAc
 import {
   createCodingRuntimeControlPlane,
   type CodingRuntimeHost,
+  type CodingRuntimeToolFacadeBridge,
 } from "./coding-runtime/codingRuntimeControlPlane.js";
 import { createProductionCodingRuntimeIssueIntake } from "./coding-context/codingRuntimeIssueIntake.js";
 import {
@@ -602,6 +603,12 @@ export interface UiHandlerDeps {
         readonly noteAdoptionGapDiagnosed: (runId: string) => boolean;
         readonly clear: (runId: string, preserveVerification?: boolean) => void;
       }
+    | undefined;
+  // ADR-0043 D11-D14 (#3390): the currently active run's governed tool bridge, reached by
+  // coding-sidecar-tool-facade.ts over the SAME attested loopback port as the model gateway
+  // instead of a second listener. `resolve()` is `undefined` whenever no run is active.
+  readonly toolFacadeBridge?:
+    | { readonly resolve: () => CodingRuntimeToolFacadeBridge | undefined }
     | undefined;
   readonly codingSidecarGatewayCancellationRegistry?:
     { readonly signalFor: (runId: string) => AbortSignal | undefined } | undefined;
@@ -4352,6 +4359,7 @@ interface CodingRuntimeControlPlaneDeps {
   gitChangeDescriptionAuthorityPort?: UiHandlerDeps["gitChangeDescriptionAuthorityPort"];
   mintDescriptionAuthority?: UiHandlerDeps["mintDescriptionAuthority"];
   openCodeGatewayReadinessRegistry?: UiHandlerDeps["openCodeGatewayReadinessRegistry"];
+  toolFacadeBridge?: UiHandlerDeps["toolFacadeBridge"];
 }
 
 // Same-named pass-throughs from `CodingRuntimeControlPlane` onto `CodingRuntimeControlPlaneDeps`:
@@ -4368,6 +4376,7 @@ const CODING_RUNTIME_CONTROL_PLANE_PASSTHROUGH_KEYS = [
   // gitChangeRoutes.ts's connect-flow mint both read `deps.mintDescriptionAuthority` directly.
   "mintDescriptionAuthority",
   "openCodeGatewayReadinessRegistry",
+  "toolFacadeBridge",
 ] as const;
 
 type CodingRuntimeControlPlanePassthroughDeps = Pick<

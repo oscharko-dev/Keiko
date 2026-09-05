@@ -80,9 +80,10 @@ const OPERATOR_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> =
 // model call must not be refused just because it raced that settling instead of a real admission
 // failure. Every other reservePromptTokens clause (audience, runId, envelopeDigest match) stays
 // exactly as strict; only the running-only state gate widens to also admit "ready".
-const PROMPT_RESERVATION_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set(
-  ["ready", "running"],
-);
+const PROMPT_RESERVATION_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
+  "ready",
+  "running",
+]);
 
 export interface CodingRuntimeTrustedContext {
   /** Captured before start confirmation; absent legacy contexts cannot execute verified commits. */

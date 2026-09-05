@@ -696,6 +696,25 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(JSON.stringify([...f.rows.values()])).not.toContain(start.taskIntent);
   });
 
+  // #3390: the initial turn used to dispatch while the run's own public projection still read
+  // "ready", flipping to "running" only after the sidecar accepted it -- untruthful for the whole
+  // window the model could already be getting its first prompt, and the same window in which
+  // runtimeAuthorityService.reservePromptTokens raced a stale "ready" admission state. The
+  // projection must already read "running" for the entire in-flight dispatch, not only once it
+  // resolves.
+  it("shows the run as running for the whole in-flight initial dispatch, never ready (#3390)", async () => {
+    const f = fixture();
+    let observedDuringDispatch: string | undefined;
+    f.taskDispatcher.dispatch.mockImplementationOnce(() => {
+      observedDuringDispatch = f.orchestrator.status().state;
+      return Promise.resolve({ ok: true, completion: Promise.resolve("succeeded" as const) });
+    });
+
+    await f.orchestrator.start(start);
+
+    expect(observedDuringDispatch).toBe("running");
+  });
+
   it("serializes follow-ups by run, revision, and one-use request id", async () => {
     const f = fixture();
     await f.orchestrator.start(start);
