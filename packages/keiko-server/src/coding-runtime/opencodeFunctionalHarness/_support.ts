@@ -1432,3 +1432,33 @@ export function createScriptedGovernedTranscriptChild(input: {
     close: (): Promise<void> => child.close(),
   };
 }
+
+/**
+ * A scripted OpenCode child whose `callGateway` performs a REAL HTTP round trip to the given
+ * gateway base URL, instead of `createScriptedGovernedTranscriptChild`'s directly-injected
+ * `modelTurn` seam (which never touches HTTP at all). Exists for exactly one purpose: proving a
+ * live child is denied by the REAL production sidecar-gateway route
+ * (`handleCodingSidecarGatewayChatCompletions`) when the tool set it advertises is incomplete --
+ * the modelTurn-based child cannot exercise that route because it never calls it.
+ */
+export function createLiveGatewayScriptedChild(input: {
+  readonly runId: string;
+  readonly gatewayUrl: string;
+  readonly gatewayCapability: string;
+  readonly gatewayToolsOverride?: readonly FunctionalGatewayTool[];
+}): ScriptedGovernedTranscriptChild {
+  const env = {
+    OPENCODE_SERVER_PASSWORD: "scripted-transcript-password",
+    KEIKO_MODEL_GATEWAY_URL: input.gatewayUrl,
+    KEIKO_MODEL_GATEWAY_CAPABILITY: input.gatewayCapability,
+    KEIKO_TOOL_FACADE_URL: "http://scripted-transcript.invalid/tool-facade",
+    KEIKO_TOOL_FACADE_CAPABILITY: "scripted-transcript-tool-capability",
+    KEIKO_CODING_RUN_ID: input.runId,
+  };
+  const child = new FakeOpenCodeChild(env, false, undefined, undefined, input.gatewayToolsOverride);
+  return {
+    runTurn: (userText): Promise<readonly ScriptedGovernedTranscriptToolResult[]> =>
+      child.runScriptedUserTurn(userText),
+    close: (): Promise<void> => child.close(),
+  };
+}

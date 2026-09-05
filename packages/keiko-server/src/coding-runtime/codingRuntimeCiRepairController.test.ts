@@ -385,4 +385,45 @@ describe("CI repair accounting around admitted model work", () => {
     // began is still active in the underlying storage -- the assertion above is not vacuous.
     expect(test.store.read(test.context).record?.attempts[0]?.status).toBe("active");
   });
+  // Final-audit F25: the specific out-of-order settle race the CAS guard at settleScope() (lines
+  // 299-311 of codingRuntimeCiRepairBudgetStore.ts) exists to prevent, exercised against the REAL
+  // store (unlike the two tests above, which wrap or force the store's response). A tool-failure
+  // settle('failed') closes the attempt first; a LATE, out-of-order settle for the SAME attemptId
+  // reporting the opposite outcome (a stale "technical-ready" CI observation that resolves only
+  // after the tool's own failure already closed the attempt) must be rejected as `attempt-replayed`,
+  // never silently accepted as a second, conflicting settlement -- and the controller's own
+  // `observed()` path, driven by that same stale CI signal, must never resurrect the closed attempt
+  // or fire `notifyVerifiedHeadAdvanced` for it.
+  it("rejects a late out-of-order settle for an attempt the tool's own failure already closed", () => {
+    const notify = vi.fn();
+    const test = fixture({}, notify);
+    const lease = test.controller.admitTool(verify("verify-1"));
+    const admitted = test.store.read(test.context).record;
+    const attemptId = admitted?.attempts[0]?.attemptId;
+    if (attemptId === undefined) throw new Error("expected an active repair attempt");
+    expect(admitted?.attempts[0]?.status).toBe("active");
+
+    // Closes the attempt as "failed" -- exactly the lease callback path admitTool() wires up.
+    lease?.settle({ status: "failed" });
+    const closed = test.store.read(test.context).record;
+    expect(closed?.attempts[0]?.status).toBe("failed");
+
+    // The late, out-of-order settle for the SAME attemptId, reporting the opposite outcome: the
+    // real store's CAS guard must reject it rather than treat it as a fresh settlement.
+    const late = test.store.settle(test.context, {
+      attemptId,
+      outcome: "succeeded",
+      expectedRevision: closed?.revision ?? 0,
+    });
+    expect(late.status).toBe("blocked");
+    expect(late.status === "blocked" && late.reason).toBe("attempt-replayed");
+    expect(test.store.read(test.context).record?.attempts[0]?.status).toBe("failed");
+
+    // The same race arriving through the controller's own `observed()` path (a stale CI snapshot
+    // for a repaired head, delivered after the tool failure already closed the attempt) must
+    // neither resurrect the attempt nor notify.
+    test.controller.observed({ ...readySnapshot(), headSha: "4".repeat(40) });
+    expect(notify).not.toHaveBeenCalled();
+    expect(test.store.read(test.context).record?.attempts[0]?.status).toBe("failed");
+  });
 });

@@ -11,6 +11,7 @@ import {
   scanToolRegistrySource,
   nonDispatchProbeDisposition,
 } from "./lib/tool-catalog-inventory.mjs";
+import { GOVERNED_TOOL_CONTRACT_PINS } from "./lib/governed-tool-contract-pins.mjs";
 
 export const TOOL_CATALOG_MANIFEST_PATH = "docs/architecture/tool-catalog-manifest.v1.json";
 export const TOOL_CATALOG_MIGRATION_PATH = "docs/architecture/tool-catalog-migration.v1.json";
@@ -18,18 +19,36 @@ export async function toolCatalogMigrationBytes(root = process.cwd()) {
   const sourceContract = "docs/architecture/governed-tool-contract.v1.json";
   const bytes = readFileSync(join(root, sourceContract), "utf8");
   const contract = JSON.parse(bytes);
+  const sourceContractDigest = sha256Hex(bytes);
   const migration = {
     schemaVersion: 1,
     ownerIssue: 3406,
     closeoutIssue: 3415,
     sourceContract,
-    sourceContractDigest: sha256Hex(bytes),
+    sourceContractDigest,
     inventory: contract.inventory.map(({ id, ownerIssue, disposition }) => ({
       id,
       ownerIssue,
       disposition,
     })),
     nonDispatchProbes: [nonDispatchProbeDisposition()],
+    // Non-authorizing pending-H1 handoff record (#3406); see governed-tool-contract-pins.mjs's
+    // `pendingH1` comment for what each field means and who may change it. The prerequisite #3411
+    // merge identity is this same document's own `sourceContractDigest` -- the #3411 architecture
+    // checkpoint this record depends on -- never a second, independently computed digest.
+    // landedDevCommit/landedTreeDigest stay null until #3414 records H1's actual dev-reachable
+    // merge identity and removes this entry in the same migration.
+    pendingH1: {
+      owner: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.owner,
+      canonicalTool: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.canonicalTool,
+      prerequisiteMerge: {
+        issue: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.prerequisiteIssue,
+        contractDigest: sourceContractDigest,
+      },
+      removalIssue: GOVERNED_TOOL_CONTRACT_PINS.pendingH1.removalIssue,
+      landedDevCommit: null,
+      landedTreeDigest: null,
+    },
   };
   return format(`${JSON.stringify(migration, null, 2)}\n`, {
     parser: "json",

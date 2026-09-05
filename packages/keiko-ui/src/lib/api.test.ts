@@ -3839,7 +3839,11 @@ describe("Governed commit/push mint-then-execute (#3386/#3387, F3 epic #3384 fin
 
     const result = await proposeCommit({ projectId: "/repo", message: "feat: x" });
 
-    expect(result).toEqual({ schemaVersion: "1", status: "approval-required", actionKind: "commit" });
+    expect(result).toEqual({
+      schemaVersion: "1",
+      status: "approval-required",
+      actionKind: "commit",
+    });
     // The denied mint never reaches execute — only the approve endpoint was called.
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [approveUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -3850,7 +3854,9 @@ describe("Governed commit/push mint-then-execute (#3386/#3387, F3 epic #3384 fin
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonOk(approvalFixture("gda_push_1")))
-      .mockResolvedValueOnce(jsonOk({ schemaVersion: "1", status: "succeeded", actionKind: "push" }));
+      .mockResolvedValueOnce(
+        jsonOk({ schemaVersion: "1", status: "succeeded", actionKind: "push" }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await proposePush({

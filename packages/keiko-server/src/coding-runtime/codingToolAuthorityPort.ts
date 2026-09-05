@@ -24,6 +24,16 @@ import {
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
 import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
+import { createOpenCodeGatewayToolCatalogAdvertisement } from "./opencodeToolSchemas.js";
+import {
+  createCatalogFacadeBridge,
+  createInMemoryCatalogFacadeBudgetPort,
+  type CatalogFacadeBridge,
+  type CatalogFacadeBudgetPort,
+} from "../tool-catalog/catalogToolFacadeBridge.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import { defaultServerDiagnosticSink, type ServerDiagnosticSink } from "../diagnostics-log.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 
 export interface CodingToolAuthorityContext {
   readonly adapterKind: CodingWorkbenchRuntimeAdapterKind;
@@ -34,6 +44,12 @@ export interface CodingToolAuthorityContext {
   readonly runId?: string | undefined;
   readonly envelopeDigest?: string | undefined;
   readonly authorityExpiresAt?: string | undefined;
+  // F8 (#3413): threads this run's correlation id into the tool-catalog.* lifecycle log lines the
+  // catalog facade bridge emits. Not yet populated by productionManagedWorktreeTools.ts's context
+  // provider (out of this change's write scope; see the report's outOfScopeNeeds) -- until it is,
+  // the bridge logs those lines under UNKNOWN_CORRELATION_ID, which is the sanctioned fallback,
+  // never a silently missing id.
+  readonly correlationId?: string | undefined;
 }
 
 export type CodingToolAuthorityContextProvider = () => CodingToolAuthorityContext;
@@ -48,6 +64,13 @@ interface RuntimeCodingToolFacadeOptions extends CodingToolFacadeOptions {
   readonly ciRepairBudget?: CiRepairExecutionBudget;
   readonly approvalProofVerifier?: CodingToolApprovalProofVerifier | undefined;
   readonly reserveEditDelegation?: boolean | undefined;
+  // F8 (#3413): production always wires the real catalog facade bridge; these three let a test
+  // observe its lifecycle log lines or replace its budget port without touching process-wide
+  // state. `disableCatalogBridge` exists only for a test that must isolate an unrelated concern.
+  readonly catalogActivityLog?: ServerLogSink | undefined;
+  readonly catalogDiagnostics?: ServerDiagnosticSink | undefined;
+  readonly catalogBudget?: CatalogFacadeBudgetPort | undefined;
+  readonly disableCatalogBridge?: boolean | undefined;
 }
 
 export type CodingToolAuthorityAvailability =
@@ -369,8 +392,36 @@ export function createRuntimeCodingToolFacade(
       }),
       delegate: createCodingToolGovernedDelegate(governedPorts, options.ciRepairBudget),
     },
-    { ...options, requireInvocationRegistryForEdits: true },
+    {
+      ...options,
+      requireInvocationRegistryForEdits: true,
+      catalogBridge:
+        options.disableCatalogBridge === true
+          ? undefined
+          : catalogFacadeBridgeFor(context, options),
+    },
   );
+}
+
+/** F8 (#3413): the production CatalogToolBinder-backed bridge for the facade's covered actions
+ * (see catalogToolFacadeBridge.ts). Built from the same real catalog used to advertise tools to
+ * the model (createOpenCodeGatewayToolCatalogAdvertisement), so there is exactly one catalog, not
+ * a second one grown for this integration. */
+function catalogFacadeBridgeFor(
+  context: CodingToolAuthorityContextProvider,
+  options: RuntimeCodingToolFacadeOptions,
+): CatalogFacadeBridge {
+  const { catalog, projection } = createOpenCodeGatewayToolCatalogAdvertisement(Date.now());
+  return createCatalogFacadeBridge({
+    catalog,
+    profile: projection.profile,
+    budget: options.catalogBudget ?? createInMemoryCatalogFacadeBudgetPort(),
+    logPort: {
+      primary: options.catalogActivityLog ?? processServerLogSink(),
+      diagnostics: options.catalogDiagnostics ?? defaultServerDiagnosticSink,
+    },
+    context: () => ({ correlationId: context().correlationId }),
+  });
 }
 
 function revalidate(

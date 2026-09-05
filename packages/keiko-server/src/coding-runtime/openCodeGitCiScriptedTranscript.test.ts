@@ -1,5 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  createServer as createHttpServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -10,6 +16,12 @@ import type {
   CodingWorkbenchRuntimeEvent,
   VerificationReport,
 } from "@oscharko-dev/keiko-contracts";
+import type {
+  GatewayConfig,
+  ModelCapability,
+  ModelProviderConfig,
+  NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { runMigrations } from "../store/schema.js";
@@ -35,11 +47,19 @@ import {
   type ScriptedToolPhase,
 } from "./opencodeFunctionalHarness/_governedTools.js";
 import {
+  createLiveGatewayScriptedChild,
   createScriptedGovernedTranscriptChild,
+  functionalGatewayTools,
   type FakeGatewayTurn,
   type FakeToolCall,
   type ScriptedGovernedTranscriptToolResult,
 } from "./opencodeFunctionalHarness/_support.js";
+import { handleCodingSidecarGatewayChatCompletions } from "../coding-sidecar-gateway.js";
+import { buildRedactor, type UiHandlerDeps } from "../deps.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
+import { createRunRegistry } from "../runs.js";
+import { createInMemoryUiStore } from "../store/index.js";
+import { STREAMING, type RouteContext } from "../routes.js";
 
 const DIGEST = "a".repeat(64);
 const roots: string[] = [];
@@ -733,4 +753,189 @@ describe("removing a tool from the advertised OpenCode schema fails closed", () 
       { runId: "run-negative-3388", tool: "unknown", phase: "failed" },
     ]);
   });
+
+  it("denies a live scripted child mid-run through the real production sidecar-gateway route when the advertised set drops one of the eight tools", async () => {
+    // #3386/#3387/#3388 fail-closed proof at the INTEGRATION layer, not only in isolation: the
+    // child's own real HTTP `/chat/completions` call reaches the REAL
+    // `handleCodingSidecarGatewayChatCompletions` route (the same route the real OpenCode 1.17.17
+    // binary calls), which enforces `hasExactOpenCodeVisibleToolContract` on the incoming request.
+    // `createScriptedGovernedTranscriptChild`'s directly-injected `modelTurn` seam never touches
+    // HTTP and so can never exercise this route; `createLiveGatewayScriptedChild` performs the
+    // same real fetch a genuine OpenCode child performs.
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = liveNegativeGatewayDeps(diagnostics);
+    const server = createHttpServer((request, response) => {
+      void routeLiveGatewayRequest(request, response, deps);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const gatewayUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`;
+    try {
+      const fullToolSet = functionalGatewayTools();
+      const droppedToolSet = fullToolSet.filter((tool) => tool.function.name !== "keiko_git_stage");
+      expect(droppedToolSet).toHaveLength(fullToolSet.length - 1);
+      const deniedChild = createLiveGatewayScriptedChild({
+        runId: "run-negative-gateway-live",
+        gatewayUrl,
+        gatewayCapability: LIVE_GATEWAY_CAPABILITY,
+        gatewayToolsOverride: droppedToolSet,
+      });
+      try {
+        // The denial happens before the model's request is ever admitted: no tool call ever runs.
+        await expect(
+          deniedChild.runTurn("stage and commit the pending workspace change"),
+        ).resolves.toEqual([]);
+      } finally {
+        await deniedChild.close();
+      }
+      expect(diagnostics).toContainEqual(
+        expect.objectContaining({
+          errorClass: "CodingSidecarGatewayToolContractRejection",
+          code: "CODING_GATEWAY_TOOL_CONTRACT_DRIFT",
+        }),
+      );
+
+      // The full, unmodified advertised set is admitted through the SAME live route: the denial
+      // above is discriminating on the missing tool, not the route simply being broken.
+      const admittedChild = createLiveGatewayScriptedChild({
+        runId: "run-negative-gateway-live-admitted",
+        gatewayUrl,
+        gatewayCapability: LIVE_GATEWAY_CAPABILITY,
+        gatewayToolsOverride: fullToolSet,
+      });
+      try {
+        await admittedChild.runTurn("stage and commit the pending workspace change");
+      } finally {
+        await admittedChild.close();
+      }
+      expect(
+        diagnostics.filter(
+          (record) => record.errorClass === "CodingSidecarGatewayToolContractRejection",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+      });
+    }
+  });
 });
+
+const LIVE_GATEWAY_CAPABILITY = "scripted-transcript-live-gateway-capability";
+const LIVE_GATEWAY_RUN_ID = "run-negative-gateway-live";
+
+function liveGatewayModelProvider(): ModelProviderConfig {
+  return {
+    modelId: "azure-coding-model",
+    baseUrl: "https://provider.example/v1",
+    apiKey: "provider-secret",
+    apiKeyHeaderName: "api-key",
+    endpointStyle: "azure-openai-deployment",
+    apiVersion: "2024-06-01",
+    timeoutMs: 30_000,
+    maxRetries: 3,
+    retryBaseDelayMs: 500,
+  };
+}
+
+function liveGatewayModelCapability(): ModelCapability {
+  return {
+    id: "azure-coding-model",
+    kind: "chat",
+    contextWindow: 128_000,
+    maxOutputTokens: 4_096,
+    toolCalling: true,
+    toolCallingVerification: {
+      status: "verified",
+      checkedAt: new Date().toISOString(),
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: "test-fingerprint",
+    },
+    structuredOutput: true,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: true,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "coding-sidecar",
+    preferredUseCases: ["Coding"],
+    knownLimitations: [],
+  };
+}
+
+function liveGatewayAssistantResponse(): NormalizedResponse {
+  return {
+    modelId: "azure-coding-model",
+    content: "assistant-content",
+    finishReason: "stop",
+    toolCalls: [],
+    structuredOutput: null,
+    usage: {
+      requestId: "req-live-gateway-negative",
+      promptTokens: 12,
+      completionTokens: 8,
+      latencyMs: 1,
+      costClass: "medium",
+    },
+  };
+}
+
+/** Minimal, real production `UiHandlerDeps` for the live sidecar-gateway route: no test doubles
+ * for tool-contract admission itself -- only the outbound model call is stubbed. */
+function liveNegativeGatewayDeps(diagnostics: ServerDiagnosticRecord[]): UiHandlerDeps {
+  const config: GatewayConfig = {
+    providers: [liveGatewayModelProvider()],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    capabilities: [liveGatewayModelCapability()],
+  };
+  const diagnosticsSink: ServerDiagnosticSink = {
+    record: (record): void => {
+      diagnostics.push(record);
+    },
+  };
+  return {
+    config,
+    configPresent: true,
+    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+    env: {},
+    redactor: buildRedactor({}),
+    diagnostics: diagnosticsSink,
+    registry: createRunRegistry(),
+    modelPortFactory: () => undefined,
+    store: createInMemoryUiStore(),
+    codingSidecarGatewayChatFactory: () => () => Promise.resolve(liveGatewayAssistantResponse()),
+    runtimeCapabilityAuthenticator: {
+      authenticate: (capability, audience) =>
+        capability === LIVE_GATEWAY_CAPABILITY && audience === "model-gateway"
+          ? {
+              ok: true,
+              binding: { runId: LIVE_GATEWAY_RUN_ID, adapterKind: "model-gateway-sidecar" },
+            }
+          : { ok: false },
+      reservePromptTokens: () => ({ ok: true, runId: LIVE_GATEWAY_RUN_ID }),
+    },
+  };
+}
+
+/** Adapts a real Node HTTP request/response to the production route contract, unmodified. */
+async function routeLiveGatewayRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  deps: UiHandlerDeps,
+): Promise<void> {
+  const ctx: RouteContext = {
+    req: request,
+    res: response,
+    params: {},
+    url: new URL(request.url ?? "/", "http://127.0.0.1"),
+    correlationId: undefined,
+  };
+  const outcome = await handleCodingSidecarGatewayChatCompletions(ctx, deps);
+  if (outcome === STREAMING) return;
+  response.writeHead(outcome.status, { "content-type": "application/json" });
+  response.end(JSON.stringify(outcome.body));
+}

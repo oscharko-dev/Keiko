@@ -2587,6 +2587,44 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     expect(signals[0]?.aborted).toBe(true);
   });
 
+  // #3401 review finding F7: pruning a settled run used to discard its per-run AbortController
+  // from `descriptionDispatchAbort` without ever calling `.abort()`, leaving a still in-flight
+  // Model Gateway/snapshot-capture call to run to completion after nothing references it any
+  // more. Mirrors the supersede-path abort test above, but drives the cancellation through
+  // `pruneSettled` (via `startupReconcileNow`) instead of a superseding head.
+  it("aborts an in-flight generation attempt when the run is pruned", async () => {
+    const jobs = jobStore();
+    const signals: AbortSignal[] = [];
+    const dispatcher: WorkbenchDescriptionDispatcher = {
+      generate: vi.fn((_scope, signal: AbortSignal) => {
+        signals.push(signal);
+        return new Promise<WorkbenchDescriptionDispatchOutcome>(() => undefined);
+      }),
+    };
+    const verifiedCommits = new Map<string, VerifiedCommitResult>();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      { jobs, dispatcher },
+      verifiedCommits,
+    );
+
+    await settleRun(f, verifiedCommits);
+    await vi.waitFor(() => {
+      expect(dispatcher.generate).toHaveBeenCalledTimes(1);
+    });
+    expect(signals[0]?.aborted).toBe(false);
+
+    f.listPrunableSettled.mockReturnValueOnce(["run-1"]);
+    f.orchestrator.startupReconcileNow();
+
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
   it("records a closed blocked status without calling the model when authority is denied", async () => {
     const jobs = jobStore();
     const dispatcher = fakeDispatcher({ reason: "authority-expired" });
@@ -2684,7 +2722,11 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
   it("emits body-free activity log lines with a threaded correlation id", async () => {
     const captured = captureActivityLog();
     const jobs = jobStore();
-    const dispatcher = fakeDispatcher({ reason: "generated", snapshotDigest: "a".repeat(64) });
+    // #3401 review finding F2: the settle line's `event` bucket (`generated`) is a coarse
+    // three-way mapping (`descriptionSettleOp`) that collapses `generated`, `partial-generated`
+    // and `fallback-generated` onto the same op-event name. Using a non-"generated" reason here
+    // proves the outcome vocabulary itself — not just the coarse bucket — survives into the log.
+    const dispatcher = fakeDispatcher({ reason: "partial-generated", snapshotDigest: "a".repeat(64) });
     const verifiedCommits = new Map<string, VerifiedCommitResult>();
     const f = fixture(
       undefined,
@@ -2717,6 +2759,15 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     expect(dispatched).toMatchObject({
       correlationId: UNKNOWN_CORRELATION_ID,
       extra: { runId: "run-1", event: "dispatched" },
+    });
+    // #3401 review finding F2: the settle line must carry the precise generation `reason`
+    // (`partial-generated`), not only the coarse `generated` op-event bucket, so the epic's
+    // outcome vocabulary can be reconstructed from the log alone.
+    const settled = captured.records.find(
+      (event) => event.op === "coding-runtime.description" && event.extra?.event === "generated",
+    );
+    expect(settled).toMatchObject({
+      extra: { runId: "run-1", event: "generated", reason: "partial-generated" },
     });
     expect(
       captured.records.every((event) => event.op !== "coding-runtime.description.dispatched"),

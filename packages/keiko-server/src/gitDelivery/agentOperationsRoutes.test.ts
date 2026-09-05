@@ -515,27 +515,28 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
   // admitted. Scoped to the non-delivery write kinds only — final-audit F2/#3390 relocates the
   // delivery-class ladder to the two cases immediately below, since `gitRepositoryAgentMinimumMode`
   // answers a narrower, unrelated question for them (see that fix's comment there).
-  it.each(WRITE_OPERATIONS.filter((operation) => operation !== "commit" && !DELIVERY_WRITE_OPERATIONS.includes(operation)))(
-    "honours the ladder for %s at supervised-coding",
-    async (operation) => {
-      const minimum = gitRepositoryAgentMinimumMode(operation);
-      const admitted =
-        minimum !== undefined &&
-        CODING_WORKBENCH_MODES.indexOf(minimum) <=
-          CODING_WORKBENCH_MODES.indexOf("supervised-coding");
-      const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
-      const result = await handleGitAgentOperation(
-        ctx(executeRequest(operation, `${operation}-supervised`)),
-        deps(runner, "supervised-coding"),
-      );
+  it.each(
+    WRITE_OPERATIONS.filter(
+      (operation) => operation !== "commit" && !DELIVERY_WRITE_OPERATIONS.includes(operation),
+    ),
+  )("honours the ladder for %s at supervised-coding", async (operation) => {
+    const minimum = gitRepositoryAgentMinimumMode(operation);
+    const admitted =
+      minimum !== undefined &&
+      CODING_WORKBENCH_MODES.indexOf(minimum) <=
+        CODING_WORKBENCH_MODES.indexOf("supervised-coding");
+    const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+    const result = await handleGitAgentOperation(
+      ctx(executeRequest(operation, `${operation}-supervised`)),
+      deps(runner, "supervised-coding"),
+    );
 
-      expect(result.body).toMatchObject({ status: admitted ? "delegated" : "denied" });
-      if (!admitted) {
-        expect(result.status).toBe(403);
-        expect(runner).not.toHaveBeenCalled();
-      }
-    },
-  );
+    expect(result.body).toMatchObject({ status: admitted ? "delegated" : "denied" });
+    if (!admitted) {
+      expect(result.status).toBe(403);
+      expect(runner).not.toHaveBeenCalled();
+    }
+  });
 
   // Final-audit F2/#3390 (ADR-0138 D2, epic #3384 correction 5): before this fix, every
   // "repository-delivery" write (fetch/pull/push/pull-request/merge) was permanently hard-denied by

@@ -328,6 +328,7 @@ export function createCodingRuntimeDescriptionJobStore(
     settle: (scope, generationVersion, revision, status, nowIso): boolean =>
       settle(statements, scope, generationVersion, revision, status, nowIso),
     recordBlocked(scope, reason, generationVersion, revision, nowIso): boolean {
+      assertScope(scope);
       const status = blockedStatus(scope, reason, generationVersion, nowIso);
       const result = statements.settleRow.run(
         JSON.stringify(status),

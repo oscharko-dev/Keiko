@@ -133,7 +133,12 @@ interface GitDeliveryAuthorityContinuityInput {
   readonly audit?:
     | Pick<
         GitDeliveryAuthorityAuditSeams,
-        "nowIso" | "logSink" | "deliveryApprovalDeferred" | "approval" | "approvalStore" | "approvalBinding"
+        | "nowIso"
+        | "logSink"
+        | "deliveryApprovalDeferred"
+        | "approval"
+        | "approvalStore"
+        | "approvalBinding"
       >
     | undefined;
   // Optional out-parameter: when the continuity re-check denies (the admitted authority changed or

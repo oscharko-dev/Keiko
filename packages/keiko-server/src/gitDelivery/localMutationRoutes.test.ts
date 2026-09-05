@@ -641,10 +641,7 @@ describe("local mutation routes — governed execution (direct handler + seams)"
         "governed-assist",
       ),
     });
-    const res = await handler(
-      ctxFor(STAGE, { schemaVersion: "1", projectId }),
-      governedAssistDeps,
-    );
+    const res = await handler(ctxFor(STAGE, { schemaVersion: "1", projectId }), governedAssistDeps);
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
     expect(adapter.calls()).toEqual([]);

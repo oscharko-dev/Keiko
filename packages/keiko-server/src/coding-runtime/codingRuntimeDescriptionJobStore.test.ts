@@ -223,6 +223,25 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
     expect(store.current("run-1")).toBeUndefined();
   });
 
+  // #3401 review finding F6: `recordBlocked` was the only public write path that skipped
+  // `assertScope`, unlike `beginDispatch`, `settle` and `recordBudgetExhausted` — a malformed
+  // scope reaching this path was written to `status_json` and the row's identity columns
+  // unvalidated instead of being rejected at the trust boundary.
+  it("rejects a malformed scope passed to recordBlocked instead of writing it unvalidated", () => {
+    const store = openStore();
+    const decision = store.beginDispatch(scope(), NOW);
+    if (decision.kind !== "dispatch") throw new Error("expected a dispatch decision");
+    expect(() =>
+      store.recordBlocked(
+        scope({ runId: "not/a/valid/run-id" }),
+        "provider-failed",
+        decision.generationVersion,
+        decision.revision,
+        NOW,
+      ),
+    ).toThrow(TypeError);
+  });
+
   it("reconciles an attempt still in flight at restart to a closed blocked status, never silently resumed", () => {
     const store = openStore();
     store.beginDispatch(scope(), NOW);

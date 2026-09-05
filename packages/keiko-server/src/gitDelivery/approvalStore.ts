@@ -32,13 +32,7 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 // redeem it — the bound command carries the exact facts (repository, PR identity, base/head SHAs,
 // readiness digest, transition-payload digest) re-verified immediately before execution.
 export type GitDeliveryApprovalOperation =
-  | "local-mutation"
-  | "commit"
-  | "push"
-  | "pr"
-  | "merge"
-  | "pr-description-apply"
-  | "pr-mark-ready";
+  "local-mutation" | "commit" | "push" | "pr" | "merge" | "pr-description-apply" | "pr-mark-ready";
 
 export interface GitDeliveryApprovalBinding {
   readonly projectId: string;
@@ -202,7 +196,10 @@ function matchesOperationBinding(
   pruneExpired(records, nowMs, maxRecords);
   const operation = binding.operation;
   if (!(allowed as readonly string[]).includes(operation)) return false;
-  return commitBindingRecord(records, binding, nowMs, operation as GitDeliveryCommitLikeOperation) !== undefined;
+  return (
+    commitBindingRecord(records, binding, nowMs, operation as GitDeliveryCommitLikeOperation) !==
+    undefined
+  );
 }
 
 function consumeOperationBinding(
@@ -215,7 +212,12 @@ function consumeOperationBinding(
   pruneExpired(records, nowMs, maxRecords);
   const operation = binding.operation;
   if (!(allowed as readonly string[]).includes(operation)) return undefined;
-  const matched = commitBindingRecord(records, binding, nowMs, operation as GitDeliveryCommitLikeOperation);
+  const matched = commitBindingRecord(
+    records,
+    binding,
+    nowMs,
+    operation as GitDeliveryCommitLikeOperation,
+  );
   if (matched === undefined) return undefined;
   records.delete(matched[0]);
   return requirementFor(matched[1]);

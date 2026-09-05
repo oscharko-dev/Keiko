@@ -48,6 +48,40 @@ describe("initial compiler and finite migration conformance gate", () => {
       await generatedToolCatalogManifest(ROOT),
     );
   });
+
+  // #3406/#3414 (F6): the non-authorizing pending-H1 handoff record for #3386's H1 local
+  // repository-search handler. Fails-before: prior to this record's addition, the generated
+  // migration document carried no `pendingH1` field at all, so #3406's acceptance criterion
+  // (owner, canonical tool reference, prerequisite #3411 merge identity, removal issue #3414,
+  // initially-empty landedDevCommit/landedTreeDigest) existed only as prose in
+  // governed-tool-migration.md, never as an actual record.
+  it("carries the non-authorizing pending-H1 handoff record with exactly its six fields", async () => {
+    const migration = JSON.parse(await toolCatalogMigrationBytes(ROOT));
+    expect(Object.keys(migration.pendingH1).sort()).toEqual(
+      [
+        "owner",
+        "canonicalTool",
+        "prerequisiteMerge",
+        "removalIssue",
+        "landedDevCommit",
+        "landedTreeDigest",
+      ].sort(),
+    );
+    expect(migration.pendingH1.owner).toBe(3386);
+    expect(migration.pendingH1.canonicalTool).toEqual({
+      canonicalId: "keiko.repo.search",
+      contractVersion: 1,
+    });
+    expect(migration.pendingH1.prerequisiteMerge.issue).toBe(3411);
+    expect(migration.pendingH1.prerequisiteMerge.contractDigest).toBe(
+      migration.sourceContractDigest,
+    );
+    expect(migration.pendingH1.removalIssue).toBe(3414);
+    // Initially empty: no code path may treat this record as an authorization while these are
+    // null -- only #3414 may populate them once H1 actually reaches dev.
+    expect(migration.pendingH1.landedDevCommit).toBeNull();
+    expect(migration.pendingH1.landedTreeDigest).toBeNull();
+  });
   it("pins the one non-dispatch readiness probe without granting a path exception", () => {
     const source = readFileSync(join(ROOT, PROBE), "utf8");
     expect(scanToolRegistrySource(PROBE, source, new Set())).toEqual([]);

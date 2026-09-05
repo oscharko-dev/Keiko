@@ -106,10 +106,7 @@ import {
 // routes ONLY through the existing body-only description application service (#3399), never
 // through `executeGovernedPullRequest`'s coupled title+body+base update path. Read-only
 // consumption of the existing owning module — never redefined here.
-import type {
-  PrDescriptionApplicationResult,
-  PrDescriptionApplicationService,
-} from "./gitDelivery/prDescriptionTypes.js";
+import type { PrDescriptionApplicationResult } from "./gitDelivery/prDescriptionTypes.js";
 import {
   currentAuditRedactString,
   currentConversationReady,
@@ -2666,22 +2663,13 @@ export function admitGitChangeScopedTurn(
 // ─── Issue #3400 — apply routes only through the description application service (#3399) ────────
 //
 // Frozen Product Decision 6 / issue correction 1: the ONLY admitted write from a git-change-
-// connected Chat is a body-only description apply through the existing #3399 service. Production
-// composition does not yet reach a Chat handler with a composed `PrDescriptionApplicationService`
-// (#3399's own production-wiring item is unmounted — createPrDescriptionApplicationService has
-// zero non-test importers at the time of writing), so it is read via the same optional-cast seam
-// as the description-authority port above. Absent, apply is unavailable — it NEVER falls back to
-// `executeGovernedPullRequest` (prExecution.ts), which is the only other PR-update path and is
-// coupled title+body+base, not body-only.
-interface PrDescriptionApplyDeps {
-  readonly prDescriptionApplicationService?: PrDescriptionApplicationService | undefined;
-}
-
-function prDescriptionApplicationServiceFor(
-  deps: UiHandlerDeps,
-): PrDescriptionApplicationService | undefined {
-  return (deps as UiHandlerDeps & PrDescriptionApplyDeps).prDescriptionApplicationService;
-}
+// connected Chat is a body-only description apply through the existing #3399 service. Final-audit
+// F7: production composition now reaches this handler with a real, composed
+// `PrDescriptionApplicationService` (`deps.prDescriptionApplicationService`, deps.ts's own
+// composition root) — a typed field, no optional-cast seam. Absent under the same closed
+// condition `deps.prDescriptionGeneration` is absent under (no configured model profile), apply is
+// unavailable — it NEVER falls back to `executeGovernedPullRequest` (prExecution.ts), which is the
+// only other PR-update path and is coupled title+body+base, not body-only.
 
 /**
  * Applies an already-approved PR-description proposal through the existing body-only service.
@@ -2693,8 +2681,7 @@ export function applyGitChangeDescription(
   proposalId: string,
   lease: object,
 ): Promise<PrDescriptionApplicationResult> | undefined {
-  const service = prDescriptionApplicationServiceFor(deps);
-  return service?.executeApproved(proposalId, lease);
+  return deps.prDescriptionApplicationService?.executeApproved(proposalId, lease);
 }
 
 export async function handleSendDesktopChat(

@@ -863,7 +863,12 @@ describe("merge approve (mints the approval execute consumes)", () => {
           () => projectId,
           () => projectId,
           mode,
-          { headRef: "feat/x", baseRef: "main", allowDetachedHead: false, allowedPrefixes: ["feat/"] },
+          {
+            headRef: "feat/x",
+            baseRef: "main",
+            allowDetachedHead: false,
+            allowedPrefixes: ["feat/"],
+          },
         ),
       });
       const adapter = recordingMergeAdapter(READY_PROVIDER);
@@ -896,7 +901,12 @@ describe("merge approve (mints the approval execute consumes)", () => {
           () => projectId,
           () => projectId,
           mode,
-          { headRef: "feat/x", baseRef: "main", allowDetachedHead: false, allowedPrefixes: ["feat/"] },
+          {
+            headRef: "feat/x",
+            baseRef: "main",
+            allowDetachedHead: false,
+            allowedPrefixes: ["feat/"],
+          },
         ),
       });
       const adapter = recordingMergeAdapter(READY_PROVIDER);

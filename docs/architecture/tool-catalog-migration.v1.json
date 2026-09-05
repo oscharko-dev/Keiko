@@ -230,5 +230,19 @@
       "function": "toolCallingBody",
       "contractDigest": "9d3dd16bff11d874ba705f8a3f10fe1e65cc7426bd8abe86f74b357f10596b17"
     }
-  ]
+  ],
+  "pendingH1": {
+    "owner": 3386,
+    "canonicalTool": {
+      "canonicalId": "keiko.repo.search",
+      "contractVersion": 1
+    },
+    "prerequisiteMerge": {
+      "issue": 3411,
+      "contractDigest": "4ab109489c318edf14d822a2b72c01ed4aa6efe96e37e8258e9809ae72a8e48a"
+    },
+    "removalIssue": 3414,
+    "landedDevCommit": null,
+    "landedTreeDigest": null
+  }
 }

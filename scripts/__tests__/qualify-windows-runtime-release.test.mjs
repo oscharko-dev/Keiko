@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   qualificationReceiptFor,
   qualifyWindowsRuntimeRelease,
+  writeQualificationEvidenceReceipt,
 } from "../qualify-windows-runtime-release.mjs";
 import { RUNTIME_QUALIFICATION_SUITE } from "../runtime-activation-manifest.mjs";
 import { hashDirectoryTree } from "../portable-runtime.mjs";
@@ -190,6 +191,71 @@ describe("Windows runtime qualification", () => {
       backend: "windows-job-object",
       result: "passed",
     });
+  });
+
+  it("writes a receipt.json + artifact pair the #3390 checker reads (audit F8)", () => {
+    const receiptsDir = root();
+    writeQualificationEvidenceReceipt({
+      receiptsDir,
+      scenarioId: "packaged-windows-x64",
+      receipt: { sourceCommitSha: COMMIT, platformTarget: "windows-x64", result: "passed" },
+      recordedAt: "2026-09-04T12:00:00Z",
+    });
+    expect(
+      JSON.parse(readFileSync(join(receiptsDir, "packaged-windows-x64.receipt.json"), "utf8")),
+    ).toEqual({
+      scenarioId: "packaged-windows-x64",
+      commitSha: COMMIT,
+      platform: "windows-x64",
+      testStatus: "passed",
+      recordedAt: "2026-09-04T12:00:00Z",
+      provenance: "real-model",
+    });
+  });
+
+  it("bridges a real qualification receipt into #3390 evidence when --qualification-receipts is set (audit F8)", () => {
+    const value = fixture();
+    const receiptsDir = root();
+    const output = join(value.stageRoot, "evidence", "qualification.json");
+    mkdirSync(dirname(output), { recursive: true });
+    qualifyWindowsRuntimeRelease(
+      {
+        "stage-root": value.stageRoot,
+        "expected-inventory": value.expectedInventoryPath,
+        "qualification-receipts": receiptsDir,
+        "scenario-id": "packaged-windows-x64",
+        "source-commit-sha": COMMIT,
+        "verification-input": value.verificationInputPath,
+        output,
+      },
+      { platform: "win32", spawnSyncImpl: vi.fn(() => ({ status: 0 })) },
+    );
+    expect(
+      JSON.parse(readFileSync(join(receiptsDir, "packaged-windows-x64.receipt.json"), "utf8")),
+    ).toMatchObject({
+      scenarioId: "packaged-windows-x64",
+      commitSha: COMMIT,
+      testStatus: "passed",
+    });
+  });
+
+  it("requires --scenario-id when writing qualification evidence", () => {
+    const value = fixture();
+    const output = join(value.stageRoot, "evidence", "qualification.json");
+    mkdirSync(dirname(output), { recursive: true });
+    expect(() =>
+      qualifyWindowsRuntimeRelease(
+        {
+          "stage-root": value.stageRoot,
+          "expected-inventory": value.expectedInventoryPath,
+          "qualification-receipts": root(),
+          "source-commit-sha": COMMIT,
+          "verification-input": value.verificationInputPath,
+          output,
+        },
+        { platform: "win32", spawnSyncImpl: vi.fn(() => ({ status: 0 })) },
+      ),
+    ).toThrow("--scenario-id is required");
   });
 
   it("rejects wrong platforms, invalid options, failed protocols, and tampered helper bytes", () => {

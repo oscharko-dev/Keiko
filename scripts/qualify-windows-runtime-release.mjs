@@ -226,6 +226,53 @@ function required(options, name) {
   return value;
 }
 
+// #3390 audit F8: mirrors qualify-macos-runtime-release.mjs's evidence bridge -- translates this
+// script's own real qualification receipt into the `<scenarioId>.receipt.json` + `.artifact` pair
+// the #3390 checker and manifest producer already read, so a real, passing Windows qualification
+// becomes evidence with no separate step. While #2198/#2951 remain open this mode is never invoked
+// for the packaged-reference scenario; its manifest row carries the descriptor's own closed
+// `blocked` reason instead -- never a fabricated receipt.
+export function writeQualificationEvidenceReceipt({
+  receiptsDir,
+  scenarioId,
+  receipt,
+  recordedAt,
+  provenance = "real-model",
+}) {
+  writeFileSync(
+    join(receiptsDir, `${scenarioId}.artifact`),
+    `${JSON.stringify(receipt, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  writeFileSync(
+    join(receiptsDir, `${scenarioId}.receipt.json`),
+    `${JSON.stringify(
+      {
+        scenarioId,
+        commitSha: receipt.sourceCommitSha,
+        platform: receipt.platformTarget,
+        testStatus: receipt.result === "passed" ? "passed" : "failed",
+        recordedAt,
+        provenance,
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: 0o600 },
+  );
+}
+
+function maybeWriteQualificationEvidence(options, receipt) {
+  const receiptsDir = options["qualification-receipts"];
+  if (receiptsDir === undefined) return;
+  writeQualificationEvidenceReceipt({
+    receiptsDir: resolve(receiptsDir),
+    scenarioId: required(options, "scenario-id"),
+    receipt,
+    recordedAt: new Date().toISOString(),
+  });
+}
+
 export function qualifyWindowsRuntimeRelease(
   options,
   { platform = process.platform, spawnSyncImpl = spawnSync } = {},
@@ -260,6 +307,7 @@ export function qualifyWindowsRuntimeRelease(
   const output = resolve(required(options, "output"));
   if (dirname(output) === output) fail("output path is invalid");
   writeFileSync(output, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
+  maybeWriteQualificationEvidence(options, receipt);
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(import.meta.filename)) {

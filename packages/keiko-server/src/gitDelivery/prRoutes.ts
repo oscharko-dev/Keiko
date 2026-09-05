@@ -72,6 +72,7 @@ import {
   gitDeliveryAuthorityGate,
   prepareGitDeliveryRequest,
   type GitDeliveryAuthorityContinuityDenialCapture,
+  type GitDeliveryAuthorityGate,
   type GitDeliveryAuthorityIdentity,
   type GitDeliveryRequestErrors,
 } from "./requestPreparation.js";
@@ -314,6 +315,25 @@ function prApprovalBinding(
 
 type PrAuthorityTarget = ReturnType<typeof prAuthorityTarget>;
 
+// Shared by execute and approve — both admit the SAME "pull-request" operation with the SAME
+// deferral (final-audit F2/#3390: PR create/update's own execute path already enforces a
+// mandatory, mode-independent consumed approval, so this coarse admission layer defers to it
+// instead of demanding a second claim). Extracted purely to keep both call sites under the repo's
+// max-lines-per-function bar — no behavioral seam of its own.
+function prAuthorityGate(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  projectId: string,
+  workspace: WorkspaceInfo,
+  target: PrAuthorityTarget,
+  activityLog: ServerLogSink | undefined,
+): GitDeliveryAuthorityGate {
+  return gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "pull-request", target, {
+    logSink: activityLog,
+    deliveryApprovalDeferred: true,
+  });
+}
+
 // #3387 (ADR-0138 D2): mirrors commitApprovalRequiredBlock (commitRoutes.ts) exactly — an accepted
 // run's PR create/update requires an actually consumed, server-issued claim regardless of what the
 // repo/org policy pack decides; a pack that never names "approval-gated" for pr-create/pr-update
@@ -422,21 +442,7 @@ async function handlePrExecute(
   const { workspace } = prepared;
   const { projectId, command, approval } = prepared.value;
   const target = prAuthorityTarget(command);
-  const authority = gitDeliveryAuthorityGate(
-    ctx,
-    deps,
-    projectId,
-    workspace,
-    "pull-request",
-    target,
-    {
-      logSink: seams.activityLog,
-      // Final-audit F2/#3390 (ADR-0138 D2, #3387): PR create/update's own execute path already
-      // enforces a mandatory, mode-independent consumed approval below, so this coarse admission
-      // layer defers to it instead of demanding a second claim.
-      deliveryApprovalDeferred: true,
-    },
-  );
+  const authority = prAuthorityGate(ctx, deps, projectId, workspace, target, seams.activityLog);
   if (!authority.allowed) return authority.result;
   const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
     store: seams.approvalStore,
@@ -510,15 +516,7 @@ export const createHandlePrApprove = (
     const { workspace } = prepared;
     const { projectId, command } = prepared.value;
     const target = prAuthorityTarget(command);
-    const authority = gitDeliveryAuthorityGate(
-      ctx,
-      deps,
-      projectId,
-      workspace,
-      "pull-request",
-      target,
-      { logSink: seams.activityLog, deliveryApprovalDeferred: true },
-    );
+    const authority = prAuthorityGate(ctx, deps, projectId, workspace, target, seams.activityLog);
     if (!authority.allowed) return authority.result;
     const store = seams.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
     const issued = store.issue({

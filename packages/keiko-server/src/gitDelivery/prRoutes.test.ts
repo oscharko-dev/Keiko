@@ -1543,7 +1543,11 @@ describe("pr mark-ready routes (#3389)", () => {
     "mints and consumes a pr-mark-ready approval end to end at %s",
     async (mode) => {
       const modeDeps = deps({
-        gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId, () => projectId, mode),
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+        ),
       });
       const approvalStore = createInMemoryGitDeliveryApprovalStore();
       const approveRes = await createHandlePrMarkReadyApprove({
@@ -1574,7 +1578,11 @@ describe("pr mark-ready routes (#3389)", () => {
     "still returns approval-required (never mode-denied) at %s when execute carries no approval",
     async (mode) => {
       const modeDeps = deps({
-        gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId, () => projectId, mode),
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+        ),
       });
       const approvalStore = createInMemoryGitDeliveryApprovalStore();
       const adapter = recordingMarkReadyAdapter({

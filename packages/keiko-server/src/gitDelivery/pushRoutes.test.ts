@@ -848,7 +848,12 @@ describe("push approve — mints the server-issued claim execute consumes (#3387
           () => projectId,
           () => projectId,
           mode,
-          { headRef: "feat/x", baseRef: "dev", allowDetachedHead: false, allowedPrefixes: ["feat/"] },
+          {
+            headRef: "feat/x",
+            baseRef: "dev",
+            allowDetachedHead: false,
+            allowedPrefixes: ["feat/"],
+          },
         ),
       });
       const approvalStore = createInMemoryGitDeliveryApprovalStore();
@@ -878,7 +883,12 @@ describe("push approve — mints the server-issued claim execute consumes (#3387
           () => projectId,
           () => projectId,
           mode,
-          { headRef: "feat/x", baseRef: "dev", allowDetachedHead: false, allowedPrefixes: ["feat/"] },
+          {
+            headRef: "feat/x",
+            baseRef: "dev",
+            allowDetachedHead: false,
+            allowedPrefixes: ["feat/"],
+          },
         ),
       });
       const executeHandler = createHandlePushExecute({ execution: seams() });

@@ -3156,7 +3156,11 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
   // for the mint-then-execute call — a second click while the first commitPropose call is still
   // in flight must not mint (or execute) a second time.
   it("does not call commitPropose a second time while the first mint/execute is in flight (F3)", async () => {
-    let resolveCommit!: (v: { schemaVersion: "1"; status: "succeeded"; actionKind: string }) => void;
+    let resolveCommit!: (v: {
+      schemaVersion: "1";
+      status: "succeeded";
+      actionKind: string;
+    }) => void;
     const pending = new Promise<{ schemaVersion: "1"; status: "succeeded"; actionKind: string }>(
       (res) => {
         resolveCommit = res;

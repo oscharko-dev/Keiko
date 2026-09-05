@@ -229,6 +229,56 @@ export function executionAppRoot(options, lstat = lstatSync) {
   return appRoot;
 }
 
+// #3390 audit F8: the platform launch driver's own real qualification receipt, translated into
+// the `<scenarioId>.receipt.json` + `.artifact` pair scripts/check-coding-issue-journey-evidence.mjs
+// and scripts/generate-coding-issue-journey-manifest.mjs already read -- so a real, passing macOS
+// qualification becomes #3390 evidence with no separate translation step once #2198 lands. The
+// artifact's bytes are the canonical qualification receipt itself; its digest is what the
+// manifest's `receiptDigest` binds to. While #2198 remains open this mode is simply never invoked
+// for the packaged-reference scenario; its manifest row instead carries the descriptor's own
+// closed `blocked` reason (docs/acceptance/coding-issue-journey-3390.json) -- a qualification
+// receipt is never fabricated in its place.
+export function writeQualificationEvidenceReceipt({
+  receiptsDir,
+  scenarioId,
+  receipt,
+  recordedAt,
+  provenance = "real-model",
+}) {
+  writeFileSync(
+    join(receiptsDir, `${scenarioId}.artifact`),
+    `${JSON.stringify(receipt, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  writeFileSync(
+    join(receiptsDir, `${scenarioId}.receipt.json`),
+    `${JSON.stringify(
+      {
+        scenarioId,
+        commitSha: receipt.sourceCommitSha,
+        platform: receipt.platformTarget,
+        testStatus: receipt.result === "passed" ? "passed" : "failed",
+        recordedAt,
+        provenance,
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: 0o600 },
+  );
+}
+
+function maybeWriteQualificationEvidence(options, receipt) {
+  const receiptsDir = options["qualification-receipts"];
+  if (receiptsDir === undefined) return;
+  writeQualificationEvidenceReceipt({
+    receiptsDir: resolve(receiptsDir),
+    scenarioId: required(options, "scenario-id"),
+    receipt,
+    recordedAt: new Date().toISOString(),
+  });
+}
+
 function verifyOnly(options) {
   const value = options["verify-only"];
   if (value === undefined || value === "false") return false;
@@ -263,6 +313,7 @@ export function qualifyMacosRuntimeRelease(
     sourceCommitSha,
   });
   persistQualificationReceipt(resourceRoot, receipt, verifyOnly(options));
+  maybeWriteQualificationEvidence(options, receipt);
 }
 
 function qualifyExecutionApp({ appRoot, resourceRoot, stagedAppRoot }, { runFn, runQuietFn }) {

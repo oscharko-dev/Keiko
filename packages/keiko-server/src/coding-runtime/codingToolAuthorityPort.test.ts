@@ -18,6 +18,7 @@ import {
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingToolGovernedPorts } from "./codingToolGovernedDelegate.js";
 import type { CodingRuntimeCapabilityDelegationInput } from "./runtimeAuthorityService.js";
+import { createBufferedServerLogSink } from "../observability/server-log.js";
 
 const DIGEST = "a".repeat(64);
 const liveFacts: CodingWorkbenchRuntimeAuthorityFacts = {
@@ -838,6 +839,142 @@ describe("CodingToolAuthorityPort", () => {
 
       expect(preview("capability", searchRequest)).toEqual({ ok: true });
       expect(resolveCapabilityForDelegation).not.toHaveBeenCalled();
+    });
+  });
+
+  // #3413 F8: the CatalogToolBinder lifecycle/settlement primitives were unmounted production
+  // code -- nothing outside packages/keiko-server/src/tool-catalog imported them, so no
+  // tool-catalog.* line was ever emitted for a real dispatch. These three tests fail before the
+  // facade/authority-port wiring in this change (createRuntimeCodingToolFacade threw
+  // "catalogActivityLog is not a function" / never called it -- there was no such option) and pass
+  // after it.
+  describe("catalog facade bridge wiring (#3413 F8)", () => {
+    const authority = {
+      resolveCapabilityForDelegation: vi.fn(() => ({
+        ok: true as const,
+        envelope: fullyAuthorizedEnvelope,
+      })),
+      revalidateCapabilityForMutation: vi.fn(() => ({
+        ok: true as const,
+        envelope: fullyAuthorizedEnvelope,
+      })),
+    };
+
+    it("emits real tool-catalog.* binding + settlement lines with a correlation id and no bodies for a real discover dispatch", async () => {
+      const log = createBufferedServerLogSink();
+      const repositoryDiscover = vi.fn(() =>
+        Promise.resolve({
+          status: "completed" as const,
+          read: { text: "match.ts\n", byteCount: 9, digest: DIGEST, totalLines: 1 },
+        }),
+      );
+      const runtime = createRuntimeCodingToolFacade(
+        authority,
+        () => ({ ...runtimeContext(), correlationId: "b".repeat(36) }),
+        { ...governedPorts(), repositoryDiscover: { execute: repositoryDiscover } },
+        { catalogActivityLog: log },
+      );
+
+      const result = await runtime.execute({
+        body: JSON.stringify({
+          action: "discover",
+          actionId: "discover-1",
+          idempotencyKey: "discover-1",
+          query: "top secret needle",
+          maxResults: 5,
+        }),
+        capability: "runtime-capability-secret",
+      });
+
+      expect(result.status).toBe("completed");
+      expect(repositoryDiscover).toHaveBeenCalledOnce();
+      const catalogEvents = log.events.filter((event) => event.op.startsWith("tool-catalog."));
+      expect(catalogEvents.map((event) => event.op)).toEqual([
+        "tool-catalog.invocation-started",
+        "tool-catalog.invocation-settled",
+      ]);
+      for (const event of catalogEvents) {
+        expect(event.correlationId).toBe("b".repeat(36));
+        expect(JSON.stringify(event)).not.toContain("top secret needle");
+      }
+      const settled = catalogEvents[1]?.extra as Record<string, unknown>;
+      expect(settled.status).toBe("completed");
+    });
+
+    it("fails closed before the handler runs when the catalog budget disposition denies the call", async () => {
+      const log = createBufferedServerLogSink();
+      const repositoryDiscover = vi.fn(() =>
+        Promise.resolve({
+          status: "completed" as const,
+          read: { text: "x\n", byteCount: 1, digest: DIGEST, totalLines: 1 },
+        }),
+      );
+      const runtime = createRuntimeCodingToolFacade(
+        authority,
+        runtimeContext,
+        { ...governedPorts(), repositoryDiscover: { execute: repositoryDiscover } },
+        {
+          catalogActivityLog: log,
+          catalogBudget: {
+            available: () => false,
+            reserve: () => {
+              throw new Error("must not reserve when unavailable");
+            },
+            commit: () => {},
+            release: () => {},
+          },
+        },
+      );
+
+      const result = await runtime.execute({
+        body: JSON.stringify({
+          action: "discover",
+          actionId: "discover-2",
+          idempotencyKey: "discover-2",
+          query: "needle",
+          maxResults: 5,
+        }),
+        capability: "runtime-capability-secret",
+      });
+
+      expect(result).toEqual({ status: "denied", evidence: [] });
+      expect(repositoryDiscover).not.toHaveBeenCalled();
+      const settled = log.events.find((event) => event.op === "tool-catalog.invocation-settled");
+      expect((settled?.extra as Record<string, unknown> | undefined)?.status).toBe("denied");
+    });
+
+    it("records handler-failed and releases the budget reservation when the governed delegate throws", async () => {
+      const log = createBufferedServerLogSink();
+      const repositoryDiscover = vi.fn(() => Promise.reject(new Error("discover blew up")));
+      const runtime = createRuntimeCodingToolFacade(
+        authority,
+        runtimeContext,
+        { ...governedPorts(), repositoryDiscover: { execute: repositoryDiscover } },
+        { catalogActivityLog: log },
+      );
+
+      const result = await runtime.execute({
+        body: JSON.stringify({
+          action: "discover",
+          actionId: "discover-3",
+          idempotencyKey: "discover-3",
+          query: "needle",
+          maxResults: 5,
+        }),
+        capability: "runtime-capability-secret",
+      });
+
+      expect(result).toEqual({
+        status: "failed",
+        evidence: [{ kind: "governed-delegate", code: "failed" }],
+      });
+      expect(repositoryDiscover).toHaveBeenCalledOnce();
+      const settled = log.events.find((event) => event.op === "tool-catalog.invocation-settled");
+      const fields = settled?.extra as Record<string, unknown> | undefined;
+      expect(fields?.status).toBe("failed");
+      expect(fields?.reason).toBe("handler-failed");
+      expect(fields?.budgetDisposition).toBe("released");
+      expect(JSON.stringify(settled)).not.toContain("discover blew up");
     });
   });
 });

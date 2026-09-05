@@ -406,7 +406,12 @@ describe("pr-description routes — preview/approve/apply round trip (#3399)", (
           () => projectId,
           () => fixture.root,
           mode,
-          { headRef: "feature", baseRef: "main", allowDetachedHead: false, allowedPrefixes: ["feature"] },
+          {
+            headRef: "feature",
+            baseRef: "main",
+            allowDetachedHead: false,
+            allowedPrefixes: ["feature"],
+          },
         ),
       });
       const previewHandler = createHandlePrDescriptionPreview(optionsWithFixtureService());

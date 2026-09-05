@@ -95,6 +95,7 @@ import {
   setServerLogger,
 } from "./observability/index.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { applyGitChangeDescription } from "./chat-handlers.js";
 
 const tmpDirs: string[] = [];
 
@@ -1201,6 +1202,59 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     expect(deps.gitChangeDescriptionAuthorityPort).toBeDefined();
     expect(deps.gitChangeDescriptionAuthorityPort).toBe(deps.gitDeliveryDescriptionAuthority);
     void deps.dispose?.();
+  });
+
+  // Final-audit F7 (#3399/#3400 production-wiring): `createPrDescriptionApplicationService` had
+  // zero non-test importers, so Chat-driven description apply (#3400) was permanently unavailable
+  // in production — `chat-handlers.ts`'s `applyGitChangeDescription` always returned `undefined`
+  // because `deps.prDescriptionApplicationService` did not exist. Before this fix,
+  // `deps.prDescriptionApplicationService` is not a field on `UiHandlerDeps` at all, so this test
+  // fails to compile; after it, a real, composed service is reachable end to end.
+  it("composes a real PrDescriptionApplicationService that applyGitChangeDescription reaches (F7)", async () => {
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-pr-description-service-");
+    const deps = buildUiHandlerDeps({
+      // A fake env-only Gateway profile — never a real network target — so
+      // `createProductionPrDescriptionGeneration` composes a real generation deps object over a
+      // real (but unreachable) Gateway instance, exactly like production would for a configured
+      // deployment.
+      configPath: join(evidenceDir, "missing-keiko.config.json"),
+      evidenceDir,
+      env: {
+        KEIKO_MODEL_EXAMPLE_CHAT_MODEL_BASE_URL: "https://models.example.invalid/openai/v1",
+        KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_KEY: "fake-test-key",
+      },
+      store,
+    });
+
+    expect(deps.prDescriptionGeneration).toBeDefined();
+    expect(deps.prDescriptionApplicationService).toBeDefined();
+
+    // Reaches the REAL service's `executeApproved` (which checks its own held-proposal map and
+    // returns a closed `blocked`/`approval-invalid` outcome for an unknown id) rather than staying
+    // `undefined` — the exact "apply unavailable" symptom F7 reported.
+    const result = await applyGitChangeDescription(deps, "unknown-proposal-id", {});
+    expect(result).toEqual({ outcome: "blocked", reason: "approval-invalid" });
+
+    void deps.dispose?.();
+    store.close();
+  });
+
+  it("leaves prDescriptionApplicationService unavailable when no model profile is configured (F7)", async () => {
+    const store = createInMemoryUiStore();
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-pr-description-service-unavailable-"),
+      env: {},
+      store,
+    });
+
+    expect(deps.prDescriptionGeneration).toBeUndefined();
+    expect(deps.prDescriptionApplicationService).toBeUndefined();
+    expect(await applyGitChangeDescription(deps, "unknown-proposal-id", {})).toBeUndefined();
+
+    void deps.dispose?.();
+    store.close();
   });
 
   it("wires production Local Knowledge encryption for heading metadata and retrieval citations", async () => {

@@ -1585,6 +1585,7 @@ export class CodingRuntimeOrchestrator {
     const accepted = support.jobs.settle(scope, generationVersion, revision, status, observedAt);
     this.logDescriptionEvent(scope, accepted ? descriptionSettleOp(outcome.reason) : "superseded", {
       generationVersion,
+      reason: outcome.reason,
     });
   }
 
@@ -1652,8 +1653,15 @@ export class CodingRuntimeOrchestrator {
       this.deps.eventHub.deleteRuns(pruned);
       this.deps.snapshots.deletePruned(pruned);
       // #3401 review: descriptionDispatchAbort is per-run bookkeeping like the three stores above
-      // and must not outlive a pruned run.
-      for (const runId of pruned) this.descriptionDispatchAbort.delete(runId);
+      // and must not outlive a pruned run. #3401 review finding F7: a dispatch still in flight for
+      // a pruned run must be cancelled, not merely forgotten, mirroring the supersede path above
+      // (this.descriptionDispatchAbort.get(scope.runId)?.abort()) — otherwise the outstanding
+      // Model Gateway/snapshot-capture call keeps running to completion after nothing references
+      // it any more.
+      for (const runId of pruned) {
+        this.descriptionDispatchAbort.get(runId)?.abort();
+        this.descriptionDispatchAbort.delete(runId);
+      }
     }
   }
   private current(): CodingRuntimeSnapshot | undefined {

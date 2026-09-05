@@ -3,6 +3,7 @@
 // mirroring scripts/__tests__/generate-code-task-acceptance.test.mjs's split: the wrapper executes
 // at module top level, so each CLI case imports it with a fresh cache-busting query and a prepared
 // process.argv.
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

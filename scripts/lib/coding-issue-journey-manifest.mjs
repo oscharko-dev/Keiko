@@ -58,6 +58,22 @@ function buildBlockedScenario(entry, generatedAt) {
   };
 }
 
+/** Assembles the opaque-fact fields shared by every manifest -- split out purely to keep
+ * `buildCodingIssueJourneyManifest` under the repository's per-function line ceiling. */
+function manifestFacts(input) {
+  return {
+    issueReference: fact(input.issueReference),
+    pullRequestReference: fact(input.pullRequestReference),
+    runReference: fact(input.runReference),
+    readinessSnapshotDigest: fact(input.readinessSnapshotDigest),
+    journeyOutcomeDigest: fact(input.journeyOutcomeDigest),
+    auditReference: fact(input.auditReference),
+    auditDigest: fact(input.auditDigest),
+    humanMergeAttestationDigest: fact(input.humanMergeAttestationDigest),
+    observedSpendUsd: fact(input.observedSpendUsd),
+  };
+}
+
 /**
  * Joins a descriptor and its per-scenario receipts into a `CodeTaskQualificationManifestV1`
  * payload (unvalidated -- the CLI wrapper validates against the contract before writing).
@@ -76,28 +92,8 @@ function buildBlockedScenario(entry, generatedAt) {
  *   scenarioId: string, testStatus: string, recordedAt: string, provenance: string, digest: string,
  * }>} input.receiptsByScenarioId
  */
-export function buildCodingIssueJourneyManifest({
-  descriptor,
-  receiptsByScenarioId,
-  generatedAt,
-  sourceCommitSha,
-  sourceTreeSha,
-  runtimeIdentity,
-  modelIdentity,
-  fixtureRevision,
-  rubricDigest,
-  issueReference,
-  pullRequestReference,
-  runReference,
-  readinessSnapshotDigest,
-  journeyOutcomeDigest,
-  humanMergeAttestationDigest,
-  auditReference,
-  auditDigest,
-  requiredTools,
-  spendBudgetUsd,
-  observedSpendUsd,
-}) {
+export function buildCodingIssueJourneyManifest(input) {
+  const { descriptor, receiptsByScenarioId, generatedAt } = input;
   const scenarios = [
     ...descriptor.scenarios.map((entry) => buildRanScenario(entry, receiptsByScenarioId)),
     ...descriptor.blocked.map((entry) => buildBlockedScenario(entry, generatedAt)),
@@ -107,23 +103,15 @@ export function buildCodingIssueJourneyManifest({
     schemaVersion: 1,
     epicIssue: descriptor.epicIssue,
     childIssue: descriptor.childIssue,
-    sourceCommitSha,
-    sourceTreeSha,
-    runtimeIdentity,
-    modelIdentity,
-    fixtureRevision,
-    rubricDigest,
-    issueReference: fact(issueReference),
-    pullRequestReference: fact(pullRequestReference),
-    runReference: fact(runReference),
-    readinessSnapshotDigest: fact(readinessSnapshotDigest),
-    journeyOutcomeDigest: fact(journeyOutcomeDigest),
-    auditReference: fact(auditReference),
-    auditDigest: fact(auditDigest),
-    humanMergeAttestationDigest: fact(humanMergeAttestationDigest),
-    requiredTools,
-    spendBudgetUsd,
-    observedSpendUsd: fact(observedSpendUsd),
+    sourceCommitSha: input.sourceCommitSha,
+    sourceTreeSha: input.sourceTreeSha,
+    runtimeIdentity: input.runtimeIdentity,
+    modelIdentity: input.modelIdentity,
+    fixtureRevision: input.fixtureRevision,
+    rubricDigest: input.rubricDigest,
+    ...manifestFacts(input),
+    requiredTools: input.requiredTools,
+    spendBudgetUsd: input.spendBudgetUsd,
     scenarios,
     knownLimitations: descriptor.knownLimitations,
   };

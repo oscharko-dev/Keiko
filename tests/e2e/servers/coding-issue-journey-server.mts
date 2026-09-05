@@ -14,7 +14,7 @@
 // model and a real repository, or the lane does not start at all.
 
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { runUiCli, type CliIo } from "@oscharko-dev/keiko-cli";
 
@@ -32,6 +32,21 @@ function processIo(): CliIo {
       process.stderr.write(text);
     },
   };
+}
+
+/**
+ * Threads the resolved, already-validated bounded evaluation budget into the launched process env
+ * (#3390 audit F15) rather than relying on the raw, unvalidated `process.env` string this same
+ * config surface read it from -- the launched process observes the exact positive number
+ * `resolveCodingIssueJourneyQualificationConfig` accepted, never a re-parse of the original
+ * string. Exported so a unit test can assert the env this process would launch with, without
+ * spawning the real `keiko ui` composition.
+ */
+export function launchedEnv(
+  baseEnv: Readonly<Record<string, string | undefined>>,
+  spendBudgetUsd: number,
+): Record<string, string | undefined> {
+  return { ...baseEnv, KEIKO_QUALIFICATION_SPEND_BUDGET_USD: String(spendBudgetUsd) };
 }
 
 async function main(): Promise<number> {
@@ -73,9 +88,15 @@ async function main(): Promise<number> {
   // opens PRs through) from it, exactly as when an operator runs `keiko ui` from inside their own
   // project. Pointing it at the controlled repository checkout is what makes this composition
   // real rather than a stand-in.
-  return runUiCli(args, processIo(), process.env, {
+  return runUiCli(args, processIo(), launchedEnv(process.env, resolved.config.spendBudgetUsd), {
     cwd: resolved.config.controlledRepositoryRoot,
   });
 }
 
-process.exitCode = await main();
+// Guarded like the sibling `coding-issue-delivery-server.mts`: only run the real production
+// composition when this file is the process entrypoint (Playwright's `webServer.command`), never
+// as a side effect of another module importing it -- `launchedEnv` above is unit-tested this way
+// (coding-issue-journey-server.test.ts) without launching the real server.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exitCode = await main();
+}

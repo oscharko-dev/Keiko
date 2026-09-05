@@ -1263,7 +1263,7 @@ describe("keiko_repository_search generated tool dispatch", () => {
     const tool = loadRepositorySearchTool(((_input: unknown, init?: RequestInit) => {
       capturedBody = typeof init?.body === "string" ? init.body : undefined;
       return Promise.resolve(boundedCompletedSearchResponse());
-    }) as typeof fetch);
+    }));
 
     const result = await tool.execute(
       {
@@ -1287,7 +1287,7 @@ describe("keiko_repository_search generated tool dispatch", () => {
     // entry point productionManagedWorktreeTools.ts's repositorySearch port dispatches from) must
     // accept the generated wire body as a "search" action with the model's arguments intact.
     const parsed = parseCodingToolRequest(capturedBody, CODING_TOOL_MAX_BODY_BYTES);
-    if (parsed === undefined || parsed.action !== "search")
+    if (parsed?.action !== "search")
       throw new Error("expected the real production parser to accept a search action request");
     expect(parsed.repositoryRequest).toEqual({
       kind: "search",

@@ -609,7 +609,7 @@ export async function handleGitAgentOperation(
       workspace,
       parsed.request.operation,
       {},
-      { deliveryApprovalDeferred: false },
+      { deliveryApprovalDeferred: true },
     );
     if (gate !== undefined) {
       return {

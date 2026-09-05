@@ -1205,7 +1205,11 @@ describe("commit approve + execute reachable regardless of mode — final-audit 
       const adapter = recordingAdapter();
       const approvalStore = createInMemoryGitDeliveryApprovalStore();
       const modeDeps = deps({
-        gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId, () => projectId, mode),
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+        ),
       });
       const message = "feat(ui): add governed flow";
       const approveHandler = createHandleCommitApprove({
@@ -1239,7 +1243,11 @@ describe("commit approve + execute reachable regardless of mode — final-audit 
     "still returns approval-required (never mode-denied) at %s when execute carries no approval",
     async (mode) => {
       const modeDeps = deps({
-        gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId, () => projectId, mode),
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+        ),
       });
       const executeHandler = createHandleCommitExecute({ execution: seams() });
       const executeRes = await executeHandler(

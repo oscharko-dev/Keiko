@@ -7,6 +7,21 @@
 // "harness-executor": moved from executor.ts RUN_COMMAND_TOOL to catalog-budget.ts
 // descriptorRunsCommand (#3409/#3411); documented in docs/architecture/governed-tool-migration.md.
 export const GOVERNED_TOOL_CONTRACT_PINS = {
+  // #3406: the non-authorizing pending-H1 handoff record for #3386's H1 local repository-search
+  // handler (docs/architecture/governed-tool-migration.md). `owner` and `canonicalTool` name who
+  // and what; `prerequisiteIssue` names the #3411 architecture checkpoint this entry may only
+  // exist after (toolCatalogMigrationBytes binds its actual digest from the same
+  // `sourceContractDigest` the migration document already computes, never a second formula);
+  // `removalIssue` is #3414, which alone may remove this entry once it lands the durable
+  // H1Provenance handoff. `landedDevCommit`/`landedTreeDigest` stay null here (initially empty) --
+  // this entry grants no allowlist exception and is never read as an authorization by any code
+  // path; only #3414 may populate those two fields once H1 actually reaches dev.
+  pendingH1: {
+    owner: 3386,
+    canonicalTool: { canonicalId: "keiko.repo.search", contractVersion: 1 },
+    prerequisiteIssue: 3411,
+    removalIssue: 3414,
+  },
   owners: {
     genericTypes: "keiko-contracts",
     digestPrimitives: "keiko-security",

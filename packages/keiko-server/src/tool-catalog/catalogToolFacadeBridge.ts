@@ -6,7 +6,7 @@ import {
   type ToolCatalog,
 } from "@oscharko-dev/keiko-tool-catalog";
 import type {
-  CatalogProfile,
+  CatalogVersionRef,
   ToolDescriptor,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { captureToolInvocationReceipt } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
@@ -77,7 +77,7 @@ export interface CatalogFacadeBridgeContext {
 }
 export interface CatalogFacadeBridgeInput {
   readonly catalog: ToolCatalog;
-  readonly profile: CatalogProfile;
+  readonly profile: CatalogVersionRef;
   readonly budget: CatalogFacadeBudgetPort;
   readonly logPort: CatalogLifecycleLogPort;
   readonly context: () => CatalogFacadeBridgeContext;
