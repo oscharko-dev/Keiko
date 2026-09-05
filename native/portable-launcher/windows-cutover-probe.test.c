@@ -56,44 +56,7 @@ typedef struct {
   LONG flush_before_successes;
   LONG flush_after_attempts;
   LONG flush_after_successes;
-  int first_failure_step;
-  DWORD first_failure_error;
 } keiko_results;
-
-typedef enum {
-  KEIKO_FAILURE_NONE = 0,
-  KEIKO_FAILURE_SETUP = 1,
-  KEIKO_FAILURE_INITIAL_OPEN = 2,
-  KEIKO_FAILURE_INITIAL_READ_FACT = 3,
-  KEIKO_FAILURE_RENAME_ALLOCATION = 4,
-  KEIKO_FAILURE_RENAME_DIRECTORY_OPEN = 5,
-  KEIKO_FAILURE_RENAME_SOURCE_OPEN = 6,
-  KEIKO_FAILURE_RENAME_EXISTING_OPEN = 7,
-  KEIKO_FAILURE_RENAME_SOURCE_FACT = 8,
-  KEIKO_FAILURE_RENAME_EXISTING_FACT = 9,
-  KEIKO_FAILURE_RENAME_DIRECTORY_ID = 10,
-  KEIKO_FAILURE_RENAME_INVARIANT = 11,
-  KEIKO_FAILURE_RENAME_CALL = 12,
-  KEIKO_FAILURE_POST_RENAME_OPEN = 13,
-  KEIKO_FAILURE_POST_RENAME_READ_FACT = 14,
-  KEIKO_FAILURE_POST_RENAME_IDENTITY = 15,
-  KEIKO_FAILURE_RETAINED_READ_FACT = 16,
-  KEIKO_FAILURE_RETAINED_IDENTITY = 17,
-  KEIKO_FAILURE_PENDING_STILL_PRESENT = 18,
-  KEIKO_FAILURE_STABILITY_READ_FACT = 19,
-  KEIKO_FAILURE_STABILITY_IDENTITY = 20
-} keiko_first_failure_step;
-
-static void record_first_failure(keiko_results *results, keiko_first_failure_step step, DWORD error) {
-  if (results->first_failure_step != KEIKO_FAILURE_NONE) {
-    return;
-  }
-  results->first_failure_step = step;
-  results->first_failure_error = error;
-  fprintf(
-    stderr, "DEBUG-3405-cutover step=%d winerr=%lu\n", (int)step, (unsigned long)error
-  );
-}
 
 static void close_if_valid(HANDLE handle) {
   if (handle != INVALID_HANDLE_VALUE && handle != NULL) {
@@ -226,54 +189,19 @@ static int write_bytes(const keiko_paths *paths, const wchar_t *path, const unsi
   return ok;
 }
 
-static int read_exact_diagnostic(HANDLE handle, const unsigned char *expected, DWORD expected_length,
-                                 keiko_file_fact *fact, DWORD *failure_error) {
+static int read_exact(HANDLE handle, const unsigned char *expected, DWORD expected_length,
+                      keiko_file_fact *fact) {
   unsigned char buffer[64];
   DWORD read = 0;
   LARGE_INTEGER origin;
   origin.QuadPart = 0;
-  if (expected_length > sizeof(buffer)) {
-    if (failure_error != NULL) {
-      *failure_error = ERROR_INVALID_PARAMETER;
-    }
+  if (expected_length > sizeof(buffer) || !query_fact(handle, fact) ||
+      fact->size.QuadPart != (LONGLONG)expected_length ||
+      !SetFilePointerEx(handle, origin, NULL, FILE_BEGIN) ||
+      !ReadFile(handle, buffer, expected_length, &read, NULL)) {
     return 0;
   }
-  if (!query_fact(handle, fact)) {
-    if (failure_error != NULL) {
-      *failure_error = GetLastError();
-    }
-    return 0;
-  }
-  if (fact->size.QuadPart != (LONGLONG)expected_length) {
-    if (failure_error != NULL) {
-      *failure_error = ERROR_BAD_LENGTH;
-    }
-    return 0;
-  }
-  if (!SetFilePointerEx(handle, origin, NULL, FILE_BEGIN)) {
-    if (failure_error != NULL) {
-      *failure_error = GetLastError();
-    }
-    return 0;
-  }
-  if (!ReadFile(handle, buffer, expected_length, &read, NULL)) {
-    if (failure_error != NULL) {
-      *failure_error = GetLastError();
-    }
-    return 0;
-  }
-  if (read != expected_length || memcmp(buffer, expected, expected_length) != 0) {
-    if (failure_error != NULL) {
-      *failure_error = ERROR_INVALID_DATA;
-    }
-    return 0;
-  }
-  return 1;
-}
-
-static int read_exact(HANDLE handle, const unsigned char *expected, DWORD expected_length,
-                      keiko_file_fact *fact) {
-  return read_exact_diagnostic(handle, expected, expected_length, fact, NULL);
+  return read == expected_length && memcmp(buffer, expected, expected_length) == 0;
 }
 
 static int flush_after(HANDLE handle, keiko_results *results) {
@@ -319,18 +247,7 @@ static int reset_pair(const keiko_paths *paths, const unsigned char *active, DWO
          write_bytes(paths, paths->pending, pending, pending_length, results);
 }
 
-static void set_rename_failure(keiko_first_failure_step *failure_step, DWORD *failure_error,
-                               keiko_first_failure_step step, DWORD error) {
-  if (failure_step != NULL) {
-    *failure_step = step;
-  }
-  if (failure_error != NULL) {
-    *failure_error = error;
-  }
-}
-
-static int rename_pending_diagnostic(const keiko_paths *paths, keiko_first_failure_step *failure_step,
-                                     DWORD *failure_error) {
+static int rename_pending(const keiko_paths *paths) {
   const wchar_t *target_name = paths->active;
   const size_t target_bytes = wcslen(target_name) * sizeof(wchar_t);
   const size_t info_size = sizeof(FILE_RENAME_INFO) + target_bytes;
@@ -342,76 +259,26 @@ static int rename_pending_diagnostic(const keiko_paths *paths, keiko_first_failu
   keiko_file_fact existing_fact;
   FILE_ID_INFO directory_id;
   int renamed = 0;
-  DWORD directory_open_error = ERROR_SUCCESS;
-  DWORD source_open_error = ERROR_SUCCESS;
-  DWORD existing_open_error = ERROR_SUCCESS;
 
   if (info == NULL) {
-    set_rename_failure(
-      failure_step, failure_error, KEIKO_FAILURE_RENAME_ALLOCATION, ERROR_NOT_ENOUGH_MEMORY
-    );
     return 0;
   }
   directory = open_directory(paths->root);
-  if (directory == INVALID_HANDLE_VALUE || directory == NULL) {
-    directory_open_error = GetLastError();
-  }
   source = open_regular(
     paths->pending,
     GENERIC_READ | GENERIC_WRITE | DELETE,
     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
   );
-  if (source == INVALID_HANDLE_VALUE || source == NULL) {
-    source_open_error = GetLastError();
-  }
   existing = open_regular(
     paths->active, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
   );
-  if (existing == INVALID_HANDLE_VALUE || existing == NULL) {
-    existing_open_error = GetLastError();
-  }
-  if (directory == INVALID_HANDLE_VALUE || directory == NULL) {
-    set_rename_failure(
-      failure_step, failure_error, KEIKO_FAILURE_RENAME_DIRECTORY_OPEN, directory_open_error
-    );
-    goto cleanup;
-  }
-  if (source == INVALID_HANDLE_VALUE || source == NULL) {
-    set_rename_failure(
-      failure_step, failure_error, KEIKO_FAILURE_RENAME_SOURCE_OPEN, source_open_error
-    );
-    goto cleanup;
-  }
-  if (existing == INVALID_HANDLE_VALUE || existing == NULL) {
-    set_rename_failure(
-      failure_step, failure_error, KEIKO_FAILURE_RENAME_EXISTING_OPEN, existing_open_error
-    );
-    goto cleanup;
-  }
-  if (!query_fact(source, &source_fact)) {
-    set_rename_failure(
-      failure_step, failure_error, KEIKO_FAILURE_RENAME_SOURCE_FACT, GetLastError()
-    );
-    goto cleanup;
-  }
-  if (!query_fact(existing, &existing_fact)) {
-    set_rename_failure(
-      failure_step, failure_error, KEIKO_FAILURE_RENAME_EXISTING_FACT, GetLastError()
-    );
-    goto cleanup;
-  }
-  if (!query_id(directory, &directory_id)) {
-    set_rename_failure(
-      failure_step, failure_error, KEIKO_FAILURE_RENAME_DIRECTORY_ID, GetLastError()
-    );
-    goto cleanup;
-  }
-  if (source_fact.size.QuadPart <= 0 || existing_fact.size.QuadPart <= 0 ||
+  if (directory == INVALID_HANDLE_VALUE || directory == NULL || source == INVALID_HANDLE_VALUE ||
+      source == NULL || existing == INVALID_HANDLE_VALUE || existing == NULL ||
+      !query_fact(source, &source_fact) || !query_fact(existing, &existing_fact) ||
+      !query_id(directory, &directory_id) || source_fact.size.QuadPart <= 0 ||
+      existing_fact.size.QuadPart <= 0 ||
       source_fact.id.VolumeSerialNumber != directory_id.VolumeSerialNumber ||
       existing_fact.id.VolumeSerialNumber != directory_id.VolumeSerialNumber) {
-    set_rename_failure(
-      failure_step, failure_error, KEIKO_FAILURE_RENAME_INVARIANT, ERROR_INVALID_DATA
-    );
     goto cleanup;
   }
   info->Flags = FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
@@ -419,11 +286,6 @@ static int rename_pending_diagnostic(const keiko_paths *paths, keiko_first_failu
   info->FileNameLength = (DWORD)target_bytes;
   memcpy(info->FileName, target_name, target_bytes);
   renamed = SetFileInformationByHandle(source, FileRenameInfoEx, info, (DWORD)info_size) != 0;
-  if (!renamed) {
-    set_rename_failure(
-      failure_step, failure_error, KEIKO_FAILURE_RENAME_CALL, GetLastError()
-    );
-  }
 
 cleanup:
   close_if_valid(directory);
@@ -431,10 +293,6 @@ cleanup:
   close_if_valid(source);
   (void)HeapFree(GetProcessHeap(), 0, info);
   return renamed;
-}
-
-static int rename_pending(const keiko_paths *paths) {
-  return rename_pending_diagnostic(paths, NULL, NULL);
 }
 
 static int create_paths(keiko_paths *paths) {
@@ -485,87 +343,31 @@ static int case_success(const keiko_paths *paths, keiko_results *results) {
   keiko_file_fact after = {0};
   FILE_ID_INFO old_id = {0};
   FILE_ID_INFO new_id = {0};
-  keiko_first_failure_step failure_step = KEIKO_FAILURE_NONE;
-  DWORD failure_error = ERROR_SUCCESS;
   int ok = reset_pair(
     paths, KEIKO_OLD_BYTES, sizeof(KEIKO_OLD_BYTES) - 1, KEIKO_NEW_BYTES,
     sizeof(KEIKO_NEW_BYTES) - 1, results
   );
   if (!ok) {
-    record_first_failure(results, KEIKO_FAILURE_SETUP, GetLastError());
     return 0;
   }
   retained = open_regular(
     paths->active, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
   );
-  if (retained == INVALID_HANDLE_VALUE) {
-    record_first_failure(results, KEIKO_FAILURE_INITIAL_OPEN, GetLastError());
-    return 0;
-  }
-  ok = read_exact_diagnostic(
-    retained, KEIKO_OLD_BYTES, sizeof(KEIKO_OLD_BYTES) - 1, &before, &failure_error
-  );
-  if (!ok) {
-    record_first_failure(results, KEIKO_FAILURE_INITIAL_READ_FACT, failure_error);
-  }
+  ok = retained != INVALID_HANDLE_VALUE &&
+       read_exact(retained, KEIKO_OLD_BYTES, sizeof(KEIKO_OLD_BYTES) - 1, &before);
   if (ok) {
     old_id = before.id;
-    ok = rename_pending_diagnostic(paths, &failure_step, &failure_error);
-    if (!ok) {
-      record_first_failure(results, failure_step, failure_error);
-    }
-  }
-  HANDLE current = INVALID_HANDLE_VALUE;
-  if (ok) {
-    current = open_regular(
-      paths->active, GENERIC_READ | GENERIC_WRITE,
-      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
-    );
-    if (current == INVALID_HANDLE_VALUE) {
-      record_first_failure(results, KEIKO_FAILURE_POST_RENAME_OPEN, GetLastError());
-      ok = 0;
-    }
-  }
-  if (ok && !read_exact_diagnostic(
-              current, KEIKO_NEW_BYTES, sizeof(KEIKO_NEW_BYTES) - 1, &after, &failure_error
-            )) {
-    record_first_failure(results, KEIKO_FAILURE_POST_RENAME_READ_FACT, failure_error);
-    ok = 0;
-  }
-  if (ok && !flush_after(current, results)) {
-    record_first_failure(results, KEIKO_FAILURE_POST_RENAME_READ_FACT, GetLastError());
-    ok = 0;
-  }
-  close_if_valid(current);
-  if (ok && equal_id(&old_id, &after.id)) {
-    record_first_failure(results, KEIKO_FAILURE_POST_RENAME_IDENTITY, ERROR_INVALID_DATA);
-    ok = 0;
-  }
-  if (ok && !read_exact_diagnostic(
-              retained, KEIKO_OLD_BYTES, sizeof(KEIKO_OLD_BYTES) - 1, &before, &failure_error
-            )) {
-    record_first_failure(results, KEIKO_FAILURE_RETAINED_READ_FACT, failure_error);
-    ok = 0;
-  }
-  if (ok && !equal_id(&old_id, &before.id)) {
-    record_first_failure(results, KEIKO_FAILURE_RETAINED_IDENTITY, ERROR_INVALID_DATA);
-    ok = 0;
-  }
-  if (ok && GetFileAttributesW(paths->pending) != INVALID_FILE_ATTRIBUTES) {
-    record_first_failure(results, KEIKO_FAILURE_PENDING_STILL_PRESENT, ERROR_ALREADY_EXISTS);
-    ok = 0;
-  }
-  if (ok) {
+    ok = rename_pending(paths) &&
+         snapshot_path(
+           paths->active, KEIKO_NEW_BYTES, sizeof(KEIKO_NEW_BYTES) - 1, &after, results
+         ) && !equal_id(&old_id, &after.id) &&
+         read_exact(retained, KEIKO_OLD_BYTES, sizeof(KEIKO_OLD_BYTES) - 1, &before) &&
+         equal_id(&old_id, &before.id) && GetFileAttributesW(paths->pending) == INVALID_FILE_ATTRIBUTES;
     new_id = after.id;
   }
   for (int sample = 0; ok && sample < KEIKO_SAMPLE_COUNT; sample++) {
-    if (!snapshot_path(paths->active, KEIKO_NEW_BYTES, sizeof(KEIKO_NEW_BYTES) - 1, &after, results)) {
-      record_first_failure(results, KEIKO_FAILURE_STABILITY_READ_FACT, GetLastError());
-      ok = 0;
-    } else if (!equal_id(&new_id, &after.id)) {
-      record_first_failure(results, KEIKO_FAILURE_STABILITY_IDENTITY, ERROR_INVALID_DATA);
-      ok = 0;
-    }
+    ok = snapshot_path(paths->active, KEIKO_NEW_BYTES, sizeof(KEIKO_NEW_BYTES) - 1, &after, results) &&
+         equal_id(&new_id, &after.id);
   }
   close_if_valid(retained);
   return ok;
@@ -871,13 +673,11 @@ static void print_result(const keiko_results *results) {
   const char *status = results->success ? "PASS" : "FAIL";
   printf(
     "windows-cutover-probe: %s success=%d allowing=%d denying=%d invalid=%d pre=%d post=%d "
-    "contention=%d flush-before=%ld/%ld flush-after=%ld/%ld first-failure-step=%d "
-    "first-failure-winerr=%lu\n",
+    "contention=%d flush-before=%ld/%ld flush-after=%ld/%ld\n",
     status, results->success, results->allowing_handle, results->denying_handle,
     results->invalid_candidate, results->pre_termination, results->post_termination,
     results->contention, results->flush_before_successes, results->flush_before_attempts,
-    results->flush_after_successes, results->flush_after_attempts, results->first_failure_step,
-    (unsigned long)results->first_failure_error
+    results->flush_after_successes, results->flush_after_attempts
   );
 }
 
