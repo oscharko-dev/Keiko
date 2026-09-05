@@ -2,14 +2,15 @@
 // correction 7) the pr-mark-ready draft->ready transition. Reuses the #3387 delivery transport
 // verbatim for git/gh REST calls (push, PR create, issue reads, the canonical per-PR identity read
 // `readPullRequest`/`markPullRequestReady` re-read before and after the mutation both use) and
-// layers a SEPARATE `gh`-only shim, found first on PATH, that answers exactly three deterministic,
+// layers a SEPARATE `gh`-only shim, found first on PATH, that answers a fixed set of deterministic,
 // fixture-mode-controlled shapes on top of it: the journey observation GraphQL query
 // (`buildGitJourneyReadArgv`), the node-id lookup `markPullRequestReady`'s adapter performs before
-// the mutation (`fetchPrNodeId`, git-pr-node.ts), and the fixed `markPullRequestReadyForReview`
-// GraphQL mutation (`buildPrMarkReadyGraphqlArgv`, git-pr-gateway.ts) — falling through to the real
-// delivery fixture's `gh` for everything else. No other endpoint or query is recognized; every
-// unmatched shape is denied the same way the delivery fixture already denies an unmatched request
-// (AGENTS.md fail-closed).
+// the mutation (`fetchPrNodeId`, git-pr-node.ts), the fixed `markPullRequestReadyForReview` GraphQL
+// mutation (`buildPrMarkReadyGraphqlArgv`, git-pr-gateway.ts), and (#3389 repair, correction 2) the
+// bounded read-only CI-facts reads (`readGitCiFacts`, git-ci-facts.ts) the execute route now
+// performs immediately before that mutation — falling through to the real delivery fixture's `gh`
+// for everything else. No other endpoint or query is recognized; every unmatched shape is denied the
+// same way the delivery fixture already denies an unmatched request (AGENTS.md fail-closed).
 
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -195,6 +196,111 @@ function answerMarkReadyMutation(stateDir: string, args: readonly string[]): nev
   process.exit(0);
 }
 
+// #3389 repair (review finding, correction 2): the live requirements/conflict re-read
+// (`createNodeGitCiReader`/`readGitCiFacts`, git-ci-facts.ts) the execute route now performs
+// immediately before the mark-ready mutation. Answers exactly the bounded, read-only endpoint
+// shapes that pipeline can produce (`buildGitCiReadArgv`, git-ci-read-argv.ts) with a deterministic
+// "unprotected, no required checks, clean merge state" fixture, matching the same shape
+// prRoutes.test.ts's own readyCiFacts() fixture exercises at the unit level — so the real `gh api`
+// round trip this e2e drives observes the identical facts assessGitCiFacts derives the mint's bound
+// readinessDigest from. Every response is a plain GET with --hostname/--method flags, distinct from
+// the node-id lookup (no such flags) and the plain identity read `GIT_PR_IDENTITY_JQ` answers.
+function isCiFactsGet(args: readonly string[]): boolean {
+  return (
+    args[0] === "api" &&
+    args.includes("--hostname") &&
+    args[args.indexOf("--hostname") + 1] === "github.com" &&
+    args.includes("--method") &&
+    args[args.indexOf("--method") + 1] === "GET"
+  );
+}
+function currentHandoffPr(
+  stateDir: string,
+): DeliveryProviderState["pullRequests"][number] | undefined {
+  const delivery = readDeliveryState(stateDir);
+  return delivery.pullRequests.find((candidate) => candidate.headRef === delivery.headRef);
+}
+function answerJson(value: unknown): never {
+  process.stdout.write(JSON.stringify(value));
+  process.exit(0);
+}
+function answerCiFactsNotFound(): never {
+  process.stderr.write("HTTP 404: Not Found\n");
+  process.exit(1);
+}
+
+type HandoffPr = DeliveryProviderState["pullRequests"][number];
+interface CiFactsShape {
+  readonly matches: (endpoint: string, projection: string) => boolean;
+  readonly respond: () => never;
+}
+
+// One matcher/responder per bounded read `readGitCiFacts` can produce (git-ci-read-argv.ts). Shared
+// by the recognizer and the responder so the two can never drift apart on which shapes are handled.
+function ciFactsShapes(pr: HandoffPr): readonly CiFactsShape[] {
+  const prefix = `/repos/${DELIVERY_REPOSITORY}`;
+  const branch = encodeURIComponent(pr.baseRef);
+  const pull = `${prefix}/pulls/${String(pr.number)}`;
+  return [
+    {
+      matches: (endpoint, projection) => endpoint === pull && projection.startsWith("{identity:"),
+      respond: () =>
+        answerJson({
+          identity: pr,
+          repositoryId: REPOSITORY_DATABASE_ID,
+          mergeable: true,
+          mergeState: "clean",
+          merged: false,
+        }),
+    },
+    {
+      matches: (endpoint) => endpoint === `${prefix}/branches/${branch}`,
+      respond: () => answerJson({ name: pr.baseRef, protected: false, sha: pr.baseSha }),
+    },
+    {
+      matches: (endpoint) => endpoint === `${prefix}/branches/${branch}/protection`,
+      respond: answerCiFactsNotFound,
+    },
+    {
+      matches: (endpoint) => endpoint.startsWith(`${prefix}/rules/branches/${branch}?`),
+      respond: () => answerJson([]),
+    },
+    {
+      matches: (endpoint) => endpoint.startsWith(`${prefix}/commits/${pr.headSha}/check-runs?`),
+      respond: () => answerJson({ total: 0, values: [] }),
+    },
+    {
+      matches: (endpoint) => endpoint.startsWith(`${prefix}/commits/${pr.headSha}/statuses?`),
+      respond: () => answerJson([]),
+    },
+    {
+      matches: (endpoint) => endpoint.startsWith(`${prefix}/actions/runs?head_sha=${pr.headSha}&`),
+      respond: () => answerJson({ total: 0, values: [] }),
+    },
+    {
+      matches: (endpoint) => endpoint.startsWith(`${pull}/reviews?`),
+      respond: () => answerJson([]),
+    },
+  ];
+}
+function matchingCiFactsShape(stateDir: string, args: readonly string[]): CiFactsShape | undefined {
+  if (!isCiFactsGet(args)) return undefined;
+  const pr = currentHandoffPr(stateDir);
+  const endpoint = args.find((arg) => arg.startsWith(`/repos/${DELIVERY_REPOSITORY}/`));
+  const projection = args.at(-1);
+  if (pr === undefined || endpoint === undefined || typeof projection !== "string")
+    return undefined;
+  return ciFactsShapes(pr).find((shape) => shape.matches(endpoint, projection));
+}
+function isCiFactsRead(stateDir: string, args: readonly string[]): boolean {
+  return matchingCiFactsShape(stateDir, args) !== undefined;
+}
+function answerCiFactsRead(stateDir: string, args: readonly string[]): never {
+  const shape = matchingCiFactsShape(stateDir, args);
+  if (shape === undefined) deny(stateDir);
+  return shape.respond();
+}
+
 export function runHandoffGh(input: {
   readonly stateDir: string;
   readonly fallbackGh: string;
@@ -210,6 +316,10 @@ export function runHandoffGh(input: {
   }
   if (isMarkReadyMutation(args)) {
     answerMarkReadyMutation(input.stateDir, args);
+    return;
+  }
+  if (isCiFactsRead(input.stateDir, args)) {
+    answerCiFactsRead(input.stateDir, args);
     return;
   }
   const result = spawnSync(input.fallbackGh, args, { stdio: "inherit", timeout: 30_000 });
