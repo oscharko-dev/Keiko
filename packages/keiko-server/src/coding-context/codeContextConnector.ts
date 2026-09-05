@@ -10,6 +10,7 @@ import {
   isGitHubOwnerAndRepo,
   parseGitHubIssueNumber,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import {
@@ -339,15 +340,22 @@ function blockedRef(
   };
 }
 
+// Title, body and every comment body are untrusted provider text that flows straight into the
+// model's initial-turn context (codingRuntimeIssueIntake.ts's `renderPack`). The sibling
+// human-facing preview (`githubIssueResolution.ts`'s `previewFor`/`boundedText`) already runs
+// every field through `stripUnsafeFormatChars` before the byte bound; this pack builder must go
+// through the exact same canonical sanitiser, in the same order (sanitise, then bound), so a
+// bidi-override / zero-width payload a human preview shows safely cannot still reach the model
+// prompt unsanitised.
 function packItem(raw: CodeContextRawObject, maxBodyBytes: number): CodeContextPackItem {
-  const body = bounded(raw.body, maxBodyBytes);
+  const body = bounded(stripUnsafeFormatChars(raw.body), maxBodyBytes);
   return {
     source: raw.source,
     objectKind: raw.objectKind,
     objectId: raw.objectId,
     label: contextLabel(raw.source, raw.objectKind, raw.objectId),
     untrusted: true,
-    title: raw.title,
+    title: stripUnsafeFormatChars(raw.title),
     body: body.value,
     bodyTruncated: body.truncated,
     comments: raw.comments.map((comment) => packComment(comment, maxBodyBytes)),
@@ -356,7 +364,7 @@ function packItem(raw: CodeContextRawObject, maxBodyBytes: number): CodeContextP
 }
 
 function packComment(comment: CodeContextRawComment, maxBodyBytes: number): CodeContextPackComment {
-  const body = bounded(comment.body, maxBodyBytes);
+  const body = bounded(stripUnsafeFormatChars(comment.body), maxBodyBytes);
   return { id: comment.id, body: body.value, bodyTruncated: body.truncated };
 }
 
