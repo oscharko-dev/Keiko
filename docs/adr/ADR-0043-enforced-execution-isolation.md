@@ -257,15 +257,14 @@ refuses the launch outright with the identical `GATEWAY_UNSUPPORTED_ON_HOST_REAS
 protocol has no field for a network policy and cannot enforce one; the refusal is also recorded as a
 body-free `runtime.confinement.failed` activity-log line, matching the macOS dev-lane path, so a
 Windows refusal leaves the same evidence a support bundle can reconstruct. Production composition
-(`productionOpenCodeBackend.ts`) attaches a gateway confinement only where a backend can enforce
-it today: the macOS app-sandbox and dev lanes. The release-qualified native lanes (Windows and
-Linux, and macOS outside the app-sandbox lane) still launch **without** a gateway confinement,
-because the only alternative this backend can offer is a refusal, and refusing would disable the
-coding runtime on every release platform rather than confine it. That gap is recorded here and in
-#2951, which stays open until the Linux network-namespace bridge and a Windows-native
-enforcement equivalent exist; it is not a containment claim. The refusal path and its
-`runtime.confinement.failed` evidence apply to any lane that does request a confinement on a host
-that cannot enforce it.
+(`productionOpenCodeBackend.ts`) always supplies the exact gateway policy, including Windows dev
+and release-qualified native lanes. Process-tree qualification alone cannot authorize an unconfined
+network launch. Until a native backend can enforce the policy, starting that run refuses before
+spawning a helper and records `runtime.confinement.failed`; omitting the policy to keep a launch
+working is a fail-open defect. The macOS app-sandbox and dev lanes enforce the same policy through
+Seatbelt. #2951 remains open for the Linux network-namespace bridge and Windows-native enforcement,
+and these unavailable targets cannot be represented as qualified end-to-end journeys.
+
 
 ## Addendum — the governed tool facade rides the ONE attested loopback destination, never a second (2026-09-05)
 

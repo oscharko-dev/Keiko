@@ -571,6 +571,27 @@ export function handleCodingRuntimeApprovalReview(
   return { status: 200, body: payload };
 }
 
+export function handleCodingRuntimeDescriptionDraft(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): RouteResult {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    return notFound(ctx.correlationId);
+  }
+  const runId = ctx.params.runId;
+  const proposalId = ctx.url.searchParams.get("proposalId");
+  const snapshotDigest = ctx.url.searchParams.get("snapshotDigest");
+  if (runId === undefined || proposalId === null || snapshotDigest === null) {
+    return notFound(ctx.correlationId);
+  }
+  const required = requireRuntime(deps, ctx.correlationId);
+  if (isRouteResult(required)) return required;
+  const review = required.orchestrator.reviewDescriptionDraft(runId, proposalId, snapshotDigest);
+  return review === undefined
+    ? notFound(ctx.correlationId)
+    : { status: 200, body: { outcome: "draft", draft: review } };
+}
+
 function frame(event: CodingWorkbenchRuntimeSseEvent): string {
   return `id: ${event.cursor}\nevent: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`;
 }
@@ -666,6 +687,11 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/coding-workbench/runtime/runs/:runId/approval-review",
     handler: handleCodingRuntimeApprovalReview,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/description-draft",
+    handler: handleCodingRuntimeDescriptionDraft,
   },
   {
     method: "POST",

@@ -278,6 +278,13 @@ function useMarkReadyPropose(
   }, [outcome, projectId]);
 }
 
+function optionalMarkReadyHandler(
+  handler: (() => Promise<void>) | undefined,
+): { readonly onProposeReady?: () => Promise<void> } {
+  if (handler === undefined) return {};
+  return { onProposeReady: handler };
+}
+
 interface ResumeModeSelection {
   readonly runId: string;
   readonly currentMode: CodingWorkbenchMode;
@@ -916,7 +923,7 @@ function WorkbenchColumns({
             onRefresh={journey.onRefresh}
             changedFiles={changedFilesSummary(journeyChanges)}
             markReadyAvailable={onProposeReady !== undefined}
-            {...(onProposeReady === undefined ? {} : { onProposeReady })}
+            {...optionalMarkReadyHandler(onProposeReady)}
           />
           <CodingWorkbenchCommitResult
             result={state.run.value?.verifiedCommitResult}

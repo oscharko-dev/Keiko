@@ -155,21 +155,7 @@ async function executeCall(
       generation.cancellation.signal,
     );
     if (!(await authorityStillCurrent(generation))) {
-      generation.usages.push(response.usage);
-      generation.modelId = call.modelId;
-      generation.outputBytes += Buffer.byteLength(response.content, "utf8");
-      generation.candidates.length = 0;
-      generation.log.write({
-        category: "gateway",
-        op: "pr-description.model.completed",
-        extra: {
-          callCount: generation.calls,
-          accepted: false,
-          reason: generation.reason,
-          outputBytes: generation.outputBytes,
-        },
-      });
-      return false;
+      return rejectResponseAfterAuthorityChange(generation, call, response);
     }
     return acceptResponse(generation, call, response, evidenceIds);
   } catch (error) {
@@ -192,6 +178,28 @@ async function executeCall(
   }
 }
 
+function rejectResponseAfterAuthorityChange(
+  generation: Generation,
+  call: GatewayCallRequest,
+  response: NormalizedResponse,
+): false {
+  generation.usages.push(response.usage);
+  generation.modelId = call.modelId;
+  generation.outputBytes += Buffer.byteLength(response.content, "utf8");
+  generation.candidates.length = 0;
+  generation.log.write({
+    category: "gateway",
+    op: "pr-description.model.completed",
+    extra: {
+      callCount: generation.calls,
+      accepted: false,
+      reason: generation.reason,
+      outputBytes: generation.outputBytes,
+    },
+  });
+  return false;
+}
+
 async function authorityStillCurrent(generation: Generation): Promise<boolean> {
   if (generation.cancellation.signal.aborted) {
     generation.reason = cancellationReason(generation);
@@ -210,9 +218,8 @@ async function authorityStillCurrent(generation: Generation): Promise<boolean> {
     if (!authorized) generation.reason = "authority-denied";
     return authorized;
   } catch (error) {
-    generation.reason = generation.cancellation.signal.aborted
-      ? cancellationReason(generation)
-      : "authority-denied";
+    generation.reason =
+      error instanceof CancelledError ? cancellationReason(generation) : "authority-denied";
     generation.log.write({
       level: "warn",
       category: "gateway",
@@ -222,6 +229,14 @@ async function authorityStillCurrent(generation: Generation): Promise<boolean> {
     });
     return false;
   }
+}
+
+async function reserveAuthorizedCall(
+  generation: Generation,
+  call: GatewayCallRequest,
+  capability: ModelCapability,
+): Promise<boolean> {
+  return (await authorityStillCurrent(generation)) && reserveCall(generation, call, capability);
 }
 
 function responseBudgetExceeded(call: GatewayCallRequest, response: NormalizedResponse): boolean {
@@ -317,8 +332,7 @@ async function generateCandidates(generation: Generation): Promise<void> {
       outputTokens,
       generation.cancellation.signal,
     );
-    if (!(await authorityStillCurrent(generation))) break;
-    if (!reserveCall(generation, call, capability)) break;
+    if (!(await reserveAuthorizedCall(generation, call, capability))) break;
     if (
       !(await executeCall(
         generation,

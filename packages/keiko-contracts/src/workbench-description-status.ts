@@ -16,7 +16,11 @@
 
 import { isGitObjectId } from "./git-repository.js";
 import type { PrDescriptionApplicationState } from "./pr-description-application.js";
-import { PR_DESCRIPTION_OUTCOMES, type PrDescriptionOutcome } from "./pr-description.js";
+import {
+  PR_DESCRIPTION_OUTCOMES,
+  type PrDescriptionArtifact,
+  type PrDescriptionOutcome,
+} from "./pr-description.js";
 
 export const WORKBENCH_DESCRIPTION_STATUS_SCHEMA_VERSION = "1" as const;
 
@@ -80,11 +84,19 @@ export interface WorkbenchDescriptionStatus {
   /** #3398's own artifact outcome for the rendered draft; null exactly when none was rendered. */
   readonly artifactOutcome: PrDescriptionOutcome | null;
   /**
-   * Server-held #3399 proposal for this exact artifact. Absent for generic runs without a PR and
-   * removed when restart reconciliation proves the in-memory proposal is no longer available.
+   * Server-held #3399 proposal for this exact artifact. Removed when restart reconciliation proves
+   * the in-memory proposal is no longer available.
    */
   readonly proposalId?: string;
   readonly observedAt: string;
+}
+
+/** Transient exact draft review; never durable status or remote-application authority. */
+export interface WorkbenchDescriptionDraftReview {
+  readonly schemaVersion: typeof WORKBENCH_DESCRIPTION_STATUS_SCHEMA_VERSION;
+  readonly proposalId: string;
+  readonly expiresAt: string;
+  readonly artifact: PrDescriptionArtifact;
 }
 
 export interface WorkbenchDescriptionGenerationBinding {

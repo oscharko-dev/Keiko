@@ -889,8 +889,11 @@ async function recheckWorkbenchDescription(
     logWorkbenchModelEgressDenied(scope.runId, denied);
     return { reason: denied };
   }
-  if (scope.applicationTarget === undefined) return workbenchDescriptionOutcome(result);
-  if (deps.artifactRetention === undefined) return { reason: "generation-unavailable" };
+  if (deps.artifactRetention === undefined) {
+    return scope.applicationTarget === undefined
+      ? workbenchDescriptionOutcome(result)
+      : { reason: "generation-unavailable" };
+  }
   if (input.signal === undefined) return { reason: "stale-snapshot" };
   const proposalId = await deps.artifactRetention.retain(scope, result.artifact, input.signal);
   return proposalId === undefined

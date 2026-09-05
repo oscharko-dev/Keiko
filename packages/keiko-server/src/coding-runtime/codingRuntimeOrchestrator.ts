@@ -1676,12 +1676,16 @@ export class CodingRuntimeOrchestrator {
     if (
       status?.proposalId !== proposalId ||
       status.snapshotDigest !== snapshotDigest ||
-      scope?.applicationTarget !== undefined ||
+      scope === undefined ||
+      scope.applicationTarget !== undefined ||
       !isRetainedDescriptionProposal(this.description, scope, status, proposalId, snapshotDigest)
     ) {
       return undefined;
     }
-    return this.description?.dispatcher?.reviewDraft?.(scope, proposalId, snapshotDigest);
+    const review = this.description?.dispatcher?.reviewDraft?.(scope, proposalId, snapshotDigest);
+    if (review !== undefined)
+      this.logDescriptionEvent(scope, "reviewed", { proposalRetained: true });
+    return review;
   }
 
   /**
@@ -1863,7 +1867,15 @@ export class CodingRuntimeOrchestrator {
     identity: Pick<WorkbenchDescriptionScope, "runId" | "generationBinding"> & {
       readonly remoteDigest?: string;
     },
-    event: "dispatched" | "coalesced" | "superseded" | "blocked" | "generated" | "failed" | "stale",
+    event:
+      | "dispatched"
+      | "coalesced"
+      | "superseded"
+      | "blocked"
+      | "generated"
+      | "failed"
+      | "stale"
+      | "reviewed",
     extra: Readonly<Record<string, unknown>>,
     errorKind?: string,
   ): void {

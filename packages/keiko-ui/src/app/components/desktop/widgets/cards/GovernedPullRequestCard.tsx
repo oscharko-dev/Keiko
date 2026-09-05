@@ -1249,8 +1249,7 @@ function useRetainedDescriptionProposal(
   const loadedProposal = useRef<string | null>(null);
   useEffect(() => {
     if (
-      retainedProposal === undefined ||
-      retainedProposal.projectId !== projectId ||
+      retainedProposal?.projectId !== projectId ||
       loadedProposal.current === retainedProposal.proposalId
     ) {
       return;

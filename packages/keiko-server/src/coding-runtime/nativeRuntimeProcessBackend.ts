@@ -205,11 +205,9 @@ function recordNativeConfinementFailure(sink: ServerLogSink, runId: string, erro
 }
 
 /**
- * Body-free evidence that a native launch runs WITHOUT gateway confinement (ADR-0043 D14, #2951):
- * this backend has no OS-level enforcement on any platform yet, and the release-qualified lanes
- * deliberately launch unconfined rather than refuse (a refusal would disable the coding runtime on
- * every Windows/Linux release). A support bundle must show that exposure per run, so the gap is
- * never silent while #2951 stays open. Reaches this line only when no confinement was requested.
+ * Legacy process-supervision callers without a gateway policy remain observable. Production
+ * OpenCode always supplies its policy; an unsupported native network boundary refuses before
+ * reaching this line and emits runtime.confinement.failed instead (ADR-0043 D14, #2951).
  */
 function recordNativeConfinementUnavailable(
   sink: ServerLogSink,

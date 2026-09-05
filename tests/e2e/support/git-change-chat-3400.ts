@@ -223,11 +223,13 @@ export async function interceptGitChangePullRequestConnect(
   });
 }
 
-function prDescriptionApplicationStatusFixture(): Record<string, unknown> {
+function prDescriptionApplicationStatusFixture(
+  reason: "approval-required" | "applied",
+): Record<string, unknown> {
   return {
     schemaVersion: "1",
-    state: "current",
-    reason: "applied",
+    state: reason === "applied" ? "current" : "blocked",
+    reason,
     binding: {
       repositoryId: "repo-1",
       remoteDigest: "d".repeat(64),
@@ -251,7 +253,7 @@ function prDescriptionApplicationStatusFixture(): Record<string, unknown> {
     observedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 30_000).toISOString(),
     completeness: "complete",
-    effect: "confirmed",
+    effect: reason === "applied" ? "confirmed" : "none",
     concurrency: "read-check-write-verify",
   };
 }
@@ -277,7 +279,8 @@ function assertChatDescriptionRequest(request: Record<string, unknown>): void {
 }
 
 export async function interceptPrDescriptionLifecycle(page: Page): Promise<void> {
-  const status = prDescriptionApplicationStatusFixture();
+  const previewStatus = prDescriptionApplicationStatusFixture("approval-required");
+  const appliedStatus = prDescriptionApplicationStatusFixture("applied");
   await page.route("**/api/git-change/review-description", async (route) => {
     const request = route.request().postDataJSON() as Record<string, unknown>;
     assertChatDescriptionRequest(request);
@@ -289,7 +292,7 @@ export async function interceptPrDescriptionLifecycle(page: Page): Promise<void>
         preview: {
           proposalId: "e2e-proposal-1",
           expiresAt: new Date(Date.now() + 30_000).toISOString(),
-          status,
+          status: previewStatus,
           finalBody:
             "<!-- keiko:managed:v1:start -->refined over chat<!-- keiko:managed:v1:end -->",
           managedRegion: "refined over chat",
@@ -315,7 +318,7 @@ export async function interceptPrDescriptionLifecycle(page: Page): Promise<void>
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ outcome: "observed", status }),
+      body: JSON.stringify({ outcome: "observed", status: appliedStatus }),
     });
   });
 }

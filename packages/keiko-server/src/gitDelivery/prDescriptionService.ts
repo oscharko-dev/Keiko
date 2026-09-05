@@ -125,6 +125,7 @@ class DescriptionService implements PrDescriptionApplicationService {
     }
     this.lastNow = now;
     const preview = {
+      schemaVersion: "1" as const,
       proposalId: randomUUID(),
       expiresAt: new Date(now + PR_DESCRIPTION_APPLICATION_MAX_AGE_MS).toISOString(),
       artifact: structuredClone(artifact),

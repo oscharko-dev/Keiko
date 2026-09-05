@@ -126,11 +126,15 @@ test("reviews, approves and applies the held description through the connected p
   await expect(chatWindow.getByTestId("git-change-description-preview-body")).toContainText(
     "refined over chat",
   );
-  await expect(chatWindow.getByTestId("git-change-description-state")).toHaveText("Current");
+  await expect(chatWindow.getByTestId("git-change-description-state")).toHaveText(
+    "Blocked (approval-required)",
+  );
 
   await chatWindow.getByTestId("git-change-description-approve").click();
   await chatWindow.getByTestId("git-change-description-apply").click();
-  await expect(chatWindow.getByTestId("git-change-description-state")).toHaveText("Current");
+  await expect(chatWindow.getByTestId("git-change-description-state")).toHaveText(
+    "Current (applied)",
+  );
 
   // One-use: the approved proposal was consumed by the apply above, so a second Apply click must
   // not reach the route again (the button becomes aria-disabled once applied).

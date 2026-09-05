@@ -1229,6 +1229,7 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
     generatePrDescriptionMock.mockResolvedValueOnce(generated);
     const retain = vi.fn(() => Promise.resolve("pr-description-1"));
     const hasProposal = vi.fn(() => true);
+    const reviewDraft = vi.fn(() => undefined);
     const dispatcher = createProductionWorkbenchDescriptionDispatcher(
       fakeDeps({
         snapshots: {
@@ -1243,7 +1244,7 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
           config: {} as PrDescription.PrDescriptionDeps["config"],
           log: { write: () => undefined },
         },
-        artifactRetention: { retain, hasProposal },
+        artifactRetention: { retain, hasProposal, reviewDraft },
       }),
     );
     const signal = new AbortController().signal;
@@ -1260,6 +1261,41 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
       "a".repeat(64),
     );
     expect(generatePrDescriptionMock).toHaveBeenCalledOnce();
+  });
+
+  it("retains a generic generated artifact without inventing a PR target", async () => {
+    const generated = generatedDescription();
+    generatePrDescriptionMock.mockResolvedValueOnce(generated);
+    const retain = vi.fn(() => Promise.resolve("draft-description-1"));
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: {
+          ...fakeSnapshots(() =>
+            Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+          ),
+          recheck: () => Promise.resolve({ state: "current", snapshot: snapshotFixture() }),
+        },
+        descriptionAuthority: admittingPort(),
+        generation: {
+          gateway: { chat: vi.fn() },
+          config: {} as PrDescription.PrDescriptionDeps["config"],
+          log: { write: () => undefined },
+        },
+        artifactRetention: {
+          retain,
+          hasProposal: () => true,
+          reviewDraft: () => undefined,
+        },
+      }),
+    );
+    const signal = new AbortController().signal;
+
+    await expect(dispatcher.generate(SCOPE, signal)).resolves.toMatchObject({
+      reason: "generated",
+      proposalId: "draft-description-1",
+    });
+    expect(retain).toHaveBeenCalledExactlyOnceWith(SCOPE, generated.artifact, signal);
+    expect(SCOPE.applicationTarget).toBeUndefined();
   });
 
   it("fails closed when a PR-targeted artifact cannot be retained", async () => {

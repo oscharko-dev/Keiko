@@ -112,8 +112,7 @@ function descriptionReviewTarget(
   if (
     status.proposalId === undefined ||
     status.snapshotDigest === null ||
-    pullRequest === undefined ||
-    pullRequest.state !== "open"
+    pullRequest?.state !== "open"
   ) {
     return undefined;
   }

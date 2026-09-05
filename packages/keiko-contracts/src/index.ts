@@ -5059,6 +5059,7 @@ export type {
   WorkbenchDescriptionStatus,
   WorkbenchDescriptionState,
   WorkbenchDescriptionReason,
+  WorkbenchDescriptionDraftReview,
   WORKBENCH_DESCRIPTION_STATUS_SCHEMA_VERSION,
   WORKBENCH_DESCRIPTION_REASON_STATES,
   isWorkbenchDescriptionStatus,

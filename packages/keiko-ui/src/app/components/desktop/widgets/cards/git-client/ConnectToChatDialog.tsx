@@ -347,16 +347,25 @@ interface SubmitState {
   readonly submit: () => void;
 }
 
-function useSubmit(
-  chatId: string,
-  mode: ConnectMode,
-  currentBranch: string | undefined,
-  baseRef: string,
-  connect: typeof connectGitChangeToChat,
-  onConnected: (chatId: string, result: GitChangeConnectResponse) => void,
-  onClose: () => void,
-  t: I18nTranslate,
-): SubmitState {
+function useSubmit({
+  chatId,
+  mode,
+  currentBranch,
+  baseRef,
+  connect,
+  onConnected,
+  onClose,
+  t,
+}: {
+  readonly chatId: string;
+  readonly mode: ConnectMode;
+  readonly currentBranch: string | undefined;
+  readonly baseRef: string;
+  readonly connect: typeof connectGitChangeToChat;
+  readonly onConnected: (chatId: string, result: GitChangeConnectResponse) => void;
+  readonly onClose: () => void;
+  readonly t: I18nTranslate;
+}): SubmitState {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const canSubmit =
@@ -459,7 +468,7 @@ function useConnectDialogState(
   const [chatId, setChatId] = useState("");
   const [mode, setMode] = useState<ConnectMode>("comparison");
   const [baseRef, setBaseRef] = useState(baseBranchName ?? "");
-  const { busy, error, canSubmit, submit } = useSubmit(
+  const { busy, error, canSubmit, submit } = useSubmit({
     chatId,
     mode,
     currentBranch,
@@ -468,7 +477,7 @@ function useConnectDialogState(
     onConnected,
     onClose,
     t,
-  );
+  });
   return { chatId, setChatId, mode, setMode, baseRef, setBaseRef, busy, error, canSubmit, submit };
 }
 

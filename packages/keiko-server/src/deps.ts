@@ -340,11 +340,15 @@ import {
 } from "./gitDelivery/prDescriptionReceiptStore.js";
 import type { PrDescriptionReceiptStatusHooks } from "./gitDelivery/prDescriptionReceiptTypes.js";
 import { createProductionPrDescriptionGeneration } from "./gitDelivery/prDescriptionGeneration.js";
-import type { PrDescriptionApplicationService } from "./gitDelivery/prDescriptionTypes.js";
-import type { PrDescriptionContext } from "./gitDelivery/prDescriptionTypes.js";
+import type {
+  PrDescriptionApplicationService,
+  PrDescriptionContext,
+  PrDescriptionDraftPreview,
+} from "./gitDelivery/prDescriptionTypes.js";
 import { resolveProjectWorkspace } from "./gitDelivery/execution.js";
 import {
   resolvePrDescriptionApplicationServiceForContext,
+  resolveWorkbenchDraftDescriptionService,
   type BaseFields as PrDescriptionBaseFields,
 } from "./gitDelivery/prDescriptionRoutes.js";
 import { descriptionAuthorityEnvelopeDigest } from "./gitDelivery/runBoundAuthority.js";
@@ -4174,25 +4178,59 @@ function createWorkbenchArtifactRetention(
     );
     return resolution.ok ? resolution.service : undefined;
   };
+  const resolveDraft = (
+    scope: Parameters<ProductionWorkbenchArtifactRetention["hasProposal"]>[0],
+    snapshotDigest: string,
+  ): PrDescriptionApplicationService | undefined => {
+    const projectId = activeWorkspaceRoot();
+    if (projectId === undefined || scope.applicationTarget !== undefined) return undefined;
+    const authorityScope: GitDeliveryDescriptionAuthorityScope = {
+      remoteDigest: scope.remoteDigest,
+      pr: { baseRef: scope.baseSha, headRef: scope.headSha },
+      snapshotDigest,
+    };
+    const resolution = resolveWorkbenchDraftDescriptionService(deps, {
+      projectId,
+      runId: scope.runId,
+      snapshotDigest,
+      authorityDigest: descriptionAuthorityEnvelopeDigest(authorityScope),
+    });
+    return resolution.ok ? resolution.service : undefined;
+  };
   return {
     async retain(scope, artifact, signal): Promise<string | undefined> {
-      const binding = workbenchRetentionBinding(scope, artifact.binding.snapshotDigest);
-      if (binding === undefined || signal.aborted) return undefined;
+      const snapshotDigest = artifact.binding.snapshotDigest;
+      const binding = workbenchRetentionBinding(scope, snapshotDigest);
+      if (signal.aborted) return undefined;
       if (scope.acceptedMode === undefined) return undefined;
+      if (binding === undefined) {
+        return resolveDraft(scope, snapshotDigest)?.holdDraftArtifact(artifact, Date.now())
+          ?.proposalId;
+      }
       controlPlane.mintDescriptionAuthority?.({
         scope: binding.authorityScope,
         requestedMode: scope.acceptedMode,
         nowIso: new Date().toISOString(),
         correlationId: scope.runId,
       });
-      const result = await resolve(scope, artifact.binding.snapshotDigest, signal)?.previewArtifact(
-        artifact,
-      );
+      const result = await resolve(scope, snapshotDigest, signal)?.previewArtifact(artifact);
       return result?.outcome === "preview" ? result.preview.proposalId : undefined;
     },
     hasProposal(scope, proposalId, snapshotDigest): boolean {
-      const review = resolve(scope, snapshotDigest)?.review(proposalId);
-      return review?.status.binding.snapshotDigest === snapshotDigest;
+      if (scope.applicationTarget === undefined) {
+        return (
+          resolveDraft(scope, snapshotDigest)?.reviewDraft(proposalId)?.artifact.binding
+            .snapshotDigest === snapshotDigest
+        );
+      }
+      return (
+        resolve(scope, snapshotDigest)?.review(proposalId)?.status.binding.snapshotDigest ===
+        snapshotDigest
+      );
+    },
+    reviewDraft(scope, proposalId, snapshotDigest): PrDescriptionDraftPreview | undefined {
+      const review = resolveDraft(scope, snapshotDigest)?.reviewDraft(proposalId);
+      return review?.artifact.binding.snapshotDigest === snapshotDigest ? review : undefined;
     },
   };
 }

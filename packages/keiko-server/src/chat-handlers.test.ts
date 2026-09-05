@@ -959,7 +959,7 @@ describe("git-change description-authority admission (#3400)", () => {
               expiresAt: "9999-12-31T23:59:59.999Z",
             }),
           },
-        } as UiHandlerDeps,
+        },
       );
 
       expect(result.status).toBe(409);

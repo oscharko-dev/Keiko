@@ -404,6 +404,7 @@ function runtimeSupervisor(
       runtimeRoots: [join(input.portable.installRoot, input.portable.sidecar.payloadRootPath)],
       workspaceRoot,
       identity: input.portable.qualification,
+      gatewayConfinement: runtimeGatewayConfinement(input.portable, input, run),
     }),
     qualifications: [input.portable.qualification],
   });
@@ -423,14 +424,15 @@ function devLaneSupervisor(
       runtimeRoots: [join(portable.installRoot, portable.sidecar.payloadRootPath)],
       workspaceRoot: run.context.workspaceRoot,
       identity: portable.qualification,
+      gatewayConfinement: runtimeGatewayConfinement(portable, input, run),
     }),
     qualifications: [portable.qualification],
   });
 }
 
 /**
- * The macOS dev/evaluation supervisor enforces the exact gateway TCP endpoint and denies forks
- * and service-based escape. Its evidence class still carries no release signature or platform
+ * The macOS dev/evaluation supervisor enforces the exact gateway TCP endpoint across descendants
+ * and denies service-based escape. Its evidence class still carries no release signature or platform
  * qualification. Windows dev-lane runs use the native Job Object supervisor.
  *
  * Dev lane (#2475, ADR-0140): no packaged install exists to supervise natively.
@@ -456,16 +458,24 @@ function appSandboxSupervisor(
         backend: "macos-app-sandbox",
       },
       runtimeRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
-      gatewayConfinement: createRuntimeGatewayConfinement({
-        gatewayUrl: input.gatewayUrl,
-        runId: run.minted.authorityRef.runId,
-        treeBindingId: run.minted.treeBindingId,
-        envelopeDigest: run.minted.authorityRef.envelopeDigest,
-        runtimeArtifactDigest: portable.sidecar.shippedExecutableSha256,
-        modelProfileDigest: codingRuntimeFactDigest(run.context.modelProfile),
-      }),
+      gatewayConfinement: runtimeGatewayConfinement(portable, input, run),
     }),
     qualifications: [portable.qualification],
+  });
+}
+
+function runtimeGatewayConfinement(
+  portable: ResolvedPortableOpenCodeRuntime,
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+): ReturnType<typeof createRuntimeGatewayConfinement> {
+  return createRuntimeGatewayConfinement({
+    gatewayUrl: input.gatewayUrl,
+    runId: run.minted.authorityRef.runId,
+    treeBindingId: run.minted.treeBindingId,
+    envelopeDigest: run.minted.authorityRef.envelopeDigest,
+    runtimeArtifactDigest: portable.sidecar.shippedExecutableSha256,
+    modelProfileDigest: codingRuntimeFactDigest(run.context.modelProfile),
   });
 }
 

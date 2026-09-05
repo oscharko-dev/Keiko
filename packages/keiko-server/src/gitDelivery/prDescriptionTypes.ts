@@ -8,6 +8,7 @@ import type {
   PrDescriptionLanguage,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import type { PrDescription } from "@oscharko-dev/keiko-model-gateway";
+import type { WorkbenchDescriptionDraftReview } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
 import type { GitPullRequestBodyAdapter, GitPrBody } from "@oscharko-dev/keiko-tools";
 import type {
   GitChangeSnapshotService,
@@ -41,12 +42,7 @@ export interface PrDescriptionPreview {
   readonly managedRegion: string;
   readonly concurrencyLimitation: string;
 }
-export interface PrDescriptionDraftPreview {
-  readonly proposalId: string;
-  readonly expiresAt: string;
-  /** Exact generated artifact retained transiently by the existing proposal owner. */
-  readonly artifact: PrDescriptionArtifact;
-}
+export type PrDescriptionDraftPreview = WorkbenchDescriptionDraftReview;
 export type PrDescriptionApplicationResult =
   | { readonly outcome: "preview"; readonly preview: PrDescriptionPreview }
   | { readonly outcome: "observed"; readonly status: PrDescriptionApplicationStatus }
@@ -85,7 +81,10 @@ export interface PrDescriptionApplicationService {
   /** Holds an already-generated Chat artifact as the exact proposal; never calls the model. */
   previewArtifact(artifact: PrDescriptionArtifact): Promise<PrDescriptionApplicationResult>;
   /** Holds a generated draft that has no real PR target; this never creates apply authority. */
-  holdDraftArtifact(artifact: PrDescriptionArtifact, now: number): PrDescriptionDraftPreview | undefined;
+  holdDraftArtifact(
+    artifact: PrDescriptionArtifact,
+    now: number,
+  ): PrDescriptionDraftPreview | undefined;
   reviewDraft(proposalId: string): PrDescriptionDraftPreview | undefined;
   review(proposalId: string): PrDescriptionPreview | undefined;
   issueApproval(proposalId: string): GitDeliveryIssuedApproval | undefined;

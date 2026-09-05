@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { CodingToolResult } from "./codingToolIpc.js";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as nativeBackend from "./nativeRuntimeProcessBackend.js";
+import { createRuntimeGatewayConfinement } from "@oscharko-dev/keiko-sandbox";
+import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 import { createOpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
 import { createCodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
@@ -76,11 +81,8 @@ describe("production OpenCode backend composition", () => {
     }
   });
 
-  // #2951 recorded gap (ADR-0043 D14): the release-qualified/evaluation native (non-dev-lane)
-  // branch of `runtimeSupervisor` launches WITHOUT a gateway confinement, because
-  // `nativeRuntimeProcessBackend.ts` has no OS-level enforcement to attach one to and a refusal
-  // would disable the coding runtime on every Windows/Linux release. This pins that the launch
-  // still composes; the OS-level bridge stays tracked under #2951, never claimed here.
+  // Process-tree qualification does not prove gateway-only network enforcement. Composition
+  // can prepare the run, but the native backend must receive the policy and refuse an unsafe start.
   it("composes a release-qualified Windows native run", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-production-opencode-native-release-"));
     try {
@@ -98,6 +100,34 @@ describe("production OpenCode backend composition", () => {
       rmSync(root, { force: true, recursive: true });
     }
   });
+  it.each(["dev", "release"] as const)(
+    "binds gateway confinement into the %s native supervisor",
+    (lane) => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-native-gateway-policy-"));
+      try {
+        const portable =
+          lane === "dev" ? windowsDevLaneRuntime(root) : releaseQualifiedNativeRuntime(root);
+        const input = backendInput(root, portable);
+        const request = runInput(root);
+        const factory = vi.spyOn(nativeBackend, "createNativeRuntimeProcessBackend");
+        createProductionOpenCodeBackend(input).createRun(request);
+        expect(factory).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            gatewayConfinement: createRuntimeGatewayConfinement({
+              gatewayUrl: input.gatewayUrl,
+              runId: request.minted.authorityRef.runId,
+              treeBindingId: request.minted.treeBindingId,
+              envelopeDigest: request.minted.authorityRef.envelopeDigest,
+              runtimeArtifactDigest: portable.sidecar.shippedExecutableSha256,
+              modelProfileDigest: codingRuntimeFactDigest(request.context.modelProfile),
+            }),
+          }),
+        );
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 });
 
 function releaseQualifiedNativeRuntime(root: string): QualifiedPortableOpenCodeRuntime {

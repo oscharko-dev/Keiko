@@ -116,6 +116,49 @@ function captureInput(
     ...(context.signal === undefined ? {} : { signal: context.signal }),
   };
 }
+function generationAuthorityRevalidator(
+  options: PrDescriptionServiceOptions,
+  context: PrDescriptionContext,
+  reference: string,
+  input: PreparedPrDescription["captureInput"],
+): PrDescription.PrDescriptionDeps["revalidateAuthority"] {
+  return async (authority, signal): Promise<boolean> => {
+    if (
+      signal.aborted ||
+      authority.authorityDigest !== context.authorityDigest ||
+      authority.correlationId !== context.correlationId ||
+      !validDescriptionContext(context)
+    ) {
+      return false;
+    }
+    const current = await options.snapshots.recheck(reference, { ...input, signal });
+    return current.state === "current" && validDescriptionContext(context);
+  };
+}
+
+function generationSnapshotResolver(
+  options: PrDescriptionServiceOptions,
+  context: PrDescriptionContext,
+  reference: string,
+): PrDescription.PrDescriptionDeps["resolveSnapshot"] {
+  return (supplied, signal) => {
+    if (supplied !== reference || signal.aborted || !validDescriptionContext(context))
+      return Promise.resolve(undefined);
+    const content = options.snapshots.read(reference, context.accessScope, context.correlationId);
+    return Promise.resolve(
+      content === undefined
+        ? undefined
+        : {
+            snapshot: content.snapshot,
+            evidence: content.files.map((file) => ({
+              evidenceId: file.evidenceId,
+              text: JSON.stringify(file),
+            })),
+          },
+    );
+  };
+}
+
 async function generate(
   options: PrDescriptionServiceOptions,
   context: PrDescriptionContext,
@@ -132,38 +175,8 @@ async function generate(
     },
     {
       ...options.generation,
-      revalidateAuthority: async (authority, signal) => {
-        if (
-          signal.aborted ||
-          authority.authorityDigest !== context.authorityDigest ||
-          authority.correlationId !== context.correlationId ||
-          !validDescriptionContext(context)
-        ) {
-          return false;
-        }
-        const current = await options.snapshots.recheck(reference, { ...input, signal });
-        return current.state === "current" && validDescriptionContext(context);
-      },
-      resolveSnapshot: (supplied, signal) => {
-        if (supplied !== reference || signal.aborted || !validDescriptionContext(context))
-          return Promise.resolve(undefined);
-        const content = options.snapshots.read(
-          reference,
-          context.accessScope,
-          context.correlationId,
-        );
-        return Promise.resolve(
-          content === undefined
-            ? undefined
-            : {
-                snapshot: content.snapshot,
-                evidence: content.files.map((file) => ({
-                  evidenceId: file.evidenceId,
-                  text: JSON.stringify(file),
-                })),
-              },
-        );
-      },
+      revalidateAuthority: generationAuthorityRevalidator(options, context, reference, input),
+      resolveSnapshot: generationSnapshotResolver(options, context, reference),
     },
   );
 }
