@@ -312,3 +312,260 @@ describe("GitChangeScopePill", () => {
     expect(results).toHaveNoViolations();
   });
 });
+
+// #3400 final-audit F5: before the apply action and its Preview -> Approve -> Apply affordance
+// existed, a PR-connected scope rendered no `git-change-description-*` controls at all — every
+// `getByTestId`/`getByRole` lookup below failed with "Unable to find an element" before this UI
+// was added. Renders nothing for a comparison-only scope (no `pullRequestNumber`), covered above.
+describe("GitChangeScopePill — description apply affordance (#3400 final-audit F5)", () => {
+  function applicationStatusFixture(
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      schemaVersion: "1",
+      state: "current",
+      reason: "applied",
+      binding: {
+        repositoryId: "repo-1",
+        remoteDigest: "a".repeat(64),
+        repository: "oscharko-dev/Keiko",
+        prNumber: 1499,
+        prExternalId: "1499",
+        baseRef: "dev",
+        baseSha: "b".repeat(40),
+        headRepository: "oscharko-dev/Keiko",
+        headRef: "feature/x",
+        headSha: "c".repeat(40),
+        isDraft: false,
+        snapshotDigest: "d".repeat(64),
+        draftDigest: "e".repeat(64),
+        renderingVersion: "1",
+        expectedBodyDigest: "f".repeat(64),
+        outsideRegionDigest: "0".repeat(64),
+        finalBodyDigest: "1".repeat(64),
+        providerUpdatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      observedAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2026-01-01T00:00:30.000Z",
+      completeness: "complete",
+      effect: "confirmed",
+      concurrency: "read-check-write-verify",
+      ...overrides,
+    };
+  }
+
+  function prScope(overrides: Partial<ChatGitChangeScope> = {}): ChatGitChangeScope {
+    return makeGitChangeScope({ pullRequestNumber: 1499, ...overrides });
+  }
+
+  it("renders no description controls for a comparison-only scope (no pull request)", () => {
+    const chat = makeChat({ gitChangeScopes: [makeGitChangeScope()] });
+    render(<GitChangeScopePill chat={chat} updateScopes={vi.fn()} refreshScope={vi.fn()} />);
+    expect(screen.queryByTestId("git-change-description-panel")).not.toBeInTheDocument();
+  });
+
+  it("runs preview -> approve -> apply and renders the final applied status", async () => {
+    const chat = makeChat({ gitChangeScopes: [prScope()] });
+    const previewDescription = vi.fn().mockResolvedValue({
+      outcome: "preview",
+      preview: {
+        proposalId: "prop-1",
+        expiresAt: "2026-01-01T00:00:30.000Z",
+        status: applicationStatusFixture(),
+        finalBody: "generated body",
+        managedRegion: "generated body",
+        concurrencyLimitation: "x",
+      },
+    });
+    const approveDescription = vi
+      .fn()
+      .mockResolvedValue({ schemaVersion: "1", proposalId: "prop-1", expiresAt: "x" });
+    const applyDescription = vi
+      .fn()
+      .mockResolvedValue({ outcome: "observed", status: applicationStatusFixture() });
+    const user = userEvent.setup();
+    render(
+      <GitChangeScopePill
+        chat={chat}
+        updateScopes={vi.fn()}
+        refreshScope={vi.fn()}
+        previewDescription={previewDescription}
+        approveDescription={approveDescription}
+        applyDescription={applyDescription}
+      />,
+    );
+
+    await user.click(screen.getByTestId("git-change-description-preview"));
+    await waitFor(() => expect(previewDescription).toHaveBeenCalledWith(chat, prScope(), "en"));
+    await waitFor(() =>
+      expect(screen.getByTestId("git-change-description-state")).toHaveTextContent("Current"),
+    );
+
+    await user.click(screen.getByTestId("git-change-description-approve"));
+    await waitFor(() => expect(approveDescription).toHaveBeenCalledWith(chat, prScope(), "prop-1"));
+
+    await user.click(screen.getByTestId("git-change-description-apply"));
+    await waitFor(() => expect(applyDescription).toHaveBeenCalledWith(chat, "rel-1", "prop-1"));
+
+    // One-use: applying clears the approved proposal, so a second Apply click never re-fires.
+    await user.click(screen.getByTestId("git-change-description-apply"));
+    expect(applyDescription).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables approve for a stale connected scope, even if a proposal was already previewed", async () => {
+    // The scope starts current (so preview succeeds and yields a real proposalId), then a refresh
+    // flips it stale — Approve must refuse even though a fresh, un-consumed proposal exists.
+    const chat = makeChat({ gitChangeScopes: [prScope({ descriptionStatus: "current" })] });
+    const previewDescription = vi.fn().mockResolvedValue({
+      outcome: "preview",
+      preview: {
+        proposalId: "prop-1",
+        expiresAt: "x",
+        status: applicationStatusFixture(),
+        finalBody: "x",
+        managedRegion: "x",
+        concurrencyLimitation: "x",
+      },
+    });
+    const approveDescription = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <GitChangeScopePill
+        chat={chat}
+        updateScopes={vi.fn()}
+        refreshScope={vi.fn()}
+        previewDescription={previewDescription}
+        approveDescription={approveDescription}
+      />,
+    );
+    await user.click(screen.getByTestId("git-change-description-preview"));
+    await waitFor(() => expect(previewDescription).toHaveBeenCalled());
+    expect(screen.getByTestId("git-change-description-approve")).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    rerender(
+      <GitChangeScopePill
+        chat={makeChat({ gitChangeScopes: [prScope({ descriptionStatus: "stale" })] })}
+        updateScopes={vi.fn()}
+        refreshScope={vi.fn()}
+        previewDescription={previewDescription}
+        approveDescription={approveDescription}
+      />,
+    );
+    expect(screen.getByTestId("git-change-description-approve")).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await user.click(screen.getByTestId("git-change-description-approve"));
+    expect(approveDescription).not.toHaveBeenCalled();
+  });
+
+  it("disables apply for a stale connected scope, even after the proposal was approved", async () => {
+    // Preview + approve succeed while current, then a refresh flips the scope stale before Apply
+    // is clicked — Apply must refuse the already-approved proposal rather than reaching the
+    // one-use apply action for a description that may no longer match the live PR.
+    const chat = makeChat({ gitChangeScopes: [prScope({ descriptionStatus: "current" })] });
+    const previewDescription = vi.fn().mockResolvedValue({
+      outcome: "preview",
+      preview: {
+        proposalId: "prop-1",
+        expiresAt: "x",
+        status: applicationStatusFixture(),
+        finalBody: "x",
+        managedRegion: "x",
+        concurrencyLimitation: "x",
+      },
+    });
+    const approveDescription = vi
+      .fn()
+      .mockResolvedValue({ schemaVersion: "1", proposalId: "prop-1", expiresAt: "x" });
+    const applyDescription = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <GitChangeScopePill
+        chat={chat}
+        updateScopes={vi.fn()}
+        refreshScope={vi.fn()}
+        previewDescription={previewDescription}
+        approveDescription={approveDescription}
+        applyDescription={applyDescription}
+      />,
+    );
+    await user.click(screen.getByTestId("git-change-description-preview"));
+    await waitFor(() => expect(previewDescription).toHaveBeenCalled());
+    await user.click(screen.getByTestId("git-change-description-approve"));
+    await waitFor(() => expect(approveDescription).toHaveBeenCalled());
+    expect(screen.getByTestId("git-change-description-apply")).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    rerender(
+      <GitChangeScopePill
+        chat={makeChat({ gitChangeScopes: [prScope({ descriptionStatus: "stale" })] })}
+        updateScopes={vi.fn()}
+        refreshScope={vi.fn()}
+        previewDescription={previewDescription}
+        approveDescription={approveDescription}
+        applyDescription={applyDescription}
+      />,
+    );
+    expect(screen.getByTestId("git-change-description-apply")).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await user.click(screen.getByTestId("git-change-description-apply"));
+    expect(applyDescription).not.toHaveBeenCalled();
+  });
+
+  it("renders a blocked outcome's state and reason code body-free, never a raw error body", async () => {
+    const chat = makeChat({ gitChangeScopes: [prScope()] });
+    const previewDescription = vi
+      .fn()
+      .mockResolvedValue({ outcome: "blocked", reason: "authority-denied" });
+    const user = userEvent.setup();
+    render(
+      <GitChangeScopePill
+        chat={chat}
+        updateScopes={vi.fn()}
+        refreshScope={vi.fn()}
+        previewDescription={previewDescription}
+      />,
+    );
+
+    await user.click(screen.getByTestId("git-change-description-preview"));
+    await waitFor(() =>
+      expect(screen.getByTestId("git-change-description-state")).toHaveTextContent(
+        "Blocked (authority-denied)",
+      ),
+    );
+  });
+
+  it("surfaces a preview wire error via role=alert, body-free", async () => {
+    const chat = makeChat({ gitChangeScopes: [prScope()] });
+    const previewDescription = vi.fn().mockRejectedValue(new Error("offline"));
+    const user = userEvent.setup();
+    render(
+      <GitChangeScopePill
+        chat={chat}
+        updateScopes={vi.fn()}
+        refreshScope={vi.fn()}
+        previewDescription={previewDescription}
+      />,
+    );
+
+    await user.click(screen.getByTestId("git-change-description-preview"));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("offline"));
+  });
+
+  it("jest-axe: no violations with the description apply affordance rendered", async () => {
+    const chat = makeChat({ gitChangeScopes: [prScope()] });
+    const { container } = render(
+      <GitChangeScopePill chat={chat} updateScopes={vi.fn()} refreshScope={vi.fn()} />,
+    );
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+});

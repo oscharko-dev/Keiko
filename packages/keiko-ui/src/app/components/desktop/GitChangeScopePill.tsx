@@ -202,14 +202,18 @@ function descriptionResultState(
   return "blocked";
 }
 
-function descriptionResultReason(result: PrDescriptionApplicationResultWire | undefined): string | undefined {
+function descriptionResultReason(
+  result: PrDescriptionApplicationResultWire | undefined,
+): string | undefined {
   if (result === undefined) return undefined;
   if (result.outcome === "preview") return result.preview.status.reason;
   if (result.outcome === "observed") return result.status.reason;
   return result.reason;
 }
 
-function descriptionProposalId(result: PrDescriptionApplicationResultWire | undefined): string | undefined {
+function descriptionProposalId(
+  result: PrDescriptionApplicationResultWire | undefined,
+): string | undefined {
   return result?.outcome === "preview" ? result.preview.proposalId : undefined;
 }
 
@@ -285,9 +289,80 @@ interface GitChangeDescriptionActionsState {
   readonly runApply: () => void;
 }
 
-// Extracted so GitChangePillItem stays under the max-lines-per-function bar; mirrors
-// useGitChangePillActions' busy/error/ref shape one level up (preview -> approve -> apply is a
-// strict, one-use-approval chain, never a free-text composer — Frozen Decisions 5/6).
+interface DescriptionRunnerFns {
+  readonly preview: PreviewGitChangeDescriptionFn;
+  readonly approve: ApproveGitChangeDescriptionFn;
+  readonly apply: ApplyGitChangeDescriptionFn;
+}
+
+interface DescriptionRunnerState {
+  readonly busy: boolean;
+  // Preview stays available while stale (it is how a stale description gets refreshed); approve
+  // and apply must refuse a stale proposal even if a stray click reaches the handler, not just
+  // report canApprove/canApply as false for rendering (mirrors GovernedPullRequestCard's own
+  // `state !== "stale"` gate on the underlying action, not only on the button's disabled state).
+  readonly stale: boolean;
+  readonly language: PrDescriptionLanguage;
+  readonly proposalId: string | undefined;
+  readonly approvedProposalId: string | undefined;
+  readonly setResult: (result: PrDescriptionApplicationResultWire) => void;
+  readonly setApprovedProposalId: (id: string | undefined) => void;
+  readonly setApplied: (applied: boolean) => void;
+}
+
+// Extracted so useGitChangeDescriptionActions stays under the max-lines-per-function bar. The
+// preview -> approve -> apply chain is a strict, one-use-approval sequence, never a free-text
+// composer (Frozen Decisions 5/6): each runner only advances from the state the PREVIOUS step
+// produced (a fresh proposalId from preview, an approved proposalId from approve).
+function buildDescriptionRunners(
+  ctx: DescriptionRunContext,
+  fns: DescriptionRunnerFns,
+  state: DescriptionRunnerState,
+): {
+  readonly runPreview: () => void;
+  readonly runApprove: () => void;
+  readonly runApply: () => void;
+} {
+  const { chat, scope } = ctx;
+  const runPreview = (): void => {
+    if (state.busy) return;
+    void runDescriptionAction(
+      ctx,
+      () => fns.preview(chat, scope, state.language),
+      (next) => {
+        state.setResult(next);
+        state.setApprovedProposalId(undefined);
+        state.setApplied(false);
+      },
+    );
+  };
+  const runApprove = (): void => {
+    const proposalId = state.proposalId;
+    if (state.busy || state.stale || proposalId === undefined) return;
+    void runDescriptionAction(
+      ctx,
+      () => fns.approve(chat, scope, proposalId),
+      () => state.setApprovedProposalId(proposalId),
+    );
+  };
+  const runApply = (): void => {
+    const proposalId = state.approvedProposalId;
+    if (state.busy || state.stale || proposalId === undefined) return;
+    void runDescriptionAction(
+      ctx,
+      () => fns.apply(chat, scope.relationshipId, proposalId),
+      (next) => {
+        state.setResult(next);
+        state.setApplied(true);
+        state.setApprovedProposalId(undefined);
+      },
+    );
+  };
+  return { runPreview, runApprove, runApply };
+}
+
+// Extracted from GitChangePillItem so it stays under the max-lines-per-function bar; mirrors
+// useGitChangePillActions' busy/error shape one level up.
 function useGitChangeDescriptionActions(
   props: GitChangeDescriptionActionsProps,
 ): GitChangeDescriptionActionsState {
@@ -301,36 +376,20 @@ function useGitChangeDescriptionActions(
   const ctx: DescriptionRunContext = { chat, scope, t, setBusy, setError };
   const proposalId = descriptionProposalId(result);
   const stale = scope.descriptionStatus === "stale" || descriptionResultState(result) === "stale";
-
-  const runPreview = (): void => {
-    if (busy) return;
-    void runDescriptionAction(ctx, () => previewDescription(chat, scope, language), (next) => {
-      setResult(next);
-      setApprovedProposalId(undefined);
-      setApplied(false);
-    });
-  };
-  const runApprove = (): void => {
-    if (busy || proposalId === undefined) return;
-    void runDescriptionAction(
-      ctx,
-      () => approveDescription(chat, scope, proposalId),
-      () => setApprovedProposalId(proposalId),
-    );
-  };
-  const runApply = (): void => {
-    if (busy || approvedProposalId === undefined) return;
-    const proposalToApply = approvedProposalId;
-    void runDescriptionAction(
-      ctx,
-      () => applyDescription(chat, scope.relationshipId, proposalToApply),
-      (next) => {
-        setResult(next);
-        setApplied(true);
-        setApprovedProposalId(undefined);
-      },
-    );
-  };
+  const { runPreview, runApprove, runApply } = buildDescriptionRunners(
+    ctx,
+    { preview: previewDescription, approve: approveDescription, apply: applyDescription },
+    {
+      busy,
+      stale,
+      language,
+      proposalId,
+      approvedProposalId,
+      setResult,
+      setApprovedProposalId,
+      setApplied,
+    },
+  );
 
   return {
     busy,
@@ -544,42 +603,69 @@ function useGitChangePillActions(props: GitChangePillItemProps): GitChangePillAc
   };
 }
 
+function GitChangePillRow({
+  scope,
+  busy,
+  disconnectRef,
+  handleDisconnect,
+  handleRefresh,
+  t,
+}: {
+  readonly scope: ChatGitChangeScope;
+  readonly busy: boolean;
+  readonly disconnectRef: RefObject<HTMLButtonElement | null>;
+  readonly handleDisconnect: () => void;
+  readonly handleRefresh: () => void;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const accessibleLabel = t("gitChangeScope.pill.accessible", { label: scope.comparisonLabel });
+  return (
+    <span className="scope-pill">
+      <span aria-hidden="true">⇄</span>
+      <span aria-label={accessibleLabel}>{scope.comparisonLabel}</span>
+      <span className={STATUS_BADGE_CLASS[scope.descriptionStatus]}>
+        {t(STATUS_LABEL_KEY[scope.descriptionStatus])}
+      </span>
+      <button
+        type="button"
+        className="scope-pill-disconnect"
+        aria-disabled={busy}
+        aria-label={t("gitChangeScope.refresh.aria", { label: scope.comparisonLabel })}
+        title={t("gitChangeScope.refresh.title")}
+        onClick={handleRefresh}
+      >
+        <span aria-hidden="true">↻</span>
+      </button>
+      <button
+        type="button"
+        ref={disconnectRef}
+        className="scope-pill-disconnect"
+        aria-disabled={busy}
+        aria-label={t("gitChangeScope.disconnect.aria", { label: scope.comparisonLabel })}
+        title={t("gitChangeScope.disconnect.title", { label: scope.comparisonLabel })}
+        onClick={handleDisconnect}
+      >
+        <span aria-hidden="true">×</span>
+      </button>
+    </span>
+  );
+}
+
 function GitChangePillItem(props: GitChangePillItemProps): ReactNode {
   const { chat, scope, t, previewDescription, approveDescription, applyDescription } = props;
   const { busy, error, disconnectRef, handleDisconnect, handleRefresh } =
     useGitChangePillActions(props);
-  const accessibleLabel = t("gitChangeScope.pill.accessible", { label: scope.comparisonLabel });
 
   return (
     <span className="scope-pill-wrap">
-      <span className="scope-pill">
-        <span aria-hidden="true">⇄</span>
-        <span aria-label={accessibleLabel}>{scope.comparisonLabel}</span>
-        <span className={STATUS_BADGE_CLASS[scope.descriptionStatus]}>
-          {t(STATUS_LABEL_KEY[scope.descriptionStatus])}
-        </span>
-        <button
-          type="button"
-          className="scope-pill-disconnect"
-          aria-disabled={busy}
-          aria-label={t("gitChangeScope.refresh.aria", { label: scope.comparisonLabel })}
-          title={t("gitChangeScope.refresh.title")}
-          onClick={handleRefresh}
-        >
-          <span aria-hidden="true">↻</span>
-        </button>
-        <button
-          type="button"
-          ref={disconnectRef}
-          className="scope-pill-disconnect"
-          aria-disabled={busy}
-          aria-label={t("gitChangeScope.disconnect.aria", { label: scope.comparisonLabel })}
-          title={t("gitChangeScope.disconnect.title", { label: scope.comparisonLabel })}
-          onClick={handleDisconnect}
-        >
-          <span aria-hidden="true">×</span>
-        </button>
-      </span>
+      <GitChangePillRow
+        scope={scope}
+        busy={busy}
+        disconnectRef={disconnectRef}
+        handleDisconnect={handleDisconnect}
+        handleRefresh={handleRefresh}
+        t={t}
+      />
       <span className="scope-pill-detail">{countsLabel(scope, t)}</span>
       {error !== null ? (
         <span role="alert" className="scope-connect-error">
