@@ -140,7 +140,12 @@ describe("prepareGitDeliveryRequest — repository-mismatch activity log line", 
     const deps: UiHandlerDeps = {
       config: undefined,
       configPresent: false,
-      evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
       env: {},
       redactor: buildRedactor({}),
       registry: createRunRegistry(),
@@ -165,14 +170,15 @@ describe("prepareGitDeliveryRequest — repository-mismatch activity log line", 
       ok: false,
       result: { status: 403, body: { error: { code: "REPOSITORY_MISMATCH" } } },
     });
-    const mismatchEvent = sink.events.find((event) => event.op === "git.delivery.repository.mismatch");
+    const mismatchEvent = sink.events.find(
+      (event) => event.op === "git.delivery.repository.mismatch",
+    );
     expect(mismatchEvent).toBeDefined();
     expect(mismatchEvent?.level).toBe("warn");
     expect(mismatchEvent?.correlationId).toBe("11111111-1111-4111-8111-111111111111");
     expect(typeof mismatchEvent?.errorKind).toBe("string");
     const extra = mismatchEvent?.extra as
-      | { readonly frames?: readonly string[]; readonly causeChain?: readonly string[] }
-      | undefined;
+      { readonly frames?: readonly string[]; readonly causeChain?: readonly string[] } | undefined;
     expect(Array.isArray(extra?.frames)).toBe(true);
     expect(Array.isArray(extra?.causeChain)).toBe(true);
   });

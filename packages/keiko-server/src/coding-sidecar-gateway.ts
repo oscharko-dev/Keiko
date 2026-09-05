@@ -163,9 +163,7 @@ function settleSpendReservation(reservation: SpendReservation, actualCostUsd?: n
 }
 
 type SpendBudgetRejectionReason =
-  | "spend-budget-invalid"
-  | "spend-pricing-unavailable"
-  | "spend-budget-exceeded";
+  "spend-budget-invalid" | "spend-pricing-unavailable" | "spend-budget-exceeded";
 
 type SpendBudgetOutcome =
   | { readonly kind: "rejected"; readonly reason: SpendBudgetRejectionReason }
@@ -1605,25 +1603,33 @@ async function streamGatewayChat(
     spendReservation,
   );
   try {
-    if (!beginGatewayStream(session)) return STREAMING;
-    const cancelIterator = (): void => {
-      void iterator.return?.();
-    };
-    cancellationSignal.addEventListener("abort", cancelIterator, { once: true });
-    try {
-      await pumpGatewayStream(session);
-    } catch (error) {
-      emitGatewayStreamFailureDiagnostic(ctx, deps, error);
-      settleGatewayStreamError(session);
-    } finally {
-      cancellationSignal.removeEventListener("abort", cancelIterator);
-    }
+    if (beginGatewayStream(session)) await pumpGatewayStreamWithCancellation(ctx, deps, session);
     return STREAMING;
   } finally {
     // Every exit path above returns/throws without necessarily having observed real usage
     // (cancelled before the first chunk, mid-stream failure, or budget/cancellation cutoff).
     // Idempotent: a no-op once `streamGatewayResponse` has already settled with real usage.
     settleSpendReservation(session.spendReservation);
+  }
+}
+
+async function pumpGatewayStreamWithCancellation(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  session: GatewayStreamSession,
+): Promise<void> {
+  const { cancellationSignal, iterator } = session;
+  const cancelIterator = (): void => {
+    void iterator.return?.();
+  };
+  cancellationSignal.addEventListener("abort", cancelIterator, { once: true });
+  try {
+    await pumpGatewayStream(session);
+  } catch (error) {
+    emitGatewayStreamFailureDiagnostic(ctx, deps, error);
+    settleGatewayStreamError(session);
+  } finally {
+    cancellationSignal.removeEventListener("abort", cancelIterator);
   }
 }
 

@@ -678,15 +678,43 @@ describe("EditorAgentAuthorityRegistry.settleRuntimePromptTokens", () => {
     });
   });
 
-  it("floors at zero instead of going negative when actual usage settles below a prior settlement", () => {
+  it("rejects an over-refund instead of erasing already-booked usage and manufacturing budget", () => {
     const { registry, reference } = registeredRuntime({
       budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPromptTokens: 100, maxPatchBytes: 1 },
     });
 
     expect(registry.reserveRuntimePromptTokens(reference, 10, NOW)).toEqual({ ok: true });
-    // Settling for more than is currently booked must clamp at zero, never underflow negative.
-    expect(registry.settleRuntimePromptTokens(reference, 500, 0, NOW)).toEqual({ ok: true });
-    expect(registry.reserveRuntimePromptTokens(reference, 100, NOW)).toEqual({ ok: true });
+    // Only 10 tokens were ever booked on this record. Claiming a 500-token refund must be
+    // rejected outright — clamping the result to zero would silently hand back budget (90
+    // tokens' worth) that was never actually reserved, letting a single bogus settlement erase
+    // real, unrelated usage on the same run.
+    expect(registry.settleRuntimePromptTokens(reference, 500, 0, NOW)).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
+    // Proof the rejection left the ledger untouched: exactly 90 of the 100-token budget remains
+    // (10 still booked) — not the full 100 an accepted over-refund would have wrongly restored.
+    expect(registry.reserveRuntimePromptTokens(reference, 90, NOW)).toEqual({ ok: true });
+    expect(registry.reserveRuntimePromptTokens(reference, 1, NOW)).toEqual({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    });
+  });
+
+  it("rejects a replayed settlement once the first application already reduced the booked total", () => {
+    const { registry, reference } = registeredRuntime({
+      budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPromptTokens: 1_000, maxPatchBytes: 1 },
+    });
+
+    expect(registry.reserveRuntimePromptTokens(reference, 900, NOW)).toEqual({ ok: true });
+    expect(registry.settleRuntimePromptTokens(reference, 900, 40, NOW)).toEqual({ ok: true });
+    // A second, replayed settlement of the SAME reservation must not succeed a second time: only
+    // 40 tokens remain booked, so claiming to refund the original 900-token reservation again is
+    // rejected rather than double-subtracting it from the ledger.
+    expect(registry.settleRuntimePromptTokens(reference, 900, 0, NOW)).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
   });
 
   it("rejects a non-finite or negative usage count instead of silently coercing it", () => {

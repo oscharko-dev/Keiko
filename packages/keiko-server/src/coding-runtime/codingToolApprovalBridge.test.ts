@@ -257,3 +257,107 @@ describe("coding tool approval bridge capacity", () => {
     ).toBe(true);
   });
 });
+
+// 3941816393 / authority-matrix-2: "git ci" and "connector" are approvable through the same
+// pendingPermission mechanism as command/verification, not a second one. These pin the bridge half
+// of that redemption directly, independent of codingToolAuthorityPort.ts's admission wiring.
+describe("coding tool approval bridge redeems git-ci and connector observations", () => {
+  it("observes, activates, and one-shot consumes a git-ci approval", () => {
+    const bridge = createCodingToolApprovalBridge();
+    const request = {
+      action: "git" as const,
+      operation: "ci" as const,
+      actionId: "ci-observe",
+      idempotencyKey: "ci-observe",
+    };
+    expect(
+      bridge.observePermission({
+        runId: RUN_ID,
+        requestId: "permission-ci",
+        action: request.action,
+        actionId: request.actionId,
+        idempotencyKey: request.idempotencyKey,
+        targetId: "ci",
+        proof: {
+          approvalId: request.actionId,
+          approvalDigest: codingToolApprovalBindingDigest(RUN_ID, request),
+        },
+        expiresAt: EXPIRES_AT,
+        nowMs: NOW_MS,
+      }),
+    ).toBe(true);
+    expect(
+      bridge.activatePermission({
+        runId: RUN_ID,
+        requestId: "permission-ci",
+        approvalAuthorityDigest: "a".repeat(64),
+        expiresAtMs: Date.parse(EXPIRES_AT),
+        nowMs: NOW_MS,
+      }),
+    ).toBe(true);
+    const approvalProof = {
+      approvalId: request.actionId,
+      approvalDigest: codingToolApprovalBindingDigest(RUN_ID, request),
+    };
+    expect(
+      bridge.matches({ runId: RUN_ID, request: { ...request, approvalProof }, nowMs: NOW_MS }),
+    ).toBe(true);
+    expect(
+      bridge.consume({ runId: RUN_ID, request: { ...request, approvalProof }, nowMs: NOW_MS }),
+    ).toBe(true);
+    // One-shot: the same proof cannot be redeemed a second time.
+    expect(
+      bridge.consume({ runId: RUN_ID, request: { ...request, approvalProof }, nowMs: NOW_MS }),
+    ).toBe(false);
+  });
+
+  it("observes, activates, and one-shot consumes a connector approval bound to its scope", () => {
+    const bridge = createCodingToolApprovalBridge();
+    const request = {
+      action: "connector" as const,
+      actionId: "connector-observe",
+      idempotencyKey: "connector-observe",
+      scope: "issue-tracker.read",
+    };
+    expect(
+      bridge.observePermission({
+        runId: RUN_ID,
+        requestId: "permission-connector",
+        action: request.action,
+        actionId: request.actionId,
+        idempotencyKey: request.idempotencyKey,
+        targetId: request.scope,
+        proof: {
+          approvalId: request.actionId,
+          approvalDigest: codingToolApprovalBindingDigest(RUN_ID, request),
+        },
+        expiresAt: EXPIRES_AT,
+        nowMs: NOW_MS,
+      }),
+    ).toBe(true);
+    expect(
+      bridge.activatePermission({
+        runId: RUN_ID,
+        requestId: "permission-connector",
+        approvalAuthorityDigest: "a".repeat(64),
+        expiresAtMs: Date.parse(EXPIRES_AT),
+        nowMs: NOW_MS,
+      }),
+    ).toBe(true);
+    const approvalProof = {
+      approvalId: request.actionId,
+      approvalDigest: codingToolApprovalBindingDigest(RUN_ID, request),
+    };
+    // A different scope than the one reviewed and approved must never match this approval.
+    expect(
+      bridge.consume({
+        runId: RUN_ID,
+        request: { ...request, scope: "issue-tracker.write", approvalProof },
+        nowMs: NOW_MS,
+      }),
+    ).toBe(false);
+    expect(
+      bridge.consume({ runId: RUN_ID, request: { ...request, approvalProof }, nowMs: NOW_MS }),
+    ).toBe(true);
+  });
+});

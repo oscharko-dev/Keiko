@@ -108,6 +108,21 @@ function withRepairBudgetExhaustion(
     ? { ...summary, reason: "repair-budget-exhausted" }
     : summary;
 }
+function assessedSummary(
+  draft: DraftDeliveryRecord,
+  result: GitCiFactsResult,
+): {
+  readonly assessment: GitCiAssessment | undefined;
+  readonly summary: Omit<GitCiAssessment, "checks">;
+} {
+  const assessment = result.status === "observed" ? assessGitCiFacts(result) : undefined;
+  if (assessment !== undefined) return { assessment, summary: assessment };
+  const failure: GitDeliveryObservationFailure =
+    result.status === "unavailable"
+      ? result.failure
+      : { state: "unknown", reason: "malformed-response" };
+  return { assessment: undefined, summary: fallback(draft, failure) };
+}
 /** Only body-free counts and exact identity enter durable runtime evidence; transient source IDs remain outside. */
 export function produceCiReadinessSnapshot(
   draft: DraftDeliveryRecord,
@@ -119,17 +134,8 @@ export function produceCiReadinessSnapshot(
     throw new TypeError("Invalid CI observation binding or time");
   if (!boundFacts(draft, result))
     throw new TypeError("CI observation does not match accepted draft");
-  const assessment = result.status === "observed" ? assessGitCiFacts(result) : undefined;
-  const summary = withRepairBudgetExhaustion(
-    assessment ??
-      fallback(
-        draft,
-        result.status === "unavailable"
-          ? result.failure
-          : { state: "unknown", reason: "malformed-response" },
-      ),
-    repairBudgetExhausted,
-  );
+  const { assessment, summary: baseSummary } = assessedSummary(draft, result);
+  const summary = withRepairBudgetExhaustion(baseSummary, repairBudgetExhausted);
   const fields = {
     ...snapshotFields(draft, result, observedAtMs, summary),
     ...failureIdentity(assessment),

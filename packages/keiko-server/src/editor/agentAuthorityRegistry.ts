@@ -339,7 +339,9 @@ export class EditorAgentAuthorityRegistry {
     }
     const resolved = this.resolveRetainedRuntime(reference, nowIso);
     if (!resolved.ok) return resolved;
-    settlePromptTokens(resolved.record, reservedPromptTokens, actualPromptTokens);
+    if (!settlePromptTokens(resolved.record, reservedPromptTokens, actualPromptTokens)) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
     return { ok: true };
   }
 
@@ -662,16 +664,26 @@ function reserveUsage(
   return true;
 }
 
-/** See {@link EditorAgentAuthorityRegistry.settleRuntimePromptTokens} for the reconciliation. */
+/**
+ * See {@link EditorAgentAuthorityRegistry.settleRuntimePromptTokens} for the reconciliation.
+ * Returns false — and books nothing — when `reservedPromptTokens` exceeds what is currently
+ * booked on the record. There is no per-call reservation identity to bind to (the ledger holds
+ * only one running total per run), so this is the strongest check available: a settlement can
+ * never claim to refund more than the record actually has outstanding, which also rejects a
+ * replayed settlement once its first application has already reduced the booked total below the
+ * replayed `reservedPromptTokens` (reviewer 3941836283).
+ */
 function settlePromptTokens(
   record: AuthorityRecord,
   reservedPromptTokens: number,
   actualPromptTokens: number,
-): void {
+): boolean {
+  if (reservedPromptTokens > record.usage.promptTokens) return false;
   record.usage.promptTokens = Math.max(
     0,
     record.usage.promptTokens - reservedPromptTokens + actualPromptTokens,
   );
+  return true;
 }
 
 function validUsageCount(value: number): boolean {

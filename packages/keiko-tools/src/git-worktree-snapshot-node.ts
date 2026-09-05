@@ -50,9 +50,6 @@ export const GIT_WORKTREE_READ_COMMAND_RULES: readonly CommandRule[] = Object.fr
       "ls-files",
       "ls-tree",
       "cat-file",
-      // Read-only version banner, permitted ONLY so this lane can probe its own lazy-fetch-guard
-      // support (see `probeGitLazyFetchGuardSupport` below) before trusting any other read.
-      "version",
     ]),
     valueFlags: Object.freeze([
       "-C",
@@ -189,17 +186,18 @@ export class GitWorktreeReadError extends Error {
 // lane performs — the equivalent of the `--no-lazy-fetch --no-replace-objects` CLI flags, per git's
 // own docs. But git's environment.c gained the GIT_NO_LAZY_FETCH check in the SAME release that
 // added the CLI flag (2.45): on the git 2.43 that `ubuntu-latest` ships, the pinned env var is
-// silently IGNORED, not merely a redundant duplicate of an absent flag. In a promisor/partial clone
-// that gap lets a "read-only" status/diff/cat-file fetch a missing object over the network and write
-// it into the object database. There is no CLI-flag or env-var form of this guard that git 2.43
-// honours, so the only fail-closed option on an unsupported git is to refuse the read rather than
-// perform it unprotected (reviewer 3941836280).
+// silently IGNORED, not merely a redundant duplicate of an absent flag. That only matters for a
+// PROMISOR (partial) clone — an ordinary clone has no promisor remote to lazily fetch from, so the
+// guard protects nothing there and must not refuse those reads (every read in this lane's own test
+// suite runs against a plain `git init` repository on whatever git the host happens to have). So a
+// read here is refused ONLY when BOTH hold: this repository has a promisor remote configured, AND
+// the installed git is too old to enforce the pinned env vars — reviewer 3941836280.
 export class GitLazyFetchGuardUnsupportedError extends GitWorktreeReadError {
   public constructor(gitVersion: string | undefined) {
     super(
       gitVersion === undefined
-        ? "git lazy-fetch guard support could not be determined; refusing read to fail closed"
-        : `git ${gitVersion} does not enforce GIT_NO_LAZY_FETCH; refusing read to fail closed`,
+        ? "git lazy-fetch guard support could not be determined for a promisor repository; refusing read to fail closed"
+        : `git ${gitVersion} does not enforce GIT_NO_LAZY_FETCH on this promisor repository; refusing read to fail closed`,
     );
     this.name = "GitLazyFetchGuardUnsupportedError";
   }
@@ -237,18 +235,82 @@ interface GitLazyFetchGuardSupport {
   readonly gitVersion: string | undefined;
 }
 
-// Detected once per spawn function (i.e. once per process in production, where every caller shares
-// `nodeSpawnFn`) and reused by every subsequent read — the installed git binary's version cannot
-// change mid-process, so re-probing on every command would only add latency, not safety.
-const lazyFetchGuardSupportCache = new WeakMap<SpawnFn, Promise<GitLazyFetchGuardSupport>>();
+// A dedicated, narrow rule set for the guard's own two probes (git's version banner and a read-only
+// local-scope config lookup) — STRUCTURALLY SEPARATE from the main read allowlist above (mirrors
+// git-mutation-node.ts's GLOBAL_SIGNING_POLICY_COMMAND_RULES) so neither probe widens what an
+// ordinary snapshot read may invoke, and "config" here can never reach a value-setting form: every
+// scope/write flag is denied, and the only argv this module ever builds for it is a fixed, literal
+// `--get-regexp` lookup.
+const GIT_LAZY_FETCH_GUARD_PROBE_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
+  {
+    executable: "git",
+    allowedSubcommands: Object.freeze(["version", "config"]),
+    valueFlags: Object.freeze([]),
+    denyFlags: Object.freeze([
+      "-c",
+      "-C",
+      "--config-env",
+      "--file",
+      "--blob",
+      "--system",
+      "--global",
+      "--worktree",
+      "--add",
+      "--replace-all",
+      "--unset",
+      "--unset-all",
+      "--rename-section",
+      "--remove-section",
+      "--edit",
+    ]),
+  },
+]);
 
-async function probeGitLazyFetchGuardSupport(ctx: ReadContext): Promise<GitLazyFetchGuardSupport> {
+async function runGuardProbe(ctx: ReadContext, argv: readonly string[]): Promise<CommandResult> {
+  const runDeps: RunCommandDeps = {
+    ...ctx.runDeps,
+    commandRules: GIT_LAZY_FETCH_GUARD_PROBE_COMMAND_RULES,
+    onTerminated: ctx.runDeps.onTerminated,
+  };
+  return runCommand(
+    { command: "git", args: [...argv], cwd: undefined, timeoutMs: ctx.timeoutMs, signal: ctx.signal },
+    runDeps,
+  );
+}
+
+// A promisor remote (`remote.<name>.promisor = true`) is what makes lazy fetch possible at all — a
+// repository without one has nothing for GIT_NO_LAZY_FETCH to guard, in any git version. Any
+// ambiguity (probe failure, non-zero/truncated exit) is treated as "cannot rule out a promisor
+// remote" rather than as "safe", so a broken probe falls through to the strict version gate instead
+// of silently skipping it.
+async function repositoryHasPromisorRemote(ctx: ReadContext): Promise<boolean> {
   let result: CommandResult;
   try {
-    result = await runReadResultUnguarded(ctx, ["version"]);
+    result = await runGuardProbe(ctx, [
+      "config",
+      "--local",
+      "--get-regexp",
+      String.raw`^remote\..*\.promisor$`,
+    ]);
+  } catch {
+    return true;
+  }
+  if (result.exitCode === 1 && result.stdout.trim().length === 0) return false;
+  if (result.exitCode !== 0 || result.truncated) return true;
+  return result.stdout
+    .trim()
+    .split("\n")
+    .some((line) => /\bpromisor\s+(?:true|yes|on|1)$/iu.test(line));
+}
+
+async function probeGitVersionGuardSupport(ctx: ReadContext): Promise<GitLazyFetchGuardSupport> {
+  let result: CommandResult;
+  try {
+    result = await runGuardProbe(ctx, ["version"]);
   } catch {
     return { supported: false, gitVersion: undefined };
   }
+  if (result.exitCode !== 0) return { supported: false, gitVersion: undefined };
   const version = parseGitVersionOutput(result.stdout);
   if (version === undefined) return { supported: false, gitVersion: undefined };
   return {
@@ -257,19 +319,42 @@ async function probeGitLazyFetchGuardSupport(ctx: ReadContext): Promise<GitLazyF
   };
 }
 
-function detectGitLazyFetchGuardSupport(ctx: ReadContext): Promise<GitLazyFetchGuardSupport> {
-  const spawn = ctx.runDeps.spawn;
-  const cached = lazyFetchGuardSupportCache.get(spawn);
+// Promisor-remote status is a property of the REPOSITORY (keyed by workspace root); the installed
+// git's version is a property of the PROCESS (keyed by the spawn function — one real binary in
+// production, a fresh fake per test). Caching each at its own natural scope means an at-risk
+// repository is never judged safe by another workspace's cached result, while an ordinary
+// (non-promisor) workspace never pays for a version probe it does not need.
+const promisorRiskCache = new Map<string, Promise<boolean>>();
+const gitVersionGuardSupportCache = new WeakMap<SpawnFn, Promise<GitLazyFetchGuardSupport>>();
+
+function cachedPromisorRisk(ctx: ReadContext): Promise<boolean> {
+  const key = ctx.runDeps.workspace.root;
+  const cached = promisorRiskCache.get(key);
   if (cached !== undefined) return cached;
-  const probe = probeGitLazyFetchGuardSupport(ctx);
-  lazyFetchGuardSupportCache.set(spawn, probe);
+  const probe = repositoryHasPromisorRemote(ctx);
+  promisorRiskCache.set(key, probe);
   return probe;
 }
 
+function cachedVersionGuardSupport(ctx: ReadContext): Promise<GitLazyFetchGuardSupport> {
+  const spawn = ctx.runDeps.spawn;
+  const cached = gitVersionGuardSupportCache.get(spawn);
+  if (cached !== undefined) return cached;
+  const probe = probeGitVersionGuardSupport(ctx);
+  gitVersionGuardSupportCache.set(spawn, probe);
+  return probe;
+}
+
+async function detectGitLazyFetchGuardSupport(ctx: ReadContext): Promise<GitLazyFetchGuardSupport> {
+  const atRisk = await cachedPromisorRisk(ctx);
+  if (!atRisk) return { supported: true, gitVersion: undefined };
+  return cachedVersionGuardSupport(ctx);
+}
+
 // Reused by git-mutation-node.ts (a structurally separate command-rule lane) so the SAME
-// version-gated fail-closed check protects the write path too, without letting it reach a `git
-// version` allowlist entry of its own — this probes through the read-only lane's rules regardless
-// of which lane's deps are handed in.
+// version-gated fail-closed check protects the write path too, without that lane needing a
+// `version`/`config` allowlist entry of its own — this probes through the read-only lane's own
+// dedicated rules regardless of which lane's deps are handed in.
 export async function ensureGitLazyFetchGuardSupported(
   deps: NodeGitWorktreeReaderDeps,
 ): Promise<void> {
@@ -283,12 +368,9 @@ async function runRead(ctx: ReadContext, argv: readonly string[]): Promise<strin
   return result.stdout;
 }
 
-// The actual spawn + exit-code translation, shared by every guarded read AND by the guard probe
-// itself (which must run unguarded — it IS the thing that determines whether the guard applies).
-async function runReadResultUnguarded(
-  ctx: ReadContext,
-  argv: readonly string[],
-): Promise<CommandResult> {
+async function runReadResult(ctx: ReadContext, argv: readonly string[]): Promise<CommandResult> {
+  const guard = await detectGitLazyFetchGuardSupport(ctx);
+  if (!guard.supported) throw new GitLazyFetchGuardUnsupportedError(guard.gitVersion);
   const runDeps: RunCommandDeps = { ...ctx.runDeps, onTerminated: ctx.runDeps.onTerminated };
   let result: CommandResult;
   try {
@@ -298,9 +380,9 @@ async function runReadResultUnguarded(
     // The CLI form of `--no-lazy-fetch` is a newer global option (absent on the git 2.43 that
     // `ubuntu-latest` ships): passing it made every read here exit 129 ("unknown option") on CI
     // while the same read stayed green on a workstation with a newer git — the guard itself is
-    // unweakened, only its incompatible, redundant CLI duplicate is gone. `runReadResult` below
-    // additionally refuses to reach this spawn at all when the installed git is too old for the
-    // pinned env vars to do anything.
+    // unweakened, only its incompatible, redundant CLI duplicate is gone. The check above refuses
+    // to reach this spawn at all for an at-risk (promisor) repository whose installed git is too
+    // old for the pinned env vars to do anything.
     result = await runCommand(
       {
         command: "git",
@@ -318,12 +400,6 @@ async function runReadResultUnguarded(
     throw new GitWorktreeReadError(`git ${argv[0] ?? "?"} exited ${String(result.exitCode)}`);
   }
   return result;
-}
-
-async function runReadResult(ctx: ReadContext, argv: readonly string[]): Promise<CommandResult> {
-  const guard = await detectGitLazyFetchGuardSupport(ctx);
-  if (!guard.supported) throw new GitLazyFetchGuardUnsupportedError(guard.gitVersion);
-  return runReadResultUnguarded(ctx, argv);
 }
 
 // ─── porcelain=v2 parsing ───────────────────────────────────────────────────────────────────

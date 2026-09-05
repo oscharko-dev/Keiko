@@ -20,6 +20,8 @@ import type { CodingToolGovernedPorts } from "./codingToolGovernedDelegate.js";
 import {
   codingRuntimeActionClassesForMode,
   codingRuntimeCommandPolicyForMode,
+  codingRuntimeConnectorScopesForMode,
+  codingRuntimeNetworkPolicyForMode,
   type CodingRuntimeCapabilityDelegationInput,
 } from "./runtimeAuthorityService.js";
 import { createBufferedServerLogSink } from "../observability/server-log.js";
@@ -133,7 +135,9 @@ function runtimeContext(): {
   };
 }
 
-function approvableRequest(action: "command" | "verification"): ApprovableToolRequest {
+function approvableRequest(
+  action: "command" | "verification",
+): Extract<ApprovableToolRequest, { readonly action: "command" | "verification" }> {
   const identity = {
     actionId: "action-approved",
     idempotencyKey: "action-approved",
@@ -227,6 +231,131 @@ describe("CodingToolAuthorityPort", () => {
       }).ok,
     ).toBe(true);
   });
+  // 3941816393 / authority-matrix-2: CI observation and connector reads are approval-required, not
+  // permanently denied, in governed-assist/supervised-coding. A per-run pendingPermission approval
+  // (the same review flow command/verification already redeem) makes them admittable there, exactly
+  // like the mode-derived envelope already does unconditionally at autonomous-delivery above.
+  it("admits CI at governed-assist once a redeemed pendingPermission approval matches the request", () => {
+    const envelope = restrictedEnvelope({
+      effectiveMode: "governed-assist",
+      actionClasses: codingRuntimeActionClassesForMode("governed-assist", true),
+      connectorScopes: codingRuntimeConnectorScopesForMode("governed-assist"),
+      networkPolicy: codingRuntimeNetworkPolicyForMode("governed-assist", true),
+    });
+    const authority = {
+      revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+    };
+    const approvalProofVerifier = createCodingToolApprovalBridge();
+    const port = createCodingToolAuthorityPort(authority, runtimeContext, { approvalProofVerifier });
+    const request = {
+      action: "git" as const,
+      operation: "ci" as const,
+      actionId: "ci-redeemed",
+      idempotencyKey: "ci-redeemed",
+    };
+
+    // Red (pre-fix behavior): denied even though the envelope already carries the connector scope
+    // and network egress -- verifyApprovalProof could not redeem anything for "git ci".
+    expect(port.admit("capability", request).ok).toBe(false);
+
+    expect(
+      approvalProofVerifier.observePermission({
+        runId: "run-authority-a",
+        requestId: "permission-ci-redeemed",
+        action: request.action,
+        actionId: request.actionId,
+        idempotencyKey: request.idempotencyKey,
+        targetId: "ci",
+        proof: {
+          approvalId: request.actionId,
+          approvalDigest: codingToolApprovalBindingDigest("run-authority-a", request),
+        },
+        expiresAt: "2026-07-12T09:05:00.000Z",
+        nowMs: Date.parse("2026-07-12T09:00:00.000Z"),
+      }),
+    ).toBe(true);
+    expect(
+      approvalProofVerifier.activatePermission({
+        runId: "run-authority-a",
+        requestId: "permission-ci-redeemed",
+        approvalAuthorityDigest: "c".repeat(64),
+        expiresAtMs: Date.parse("2026-07-12T09:05:00.000Z"),
+        nowMs: Date.parse("2026-07-12T09:00:00.000Z"),
+      }),
+    ).toBe(true);
+
+    const approved = {
+      ...request,
+      approvalProof: {
+        approvalId: request.actionId,
+        approvalDigest: codingToolApprovalBindingDigest("run-authority-a", request),
+      },
+    };
+    // Green: the redeemed approval admits the exact same action.
+    expect(port.admit("capability", approved).ok).toBe(true);
+    // One-shot: the same proof cannot be redeemed twice.
+    expect(port.admit("capability", approved).ok).toBe(false);
+  });
+
+  it("admits a connector read at supervised-coding once its scoped approval is redeemed, never a mismatched scope", () => {
+    const envelope = restrictedEnvelope({
+      effectiveMode: "supervised-coding",
+      actionClasses: codingRuntimeActionClassesForMode("supervised-coding", true),
+      connectorScopes: codingRuntimeConnectorScopesForMode("supervised-coding"),
+      networkPolicy: codingRuntimeNetworkPolicyForMode("supervised-coding", true),
+    });
+    const authority = {
+      revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+    };
+    const approvalProofVerifier = createCodingToolApprovalBridge();
+    const port = createCodingToolAuthorityPort(authority, runtimeContext, { approvalProofVerifier });
+    const request = {
+      action: "connector" as const,
+      actionId: "connector-redeemed",
+      idempotencyKey: "connector-redeemed",
+      scope: "source-control.read",
+    };
+
+    expect(port.admit("capability", request).ok).toBe(false);
+    expect(
+      approvalProofVerifier.observePermission({
+        runId: "run-authority-a",
+        requestId: "permission-connector-redeemed",
+        action: request.action,
+        actionId: request.actionId,
+        idempotencyKey: request.idempotencyKey,
+        targetId: request.scope,
+        proof: {
+          approvalId: request.actionId,
+          approvalDigest: codingToolApprovalBindingDigest("run-authority-a", request),
+        },
+        expiresAt: "2026-07-12T09:05:00.000Z",
+        nowMs: Date.parse("2026-07-12T09:00:00.000Z"),
+      }),
+    ).toBe(true);
+    expect(
+      approvalProofVerifier.activatePermission({
+        runId: "run-authority-a",
+        requestId: "permission-connector-redeemed",
+        approvalAuthorityDigest: "c".repeat(64),
+        expiresAtMs: Date.parse("2026-07-12T09:05:00.000Z"),
+        nowMs: Date.parse("2026-07-12T09:00:00.000Z"),
+      }),
+    ).toBe(true);
+
+    const approvalProof = {
+      approvalId: request.actionId,
+      approvalDigest: codingToolApprovalBindingDigest("run-authority-a", request),
+    };
+    // A scope the reviewer never saw must never redeem this approval.
+    expect(
+      port.admit("capability", { ...request, scope: "source-control.write", approvalProof }).ok,
+    ).toBe(false);
+    expect(port.admit("capability", { ...request, approvalProof }).ok).toBe(true);
+  });
+
   // B2-4: a raw git "write" bypasses the propose/stage review path entirely, so it carries
   // delivery's risk class and must require an approval proof unconditionally, in every mode --
   // never merely the connector scope alone, which (per deliveryScopeGranted) is present at every

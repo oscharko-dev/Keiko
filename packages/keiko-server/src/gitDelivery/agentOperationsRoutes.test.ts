@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -119,8 +120,23 @@ async function waitUntil(assertion: () => void): Promise<void> {
   throw lastError;
 }
 
+// #3384 B5-8 (wave-2 agent G "needs"): `prepareGitDeliveryRequest`'s repository-binding check now
+// binds every request's `ownerAndRepo` to the resolved workspace's own `origin` remote before
+// admitting it, so this fixture's project root must be a real checkout whose origin resolves to the
+// SAME "owner/repo" this file's `EXECUTE_PAYLOADS` already names for `pull-request`/`merge` —
+// mirrors `prRoutes.test.ts`/`mergeRoutes.test.ts`'s identical `initOriginFixture` repair.
+function initOriginFixture(projectRoot: string): void {
+  execFileSync("git", ["init", "-q"], { cwd: projectRoot });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: projectRoot });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: projectRoot });
+  execFileSync("git", ["remote", "add", "origin", "https://github.com/owner/repo.git"], {
+    cwd: projectRoot,
+  });
+}
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "keiko-agent-git-"));
+  initOriginFixture(root);
   store = createInMemoryUiStore();
   store.createProject(root, "fixture");
 });
@@ -623,6 +639,7 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
       }),
     );
 
+    console.log("DEBUG_MERGE_RESULT", JSON.stringify(result));
     expect(result.status).toBe(409);
     expect(result.body).toMatchObject({
       status: "delegated",

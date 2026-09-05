@@ -399,10 +399,20 @@ export async function gitDeliveryRepositoryBindingMismatch(
   ownerAndRepo: string,
   onReadFailure?: (failure: GitDeliveryRepositoryReadFailure) => void,
 ): Promise<boolean> {
+  // Fails closed on a read failure (an unreadable or non-Git worktree, a broken `git`) exactly like
+  // `githubRemoteOwnerAndRepoFor`'s own resolver already does for the coding-context surface: a
+  // denial that is really a broken read is still a denial, never a silent admit. The failure itself
+  // is reported to `onReadFailure` (when supplied) before translating it to the closed refusal, so
+  // the caller can preserve structured evidence instead of the exception being discarded.
   let remote: string | undefined;
   try {
     remote = await readVerifiedGitHubOwnerAndRepo({ workspace });
-  } catch {
+  } catch (error) {
+    onReadFailure?.({
+      errorKind: errorKindOf(error),
+      frames: keikoStackFrames(error),
+      causeChain: causeChain(error),
+    });
     return true;
   }
   if (remote === undefined) return true;

@@ -824,7 +824,10 @@ function gitChangeRelationshipMatches(
 // record lives on `chat`, never on the request body. Look it up by `relationshipId` and return
 // THAT, ignoring every other field the browser sent; an entry with no matching canonical record is
 // an identity mismatch and is rejected exactly like an unbound relationship.
-function canonicalGitChangeScope(chat: Chat, relationshipId: string): ChatGitChangeScope | undefined {
+function canonicalGitChangeScope(
+  chat: Chat,
+  relationshipId: string,
+): ChatGitChangeScope | undefined {
   return (chat.gitChangeScopes ?? []).find((entry) => entry.relationshipId === relationshipId);
 }
 

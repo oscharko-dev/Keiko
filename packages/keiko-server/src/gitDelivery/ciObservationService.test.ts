@@ -378,13 +378,13 @@ describe("run-bound CI observations through existing draft authority", () => {
     const repairController = new CodingRuntimeCiRepairController({
       store: budgetStore,
       readiness: test.options.persistence,
-      now: () => fixture.now,
-      context: () => repairContext,
+      now: (): number => fixture.now,
+      context: (): CiRepairBudgetContext => repairContext,
     });
     expect(repairController.repairBudgetExhausted()).toBe(true);
     const observed = new CiObservationController({
       ...test.options,
-      repairBudgetExhausted: () => repairController.repairBudgetExhausted(),
+      repairBudgetExhausted: (): boolean => repairController.repairBudgetExhausted(),
     });
     expect(await observed.observe()).toMatchObject({
       status: "observed",

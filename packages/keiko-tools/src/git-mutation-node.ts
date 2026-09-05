@@ -46,6 +46,7 @@ import {
   type SandboxPolicy,
 } from "./types.js";
 import {
+  ensureGitLazyFetchGuardSupported,
   readGitFullRef,
   readGitIndexTreeDigest,
   readGitCommitIdentity,
@@ -181,11 +182,19 @@ const GLOBAL_SIGNING_POLICY_COMMAND_RULES: readonly CommandRule[] = Object.freez
   },
 ]);
 
-function runOne(
+// Every mutating spawn goes through here, so the version-gated lazy-fetch/replace-objects guard
+// (git-worktree-snapshot-node.ts, reviewer 3941836280) protects the write lane exactly the way it
+// protects the read lane — cached after the first call, so this costs nothing beyond it. This
+// REPLACES the CLI-flag prepends this lane used to build at each call site: `buildRunContext`
+// below pins GIT_NO_LAZY_FETCH / GIT_NO_REPLACE_OBJECTS into every mutation's env, the equivalent
+// per git's own docs, and `ensureGitLazyFetchGuardSupported` refuses the write outright (never
+// silently unprotected) for an at-risk repository whose installed git cannot enforce them.
+async function runOne(
   ctx: RunContext,
   argv: readonly string[],
   stdin?: string | Uint8Array,
 ): Promise<CommandResult> {
+  await ensureGitLazyFetchGuardSupported(commitReadDeps(ctx));
   return runCommand(
     {
       command: "git",
@@ -294,11 +303,7 @@ async function execStage(
         check: () => verifiedFactsMatch(ctx, request),
         authorized: () => !ctx.signal.aborted && ctx.beforeIndexUpdate?.() !== false,
         run: (argv, stdin, indexPath) =>
-          runOne(
-            indexPath === undefined ? ctx : withIndexPath(ctx, indexPath),
-            ["--no-lazy-fetch", "--no-replace-objects", ...argv],
-            stdin,
-          ),
+          runOne(indexPath === undefined ? ctx : withIndexPath(ctx, indexPath), argv, stdin),
       },
       request,
     );
@@ -387,7 +392,7 @@ async function verifiedFactsMatch(
 }
 
 async function checkedObjectCommand(ctx: RunContext, argv: readonly string[]): Promise<string> {
-  const result = await runOne(ctx, ["--no-lazy-fetch", "--no-replace-objects", ...argv]);
+  const result = await runOne(ctx, argv);
   const objectId = result.stdout.trim();
   if (
     result.exitCode !== 0 ||
@@ -425,7 +430,7 @@ async function execVerifiedCommit(
     refAttempted = true;
     const result = await runOne(
       ctx,
-      ["--no-lazy-fetch", "--no-replace-objects", "update-ref", "--stdin"],
+      ["update-ref", "--stdin"],
       `start\nverify ${baseRef} ${request.verified.baseSha}\nupdate refs/heads/${request.verified.branchName} ${head} ${request.verified.headSha}\nprepare\ncommit\n`,
     );
     if (result.exitCode !== 0) return failureFromExit(result.durationMs, 0);
@@ -477,11 +482,27 @@ async function execPlan(
   return runPlan(ctx, plan);
 }
 
+// The equivalent of the `--no-lazy-fetch --no-replace-objects` CLI flags this lane used to prepend
+// to every argv (git's own docs: each flag "is equivalent to setting the GIT_NO_(LAZY_FETCH|
+// REPLACE_OBJECTS) environment variable"). Pinned once here rather than per call site so `runOne`
+// need only decide WHETHER the guard can be trusted (`ensureGitLazyFetchGuardSupported`), not build
+// it into every argv.
+function immutableMutationPolicy(policy: SandboxPolicy): SandboxPolicy {
+  return {
+    ...policy,
+    pinnedEnv: {
+      ...policy.pinnedEnv,
+      GIT_NO_REPLACE_OBJECTS: "1",
+      GIT_NO_LAZY_FETCH: "1",
+    },
+  };
+}
+
 function buildRunContext(deps: NodeGitMutationAdapterDeps): RunContext {
   return {
     runDeps: {
       workspace: deps.workspace,
-      policy: deps.policy ?? GOVERNED_GIT_IDENTITY_SANDBOX_POLICY,
+      policy: immutableMutationPolicy(deps.policy ?? GOVERNED_GIT_IDENTITY_SANDBOX_POLICY),
       commandRules: GIT_MUTATION_COMMAND_RULES,
       spawn: deps.spawn ?? nodeSpawnFn,
       processEnv: deps.processEnv ?? process.env,
@@ -510,8 +531,7 @@ export async function readGitStageSupport(
       workspaceRoot: deps.workspace.root,
       authorized: () => !ctx.signal.aborted,
       check: () => Promise.resolve(!ctx.signal.aborted),
-      run: (argv, stdin) =>
-        runOne(ctx, ["--no-lazy-fetch", "--no-replace-objects", ...argv], stdin),
+      run: (argv, stdin) => runOne(ctx, argv, stdin),
     },
     paths,
   );

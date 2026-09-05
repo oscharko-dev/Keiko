@@ -3961,4 +3961,98 @@ describe("coding-sidecar gateway spend budget", () => {
     expect(second).toMatchObject({ status: 200 });
     expect(chat).toHaveBeenCalledTimes(2);
   });
+
+  // reviewer 3941877971: the ceiling must see OUTSTANDING (in-flight) reservations, not only
+  // completed spend. Budget covers one call's pre-call estimate (~$4,096, dominated by
+  // maxOutputTokens(4096) * outputUsdPerMillionTokens(1_000_000)/1e6) but strictly less than two
+  // stacked estimates. The first call is held in flight (never resolved) while the second is
+  // dispatched; without a pre-dispatch reservation both would be admitted against the same
+  // completed-only ledger and the provider would be called twice.
+  it("reserves the estimated cost before dispatch, so an overlapping in-flight call cannot also be admitted", async () => {
+    const sink = captureServerLog("warn");
+    let resolveFirst: ((response: NormalizedResponse) => void) | undefined;
+    const firstProvider = new Promise<NormalizedResponse>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const chat = vi
+      .fn()
+      .mockImplementationOnce(() => firstProvider)
+      .mockImplementationOnce(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const priced = pricedCapability({
+      maxOutputTokens: 4_096,
+      pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1_000_000 },
+    });
+    const deps = depsValue(configValue(provider(), priced), () => chat, {
+      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "6144",
+    });
+
+    const first = handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
+    await vi.waitFor(() => {
+      expect(chat).toHaveBeenCalledOnce();
+    });
+
+    const second = await handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
+
+    expect(second).toMatchObject({ status: 403 });
+    expect(chat).toHaveBeenCalledOnce();
+    expect(sink.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          op: "coding-sidecar.gateway.rejected",
+          status: 403,
+          extra: { reason: "spend-budget-exceeded", runId: "run-gateway-test" },
+        }),
+      ]),
+    );
+
+    resolveFirst?.(assistantResponse("azure-coding-model"));
+    await expect(first).resolves.toMatchObject({ status: 200 });
+  });
+
+  // reviewer 3941877974: absence of a configured ceiling (unrestricted) must never be conflated
+  // with a present-but-unusable one (fail closed).
+  describe("invalid configured ceiling", () => {
+    it("denies spending outright rather than silently disabling the ceiling when set to zero", async () => {
+      const sink = captureServerLog("warn");
+      const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+      const deps = depsValue(configValue(provider(), pricedCapability()), () => chat, {
+        [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0",
+      });
+
+      const result = await handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
+
+      expect(result).toMatchObject({ status: 403 });
+      expect(chat).not.toHaveBeenCalled();
+      expect(sink.events).toEqual([
+        expect.objectContaining({
+          op: "coding-sidecar.gateway.rejected",
+          status: 403,
+          extra: { reason: "spend-budget-exceeded", runId: "run-gateway-test" },
+        }),
+      ]);
+    });
+
+    it.each(["-1", "invalid", "50oops"])(
+      "fails closed with spend-budget-invalid rather than disabling enforcement for %s",
+      async (rawValue) => {
+        const sink = captureServerLog("warn");
+        const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+        const deps = depsValue(configValue(provider(), pricedCapability()), () => chat, {
+          [QUALIFICATION_SPEND_BUDGET_USD_ENV]: rawValue,
+        });
+
+        const result = await handleCodingSidecarGatewayChatCompletions(chatRequest(), deps);
+
+        expect(result).toMatchObject({ status: 403 });
+        expect(chat).not.toHaveBeenCalled();
+        expect(sink.events).toEqual([
+          expect.objectContaining({
+            op: "coding-sidecar.gateway.rejected",
+            status: 403,
+            extra: { reason: "spend-budget-invalid", runId: "run-gateway-test" },
+          }),
+        ]);
+      },
+    );
+  });
 });
