@@ -4,7 +4,12 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { GitCiFactsResult } from "@oscharko-dev/keiko-tools/internal/git-mutation";
-import { createDraftRun, readySnapshot, AT, DIGEST } from "../gitDelivery/ciObservationTest/_support.js";
+import {
+  createDraftRun,
+  readySnapshot,
+  AT,
+  DIGEST,
+} from "../gitDelivery/ciObservationTest/_support.js";
 import { CHECK, failureFacts } from "../gitDelivery/ciObservationTest/_providerFacts.js";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
 import type { DraftDeliveryDependencies } from "../gitDelivery/draftDeliveryTypes.js";
@@ -125,7 +130,12 @@ describe("production CI observation service repair-budget wiring (#3384 wave-3 W
         },
         networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
         gates: [],
-        budget: { maxRuntimeMs: 60_000, maxToolCalls: 1, maxPromptTokens: 1000, maxPatchBytes: 1024 },
+        budget: {
+          maxRuntimeMs: 60_000,
+          maxToolCalls: 1,
+          maxPromptTokens: 1000,
+          maxPatchBytes: 1024,
+        },
         expiresAt: "2099-01-01T00:00:00.000Z",
       },
     };

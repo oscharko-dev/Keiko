@@ -273,10 +273,14 @@ describe("lazy-fetch guard: promisor detection matches git's effective configura
     // RED proof, on this SAME repository: the guard's OLD `--local`-scoped read cannot see an
     // `include.path` at all — it is genuinely blind here, not merely differently parsed.
     expect(() =>
-      execFileSync("git", ["config", "--local", "--get-regexp", String.raw`^remote\..*\.promisor$`], {
-        cwd: root,
-        encoding: "utf8",
-      }),
+      execFileSync(
+        "git",
+        ["config", "--local", "--get-regexp", String.raw`^remote\..*\.promisor$`],
+        {
+          cwd: root,
+          encoding: "utf8",
+        },
+      ),
     ).toThrow();
     const rec = recordingRealSpawn();
     await ensureGitLazyFetchGuardSupported({ ...deps(), spawn: rec.fn });
@@ -324,9 +328,9 @@ describe("gitConfigIndicatesPromisorRemote", () => {
     // git prints an explicit empty-string value as the key, ONE trailing space, then nothing —
     // the exact shape `git config remote.origin.promisor ""` produces.
     expect(gitConfigIndicatesPromisorRemote("remote.origin.promisor \n")).toBe(false);
-    expect(gitConfigIndicatesPromisorRemote("remote.origin.url https://example.invalid/x.git\n")).toBe(
-      false,
-    );
+    expect(
+      gitConfigIndicatesPromisorRemote("remote.origin.url https://example.invalid/x.git\n"),
+    ).toBe(false);
   });
 
   it("treats a bare key with no value at all as true", () => {

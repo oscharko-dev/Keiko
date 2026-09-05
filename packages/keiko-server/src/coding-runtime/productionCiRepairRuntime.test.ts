@@ -472,7 +472,11 @@ describe("production CI repair accounting availability", () => {
       const test = fixture(false);
       const snapshots = { ...test.snapshots };
       delete snapshots.ciRepairBudget;
-      const budget = createProductionCiRepairBudget({ ...test.deps, snapshots }, test.verified, test.current);
+      const budget = createProductionCiRepairBudget(
+        { ...test.deps, snapshots },
+        test.verified,
+        test.current,
+      );
       expect(budget?.repairBudgetExhausted?.()).toBe(false);
     });
 

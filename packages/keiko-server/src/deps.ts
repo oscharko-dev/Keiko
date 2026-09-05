@@ -581,7 +581,11 @@ export interface UiHandlerDeps {
         // #3384 wave-3 W3-3 "needs": reconciles a prompt-token reservation above against the
         // provider's real reported usage once known, mirroring `reservePromptTokens`.
         readonly settlePromptTokens?:
-          | ((capability: string, reservedPromptTokens: number, actualPromptTokens: number) => unknown)
+          | ((
+              capability: string,
+              reservedPromptTokens: number,
+              actualPromptTokens: number,
+            ) => unknown)
           | undefined;
       }
     | undefined;

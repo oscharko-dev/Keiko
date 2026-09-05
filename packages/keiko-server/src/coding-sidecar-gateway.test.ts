@@ -4155,7 +4155,10 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
         },
       };
 
-      const first = await handleCodingSidecarGatewayChatCompletions(promptSettlementRequest(), deps);
+      const first = await handleCodingSidecarGatewayChatCompletions(
+        promptSettlementRequest(),
+        deps,
+      );
       const second = await handleCodingSidecarGatewayChatCompletions(
         promptSettlementRequest(),
         deps,

@@ -1192,8 +1192,7 @@ interface RuntimeCapabilityAuthenticator {
   // runId this capability has no record of (or an authenticator that predates this wiring)
   // preserves the advertisement's prior, structural-only behaviour.
   readonly unavailableOptionalTools?:
-    | ((runId: string) => ReadonlySet<OpenCodeOptionalToolName> | undefined)
-    | undefined;
+    ((runId: string) => ReadonlySet<OpenCodeOptionalToolName> | undefined) | undefined;
 }
 
 type RuntimeAdapterKind = "model-gateway-sidecar" | "codex-cli-adapter";
@@ -1599,10 +1598,40 @@ async function executeGatewayChat(
   runId: string,
   delivery: GatewayChatDelivery,
 ): Promise<RouteResult | typeof STREAMING> {
-  const { modelAlias, upstreamStreamingSupported, spendReservation, promptTokenReservation } =
-    delivery;
-  const cancellation = gatewayRequestCancellation(ctx, deps, binding.config, modelAlias, runId);
-  const request = requestForGatewayDelivery(ctx, parsed, delivery, cancellation.signal);
+  const cancellation = gatewayRequestCancellation(
+    ctx,
+    deps,
+    binding.config,
+    delivery.modelAlias,
+    runId,
+  );
+  try {
+    return await dispatchGatewayChat(
+      ctx,
+      deps,
+      binding,
+      parsed,
+      runId,
+      delivery,
+      cancellation.signal,
+    );
+  } finally {
+    cancellation.dispose();
+  }
+}
+
+// Extracted so `executeGatewayChat` stays under AGENTS.md §6's 50-line ceiling.
+async function dispatchGatewayChat(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  binding: PinnedGatewayBinding,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  runId: string,
+  delivery: GatewayChatDelivery,
+  cancellationSignal: AbortSignal,
+): Promise<RouteResult | typeof STREAMING> {
+  const { modelAlias, upstreamStreamingSupported } = delivery;
+  const request = requestForGatewayDelivery(ctx, parsed, delivery, cancellationSignal);
   let bufferedStream: BufferedOpenAiStreamSession | undefined;
   try {
     if (parsed.stream && upstreamStreamingSupported) {
@@ -1613,9 +1642,8 @@ async function executeGatewayChat(
         modelAlias,
         request,
         runId,
-        cancellation.signal,
-        spendReservation,
-        promptTokenReservation,
+        cancellationSignal,
+        delivery,
       );
     }
     if (parsed.stream) bufferedStream = beginBufferedOpenAiStream(ctx, modelAlias);
@@ -1625,24 +1653,42 @@ async function executeGatewayChat(
       modelAlias,
       request,
       runId,
-      cancellation.signal,
+      cancellationSignal,
       bufferedStream,
-      spendReservation,
-      promptTokenReservation,
+      delivery,
     );
   } catch (error) {
-    recordGatewayOutcome(deps, runId, cancellation.signal.aborted ? "cancelled" : "failed", 0, 0);
-    emitGatewayFailureDiagnostic(ctx, deps, error);
-    // The call may or may not have reached the provider before throwing; settle conservatively
-    // (idempotent — a no-op if the reservation was already settled with real usage below).
-    settleSpendReservation(spendReservation);
-    settlePromptTokenReservation(deps, promptTokenReservation);
-    return bufferedStream === undefined
-      ? unavailableError()
-      : settleBufferedOpenAiStreamError(bufferedStream, "error");
-  } finally {
-    cancellation.dispose();
+    return settleFailedGatewayChat(
+      ctx,
+      deps,
+      runId,
+      cancellationSignal,
+      error,
+      delivery,
+      bufferedStream,
+    );
   }
+}
+
+// Extracted so `executeGatewayChat` stays under AGENTS.md §6's 50-line ceiling.
+function settleFailedGatewayChat(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+  cancellationSignal: AbortSignal,
+  error: unknown,
+  delivery: Pick<GatewayChatDelivery, "spendReservation" | "promptTokenReservation">,
+  bufferedStream: BufferedOpenAiStreamSession | undefined,
+): RouteResult | typeof STREAMING {
+  recordGatewayOutcome(deps, runId, cancellationSignal.aborted ? "cancelled" : "failed", 0, 0);
+  emitGatewayFailureDiagnostic(ctx, deps, error);
+  // The call may or may not have reached the provider before throwing; settle conservatively
+  // (idempotent — a no-op if the reservation was already settled with real usage below).
+  settleSpendReservation(delivery.spendReservation);
+  settlePromptTokenReservation(deps, delivery.promptTokenReservation);
+  return bufferedStream === undefined
+    ? unavailableError()
+    : settleBufferedOpenAiStreamError(bufferedStream, "error");
 }
 
 async function executeBufferedGatewayChat(
@@ -1653,15 +1699,14 @@ async function executeBufferedGatewayChat(
   runId: string,
   cancellationSignal: AbortSignal,
   stream: BufferedOpenAiStreamSession | undefined,
-  spendReservation: SpendReservation,
-  promptTokenReservation: PromptTokenReservation,
+  delivery: Pick<GatewayChatDelivery, "spendReservation" | "promptTokenReservation">,
 ): Promise<RouteResult | typeof STREAMING> {
   const response = await chatFactoryFor(deps, binding.gateway)(binding.config, modelAlias)(request);
   settleSpendReservation(
-    spendReservation,
+    delivery.spendReservation,
     actualCostUsdFor(binding.config, modelAlias, response.usage),
   );
-  settlePromptTokenReservation(deps, promptTokenReservation, response.usage.promptTokens);
+  settlePromptTokenReservation(deps, delivery.promptTokenReservation, response.usage.promptTokens);
   const metrics = outputMetrics(response);
   if (cancellationSignal.aborted) {
     recordGatewayOutcome(deps, runId, "cancelled", metrics.completionTokens, metrics.outputBytes);
@@ -1696,8 +1741,7 @@ async function streamGatewayChat(
   request: GatewayRequest,
   runId: string,
   cancellationSignal: AbortSignal,
-  spendReservation: SpendReservation,
-  promptTokenReservation: PromptTokenReservation,
+  delivery: Pick<GatewayChatDelivery, "spendReservation" | "promptTokenReservation">,
 ): Promise<RouteResult | typeof STREAMING> {
   let iterator: AsyncIterator<GatewayStreamChunk>;
   try {
@@ -1708,8 +1752,8 @@ async function streamGatewayChat(
   } catch (error) {
     recordGatewayOutcome(deps, runId, "failed", 0, 0);
     emitGatewayFailureDiagnostic(ctx, deps, error);
-    settleSpendReservation(spendReservation);
-    settlePromptTokenReservation(deps, promptTokenReservation);
+    settleSpendReservation(delivery.spendReservation);
+    settlePromptTokenReservation(deps, delivery.promptTokenReservation);
     return unavailableError();
   }
   const session = createGatewayStreamSession(
@@ -1721,8 +1765,8 @@ async function streamGatewayChat(
     runId,
     cancellationSignal,
     iterator,
-    spendReservation,
-    promptTokenReservation,
+    delivery.spendReservation,
+    delivery.promptTokenReservation,
   );
   try {
     if (beginGatewayStream(session)) await pumpGatewayStreamWithCancellation(ctx, deps, session);
