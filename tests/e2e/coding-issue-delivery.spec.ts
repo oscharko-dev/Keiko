@@ -21,6 +21,7 @@ import {
   type CommitFixtureOperation,
 } from "./support/coding-issue-commit.js";
 import {
+  DELIVERY_DESCRIPTION_DRAFT_DIGEST,
   DELIVERY_LAUNCHER_SECRET,
   DELIVERY_REPOSITORY,
   DELIVERY_TEMPLATE,
@@ -349,6 +350,20 @@ for (const [index, mode] of (
     ).toHaveCount(0);
     expect((await snapshot(page)).draftDelivery).toEqual(createdRecord);
     await finish(page);
+    // #3401: the terminal "succeeded" transition automatically dispatches exactly one description
+    // generation attempt through the composed (fake, this journey) Model Gateway core -- proven
+    // end-to-end here, not only at the orchestrator unit level, so the real deps.ts wiring
+    // (job store + dispatcher attached to the control plane) is exercised through the real HTTP
+    // status route.
+    await expect
+      .poll(async () => (await snapshot(page)).descriptionStatus?.reason, { timeout: 10_000 })
+      .toBe("generated");
+    expect((await snapshot(page)).descriptionStatus).toMatchObject({
+      state: "current",
+      reason: "generated",
+      generationVersion: 1,
+      draftDigest: DELIVERY_DESCRIPTION_DRAFT_DIGEST,
+    });
   });
 }
 

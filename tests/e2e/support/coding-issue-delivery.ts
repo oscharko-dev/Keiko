@@ -7,6 +7,10 @@ export const DELIVERY_REPOSITORY = "fixture/issue-delivery";
 export const DELIVERY_URL = `https://github.com/${DELIVERY_REPOSITORY}.git`;
 export const DELIVERY_TITLE = "fix: deliver the accepted issue <script>";
 export const DELIVERY_TEMPLATE = "## Review notes\n\nPreserved template <img src=x>.\n";
+// #3401: the fixed draft digest the delivery server's fake WorkbenchDescriptionDispatcher
+// returns, shared with the spec so it can assert the automatic-description dispatch reached the
+// composed job store without either side restating the other's literal.
+export const DELIVERY_DESCRIPTION_DRAFT_DIGEST = "b".repeat(64);
 export const DELIVERY_OPERATIONS = [
   "push-propose",
   "push-execute",

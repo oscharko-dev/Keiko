@@ -1,10 +1,12 @@
 import { pathToFileURL } from "node:url";
 import type { DraftDeliveryDependencies } from "../../../packages/keiko-server/src/gitDelivery/draftDeliveryTypes.js";
+import type { ProductionWorkbenchDescriptionDispatcher } from "../../../packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.js";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { COMMIT_EDITED, COMMIT_ORIGINAL, COMMIT_TARGET } from "../support/coding-issue-commit.js";
 import {
+  DELIVERY_DESCRIPTION_DRAFT_DIGEST,
   DELIVERY_LAUNCHER_SECRET,
   DELIVERY_PORT,
   DELIVERY_REPOSITORY,
@@ -20,6 +22,21 @@ import {
   installDeliveryTransport,
 } from "./coding-issue-delivery-transport.mjs";
 import { runCodingRuntimeJourneyServer } from "./coding-runtime-server-shared.mjs";
+
+// #3401: a fixed, deterministic fake standing in for #3398's real Model Gateway generation core,
+// so the delivery journey can prove the terminal-run automatic-description dispatch (job store
+// persistence, snapshot overlay onto `/api/coding-workbench/runtime/status`) without a live model
+// provider. Never publishes and never touches the git fixture — the SAME closed contract the real
+// dispatcher honors (epic correction 1).
+const deliveryDescriptionDispatcher: ProductionWorkbenchDescriptionDispatcher = {
+  generate: () =>
+    Promise.resolve({
+      reason: "generated",
+      snapshotDigest: "a".repeat(64),
+      draftDigest: DELIVERY_DESCRIPTION_DRAFT_DIGEST,
+      artifactOutcome: "complete",
+    }),
+};
 
 export async function runIssueDeliveryServer(
   options: {
@@ -46,6 +63,7 @@ export async function runIssueDeliveryServer(
     launcherSessionSecret: DELIVERY_LAUNCHER_SECRET,
     commit: true,
     delivery: true,
+    descriptionDispatcher: deliveryDescriptionDispatcher,
     issue: {
       remoteUrl: DELIVERY_URL,
       initialize: (dir): void => {

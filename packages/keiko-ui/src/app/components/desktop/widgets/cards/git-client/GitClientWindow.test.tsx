@@ -14,7 +14,7 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   GitChangedFile,
   GitHistoryEntry,
@@ -36,6 +36,22 @@ import type { GitClientSeam } from "./git-client-seam";
 import { GitClientWindow } from "./GitClientWindow";
 import { parseUnifiedDiff } from "../shared/diffParser";
 import { notifyWorkspaceFileMutated } from "../workspace-file-events";
+
+// Issue #3400 — the "Connect to Chat" dialog calls fetchChats/connectGitChangeToChat directly
+// (it owns no GitClientSeam methods). Only these two are replaced; every other @/lib/api export
+// stays real so the rest of this file's `client` seam-only tests are unaffected.
+const gitChangeChatMocks = vi.hoisted(() => ({
+  fetchChats: vi.fn(),
+  connectGitChangeToChat: vi.fn(),
+}));
+vi.mock("@/lib/api", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+  return {
+    ...actual,
+    fetchChats: gitChangeChatMocks.fetchChats,
+    connectGitChangeToChat: gitChangeChatMocks.connectGitChangeToChat,
+  };
+});
 
 const nativeFileDialogMock = vi.hoisted(() => ({
   pickWithNativeDialog: vi.fn(),
@@ -514,6 +530,12 @@ function makeStructuredDiffResponse(diff = "", scope: "staged" | "unstaged" = "u
 afterEach(() => {
   resetClientDiagnosticWriter();
   vi.clearAllMocks();
+});
+
+// Issue #3400 — a sane default so any toolbar action that happens to mount ConnectToChatDialog
+// (even in a test that isn't exercising it) resolves instead of leaving an unhandled rejection.
+beforeEach(() => {
+  gitChangeChatMocks.fetchChats.mockResolvedValue({ chats: [] });
 });
 
 describe("GitClientWindow — repository list", () => {
@@ -1116,6 +1138,10 @@ describe("GitClientWindow — toolbar actions", () => {
     expect(
       await screen.findByRole("dialog", { name: /Connect Git change to chat/i }),
     ).toBeInTheDocument();
+    // The dialog is scoped to THIS window's own facts: the active repository (for its chat
+    // picker) and the active branch (as the fixed comparison head) — never browser-authored.
+    await waitFor(() => expect(gitChangeChatMocks.fetchChats).toHaveBeenCalledWith(REPO_A.path));
+    expect(screen.getByLabelText("Head branch")).toHaveValue("main");
   });
 
   it("Connect to Chat is absent when no repository is selected", () => {
@@ -3139,5 +3165,26 @@ describe("GitClientWindow — diff scope (Issue #1575)", () => {
         scope: "staged",
       }),
     );
+  });
+});
+
+// Issue #3400 (epic #3384) — the dialog itself is unit-tested in ConnectToChatDialog.test.tsx;
+// this pins only that the toolbar's trigger regains focus once the dialog closes (WCAG 2.4.3),
+// which needs the real GitClientWindow tree (ConnectToChatDialog.test.tsx renders the dialog
+// standalone, with no trigger to return focus to).
+describe("GitClientWindow — Connect to Chat", () => {
+  it("closes on Escape and returns focus to the toolbar trigger", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.listBranches).toHaveBeenCalled());
+    const trigger = screen.getByRole("button", { name: "Connect to Chat" });
+    await user.click(trigger);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 });

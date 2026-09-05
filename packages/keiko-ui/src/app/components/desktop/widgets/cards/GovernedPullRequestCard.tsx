@@ -672,6 +672,43 @@ function descriptionPreviewAction(
   );
 }
 
+function descriptionApproveAction(
+  client: RequiredPrDescriptionClient,
+  seq: { current: number },
+  setState: (updater: (s: DescriptionAsyncState) => DescriptionAsyncState) => void,
+  handleError: (err: unknown, token: number) => void,
+  target: GitDeliveryPrDescriptionTarget,
+  proposalId: string,
+): void {
+  dispatchDescriptionAction(
+    seq,
+    setState,
+    handleError,
+    () => client.prDescriptionApprove({ ...target, proposalId }),
+    () => ({ approved: true }),
+  );
+}
+
+function descriptionApplyAction(
+  client: RequiredPrDescriptionClient,
+  seq: { current: number },
+  setState: (updater: (s: DescriptionAsyncState) => DescriptionAsyncState) => void,
+  handleError: (err: unknown, token: number) => void,
+  target: GitDeliveryPrDescriptionTarget,
+  proposalId: string,
+): void {
+  dispatchDescriptionAction(
+    seq,
+    setState,
+    handleError,
+    () => client.prDescriptionApply({ ...target, proposalId }),
+    // One-use: the spent proposal/approval never carries forward to a second Apply click — but
+    // `target` is kept so the just-applied result stays visible (still "the exact target the
+    // current result was produced for"); only a fresh Preview mints a new proposal to approve.
+    (result) => ({ result, proposalId: null, approved: false }),
+  );
+}
+
 // The returned object is rebuilt every render regardless (it spreads `state`), so wrapping these in
 // `useCallback` would buy no referential stability — plain closures keep the hook itself short.
 function useGovernedPrDescriptionActions(
@@ -699,14 +736,7 @@ function useGovernedPrDescriptionActions(
 
   const runApprove = (): void => {
     if (client === undefined || state.proposalId === null || state.target === null) return;
-    const { target, proposalId } = state;
-    dispatchDescriptionAction(
-      seq,
-      setState,
-      handleError,
-      () => client.prDescriptionApprove({ ...target, proposalId }),
-      () => ({ approved: true }),
-    );
+    descriptionApproveAction(client, seq, setState, handleError, state.target, state.proposalId);
   };
 
   const runApply = (): void => {
@@ -718,15 +748,7 @@ function useGovernedPrDescriptionActions(
     ) {
       return;
     }
-    const { target, proposalId } = state;
-    dispatchDescriptionAction(
-      seq,
-      setState,
-      handleError,
-      () => client.prDescriptionApply({ ...target, proposalId }),
-      // One-use: a spent approval never carries forward to a second apply of the same preview.
-      (result) => ({ result, target: null, proposalId: null, approved: false }),
-    );
+    descriptionApplyAction(client, seq, setState, handleError, state.target, state.proposalId);
   };
 
   return { ...state, runPreview, runApprove, runApply };
@@ -988,7 +1010,10 @@ type DescriptionVisibility = Pick<
 // A preview/approval is shown only while the form still names the exact target it was produced for
 // — mirrors GovernedPullRequestBody's previewedKey/targetKey gate for the create/update form above,
 // applied to the description lifecycle's own (ownerAndRepo, prNumber) target.
-function derivePrDescriptionVisibility(form: DescriptionForm, async: DescriptionAsync): DescriptionVisibility {
+function derivePrDescriptionVisibility(
+  form: DescriptionForm,
+  async: DescriptionAsync,
+): DescriptionVisibility {
   const targetKey = descriptionTargetKeyOf(form.ownerAndRepo, form.prNumber);
   const previewedKey =
     async.target === null
@@ -1018,6 +1043,68 @@ function derivePrDescriptionPanelFlags(
   };
 }
 
+function PrDescriptionRefinementField({ form, busy, onChange }: DescriptionFieldsProps): ReactNode {
+  return (
+    <label style={LABEL_STYLE}>
+      Refinement (optional){" "}
+      <textarea
+        style={{ ...FIELD_STYLE, minHeight: 60, resize: "vertical" }}
+        value={form.refinement}
+        disabled={busy}
+        onChange={(e) => onChange("refinement", e.target.value)}
+        aria-label="Description refinement"
+      />
+    </label>
+  );
+}
+
+function PrDescriptionPanelStatus({
+  flags,
+  error,
+}: {
+  readonly flags: DescriptionPanelFlags;
+  readonly error: string | null;
+}): ReactNode {
+  return (
+    <>
+      {descriptionRefreshHint(flags.hasPreviewed, flags.stillValid, flags.state)}
+      <PrDescriptionStatusBadge result={flags.visibleResult} />
+      <PrDescriptionPreviewBody result={flags.visibleResult} />
+      {error !== null ? (
+        <p role="alert" style={{ font: "var(--text-body-sm)", color: "var(--feedback-danger)" }}>
+          <InfoIcon size={12} /> {error}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+function usePrDescriptionPreviewHandler(
+  form: DescriptionForm,
+  flags: DescriptionPanelFlags,
+  async: DescriptionAsync,
+  projectId: string,
+): () => void {
+  return useCallback((): void => {
+    if (!flags.canPreview) return;
+    async.runPreview({
+      projectId,
+      ownerAndRepo: form.ownerAndRepo,
+      prNumber: Number(form.prNumber),
+      language: form.language,
+      ...(form.refinement === "" ? {} : { refinement: form.refinement }),
+    });
+  }, [
+    async,
+    flags.canPreview,
+    form.language,
+    form.ownerAndRepo,
+    form.prNumber,
+    form.refinement,
+    projectId,
+  ]);
+}
+
 function PrDescriptionPanel({
   client,
   projectId,
@@ -1037,25 +1124,7 @@ function PrDescriptionPanel({
   const descriptionClient = requiredPrDescriptionClient(client);
   const async = useGovernedPrDescriptionActions(descriptionClient);
   const flags = derivePrDescriptionPanelFlags(form, async);
-
-  const onPreview = useCallback((): void => {
-    if (!flags.canPreview) return;
-    async.runPreview({
-      projectId,
-      ownerAndRepo: form.ownerAndRepo,
-      prNumber: Number(form.prNumber),
-      language: form.language,
-      ...(form.refinement === "" ? {} : { refinement: form.refinement }),
-    });
-  }, [
-    async,
-    flags.canPreview,
-    form.language,
-    form.ownerAndRepo,
-    form.prNumber,
-    form.refinement,
-    projectId,
-  ]);
+  const onPreview = usePrDescriptionPreviewHandler(form, flags, async, projectId);
 
   if (descriptionClient === undefined) return null;
 
@@ -1069,16 +1138,7 @@ function PrDescriptionPanel({
         <GitIcon size={12} /> Description
       </h3>
       <PrDescriptionFields form={form} busy={async.busy} onChange={onChange} />
-      <label style={LABEL_STYLE}>
-        Refinement (optional){" "}
-        <textarea
-          style={{ ...FIELD_STYLE, minHeight: 60, resize: "vertical" }}
-          value={form.refinement}
-          disabled={async.busy}
-          onChange={(e) => onChange("refinement", e.target.value)}
-          aria-label="Description refinement"
-        />
-      </label>
+      <PrDescriptionRefinementField form={form} busy={async.busy} onChange={onChange} />
       <PrDescriptionButtons
         busy={async.busy}
         canPreview={flags.canPreview}
@@ -1088,14 +1148,7 @@ function PrDescriptionPanel({
         onApprove={async.runApprove}
         onApply={async.runApply}
       />
-      {descriptionRefreshHint(flags.hasPreviewed, flags.stillValid, flags.state)}
-      <PrDescriptionStatusBadge result={flags.visibleResult} />
-      <PrDescriptionPreviewBody result={flags.visibleResult} />
-      {async.error !== null ? (
-        <p role="alert" style={{ font: "var(--text-body-sm)", color: "var(--feedback-danger)" }}>
-          <InfoIcon size={12} /> {async.error}
-        </p>
-      ) : null}
+      <PrDescriptionPanelStatus flags={flags} error={async.error} />
     </section>
   );
 }

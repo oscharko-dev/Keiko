@@ -29,7 +29,13 @@ import type {
   GitPullRequestAdapter,
   GitPullRequestMarkReadyAdapter,
 } from "@oscharko-dev/keiko-tools";
-import type { NodeGitPullRequestAdapterDeps } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import {
+  assessGitCiFacts,
+  type GitCiFactsResult,
+  type GitCiProviderFacts,
+  type GitCiProviderReader,
+  type NodeGitPullRequestAdapterDeps,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { UI_HOST } from "../server.js";
@@ -1064,7 +1070,73 @@ describe("pr mark-ready routes (#3389)", () => {
   const MARK_READY_EXECUTE = "/api/git-delivery/pr/mark-ready/execute";
   const HEAD_SHA = "a".repeat(40);
   const BASE_SHA = "b".repeat(40);
-  const READINESS_DIGEST = "c".repeat(64);
+  const BASE_REF = "dev";
+
+  function page(values: readonly unknown[] = []): {
+    readonly values: readonly unknown[];
+    readonly completeness: {
+      readonly complete: true;
+      readonly pages: number;
+      readonly entries: number;
+      readonly bytes: number;
+    };
+  } {
+    return { values, completeness: { complete: true, pages: 1, entries: values.length, bytes: 0 } };
+  }
+
+  // A minimal, complete, unprotected, conflict-free live CI-facts read — head/base/draft match the
+  // approval's bound facts exactly. `requirements.digest`/`workflowDefinitions` are inert inputs to
+  // assessGitCiFacts's OWN requirementsDigest formula (not the value under test); READINESS_DIGEST
+  // below is derived by calling that real producer, never hand-rolled, so it can never drift from
+  // what the production code actually computes (AGENTS.md §7: import the producer, don't restate it).
+  function readyCiFacts(overrides: Partial<GitCiProviderFacts> = {}): GitCiProviderFacts {
+    return {
+      status: "observed",
+      identity: {
+        number: 1499,
+        externalId: "PR_kwDO123",
+        url: "https://github.com/oscharko-dev/Keiko/pull/1499",
+        repository: "oscharko-dev/Keiko",
+        headRepository: "oscharko-dev/Keiko",
+        headRef: "claude/issue-3389-x",
+        headSha: HEAD_SHA,
+        baseRef: BASE_REF,
+        baseSha: BASE_SHA,
+        state: "open",
+        isDraft: true,
+      },
+      repositoryId: 1499,
+      mergeable: true,
+      mergeState: "clean",
+      merged: false,
+      protection: { outcome: "unprotected" },
+      requirements: {
+        status: "observed",
+        requirements: [],
+        strict: false,
+        digest: "fixture-requirements-digest",
+      },
+      workflowDefinitions: { status: "observed", definitions: [] },
+      lists: {
+        "branch-rules": page(),
+        "check-runs": page(),
+        "commit-statuses": page(),
+        "workflow-runs": page(),
+        reviews: page(),
+      },
+      ...overrides,
+    };
+  }
+  const READY_CI_FACTS = readyCiFacts();
+  const requirementsDigest = assessGitCiFacts(READY_CI_FACTS).requirementsDigest;
+  if (requirementsDigest === null) throw new Error("fixture must produce a requirements digest");
+  const READINESS_DIGEST = requirementsDigest;
+
+  function ciReaderReturning(facts: GitCiFactsResult): GitCiProviderReader {
+    return { readFacts: (): Promise<GitCiFactsResult> => Promise.resolve(facts) };
+  }
+  // The default, happy-path live read every test that expects the adapter to be reached uses.
+  const cleanCiReaderFactory = (): GitCiProviderReader => ciReaderReturning(READY_CI_FACTS);
 
   function markReadyBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
@@ -1074,6 +1146,7 @@ describe("pr mark-ready routes (#3389)", () => {
       prExternalId: "1499",
       headSha: HEAD_SHA,
       baseSha: BASE_SHA,
+      baseRef: BASE_REF,
       readinessDigest: READINESS_DIGEST,
       ...overrides,
     };
@@ -1119,6 +1192,7 @@ describe("pr mark-ready routes (#3389)", () => {
       approvalStore,
       now: () => 1_700_000_000_001,
       adapterFactory: () => adapter.adapter,
+      ciReaderFactory: cleanCiReaderFactory,
     })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), deps());
     const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
     expect(body).toMatchObject({ actionKind: "pr-mark-ready", status: "succeeded" });
@@ -1192,6 +1266,7 @@ describe("pr mark-ready routes (#3389)", () => {
       approvalStore,
       now: () => 1_700_000_000_001,
       adapterFactory: () => adapter.adapter,
+      ciReaderFactory: cleanCiReaderFactory,
     })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), deps());
     const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
     expect(body).toMatchObject({ status: "failed", executionErrorCode: "precondition-failed" });
@@ -1201,14 +1276,95 @@ describe("pr mark-ready routes (#3389)", () => {
       approvalStore,
       now: () => 1_700_000_000_002,
       adapterFactory: () => adapter.adapter,
+      ciReaderFactory: cleanCiReaderFactory,
     })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), deps());
     expect(secondRes.status).toBe(400);
     expect(adapter.calls()).toHaveLength(1);
   });
 
+  // #3389 repair (review finding, correction 2): failing-before-fix — previously the execute path
+  // never re-read requirements/conflict facts at all, so ANY syntactically-valid readinessDigest
+  // (including one with no relationship to the live PR) redeemed the claim and reached the adapter,
+  // which this fixture would have reported as "succeeded". Now a live read that disagrees with the
+  // claim's bound digest revokes the claim before the adapter is ever called.
+  it("reports drift and never calls the adapter when the live requirements digest no longer matches the claim", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = await mintMarkReadyApproval(approvalStore);
+    const adapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 5,
+    });
+    // Same head/base/draft, but the live required-checks configuration has since changed — a
+    // different requirements.digest input yields a different requirementsDigest output.
+    const driftedFacts = readyCiFacts({
+      requirements: {
+        status: "observed",
+        requirements: [],
+        strict: false,
+        digest: "a-different-requirements-configuration",
+      },
+    });
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_001,
+      adapterFactory: () => adapter.adapter,
+      ciReaderFactory: () => ciReaderReturning(driftedFacts),
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), deps());
+    const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
+    expect(body).toMatchObject({ status: "failed", executionErrorCode: "precondition-failed" });
+    expect(adapter.calls()).toHaveLength(0);
+  });
+
+  it("reports drift and never calls the adapter when the live PR now has a merge conflict", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = await mintMarkReadyApproval(approvalStore);
+    const adapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 5,
+    });
+    const conflictingFacts = readyCiFacts({ mergeable: false, mergeState: "dirty" });
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_001,
+      adapterFactory: () => adapter.adapter,
+      ciReaderFactory: () => ciReaderReturning(conflictingFacts),
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), deps());
+    const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
+    expect(body).toMatchObject({ status: "failed", executionErrorCode: "precondition-failed" });
+    expect(adapter.calls()).toHaveLength(0);
+  });
+
+  it("reports drift and never calls the adapter when the live requirements/conflict read is unavailable or incomplete", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = await mintMarkReadyApproval(approvalStore);
+    const adapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 5,
+    });
+    // The "unavailable" branch of GitCiFactsResult (never a synthesized green — correction 4/AC5).
+    const unavailable: GitCiFactsResult = {
+      status: "unavailable",
+      failure: { reason: "rate-limited", state: "pending" },
+    };
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_001,
+      adapterFactory: () => adapter.adapter,
+      ciReaderFactory: () => ciReaderReturning(unavailable),
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), deps());
+    const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
+    expect(body).toMatchObject({ status: "failed", executionErrorCode: "precondition-failed" });
+    expect(adapter.calls()).toHaveLength(0);
+  });
+
   it.each([
     { headSha: "not-a-sha" },
     { baseSha: "0".repeat(39) },
+    { baseRef: "refs/heads/dev" },
+    { baseRef: "bad ref" },
     { readinessDigest: "too-short" },
     { prExternalId: "not-numeric" },
     { ownerAndRepo: "not-owner-repo" },
@@ -1269,6 +1425,7 @@ describe("pr mark-ready routes (#3389)", () => {
       activityLog,
       now: () => 1_700_000_000_001,
       adapterFactory: () => adapter.adapter,
+      ciReaderFactory: cleanCiReaderFactory,
     })(
       {
         ...ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval: succeeded })),
@@ -1295,6 +1452,7 @@ describe("pr mark-ready routes (#3389)", () => {
       activityLog,
       now: () => 1_700_000_000_002,
       adapterFactory: () => driftAdapter.adapter,
+      ciReaderFactory: cleanCiReaderFactory,
     })(
       {
         ...ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval: drifted })),

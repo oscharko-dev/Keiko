@@ -65,6 +65,8 @@ import {
 import { createUiServer, UI_HOST } from "../../../packages/keiko-server/src/server.js";
 import { createInMemoryUiStore } from "../../../packages/keiko-server/src/store/index.js";
 import { createCodingRuntimeSnapshotStore } from "../../../packages/keiko-server/src/coding-runtime/codingRuntimeSnapshotStore.js";
+import { createCodingRuntimeDescriptionJobStore } from "../../../packages/keiko-server/src/coding-runtime/codingRuntimeDescriptionJobStore.js";
+import type { ProductionWorkbenchDescriptionDispatcher } from "../../../packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.js";
 import { runMigrations } from "../../../packages/keiko-server/src/store/schema.js";
 import { buildActiveWorkspacePointerStoreOverDatabase } from "../../../packages/keiko-server/src/task-workspace/active-store.js";
 import { createWorkspaceLifecycleService } from "../../../packages/keiko-server/src/task-workspace/lifecycle.js";
@@ -89,6 +91,11 @@ interface JourneyWorkspaceServices {
   // journey must bring the snapshot-store companion or the coding-runtime control plane is never
   // assembled and production discovery refuses as unqualified (the daily lane outage after #2835).
   readonly codingRuntimeSnapshots: ReturnType<typeof createCodingRuntimeSnapshotStore>;
+  // #3401: companion to `codingRuntimeSnapshots` above, over the SAME handle — without it the
+  // automatic-description job store is unavailable and no journey can prove the dispatch.
+  readonly codingRuntimeDescriptionJobStore: ReturnType<
+    typeof createCodingRuntimeDescriptionJobStore
+  >;
 }
 
 /**
@@ -151,6 +158,13 @@ export interface CodingRuntimeJourneyServerConfig {
   /** Controlled provider boundary for the actual issue-bound delivery adapters. */
   readonly delivery?: boolean;
   readonly ciReader?: DraftDeliveryDependencies["ciReader"];
+  /**
+   * #3401: a fake `WorkbenchDescriptionDispatcher` standing in for the real Model Gateway
+   * generation core, so a journey can prove the terminal-run automatic-description dispatch
+   * end-to-end (job store persistence, snapshot overlay onto the runtime status) without a real
+   * provider response. Only meaningful when `runtime === "scripted"`.
+   */
+  readonly descriptionDispatcher?: ProductionWorkbenchDescriptionDispatcher | undefined;
 }
 
 interface JourneyComposition {
@@ -237,6 +251,7 @@ function createWorkspaceServices(managedRoot: string): JourneyWorkspaceServices 
     uiStore,
     workspaceScriptTrust,
     codingRuntimeSnapshots: createCodingRuntimeSnapshotStore(db),
+    codingRuntimeDescriptionJobStore: createCodingRuntimeDescriptionJobStore(db),
   };
 }
 
@@ -395,6 +410,36 @@ function scriptedResolver(
       });
 }
 
+function scriptedUiHandlerDepsOptions(
+  config: CodingRuntimeJourneyServerConfig,
+  services: JourneyWorkspaceServices,
+  bffStateRoot: string,
+  env: ReturnType<typeof scriptedEnvironment>,
+  resolver: ReturnType<typeof scriptedResolver>,
+): Parameters<typeof buildUiHandlerDeps>[0] {
+  return {
+    configPath: undefined,
+    evidenceDir: join(bffStateRoot, "evidence"),
+    env,
+    uiDbPath: join(bffStateRoot, "ui-db", "keiko-ui.db"),
+    store: services.uiStore,
+    codingRuntimeSnapshotStore: services.codingRuntimeSnapshots,
+    codingRuntimeDescriptionJobStore: services.codingRuntimeDescriptionJobStore,
+    workspaceScriptTrust: services.workspaceScriptTrust,
+    workspaceProvisioning: services.provisioning,
+    workspaceLifecycle: services.lifecycle,
+    workspaceReconciliation: services.reconciliation,
+    codingRuntimeResolver: resolver,
+    ...(config.issue === undefined ? {} : { codingContextGitHubPort: config.issue.port }),
+    ...(config.descriptionDispatcher === undefined
+      ? {}
+      : { codingRuntimeDescriptionDispatcher: config.descriptionDispatcher }),
+    codingRuntimeDeploymentCeiling: "autonomous-delivery",
+    codingRuntimeServerPrincipal: () => `${config.fixtureId}-operator`,
+    autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
+  };
+}
+
 function scriptedComposition(
   config: CodingRuntimeJourneyServerConfig,
   stateDir: string,
@@ -418,23 +463,9 @@ function scriptedComposition(
     script.calls = 0;
   });
   const env = scriptedEnvironment(config, bffStateRoot);
-  const deps = buildUiHandlerDeps({
-    configPath: undefined,
-    evidenceDir: join(bffStateRoot, "evidence"),
-    env,
-    uiDbPath: join(bffStateRoot, "ui-db", "keiko-ui.db"),
-    store: services.uiStore,
-    codingRuntimeSnapshotStore: services.codingRuntimeSnapshots,
-    workspaceScriptTrust: services.workspaceScriptTrust,
-    workspaceProvisioning: services.provisioning,
-    workspaceLifecycle: services.lifecycle,
-    workspaceReconciliation: services.reconciliation,
-    codingRuntimeResolver: resolver,
-    ...(config.issue === undefined ? {} : { codingContextGitHubPort: config.issue.port }),
-    codingRuntimeDeploymentCeiling: "autonomous-delivery",
-    codingRuntimeServerPrincipal: () => `${config.fixtureId}-operator`,
-    autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
-  });
+  const deps = buildUiHandlerDeps(
+    scriptedUiHandlerDepsOptions(config, services, bffStateRoot, env, resolver),
+  );
   const observe =
     config.issue === undefined
       ? undefined
