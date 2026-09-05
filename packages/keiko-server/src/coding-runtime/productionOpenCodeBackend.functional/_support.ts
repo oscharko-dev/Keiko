@@ -39,6 +39,7 @@ import {
 import type { VerificationRunnerManager } from "../../editor/verificationRunner.js";
 import type { WorkspaceLifecycleService } from "../../task-workspace/types.js";
 import type { CodingRuntimeEvidenceAggregator } from "../codingRuntimeEvidenceAggregator.js";
+import type { CodingRuntimeEditorMutationLeaseBroker } from "../codingRuntimeEditorMutationLeaseCoordinator.js";
 import { createAuthenticatedSessionStartConfirmationPlane } from "../codingRuntimeStartConfirmationPlane.js";
 import type { ProductionCodingRuntimeResolver } from "../productionCodingRuntimeHost.js";
 import { createProductionCodingRuntimeResolver } from "../productionCodingRuntimeResolver.js";
@@ -95,6 +96,8 @@ interface FunctionalRuntimeResolverBaseInput {
   readonly readWorkspaceHead: (workspaceRoot: string, repositoryRoot: string) => string | undefined;
   readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport">;
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
+  /** Shares the resolver's per-run coordinators with the BFF editor commit boundary. */
+  readonly runtimeMutationLeaseBroker?: Pick<CodingRuntimeEditorMutationLeaseBroker, "attach">;
   readonly createSupervisor: NonNullable<ProductionOpenCodeBackendInput["createSupervisor"]>;
   readonly diagnostics?: ServerDiagnosticSink;
   /** Uses the same configured-profile qualification as the mounted gateway when supplied. */
@@ -196,6 +199,9 @@ export function createFunctionalRuntimeResolver(
           }
         : undefined,
     confirmationConsumer: createAuthenticatedSessionStartConfirmationPlane(),
+    ...(input.runtimeMutationLeaseBroker === undefined
+      ? {}
+      : { runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker }),
   });
   return {
     resolve: (): ReturnType<ProductionCodingRuntimeResolver["resolve"]> => {

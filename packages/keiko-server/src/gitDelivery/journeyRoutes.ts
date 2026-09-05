@@ -260,7 +260,7 @@ function recordJourneyOutcome(
         store: "unavailable",
       },
     });
-    return true;
+    return false;
   }
   const recorded = outcomes.record(outcome);
   (deps.activityLog ?? processServerLogSink()).write({

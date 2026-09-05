@@ -56,10 +56,8 @@ export interface GovernedPullRequestClient {
   // #3387: the create/update mutation now requires an actually consumed, server-issued approval
   // claim unconditionally (epic #3384 correction 5) — never mode-denied merely because the mode is
   // lower. `runExecute` mints it from the identical command and attaches it before calling execute.
-  // Optional so an existing injected client that has not yet added it (e.g. a shared multi-card
-  // seam) degrades to the pre-#3387 unapproved call instead of a hard TypeScript break; the real
-  // BFF route already rejects that unapproved call, so the caller sees "approval-required", never a
-  // silently accepted mutation.
+  // Optional only for compatibility with narrow injected clients. Execution fails closed when it
+  // is absent; no caller may downgrade to an unapproved request.
   readonly prApprove?: typeof fetchGitDeliveryPrApprove | undefined;
   readonly prExecute: typeof fetchGitDeliveryPrExecute;
   // #3399: the governed PR-description preview -> approve -> apply lifecycle. Optional for the same
@@ -242,14 +240,13 @@ interface PrAsync extends PrAsyncState {
 // EXACT SAME input, then attaches the returned claim to the identical input before execute — the
 // mint route binds to that exact typed command, so the claim it returns is redeemable only for this
 // same target/title/body combination (mirrors GovernedMergeCard's runExecute). `prApprove` is
-// optional on the client (see GovernedPullRequestClient) — when absent, execute runs unapproved,
-// exactly as it did before #3387 (the BFF route itself is the fail-closed backstop).
+// optional on the client (see GovernedPullRequestClient), but absence fails closed before execute.
 function withMintedPrApproval(
   client: GovernedPullRequestClient,
   input: GitDeliveryPrInput,
 ): Promise<GitDeliveryPrInput> {
   const prApprove = client.prApprove;
-  if (prApprove === undefined) return Promise.resolve(input);
+  if (prApprove === undefined) return Promise.reject(new Error("pr-approval-client-unavailable"));
   return prApprove(input).then((approved): GitDeliveryPrInput => ({
     ...input,
     approval: approved.approval,

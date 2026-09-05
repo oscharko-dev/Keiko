@@ -56,6 +56,7 @@ describe("CodingToolGovernedDelegate", () => {
     const ports = governedPorts();
     const budget = {
       admitTool: vi.fn(() => undefined),
+      canChargePrompt: vi.fn(() => false),
       chargePrompt: vi.fn(() => false),
       observed: vi.fn(),
     };
@@ -90,6 +91,7 @@ describe("CodingToolGovernedDelegate", () => {
     const ports = { ...governedPorts(), verificationRunner };
     const budget = {
       admitTool: vi.fn(() => ({ check: (): boolean => allowed, settle })),
+      canChargePrompt: vi.fn(() => true),
       chargePrompt: vi.fn(() => true),
       observed: vi.fn(),
     };
@@ -126,6 +128,7 @@ describe("CodingToolGovernedDelegate", () => {
       };
       const budget = {
         admitTool: vi.fn(() => ({ check: (): boolean => repairLive, settle })),
+        canChargePrompt: (): boolean => true,
         chargePrompt: (): boolean => true,
         observed: vi.fn(),
       };

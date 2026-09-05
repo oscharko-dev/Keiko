@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerLogEvent } from "../observability/index.js";
-import { resolveProductionOpenCodeActivation } from "./productionOpenCodeActivation.js";
+import {
+  productionOpenCodeLoopbackEndpoints,
+  resolveProductionOpenCodeActivation,
+} from "./productionOpenCodeActivation.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { stageDevLaneFixture, type DevLaneFixture } from "./devLaneFixture/_support.js";
 import type { DevLaneOpenCodeTarget } from "./devLanePortableCodingRuntime.js";
@@ -65,6 +68,16 @@ afterEach(() => {
 });
 
 describe("production OpenCode activation", () => {
+  it("derives the model gateway and tool facade from one production loopback origin", () => {
+    const endpoints = productionOpenCodeLoopbackEndpoints({ KEIKO_UI_PORT: "1983" });
+    expect(endpoints).toEqual({
+      gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+      toolFacadeUrl: "http://127.0.0.1:1983/api/coding-sidecar/tool",
+    });
+    if (endpoints === undefined) throw new Error("expected production loopback endpoints");
+    expect(new URL(endpoints.gatewayUrl).origin).toBe(new URL(endpoints.toolFacadeUrl).origin);
+  });
+
   it("names platform-unqualified without a discoverable runtime on this platform", () => {
     const result = resolveProductionOpenCodeActivation(
       activationInput(

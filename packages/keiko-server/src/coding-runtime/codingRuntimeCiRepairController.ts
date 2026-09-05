@@ -20,6 +20,8 @@ export interface CiRepairExecutionLease {
 export interface CiRepairExecutionBudget {
   /** Called only after the existing authority owner admits the concrete tool action. */
   readonly admitTool: (request: CodingToolActionRequest) => CiRepairExecutionLease | undefined;
+  /** Checks whether a prompt charge fits without consuming the repair ledger. */
+  readonly canChargePrompt: (promptTokens: number) => boolean;
   /** The existing gateway has accepted this prompt reservation; false prevents provider dispatch. */
   readonly chargePrompt: (promptTokens: number) => boolean;
   readonly chargeDelegatedRead?: (delegationId: string, idempotencyKey: string) => boolean;
@@ -167,6 +169,22 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
         toolCalls: 0,
         promptTokens,
       }) !== undefined
+    );
+  }
+  public canChargePrompt(promptTokens: number): boolean {
+    const context = this.deps.context();
+    if (context === undefined) return true;
+    if (!context.stillAuthorized()) return false;
+    const result = this.accepted(context);
+    if (active(result.record) === undefined) return result.status !== "blocked";
+    return (
+      (result.status !== "blocked" || result.reason === "tool-budget-exhausted") &&
+      result.record !== undefined &&
+      chargeFits(result.record, {
+        chargeId: "prompt-admission",
+        toolCalls: 0,
+        promptTokens,
+      })
     );
   }
   public chargeDelegatedRead(delegationId: string, idempotencyKey: string): boolean {

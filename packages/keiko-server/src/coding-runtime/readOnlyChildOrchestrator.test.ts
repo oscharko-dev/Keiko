@@ -23,6 +23,7 @@ import type {
   ReadOnlyChildToolAttempt,
 } from "./readOnlyChildOrchestrator.js";
 import type { ReadOnlyChildEnvelope } from "./readOnlyChildEnvelope.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
 
 const CHILD_RUN_ID = "chr_child-1" as CodeTaskChildRunId;
 const READ: ReadOnlyChildToolAttempt = { toolClass: "workspace-read" };
@@ -109,6 +110,7 @@ function scriptedRunner(attempts: readonly ReadOnlyChildToolAttempt[]): ReadOnly
 
 interface Harness {
   readonly events: CodingWorkbenchRuntimeEvent[];
+  readonly logs: ServerLogEvent[];
   readonly deps: ReadOnlyChildOrchestratorDeps;
 }
 
@@ -121,9 +123,11 @@ function harness(
   } = {},
 ): Harness {
   const events: CodingWorkbenchRuntimeEvent[] = [];
+  const logs: ServerLogEvent[] = [];
   let seq = 0;
   return {
     events,
+    logs,
     deps: {
       runner,
       charger: overrides.charger ?? { chargeParentToolCall: () => true },
@@ -131,6 +135,7 @@ function harness(
       emit: (event): void => {
         events.push(event);
       },
+      activityLog: { write: (event): void => void logs.push(event) },
       clock: overrides.clock ?? { now: () => 0 },
       newEventId: () => `event-run-${String((seq += 1))}`,
     },
@@ -432,7 +437,7 @@ describe("createReadOnlyChildOrchestrator", () => {
     const runner: ReadOnlyChildRunner = {
       run: () => Promise.reject(new ReadOnlyChildTrustViolationError("fabricated-tool-denied")),
     };
-    const { events, deps } = harness(runner, { charger });
+    const { events, logs, deps } = harness(runner, { charger });
     const outcome = await createReadOnlyChildOrchestrator(deps).handleChildRequest(
       childRequest(),
       contextFor(),
@@ -444,6 +449,17 @@ describe("createReadOnlyChildOrchestrator", () => {
     expect(eventOfKind(events, "child-run-completed")).toMatchObject({
       auxiliaryOutcome: "denied",
       childResultCount: 0,
+    });
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      op: "coding-runtime.read-only-child.runner-failed",
+      correlationId: "run-2387",
+      errorKind: "ReadOnlyChildTrustViolationError",
+      extra: {
+        childRunId: CHILD_RUN_ID,
+        terminal: "denied",
+        reasonCode: "fabricated-tool-denied",
+      },
     });
   });
 
@@ -497,13 +513,27 @@ describe("createReadOnlyChildOrchestrator", () => {
     const runner: ReadOnlyChildRunner = {
       run: () => Promise.reject(new Error("secret stack trace: sk-should-never-leak")),
     };
-    const { events, deps } = harness(runner);
+    const { events, logs, deps } = harness(runner);
     await createReadOnlyChildOrchestrator(deps).handleChildRequest(childRequest(), contextFor());
     const diagnostic = eventOfKind(events, "failure-redacted");
     expect(diagnostic).toMatchObject({ failureCode: "failure-redacted", retryable: false });
     expect(typeof diagnostic.eventId).toBe("string");
     expect(diagnostic.eventId.length).toBeGreaterThan(0);
     expect(validateCodingWorkbenchRuntimeEvent(diagnostic).ok).toBe(true);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      op: "coding-runtime.read-only-child.runner-failed",
+      correlationId: "run-2387",
+      errorKind: "Error",
+      extra: {
+        childRunId: CHILD_RUN_ID,
+        terminal: "unavailable",
+        reasonCode: "child-runner-error",
+      },
+    });
+    expect(Array.isArray(logs[0]?.extra?.frames)).toBe(true);
+    expect(Array.isArray(logs[0]?.extra?.causeChain)).toBe(true);
+    expect(JSON.stringify(logs)).not.toContain("sk-should-never-leak");
   });
 
   it("re-checks authority after the runner resolves: a mid-run revocation yields stopped, not accepted", async () => {

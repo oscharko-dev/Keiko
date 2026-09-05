@@ -26,7 +26,7 @@ import { GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contract
 import { createRelationshipStorePort } from "./relationship-handlers.js";
 import type { RelationshipHandlerDeps } from "./relationship-handlers.js";
 import { runMigrations } from "./store/schema.js";
-import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import { createInMemoryUiStore, invalidRequest, type UiStore } from "./store/index.js";
 import {
   GIT_CHANGE_ROUTE_GROUP,
   handleGitChangeConnect,
@@ -410,6 +410,38 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     expect(ninth.body).toMatchObject({ error: { code: "GIT_CHANGE_SCOPE_LIMIT_REACHED" } });
     expect(chatStore.findChatById(chat.id)?.gitChangeScopes ?? []).toHaveLength(8);
   });
+
+  it("archives the created relationship and reports a distinct persistence failure", async () => {
+    const { deps, chatStore } = buildHarness({
+      runnerScript: {},
+      snapshots: [fixtureSnapshot()],
+    });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    vi.spyOn(chatStore, "updateChat").mockImplementationOnce(() => {
+      throw invalidRequest("simulated malformed persisted scope");
+    });
+    const events: { readonly op: string; readonly extra?: Readonly<Record<string, unknown>> }[] =
+      [];
+    const wiredDeps = {
+      ...deps,
+      activityLog: { write: (event): void => void events.push(event) },
+    } satisfies UiHandlerDeps;
+
+    const result = asRouteResult(
+      await connectHandler(makeCtx(connectRequestBody(chat.id)), wiredDeps),
+    );
+
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ error: { code: "GIT_CHANGE_SCOPE_PERSIST_FAILED" } });
+    const relationship = requireDefined(deps.relationship, "relationship deps").store;
+    expect(relationship.getRelationship("ws-1", "rel-00000001")?.lifecycleState).toBe("archived");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git-change.chat.blocked",
+        extra: { reason: "GIT_CHANGE_SCOPE_PERSIST_FAILED" },
+      }),
+    );
+  });
 });
 
 function pullRequestIdentity(
@@ -622,6 +654,55 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
     expect(scopes).toHaveLength(1);
     expect(requireDefined(scopes[0], "unchanged persisted scope").relationshipId).toBe(
       oldRelationshipId,
+    );
+  });
+
+  it("rolls back the chat and archives the replacement when the old edge loses its etag", async () => {
+    const original = fixtureSnapshot();
+    const moved = fixtureSnapshot({ headSha: "f".repeat(40), snapshotDigest: "9".repeat(64) });
+    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [original, moved] });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const connected = asRouteResult(
+      await connectHandler(makeCtx(connectRequestBody(chat.id)), deps),
+    );
+    const oldRelationshipId = requireDefined(
+      (connected.body as GitChangeScopeBody).scope,
+      "connect response scope",
+    ).relationshipId;
+    const relationship = requireDefined(deps.relationship, "relationship deps");
+    const realStore = relationship.store;
+    const missingOldEtagStore: typeof realStore = {
+      ...realStore,
+      getEtag: (workspaceId, id) =>
+        id === oldRelationshipId ? undefined : realStore.getEtag(workspaceId, id),
+    };
+    const events: { readonly op: string; readonly extra?: Readonly<Record<string, unknown>> }[] =
+      [];
+    const wiredDeps: UiHandlerDeps = {
+      ...deps,
+      relationship: { ...relationship, store: missingOldEtagStore },
+      activityLog: { write: (event): void => void events.push(event) },
+    };
+
+    const result = asRouteResult(
+      await refreshHandler(
+        makeCtx({ schemaVersion: "1", chatId: chat.id, relationshipId: oldRelationshipId }),
+        wiredDeps,
+      ),
+    );
+
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ error: { code: "GIT_CHANGE_RELATIONSHIP_CONFLICT" } });
+    expect(chatStore.findChatById(chat.id)?.gitChangeScopes?.[0]?.relationshipId).toBe(
+      oldRelationshipId,
+    );
+    expect(realStore.getRelationship("ws-1", oldRelationshipId)?.lifecycleState).toBe("active");
+    expect(realStore.getRelationship("ws-1", "rel-00000002")?.lifecycleState).toBe("archived");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git-change.chat.blocked",
+        extra: { reason: "relationship-conflict" },
+      }),
     );
   });
 });

@@ -28,9 +28,14 @@ export function reservePromptWithCiRepair(
   const authenticated = authority.authenticateCapability(capability, "model-gateway");
   if (authenticated.ok) {
     const budget = budgetForRun(authenticated.binding.runId);
-    if (budget?.chargePrompt(promptTokens) === false) {
+    if (budget?.canChargePrompt(promptTokens) === false) {
       return { ok: false, reason: "authority-budget-exceeded" };
     }
+    const reservation = authority.reservePromptTokens(capability, promptTokens);
+    if (!reservation.ok || budget === undefined) return reservation;
+    return budget.chargePrompt(promptTokens)
+      ? reservation
+      : { ok: false, reason: "authority-budget-exceeded" };
   }
   return authority.reservePromptTokens(capability, promptTokens);
 }

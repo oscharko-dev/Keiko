@@ -446,7 +446,7 @@ describe("GovernedPullRequestCard", () => {
     );
   });
 
-  it("still executes unapproved when the injected client has no prApprove (legacy seam)", async () => {
+  it("fails closed before execute when the injected client has no approval capability", async () => {
     const prExecute = vi.fn(async () => makeExecute());
     const client = makeClient({ prApprove: undefined, prExecute });
     render(
@@ -458,10 +458,12 @@ describe("GovernedPullRequestCard", () => {
     );
     fillForm();
     fireEvent.click(screen.getByTestId("gpr-submit"));
-    expect(await screen.findByTestId("gpr-outcome")).toBeInTheDocument();
-    expect(prExecute).toHaveBeenCalledWith(
-      expect.not.objectContaining({ approval: expect.anything() }),
+    await waitFor(() =>
+      expect(screen.getByTestId("gpr-live")).toHaveTextContent(
+        "Pull request action failed: pr-approval-client-unavailable",
+      ),
     );
+    expect(prExecute).not.toHaveBeenCalled();
   });
 });
 

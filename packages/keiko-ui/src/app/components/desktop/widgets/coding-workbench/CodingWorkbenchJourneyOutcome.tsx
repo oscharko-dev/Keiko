@@ -99,7 +99,8 @@ export function createPrMarkReadyProposeHandler(
   const request = prMarkReadyProposalRequestFor(outcome, projectId);
   if (request === undefined) return undefined;
   return async (): Promise<void> => {
-    await proposePrMarkReady(request);
+    const result = await proposePrMarkReady(request);
+    if (result.status !== "succeeded") throw new Error(`pr-mark-ready-${result.status}`);
   };
 }
 /** A historical outcome never reconstructs a grant or completes a provider mutation. */

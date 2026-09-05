@@ -383,6 +383,22 @@ describe("pr-mark-ready proposal wiring", () => {
     );
   });
 
+  it.each(["failed", "aborted", "approval-required"] as const)(
+    "rejects the action when mark-ready returns %s instead of reporting a successful click",
+    async (status) => {
+      const { outcome } = journeyFixture();
+      const handler = createPrMarkReadyProposeHandler(outcome, PROJECT_ID);
+      if (handler === undefined) throw new Error("Expected a handler for a complete observation");
+      proposePrMarkReadyMock.mockResolvedValueOnce({
+        schemaVersion: "1",
+        actionKind: "pr-mark-ready",
+        status,
+      });
+
+      await expect(handler()).rejects.toThrow(`pr-mark-ready-${status}`);
+    },
+  );
+
   it("returns no handler at all when the observation cannot yet back a genuine request", () => {
     const { outcome } = journeyFixture();
     expect(

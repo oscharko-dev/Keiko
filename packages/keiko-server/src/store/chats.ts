@@ -429,7 +429,7 @@ function hasValidGitChangeIdentityFields(
   return hasValidGitChangeRefFields(scope) && hasValidGitChangeDigestFields(scope);
 }
 
-function decodeGitChangeScopeObject(raw: unknown): ChatGitChangeScope | undefined {
+export function parseChatGitChangeScope(raw: unknown): ChatGitChangeScope | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
   const scope = raw as Record<string, unknown>;
   if (scope.kind !== "git-change" || !hasValidGitChangeIdentityFields(scope)) return undefined;
@@ -480,7 +480,7 @@ function decodeGitChangeScopes(raw: string | null): readonly ChatGitChangeScope[
   }
   const scopes: ChatGitChangeScope[] = [];
   for (const entry of parsed) {
-    const decoded = decodeGitChangeScopeObject(entry);
+    const decoded = parseChatGitChangeScope(entry);
     if (decoded === undefined) return undefined;
     scopes.push(decoded);
   }
@@ -820,7 +820,7 @@ function validatePatchGitChangeScopes(
     );
   }
   for (const scope of scopes) {
-    if (decodeGitChangeScopeObject(scope) === undefined) {
+    if (parseChatGitChangeScope(scope) === undefined) {
       throw invalidRequest("gitChangeScopes entries must be well-formed git-change scope objects.");
     }
   }

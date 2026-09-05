@@ -11,6 +11,7 @@ import {
   validateCodingWorkbenchRuntimeState,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
 import {
   createInMemoryRuntimeCapabilityStore,
   type RuntimeCapabilityBinding,
@@ -305,6 +306,47 @@ function serviceInState(state: CodingWorkbenchRuntimeStateName): {
 }
 
 describe("CodingRuntimeAuthorityService", () => {
+  it("logs the exact minted authority grants for lower-mode reconstruction", () => {
+    const activity: ServerLogEvent[] = [];
+    const authority = new CodingRuntimeAuthorityService(
+      new EditorAgentAuthorityRegistry(),
+      () => "run-1",
+      () => "nonce-1",
+      createInMemorySupervisedCodingApprovalStore(),
+      createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.parse(NOW) }),
+      { write: (event): void => void activity.push(event) },
+    );
+    const trusted: CodingRuntimeTrustedContext = {
+      ...context(),
+      actionClasses: [
+        "workspace-read",
+        "workspace-write",
+        "verification",
+        "command-execution",
+        "delivery-substrate",
+        "connector-access",
+      ],
+      connectorScopes: ["source-control.read", "source-control.write"],
+      networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+    };
+    const confirmation = authority.confirmStart(intent, trusted.taskId, trusted.operatorId, NOW);
+    expect(authority.mintStart(intent, trusted, confirmation, NOW).ok).toBe(true);
+
+    expect(activity).toContainEqual({
+      category: "security",
+      op: "coding-runtime.authority.minted",
+      correlationId: "run-1",
+      level: "info",
+      extra: {
+        runId: "run-1",
+        effectiveMode: "supervised-coding",
+        actionClasses: trusted.actionClasses,
+        connectorScopes: trusted.connectorScopes,
+        networkPolicyMode: "deny-all",
+      },
+    });
+  });
+
   it("atomically charges the exact prompt budget and fails closed after exhaustion", async () => {
     const authority = promptBudgetService();
     const minted = mint(authority);

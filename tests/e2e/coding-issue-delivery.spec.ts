@@ -400,6 +400,8 @@ for (const [index, mode] of (
     });
     await expectDenied("pr-execute");
     const number = createdRecord.pullRequest?.number;
+    const beforeDescriptions = descriptionModel().requests;
+    await finish(page);
     await page.reload();
     await expect(
       page
@@ -410,8 +412,6 @@ for (const [index, mode] of (
       page.getByRole("region", { name: "Reviewed pull request description" }),
     ).toHaveCount(0);
     expect((await snapshot(page)).draftDelivery).toEqual(createdRecord);
-    const beforeDescriptions = descriptionModel().requests;
-    await finish(page);
     // #3401: the terminal transition dispatches through deps.ts's real production dispatcher and
     // Model Gateway. The lower loopback provider derives its citations from the captured snapshot's
     // actual evidence ids; the retained proposal below proves this is a reviewable bound artifact.

@@ -17,6 +17,7 @@
 import { isGitObjectId } from "./git-repository.js";
 import type { PrDescriptionApplicationState } from "./pr-description-application.js";
 import {
+  isPrDescriptionArtifact,
   PR_DESCRIPTION_OUTCOMES,
   type PrDescriptionArtifact,
   type PrDescriptionOutcome,
@@ -97,6 +98,22 @@ export interface WorkbenchDescriptionDraftReview {
   readonly proposalId: string;
   readonly expiresAt: string;
   readonly artifact: PrDescriptionArtifact;
+}
+
+const DRAFT_REVIEW_KEYS = ["schemaVersion", "proposalId", "expiresAt", "artifact"] as const;
+
+export function isWorkbenchDescriptionDraftReview(
+  value: unknown,
+): value is WorkbenchDescriptionDraftReview {
+  if (!record(value) || Reflect.ownKeys(value).length !== DRAFT_REVIEW_KEYS.length) return false;
+  return (
+    DRAFT_REVIEW_KEYS.every((key) => Object.hasOwn(value, key)) &&
+    value.schemaVersion === WORKBENCH_DESCRIPTION_STATUS_SCHEMA_VERSION &&
+    typeof value.proposalId === "string" &&
+    RUN_ID.test(value.proposalId) &&
+    timestamp(value.expiresAt) &&
+    isPrDescriptionArtifact(value.artifact)
+  );
 }
 
 export interface WorkbenchDescriptionGenerationBinding {

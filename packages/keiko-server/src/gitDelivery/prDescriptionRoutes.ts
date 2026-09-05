@@ -738,6 +738,7 @@ function logModelEgressDenied(activityLog: ServerLogSink, correlationId: string)
     correlationId,
     level: "warn",
     status: 403,
+    errorKind: "permission",
   });
 }
 

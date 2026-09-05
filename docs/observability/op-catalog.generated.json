@@ -1506,6 +1506,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-runtime.read-only-child.runner-failed",
+      "category": "security",
+      "site": "packages/keiko-server/src/coding-runtime/readOnlyChildOrchestrator.ts:500",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-runtime.readiness.failed",
       "category": "process",
       "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:557",
@@ -1612,7 +1618,7 @@
     {
       "op": "coding-runtime.verification",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:612",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:613",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1981,7 +1987,7 @@
     {
       "op": "git.ci-repair.budget",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionCiRepairRuntime.ts:132",
+      "site": "packages/keiko-server/src/coding-runtime/productionCiRepairRuntime.ts:133",
       "package": "keiko-server"
     },
     {
@@ -2615,20 +2621,20 @@
     {
       "op": "project.create.trust.grant",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:364",
+      "site": "packages/keiko-server/src/store-handlers.ts:366",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "setup",
-      "site": "packages/keiko-server/src/store-handlers.ts:476",
+      "site": "packages/keiko-server/src/store-handlers.ts:478",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:487",
+      "site": "packages/keiko-server/src/store-handlers.ts:489",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3103,6 +3109,7 @@
     "coding-runtime.lifecycle",
     "coding-runtime.opencode-composition",
     "coding-runtime.operation.refused",
+    "coding-runtime.read-only-child.runner-failed",
     "coding-runtime.readiness.failed",
     "coding-runtime.run.issue-binding-refused",
     "coding-runtime.run.issue-context-attached",

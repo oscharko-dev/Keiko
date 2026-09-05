@@ -70,6 +70,8 @@ type GitChangeErrorCode =
   | "GIT_CHANGE_CHAT_NOT_FOUND"
   | "GIT_CHANGE_SCOPE_NOT_FOUND"
   | "GIT_CHANGE_SCOPE_LIMIT_REACHED"
+  | "GIT_CHANGE_SCOPE_PERSIST_FAILED"
+  | "GIT_CHANGE_RELATIONSHIP_CONFLICT"
   | "GIT_CHANGE_ENGINE_UNAVAILABLE";
 
 const SAFE_MESSAGES: Readonly<Record<GitChangeErrorCode, string>> = {
@@ -80,6 +82,9 @@ const SAFE_MESSAGES: Readonly<Record<GitChangeErrorCode, string>> = {
   GIT_CHANGE_ENGINE_UNAVAILABLE: "The relationship engine is not available.",
   GIT_CHANGE_SCOPE_LIMIT_REACHED:
     "This chat already has the maximum number of connected git-change scopes.",
+  GIT_CHANGE_SCOPE_PERSIST_FAILED: "The connected git-change scope could not be persisted.",
+  GIT_CHANGE_RELATIONSHIP_CONFLICT:
+    "The connected git-change relationship changed before the update completed.",
 };
 
 function errResult(status: number, code: GitChangeErrorCode): RouteResult {
@@ -313,11 +318,15 @@ function createGitChangeRelationship(
   );
 }
 
-function archiveGitChangeRelationship(deps: UiHandlerDeps, workspaceId: string, id: string): void {
+function archiveGitChangeRelationship(
+  deps: UiHandlerDeps,
+  workspaceId: string,
+  id: string,
+): boolean {
   const relationship = deps.relationship;
-  if (relationship === undefined) return;
+  if (relationship === undefined) return false;
   const etag = relationship.store.getEtag(workspaceId, id);
-  if (etag === undefined) return;
+  if (etag === undefined) return false;
   relationship.store.updateLifecycle(
     { workspaceId, id, currentEtag: etag, to: "archived" },
     (result) => ({
@@ -329,6 +338,7 @@ function archiveGitChangeRelationship(deps: UiHandlerDeps, workspaceId: string, 
       payload: { lifecycle: result.relationship.lifecycleState },
     }),
   );
+  return true;
 }
 
 // ─── Scope assembly ─────────────────────────────────────────────────────────────────────────────
@@ -493,7 +503,12 @@ function persistConnectedScope(
   } catch (error) {
     if (error instanceof UiStoreError) {
       archiveGitChangeRelationship(deps, workspaceId, scope.relationshipId);
-      return errResult(409, "GIT_CHANGE_SCOPE_LIMIT_REACHED");
+      const code =
+        error.code === "NOT_FOUND"
+          ? "GIT_CHANGE_CHAT_NOT_FOUND"
+          : "GIT_CHANGE_SCOPE_PERSIST_FAILED";
+      logGitChangeEvent(deps, "git-change.chat.blocked", correlationId, { reason: code });
+      return errResult(code === "GIT_CHANGE_CHAT_NOT_FOUND" ? 404 : 409, code);
     }
     throw error;
   }
@@ -505,6 +520,57 @@ function persistConnectedScope(
   });
   const result: GitChangeConnectResult = { status: "connected", scope };
   return { status: 200, body: result };
+}
+
+function compensateFailedStaleReplacement(
+  deps: UiHandlerDeps,
+  workspaceId: string,
+  chatId: string,
+  existingScopes: readonly ChatGitChangeScope[],
+  replacementRelationshipId: string,
+): void {
+  deps.store.updateChat(chatId, { gitChangeScopes: existingScopes });
+  archiveGitChangeRelationship(deps, workspaceId, replacementRelationshipId);
+}
+
+function replaceStaleScope(
+  deps: UiHandlerDeps,
+  workspaceId: string,
+  chatId: string,
+  found: FoundGitChangeScope,
+  staleScope: ChatGitChangeScope,
+): RouteResult | undefined {
+  const remaining = found.existing.filter(
+    (entry) => entry.relationshipId !== found.scope.relationshipId,
+  );
+  try {
+    deps.store.updateChat(chatId, { gitChangeScopes: [...remaining, staleScope] });
+  } catch (error) {
+    archiveGitChangeRelationship(deps, workspaceId, staleScope.relationshipId);
+    throw error;
+  }
+  let archived: boolean;
+  try {
+    archived = archiveGitChangeRelationship(deps, workspaceId, found.scope.relationshipId);
+  } catch (error) {
+    compensateFailedStaleReplacement(
+      deps,
+      workspaceId,
+      chatId,
+      found.existing,
+      staleScope.relationshipId,
+    );
+    throw error;
+  }
+  if (archived) return undefined;
+  compensateFailedStaleReplacement(
+    deps,
+    workspaceId,
+    chatId,
+    found.existing,
+    staleScope.relationshipId,
+  );
+  return errResult(409, "GIT_CHANGE_RELATIONSHIP_CONFLICT");
 }
 
 export async function handleGitChangeConnect(
@@ -632,16 +698,13 @@ function persistStaleScope(
     ),
     descriptionStatus: "stale",
   };
-  const remaining = found.existing.filter(
-    (entry) => entry.relationshipId !== found.scope.relationshipId,
-  );
-  try {
-    deps.store.updateChat(chatId, { gitChangeScopes: [...remaining, staleScope] });
-  } catch (error) {
-    archiveGitChangeRelationship(deps, workspaceId, staleScope.relationshipId);
-    throw error;
+  const conflict = replaceStaleScope(deps, workspaceId, chatId, found, staleScope);
+  if (conflict !== undefined) {
+    logGitChangeEvent(deps, "git-change.chat.blocked", correlationId, {
+      reason: "relationship-conflict",
+    });
+    return conflict;
   }
-  archiveGitChangeRelationship(deps, workspaceId, found.scope.relationshipId);
   logGitChangeEvent(deps, "git-change.chat.stale", correlationId, {
     relationshipId: staleScope.relationshipId,
     remoteDigestPrefix: staleScope.remoteDigest.slice(0, 8),

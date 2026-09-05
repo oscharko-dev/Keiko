@@ -46,7 +46,8 @@ import {
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -90,6 +91,7 @@ type GitDeliveryPrMarkReadyErrorCode =
   | "GIT_DELIVERY_PR_MARK_READY_PAYLOAD_TOO_LARGE"
   | "GIT_DELIVERY_PR_MARK_READY_FORBIDDEN_PAYLOAD"
   | "GIT_DELIVERY_PR_MARK_READY_UNKNOWN_PROJECT"
+  | "GIT_DELIVERY_PR_MARK_READY_EXECUTION_FAILED"
   | "GIT_DELIVERY_PR_MARK_READY_WORKTREE_UNAVAILABLE";
 
 const SAFE_MESSAGES: Readonly<Record<GitDeliveryPrMarkReadyErrorCode, string>> = {
@@ -98,6 +100,8 @@ const SAFE_MESSAGES: Readonly<Record<GitDeliveryPrMarkReadyErrorCode, string>> =
   GIT_DELIVERY_PR_MARK_READY_FORBIDDEN_PAYLOAD:
     "The request contained a forbidden field. Requests may not carry credentials or auth headers.",
   GIT_DELIVERY_PR_MARK_READY_UNKNOWN_PROJECT: "The requested project is not a known workspace.",
+  GIT_DELIVERY_PR_MARK_READY_EXECUTION_FAILED:
+    "The mark-ready operation could not be completed. Refresh the pull request and try again.",
   GIT_DELIVERY_PR_MARK_READY_WORKTREE_UNAVAILABLE:
     "The repository worktree could not be inspected. Confirm the project is a Git repository.",
 };
@@ -347,6 +351,27 @@ function log(
   });
 }
 
+function logMarkReadyFailure(
+  activityLog: ServerLogSink | undefined,
+  correlationId: string,
+  phaseReached: "readiness" | "dispatch",
+  error: unknown,
+): void {
+  (activityLog ?? processServerLogSink()).write({
+    category: "diagnostic",
+    op: "git.delivery.mutation.failed",
+    correlationId,
+    level: "error",
+    errorKind: errorKindOf(error),
+    extra: {
+      actionKind: "pr-mark-ready",
+      phaseReached,
+      frames: keikoStackFrames(error),
+      causeChain: causeChain(error),
+    },
+  });
+}
+
 // ─── Approve handler (mints the server-issued approval claim execute consumes) ────────────────────
 
 export interface GitDeliveryPrMarkReadyApproveResponseBody {
@@ -449,6 +474,21 @@ interface GovernedMarkReadyDispatch {
   readonly redact: (value: string) => string;
 }
 
+function reportReadinessFailure(input: GovernedMarkReadyDispatch, error: unknown): void {
+  logMarkReadyFailure(input.options.activityLog, input.correlationId, "readiness", error);
+  emitServerDiagnostic(
+    input.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: input.correlationId,
+      operation: "POST /api/git-delivery/pr/mark-ready/execute",
+      source: "pr-mark-ready-ci-read",
+      error,
+      summary: "The bounded status read was unavailable.",
+      redact: input.redact,
+    }),
+  );
+}
+
 // #3389 (AC3): the continuity guard runs immediately before the actual `gh` dispatch, mirroring the
 // generic PR/push/merge routes — a run whose authority was revoked or replaced between admission and
 // this attempt never reaches the adapter (F4: logged, never a real spawn).
@@ -472,17 +512,7 @@ async function dispatchGovernedMarkReady(
     continuityGuard,
   );
   if (readiness.readFailure !== undefined) {
-    emitServerDiagnostic(
-      input.diagnostics,
-      serverDiagnosticFromError({
-        correlationId,
-        operation: "POST /api/git-delivery/pr/mark-ready/execute",
-        source: "pr-mark-ready-ci-read",
-        error: readiness.readFailure.error,
-        summary: "The bounded status read was unavailable.",
-        redact: input.redact,
-      }),
-    );
+    reportReadinessFailure(input, readiness.readFailure.error);
   }
   if (readiness.drifted) {
     return {
@@ -559,8 +589,20 @@ async function dispatchOrBlock(
     if (denialCapture.result !== undefined) return denialCapture.result;
     logMarkReadyOutcome(options, correlationId, command, result);
     return { status: 200, body: deps.redactor(markReadyExecuteResponse(result)) };
-  } catch {
-    return errResult(409, "GIT_DELIVERY_PR_MARK_READY_WORKTREE_UNAVAILABLE");
+  } catch (error) {
+    logMarkReadyFailure(options.activityLog, correlationId, "dispatch", error);
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "POST /api/git-delivery/pr/mark-ready/execute",
+        source: "pr-mark-ready-dispatch",
+        error,
+        summary: "server-operation-failed",
+        redact: (value): string => String(deps.redactor(value)),
+      }),
+    );
+    return errResult(502, "GIT_DELIVERY_PR_MARK_READY_EXECUTION_FAILED");
   }
 }
 

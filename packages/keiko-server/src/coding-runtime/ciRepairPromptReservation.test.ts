@@ -12,6 +12,7 @@ type Authority = Pick<
 function fakeBudget(chargePrompt: (promptTokens: number) => boolean): CiRepairExecutionBudget {
   return {
     admitTool: () => undefined,
+    canChargePrompt: chargePrompt,
     chargePrompt,
     observed: () => undefined,
   };

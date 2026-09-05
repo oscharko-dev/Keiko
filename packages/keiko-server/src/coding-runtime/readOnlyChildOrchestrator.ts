@@ -36,6 +36,8 @@ import {
   deriveReadOnlyChildEnvelope,
 } from "./readOnlyChildEnvelope.js";
 import type { ChildAgentRequestV1, ReadOnlyChildEnvelope } from "./readOnlyChildEnvelope.js";
+import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 
 /** A governance terminal from the gate or the orchestrator — every non-accepted outcome status. */
 export type ReadOnlyChildTerminal = Exclude<AuxiliaryOutcomeStatus, "accepted">;
@@ -131,6 +133,7 @@ export interface ReadOnlyChildOrchestratorDeps {
   readonly charger: ReadOnlyChildBudgetCharger;
   readonly cancellation: ReadOnlyChildCancellationSource;
   readonly emit: (event: CodingWorkbenchRuntimeEvent) => void;
+  readonly activityLog: ServerLogSink;
   readonly clock: { readonly now: () => number };
   /** Produces an evidence-safe unique event id for each emitted lifecycle event. */
   readonly newEventId: () => string;
@@ -292,14 +295,9 @@ async function runChild(
     // malformed arguments — a governance outcome, not lost infrastructure), else a content-free
     // `unavailable`. Either way, a redacted diagnostic ties the opaque outcome to a correlatable
     // event record.
-    emitRunnerFault(deps, context.parentAuthority.runId);
-    if (state.latched !== undefined) {
-      return rejectedOutcome(state.latched.terminal, state.latched.reasonCode);
-    }
-    if (error instanceof ReadOnlyChildTrustViolationError) {
-      return rejectedOutcome("denied", error.reasonCode);
-    }
-    return rejectedOutcome("unavailable", "child-runner-error");
+    const failure = childRunnerFailure(state, error);
+    emitRunnerFault(deps, context.parentAuthority.runId, childRequest.childRunId, failure, error);
+    return rejectedOutcome(failure.terminal, failure.reasonCode);
   } finally {
     cleanup();
   }
@@ -479,8 +477,38 @@ function emitCompleted(
   });
 }
 
+function childRunnerFailure(
+  state: GateState,
+  error: unknown,
+): { readonly terminal: ReadOnlyChildTerminal; readonly reasonCode: string } {
+  if (state.latched !== undefined) return state.latched;
+  return error instanceof ReadOnlyChildTrustViolationError
+    ? { terminal: "denied", reasonCode: error.reasonCode }
+    : { terminal: "unavailable", reasonCode: "child-runner-error" };
+}
+
 /** A content-free, redacted diagnostic tying an opaque runner fault to a correlatable event id. */
-function emitRunnerFault(deps: ReadOnlyChildOrchestratorDeps, parentRunId: string): void {
+function emitRunnerFault(
+  deps: ReadOnlyChildOrchestratorDeps,
+  parentRunId: string,
+  childRunId: CodeTaskChildRunId,
+  failure: { readonly terminal: ReadOnlyChildTerminal; readonly reasonCode: string },
+  error: unknown,
+): void {
+  deps.activityLog.write({
+    category: "security",
+    op: "coding-runtime.read-only-child.runner-failed",
+    correlationId: parentRunId,
+    level: "warn",
+    errorKind: errorKindOf(error),
+    extra: {
+      childRunId,
+      terminal: failure.terminal,
+      reasonCode: failure.reasonCode,
+      frames: keikoStackFrames(error),
+      causeChain: causeChain(error),
+    },
+  });
   publishRuntimeEvent(deps, {
     schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
     eventId: deps.newEventId(),

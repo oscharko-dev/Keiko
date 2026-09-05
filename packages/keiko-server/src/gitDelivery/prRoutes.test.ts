@@ -1432,6 +1432,7 @@ describe("pr mark-ready routes (#3389)", () => {
   it("emits a correlation-keyed diagnostic when the live CI read throws", async () => {
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const approval = await mintMarkReadyApproval(approvalStore);
+    const activity: ServerLogEvent[] = [];
     const diagnostics: ServerDiagnosticRecord[] = [];
     const diagnosticSink: ServerDiagnosticSink = {
       record: (record): void => void diagnostics.push(record),
@@ -1439,6 +1440,7 @@ describe("pr mark-ready routes (#3389)", () => {
     const res = await createHandlePrMarkReadyExecute({
       approvalStore,
       now: () => 1_700_000_000_001,
+      activityLog: { write: (event): void => void activity.push(event) },
       ciReaderFactory: () => ({
         readFacts: (): Promise<GitCiFactsResult> =>
           Promise.reject(new Error("provider response contained a secret")),
@@ -1456,6 +1458,58 @@ describe("pr mark-ready routes (#3389)", () => {
       message: "The bounded status read was unavailable.",
     });
     expect(JSON.stringify(diagnostics[0])).not.toContain("provider response contained a secret");
+    const failure = activity.find((event) => event.op === "git.delivery.mutation.failed");
+    expect(failure).toMatchObject({
+      correlationId: "corr-ci-read",
+      level: "error",
+      errorKind: "Error",
+      extra: { actionKind: "pr-mark-ready", phaseReached: "readiness" },
+    });
+    expect(failure?.extra?.frames).toBeDefined();
+    expect(failure?.extra?.causeChain).toBeDefined();
+    expect(JSON.stringify(failure)).not.toContain("provider response contained a secret");
+  });
+
+  it("reports and logs an unexpected mark-ready adapter failure without mislabelling the worktree", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = await mintMarkReadyApproval(approvalStore);
+    const activity: ServerLogEvent[] = [];
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_001,
+      activityLog: { write: (event): void => void activity.push(event) },
+      ciReaderFactory: cleanCiReaderFactory,
+      adapterFactory: (): GitPullRequestMarkReadyAdapter => ({
+        markPullRequestReady: (): Promise<GitPrMarkReadyExecResult> =>
+          Promise.reject(new Error("provider response contained another secret")),
+      }),
+    })(
+      {
+        ...ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })),
+        correlationId: "corr-mark-ready-failed",
+      },
+      deps({ diagnostics: { record: (record): void => void diagnostics.push(record) } }),
+    );
+
+    expect(res).toMatchObject({
+      status: 502,
+      body: { error: { code: "GIT_DELIVERY_PR_MARK_READY_EXECUTION_FAILED" } },
+    });
+    expect(activity.find((event) => event.op === "git.delivery.mutation.failed")).toMatchObject({
+      correlationId: "corr-mark-ready-failed",
+      level: "error",
+      errorKind: "Error",
+      extra: { actionKind: "pr-mark-ready", phaseReached: "dispatch" },
+    });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      correlationId: "corr-mark-ready-failed",
+      source: "pr-mark-ready-dispatch",
+    });
+    expect(JSON.stringify({ activity, diagnostics })).not.toContain(
+      "provider response contained another secret",
+    );
   });
 
   it.each([

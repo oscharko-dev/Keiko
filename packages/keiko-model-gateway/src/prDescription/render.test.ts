@@ -5,6 +5,7 @@ import {
   summarizeGitChangeSnapshotCompleteness,
 } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import { PR_DESCRIPTION_ATTRIBUTION } from "@oscharko-dev/keiko-contracts/runtime/pr-description-region";
+import { isWorkbenchDescriptionDraftReview } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
 import type { GitChangeSnapshot } from "@oscharko-dev/keiko-contracts";
 import { resolvePrDescriptionBrandingFromConfig } from "../config.js";
 import type { GatewayConfig } from "../types.js";
@@ -71,6 +72,27 @@ function gatewayConfigWithBranding(logoUrl: string | undefined): GatewayConfig {
 // Issue #3398 (child correction 8): the config-derived branding must actually change the
 // rendered footer, not merely resolve to a differently-shaped object nobody reads.
 describe("PR-description footer branding, threaded from GatewayConfig (#3398)", () => {
+  it("produces an artifact accepted by the complete Workbench draft-review validator", () => {
+    const evidenceId = "e".repeat(64);
+    const artifact = buildPrDescriptionArtifact({
+      ...baseInput(),
+      candidate: {
+        summary: [{ text: "Bound change summary", evidenceIds: [evidenceId] }],
+        keyChanges: [{ text: "One source change", evidenceIds: [evidenceId] }],
+        risks: [],
+        reviewerFocus: [],
+      },
+    });
+    expect(
+      isWorkbenchDescriptionDraftReview({
+        schemaVersion: "1",
+        proposalId: "proposal-1",
+        expiresAt: "2026-09-05T18:00:00.000Z",
+        artifact,
+      }),
+    ).toBe(true);
+  });
+
   it("renders the logo when the configured URL clears validatedPrDescriptionLogoUrl", () => {
     const branding = resolvePrDescriptionBrandingFromConfig(gatewayConfigWithBranding(IMMUTABLE));
     const artifact = buildPrDescriptionArtifact({ ...baseInput(), branding });

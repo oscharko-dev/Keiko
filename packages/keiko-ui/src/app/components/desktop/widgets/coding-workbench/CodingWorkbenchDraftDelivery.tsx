@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type {
@@ -129,6 +129,22 @@ type WorkbenchDescriptionDraftReader = (
   signal?: AbortSignal,
 ) => Promise<CodingWorkbenchDescriptionDraftResult>;
 
+function descriptionDraftTargetKey(target: WorkbenchDescriptionDraftTarget | undefined): string {
+  return target === undefined
+    ? ""
+    : [target.runId, target.proposalId, target.snapshotDigest].join("\u0000");
+}
+
+function draftMatchesTarget(
+  draft: WorkbenchDescriptionDraftReview,
+  target: WorkbenchDescriptionDraftTarget,
+): boolean {
+  return (
+    draft.proposalId === target.proposalId &&
+    draft.artifact.binding.snapshotDigest === target.snapshotDigest
+  );
+}
+
 function descriptionReviewTarget(
   status: WorkbenchDescriptionStatus,
   delivery: DraftDeliveryRecord | undefined,
@@ -227,23 +243,7 @@ function WorkbenchDescriptionReview({
   readonly reviewDraft: WorkbenchDescriptionDraftReader;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const [draft, setDraft] = useState<WorkbenchDescriptionDraftReview>();
-  const [unavailable, setUnavailable] = useState(false);
-  useEffect(() => {
-    setDraft(undefined);
-    setUnavailable(false);
-  }, [draftTarget?.proposalId]);
-  const openDraft = useCallback((): void => {
-    if (draftTarget === undefined) return;
-    reviewDraft(draftTarget.runId, draftTarget.proposalId, draftTarget.snapshotDigest)
-      .then((result) => setDraft(result.draft))
-      .catch((error: unknown) => {
-        setUnavailable(true);
-        reportClientDiagnostic("[keiko] workbench description draft review failed", {
-          correlationId: correlationIdOf(error) ?? draftTarget.runId,
-        });
-      });
-  }, [draftTarget, reviewDraft]);
+  const { draft, unavailable, openDraft } = useWorkbenchDraftReview(draftTarget, reviewDraft);
   if (applicationTarget !== undefined && onReview !== undefined) {
     return <DescriptionReviewButton onClick={() => onReview(applicationTarget)} />;
   }
@@ -261,6 +261,49 @@ function WorkbenchDescriptionReview({
       ) : null}
     </>
   );
+}
+
+function useWorkbenchDraftReview(
+  draftTarget: WorkbenchDescriptionDraftTarget | undefined,
+  reviewDraft: WorkbenchDescriptionDraftReader,
+): {
+  readonly draft: WorkbenchDescriptionDraftReview | undefined;
+  readonly unavailable: boolean;
+  readonly openDraft: () => void;
+} {
+  const [draft, setDraft] = useState<WorkbenchDescriptionDraftReview>();
+  const [unavailable, setUnavailable] = useState(false);
+  const reviewGeneration = useRef(0);
+  const targetKey = descriptionDraftTargetKey(draftTarget);
+  useEffect(() => {
+    reviewGeneration.current += 1;
+    setDraft(undefined);
+    setUnavailable(false);
+    return (): void => {
+      reviewGeneration.current += 1;
+    };
+  }, [targetKey]);
+  const openDraft = useCallback((): void => {
+    if (draftTarget === undefined) return;
+    const generation = ++reviewGeneration.current;
+    reviewDraft(draftTarget.runId, draftTarget.proposalId, draftTarget.snapshotDigest)
+      .then((result) => {
+        if (
+          reviewGeneration.current === generation &&
+          draftMatchesTarget(result.draft, draftTarget)
+        ) {
+          setDraft(result.draft);
+        }
+      })
+      .catch((error: unknown) => {
+        if (reviewGeneration.current !== generation) return;
+        setUnavailable(true);
+        reportClientDiagnostic("[keiko] workbench description draft review failed", {
+          correlationId: correlationIdOf(error) ?? draftTarget.runId,
+        });
+      });
+  }, [draftTarget, reviewDraft]);
+  return { draft, unavailable, openDraft };
 }
 
 function DescriptionReviewButton({ onClick }: { readonly onClick: () => void }): ReactNode {

@@ -313,6 +313,32 @@ describe("CI repair accounting around admitted model work", () => {
     expect(test.controller.chargeDelegatedRead("child-2", "read-2")).toBe(false);
     expect(test.store.read(test.context).record).toMatchObject({ toolCalls: 2, promptTokens: 9 });
   });
+  it("does not charge durable repair tokens when the authority reservation rejects (b2-3 residual)", () => {
+    const test = fixture({ maxPromptTokens: 10 });
+    expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
+    const authority = {
+      authenticateCapability: (): RuntimeCapabilityResolution => ({
+        ok: true,
+        binding: {
+          runId: "run-1",
+          workspaceRootDigest: "a".repeat(64),
+          envelopeDigest: "b".repeat(64),
+          adapterKind: "model-gateway-sidecar",
+          audience: "model-gateway",
+          expiresAtMs: Date.parse("2026-09-05T12:00:00.000Z"),
+        },
+      }),
+      reservePromptTokens: (): {
+        readonly ok: false;
+        readonly reason: "authority-expired";
+      } => ({ ok: false, reason: "authority-expired" }),
+    };
+
+    const result = reservePromptWithCiRepair(authority, () => test.controller, "capability", 9);
+
+    expect(result).toEqual({ ok: false, reason: "authority-expired" });
+    expect(test.store.read(test.context).record?.promptTokens).toBe(0);
+  });
   // #3401: a repaired head after CI repair must regenerate the run's automatic description, since
   // the orchestrator's one-time terminal dispatch already fired for the original (failing) head.
   it("notifies notifyVerifiedHeadAdvanced exactly once a repaired head is observed CI-green", () => {

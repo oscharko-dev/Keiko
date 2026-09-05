@@ -3914,8 +3914,7 @@ describe("Governed commit/push mint-then-execute (#3386/#3387, F3 epic #3384 fin
     });
   }
 
-  // The EXACT shape `deniedAuthorityGate` (requestPreparation.ts) issues for every admission-layer
-  // refusal — the only mint failure `proposeCommit`/`proposePush` may fall back on.
+  // The exact hard-denial shape `deniedAuthorityGate` issues for a refused mint.
   function jsonDenied(): Response {
     return new Response(
       JSON.stringify({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED", message: "denied" } }),
@@ -3966,16 +3965,13 @@ describe("Governed commit/push mint-then-execute (#3386/#3387, F3 epic #3384 fin
     expect(executeBody.approval).toEqual(approvalFixture("gda_commit_1").approval);
   });
 
-  it("proposeCommit resolves to the static approval-required outcome when the mint itself is denied", async () => {
+  it("proposeCommit surfaces a denied mint instead of relabelling it approval-required", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(jsonDenied());
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await proposeCommit({ projectId: "/repo", message: "feat: x" });
-
-    expect(result).toEqual({
-      schemaVersion: "1",
-      status: "approval-required",
-      actionKind: "commit",
+    await expect(proposeCommit({ projectId: "/repo", message: "feat: x" })).rejects.toMatchObject({
+      code: "GIT_DELIVERY_AUTHORITY_DENIED",
+      status: 403,
     });
     // The denied mint never reaches execute — only the approve endpoint was called.
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -4009,18 +4005,18 @@ describe("Governed commit/push mint-then-execute (#3386/#3387, F3 epic #3384 fin
     expect(executeBody.approval).toEqual(approvalFixture("gda_push_1").approval);
   });
 
-  it("proposePush resolves to the static approval-required outcome when the mint itself is denied", async () => {
+  it("proposePush surfaces a denied mint instead of relabelling it approval-required", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(jsonDenied());
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await proposePush({
-      projectId: "/repo",
-      remoteAlias: "origin",
-      remoteBranchName: "feature/x",
-      sourceBranchName: "feature/x",
-    });
-
-    expect(result).toEqual({ schemaVersion: "1", status: "approval-required", actionKind: "push" });
+    await expect(
+      proposePush({
+        projectId: "/repo",
+        remoteAlias: "origin",
+        remoteBranchName: "feature/x",
+        sourceBranchName: "feature/x",
+      }),
+    ).rejects.toMatchObject({ code: "GIT_DELIVERY_AUTHORITY_DENIED", status: 403 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [approveUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(approveUrl).toBe("/api/git-delivery/push/approve");

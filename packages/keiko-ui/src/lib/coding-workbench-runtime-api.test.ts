@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
+import { genericDescriptionArtifact } from "../app/components/desktop/widgets/coding-workbench/_workbenchDescriptionStatusTestSupport";
 import {
   acknowledgeCodingWorkbenchRuntimeRecovery,
   answerCodingWorkbenchRuntimeQuestion,
@@ -322,17 +323,32 @@ describe("Coding Workbench runtime API endpoints", () => {
         schemaVersion: "1",
         proposalId: "proposal-1",
         expiresAt: "2026-09-05T18:00:00.000Z",
-        artifact: { markdown: "## Exact draft" },
+        artifact: genericDescriptionArtifact(),
       },
     };
     const fetchMock = stubFetch(response);
     await expect(
-      getCodingWorkbenchRuntimeDescriptionDraft("run/1", "proposal 1", "b".repeat(64)),
+      getCodingWorkbenchRuntimeDescriptionDraft("run/1", "proposal-1", "b".repeat(64)),
     ).resolves.toEqual(response);
     expect(fetchMock).toHaveBeenLastCalledWith(
-      `/api/coding-workbench/runtime/runs/run%2F1/description-draft?proposalId=proposal+1&snapshotDigest=${"b".repeat(64)}`,
+      `/api/coding-workbench/runtime/runs/run%2F1/description-draft?proposalId=proposal-1&snapshotDigest=${"b".repeat(64)}`,
       expect.objectContaining({ cache: "no-store" }),
     );
+  });
+
+  it("rejects a truncated generic description artifact before displaying it", async () => {
+    stubFetch({
+      outcome: "draft",
+      draft: {
+        schemaVersion: "1",
+        proposalId: "proposal-1",
+        expiresAt: "2026-09-05T18:00:00.000Z",
+        artifact: { markdown: "## Unbound draft" },
+      },
+    });
+    await expect(
+      getCodingWorkbenchRuntimeDescriptionDraft("run-1", "proposal-1", "b".repeat(64)),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED", status: 502 });
   });
 
   // Epic #3384 defect A: the answer body's field is `questionId`, the single name every layer

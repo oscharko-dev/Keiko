@@ -133,6 +133,7 @@ describe("production managed worktree tools", () => {
       verifiedCommitService: service,
       ciRepairBudget: {
         admitTool: () => ({ check: (): boolean => repairLive, settle }),
+        canChargePrompt: () => true,
         chargePrompt: () => true,
         observed: vi.fn(),
       },

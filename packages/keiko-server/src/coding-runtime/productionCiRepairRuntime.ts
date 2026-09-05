@@ -98,6 +98,7 @@ function unavailableBudget(
   });
   return {
     admitTool: () => (allowed() ? { check: allowed, settle: () => undefined } : undefined),
+    canChargePrompt: allowed,
     chargePrompt: allowed,
     chargeDelegatedRead: allowed,
     observed: () => undefined,
@@ -155,6 +156,7 @@ function gateBudget(
         ? undefined
         : { ...lease, check: () => allowed() && lease.check() };
     },
+    canChargePrompt: (tokens) => allowed() && budget.canChargePrompt(tokens),
     chargePrompt: (tokens) => allowed() && budget.chargePrompt(tokens),
     chargeDelegatedRead: (id, key) => allowed() && budget.chargeDelegatedRead?.(id, key) === true,
     observed: (snapshot): void => {

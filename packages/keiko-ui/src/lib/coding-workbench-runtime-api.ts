@@ -28,7 +28,10 @@ import {
   validateCodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { validateCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
-import type { WorkbenchDescriptionDraftReview } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
+import {
+  isWorkbenchDescriptionDraftReview,
+  type WorkbenchDescriptionDraftReview,
+} from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
 import { createSameOriginApiEventSource } from "./safe-event-source";
@@ -132,44 +135,30 @@ export interface CodingWorkbenchDescriptionDraftResult {
   readonly draft: WorkbenchDescriptionDraftReview;
 }
 
-function isDescriptionArtifactPreview(value: unknown): boolean {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    typeof (value as Record<string, unknown>).markdown === "string"
-  );
-}
-
-function isDescriptionDraftReview(value: unknown): value is WorkbenchDescriptionDraftReview {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const review = value as Record<string, unknown>;
-  return (
-    review.schemaVersion === "1" &&
-    typeof review.proposalId === "string" &&
-    review.proposalId.length > 0 &&
-    typeof review.expiresAt === "string" &&
-    Number.isFinite(Date.parse(review.expiresAt)) &&
-    isDescriptionArtifactPreview(review.artifact)
-  );
-}
-
 function isDescriptionDraftResult(value: unknown): value is CodingWorkbenchDescriptionDraftResult {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const result = value as Record<string, unknown>;
-  return result.outcome === "draft" && isDescriptionDraftReview(result.draft);
+  return result.outcome === "draft" && isWorkbenchDescriptionDraftReview(result.draft);
 }
 
 function descriptionDraftValidator(
-  path: string,
-  value: unknown,
-): CodingWorkbenchDescriptionDraftResult {
-  if (isDescriptionDraftResult(value)) return value;
-  throw new ApiError(
-    "CONTRACT_VALIDATION_FAILED",
-    `BFF response for ${path} failed contract validation.`,
-    502,
-  );
+  proposalId: string,
+  snapshotDigest: string,
+): (path: string, value: unknown) => CodingWorkbenchDescriptionDraftResult {
+  return (path, value): CodingWorkbenchDescriptionDraftResult => {
+    if (
+      isDescriptionDraftResult(value) &&
+      value.draft.proposalId === proposalId &&
+      value.draft.artifact.binding.snapshotDigest === snapshotDigest
+    ) {
+      return value;
+    }
+    throw new ApiError(
+      "CONTRACT_VALIDATION_FAILED",
+      `BFF response for ${path} failed contract validation.`,
+      502,
+    );
+  };
 }
 
 function runPath(runId: string, suffix = ""): string {
@@ -365,7 +354,7 @@ export function getCodingWorkbenchRuntimeDescriptionDraft(
   return bffFetchJson(
     path,
     { cache: "no-store", ...(signal ? { signal } : {}) },
-    { validator: descriptionDraftValidator },
+    { validator: descriptionDraftValidator(proposalId, snapshotDigest) },
   );
 }
 

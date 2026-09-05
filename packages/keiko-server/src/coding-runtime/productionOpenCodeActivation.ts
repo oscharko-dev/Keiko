@@ -73,6 +73,24 @@ export type ProductionOpenCodeActivationResult =
       readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason;
     };
 
+export interface ProductionOpenCodeLoopbackEndpoints {
+  readonly gatewayUrl: string;
+  readonly toolFacadeUrl: string;
+}
+
+/** Derives both sidecar endpoints from the one attested BFF loopback origin. */
+export function productionOpenCodeLoopbackEndpoints(
+  env: NodeJS.ProcessEnv,
+): ProductionOpenCodeLoopbackEndpoints | undefined {
+  const loopback = loopbackBaseUrl(env);
+  return loopback === undefined
+    ? undefined
+    : {
+        gatewayUrl: `${loopback}/api/coding-sidecar/gateway`,
+        toolFacadeUrl: `${loopback}/api/coding-sidecar/tool`,
+      };
+}
+
 /**
  * Assembles the production OpenCode runtime ports from a discovered runtime: the attested
  * packaged portable artifact where one exists, otherwise the explicitly opted-in supported dev-lane
@@ -89,8 +107,8 @@ export function resolveProductionOpenCodeActivation(
   if (runtime.unavailableReason !== undefined) {
     return { unavailableReason: runtime.unavailableReason };
   }
-  const loopback = loopbackBaseUrl(input.env);
-  if (loopback === undefined) return { unavailableReason: "loopback-unavailable" };
+  const endpoints = productionOpenCodeLoopbackEndpoints(input.env);
+  if (endpoints === undefined) return { unavailableReason: "loopback-unavailable" };
   const secureWorkspaceTextRead = resolveSecureRead(input, runtime.portable);
   if (secureWorkspaceTextRead === undefined) {
     return { unavailableReason: "secure-read-unavailable" };
@@ -101,10 +119,10 @@ export function resolveProductionOpenCodeActivation(
       backend: createProductionOpenCodeBackend({
         portable: runtime.portable,
         runtimeStateRoot: input.runtimeStateDir,
-        gatewayUrl: `${loopback}/api/coding-sidecar/gateway`,
+        gatewayUrl: endpoints.gatewayUrl,
         // ADR-0043 D11-D14 (#3390): the SAME single attested loopback origin as the model
         // gateway above, never a second listener's own port.
-        toolFacadeUrl: `${loopback}/api/coding-sidecar/tool`,
+        toolFacadeUrl: endpoints.toolFacadeUrl,
         runtimeEvidence: input.runtimeEvidence,
         gatewayReadiness: input.gatewayReadiness,
         ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
@@ -114,7 +132,7 @@ export function resolveProductionOpenCodeActivation(
       editorAgentClient:
         input.editorAgentClient ??
         new EditorAgentHttpClient({
-          baseUrl: loopback,
+          baseUrl: new URL(endpoints.gatewayUrl).origin,
           transport: createFetchEditorAgentHttpTransport(input.fetch ?? fetch),
         }),
     },

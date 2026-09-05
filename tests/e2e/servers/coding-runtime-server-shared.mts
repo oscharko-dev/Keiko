@@ -33,6 +33,7 @@ import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal
 
 import { SESSION_PAIRING_LAUNCHER_SECRET_ENV } from "../../../packages/keiko-server/src/coding-app-session/launcherSessionPairingPort.js";
 import { createCodingRuntimeEvidenceAggregator } from "../../../packages/keiko-server/src/coding-runtime/codingRuntimeEvidenceAggregator.js";
+import { createCodingRuntimeEditorMutationLeaseBroker } from "../../../packages/keiko-server/src/coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
 import {
   createScriptedOpenCodeHarness,
   scriptedFunctionalPortable,
@@ -375,6 +376,7 @@ function scriptedResolver(
   port: number,
   services: JourneyWorkspaceServices,
   scripted: ScriptedOpenCodeHarness,
+  runtimeMutationLeaseBroker: ReturnType<typeof createCodingRuntimeEditorMutationLeaseBroker>,
   commit?: CodingIssueCommitFixture,
   resetScript?: () => void,
 ): ReturnType<typeof createFunctionalRuntimeResolver> {
@@ -387,6 +389,7 @@ function scriptedResolver(
     readWorkspaceHead: readProductionWorkspaceHead,
     verificationRunner: verificationRunner(config.fixtureLabel),
     runtimeEvidence: createCodingRuntimeEvidenceAggregator(createInMemoryEvidenceStore()),
+    runtimeMutationLeaseBroker,
     createSupervisor: scripted.createSupervisor,
     resolveManagedModelProfile: scriptedManagedModelProfile,
     ...(commit === undefined
@@ -459,13 +462,31 @@ function scriptedComposition(
       ? {}
       : { observePhase: commit.observeToolPhase.bind(commit) }),
   });
-  const resolver = scriptedResolver(config, stateDir, port, services, scripted, commit, () => {
-    script.calls = 0;
-  });
+  const runtimeMutationLeaseBroker = createCodingRuntimeEditorMutationLeaseBroker();
+  const resolver = scriptedResolver(
+    config,
+    stateDir,
+    port,
+    services,
+    scripted,
+    runtimeMutationLeaseBroker,
+    commit,
+    () => {
+      script.calls = 0;
+    },
+  );
   const env = scriptedEnvironment(config, bffStateRoot);
-  const deps = buildUiHandlerDeps(
+  const assembledDeps = buildUiHandlerDeps(
     scriptedUiHandlerDepsOptions(config, services, bffStateRoot, env, resolver),
   );
+  const deps: UiHandlerDeps = {
+    ...assembledDeps,
+    runtimeMutationLease: runtimeMutationLeaseBroker,
+    dispose: async (): Promise<void> => {
+      await assembledDeps.dispose?.();
+      runtimeMutationLeaseBroker.dispose();
+    },
+  };
   const observe =
     config.issue === undefined
       ? undefined

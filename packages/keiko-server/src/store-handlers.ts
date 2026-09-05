@@ -20,6 +20,7 @@ import {
   type Chat,
   type ChatMessage,
   type ChatConnectedScope,
+  type ChatGitChangeScope,
   type ChatLocalKnowledgeScope,
   type ChatRole,
   type UpdateChatMessagePatch,
@@ -27,6 +28,7 @@ import {
   type UpdateProjectPatch,
   type WorkflowStatus,
 } from "./store/index.js";
+import { MAX_GIT_CHANGE_SCOPES, parseChatGitChangeScope } from "./store/chats.js";
 import {
   projectsWithWorkspaceAvailability,
   projectWithWorkspaceAvailability,
@@ -942,8 +944,31 @@ function optionalConnectedScopes(
   return raw.map((entry) => parseConnectedScopeObject(entry));
 }
 
-// Epic #189/#532 — the four grounding-source patch fields (connected folders + local-knowledge
-// connectors, each single + plural). Extracted so buildChatPatch stays under the complexity gate.
+function optionalGitChangeScopes(
+  body: Record<string, unknown>,
+): readonly ChatGitChangeScope[] | null | undefined {
+  if (!("gitChangeScopes" in body)) return undefined;
+  const raw = body.gitChangeScopes;
+  if (raw === null) return null;
+  if (!Array.isArray(raw)) {
+    throw new InvalidRequest('Field "gitChangeScopes" must be an array or null.');
+  }
+  if (raw.length > MAX_GIT_CHANGE_SCOPES) {
+    throw new InvalidRequest(
+      `Field "gitChangeScopes" must contain at most ${String(MAX_GIT_CHANGE_SCOPES)} entries.`,
+    );
+  }
+  return raw.map((entry) => {
+    const scope = parseChatGitChangeScope(entry);
+    if (scope === undefined) {
+      throw new InvalidRequest('Field "gitChangeScopes" contains an invalid entry.');
+    }
+    return scope;
+  });
+}
+
+// Epic #189/#532/#3400 — the grounding-source and Git-change scope patch fields. Extracted so
+// buildChatPatch stays under the complexity gate.
 // Receives deps so runtime-resolved grounding limits are used for the source-count caps.
 function groundingScopePatchFields(
   body: Record<string, unknown>,
@@ -954,11 +979,13 @@ function groundingScopePatchFields(
   const connectedScopes = optionalConnectedScopes(body, limits.maxConnectedSources);
   const localKnowledgeScope = optionalLocalKnowledgeScope(body);
   const localKnowledgeScopes = optionalLocalKnowledgeScopes(body, limits.maxLocalKnowledgeSources);
+  const gitChangeScopes = optionalGitChangeScopes(body);
   return {
     ...(connectedScope !== undefined ? { connectedScope } : {}),
     ...(connectedScopes !== undefined ? { connectedScopes } : {}),
     ...(localKnowledgeScope !== undefined ? { localKnowledgeScope } : {}),
     ...(localKnowledgeScopes !== undefined ? { localKnowledgeScopes } : {}),
+    ...(gitChangeScopes !== undefined ? { gitChangeScopes } : {}),
   };
 }
 
@@ -1023,7 +1050,8 @@ function patchTouchesGroundingScope(patch: UpdateChatPatch): boolean {
     patch.connectedScopes !== undefined ||
     patch.connectedScope !== undefined ||
     patch.localKnowledgeScopes !== undefined ||
-    patch.localKnowledgeScope !== undefined
+    patch.localKnowledgeScope !== undefined ||
+    patch.gitChangeScopes !== undefined
   );
 }
 

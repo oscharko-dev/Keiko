@@ -1071,6 +1071,55 @@ describe("POST /api/chats", () => {
 
 // ─── Route 19: PATCH /api/chats ──────────────────────────────────────────────
 describe("PATCH /api/chats", () => {
+  it("persists clearing git-change scopes from the disconnect patch", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    store.updateChat(chat.id, {
+      gitChangeScopes: [
+        {
+          kind: "git-change",
+          relationshipId: "rel-disconnect",
+          remoteDigest: "d".repeat(64),
+          comparisonLabel: "main...feature/x",
+          baseRef: "main",
+          headRef: "feature/x",
+          baseSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+          mergeBaseSha: "c".repeat(40),
+          snapshotDigest: "e".repeat(64),
+          fileCount: 1,
+          totalFiles: 1,
+          omittedFiles: 0,
+          truncatedFiles: 0,
+          descriptionStatus: "current",
+          connectedAtMs: 10,
+        },
+      ],
+    });
+
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ gitChangeScopes: null }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(store.findChatById(chat.id)?.gitChangeScopes).toBeUndefined();
+  });
+
+  it("rejects malformed git-change scopes without changing the stored binding", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ gitChangeScopes: [{ kind: "git-change" }] }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(store.findChatById(chat.id)?.gitChangeScopes).toBeUndefined();
+  });
+
   it("cancels a queued status update when the request aborts", async () => {
     store.createProject(projDir);
     const chat = store.createChat(projDir, "t", "m");

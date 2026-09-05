@@ -471,6 +471,19 @@ export class CodingRuntimeAuthorityService {
     this.activeTreeBindingId = treeBindingId;
     this.activeEffectiveMode = envelope.authority.effectiveMode;
     this.runtimeState = stateForMint(this.runtimeState, envelope, nowIso);
+    (this.activityLog ?? processServerLogSink()).write({
+      category: "security",
+      op: "coding-runtime.authority.minted",
+      correlationId: runId,
+      level: "info",
+      extra: {
+        runId,
+        effectiveMode: envelope.authority.effectiveMode,
+        actionClasses: envelope.authority.actionClasses,
+        connectorScopes: envelope.authority.connectorScopes,
+        networkPolicyMode: envelope.authority.networkPolicy.mode,
+      },
+    });
     return {
       ok: true,
       authorityRef,

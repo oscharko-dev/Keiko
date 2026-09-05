@@ -1,63 +1,20 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { PrDescriptionArtifact } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodingWorkbenchDraftDelivery } from "./CodingWorkbenchDraftDelivery";
 import { draftDeliverySnapshot } from "./_draftDeliveryTestSupport";
-import { descriptionStatusSnapshot } from "./_workbenchDescriptionStatusTestSupport";
+import {
+  descriptionStatusSnapshot,
+  genericDescriptionArtifact,
+} from "./_workbenchDescriptionStatusTestSupport";
 import { translateCodingWorkbench } from "./coding-workbench-i18n";
 
-function genericDescriptionArtifact(): PrDescriptionArtifact {
-  const evidenceId = "e".repeat(64);
-  return {
-    schemaVersion: "1",
-    renderingVersion: "1",
-    binding: {
-      repositoryId: "repository-1",
-      baseRef: "dev",
-      baseSha: "1".repeat(40),
-      headRef: "feature",
-      headSha: "2".repeat(40),
-      mergeBaseSha: "1".repeat(40),
-      snapshotDigest: "b".repeat(64),
-    },
-    language: "en",
-    outcome: "complete",
-    reason: "none",
-    coverage: {
-      snapshot: {
-        totalFiles: 1,
-        files: 1,
-        hunks: 1,
-        bytes: 10,
-        omittedFiles: 0,
-        omittedHunks: 0,
-        truncatedFiles: 0,
-        kinds: {
-          add: 0,
-          modify: 1,
-          delete: 0,
-          rename: 0,
-          copy: 0,
-          "mode-change": 0,
-          binary: 0,
-          submodule: 0,
-        },
-        omissions: [],
-      },
-      suppliedEvidenceCount: 1,
-      processedEvidenceCount: 1,
-      omittedEvidenceCount: 0,
-    },
-    candidate: {
-      summary: [{ text: "Generic Workbench draft", evidenceIds: [evidenceId] }],
-      keyChanges: [{ text: "One bounded change", evidenceIds: [evidenceId] }],
-      risks: [],
-      reviewerFocus: [],
-    },
-    markdown: "## Summary\n\nGeneric Workbench draft",
-    artifactDigest: "c".repeat(64),
-  };
+function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
+  let resolve = (_value: T): void => undefined;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
 }
 
 describe("durable repository delivery in the Code task", () => {
@@ -272,6 +229,71 @@ describe("durable repository delivery in the Code task", () => {
       "b".repeat(64),
     );
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("discards an older draft read after the immutable proposal target changes", async () => {
+    const older = deferred<{
+      readonly outcome: "draft";
+      readonly draft: {
+        readonly schemaVersion: "1";
+        readonly proposalId: string;
+        readonly expiresAt: string;
+        readonly artifact: ReturnType<typeof genericDescriptionArtifact>;
+      };
+    }>();
+    const newerArtifact = {
+      ...genericDescriptionArtifact(),
+      binding: {
+        ...genericDescriptionArtifact().binding,
+        snapshotDigest: "d".repeat(64),
+      },
+      markdown: "## New head draft",
+    };
+    const reviewDraft = vi
+      .fn()
+      .mockReturnValueOnce(older.promise)
+      .mockResolvedValueOnce({
+        outcome: "draft",
+        draft: {
+          schemaVersion: "1",
+          proposalId: "proposal-new",
+          expiresAt: "2026-09-05T18:00:00.000Z",
+          artifact: newerArtifact,
+        },
+      });
+    const { rerender } = render(
+      <CodingWorkbenchDraftDelivery
+        snapshot={descriptionStatusSnapshot({ proposalId: "proposal-old" })}
+        reviewDraft={reviewDraft}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review exact draft" }));
+    rerender(
+      <CodingWorkbenchDraftDelivery
+        snapshot={descriptionStatusSnapshot({
+          proposalId: "proposal-new",
+          snapshotDigest: "d".repeat(64),
+        })}
+        reviewDraft={reviewDraft}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review exact draft" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("cwb-description-draft").textContent).toBe(newerArtifact.markdown),
+    );
+    await act(() => {
+      older.resolve({
+        outcome: "draft",
+        draft: {
+          schemaVersion: "1",
+          proposalId: "proposal-old",
+          expiresAt: "2026-09-05T18:00:00.000Z",
+          artifact: genericDescriptionArtifact(),
+        },
+      });
+      return older.promise;
+    });
+    expect(screen.getByTestId("cwb-description-draft").textContent).toBe(newerArtifact.markdown);
   });
 
   it("renders nothing for the description status when it is absent, without a diagnostic", () => {

@@ -1,5 +1,12 @@
-import type { GitChangeSnapshot, GitChangeSnapshotCompleteness } from "./git-change-snapshot.js";
+import {
+  GIT_CHANGE_SNAPSHOT_ENTRY_KINDS,
+  GIT_CHANGE_SNAPSHOT_OMISSION_REASONS,
+  GIT_CHANGE_SNAPSHOT_REPOSITORY_ID_MAX_CHARS,
+  type GitChangeSnapshot,
+  type GitChangeSnapshotCompleteness,
+} from "./git-change-snapshot.js";
 import { deepFreeze } from "./deep-freeze.js";
+import { isGitObjectId, isSafeGitRefName } from "./git-repository.js";
 import {
   containsAbsolutePath,
   containsPseudoRoleMarker,
@@ -280,4 +287,175 @@ export function validatePrDescriptionCandidate(
       };
   }
   return { ok: true, value: value as PrDescriptionCandidate };
+}
+
+const ARTIFACT_KEYS = [
+  "schemaVersion",
+  "renderingVersion",
+  "binding",
+  "language",
+  "outcome",
+  "reason",
+  "coverage",
+  "candidate",
+  "markdown",
+  "artifactDigest",
+] as const;
+const BINDING_KEYS = [
+  "repositoryId",
+  "baseRef",
+  "baseSha",
+  "headRef",
+  "headSha",
+  "mergeBaseSha",
+  "snapshotDigest",
+] as const;
+const COMPLETENESS_KEYS = [
+  "totalFiles",
+  "files",
+  "hunks",
+  "bytes",
+  "omittedFiles",
+  "omittedHunks",
+  "truncatedFiles",
+  "kinds",
+  "omissions",
+] as const;
+const COVERAGE_KEYS = [
+  "snapshot",
+  "suppliedEvidenceCount",
+  "processedEvidenceCount",
+  "omittedEvidenceCount",
+] as const;
+const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
+
+function nonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function validBindingIdentity(value: Record<string, unknown>): boolean {
+  return (
+    typeof value.repositoryId === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(value.repositoryId) &&
+    value.repositoryId.length <= GIT_CHANGE_SNAPSHOT_REPOSITORY_ID_MAX_CHARS
+  );
+}
+
+function validBindingRevisions(value: Record<string, unknown>): boolean {
+  return (
+    typeof value.baseRef === "string" &&
+    isSafeGitRefName(value.baseRef) &&
+    typeof value.headRef === "string" &&
+    isSafeGitRefName(value.headRef) &&
+    isGitObjectId(value.baseSha) &&
+    isGitObjectId(value.headSha) &&
+    isGitObjectId(value.mergeBaseSha)
+  );
+}
+
+function validBindingDigests(value: Record<string, unknown>): boolean {
+  const remoteDigest = value.remoteDigest;
+  return (
+    typeof value.snapshotDigest === "string" &&
+    DIGEST_PATTERN.test(value.snapshotDigest) &&
+    (remoteDigest === undefined ||
+      (typeof remoteDigest === "string" && DIGEST_PATTERN.test(remoteDigest)))
+  );
+}
+
+function validDescriptionBinding(input: unknown): boolean {
+  if (!isPlainRecord(input)) return false;
+  const value = input;
+  const keys = value.remoteDigest === undefined ? BINDING_KEYS : [...BINDING_KEYS, "remoteDigest"];
+  if (!exactKeys(value, keys)) return false;
+  return validBindingIdentity(value) && validBindingRevisions(value) && validBindingDigests(value);
+}
+
+function validDescriptionOmission(value: unknown): boolean {
+  if (!isPlainRecord(value) || !exactKeys(value, ["reason", "files", "hunks"])) return false;
+  return (
+    typeof value.reason === "string" &&
+    (GIT_CHANGE_SNAPSHOT_OMISSION_REASONS as readonly string[]).includes(value.reason) &&
+    nonNegativeInteger(value.files) &&
+    nonNegativeInteger(value.hunks)
+  );
+}
+
+function validDescriptionKinds(value: unknown): boolean {
+  if (!isPlainRecord(value) || !exactKeys(value, GIT_CHANGE_SNAPSHOT_ENTRY_KINDS)) return false;
+  return GIT_CHANGE_SNAPSHOT_ENTRY_KINDS.every((kind) => nonNegativeInteger(value[kind]));
+}
+
+function validDescriptionCompleteness(value: unknown): boolean {
+  if (!isPlainRecord(value) || !exactKeys(value, COMPLETENESS_KEYS)) return false;
+  const scalarKeys = COMPLETENESS_KEYS.slice(0, 7);
+  return (
+    scalarKeys.every((key) => nonNegativeInteger(value[key])) &&
+    validDescriptionKinds(value.kinds) &&
+    Array.isArray(value.omissions) &&
+    value.omissions.every(validDescriptionOmission)
+  );
+}
+
+function validDescriptionCoverage(value: unknown): boolean {
+  if (!isPlainRecord(value) || !exactKeys(value, COVERAGE_KEYS)) return false;
+  return (
+    validDescriptionCompleteness(value.snapshot) &&
+    nonNegativeInteger(value.suppliedEvidenceCount) &&
+    nonNegativeInteger(value.processedEvidenceCount) &&
+    nonNegativeInteger(value.omittedEvidenceCount)
+  );
+}
+
+function candidateEvidenceIds(value: unknown): readonly string[] {
+  if (!isPlainRecord(value)) return [];
+  const ids: string[] = [];
+  for (const key of PR_DESCRIPTION_SECTION_KEYS) {
+    const statements = value[key];
+    if (!Array.isArray(statements)) continue;
+    for (const statement of statements) {
+      if (!isPlainRecord(statement) || !Array.isArray(statement.evidenceIds)) continue;
+      for (const id of statement.evidenceIds) if (typeof id === "string") ids.push(id);
+    }
+  }
+  return ids;
+}
+
+function validArtifactVocabulary(value: Record<string, unknown>): boolean {
+  return (
+    value.schemaVersion === PR_DESCRIPTION_SCHEMA_VERSION &&
+    value.renderingVersion === PR_DESCRIPTION_RENDERING_VERSION &&
+    typeof value.language === "string" &&
+    (PR_DESCRIPTION_LANGUAGES as readonly string[]).includes(value.language) &&
+    typeof value.outcome === "string" &&
+    (PR_DESCRIPTION_OUTCOMES as readonly string[]).includes(value.outcome) &&
+    typeof value.reason === "string" &&
+    (PR_DESCRIPTION_REASONS as readonly string[]).includes(value.reason)
+  );
+}
+
+function validArtifactContent(value: Record<string, unknown>): boolean {
+  const candidate = validatePrDescriptionCandidate(
+    value.candidate,
+    candidateEvidenceIds(value.candidate),
+  );
+  return (
+    validDescriptionCoverage(value.coverage) &&
+    candidate.ok &&
+    typeof value.markdown === "string" &&
+    value.markdown.length > 0 &&
+    value.markdown.length <= 65_536
+  );
+}
+
+/** Full structural validation for an artifact crossing an application trust boundary. */
+export function isPrDescriptionArtifact(value: unknown): value is PrDescriptionArtifact {
+  if (!isPlainRecord(value) || !exactKeys(value, ARTIFACT_KEYS)) return false;
+  return (
+    validArtifactVocabulary(value) &&
+    validDescriptionBinding(value.binding) &&
+    validArtifactContent(value) &&
+    typeof value.artifactDigest === "string" &&
+    DIGEST_PATTERN.test(value.artifactDigest)
+  );
 }

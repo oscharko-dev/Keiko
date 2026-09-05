@@ -452,6 +452,7 @@ function auxiliaryPorts(
     secureWorkspaceTextRead: input.secureWorkspaceTextRead,
     researchGrantRegistry: input.researchGrantRegistry,
     emit: input.onRuntimeEvent,
+    activityLog: input.activityLog ?? processServerLogSink(),
   });
 }
 

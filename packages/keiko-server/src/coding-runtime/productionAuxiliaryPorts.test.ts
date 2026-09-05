@@ -146,6 +146,7 @@ function ports(
           Promise.resolve({ ok: true as const, text: '{"scripts":{"b":"1","a":"2"}}' })),
     },
     emit: options.emit ?? ((): void => undefined),
+    activityLog: { write: (): void => undefined },
     ...(options.researchGrantRegistry === undefined
       ? {}
       : { researchGrantRegistry: options.researchGrantRegistry }),
