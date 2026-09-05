@@ -121,6 +121,7 @@ async function generate(
   context: PrDescriptionContext,
   request: PrDescriptionPreviewRequest,
   reference: string,
+  input: PreparedPrDescription["captureInput"],
 ): Promise<PrDescription.PrDescriptionGenerationResult> {
   return PrDescription.generatePrDescription(
     {
@@ -131,6 +132,18 @@ async function generate(
     },
     {
       ...options.generation,
+      revalidateAuthority: async (authority, signal) => {
+        if (
+          signal.aborted ||
+          authority.authorityDigest !== context.authorityDigest ||
+          authority.correlationId !== context.correlationId ||
+          !validDescriptionContext(context)
+        ) {
+          return false;
+        }
+        const current = await options.snapshots.recheck(reference, { ...input, signal });
+        return current.state === "current" && validDescriptionContext(context);
+      },
       resolveSnapshot: (supplied, signal) => {
         if (supplied !== reference || signal.aborted || !validDescriptionContext(context))
           return Promise.resolve(undefined);
@@ -200,7 +213,10 @@ export async function prepareDescription(
     snapshot.remoteDigest !== codingWorkbenchRemoteDigest(context.repository)
   )
     throw new PrDescriptionFailure("stale-snapshot");
-  const generated = await generate(options, context, request, captured.reference);
+  const generated = await generate(options, context, request, captured.reference, input);
+  if (generated.status === "unavailable" && generated.reason === "authority-denied") {
+    throw new PrDescriptionFailure("authority-denied");
+  }
   if (generated.status !== "generated" || generated.artifact.outcome === "failed")
     throw new PrDescriptionFailure("provider-failed");
   return finishPreparation({

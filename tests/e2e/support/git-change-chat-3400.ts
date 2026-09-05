@@ -108,7 +108,7 @@ export async function seedWorkspace(
             type: "governedGit",
             x: 24,
             y: 24,
-            w: 1200,
+            w: 650,
             h: 820,
             z: 20,
             cfg: { projectPath },

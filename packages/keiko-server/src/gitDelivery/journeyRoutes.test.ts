@@ -317,6 +317,8 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
     try {
       const snapshots = h.deps.codingRuntimeSnapshotStore;
       if (snapshots === undefined) throw new Error("snapshot store fixture missing");
+      const snapshotsWithoutOutcomes = { ...snapshots };
+      delete snapshotsWithoutOutcomes.journeyOutcomes;
       const group = createGitDeliveryJourneyRouteGroup({
         reader: (): GitJourneyReader => fakeReader(OBSERVED_FACTS),
         readiness: () => Promise.resolve(readySnapshot()),
@@ -324,7 +326,7 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
       });
       const result = (await group[0]?.handler(ctxFor({ schemaVersion: "1", runId: "run-1" }), {
         ...h.deps,
-        codingRuntimeSnapshotStore: { ...snapshots, journeyOutcomes: undefined },
+        codingRuntimeSnapshotStore: snapshotsWithoutOutcomes,
       })) as RouteResult;
       expect(result.body).toMatchObject({ status: "observed" });
       const recorded = h.events.find((event) => event.op === "git.journey-outcome.recorded");

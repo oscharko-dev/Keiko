@@ -8,6 +8,7 @@ import type { NormalizedResponse, WorkspaceInfo } from "@oscharko-dev/keiko-cont
 import { createGitChangeSnapshotService } from "./gitChangeSnapshotService.js";
 import {
   generateGitChangeChatDescription,
+  gitChangeDescriptionAuthorityScopeFor,
   gitChangeChatRefinement,
 } from "./gitChangeChatContext.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -147,6 +148,13 @@ async function scopeAndDeps(): Promise<{
   };
   const deps = {
     gitChangeSnapshotService: snapshots,
+    gitChangeDescriptionAuthorityPort: {
+      current: () => ({
+        scope: gitChangeDescriptionAuthorityScopeFor(scope),
+        effectiveMode: "supervised-coding",
+        expiresAt: "9999-12-31T23:59:59.999Z",
+      }),
+    },
     activityLog: { write: (event: ServerLogEvent): void => void events.push(event) },
     prDescriptionGeneration: { gateway: { chat }, config, log: { write: vi.fn() }, now: () => NOW },
   } as unknown as UiHandlerDeps;
@@ -216,6 +224,41 @@ describe("Git-change Chat shared description core", () => {
     expect(
       setup.events.find((entry) => entry.op === "pr-description.chat.unavailable"),
     ).toMatchObject({ errorKind: "snapshot-unavailable" });
+  });
+
+  it("discards a provider response when exact authority narrows during the call", async () => {
+    const setup = await scopeAndDeps();
+    let checks = 0;
+    const scope = gitChangeDescriptionAuthorityScopeFor(setup.scope);
+    const result = await generateGitChangeChatDescription({
+      deps: {
+        ...setup.deps,
+        gitChangeDescriptionAuthorityPort: {
+          current: () => {
+            checks += 1;
+            return checks === 1
+              ? {
+                  scope,
+                  effectiveMode: "supervised-coding",
+                  expiresAt: "9999-12-31T23:59:59.999Z",
+                }
+              : undefined;
+          },
+        },
+      },
+      projectPath: root,
+      scope: setup.scope,
+      correlationId: "chat-description-narrowed",
+      signal: new AbortController().signal,
+      history: [],
+      latestIntent: "Refine",
+    });
+
+    expect(result).toEqual({ status: "unavailable", reason: "authority-denied" });
+    expect(setup.chat).toHaveBeenCalledTimes(1);
+    expect(
+      setup.events.find((entry) => entry.op === "pr-description.chat.unavailable"),
+    ).toMatchObject({ errorKind: "authority-denied" });
   });
 
   it("bounds untrusted refinement input by UTF-8 bytes", () => {

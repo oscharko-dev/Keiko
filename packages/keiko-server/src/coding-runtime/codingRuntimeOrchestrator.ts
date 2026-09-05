@@ -68,6 +68,7 @@ import type {
   CodingRuntimeDescriptionJobStore,
   WorkbenchDescriptionScope,
 } from "./codingRuntimeDescriptionJobStore.js";
+import type { PrDescriptionDraftPreview } from "../gitDelivery/prDescriptionTypes.js";
 import {
   WORKBENCH_DESCRIPTION_REASON_STATES,
   type WorkbenchDescriptionReason,
@@ -168,6 +169,11 @@ export interface WorkbenchDescriptionDispatcher {
     proposalId: string,
     snapshotDigest: string,
   ) => boolean;
+  readonly reviewDraft?: (
+    scope: WorkbenchDescriptionScope,
+    proposalId: string,
+    snapshotDigest: string,
+  ) => PrDescriptionDraftPreview | undefined;
 }
 
 /** Optional support the terminal-run hook consumes; absent means the feature is not yet wired. */
@@ -1656,6 +1662,26 @@ export class CodingRuntimeOrchestrator {
   notifyVerifiedHeadAdvanced(runId: string): void {
     const snapshot = this.deps.snapshots.get(runId);
     if (snapshot !== undefined) this.dispatchDescriptionIfEligible(snapshot);
+  }
+
+  /** Returns an exact transient generic draft only while its durable status remains current. */
+  reviewDescriptionDraft(
+    runId: string,
+    proposalId: string,
+    snapshotDigest: string,
+  ): PrDescriptionDraftPreview | undefined {
+    const snapshot = this.deps.snapshots.get(runId);
+    const status = this.description?.jobs.current(runId);
+    const scope = snapshot === undefined ? undefined : this.descriptionScope(snapshot);
+    if (
+      status?.proposalId !== proposalId ||
+      status.snapshotDigest !== snapshotDigest ||
+      scope?.applicationTarget !== undefined ||
+      !isRetainedDescriptionProposal(this.description, scope, status, proposalId, snapshotDigest)
+    ) {
+      return undefined;
+    }
+    return this.description?.dispatcher?.reviewDraft?.(scope, proposalId, snapshotDigest);
   }
 
   /**

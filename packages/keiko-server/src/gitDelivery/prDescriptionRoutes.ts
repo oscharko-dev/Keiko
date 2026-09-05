@@ -511,6 +511,35 @@ export type PrDescriptionServiceResolution =
   | { readonly ok: true; readonly service: PrDescriptionApplicationService }
   | { readonly ok: false; readonly result: RouteResult };
 
+export interface WorkbenchDraftDescriptionServiceRequest {
+  readonly projectId: string;
+  readonly runId: string;
+  readonly snapshotDigest: string;
+  readonly authorityDigest: string;
+}
+
+/** Resolves a generic Workbench draft holder through the same bounded service cache. */
+export function resolveWorkbenchDraftDescriptionService(
+  deps: UiHandlerDeps,
+  request: WorkbenchDraftDescriptionServiceRequest,
+): PrDescriptionServiceResolution {
+  const workspace = resolveProjectWorkspace(deps, request.projectId);
+  if (workspace === undefined) {
+    return { ok: false, result: errResult(404, "GIT_DELIVERY_PR_DESCRIPTION_UNKNOWN_PROJECT") };
+  }
+  const key = [
+    "workbench-draft",
+    request.projectId,
+    request.runId,
+    request.snapshotDigest,
+    request.authorityDigest,
+  ].join("\u0000");
+  const service = serviceFor({}, deps, {}, workspace, key, () => undefined);
+  return service === undefined
+    ? { ok: false, result: unavailableService() }
+    : { ok: true, service };
+}
+
 function matchingDescriptionContext(
   request: BaseFields,
   workspace: WorkspaceInfo,

@@ -39,6 +39,7 @@ import {
   type GitDeliveryDescriptionAuthorityScope,
 } from "../gitDelivery/runBoundAuthority.js";
 import type { WorkbenchDescriptionScope } from "./codingRuntimeDescriptionJobStore.js";
+import type { PrDescriptionDraftPreview } from "../gitDelivery/prDescriptionTypes.js";
 
 /** Render transient untrusted context separately from the human's task intent. */
 export function renderInitialTurnContext(attachment: CodingRuntimeIssueAttachment): string {
@@ -649,6 +650,11 @@ export interface ProductionWorkbenchArtifactRetention {
     proposalId: string,
     snapshotDigest: string,
   ) => boolean;
+  readonly reviewDraft: (
+    scope: WorkbenchDescriptionScope,
+    proposalId: string,
+    snapshotDigest: string,
+  ) => PrDescriptionDraftPreview | undefined;
 }
 
 export interface ProductionWorkbenchDescriptionOutcome {
@@ -669,6 +675,11 @@ export interface ProductionWorkbenchDescriptionDispatcher {
     proposalId: string,
     snapshotDigest: string,
   ) => boolean;
+  readonly reviewDraft: (
+    scope: WorkbenchDescriptionScope,
+    proposalId: string,
+    snapshotDigest: string,
+  ) => PrDescriptionDraftPreview | undefined;
 }
 
 export function createProductionWorkbenchDescriptionDispatcher(
@@ -678,6 +689,8 @@ export function createProductionWorkbenchDescriptionDispatcher(
     generate: (scope, signal) => dispatchWorkbenchDescription(deps, scope, signal),
     hasProposal: (scope, proposalId, snapshotDigest): boolean =>
       deps.artifactRetention?.hasProposal(scope, proposalId, snapshotDigest) ?? false,
+    reviewDraft: (scope, proposalId, snapshotDigest): PrDescriptionDraftPreview | undefined =>
+      deps.artifactRetention?.reviewDraft(scope, proposalId, snapshotDigest),
   };
 }
 
@@ -775,10 +788,19 @@ function guardedWorkbenchGeneration(
   const generation = deps.generation;
   if (generation === undefined) return undefined;
   let invalidation: WorkbenchGenerationInvalidation | undefined;
+  const expectedAuthorityDigest = sha256Hex(canonicalise(authorityScope));
   return {
     generation: {
       ...generation,
-      revalidateAuthority: async (): Promise<boolean> => {
+      revalidateAuthority: async (authority, signal): Promise<boolean> => {
+        if (
+          signal.aborted ||
+          authority.authorityDigest !== expectedAuthorityDigest ||
+          authority.correlationId !== scope.runId
+        ) {
+          invalidation = signal.aborted ? "stale-snapshot" : "model-egress-denied";
+          return false;
+        }
         invalidation = await currentWorkbenchGenerationInvalidation(
           deps,
           input,
@@ -949,6 +971,7 @@ const GENERATED_REASON: Record<PrDescriptionOutcome, WorkbenchDescriptionReason>
 
 const UNAVAILABLE_REASON: Record<PrDescriptionReason, WorkbenchDescriptionReason> = {
   none: "provider-failed",
+  "authority-denied": "model-egress-denied",
   "model-unavailable": "provider-failed",
   "invalid-model-output": "provider-failed",
   "unsafe-model-output": "provider-failed",

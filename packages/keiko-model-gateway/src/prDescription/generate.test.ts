@@ -189,6 +189,7 @@ function fixture(
     gateway: new Gateway(gatewayConfig, { adapter }),
     config: gatewayConfig,
     resolveSnapshot: async () => await Promise.resolve(source),
+    revalidateAuthority: () => true,
     log: {
       write: (event): void => {
         events.push(event);
@@ -521,6 +522,51 @@ describe("bounded PR narrative lifecycle", () => {
     expect(setup.calls).toHaveLength(1);
     expect(result.status === "generated" && result.artifact.outcome).toBe("partial");
     expect(result.status === "generated" && result.artifact.coverage.omittedEvidenceCount).toBe(2);
+  });
+
+  it("revalidates authority around provider calls and stops before a second chunk", async () => {
+    const setup = fixture({
+      count: 3,
+      respond: async (request) => {
+        const user = request.messages[1]?.content;
+        if (typeof user !== "string") throw new Error("Missing evidence");
+        const parsed = JSON.parse(user) as { evidence: { evidenceId: string }[] };
+        return response(candidate(parsed.evidence[0]?.evidenceId ?? ""));
+      },
+    });
+    const revalidateAuthority = vi
+      .fn<PrDescriptionDeps["revalidateAuthority"]>()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValue(false);
+
+    const result = await generatePrDescription(REQUEST, {
+      ...setup.deps,
+      revalidateAuthority,
+      limits: { maxChunkBytes: 180 },
+    });
+
+    expect(result).toEqual({ status: "unavailable", reason: "authority-denied" });
+    expect(setup.calls).toHaveLength(1);
+    expect(revalidateAuthority).toHaveBeenCalledTimes(3);
+  });
+
+  it("fails closed with body-free evidence when authority revalidation throws", async () => {
+    const setup = fixture();
+    const result = await generatePrDescription(REQUEST, {
+      ...setup.deps,
+      revalidateAuthority: () => {
+        throw new Error("private authority failure");
+      },
+    });
+
+    expect(result).toEqual({ status: "unavailable", reason: "authority-denied" });
+    expect(setup.calls).toHaveLength(0);
+    expect(
+      setup.events.find((event) => event.op === "pr-description.authority.revalidation.failed")
+        ?.errorKind,
+    ).toBe("Error");
+    expect(JSON.stringify(setup.events)).not.toContain("private authority failure");
   });
 
   it.each([

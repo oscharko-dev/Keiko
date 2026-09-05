@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { evaluateGitPolicy } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import {
+  PR_DESCRIPTION_APPLICATION_MAX_AGE_MS,
   isPrDescriptionApplicationStatus,
   type PrDescriptionApplicationStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
@@ -28,6 +30,7 @@ import {
   type PrDescriptionApplicationResult,
   type PreparedPrDescription,
   type PrDescriptionContext,
+  type PrDescriptionDraftPreview,
   type PrDescriptionPreview,
 } from "./prDescriptionTypes.js";
 import type { GitDeliveryIssuedApproval } from "./approvalStore.js";
@@ -37,13 +40,17 @@ type ProposalPreparation = (
   now: number,
 ) => Promise<PreparedPrDescription>;
 
+type HeldDescriptionProposal =
+  | { readonly kind: "application"; readonly proposal: PreparedPrDescription }
+  | { readonly kind: "draft"; readonly preview: PrDescriptionDraftPreview };
+
 export function createPrDescriptionApplicationService(
   options: PrDescriptionServiceOptions,
 ): PrDescriptionApplicationService {
   return new DescriptionService(options);
 }
 class DescriptionService implements PrDescriptionApplicationService {
-  private readonly proposals = new Map<string, PreparedPrDescription>();
+  private readonly proposals = new Map<string, HeldDescriptionProposal>();
   private readonly approvals: PrDescriptionApprovals;
   private lastNow = 0;
   private generation = 0;
@@ -90,8 +97,9 @@ class DescriptionService implements PrDescriptionApplicationService {
     );
   }
   private held(id: string): PreparedPrDescription | undefined {
-    const proposal = this.proposals.get(id);
-    if (proposal === undefined) return undefined;
+    const held = this.proposals.get(id);
+    if (held?.kind !== "application") return undefined;
+    const proposal = held.proposal;
     try {
       if (
         Date.parse(proposal.review.expiresAt) <= this.time() ||
@@ -107,6 +115,34 @@ class DescriptionService implements PrDescriptionApplicationService {
   public review(id: string): PrDescriptionPreview | undefined {
     const proposal = this.held(id);
     return proposal === undefined ? undefined : structuredClone(proposal.review);
+  }
+  public holdDraftArtifact(
+    artifact: PreparedPrDescription["artifact"],
+    now: number,
+  ): PrDescriptionDraftPreview | undefined {
+    if (!Number.isSafeInteger(now) || now < this.lastNow || artifact.outcome === "failed") {
+      return undefined;
+    }
+    this.lastNow = now;
+    const preview = {
+      proposalId: randomUUID(),
+      expiresAt: new Date(now + PR_DESCRIPTION_APPLICATION_MAX_AGE_MS).toISOString(),
+      artifact: structuredClone(artifact),
+    };
+    this.proposals.clear();
+    this.approvals.clear();
+    this.proposals.set(preview.proposalId, { kind: "draft", preview });
+    return structuredClone(preview);
+  }
+  public reviewDraft(id: string): PrDescriptionDraftPreview | undefined {
+    const held = this.proposals.get(id);
+    if (held?.kind !== "draft") return undefined;
+    try {
+      if (Date.parse(held.preview.expiresAt) <= this.time()) return undefined;
+      return structuredClone(held.preview);
+    } catch {
+      return undefined;
+    }
   }
   public async preview(raw: unknown): Promise<PrDescriptionApplicationResult> {
     const request = parsePrDescriptionPreviewRequest(raw);
@@ -141,7 +177,7 @@ class DescriptionService implements PrDescriptionApplicationService {
         throw new PrDescriptionFailure("expired");
       this.proposals.clear();
       this.approvals.clear();
-      this.proposals.set(proposal.review.proposalId, proposal);
+      this.proposals.set(proposal.review.proposalId, { kind: "application", proposal });
       logDescription(this.options, context, "preview", "approval-required", proposal.review.status);
       return { outcome: "preview", preview: structuredClone(proposal.review) };
     } catch (error) {

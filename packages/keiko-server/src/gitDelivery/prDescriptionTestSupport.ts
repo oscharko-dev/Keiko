@@ -124,6 +124,8 @@ export class DescriptionFixture {
       },
       {
         ...this.generation(),
+        revalidateAuthority: (_authority, signal) =>
+          !signal.aborted && this.context.stillAuthorized(),
         resolveSnapshot: (reference) => {
           const content = this.snapshots.read(
             reference,

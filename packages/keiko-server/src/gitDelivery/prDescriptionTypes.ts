@@ -41,6 +41,12 @@ export interface PrDescriptionPreview {
   readonly managedRegion: string;
   readonly concurrencyLimitation: string;
 }
+export interface PrDescriptionDraftPreview {
+  readonly proposalId: string;
+  readonly expiresAt: string;
+  /** Exact generated artifact retained transiently by the existing proposal owner. */
+  readonly artifact: PrDescriptionArtifact;
+}
 export type PrDescriptionApplicationResult =
   | { readonly outcome: "preview"; readonly preview: PrDescriptionPreview }
   | { readonly outcome: "observed"; readonly status: PrDescriptionApplicationStatus }
@@ -78,6 +84,9 @@ export interface PrDescriptionApplicationService {
   preview(request: unknown): Promise<PrDescriptionApplicationResult>;
   /** Holds an already-generated Chat artifact as the exact proposal; never calls the model. */
   previewArtifact(artifact: PrDescriptionArtifact): Promise<PrDescriptionApplicationResult>;
+  /** Holds a generated draft that has no real PR target; this never creates apply authority. */
+  holdDraftArtifact(artifact: PrDescriptionArtifact, now: number): PrDescriptionDraftPreview | undefined;
+  reviewDraft(proposalId: string): PrDescriptionDraftPreview | undefined;
   review(proposalId: string): PrDescriptionPreview | undefined;
   issueApproval(proposalId: string): GitDeliveryIssuedApproval | undefined;
   matchesApproval(proposalId: string): boolean;

@@ -2418,11 +2418,17 @@ function descriptionTurnResponse(
   };
 }
 
+function gitChangeGenerationFailureStatus(reason: string): number {
+  if (reason === "authority-denied") return 403;
+  if (reason === "snapshot-unavailable" || reason === "invalid-snapshot") return 409;
+  return 503;
+}
+
 function gitChangeGenerationFailure(reason: string): RouteResult {
   return reason === "cancelled"
     ? requestCancelledResult()
     : {
-        status: reason === "snapshot-unavailable" || reason === "invalid-snapshot" ? 409 : 503,
+        status: gitChangeGenerationFailureStatus(reason),
         body: errorBody(
           "GIT_CHANGE_DESCRIPTION_UNAVAILABLE",
           "The connected Git change could not produce a current description.",

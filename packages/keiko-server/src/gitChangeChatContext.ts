@@ -8,6 +8,7 @@ import { defaultGitProcessRunner } from "@oscharko-dev/keiko-git";
 import { observedGitRunner } from "./gitProcessActivity.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import {
+  authorizeGitDeliveryModelEgress,
   descriptionAuthorityEnvelopeDigest,
   type GitDeliveryDescriptionAuthorityScope,
 } from "./gitDelivery/runBoundAuthority.js";
@@ -204,19 +205,34 @@ async function generateFromCapturedSnapshot(
   context: GitChangeChatSnapshotContext,
 ): Promise<GitChangeChatDescriptionResult> {
   const scope = gitChangeDescriptionAuthorityScopeFor(input.scope);
+  const authorityDigest = descriptionAuthorityEnvelopeDigest(scope);
   const result = await PrDescription.generatePrDescription(
     {
       snapshotReference: context.reference,
       language: "en",
       refinement: gitChangeChatRefinement(input.history, input.latestIntent),
       authority: {
-        authorityDigest: descriptionAuthorityEnvelopeDigest(scope),
+        authorityDigest,
         correlationId: input.correlationId,
       },
       signal: input.signal,
     },
     {
       ...generation,
+      revalidateAuthority: async (authority, signal) => {
+        if (
+          authority.authorityDigest !== authorityDigest ||
+          authority.correlationId !== input.correlationId ||
+          (await resolveCapturedSnapshot(input, context, context.reference, signal)) === undefined
+        ) {
+          return false;
+        }
+        const port = input.deps.gitChangeDescriptionAuthorityPort;
+        return (
+          port !== undefined &&
+          authorizeGitDeliveryModelEgress(port, scope, new Date().toISOString()).allowed
+        );
+      },
       resolveSnapshot: (reference, signal) =>
         resolveCapturedSnapshot(input, context, reference, signal),
     },

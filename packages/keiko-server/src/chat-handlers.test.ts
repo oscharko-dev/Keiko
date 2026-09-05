@@ -869,7 +869,8 @@ describe("git-change description-authority admission (#3400)", () => {
     try {
       const description = await initializeGitChangeDescriptionFixture(fixture.projectPath);
       fixture.deps.store.updateChat(fixture.chatId, { gitChangeScopes: [description.scope] });
-      const mintDescriptionAuthority = vi.fn();
+      const mintDescriptionAuthority =
+        vi.fn<NonNullable<UiHandlerDeps["mintDescriptionAuthority"]>>();
       const admittingDeps = {
         ...fixture.deps,
         ...description.deps,
@@ -911,12 +912,13 @@ describe("git-change description-authority admission (#3400)", () => {
       expect(result.status).toBe(200);
       expect(JSON.stringify(result.body)).toContain("Update the exported value.");
       expect(fetchSpy).not.toHaveBeenCalled();
-      expect(mintDescriptionAuthority).toHaveBeenCalledWith({
-        scope: expect.objectContaining({ snapshotDigest: description.scope.snapshotDigest }),
+      const mintRequest = mintDescriptionAuthority.mock.calls.at(-1)?.[0];
+      expect(mintRequest).toMatchObject({
+        scope: { snapshotDigest: description.scope.snapshotDigest },
         requestedMode: "supervised-coding",
-        nowIso: expect.any(String),
         correlationId: "corr-git-change-2",
       });
+      expect(Date.parse(mintRequest?.nowIso ?? "")).not.toBeNaN();
       expect(sink.events).toContainEqual(
         expect.objectContaining({
           category: "security",
