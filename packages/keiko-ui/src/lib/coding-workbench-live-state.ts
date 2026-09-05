@@ -286,6 +286,21 @@ function acceptStreamProjection(
   return { ...state, stream: ready(stream) };
 }
 
+/**
+ * #3390 recovery-ack-restart: once the operator has explicitly acknowledged a `recovery-required`
+ * predecessor, the server treats that acknowledgement as the reconciliation ADR-0137 D5 requires
+ * before a replacement run may start (`CodingRuntimeOrchestrator.start` auto-detects it). The
+ * client-side start guard must agree, or the composer's single "Start coding run" action stays
+ * disabled forever after a restart and the operator has no way to launch a replacement run short
+ * of wiping local state.
+ */
+function isAcknowledgedRecoveryRequired(state: CodingWorkbenchRuntimeState): boolean {
+  return (
+    state.run.value?.state === "recovery-required" &&
+    state.run.value.recoveryAcknowledged === true
+  );
+}
+
 function projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
   const runtime = state.runtime.value;
   // F-01: `available` is stored-config truth. A probe that ran and could not reach the gateway
@@ -308,7 +323,9 @@ function projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRu
     runtime.requestedMode === state.requestedMode;
   const runState = state.run.value?.state;
   const runReady =
-    state.run.status === "ready" && runState !== undefined && STARTABLE_RUN_STATES.has(runState);
+    state.run.status === "ready" &&
+    runState !== undefined &&
+    (STARTABLE_RUN_STATES.has(runState) || isAcknowledgedRecoveryRequired(state));
   const mutationIdle = state.mutation.status !== "pending";
   // Pairing is a channel diagnostic, not a local-composer kill switch. `unknown` still blocks while
   // the boot read is unresolved, but a confirmed unpaired browser must be allowed to send the start
@@ -324,8 +341,7 @@ function projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRu
       workspaceReady &&
       authorityReady &&
       pairingReady &&
-      runState === "recovery-required" &&
-      state.run.value?.recoveryAcknowledged === true &&
+      isAcknowledgedRecoveryRequired(state) &&
       mutationIdle,
   };
 }

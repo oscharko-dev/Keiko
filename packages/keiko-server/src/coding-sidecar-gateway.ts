@@ -18,6 +18,7 @@ import type {
   ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 import { estimateTokensForSegments } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   MODEL_REASONING_EFFORTS,
   validateGatewaySamplingParameters,
@@ -35,10 +36,12 @@ import {
 import {
   createOpenCodeGatewayToolCatalogAdvertisement,
   hasExactOpenCodeVisibleToolContract,
+  OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
 } from "./coding-runtime/opencodeToolSchemas.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
+import { getServerLogger } from "./observability/index.js";
 import { STREAMING, errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import { startSseHeartbeat } from "./sse.js";
 
@@ -79,6 +82,77 @@ const OUTPUT_BYTES_PER_TOKEN_LIMIT = 4;
 const TOOL_ADOPTION_GAP_MESSAGE_THRESHOLD = 9;
 const GOVERNED_TOOL_NAME_PREFIX = "keiko_";
 const MODEL_REASONING_EFFORT_SET: ReadonlySet<string> = new Set(MODEL_REASONING_EFFORTS);
+
+// #3390 closeout (AGENTS.md §8): every rejection this route can hand back gets ONE body-free
+// activity-log line carrying the REASON, so a defect is reconstructable from the log alone instead
+// of only the opaque HTTP status the client saw. `reason` is this closed vocabulary — never a raw
+// message — and is threaded through every 400/403 rejection path below via `logGatewayRejection`.
+const CODING_SIDECAR_GATEWAY_REJECTED_OP = "coding-sidecar.gateway.rejected";
+// The readiness projection (`/api/coding-sidecar/gateway/profile`) demoting an otherwise
+// "available" profile because its context window cannot survive a real request gets its own op:
+// it is not a per-request rejection, it is a standing state of the profile itself.
+const CODING_SIDECAR_GATEWAY_READINESS_OP = "coding-sidecar.gateway.readiness-insufficient";
+
+type CodingSidecarGatewayRejectionReason =
+  | "request-too-large"
+  | "body-not-json"
+  | "body-empty-messages"
+  | "tools-not-openai-compatible"
+  | "invalid-sampling"
+  | "input-messages-exceeded"
+  | "prompt-tokens-exceeded"
+  | "invalid-model"
+  | "tool-contract-drift"
+  | "tool-contract-missing"
+  | "tool-contract-empty";
+
+/** Body-free: `reason` is closed, `runId` and every `extra` field are counts/ids, never text. */
+function logGatewayRejection(
+  ctx: RouteContext,
+  runId: string | undefined,
+  status: number,
+  reason: CodingSidecarGatewayRejectionReason,
+  extra?: Readonly<Record<string, unknown>>,
+): void {
+  getServerLogger().warn({
+    category: "gateway",
+    op: CODING_SIDECAR_GATEWAY_REJECTED_OP,
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    status,
+    extra: { reason, ...(runId === undefined ? {} : { runId }), ...extra },
+  });
+}
+
+/**
+ * Classifies a rejection this file itself built (`badRequest`/`readJsonObject`/invalid-model)
+ * into the closed reason vocabulary above by its fixed `code`/message shape. Every branch here
+ * mirrors a message literal authored in this module, so a message change and this function must
+ * move together; there is deliberately no silent default that could misclassify a future one.
+ */
+function classifyBadRequestReason(result: RouteResult): CodingSidecarGatewayRejectionReason {
+  const error = isRecord(result.body) ? result.body.error : undefined;
+  const code = isRecord(error) && typeof error.code === "string" ? error.code : undefined;
+  const message = isRecord(error) && typeof error.message === "string" ? error.message : undefined;
+  if (code === "PAYLOAD_TOO_LARGE") return "request-too-large";
+  if (code === "INVALID_MODEL") return "invalid-model";
+  if (message === undefined) return "body-not-json";
+  if (message.startsWith("Request body messages exceed profile maxInputMessages")) {
+    return "input-messages-exceeded";
+  }
+  if (message.startsWith("Request body estimated prompt tokens exceed profile maxPromptTokens")) {
+    return "prompt-tokens-exceeded";
+  }
+  if (message === "Request body tools must be OpenAI-compatible function tools.") {
+    return "tools-not-openai-compatible";
+  }
+  if (message === "Request body must include a non-empty messages array.") {
+    return "body-empty-messages";
+  }
+  if (message.startsWith("Request body temperature") || message.startsWith("Request body top_p")) {
+    return "invalid-sampling";
+  }
+  return "body-not-json";
+}
 
 function isModelReasoningEffort(value: unknown): value is ModelReasoningEffort {
   return typeof value === "string" && MODEL_REASONING_EFFORT_SET.has(value);
@@ -838,14 +912,42 @@ function isRuntimeReadinessProbe(parsed: CodingSidecarGatewayChatCompletionReque
   );
 }
 
+function toolContractRejectionReason(
+  tools: readonly ToolDefinition[] | undefined,
+): { readonly code: string; readonly reason: CodingSidecarGatewayRejectionReason } {
+  if (tools === undefined) {
+    return { code: "CODING_GATEWAY_TOOL_CONTRACT_MISSING", reason: "tool-contract-missing" };
+  }
+  if (tools.length === 0) {
+    return { code: "CODING_GATEWAY_TOOL_CONTRACT_EMPTY", reason: "tool-contract-empty" };
+  }
+  return { code: "CODING_GATEWAY_TOOL_CONTRACT_DRIFT", reason: "tool-contract-drift" };
+}
+
+/**
+ * Identifiers only — the mismatching tool NAMES, never a schema or a body — so the activity-log
+ * line this feeds stays body-free (AGENTS.md §8) while still naming exactly which tools drifted.
+ */
+function toolContractMismatch(
+  tools: readonly ToolDefinition[] | undefined,
+): Readonly<Record<string, unknown>> {
+  const expected = new Set<string>(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
+  const received = new Set(tools?.map((tool) => tool.name) ?? []);
+  return {
+    expectedToolCount: expected.size,
+    receivedToolCount: received.size,
+    unexpectedToolNames: [...received].filter((name) => !expected.has(name)),
+    missingToolNames: [...expected].filter((name) => !received.has(name)),
+  };
+}
+
 function emitGatewayToolContractDiagnostic(
   ctx: RouteContext,
   deps: UiHandlerDeps,
+  runId: string,
   tools: readonly ToolDefinition[] | undefined,
 ): void {
-  let code = "CODING_GATEWAY_TOOL_CONTRACT_DRIFT";
-  if (tools === undefined) code = "CODING_GATEWAY_TOOL_CONTRACT_MISSING";
-  else if (tools.length === 0) code = "CODING_GATEWAY_TOOL_CONTRACT_EMPTY";
+  const { code, reason } = toolContractRejectionReason(tools);
   emitServerDiagnostic(deps.diagnostics, {
     correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
     timestamp: new Date(Date.now()).toISOString(),
@@ -855,6 +957,7 @@ function emitGatewayToolContractDiagnostic(
     message: "coding-sidecar-gateway-tool-contract-rejected",
     code,
   });
+  logGatewayRejection(ctx, runId, 403, reason, toolContractMismatch(tools));
 }
 
 /**
@@ -1551,11 +1654,44 @@ function openAiStreamChunk(
   };
 }
 
+/**
+ * Readiness dimension (#3390 closeout): a profile can be "available" per the stored config and
+ * probe yet still be unusable — its `runMetadata.maxPromptTokens` (derived from the capability via
+ * `deriveContextProfileFromCapability`) can sit below what a coding run's fixed system prompt and
+ * governed tool schemas alone need. That capability reports itself ready and then dies on the
+ * FIRST gateway call. This demotes the readiness projection before a run ever starts, WITHOUT
+ * touching the live admission gate below (`isAvailableGatewayProfile`) — an already-minted run's
+ * requests keep failing exactly as before, unchanged by this readiness-only check.
+ */
+function gatewayReadinessProjection(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): CodingWorkbenchSidecarGatewayResult {
+  const result = resolveGatewayProfile(deps).result;
+  if (
+    result.status !== "available" ||
+    result.runMetadata.maxPromptTokens >= CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS
+  ) {
+    return result;
+  }
+  getServerLogger().warn({
+    category: "gateway",
+    op: CODING_SIDECAR_GATEWAY_READINESS_OP,
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    extra: {
+      reason: "model-context-window-insufficient",
+      maxPromptTokens: result.runMetadata.maxPromptTokens,
+      minimumRequiredPromptTokens: CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS,
+    },
+  });
+  return { status: "unavailable", reason: "model-context-window-insufficient" };
+}
+
 export function handleCodingSidecarGatewayProfile(
-  _ctx: RouteContext,
+  ctx: RouteContext,
   deps: UiHandlerDeps,
 ): RouteResult {
-  return { status: 200, body: resolveGatewayProfile(deps).result };
+  return { status: 200, body: gatewayReadinessProjection(ctx, deps) };
 }
 
 function upstreamGatewayStreamingSupported(
@@ -1575,7 +1711,7 @@ function runtimeGatewayAdmissionResponse(
   if (!authentication.runtimeAuthenticated) return undefined;
   const registry = gatewayReadinessRegistry(deps);
   if (!isAdmittedManagedToolSet(parsed.tools, registry, authentication.runId)) {
-    emitGatewayToolContractDiagnostic(ctx, deps, parsed.tools);
+    emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed.tools);
     return forbiddenGatewayRequest();
   }
   if (
@@ -1637,6 +1773,12 @@ async function runHandleCodingSidecarGatewayChatCompletions(
     authentication.runtimeAuthenticated,
   );
   if (validationError !== undefined) {
+    logGatewayRejection(
+      ctx,
+      authentication.runId,
+      validationError.status,
+      classifyBadRequestReason(validationError),
+    );
     return validationError;
   }
   if (isRouteResult(parsed)) {

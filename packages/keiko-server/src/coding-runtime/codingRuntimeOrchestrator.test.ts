@@ -1181,6 +1181,71 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.rows.get("run-1")?.terminalAt).toBe("2026-01-01T00:00:00.000Z");
   });
 
+  // #3390: after a mid-run server restart the operator acknowledged recovery and the route
+  // answered 200, but the returned snapshot still showed the SAME revision — a poller or SSE
+  // catch-up comparing revisions could never observe the acknowledgement happened at all, and the
+  // activity log carried no evidence of it either.
+  it("advances the revision and logs a body-free line when recovery is acknowledged", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    await f.orchestrator.startupReconcile();
+    const before = f.orchestrator.snapshot();
+    expect(before).toMatchObject({ state: "recovery-required" });
+    const beforeRevision = before.revision;
+
+    const acknowledged = await f.orchestrator.acknowledgeRecovery("run-1", {
+      requestId: "run-1",
+      acknowledged: true,
+    });
+
+    const afterRevision = beforeRevision + 1;
+    expect(successfulSnapshot(acknowledged)).toMatchObject({
+      state: "recovery-required",
+      revision: afterRevision,
+      recoveryAcknowledged: true,
+    });
+    const line = captured.records.find(
+      (event) => event.op === "coding-runtime.run.recovery-acknowledged",
+    );
+    expect(line).toMatchObject({
+      correlationId: UNKNOWN_CORRELATION_ID,
+      extra: { runId: "run-1", revision: afterRevision },
+    });
+    // Body-free: no task, prompt, or process content ever reaches this line.
+    expect(JSON.stringify(line)).not.toContain(start.taskIntent);
+  });
+
+  // #3390: the composer's single "Start coding run" action is the control the operator actually
+  // used, not the separate recovery-panel retry button. Once acknowledgement makes the slot
+  // startable, a plain `start()` — not only `retry()` — must succeed against the acknowledged
+  // predecessor, or the operator has no way to launch a replacement run without wiping state.
+  it("lets a plain start succeed against an acknowledged recovery-required predecessor", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    await f.orchestrator.startupReconcile();
+    await f.orchestrator.acknowledgeRecovery("run-1", { requestId: "run-1", acknowledged: true });
+
+    const restarted = successfulSnapshot(
+      await f.orchestrator.start({ ...start, requestId: "request-2" }),
+    );
+
+    expect(restarted).toMatchObject({ runId: "run-2", state: "running" });
+    expect(f.rows.get("run-2")?.predecessorRunId).toBe("run-1");
+    expect(f.rows.get("run-1")?.terminalAt).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  it("still fails a plain start closed against an unacknowledged recovery-required predecessor", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    await f.orchestrator.startupReconcile();
+
+    expect(await f.orchestrator.start({ ...start, requestId: "request-2" })).toEqual({
+      ok: false,
+      failureCode: "active-run-conflict",
+    });
+  });
+
   // 0.3.0 release audit: `cancelled` is legal only from `starting`/`stopping`, so an ingested
   // runtime-stopped event from a LIVE state was rejected with `invalid-intent` and produced no
   // transition, no evidence, and no SSE frame. A dead runtime kept presenting as `running` until

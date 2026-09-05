@@ -1906,6 +1906,37 @@ describe("CodingWorkbenchWindow", () => {
     expect(liveActions.acknowledgeRecovery).toHaveBeenCalledOnce();
   });
 
+  // #3390: after a server restart the operator's actual control was the composer's single "Start
+  // coding run" action, not the recovery panel's separate Retry button. Once the live-state guard
+  // reports the acknowledged predecessor as startable (`canStart: true`), that primary action must
+  // reach `actions.start` exactly like any other startable state — a hidden runState-specific
+  // guard here would leave the button visually enabled but silently inert.
+  it("lets the primary Start action fire once an acknowledged recovery-required predecessor is startable", async () => {
+    const user = userEvent.setup();
+    const liveActions = renderWorkbench(
+      liveState({
+        canStart: true,
+        canRetry: true,
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "recovery-required",
+            runId: "run-1",
+            failureCode: "recovery-required",
+            recoveryAcknowledged: true,
+          }),
+        },
+      }),
+    );
+
+    const taskInput = screen.getByLabelText("Task instructions");
+    await user.type(taskInput, "Continue after the restart");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+
+    expect(liveActions.start).toHaveBeenCalledWith("Continue after the restart");
+  });
+
   it("keeps terminal result evidence out of the user-facing workbench", async () => {
     renderWorkbench(
       liveState({

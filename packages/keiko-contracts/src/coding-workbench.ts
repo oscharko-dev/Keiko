@@ -500,7 +500,22 @@ export type CodingWorkbenchSidecarGatewayUnavailableReason =
   | "non-workflow-eligible"
   | "non-coding-capable"
   | "deployment-policy-disabled"
-  | "subscription-source";
+  | "subscription-source"
+  // Appended (epic #3384, #3390 closeout): the profile is otherwise configured and probed, but
+  // `runMetadata.maxPromptTokens` sits below `CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS`
+  // — a run minted against it would fail its very first gateway call.
+  | "model-context-window-insufficient";
+
+/**
+ * The floor `runMetadata.maxPromptTokens` must clear before a coding run is allowed to look
+ * "ready": the fixed OpenCode system prompt plus all 18 governed tool schemas the sidecar gateway
+ * advertises (~8 KB of JSON, roughly 2,000 tokens) plus a usable slice of actual issue/task
+ * context and conversation. A capability configured under this — the #3390 incident shipped a
+ * setup placeholder of `contextWindow: 4096, maxOutputTokens: 0` — reports itself "available" and
+ * then dies on the first real request with "estimated prompt tokens exceed profile
+ * maxPromptTokens". Demoting readiness here catches that before a run ever starts.
+ */
+export const CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS = 32_768;
 
 export interface CodingWorkbenchSidecarGatewayRunMetadata {
   readonly maxPromptTokens: number;

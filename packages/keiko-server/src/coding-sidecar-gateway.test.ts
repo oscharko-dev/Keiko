@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ProviderError,
   resolveCodingSafeSidecarGatewayProfile,
@@ -28,11 +28,28 @@ import {
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
 } from "./coding-runtime/opencodeToolSchemas.js";
 import { proposalIdPattern } from "./gitDelivery/proposalId.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+  type ServerLogThreshold,
+} from "./observability/index.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
 import { resetGatewayInstanceCacheForTests } from "./gateway-instance-cache.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./coding-runtime/opencodeLaunchProfile.js";
+
+// Installs a buffered process logger at `level` and returns its sink, mirroring
+// `bounded-request-body.test.ts`'s helper of the same name. `resetServerLogger` in each suite's
+// own `afterEach` puts the process-wide slot back so no other suite in this file shares it.
+function captureServerLog(level: ServerLogThreshold): BufferedServerLogSink {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level }));
+  return sink;
+}
 
 function provider(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
   return {
