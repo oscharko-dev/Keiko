@@ -64,12 +64,13 @@ function context(
   params: Record<string, string> = {},
   path = "/api/coding-workbench/runtime/runs",
   cookie?: string,
+  correlationId?: string,
 ): RouteContext {
   const req = new PassThrough() as unknown as RouteContext["req"];
   req.headers = cookie === undefined ? {} : { cookie };
   queueMicrotask(() => (req as unknown as PassThrough).end(body));
   return {
-    correlationId: undefined,
+    correlationId,
     req,
     res: new FakeResponse() as unknown as RouteContext["res"],
     params,
@@ -121,6 +122,11 @@ function runtime(
   },
 ): UiHandlerDeps {
   const calls: unknown[] = [];
+  // codingRuntimeRoutes.ts's mutation() funnel and the direct listQuestions call site now thread
+  // ctx.correlationId as an extra positional argument into these four methods (review 3941746512):
+  // captured separately from `calls`/`__calls` so the existing exact-shape assertions on that array
+  // stay untouched.
+  const correlationIds: (string | undefined)[] = [];
   const orchestrator = {
     start: (body: unknown) => {
       calls.push(body);
@@ -134,21 +140,28 @@ function runtime(
     pause: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
     resume: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
     revokeResearch: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
-    submitFollowUp: (_runId: string, body: unknown) => {
+    submitFollowUp: (_runId: string, body: unknown, correlationId?: string) => {
       calls.push(body);
+      correlationIds.push(correlationId);
       return Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot });
     },
-    answerQuestion: (_runId: string, body: unknown) => {
+    answerQuestion: (_runId: string, body: unknown, correlationId?: string) => {
       calls.push(body);
+      correlationIds.push(correlationId);
       return Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot });
     },
-    rejectQuestion: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
-    listQuestions: () =>
-      Promise.resolve({
+    rejectQuestion: (_runId: string, _body: unknown, correlationId?: string) => {
+      correlationIds.push(correlationId);
+      return Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot });
+    },
+    listQuestions: (_runId: string, _body: unknown, correlationId?: string) => {
+      correlationIds.push(correlationId);
+      return Promise.resolve({
         ok: true as const,
         snapshot: runtimeSnapshot,
         questions: { schemaVersion: "1" as const, questions: [] },
-      }),
+      });
+    },
     status: () => runtimeSnapshot,
     getSnapshot: (runId: string) => (runId === "run-1" ? runtimeSnapshot : undefined),
     pendingResearchAsk: (runId: string) =>
@@ -205,6 +218,7 @@ function runtime(
     codingRuntimeOrchestrator: orchestrator,
     codingRuntimeEventHub: eventHub,
     __calls: calls,
+    __correlationIds: correlationIds,
     ...overrides,
   } as unknown as UiHandlerDeps;
 }
@@ -315,6 +329,32 @@ describe("coding runtime routes", () => {
     expect(answered).toMatchObject({ status: 200, body: snapshot });
     // The route response projects only the content-free snapshot, never the answer text.
     expect(JSON.stringify(answered.body)).not.toContain("untrusted-answer-text");
+  });
+
+  // Review 3941746512: the per-request ctx.correlationId used to stop at this route boundary --
+  // the orchestrator's follow-up/answer/reject/list methods had no correlationId parameter at all,
+  // so a question-mutation transport failure could only ever correlate by run id. Proves every one
+  // of the four question/follow-up routes now forwards ctx.correlationId through to the
+  // orchestrator call.
+  it("threads ctx.correlationId into every follow-up/question orchestrator call", async () => {
+    const session = pairedAppSession();
+    const runPath = "/api/coding-workbench/runtime/runs";
+    const correlationId = "route-correlation-id-1";
+    const handlers = [
+      handleCodingRuntimeFollowUp,
+      handleCodingRuntimeQuestionAnswer,
+      handleCodingRuntimeQuestionReject,
+      handleCodingRuntimeQuestionList,
+    ];
+    for (const handler of handlers) {
+      const deps = runtime({ codingAppSessionChannel: session.channel });
+      await expect(
+        handler(context("{}", { runId: "run-1" }, runPath, session.cookie, correlationId), deps),
+      ).resolves.toMatchObject({ status: 200 });
+      expect(
+        (deps as unknown as { __correlationIds: (string | undefined)[] }).__correlationIds,
+      ).toContain(correlationId);
+    }
   });
 
   // Epic #3384 defect B: every refused mutation used to return its 400/403 with nothing in the

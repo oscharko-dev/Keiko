@@ -263,6 +263,10 @@ async function captureComparison(
     headRef,
     accessScope: {},
     correlationId,
+    // B2-8 — this comparison only ever reads `capture.snapshot`/`.remoteDigest`, never
+    // `.reference` (see `CapturedComparison`, which has no `reference` field), so retaining it in
+    // the shared registry would only churn a slot every connect/refresh call can never read back.
+    retain: false,
   });
   if (!isGitChangeSnapshot(capture.snapshot)) {
     return capture.snapshot.outcome === "unavailable" ? "snapshot-unavailable" : "snapshot-failed";
@@ -587,7 +591,12 @@ export async function handleGitChangeConnect(
   if (request === undefined) return errResult(400, "GIT_CHANGE_BAD_REQUEST");
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
   const chatResult = connectChat(deps, request.chatId);
-  if (!chatResult.ok) return chatResult.result;
+  if (!chatResult.ok) {
+    logGitChangeEvent(deps, "git-change.chat.blocked", correlationId, {
+      reason: chatResult.reason,
+    });
+    return errResult(chatResult.reason === "GIT_CHANGE_CHAT_NOT_FOUND" ? 404 : 409, chatResult.reason);
+  }
   const { chat } = chatResult;
 
   let captured: CapturedComparison & { readonly prNumber: number | undefined };
@@ -612,11 +621,14 @@ function connectChat(
   chatId: string,
 ):
   | { readonly ok: true; readonly chat: Chat }
-  | { readonly ok: false; readonly result: RouteResult } {
+  | {
+      readonly ok: false;
+      readonly reason: "GIT_CHANGE_CHAT_NOT_FOUND" | "GIT_CHANGE_SCOPE_LIMIT_REACHED";
+    } {
   const chat = deps.store.findChatById(chatId);
-  if (chat === undefined) return { ok: false, result: errResult(404, "GIT_CHANGE_CHAT_NOT_FOUND") };
+  if (chat === undefined) return { ok: false, reason: "GIT_CHANGE_CHAT_NOT_FOUND" };
   return (chat.gitChangeScopes?.length ?? 0) >= MAX_GIT_CHANGE_SCOPES
-    ? { ok: false, result: errResult(409, "GIT_CHANGE_SCOPE_LIMIT_REACHED") }
+    ? { ok: false, reason: "GIT_CHANGE_SCOPE_LIMIT_REACHED" }
     : { ok: true, chat };
 }
 

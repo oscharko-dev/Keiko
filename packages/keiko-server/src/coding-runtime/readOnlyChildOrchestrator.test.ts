@@ -172,6 +172,12 @@ function eventOfKind(
   return found;
 }
 
+function logOfOp(logs: readonly ServerLogEvent[], op: string): ServerLogEvent {
+  const found = logs.find((log) => log.op === op);
+  if (found === undefined) throw new Error(`missing log with op ${op}`);
+  return found;
+}
+
 const CHILD_ORIGIN: ReadOnlyChildEnvelope = {
   parentRunId: "run-2387",
   childRunId: "chr_parent-child" as CodeTaskChildRunId,
@@ -191,7 +197,7 @@ describe("createReadOnlyChildOrchestrator", () => {
         return true;
       },
     };
-    const { events, deps } = harness(scriptedRunner([READ, READ, READ]), { charger });
+    const { events, logs, deps } = harness(scriptedRunner([READ, READ, READ]), { charger });
     const outcome = await createReadOnlyChildOrchestrator(deps).handleChildRequest(
       childRequest(),
       contextFor(),
@@ -206,6 +212,15 @@ describe("createReadOnlyChildOrchestrator", () => {
     const completed = eventOfKind(events, "child-run-completed");
     expect(completed).toMatchObject({ auxiliaryOutcome: "accepted", childResultCount: 3 });
     expect(validateCodingWorkbenchRuntimeEvent(completed).ok).toBe(true);
+    // §AC7: a healthy primary sink attempts exactly one durable terminal write, on the ACCEPTED
+    // path too — not only on a crash/denial.
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      op: "coding-runtime.read-only-child.completed",
+      correlationId: "run-2387",
+      level: "info",
+      extra: { childRunId: CHILD_RUN_ID, terminal: "accepted" },
+    });
   });
 
   it("treats an explicit zero result count as a valid accepted outcome", async () => {
@@ -225,7 +240,7 @@ describe("createReadOnlyChildOrchestrator", () => {
   });
 
   it("denies a mutation attempt from within the read-only child", async () => {
-    const { deps } = harness(scriptedRunner([{ toolClass: "workspace-write" }]));
+    const { logs, deps } = harness(scriptedRunner([{ toolClass: "workspace-write" }]));
     const outcome = await createReadOnlyChildOrchestrator(deps).handleChildRequest(
       childRequest(),
       contextFor(),
@@ -235,6 +250,13 @@ describe("createReadOnlyChildOrchestrator", () => {
       status: "denied",
       capability: "child-agent",
       reasonCode: "workspace-write-denied",
+    });
+    // §AC7: an ordinary gate denial is a durable terminal too, not only a crash/trust-violation.
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      op: "coding-runtime.read-only-child.completed",
+      level: "warn",
+      extra: { childRunId: CHILD_RUN_ID, terminal: "denied", reasonCode: "workspace-write-denied" },
     });
   });
 
@@ -258,7 +280,7 @@ describe("createReadOnlyChildOrchestrator", () => {
   });
 
   it("denies a nested child before any run when the caller is itself a child, and still audits it", async () => {
-    const { events, deps } = harness(scriptedRunner([READ]));
+    const { events, logs, deps } = harness(scriptedRunner([READ]));
     const outcome = await createReadOnlyChildOrchestrator(deps).handleChildRequest(
       childRequest(),
       contextFor({ originChildEnvelope: CHILD_ORIGIN }),
@@ -268,6 +290,14 @@ describe("createReadOnlyChildOrchestrator", () => {
     const completed = eventOfKind(events, "child-run-completed");
     expect(completed).toMatchObject({ auxiliaryOutcome: "denied", childResultCount: 0 });
     expect(validateCodingWorkbenchRuntimeEvent(completed).ok).toBe(true);
+    // §AC7: admission denial (never reaching runChild at all) is a durable terminal too — this is
+    // the path the crash-only fix left unaudited on the primary activity sink.
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      op: "coding-runtime.read-only-child.completed",
+      correlationId: "run-2387",
+      extra: { childRunId: CHILD_RUN_ID, terminal: "denied", reasonCode: "nested-child-denied" },
+    });
   });
 
   it("reports limit-reached when the parent budget is exhausted mid-run", async () => {
@@ -278,7 +308,7 @@ describe("createReadOnlyChildOrchestrator", () => {
         return charges <= 2;
       },
     };
-    const { deps } = harness(scriptedRunner([READ, READ, READ, READ]), { charger });
+    const { logs, deps } = harness(scriptedRunner([READ, READ, READ, READ]), { charger });
     const outcome = await createReadOnlyChildOrchestrator(deps).handleChildRequest(
       childRequest(8),
       contextFor(),
@@ -287,6 +317,16 @@ describe("createReadOnlyChildOrchestrator", () => {
     expect(outcome).toMatchObject({
       status: "limit-reached",
       reasonCode: "parent-budget-exceeded",
+    });
+    // §AC7: an exhausted-budget terminal is a durable terminal too.
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      op: "coding-runtime.read-only-child.completed",
+      extra: {
+        childRunId: CHILD_RUN_ID,
+        terminal: "limit-reached",
+        reasonCode: "parent-budget-exceeded",
+      },
     });
   });
 
@@ -317,7 +357,7 @@ describe("createReadOnlyChildOrchestrator", () => {
         return true;
       },
     };
-    const { events, deps } = harness(runner, {
+    const { events, logs, deps } = harness(runner, {
       charger,
       cancellation: { stopReason: () => cancelState.reason },
     });
@@ -329,6 +369,12 @@ describe("createReadOnlyChildOrchestrator", () => {
     expect(charges).toBe(0);
     expect(eventOfKind(events, "child-run-completed")).toMatchObject({
       auxiliaryOutcome: "stopped",
+    });
+    // §AC7: a cascaded stop is a durable terminal too.
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      op: "coding-runtime.read-only-child.completed",
+      extra: { childRunId: CHILD_RUN_ID, terminal: "stopped", reasonCode: "parent-stopped" },
     });
   });
 
@@ -450,9 +496,11 @@ describe("createReadOnlyChildOrchestrator", () => {
       auxiliaryOutcome: "denied",
       childResultCount: 0,
     });
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatchObject({
-      op: "coding-runtime.read-only-child.runner-failed",
+    // §AC7: the crash/trust-violation path keeps its richer diagnostic write (runner-failed) AND
+    // now also gets the same generic durable terminal write every other terminal gets
+    // (completed) — one additional diagnostic line, not a replacement.
+    expect(logs).toHaveLength(2);
+    expect(logOfOp(logs, "coding-runtime.read-only-child.runner-failed")).toMatchObject({
       correlationId: "run-2387",
       errorKind: "ReadOnlyChildTrustViolationError",
       extra: {
@@ -460,6 +508,10 @@ describe("createReadOnlyChildOrchestrator", () => {
         terminal: "denied",
         reasonCode: "fabricated-tool-denied",
       },
+    });
+    expect(logOfOp(logs, "coding-runtime.read-only-child.completed")).toMatchObject({
+      correlationId: "run-2387",
+      extra: { childRunId: CHILD_RUN_ID, terminal: "denied", reasonCode: "fabricated-tool-denied" },
     });
   });
 
@@ -520,9 +572,9 @@ describe("createReadOnlyChildOrchestrator", () => {
     expect(typeof diagnostic.eventId).toBe("string");
     expect(diagnostic.eventId.length).toBeGreaterThan(0);
     expect(validateCodingWorkbenchRuntimeEvent(diagnostic).ok).toBe(true);
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatchObject({
-      op: "coding-runtime.read-only-child.runner-failed",
+    expect(logs).toHaveLength(2);
+    const runnerFailed = logOfOp(logs, "coding-runtime.read-only-child.runner-failed");
+    expect(runnerFailed).toMatchObject({
       correlationId: "run-2387",
       errorKind: "Error",
       extra: {
@@ -531,8 +583,16 @@ describe("createReadOnlyChildOrchestrator", () => {
         reasonCode: "child-runner-error",
       },
     });
-    expect(Array.isArray(logs[0]?.extra?.frames)).toBe(true);
-    expect(Array.isArray(logs[0]?.extra?.causeChain)).toBe(true);
+    expect(Array.isArray(runnerFailed.extra?.frames)).toBe(true);
+    expect(Array.isArray(runnerFailed.extra?.causeChain)).toBe(true);
+    expect(logOfOp(logs, "coding-runtime.read-only-child.completed")).toMatchObject({
+      correlationId: "run-2387",
+      extra: {
+        childRunId: CHILD_RUN_ID,
+        terminal: "unavailable",
+        reasonCode: "child-runner-error",
+      },
+    });
     expect(JSON.stringify(logs)).not.toContain("sk-should-never-leak");
   });
 

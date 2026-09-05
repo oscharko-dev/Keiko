@@ -297,7 +297,12 @@ describe("durable repository delivery in the Code task", () => {
     expect(screen.getByTestId("cwb-description-draft").textContent).toBe(newerArtifact.markdown);
   });
 
-  it("does not display a returned artifact that differs from the durable draft digest", async () => {
+  // Review comment 3941638345 (#3394): the T44 artifact-digest binding rejects a resolved draft
+  // whose proposal/snapshot match but whose artifact digest does not. Before this fix, that
+  // mismatch was dropped with no diagnostic and no operator-visible state — indistinguishable from
+  // a request that never completed. This proves both the closed, body-free diagnostic and the
+  // calm, localized "unavailable" state now surface instead.
+  it("reports and surfaces a digest-mismatch instead of silently dropping the response", async () => {
     const reviewDraft = vi.fn(async () => ({
       outcome: "draft" as const,
       draft: {
@@ -316,6 +321,17 @@ describe("durable repository delivery in the Code task", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review exact draft" }));
     await waitFor(() => expect(reviewDraft).toHaveBeenCalledOnce());
     expect(screen.queryByTestId("cwb-description-draft")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(console.warn).toHaveBeenCalledWith(
+        "[keiko] workbench description draft rejected: digest-mismatch proposal generic-description-1 expected cccccccccccc actual dddddddddddd",
+      ),
+    );
+    expect(
+      screen.getByText(
+        translateCodingWorkbench("en", "codingWorkbench.descriptionStatus.unavailable"),
+      ),
+    ).toBeInTheDocument();
+    expect(await axe(document.body)).toHaveNoViolations();
   });
 
   it("renders nothing for the description status when it is absent, without a diagnostic", () => {

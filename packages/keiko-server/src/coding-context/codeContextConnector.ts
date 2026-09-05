@@ -450,7 +450,10 @@ function blockedRef(
 function packItem(
   raw: CodeContextRawObject,
   maxBodyBytes: number,
-): { readonly item: CodeContextPackItem; readonly sanitization: ItemSanitizationTally | undefined } {
+): {
+  readonly item: CodeContextPackItem;
+  readonly sanitization: ItemSanitizationTally | undefined;
+} {
   const sanitizedTitle = stripUnsafeFormatChars(raw.title);
   const sanitizedRawBody = stripUnsafeFormatChars(raw.body);
   const body = bounded(sanitizedRawBody, maxBodyBytes);

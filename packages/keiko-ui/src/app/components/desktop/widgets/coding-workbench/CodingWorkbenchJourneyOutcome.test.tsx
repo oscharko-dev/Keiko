@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isJourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-validation";
+import { ApiError } from "@/lib/api";
 
 const { proposePrMarkReadyMock } = vi.hoisted(() => ({ proposePrMarkReadyMock: vi.fn() }));
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -230,9 +231,38 @@ describe("observed issue journey handoff", () => {
       expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toMatch(
         /customer-content|token-value/,
       );
-      expect(console.warn).toHaveBeenCalledWith(`[keiko] journey action: ${action} failed`);
+      expect(console.warn).toHaveBeenCalledWith(
+        `[keiko] journey action: ${action} failed (reason=Error)`,
+      );
     },
   );
+
+  // B5-2 (epic #3384 audit): before the fix, `useJourneyActions` discarded the caught error
+  // entirely and every failure rendered the exact same static sentence regardless of cause — a
+  // network error, an expired approval and a quota-exceeded rejection were indistinguishable.
+  // Failing-before: both branches below rendered byte-identical alert text (no `(reason=...)`
+  // segment existed at all); passing-after: the two distinct closed-vocabulary reasons the server
+  // (`ApiError.code`) and the browser (`clientErrorSummary`) can produce are visibly different.
+  it("surfaces a distinct, body-free reason for a server ApiError vs. a native throw (never the same text)", async () => {
+    const apiFailure = vi.fn().mockRejectedValue(new ApiError("READINESS_DIGEST_STALE", "", 409));
+    const { rerender } = render(
+      <CodingWorkbenchJourneyOutcome {...journeyFixture()} onRefresh={apiFailure} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Refresh observed status" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    const apiErrorText = screen.getByRole("alert").textContent;
+    expect(apiErrorText).toContain("READINESS_DIGEST_STALE");
+
+    const networkFailure = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    rerender(<CodingWorkbenchJourneyOutcome {...journeyFixture()} onRefresh={networkFailure} />);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh observed status" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).not.toBe(apiErrorText),
+    );
+    const networkErrorText = screen.getByRole("alert").textContent;
+    expect(networkErrorText).toContain("TypeError");
+    expect(document.body).not.toHaveTextContent("Failed to fetch");
+  });
 
   it.each([
     ["blocked", "policy-blocked"],

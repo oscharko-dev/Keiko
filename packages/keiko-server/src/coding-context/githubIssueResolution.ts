@@ -29,7 +29,6 @@ import {
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { readGitDefaultBranch } from "@oscharko-dev/keiko-tools";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -47,6 +46,7 @@ import {
 } from "./codeContextConnector.js";
 import type { GitHubCodeContextApiPort } from "./githubCodeContextConnector.js";
 import {
+  contentFreeWorkspaceFor,
   gitHubCodeContextPortFor,
   githubIssueReaderRepositoryId,
   githubRemoteOwnerAndRepoFor,
@@ -202,26 +202,10 @@ function cancelledIfAborted(signal: AbortSignal | undefined): Step<undefined> {
   return signal?.aborted === true ? refuse("cancelled", "aborted") : produce(undefined);
 }
 
-// The content-free workspace view `git` is given for one checkout — the same literal the
-// authorization module builds for its own reads.
-function workspaceViewFor(repositoryRoot: string): WorkspaceInfo {
-  return {
-    root: repositoryRoot,
-    selectedRoot: repositoryRoot,
-    name: undefined,
-    version: undefined,
-    testFramework: "unknown",
-    sourceDirs: [],
-    testDirs: [],
-    languages: [],
-    ignoreLines: [],
-  };
-}
-
 const PRODUCTION_PORTS: GitHubIssueResolverPorts = {
   readDefaultBranch: (repositoryRoot, context) =>
     readGitDefaultBranch({
-      workspace: workspaceViewFor(repositoryRoot),
+      workspace: contentFreeWorkspaceFor(repositoryRoot),
       processEnv: context.env,
       signal: context.signal,
       onTerminated: (evidence): void => {

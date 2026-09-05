@@ -2,6 +2,7 @@ import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/te
 import { isCommandAllowed } from "@oscharko-dev/keiko-tools";
 import { describe, expect, it } from "vitest";
 
+import type { ServerLogEvent } from "../observability/server-log.js";
 import {
   buildCodeContextPack,
   GITHUB_CODE_CONTEXT_OBJECT_JQ,
@@ -408,6 +409,109 @@ describe("CodeContextConnector", () => {
     for (const text of [item?.title, item?.body, item?.comments[0]?.body]) {
       expect(text).not.toMatch(/[\u200B\u202E]/u);
     }
+  });
+
+  // Review 3941762925 [P2]: `packItem`/`packComment` sanitise title/body/comments but, until now,
+  // `buildCodeContextPack` had no log sink at all — a customer log could not tell whether a run's
+  // context pack had silently dropped hostile formatting. This pins the fix: when an injected
+  // `activityLog` is present AND sanitisation actually removed something, exactly one body-free
+  // `coding-context.pack` line is emitted, carrying counts and a digest of the SANITISED result —
+  // never the issue/comment text itself.
+  it("emits one body-free coding-context.pack line when sanitisation removes something", async () => {
+    const hostileTitle = "\u202Emalicious title\u200B";
+    const hostileBody = "clean body prefix\u202E hostile suffix";
+    const hostileConnector: CodeContextConnector = {
+      read: (ref): Promise<CodeContextRawObject> =>
+        Promise.resolve({
+          source: "github",
+          objectKind: ref.objectKind,
+          objectId: ref.objectId,
+          title: hostileTitle,
+          body: hostileBody,
+          comments: [{ id: "c1", body: "clean comment" }],
+          url: "https://github.com/oscharko-dev/Keiko/issues/1989",
+        }),
+    };
+    const events: ServerLogEvent[] = [];
+
+    const result = await buildCodeContextPack(
+      request({
+        refs: [
+          {
+            source: "github",
+            objectKind: "issue",
+            ownerAndRepo: "oscharko-dev/Keiko",
+            objectId: "1989",
+          },
+        ],
+        maxBodyBytes: 4_096,
+      }),
+      {
+        connectors: { github: hostileConnector, jira: connector("jira").connector },
+        connectorConfig: {
+          github_connector_authorized: true,
+          github_allowed_owner_and_repo: "oscharko-dev/Keiko",
+        },
+        nowIso: () => "2026-09-05T15:30:00.000Z",
+        activityLog: { write: (event): void => void events.push(event) },
+        correlationId: "req-3941762925-correlation",
+      },
+    );
+
+    expect(events).toHaveLength(1);
+    const [event] = events;
+    expect(event).toMatchObject({
+      level: "info",
+      category: "security",
+      op: "coding-context.pack",
+      correlationId: "req-3941762925-correlation",
+      extra: {
+        runId: "run-1989",
+        outcome: "sanitized",
+        sanitizedItemCount: 1,
+        sanitizedObjectIds: ["1989"],
+      },
+    });
+    const extra = event?.extra as Record<string, unknown>;
+    expect(extra.sanitizedTitleBytesRemoved).toBeGreaterThan(0);
+    expect(extra.sanitizedBodyBytesRemoved).toBeGreaterThan(0);
+    expect(extra.sanitizedCommentBytesRemoved).toBe(0);
+    expect(extra.sanitizedContentDigest).toMatch(/^[a-f0-9]{64}$/u);
+
+    // Body-free: the serialised line never contains the raw or sanitised issue text.
+    const serialized = JSON.stringify(event);
+    expect(serialized).not.toContain("malicious title");
+    expect(serialized).not.toContain("hostile suffix");
+    expect(serialized).not.toContain(result.items[0]?.title);
+  });
+
+  it("emits no coding-context.pack line when nothing needed sanitising", async () => {
+    const events: ServerLogEvent[] = [];
+
+    await buildCodeContextPack(
+      request({
+        refs: [
+          {
+            source: "github",
+            objectKind: "issue",
+            ownerAndRepo: "oscharko-dev/Keiko",
+            objectId: "1989",
+          },
+        ],
+      }),
+      {
+        connectors: { github: connector("github").connector, jira: connector("jira").connector },
+        connectorConfig: {
+          github_connector_authorized: true,
+          github_allowed_owner_and_repo: "oscharko-dev/Keiko",
+        },
+        nowIso: () => "2026-09-05T15:30:00.000Z",
+        activityLog: { write: (event): void => void events.push(event) },
+        correlationId: "req-clean-correlation",
+      },
+    );
+
+    expect(events).toHaveLength(0);
   });
 
   it("builds a constrained read-only gh api argv for GitHub context", () => {

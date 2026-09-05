@@ -167,6 +167,13 @@ function fixture(
     readonly count?: number;
     readonly flags?: Partial<ModelCapability>;
     readonly respond?: (request: GatewayRequest) => Promise<NormalizedResponse>;
+    // Opt-in: also wires the Gateway's OWN log (its `gateway.circuit.*` state-transition/rejection
+    // lines, which the breaker emits itself and never through the PR-description path's own log
+    // calls) into the same `events` sink. Off by default, because most fixtures share one
+    // `resolved()` snapshot/config across many tests and asserting on `events` as "only this
+    // operation's own lines" (e.g. the correlation-id test) would otherwise pick up the Gateway's
+    // own one-time `gateway.config.resolved` construction line too.
+    readonly includeGatewayLog?: boolean;
   } = {},
 ): {
   readonly deps: PrDescriptionDeps;
@@ -185,8 +192,9 @@ function fixture(
     },
   };
   const gatewayConfig = config(options.flags);
+  const gatewayLog = options.includeGatewayLog === true ? { write: (event: ModelGatewayLogEvent): void => void events.push(event) } : undefined;
   const deps: PrDescriptionDeps = {
-    gateway: new Gateway(gatewayConfig, { adapter }),
+    gateway: new Gateway(gatewayConfig, { adapter, log: gatewayLog }),
     config: gatewayConfig,
     resolveSnapshot: async () => await Promise.resolve(source),
     revalidateAuthority: () => true,
@@ -661,6 +669,34 @@ describe("bounded PR narrative lifecycle", () => {
     expect(
       setup.events.find((event) => event.op === "pr-description.model.failed")?.extra?.frames,
     ).toEqual(["keiko-model-gateway/dist/prDescription/generate.js:1:1"]);
+  });
+
+  it("classifies a genuine gateway circuit-breaker open, not just an adapter-thrown CircuitOpenError", async () => {
+    // The test above rejects at the mocked ADAPTER's own call() -- the breaker never sees it.
+    // This one drives the REAL breaker (shared `deps.gateway`/breaker instance across repeated
+    // `generatePrDescription` invocations) to its `failureThreshold` and confirms the fourth call
+    // is refused by `assertAllowed()` BEFORE the adapter is ever reached, with the same body-free,
+    // `provider-failed` classification.
+    const setup = fixture({ respond: () => Promise.reject(new Error("provider unreachable")) });
+    const failureThreshold = config().circuitBreaker.failureThreshold;
+    for (let attempt = 0; attempt < failureThreshold; attempt += 1) {
+      const failed = await generatePrDescription(REQUEST, setup.deps);
+      expect(failed.status === "generated" && failed.artifact.reason).toBe("provider-failed");
+    }
+    expect(setup.calls).toHaveLength(failureThreshold);
+    expect(setup.events.some((event) => event.op === "gateway.circuit.opened")).toBe(true);
+
+    const callsBeforeOpenCall = setup.calls.length;
+    const result = await generatePrDescription(REQUEST, setup.deps);
+
+    // The real breaker short-circuited before `adapter.call` -- no new call was ever dispatched.
+    expect(setup.calls).toHaveLength(callsBeforeOpenCall);
+    expect(result.status === "generated" && result.artifact.reason).toBe("provider-failed");
+    const modelFailed = setup.events.findLast((event) => event.op === "pr-description.model.failed");
+    expect(modelFailed?.errorKind).toBeDefined();
+    expect(JSON.stringify(setup.events)).not.toContain("circuit open for model");
+    const circuitRejected = setup.events.findLast((event) => event.op === "gateway.circuit.rejected");
+    expect(circuitRejected).toMatchObject({ extra: { state: "open", reason: "cooldown" } });
   });
 
   it("chunks deterministically and omits oversized files without slicing their evidence", () => {

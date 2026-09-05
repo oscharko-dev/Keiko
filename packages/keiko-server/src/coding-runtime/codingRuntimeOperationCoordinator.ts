@@ -544,12 +544,7 @@ function recordRuntimeOperationTransportFailure(
     readonly runId: string;
     readonly correlationId?: string | undefined;
     readonly operation:
-      | "follow-up"
-      | "list"
-      | "answer"
-      | "reject"
-      | "initial-turn-dispatch"
-      | "initial-turn-stop";
+      "follow-up" | "list" | "answer" | "reject" | "initial-turn-dispatch" | "initial-turn-stop";
     readonly error: unknown;
   },
 ): void {

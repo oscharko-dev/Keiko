@@ -931,6 +931,7 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("fails closed when a runtime gateway route has no capability authenticator", async () => {
+    const sink = captureServerLog("warn");
     const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
     const deps = { ...depsValue(configValue(provider(), capability()), () => chat) } as Record<
       string,
@@ -948,9 +949,41 @@ describe("coding-sidecar gateway", () => {
 
     expect(result).toMatchObject({ status: 401 });
     expect(chat).not.toHaveBeenCalled();
+    expect(sink.events).toEqual([
+      expect.objectContaining({
+        op: "coding-sidecar.gateway.rejected",
+        status: 401,
+        extra: { reason: "capability-authenticator-unavailable" },
+      }),
+    ]);
+  });
+
+  it("logs a body-free rejection line for a request missing a bearer capability", async () => {
+    const sink = captureServerLog("warn");
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const deps = depsValue(configValue(provider(), capability()), () => chat);
+    const context = authenticatedContext({
+      model: "azure-coding-model",
+      messages: [{ role: "user", content: "continue" }],
+      tools: [],
+    });
+    delete (context.req.headers as Record<string, unknown>).authorization;
+
+    const result = await handleCodingSidecarGatewayChatCompletions(context, deps);
+
+    expect(result).toMatchObject({ status: 401 });
+    expect(chat).not.toHaveBeenCalled();
+    expect(sink.events).toEqual([
+      expect.objectContaining({
+        op: "coding-sidecar.gateway.rejected",
+        status: 401,
+        extra: { reason: "capability-missing" },
+      }),
+    ]);
   });
 
   it("authenticates the model-gateway audience before parsing a body and rejects Origin", async () => {
+    const sink = captureServerLog("warn");
     const authenticate = vi.fn(() => ({ ok: false, reason: "invalid" }));
     const malformed = await handleCodingSidecarGatewayChatCompletions(
       authenticatedContext("{"),
@@ -961,6 +994,13 @@ describe("coding-sidecar gateway", () => {
       "model-gateway",
     );
     expect(malformed).toMatchObject({ status: 401 });
+    expect(sink.events).toEqual([
+      expect.objectContaining({
+        op: "coding-sidecar.gateway.rejected",
+        status: 401,
+        extra: { reason: "capability-invalid" },
+      }),
+    ]);
 
     const browser = await handleCodingSidecarGatewayChatCompletions(
       authenticatedContext({ messages: [{ role: "user", content: "hello" }] }, "http://evil.test"),

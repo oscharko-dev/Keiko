@@ -397,19 +397,57 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     );
     const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots });
     const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const events: ServerLogEvent[] = [];
+    const wiredDeps = {
+      ...deps,
+      activityLog: { write: (event): void => void events.push(event) },
+    } satisfies UiHandlerDeps;
 
     for (let index = 0; index < 8; index += 1) {
       const result = asRouteResult(
-        await connectHandler(makeCtx(connectRequestBody(chat.id)), deps),
+        await connectHandler(makeCtx(connectRequestBody(chat.id)), wiredDeps),
       );
       expect((result.body as GitChangeScopeBody).status).toBe("connected");
     }
     expect(chatStore.findChatById(chat.id)?.gitChangeScopes ?? []).toHaveLength(8);
 
-    const ninth = asRouteResult(await connectHandler(makeCtx(connectRequestBody(chat.id)), deps));
+    const ninth = asRouteResult(
+      await connectHandler(makeCtx(connectRequestBody(chat.id)), wiredDeps),
+    );
     expect(ninth.status).toBe(409);
     expect(ninth.body).toMatchObject({ error: { code: "GIT_CHANGE_SCOPE_LIMIT_REACHED" } });
     expect(chatStore.findChatById(chat.id)?.gitChangeScopes ?? []).toHaveLength(8);
+    // logging-contract-1 — the new cap-enforcement refusal must leave the same body-free
+    // activity-log evidence every sibling `git-change.chat.blocked` refusal in this file leaves
+    // (AGENTS.md §8 Rule 1), not only the generic HTTP access line.
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git-change.chat.blocked",
+        extra: { reason: "GIT_CHANGE_SCOPE_LIMIT_REACHED" },
+      }),
+    );
+  });
+
+  it("logs a blocked event when connect targets a chat that does not exist (logging-contract-1)", async () => {
+    const { deps } = buildHarness({ runnerScript: {}, snapshots: [] });
+    const events: ServerLogEvent[] = [];
+    const wiredDeps = {
+      ...deps,
+      activityLog: { write: (event): void => void events.push(event) },
+    } satisfies UiHandlerDeps;
+
+    const result = asRouteResult(
+      await connectHandler(makeCtx(connectRequestBody("chat-does-not-exist")), wiredDeps),
+    );
+
+    expect(result.status).toBe(404);
+    expect(result.body).toMatchObject({ error: { code: "GIT_CHANGE_CHAT_NOT_FOUND" } });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git-change.chat.blocked",
+        extra: { reason: "GIT_CHANGE_CHAT_NOT_FOUND" },
+      }),
+    );
   });
 
   it("archives the created relationship and reports a distinct persistence failure", async () => {

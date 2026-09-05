@@ -465,6 +465,11 @@ function emitCompleted(
   childRunId: CodeTaskChildRunId,
   outcome: AuxiliaryCapabilityOutcomeV1,
 ): void {
+  // Durable primary-activity-sink write first (§AC7: exactly one durable terminal write per
+  // read-only child run, for EVERY terminal — accepted, denied, limit-reached, stopped and
+  // unavailable alike), so a thrown/invalid runtime event from the auxiliary `emit` sink below can
+  // never suppress it.
+  writeCompletedActivityLog(deps, parentRunId, childRunId, outcome);
   publishRuntimeEvent(deps, {
     schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
     eventId: deps.newEventId(),
@@ -474,6 +479,26 @@ function emitCompleted(
     childRunId,
     auxiliaryOutcome: outcome.status,
     childResultCount: eventResultCount(outcome),
+  });
+}
+
+/** Body-free: only the terminal status and, for a non-accepted outcome, its bounded reason code. */
+function writeCompletedActivityLog(
+  deps: ReadOnlyChildOrchestratorDeps,
+  parentRunId: string,
+  childRunId: CodeTaskChildRunId,
+  outcome: AuxiliaryCapabilityOutcomeV1,
+): void {
+  deps.activityLog.write({
+    category: "process",
+    op: "coding-runtime.read-only-child.completed",
+    correlationId: parentRunId,
+    level: outcome.status === "accepted" ? "info" : "warn",
+    extra: {
+      childRunId,
+      terminal: outcome.status,
+      ...(outcome.status === "accepted" ? {} : { reasonCode: outcome.reasonCode }),
+    },
   });
 }
 

@@ -46,10 +46,10 @@ export interface CodingToolAuthorityContext {
   readonly envelopeDigest?: string | undefined;
   readonly authorityExpiresAt?: string | undefined;
   // F8 (#3413): threads this run's correlation id into the tool-catalog.* lifecycle log lines the
-  // catalog facade bridge emits. Not yet populated by productionManagedWorktreeTools.ts's context
-  // provider (out of this change's write scope; see the report's outOfScopeNeeds) -- until it is,
-  // the bridge logs those lines under UNKNOWN_CORRELATION_ID, which is the sanctioned fallback,
-  // never a silently missing id.
+  // catalog facade bridge emits. productionManagedWorktreeTools.ts's context provider now populates
+  // this from `input.authorityRef.runId`, so those lines join the run's own activity log.
+  // UNKNOWN_CORRELATION_ID (correlation.ts) remains the sanctioned fallback for any other/future
+  // caller that leaves this optional field unset -- never a silently missing id.
   readonly correlationId?: string | undefined;
 }
 
@@ -653,9 +653,12 @@ function runtimeGitPolicyAllowed(
   request: Extract<CodingToolActionRequest, { readonly action: "git" }>,
   approved: boolean,
 ): boolean {
-  if (request.operation === "ci") return connectorAllowed(envelope, "source-control.read");
+  if (request.operation === "ci")
+    return (
+      internetPolicyAllowed(envelope, approved) && connectorAllowed(envelope, "source-control.read")
+    );
   if (request.operation === "read" || request.operation === "write")
-    return gitPolicyAllowed(envelope, request.operation);
+    return gitPolicyAllowed(envelope, request.operation, approved);
   if (request.operation === "stage" && request.phase === "execute")
     return workspaceMediumRiskAllowed(envelope, approved);
   return true;
@@ -664,9 +667,16 @@ function runtimeGitPolicyAllowed(
 function gitPolicyAllowed(
   envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
   operation: "read" | "write",
+  approved: boolean,
 ): boolean {
+  // A raw git "write" bypasses the propose/stage review path entirely, so it carries the same
+  // risk class as a delivery commit and is gated the same way commitPolicyAllowed gates
+  // commit-execute: an approval proof is required unconditionally, in every mode, never merely a
+  // connector scope that (per deliveryScopeGranted) is present at every mode by design.
+  if (operation === "read") return true;
+  const effect = codingWorkbenchPolicyEffectFor(envelope.authority.effectiveMode, "delivery", "high");
   return (
-    operation === "read" || hasScope(envelope.authority.connectorScopes, "source-control.write")
+    approved && effect !== "denied" && hasScope(envelope.authority.connectorScopes, "source-control.write")
   );
 }
 

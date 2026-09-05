@@ -4,7 +4,7 @@ import { useEffect, type ReactNode } from "react";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
-import { proposePrMarkReady, type GitDeliveryPrMarkReadyInput } from "@/lib/api";
+import { ApiError, proposePrMarkReady, type GitDeliveryPrMarkReadyInput } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import { JourneyDetails } from "./_JourneyDetails";
@@ -13,7 +13,7 @@ import {
   matchesJourneySnapshot,
   journeyDisplayState,
 } from "./_journeyPresentation";
-import { useJourneyActions } from "./_useJourneyActions";
+import { useJourneyActions, type JourneyActionFailure } from "./_useJourneyActions";
 import { useJourneyClock } from "./_useJourneyClock";
 import common from "./CodingWorkbenchWindow.module.css";
 import styles from "./CodingWorkbenchJourneyOutcome.module.css";
@@ -100,7 +100,17 @@ export function createPrMarkReadyProposeHandler(
   if (request === undefined) return undefined;
   return async (): Promise<void> => {
     const result = await proposePrMarkReady(request);
-    if (result.status !== "succeeded") throw new Error(`pr-mark-ready-${result.status}`);
+    if (result.status === "succeeded") return;
+    // B5-2 (epic #3384 audit): carry the already-observed closed-vocabulary reason
+    // (`executionErrorCode`, falling back to the outcome `status` itself — both body-free per
+    // GitDeliveryPrMarkReadyExecuteResponse) as an `ApiError.code` rather than folding it only into
+    // the message string, so `useJourneyActions`' catch block can surface it instead of the
+    // undifferentiated "Error" class every plain-thrown `Error` reduces to.
+    throw new ApiError(
+      result.executionErrorCode ?? result.status,
+      `pr-mark-ready-${result.status}`,
+      0,
+    );
   };
 }
 /** A historical outcome never reconstructs a grant or completes a provider mutation. */
@@ -265,7 +275,7 @@ function JourneyActionFeedback({
   pending,
 }: {
   readonly busy: boolean;
-  readonly failure: "refresh" | "propose-ready" | null;
+  readonly failure: JourneyActionFailure | null;
   readonly ready: boolean;
   readonly pending: boolean;
 }): ReactNode {
@@ -285,7 +295,7 @@ function JourneyActionFeedback({
       )}
       {failure !== null && (
         <p role="alert" className={styles["cmp-journey-error"]}>
-          {t(`codingWorkbench.journey.actionError.${failure}`)}
+          {t(`codingWorkbench.journey.actionError.${failure.action}`, { reason: failure.reason })}
         </p>
       )}
     </>

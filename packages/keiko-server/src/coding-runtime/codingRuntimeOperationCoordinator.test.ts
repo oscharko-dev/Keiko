@@ -418,6 +418,112 @@ describe("CodingRuntimeOperationCoordinator", () => {
     ]);
   });
 
+  // Review 3941746512 (P1 follow-up): submitFollowUp's dispatch catch, listQuestions's catch and
+  // startInitialTurn's dispatch/stop catches discarded their raw error exactly like the
+  // answer/reject path did before T50 -- same defect class (AGENTS.md §7), same fix: structured,
+  // body-free evidence on the existing activity log instead of silence.
+  it("logs structured evidence when a follow-up dispatch throws, not just answer/reject", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const taskDispatcher = dispatcher({
+      dispatch: () => Promise.reject(new Error("dispatch backend offline")),
+    });
+    const subject = coordinator({ taskDispatcher, activityLog });
+    await expect(subject.submitFollowUp("run-1", followUp())).resolves.toEqual({
+      ok: false,
+      failureCode: "authority-resolution-failed",
+    });
+    expect(activityLog.events).toMatchObject([
+      {
+        level: "warn",
+        op: "coding-runtime.follow-up.dispatch-failed",
+        errorKind: "Error",
+        extra: { runId: "run-1", operation: "follow-up" },
+      },
+    ]);
+    expect(JSON.stringify(activityLog.events)).not.toContain("dispatch backend offline");
+  });
+
+  it("logs structured evidence when listing questions throws, not just answer/reject", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const port = questionPort({ list: () => Promise.reject(new Error("protocol failure")) });
+    const subject = coordinator({ port, activityLog });
+    await expect(
+      subject.listQuestions("run-1", { requestId: "req-1", expectedRevision: 3 }),
+    ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
+    expect(activityLog.events).toMatchObject([
+      {
+        op: "coding-runtime.question.list-failed",
+        extra: { runId: "run-1", operation: "list" },
+      },
+    ]);
+  });
+
+  it("logs structured evidence when the initial turn's own dispatch throws", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const subject = coordinator({
+      taskDispatcher: dispatcher({
+        dispatch: () => Promise.reject(new Error("dispatch backend offline")),
+      }),
+      stop: vi.fn(() => Promise.resolve({ ok: true as const, status: "stopped" as const })),
+      activityLog,
+    });
+    await expect(
+      subject.startInitialTurn({
+        runId: "run-1",
+        requestId: "req-1",
+        expectedRevision: 3,
+        taskIntent: "Investigate",
+      }),
+    ).resolves.toBe("failed");
+    expect(activityLog.events).toMatchObject([
+      {
+        op: "coding-runtime.initial-turn.dispatch-failed",
+        extra: { runId: "run-1", operation: "initial-turn-dispatch" },
+      },
+    ]);
+  });
+
+  it("logs structured evidence when the initial turn cannot even be stopped after a failed dispatch", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const subject = coordinator({
+      taskDispatcher: dispatcher({ dispatch: () => Promise.reject(new Error("offline")) }),
+      stop: vi.fn(() => Promise.reject(new Error("stop backend offline"))),
+      activityLog,
+    });
+    await expect(
+      subject.startInitialTurn({
+        runId: "run-1",
+        requestId: "req-1",
+        expectedRevision: 3,
+        taskIntent: "Investigate",
+      }),
+    ).resolves.toBe("recovery-required");
+    expect(activityLog.events).toMatchObject([
+      { op: "coding-runtime.initial-turn.dispatch-failed" },
+      {
+        op: "coding-runtime.initial-turn.stop-failed",
+        extra: { runId: "run-1", operation: "initial-turn-stop" },
+      },
+    ]);
+  });
+
+  // Review 3941746512: no per-request correlationId reached this coordinator at all -- every line
+  // correlated by run id only. answerQuestion/rejectQuestion/listQuestions/submitFollowUp now
+  // accept an optional correlationId (threaded from the HTTP route) and prefer it over the run id.
+  it("prefers a supplied per-request correlationId over the run id as the log's correlation key", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const port = questionPort({ answer: () => Promise.reject(new Error("protocol failure")) });
+    const subject = coordinator({ port, activityLog });
+    await expect(
+      subject.answerQuestion(
+        "run-1",
+        { requestId: "req-1", expectedRevision: 3, questionId: "que_1", answers: [["Yes"]] },
+        "request-correlation-id-1",
+      ),
+    ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
+    expect(activityLog.events).toMatchObject([{ correlationId: "request-correlation-id-1" }]);
+  });
+
   it("does not log the typed incompatible-answer rejection as a transport failure", async () => {
     const activityLog = createBufferedServerLogSink();
     const port = questionPort({

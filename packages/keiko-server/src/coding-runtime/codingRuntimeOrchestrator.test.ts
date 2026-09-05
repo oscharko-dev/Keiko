@@ -898,6 +898,58 @@ describe("CodingRuntimeOrchestrator", () => {
     ).toEqual({ ok: false, failureCode: "invalid-intent" });
   });
 
+  // [P1] review 3941746512: the constructor built this orchestrator's CodingRuntimeOperationCoordinator
+  // without threading its own `activityLog` dep through, so every question-mutation transport
+  // failure silently fell back to the process-wide sink instead of the composed ServerLogSink this
+  // orchestrator was actually given -- production evidence never reached it. Proves the INJECTED
+  // sink (not a parallel, unwired one) receives the line.
+  it("routes a question-mutation transport failure onto the orchestrator's OWN injected activity log (review 3941746512)", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    f.questionPort.answer.mockRejectedValueOnce(new Error("protocol failure"));
+
+    await expect(
+      f.orchestrator.answerQuestion("run-1", {
+        requestId: "question-answer-injected-sink",
+        expectedRevision: 4,
+        questionId: "que_1",
+        answers: [["Continue"]],
+      }),
+    ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
+
+    const event = captured.records.find(
+      (record) => record.op === "coding-runtime.question.authority-resolution-failed",
+    );
+    expect(event).toBeDefined();
+    expect(event?.extra).toMatchObject({ runId: "run-1", operation: "answer" });
+  });
+
+  // Review 3941746512: no per-request correlationId reached the coordinator -- every line
+  // correlated by run id only. The route's ctx.correlationId now threads through
+  // answerQuestion/rejectQuestion/listQuestions/submitFollowUp.
+  it("threads a per-request correlationId from answerQuestion onto the logged failure", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    f.questionPort.answer.mockRejectedValueOnce(new Error("protocol failure"));
+
+    await f.orchestrator.answerQuestion(
+      "run-1",
+      {
+        requestId: "question-answer-correlated",
+        expectedRevision: 4,
+        questionId: "que_1",
+        answers: [["Continue"]],
+      },
+      "request-correlation-abcdefg",
+    );
+
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({ correlationId: "request-correlation-abcdefg" }),
+    );
+  });
+
   it("allows question retries at unchanged revisions after adapter refusal", async () => {
     const f = fixture();
     await f.orchestrator.start(start);

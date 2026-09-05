@@ -4,8 +4,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createInMemoryUiStore } from "../store/index.js";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
+import { readGitDefaultBranch } from "@oscharko-dev/keiko-tools";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { deriveRepositoryId } from "../task-workspace/naming.js";
+import { contentFreeWorkspaceFor } from "./githubIssueReaderAuthorization.js";
 import {
   codingWorkbenchIssueBindingDigest,
   codingWorkbenchRemoteDigest,
@@ -13,6 +15,21 @@ import {
   type GitHubIssueResolutionDeps,
   type GitHubIssueResolver,
 } from "./githubIssueResolution.js";
+
+// KEIKO-#3384 B5-14: `readGitDefaultBranch` is real production I/O; every other test in this file
+// bypasses it with a custom `readDefaultBranch` port. The test below exercises the real,
+// unoverridden `PRODUCTION_PORTS.readDefaultBranch` to pin that it builds its `workspace` through
+// the single shared `contentFreeWorkspaceFor` (owned by githubIssueReaderAuthorization.ts), not a
+// second, independently maintained copy.
+vi.mock("@oscharko-dev/keiko-tools", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-tools")>();
+  return { ...actual, readGitDefaultBranch: vi.fn(() => Promise.resolve("dev")) };
+});
+
+vi.mock("./githubIssueReaderAuthorization.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./githubIssueReaderAuthorization.js")>();
+  return { ...actual, contentFreeWorkspaceFor: vi.fn(actual.contentFreeWorkspaceFor) };
+});
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -120,6 +137,17 @@ describe("server-resolved issue intake", () => {
     for (const content of [f.root, f.object.title, f.object.body, f.object.url]) {
       expect(JSON.stringify(f.events)).not.toContain(content);
     }
+  });
+
+  it("resolves the default branch through the single shared content-free workspace builder (B5-14)", async () => {
+    const f = fixture();
+    const resolve = createGitHubIssueResolver();
+    const result = await resolve(f.deps, f.input);
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(contentFreeWorkspaceFor)).toHaveBeenCalledWith(f.root);
+    expect(vi.mocked(readGitDefaultBranch)).toHaveBeenCalledWith(
+      expect.objectContaining({ workspace: contentFreeWorkspaceFor(f.root) }),
+    );
   });
 
   it("refuses a revoked checkout before reading GitHub", async () => {

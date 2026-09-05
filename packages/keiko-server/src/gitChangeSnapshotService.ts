@@ -60,6 +60,14 @@ export interface GitChangeSnapshotCaptureInput {
   readonly limits?: Partial<GitChangeSnapshotLimits>;
   readonly ttlMs?: number;
   readonly timeoutMs?: number;
+  /**
+   * Whether a successful capture keeps a readable registry reference (default true, matching the
+   * service's pre-existing behavior). B2-8 — a caller that only needs the returned `snapshot`
+   * fields (e.g. a throwaway connect/refresh comparison that never reads `.reference` back) must
+   * pass `false` so it stops competing with retained chat/PR-description captures for the shared
+   * 32-slot registry.
+   */
+  readonly retain?: boolean;
 }
 
 export interface GitChangeSnapshotCapture {
@@ -79,6 +87,15 @@ export interface GitChangeSnapshotService {
     reference: string,
     input: GitChangeSnapshotCaptureInput,
   ): Promise<GitChangeSnapshotRecheck>;
+  /**
+   * B2-8 — pins a retained reference out of the shared registry's LRU eviction so an in-flight
+   * consumer (e.g. a PR-description proposal awaiting review) is not evicted by unrelated capture
+   * activity. Optional: existing callers/fakes that never need protection are unaffected. Returns
+   * false when the reference/scope is unknown or the reservation cap is exhausted.
+   */
+  reserve?(reference: string, scope: object, correlationId: string): boolean;
+  /** Releases a reservation made via `reserve`, e.g. once the proposal is applied or abandoned. */
+  release?(reference: string, scope: object, correlationId: string): void;
   close(): void;
 }
 
@@ -387,10 +404,14 @@ export function createGitChangeSnapshotService(
     runner: immutableLocalRunner(runner),
   };
   return {
-    capture: async (input) => await captureSnapshot(ctx, input, true),
+    capture: async (input) => await captureSnapshot(ctx, input, input.retain ?? true),
     read: (reference, scope, correlationId) => registry.get(reference, scope, correlationId),
     recheck: async (reference, input): Promise<GitChangeSnapshotRecheck> =>
       await recheckSnapshot(ctx, reference, input),
+    reserve: (reference, scope, correlationId) => registry.reserve(reference, scope, correlationId),
+    release: (reference, scope, correlationId) => {
+      registry.release(reference, scope, correlationId);
+    },
     close: (): void => {
       registry.close();
     },

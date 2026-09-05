@@ -267,26 +267,44 @@ describe("workspace-owned coding repository handler", () => {
   });
 });
 
+// The production discovery/scan loops cooperatively yield to the event loop every 32 entries
+// (discovery.ts ASYNC_DISCOVERY_YIELD_EVERY_ENTRIES, repoSearch.ts SCAN_YIELD_INTERVAL) so a
+// large cold-workspace walk never blocks the event loop for real users. Exercising the exact
+// 2,000-file / 50,000-candidate contract ceilings below is the whole point of these two tests, so
+// the fixtures cannot be made cheaper without weakening the bound each one proves — the fixed
+// per-entry `setImmediate` cost is real production behaviour, not fixture overhead, and it is
+// consistently amplified on shared/contended GitHub-hosted runners well past the suite's default
+// 15s `testTimeout` (vitest.config.ts). A justified per-test timeout keeps the assertions intact.
+const COOPERATIVE_YIELD_CEILING_TEST_TIMEOUT_MS = 30_000;
+
 describe("bounded candidate inventory and cooperative scan", () => {
-  it("never scans beyond 2,000 files", async () => {
-    const files = Object.fromEntries(
-      Array.from({ length: 2_001 }, (_, index) => [`src/${String(index)}.ts`, "marker"]),
-    );
-    const result = await executeCodingRepositoryRequest(workspace(), request("marker"), {
-      fs: memFs("/ws", files),
-      nowMs: () => 0,
-    });
-    expect(result.ok && result.metrics.filesScanned).toBe(2_000);
-    expect(result.ok && result.truncationReasons).toContain("file-limit");
-  });
-  it("never inventories beyond 50,000 candidates", async () => {
-    const result = await executeCodingRepositoryRequest(workspace(), request("marker"), {
-      fs: broadInventoryFs(),
-      nowMs: () => 0,
-    });
-    expect(result.ok && result.metrics.candidatesDiscovered).toBe(50_000);
-    expect(result.ok && result.truncationReasons).toContain("inventory-limit");
-  });
+  it(
+    "never scans beyond 2,000 files",
+    async () => {
+      const files = Object.fromEntries(
+        Array.from({ length: 2_001 }, (_, index) => [`src/${String(index)}.ts`, "marker"]),
+      );
+      const result = await executeCodingRepositoryRequest(workspace(), request("marker"), {
+        fs: memFs("/ws", files),
+        nowMs: () => 0,
+      });
+      expect(result.ok && result.metrics.filesScanned).toBe(2_000);
+      expect(result.ok && result.truncationReasons).toContain("file-limit");
+    },
+    COOPERATIVE_YIELD_CEILING_TEST_TIMEOUT_MS,
+  );
+  it(
+    "never inventories beyond 50,000 candidates",
+    async () => {
+      const result = await executeCodingRepositoryRequest(workspace(), request("marker"), {
+        fs: broadInventoryFs(),
+        nowMs: () => 0,
+      });
+      expect(result.ok && result.metrics.candidatesDiscovered).toBe(50_000);
+      expect(result.ok && result.truncationReasons).toContain("inventory-limit");
+    },
+    COOPERATIVE_YIELD_CEILING_TEST_TIMEOUT_MS,
+  );
   it("observes cancellation by the thirty-second scan candidate", async () => {
     const files = Object.fromEntries(
       Array.from({ length: 80 }, (_, index) => [`src/${String(index)}.ts`, "marker"]),

@@ -228,9 +228,11 @@ function recordRemoteResolution(
   });
 }
 
-// The content-free workspace view both `gh` and `git` are given for one checkout. Declared once:
-// two copies of this literal drifted apart the moment either one gained a field.
-function contentFreeWorkspaceFor(repositoryRoot: string): WorkspaceInfo {
+// The content-free workspace view both `gh` and `git` are given for one checkout. Declared once
+// and exported (#3384 B5-14): two unexported copies of this literal drifted apart the moment
+// either one gained a field, so `githubIssueResolution.ts`'s default-branch read imports this
+// function instead of keeping a second copy.
+export function contentFreeWorkspaceFor(repositoryRoot: string): WorkspaceInfo {
   return {
     root: repositoryRoot,
     selectedRoot: repositoryRoot,

@@ -102,6 +102,15 @@ function deliveryScopeGranted(mode: CodingWorkbenchMode): boolean {
   return codingWorkbenchPolicyEffectFor(mode, "delivery", "medium") !== "denied";
 }
 
+// ADR-0138 D2: workspace-contained effects (commands included) are approval-required, never
+// denied outright, in Ask for approval. Deriving from the shared matrix -- the same pattern
+// deliveryScopeGranted already uses -- instead of hardcoding a mode exclusion keeps this mint
+// from silently diverging from the one evaluator every other workspace-contained action reads
+// (codingToolAuthorityPort.ts's workspaceMediumRiskAllowed).
+function commandExecutionGranted(mode: CodingWorkbenchMode): boolean {
+  return codingWorkbenchPolicyEffectFor(mode, "workspace-contained", "medium") !== "denied";
+}
+
 export const DELIVERY_CONNECTOR_SCOPES: readonly CodingWorkbenchConnectorScope[] = [
   "source-control.read",
   "source-control.write",
@@ -116,7 +125,7 @@ export function codingRuntimeActionClassesForMode(
     "workspace-write",
     "verification",
   ];
-  if (mode !== "governed-assist") actionClasses.push("command-execution");
+  if (commandExecutionGranted(mode)) actionClasses.push("command-execution");
   if (deliveryScopeGranted(mode)) actionClasses.push("delivery-substrate", "connector-access");
   if (researchEgressEnabled === true || mode === "autonomous-delivery") {
     actionClasses.push("network-egress");
@@ -134,23 +143,24 @@ export function codingRuntimeNetworkPolicyForMode(
   mode: CodingWorkbenchMode,
   researchEgressEnabled: boolean | undefined,
 ): CodingWorkbenchNetworkPolicy {
+  // Mirrors codingRuntimeConnectorScopesForMode: the connector scopes a mode carries are a
+  // function of deliveryScopeGranted alone, never of the network egress posture, so an approved
+  // connector-scoped request (git ci, "connector") has the right scope to check regardless of
+  // which networkPolicy.mode this envelope carries.
+  const connectorScopes = codingRuntimeConnectorScopesForMode(mode);
   if (mode === "autonomous-delivery") {
-    return {
-      mode: "connector-scoped-egress",
-      allowLoopback: false,
-      connectorScopes: DELIVERY_CONNECTOR_SCOPES,
-    };
+    return { mode: "connector-scoped-egress", allowLoopback: false, connectorScopes };
   }
   return researchEgressEnabled === true
-    ? { mode: "governed-egress", allowLoopback: false, connectorScopes: [] }
-    : { mode: "deny-all", allowLoopback: false, connectorScopes: [] };
+    ? { mode: "governed-egress", allowLoopback: false, connectorScopes }
+    : { mode: "deny-all", allowLoopback: false, connectorScopes };
 }
 
 export function codingRuntimeCommandPolicyForMode(
   mode: CodingWorkbenchMode,
 ): CodingWorkbenchCommandPolicy {
   return {
-    mode: mode === "governed-assist" ? "deny" : "governed",
+    mode: commandExecutionGranted(mode) ? "governed" : "deny",
     allow: [],
     deny: [],
     maxCommandTimeoutMs: 120_000,

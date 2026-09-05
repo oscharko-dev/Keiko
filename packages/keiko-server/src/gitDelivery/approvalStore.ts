@@ -55,13 +55,13 @@ export interface GitDeliveryApprovalBinding {
   // durable human proof to the exact Authority Envelope that admitted both mint and redemption.
   readonly runId?: string | undefined;
   readonly envelopeDigest?: string | undefined;
-  readonly workspaceDigest?: string;
-  readonly repositoryDigest?: string;
-  readonly baseSha?: string;
-  readonly headSha?: string;
-  readonly stagedTreeDigest?: string;
-  readonly verificationEvidenceId?: string;
-  readonly proposalId?: string;
+  readonly workspaceDigest?: string | undefined;
+  readonly repositoryDigest?: string | undefined;
+  readonly baseSha?: string | undefined;
+  readonly headSha?: string | undefined;
+  readonly stagedTreeDigest?: string | undefined;
+  readonly verificationEvidenceId?: string | undefined;
+  readonly proposalId?: string | undefined;
 }
 
 export interface GitDeliveryApprovalIssueInput {

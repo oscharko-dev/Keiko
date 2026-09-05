@@ -22,9 +22,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.journey.changedFilesTruncated": "(list truncated)",
   "codingWorkbench.journey.busy": "Updating handoff status…",
   "codingWorkbench.journey.actionError.refresh":
-    "Status refresh failed. The saved observations remain visible.",
+    "Status refresh failed ({reason}). The saved observations remain visible.",
   "codingWorkbench.journey.actionError.propose-ready":
-    "The ready-for-review request failed. Refresh the observed status before trying again.",
+    "The ready-for-review request failed ({reason}). Refresh the observed status before trying again.",
   "codingWorkbench.journey.issueLink": "Issue #{number}",
   "codingWorkbench.journey.prLink": "Pull request #{number}",
   "codingWorkbench.journey.ci": "Technical checks",

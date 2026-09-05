@@ -18,6 +18,22 @@
     "./runtime/tool-catalog-lifecycle": {
       "types": "./dist/tool-catalog/catalogToolLifecycle.d.ts",
       "import": "./dist/tool-catalog/catalogToolLifecycle.js"
+    },
+    "./diagnostics-log": {
+      "types": "./dist/diagnostics-log.d.ts",
+      "import": "./dist/diagnostics-log.js"
+    },
+    "./observability/server-log": {
+      "types": "./dist/observability/server-log.d.ts",
+      "import": "./dist/observability/server-log.js"
+    },
+    "./tool-catalog/catalogToolDispatch": {
+      "types": "./dist/tool-catalog/catalogToolDispatch.d.ts",
+      "import": "./dist/tool-catalog/catalogToolDispatch.js"
+    },
+    "./tool-catalog/catalogToolPorts": {
+      "types": "./dist/tool-catalog/catalogToolPorts.d.ts",
+      "import": "./dist/tool-catalog/catalogToolPorts.js"
     }
   },
   "scripts": {

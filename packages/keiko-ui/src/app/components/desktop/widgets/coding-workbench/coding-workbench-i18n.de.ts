@@ -27,9 +27,9 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.journey.changedFilesTruncated": "(Liste gekürzt)",
   "codingWorkbench.journey.busy": "Übergabestatus wird aktualisiert…",
   "codingWorkbench.journey.actionError.refresh":
-    "Statusaktualisierung fehlgeschlagen. Die gespeicherten Beobachtungen bleiben sichtbar.",
+    "Statusaktualisierung fehlgeschlagen ({reason}). Die gespeicherten Beobachtungen bleiben sichtbar.",
   "codingWorkbench.journey.actionError.propose-ready":
-    "Die Anfrage zur Review-Bereitschaft ist fehlgeschlagen. Aktualisiere den beobachteten Status vor einem neuen Versuch.",
+    "Die Anfrage zur Review-Bereitschaft ist fehlgeschlagen ({reason}). Aktualisiere den beobachteten Status vor einem neuen Versuch.",
   "codingWorkbench.journey.issueLink": "Issue #{number}",
   "codingWorkbench.journey.prLink": "Pull Request #{number}",
   "codingWorkbench.journey.ci": "Technische Prüfungen",

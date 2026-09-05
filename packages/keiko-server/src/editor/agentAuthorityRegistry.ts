@@ -313,6 +313,36 @@ export class EditorAgentAuthorityRegistry {
       : { ok: false, reason: "authority-budget-exceeded" };
   }
 
+  /**
+   * Reconciles a prompt-token reservation already booked by {@link reserveRuntimePromptTokens}
+   * against the provider's actual reported usage for that same call, once known. A tool-calling
+   * client resends its whole growing history on every turn, so charging the full pre-call
+   * estimate on every call and never correcting it exhausts the budget in a fraction of the calls
+   * a real run needs (live-journey-readiness-2). Settlement never re-runs budget admission — the
+   * call already dispatched — and never fails on its own account: a run that already spent real
+   * tokens must not be retroactively rejected by this post-hoc correction. The estimate is
+   * subtracted and the actual value added in one combined update, never two separate mutations, so
+   * a reservation from a concurrent call on the same run cannot observe an intermediate negative
+   * or doubled value; the floor at zero guards the same case if a settlement ever raced ahead of
+   * its matching reservation.
+   */
+  public settleRuntimePromptTokens(
+    reference: EditorAgentGovernedAuthorityReference,
+    reservedPromptTokens: number,
+    actualPromptTokens: number,
+    nowIso: string,
+  ):
+    | { readonly ok: true }
+    | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
+    if (!validUsageCount(reservedPromptTokens) || !validUsageCount(actualPromptTokens)) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    const resolved = this.resolveRetainedRuntime(reference, nowIso);
+    if (!resolved.ok) return resolved;
+    settlePromptTokens(resolved.record, reservedPromptTokens, actualPromptTokens);
+    return { ok: true };
+  }
+
   /** Revalidates retained authority at a pause/resume boundary without consuming budget. */
   public revalidateRetainedRuntime(
     reference: EditorAgentGovernedAuthorityReference,
@@ -630,6 +660,18 @@ function reserveUsage(
     return false;
   Object.assign(record.usage, next);
   return true;
+}
+
+/** See {@link EditorAgentAuthorityRegistry.settleRuntimePromptTokens} for the reconciliation. */
+function settlePromptTokens(
+  record: AuthorityRecord,
+  reservedPromptTokens: number,
+  actualPromptTokens: number,
+): void {
+  record.usage.promptTokens = Math.max(
+    0,
+    record.usage.promptTokens - reservedPromptTokens + actualPromptTokens,
+  );
 }
 
 function validUsageCount(value: number): boolean {

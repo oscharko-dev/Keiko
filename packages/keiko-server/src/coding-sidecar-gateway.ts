@@ -109,6 +109,9 @@ type CodingSidecarGatewayRejectionReason =
   | "tool-contract-empty"
   | "origin-not-allowed"
   | "runtime-prompt-budget-denied"
+  | "capability-authenticator-unavailable"
+  | "capability-missing"
+  | "capability-invalid"
   | "unclassified-rejection";
 
 /** Body-free: `reason` is closed, `runId` and every `extra` field are counts/ids, never text. */
@@ -1148,11 +1151,21 @@ function authenticateGatewayRequest(
   }
   const authenticator = runtimeCapabilityAuthenticator(deps);
   const capability = bearerCapability(ctx);
-  if (authenticator === undefined || capability === undefined) return unauthorizedGatewayRequest();
+  if (authenticator === undefined) {
+    // No runId yet — capability authentication never ran.
+    logGatewayRejection(ctx, undefined, 401, "capability-authenticator-unavailable");
+    return unauthorizedGatewayRequest();
+  }
+  if (capability === undefined) {
+    logGatewayRejection(ctx, undefined, 401, "capability-missing");
+    return unauthorizedGatewayRequest();
+  }
   const binding = authenticatedRuntimeBinding(
     authenticator.authenticate(capability, "model-gateway"),
   );
   if (binding === undefined) {
+    // No runId available — the presented capability failed to bind to a runtime.
+    logGatewayRejection(ctx, undefined, 401, "capability-invalid");
     return unauthorizedGatewayRequest();
   }
   // Runtime launch wires the readiness registry. Other callers still require the

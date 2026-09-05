@@ -15,10 +15,20 @@ interface SnapshotRecord {
   readonly timer: ReturnType<typeof setTimeout>;
 }
 
+// B2-8 — the registry is shared by every consumer that captures a retained snapshot (chat
+// git-change context and PR-description proposal review). A reservation keeps a specific,
+// still-in-use reference out of the LRU eviction sweep below without partitioning the registry
+// into separate stores per consumer (AGENTS.md §5 — extend the one shared cache, don't grow a
+// second one). The cap is strictly below the 32-slot capacity so eviction always has at least one
+// unreserved candidate to reclaim; a reservation request beyond the cap is refused (fail-closed)
+// rather than silently starving unrelated captures of every slot.
+const MAX_RESERVED = 24;
+
 /** Process-local, bounded content handles. No store, filesystem, or browser serialization path. */
 export class GitChangeSnapshotRegistry {
   private readonly records = new Map<string, SnapshotRecord>();
   private readonly expiredReferences = new Map<string, object>();
+  private readonly reserved = new Set<string>();
   private bytes = 0;
 
   public constructor(
@@ -31,7 +41,7 @@ export class GitChangeSnapshotRegistry {
     const bytes = Buffer.byteLength(JSON.stringify(content));
     if (bytes > 64 * 1024 * 1024) throw new RangeError("Snapshot registry capacity exceeded");
     while (this.records.size >= 32 || this.bytes + bytes > 64 * 1024 * 1024) {
-      const oldest = this.records.keys().next().value;
+      const oldest = this.oldestEvictable();
       if (oldest === undefined) break;
       this.remove(oldest);
     }
@@ -87,6 +97,46 @@ export class GitChangeSnapshotRegistry {
     this.log.write({ category: "security", op: "git.snapshot.invalidated", correlationId });
   }
 
+  /**
+   * Pins a still-retained reference out of the LRU eviction sweep in `put` — e.g. a PR-description
+   * proposal that must be able to recheck its own snapshot later regardless of unrelated capture
+   * activity elsewhere (B2-8). Returns false (fail-closed) when the reference/scope does not match
+   * an existing record or the reservation cap is already at `MAX_RESERVED`; the caller must treat a
+   * `false` result as "not protected" rather than assuming the reservation succeeded.
+   */
+  public reserve(reference: string, scope: object, correlationId: string): boolean {
+    this.prune();
+    const record = this.records.get(reference);
+    if (record?.scope !== scope) return false;
+    if (!this.reserved.has(reference) && this.reserved.size >= MAX_RESERVED) {
+      this.log.write({
+        category: "process",
+        op: "git.snapshot.reserve-denied",
+        correlationId,
+        extra: { reservedCount: this.reserved.size },
+      });
+      return false;
+    }
+    this.reserved.add(reference);
+    this.log.write({ category: "process", op: "git.snapshot.reserved", correlationId, extra: {} });
+    return true;
+  }
+
+  /** Releases a reservation made by `reserve`, e.g. once a proposal is applied or abandoned. */
+  public release(reference: string, scope: object, correlationId: string): void {
+    if (this.records.get(reference)?.scope !== scope) return;
+    if (this.reserved.delete(reference)) {
+      this.log.write({ category: "process", op: "git.snapshot.released", correlationId, extra: {} });
+    }
+  }
+
+  private oldestEvictable(): string | undefined {
+    for (const reference of this.records.keys()) {
+      if (!this.reserved.has(reference)) return reference;
+    }
+    return undefined;
+  }
+
   private rememberExpired(reference: string, scope: object): void {
     if (this.expiredReferences.size >= 32) {
       const oldest = this.expiredReferences.keys().next().value;
@@ -101,6 +151,7 @@ export class GitChangeSnapshotRegistry {
     clearTimeout(record.timer);
     this.bytes -= record.bytes;
     this.records.delete(reference);
+    this.reserved.delete(reference);
   }
 
   private prune(): void {

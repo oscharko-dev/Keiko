@@ -1,8 +1,8 @@
 import {
   buildGitHubCodeContextArgv,
   buildGitHubCodeContextCommentsArgv,
+  gitHubCodeContextRawObjectFrom,
   type CodeContextConnector,
-  type CodeContextRawComment,
   type CodeContextRawObject,
   type CodeContextRef,
   type GitHubCodeContextRef,
@@ -49,46 +49,18 @@ async function readGitHubCodeContext(
     api.readJson(buildGitHubCodeContextArgv(githubRef)),
     api.readJson(buildGitHubCodeContextCommentsArgv(githubRef)),
   ]);
-  return rawObjectFromGitHub(githubRef, objectJson, commentsJson);
+  // KEIKO-#3384 B5-11/B5-15/reuse-duplication-1: this connector used to carry its own private
+  // GitHub-object-to-CodeContextRawObject mapper, a byte-for-byte duplicate of the projection
+  // codeContextConnector.ts owns, except it silently dropped the identity fields
+  // (providerId/providerNodeId/state/isPullRequest/commentCount) the shared jq projection already
+  // fetches. Call the canonical mapper so this connector's consumers (the chat/@mention
+  // coding-context pack route and the editor's connected-context provider) see the same identity
+  // fields the issue-resolution security path already relies on, and so there is exactly one
+  // owner of the gh-api-to-CodeContextRawObject projection.
+  return gitHubCodeContextRawObjectFrom(githubRef, objectJson, commentsJson);
 }
 
 function assertGitHubRef(ref: CodeContextRef): GitHubCodeContextRef {
   if (ref.source !== "github") throw new Error("GitHub connector received non-GitHub ref");
   return ref;
-}
-
-function rawObjectFromGitHub(
-  ref: GitHubCodeContextRef,
-  objectJson: unknown,
-  commentsJson: unknown,
-): CodeContextRawObject {
-  const object = asRecord(objectJson, "GitHub object");
-  return {
-    source: "github",
-    objectKind: ref.objectKind,
-    objectId: ref.objectId,
-    title: optionalString(object.title),
-    body: optionalString(object.body),
-    comments: commentsFromGitHub(commentsJson),
-    url: optionalString(object.url),
-  };
-}
-
-function commentsFromGitHub(value: unknown): readonly CodeContextRawComment[] {
-  if (!Array.isArray(value)) throw new Error("GitHub comments response must be an array");
-  return value.map((entry) => {
-    const comment = asRecord(entry, "GitHub comment");
-    return { id: optionalString(comment.id), body: optionalString(comment.body) };
-  });
-}
-
-function asRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${label} response must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function optionalString(value: unknown): string {
-  return typeof value === "string" ? value : "";
 }
