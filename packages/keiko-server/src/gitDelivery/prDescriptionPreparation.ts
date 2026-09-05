@@ -231,8 +231,13 @@ export async function prepareDescription(
   if (generated.status === "unavailable" && generated.reason === "authority-denied") {
     throw new PrDescriptionFailure("authority-denied");
   }
-  if (generated.status !== "generated" || generated.artifact.outcome === "failed")
-    throw new PrDescriptionFailure("provider-failed");
+  // #3384 B5-12: a "failed"-outcome artifact still exists (unlike a genuine `status !== "generated"`
+  // provider unavailability) and carries the bilingual "generation did not complete — refresh or
+  // retry" guidance baked into its own markdown (render.ts's LABELS.failed). Falling through to
+  // `finishPreparation` — exactly like `prepareDescriptionArtifact` already does — surfaces that
+  // specific guidance through `review.finalBody`/`status` instead of discarding it behind a bare
+  // "provider-failed" block.
+  if (generated.status !== "generated") throw new PrDescriptionFailure("provider-failed");
   return finishPreparation({
     options,
     context,

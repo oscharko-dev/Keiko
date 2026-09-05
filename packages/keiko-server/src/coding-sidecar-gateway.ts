@@ -6,6 +6,7 @@ import {
   type GatewayConfig,
   type GatewayRequest,
   type GatewayStreamChunk,
+  type ModelCapabilityPricing,
   type NormalizedToolCall,
   type NormalizedResponse,
   type ToolDefinition,
@@ -112,6 +113,8 @@ type CodingSidecarGatewayRejectionReason =
   | "capability-authenticator-unavailable"
   | "capability-missing"
   | "capability-invalid"
+  | "spend-pricing-unavailable"
+  | "spend-budget-exceeded"
   | "unclassified-rejection";
 
 /** Body-free: `reason` is closed, `runId` and every `extra` field are counts/ids, never text. */

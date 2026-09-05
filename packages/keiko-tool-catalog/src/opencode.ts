@@ -27,16 +27,16 @@
 // keyword included, or the sidecar-gateway's incoming exact-set trust check
 // (`hasExactOpenCodeVisibleToolContract`) would start rejecting legitimate real traffic.
 //
-// Known, reported representability gap (ADR-0175 D3: "unsupported dialect semantics are
-// incompatibility, never silently omitted keywords"): packages/keiko-tool-catalog/src/schema.ts's
-// closed dialect has no `pattern` keyword (TYPE_KEYS.string only allows minLength/maxLength), so
-// the format-level regexes the real OpenCode wire schemas use today for `relativePath` (path
-// traversal), `expectedContentHash` (hex-64), `target` (https-only) and `skillId` (skill-id shape)
-// cannot be expressed in a catalog descriptor. Following the precedent already accepted for
-// `keiko.file.read`'s `path` in legacy.ts (also pattern-free), those format checks stay owned by
-// the real handler and OpenCode's own generated adapter source, never by this advisory,
-// model-facing schema; once schema.ts gains `pattern` support this set becomes a candidate single
-// source for OPENCODE_TOOL_SOURCE_DEFINITIONS too (see the #3414 report).
+// Formerly-reported representability gap (ADR-0175 D3: "unsupported dialect semantics are
+// incompatibility, never silently omitted keywords"), now partially closed: schema.ts's closed
+// dialect gained a `pattern` keyword (TYPE_KEYS.string, enforced both at compile time and at
+// match time), so `relativePath` (path traversal), `expectedContentHash` (hex-64), `target`
+// (https-only) and `skillId` (skill-id shape) below now carry the exact same regex the real
+// OpenCode wire schemas use (opencodeToolSchemas.ts), rather than omitting the format check. This
+// projection is still NOT the source OPENCODE_MODEL_VISIBLE_TOOLS/OPENCODE_TOOL_SOURCE_DEFINITIONS
+// are generated from (see the header note above) — that consolidation, and matching
+// `codingToolIpc.ts`'s independent action vocabulary to this one, remain open (#3414 follow-up).
+// `keiko.file.read`'s `path` in legacy.ts stays pattern-free; that is a separate, still-open case.
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
@@ -235,7 +235,15 @@ function readSpec(): OpenCodeToolSpec {
     description: "Read one bounded, line-windowed slice of a workspace text file.",
     inputSchema: managedObjectSchema(
       {
-        relativePath: { type: "string", minLength: 1, maxLength: 512 },
+        relativePath: {
+          type: "string",
+          minLength: 1,
+          maxLength: 512,
+          // #3414 AC1: schema.ts now supports `pattern` — this is the exact real wire pattern
+          // (opencodeToolSchemas.ts WORKSPACE_READ_SCHEMA.relativePath), no longer a format check
+          // this advisory projection had to omit.
+          pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
+        },
         startLine: { type: "integer", minimum: 1, maximum: OPENCODE_READ_MAX_START_LINE },
         maxLines: { type: "integer", minimum: 1, maximum: OPENCODE_READ_MAX_WINDOW_LINES },
       },
@@ -315,7 +323,13 @@ function changesetEditSpec(): OpenCodeToolSpec {
   const fileEntry = managedObjectSchema(
     {
       file: { type: "string", minLength: 1, maxLength: 512 },
-      expectedContentHash: { type: "string", minLength: 64, maxLength: 64 },
+      // #3414 AC1: exact real wire pattern (opencodeToolSchemas.ts's `expectedContentHash`).
+      expectedContentHash: {
+        type: "string",
+        minLength: 64,
+        maxLength: 64,
+        pattern: "^[a-f0-9]{64}$",
+      },
     },
     ["file", "expectedContentHash"],
   );
@@ -368,9 +382,13 @@ function researchFetchSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.research.fetch",
     alias: "keiko_research_fetch",
     description: "Fetch one public https URL for read-only research.",
-    inputSchema: managedObjectSchema({ target: { type: "string", minLength: 9, maxLength: 512 } }, [
-      "target",
-    ]),
+    inputSchema: managedObjectSchema(
+      {
+        // #3414 AC1: exact real wire pattern (opencodeToolSchemas.ts RESEARCH_FETCH_SCHEMA).
+        target: { type: "string", minLength: 9, maxLength: 512, pattern: "^https://" },
+      },
+      ["target"],
+    ),
     effects: ["network-egress"],
     idempotency: "server-key-required",
     handlerId: "opencode-research-fetch-port",
@@ -382,7 +400,17 @@ function skillSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.skill.invoke",
     alias: "keiko_skill",
     description: "Invoke one approved, read-only skill by its pinned identifier.",
-    inputSchema: managedObjectSchema({ skillId: { type: "string", maxLength: 80 } }, ["skillId"]),
+    inputSchema: managedObjectSchema(
+      {
+        // #3414 AC1: exact real wire pattern (opencodeToolSchemas.ts SKILL_SCHEMA.skillId).
+        skillId: {
+          type: "string",
+          maxLength: 80,
+          pattern: String.raw`^skl_[a-z0-9][a-z0-9-]{0,62}@[0-9]{1,4}(?:\.[0-9]{1,4}){0,2}$`,
+        },
+      },
+      ["skillId"],
+    ),
     effects: ["connector-access"],
     idempotency: "server-key-required",
     handlerId: "opencode-skill-port",

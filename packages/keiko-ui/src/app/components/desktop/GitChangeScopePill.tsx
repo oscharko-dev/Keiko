@@ -743,6 +743,42 @@ function scopesAnnouncement(isEmpty: boolean, hasStale: boolean, t: I18nTranslat
     : t("gitChangeScope.announcement.connected");
 }
 
+// GEN-UI-STATE-001 (WCAG 4.1.3): ONE always-mounted sr-only polite region announces a genuine
+// binding change (connect / disconnect / stale transition). It stays empty until the signature
+// actually changes after mount, so a chat switch or routine re-render never re-announces on its
+// own.
+//
+// B5-3 (epic #3384 audit): `GitChangeScopePill` is never remounted on a chat switch — an
+// already-mounted chat window can be rebound to a different existing chat in place
+// (SelectionAwareWorkspaceHosts.tsx's `updateCfg({ chatId })` handoff) — so tracking only the
+// signature let a landing chat with a different scope signature announce as though the SAME chat
+// had just gained/lost a scope. `prevChatIdRef` makes that reset silent: a changed `chatId`
+// re-baselines both refs without calling `setAnnouncement`, so only a genuine signature change
+// WITHIN one chat announces.
+function useGitChangeScopeAnnouncement(
+  chatId: string,
+  signature: string,
+  isEmpty: boolean,
+  hasStale: boolean,
+  t: I18nTranslate,
+): string {
+  const [announcement, setAnnouncement] = useState("");
+  const prevSignatureRef = useRef(signature);
+  const prevChatIdRef = useRef(chatId);
+  useEffect(() => {
+    if (prevChatIdRef.current !== chatId) {
+      prevChatIdRef.current = chatId;
+      prevSignatureRef.current = signature;
+      return;
+    }
+    if (prevSignatureRef.current !== signature) {
+      prevSignatureRef.current = signature;
+      setAnnouncement(scopesAnnouncement(isEmpty, hasStale, t));
+    }
+  }, [chatId, signature, isEmpty, hasStale, t]);
+  return announcement;
+}
+
 function GitChangeScopeAnnouncer({ text }: { readonly text: string }): ReactNode {
   return (
     <span
@@ -771,35 +807,9 @@ export function GitChangeScopePill({
   const signature = scopesSignature(scopes);
   const isEmpty = scopes.length === 0;
   const hasStale = scopes.some((scope) => scope.descriptionStatus === "stale");
-
-  // GEN-UI-STATE-001 (WCAG 4.1.3): ONE always-mounted sr-only polite region announces a genuine
-  // binding change (connect / disconnect / stale transition). It stays empty until the signature
-  // actually changes after mount, so a chat switch or routine re-render never re-announces. Deps
-  // are the primitives the announcement needs, never the `scopes` array itself (a fresh `[]`
-  // reference every render for an unbound chat would otherwise re-fire on every render).
-  //
-  // B5-3 (epic #3384 audit): this component is never remounted on a chat switch — an
-  // already-mounted chat window can be rebound to a different existing chat in place
-  // (SelectionAwareWorkspaceHosts.tsx's `updateCfg({ chatId })` handoff) — so `prevSignatureRef`
-  // alone survived across chats and a landing chat with a different scope signature announced as
-  // though the SAME chat had just gained/lost a scope. `prevChatIdRef` makes the reset silent: a
-  // changed `chat.id` re-baselines both refs without firing `setAnnouncement`, so only a genuine
-  // signature change WITHIN one chat announces.
-  const [announcement, setAnnouncement] = useState("");
-  const prevSignatureRef = useRef(signature);
-  const prevChatIdRef = useRef(chat.id);
-  useEffect(() => {
-    if (prevChatIdRef.current !== chat.id) {
-      prevChatIdRef.current = chat.id;
-      prevSignatureRef.current = signature;
-      return;
-    }
-    if (prevSignatureRef.current !== signature) {
-      prevSignatureRef.current = signature;
-      setAnnouncement(scopesAnnouncement(isEmpty, hasStale, t));
-    }
-  }, [signature, isEmpty, hasStale, t, chat.id]);
-
+  // Deps are the primitives the announcement needs, never the `scopes` array itself (a fresh
+  // `[]` reference every render for an unbound chat would otherwise re-fire on every render).
+  const announcement = useGitChangeScopeAnnouncement(chat.id, signature, isEmpty, hasStale, t);
   const announcer = <GitChangeScopeAnnouncer text={announcement} />;
 
   if (scopes.length === 0) {

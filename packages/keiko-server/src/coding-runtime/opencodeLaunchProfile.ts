@@ -11,7 +11,21 @@ export interface OpenCodeLaunchProfileInput {
   readonly executable: string;
   readonly stateRoot: string;
   readonly randomBytes?: ((size: number) => Buffer) | undefined;
+  /**
+   * #3414-AC9: an optional tool whose handler/readiness/policy prerequisite is not satisfied for
+   * this run (e.g. no live #2387 research grant, no approved skill, no resolvable child-agent
+   * model) must be ABSENT from what the model is told exists, not merely denied when called.
+   * Omitted or empty leaves every optional tool enabled, preserving this function's prior
+   * deterministic output byte-for-byte. See `productionManagedWorktreeTools.ts`'s
+   * `deriveOptionalToolAvailability` for the real, non-fake per-run signal this is meant to carry
+   * (tracked outOfScopeNeeds against `opencodeRuntimeComposition.ts`'s launch-profile call site,
+   * which does not yet thread it through).
+   */
+  readonly unavailableOptionalTools?: ReadonlySet<OpenCodeOptionalToolName> | undefined;
 }
+
+/** The three optional tools #3414-AC9 requires to be absent, never merely denied, when unready. */
+export type OpenCodeOptionalToolName = "keiko_research_fetch" | "keiko_skill" | "keiko_child_agent";
 export const OPENCODE_RUNTIME_MODEL_ALIAS = "coding";
 export const OPENCODE_RUNTIME_READINESS_PROMPT = "Keiko runtime readiness handshake.";
 const OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS = 30 * 60_000;
@@ -75,11 +89,69 @@ export function buildOpenCodeLaunchProfile(
       OPENCODE_DB: join(input.stateRoot, "state", "opencode.db"),
       OPENCODE_SERVER_PASSWORD: secret.toString("base64url"),
     }),
-    config: JSON.stringify(createFixedOpenCodeConfig()),
+    config: JSON.stringify(createFixedOpenCodeConfig(input.unavailableOptionalTools)),
   };
 }
 
-export function createFixedOpenCodeConfig(): {
+function fixedOpenCodeProvider(): Readonly<Record<string, unknown>> {
+  return {
+    "keiko-runtime": {
+      name: "Keiko Governed Coding Gateway",
+      npm: "@ai-sdk/openai-compatible",
+      env: [],
+      models: {
+        [OPENCODE_RUNTIME_MODEL_ALIAS]: {
+          name: "Keiko Governed Coding",
+          tool_call: true,
+          limit: { context: 32_768, output: 4_096 },
+          cost: { input: 0, output: 0 },
+        },
+      },
+      options: {
+        baseURL: "{env:KEIKO_MODEL_GATEWAY_URL}",
+        // The pinned v1.17.17 child defaults provider chunks to 10 seconds. Coding turns can
+        // legitimately reason longer while Keiko's gateway still enforces its shorter provider
+        // deadline; align the child watchdog with the outer hard turn/authority ceiling.
+        chunkTimeout: OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS,
+        headers: { Authorization: "Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}" },
+      },
+    },
+  };
+}
+
+// #3414-AC9: an optional tool whose handler/readiness/policy prerequisite is unavailable for this
+// run is excluded from BOTH the tool-enablement map and the permission map -- absent, not merely
+// denied at call time. `unavailable` empty (the default) reproduces the prior unconditional
+// allow-everything shape byte-for-byte.
+function fixedOpenCodeTools(
+  unavailable: ReadonlySet<OpenCodeOptionalToolName>,
+): Readonly<Record<string, boolean>> {
+  return Object.fromEntries([
+    ["*", false] as const,
+    ...OPENCODE_PINNED_BUILT_IN_TOOLS.map((tool) => [tool, false] as const),
+    ...OPENCODE_MODEL_VISIBLE_TOOL_NAMES.map(
+      (tool) => [tool, !unavailable.has(tool as OpenCodeOptionalToolName)] as const,
+    ),
+  ]);
+}
+
+function fixedOpenCodePermission(
+  unavailable: ReadonlySet<OpenCodeOptionalToolName>,
+): Readonly<Record<string, string>> {
+  return Object.fromEntries([
+    ["*", "deny"] as const,
+    ...OPENCODE_PINNED_BUILT_IN_TOOLS.map((tool) => [tool, "deny"] as const),
+    [OPENCODE_GOVERNED_ACTION_PERMISSION, "ask"] as const,
+    ...OPENCODE_MODEL_VISIBLE_TOOL_NAMES.map(
+      (tool) =>
+        [tool, unavailable.has(tool as OpenCodeOptionalToolName) ? "deny" : "allow"] as const,
+    ),
+  ]);
+}
+
+export function createFixedOpenCodeConfig(
+  unavailableOptionalTools?: ReadonlySet<OpenCodeOptionalToolName>,
+): {
   readonly autoupdate: false;
   readonly snapshot: false;
   readonly model: string;
@@ -88,6 +160,7 @@ export function createFixedOpenCodeConfig(): {
   readonly tools: Readonly<Record<string, boolean>>;
   readonly permission: Readonly<Record<string, string>>;
 } {
+  const unavailable = unavailableOptionalTools ?? new Set<OpenCodeOptionalToolName>();
   return {
     autoupdate: false,
     snapshot: false,
@@ -95,39 +168,8 @@ export function createFixedOpenCodeConfig(): {
     // "build" is the pinned child's default primary agent; its prompt override replaces the
     // misleading built-in-tool default prompt for every governed turn.
     agent: { build: { prompt: OPENCODE_GOVERNED_SYSTEM_PROMPT } },
-    provider: {
-      "keiko-runtime": {
-        name: "Keiko Governed Coding Gateway",
-        npm: "@ai-sdk/openai-compatible",
-        env: [],
-        models: {
-          [OPENCODE_RUNTIME_MODEL_ALIAS]: {
-            name: "Keiko Governed Coding",
-            tool_call: true,
-            limit: { context: 32_768, output: 4_096 },
-            cost: { input: 0, output: 0 },
-          },
-        },
-        options: {
-          baseURL: "{env:KEIKO_MODEL_GATEWAY_URL}",
-          // The pinned v1.17.17 child defaults provider chunks to 10 seconds. Coding turns can
-          // legitimately reason longer while Keiko's gateway still enforces its shorter provider
-          // deadline; align the child watchdog with the outer hard turn/authority ceiling.
-          chunkTimeout: OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS,
-          headers: { Authorization: "Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}" },
-        },
-      },
-    },
-    tools: Object.fromEntries([
-      ["*", false] as const,
-      ...OPENCODE_PINNED_BUILT_IN_TOOLS.map((tool) => [tool, false] as const),
-      ...OPENCODE_MODEL_VISIBLE_TOOL_NAMES.map((tool) => [tool, true] as const),
-    ]),
-    permission: Object.fromEntries([
-      ["*", "deny"] as const,
-      ...OPENCODE_PINNED_BUILT_IN_TOOLS.map((tool) => [tool, "deny"] as const),
-      [OPENCODE_GOVERNED_ACTION_PERMISSION, "ask"] as const,
-      ...OPENCODE_MODEL_VISIBLE_TOOL_NAMES.map((tool) => [tool, "allow"] as const),
-    ]),
+    provider: fixedOpenCodeProvider(),
+    tools: fixedOpenCodeTools(unavailable),
+    permission: fixedOpenCodePermission(unavailable),
   };
 }

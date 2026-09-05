@@ -14,6 +14,7 @@ import { recordingSpawn } from "./_support.js";
 import {
   GIT_WORKTREE_READ_COMMAND_RULES,
   GitWorktreeReadError,
+  readGitRemoteAliases,
   readGitRemoteUrl,
   readGitPushRemoteUrls,
   readGitWorktreeSnapshot,
@@ -105,6 +106,30 @@ describe("read-only allowlist", () => {
     for (const sub of ["commit", "add", "switch", "reset", "push", "fetch"]) {
       expect(isCommandAllowed(GIT_WORKTREE_READ_COMMAND_RULES, "git", [sub]).allowed).toBe(false);
     }
+  });
+});
+
+describe("read-only lane git-version compatibility", () => {
+  // Regression pin: this lane used to prepend `--no-lazy-fetch --no-replace-objects` as CLI flags
+  // to every read (git-mutation-node.ts's write lane still does, correctly, for its own reason).
+  // `--no-lazy-fetch` is a newer global option — absent on the git 2.43 that `ubuntu-latest` ships
+  // — so on CI every read here exited 129 ("unknown option: --no-lazy-fetch") while the identical
+  // read stayed green on a workstation with a newer git (#3384 CI: git-raw-worktree-node.test.ts
+  // "never reflects the real upstream/ahead/behind state", draftDeliveryEffects.test.ts "refuses a
+  // behind-upstream push"). Git's own docs state each flag is "equivalent to setting the
+  // GIT_NO_(LAZY_FETCH|REPLACE_OBJECTS) environment variable", and `immutableReadPolicy` already
+  // pins both env vars into every read this lane performs — so the CLI flags were a redundant,
+  // version-incompatible duplicate. This pin fails if either flag reappears in the spawned argv.
+  it("never passes --no-lazy-fetch/--no-replace-objects as CLI flags, only as pinned env vars", async () => {
+    const spawn = recordingSpawn();
+    const pending = readGitRemoteAliases({ workspace: info, spawn: spawn.fn, now: () => Date.now() });
+    spawn.child.stdout.emit("data", Buffer.from("origin\n", "utf8"));
+    spawn.child.emit("close", 0, null);
+    await pending;
+    const call = spawn.calls()[0];
+    expect(call?.args).toEqual(["remote"]);
+    expect(call?.options.env.GIT_NO_LAZY_FETCH).toBe("1");
+    expect(call?.options.env.GIT_NO_REPLACE_OBJECTS).toBe("1");
   });
 });
 

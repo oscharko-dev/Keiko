@@ -7,6 +7,7 @@ import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { readGitDefaultBranch } from "@oscharko-dev/keiko-tools";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { deriveRepositoryId } from "../task-workspace/naming.js";
+import { GitHubCodeContextPortError } from "./githubCodeContextPort.js";
 import { contentFreeWorkspaceFor } from "./githubIssueReaderAuthorization.js";
 import {
   codingWorkbenchIssueBindingDigest,
@@ -236,6 +237,22 @@ describe("server-resolved issue intake", () => {
       correlationId: "issue-test",
       errorKind: "Error",
       extra: { reason: "read-failed" },
+    });
+  });
+
+  it("reports a rate-limited or 5xx gh read as transient, not the closed/PR/transferred diagnosis (B5-13)", async () => {
+    const f = fixture();
+    f.readJson.mockRejectedValue(new GitHubCodeContextPortError("gh-transient-failure"));
+    const result = await f.resolve(f.deps, f.input);
+    expect(result).toEqual({
+      ok: false,
+      failure: "issue-unavailable",
+      failureReason: "read-transient-failure",
+    });
+    expect(f.events.at(-1)).toMatchObject({
+      op: "coding-workbench.issue.resolved",
+      correlationId: "issue-test",
+      extra: { reason: "read-transient-failure" },
     });
   });
 

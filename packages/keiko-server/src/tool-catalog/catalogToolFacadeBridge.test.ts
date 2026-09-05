@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ToolCatalog } from "@oscharko-dev/keiko-tool-catalog";
 
 import { createOpenCodeGatewayToolCatalogAdvertisement } from "../coding-runtime/opencodeToolSchemas.js";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
@@ -181,6 +182,36 @@ function bridgeFixture(budget: CatalogFacadeBudgetPort = createInMemoryCatalogFa
         return `id-${String(count)}`;
       };
     })(),
+  });
+  return { log, bridge };
+}
+
+/**
+ * A `catalog` provider that returns each entry of `sequence` in order (clamped to the last entry
+ * once exhausted) -- lets a test observe a live catalog "changing" between the construction-time
+ * compile and a later per-dispatch re-derivation, which a static `ToolCatalog` value can never do
+ * (#3413 F8 review, AC3).
+ */
+function liveCatalogFixture(sequence: readonly ToolCatalog[]): {
+  readonly log: ReturnType<typeof createBufferedServerLogSink>;
+  readonly bridge: ReturnType<typeof createCatalogFacadeBridge>;
+} {
+  const { projection } = createOpenCodeGatewayToolCatalogAdvertisement(0);
+  const log = createBufferedServerLogSink();
+  let calls = 0;
+  const provider = (): ToolCatalog => {
+    const value = sequence[Math.min(calls, sequence.length - 1)];
+    calls += 1;
+    if (value === undefined) throw new Error("fixture sequence must not be empty");
+    return value;
+  };
+  const bridge = createCatalogFacadeBridge({
+    catalog: provider,
+    profile: projection.profile,
+    budget: createInMemoryCatalogFacadeBudgetPort(),
+    logPort: { primary: log, diagnostics: defaultServerDiagnosticSink },
+    context: () => ({ correlationId: "a".repeat(36) }),
+    now: () => 1_000,
   });
   return { log, bridge };
 }
@@ -466,5 +497,107 @@ describe("CatalogFacadeBridge (#3413 F8)", () => {
     expect(settled.effectStarted).toBe(true);
     expect(JSON.stringify(settled)).not.toContain("ledger unavailable");
     expect(JSON.stringify(settled)).not.toContain("handler exploded");
+  });
+
+  // #3413 F8 review, findings b1-1/AC10/AC11: a canonical id `catalogIdFor` maps a request to but
+  // the composed catalog does not contain must fail closed with a real readiness signal, never run
+  // the handler unwrapped as if the action were merely uncovered by design.
+  it("fails closed with tool-catalog.bind-unavailable and never runs the handler when the composed catalog drops a canonical id this bridge maps to", async () => {
+    const { catalog: fullCatalog } = createOpenCodeGatewayToolCatalogAdvertisement(0);
+    const strippedCatalog: ToolCatalog = {
+      ...fullCatalog,
+      descriptors: fullCatalog.descriptors.filter(
+        (descriptor) => descriptor.toolRef.canonicalId !== "keiko.workspace.discover",
+      ),
+    };
+    const { bridge, log } = liveCatalogFixture([fullCatalog, strippedCatalog]);
+    const run = vi.fn(() => Promise.resolve({ status: "completed" as const }));
+
+    const rejection: unknown = await bridge
+      .dispatch(discoverRequest, run)
+      .catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(CatalogDispatchFault);
+    expect((rejection as CatalogDispatchFault).status).toBe("invalid");
+    expect((rejection as CatalogDispatchFault).reason).toBe("unknown-tool");
+    expect(run).not.toHaveBeenCalled();
+    expect(log.events).toHaveLength(1);
+    expect(log.events[0]?.op).toBe("tool-catalog.bind-unavailable");
+    const extra = log.events[0]?.extra as Record<string, unknown>;
+    expect(extra.readiness).toBe("unavailable");
+    expect(extra.reason).toBe("unknown-tool");
+  });
+
+  // #3413 F8 review, AC3: a static catalog value cannot drift (the current, only production
+  // wiring), but a live provider must be re-derived and revalidated before the handler runs.
+  it("settles invalid/projection-mismatch and never runs the handler when a live catalog provider drifts after construction", async () => {
+    const { catalog: baseCatalog } = createOpenCodeGatewayToolCatalogAdvertisement(0);
+    const drifted: ToolCatalog = {
+      ...baseCatalog,
+      catalogRevision: "1".repeat(64) as ToolCatalog["catalogRevision"],
+    };
+    const { bridge, log } = liveCatalogFixture([baseCatalog, drifted]);
+    const run = vi.fn(() => Promise.resolve({ status: "completed" as const }));
+
+    const rejection: unknown = await bridge
+      .dispatch(discoverRequest, run)
+      .catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(CatalogDispatchFault);
+    expect((rejection as CatalogDispatchFault).status).toBe("invalid");
+    expect((rejection as CatalogDispatchFault).reason).toBe("projection-mismatch");
+    expect(run).not.toHaveBeenCalled();
+    const settled = log.events.at(-1)?.extra as Record<string, unknown>;
+    expect(settled.status).toBe("invalid");
+    expect(settled.reason).toBe("projection-mismatch");
+  });
+
+  // #3413 F8 review, AC6/AC8: an authoritative deadline settles `timeout`, never `cancelled`, and a
+  // handler completion that arrives after that settlement is quarantined -- discarded, never a
+  // second terminal event, never a second budget charge.
+  it("settles timeout/deadline-exceeded at the authoritative deadline and quarantines a later handler completion", async () => {
+    vi.useFakeTimers();
+    try {
+      const { bridge, log } = bridgeFixture();
+      let releaseHandler: (() => void) | undefined;
+      const handlerGate = new Promise<{ status: "completed" }>((resolve) => {
+        releaseHandler = (): void => {
+          resolve({ status: "completed" });
+        };
+      });
+      const run = vi.fn(() => handlerGate);
+
+      const rejectionPromise = bridge
+        .dispatch(discoverRequest, run)
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(30_000);
+      const rejection: unknown = await rejectionPromise;
+
+      expect(rejection).toBeInstanceOf(CatalogDispatchFault);
+      expect((rejection as CatalogDispatchFault).status).toBe("timeout");
+      expect((rejection as CatalogDispatchFault).reason).toBe("deadline-exceeded");
+      expect(log.events.map((event) => event.op)).toEqual([
+        "tool-catalog.invocation-started",
+        "tool-catalog.invocation-settled",
+      ]);
+      const settled = log.events[1]?.extra as Record<string, unknown>;
+      expect(settled.status).toBe("timeout");
+      expect(settled.reason).toBe("deadline-exceeded");
+      expect(settled.budgetDisposition).toBe("committed");
+
+      if (releaseHandler === undefined) throw new Error("fixture wiring failed");
+      releaseHandler();
+      await vi.runAllTimersAsync();
+
+      expect(log.events.map((event) => event.op)).toEqual([
+        "tool-catalog.invocation-started",
+        "tool-catalog.invocation-settled",
+        "tool-catalog.completion-discarded",
+      ]);
+      const discarded = log.events[2]?.extra as Record<string, unknown>;
+      expect(discarded.reason).toBe("late-completion");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

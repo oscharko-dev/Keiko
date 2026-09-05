@@ -1919,6 +1919,63 @@ describe("parseModelCapability", () => {
     ).toThrow(/tokenAccounting\.counterId/u);
   });
 
+  // live-journey-readiness-1: `pricing` is an optional, content-free public list price. Absent
+  // means the model carries no known dollar cost — a spend-budget enforcement layer must treat
+  // that as "unpriced" and fail closed rather than assume zero cost.
+  it("accepts and round-trips optional pricing", () => {
+    const raw = {
+      ...validCapability(),
+      pricing: { inputUsdPerMillionTokens: 3, outputUsdPerMillionTokens: 15 },
+    };
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed.pricing).toEqual(raw.pricing);
+  });
+
+  it("omits pricing when the capability declares none (stays undefined, never defaulted)", () => {
+    const parsed = parseModelCapability(validCapability(), "capabilities[0]");
+    expect(parsed.pricing).toBeUndefined();
+  });
+
+  it("rejects a negative or non-finite pricing rate", () => {
+    expect(() =>
+      parseModelCapability(
+        {
+          ...validCapability(),
+          pricing: { inputUsdPerMillionTokens: -1, outputUsdPerMillionTokens: 15 },
+        },
+        "capabilities[0]",
+      ),
+    ).toThrow(/pricing\.inputUsdPerMillionTokens/u);
+    expect(() =>
+      parseModelCapability(
+        {
+          ...validCapability(),
+          pricing: {
+            inputUsdPerMillionTokens: 3,
+            outputUsdPerMillionTokens: Number.POSITIVE_INFINITY,
+          },
+        },
+        "capabilities[0]",
+      ),
+    ).toThrow(/pricing\.outputUsdPerMillionTokens/u);
+  });
+
+  it("rejects an unknown pricing field (strict — no silent absorption)", () => {
+    expect(() =>
+      parseModelCapability(
+        {
+          ...validCapability(),
+          pricing: {
+            inputUsdPerMillionTokens: 3,
+            outputUsdPerMillionTokens: 15,
+            discountCode: "friends-and-family",
+          },
+        },
+        "capabilities[0]",
+      ),
+    ).toThrow(/pricing\.discountCode/u);
+  });
+
   // Issue #1210: supportsInfilling / infillingAlignment are recognised strict-list keys and
   // round-trip exactly (the strict parser rejects unknown keys, so this also proves they are
   // allow-listed).

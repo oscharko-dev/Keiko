@@ -674,9 +674,15 @@ function gitPolicyAllowed(
   // commit-execute: an approval proof is required unconditionally, in every mode, never merely a
   // connector scope that (per deliveryScopeGranted) is present at every mode by design.
   if (operation === "read") return true;
-  const effect = codingWorkbenchPolicyEffectFor(envelope.authority.effectiveMode, "delivery", "high");
+  const effect = codingWorkbenchPolicyEffectFor(
+    envelope.authority.effectiveMode,
+    "delivery",
+    "high",
+  );
   return (
-    approved && effect !== "denied" && hasScope(envelope.authority.connectorScopes, "source-control.write")
+    approved &&
+    effect !== "denied" &&
+    hasScope(envelope.authority.connectorScopes, "source-control.write")
   );
 }
 

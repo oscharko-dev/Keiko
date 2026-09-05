@@ -116,6 +116,12 @@ describe("catalog invocation bridge", () => {
     { projectionDigest: "a".repeat(64) },
     { offerId: "other" },
     { toolRef: { canonicalId: "keiko.fixture.read", contractVersion: 2 } },
+    // #3415 AC3: implicit-latest resolution — omitting `contractVersion` must never fall back to
+    // "whichever version is current" (also proven against the real producer by the matching
+    // architecture negative fixture under tests/architecture/fixtures/, see
+    // scripts/check-tool-catalog-conformance.mjs's CATALOG_SEMANTIC_NEGATIVE_FIXTURES).
+    { toolRef: { canonicalId: "keiko.fixture.read" } },
+    { toolRef: { canonicalId: "keiko.fixture.read", contractVersion: "latest" } },
     { arguments: { path: "src/a.ts", extra: true } },
     { arguments: null },
     { arguments: [] },

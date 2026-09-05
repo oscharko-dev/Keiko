@@ -28,6 +28,7 @@ export type {
   InfillingAlignment,
   LatencyClass,
   ModelCapability,
+  ModelCapabilityPricing,
   CompletionInteractionMode,
   CompletionDegradeReason,
   CompletionModelSelection,

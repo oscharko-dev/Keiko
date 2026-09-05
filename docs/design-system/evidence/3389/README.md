@@ -1,62 +1,55 @@
-# Evidence to capture — PR mark-ready and delivery-approval UI (#3389, pr-card-ui)
+# Verified PR description approval browser evidence (#3389, pr-card-ui)
 
-This directory does not yet hold a captured visual/journey proof. It states what the integrator
-must produce before this surface can be described as release-evidenced, mirroring the format
-already captured for the sibling delivery surfaces in `docs/design-system/evidence/3386/`,
-`docs/design-system/evidence/3387/` and `docs/design-system/evidence/3388/`.
+This directory holds captured visual/journey proof for `GovernedPullRequestCard.tsx`'s Description
+section: repository/PR-number/language fields, the Preview -> Approve -> Apply lifecycle against
+the real `pr-description` route group, the server-rendered final body (repository template and
+human text preserved outside the managed region, the trusted "by Keiko" attribution rendered by the
+server, never recomposed client-side), and the one-use Apply action.
 
-## What shipped without evidence yet
+## Producer
 
-- `GovernedPullRequestCard.tsx` — the create/update mutation now mints and attaches the
-  `pr-approve` claim unconditionally before execute (#3387), and a new "Description" section
-  drives the PR-description preview -> approve -> apply lifecycle (#3399): repository/PR-number/
-  language fields, a Preview action, the server-rendered final body (repository template and
-  human text preserved outside the managed region, the trusted "by Keiko" attribution rendered by
-  the server — never recomposed here), an Approve action, and a one-use Apply action. The
-  `current | stale | partial | fallback | blocked | failed` state is rendered as text + icon, never
-  colour alone, with a distinct refresh-guidance message when the preview target has drifted or the
-  server reports `stale`.
-- `packages/keiko-ui/src/lib/api.ts` — `fetchGitDeliveryCommitApprove`, `fetchGitDeliveryPushApprove`,
-  `fetchGitDeliveryPrApprove` (mirroring `fetchGitDeliveryMergeApprove`) and the
-  `fetchGitDeliveryPrDescriptionPreview` / `...Approve` / `...Apply` / `...Status` clients, the last
-  three validated client-side against the shared `PrDescriptionApplicationStatus` contract before a
-  malformed body ever reaches a component.
-- `CodingWorkbenchDraftDelivery.tsx` — a read-only hint (`cwb-draft-delivery-approval-hint`) naming
-  that a `push-proposed`/`pr-proposed` proposal is waiting on the existing bounded-action permission
-  review, without adding a second approve control for the same pending request.
+All three sibling surfaces — #3389, #3400, #3401 — are captured by **one spec file**,
+`tests/e2e/git-change-chat-3400.spec.ts`, run by **one command**:
 
-Component and contract-level tests for all of the above are committed and green (see
-`GovernedPullRequestCard.test.tsx`, `GovernedPullRequestCard.a11y.test.tsx`,
-`CodingWorkbenchDraftDelivery.test.tsx`, `packages/keiko-ui/src/lib/api.test.ts`). What is missing
-is the end-to-end, real-server visual/journey proof this repository's release process expects for a
-delivery-approval surface.
+```sh
+KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:git-change-chat
+```
 
-## Reproduction the integrator must run or create
+(`package.json` → `playwright test --config
+tests/e2e/config/playwright.git-change-chat-3400.config.ts --project=chromium`). The config pins
+`workers: 1`,
+`fullyParallel: false`, so the file's tests run serially in source order against one production
+build (its `webServer` command rebuilds the packaged CLI and the static UI from scratch). Test 3
+in that file, "qualifies the governed PR Description panel...", is the one that writes this
+directory's evidence (`capturePrDescriptionModes({ issue: 3389, ... })` and
+`writePrDescriptionJourneyEvidence({ issue: 3389, ... })`, both from
+`tests/e2e/support/pr-description-visual-evidence.ts`). Ordinary runs (without
+`KEIKO_WRITE_TRACKED_EVIDENCE=1`) write evidence under the gitignored `test-results/e2e-evidence/`
+directory instead of here — set the env var only when intentionally refreshing the committed
+receipts and screenshots.
 
-No `test:e2e:coding-issue-*` Playwright lane exercises the PR-description preview -> approve ->
-apply flow or the unconditional commit/push/pr approval mint yet. Before claiming this evidence
-directory complete:
+## Receipts
 
-1. Extend (do not duplicate) the existing `tests/e2e/config/playwright.coding-issue-delivery.config.ts`
-   fixture and lane — it already drives a real temporary Git repository, the mounted production BFF
-   routes and the existing approval panel — with scenarios for:
-   - Preview -> approve -> apply of a PR description against the real `pr-description` route group,
-     asserting the applied body byte-for-byte preserves the repository template and human text
-     outside the managed region, and that the trusted "by Keiko" attribution is present.
-   - A stale re-check (base/head or body changed after preview) rendering the `stale` state and
-     refusing apply.
-   - A commit/push/pr-create execute attempt whose approval mint the server rejects (mode-denied or
-     authority-denied), rendering the readable API error without leaking the approval token.
-2. Run it with `KEIKO_WRITE_TRACKED_EVIDENCE=1` to regenerate this directory's tracked artifacts, per
-   the pattern documented in `docs/design-system/evidence/3386/README.md` and
-   `docs/design-system/evidence/3387/README.md`.
-3. Capture the eight canonical screenshots (dark, light, dark high contrast, light high contrast,
-   increased contrast, forced colors, reduced motion, 360px compact) of the Description panel in at
-   least its preview-loaded and applied states, plus `visual-proof.json` (source hashes, screenshot
-   hashes, axe findings, horizontal-overflow checks) and `journey-proof.json` (scenario outcomes,
-   correlated activity-log lines, provider-effect counts).
-4. Confirm no receipt or screenshot contains a real PR body, diff, prompt, or approval token —
-   only bounded fixture text, matching this repository's body-free evidence rule.
+- `01-dark.png` through `08-compact.png` — the eight canonical color/contrast/motion/layout modes
+  (dark, light, dark high contrast, light high contrast, increased contrast, forced colors, reduced
+  motion, 360px compact) of the Description panel in its `preview-loaded` state.
+- `09-applied.png` — the panel after Apply, with the applied control disabled.
+- `visual-proof.json` records each capture's screenshot hash, exact UI source hashes, actual
+  browser axe findings (`seriousOrCriticalViolations`, always 0 in the recorded run) and a
+  horizontal-overflow check, plus the shared `sourceHashes` map (spec/config/support files and the
+  component/client files this surface actually exercises).
+- `journey-proof.json` binds three successful cases — "preview displays exact server final body",
+  "managed and human regions remain visible", "approval precedes one apply" — to one review, one
+  approve and one apply observation, confirms the exact final body and human regions were
+  displayed, and records the applied-state screenshot hash. `modelQualification` and
+  `liveAuthenticationQualification` are both `false`: this is production-composed deterministic
+  browser evidence, not a live-model or live-GitHub-authentication qualification.
 
-Until that lane exists and is run, this surface's release-evidence claim is: component tests green,
-no captured end-to-end visual/journey proof.
+The evidence in this directory was captured at `checkedAt` `2026-09-05T18:05:44Z`
+(`journey-proof.json`) / `...:44.250Z` (`visual-proof.json`). **This must be re-captured on the
+final head before any release claim**: re-run the command above and re-diff `sourceHashes` against
+the corresponding files' current content whenever any of them changes — component tests passing is
+not evidence that this captured browser proof still reflects the current source.
+
+Screenshots and receipts contain synthetic fixture text only — no real PR body, diff, prompt, or
+approval token (`rawContentRecorded: false`).

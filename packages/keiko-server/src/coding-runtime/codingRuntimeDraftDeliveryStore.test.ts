@@ -162,7 +162,11 @@ describe("durable draft delivery in the owning runtime store", () => {
       expect(() => store.recordDraftDelivery(pushing, 0)).toThrow("stale draft delivery revision");
       const restored = createCodingRuntimeSnapshotStore(db).get("run-1");
       expect(restored?.draftDelivery).toEqual(pushing);
-      expect(restored?.revision).toBe(0);
+      // Row-level revision (#3384 B5-6) is a separate counter from draftDelivery.revision above: it
+      // advances on every accepted write to this row -- recordVerifiedCommit in storeWithRun (0->1),
+      // then the two accepted recordDraftDelivery calls (1->2, 2->3); the two rejected calls above
+      // throw before persisting and do not advance it.
+      expect(restored?.revision).toBe(3);
     } finally {
       db.close();
     }
@@ -347,7 +351,9 @@ describe("draft delivery predecessor recovery", () => {
       const restored = createCodingRuntimeSnapshotStore(db).get("run-2");
       expect(restored?.draftDelivery).toEqual(adopted);
       expect(restored?.verifiedCommitResult).toBeUndefined();
-      expect(restored?.revision).toBe(0);
+      // Row-level revision (#3384 B5-6): run-2 was created at revision 0 and this single accepted
+      // adoptDraftDeliveryFromPredecessor call is its first write, so it advances 0->1.
+      expect(restored?.revision).toBe(1);
       expect(store.get("run-1")).toEqual(sourceBefore);
       expect(() => store.adoptDraftDeliveryFromPredecessor(adopted)).toThrow();
       expect(() =>

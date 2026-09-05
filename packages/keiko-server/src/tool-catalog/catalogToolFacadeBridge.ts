@@ -632,6 +632,42 @@ function emitDiscarded(runtime: BridgeRuntime, meta: InvocationMeta): void {
  * the invocation settles `timeout`/`deadline-exceeded` and any later handler resolution/rejection
  * is quarantined via `emitDiscarded` instead of double-settling or silently vanishing.
  */
+function armDeadlineTimeout(deadlineMs: number): {
+  readonly promise: Promise<never>;
+  readonly clear: () => void;
+} {
+  let timer: ReturnType<typeof setTimeout>;
+  const promise = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new CatalogFacadeDeadlineExceeded());
+    }, deadlineMs);
+    timer.unref();
+  });
+  return {
+    promise,
+    clear: (): void => {
+      clearTimeout(timer);
+    },
+  };
+}
+
+function watchForLateCompletion<T>(
+  runtime: BridgeRuntime,
+  meta: InvocationMeta,
+  handlerPromise: Promise<T>,
+  timedOut: () => boolean,
+): void {
+  const tail = handlerPromise.then(
+    () => {
+      if (timedOut()) emitDiscarded(runtime, meta);
+    },
+    () => {
+      if (timedOut()) emitDiscarded(runtime, meta);
+    },
+  );
+  void tail;
+}
+
 async function runReservedWithDeadline<T>(
   runtime: BridgeRuntime,
   meta: InvocationMeta,
@@ -640,37 +676,12 @@ async function runReservedWithDeadline<T>(
   deadlineMs: number,
 ): Promise<T> {
   let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-  }, deadlineMs);
-  timer.unref();
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer.ref = timer.ref; // no-op keep type inference stable; timer already scheduled above
-    setTimeout(() => reject(new CatalogFacadeDeadlineExceeded()), 0);
-  });
-  void timeout;
-  const quarantine = handlerPromise.then(
-    () => {
-      if (timedOut) emitDiscarded(runtime, meta);
-    },
-    () => {
-      if (timedOut) emitDiscarded(runtime, meta);
-    },
-  );
-  void quarantine;
+  const deadline = armDeadlineTimeout(deadlineMs);
+  watchForLateCompletion(runtime, meta, handlerPromise, () => timedOut);
   try {
-    const result = await Promise.race([
-      handlerPromise,
-      new Promise<never>((_resolve, reject) => {
-        setTimeout(() => {
-          reject(new CatalogFacadeDeadlineExceeded());
-        }, deadlineMs).unref();
-      }),
-    ]);
-    clearTimeout(timer);
+    const result = await Promise.race([handlerPromise, deadline.promise]);
     return settleSuccess(runtime, meta, reservation, result);
   } catch (error) {
-    clearTimeout(timer);
     if (error instanceof CatalogFacadeDeadlineExceeded) {
       timedOut = true;
       settleTimeout(runtime, meta, reservation);
@@ -678,6 +689,8 @@ async function runReservedWithDeadline<T>(
     }
     settleFailure(runtime, meta, reservation, error);
     throw error;
+  } finally {
+    deadline.clear();
   }
 }
 
@@ -746,6 +759,7 @@ async function dispatchCovered<T>(
     settlementId: runtime.mintId(),
     startedAt: runtime.now(),
   };
+  if (projectionDrift(runtime)) denyProjectionMismatch(runtime, meta);
   const reservation = reserveOrSettleDenied(runtime, meta);
   emitStarted(runtime, meta, reservation);
   return runReserved(runtime, meta, reservation, run);
@@ -754,20 +768,21 @@ async function dispatchCovered<T>(
 export function createCatalogFacadeBridge(input: CatalogFacadeBridgeInput): CatalogFacadeBridge {
   const runtime: BridgeRuntime = {
     input,
-    projection: compileToolProjection(input.catalog, input.profile),
+    projection: compileToolProjection(currentCatalog(input), input.profile),
     mintId: input.mintId ?? randomUUID,
     now: input.now ?? Date.now,
   };
   return Object.freeze({
     resolve: (request: CodingToolActionRequest): ToolDescriptor | undefined =>
-      resolveDescriptor(input.catalog, request),
+      resolveDescriptor(currentCatalog(input), request),
     dispatch: <T>(request: CodingToolActionRequest, run: () => Promise<T>): Promise<T> => {
-      const descriptor = resolveDescriptor(input.catalog, request);
-      if (descriptor === undefined) {
+      const outcome = resolveAction(currentCatalog(input), request);
+      if (outcome.kind === "uncovered") {
         emitUnbound(runtime, request);
         return run();
       }
-      return dispatchCovered(runtime, descriptor, run);
+      if (outcome.kind === "missing") return dispatchMissing(runtime);
+      return dispatchCovered(runtime, outcome.descriptor, run);
     },
   });
 }

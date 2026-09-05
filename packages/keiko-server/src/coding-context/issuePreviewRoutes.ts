@@ -254,7 +254,7 @@ export function createCodingWorkbenchIssuePreviewHandler(
 ): (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult> {
   return async (ctx, deps): Promise<RouteResult> => {
     if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-      return failureResult("authority-denied", ctx.correlationId);
+      return failureResult("authority-denied", undefined, ctx.correlationId);
     }
     const read = await readRequest(ctx);
     if (!read.ok) return read.result;

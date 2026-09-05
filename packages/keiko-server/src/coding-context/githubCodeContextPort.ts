@@ -79,11 +79,7 @@ export const GH_CODE_CONTEXT_COMMAND_RULES: readonly CommandRule[] = Object.free
  * had nothing to do with the issue at all.
  */
 export type GitHubCodeContextPortErrorCode =
-  | "gh-denied"
-  | "gh-failed"
-  | "gh-transient-failure"
-  | "gh-output-truncated"
-  | "gh-invalid-json";
+  "gh-denied" | "gh-failed" | "gh-transient-failure" | "gh-output-truncated" | "gh-invalid-json";
 
 export class GitHubCodeContextPortError extends Error {
   readonly code: GitHubCodeContextPortErrorCode;

@@ -23,3 +23,19 @@ export async function readVerifiedRepositoryIdentity(
   if (remote === undefined) throw new Error("verified-commit-remote-unsupported");
   return { kind: "github-origin", digest: codingWorkbenchRemoteDigest(remote) };
 }
+
+/**
+ * Resolves the workspace's own live `owner/repo` from its `origin` remote, or `undefined` when no
+ * GitHub-shaped origin is configured. Read-only, and — unlike `readVerifiedRepositoryIdentity`
+ * above — never falls back to a caller-supplied identity: a Git-delivery mutation route binding a
+ * client-supplied `ownerAndRepo` to the workspace's real remote (#3384 B5-8) has nothing legitimate
+ * to bind to when the workspace carries no verifiable GitHub origin, so that case must read as "no
+ * match", never as an accepted local identity.
+ */
+export async function readVerifiedGitHubOwnerAndRepo(
+  deps: NodeGitWorktreeReaderDeps,
+): Promise<string | undefined> {
+  const aliases = await readGitRemoteAliases(deps);
+  if (!aliases.includes("origin")) return undefined;
+  return githubOwnerAndRepoFromRemoteUrl(await readGitRemoteUrl(deps, "origin"));
+}

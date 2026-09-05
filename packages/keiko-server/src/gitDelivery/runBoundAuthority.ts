@@ -27,6 +27,14 @@ export interface ActiveGitDeliveryRunAuthority {
     readonly allowedPrefixes: readonly string[];
   };
   readonly authority: CodingWorkbenchAuthorityEnvelope;
+  // #3384 B1-3/B1-13: the PR this run is bound to, populated by the producer
+  // (`runtimeAuthorityService.ts`) once the run's own PR context is established. Absent for a run
+  // that has not yet bound to a specific PR — a request naming any PR is then admitted unchanged (no
+  // narrower scope exists yet to compare against), never refused for a binding this run's producer
+  // has not made. Once populated, it is the sole ceiling a PR-description model-egress or apply
+  // request may be admitted against for THIS run — see `admitDescriptionModelEgress` in
+  // prDescriptionRoutes.ts.
+  readonly pullRequest?: { readonly ownerAndRepo: string; readonly prNumber: number } | undefined;
 }
 
 export interface GitDeliveryRunAuthorityPort {

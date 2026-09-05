@@ -378,7 +378,9 @@ describe("GitChangeScopePill", () => {
       <GitChangeScopePill
         chat={makeChat({
           id: "chat-2",
-          gitChangeScopes: [makeGitChangeScope({ relationshipId: "rel-2", descriptionStatus: "stale" })],
+          gitChangeScopes: [
+            makeGitChangeScope({ relationshipId: "rel-2", descriptionStatus: "stale" }),
+          ],
         })}
         updateScopes={vi.fn()}
         refreshScope={vi.fn()}

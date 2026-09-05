@@ -277,7 +277,10 @@ async function captureComparison(
 
 // ─── Relationship engine bridge (existing Connect relationship infrastructure) ─────────────────
 
-function gitChangeObjectId(snapshotDigest: string): string {
+// Exported so store-handlers.ts's PATCH-time relationship binding check (#3400-AC3) derives the
+// same target object id this file uses when creating the relationship, rather than restating the
+// `gc_` prefix formula (AGENTS.md §7).
+export function gitChangeObjectId(snapshotDigest: string): string {
   return `gc_${snapshotDigest}`;
 }
 

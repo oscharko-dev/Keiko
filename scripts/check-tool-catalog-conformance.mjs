@@ -208,6 +208,15 @@ const CATALOG_SEMANTIC_NEGATIVE_FIXTURES = Object.freeze([
       { fn: "attemptDowngraded", reason: "invalid-compatibility" },
     ],
   },
+  // #3415 AC3: proves the call-time wire boundary (not the compiler) rejects a request that
+  // omits `contractVersion` or spells it "latest" instead of pinning an exact version.
+  {
+    file: "implicit-latest-resolution.mjs",
+    cases: [
+      { fn: "attemptOmittedContractVersion", reason: "invalid-shape" },
+      { fn: "attemptLatestLiteral", reason: "invalid-shape" },
+    ],
+  },
 ]);
 async function semanticFixtureFailures(producer, fixturesDir, { file, cases }) {
   const fixture = await import(pathToFileURL(join(fixturesDir, file)).href);

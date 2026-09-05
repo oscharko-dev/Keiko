@@ -236,6 +236,7 @@ describe("#3415 catalog-semantic negative-fixture matrix", () => {
       [
         "alias-collision-or-confusable.mjs",
         "duplicate-handler.mjs",
+        "implicit-latest-resolution.mjs",
         "legacy-table-reintroduction.mjs",
         "missing-handler.mjs",
         "orphan-handler.mjs",
@@ -327,6 +328,16 @@ describe("#3415 catalog-semantic negative-fixture matrix", () => {
     expect(
       sharedNegativeFixture.expectRejection(() => compatibility.attemptDowngraded(producer)),
     ).toEqual({ rejected: true, reason: compatibility.EXPECTED_REASONS.downgraded });
+
+    const implicitLatest = await fixture("implicit-latest-resolution.mjs");
+    expect(
+      sharedNegativeFixture.expectRejection(() =>
+        implicitLatest.attemptOmittedContractVersion(producer),
+      ),
+    ).toEqual({ rejected: true, reason: implicitLatest.EXPECTED_REASON });
+    expect(
+      sharedNegativeFixture.expectRejection(() => implicitLatest.attemptLatestLiteral(producer)),
+    ).toEqual({ rejected: true, reason: implicitLatest.EXPECTED_REASON });
 
     const legacyTable = await fixture("legacy-table-reintroduction.mjs");
     const legacyResult = await legacyTable.attempt(producer, ROOT, legacyProjectionDiffers);

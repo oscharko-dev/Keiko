@@ -6,7 +6,6 @@
 
 import type {
   ModelCapability,
-  ModelCapabilityPricing,
   NormalizedResponse,
   GatewayRequest,
   ProviderEndpointStyle,
@@ -24,6 +23,7 @@ export type {
   ModelReasoningEffort,
   InfillingAlignment,
   ModelCapability,
+  ModelCapabilityPricing,
   CompletionInteractionMode,
   CompletionDegradeReason,
   CompletionModelSelection,

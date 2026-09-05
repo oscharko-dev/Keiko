@@ -49,7 +49,7 @@ jobs:
           - test:e2e:coding-workbench-2253
           - test:e2e:coding-issue-intake
           - test:e2e:coding-issue-commit
-          - test:e2e:coding-issue-delivery
+          - test:e2e:coding-issue-publish
           - test:e2e:coding-issue-ci
           - test:e2e:coding-issue-handoff
           - test:e2e:git-change-chat

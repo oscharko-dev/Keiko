@@ -48,12 +48,16 @@ import { resolveProjectWorkspace } from "./execution.js";
 import {
   hasOnlyAllowedKeys,
   isNonEmptyString,
+  isOwnerAndRepo,
   isPlainObject,
   readParsedGitDeliveryBody,
   scanForbiddenStrings,
   scanUnsafeFormatChars,
 } from "./requestGuards.js";
-import { gitDeliveryAuthorityGate } from "./requestPreparation.js";
+import {
+  gitDeliveryAuthorityGate,
+  gitDeliveryRepositoryBindingMismatch,
+} from "./requestPreparation.js";
 import { authorizeGitDeliveryModelEgress } from "./runBoundAuthority.js";
 import type { GitDeliveryDescriptionAuthorityScope } from "./runBoundAuthority.js";
 import { createPrDescriptionApplicationService } from "./prDescriptionService.js";
@@ -72,7 +76,8 @@ export type GitDeliveryPrDescriptionErrorCode =
   | "GIT_DELIVERY_PR_DESCRIPTION_UNKNOWN_PROJECT"
   | "GIT_DELIVERY_PR_DESCRIPTION_UNAVAILABLE"
   | "GIT_DELIVERY_PR_DESCRIPTION_UNKNOWN_PROPOSAL"
-  | "GIT_DELIVERY_PR_DESCRIPTION_MODEL_EGRESS_DENIED";
+  | "GIT_DELIVERY_PR_DESCRIPTION_MODEL_EGRESS_DENIED"
+  | "GIT_DELIVERY_PR_DESCRIPTION_REPOSITORY_MISMATCH";
 
 const SAFE_MESSAGES: Readonly<Record<GitDeliveryPrDescriptionErrorCode, string>> = {
   GIT_DELIVERY_PR_DESCRIPTION_BAD_REQUEST:
@@ -88,6 +93,9 @@ const SAFE_MESSAGES: Readonly<Record<GitDeliveryPrDescriptionErrorCode, string>>
     "The referenced proposal is unknown, expired, or no longer current.",
   GIT_DELIVERY_PR_DESCRIPTION_MODEL_EGRESS_DENIED:
     "Model egress for PR-description generation is not currently authorized.",
+  // #3384 B5-8: the workspace's own `origin` remote does not resolve to the requested repository.
+  GIT_DELIVERY_PR_DESCRIPTION_REPOSITORY_MISMATCH:
+    "The requested repository does not match this project's own Git remote.",
 };
 
 const errResult = (status: number, code: GitDeliveryPrDescriptionErrorCode): RouteResult => ({
@@ -97,11 +105,6 @@ const errResult = (status: number, code: GitDeliveryPrDescriptionErrorCode): Rou
 
 // ─── Request validation ─────────────────────────────────────────────────────────────────────────
 
-const OWNER_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
-
-function isOwnerAndRepo(value: unknown): value is string {
-  return typeof value === "string" && OWNER_REPO_RE.test(value);
-}
 function isPrNumber(value: unknown): value is number {
   return (
     typeof value === "number" &&
@@ -314,12 +317,30 @@ function admitDescription(
  * description generation. Consulted only when no run is active; a running run's own authority
  * already covers generation (it is not a Git operation, so `authorizeGitDelivery` never gates it).
  */
+// #3384 B1-3/B1-13: a run's own authority admits model egress only for the PR it is actually bound
+// to — an active run carries no blanket "any PR" grant. `active.pullRequest` is absent for a run
+// that has not yet bound to a specific PR (the producer has not made that binding yet), in which
+// case there is no narrower scope to compare against and the request is admitted unchanged; once
+// populated, a request naming a different repository or PR number is refused, never silently
+// widened to cover it.
+function admittedForRunBoundPullRequest(
+  active: { readonly pullRequest?: { readonly ownerAndRepo: string; readonly prNumber: number } },
+  request: BaseFields,
+): boolean {
+  if (active.pullRequest === undefined) return true;
+  return (
+    active.pullRequest.ownerAndRepo.toLowerCase() === request.ownerAndRepo.toLowerCase() &&
+    active.pullRequest.prNumber === request.prNumber
+  );
+}
+
 export function admitDescriptionModelEgress(
   deps: Pick<UiHandlerDeps, "gitDeliveryAuthority" | "gitDeliveryDescriptionAuthority">,
   request: BaseFields,
   nowIso: string,
 ): boolean {
-  if (deps.gitDeliveryAuthority?.current(nowIso) !== undefined) return true;
+  const active = deps.gitDeliveryAuthority?.current(nowIso);
+  if (active !== undefined) return admittedForRunBoundPullRequest(active, request);
   if (deps.gitDeliveryDescriptionAuthority === undefined || request.snapshotDigest === undefined) {
     return false;
   }
@@ -657,6 +678,10 @@ async function prepare<V extends BaseFields>(
   }
   const seams = options.execution ?? {};
   const logSink = seams.activityLog ?? processServerLogSink();
+  if (await gitDeliveryRepositoryBindingMismatch(workspace, request.ownerAndRepo)) {
+    logRepositoryMismatch(logSink, correlationId);
+    return { ok: false, result: errResult(403, "GIT_DELIVERY_PR_DESCRIPTION_REPOSITORY_MISMATCH") };
+  }
   const admitted = admitDescription(ctx, deps, request, workspace, logSink);
   if (!admitted.allowed) return { ok: false, result: admitted.result };
   const authorityIdentity = `${admitted.scope.runId ?? "description-authority"}:${admitted.scope.authorityDigest}`;
@@ -735,6 +760,21 @@ function logModelEgressDenied(activityLog: ServerLogSink, correlationId: string)
   activityLog.write({
     category: "security",
     op: "pr-description.model-egress.denied",
+    correlationId,
+    level: "warn",
+    status: 403,
+    errorKind: "permission",
+  });
+}
+
+// #3384 B5-8: the client-supplied `ownerAndRepo` is not the mutation target on its own say-so —
+// it must bind to the resolved project workspace's own `origin` remote, the SAME check every other
+// PR-lifecycle route (`prepareGitDeliveryRequest`'s `ownerAndRepoOf` seam) applies. Body-free,
+// security-categorized, correlated — matches every other Git delivery authority denial in this file.
+function logRepositoryMismatch(activityLog: ServerLogSink, correlationId: string): void {
+  activityLog.write({
+    category: "security",
+    op: "pr-description.repository.mismatch",
     correlationId,
     level: "warn",
     status: 403,

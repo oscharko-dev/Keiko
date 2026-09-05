@@ -37,7 +37,7 @@ async function buildContext(
   if (canonicalise(resolution.binding) !== canonicalise(input.binding)) {
     return { ok: false, failure: "issue-unavailable" };
   }
-  const pack = await buildPack(input, resolution);
+  const pack = await buildPack(deps, input, resolution);
   if (pack.status === "blocked") {
     logPackBlocked(deps, input, pack);
     return { ok: false, failure: "authority-denied" };
@@ -104,6 +104,7 @@ function logPackBlocked(
 }
 
 async function buildPack(
+  deps: GitHubIssueResolutionDeps,
   input: ContextInput,
   resolution: ResolvedIssue,
 ): Promise<CodeContextPackResult> {
@@ -133,6 +134,12 @@ async function buildPack(
         github_allowed_owner_and_repo: ownerAndRepo,
       },
       nowIso: () => new Date().toISOString(),
+      // #3941762925: thread the owning activity-log port and this operation's correlation id so
+      // `buildCodeContextPack`'s sanitisation evidence (`codeContextConnector.ts:319`,
+      // `emitSanitizationEvidence`) actually reaches the log — mirrors `logPackBlocked` above,
+      // which already falls back to `processServerLogSink()` the same way.
+      activityLog: deps.activityLog ?? processServerLogSink(),
+      correlationId: input.correlationId,
     },
   );
 }

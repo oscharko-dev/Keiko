@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   buildOpenCodeLaunchProfile,
+  createFixedOpenCodeConfig,
   OPENCODE_GOVERNED_SYSTEM_PROMPT,
   type OpenCodeLaunchProfileInput,
 } from "./opencodeLaunchProfile.js";
@@ -193,6 +194,52 @@ describe("OpenCode launch profile", () => {
     for (const tool of ["bash", "read", "edit", "unknown_tool"]) {
       expect(finalPermissionAction(rules, tool)).toBe("deny");
     }
+  });
+
+  // #3414-AC9: an optional tool whose handler/readiness/policy prerequisite is unavailable for
+  // this run must be ABSENT from what the model is told exists (tools[name]=false AND
+  // permission[name]="deny"), not merely denied when called -- static catalog membership alone
+  // must never make it appear ready.
+  it("denies an unavailable optional tool in both tools and permission (#3414-AC9)", () => {
+    const config = createFixedOpenCodeConfig(new Set(["keiko_research_fetch", "keiko_skill"]));
+    expect(config.tools.keiko_research_fetch).toBe(false);
+    expect(config.tools.keiko_skill).toBe(false);
+    expect(config.permission.keiko_research_fetch).toBe("deny");
+    expect(config.permission.keiko_skill).toBe("deny");
+    // A sibling optional tool with no unavailability entry stays available.
+    expect(config.tools.keiko_child_agent).toBe(true);
+    expect(config.permission.keiko_child_agent).toBe("allow");
+    // A required (non-optional) tool is never affected by this mechanism.
+    expect(config.tools.keiko_workspace_read).toBe(true);
+    expect(config.permission.keiko_workspace_read).toBe("allow");
+  });
+
+  it("leaves every optional tool available, and the config byte-identical, when omitted", () => {
+    const withoutInput = JSON.stringify(createFixedOpenCodeConfig());
+    const withEmptySet = JSON.stringify(createFixedOpenCodeConfig(new Set()));
+    expect(withoutInput).toBe(withEmptySet);
+    const parsed = JSON.parse(withoutInput) as {
+      readonly tools: Readonly<Record<string, boolean>>;
+    };
+    expect(parsed.tools.keiko_research_fetch).toBe(true);
+    expect(parsed.tools.keiko_skill).toBe(true);
+    expect(parsed.tools.keiko_child_agent).toBe(true);
+  });
+
+  it("threads unavailableOptionalTools from buildOpenCodeLaunchProfile into the launched config", () => {
+    const profile = buildOpenCodeLaunchProfile({
+      executable: "/managed/opencode",
+      stateRoot: "/private/run",
+      randomBytes: () => Buffer.alloc(32, 7),
+      unavailableOptionalTools: new Set(["keiko_child_agent"]),
+    });
+    if (!profile.ok) throw new Error("expected fixed managed launch profile");
+    const config = JSON.parse(profile.config) as {
+      readonly tools: Readonly<Record<string, boolean>>;
+      readonly permission: Readonly<Record<string, string>>;
+    };
+    expect(config.tools.keiko_child_agent).toBe(false);
+    expect(config.permission.keiko_child_agent).toBe("deny");
   });
 
   it("fails closed for non-absolute executable or insufficient secret entropy", () => {

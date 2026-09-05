@@ -174,7 +174,10 @@ describe("catalog handler binding and offered projection", () => {
     const state = createCatalogBinding(fixture.input, fixture.options);
     expect(state.handlerSetDigest).toBe(computeHandlerSetDigest(state.projection, state.handlers));
     expect(state.handlerSetDigest).toMatch(/^[a-f0-9]{64}$/u);
-    const unbound = createCatalogBinding({ ...fixture.input, handlerBindings: [] }, fixture.options);
+    const unbound = createCatalogBinding(
+      { ...fixture.input, handlerBindings: [] },
+      fixture.options,
+    );
     expect(unbound.handlerSetDigest).not.toBe(state.handlerSetDigest);
   });
   it("passes a well-formed correlation and parent correlation id through unchanged", () => {

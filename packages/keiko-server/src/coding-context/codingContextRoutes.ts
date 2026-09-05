@@ -361,6 +361,11 @@ export async function handleCodingContextPack(
       connectors: composed.connectors,
       connectorConfig: composed.connectorConfig,
       nowIso: (): string => new Date().toISOString(),
+      // #3941762925: thread the route's own activity-log port and the request's correlation id so
+      // `buildCodeContextPack`'s sanitisation evidence (`codeContextConnector.ts:319`,
+      // `emitSanitizationEvidence`) reaches the log instead of being silently dropped.
+      activityLog: deps.activityLog,
+      correlationId: ctx.correlationId,
     });
     return { status: 200, body: { schemaVersion: "1", ...pack } };
   } catch (error) {

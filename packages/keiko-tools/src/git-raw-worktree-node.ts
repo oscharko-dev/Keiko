@@ -6,7 +6,12 @@
 // `git-mutation-preflight.ts`) — that would silently disable the non-fast-forward and nothing-to-push
 // checks for every push. A push effect must read the real tracking state via `readGitWorktreeSnapshot`
 // (`git-worktree-snapshot-node.ts`) instead.
-import { parseGitIndexStat, indexStatMatches, type GitIndexStat } from "./git-index-stat.js";
+import {
+  parseGitIndexStat,
+  indexStatMatches,
+  readGitIndexWriteTimeNs,
+  type GitIndexStat,
+} from "./git-index-stat.js";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import { readGitStageFile } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
@@ -90,6 +95,7 @@ export async function readGitRawChanges(deps: NodeGitWorktreeReaderDeps): Promis
     head,
     index,
     parseGitIndexStat(await readGitIndexStat(deps)),
+    readGitIndexWriteTimeNs(deps.workspace.root),
   );
   const stagedTreeDigest = gitIndexEntriesDigest([...index.values()]);
   if (
@@ -106,6 +112,7 @@ async function scanPaths(
   head: ReadonlyMap<string, IndexEntry>,
   index: ReadonlyMap<string, IndexEntry>,
   stats: ReadonlyMap<string, GitIndexStat>,
+  indexWriteTimeNs: string | undefined,
 ): Promise<Pick<GitRawChanges, "changes" | "truncated">> {
   const changes: GitChangedFile[] = [];
   let total = 0;
@@ -120,7 +127,15 @@ async function scanPaths(
       truncated = true;
       break;
     }
-    const working = await workingStatus(deps, path, head, index, stats, MAX_CONTENT_BYTES - total);
+    const working = await workingStatus(
+      deps,
+      path,
+      head,
+      index,
+      stats,
+      indexWriteTimeNs,
+      MAX_CONTENT_BYTES - total,
+    );
     total += working.bytes;
     const staged = indexStatus(head.get(path), index.get(path));
     if (staged !== " " || working.status !== " " || working.untracked)
@@ -134,11 +149,12 @@ async function workingStatus(
   head: ReadonlyMap<string, IndexEntry>,
   index: ReadonlyMap<string, IndexEntry>,
   stats: ReadonlyMap<string, GitIndexStat>,
+  indexWriteTimeNs: string | undefined,
   remainingBytes: number,
 ): Promise<{ status: GitStatusCode; bytes: number; untracked: boolean }> {
   return index.has(path) &&
     index.get(path)?.mode === head.get(path)?.mode &&
-    indexStatMatches(deps.workspace.root, path, stats.get(path))
+    indexStatMatches(deps.workspace.root, path, stats.get(path), indexWriteTimeNs)
     ? { status: " " as const, bytes: 0, untracked: false }
     : await inspectWorkingFile(deps, path, index.get(path), remainingBytes);
 }

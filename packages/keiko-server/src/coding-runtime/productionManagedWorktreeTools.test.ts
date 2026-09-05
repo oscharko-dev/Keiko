@@ -17,7 +17,11 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
-import { createProductionManagedWorktreeToolFacade } from "./productionManagedWorktreeTools.js";
+import {
+  createProductionManagedWorktreeToolFacade,
+  deriveOptionalToolAvailability,
+} from "./productionManagedWorktreeTools.js";
+import type { SkillCatalog } from "./skillCatalog.js";
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
 import type { VerifiedCommitService } from "../gitDelivery/verifiedCommitTypes.js";
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
@@ -1172,6 +1176,122 @@ describe("H1 repository search mounted into production composition (#3386)", () 
         signal: controller.signal,
       }),
     ).resolves.toMatchObject({ status: "cancelled" });
+  });
+});
+
+// #3414-AC9: optional research/skill/child-agent tools must be absent from what the model is told
+// exists when their real handler/readiness/policy prerequisite is unavailable, not merely denied
+// at call time. These pin `deriveOptionalToolAvailability`'s real, non-fake per-run signal against
+// the same fields the production dispatch ports already key off (`buildEgressAuthority`'s live
+// #2387 grant check, `auxiliaryPorts`' skill catalog, and the child-agent model resolution
+// comment), rather than a second, parallel policy source.
+describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
+  const runId = "run-availability-1";
+
+  function emptySkillCatalog(): SkillCatalog {
+    return {
+      has: () => false,
+      get: () => undefined,
+      list: () => [],
+      isImplicitAllowed: () => false,
+    };
+  }
+
+  it("marks research and child-agent unavailable, and skill available from the server default catalog, when nothing else is wired", () => {
+    // No explicit skillCatalog falls back to `createServerApprovedSkillCatalog()` -- the same
+    // default `auxiliaryPorts` itself falls back to -- which is non-empty, so `keiko_skill` is
+    // available by default; research and child-agent have no such non-empty default.
+    const unavailable = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+    });
+    expect(unavailable).toEqual(new Set(["keiko_research_fetch", "keiko_child_agent"]));
+  });
+
+  it("marks research available only when the registry AND gateway egress are wired and a grant is currently active for THIS run", () => {
+    const registry = createResearchGrantRegistry();
+    const now = Date.now();
+    registry.register(
+      runId,
+      {
+        grantId: "grant-1" as CodeTaskGrantId,
+        domains: ["docs.example.org"],
+        expiresAt: new Date(now + 60_000).toISOString(),
+        queryTextDigest: { outcome: "absent" },
+      },
+      undefined,
+      DIGEST,
+      now,
+    );
+    const wired = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      researchGrantRegistry: registry,
+      gatewayEgress: () => ({ noProxy: [] }),
+    });
+    expect(wired.has("keiko_research_fetch")).toBe(false);
+
+    // Registry wired, gateway egress present, but a DIFFERENT run holds the grant: unavailable.
+    const otherRun = deriveOptionalToolAvailability({
+      authorityRef: { runId: "run-availability-other", envelopeDigest: DIGEST },
+      researchGrantRegistry: registry,
+      gatewayEgress: () => ({ noProxy: [] }),
+    });
+    expect(otherRun.has("keiko_research_fetch")).toBe(true);
+
+    // Registry wired but no gatewayEgress: fail-closed stub, unavailable regardless of the grant.
+    const noEgress = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      researchGrantRegistry: registry,
+    });
+    expect(noEgress.has("keiko_research_fetch")).toBe(true);
+  });
+
+  it("marks skill available only when the catalog actually lists an approved entry", () => {
+    const empty = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      skillCatalog: emptySkillCatalog(),
+    });
+    expect(empty.has("keiko_skill")).toBe(true);
+
+    const nonEmpty = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      skillCatalog: {
+        has: () => true,
+        get: () => undefined,
+        list: () => [
+          { skillId: "skl_demo@1" as never, implicitAllowed: false, category: "public-research" },
+        ],
+        isImplicitAllowed: () => false,
+      },
+    });
+    expect(nonEmpty.has("keiko_skill")).toBe(false);
+  });
+
+  it("marks child-agent available only when modelId is non-empty AND a factory is supplied", () => {
+    const noModel = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      childModelPortFactory: () => undefined,
+    });
+    expect(noModel.has("keiko_child_agent")).toBe(true);
+
+    const emptyModelId = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      modelId: "",
+      childModelPortFactory: () => undefined,
+    });
+    expect(emptyModelId.has("keiko_child_agent")).toBe(true);
+
+    const noFactory = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      modelId: "coding-safe-model",
+    });
+    expect(noFactory.has("keiko_child_agent")).toBe(true);
+
+    const resolvable = deriveOptionalToolAvailability({
+      authorityRef: { runId, envelopeDigest: DIGEST },
+      modelId: "coding-safe-model",
+      childModelPortFactory: () => undefined,
+    });
+    expect(resolvable.has("keiko_child_agent")).toBe(false);
   });
 });
 

@@ -1,4 +1,5 @@
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
 import { runDraftDeliveryRequest } from "./productionDraftDeliveryRuntime.js";
 import type { DraftDeliveryService } from "../gitDelivery/draftDeliveryTypes.js";
 import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
@@ -117,6 +118,52 @@ export interface ProductionManagedWorktreeToolInput {
   readonly requestResearchApproval?: ((url: URL) => void) | undefined;
   /** Explicit hermetic-test seam for the research transport. Production never supplies this. */
   readonly researchFetchImpl?: ResearchFetch | undefined;
+}
+
+// #3414-AC9: a real, non-fake per-run signal for whether an optional tool's handler/readiness/
+// policy prerequisite is actually satisfied right now -- built from the SAME fields this
+// composition root already uses to decide whether the real dispatch port is mounted or the
+// fail-closed stub (`buildEgressAuthority`, `auxiliaryPorts`), never a second, parallel policy
+// source. The caller feeds the result straight into `opencodeLaunchProfile.ts`'s
+// `unavailableOptionalTools` and (once wired) `opencodeToolSchemas.ts`'s `handlerCoverage`, so an
+// unready optional tool is ABSENT from what the model is told exists, not merely denied when
+// called. Research uses the live #2387 grant, not mere registry presence: a registry can be wired
+// for the process while this specific run holds no active grant.
+export type OptionalToolAvailabilityInput = Pick<
+  ProductionManagedWorktreeToolInput,
+  | "researchGrantRegistry"
+  | "gatewayEgress"
+  | "authorityRef"
+  | "skillCatalog"
+  | "modelId"
+  | "childModelPortFactory"
+>;
+
+export function deriveOptionalToolAvailability(
+  input: OptionalToolAvailabilityInput,
+): ReadonlySet<OpenCodeOptionalToolName> {
+  const unavailable = new Set<OpenCodeOptionalToolName>();
+  if (!hasLiveResearchGrant(input)) unavailable.add("keiko_research_fetch");
+  if ((input.skillCatalog ?? createServerApprovedSkillCatalog()).list().length === 0)
+    unavailable.add("keiko_skill");
+  if (!hasResolvableChildAgentModel(input)) unavailable.add("keiko_child_agent");
+  return unavailable;
+}
+
+function hasLiveResearchGrant(input: OptionalToolAvailabilityInput): boolean {
+  if (input.researchGrantRegistry === undefined || input.gatewayEgress === undefined) return false;
+  return input.researchGrantRegistry.activeGrants(input.authorityRef.runId, Date.now()).length > 0;
+}
+
+// Mirrors `auxiliaryPorts`' own fail-closed comment: an empty modelId means "no coding-safe
+// provider model resolved," so the child-agent port stays unmounted regardless of whether a
+// factory was supplied.
+function hasResolvableChildAgentModel(input: OptionalToolAvailabilityInput): boolean {
+  return (
+    input.modelId !== undefined &&
+    input.modelId.length > 0 &&
+    input.childModelPortFactory !== undefined
+  );
 }
 
 export function createProductionManagedWorktreeToolFacade(

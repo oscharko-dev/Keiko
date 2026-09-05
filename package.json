@@ -200,7 +200,7 @@
     "check:workflow-branch-parity": "node scripts/check-workflow-branch-parity.mjs",
     "check:native:macos": "./scripts/check-macos-native-quality.sh",
     "check:native:windows": "pwsh -NoProfile -NonInteractive -File scripts/check-windows-native-quality.ps1",
-    "arch:check": "depcruise --validate .dependency-cruiser.cjs src \"packages/*/src\" && node scripts/check-import-policy.mjs && node scripts/check-contract-boundaries.mjs && node scripts/check-vector-index-architecture.mjs && npm run check:governed-tool-contract && npm run check:tool-catalog-conformance",
+    "arch:check": "depcruise --validate .dependency-cruiser.cjs src \"packages/*/src\" && node scripts/check-import-policy.mjs && node scripts/check-contract-boundaries.mjs && node scripts/check-vector-index-architecture.mjs && npm run check:governed-tool-contract && npm run check:tool-catalog-conformance && npm run check:tool-catalog-performance",
     "arch:check:negative": "node scripts/arch-check-negative.mjs",
     "conversation:release-check": "npm run check:runtime-toolchain && npm run typecheck && npm run lint && npm run arch:check && npm run arch:check:negative && npm test && node node_modules/@typescript/native/bin/tsc -p tsconfig.build.json && node dist/cli/index.js --version",
     "prepack": "npm run check:runtime-toolchain && npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:editor-release-evidence && npm run prune:package-build-artifacts && npm run prune:package-native-optionals && npm run check:shell-spawn-guardrails && npm run check:security-regression-matrix && npm run arch:check && npm run arch:check:negative && npm run check:workspace-supply-chain && npm run check:package-surface && npm run check:version-consistency && npm run check:publish-manifests && npm run check:portable-manifest && npm run check:release-impact && npm run check:qi-supply-chain",
@@ -235,7 +235,7 @@
     "check:tool-catalog-conformance": "node scripts/check-tool-catalog-conformance.mjs",
     "check:tool-catalog-performance": "node scripts/check-tool-catalog-performance.mjs",
     "generate:tool-catalog": "node scripts/check-tool-catalog-conformance.mjs --write",
-    "test:e2e:coding-issue-delivery": "playwright test --config tests/e2e/config/playwright.coding-issue-delivery.config.ts --project=chromium",
+    "test:e2e:coding-issue-publish": "playwright test --config tests/e2e/config/playwright.coding-issue-publish.config.ts --project=chromium",
     "test:e2e:coding-issue-ci": "playwright test --config tests/e2e/config/playwright.coding-issue-ci.config.ts --project=chromium",
     "test:e2e:coding-issue-journey:live": "playwright test --config tests/e2e/config/playwright.coding-issue-journey.config.ts --project=chromium",
     "test:e2e:coding-issue-handoff": "playwright test --config tests/e2e/config/playwright.coding-issue-handoff.config.ts --project=chromium"

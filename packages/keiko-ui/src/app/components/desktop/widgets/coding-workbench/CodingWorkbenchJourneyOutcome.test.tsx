@@ -256,9 +256,7 @@ describe("observed issue journey handoff", () => {
     const networkFailure = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
     rerender(<CodingWorkbenchJourneyOutcome {...journeyFixture()} onRefresh={networkFailure} />);
     fireEvent.click(screen.getByRole("button", { name: "Refresh observed status" }));
-    await waitFor(() =>
-      expect(screen.getByRole("alert").textContent).not.toBe(apiErrorText),
-    );
+    await waitFor(() => expect(screen.getByRole("alert").textContent).not.toBe(apiErrorText));
     const networkErrorText = screen.getByRole("alert").textContent;
     expect(networkErrorText).toContain("TypeError");
     expect(document.body).not.toHaveTextContent("Failed to fetch");

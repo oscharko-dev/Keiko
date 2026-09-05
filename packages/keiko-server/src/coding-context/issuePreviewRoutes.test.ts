@@ -159,6 +159,22 @@ describe("issue preview request lifecycle", () => {
     expect(JSON.stringify(result.body)).not.toContain("read-failed");
   });
 
+  it("reports a transient gh read failure as a distinct, retry-worded status (B5-13)", async () => {
+    const f = fixture();
+    const resolver: GitHubIssueResolver = () =>
+      Promise.resolve({
+        ok: false,
+        failure: "issue-unavailable",
+        failureReason: "read-transient-failure",
+      });
+    const result = await createCodingWorkbenchIssuePreviewHandler(resolver)(f.ctx, f.deps);
+    expect(result.status).toBe(503);
+    expect(result.body).toMatchObject({
+      failure: "issue-unavailable",
+      error: { code: "CODING_WORKBENCH_ISSUE_READ_TRANSIENT_FAILURE" },
+    });
+  });
+
   it("disposes transport listeners after a completed resolver refusal", async () => {
     const f = fixture();
     const resolver: GitHubIssueResolver = () =>

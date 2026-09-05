@@ -29,6 +29,8 @@ import {
   type WorkflowStatus,
 } from "./store/index.js";
 import { MAX_GIT_CHANGE_SCOPES, parseChatGitChangeScope } from "./store/chats.js";
+import { gitChangeObjectId } from "./gitChangeRoutes.js";
+import type { StoredRelationship } from "./store/relationships.js";
 import {
   projectsWithWorkspaceAvailability,
   projectWithWorkspaceAvailability,
@@ -790,6 +792,50 @@ function validateConnectedScopeAccess(
   return scope.root === undefined ? scope : { ...scope, root: realRoot };
 }
 
+// #3400-AC3 — the browser sends only a server-issued scope reference; it must never be able to
+// author a `gitChangeScopes` entry's repository identity (relationshipId/snapshotDigest/refs/sha)
+// itself. store/chats.ts's `validatePatchGitChangeScopes` is shape-only defense-in-depth (its own
+// comment says so); the actual binding check — that this exact chat holds an ACTIVE `reads-context`
+// relationship whose target is this exact snapshot — lives here, at the same layer that already
+// live-checks `connectedScope` (`validateConnectedScopeAccess` above), mirroring the relationship
+// shape gitChangeRoutes.ts itself creates (`gitChangeObjectId`/`createGitChangeRelationship`).
+function gitChangeRelationshipMatches(
+  stored: StoredRelationship | undefined,
+  chat: Chat,
+  scope: ChatGitChangeScope,
+): boolean {
+  return (
+    stored?.lifecycleState === "active" &&
+    stored.type === "reads-context" &&
+    stored.source.kind === "chat" &&
+    stored.source.id === chat.id &&
+    stored.target.kind === "git-change" &&
+    stored.target.id === gitChangeObjectId(scope.snapshotDigest)
+  );
+}
+
+function validateGitChangeScopeAccess(
+  deps: UiHandlerDeps,
+  chat: Chat,
+  req: IncomingMessage,
+  scope: ChatGitChangeScope,
+): ChatGitChangeScope {
+  const relationship = deps.relationship;
+  const workspaceId = relationship?.scopeResolver(req)?.workspaceId;
+  if (relationship === undefined || workspaceId === undefined) {
+    throw new InvalidRequest(
+      'Field "gitChangeScopes" could not be verified: the relationship engine is not available.',
+    );
+  }
+  const stored = relationship.store.getRelationship(workspaceId, scope.relationshipId);
+  if (!gitChangeRelationshipMatches(stored, chat, scope)) {
+    throw new InvalidRequest(
+      'Field "gitChangeScopes" contains an entry that is not an active, server-issued git-change relationship for this chat.',
+    );
+  }
+  return scope;
+}
+
 function validateScopeConnectedAtMs(value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
     throw new InvalidRequest(
@@ -1043,6 +1089,28 @@ function canonicalizeConnectedScopePatch(
   return patch;
 }
 
+// #3400-AC3 — a non-empty `gitChangeScopes` patch must bind every entry to a relationship this
+// chat actually holds (see `validateGitChangeScopeAccess`). `null` (clear) and `undefined`
+// (absent) need no relationship lookup — there is nothing to bind.
+function gitChangeScopePatchNeedsAccessValidation(patch: UpdateChatPatch): boolean {
+  return patch.gitChangeScopes !== undefined && patch.gitChangeScopes !== null;
+}
+
+function canonicalizeGitChangeScopePatch(
+  deps: UiHandlerDeps,
+  chat: Chat,
+  req: IncomingMessage,
+  patch: UpdateChatPatch,
+): UpdateChatPatch {
+  if (!gitChangeScopePatchNeedsAccessValidation(patch)) return patch;
+  return {
+    ...patch,
+    gitChangeScopes: (patch.gitChangeScopes ?? []).map((scope) =>
+      validateGitChangeScopeAccess(deps, chat, req, scope),
+    ),
+  };
+}
+
 // Epic #189 — the grounded index is invalidated when ANY grounding source changes: a connected
 // folder scope (#532) OR a local-knowledge connector scope. The hybrid path reads both.
 function patchTouchesGroundingScope(patch: UpdateChatPatch): boolean {
@@ -1065,7 +1133,7 @@ export async function handleUpdateChat(
       const id = requireQuery(ctx, "id");
       const body = await readJsonObject(ctx.req);
       const patch = buildChatPatch(deps, body);
-      const apply = (): RouteResult => applyChatUpdate(deps, id, patch);
+      const apply = (): RouteResult => applyChatUpdate(deps, id, patch, ctx.req);
       if (!patchTouchesGroundingScope(patch) && patch.status === undefined) return apply();
       const result = await runSerializedChatTurn(deps, id, cancellation.signal, apply);
       return result === CHAT_TURN_WAIT_CANCELLED
@@ -1077,13 +1145,20 @@ export async function handleUpdateChat(
   }
 }
 
-function applyChatUpdate(deps: UiHandlerDeps, id: string, patch: UpdateChatPatch): RouteResult {
+function applyChatUpdate(
+  deps: UiHandlerDeps,
+  id: string,
+  patch: UpdateChatPatch,
+  req: IncomingMessage,
+): RouteResult {
   const scopesToCheck = scopesRequiringAccessValidation(patch);
+  const needsGitChangeCheck = gitChangeScopePatchNeedsAccessValidation(patch);
   let safePatch = patch;
-  if (scopesToCheck.length > 0) {
+  if (scopesToCheck.length > 0 || needsGitChangeCheck) {
     const existing = findChatById(deps, id);
     if (existing === undefined) return notFoundResult("Chat not found.");
     safePatch = canonicalizeConnectedScopePatch(deps, existing, patch);
+    safePatch = canonicalizeGitChangeScopePatch(deps, existing, req, safePatch);
   }
   const limits = currentGroundingLimits(deps);
   const chat = deps.store.updateChat(id, safePatch, {

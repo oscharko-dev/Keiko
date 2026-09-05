@@ -30,7 +30,10 @@ describe("useJourneyActions failure reason", () => {
       );
     });
     await waitFor(() =>
-      expect(result.current.failure).toEqual({ action: "refresh", reason: "READINESS_DIGEST_STALE" }),
+      expect(result.current.failure).toEqual({
+        action: "refresh",
+        reason: "READINESS_DIGEST_STALE",
+      }),
     );
   });
 

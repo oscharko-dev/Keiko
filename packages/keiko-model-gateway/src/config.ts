@@ -35,6 +35,7 @@ import type {
   InfillingAlignment,
   LatencyClass,
   ModelCapability,
+  ModelCapabilityPricing,
   ModelKind,
   ModelReasoningEffort,
   ModelProviderConfig,
@@ -109,6 +110,10 @@ const TOKEN_ACCOUNTING_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "counterId",
   "scaleMilli",
   "offsetTokens",
+]);
+const PRICING_KNOWN_KEYS: ReadonlySet<string> = new Set([
+  "inputUsdPerMillionTokens",
+  "outputUsdPerMillionTokens",
 ]);
 
 export type EnvSource = Readonly<Record<string, string | undefined>>;
@@ -523,6 +528,49 @@ function optionalTokenAccountingField(
 ): Partial<Pick<ModelCapability, "tokenAccounting">> {
   const tokenAccounting = parseTokenAccounting(value, path);
   return tokenAccounting === undefined ? {} : { tokenAccounting };
+}
+
+function assertKnownPricingKeys(value: Record<string, unknown>, path: string): void {
+  for (const key of Object.keys(value)) {
+    if (!PRICING_KNOWN_KEYS.has(key)) {
+      throw new ConfigInvalidError(`${path}.${key} is not a recognised pricing field`);
+    }
+  }
+}
+
+function requireNonNegativeFiniteNumber(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new ConfigInvalidError(`${path} must be a non-negative finite number`);
+  }
+  return value;
+}
+
+// live-journey-readiness-1: public per-million-token USD list price, optional on every capability.
+// A model without this block carries no known dollar cost — a spend-budget check on an un-priced
+// model must fail closed, never assume free (see coding-sidecar-gateway.ts's
+// "spend-pricing-unavailable" reason).
+function parsePricing(value: unknown, path: string): ModelCapabilityPricing | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new ConfigInvalidError(`${path} must be an object`);
+  assertKnownPricingKeys(value, path);
+  return {
+    inputUsdPerMillionTokens: requireNonNegativeFiniteNumber(
+      value.inputUsdPerMillionTokens,
+      `${path}.inputUsdPerMillionTokens`,
+    ),
+    outputUsdPerMillionTokens: requireNonNegativeFiniteNumber(
+      value.outputUsdPerMillionTokens,
+      `${path}.outputUsdPerMillionTokens`,
+    ),
+  };
+}
+
+function optionalPricingField(
+  value: unknown,
+  path: string,
+): Partial<Pick<ModelCapability, "pricing">> {
+  const pricing = parsePricing(value, path);
+  return pricing === undefined ? {} : { pricing };
 }
 
 // Model id → KEIKO_MODEL_<UPPER>_ form: non-alphanumerics become "_", uppercased.
@@ -1262,6 +1310,7 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "preferredUseCases",
   "knownLimitations",
   "tokenAccounting",
+  "pricing",
 ]);
 
 function requireBoolean(value: unknown, path: string): boolean {
@@ -1493,6 +1542,7 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
     structuredOutput: requireBoolean(value.structuredOutput, `${path}.structuredOutput`),
     streaming: requireBoolean(value.streaming, `${path}.streaming`),
     ...optionalTokenAccountingField(value.tokenAccounting, `${path}.tokenAccounting`),
+    ...optionalPricingField(value.pricing, `${path}.pricing`),
     ...optionalToolCallingVerification(value, path, kind),
     supportsImageInput: requireBoolean(value.supportsImageInput, `${path}.supportsImageInput`),
     supportsDocumentInput: requireBoolean(

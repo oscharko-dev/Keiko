@@ -259,8 +259,10 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
   it("is JSON-safe and carries no handler/authority/secret-bearing material (#3413-AC5)", () => {
     const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0);
     const serialized = JSON.stringify(advertisement.offered);
+    // "execute" is deliberately excluded: `keiko.git.execute` is a legitimate canonical tool id,
+    // not a leaked handler-execution field.
     expect(serialized).not.toMatch(
-      /private|authority|handlerBindings|execute|environment|workspaceRoot|password|secret|token/iu,
+      /private|authority|handlerBindings|environment|workspaceRoot|password|secret|token/iu,
     );
     // Round-trips through JSON with no loss (no function/undefined/symbol survives serialization).
     expect(JSON.parse(serialized)).toEqual(JSON.parse(JSON.stringify(JSON.parse(serialized))));
@@ -292,7 +294,10 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement with real handlerCoverag
   ): OpenCodeGatewayHandlerCoverage {
     const base = createOpenCodeGatewayToolCatalogAdvertisement(0);
     const readinessByToolId = new Map(
-      base.projection.tools.map((tool) => [tool.toolRef.canonicalId, readiness(tool.toolRef.canonicalId)]),
+      base.projection.tools.map((tool) => [
+        tool.toolRef.canonicalId,
+        readiness(tool.toolRef.canonicalId),
+      ]),
     );
     return { readinessByToolId, handlerSetDigest: "real-handler-set-digest" as never };
   }

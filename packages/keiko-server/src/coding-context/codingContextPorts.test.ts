@@ -24,13 +24,16 @@ const WORKSPACE: WorkspaceInfo = {
   ignoreLines: [],
 };
 
-function githubPortWith(spawn: SpawnFn): ReturnType<typeof createGitHubCodeContextApiPort> {
+function githubPortWith(
+  spawn: SpawnFn,
+  timeoutMs = 1_000,
+): ReturnType<typeof createGitHubCodeContextApiPort> {
   return createGitHubCodeContextApiPort({
     workspace: WORKSPACE,
     processEnv: { PATH: process.env.PATH },
     spawn,
     resolveExecutable: () => "/test-bin/gh",
-    timeoutMs: 1_000,
+    timeoutMs,
   });
 }
 
@@ -169,18 +172,83 @@ describe("github code context port", () => {
       await expect(port.readJson(READ_ARGV)).resolves.toEqual(JSON.parse(body) as unknown);
     });
   });
+
+  // #3384 B5-13: a rate limit, a GitHub-side 5xx, or a wall-time timeout must not be reported as
+  // the same diagnosis as an object that genuinely is not readable. Before this fix every one of
+  // these collapsed into "gh-failed", which `githubIssueResolution.ts` then reported to the
+  // operator as "closed, transferred, a pull request, or not readable" — specific and false.
+  describe("transient-failure classification", () => {
+    it("classifies a rate-limited exit (HTTP 403) as transient", async () => {
+      const port = githubPortWith(((..._args: readonly unknown[]) =>
+        fakeGhChildWithStderr(
+          1,
+          "gh: API rate limit exceeded for user ID 1. (HTTP 403)",
+        )) as unknown as SpawnFn);
+
+      await expect(port.readJson(READ_ARGV)).rejects.toMatchObject({
+        code: "gh-transient-failure",
+      });
+    });
+
+    it("classifies a rate-limited exit (HTTP 429) as transient", async () => {
+      const port = githubPortWith(((..._args: readonly unknown[]) =>
+        fakeGhChildWithStderr(1, "gh: Too Many Requests (HTTP 429)")) as unknown as SpawnFn);
+
+      await expect(port.readJson(READ_ARGV)).rejects.toMatchObject({
+        code: "gh-transient-failure",
+      });
+    });
+
+    it("classifies a GitHub-side 5xx exit as transient", async () => {
+      const port = githubPortWith(((..._args: readonly unknown[]) =>
+        fakeGhChildWithStderr(1, "gh: Internal Server Error (HTTP 500)")) as unknown as SpawnFn);
+
+      await expect(port.readJson(READ_ARGV)).rejects.toMatchObject({
+        code: "gh-transient-failure",
+      });
+    });
+
+    it("keeps a plain not-found exit (HTTP 404) as a genuine read failure, not transient", async () => {
+      const port = githubPortWith(((..._args: readonly unknown[]) =>
+        fakeGhChildWithStderr(1, "gh: Not Found (HTTP 404)")) as unknown as SpawnFn);
+
+      await expect(port.readJson(READ_ARGV)).rejects.toMatchObject({ code: "gh-failed" });
+    });
+
+    it("keeps a non-zero exit with no HTTP status as a genuine read failure", async () => {
+      const port = githubPortWith(((..._args: readonly unknown[]) =>
+        fakeChild(1, "")) as unknown as SpawnFn);
+
+      await expect(port.readJson(READ_ARGV)).rejects.toMatchObject({ code: "gh-failed" });
+    });
+
+    it("classifies a wall-time timeout as transient, not a genuine read failure", async () => {
+      const port = githubPortWith(
+        ((..._args: readonly unknown[]) =>
+          fakeGhChildThatOutlivesItsTimeout(60)) as unknown as SpawnFn,
+        15,
+      );
+
+      await expect(port.readJson(READ_ARGV)).rejects.toMatchObject({
+        code: "gh-transient-failure",
+      });
+    });
+  });
 });
 
 interface FakeGhChildOptions {
   readonly chunks: readonly string[];
   readonly exitCode: number | null;
   readonly signal: string | null;
+  /** stderr chunks the fake child emits before closing (default: none). */
+  readonly stderrChunks?: readonly string[];
 }
 
 // No `pid`: the exec boundary kills the whole process GROUP on a flood, and a fabricated pid in a
 // unit test would signal an unrelated real process group on the host.
 function fakeGhChild(options: FakeGhChildOptions): unknown {
   const stdoutListeners: ((chunk: Buffer) => void)[] = [];
+  const stderrListeners: ((chunk: Buffer) => void)[] = [];
   const closeListeners: ((code: number | null, signal: string | null) => void)[] = [];
   const child = {
     stdout: {
@@ -190,7 +258,10 @@ function fakeGhChild(options: FakeGhChildOptions): unknown {
       },
     },
     stderr: {
-      on: (): unknown => child.stderr,
+      on: (event: string, listener: (chunk: Buffer) => void): unknown => {
+        if (event === "data") stderrListeners.push(listener);
+        return child.stderr;
+      },
     },
     on: (
       event: string,
@@ -210,6 +281,9 @@ function fakeGhChild(options: FakeGhChildOptions): unknown {
     for (const listener of stdoutListeners) {
       for (const chunk of options.chunks) listener(Buffer.from(chunk, "utf8"));
     }
+    for (const listener of stderrListeners) {
+      for (const chunk of options.stderrChunks ?? []) listener(Buffer.from(chunk, "utf8"));
+    }
     queueMicrotask(() => {
       for (const listener of closeListeners) listener(options.exitCode, options.signal);
     });
@@ -219,6 +293,40 @@ function fakeGhChild(options: FakeGhChildOptions): unknown {
 
 function fakeChild(exitCode: number, stdout: string): unknown {
   return fakeGhChild({ chunks: [stdout], exitCode, signal: null });
+}
+
+function fakeGhChildWithStderr(exitCode: number, stderr: string): unknown {
+  return fakeGhChild({ chunks: [], exitCode, signal: null, stderrChunks: [stderr] });
+}
+
+// Simulates a child that is killed (by the spawn boundary's own timeout handling, exercised via a
+// short `timeoutMs`) but whose OS-level exit is only observed later — the same "signalled now,
+// closed later" shape the flood-kill fixture above exercises, here driven by a wall-clock timeout
+// instead of the output cap.
+function fakeGhChildThatOutlivesItsTimeout(closeAfterMs: number): unknown {
+  const closeListeners: ((code: number | null, signal: string | null) => void)[] = [];
+  const child = {
+    stdout: { on: (): unknown => child.stdout },
+    stderr: { on: (): unknown => child.stderr },
+    on: (
+      event: string,
+      listener: (code: number | null, signal: string | null) => void,
+    ): unknown => {
+      if (event === "close") closeListeners.push(listener);
+      return child;
+    },
+    once: (event: string, listener: () => void): unknown => {
+      if (event === "spawn") queueMicrotask(listener);
+      return child;
+    },
+    kill: (): boolean => true,
+    pid: undefined,
+  };
+  const timer = setTimeout(() => {
+    for (const listener of closeListeners) listener(null, "SIGTERM");
+  }, closeAfterMs);
+  timer.unref();
+  return child;
 }
 
 describe("jira code context port", () => {

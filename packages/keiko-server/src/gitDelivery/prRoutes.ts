@@ -84,7 +84,8 @@ export type GitDeliveryPrErrorCode =
   | "GIT_DELIVERY_PR_PAYLOAD_TOO_LARGE"
   | "GIT_DELIVERY_PR_FORBIDDEN_PAYLOAD"
   | "GIT_DELIVERY_PR_UNKNOWN_PROJECT"
-  | "GIT_DELIVERY_PR_WORKTREE_UNAVAILABLE";
+  | "GIT_DELIVERY_PR_WORKTREE_UNAVAILABLE"
+  | "GIT_DELIVERY_PR_REPOSITORY_MISMATCH";
 
 const SAFE_MESSAGES: Readonly<Record<GitDeliveryPrErrorCode, string>> = {
   GIT_DELIVERY_PR_BAD_REQUEST: "The request body is not a valid governed pull request.",
@@ -94,6 +95,9 @@ const SAFE_MESSAGES: Readonly<Record<GitDeliveryPrErrorCode, string>> = {
   GIT_DELIVERY_PR_UNKNOWN_PROJECT: "The requested project is not a known workspace.",
   GIT_DELIVERY_PR_WORKTREE_UNAVAILABLE:
     "The repository worktree could not be inspected. Confirm the project is a Git repository.",
+  // #3384 B5-8: the workspace's own `origin` remote does not resolve to the requested repository.
+  GIT_DELIVERY_PR_REPOSITORY_MISMATCH:
+    "The requested repository does not match this project's own Git remote.",
 };
 
 const errResult = (status: number, code: GitDeliveryPrErrorCode): RouteResult => ({
@@ -105,7 +109,15 @@ const PR_REQUEST_ERRORS: GitDeliveryRequestErrors = {
   tooLarge: errResult(413, "GIT_DELIVERY_PR_PAYLOAD_TOO_LARGE"),
   badRequest: errResult(400, "GIT_DELIVERY_PR_BAD_REQUEST"),
   unknownProject: errResult(404, "GIT_DELIVERY_PR_UNKNOWN_PROJECT"),
+  repositoryMismatch: errResult(403, "GIT_DELIVERY_PR_REPOSITORY_MISMATCH"),
 };
+
+// #3384 B5-8: the ONE place this route group names its request's GitHub mutation target for
+// `prepareGitDeliveryRequest`'s repository-binding check — both `pr-create` and `pr-update`
+// commands carry `ownerAndRepo` at the same position.
+function prOwnerAndRepoOf(value: ValidatedRequest): string {
+  return value.command.ownerAndRepo;
+}
 
 // ─── Options ────────────────────────────────────────────────────────────────────────────────
 
@@ -273,7 +285,7 @@ export const createHandlePrPreview = (
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-    const prepared = await prepareGitDeliveryRequest(ctx, deps, PR_REQUEST_ERRORS, validate);
+    const prepared = await prepareGitDeliveryRequest(ctx, deps, PR_REQUEST_ERRORS, validate, prOwnerAndRepoOf);
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { command } = prepared.value;
@@ -437,7 +449,7 @@ async function handlePrExecute(
   seams: GitDeliveryPullRequestSeams,
 ): Promise<RouteResult> {
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-  const prepared = await prepareGitDeliveryRequest(ctx, deps, PR_REQUEST_ERRORS, validate);
+  const prepared = await prepareGitDeliveryRequest(ctx, deps, PR_REQUEST_ERRORS, validate, prOwnerAndRepoOf);
   if (!prepared.ok) return prepared.result;
   const { workspace } = prepared;
   const { projectId, command, approval } = prepared.value;
@@ -511,7 +523,7 @@ export const createHandlePrApprove = (
     // GitPullRequestCommand this mints against is byte-for-byte the same typed value execute will
     // rebuild from the same request body — the binding-hash consume() already enforces then matches
     // by construction.
-    const prepared = await prepareGitDeliveryRequest(ctx, deps, PR_REQUEST_ERRORS, validate);
+    const prepared = await prepareGitDeliveryRequest(ctx, deps, PR_REQUEST_ERRORS, validate, prOwnerAndRepoOf);
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { projectId, command } = prepared.value;

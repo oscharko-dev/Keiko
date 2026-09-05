@@ -19,6 +19,8 @@ import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/index.js";
 import { resolveProjectWorkspace } from "./execution.js";
 import { readParsedGitDeliveryBody } from "./requestGuards.js";
+import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
+import { readVerifiedGitHubOwnerAndRepo } from "./verifiedRepositoryIdentity.js";
 import {
   authorizeGitDelivery,
   type GitDeliveryApprovalRedemption,
@@ -44,6 +46,12 @@ export interface GitDeliveryRequestErrors {
   readonly tooLarge: RouteResult;
   readonly badRequest: RouteResult;
   readonly unknownProject: RouteResult;
+  // #3384 B5-8: present only for the route groups whose validated request names an explicit GitHub
+  // mutation target (PR create/update, mark-ready, merge) — required together with `prepareGitDeliveryRequest`'s
+  // `ownerAndRepoOf` extractor. Returned when the resolved workspace's own `origin` remote does not
+  // resolve to the request's `ownerAndRepo` (or carries no verifiable GitHub origin at all), so a
+  // client can never redirect a governed mutation at a repository the workspace does not own.
+  readonly repositoryMismatch?: RouteResult | undefined;
 }
 
 export type PreparedGitDeliveryRequest<V> =
@@ -368,14 +376,42 @@ export function gitDeliveryAuthorityDenial(
   return gate.allowed ? undefined : gate.result;
 }
 
+// #3384 B5-8: the workspace's own `origin` remote is the ONLY repository a governed Git-delivery
+// mutation may name — never the client-supplied `ownerAndRepo` alone, format-valid or not. Reuses
+// the same origin-identity read `verifiedRepositoryIdentity.ts`'s commit-path producer performs
+// (`readGitRemoteAliases`/`readGitRemoteUrl`/`githubOwnerAndRepoFromRemoteUrl`), compared with the
+// same `codingWorkbenchRemoteDigest` every PR-lifecycle command already hashes its `ownerAndRepo`
+// through — so a case-insensitive match still binds, exactly like every other repository-identity
+// comparison in this package.
+export async function gitDeliveryRepositoryBindingMismatch(
+  workspace: WorkspaceInfo,
+  ownerAndRepo: string,
+): Promise<boolean> {
+  const remote = await readVerifiedGitHubOwnerAndRepo({ workspace });
+  if (remote === undefined) return true;
+  return codingWorkbenchRemoteDigest(remote) !== codingWorkbenchRemoteDigest(ownerAndRepo);
+}
+
+function logGitDeliveryRepositoryMismatch(ctx: RouteContext, logSink: ServerLogSink): void {
+  logSink.write({
+    category: "security",
+    op: "git.delivery.repository.mismatch",
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    status: 403,
+  });
+}
+
 // Runs the shared read → validate → resolve-workspace prologue. Returns the validated request value
 // together with its authorized workspace, or the first typed error result encountered. `V` must carry
-// the `projectId` the workspace is resolved (and authorized) from.
+// the `projectId` the workspace is resolved (and authorized) from. `ownerAndRepoOf`, when supplied,
+// extracts the request's own GitHub mutation target for the #3384 B5-8 repository-binding check
+// above — omitted by route groups (push/sync) whose request names no explicit repository.
 export const prepareGitDeliveryRequest = async <V extends { readonly projectId: string }>(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   errors: GitDeliveryRequestErrors,
   validate: (parsed: unknown) => GitDeliveryValidation<V>,
+  ownerAndRepoOf?: (value: V) => string,
 ): Promise<PreparedGitDeliveryRequest<V>> => {
   const read = await readParsedGitDeliveryBody(
     ctx.req,
@@ -387,5 +423,15 @@ export const prepareGitDeliveryRequest = async <V extends { readonly projectId: 
   if (validation.kind === "err") return { ok: false, result: validation.result };
   const workspace = resolveProjectWorkspace(deps, validation.value.projectId);
   if (workspace === undefined) return { ok: false, result: errors.unknownProject };
+  if (ownerAndRepoOf !== undefined) {
+    const mismatch = await gitDeliveryRepositoryBindingMismatch(
+      workspace,
+      ownerAndRepoOf(validation.value),
+    );
+    if (mismatch) {
+      logGitDeliveryRepositoryMismatch(ctx, processServerLogSink());
+      return { ok: false, result: errors.repositoryMismatch ?? errors.badRequest };
+    }
+  }
   return { ok: true, value: validation.value, workspace };
 };

@@ -55,6 +55,7 @@ import {
 import {
   hasOnlyAllowedKeys,
   isNonEmptyString,
+  isOwnerAndRepo,
   isPlainObject,
   isSafeGitRef,
   scanForbiddenStrings,
@@ -76,7 +77,8 @@ export type GitDeliveryMergeErrorCode =
   | "GIT_DELIVERY_MERGE_PAYLOAD_TOO_LARGE"
   | "GIT_DELIVERY_MERGE_FORBIDDEN_PAYLOAD"
   | "GIT_DELIVERY_MERGE_UNKNOWN_PROJECT"
-  | "GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE";
+  | "GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE"
+  | "GIT_DELIVERY_MERGE_REPOSITORY_MISMATCH";
 
 const SAFE_MESSAGES: Readonly<Record<GitDeliveryMergeErrorCode, string>> = {
   GIT_DELIVERY_MERGE_BAD_REQUEST: "The request body is not a valid governed merge.",
@@ -86,6 +88,9 @@ const SAFE_MESSAGES: Readonly<Record<GitDeliveryMergeErrorCode, string>> = {
   GIT_DELIVERY_MERGE_UNKNOWN_PROJECT: "The requested project is not a known workspace.",
   GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE:
     "The repository worktree could not be inspected. Confirm the project is a Git repository.",
+  // #3384 B5-8: the workspace's own `origin` remote does not resolve to the requested repository.
+  GIT_DELIVERY_MERGE_REPOSITORY_MISMATCH:
+    "The requested repository does not match this project's own Git remote.",
 };
 
 const errResult = (status: number, code: GitDeliveryMergeErrorCode): RouteResult => ({
@@ -97,7 +102,14 @@ const MERGE_REQUEST_ERRORS: GitDeliveryRequestErrors = {
   tooLarge: errResult(413, "GIT_DELIVERY_MERGE_PAYLOAD_TOO_LARGE"),
   badRequest: errResult(400, "GIT_DELIVERY_MERGE_BAD_REQUEST"),
   unknownProject: errResult(404, "GIT_DELIVERY_MERGE_UNKNOWN_PROJECT"),
+  repositoryMismatch: errResult(403, "GIT_DELIVERY_MERGE_REPOSITORY_MISMATCH"),
 };
+
+// #3384 B5-8: the ONE place this route group names its request's GitHub mutation target for
+// `prepareGitDeliveryRequest`'s repository-binding check.
+function mergeOwnerAndRepoOf(value: ValidatedRequest): string {
+  return value.command.ownerAndRepo;
+}
 
 // ─── Options ────────────────────────────────────────────────────────────────────────────────
 
@@ -105,13 +117,8 @@ export interface GitDeliveryMergeRouteOptions {
   readonly execution?: GitDeliveryMergeSeams;
 }
 
-const OWNER_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const PR_NUMBER_RE = /^[1-9]\d{0,9}$/;
 const SHA_RE = /^[0-9a-fA-F]{7,64}$/;
-
-function isOwnerAndRepo(value: unknown): value is string {
-  return typeof value === "string" && OWNER_REPO_RE.test(value);
-}
 
 function isPrNumberString(value: unknown): value is string {
   return typeof value === "string" && PR_NUMBER_RE.test(value);
@@ -211,7 +218,7 @@ export const createHandleMergePreview = (
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-    const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate);
+    const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate, mergeOwnerAndRepoOf);
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { command } = prepared.value;
@@ -249,7 +256,7 @@ export const createHandleMergeApprove = (
     // Reuses the IDENTICAL `validate()` the preview/execute handlers use, so the GitMergeCommand this
     // mints against is byte-for-byte the same typed value execute will rebuild from the same request
     // body — the binding-hash consume() already enforces then matches by construction.
-    const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate);
+    const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate, mergeOwnerAndRepoOf);
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { projectId, command } = prepared.value;
@@ -372,7 +379,7 @@ async function handleMergeExecute(
   seams: GitDeliveryMergeSeams,
 ): Promise<RouteResult> {
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-  const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate);
+  const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate, mergeOwnerAndRepoOf);
   if (!prepared.ok) return prepared.result;
   const { workspace } = prepared;
   const { projectId, command, approval } = prepared.value;

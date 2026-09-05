@@ -409,6 +409,52 @@ describe("verified commit persistence (#3386, schema v23)", () => {
     expect(s.get("run-1")?.verifiedCommitResult).toEqual(receipt);
     expect(JSON.stringify(s.get("run-1"))).not.toContain("approvalToken");
   });
+  // #3384 batch-1 B5-6: a verified-commit write mutates a column that IS part of the public
+  // snapshot, so it must advance revision/updated_at exactly like acknowledge/releaseRecovery do --
+  // otherwise a poller or SSE catch-up sees a same-revision no-op and misses the write.
+  it("advances revision and updated_at on a verified-commit write", () => {
+    const s = store();
+    s.create(snapshot());
+    const before = s.get("run-1");
+    if (before === undefined) throw new Error("expected snapshot");
+    const recordedAt = "2026-07-13T10:05:00.000Z";
+    const after = s.recordVerifiedCommit(commitReceipt(), recordedAt);
+    expect(after.revision).toBe(before.revision + 1);
+    expect(after.updatedAt).toBe(recordedAt);
+    expect(s.get("run-1")?.revision).toBe(before.revision + 1);
+    expect(s.get("run-1")?.updatedAt).toBe(recordedAt);
+  });
+  // #3384 batch-1 B3-6: the write is now a compare-and-swap on the exact prior bytes this call
+  // observed. Simulate a second writer racing in between this call's internal prior-row read and
+  // its own UPDATE (propose/execute/reconcile can all reach this path with no upstream mutex) by
+  // injecting a conflicting write at the moment the UPDATE statement is prepared -- the bound
+  // parameters were already computed from the pre-race read, so the CAS predicate must now refuse
+  // the write instead of silently overwriting it.
+  it("rejects a concurrent verified-commit write racing between its read and its write", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create(snapshot());
+    s.recordVerifiedCommit(commitReceipt());
+    const originalPrepare: DatabaseSync["prepare"] = db.prepare.bind(db);
+    const isVerifiedCommitUpdate = (sql: string): boolean =>
+      sql.includes("SET verified_commit_result = ?") && sql.includes("revision = revision + 1");
+    db.prepare = ((sql: string) => {
+      if (isVerifiedCommitUpdate(sql))
+        originalPrepare(
+          "UPDATE coding_runtime_snapshots SET verified_commit_result = ? WHERE run_id = ?",
+        ).run(JSON.stringify({ ...commitReceipt(), proposalId: "commit-raced" }), "run-1");
+      return originalPrepare(sql);
+    }) as DatabaseSync["prepare"];
+    try {
+      expect(() =>
+        s.recordVerifiedCommit({ ...commitReceipt(), proposalId: "commit-2" }),
+      ).toThrow("concurrent verified commit update");
+    } finally {
+      db.prepare = originalPrepare;
+      db.close();
+    }
+  });
   it.each([
     "approvalToken",
     "approval",

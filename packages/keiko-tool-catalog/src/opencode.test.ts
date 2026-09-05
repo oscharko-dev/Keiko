@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { opencodeRegistrationSet, OPENCODE_NATIVE_EXTENSION_DEFINITIONS } from "./opencode.js";
 import { createKeikoToolCatalog } from "./composer.js";
 import { compileToolProjection, gatewayToolDefinitions } from "./projection.js";
+import { matchesCatalogSchema } from "./schema.js";
 
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
 
@@ -175,6 +176,35 @@ describe("opencode registration set", () => {
     const first = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const second = createKeikoToolCatalog([opencodeRegistrationSet()]);
     expect(first.catalogRevision).toBe(second.catalogRevision);
+  });
+
+  // #3414 AC1: these fields carry the exact real OpenCode wire pattern (opencodeToolSchemas.ts) now
+  // that schema.ts supports `pattern`. Fails-before: prior to schema.ts gaining `pattern` support,
+  // `compileCatalogSchema` rejected any schema carrying that keyword outright (see
+  // validation.test.ts), so this projection could only omit the format check entirely.
+  function toolProperties(alias: string): Record<string, unknown> {
+    const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
+    const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
+    const tool = projection.tools.find((entry) => entry.alias === alias);
+    if (tool === undefined) throw new Error(`Missing tool: ${alias}`);
+    return (tool.inputSchema as { properties: Record<string, unknown> }).properties;
+  }
+  it.each([
+    ["keiko_workspace_read", "relativePath", "src/index.ts", "../escape"],
+    ["keiko_research_fetch", "target", "https://example.com/doc", "http://example.com"],
+    ["keiko_skill", "skillId", "skl_a@1", "not-a-skill-id"],
+  ])("enforces the real wire pattern for %s.%s", (alias, field, valid, invalid) => {
+    const schema = toolProperties(alias)[field];
+    expect(matchesCatalogSchema(schema as never, valid)).toBe(true);
+    expect(matchesCatalogSchema(schema as never, invalid)).toBe(false);
+  });
+  it("enforces the real wire pattern for keiko_changeset_edit's expectedContentHash", () => {
+    const changeset = toolProperties("keiko_changeset_edit").changeset as {
+      properties: { files: { items: { properties: Record<string, unknown> } } };
+    };
+    const schema = changeset.properties.files.items.properties.expectedContentHash;
+    expect(matchesCatalogSchema(schema as never, "a".repeat(64))).toBe(true);
+    expect(matchesCatalogSchema(schema as never, "not-a-hash")).toBe(false);
   });
 });
 

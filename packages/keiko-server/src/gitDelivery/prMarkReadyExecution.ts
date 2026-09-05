@@ -92,7 +92,8 @@ type GitDeliveryPrMarkReadyErrorCode =
   | "GIT_DELIVERY_PR_MARK_READY_FORBIDDEN_PAYLOAD"
   | "GIT_DELIVERY_PR_MARK_READY_UNKNOWN_PROJECT"
   | "GIT_DELIVERY_PR_MARK_READY_EXECUTION_FAILED"
-  | "GIT_DELIVERY_PR_MARK_READY_WORKTREE_UNAVAILABLE";
+  | "GIT_DELIVERY_PR_MARK_READY_WORKTREE_UNAVAILABLE"
+  | "GIT_DELIVERY_PR_MARK_READY_REPOSITORY_MISMATCH";
 
 const SAFE_MESSAGES: Readonly<Record<GitDeliveryPrMarkReadyErrorCode, string>> = {
   GIT_DELIVERY_PR_MARK_READY_BAD_REQUEST: "The request body is not a valid mark-ready proposal.",
@@ -104,6 +105,9 @@ const SAFE_MESSAGES: Readonly<Record<GitDeliveryPrMarkReadyErrorCode, string>> =
     "The mark-ready operation could not be completed. Refresh the pull request and try again.",
   GIT_DELIVERY_PR_MARK_READY_WORKTREE_UNAVAILABLE:
     "The repository worktree could not be inspected. Confirm the project is a Git repository.",
+  // #3384 B5-8: the workspace's own `origin` remote does not resolve to the requested repository.
+  GIT_DELIVERY_PR_MARK_READY_REPOSITORY_MISMATCH:
+    "The requested repository does not match this project's own Git remote.",
 };
 
 const errResult = (status: number, code: GitDeliveryPrMarkReadyErrorCode): RouteResult => ({
@@ -115,7 +119,14 @@ const MARK_READY_REQUEST_ERRORS: GitDeliveryRequestErrors = {
   tooLarge: errResult(413, "GIT_DELIVERY_PR_MARK_READY_PAYLOAD_TOO_LARGE"),
   badRequest: errResult(400, "GIT_DELIVERY_PR_MARK_READY_BAD_REQUEST"),
   unknownProject: errResult(404, "GIT_DELIVERY_PR_MARK_READY_UNKNOWN_PROJECT"),
+  repositoryMismatch: errResult(403, "GIT_DELIVERY_PR_MARK_READY_REPOSITORY_MISMATCH"),
 };
+
+// #3384 B5-8: the ONE place this route group names its request's GitHub mutation target for
+// `prepareGitDeliveryRequest`'s repository-binding check.
+function markReadyOwnerAndRepoOf(value: ValidatedMarkReadyRequest): string {
+  return value.command.ownerAndRepo;
+}
 
 // ─── Request parsing ────────────────────────────────────────────────────────────────────────────
 
@@ -390,6 +401,7 @@ export const createHandlePrMarkReadyApprove = (
       deps,
       MARK_READY_REQUEST_ERRORS,
       validate,
+      markReadyOwnerAndRepoOf,
     );
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
@@ -612,7 +624,13 @@ async function handleMarkReadyExecute(
   options: GitDeliveryPrMarkReadyRouteOptions,
 ): Promise<RouteResult> {
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-  const prepared = await prepareGitDeliveryRequest(ctx, deps, MARK_READY_REQUEST_ERRORS, validate);
+  const prepared = await prepareGitDeliveryRequest(
+    ctx,
+    deps,
+    MARK_READY_REQUEST_ERRORS,
+    validate,
+    markReadyOwnerAndRepoOf,
+  );
   if (!prepared.ok) return prepared.result;
   const { workspace } = prepared;
   const { projectId, command, approval } = prepared.value;

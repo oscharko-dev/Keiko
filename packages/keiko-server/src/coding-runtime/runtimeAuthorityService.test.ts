@@ -1618,12 +1618,13 @@ describe("codingRuntimeNetworkPolicyForMode", () => {
     expect(codingRuntimeNetworkPolicyForMode("governed-assist", undefined).connectorScopes).toEqual(
       codingRuntimeConnectorScopesForMode("governed-assist"),
     );
-    expect(
-      codingRuntimeNetworkPolicyForMode("governed-assist", undefined).connectorScopes,
-    ).toEqual(["source-control.read", "source-control.write"]);
-    expect(
-      codingRuntimeNetworkPolicyForMode("governed-assist", true).connectorScopes,
-    ).toEqual(["source-control.read", "source-control.write"]);
+    expect(codingRuntimeNetworkPolicyForMode("governed-assist", undefined).connectorScopes).toEqual(
+      ["source-control.read", "source-control.write"],
+    );
+    expect(codingRuntimeNetworkPolicyForMode("governed-assist", true).connectorScopes).toEqual([
+      "source-control.read",
+      "source-control.write",
+    ]);
     expect(
       codingRuntimeNetworkPolicyForMode("supervised-coding", undefined).connectorScopes,
     ).toEqual(["source-control.read", "source-control.write"]);
