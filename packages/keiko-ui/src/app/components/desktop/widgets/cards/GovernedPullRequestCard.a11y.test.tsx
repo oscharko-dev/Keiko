@@ -44,6 +44,15 @@ const OUTCOME: GitDeliveryPrExecuteResponse = {
 function makeClient(): GovernedPullRequestClient {
   return {
     prPreview: vi.fn(async () => PREVIEW),
+    prApprove: vi.fn(async () => ({
+      schemaVersion: "1" as const,
+      approval: {
+        schemaVersion: "1" as const,
+        approvalId: "approval-1",
+        approvalToken: "token-1",
+      },
+      expiresAt: "2026-01-01T00:00:30.000Z",
+    })),
     prExecute: vi.fn(async () => OUTCOME),
   };
 }

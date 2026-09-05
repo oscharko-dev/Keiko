@@ -252,7 +252,7 @@ function WorkbenchDescriptionReview({
     <>
       <DescriptionReviewButton onClick={openDraft} />
       {draft === undefined ? null : (
-        <pre className={styles.descriptionDraft} data-testid="cwb-description-draft">
+        <pre className={styles.cmpDescriptionDraft} data-testid="cwb-description-draft">
           {draft.artifact.markdown}
         </pre>
       )}

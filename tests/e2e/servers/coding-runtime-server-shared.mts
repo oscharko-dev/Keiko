@@ -25,6 +25,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   resolveCodingSafeSidecarGatewayProfile,
+  type GatewayConfig,
   type GatewayRequest,
   type GatewayStreamChunk,
   type NormalizedResponse,
@@ -321,7 +322,7 @@ function scriptedModelDeps(
   };
   return {
     ...deps,
-    config: functionalGatewayConfig(),
+    config: scriptedGatewayConfig(),
     configPresent: true,
     gatewayConfig: undefined,
     codingSidecarGatewayChatFactory: () => chat,
@@ -329,6 +330,14 @@ function scriptedModelDeps(
       async function* (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> {
         yield { type: "done" as const, response: await chat(request) };
       },
+  };
+}
+
+function scriptedGatewayConfig(): GatewayConfig {
+  const config = functionalGatewayConfig();
+  return {
+    ...config,
+    providers: config.providers.map((provider) => ({ ...provider, timeoutMs: 30_000 })),
   };
 }
 

@@ -530,7 +530,7 @@ function gitExecuteSpec(): OpenCodeToolSpec {
       },
       ["kind", "proposalId"],
     ),
-    effects: ["delivery-substrate"],
+    effects: ["workspace-write", "delivery-substrate", "network-egress"],
     idempotency: "server-key-required",
     handlerId: "opencode-git-execute-port",
   };

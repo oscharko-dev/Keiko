@@ -28,5 +28,8 @@ export function useJourneyClock(outcome: JourneyOutcome): number {
       globalThis.removeEventListener("pageshow", update);
     };
   }, [observation, ci, description]);
-  return now;
+  // A parent render can occur after a lease expires but before the scheduled timer callback runs
+  // (for example while the browser is throttled). Re-read the wall clock on every render so stale
+  // authority is never presented as current during that interval.
+  return Math.max(now, Date.now());
 }

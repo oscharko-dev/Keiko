@@ -54,6 +54,7 @@ export interface GitDeliveryAuthorityTarget {
   readonly headBranchName?: string | undefined;
   readonly baseBranchName?: string | undefined;
   readonly remoteBranchName?: string | undefined;
+  readonly descriptionApply?: boolean | undefined;
 }
 
 // The exact per-operation approval binding this admission attempt corresponds to — the SAME
@@ -269,7 +270,13 @@ function gitDeliveryApprovalRedemption(
   audit: GitDeliveryAuthorityAuditSeams,
 ): GitDeliveryApprovalRedemption | undefined {
   if (audit.deliveryApprovalDeferred === true) {
-    return (): boolean => true;
+    return (_active, request): boolean =>
+      request.operation === "commit" ||
+      request.operation === "fetch" ||
+      request.operation === "pull" ||
+      request.operation === "push" ||
+      request.operation === "pull-request" ||
+      request.operation === "merge";
   }
   if (audit.approval?.kind !== "claim" || audit.approvalBinding === undefined) return undefined;
   const claim = audit.approval.claim;

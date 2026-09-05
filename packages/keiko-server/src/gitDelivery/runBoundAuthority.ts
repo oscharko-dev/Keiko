@@ -115,6 +115,8 @@ export interface GitDeliveryAuthorityRequest {
   readonly baseBranchName?: string | undefined;
   // A push's remote ref is the remote counterpart of the head, never the repository base.
   readonly remoteBranchName?: string | undefined;
+  /** True only for the body-only PR-description apply route. */
+  readonly descriptionApply?: boolean | undefined;
 }
 
 // Invoked only when the matrix resolves "approval-required" for a lower mode. Returns true when the
@@ -290,7 +292,12 @@ function admitByDescriptionAuthority(
   admission: GitDeliveryDescriptionAuthorityAdmission | undefined,
   nowIso: string,
 ): GitDeliveryAuthorityDecision | undefined {
-  if (admission === undefined || request.operation !== "pull-request") return undefined;
+  if (
+    admission === undefined ||
+    request.operation !== "pull-request" ||
+    request.descriptionApply !== true
+  )
+    return undefined;
   const active = admission.port.current(admission.scope, nowIso);
   if (active === undefined) return undefined;
   return {
@@ -310,9 +317,9 @@ function admitByDescriptionAuthority(
  * one-use claim bound to this exact accepted run instead of failing closed outright.
  *
  * `descriptionAuthority`, when supplied, is consulted only when no running accepted run exists AND
- * `request.operation === "pull-request"` — the body-only description apply's admission outside a
- * Code task (#3399, epic #3384 correction 4). Every other operation keeps requiring a running
- * accepted run; this parameter has no effect on any other operation.
+ * the request is the explicitly tagged body-only description apply outside a Code task (#3399,
+ * epic #3384 correction 4). A normal PR create/update carries no such tag and keeps requiring a
+ * running accepted run.
  */
 export function authorizeGitDelivery(
   authorityPort: GitDeliveryRunAuthorityPort | undefined,

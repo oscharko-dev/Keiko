@@ -2052,13 +2052,13 @@
     {
       "op": "git.delivery.authority.admitted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:240",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:241",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.authority.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:214",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:215",
       "package": "keiko-server"
     },
     {
@@ -2652,7 +2652,7 @@
     {
       "op": "pr-description.workbench.egress.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:939",
+      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:942",
       "package": "keiko-server"
     },
     {

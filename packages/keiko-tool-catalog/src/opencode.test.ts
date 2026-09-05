@@ -112,11 +112,21 @@ describe("opencode registration set", () => {
     // delivery-substrate but never network-egress (the model proposes; it never touches a remote).
     const commit = projection.tools.find((entry) => entry.alias === "keiko_git_commit");
     expect(commit?.effects).toEqual(["delivery-substrate"]);
-    // keiko_git_execute redeems any approved stage/commit/push/pull-request proposal; its own
-    // declared effect is the shared delivery-substrate floor, never network-egress by itself --
-    // the redeemed action's own effects (e.g. push's network-egress) apply at execution time.
+    // The redemption descriptor must conservatively cover every kind it can dispatch. Inner
+    // per-kind authority checks remain required; they cannot repair an incomplete advertisement.
+    const redeemedAliases = new Set([
+      "keiko_git_stage",
+      "keiko_git_commit",
+      "keiko_git_push",
+      "keiko_pull_request",
+    ]);
+    const requiredEffects = new Set(
+      projection.tools
+        .filter((tool) => redeemedAliases.has(tool.alias))
+        .flatMap((tool) => tool.effects),
+    );
     const execute = projection.tools.find((entry) => entry.alias === "keiko_git_execute");
-    expect(execute?.effects).toEqual(["delivery-substrate"]);
+    expect(new Set(execute?.effects)).toEqual(requiredEffects);
   });
 
   // #3414: #3386's H1 local repository-search handler is implemented and mounted server-side, so

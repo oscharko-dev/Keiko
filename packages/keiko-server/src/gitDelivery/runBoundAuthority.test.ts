@@ -559,6 +559,30 @@ describe("authorizeGitDelivery", () => {
     expect(result).toEqual({ allowed: true, runId: "test-run", envelopeDigest: "c".repeat(64) });
   });
 
+  it("never lets the delivery-only deferred approval seam admit a local stage operation", () => {
+    const workspace = { root: WORKSPACE_ROOT } as WorkspaceInfo;
+    const deps = {
+      gitDeliveryAuthority: permittedGitDeliveryAuthority(
+        () => PROJECT_ID,
+        () => WORKSPACE_ROOT,
+        "governed-assist",
+      ),
+    };
+
+    const result = gitDeliveryAuthorityGate(
+      { correlationId: "correlation-stage" } as never,
+      deps,
+      PROJECT_ID,
+      workspace,
+      "stage",
+      {},
+      { nowIso: NOW, deliveryApprovalDeferred: true },
+    );
+
+    expect(result.allowed).toBe(false);
+    expect(!result.allowed && result.reason).toBe("approval-required");
+  });
+
   // Final-audit F1/#3390: the workspace-contained counterpart. Local mutations have no
   // operation-independent mandatory downstream enforcement (the repo/org policy pack decides
   // per-command), so `deliveryApprovalDeferred` must never apply here — redemption requires an
@@ -664,7 +688,7 @@ describe("authorizeGitDelivery — description authority (#3399)", () => {
   it("admits the pull-request apply from the description authority when no run is active", () => {
     const decision = authorizeGitDelivery(
       undefined,
-      { ...REQUEST, operation: "pull-request" },
+      { ...REQUEST, operation: "pull-request", descriptionApply: true },
       NOW,
       undefined,
       {
@@ -680,7 +704,7 @@ describe("authorizeGitDelivery — description authority (#3399)", () => {
   it("falls back to accepted-run-unavailable when the description authority has no live record", () => {
     const decision = authorizeGitDelivery(
       undefined,
-      { ...REQUEST, operation: "pull-request" },
+      { ...REQUEST, operation: "pull-request", descriptionApply: true },
       NOW,
       undefined,
       { port: descriptionPort(undefined), scope: SCOPE },
@@ -706,13 +730,31 @@ describe("authorizeGitDelivery — description authority (#3399)", () => {
     expect(decision).toEqual({ allowed: false, reason: "accepted-run-unavailable" });
   });
 
+  it("never admits a normal pull-request create through description authority", () => {
+    const decision = authorizeGitDelivery(
+      undefined,
+      { ...REQUEST, operation: "pull-request" },
+      NOW,
+      undefined,
+      {
+        port: descriptionPort({
+          scope: SCOPE,
+          effectiveMode: "autonomous-delivery",
+          expiresAt: NOW,
+        }),
+        scope: SCOPE,
+      },
+    );
+    expect(decision).toEqual({ allowed: false, reason: "accepted-run-unavailable" });
+  });
+
   it("prefers a running accepted run over the description authority when both are present", () => {
     const decision = authorizeGitDelivery(
       permittedGitDeliveryAuthority(
         () => PROJECT_ID,
         () => WORKSPACE_ROOT,
       ),
-      { ...REQUEST, operation: "pull-request" },
+      { ...REQUEST, operation: "pull-request", descriptionApply: true },
       NOW,
       undefined,
       {
@@ -727,7 +769,7 @@ describe("authorizeGitDelivery — description authority (#3399)", () => {
   it("mints a byte-identical envelopeDigest for the identical scope, so a stale-scope claim never matches", () => {
     const first = authorizeGitDelivery(
       undefined,
-      { ...REQUEST, operation: "pull-request" },
+      { ...REQUEST, operation: "pull-request", descriptionApply: true },
       NOW,
       undefined,
       {
@@ -741,7 +783,7 @@ describe("authorizeGitDelivery — description authority (#3399)", () => {
     );
     const second = authorizeGitDelivery(
       undefined,
-      { ...REQUEST, operation: "pull-request" },
+      { ...REQUEST, operation: "pull-request", descriptionApply: true },
       NOW,
       undefined,
       {

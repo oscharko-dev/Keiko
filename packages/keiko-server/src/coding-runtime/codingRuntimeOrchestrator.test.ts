@@ -176,7 +176,7 @@ function fixture(
     },
     releaseRecoveryForRetry: (id, at) => {
       const row = rowFor(rows, id);
-      const next = { ...row, terminalAt: at, updatedAt: at };
+      const next = { ...row, terminalAt: at, revision: row.revision + 1, updatedAt: at };
       rows.set(id, next);
       return next;
     },

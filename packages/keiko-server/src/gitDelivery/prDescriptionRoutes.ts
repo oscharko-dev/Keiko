@@ -292,7 +292,7 @@ function admitDescription(
     request.projectId,
     workspace,
     "pull-request",
-    {},
+    { descriptionApply: true },
     {
       logSink,
       descriptionAuthority,
