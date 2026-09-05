@@ -353,7 +353,7 @@ static int rename_pending_diagnostic(const keiko_paths *paths, keiko_first_failu
     return 0;
   }
   directory = open_directory(paths->root);
-  if (directory == INVALID_HANDLE_VALUE) {
+  if (directory == INVALID_HANDLE_VALUE || directory == NULL) {
     directory_open_error = GetLastError();
   }
   source = open_regular(
@@ -361,28 +361,28 @@ static int rename_pending_diagnostic(const keiko_paths *paths, keiko_first_failu
     GENERIC_READ | GENERIC_WRITE | DELETE,
     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
   );
-  if (source == INVALID_HANDLE_VALUE) {
+  if (source == INVALID_HANDLE_VALUE || source == NULL) {
     source_open_error = GetLastError();
   }
   existing = open_regular(
     paths->active, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
   );
-  if (existing == INVALID_HANDLE_VALUE) {
+  if (existing == INVALID_HANDLE_VALUE || existing == NULL) {
     existing_open_error = GetLastError();
   }
-  if (directory == INVALID_HANDLE_VALUE) {
+  if (directory == INVALID_HANDLE_VALUE || directory == NULL) {
     set_rename_failure(
       failure_step, failure_error, KEIKO_FAILURE_RENAME_DIRECTORY_OPEN, directory_open_error
     );
     goto cleanup;
   }
-  if (source == INVALID_HANDLE_VALUE) {
+  if (source == INVALID_HANDLE_VALUE || source == NULL) {
     set_rename_failure(
       failure_step, failure_error, KEIKO_FAILURE_RENAME_SOURCE_OPEN, source_open_error
     );
     goto cleanup;
   }
-  if (existing == INVALID_HANDLE_VALUE) {
+  if (existing == INVALID_HANDLE_VALUE || existing == NULL) {
     set_rename_failure(
       failure_step, failure_error, KEIKO_FAILURE_RENAME_EXISTING_OPEN, existing_open_error
     );
