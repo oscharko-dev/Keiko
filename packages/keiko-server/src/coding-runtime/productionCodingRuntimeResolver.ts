@@ -90,8 +90,10 @@ import {
 } from "./productionCodingRuntimePorts.js";
 import {
   createProductionManagedWorktreeToolFacade,
+  deriveOptionalToolAvailability,
   type ProductionManagedWorktreeToolInput,
 } from "./productionManagedWorktreeTools.js";
+import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
 import {
   productionRuntimeAuthorityFacts,
   resolveProductionRuntimeContext,
@@ -192,6 +194,7 @@ interface ResolverRunRecord extends ProductionRuntimeRunRecord {
   readonly questionPort?: CodingRuntimeQuestionPort | undefined;
   readonly permissionPort?: CodingRuntimePermissionPort | undefined;
   readonly toolBridge?: OpenCodeToolBridge | undefined;
+  readonly unavailableOptionalTools: ReadonlySet<OpenCodeOptionalToolName>;
 }
 
 /** The two server-level #2387 research stores threaded together through the run composition. */
@@ -372,6 +375,13 @@ function runtimeCapabilityAuthenticatorFor(
     reservedPromptTokens: number,
     actualPromptTokens: number,
   ) => unknown;
+  // #3384 wave-3 W3-1 redirect: the real per-run fact `coding-sidecar-gateway.ts`'s outgoing
+  // tool-catalog advertisement needs, keyed by runId the same way `ciRepairBudget` already is
+  // above. `undefined` (run not tracked here) preserves the advertisement's prior,
+  // structural-only behaviour rather than claiming every optional tool is unavailable.
+  readonly unavailableOptionalTools: (
+    runId: string,
+  ) => ReadonlySet<OpenCodeOptionalToolName> | undefined;
 } {
   return {
     authenticate: (capability, audience) => authority.authenticateCapability(capability, audience),
@@ -384,6 +394,7 @@ function runtimeCapabilityAuthenticatorFor(
       ),
     settlePromptTokens: (capability, reservedPromptTokens, actualPromptTokens) =>
       authority.settlePromptTokens(capability, reservedPromptTokens, actualPromptTokens),
+    unavailableOptionalTools: (runId) => runs.get(runId)?.unavailableOptionalTools,
   };
 }
 
@@ -526,6 +537,14 @@ interface RunToolSurface {
   readonly toolFacade: ReturnType<typeof createManagedToolFacade>;
   readonly codingToolApprovals: CodingToolApprovalBridge;
   readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+  /**
+   * #3384 wave-3 W3-1 redirect (reviewer 3941816393 / B1): the SAME real, non-fake per-run
+   * availability fact `createManagedToolFacade` already computes for the child-facing tool ports
+   * below (`deriveOptionalToolAvailability`), retained here so the gateway's OUTGOING tool-catalog
+   * advertisement (coding-sidecar-gateway.ts) can derive its readiness from real bindings instead
+   * of the catalog's static declarations alone (#3413-AC1/#3414-AC4/AC9).
+   */
+  readonly unavailableOptionalTools: ReadonlySet<OpenCodeOptionalToolName>;
 }
 
 function commitServiceFor(
@@ -660,6 +679,27 @@ interface RunToolSurfaceInput {
   readonly signal: AbortSignal;
   readonly notifyVerifiedHeadAdvanced: (runId: string) => void;
 }
+
+// Reuses the SAME fields `managedResearchOptions`/`createManagedToolFacade` already source for the
+// child-facing tool ports below (never a second, parallel policy source) so the gateway's outgoing
+// advertisement and the actual dispatch-side ports agree on which optional tool is really available
+// (#3384 wave-3 W3-1 redirect).
+function unavailableOptionalToolsFor(
+  input: ProductionCodingRuntimeResolverInput,
+  minted: MintedRuntime,
+  research: ResearchComposition,
+  skillCatalog: SkillCatalog,
+): ReadonlySet<OpenCodeOptionalToolName> {
+  return deriveOptionalToolAvailability({
+    researchGrantRegistry: research.grants,
+    gatewayEgress: input.gatewayEgress ?? ((): undefined => undefined),
+    authorityRef: minted.authorityRef,
+    skillCatalog,
+    modelId: input.childModelId?.(),
+    childModelPortFactory: input.childModelPortFactory,
+  });
+}
+
 function createRunToolSurface(args: RunToolSurfaceInput): RunToolSurface {
   const {
     input,
@@ -707,6 +747,7 @@ function createRunToolSurface(args: RunToolSurfaceInput): RunToolSurface {
     toolFacade,
     codingToolApprovals,
     resolveWorkspaceRootAccess,
+    unavailableOptionalTools: unavailableOptionalToolsFor(input, minted, research, skillCatalog),
   };
 }
 
@@ -740,6 +781,7 @@ function createRunRecord(args: Omit<RunToolSurfaceInput, "signal">): ResolverRun
     ...(backend.permissionPort ? { permissionPort: backend.permissionPort } : {}),
     toolBridge: backend.toolBridge,
     dispose: createRunDisposer(detachLease, surface.leases, surface.invocationRegistry, backend),
+    unavailableOptionalTools: surface.unavailableOptionalTools,
   };
 }
 

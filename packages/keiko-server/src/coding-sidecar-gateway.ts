@@ -38,7 +38,11 @@ import {
   createOpenCodeGatewayToolCatalogAdvertisement,
   hasExactOpenCodeVisibleToolContract,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
+  type OpenCodeGatewayHandlerCoverage,
 } from "./coding-runtime/opencodeToolSchemas.js";
+import type { OpenCodeOptionalToolName } from "./coding-runtime/opencodeLaunchProfile.js";
+import type { CatalogDigest } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
@@ -767,18 +771,74 @@ function isMatchingModelAlias(
  */
 function toolCatalogFor(
   tools: readonly ToolDefinition[] | undefined,
+  coverage: OpenCodeGatewayHandlerCoverage | undefined,
 ): GatewayCallRequest["toolCatalog"] {
   return isExactManagedToolSet(tools)
-    ? createOpenCodeGatewayToolCatalogAdvertisement(Date.now())
+    ? createOpenCodeGatewayToolCatalogAdvertisement(Date.now(), coverage)
     : undefined;
 }
 
 function toolRequestFields(
   parsed: CodingSidecarGatewayChatCompletionRequest,
+  coverage: OpenCodeGatewayHandlerCoverage | undefined,
 ): Pick<GatewayCallRequest, "toolCatalog"> {
-  const toolCatalog = toolCatalogFor(parsed.tools);
+  const toolCatalog = toolCatalogFor(parsed.tools, coverage);
   if (toolCatalog !== undefined) return { toolCatalog };
   return {};
+}
+
+const OPENCODE_OPTIONAL_TOOL_NAMES: ReadonlySet<string> = new Set<OpenCodeOptionalToolName>([
+  "keiko_research_fetch",
+  "keiko_skill",
+  "keiko_child_agent",
+]);
+
+function isOpenCodeOptionalToolName(value: string): value is OpenCodeOptionalToolName {
+  return OPENCODE_OPTIONAL_TOOL_NAMES.has(value);
+}
+
+/**
+ * #3384 wave-3 W3-1 redirect (reviewer 3941816393 / B1): `createOpenCodeGatewayToolCatalogAdvertisement`'s
+ * `offered`/`readiness`/`handlerSetDigest` previously reflected the catalog's static declarations
+ * only -- every tool always "ready" regardless of whether its handler is actually bound for this run
+ * (#3413-AC1/#3414-AC4/AC9). `runtimeCapabilityAuthenticator(deps)?.unavailableOptionalTools` is the
+ * real per-run fact (`productionManagedWorktreeTools.ts`'s `deriveOptionalToolAvailability`, wired
+ * through `productionCodingRuntimeResolver.ts` the same way `reservePromptTokens`/
+ * `settlePromptTokens` already are). The catalog's thirteen mandatory tools are never gated by this
+ * check -- only the three optional tools (`keiko_research_fetch`/`keiko_skill`/`keiko_child_agent`)
+ * can ever be reported unavailable -- so a structural (no-coverage) first pass is used only to learn
+ * the compiled projection's real tool ids/aliases, never to decide readiness itself. Absent
+ * capability info (no run bound, or an older composition that has not wired this yet) preserves the
+ * advertisement's prior, structural-only behaviour byte-for-byte.
+ */
+function resolveToolCatalogHandlerCoverage(
+  deps: UiHandlerDeps,
+  runId: string,
+): OpenCodeGatewayHandlerCoverage | undefined {
+  const unavailable = runtimeCapabilityAuthenticator(deps)?.unavailableOptionalTools?.(runId);
+  if (unavailable === undefined) return undefined;
+  const structural = createOpenCodeGatewayToolCatalogAdvertisement(Date.now());
+  const readinessByToolId = new Map(
+    structural.projection.tools.map(
+      (tool) =>
+        [
+          tool.toolRef.canonicalId,
+          isOpenCodeOptionalToolName(tool.alias) && unavailable.has(tool.alias)
+            ? ("unavailable" as const)
+            : ("ready" as const),
+        ] as const,
+    ),
+  );
+  return {
+    readinessByToolId,
+    handlerSetDigest: sha256Hex(
+      canonicalise({
+        domain: "keiko.gateway-tool-handler-coverage.v1",
+        projectionDigest: structural.projection.projectionDigest,
+        unavailable: [...unavailable].sort(),
+      }),
+    ) as CatalogDigest,
+  };
 }
 
 function buildChatRequest(
@@ -788,11 +848,12 @@ function buildChatRequest(
   maxOutputTokens: number,
   correlationId: string | undefined,
   reasoningEffort: ModelReasoningEffort | undefined,
+  toolCatalogCoverage: OpenCodeGatewayHandlerCoverage | undefined,
 ): GatewayCallRequest {
   return {
     modelId: modelAlias,
     messages: parsed.messages,
-    ...toolRequestFields(parsed),
+    ...toolRequestFields(parsed, toolCatalogCoverage),
     ...(parsed.temperature === undefined ? {} : { temperature: parsed.temperature }),
     ...(parsed.top_p === undefined ? {} : { topP: parsed.top_p }),
     cancellationSignal,
@@ -1125,6 +1186,13 @@ interface RuntimeCapabilityAuthenticator {
     ((capability: string, promptTokens: number) => unknown) | undefined;
   readonly settlePromptTokens?:
     | ((capability: string, reservedPromptTokens: number, actualPromptTokens: number) => unknown)
+    | undefined;
+  // #3384 wave-3 W3-1 redirect (reviewer 3941816393 / B1): the real per-run fact behind the
+  // outgoing tool-catalog advertisement's readiness (#3413-AC1/#3414-AC4/AC9). `undefined` for a
+  // runId this capability has no record of (or an authenticator that predates this wiring)
+  // preserves the advertisement's prior, structural-only behaviour.
+  readonly unavailableOptionalTools?:
+    | ((runId: string) => ReadonlySet<OpenCodeOptionalToolName> | undefined)
     | undefined;
 }
 
@@ -1498,6 +1566,7 @@ interface GatewayChatDelivery {
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
   readonly spendReservation: SpendReservation;
   readonly promptTokenReservation: PromptTokenReservation;
+  readonly toolCatalogCoverage: OpenCodeGatewayHandlerCoverage | undefined;
 }
 
 interface PinnedGatewayBinding {
@@ -1518,6 +1587,7 @@ function requestForGatewayDelivery(
     delivery.maxOutputTokens,
     ctx.correlationId,
     delivery.reasoningEffort,
+    delivery.toolCatalogCoverage,
   );
 }
 
@@ -2267,6 +2337,7 @@ function executeBudgetedGatewayChat(
     ...profile,
     spendReservation: spendBudget.reservation,
     promptTokenReservation,
+    toolCatalogCoverage: resolveToolCatalogHandlerCoverage(deps, authentication.runId),
   });
 }
 

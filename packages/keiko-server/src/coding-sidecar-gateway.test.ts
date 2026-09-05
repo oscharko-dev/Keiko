@@ -852,6 +852,60 @@ describe("coding-sidecar gateway", () => {
     }
   });
 
+  // #3384 wave-3 W3-1 redirect (reviewer 3941816393 / B1): a tool whose real handler binding is
+  // reported unavailable for this run must be ABSENT from the advertised (and therefore forwarded)
+  // tool set, not merely denied if the model ever tries to call it (#3413-AC1/#3414-AC4/AC9).
+  it("omits an optional tool from the advertised catalog once its real handler is reported unavailable", async () => {
+    resetGatewayInstanceCacheForTests();
+    let requestBody:
+      { tools?: readonly { function: { name: string; parameters: unknown } }[] } | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const body = typeof init?.body === "string" ? init.body : "{}";
+        requestBody = JSON.parse(body) as typeof requestBody;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }),
+    );
+    const deps: UiHandlerDeps = {
+      ...depsValue(configValue(provider(), capability())),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-real" } }),
+        reservePromptTokens: () => ({ ok: true, runId: "run-real" }),
+        unavailableOptionalTools: (runId: string) =>
+          runId === "run-real" ? new Set(["keiko_research_fetch"]) : undefined,
+      },
+      openCodeGatewayReadinessRegistry: createOpenCodeGatewayReadinessRegistry(),
+    } as unknown as UiHandlerDeps;
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "continue" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+      assertRouteResult(result);
+      expect(result.status).toBe(200);
+      const sentToolNames = new Set((requestBody?.tools ?? []).map((tool) => tool.function.name));
+      expect(sentToolNames.has("keiko_research_fetch")).toBe(false);
+      expect(sentToolNames).toEqual(
+        new Set(
+          OPENCODE_MODEL_VISIBLE_TOOL_NAMES.filter((name) => name !== "keiko_research_fetch"),
+        ),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
   it("passes a native extension tool call ('question') through unbound instead of rejecting it (#3414 follow-up)", async () => {
     resetGatewayInstanceCacheForTests();
     vi.stubGlobal(

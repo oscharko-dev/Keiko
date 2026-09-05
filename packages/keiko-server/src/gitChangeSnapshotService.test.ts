@@ -169,6 +169,98 @@ describe("immutable Git change snapshot production", () => {
     expect(after.snapshot.snapshotDigest).toBe(before.snapshot.snapshotDigest);
     service.close();
   });
+  // Records every argv this lane's own `GitProcessRunner` receives — real git for every call — so
+  // a test can assert WHICH probes actually ran. A `version` probe only runs when
+  // `repositoryHasPromisorRemote` judged the repository at risk, so its presence/absence is the
+  // definitive signal for "was promisor risk (re)detected".
+  function recordingRunner(): {
+    readonly runner: GitProcessRunner;
+    readonly subcommands: () => readonly string[];
+  } {
+    const subcommands: string[] = [];
+    const runner: GitProcessRunner = async (args, options) => {
+      subcommands.push(args[0] ?? "");
+      return defaultGitProcessRunner(args, options);
+    };
+    return { runner, subcommands: () => subcommands };
+  }
+
+  // Real git for everything, except the FIRST `version` call fails — the exact shape of a
+  // workspace-local spawn failure reviewer 3941928444 reproduced. Every later call, including a
+  // later `version` probe, reaches the real binary.
+  function runnerFailingVersionOnce(): GitProcessRunner {
+    let versionCalls = 0;
+    return async (args, options) => {
+      if (args[0] === "version") {
+        versionCalls += 1;
+        if (versionCalls === 1) throw new Error("ENOTDIR: not a directory");
+      }
+      return defaultGitProcessRunner(args, options);
+    };
+  }
+
+  it("treats `partialclonefilter` alone as a promisor remote, with no `promisor` key set at all (reviewer 3941943601)", async () => {
+    const workspace = await repository();
+    git(workspace.root, "config", "remote.origin.partialclonefilter", "blob:none");
+    const rec = recordingRunner();
+    const service = createGitChangeSnapshotService({ runner: rec.runner });
+    await service.capture(inputFor(workspace));
+    expect(rec.subcommands().filter((s) => s === "version")).toHaveLength(1);
+    service.close();
+  });
+
+  it("honours an `include.path` setting promisor risk, unlike the old `--local`-scoped read (reviewer 3941943601)", async () => {
+    const workspace = await repository();
+    const includeDir = await mkdtemp(join(tmpdir(), "keiko-gcs-include-"));
+    roots.push(includeDir);
+    const includePath = join(includeDir, "promisor.gitconfig");
+    await writeFile(includePath, '[remote "origin"]\n\tpromisor = true\n');
+    git(workspace.root, "config", "--add", "include.path", includePath);
+    // RED proof, on this SAME repository: the OLD `--local`-scoped read cannot see an
+    // `include.path` at all — it is genuinely blind here, not merely differently parsed.
+    expect(() =>
+      execFileSync(
+        "git",
+        ["config", "--local", "--get-regexp", String.raw`^remote\..*\.promisor$`],
+        { cwd: workspace.root, encoding: "utf8" },
+      ),
+    ).toThrow();
+    const rec = recordingRunner();
+    const service = createGitChangeSnapshotService({ runner: rec.runner });
+    await service.capture(inputFor(workspace));
+    expect(rec.subcommands().filter((s) => s === "version")).toHaveLength(1);
+    service.close();
+  });
+
+  it("revalidates promisor risk on every call — an earlier safe verdict never authorizes a later, riskier one (reviewer 3941943603)", async () => {
+    const workspace = await repository();
+    const rec = recordingRunner();
+    const service = createGitChangeSnapshotService({ runner: rec.runner });
+    await service.capture(inputFor(workspace));
+    // No promisor remote yet: no version check needed for this capture.
+    expect(rec.subcommands().filter((s) => s === "version")).toHaveLength(0);
+    git(workspace.root, "config", "remote.origin.promisor", "true");
+    await service.capture(inputFor(workspace));
+    // The SAME service instance, the SAME runner — risk was still re-checked, not replayed from
+    // the first capture's safe verdict.
+    expect(rec.subcommands().filter((s) => s === "version")).toHaveLength(1);
+    service.close();
+  });
+
+  it("evicts a failed git-version probe instead of caching it forever (reviewer 3941928444)", async () => {
+    const workspace = await repository();
+    git(workspace.root, "config", "remote.origin.promisor", "true");
+    const service = createGitChangeSnapshotService({ runner: runnerFailingVersionOnce() });
+    const failed = await service.capture(inputFor(workspace));
+    // The first, indeterminate probe fails closed for this one capture.
+    expect(failed.snapshot).toMatchObject({ outcome: "failed" });
+    // A second, healthy capture on the SAME service instance must re-probe and succeed instead of
+    // replaying the first probe's spawn failure as a permanent "guard unsupported" verdict.
+    const recovered = await service.capture(inputFor(workspace));
+    expect(isGitChangeSnapshot(recovered.snapshot)).toBe(true);
+    service.close();
+  });
+
   it("represents every kind through raw and numstat, including NUL-safe rename paths", async () => {
     const workspace = await repository();
     await allKinds(workspace);
