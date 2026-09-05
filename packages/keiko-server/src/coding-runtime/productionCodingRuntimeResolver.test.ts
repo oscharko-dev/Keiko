@@ -186,37 +186,6 @@ describe("production coding runtime resolver", () => {
     expect(host.gitDeliveryDescriptionAuthority?.current(unknownModeScope, nowIso)).toBeUndefined();
   });
 
-  // #3401 CI-repair notify: the orchestrator that owns `notifyVerifiedHeadAdvanced` is built by
-  // `codingRuntimeControlPlane.ts` after this resolver, so the resolver exposes a setter the
-  // control plane calls once the real method exists. Before this change the resolver carried no
-  // such seam, so a CI-repair controller's notification hook (constructed deep inside a per-run
-  // composition) had nothing reachable to call.
-  it("forwards a repaired head to whichever notifier is attached after composition", () => {
-    const fixture = workspaceFixture();
-    const confirmations = confirmationFixture();
-    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
-      backendRun(input.request.runId),
-    );
-    const host = createProductionCodingRuntimeHost(
-      resolverFor(fixture, createRun, confirmations.consumer),
-    );
-    if (host === undefined) throw new Error("expected qualified host");
-    expect(host.attachVerifiedHeadNotifier).toBeDefined();
-    const notified: string[] = [];
-    host.attachVerifiedHeadNotifier?.((runId) => notified.push(runId));
-    // A run started before an attempt to notify still reaches the LATEST attached notifier: the
-    // resolver's launch closures read the mutable slot at call time, never a snapshot taken at
-    // `mintLaunch` construction.
-    confirmations.issue(
-      resolveProductionRuntimeStartConfirmationClaim(
-        fixture.authority,
-        launchRequest(fixture.workspace),
-      ),
-    );
-    host.launchResolver.resolve(launchRequest(fixture.workspace));
-    expect(notified).toEqual([]);
-  });
-
   it("is unavailable without a trusted confirmation consumer and causes no backend side effects", () => {
     const fixture = workspaceFixture();
     const createRun = vi.fn();

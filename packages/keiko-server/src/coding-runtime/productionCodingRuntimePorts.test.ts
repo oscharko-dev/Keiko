@@ -780,12 +780,16 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
   const REMOTE = "d".repeat(64);
   const BASE_SHA = "1".repeat(40);
   const HEAD_SHA = "2".repeat(40);
+  const BASE_REF = "dev";
+  const HEAD_REF = "feature/x";
   const SCOPE: WorkbenchDescriptionScope = {
     runId: "run-1",
     remoteDigest: REMOTE,
     baseSha: BASE_SHA,
     headSha: HEAD_SHA,
     acceptedMode: "supervised-coding",
+    baseRef: BASE_REF,
+    headRef: HEAD_REF,
   };
   const PR_SCOPE: WorkbenchDescriptionScope = {
     ...SCOPE,
@@ -859,7 +863,7 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
       current: () => ({
         scope: {
           remoteDigest: REMOTE,
-          pr: { baseRef: BASE_SHA, headRef: HEAD_SHA },
+          pr: { baseRef: BASE_REF, headRef: HEAD_REF },
           snapshotDigest: "a".repeat(64),
         },
         effectiveMode: "supervised-coding",
@@ -1037,7 +1041,7 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
     expect(mint).toHaveBeenCalledExactlyOnceWith({
       scope: {
         remoteDigest: REMOTE,
-        pr: { baseRef: BASE_SHA, headRef: HEAD_SHA },
+        pr: { baseRef: BASE_REF, headRef: HEAD_REF },
         snapshotDigest: "a".repeat(64),
       },
       requestedMode: "supervised-coding",

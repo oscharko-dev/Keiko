@@ -4188,7 +4188,10 @@ function resolveWorkbenchDraftRetention(
   if (projectId === undefined || scope.applicationTarget !== undefined) return undefined;
   const authorityScope: GitDeliveryDescriptionAuthorityScope = {
     remoteDigest: scope.remoteDigest,
-    pr: { baseRef: scope.baseSha, headRef: scope.headSha },
+    pr: {
+      baseRef: scope.baseRef ?? scope.baseSha,
+      headRef: scope.headRef ?? scope.headSha,
+    },
     snapshotDigest,
   };
   const resolution = resolveWorkbenchDraftDescriptionService(deps, {

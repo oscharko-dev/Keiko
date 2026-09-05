@@ -127,9 +127,9 @@ export class ScriptedGovernedTools {
     call: { readonly id: string; readonly name: string; readonly args: Record<string, unknown> },
     signal: AbortSignal,
   ): Promise<string> {
-    if (signal.aborted) throw new Error("functional-generated-tool-aborted");
     this.phase(call.name, "entered");
     try {
+      if (signal.aborted) throw new Error("functional-generated-tool-aborted");
       const output = await this.executeObserved(call, signal);
       this.phase(call.name, "completed");
       return output;

@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import {
   buildGitChangeChatFixture,
   createChatForFixture,
+  interceptGovernedPrDescriptionLifecycle,
   interceptGitChangePullRequestConnect,
   interceptPrDescriptionLifecycle,
   interceptProjectList,
@@ -9,6 +10,31 @@ import {
   seedWorkspace,
   type GitChangeChatFixture,
 } from "./support/git-change-chat-3400.js";
+import {
+  capturePrDescriptionModes,
+  capturePrDescriptionState,
+  writePrDescriptionJourneyEvidence,
+} from "./support/pr-description-visual-evidence.js";
+
+const CHAT_VISUAL_SOURCES = [
+  "tests/e2e/git-change-chat-3400.spec.ts",
+  "tests/e2e/support/git-change-chat-3400.ts",
+  "tests/e2e/support/pr-description-visual-evidence.ts",
+  "packages/keiko-ui/src/app/components/desktop/GitChangeScopePill.tsx",
+  "packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx",
+  "packages/keiko-ui/src/lib/api.ts",
+  "packages/keiko-ui/src/lib/coding-workbench-lazy-fetchers.ts",
+] as const;
+
+const PR_CARD_VISUAL_SOURCES = [
+  "tests/e2e/git-change-chat-3400.spec.ts",
+  "tests/e2e/support/git-change-chat-3400.ts",
+  "tests/e2e/support/pr-description-visual-evidence.ts",
+  "packages/keiko-ui/src/app/components/desktop/widgets/cards/GovernedPullRequestCard.tsx",
+  "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/GitClientWindow.tsx",
+  "packages/keiko-ui/src/lib/api.ts",
+  "packages/keiko-ui/src/lib/coding-workbench-lazy-fetchers.ts",
+] as const;
 
 // Issue #3400 (epic #3384) — "Connect a Git change to Chat for iterative pull request
 // description refinement". Frozen Decision 5: the Git window only CONNECTS a comparison to a
@@ -101,7 +127,7 @@ test("reviews, approves and applies the held description through the connected p
     headRef: fixture.headRef,
     pullRequestNumber: 42,
   });
-  await interceptPrDescriptionLifecycle(page);
+  const lifecycle = await interceptPrDescriptionLifecycle(page);
   await seedWorkspace(page, fixture.root, chat);
 
   await page.goto("/");
@@ -126,14 +152,34 @@ test("reviews, approves and applies the held description through the connected p
   await expect(chatWindow.getByTestId("git-change-description-preview-body")).toContainText(
     "refined over chat",
   );
+  await expect(chatWindow.getByTestId("git-change-description-preview-body")).toHaveText(
+    lifecycle.finalBody,
+    { useInnerText: false },
+  );
   await expect(chatWindow.getByTestId("git-change-description-state")).toHaveText(
     "Blocked (approval-required)",
   );
+
+  await capturePrDescriptionModes({
+    issue: 3400,
+    page,
+    windowId: "issue-3400-chat-window",
+    surface: '[data-testid="git-change-description-preview-body"]',
+    state: "held-preview",
+    sources: CHAT_VISUAL_SOURCES,
+    keyboardTarget: '[data-testid="git-change-description-approve"]',
+  });
 
   await chatWindow.getByTestId("git-change-description-approve").click();
   await chatWindow.getByTestId("git-change-description-apply").click();
   await expect(chatWindow.getByTestId("git-change-description-state")).toHaveText(
     "Current (applied)",
+  );
+  const appliedCapture = await capturePrDescriptionState(
+    page,
+    3400,
+    "issue-3400-chat-window",
+    "09-applied",
   );
 
   // One-use: the approved proposal was consumed by the apply above, so a second Apply click must
@@ -142,4 +188,85 @@ test("reviews, approves and applies the held description through the connected p
     "aria-disabled",
     "true",
   );
+  expect(lifecycle.calls).toEqual({ review: 1, approve: 1, apply: 1 });
+  writePrDescriptionJourneyEvidence({
+    issue: 3400,
+    cases: [
+      "server-held proposal reviewed before approval",
+      "exact final body displayed",
+      "one-use approval applied once",
+    ],
+    observations: {
+      ...lifecycle.calls,
+      exactFinalBodyDisplayed: true,
+      appliedControlDisabled: true,
+      appliedCapture,
+    },
+    sources: CHAT_VISUAL_SOURCES,
+  });
+});
+
+test("qualifies the governed PR Description panel through preview, approval and apply", async ({
+  page,
+  request,
+}) => {
+  const fixture = buildGitChangeChatFixture();
+  fixtures.push(fixture);
+  const chat = await createChatForFixture(request, fixture.root);
+  await interceptProjectList(page, fixture.root);
+  const lifecycle = await interceptGovernedPrDescriptionLifecycle(page);
+  await seedWorkspace(page, fixture.root, chat);
+  await page.goto("/");
+
+  const gitWindow = page.locator('[data-window-id="issue-3400-git-window"]');
+  await gitWindow.getByRole("button", { name: "Create pull request" }).click();
+  const description = gitWindow.getByTestId("gpr-description");
+  await expect(description).toBeVisible();
+  await description.getByLabel("Description pull request number").fill("42");
+  await description.getByTestId("gpr-description-preview-button").click();
+  await expect(description.getByTestId("gpr-description-preview")).toHaveText(lifecycle.finalBody, {
+    useInnerText: false,
+  });
+  await expect(description).toContainText("Human context before the managed region.");
+  await expect(description).toContainText("Generated by Keiko from bounded fixture evidence.");
+  await expect(description).toContainText("Human footer after the managed region.");
+
+  await capturePrDescriptionModes({
+    issue: 3389,
+    page,
+    windowId: "issue-3400-git-window",
+    surface: '[data-testid="gpr-description"]',
+    state: "preview-loaded",
+    sources: PR_CARD_VISUAL_SOURCES,
+    keyboardTarget: '[data-testid="gpr-description-approve-button"]',
+  });
+  await description.getByTestId("gpr-description-approve-button").click();
+  await expect(description.getByTestId("gpr-description-apply-button")).toBeEnabled();
+  await description.getByTestId("gpr-description-apply-button").click();
+  await expect(description.getByTestId("gpr-description-state")).toHaveAttribute(
+    "data-state",
+    "current",
+  );
+  const appliedCapture = await capturePrDescriptionState(
+    page,
+    3389,
+    "issue-3400-git-window",
+    "09-applied",
+  );
+  expect(lifecycle.calls).toEqual({ review: 1, approve: 1, apply: 1 });
+  writePrDescriptionJourneyEvidence({
+    issue: 3389,
+    cases: [
+      "preview displays exact server final body",
+      "managed and human regions remain visible",
+      "approval precedes one apply",
+    ],
+    observations: {
+      ...lifecycle.calls,
+      exactFinalBodyDisplayed: true,
+      humanRegionsDisplayed: true,
+      appliedCapture,
+    },
+    sources: PR_CARD_VISUAL_SOURCES,
+  });
 });

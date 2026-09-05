@@ -116,6 +116,7 @@ class CommitFixture implements CodingIssueCommitFixture {
   private lastControl = 0;
   private sequence = 0;
   private readonly toolPhases: ScriptedToolPhase[] = [];
+  private readonly modelResponsePhases: string[] = [];
   private latestPhase: FixturePhase = "run-created";
   private latestResult: CodingToolResult | undefined;
   private staging: Promise<void> | undefined;
@@ -143,6 +144,7 @@ class CommitFixture implements CodingIssueCommitFixture {
         ...(result === undefined ? {} : { result }),
         rawContentRecorded: false,
         toolPhases: this.toolPhases,
+        modelResponsePhases: this.modelResponsePhases,
       }),
     );
     renameSync(`${path}.next`, path);
@@ -225,10 +227,15 @@ class CommitFixture implements CodingIssueCommitFixture {
   }
   public async beforeResponse(response: NormalizedResponse): Promise<void> {
     if (this.run === undefined) throw new Error("commit-fixture-run-unavailable");
+    const requestedTool = response.toolCalls[0]?.name ?? "none";
+    this.modelResponsePhases.push(`${requestedTool}:entered`);
+    this.write(this.latestPhase, this.latestResult);
     if (response.toolCalls.some((call) => call.name === "keiko_verification")) {
       if (this.staging === undefined) throw new Error("commit-fixture-stage-unavailable");
       await this.staging;
     }
+    this.modelResponsePhases.push(`${requestedTool}:returned`);
+    this.write(this.latestPhase, this.latestResult);
     if (response.toolCalls.length === 0) await this.waitForControls();
   }
 

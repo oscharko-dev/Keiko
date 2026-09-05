@@ -827,7 +827,10 @@ async function admitAndGenerate(
 ): Promise<ProductionWorkbenchDescriptionOutcome> {
   const authorityScope: GitDeliveryDescriptionAuthorityScope = {
     remoteDigest: scope.remoteDigest,
-    pr: { baseRef: scope.baseSha, headRef: scope.headSha },
+    pr: {
+      baseRef: scope.baseRef ?? scope.baseSha,
+      headRef: scope.headRef ?? scope.headSha,
+    },
     snapshotDigest: captured.snapshotDigest,
   };
   const nowIso = new Date(deps.now()).toISOString();
