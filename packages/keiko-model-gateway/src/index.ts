@@ -143,6 +143,11 @@ export {
   type SafeRerankerConfig,
 } from "./config.js";
 
+// The ONE env-only Model Gateway provider-admission formula (config.ts's own comment on it):
+// appended here rather than folded into the export block above so this file stays append-only
+// for this addition (KEIKO-final-audit F13/F24).
+export { hasConfiguredEnvModelProvider } from "./config.js";
+
 export { Gateway, type GatewayCallRequest, type GatewayDeps } from "./gateway.js";
 
 // The caller-supplied correlation context a `GatewayCallRequest` may carry (ADR-0173 D5). Exported

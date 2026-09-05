@@ -2067,6 +2067,30 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     expect(pill).not.toHaveTextContent("resolve-conflicts");
   });
 
+  // F3 (epic #3384 final audit): before proposePush existed, runPushSync called pushExecute
+  // directly with no mint step at all — an accepted run's push could never satisfy the epic's
+  // unconditional approval requirement. When the mint itself is denied, proposePush resolves to
+  // the same static "approval-required" outcome the pack-driven approval-gated path already
+  // renders, so the existing pushOutcomePresentation catalog surfaces it without a new code path.
+  it("shows the approval-required label when the push mint is denied (F3)", async () => {
+    const client = makeClient({
+      getSummary: vi.fn(async () => makeSummary({ ahead: 2 })),
+      pushPropose: vi.fn<GitClientSeam["pushPropose"]>(async () => ({
+        schemaVersion: "1",
+        status: "approval-required",
+        actionKind: "push",
+      })),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("button", { name: "Run sync: Push" }));
+    await waitFor(() => expect(client.pushPropose).toHaveBeenCalled());
+
+    const pill = await screen.findByRole("alert");
+    expect(pill).toHaveTextContent(/approval/i);
+  });
+
   it("shows diverged branches as an explicit safe fetch state with merge guidance", async () => {
     const client = makeClient({
       getSummary: vi.fn(async () => makeSummary({ ahead: 2, behind: 3 })),
@@ -3096,6 +3120,69 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
         message: "feat: subject\n\nBody line.",
       }),
     );
+  });
+
+  // F3 (epic #3384 final audit): before proposeCommit existed, commitChanges called
+  // commitExecute directly with no mint step at all — an accepted run's commit could never
+  // satisfy the epic's unconditional approval requirement and there was no code path that could
+  // ever render "Approval required" for a mint denial (it would either succeed outright with no
+  // approval, or throw a raw network error). Failing-before: this test could not even be written
+  // against the pre-fix seam, since commitExecute carries no concept of a denied mint.
+  it("shows the static Approval required label when the commit mint is denied (F3)", async () => {
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      commitPropose: vi.fn<GitClientSeam["commitPropose"]>(async () => ({
+        schemaVersion: "1",
+        status: "approval-required",
+        actionKind: "commit",
+      })),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Summary"), "feat: needs approval");
+    const button = screen.getByRole("button", { name: /^Commit/ });
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+
+    expect(await screen.findByTestId("git-commit-outcome-headline")).toHaveTextContent(
+      "commit: Approval required",
+    );
+  });
+
+  // F3: proves the existing single-flight guard (useGitActions' seqRef, via the disabled Commit
+  // button while `commit.flow.busy`) is reused as-is rather than a second lock being introduced
+  // for the mint-then-execute call — a second click while the first commitPropose call is still
+  // in flight must not mint (or execute) a second time.
+  it("does not call commitPropose a second time while the first mint/execute is in flight (F3)", async () => {
+    let resolveCommit!: (v: { schemaVersion: "1"; status: "succeeded"; actionKind: string }) => void;
+    const pending = new Promise<{ schemaVersion: "1"; status: "succeeded"; actionKind: string }>(
+      (res) => {
+        resolveCommit = res;
+      },
+    );
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      commitPropose: vi.fn<GitClientSeam["commitPropose"]>(() => pending),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Summary"), "feat: single flight");
+    const button = screen.getByRole("button", { name: /^Commit/ });
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+    await waitFor(() => expect(button).toBeDisabled());
+    // The button is disabled while busy, so a second click cannot dispatch a second call.
+    fireEvent.click(button);
+    expect(client.commitPropose).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveCommit({ schemaVersion: "1", status: "succeeded", actionKind: "commit" });
+    });
+    expect(client.commitPropose).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes status and clears the composer after a successful commit", async () => {

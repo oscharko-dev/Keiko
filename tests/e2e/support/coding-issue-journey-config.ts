@@ -18,6 +18,7 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
+import { hasConfiguredEnvModelProvider } from "@oscharko-dev/keiko-model-gateway";
 
 export interface CodingIssueJourneyQualificationConfig {
   readonly gatewayConfigPath: string | undefined;
@@ -34,13 +35,16 @@ export type CodingIssueJourneyQualificationResolution =
       readonly missing: readonly string[];
     };
 
-const MODEL_API_KEY_PATTERN = /^KEIKO_MODEL_[A-Z0-9_]+_API_KEY$/u;
 const GITHUB_REMOTE_PATTERN = /github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/u;
 
+// Final-audit F13/F24: delegates to the SAME env-only provider-admission formula production's own
+// `packages/keiko-server/src/deps.ts` composition uses (both `_API_KEY` and `_BASE_URL` must be
+// present and non-empty), never a restated, weaker copy that accepts the API key alone -- an
+// API-key-only environment used to report a qualifying profile here while production's own
+// `hasEnvProvider` would refuse it, so the live #3390 lane could start a real server with no
+// provider wired.
 function hasEnvOnlyModelProfile(env: Readonly<Record<string, string | undefined>>): boolean {
-  return Object.keys(env).some(
-    (key) => MODEL_API_KEY_PATTERN.test(key) && (env[key]?.length ?? 0) > 0,
-  );
+  return hasConfiguredEnvModelProvider(env);
 }
 
 function hasRealModelGatewayProfile(env: Readonly<Record<string, string | undefined>>): boolean {

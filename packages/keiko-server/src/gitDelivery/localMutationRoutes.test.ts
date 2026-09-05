@@ -606,7 +606,11 @@ describe("local mutation routes — governed execution (direct handler + seams)"
     expect(adapter.calls()).toEqual(["stage"]);
   });
 
-  it("still returns approval-required (never mode-denied) in governed-assist mode when no claim is offered", async () => {
+  // Unlike a delivery effect (commit/push/…), a local mutation has no downstream soft
+  // "approval-required" response of its own to fall back to — the coarse admission gate IS the
+  // approval-required enforcement point here, so refusing without a matching claim surfaces as its
+  // ordinary 403 GIT_DELIVERY_AUTHORITY_DENIED, never a silent allow and never "mode-denied".
+  it("refuses with approval-required (never mode-denied, never a silent allow) in governed-assist mode when no claim is offered", async () => {
     const approvalGatedPack: GitDeliveryRepoPolicyPack = {
       schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
       repoId: "repo",
@@ -641,8 +645,8 @@ describe("local mutation routes — governed execution (direct handler + seams)"
       ctxFor(STAGE, { schemaVersion: "1", projectId }),
       governedAssistDeps,
     );
-    expect(res.status).toBe(200);
-    expect((res.body as { status: string }).status).toBe("approval-required");
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
     expect(adapter.calls()).toEqual([]);
   });
 });

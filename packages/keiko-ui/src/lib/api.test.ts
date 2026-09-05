@@ -103,6 +103,8 @@ import {
   fetchGitDeliveryPrMarkReadyApprove,
   fetchGitDeliveryPrMarkReadyExecute,
   proposePrMarkReady,
+  proposeCommit,
+  proposePush,
   fetchGitDeliveryPrDescriptionPreview,
   fetchGitDeliveryPrDescriptionApprove,
   fetchGitDeliveryPrDescriptionApply,
@@ -3774,6 +3776,126 @@ describe("Governed commit/push/pull-request approval mint (#3386/#3387)", () => 
       body: "body",
       isDraft: false,
     });
+  });
+});
+
+// F3 (epic #3384 final audit): commit/push through the standalone Git Client Window could never
+// satisfy the epic's own unconditional approval requirement (correction 5) — `commitChanges`/
+// `runPushSync` (GitClientWindow.tsx) called `commitExecute`/`pushExecute` directly, with no mint
+// step at all, so an accepted run's commit/push silently dead-ended every time. Failing-before:
+// before `proposeCommit`/`proposePush` existed, this whole block failed with
+// "proposeCommit is not a function" / "proposePush is not a function".
+describe("Governed commit/push mint-then-execute (#3386/#3387, F3 epic #3384 final audit)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonOk(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  function jsonDenied(): Response {
+    return new Response(JSON.stringify({ error: { code: "FORBIDDEN", message: "denied" } }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  function approvalFixture(id: string): Record<string, unknown> {
+    return {
+      schemaVersion: "1",
+      approval: { schemaVersion: "1", approvalId: id, approvalToken: "t".repeat(64) },
+      expiresAt: "2026-01-01T00:00:30.000Z",
+    };
+  }
+
+  it("proposeCommit mints then redeems, in order, before reporting success", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonOk(approvalFixture("gda_commit_1")))
+      .mockResolvedValueOnce(
+        jsonOk({ schemaVersion: "1", status: "succeeded", actionKind: "commit" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await proposeCommit({ projectId: "/repo", message: "feat: x" });
+
+    expect(result.status).toBe("succeeded");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [approveUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [executeUrl, executeInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(approveUrl).toBe("/api/git-delivery/commit/approve");
+    expect(executeUrl).toBe("/api/git-delivery/commit/execute");
+    const executeBody = JSON.parse(executeInit.body as string) as Record<string, unknown>;
+    expect(executeBody.approval).toEqual(approvalFixture("gda_commit_1").approval);
+  });
+
+  it("proposeCommit resolves to the static approval-required outcome when the mint itself is denied", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonDenied());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await proposeCommit({ projectId: "/repo", message: "feat: x" });
+
+    expect(result).toEqual({ schemaVersion: "1", status: "approval-required", actionKind: "commit" });
+    // The denied mint never reaches execute — only the approve endpoint was called.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [approveUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(approveUrl).toBe("/api/git-delivery/commit/approve");
+  });
+
+  it("proposePush mints then redeems, in order, before reporting success", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonOk(approvalFixture("gda_push_1")))
+      .mockResolvedValueOnce(jsonOk({ schemaVersion: "1", status: "succeeded", actionKind: "push" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await proposePush({
+      projectId: "/repo",
+      remoteAlias: "origin",
+      remoteBranchName: "feature/x",
+      sourceBranchName: "feature/x",
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [approveUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [executeUrl, executeInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(approveUrl).toBe("/api/git-delivery/push/approve");
+    expect(executeUrl).toBe("/api/git-delivery/push/execute");
+    const executeBody = JSON.parse(executeInit.body as string) as Record<string, unknown>;
+    expect(executeBody.approval).toEqual(approvalFixture("gda_push_1").approval);
+  });
+
+  it("proposePush resolves to the static approval-required outcome when the mint itself is denied", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonDenied());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await proposePush({
+      projectId: "/repo",
+      remoteAlias: "origin",
+      remoteBranchName: "feature/x",
+      sourceBranchName: "feature/x",
+    });
+
+    expect(result).toEqual({ schemaVersion: "1", status: "approval-required", actionKind: "push" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [approveUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(approveUrl).toBe("/api/git-delivery/push/approve");
+  });
+
+  it("proposeCommit still rejects when execute itself fails after a successful mint", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonOk(approvalFixture("gda_commit_2")))
+      .mockResolvedValueOnce(jsonDenied());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(proposeCommit({ projectId: "/repo", message: "feat: x" })).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 

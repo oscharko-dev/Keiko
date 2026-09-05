@@ -80,6 +80,30 @@ describe("resolveCodingIssueJourneyQualificationConfig", () => {
     expect(result.config.gatewayConfigPath).toBeUndefined();
   });
 
+  // Final-audit F13/F24 regression: production's own `hasEnvProvider` (packages/keiko-server/src/
+  // deps.ts) requires BOTH `_API_KEY` and `_BASE_URL` non-empty before treating an env-only
+  // profile as configured. Before this fix, this harness's `hasEnvOnlyModelProfile` accepted the
+  // API key alone, so a live #3390 lane could start a real server with no provider wired at all.
+  it("fails closed on an env-only profile missing its base URL (API key alone does not qualify)", () => {
+    const root = trackedGithubCheckout();
+    const env = { ...fullyConfiguredEnv(root) };
+    delete env.KEIKO_MODEL_CODING_ISSUE_JOURNEY_BASE_URL;
+    const result = resolveCodingIssueJourneyQualificationConfig(env);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.missing.some((entry) => entry.includes("Model Gateway"))).toBe(true);
+  });
+
+  it("fails closed on an env-only profile missing its API key (base URL alone does not qualify)", () => {
+    const root = trackedGithubCheckout();
+    const env = { ...fullyConfiguredEnv(root) };
+    delete env.KEIKO_MODEL_CODING_ISSUE_JOURNEY_API_KEY;
+    const result = resolveCodingIssueJourneyQualificationConfig(env);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.missing.some((entry) => entry.includes("Model Gateway"))).toBe(true);
+  });
+
   it("accepts a gateway config file path in place of the env-only profile", () => {
     const root = trackedGithubCheckout();
     const configDir = mkdtempSync(join(tmpdir(), "coding-issue-journey-gateway-config-"));

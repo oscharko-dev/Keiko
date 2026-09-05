@@ -233,10 +233,20 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       status: "succeeded",
       actionKind: "commit",
     })),
+    commitPropose: vi.fn<GitClientSeam["commitPropose"]>(async () => ({
+      schemaVersion: "1",
+      status: "succeeded",
+      actionKind: "commit",
+    })),
     syncPreview: vi.fn<GitClientSeam["syncPreview"]>(),
     syncExecute: vi.fn<GitClientSeam["syncExecute"]>(),
     pushPreview: vi.fn<GitClientSeam["pushPreview"]>(),
     pushExecute: vi.fn<GitClientSeam["pushExecute"]>(async () => ({
+      schemaVersion: "1",
+      status: "succeeded",
+      actionKind: "push",
+    })),
+    pushPropose: vi.fn<GitClientSeam["pushPropose"]>(async () => ({
       schemaVersion: "1",
       status: "succeeded",
       actionKind: "push",

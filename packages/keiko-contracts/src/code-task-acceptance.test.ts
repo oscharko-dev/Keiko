@@ -603,6 +603,8 @@ function validQualificationManifest(): CodeTaskQualificationManifestV1 {
       auditDigest: { outcome: "known", value: AUDIT_DIGEST },
       humanMergeAttestationDigest: { outcome: "known", value: HUMAN_MERGE_ATTESTATION_DIGEST },
       requiredTools: ["keiko_changeset_edit"],
+      spendBudgetUsd: 25,
+      observedSpendUsd: { outcome: "known", value: 4.5 },
       scenarios: [
         {
           scenarioId: "issue-to-pr-full-access",
@@ -716,9 +718,7 @@ describe("validateCodeTaskQualificationManifest", () => {
     const result = validateCodeTaskQualificationManifest(base);
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(
-      result.errors.some((error) => error.includes("humanMergeAttestationDigest")),
-    ).toBe(true);
+    expect(result.errors.some((error) => error.includes("humanMergeAttestationDigest"))).toBe(true);
   });
 
   it("rejects requiredTools entries that are not catalog tool names (#3390 audit F10)", () => {
@@ -737,6 +737,31 @@ describe("validateCodeTaskQualificationManifest", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.errors).toContain("requiredTools must be an array of catalog tool names");
+  });
+
+  it("rejects a non-positive or unbounded spendBudgetUsd (#3390 audit F15)", () => {
+    expect(validateCodeTaskQualificationManifest(mutatedManifest({ spendBudgetUsd: 0 })).ok).toBe(
+      false,
+    );
+    expect(validateCodeTaskQualificationManifest(mutatedManifest({ spendBudgetUsd: -5 })).ok).toBe(
+      false,
+    );
+    expect(
+      validateCodeTaskQualificationManifest(mutatedManifest({ spendBudgetUsd: 10_000_000 })).ok,
+    ).toBe(false);
+  });
+
+  it("accepts an unknown observedSpendUsd and rejects a negative one", () => {
+    expect(
+      validateCodeTaskQualificationManifest(
+        mutatedManifest({ observedSpendUsd: { outcome: "unknown" } }),
+      ).ok,
+    ).toBe(true);
+    expect(
+      validateCodeTaskQualificationManifest(
+        mutatedManifest({ observedSpendUsd: { outcome: "known", value: -1 } }),
+      ).ok,
+    ).toBe(false);
   });
 });
 
@@ -863,5 +888,29 @@ describe("codeTaskQualificationManifestFailures and codeTaskQualificationVerdict
       humanMergeAttestationDigest: { outcome: "absent" },
     };
     expect(codeTaskQualificationManifestFailures(noOutcomeYet, binding)).toEqual([]);
+  });
+
+  it("flags an observed spend above the approved budget, never silently (#3390 audit F15)", () => {
+    const manifest = validQualificationManifest();
+    const overspent: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      spendBudgetUsd: 10,
+      observedSpendUsd: { outcome: "known", value: 10.01 },
+    };
+    expect(codeTaskQualificationManifestFailures(overspent, binding)).toContain(
+      "spend budget exceeded: observed 10.01 usd exceeds budget 10 usd",
+    );
+    expect(codeTaskQualificationVerdictFor(overspent, binding)).toBe("blocked");
+    const withinBudget: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      spendBudgetUsd: 10,
+      observedSpendUsd: { outcome: "known", value: 10 },
+    };
+    expect(codeTaskQualificationManifestFailures(withinBudget, binding)).toEqual([]);
+    const unreportedSpend: CodeTaskQualificationManifestV1 = {
+      ...manifest,
+      observedSpendUsd: { outcome: "unknown" },
+    };
+    expect(codeTaskQualificationManifestFailures(unreportedSpend, binding)).toEqual([]);
   });
 });

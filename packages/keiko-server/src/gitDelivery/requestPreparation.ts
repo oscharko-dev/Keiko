@@ -20,7 +20,6 @@ import { resolveProjectWorkspace } from "./execution.js";
 import { readParsedGitDeliveryBody } from "./requestGuards.js";
 import {
   authorizeGitDelivery,
-  type ActiveGitDeliveryRunAuthority,
   type GitDeliveryApprovalRedemption,
   type GitDeliveryAuthorityDenial,
   type GitDeliveryDescriptionAuthorityAdmission,
@@ -271,16 +270,15 @@ function gitDeliveryApprovalRedemption(
   const { operation, command } = audit.approvalBinding;
   const store = audit.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
   const nowMs = Date.parse(audit.nowIso ?? new Date().toISOString());
-  return (active: ActiveGitDeliveryRunAuthority): boolean =>
+  // NOT run-bound: mirrors the EXACT binding shape `localMutationRoutes.ts`'s own subsequent
+  // `resolveGitDeliveryApprovalRequirement` call already uses for "local-mutation" (project +
+  // operation + command only, no runId/envelopeDigest) — the peek must match the same binding hash
+  // the real consumption computes, or a claim minted against that shape would never redeem either
+  // one.
+  return (): boolean =>
     store.matches({
       approval: claim,
-      binding: {
-        projectId,
-        operation,
-        command,
-        runId: active.runId,
-        envelopeDigest: active.envelopeDigest,
-      },
+      binding: { projectId, operation, command },
       nowMs,
     });
 }

@@ -271,6 +271,46 @@ const WORKSPACE_READ_SCHEMA = {
   required: ["relativePath", "startLine", "maxLines"],
 } as const;
 
+// #3406/#3414: mirrors opencodeToolSchemas.ts's REPOSITORY_SEARCH_SCHEMA for #3386's H1 local
+// repository-search handler, projected as keiko_repository_search.
+const REPOSITORY_SEARCH_SCHEMA = {
+  type: "object",
+  properties: {
+    mode: {
+      type: "string",
+      enum: ["lexical", "literal", "regex", "symbol"],
+      description:
+        "lexical: natural-language keyword match. literal: exact substring. regex: bounded, ReDoS-safe pattern. symbol: exact identifier (no whitespace).",
+    },
+    query: {
+      type: "string",
+      minLength: 1,
+      maxLength: 200,
+      description: "Search text for the selected mode.",
+    },
+    caseSensitive: { type: "boolean" },
+    includeGlobs: {
+      type: "array",
+      maxItems: 32,
+      items: { type: "string", minLength: 1, maxLength: 200 },
+      description: "Workspace-relative glob patterns to restrict the search to.",
+    },
+    excludeGlobs: {
+      type: "array",
+      maxItems: 32,
+      items: { type: "string", minLength: 1, maxLength: 200 },
+      description: "Workspace-relative glob patterns to exclude from the search.",
+    },
+    maxResults: {
+      type: "integer",
+      minimum: 1,
+      maximum: 50,
+      description: "Maximum number of bounded content excerpts to return.",
+    },
+  },
+  required: ["mode", "query", "caseSensitive", "includeGlobs", "excludeGlobs", "maxResults"],
+} as const;
+
 const WORKSPACE_DISCOVER_SCHEMA = {
   type: "object",
   properties: {
@@ -520,6 +560,7 @@ const PINNED_MODEL_VISIBLE_TOOLS = [
   { name: "question", parameters: QUESTION_SCHEMA },
   { name: "keiko_workspace_discover", parameters: WORKSPACE_DISCOVER_SCHEMA },
   { name: "keiko_workspace_read", parameters: WORKSPACE_READ_SCHEMA },
+  { name: "keiko_repository_search", parameters: REPOSITORY_SEARCH_SCHEMA },
   { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
   { name: "keiko_verification", parameters: VERIFICATION_PROJECTED_SCHEMA },
   { name: "keiko_research_fetch", parameters: RESEARCH_FETCH_SCHEMA },
@@ -921,6 +962,12 @@ describe("coding-sidecar gateway", () => {
         "43c78833caee7bb83f746ae45cacd44d3b8cc07fc7a3b298a24caae993ba2978",
       ],
       ["keiko_workspace_read", "56d2649a7a308efdc47db2899922c9889822a17b9d9bd081ee0c099a066411ac"],
+      // #3406/#3414: keiko_repository_search projects #3386's H1 local repository-search handler
+      // (executeCodingRepositoryRequest); regenerated because the model-visible set changed.
+      [
+        "keiko_repository_search",
+        "3abb5e7d1f1fa82aabb7b821c515078bc1a2e165a1471c940d4d72b9b9fc4069",
+      ],
       ["keiko_changeset_edit", "59902a2dd9af28ed8b97d1108215c6e88bbe0fba017a4756a99e833b9af48952"],
       ["keiko_verification", "4cd58eaead9fef3c41ef7faaacd2feb5440755e052ed67efa6b9c4860e18e988"],
       ["keiko_research_fetch", "8510b5132cc06c627c2b46c20df92c3fcca392f0d16a621b7006eb41d2bf02b5"],
@@ -1487,6 +1534,14 @@ describe("coding-sidecar gateway", () => {
             parameters: {
               required: ["relativePath", "startLine", "maxLines"],
               properties: { ...WORKSPACE_READ_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_repository_search",
+            parameters: {
+              required: ["mode", "query", "caseSensitive", "includeGlobs", "excludeGlobs", "maxResults"],
+              properties: { ...REPOSITORY_SEARCH_SCHEMA.properties },
               type: "object",
             },
           },

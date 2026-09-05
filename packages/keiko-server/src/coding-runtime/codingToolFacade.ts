@@ -120,10 +120,25 @@ import type {
   CodingToolInvocationRegistry,
   CodingToolInvocationTakeResult,
 } from "./codingToolInvocationRegistry.js";
+import {
+  CatalogFacadeDeniedError,
+  type CatalogFacadeBridge,
+} from "../tool-catalog/catalogToolFacadeBridge.js";
+
+// F8 (#3413): an optional, additive extension of CodingToolFacadeOptions. `codingToolFacadePorts.ts`
+// stays the single owner of the base shape; this widens only the LOCAL parameter type accepted by
+// this file's own composition function, so every existing caller that passes a plain
+// CodingToolFacadeOptions (no `catalogBridge`) keeps its exact prior behaviour unchanged.
+export interface CodingToolFacadeCreateOptions extends CodingToolFacadeOptions {
+  /** Resolves a catalog binding per covered tool call and settles it around the existing handler
+   * execution (descriptor, disposition, budget, tool-catalog.* lifecycle log lines). Actions the
+   * catalog does not cover dispatch exactly as before -- no behaviour change, no log line. */
+  readonly catalogBridge?: CatalogFacadeBridge | undefined;
+}
 
 export function createCodingToolFacade(
   ports: CodingToolFacadePorts,
-  options: CodingToolFacadeOptions = {},
+  options: CodingToolFacadeCreateOptions = {},
 ): CodingToolFacade {
   const context: ExecutionContext = {
     ports,
@@ -131,6 +146,7 @@ export function createCodingToolFacade(
     maxInFlight: boundedOption(options.maxInFlight, CODING_TOOL_MAX_IN_FLIGHT),
     invocationRegistry: options.invocationRegistry,
     requireInvocationRegistryForEdits: options.requireInvocationRegistryForEdits === true,
+    catalogBridge: options.catalogBridge,
     inFlight: { count: 0 },
   };
   return {
@@ -144,6 +160,7 @@ interface ExecutionContext {
   readonly maxInFlight: number;
   readonly invocationRegistry: CodingToolInvocationRegistry | undefined;
   readonly requireInvocationRegistryForEdits: boolean;
+  readonly catalogBridge: CatalogFacadeBridge | undefined;
   readonly inFlight: { count: number };
 }
 
@@ -165,6 +182,7 @@ async function execute(
       request,
       context.invocationRegistry,
       context.requireInvocationRegistryForEdits,
+      context.catalogBridge,
     );
   } finally {
     context.inFlight.count -= 1;
@@ -177,6 +195,7 @@ async function executeAdmitted(
   request: CodingToolActionRequest,
   invocationRegistry: CodingToolInvocationRegistry | undefined,
   requireInvocationRegistryForEdits: boolean,
+  catalogBridge: CatalogFacadeBridge | undefined,
 ): Promise<CodingToolResult> {
   const admission = ports.authority.admit(input.capability, request);
   if (!admission.ok) return empty("denied");
@@ -186,12 +205,16 @@ async function executeAdmitted(
     return executeStagedEdit(ports, input, request, admission, invocationRegistry);
   }
   if (request.action === "edit" && requireInvocationRegistryForEdits) return empty("denied");
+  const runDelegate = (): Promise<unknown> =>
+    ports.delegate.execute(request, input.signal, admission.mutationGuard);
   try {
-    return project(
-      request,
-      await ports.delegate.execute(request, input.signal, admission.mutationGuard),
-    );
-  } catch {
+    const outcome =
+      catalogBridge === undefined
+        ? await runDelegate()
+        : await catalogBridge.dispatch(request, runDelegate);
+    return project(request, outcome);
+  } catch (error) {
+    if (error instanceof CatalogFacadeDeniedError) return empty("denied");
     return projected("failed");
   }
 }

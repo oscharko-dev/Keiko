@@ -1272,19 +1272,12 @@ class ScriptedChildBackend implements RuntimeProcessBackend {
     private readonly children: FakeOpenCodeChild[],
     private readonly generatedTools: boolean,
     private readonly observePhase?: (event: ScriptedToolPhase) => void,
-    private readonly gatewayToolsOverride?: readonly FunctionalGatewayTool[],
   ) {}
 
   public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
-    const child = new FakeOpenCodeChild(
-      request.env,
-      this.generatedTools,
-      this.observePhase,
-      undefined,
-      this.gatewayToolsOverride,
-    );
+    const child = new FakeOpenCodeChild(request.env, this.generatedTools, this.observePhase);
     this.children.push(child);
     const tree: ScriptedTree = {
       treeId: request.recoveryHandle,
@@ -1360,14 +1353,6 @@ export function createScriptedOpenCodeHarness(
   options: {
     readonly generatedTools?: boolean;
     readonly observePhase?: (event: ScriptedToolPhase) => void;
-    /**
-     * Test-only fail-closed seam: overrides the `tools` array a scripted child advertises to the
-     * REAL sidecar gateway route on every `/chat/completions` call, instead of the full
-     * `functionalGatewayTools()` projection. Lets a live run prove the sidecar gateway's
-     * `hasExactOpenCodeVisibleToolContract` admission denies an incomplete advertised set, not
-     * only in isolation.
-     */
-    readonly gatewayToolsOverride?: readonly FunctionalGatewayTool[];
   } = {},
 ): ScriptedOpenCodeHarness {
   const children: FakeOpenCodeChild[] = [];
@@ -1384,7 +1369,6 @@ export function createScriptedOpenCodeHarness(
           children,
           options.generatedTools === true,
           options.observePhase,
-          options.gatewayToolsOverride,
         ),
         qualifications: [portable.qualification],
       }),

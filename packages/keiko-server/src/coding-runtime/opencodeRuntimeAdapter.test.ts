@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
+import { Script } from "node:vm";
 
 import { describe, expect, it, vi } from "vitest";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import { OPENCODE_PINNED_BUILT_IN_TOOLS } from "./opencodeToolSchemas.js";
+import { createGeneratedOpenCodeBundle } from "./opencodeRuntimeAdapter.js";
+import { CODING_TOOL_MAX_BODY_BYTES, parseCodingToolRequest } from "./codingToolIpc.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 
 const DIGEST = "a".repeat(64);
@@ -10,6 +13,7 @@ const SECRET = "SENTINEL_OPENCODE_RUNTIME_SECRET";
 const KEIKO_PRODUCER_TOOLS = [
   "keiko_workspace_discover",
   "keiko_workspace_read",
+  "keiko_repository_search",
   "keiko_changeset_edit",
   "keiko_verification",
   "keiko_research_fetch",
@@ -1165,5 +1169,155 @@ describe("OpenCode runtime adapter readiness", () => {
     // Before the fix, this returned false because turnArmed was still true from the leaked turn.
     expect(adapter.armTurn()).toBe(true);
     await adapter.close();
+  });
+});
+
+// #3406/#3414: dispatches the model-visible keiko_repository_search tool through the same
+// generated-source mechanism every other governed tool uses (GeneratedToolAction/toolSource),
+// consuming #3386's already-mounted H1 handler rather than adding a second dispatch path.
+describe("keiko_repository_search generated tool dispatch", () => {
+  interface GeneratedRepositorySearchContext {
+    readonly sessionID: string;
+    readonly callID: string;
+    readonly abort: AbortSignal;
+    readonly ask: (request: Record<string, unknown>) => Promise<void>;
+  }
+  interface GeneratedRepositorySearchTool {
+    readonly execute: (
+      args: Record<string, unknown>,
+      context: GeneratedRepositorySearchContext,
+    ) => Promise<{ readonly title: string; readonly output: string; readonly metadata: unknown }>;
+  }
+
+  /** Executes the repository-owned generated shim in isolation, never model- or workspace-supplied source. */
+  function loadRepositorySearchTool(fetchImpl: typeof fetch): GeneratedRepositorySearchTool {
+    const source = createGeneratedOpenCodeBundle().toolSources.keiko_repository_search;
+    if (source === undefined) throw new Error("keiko_repository_search tool source missing");
+    const script = new Script(
+      `${source.replace("export default", "const generated =")}\ngenerated;`,
+    );
+    const value: unknown = script.runInNewContext(
+      {
+        process: {
+          env: {
+            KEIKO_TOOL_FACADE_URL: "https://tool-facade.internal/invoke",
+            KEIKO_TOOL_FACADE_CAPABILITY: "capability-token",
+          },
+        },
+        fetch: fetchImpl,
+        AbortController,
+        TextEncoder,
+        TextDecoder,
+        Uint8Array,
+        setTimeout,
+        clearTimeout,
+      },
+      { timeout: 1000 },
+    );
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      !("execute" in value) ||
+      typeof value.execute !== "function"
+    ) {
+      throw new Error("generated repository-search tool invalid");
+    }
+    return value as GeneratedRepositorySearchTool;
+  }
+
+  function boundedCompletedSearchResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+        search: {
+          ok: true,
+          kind: "search",
+          hits: [
+            {
+              path: "src/a.ts",
+              startLine: 1,
+              endLine: 2,
+              snippet: "const a = 1;",
+              redacted: false,
+              snippetTruncated: false,
+            },
+          ],
+          truncationReasons: [],
+          metrics: { candidatesDiscovered: 1, filesScanned: 1, skippedFiles: 0, durationMs: 1 },
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }
+
+  // Fails before #3414: without a `keiko_repository_search` entry in
+  // OPENCODE_TOOL_SOURCE_DEFINITIONS, createGeneratedOpenCodeBundle().toolSources never has this
+  // key, so the real pinned OpenCode runtime would have no generated tool to expose at all.
+  it("is present in the generated bundle", () => {
+    expect(createGeneratedOpenCodeBundle().toolSources.keiko_repository_search).toBeDefined();
+  });
+
+  it("nests the model's arguments under repositoryRequest so the real production parser accepts the request, and returns the bounded result", async () => {
+    let capturedBody: string | undefined;
+    const tool = loadRepositorySearchTool(((_input: unknown, init?: RequestInit) => {
+      capturedBody = typeof init?.body === "string" ? init.body : undefined;
+      return Promise.resolve(boundedCompletedSearchResponse());
+    }) as typeof fetch);
+
+    const result = await tool.execute(
+      {
+        mode: "lexical",
+        query: "safeActivity",
+        caseSensitive: false,
+        includeGlobs: [],
+        excludeGlobs: [],
+        maxResults: 10,
+      },
+      {
+        sessionID: "ses_1",
+        callID: "call_1",
+        abort: new AbortController().signal,
+        ask: (): Promise<void> => Promise.resolve(),
+      },
+    );
+
+    if (capturedBody === undefined) throw new Error("expected the generated tool to call fetch");
+    // Reaches the handler: codingToolIpc.ts's real `searchRequest` parser (the exact production
+    // entry point productionManagedWorktreeTools.ts's repositorySearch port dispatches from) must
+    // accept the generated wire body as a "search" action with the model's arguments intact.
+    const parsed = parseCodingToolRequest(capturedBody, CODING_TOOL_MAX_BODY_BYTES);
+    if (parsed === undefined || parsed.action !== "search")
+      throw new Error("expected the real production parser to accept a search action request");
+    expect(parsed.repositoryRequest).toEqual({
+      kind: "search",
+      mode: "lexical",
+      query: "safeActivity",
+      caseSensitive: false,
+      includeGlobs: [],
+      excludeGlobs: [],
+      maxResults: 10,
+    });
+    expect(result.title).toBe("repository-search");
+    const output: unknown = JSON.parse(result.output);
+    expect(output).toMatchObject({ status: "completed" });
+    const hits = (output as { search: { hits: readonly unknown[] } }).search.hits;
+    // Bounded per #3414: never more than the handler's own returnedHits ceiling.
+    expect(hits.length).toBeLessThanOrEqual(50);
+  });
+
+  it("rejects a flat, unnested wire body the same real parser would reject (proves the nesting is load-bearing)", () => {
+    const flatBody = JSON.stringify({
+      action: "search",
+      actionId: "ses_1:call_1",
+      idempotencyKey: "ses_1:call_1",
+      mode: "lexical",
+      query: "safeActivity",
+      caseSensitive: false,
+      includeGlobs: [],
+      excludeGlobs: [],
+      maxResults: 10,
+    });
+    expect(parseCodingToolRequest(flatBody, CODING_TOOL_MAX_BODY_BYTES)).toBeUndefined();
   });
 });

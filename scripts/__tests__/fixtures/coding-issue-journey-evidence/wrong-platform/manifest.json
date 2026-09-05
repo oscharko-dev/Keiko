@@ -41,12 +41,13 @@
     "outcome": "known",
     "value": "3333333333333333333333333333333333333333333333333333333333333333"
   },
-  "requiredTools": [
-    "keiko_changeset_edit"
-  ],
-  "knownLimitations": [
-    "packaged Windows x64 reference run is a documented external dependency"
-  ],
+  "requiredTools": ["keiko_changeset_edit"],
+  "spendBudgetUsd": 25,
+  "observedSpendUsd": {
+    "outcome": "known",
+    "value": 4.5
+  },
+  "knownLimitations": ["packaged Windows x64 reference run is a documented external dependency"],
   "scenarios": [
     {
       "scenarioId": "issue-to-pr-full-access",
@@ -58,9 +59,7 @@
       "blockedReason": {
         "outcome": "absent"
       },
-      "artifactDigests": [
-        "0bff7151e74aa46dd91d60a64c0d00efc45f038289cca00fd827fe2b23f37172"
-      ],
+      "artifactDigests": ["0bff7151e74aa46dd91d60a64c0d00efc45f038289cca00fd827fe2b23f37172"],
       "receiptDigest": {
         "outcome": "known",
         "value": "0bff7151e74aa46dd91d60a64c0d00efc45f038289cca00fd827fe2b23f37172"

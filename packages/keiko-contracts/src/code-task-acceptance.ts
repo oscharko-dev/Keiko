@@ -186,6 +186,13 @@ function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
+/** A bounded, non-negative USD amount (issue #3390 audit F15): finite, never negative, and capped
+ * well above any plausible single-run evaluation budget so a malformed/overflowed value cannot
+ * pass as a spend fact. */
+function isNonNegativeAmountUsd(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1_000_000;
+}
+
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
   return typeof value === "string" && (allowed as readonly string[]).includes(value);
 }
@@ -620,6 +627,15 @@ export interface CodeTaskQualificationManifestV1 {
    * requires; content-free by construction (a name, never a prompt or result). The evidence gate
    * rejects any entry absent from the model-visible tool set on the head under qualification. */
   readonly requiredTools: readonly string[];
+  /** The operator-approved bounded evaluation budget the run was launched with (#3390 audit F15;
+   * issue #3390: "Do not provision paid resources ... spend beyond operator-approved evaluation
+   * budgets"). Always known -- the run cannot start without it (see
+   * `resolveCodingIssueJourneyQualificationConfig`). */
+  readonly spendBudgetUsd: number;
+  /** What the model gateway actually reported spending; `unknown` when the gateway does not
+   * report spend at all (never fabricated as zero). The validator flags overspend after the fact
+   * by comparing this against `spendBudgetUsd` -- the budget is checked, not merely recorded. */
+  readonly observedSpendUsd: CodeTaskFact<number>;
   readonly scenarios: readonly CodeTaskQualificationScenarioV1[];
   readonly knownLimitations: readonly string[];
 }
@@ -656,6 +672,8 @@ const QUALIFICATION_MANIFEST_KEYS = [
   "auditDigest",
   "humanMergeAttestationDigest",
   "requiredTools",
+  "spendBudgetUsd",
+  "observedSpendUsd",
   "scenarios",
   "knownLimitations",
 ] as const;
@@ -793,7 +811,9 @@ function qualificationManifestReferenceErrors(value: Record<string, unknown>): r
   return errors;
 }
 
-function qualificationManifestRequiredToolsErrors(value: Record<string, unknown>): readonly string[] {
+function qualificationManifestRequiredToolsErrors(
+  value: Record<string, unknown>,
+): readonly string[] {
   const requiredTools = ownField(value, "requiredTools");
   if (!Array.isArray(requiredTools) || !requiredTools.every((tool) => isCodeTaskToolName(tool))) {
     return ["requiredTools must be an array of catalog tool names"];
@@ -801,10 +821,27 @@ function qualificationManifestRequiredToolsErrors(value: Record<string, unknown>
   return [];
 }
 
+// #3390 audit F15: the bounded evaluation budget the run was launched with, plus what the gateway
+// actually reported spending. `spendBudgetUsd` is always a known positive amount by construction
+// (the run cannot start without one); `observedSpendUsd` is a tagged fact because a gateway that
+// does not report spend must never be recorded as having spent zero.
+function qualificationManifestSpendErrors(value: Record<string, unknown>): readonly string[] {
+  const errors: string[] = [];
+  const spendBudgetUsd = ownField(value, "spendBudgetUsd");
+  if (!isNonNegativeAmountUsd(spendBudgetUsd) || spendBudgetUsd <= 0) {
+    errors.push("spendBudgetUsd must be a positive, bounded USD amount");
+  }
+  errors.push(
+    ...factErrors(ownField(value, "observedSpendUsd"), "observedSpendUsd", isNonNegativeAmountUsd),
+  );
+  return errors;
+}
+
 function qualificationManifestBodyErrors(value: Record<string, unknown>): readonly string[] {
   const errors: string[] = [
     ...qualificationManifestReferenceErrors(value),
     ...qualificationManifestRequiredToolsErrors(value),
+    ...qualificationManifestSpendErrors(value),
   ];
   const scenarios = ownField(value, "scenarios");
   if (Array.isArray(scenarios)) {
@@ -860,12 +897,57 @@ function scenarioQualificationFailures(
   return failures;
 }
 
+// #3390 audit F3: a manifest that omits a required scenario entirely (rather than reporting it as
+// failed or blocked) previously passed unnoticed -- the per-scenario loop only ever validates
+// scenarios the manifest DOES carry. Every id the binding declares required must actually be
+// present, not merely absent from complaints.
+function missingRequiredScenarioFailures(
+  manifest: CodeTaskQualificationManifestV1,
+  binding: CodeTaskAcceptanceBinding,
+): readonly string[] {
+  const present = new Set<string>(manifest.scenarios.map((scenario) => scenario.scenarioId));
+  return binding.registeredScenarioIds
+    .filter((requiredId) => !present.has(requiredId))
+    .map((requiredId) => `missing required scenario: ${requiredId}`);
+}
+
+// #3390 audit F9 / issue #3390 contract-correction 5: a human merge attestation supplements
+// #3389's machine-observed merge/closure facts and can never replace them, but the manifest cannot
+// itself see whether the referenced journey outcome claims merged/closed -- it only holds an
+// opaque digest. Requiring the attestation whenever the outcome digest is known (not only when it
+// is known to claim merged/closed) is the fail-closed reading: an unattested merge/closure can
+// never slip through because the manifest could not tell the two cases apart.
+//
+// #3390 audit F15: the approved evaluation budget is checked, not merely recorded -- an observed
+// spend above it is a qualification failure, never a silent overage.
+function manifestCrossFieldFailures(manifest: CodeTaskQualificationManifestV1): readonly string[] {
+  const failures: string[] = [];
+  if (
+    manifest.journeyOutcomeDigest.outcome === "known" &&
+    manifest.humanMergeAttestationDigest.outcome !== "known"
+  ) {
+    failures.push("humanMergeAttestationDigest required when journeyOutcomeDigest is known");
+  }
+  if (
+    manifest.observedSpendUsd.outcome === "known" &&
+    manifest.observedSpendUsd.value > manifest.spendBudgetUsd
+  ) {
+    failures.push(
+      `spend budget exceeded: observed ${String(manifest.observedSpendUsd.value)} usd exceeds ` +
+        `budget ${String(manifest.spendBudgetUsd)} usd`,
+    );
+  }
+  return failures;
+}
+
 /**
  * Consumer-side qualification rules for #3390: a structurally valid manifest still fails to
- * qualify when it is empty, bound to a foreign or stale SHA, references an unregistered scenario,
- * a blocked scenario carries no reason, or a "passed" scenario is scripted rather than real-model
- * -- a scripted double can only ever produce regression coverage, never qualification evidence.
- * Failures are content-free strings; the manifest itself carries no producer-supplied verdict.
+ * qualify when it is empty, bound to a foreign or stale SHA, references an unregistered or missing
+ * scenario, a blocked scenario carries no reason, a "passed" scenario is scripted rather than
+ * real-model (a scripted double can only ever produce regression coverage, never qualification
+ * evidence), a merged/closed journey outcome carries no human merge attestation, or the observed
+ * spend exceeds the approved budget. Failures are content-free strings; the manifest itself carries
+ * no producer-supplied verdict.
  */
 export function codeTaskQualificationManifestFailures(
   manifest: CodeTaskQualificationManifestV1,
@@ -884,28 +966,8 @@ export function codeTaskQualificationManifestFailures(
   for (const scenario of manifest.scenarios) {
     failures.push(...scenarioQualificationFailures(scenario, registered));
   }
-  // #3390 audit F3: a manifest that omits a required scenario entirely (rather than reporting it
-  // as failed or blocked) previously passed unnoticed -- the loop above only ever validates
-  // scenarios the manifest DOES carry. Every id the binding declares required must actually be
-  // present, not merely absent from complaints.
-  const present = new Set<string>(manifest.scenarios.map((scenario) => scenario.scenarioId));
-  for (const requiredId of binding.registeredScenarioIds) {
-    if (!present.has(requiredId)) {
-      failures.push(`missing required scenario: ${requiredId}`);
-    }
-  }
-  if (manifest.journeyOutcomeDigest.outcome === "known" &&
-    manifest.humanMergeAttestationDigest.outcome !== "known") {
-    // #3390 audit F9 / issue #3390 contract-correction 5: a human merge attestation supplements
-    // #3389's machine-observed merge/closure facts and can never replace them, but the manifest
-    // cannot itself see whether the referenced journey outcome claims merged/closed -- it only
-    // holds an opaque digest. Requiring the attestation whenever the outcome digest is known (not
-    // only when it is known to claim merged/closed) is the fail-closed reading: an unattested
-    // merge/closure can never slip through because the manifest could not tell the two cases apart.
-    failures.push(
-      "humanMergeAttestationDigest required when journeyOutcomeDigest is known",
-    );
-  }
+  failures.push(...missingRequiredScenarioFailures(manifest, binding));
+  failures.push(...manifestCrossFieldFailures(manifest));
   return failures;
 }
 

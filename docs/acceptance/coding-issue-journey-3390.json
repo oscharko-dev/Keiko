@@ -1,0 +1,100 @@
+{
+  "epicIssue": 3384,
+  "childIssue": 3390,
+  "scenarios": [
+    {
+      "scenarioId": "issue-to-pr-governed-assist",
+      "evidenceClass": "playwright-journey",
+      "platform": "macos-arm64"
+    },
+    {
+      "scenarioId": "issue-to-pr-supervised-coding",
+      "evidenceClass": "playwright-journey",
+      "platform": "macos-arm64"
+    },
+    {
+      "scenarioId": "issue-to-pr-autonomous-delivery",
+      "evidenceClass": "playwright-journey",
+      "platform": "macos-arm64"
+    },
+    {
+      "scenarioId": "ci-repair-loop",
+      "evidenceClass": "playwright-journey",
+      "platform": "macos-arm64"
+    },
+    {
+      "scenarioId": "description-auto-draft-and-apply",
+      "evidenceClass": "playwright-journey",
+      "platform": "macos-arm64"
+    },
+    {
+      "scenarioId": "mark-ready-intent",
+      "evidenceClass": "playwright-journey",
+      "platform": "macos-arm64"
+    },
+    {
+      "scenarioId": "human-merge-and-closure",
+      "evidenceClass": "playwright-journey",
+      "platform": "macos-arm64"
+    },
+    {
+      "scenarioId": "git-to-chat-connect-refine-apply",
+      "evidenceClass": "playwright-journey",
+      "platform": "macos-arm64"
+    },
+    {
+      "scenarioId": "git-chat-negative-effects",
+      "evidenceClass": "playwright-journey",
+      "platform": "macos-arm64"
+    }
+  ],
+  "blocked": [
+    {
+      "scenarioId": "packaged-macos-arm64-reference",
+      "evidenceClass": "packaged-computer-use",
+      "platform": "macos-arm64",
+      "blockedReason": "#2198"
+    },
+    {
+      "scenarioId": "packaged-windows-x64",
+      "evidenceClass": "packaged-computer-use",
+      "platform": "windows-x64",
+      "blockedReason": "#2198, #2951"
+    },
+    {
+      "scenarioId": "packaged-macos-x64",
+      "evidenceClass": "packaged-computer-use",
+      "platform": "macos-x64",
+      "blockedReason": "#2198, #2951"
+    },
+    {
+      "scenarioId": "egress-confinement-linux-windows",
+      "evidenceClass": "production-functional",
+      "platform": "linux-x64",
+      "blockedReason": "#3421, #2951"
+    },
+    {
+      "scenarioId": "coding-runtime-performance-budgets",
+      "evidenceClass": "production-functional",
+      "platform": "macos-arm64",
+      "blockedReason": "#2952"
+    },
+    {
+      "scenarioId": "real-binary-lane",
+      "evidenceClass": "production-functional",
+      "platform": "macos-arm64",
+      "blockedReason": "real-binary nightly lane red since 2026-07-23"
+    },
+    {
+      "scenarioId": "keiko-issue-audit",
+      "evidenceClass": "production-functional",
+      "platform": "macos-arm64",
+      "blockedReason": "keiko-issue-audit is an operator-run process outside this repository"
+    }
+  ],
+  "knownLimitations": [
+    "packaged and egress qualification rows depend on #2198, #2951, and #2952, which remain open",
+    "the real-binary nightly lane is red on dev and is not release qualification evidence",
+    "keiko-issue-audit runs outside this repository and is bound by opaque reference only"
+  ]
+}

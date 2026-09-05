@@ -97,9 +97,9 @@ describe("OpenCode visible tool contract", () => {
     },
   );
 
-  it("accepts the exact projected surface including the eight new Git/CI tools", () => {
+  it("accepts the exact projected surface including the eight new Git/CI tools and #3414's repository search", () => {
     expect(hasExactOpenCodeVisibleToolContract(projectedTools())).toBe(true);
-    expect(OPENCODE_MODEL_VISIBLE_TOOLS).toHaveLength(17);
+    expect(OPENCODE_MODEL_VISIBLE_TOOLS).toHaveLength(18);
   });
 
   it("bounds keiko_git_diff to CODING_RUNTIME_GIT_MAX_PATHS paths", () => {
@@ -156,7 +156,7 @@ describe("OpenCode visible tool contract", () => {
 });
 
 describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
-  it("binds the fifteen catalog-representable governed tools plus its two native extensions (#3414 follow-up)", () => {
+  it("binds the sixteen catalog-representable governed tools plus its two native extensions (#3414 follow-up)", () => {
     const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0);
     expect(advertisement.kind).toBe("bound");
     expect(advertisement.projection.nativeExtensions).toEqual([
@@ -167,6 +167,7 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
       [
         "keiko_changeset_edit",
         "keiko_child_agent",
+        "keiko_repository_search",
         "keiko_research_fetch",
         "keiko_skill",
         "keiko_verification",
@@ -183,8 +184,9 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
       ].sort(),
     );
     // Catalog toolRefs never carry a native extension (ADR-0175 D2: never a Keiko tool
-    // descriptor) -- the offered set still names only the fifteen catalog-representable tools.
-    expect(advertisement.offered.toolRefs).toHaveLength(15);
+    // descriptor) -- the offered set still names only the sixteen catalog-representable tools
+    // (#3414 adds keiko_repository_search, #3386's H1 handler, to the original fifteen).
+    expect(advertisement.offered.toolRefs).toHaveLength(16);
     expect(advertisement.offered.binding.readiness).toBe("ready");
   });
 
@@ -195,7 +197,7 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
   // #3386/#3387/#3388 Git/CI tools under their canonical identities" test pins that registration),
   // so this stays one exact-equality invariant rather than a two-source partition: every
   // model-visible tool is either a catalog-projected tool or one of its two native extensions.
-  it("names all seventeen OpenCode 1.17.17 model-visible tools once native extensions are included", () => {
+  it("names all eighteen OpenCode 1.17.17 model-visible tools once native extensions are included", () => {
     const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0);
     const modelVisibleNames = new Set([
       ...advertisement.projection.tools.map((tool) => tool.alias),

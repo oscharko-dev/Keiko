@@ -9,6 +9,7 @@
 import {
   createDefaultChatCapability,
   findConfiguredCapability,
+  hasConfiguredEnvModelProvider,
   loadConfigFromFile,
   loadEgressConfigFromFile,
   parseGatewayConfig,
@@ -189,7 +190,10 @@ import {
   createRelationshipStorePort,
   type RelationshipHandlerDeps,
 } from "./relationship-handlers.js";
-import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import {
+  createNodeGitPullRequestAdapter,
+  createNodeGitWorktreeAdapter,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 // Deps-level termination-evidence port for every managed-worktree git lane composed here
 // (PR #3354 review, comment 3887021650): a worktree operation that times out or is aborted leaves
 // its verified Windows tree-kill disposition in the activity log.
@@ -335,6 +339,9 @@ import {
 } from "./gitDelivery/prDescriptionReceiptStore.js";
 import type { PrDescriptionReceiptStatusHooks } from "./gitDelivery/prDescriptionReceiptTypes.js";
 import { createProductionPrDescriptionGeneration } from "./gitDelivery/prDescriptionGeneration.js";
+import { createPrDescriptionApplicationService } from "./gitDelivery/prDescriptionService.js";
+import type { PrDescriptionApplicationService } from "./gitDelivery/prDescriptionTypes.js";
+import type { GitDeliveryMutationDeps } from "./gitDelivery/execution.js";
 import { createProductionVerifiedCommitDependencies } from "./coding-runtime/productionVerifiedCommitDependencies.js";
 import { createProductionDraftDeliveryDependencies } from "./coding-runtime/productionDraftDeliveryDependencies.js";
 import {
@@ -773,6 +780,12 @@ export interface UiHandlerDeps {
   // description.
   readonly prDescriptionGeneration?:
     Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot"> | undefined;
+  // Final-audit F7 (#3399/#3400 production-wiring): the SAME #3399 application service composed
+  // from the description-generation/receipt-store pieces above, exposed as a typed field so
+  // chat-handlers.ts's Chat-driven description apply (#3400) can reach a real `executeApproved`
+  // instead of the previous permanently-`undefined` optional-cast seam. Absent under the exact
+  // same closed condition `prDescriptionGeneration` is absent under (no configured model profile).
+  readonly prDescriptionApplicationService?: PrDescriptionApplicationService | undefined;
   // Runtime gateway config supports first-run UI onboarding. It starts from the CLI/env/local config
   // and can be updated after a successful credential test without restarting the loopback server.
   readonly gatewayConfig?: RuntimeGatewayConfig | undefined;
@@ -1125,10 +1138,6 @@ export type ProductionCodingRuntimePorts = Pick<
   "backend" | "editorAgentClient" | "secureWorkspaceTextRead"
 >;
 
-function envModelToken(modelId: string): string {
-  return modelId.replace(/[^A-Za-z0-9]/g, "_").toUpperCase();
-}
-
 function envModelIdFromApiKeyName(name: string): string | undefined {
   const prefix = "KEIKO_MODEL_";
   const suffix = "_API_KEY";
@@ -1139,11 +1148,11 @@ function envModelIdFromApiKeyName(name: string): string | undefined {
   return token.length === 0 ? undefined : token.toLowerCase().replaceAll("_", "-");
 }
 
+// Final-audit F13/F24: delegates to keiko-model-gateway's ONE env-only provider-admission formula
+// (both `_API_KEY` and `_BASE_URL` non-empty) so this production check and the #3390 real-model
+// qualification harness's own check can never drift apart.
 function hasEnvProvider(modelId: string, env: EnvSource): boolean {
-  const token = envModelToken(modelId);
-  const baseUrl = env[`KEIKO_MODEL_${token}_BASE_URL`];
-  const apiKey = env[`KEIKO_MODEL_${token}_API_KEY`];
-  return baseUrl !== undefined && baseUrl.length > 0 && apiKey !== undefined && apiKey.length > 0;
+  return hasConfiguredEnvModelProvider(env, modelId);
 }
 
 function envModelIds(env: EnvSource): readonly string[] {
@@ -3855,7 +3864,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   // no configured model profile — is the ONE closed reason prDescriptionRoutes.ts's "unavailable"
   // fallback exists for.
   const prDescriptionGeneration = createProductionPrDescriptionGeneration(args.runtimeConfig);
-  return {
+  const deps: UiHandlerDeps = {
     ...buildBaseUiHandlerDeps(args),
     ...buildRuntimeUiHandlerDeps(args, services),
     ...buildIntegrationUiHandlerDeps(args),
@@ -3875,6 +3884,50 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       codingAppSessionDenialWindows,
     ),
   };
+  // Final-audit F7: composed from the exact same generation + receipt-store pieces already set on
+  // `deps` above (one composed value, two consumers — prDescriptionRoutes.ts's own per-request
+  // composition receives the same `deps` fields; this is the Chat-facing consumer #3400 needs).
+  // Absent under the exact same closed condition `prDescriptionGeneration` is absent under.
+  const prDescriptionApplicationService = productionPrDescriptionApplicationService(
+    deps,
+    services.gitChangeSnapshotService,
+    prDescriptionGeneration,
+    prDescriptionReceiptStatus,
+  );
+  return {
+    ...deps,
+    ...(prDescriptionApplicationService === undefined
+      ? {}
+      : { prDescriptionApplicationService }),
+  };
+}
+
+// Final-audit F7 (#3399/#3400 production-wiring): builds the Chat-facing `PrDescriptionApplicationService`
+// from the SAME already-composed pieces `prDescriptionRoutes.ts` receives via `deps` (generation,
+// receipt-store hooks, snapshots, mutation deps) — never a second, independently-wired copy.
+// `context()` fails closed to `undefined`: Chat's only call into this instance is `executeApproved`
+// (applyGitChangeDescription in chat-handlers.ts), which never invokes `context()` unless a
+// proposal is already held from THIS instance's own `preview()` — Chat never calls `preview()`
+// (Frozen Product Decision 6: apply-only) — so there is no single global "current" (repository, PR)
+// this composition root could fabricate one from, and failing closed is the correct default.
+function productionPrDescriptionApplicationService(
+  deps: GitDeliveryMutationDeps,
+  snapshots: GitChangeSnapshotService,
+  generation: Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot"> | undefined,
+  receiptStatus: PrDescriptionReceiptStatusHooks,
+): PrDescriptionApplicationService | undefined {
+  if (generation === undefined) return undefined;
+  return createPrDescriptionApplicationService({
+    context: () => undefined,
+    snapshots,
+    generation,
+    adapter: (context) =>
+      createNodeGitPullRequestAdapter({ workspace: context.workspace, processEnv: process.env }),
+    mutationDeps: deps,
+    execution: {},
+    recordStatus: receiptStatus.recordStatus,
+    readStatus: receiptStatus.readStatus,
+  });
 }
 
 function createDapRuntimeReference(options: BuildHandlerDepsOptions): DapRuntimeReference {

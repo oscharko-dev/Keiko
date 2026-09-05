@@ -574,15 +574,12 @@ describe("authorizeGitDelivery", () => {
         "governed-assist",
       ),
     };
+    // NOT run-bound: matches the EXACT binding shape localMutationRoutes.ts's own
+    // `resolveGitDeliveryApprovalRequirement` call uses for "local-mutation" (project + operation +
+    // command only) — the peek in `gitDeliveryApprovalRedemption` must hash the same shape.
     const command = { kind: "stage", pathspecs: ["a.txt"], includeUntracked: false };
     const issued = approvalStore.issue({
-      binding: {
-        projectId: PROJECT_ID,
-        operation: "local-mutation",
-        command,
-        runId: "test-run",
-        envelopeDigest: "c".repeat(64),
-      },
+      binding: { projectId: PROJECT_ID, operation: "local-mutation", command },
       approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
       nowMs: Date.parse(NOW),
     });
@@ -608,13 +605,7 @@ describe("authorizeGitDelivery", () => {
     expect(
       approvalStore.matches({
         approval: issued.approval,
-        binding: {
-          projectId: PROJECT_ID,
-          operation: "local-mutation",
-          command,
-          runId: "test-run",
-          envelopeDigest: "c".repeat(64),
-        },
+        binding: { projectId: PROJECT_ID, operation: "local-mutation", command },
         nowMs: Date.parse(NOW),
       }),
     ).toBe(true);

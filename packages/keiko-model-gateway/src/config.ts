@@ -113,6 +113,38 @@ const TOKEN_ACCOUNTING_KNOWN_KEYS: ReadonlySet<string> = new Set([
 
 export type EnvSource = Readonly<Record<string, string | undefined>>;
 
+const ENV_MODEL_PREFIX = "KEIKO_MODEL_";
+const ENV_MODEL_API_KEY_SUFFIX = "_API_KEY";
+
+function envModelProviderTokenQualifies(token: string, env: EnvSource): boolean {
+  const apiKey = env[`${ENV_MODEL_PREFIX}${token}${ENV_MODEL_API_KEY_SUFFIX}`];
+  const baseUrl = env[`${ENV_MODEL_PREFIX}${token}_BASE_URL`];
+  return (apiKey?.length ?? 0) > 0 && (baseUrl?.length ?? 0) > 0;
+}
+
+/**
+ * The ONE env-only Model Gateway provider-admission formula: a `KEIKO_MODEL_<TOKEN>_API_KEY` /
+ * `KEIKO_MODEL_<TOKEN>_BASE_URL` pair counts as a configured provider only when BOTH are present
+ * and non-empty — never the API key alone. Every caller that needs to know whether an env-only
+ * provider is configured (keiko-server's production Gateway composition, and the #3390 real-model
+ * qualification harness) shares this exact check, so none of them can drift into accepting a
+ * profile the others would refuse.
+ *
+ * Pass `modelId` to check one specific provider (its token is derived the same way production
+ * derives it: non-alphanumeric characters become `_`, then upper-cased); omit it to ask whether
+ * ANY env-only provider in `env` qualifies.
+ */
+export function hasConfiguredEnvModelProvider(env: EnvSource, modelId?: string): boolean {
+  if (modelId !== undefined) {
+    return envModelProviderTokenQualifies(modelId.replace(/[^A-Za-z0-9]/g, "_").toUpperCase(), env);
+  }
+  return Object.keys(env).some((key) => {
+    if (!key.startsWith(ENV_MODEL_PREFIX) || !key.endsWith(ENV_MODEL_API_KEY_SUFFIX)) return false;
+    const token = key.slice(ENV_MODEL_PREFIX.length, -ENV_MODEL_API_KEY_SUFFIX.length);
+    return token.length > 0 && envModelProviderTokenQualifies(token, env);
+  });
+}
+
 // Resolves an opaque, NON-SECRET credential reference (persisted in the config file as a provider's
 // `apiKeySecretRef`) to its plaintext secret, or undefined when the reference is unknown. The gateway
 // stays crypto-free and deterministic: keiko-server / keiko-cli inject a vault-backed resolver

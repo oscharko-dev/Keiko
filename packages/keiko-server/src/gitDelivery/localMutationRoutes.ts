@@ -247,6 +247,10 @@ export const createHandleLocalMutation = (
       // consumed, here; the `resolveGitDeliveryApprovalRequirement` call right below is the one
       // real single-use consumption, unchanged).
       {
+        // Threaded so the peek's expiry check runs against the SAME clock the route's own
+        // subsequent single-use consumption uses below (`(seams.now ?? Date.now)()`), rather than
+        // silently falling back to real wall-clock time and disagreeing with an injected clock.
+        nowIso: new Date((seams.now ?? Date.now)()).toISOString(),
         approval,
         approvalStore: seams.approvalStore,
         approvalBinding: { operation: "local-mutation", command },

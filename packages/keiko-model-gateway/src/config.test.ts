@@ -10,6 +10,7 @@ import {
   DEFAULT_FAILURE_THRESHOLD,
   DEFAULT_HALF_OPEN_PROBES,
   TOOL_CALLING_VERIFICATION_MAX_AGE_MS,
+  hasConfiguredEnvModelProvider,
   loadConfigFromFile,
   loadEgressConfigFromFile,
   migrateLegacyChatContextWindows,
@@ -3001,5 +3002,46 @@ describe("circuit breaker defaults stay pinned to the contracts-owned value", ()
     expect(DEFAULT_FAILURE_THRESHOLD).toBe(DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.failureThreshold);
     expect(DEFAULT_COOLDOWN_MS).toBe(DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.cooldownMs);
     expect(DEFAULT_HALF_OPEN_PROBES).toBe(DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.halfOpenProbes);
+  });
+});
+
+// Final-audit F13/F24: the ONE env-only provider-admission formula every caller (keiko-server's
+// production Gateway composition, the #3390 real-model qualification harness) must share instead
+// of restating a weaker copy that accepts the API key alone.
+describe("hasConfiguredEnvModelProvider", () => {
+  it("is false when only the API key half of the pair is set", () => {
+    expect(
+      hasConfiguredEnvModelProvider({ KEIKO_MODEL_EXAMPLE_API_KEY: "sk-fixture-not-a-real-secret" }),
+    ).toBe(false);
+  });
+
+  it("is false when only the base-URL half of the pair is set", () => {
+    expect(
+      hasConfiguredEnvModelProvider({
+        KEIKO_MODEL_EXAMPLE_BASE_URL: "https://gateway.internal.example/v1",
+      }),
+    ).toBe(false);
+  });
+
+  it("is true only once both halves of the pair are set", () => {
+    expect(
+      hasConfiguredEnvModelProvider({
+        KEIKO_MODEL_EXAMPLE_API_KEY: "sk-fixture-not-a-real-secret",
+        KEIKO_MODEL_EXAMPLE_BASE_URL: "https://gateway.internal.example/v1",
+      }),
+    ).toBe(true);
+  });
+
+  it("checks one specific model id's token when given, ignoring an unrelated qualifying pair", () => {
+    const env = {
+      KEIKO_MODEL_OTHER_API_KEY: "sk-fixture-not-a-real-secret",
+      KEIKO_MODEL_OTHER_BASE_URL: "https://gateway.internal.example/v1",
+    };
+    expect(hasConfiguredEnvModelProvider(env, "example")).toBe(false);
+    expect(hasConfiguredEnvModelProvider(env, "other")).toBe(true);
+  });
+
+  it("is false on an empty environment", () => {
+    expect(hasConfiguredEnvModelProvider({})).toBe(false);
   });
 });

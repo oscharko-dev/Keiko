@@ -36,7 +36,15 @@ function gitHeadShas(root) {
   return { sourceCommitSha, sourceTreeSha };
 }
 
-function readReceipts(receiptsDir) {
+/**
+ * Reads every `<scenarioId>.receipt.json` + `.artifact` pair from a receipts directory, keyed by
+ * scenario id. Exported so both this checker and the manifest producer
+ * (scripts/generate-coding-issue-journey-manifest.mjs) share the one reader instead of each
+ * growing its own copy (AGENTS.md §5). `recordedAt`/`provenance` are only consumed by the
+ * producer -- this checker never reads them back off a receipt, since a scenario's declared
+ * `recordedAt`/`provenance` are cross-referenced through the manifest itself, not the receipt.
+ */
+export function readReceipts(receiptsDir) {
   const receipts = new Map();
   if (!existsSync(receiptsDir)) return receipts;
   for (const entry of readdirSync(receiptsDir)) {
@@ -50,6 +58,8 @@ function readReceipts(receiptsDir) {
       commitSha: meta.commitSha,
       platform: meta.platform,
       testStatus: meta.testStatus,
+      recordedAt: meta.recordedAt,
+      provenance: meta.provenance,
       digest: sha256File(artifactPath),
     });
   }
@@ -73,9 +83,8 @@ async function loadContracts(root) {
  */
 async function loadToolCatalog(root) {
   return import(
-    pathToFileURL(
-      resolve(root, "packages/keiko-server/dist/coding-runtime/opencodeToolSchemas.js"),
-    ).href
+    pathToFileURL(resolve(root, "packages/keiko-server/dist/coding-runtime/opencodeToolSchemas.js"))
+      .href
   );
 }
 

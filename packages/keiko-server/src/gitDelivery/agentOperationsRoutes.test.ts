@@ -28,6 +28,10 @@ import {
   handleGitAgentOperationWithDelegate,
   IdempotencyCache,
 } from "./agentOperationsRoutes.js";
+import {
+  DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
+  GIT_DELIVERY_LOCAL_OPERATOR_ID,
+} from "./approvalStore.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
 let store: UiStore;
@@ -686,6 +690,56 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
 
     expect(body.message).not.toContain("add a thing");
     expect(body.message).not.toContain(root);
+  });
+
+  // Final-audit F1+F2/#3390: proves the facade forwards a caller-held approval through to the
+  // delegated route (this facade never mints or consumes one itself) and that governed-assist
+  // admission no longer hard-denies the attempt (F2's fix) once that claim is presented — the
+  // delegated push route's own consumption is what actually redeems it. The claim is minted
+  // directly into the SAME shared `DEFAULT_GIT_DELIVERY_APPROVAL_STORE` this facade's own
+  // (options-free) route table falls back to.
+  it("approves then succeeds: a push delegated through the facade at governed-assist redeems a claim minted for the exact same command", async () => {
+    const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+    const command = {
+      kind: "push" as const,
+      sourceBranchName: "feat/x",
+      remoteAlias: "origin",
+      remoteBranchName: "feat/x",
+      forcePush: false,
+      setUpstreamTracking: false,
+    };
+    const issued = DEFAULT_GIT_DELIVERY_APPROVAL_STORE.issue({
+      binding: {
+        projectId: root,
+        operation: "push",
+        command,
+        runId: "test-run",
+        envelopeDigest: "c".repeat(64),
+      },
+      approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
+      nowMs: Date.now(),
+    });
+    const body = executeRequest("push", "push-agent-approved");
+    body.payload = {
+      remoteAlias: command.remoteAlias,
+      sourceBranchName: command.sourceBranchName,
+      remoteBranchName: command.remoteBranchName,
+      approval: issued.approval,
+    };
+    const result = await handleGitAgentOperation(
+      ctx(body),
+      deps(runner, "governed-assist", {
+        headRef: "feat/x",
+        baseRef: "dev",
+        allowDetachedHead: false,
+        allowedPrefixes: ["feat/"],
+      }),
+    );
+
+    expect(result.body).toMatchObject({ status: "delegated", operation: "push" });
+    expect((result.body as { response: { status?: string } }).response.status).not.toBe(
+      "approval-required",
+    );
   });
 });
 
