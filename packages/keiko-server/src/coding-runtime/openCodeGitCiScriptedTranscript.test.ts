@@ -940,3 +940,195 @@ async function routeLiveGatewayRequest(
   response.writeHead(outcome.status, { "content-type": "application/json" });
   response.end(JSON.stringify(outcome.body));
 }
+
+/**
+ * A real, but never-invoked-in-this-suite, `VerifiedCommitService` -- `commitFacadeFixture`
+ * requires one to build the facade at all, but the transcript below never calls
+ * keiko_git_status/diff/stage/commit, only keiko_git_push/keiko_pull_request/keiko_git_execute.
+ */
+function unusedVerifiedCommitService(root: string): ReturnType<typeof createVerifiedCommitService> {
+  const context = (): VerifiedCommitRunContext => ({
+    runId: "run-1",
+    envelopeDigest: "b".repeat(64),
+    runtimeAuthorityDigest: DIGEST,
+    workspaceDigest: DIGEST,
+    repositoryDigest: DIGEST,
+    workspace: {
+      root,
+      selectedRoot: root,
+      name: "test",
+      version: undefined,
+      testFramework: "vitest",
+      sourceDirs: [],
+      testDirs: [],
+      languages: [],
+      ignoreLines: [],
+    },
+    baseRef: "master",
+    headRef: "feature/issue-1",
+    correlationId: "scripted-transcript-3387",
+    buffersClean: () => true,
+    stillAuthorized: () => true,
+  });
+  const evidence = new Map<string, string>();
+  const db = new DatabaseSync(":memory:");
+  runMigrations(db);
+  return createVerifiedCommitService({
+    context,
+    snapshots: createCodingRuntimeSnapshotStore(db),
+    mutationDeps: {
+      redactor: (value: unknown): unknown => value,
+      evidenceStore: {
+        put: (id: string, body: string): string => {
+          evidence.set(id, body);
+          return id;
+        },
+        get: (id: string): string | undefined => evidence.get(id),
+        list: (): readonly string[] => [...evidence.keys()],
+        delete: (id: string): void => {
+          evidence.delete(id);
+        },
+      },
+    },
+    messageAllowed: (): Promise<boolean> => Promise.resolve(true),
+    execution: {
+      processEnv: { PATH: process.env.PATH },
+      now: (): number => Date.now(),
+      approvalStore: createInMemoryGitDeliveryApprovalStore(),
+      activityLog: { write: (): void => undefined },
+      branchProtectionReader: (): Promise<{ readonly outcome: "unprotected" }> =>
+        Promise.resolve({ outcome: "unprotected" }),
+    },
+  });
+}
+
+/**
+ * #3387: proves that a MODEL-SELECTED call to keiko_git_push and keiko_pull_request reaches the
+ * real `DraftDeliveryController` (`DraftDeliveryFixture`, the same test-support fixture
+ * draftDeliveryService.test.ts/pushRoutes.test.ts/prRoutes.test.ts already use) through the SAME
+ * scripted-model/tool-facade dispatch path #3386 proves for commit: the model never pushes or
+ * creates a PR directly -- keiko_git_push/keiko_pull_request only PROPOSE, the real approval
+ * bridge (`codingToolApprovalBridge.ts`'s `issueDelivery`, the same call the orchestrator's
+ * `decideApproval` makes once a human approves a delivery-substrate action) is exercised
+ * explicitly between turns, and only then does keiko_git_execute redeem -- producing a REAL `git
+ * push` to a real bare remote, and a REAL pull request through the fixture's fake GitHub adapter.
+ */
+describe("scripted OpenCode transcript reaches DraftDeliveryController for push/pull-request (#3387)", () => {
+  it("routes a scripted-model push propose/approve/execute cycle to a real bare git remote", async () => {
+    const draft = new DraftDeliveryFixture();
+    try {
+      await draft.recordVerifiedCommit();
+      const { facade, bridge } = commitFacadeFixture({
+        service: unusedVerifiedCommitService(draft.root),
+        root: draft.root,
+        mode: "autonomous-delivery",
+        live: () => true,
+        report: () => passingReport(draft.root),
+        draftDeliveryService: draft.service,
+      });
+      const facadeFetch = async (
+        _url: unknown,
+        init: { readonly body?: unknown },
+      ): Promise<Response> => {
+        const result = await facade.execute({
+          body: requestBodyText(init.body),
+          capability: "scripted-fixture-capability",
+        });
+        return new Response(JSON.stringify(result));
+      };
+      const plan = swappableModelTurn();
+      const child = createScriptedGovernedTranscriptChild({
+        runId: "run-3387-push",
+        toolFacadeFetch: facadeFetch,
+        modelTurn: plan.modelTurn,
+      });
+
+      plan.use([(): FakeToolCall => toolCall("keiko_git_push", {}, "call-push-propose")]);
+      const turn1 = await child.runTurn("push the verified commit");
+      expect(turn1.map((result) => result.tool)).toEqual(["keiko_git_push"]);
+      const pushPropose = toolResult(turn1, "call-push-propose").draftDelivery as {
+        readonly status: string;
+        readonly record: { readonly phase: string; readonly proposalId: string };
+      };
+      expect(pushPropose.status).toBe("recorded");
+      // Routine as this action class is, the delivery-substrate action class still needs an
+      // explicit human approval before keiko_git_execute may redeem it.
+      expect(pushPropose.record.phase).toBe("push-proposed");
+      expect(draft.pushCount).toBe(0);
+
+      expect(bridge.issueDelivery?.("run-1", pushPropose.record.proposalId)).toBeDefined();
+
+      plan.use([
+        (): FakeToolCall =>
+          toolCall(
+            "keiko_git_execute",
+            { kind: "push", proposalId: pushPropose.record.proposalId },
+            "call-push-execute",
+          ),
+      ]);
+      const turn2 = await child.runTurn("the push has been approved -- proceed");
+      const pushExecuted = toolResult(turn2, "call-push-execute").draftDelivery as {
+        readonly status: string;
+        readonly record: { readonly phase: string };
+      };
+      expect(pushExecuted.status).toBe("recorded");
+      expect(pushExecuted.record.phase).toBe("pushed");
+      // The REAL git push landed on the REAL bare remote -- not a simulated success.
+      expect(draft.pushCount).toBe(1);
+      const remoteHead = draft.git(
+        ["for-each-ref", "--format=%(objectname)", "refs/heads/feature/issue-1"],
+        draft.remote,
+      );
+      expect(remoteHead).toBe(draft.git(["rev-parse", "feature/issue-1"]));
+      await child.close();
+
+      // Same conversation, same run: propose a pull request against the branch just pushed.
+      const prChild = createScriptedGovernedTranscriptChild({
+        runId: "run-3387-pr",
+        toolFacadeFetch: facadeFetch,
+        modelTurn: plan.modelTurn,
+      });
+      plan.use([
+        (): FakeToolCall =>
+          toolCall("keiko_pull_request", { title: "feat: bounded change" }, "call-pr-propose"),
+      ]);
+      const turn3 = await prChild.runTurn("open a pull request for the pushed branch");
+      const prPropose = toolResult(turn3, "call-pr-propose").draftDelivery as {
+        readonly status: string;
+        readonly record: { readonly phase: string; readonly proposalId: string };
+      };
+      expect(prPropose.status).toBe("recorded");
+      expect(prPropose.record.phase).toBe("pr-proposed");
+      expect(draft.createCount).toBe(0);
+
+      expect(bridge.issueDelivery?.("run-1", prPropose.record.proposalId)).toBeDefined();
+
+      plan.use([
+        (): FakeToolCall =>
+          toolCall(
+            "keiko_git_execute",
+            { kind: "pull-request", proposalId: prPropose.record.proposalId },
+            "call-pr-execute",
+          ),
+      ]);
+      const turn4 = await prChild.runTurn("the pull request has been approved -- proceed");
+      const prExecuted = toolResult(turn4, "call-pr-execute").draftDelivery as {
+        readonly status: string;
+        readonly record: {
+          readonly phase: string;
+          readonly pullRequest?: { readonly number: number };
+        };
+      };
+      expect(prExecuted.status).toBe("recorded");
+      expect(prExecuted.record.phase).toBe("draft-created");
+      // The REAL pull request was created through the fixture's fake GitHub adapter -- not merely
+      // recorded as an intent.
+      expect(draft.createCount).toBe(1);
+      expect(draft.prs).toHaveLength(1);
+      expect(prExecuted.record.pullRequest?.number).toBe(draft.prs[0]?.number);
+      await prChild.close();
+    } finally {
+      draft.close();
+    }
+  });
+});
