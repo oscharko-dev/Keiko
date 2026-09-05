@@ -116,20 +116,31 @@ function seatbeltArgs(plan: IsolatedRunPlan): readonly string[] {
   return ["-p", SEATBELT_DENY_EGRESS_PROFILE, plan.command, ...plan.args];
 }
 
+const APPLE_GIT_EXECUTABLES = Object.freeze([
+  "/usr/bin/git",
+  "/Library/Developer/CommandLineTools/usr/bin/git",
+  "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+] as const);
+
+function gatewayProcessExecPolicy(command: string): string {
+  if (!isAbsolute(command) || command.includes("\0")) {
+    throw new TypeError("gateway-seatbelt-command-not-absolute");
+  }
+  const executables = new Set([command, ...APPLE_GIT_EXECUTABLES]);
+  const literals = [...executables].map((path) => `(literal ${JSON.stringify(path)})`).join(" ");
+  return `(deny process-exec)(allow process-exec ${literals})`;
+}
+
 // The ONE gateway-allowlist Seatbelt profile builder (ADR-0043 D11/D14, #2951): deny all network
 // egress and every service/inter-process escape surface by default, then carve out exactly the
 // attested loopback family/port. Both the direct `runtime-gateway.ts` API and the generic
 // `buildWrappedCommand` planning path call into this single formula — there is no second copy of
 // the profile string anywhere in the package.
 //
-// `process-fork` is deliberately NOT denied (#3390 live run): the pinned OpenCode sidecar shells
-// out to `git` for its own session/history endpoints (`POST /sync/history`, `GET /session`), and a
-// fork denial made every one of those calls fail with HTTP 500 — a product-breaking regression this
-// epic introduced, not a pre-existing posture (the pre-epic dev lane on `dev` ran no Seatbelt
-// profile at all). Denying fork does not add egress confinement of its own: on macOS a Seatbelt
-// profile is inherited by every descendant process, so a forked `git`/`curl` is still bound by the
-// SAME `(deny network*)` plus the single loopback allow-carve-out below. The proof that this
-// inheritance actually holds lives in `runtime-gateway.test.ts`'s real OS-level Seatbelt suite.
+// `process-fork` remains available because the pinned OpenCode sidecar forks Apple git during its
+// session/history handshake (#3390). Executable transitions are independently deny-by-default:
+// only the already verified runtime executable and Apple's fixed git launcher/implementation paths
+// may execute. Descendants inherit both this executable allowlist and the network restriction.
 export function buildGatewaySeatbeltCommand(
   gateway: NetworkGatewayPolicy,
   command: string,
@@ -138,6 +149,7 @@ export function buildGatewaySeatbeltCommand(
   const family = gateway.host === "127.0.0.1" ? "tcp4" : "tcp6";
   const profile =
     "(version 1)(allow default)(deny network*)" +
+    gatewayProcessExecPolicy(command) +
     "(deny mach-lookup)(deny appleevent-send)(deny lsopen)" +
     `(allow network-outbound (remote ${family} "localhost:${String(gateway.port)}"))` +
     `(allow network-inbound (local ${family} "localhost:*"))`;

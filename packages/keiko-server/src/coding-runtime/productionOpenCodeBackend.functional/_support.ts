@@ -464,54 +464,61 @@ function functionalEditorAgentClient(
   return {
     action: (action, signal): Promise<FunctionalEditorActionResult> => {
       const root = resolveRoot();
-      if (root === undefined || action.type !== "applyChangeset") {
-        return Promise.resolve(editorDenied("RUNTIME_EDIT_UNSUPPORTED"));
-      }
-      if (!changesetMatchesPatch(root, action)) {
-        return Promise.resolve(editorDenied("RUNTIME_EDIT_CHANGESET_INVALID"));
-      }
-      const leaseRequest = functionalMutationLeaseRequest(action, root);
-      process.stderr.write(
-        `[debug-lease] present=${String(leaseRequest !== undefined)} broker=${String(runtimeMutationLeaseBroker !== undefined)}\n`,
+      return Promise.resolve(
+        functionalEditorAction(action, signal, root, runtimeMutationLeaseBroker),
       );
-      const claimed =
-        runtimeMutationLeaseBroker === undefined ||
-        (leaseRequest !== undefined && runtimeMutationLeaseBroker.claim(leaseRequest));
-      process.stderr.write(`[debug-lease-claim] claimed=${String(claimed)}\n`);
-      if (
-        runtimeMutationLeaseBroker !== undefined &&
-        !claimed
-      ) {
-        return Promise.resolve(editorDenied("RUNTIME_EDIT_AUTHORITY_INVALID"));
-      }
-      let succeeded = false;
-      try {
-        applyPatch(workspace(root), action.changeset?.patch ?? "", {
-          applyEnabled: true,
-          signal,
-        });
-        succeeded = true;
-      } catch {
-        return Promise.resolve(editorDenied("RUNTIME_EDIT_APPLY_FAILED"));
-      } finally {
-        if (leaseRequest !== undefined) {
-          const completed = runtimeMutationLeaseBroker?.complete(leaseRequest, succeeded);
-          process.stderr.write(
-            `[debug-lease-complete] succeeded=${String(succeeded)} completed=${String(completed)}\n`,
-          );
-        }
-      }
-      return Promise.resolve({
-        ok: true as const,
-        value: {
-          result: {
-            schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-            actionId: action.actionId,
-            sessionId: action.sessionId,
-            status: "succeeded" as const,
-          },
-        },
-      });
+    },
+  };
+}
+
+function functionalEditorAction(
+  action: FunctionalEditorAction,
+  signal: AbortSignal,
+  root: string | undefined,
+  broker: CodingRuntimeEditorMutationLeaseBroker | undefined,
+): FunctionalEditorActionResult {
+  if (root === undefined || action.type !== "applyChangeset") {
+    return editorDenied("RUNTIME_EDIT_UNSUPPORTED");
+  }
+  if (!changesetMatchesPatch(root, action)) {
+    return editorDenied("RUNTIME_EDIT_CHANGESET_INVALID");
+  }
+  const request = functionalMutationLeaseRequest(action, root);
+  if (broker !== undefined && (request === undefined || !broker.claim(request))) {
+    return editorDenied("RUNTIME_EDIT_AUTHORITY_INVALID");
+  }
+  return applyFunctionalChangeset(action, signal, root, request, broker);
+}
+
+function applyFunctionalChangeset(
+  action: FunctionalEditorAction,
+  signal: AbortSignal,
+  root: string,
+  request: CodingRuntimeEditorMutationLeaseRequest | undefined,
+  broker: CodingRuntimeEditorMutationLeaseBroker | undefined,
+): FunctionalEditorActionResult {
+  let succeeded = false;
+  try {
+    applyPatch(workspace(root), action.changeset?.patch ?? "", { applyEnabled: true, signal });
+    succeeded = true;
+    return editorSucceeded(action);
+  } catch {
+    return editorDenied("RUNTIME_EDIT_APPLY_FAILED");
+  } finally {
+    if (request !== undefined) broker?.complete(request, succeeded);
+  }
+}
+
+function editorSucceeded(action: FunctionalEditorAction): FunctionalEditorActionResult {
+  return {
+    ok: true,
+    value: {
+      result: {
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: action.actionId,
+        sessionId: action.sessionId,
+        status: "succeeded",
+      },
     },
   };
 }

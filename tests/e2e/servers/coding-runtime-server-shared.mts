@@ -314,7 +314,6 @@ function scriptedModelDeps(
   // reaches the model without being complied with; productive/discovery/out-of-scope modes ignore
   // the transcript, so passing it always is behaviour-preserving.
   const chat = async (request?: GatewayRequest): Promise<NormalizedResponse> => {
-    process.stderr.write(`[debug-gateway] calls=${String(script.calls)}\n`);
     if (request !== undefined) observeGatewayRequest?.(request);
     const response = nextScriptedTurn(script, includeQuestion, scriptedTranscript(request));
     await commit?.beforeResponse(response);

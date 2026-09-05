@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { delimiter, join, relative, isAbsolute } from "node:path";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
+import { buildPrBodyReadArgv } from "@oscharko-dev/keiko-tools";
 import { GIT_PR_IDENTITY_JQ } from "../../../packages/keiko-tools/src/git-pr-gateway.js";
 import {
   DELIVERY_REPOSITORY,
@@ -21,6 +22,10 @@ export interface DeliveryProviderState {
   readonly rejections: number;
   readonly mode: "normal" | "push-response-loss" | "create-response-loss" | "read-failure";
   readonly pullRequests: readonly GitPullRequestIdentity[];
+  /** Exact transient provider state; delivery evidence records only its digest below. */
+  readonly pullRequestBodies: Readonly<
+    Record<string, { readonly body: string; readonly updatedAt: string }>
+  >;
   readonly lastTitleDigest?: string;
   readonly lastBodyDigest?: string;
   readonly lastPush?: {
@@ -80,6 +85,7 @@ export function initializeDeliveryRemote(stateDir: string, realGit: string): voi
     rejections: 0,
     mode: "normal",
     pullRequests: [],
+    pullRequestBodies: {},
   });
 }
 
@@ -288,7 +294,17 @@ function readProvider(
   const pr = state.pullRequests.find(
     (candidate) => endpoint === `${prefix}/pulls/${String(candidate.number)}`,
   );
-  if (pr === undefined || projection !== GIT_PR_IDENTITY_JQ) deny(input.stateDir);
+  if (pr === undefined) deny(input.stateDir);
+  const bodyProjection = buildPrBodyReadArgv({
+    ownerAndRepo: DELIVERY_REPOSITORY,
+    prExternalId: String(pr.number),
+  }).at(-1);
+  if (projection === bodyProjection) {
+    const body = state.pullRequestBodies[String(pr.number)];
+    if (body === undefined) deny(input.stateDir);
+    providerOutput({ identity: pr, ...body });
+  }
+  if (projection !== GIT_PR_IDENTITY_JQ) deny(input.stateDir);
   providerOutput(pr);
 }
 
@@ -337,6 +353,13 @@ function createPullRequest(
     ...state,
     creates: number,
     pullRequests: [...state.pullRequests, identity],
+    pullRequestBodies: {
+      ...state.pullRequestBodies,
+      [String(number)]: {
+        body: fields.get("body") ?? "",
+        updatedAt: "2026-09-05T00:00:00.000Z",
+      },
+    },
     lastTitleDigest: digest(fields.get("title") ?? ""),
     lastBodyDigest: digest(fields.get("body") ?? ""),
   });

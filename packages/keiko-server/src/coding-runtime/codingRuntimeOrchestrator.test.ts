@@ -927,7 +927,7 @@ describe("CodingRuntimeOrchestrator", () => {
       });
     await expect(answer("question-answer-refused")).resolves.toEqual({
       ok: false,
-      failureCode: "authority-resolution-failed",
+      failureCode: "question-answer-rejected",
     });
     expect(f.orchestrator.status().revision).toBe(4);
     await expect(answer("question-answer-retry")).resolves.toMatchObject({

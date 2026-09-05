@@ -54,17 +54,17 @@ describe("long-lived gateway network confinement", () => {
     expect(JSON.stringify(policy)).not.toContain(input.gatewayUrl);
   });
 
-  // Regression pin (#3390 live run): the pinned OpenCode sidecar shells out to `git` for its own
-  // session/history endpoints, so a fork denial in this profile broke every dev-lane coding run at
-  // the handshake (`POST /sync/history` / `GET /session` both answered HTTP 500). This pin moved
-  // here, strengthened, from the old "denies process-fork" assertion above: fork must stay ALLOWED,
-  // and the other service-escape denials this incident did NOT touch must stay exactly as strict.
-  it("allows process-fork so the sidecar can spawn git, while still denying every other escape (#3390)", () => {
+  // Regression pin (#3390 live run): fork remains available for OpenCode's git handshake, while a
+  // deny-by-default process-exec rule prevents the sidecar from selecting arbitrary child binaries.
+  it("allows fork only into the runtime and Apple git executable allowlist (#3390)", () => {
     const policy = createRuntimeGatewayConfinement(input);
     const profile = buildRuntimeGatewaySeatbeltCommand(policy, "/trusted/opencode", ["serve"])
       .args[1];
     expect(profile).not.toContain("process-fork");
-    expect(profile).not.toContain("(deny process*)");
+    expect(profile).toContain("(deny process-exec)");
+    expect(profile).toContain('(literal "/trusted/opencode")');
+    expect(profile).toContain('(literal "/usr/bin/git")');
+    expect(profile).not.toContain("(allow process-exec)");
     for (const denied of ["network*", "mach-lookup", "appleevent-send", "lsopen"])
       expect(profile).toContain(`(deny ${denied})`);
   });
@@ -232,6 +232,29 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
   const seatbeltAvailable = probeBackends().seatbelt;
   const platformIsDarwin = currentPlatform() === "darwin";
   const canProveOnThisHost = platformIsDarwin && seatbeltAvailable;
+
+  it.skipIf(!canProveOnThisHost)(
+    "denies an unapproved child executable while permitting the real Apple git chain",
+    () => {
+      const policy = createRuntimeGatewayConfinement(input);
+      const childProbe = [
+        "const { spawnSync } = require('node:child_process');",
+        "const denied = spawnSync('/bin/echo', ['unexpected'], { encoding: 'utf8' });",
+        "if (denied.error?.code !== 'EPERM') { process.stdout.write('UNAPPROVED_ALLOWED'); process.exit(2); }",
+        "const git = spawnSync('/usr/bin/git', ['--version'], { encoding: 'utf8' });",
+        "if (git.status !== 0 || !git.stdout.startsWith('git version ')) { process.stdout.write('GIT_DENIED'); process.exit(3); }",
+        "process.stdout.write('DENIED_UNAPPROVED_ALLOWED_GIT');",
+      ].join("");
+      const wrapped = buildRuntimeGatewaySeatbeltCommand(policy, process.execPath, [
+        "-e",
+        childProbe,
+      ]);
+      expect(run(wrapped.command, wrapped.args)).toEqual({
+        status: 0,
+        stdout: "DENIED_UNAPPROVED_ALLOWED_GIT",
+      });
+    },
+  );
 
   it.skipIf(!canProveOnThisHost)(
     "denies a hostile loopback destination while permitting only the configured gateway port",

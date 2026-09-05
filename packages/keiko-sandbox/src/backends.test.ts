@@ -255,19 +255,31 @@ describe("buildWrappedCommand", () => {
   });
 });
 
-describe("buildGatewaySeatbeltCommand fork policy (#3390 live run)", () => {
+describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", () => {
   const gateway: NetworkGatewayPolicy = { mode: "gateway", host: "127.0.0.1", port: 1983 };
 
-  // Regression pin: `(deny process-fork)` broke every dev-lane coding run at the OpenCode
-  // handshake, because the pinned sidecar shells out to `git` for its own session/history
-  // endpoints. Fork must stay allowed here; the other service-escape denials are unaffected and
-  // stay pinned. If this test starts failing because `process-fork` reappears in the profile, do
-  // not "fix" it by re-adding the denial — OpenCode needs fork for git (#3390).
-  it("never re-adds a process-fork denial to the gateway profile", () => {
+  // Regression pin: `(deny process-fork)` broke the OpenCode git handshake. Fork itself therefore
+  // remains available, but the executable transition is deny-by-default and admits only the
+  // verified runtime plus Apple's fixed git launcher/implementation paths.
+  it("denies arbitrary child executables while admitting only the runtime and Apple git", () => {
     const wrapped = buildGatewaySeatbeltCommand(gateway, "/trusted/opencode", ["serve"]);
     const profile = wrapped.args[1];
     expect(profile).not.toContain("process-fork");
+    expect(profile).toContain("(deny process-exec)");
+    expect(profile).toContain('(literal "/trusted/opencode")');
+    expect(profile).toContain('(literal "/usr/bin/git")');
+    expect(profile).toContain('(literal "/Library/Developer/CommandLineTools/usr/bin/git")');
+    expect(profile).toContain(
+      '(literal "/Applications/Xcode.app/Contents/Developer/usr/bin/git")',
+    );
+    expect(profile).not.toContain("(allow process-exec)");
     for (const denied of ["network*", "mach-lookup", "appleevent-send", "lsopen"])
       expect(profile).toContain(`(deny ${denied})`);
+  });
+
+  it("rejects a relative runtime executable before compiling the profile", () => {
+    expect(() => buildGatewaySeatbeltCommand(gateway, "opencode", ["serve"])).toThrow(
+      "gateway-seatbelt-command-not-absolute",
+    );
   });
 });
