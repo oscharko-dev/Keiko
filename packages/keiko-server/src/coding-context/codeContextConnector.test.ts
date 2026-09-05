@@ -1,3 +1,4 @@
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { isCommandAllowed } from "@oscharko-dev/keiko-tools";
 import { describe, expect, it } from "vitest";
 
