@@ -20,11 +20,29 @@ import type {
   GitJourneyReader,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { RouteContext, RouteResult } from "../routes.js";
-import type { UiHandlerDeps } from "../deps.js";
+import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
+import { createInMemoryUiStore } from "../store/index.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { createCodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
 import { createDraftRun, readySnapshot } from "./ciObservationTest/_support.js";
 import { createGitDeliveryJourneyRouteGroup } from "./journeyRoutes.js";
+
+// Builds a fully-typed UiHandlerDeps (all 8 required fields), matching the `deps(overrides)`
+// pattern shared by the sibling gitDelivery route test files (e.g. actionSheetRoutes.test.ts),
+// so the fixture stays structurally checked against UiHandlerDeps instead of double-cast past it.
+function baseDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
+  return {
+    config: undefined,
+    configPresent: false,
+    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+    env: {},
+    redactor: buildRedactor({}),
+    registry: createRunRegistry(),
+    modelPortFactory: () => undefined,
+    store: createInMemoryUiStore(),
+    ...overrides,
+  };
+}
 
 const PATTERN = "/api/git-delivery/journey/refresh";
 
@@ -56,7 +74,7 @@ function harness(): Harness {
   const snapshots = createDraftRun(db);
   const dir = mkdtempSync(join(tmpdir(), "keiko-journey-route-"));
   const events: ServerLogEvent[] = [];
-  const deps = {
+  const deps = baseDeps({
     codingRuntimeSnapshotStore: snapshots,
     evidenceStore: createNodeEvidenceStore(dir),
     redactor: (value: string): string => value,
@@ -65,7 +83,7 @@ function harness(): Harness {
         events.push(event);
       },
     },
-  } as unknown as UiHandlerDeps;
+  });
   return {
     deps,
     events,
@@ -244,11 +262,11 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
     try {
       const db = new DatabaseSync(dbPath);
       const snapshots = createDraftRun(db);
-      const deps = {
+      const deps = baseDeps({
         codingRuntimeSnapshotStore: snapshots,
         evidenceStore: createNodeEvidenceStore(evidenceDir),
         redactor: (value: string): string => value,
-      } as unknown as UiHandlerDeps;
+      });
       // No `outcomes` override: exercises the same default wiring the mounted production route
       // group (`GIT_DELIVERY_JOURNEY_ROUTE_GROUP`) uses.
       const group = createGitDeliveryJourneyRouteGroup({

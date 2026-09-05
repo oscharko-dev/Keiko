@@ -330,9 +330,13 @@ export function listCodingWorkbenchRuntimeQuestions(
   );
 }
 
+// The answer body imports the contract type directly (epic #3384 defect A) rather than
+// re-declaring the requestId/expectedRevision/questionId/answers shape locally: the server route
+// parses this exact wire body with parseCodingWorkbenchRuntimeQuestionAnswerRequest, so there is
+// exactly one definition of what an answer looks like, not two that can drift apart.
 export function answerCodingWorkbenchRuntimeQuestion(
   runId: string,
-  input: CodingWorkbenchRuntimeQuestionAnswerBody,
+  input: CodingWorkbenchRuntimeQuestionAnswerRequest,
   signal?: AbortSignal,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
   return postSnapshot(runPath(runId, "/questions/answer"), input, signal);

@@ -2498,6 +2498,76 @@ describe("Codex subscription sign-in surface", () => {
 // when Start arrived and keeps it for the run's life, so the composer chips, the session context
 // bar and the Git target must keep naming THAT workspace. Following the pointer instead labelled a
 // run in A with B's root and branch and opened B's Git — an invitation to act on the wrong tree.
+// #3390 wave: the header's "Allow package scripts for verification" affordance. It reads the SAME
+// server-owned trust status the Editor's own trust surface reads, keyed on the live active root —
+// the operator no longer has to already know the Editor's own command to unblock a run refused
+// WORKSPACE_TRUST_REQUIRED (2026-09-05 real run).
+describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
+  it("shows the allow action once the bound workspace resolves as restricted", async () => {
+    trustStatusMock.mockResolvedValue(trustStatus("/repos/keiko", "restricted"));
+    renderWorkbench(
+      liveState(),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko", "/repos/keiko"),
+    );
+
+    const action = await screen.findByRole("button", {
+      name: "Allow package scripts for verification",
+    });
+    expect(action).toBeEnabled();
+    expect(trustStatusMock).toHaveBeenCalledWith("/repos/keiko");
+  });
+
+  it("grants trust for the bound root through the existing grant route and hides once trusted", async () => {
+    trustStatusMock.mockResolvedValue(trustStatus("/repos/keiko", "restricted"));
+    trustMutateMock.mockResolvedValue(trustStatus("/repos/keiko", "trusted"));
+    const user = userEvent.setup();
+    renderWorkbench(
+      liveState(),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko", "/repos/keiko"),
+    );
+
+    const action = await screen.findByRole("button", {
+      name: "Allow package scripts for verification",
+    });
+    await user.click(action);
+
+    expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko", "grant");
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: /Allow package scripts/u }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("renders no affordance once the bound workspace resolves as trusted", async () => {
+    trustStatusMock.mockResolvedValue(trustStatus("/repos/keiko", "trusted"));
+    renderWorkbench(
+      liveState(),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko", "/repos/keiko"),
+    );
+
+    await waitFor(() => expect(trustStatusMock).toHaveBeenCalledWith("/repos/keiko"));
+    expect(
+      screen.queryByRole("button", { name: /Allow package scripts/u }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders no affordance while no workspace is bound", () => {
+    renderWorkbench(liveState());
+
+    expect(trustStatusMock).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: /Allow package scripts/u }),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("CodingWorkbenchWindow run workspace attribution", () => {
   const WORKSPACE_A = { root: "/worktrees/task-a", branch: "issue/aaa", id: "workspace-a" };
   const WORKSPACE_B = { root: "/worktrees/task-b", branch: "issue/bbb", id: "workspace-b" };

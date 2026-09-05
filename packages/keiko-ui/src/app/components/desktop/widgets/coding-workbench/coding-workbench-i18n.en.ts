@@ -688,6 +688,17 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.commitResult.preflight.recovery-target-unset": "No recovery target is set",
   "codingWorkbench.commitResult.preflight.dirty-worktree-impacts-recovery":
     "Workspace changes prevent safe recovery",
+  "codingWorkbench.commitResult.messageViolation.empty-subject": "The commit subject is empty",
+  "codingWorkbench.commitResult.messageViolation.missing-conventional-prefix":
+    'The subject is missing a conventional-commit prefix (for example "feat: ")',
+  "codingWorkbench.commitResult.messageViolation.disallowed-type":
+    "The conventional-commit type is not one of the allowed types",
+  "codingWorkbench.commitResult.messageViolation.subject-too-long":
+    "The subject line exceeds the maximum length",
+  "codingWorkbench.commitResult.messageViolation.missing-issue-key":
+    "The message is missing a required issue key",
+  "codingWorkbench.commitResult.messageViolation.missing-signoff":
+    "The message is missing a required Signed-off-by trailer",
   "codingWorkbench.approval.commit.message": "Reviewed commit message",
   "codingWorkbench.approval.commit.binding": "Exact commit binding",
   "codingWorkbench.approval.commit.proposal": "Proposal",

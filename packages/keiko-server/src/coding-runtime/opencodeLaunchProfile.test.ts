@@ -135,6 +135,11 @@ describe("OpenCode launch profile", () => {
     // disambiguate instead of leaving the built-in unmentioned.
     expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("skills run only through keiko_skill");
     expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("expectedContentHash");
+    // #3390: a message-policy block must be self-correctable from the tool result alone -- the
+    // model must read `violations` and fix the message itself, never ask the operator for a
+    // format.
+    expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("violations");
+    expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("never ask the operator which commit format");
     for (const verifier of ["test", "targeted-test", "typecheck", "lint", "build"]) {
       expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain(verifier);
     }

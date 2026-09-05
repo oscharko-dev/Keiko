@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
   acknowledgeCodingWorkbenchRuntimeRecovery,
+  answerCodingWorkbenchRuntimeQuestion,
   codingWorkbenchFailureStatus,
   codingWorkbenchRuntimeActionError,
   codingWorkbenchRuntimeApiError,
@@ -310,6 +311,32 @@ describe("Coding Workbench runtime API endpoints", () => {
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/coding-workbench/runtime/runs/run-1/recovery-ack",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  // Epic #3384 defect A: the answer body's field is `questionId`, the single name every layer
+  // (contract, server coordinator, UI) now speaks for it -- posted verbatim, not translated from
+  // some other local field name, since answerCodingWorkbenchRuntimeQuestion's input type is
+  // imported directly from keiko-contracts rather than a second, locally-declared shape.
+  it("posts a question answer with the requestId/expectedRevision/questionId/answers contract shape", async () => {
+    const fetchMock = stubFetch(snapshot());
+    await answerCodingWorkbenchRuntimeQuestion("run-1", {
+      requestId: "req-1",
+      expectedRevision: 3,
+      questionId: "que_1",
+      answers: [["Continue"]],
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/coding-workbench/runtime/runs/run-1/questions/answer",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          requestId: "req-1",
+          expectedRevision: 3,
+          questionId: "que_1",
+          answers: [["Continue"]],
+        }),
+      }),
     );
   });
 

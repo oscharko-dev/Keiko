@@ -109,6 +109,23 @@ describe("verified commit outcome in the Code task", () => {
     expect(screen.getByText(/Blocking.*You can fix this/u)).toBeInTheDocument();
   });
 
+  it("shows the closed message-policy violation codes instead of the rejected message (#3390)", () => {
+    const value = blocked();
+    Reflect.deleteProperty(value, "blockReason");
+    const result = {
+      ...value,
+      reason: "message-policy" as const,
+      violations: ["missing-conventional-prefix" as const, "subject-too-long" as const],
+    };
+    render(<CodingWorkbenchCommitResult result={result} runId="run-1" />);
+    expect(
+      screen.getByText(
+        'The subject is missing a conventional-commit prefix (for example "feat: ")',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("The subject line exceeds the maximum length")).toBeInTheDocument();
+  });
+
   it.each(["foreign-run", "unknown-field", "unknown-finding", "pending"])(
     "refuses %s without rendering or logging its content",
     (shape) => {

@@ -48,9 +48,7 @@ describe("CodingWorkbenchTrustAffordance", () => {
     const { container } = render(<CodingWorkbenchTrustAffordance root="/repo-a" />);
 
     await waitFor(() => expect(fetchStatus).toHaveBeenCalledWith("/repo-a"));
-    expect(
-      screen.queryByTestId("coding-workbench-trust-affordance"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coding-workbench-trust-affordance")).not.toBeInTheDocument();
     expect(container).toBeEmptyDOMElement();
   });
 
@@ -79,7 +77,9 @@ describe("CodingWorkbenchTrustAffordance", () => {
     // The grant response IS the re-read status: the affordance adopts it directly and, once
     // trusted, removes the action rather than leaving a stale "restricted" button behind.
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: /Allow package scripts/u })).not.toBeInTheDocument(),
+      expect(
+        screen.queryByRole("button", { name: /Allow package scripts/u }),
+      ).not.toBeInTheDocument(),
     );
   });
 

@@ -56,7 +56,12 @@ export function CodingWorkbenchCommitResult({
 function CommitKernelFindings({ result }: { readonly result: VerifiedCommitResult }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const git = useOptionalWidgetTranslate();
-  if (result.blockReason === undefined && result.preflightFindings === undefined) return null;
+  if (
+    result.blockReason === undefined &&
+    result.preflightFindings === undefined &&
+    result.violations === undefined
+  )
+    return null;
   return (
     <section
       className={styles.approvalResearch}
@@ -75,6 +80,13 @@ function CommitKernelFindings({ result }: { readonly result: VerifiedCommitResul
             <p className={styles.helpText}>
               {git(`gitDelivery.blockerSeverity.${finding.severity}`)} ·{" "}
               {git(`gitDelivery.remediation.${finding.remediation}`)}
+            </p>
+          </li>
+        ))}
+        {result.violations?.map((code) => (
+          <li key={code}>
+            <p className={styles.helpText}>
+              {t(`codingWorkbench.commitResult.messageViolation.${code}`)}
             </p>
           </li>
         ))}

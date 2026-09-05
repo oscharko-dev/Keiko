@@ -714,6 +714,17 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Kein Wiederherstellungsziel ist festgelegt",
   "codingWorkbench.commitResult.preflight.dirty-worktree-impacts-recovery":
     "Workspace-Änderungen verhindern eine sichere Wiederherstellung",
+  "codingWorkbench.commitResult.messageViolation.empty-subject": "Die Commit-Betreffzeile ist leer",
+  "codingWorkbench.commitResult.messageViolation.missing-conventional-prefix":
+    'Der Betreffzeile fehlt ein Conventional-Commit-Präfix (zum Beispiel "feat: ")',
+  "codingWorkbench.commitResult.messageViolation.disallowed-type":
+    "Der Conventional-Commit-Typ gehört nicht zu den erlaubten Typen",
+  "codingWorkbench.commitResult.messageViolation.subject-too-long":
+    "Die Betreffzeile überschreitet die maximale Länge",
+  "codingWorkbench.commitResult.messageViolation.missing-issue-key":
+    "Der Nachricht fehlt ein erforderlicher Issue-Schlüssel",
+  "codingWorkbench.commitResult.messageViolation.missing-signoff":
+    "Der Nachricht fehlt ein erforderlicher Signed-off-by-Trailer",
   "codingWorkbench.approval.commit.message": "Geprüfte Commit-Nachricht",
   "codingWorkbench.approval.commit.binding": "Exakte Commit-Bindung",
   "codingWorkbench.approval.commit.proposal": "Vorschlag",
