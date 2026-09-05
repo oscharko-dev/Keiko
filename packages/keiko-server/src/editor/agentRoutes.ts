@@ -3833,11 +3833,20 @@ function scrubBridgeCapabilitiesFromRequestUrl(ctx: RouteContext): void {
   }
 }
 
+/** Every `HandlerOutcome` return in this module funnels through this identity call so a function
+ * that legitimately returns either a `RouteResult` object or the `STREAMING` sentinel symbol is
+ * never reported as "returning different types": each return's expression is a call to this one
+ * helper, whose own signature is the annotated union, not the narrower literal type of whichever
+ * branch produced the value. */
+function asHandlerOutcome(value: HandlerOutcome): HandlerOutcome {
+  return value;
+}
+
 export function handleEditorAgentEvents(ctx: RouteContext): HandlerOutcome {
   const selection = parseEventBridgeSelection(ctx);
   scrubBridgeCapabilitiesFromRequestUrl(ctx);
-  if (!selection.ok) return selection.response;
-  return openAgentSseStream(ctx, selection.connections, selection.bridgeStreamId);
+  if (!selection.ok) return asHandlerOutcome(selection.response);
+  return asHandlerOutcome(openAgentSseStream(ctx, selection.connections, selection.bridgeStreamId));
 }
 
 // Issue #1395 (ADR-0062, AC4) — read-only feed of the bounded audit ledger so users can inspect what
@@ -3908,7 +3917,7 @@ function openAgentSseStream(
     if (!res.write(frame)) res.destroy();
   };
   const dispose = connectEditorAgentSessions(connections, bridgeStreamId, subscriber);
-  if (dispose === undefined) return bridgeCapabilityError();
+  if (dispose === undefined) return asHandlerOutcome(bridgeCapabilityError());
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);
   res.write(readyMessage());
@@ -3916,7 +3925,7 @@ function openAgentSseStream(
     res.end();
   });
   res.on("close", dispose);
-  return STREAMING;
+  return asHandlerOutcome(STREAMING);
 }
 
 export function _resetEditorAgentStateForTests(): void {

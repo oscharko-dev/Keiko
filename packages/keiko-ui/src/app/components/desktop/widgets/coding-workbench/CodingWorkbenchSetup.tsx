@@ -98,7 +98,7 @@ type SetupStatus =
 export interface CodingWorkbenchSetupProps {
   // The Workbench-wide selected folder/repository is a convenience default only. It does not become
   // execution authority until this explicit provision → verify → activate action succeeds.
-  readonly selectedRoot?: string | undefined;
+  readonly selectedRoot: string | undefined;
   // ActiveWorkspaceApi.refresh from the shared context — re-reads the active binding after the
   // workbench-initiated bind so every bound surface flips to the new workspace atomically.
   readonly refreshWorkspace: () => Promise<boolean>;
@@ -109,9 +109,9 @@ export interface CodingWorkbenchSetupProps {
   // during the initial load. The bootstrap section is the FIRST screen a fresh evaluation install
   // shows, so a clean form here would imply a verified runtime (ADR-0163 D9).
   readonly runtimePosture: CodingWorkbenchSetupRuntimePosture;
-  readonly acceptedIssue?: AcceptedWorkbenchIssue | null | undefined;
-  readonly onAcceptedIssue?: ((issue: AcceptedWorkbenchIssue | null) => void) | undefined;
-  readonly onOpenGit?: (() => void) | undefined;
+  readonly acceptedIssue: AcceptedWorkbenchIssue | null | undefined;
+  readonly onAcceptedIssue: ((issue: AcceptedWorkbenchIssue | null) => void) | undefined;
+  readonly onOpenGit: (() => void) | undefined;
 }
 
 // "pending" is a real state, not a stand-in for "verified": before the first readiness read
@@ -212,7 +212,7 @@ async function settleBoundWorkspace(
 interface BindInput {
   readonly root: string;
   readonly baseBranch: string;
-  readonly issue?: AcceptedWorkbenchIssue | null | undefined;
+  readonly issue: AcceptedWorkbenchIssue | null | undefined;
   readonly refreshWorkspace: () => Promise<boolean>;
   readonly onPhase: (phase: SetupPhase) => void;
 }
@@ -340,7 +340,7 @@ function useSetupAttempt(params: {
 function useSetupActions(params: {
   readonly repositoryPath: string;
   readonly branch: TargetBranchState;
-  readonly issue?: AcceptedWorkbenchIssue | null | undefined;
+  readonly issue: AcceptedWorkbenchIssue | null | undefined;
   readonly unresolvedIssue: boolean;
   readonly refreshWorkspace: () => Promise<boolean>;
   readonly status: SetupStatus;

@@ -58,14 +58,14 @@ export interface GovernedPullRequestClient {
   // lower. `runExecute` mints it from the identical command and attaches it before calling execute.
   // Optional only for compatibility with narrow injected clients. Execution fails closed when it
   // is absent; no caller may downgrade to an unapproved request.
-  readonly prApprove?: typeof fetchGitDeliveryPrApprove | undefined;
+  readonly prApprove: typeof fetchGitDeliveryPrApprove | undefined;
   readonly prExecute: typeof fetchGitDeliveryPrExecute;
   // #3399: the governed PR-description preview -> approve -> apply lifecycle. Optional for the same
   // reason as `prApprove` above — the panel renders nothing when a caller's client omits any of them.
-  readonly prDescriptionPreview?: typeof fetchGitDeliveryPrDescriptionPreview | undefined;
-  readonly prDescriptionReview?: typeof fetchGitDeliveryPrDescriptionReview | undefined;
-  readonly prDescriptionApprove?: typeof fetchGitDeliveryPrDescriptionApprove | undefined;
-  readonly prDescriptionApply?: typeof fetchGitDeliveryPrDescriptionApply | undefined;
+  readonly prDescriptionPreview?: typeof fetchGitDeliveryPrDescriptionPreview;
+  readonly prDescriptionReview?: typeof fetchGitDeliveryPrDescriptionReview;
+  readonly prDescriptionApprove?: typeof fetchGitDeliveryPrDescriptionApprove;
+  readonly prDescriptionApply?: typeof fetchGitDeliveryPrDescriptionApply;
 }
 
 const DEFAULT_CLIENT: GovernedPullRequestClient = {
@@ -164,9 +164,9 @@ function initialForm({
   ownerAndRepo,
   baseBranchName,
 }: {
-  readonly headBranchName?: string | undefined;
-  readonly ownerAndRepo?: string | undefined;
-  readonly baseBranchName?: string | undefined;
+  readonly headBranchName: string | undefined;
+  readonly ownerAndRepo: string | undefined;
+  readonly baseBranchName: string | undefined;
 }): PrForm {
   return {
     kind: "pr-create",
@@ -714,7 +714,7 @@ interface RequiredPrDescriptionClient {
   readonly prDescriptionPreview: typeof fetchGitDeliveryPrDescriptionPreview;
   readonly prDescriptionApprove: typeof fetchGitDeliveryPrDescriptionApprove;
   readonly prDescriptionApply: typeof fetchGitDeliveryPrDescriptionApply;
-  readonly prDescriptionReview?: typeof fetchGitDeliveryPrDescriptionReview | undefined;
+  readonly prDescriptionReview?: typeof fetchGitDeliveryPrDescriptionReview;
 }
 
 // Shared sequencing for the three description actions below: increments the guard token, marks
@@ -1336,9 +1336,9 @@ interface GovernedPullRequestBodyProps {
   readonly client: GovernedPullRequestClient;
   readonly projectId: string;
   readonly headBranchName: string | undefined;
-  readonly ownerAndRepo?: string | undefined;
-  readonly baseBranchName?: string | undefined;
-  readonly descriptionProposal?: GitDeliveryPrDescriptionProposalInput | undefined;
+  readonly ownerAndRepo: string | undefined;
+  readonly baseBranchName: string | undefined;
+  readonly descriptionProposal: GitDeliveryPrDescriptionProposalInput | undefined;
   readonly titleId: string;
   readonly liveId: string;
 }

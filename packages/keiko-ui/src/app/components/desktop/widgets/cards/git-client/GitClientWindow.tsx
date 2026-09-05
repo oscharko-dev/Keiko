@@ -154,16 +154,16 @@ export interface GitClientWindowProps {
   readonly initialPath?: string | undefined;
   readonly initialCommit?: string | undefined;
   readonly initialRepositoryDialog?: "clone" | "open" | undefined;
-  readonly onRepositoryConnected?: ((root: string) => void) | undefined;
-  readonly onOpenFiles?: ((root: string) => void) | undefined;
-  readonly onOpenEditor?: ((root: string) => void) | undefined;
-  readonly onOpenEditorFile?: ((request: OpenEditorFileRequest) => void) | undefined;
+  readonly onRepositoryConnected?: (root: string) => void;
+  readonly onOpenFiles?: (root: string) => void;
+  readonly onOpenEditor?: (root: string) => void;
+  readonly onOpenEditorFile?: (request: OpenEditorFileRequest) => void;
   /** Persists the selected repository into cfg.projectPath so resolveBoundRoot re-targets. */
-  readonly updateCfg?: ((patch: Record<string, WindowCfgValue>) => void) | undefined;
+  readonly updateCfg?: (patch: Record<string, WindowCfgValue>) => void;
   /** DI seam; defaults to the real BFF client. */
   readonly client?: GitClientSeam;
   /** Reconciles open editor buffers after a successful working-tree mutation. */
-  readonly reconcileEditorBuffers?: ((root: string) => Promise<void>) | undefined;
+  readonly reconcileEditorBuffers?: (root: string) => Promise<void>;
 }
 
 type RightPaneMode = "diff" | "pull-request" | "merge";

@@ -46,13 +46,13 @@ import type {
 // letting the server re-derive the repository from the SAME trusted checkout the scope was
 // connected against. Approval and apply both name only the Chat-held proposal; the server
 // re-derives the live repository identity and snapshot-bound service instance.
-export type ApproveGitChangeDescriptionFn = (
+type ApproveGitChangeDescriptionFn = (
   chat: Chat,
   scope: ChatGitChangeScope,
   proposalId: string,
 ) => Promise<GitDeliveryPrDescriptionApproveResponse>;
 
-export type ApplyGitChangeDescriptionFn = (
+type ApplyGitChangeDescriptionFn = (
   chat: Chat,
   relationshipId: string,
   proposalId: string,
@@ -536,8 +536,8 @@ interface GitChangePillItemProps {
   readonly chat: Chat;
   readonly scope: ChatGitChangeScope;
   readonly allScopes: readonly ChatGitChangeScope[];
-  readonly onDisconnect?: ((chat: Chat) => void) | undefined;
-  readonly onRefreshed?: ((chat: Chat) => void) | undefined;
+  readonly onDisconnect: ((chat: Chat) => void) | undefined;
+  readonly onRefreshed: ((chat: Chat) => void) | undefined;
   readonly updateScopes: typeof updateChatGitChangeScopes;
   readonly refreshScope: typeof refreshGitChangeScope;
   readonly approveDescription: ApproveGitChangeDescriptionFn;

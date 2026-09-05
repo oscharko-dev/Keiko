@@ -399,8 +399,8 @@ function selectedResumeMode(
 export interface CodingWorkbenchGitTarget {
   readonly root: string | null;
   readonly binding: "repository" | "task-workspace";
-  readonly repositoryDialog?: "clone" | "open" | undefined;
-  readonly descriptionReview?: WorkbenchDescriptionReviewTarget | undefined;
+  readonly repositoryDialog?: "clone" | "open";
+  readonly descriptionReview?: WorkbenchDescriptionReviewTarget;
 }
 
 function noopOpenGit(_target: CodingWorkbenchGitTarget): void {}
@@ -474,7 +474,7 @@ export function CodingWorkbenchWindow({
   onOpenGit = noopOpenGit,
 }: {
   readonly selectedRoot?: string | undefined;
-  readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
+  readonly onOpenGit?: (target: CodingWorkbenchGitTarget) => void;
 }): ReactNode {
   const activeWorkspace = useOptionalActiveWorkspace() ?? EMPTY_WORKSPACE;
   const chatCatalog = useOptionalChatSessionCatalog();

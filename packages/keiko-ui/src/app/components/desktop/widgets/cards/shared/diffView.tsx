@@ -80,8 +80,8 @@ function TokenSpans({ tokens }: TokensProps): ReactNode {
 interface DiffLineViewProps {
   readonly line: DiffLine;
   readonly lang: string;
-  readonly kindLabel?: string | undefined;
-  readonly labels?: DiffViewLabels | undefined;
+  readonly kindLabel: string | undefined;
+  readonly labels: DiffViewLabels | undefined;
 }
 
 function DiffLineView({ line, lang, kindLabel, labels }: DiffLineViewProps): ReactNode {
@@ -123,7 +123,7 @@ interface DiffHunkViewLabels {
 interface DiffHunkViewProps {
   readonly hunk: DiffHunk;
   readonly lang: string;
-  readonly labels?: DiffHunkViewLabels | undefined;
+  readonly labels?: DiffHunkViewLabels;
   readonly viewLabels?: DiffViewLabels | undefined;
 }
 
@@ -164,11 +164,11 @@ export function DiffHunkView({ hunk, lang, labels, viewLabels }: DiffHunkViewPro
 interface DiffFileSectionProps {
   readonly file: DiffFile;
   readonly index: number;
-  readonly changedFiles?: readonly ChangedFile[] | undefined;
+  readonly changedFiles?: readonly ChangedFile[];
   readonly sectionRef: (el: HTMLElement | null) => void;
-  readonly translate?: I18nTranslate | undefined;
-  readonly labels?: DiffViewLabels | undefined;
-  readonly idPrefix?: string | undefined;
+  readonly translate?: I18nTranslate;
+  readonly labels?: DiffViewLabels;
+  readonly idPrefix?: string;
 }
 
 function useTranslate(translate: I18nTranslate | undefined): string {

@@ -179,9 +179,9 @@ interface ChatWindowProps {
   readonly workflowCompact?: boolean;
   readonly linkedRoot?: string | null;
   readonly linkedRoots?: readonly string[];
-  readonly openEditorFile?: ((request: OpenEditorFileRequest) => OpenEditorFileResult) | undefined;
-  readonly previewWindows?: PdfCitationPreviewWindowApi | undefined;
-  readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
+  readonly openEditorFile?: (request: OpenEditorFileRequest) => OpenEditorFileResult;
+  readonly previewWindows?: PdfCitationPreviewWindowApi;
+  readonly onOpenRunResult?: (message: ChatMessage) => void;
 }
 
 // Stable id for the no-model alert so aria-describedby chains can reference it.
@@ -815,16 +815,16 @@ function ChatBubbleImpl({
   layout = "stack",
 }: {
   readonly message: ChatMessage;
-  readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
-  readonly onRegenerate?: ((assistantMessageId: string) => Promise<void>) | undefined;
-  readonly onCancelRegenerate?: (() => void) | undefined;
+  readonly onOpenRunResult: ((message: ChatMessage) => void) | undefined;
+  readonly onRegenerate?: (assistantMessageId: string) => Promise<void>;
+  readonly onCancelRegenerate?: () => void;
   readonly showRegenerate?: boolean;
   readonly regenerating?: boolean;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly onApplyCodeBlock?: AssistantCodeBlockApply | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
-  readonly windowId?: string | undefined;
+  readonly windowId: string | undefined;
   // Issue #1296 — true only for the live assistant turn while tokens are arriving,
   // so the DS 0.4.0 streaming caret blinks at the growing edge of the text.
   readonly streaming?: boolean;
@@ -1001,13 +1001,13 @@ function TypingBubble(): ReactNode {
 
 interface ConversationThreadProps {
   readonly messages: readonly ChatMessage[];
-  readonly streamingAssistantMessage?: ChatMessage | undefined;
-  readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
+  readonly streamingAssistantMessage: ChatMessage | undefined;
+  readonly onOpenRunResult: ((message: ChatMessage) => void) | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly onApplyCodeBlock: AssistantCodeBlockApply | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
-  readonly windowId?: string | undefined;
+  readonly windowId: string | undefined;
   readonly sending: boolean;
   readonly sendStatus: SendStatus;
   readonly regeneratingMessageId: string | undefined;
@@ -1966,21 +1966,21 @@ interface VoiceDialogComposerControlsProps {
   // whether the mounted button is actionable, exactly as VoiceDialogInterruptButton expects.
   readonly canInterrupt: boolean;
   readonly onInterrupt: (() => void) | undefined;
-  readonly compact?: boolean | undefined;
+  readonly compact: boolean | undefined;
 }
 
 interface ComposerContextControlsProps {
   readonly session: ChatSessionApi;
   readonly selectedModelCapability: ModelCapability | undefined;
   readonly onAttachFiles: (files: readonly File[]) => void;
-  readonly controlsNarrow?: boolean | undefined;
+  readonly controlsNarrow: boolean | undefined;
 }
 
 interface VoiceDialogMicMuteButtonProps {
   readonly muted: boolean;
   readonly onToggle: () => void;
-  readonly buttonRef?: Ref<HTMLButtonElement> | undefined;
-  readonly compact?: boolean | undefined;
+  readonly buttonRef: Ref<HTMLButtonElement> | undefined;
+  readonly compact: boolean | undefined;
 }
 
 function VoiceDialogMicMuteButton({

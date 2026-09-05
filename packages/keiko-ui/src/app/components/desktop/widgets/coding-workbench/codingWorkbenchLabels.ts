@@ -303,9 +303,9 @@ function eventOutcomeDetail(
  * three different layers and all three get the identical treatment.
  */
 export interface CodingWorkbenchFailureFacts {
-  readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure | undefined;
+  readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure;
   readonly code: string;
-  readonly correlationId?: string | undefined;
+  readonly correlationId?: string;
 }
 
 // F-09a: a rejected action (any non-ok result — never only one status code) must surface as a

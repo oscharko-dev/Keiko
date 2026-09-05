@@ -186,6 +186,9 @@ function renderStatefulWindow(
   session: ChatSessionApi,
   props: { readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined } = {},
 ): void {
+  const chatWindowProps: ComponentProps<typeof ChatWindow> = {
+    ...(props.onOpenRunResult === undefined ? {} : { onOpenRunResult: props.onOpenRunResult }),
+  };
   function StatefulWindow(): React.JSX.Element {
     const [draft, setDraftState] = useState(session.draft);
     return (
@@ -199,7 +202,7 @@ function renderStatefulWindow(
           },
         }}
       >
-        <ChatWindow onOpenRunResult={props.onOpenRunResult} />
+        <ChatWindow {...chatWindowProps} />
       </ChatSessionProvider>
     );
   }

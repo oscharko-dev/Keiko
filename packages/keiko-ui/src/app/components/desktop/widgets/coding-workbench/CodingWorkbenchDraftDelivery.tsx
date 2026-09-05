@@ -27,8 +27,8 @@ export function CodingWorkbenchDraftDelivery({
   reviewDraft = getCodingWorkbenchRuntimeDescriptionDraft,
 }: {
   readonly snapshot: CodingWorkbenchRuntimeSnapshot | undefined;
-  readonly onReviewDescription?: ((target: WorkbenchDescriptionReviewTarget) => void) | undefined;
-  readonly reviewDraft?: WorkbenchDescriptionDraftReader | undefined;
+  readonly onReviewDescription?: (target: WorkbenchDescriptionReviewTarget) => void;
+  readonly reviewDraft?: WorkbenchDescriptionDraftReader;
 }): ReactNode {
   const parsed = validateCodingWorkbenchRuntimeSnapshot(snapshot);
   const delivery = parsed.ok ? parsed.value.draftDelivery : undefined;

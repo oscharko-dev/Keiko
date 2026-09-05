@@ -76,7 +76,7 @@ export interface ConnectToChatDialogProps {
   readonly baseBranchName: string | undefined;
   readonly baseBranchChoices: readonly string[];
   readonly onClose: () => void;
-  readonly onConnected?: ((chat: Chat) => void) | undefined;
+  readonly onConnected?: (chat: Chat) => void;
   /** Injectable wire seams for tests. Default to the real BFF helpers. */
   readonly listChats?: typeof fetchChats;
   readonly connect?: typeof connectGitChangeToChat;

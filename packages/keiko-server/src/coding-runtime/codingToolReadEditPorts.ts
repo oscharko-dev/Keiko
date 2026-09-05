@@ -164,8 +164,9 @@ function executeDiscoverSync(
 ):
   | { readonly status: "completed"; readonly read: CodingToolReadResult }
   | { readonly status: "failed" } {
-  const binding = discoveryPreflight(deps, signal, mutationGuard);
-  if (binding === false) return { status: "failed" };
+  const preflight = discoveryPreflight(deps, signal, mutationGuard);
+  if (!preflight.ok) return { status: "failed" };
+  const binding = preflight.binding;
   try {
     const resolved = discoveryWorkspace(deps);
     if (resolved === undefined) return { status: "failed" };
@@ -282,8 +283,9 @@ async function executeRead(
   | { readonly status: "completed"; readonly read: CodingToolReadResult }
   | { readonly status: "failed" }
 > {
-  const binding = readPreflight(deps, request, signal, mutationGuard);
-  if (binding === false) return { status: "failed" };
+  const preflight = readPreflight(deps, request, signal, mutationGuard);
+  if (!preflight.ok) return { status: "failed" };
+  const binding = preflight.binding;
   const result = await deps.secureWorkspaceTextRead.readText({
     relativePath: request.relativePath,
     signal,
@@ -348,32 +350,41 @@ function slicedWindow(input: {
   };
 }
 
+/** A single explicit result shape for both preflight checks below: every branch returns an
+ * object literal discriminated on `ok`, instead of mixing a `RuntimeProducerBinding | undefined`
+ * payload with the bare boolean literal `false` "abort" signal. */
+type ReadEditPreflightOutcome =
+  | { readonly ok: false }
+  | { readonly ok: true; readonly binding: RuntimeProducerBinding | undefined };
+
 function readPreflight(
   deps: CodingToolReadEditPortDeps,
   request: RepositoryReadRequest,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
-): RuntimeProducerBinding | undefined | false {
+): ReadEditPreflightOutcome {
   if (isAborted(signal) || isDenied(request.relativePath) || !hasLiveWorkspaceAccess(deps)) {
-    return false;
+    return { ok: false };
   }
   const binding = mutationBinding(mutationGuard);
-  if (binding === null) return false;
-  if (binding === undefined && deps.enforceProducerBinding === true) return false;
-  if (!readContextMatches(deps, binding) || !checkGuard(mutationGuard)) return false;
-  return isDenied(request.relativePath) ? false : binding;
+  if (binding === null) return { ok: false };
+  if (binding === undefined && deps.enforceProducerBinding === true) return { ok: false };
+  if (!readContextMatches(deps, binding) || !checkGuard(mutationGuard)) return { ok: false };
+  return isDenied(request.relativePath) ? { ok: false } : { ok: true, binding };
 }
 
 function discoveryPreflight(
   deps: CodingToolReadEditPortDeps,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
-): RuntimeProducerBinding | undefined | false {
-  if (isAborted(signal)) return false;
+): ReadEditPreflightOutcome {
+  if (isAborted(signal)) return { ok: false };
   const binding = mutationBinding(mutationGuard);
-  if (binding === null) return false;
-  if (binding === undefined && deps.enforceProducerBinding === true) return false;
-  return readContextMatches(deps, binding) && checkGuard(mutationGuard) ? binding : false;
+  if (binding === null) return { ok: false };
+  if (binding === undefined && deps.enforceProducerBinding === true) return { ok: false };
+  return readContextMatches(deps, binding) && checkGuard(mutationGuard)
+    ? { ok: true, binding }
+    : { ok: false };
 }
 
 function discoveryPostflight(

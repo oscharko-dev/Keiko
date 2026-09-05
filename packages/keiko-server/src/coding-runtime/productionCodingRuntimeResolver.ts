@@ -259,7 +259,11 @@ function composeRuntime(
   // Transient URL retention between "the model asked for this URL" and "the operator approved it".
   // In memory only; invalidated with the run.
   const pendingResearch = createPendingResearchApprovals();
-  let receiver: (event: CodingWorkbenchRuntimeEvent) => void = () => undefined;
+  // Arity matches the declared slot deliberately (not just `() => undefined`): the placeholder
+  // is itself a value of type `(event: CodingWorkbenchRuntimeEvent) => void`, so every call site
+  // below passes exactly the one argument that type accepts -- confirmed a real callee-arity
+  // mismatch is not being papered over here.
+  let receiver: (event: CodingWorkbenchRuntimeEvent) => void = (_event) => undefined;
   // #3401 (epic #3384 closeout, description-composition-closeout): the orchestrator that owns
   // `notifyVerifiedHeadAdvanced` is built by `codingRuntimeControlPlane.ts` AFTER this resolver
   // (and every per-run CI-repair budget it mints) already exists, so a per-run controller cannot

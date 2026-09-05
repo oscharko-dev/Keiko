@@ -46,6 +46,16 @@
       "scenarioId": "git-chat-negative-effects",
       "evidenceClass": "playwright-journey",
       "platform": "macos-arm64"
+    },
+    {
+      "scenarioId": "coding-runtime-performance-budgets",
+      "evidenceClass": "production-functional",
+      "platform": "macos-arm64"
+    },
+    {
+      "scenarioId": "egress-confinement-macos-arm64",
+      "evidenceClass": "production-functional",
+      "platform": "macos-arm64"
     }
   ],
   "blocked": [
@@ -71,13 +81,7 @@
       "scenarioId": "egress-confinement-linux-windows",
       "evidenceClass": "production-functional",
       "platform": "linux-x64",
-      "blockedReason": "#3421, #2951"
-    },
-    {
-      "scenarioId": "coding-runtime-performance-budgets",
-      "evidenceClass": "production-functional",
-      "platform": "macos-arm64",
-      "blockedReason": "#2952"
+      "blockedReason": "#2951 (ADR-0043 D14: Linux and Windows have no OS-level gateway-confinement enforcement)"
     },
     {
       "scenarioId": "real-binary-lane",
@@ -93,7 +97,8 @@
     }
   ],
   "knownLimitations": [
-    "packaged and egress qualification rows depend on #2198, #2951, and #2952, which remain open",
+    "packaged reference-installation rows depend on #2198 (signing and notarization) and #2951 (sidecar egress attestation), which remain open",
+    "egress and confinement qualification is proven on macos-arm64 only; #2951 must land the Linux/Windows enforcement before those platforms qualify (ADR-0043 D14)",
     "the real-binary nightly lane is red on dev and is not release qualification evidence",
     "keiko-issue-audit runs outside this repository and is bound by opaque reference only"
   ]

@@ -45,7 +45,7 @@ export interface RepositoryToolbarProps {
   readonly onOpenEditor?: ((root: string) => void) | undefined;
   readonly onOpenFiles?: ((root: string) => void) | undefined;
   /** Issue #3400 — opens the "Connect to Chat" dialog for the active repository comparison. */
-  readonly onConnectToChat?: (() => void) | undefined;
+  readonly onConnectToChat?: () => void;
 }
 
 function currentBranchName(
@@ -89,9 +89,9 @@ function ToolbarCell({
 
 interface ToolbarActionsProps {
   readonly selectedPath: string | null;
-  readonly onOpenEditor?: ((root: string) => void) | undefined;
-  readonly onOpenFiles?: ((root: string) => void) | undefined;
-  readonly onConnectToChat?: (() => void) | undefined;
+  readonly onOpenEditor: ((root: string) => void) | undefined;
+  readonly onOpenFiles: ((root: string) => void) | undefined;
+  readonly onConnectToChat: (() => void) | undefined;
   readonly connectToChatLabel: string;
 }
 
@@ -167,7 +167,7 @@ function ToolbarActions({
 function EmptyRepositoryToolbar({
   onOpenEditor,
 }: {
-  readonly onOpenEditor?: ((root: string) => void) | undefined;
+  readonly onOpenEditor: ((root: string) => void) | undefined;
 }): ReactNode {
   return (
     <header style={TOOLBAR_EMPTY_STYLE} aria-label="Repository toolbar">
