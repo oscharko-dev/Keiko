@@ -4,14 +4,18 @@ Status: production baseline for issue #2294, effective 2026-07-11.
 
 ## Supported baseline
 
-Keiko develops, tests, packages, and stages portable artifacts on Node.js 24.18.0 LTS (`Krypton`).
-Repository and published workspace manifests accept later Node.js 24 patches but reject Node.js 22,
-Node.js 25, and the not-yet-LTS Node.js 26 line. CI and portable release inputs use the exact
-24.18.0 patch so their artifact identity is reproducible.
+Keiko develops and tests on Node.js 24 LTS (`Krypton`) and Node.js 26. Repository and published
+workspace manifests accept Node.js `>=24.18.0 <25 || >=26.3.0 <27`; Node.js 26.3.0 is the first 26.x
+release that bundles the minimum governed npm version. Node.js 22, Node.js 25, Node.js 26.0-26.2,
+and Node.js 27 or newer are rejected. Portable releases and D12 measurements remain exact on
+24.18.0 so their artifact and measurement identities stay reproducible.
 
-The governed package manager is npm 11.16.0, the version bundled in the official Node.js 24.18.0
-archives. Keiko pins it exactly in `packageManager` and `engines.npm`; every workflow verifies both
-executed versions before `npm ci`.
+The supported package-manager range is npm `>=11.16.0 <12`. Keiko retains `npm@11.16.0` as its exact
+`packageManager`, publish, portable, and measurement baseline; Node.js 26.8.1 compatibility CI uses
+its bundled npm 11.19.0. Every workflow verifies an approved Node/npm pair before `npm ci`.
+Node.js 26 no longer bundles Corepack, so its compatibility lane copies the `npm ci`-verified,
+lockfile-pinned Corepack package tree into the Node runtime trust root and creates its fixed
+executable shim there before provisioning the existing digest-pinned Yarn smoke.
 
 ## npm 12 decision
 
@@ -27,9 +31,10 @@ contract. Updating `packageManager` alone is never sufficient.
 
 ## Enforced surfaces
 
-- Root and all workspace `engines.node`: `>=24.18.0 <25`.
-- Root and UI `engines.npm`: `11.16.0`; root `packageManager`: `npm@11.16.0`.
-- Every GitHub Actions Node setup: exact `24.18.0`, followed by
+- Root and all workspace `engines.node`: `>=24.18.0 <25 || >=26.3.0 <27`.
+- Root and UI `engines.npm`: `>=11.16.0 <12`; root `packageManager`: `npm@11.16.0`.
+- GitHub Actions use exact approved pairs: the reproducible baseline is `24.18.0`/`11.16.0`, and
+  dedicated compatibility CI uses `26.8.1`/`11.19.0`. Every setup is followed by
   `node scripts/check-runtime-toolchain.mjs --exact` before installation.
 - Cross-platform CI: Linux, macOS, and Windows perform clean install, typecheck, tests, build, and
   install smoke with native optional dependencies.
@@ -44,8 +49,8 @@ manager logs, archive URLs, or credentials.
 
 ## Contributor migration
 
-Install Node.js 24.18.x and use its bundled npm 11.16.0, then replace the dependency tree from the
-committed lockfile:
+Install Node.js 24.18.x or later in the 24 line, or Node.js 26.3.x or later in the 26 line, and use
+npm 11.16.0 or newer below npm 12. Then replace the dependency tree from the committed lockfile:
 
 ```bash
 node --version
@@ -54,10 +59,10 @@ node scripts/check-runtime-toolchain.mjs
 npm ci
 ```
 
-Expected versions are Node.js `v24.18.0` or a later 24.x patch and npm `11.16.0`. CI remains exact at
-Node.js 24.18.0. Node.js 22 is no longer a supported development or product runtime.
+Expected versions match `>=24.18.0 <25 || >=26.3.0 <27` with npm `>=11.16.0 <12`. CI proves the
+exact pairs `24.18.0`/`11.16.0` and `26.8.1`/`11.19.0`. Odd Node.js majors remain unsupported.
 
-## Updating the LTS patch
+## Updating runtime baselines
 
 Use the existing fail-closed updater; never edit archive digests by hand:
 
@@ -66,16 +71,14 @@ npm run portable:approve-runtimes -- --node-version <approved-24.x-version>
 npm run check:portable-approvals
 ```
 
-In the same reviewed change, update the engine floor, workflow inputs, sandbox image, toolchain gate,
-and this document. Re-run all cross-platform, portable staging, package-surface, audit, SBOM, native
-optional dependency, SQLite, and install-smoke gates before handoff. Publishing assets remains a
-separate human-approved action.
+Updating the portable Node 24 patch still uses the updater above. Updating a compatibility baseline
+changes the exact CI tuple and toolchain gate but does not alter portable approvals, sandbox images,
+or D12 evidence. Re-run all cross-platform, package-surface, native optional dependency, SQLite, and
+install-smoke gates before handoff. Publishing assets remains a separate human-approved action.
 
 ## Rollback
 
-Rollback is a normal reviewed revert or forward fix; it never rewrites Git history. Restore the last
-approved Node.js 22/npm 10 declarations, workflow pins, sandbox image, and documentation, then use
-the same updater to restore the reviewed Node.js 22 portable archive identities. Regenerate the
-lockfile with that governed npm version and rerun the full release gate surface on all platforms.
-Do not mix Node.js 24 manifests with Node.js 22 portable approvals, and do not publish rollback
-assets without separate human authorization.
+Rollback is a normal reviewed revert or forward fix; it never rewrites Git history. To withdraw
+Node 26 compatibility, restore the Node-24-only engine and npm declarations and remove the Node 26
+CI tuple while leaving the exact Node 24 portable approvals unchanged. Regenerate the lockfile with
+the governed npm version and rerun the full release gate surface on all platforms.

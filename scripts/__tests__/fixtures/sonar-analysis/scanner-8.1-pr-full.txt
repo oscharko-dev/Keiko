@@ -1,0 +1,19 @@
+16:18:06.890 INFO  5538 files indexed (done)
+16:18:14.870 INFO  Sensor JavaScript/TypeScript/CSS analysis [javascript]
+16:21:03.400 INFO  Hit the cache for 0 out of 4799
+16:21:03.400 INFO  Miss the cache for 4799 out of 4799: FILE_CHANGED [4799/4799]
+16:21:03.401 INFO  Sensor JavaScript/TypeScript/CSS analysis [javascript] (done)
+16:21:03.476 INFO  4855/4855 source files have been analyzed
+16:21:03.506 INFO  Sensor JsArchitectureSensor [architecture]
+16:21:03.549 INFO  Found 1 potential Udg file location(s) for "js" in "<redacted>"
+16:21:03.568 INFO  * Reading SonarArchitecture UDG data from directory <redacted>/architecture/js
+16:21:03.743 INFO  * Files successfully loaded: "191" out of "191"
+16:21:05.447 INFO  Sensor JsArchitectureSensor [architecture] (done)
+16:21:05.448 INFO  Sensor TsArchitectureSensor [architecture]
+16:21:05.475 INFO  Found 1 potential Udg file location(s) for "ts" in "<redacted>"
+16:21:05.476 INFO  * Reading SonarArchitecture UDG data from directory <redacted>/architecture/ts
+16:21:05.782 INFO  * Files successfully loaded: "2087" out of "2087"
+16:21:17.197 INFO  Sensor TsArchitectureSensor [architecture] (done)
+16:21:38.798 INFO  Successfully sent architecture data
+16:21:40.324 INFO  SonarScanner Engine completed successfully
+16:21:40.672 INFO  EXECUTION SUCCESS

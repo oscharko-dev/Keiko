@@ -99,7 +99,8 @@ Run it inside a project with a `package.json`; the UI opens at `http://127.0.0.1
 
 ## Requirements
 
-Node.js 24.18 LTS and npm 11.16 for the npm path — the desktop packages bring their own runtime.
+The npm path supports Node.js `>=24.18.0 <25 || >=26.3.0 <27` with npm `>=11.16.0 <12`;
+the desktop packages bring their own runtime.
 
 ## Learn more
 
