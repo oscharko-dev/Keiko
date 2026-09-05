@@ -105,6 +105,14 @@ function sameHead(row: Row, scope: WorkbenchDescriptionScope): boolean {
   );
 }
 
+// A row already `dispatched` for the same run already occupies one of the counted slots (this is
+// a supersede, not a new claim on the budget); a `settled` row (or no row at all) claims a fresh
+// slot. Without this distinction, a repaired-head regeneration for an already-settled run could
+// exceed `maxConcurrentDispatches` unconditionally (#3401 review).
+function claimsFreshBudgetSlot(row: Row | undefined): boolean {
+  return row?.phase !== "dispatched";
+}
+
 function settledStatus(row: Row): WorkbenchDescriptionStatus | undefined {
   if (row.phase !== "settled" || row.status_json === null) return undefined;
   const parsed: unknown = JSON.parse(row.status_json);
@@ -197,13 +205,8 @@ function beginDispatch(
   if (row !== undefined && sameHead(row, scope)) {
     return { kind: "coalesced", status: settledStatus(row) };
   }
-  // A row already `dispatched` for THIS run already occupies one of the counted slots (this is a
-  // supersede, not a new claim on the budget); a `settled` row (or no row) claims a fresh slot, so
-  // only that case is checked against the cap. Without this, a repaired-head regeneration for an
-  // already-settled run could exceed `maxConcurrentDispatches` unconditionally (#3401 review).
-  const alreadyInFlight = row !== undefined && row.phase === "dispatched";
   const inFlight = (statements.countInFlight.get() as { count: number }).count;
-  if (!alreadyInFlight && inFlight >= maxConcurrentDispatches) {
+  if (claimsFreshBudgetSlot(row) && inFlight >= maxConcurrentDispatches) {
     return { kind: "budget-exhausted" };
   }
   const generationVersion = (row?.generation_version ?? 0) + 1;
@@ -323,8 +326,9 @@ export function createCodingRuntimeDescriptionJobStore(
       const status = blockedStatus(scope, reason, generationVersion, nowIso);
       statements.settleRow.run(JSON.stringify(status), nowIso, scope.runId, revision);
     },
-    recordBudgetExhausted: (scope, nowIso): void =>
-      recordBudgetExhausted(statements, scope, nowIso),
+    recordBudgetExhausted(scope, nowIso): void {
+      recordBudgetExhausted(statements, scope, nowIso);
+    },
     current(runId): WorkbenchDescriptionStatus | undefined {
       const row = readRow(statements, runId);
       return row === undefined ? undefined : settledStatus(row);

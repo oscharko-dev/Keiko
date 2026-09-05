@@ -506,6 +506,20 @@ function logApplyLifecycle(
   });
 }
 
+// #3399 (epic #3384 correction 4): the description authority's model-egress denial is a security
+// decision, not a request-shape one, so it logs on the SAME activity log every other Git delivery
+// authority decision uses — body-free (no PR content, no snapshot text), correlated. `op` is new;
+// the integrator regenerates docs/observability/op-catalog.generated.json (AGENTS.md §8).
+function logModelEgressDenied(activityLog: ServerLogSink, correlationId: string): void {
+  activityLog.write({
+    category: "security",
+    op: "pr-description.model-egress.denied",
+    correlationId,
+    level: "warn",
+    status: 403,
+  });
+}
+
 // ─── Handlers ───────────────────────────────────────────────────────────────────────────────────
 
 export const createHandlePrDescriptionPreview = (
@@ -523,6 +537,7 @@ export const createHandlePrDescriptionPreview = (
     const seams = options.execution ?? {};
     const nowIso = new Date((seams.now ?? Date.now)()).toISOString();
     if (!admitDescriptionModelEgress(deps, value, nowIso)) {
+      logModelEgressDenied(seams.activityLog ?? processServerLogSink(), correlationId);
       return errResult(403, "GIT_DELIVERY_PR_DESCRIPTION_MODEL_EGRESS_DENIED");
     }
     const result = await service.preview({

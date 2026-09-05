@@ -119,9 +119,8 @@ function body(overrides: Record<string, unknown> = {}): Record<string, unknown> 
 function unqualifiedControlPlaneRuntimeHost(
   gitDeliveryDescriptionAuthority: CodingRuntimeHost["gitDeliveryDescriptionAuthority"],
 ): CodingRuntimeHost {
-  const stopped = (): ReturnType<
-    ReturnType<CodingRuntimeHost["createManager"]>["stop"]
-  > => Promise.resolve({ ok: false, failureCode: "runtime-run-mismatch", retryable: false });
+  const stopped = (): ReturnType<ReturnType<CodingRuntimeHost["createManager"]>["stop"]> =>
+    Promise.resolve({ ok: false, failureCode: "runtime-run-mismatch", retryable: false });
   return {
     createManager: () => ({
       start: () => ({ ok: false, failureCode: "runtime-unqualified", retryable: false }),
@@ -448,5 +447,50 @@ describe("pr-description routes — apply-lifecycle activity log (AGENTS.md §8 
       .filter((event) => event.op.startsWith("pr-description.apply."))
       .map((event) => event.op);
     expect(applyOps).toEqual(["pr-description.apply.started", "pr-description.apply.blocked"]);
+  });
+
+  // #3399 (epic #3384 correction 4): the model-egress denial is a security decision — it must
+  // surface on the activity log exactly like every other Git delivery authority denial, body-free.
+  it("emits a body-free, correlated denial when the description authority is revoked between the pull-request admission and model egress", async () => {
+    const events: ServerLogEvent[] = [];
+    const activityLog = { write: (event: ServerLogEvent): void => void events.push(event) };
+    const scope: GitDeliveryDescriptionAuthorityScope = {
+      remoteDigest: "d".repeat(64),
+      pr: { ownerAndRepo: "owner/repo", prNumber: 123 },
+      snapshotDigest: "f".repeat(64),
+    };
+    const active: ActiveGitDeliveryDescriptionAuthority = {
+      scope,
+      effectiveMode: "supervised-coding",
+      expiresAt: "2999-01-01T00:00:00.000Z",
+    };
+    // `prepare()`'s pull-request admission calls `current()` first and still finds a live grant;
+    // model egress is admitted by a SECOND, later call to the SAME port — this simulates the
+    // authority having been revoked/expired in between, exactly the window `stillAuthorized()`
+    // exists to re-check.
+    let calls = 0;
+    const port: GitDeliveryDescriptionAuthorityPort = {
+      current: () => (calls++ === 0 ? active : undefined),
+    };
+    const previewHandler = createHandlePrDescriptionPreview(
+      optionsWithFixtureService({ activityLog }),
+    );
+
+    const res = await previewHandler(
+      {
+        ...ctxFor(PREVIEW, body({ language: "en", snapshotDigest: scope.snapshotDigest })),
+        correlationId: "corr-model-egress-1",
+      },
+      deps({ gitDeliveryAuthority: undefined, gitDeliveryDescriptionAuthority: port }),
+    );
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_PR_DESCRIPTION_MODEL_EGRESS_DENIED" },
+    });
+    const denial = events.find((event) => event.op === "pr-description.model-egress.denied");
+    expect(denial).toBeDefined();
+    expect(denial?.correlationId).toBe("corr-model-egress-1");
+    expect(JSON.stringify(events)).not.toContain("owner/repo");
   });
 });

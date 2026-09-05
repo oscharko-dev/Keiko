@@ -23,8 +23,11 @@ import type { GitPullRequestCommand, GitWorktreeSnapshot } from "@oscharko-dev/k
 import type {
   GitPrCreateExecRequest,
   GitPrExecResult,
+  GitPrMarkReadyExecRequest,
+  GitPrMarkReadyExecResult,
   GitPrUpdateExecRequest,
   GitPullRequestAdapter,
+  GitPullRequestMarkReadyAdapter,
 } from "@oscharko-dev/keiko-tools";
 import type { NodeGitPullRequestAdapterDeps } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
@@ -58,7 +61,18 @@ vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal
   };
 });
 
-import { createHandlePrApprove, createHandlePrExecute, createHandlePrPreview } from "./prRoutes.js";
+import {
+  createGitDeliveryPrRouteGroup,
+  createHandlePrApprove,
+  createHandlePrExecute,
+  createHandlePrPreview,
+} from "./prRoutes.js";
+import {
+  createHandlePrMarkReadyApprove,
+  createHandlePrMarkReadyExecute,
+  type GitDeliveryPrMarkReadyApproveResponseBody,
+  type GitDeliveryPrMarkReadyExecuteResponseBody,
+} from "./prMarkReadyExecution.js";
 import {
   executeGovernedPullRequest,
   type GitDeliveryPrExecuteResponseBody,
@@ -726,6 +740,49 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
       title: "feat: updated title",
       body: "Updated body",
       convertToDraft: false,
+      convertFromDraft: false,
+    };
+    const res = await handler(
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        kind: "pr-update",
+        ownerAndRepo: "oscharko-dev/Keiko",
+        prExternalId: "1499",
+        headBranchName: "claude/issue-477-github-pr-command-center",
+        baseBranchName: "dev",
+        title: "feat: updated title",
+        body: "Updated body",
+        approval: issuePrApproval(approvalStore, updateCommand),
+      }),
+      deps(),
+    );
+    const body = res.body as GitDeliveryPrExecuteResponseBody;
+    expect(body.status).toBe("succeeded");
+    expect(adapter.updates()).toBe(1);
+    expect(adapter.creates()).toBe(0);
+  });
+
+  // #3389 (epic #3384 correction 1): the approval-less draft->ready transition through the generic
+  // pr-update command is closed. Before this change, this exact request (convertFromDraft: true, no
+  // pr-mark-ready claim, only the generic "pr" approval) executed and returned "succeeded" — the
+  // approval-less path AC3 requires closed. The transition is reachable ONLY through the dedicated
+  // POST /api/git-delivery/pr/mark-ready/execute route (prMarkReadyExecution.ts).
+  it("refuses convertFromDraft on the generic pr-update command even with a valid generic pr approval (#3389)", async () => {
+    const adapter = recordingPrAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const handler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const updateCommand: GitPullRequestCommand = {
+      kind: "pr-update",
+      ownerAndRepo: "oscharko-dev/Keiko",
+      prExternalId: "1499",
+      headBranchName: "claude/issue-477-github-pr-command-center",
+      baseBranchName: "dev",
+      title: "feat: updated title",
+      body: "Updated body",
+      convertToDraft: false,
       convertFromDraft: true,
     };
     const res = await handler(
@@ -740,13 +797,15 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
         title: "feat: updated title",
         body: "Updated body",
         convertFromDraft: true,
+        // A valid, correctly-bound generic "pr" approval is minted and attached — proving the
+        // refusal is NOT merely "no approval was supplied" but that convertFromDraft is rejected
+        // at request validation, before any approval is even consulted.
         approval: issuePrApproval(approvalStore, updateCommand),
       }),
       deps(),
     );
-    const body = res.body as GitDeliveryPrExecuteResponseBody;
-    expect(body.status).toBe("succeeded");
-    expect(adapter.updates()).toBe(1);
+    expect(res.status).toBe(400);
+    expect(adapter.updates()).toBe(0);
     expect(adapter.creates()).toBe(0);
   });
 });
@@ -993,5 +1052,199 @@ describe("executeGovernedPullRequest — no-spawn refusal is marked, never reach
     expect(marker?.correlationId).toBe("request-correlation-pr-no-spawn");
     expect(marker?.extra?.operation).toBe("pr-create");
     expect(marker?.status).toBe(403);
+  });
+});
+
+// #3389 (epic #3384 correction 7): the pr-mark-ready mint and execute routes. Reuses the exact
+// approval-store primitives the generic PR routes above already exercise, bound to a SEPARATE
+// "pr-mark-ready" operation so a claim minted here can never redeem the generic pr-update admission
+// (and vice versa — approvalStore.test.ts pins the store-level half of this).
+describe("pr mark-ready routes (#3389)", () => {
+  const MARK_READY_APPROVE = "/api/git-delivery/pr/mark-ready/approve";
+  const MARK_READY_EXECUTE = "/api/git-delivery/pr/mark-ready/execute";
+  const HEAD_SHA = "a".repeat(40);
+  const BASE_SHA = "b".repeat(40);
+  const READINESS_DIGEST = "c".repeat(64);
+
+  function markReadyBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      schemaVersion: "1",
+      projectId,
+      ownerAndRepo: "oscharko-dev/Keiko",
+      prExternalId: "1499",
+      headSha: HEAD_SHA,
+      baseSha: BASE_SHA,
+      readinessDigest: READINESS_DIGEST,
+      ...overrides,
+    };
+  }
+
+  function recordingMarkReadyAdapter(result: GitPrMarkReadyExecResult): {
+    readonly adapter: GitPullRequestMarkReadyAdapter;
+    readonly calls: () => readonly GitPrMarkReadyExecRequest[];
+  } {
+    const calls: GitPrMarkReadyExecRequest[] = [];
+    return {
+      adapter: {
+        markPullRequestReady: (req): Promise<GitPrMarkReadyExecResult> => {
+          calls.push(req);
+          return Promise.resolve(result);
+        },
+      },
+      calls: () => calls,
+    };
+  }
+
+  async function mintMarkReadyApproval(
+    approvalStore: ReturnType<typeof createInMemoryGitDeliveryApprovalStore>,
+    overrides: Record<string, unknown> = {},
+  ): Promise<GitDeliveryApprovalClaim> {
+    const res = await createHandlePrMarkReadyApprove({
+      approvalStore,
+      now: () => 1_700_000_000_000,
+    })(ctxFor(MARK_READY_APPROVE, markReadyBody(overrides)), deps());
+    return (res.body as GitDeliveryPrMarkReadyApproveResponseBody).approval;
+  }
+
+  it("mints a claim, then executes the draft->ready transition through the adapter — no PATCH", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = await mintMarkReadyApproval(approvalStore);
+    const succeeded: GitPrMarkReadyExecResult = {
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 5,
+    };
+    const adapter = recordingMarkReadyAdapter(succeeded);
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_001,
+      adapterFactory: () => adapter.adapter,
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), deps());
+    const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
+    expect(body).toMatchObject({ actionKind: "pr-mark-ready", status: "succeeded" });
+    expect(adapter.calls()).toEqual([
+      {
+        ownerAndRepo: "oscharko-dev/Keiko",
+        prExternalId: "1499",
+        expectedHeadSha: HEAD_SHA,
+        expectedBaseSha: BASE_SHA,
+      },
+    ]);
+  });
+
+  it("refuses execute with approval-required when no claim is attached, and never calls the adapter", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const adapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 5,
+    });
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      adapterFactory: () => adapter.adapter,
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody()), deps());
+    const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
+    expect(body.status).toBe("approval-required");
+    expect(adapter.calls()).toHaveLength(0);
+  });
+
+  // #3389 (correction 1/7): the failing-before-fix case — a claim minted for the GENERIC "pr"
+  // operation (the same claim GovernedPullRequestCard's old convertFromDraft path consumed) must
+  // never redeem the dedicated pr-mark-ready execute route.
+  it("refuses execute when the approval was minted for the generic pr operation, not pr-mark-ready", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const genericPrCommand: GitPullRequestCommand = {
+      kind: "pr-update",
+      ownerAndRepo: "oscharko-dev/Keiko",
+      prExternalId: "1499",
+      headBranchName: "claude/issue-3389-x",
+      baseBranchName: "dev",
+      title: "t",
+      body: "b",
+      convertToDraft: false,
+      convertFromDraft: false,
+    };
+    const foreignApproval = issuePrApproval(approvalStore, genericPrCommand);
+    const adapter = recordingMarkReadyAdapter({
+      schemaVersion: "1",
+      outcome: "succeeded",
+      durationMs: 5,
+    });
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      adapterFactory: () => adapter.adapter,
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval: foreignApproval })), deps());
+    expect(res.status).toBe(400);
+    expect(adapter.calls()).toHaveLength(0);
+  });
+
+  it("reports drift (precondition-failed) when the adapter observes the PR has moved, and revokes the claim", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = await mintMarkReadyApproval(approvalStore);
+    const drifted: GitPrMarkReadyExecResult = {
+      schemaVersion: "1",
+      outcome: "failed",
+      durationMs: 3,
+      errorCode: "precondition-failed",
+    };
+    const adapter = recordingMarkReadyAdapter(drifted);
+    const res = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_001,
+      adapterFactory: () => adapter.adapter,
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), deps());
+    const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
+    expect(body).toMatchObject({ status: "failed", executionErrorCode: "precondition-failed" });
+    // The claim is one-use: a second execute against the identical binding no longer redeems it
+    // (the store already consumed it on the first attempt above) — a bad request, not a retry.
+    const secondRes = await createHandlePrMarkReadyExecute({
+      approvalStore,
+      now: () => 1_700_000_000_002,
+      adapterFactory: () => adapter.adapter,
+    })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), deps());
+    expect(secondRes.status).toBe(400);
+    expect(adapter.calls()).toHaveLength(1);
+  });
+
+  it.each([
+    { headSha: "not-a-sha" },
+    { baseSha: "0".repeat(39) },
+    { readinessDigest: "too-short" },
+    { prExternalId: "not-numeric" },
+    { ownerAndRepo: "not-owner-repo" },
+  ])("rejects a malformed mark-ready request %j", async (overrides) => {
+    const res = await createHandlePrMarkReadyApprove()(
+      ctxFor(MARK_READY_APPROVE, markReadyBody(overrides)),
+      deps(),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a request smuggling a merge or issue-close field", async () => {
+    const res = await createHandlePrMarkReadyApprove()(
+      ctxFor(MARK_READY_APPROVE, { ...markReadyBody(), mergeMethod: "squash", closeIssue: true }),
+      deps(),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  // AC4 (epic #3384): the coding runtime exposes neither merge nor auto-merge scheduling nor
+  // issue-close mutations. The full PR route group (create/update/preview/mark-ready) carries no
+  // such endpoint — this is a structural pin on the route table itself, independent of any single
+  // handler's behaviour.
+  it("the PR route group (including mark-ready) exposes no merge or issue-close endpoint", () => {
+    const patterns = createGitDeliveryPrRouteGroup().map((route) => route.pattern);
+    expect(patterns).toEqual(
+      expect.arrayContaining([
+        "/api/git-delivery/pr/preview",
+        "/api/git-delivery/pr/approve",
+        "/api/git-delivery/pr/execute",
+        "/api/git-delivery/pr/mark-ready/approve",
+        "/api/git-delivery/pr/mark-ready/execute",
+      ]),
+    );
+    for (const pattern of patterns) {
+      expect(pattern.toLowerCase()).not.toMatch(/merge|close/u);
+    }
   });
 });

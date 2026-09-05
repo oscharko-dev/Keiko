@@ -99,8 +99,8 @@ envelope promises no order across processes.
 a whole-file view of every parsed line grouped by (category, op, errorKind), independent of
 --correlation-id: a count and up to 5 sample correlation ids per group. --seed (requires
 --correlation-id) prints a ReproductionSeed — a gatewayScript/httpRequest/storeFingerprint/
-indexingJob/stackFrames/causeChain reconstruction for that one correlationId, plus a warnings field
-naming exactly what could not be reconstructed and why. --emit-fixture PATH (requires
+indexingJob/issueToPrJourney/stackFrames/causeChain reconstruction for that one correlationId, plus
+a warnings field naming exactly what could not be reconstructed and why. --emit-fixture PATH (requires
 --correlation-id) writes a ready-to-paste TypeScript GatewayReplayScriptEntry[] fixture, derived
 from that seed's gatewayScript, to PATH — refusing to overwrite an existing file and creating
 parent directories as needed. --seed and --emit-fixture may be combined in one invocation.
