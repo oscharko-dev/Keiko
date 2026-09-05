@@ -108,15 +108,24 @@ describe("CodingRuntimeSnapshotStore", () => {
     const s = store();
     s.create(snapshot());
     expect(s.markNonterminalRecoveryRequired("2026-07-13T10:01:00.000Z")).toEqual(["run-1"]);
-    expect(s.acknowledgeRecovery("run-1", "2026-07-13T10:02:00.000Z").state).toBe(
-      "recovery-required",
-    );
+    // Recovery #3390: acknowledgement is itself an observable lifecycle mutation on the row — a
+    // poller or SSE catch-up reading the same revision back must see the acknowledgement as new
+    // fact, not a same-revision no-op. `recoveryAcknowledgedAt` alone advancing with the revision
+    // frozen at 1 (the last `markNonterminalRecoveryRequired` bump) was the exact defect: a caller
+    // diffing on revision alone never observed the acknowledgement at all.
+    const acknowledged = s.acknowledgeRecovery("run-1", "2026-07-13T10:02:00.000Z");
+    expect(acknowledged).toMatchObject({
+      state: "recovery-required",
+      revision: 2,
+      updatedAt: "2026-07-13T10:02:00.000Z",
+      recoveryAcknowledgedAt: "2026-07-13T10:02:00.000Z",
+    });
     expect(() => s.create(snapshot("run-2"))).toThrow();
     const released = s.releaseRecoveryForRetry("run-1", "2026-07-13T10:03:00.000Z");
     expect(released).toMatchObject({
       state: "recovery-required",
       terminalAt: "2026-07-13T10:03:00.000Z",
-      revision: 2,
+      revision: 3,
     });
     expect(s.create(snapshot("run-2")).runId).toBe("run-2");
     expect(s.get("run-1")).toEqual(released);

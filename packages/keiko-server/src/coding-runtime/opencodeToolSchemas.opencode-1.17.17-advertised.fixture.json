@@ -36,10 +36,7 @@
                     "description": "SHA-256 digest returned by keiko_workspace_read."
                   }
                 },
-                "required": [
-                  "file",
-                  "expectedContentHash"
-                ]
+                "required": ["file", "expectedContentHash"]
               },
               "description": "Every file changed by patch, bound to its last governed read digest."
             },
@@ -57,15 +54,10 @@
               "description": "Optional subset of files to apply; each entry must occur in files."
             }
           },
-          "required": [
-            "patch",
-            "files"
-          ]
+          "required": ["patch", "files"]
         }
       },
-      "required": [
-        "changeset"
-      ]
+      "required": ["changeset"]
     }
   },
   {
@@ -85,10 +77,7 @@
           "maximum": 32
         }
       },
-      "required": [
-        "objective",
-        "maxToolCalls"
-      ]
+      "required": ["objective", "maxToolCalls"]
     }
   },
   {
@@ -102,9 +91,7 @@
           "description": "Set true to bypass the cached readiness snapshot and force one fresh provider read."
         }
       },
-      "required": [
-        "forceFresh"
-      ]
+      "required": ["forceFresh"]
     }
   },
   {
@@ -120,9 +107,7 @@
           "description": "Proposed commit message. This proposes only; a human approval is required."
         }
       },
-      "required": [
-        "message"
-      ]
+      "required": ["message"]
     }
   },
   {
@@ -133,10 +118,7 @@
       "properties": {
         "scope": {
           "type": "string",
-          "enum": [
-            "working-tree",
-            "index"
-          ]
+          "enum": ["working-tree", "index"]
         },
         "paths": {
           "type": "array",
@@ -150,10 +132,7 @@
           "description": "Workspace-relative paths to diff; denied or ignored paths never appear."
         }
       },
-      "required": [
-        "scope",
-        "paths"
-      ]
+      "required": ["scope", "paths"]
     }
   },
   {
@@ -164,12 +143,7 @@
       "properties": {
         "kind": {
           "type": "string",
-          "enum": [
-            "stage",
-            "commit",
-            "push",
-            "pull-request"
-          ]
+          "enum": ["stage", "commit", "push", "pull-request"]
         },
         "proposalId": {
           "type": "string",
@@ -179,10 +153,7 @@
           "description": "The proposalId returned by the matching propose-phase tool call."
         }
       },
-      "required": [
-        "kind",
-        "proposalId"
-      ]
+      "required": ["kind", "proposalId"]
     }
   },
   {
@@ -212,9 +183,7 @@
           "description": "Workspace-relative paths to propose staging."
         }
       },
-      "required": [
-        "paths"
-      ]
+      "required": ["paths"]
     }
   },
   {
@@ -240,9 +209,7 @@
           "description": "Proposed draft pull-request title."
         }
       },
-      "required": [
-        "title"
-      ]
+      "required": ["title"]
     }
   },
   {
@@ -253,12 +220,7 @@
       "properties": {
         "mode": {
           "type": "string",
-          "enum": [
-            "lexical",
-            "literal",
-            "regex",
-            "symbol"
-          ],
+          "enum": ["lexical", "literal", "regex", "symbol"],
           "description": "lexical: natural-language keyword match. literal: exact substring. regex: bounded, ReDoS-safe pattern. symbol: exact identifier (no whitespace)."
         },
         "query": {
@@ -297,14 +259,7 @@
           "description": "Maximum number of bounded content excerpts to return."
         }
       },
-      "required": [
-        "mode",
-        "query",
-        "caseSensitive",
-        "includeGlobs",
-        "excludeGlobs",
-        "maxResults"
-      ]
+      "required": ["mode", "query", "caseSensitive", "includeGlobs", "excludeGlobs", "maxResults"]
     }
   },
   {
@@ -320,9 +275,7 @@
           "pattern": "^https://"
         }
       },
-      "required": [
-        "target"
-      ]
+      "required": ["target"]
     }
   },
   {
@@ -337,9 +290,7 @@
           "maxLength": 80
         }
       },
-      "required": [
-        "skillId"
-      ]
+      "required": ["skillId"]
     }
   },
   {
@@ -350,18 +301,10 @@
       "properties": {
         "verifierId": {
           "type": "string",
-          "enum": [
-            "test",
-            "targeted-test",
-            "typecheck",
-            "lint",
-            "build"
-          ]
+          "enum": ["test", "targeted-test", "typecheck", "lint", "build"]
         }
       },
-      "required": [
-        "verifierId"
-      ]
+      "required": ["verifierId"]
     }
   },
   {
@@ -383,10 +326,7 @@
           "description": "Maximum number of matching workspace-relative file paths to return."
         }
       },
-      "required": [
-        "query",
-        "maxResults"
-      ]
+      "required": ["query", "maxResults"]
     }
   },
   {
@@ -414,11 +354,7 @@
           "description": "Window height in lines; startLine 1 with maxLines 5000 reads a small file whole. The result reports totalLines and, when truncated, nextStartLine; the digest always covers the whole file."
         }
       },
-      "required": [
-        "relativePath",
-        "startLine",
-        "maxLines"
-      ]
+      "required": ["relativePath", "startLine", "maxLines"]
     }
   },
   {
@@ -455,10 +391,7 @@
                       "description": "Explanation of choice"
                     }
                   },
-                  "required": [
-                    "label",
-                    "description"
-                  ]
+                  "required": ["label", "description"]
                 },
                 "description": "Available choices"
               },
@@ -467,18 +400,12 @@
                 "description": "Allow selecting multiple choices"
               }
             },
-            "required": [
-              "question",
-              "header",
-              "options"
-            ]
+            "required": ["question", "header", "options"]
           },
           "description": "Questions to ask"
         }
       },
-      "required": [
-        "questions"
-      ]
+      "required": ["questions"]
     }
   },
   {
@@ -506,18 +433,12 @@
                 "description": "Priority level of the task: high, medium, low"
               }
             },
-            "required": [
-              "content",
-              "status",
-              "priority"
-            ]
+            "required": ["content", "status", "priority"]
           },
           "description": "The updated todo list"
         }
       },
-      "required": [
-        "todos"
-      ]
+      "required": ["todos"]
     }
   }
 ]

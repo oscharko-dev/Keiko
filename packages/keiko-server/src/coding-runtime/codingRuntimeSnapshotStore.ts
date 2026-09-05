@@ -231,8 +231,12 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
   const update = db.prepare(
     `UPDATE coding_runtime_snapshots SET state=?, revision=?, updated_at=?, failure_code=?, terminal_at=?, tool_call_count=?, patch_byte_count=?, model_request_count=?, recovery_handle=?, result_status=?, exit_code=?, stdout_byte_count=?, stdout_line_count=?, stdout_sha256=?, stdout_truncated=?, stderr_byte_count=?, stderr_line_count=?, stderr_sha256=?, stderr_truncated=? WHERE run_id=?`,
   );
+  // Acknowledgement is itself an observable lifecycle event on the row (the operator's attestation
+  // that ADR-0137 D5 reconciliation may treat the predecessor as reaped), so it advances `revision`
+  // and `updated_at` exactly like every other mutating transition — a poller or SSE catch-up must
+  // see this as a new fact, not a same-revision no-op.
   const acknowledge = db.prepare(
-    "UPDATE coding_runtime_snapshots SET recovery_acknowledged_at = ? WHERE run_id = ? AND state = 'recovery-required'",
+    "UPDATE coding_runtime_snapshots SET recovery_acknowledged_at = ?, updated_at = ?, revision = revision + 1 WHERE run_id = ? AND state = 'recovery-required'",
   );
   const releaseRecovery = db.prepare(
     "UPDATE coding_runtime_snapshots SET terminal_at = ?, updated_at = ?, revision = revision + 1 WHERE run_id = ? AND state = 'recovery-required' AND recovery_acknowledged_at IS NOT NULL AND terminal_at IS NULL",
@@ -339,7 +343,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
     acknowledgeRecovery(runId, acknowledgedAt): CodingRuntimeSnapshot {
       assertId(runId, "runId");
       assertIso(acknowledgedAt, "acknowledgedAt");
-      if (acknowledge.run(acknowledgedAt, runId).changes !== 1)
+      if (acknowledge.run(acknowledgedAt, acknowledgedAt, runId).changes !== 1)
         throw new Error("recovery-required runtime snapshot was not found");
       return requireSnapshot(one(runId));
     },

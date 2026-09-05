@@ -41,6 +41,7 @@ import {
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   hasExactOpenCodeVisibleToolContract,
   OPENCODE_MODEL_VISIBLE_TOOLS,
+  projectedGatewaySchema,
 } from "./opencodeToolSchemas.js";
 import { createGeneratedOpenCodeBundle } from "./opencodeRuntimeAdapter.js";
 import {
@@ -701,20 +702,15 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
  */
 describe("removing a tool from the advertised OpenCode schema fails closed", () => {
   it("rejects a gateway tool projection missing one of the eight #3386/#3387/#3388 tools", () => {
-    // Mirrors the real gateway wire projection: OpenCode 1.17.17 strips `additionalProperties`
-    // from keiko_verification before forwarding it, so the admission check is keyed on the
-    // PROJECTED schema, not the raw generated one -- exercised here without restating the digest
-    // logic itself, which stays owned by `hasExactOpenCodeVisibleToolContract`.
+    // Mirrors the real gateway wire projection (OpenCode 1.17.17 strips `additionalProperties`
+    // from keiko_verification, and drops the empty `required: []` array for a zero-argument tool
+    // such as keiko_git_status/keiko_git_push -- #3390 live-run evidence), by deriving it from
+    // `projectedGatewaySchema`, the one production formula, rather than restating either
+    // projection here -- exercised without restating the digest logic itself, which stays owned
+    // by `hasExactOpenCodeVisibleToolContract`.
     const gatewayVisible = OPENCODE_MODEL_VISIBLE_TOOLS.map(({ name, parameters }) => ({
       name,
-      parameters:
-        name === "keiko_verification"
-          ? {
-              type: "object",
-              properties: (parameters as { properties: unknown }).properties,
-              required: (parameters as { required: unknown }).required,
-            }
-          : parameters,
+      parameters: projectedGatewaySchema(name, parameters),
     }));
     expect(hasExactOpenCodeVisibleToolContract(gatewayVisible)).toBe(true);
     const withoutStage = gatewayVisible.filter((tool) => tool.name !== "keiko_git_stage");

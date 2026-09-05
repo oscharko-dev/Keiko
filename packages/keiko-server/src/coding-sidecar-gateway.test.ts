@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
@@ -623,6 +624,23 @@ function modelVisibleTools(
     type: "function",
     function: { name: tool.name, parameters: tool.parameters },
   }));
+}
+
+/**
+ * #3390 live-run evidence: the exact `tools` array the real OpenCode 1.17.17 binary sent on a
+ * macOS run, captured verbatim (schema only, no secrets). Used to prove the gateway route itself
+ * -- not just `hasExactOpenCodeVisibleToolContract` in isolation -- accepts real OpenCode traffic.
+ */
+function realOpenCodeAdvertisedTools(): ModelVisibleRequestTool[] {
+  const path = new URL(
+    "./coding-runtime/opencodeToolSchemas.opencode-1.17.17-advertised.fixture.json",
+    import.meta.url,
+  );
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as readonly {
+    readonly name: string;
+    readonly parameters: unknown;
+  }[];
+  return modelVisibleTools(parsed);
 }
 
 /**
@@ -1530,6 +1548,28 @@ describe("coding-sidecar gateway", () => {
       ),
     ).toMatchObject({ status: 200 });
     expect(chat).toHaveBeenCalledTimes(2);
+  });
+
+  // #3390: the real OpenCode 1.17.17 binary on macOS refused every chat completion with 403
+  // CODING_GATEWAY_TOOL_CONTRACT_DRIFT because it projects an empty-parameter tool's schema
+  // (keiko_git_status, keiko_git_push) differently from the pinned source shape. This proves the
+  // route itself now accepts that exact live-captured advertisement, not only the isolated
+  // schema-matching function (opencodeToolSchemas.test.ts covers that in unit isolation).
+  it("accepts the real OpenCode 1.17.17 live-captured advertisement (#3390 live-run evidence)", async () => {
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "real user task" }],
+        tools: realOpenCodeAdvertisedTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+      ),
+    );
+    expect(result).toMatchObject({ status: 200 });
+    expect(chat).toHaveBeenCalledOnce();
   });
 
   it("canonicalizes key order but denies empty, drifted, unknown, and productive built-in tools", async () => {

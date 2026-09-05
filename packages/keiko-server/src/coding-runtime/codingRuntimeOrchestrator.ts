@@ -368,9 +368,41 @@ export class CodingRuntimeOrchestrator {
       this.activeRunId === undefined ? latestSettledRunId(deps.snapshots) : undefined;
   }
 
+  /**
+   * A plain "Start coding run" is also the reachable path once the operator has acknowledged a
+   * `recovery-required` predecessor: the acknowledgement itself is the human reconciliation
+   * ADR-0137 D5 requires before a replacement run may occupy the slot, so `start` auto-detects it
+   * and takes the same predecessor-superseding path `retry` uses. Any other occupied slot
+   * (running, or an unacknowledged recovery) still fails closed as `active-run-conflict` inside
+   * `startFresh`.
+   */
   start(input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    return this.serial(() => this.startFresh(input));
+    return this.serial(() =>
+      this.startFreshAgainstPredecessor(input, this.acknowledgedRecoveryPredecessorId()),
+    );
   }
+
+  private acknowledgedRecoveryPredecessorId(): string | undefined {
+    const current = this.current();
+    return current?.state === "recovery-required" && current.recoveryAcknowledgedAt !== undefined
+      ? current.runId
+      : undefined;
+  }
+
+  private async startFreshAgainstPredecessor(
+    input: unknown,
+    predecessorRunId: string | undefined,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    if (predecessorRunId === undefined) return this.startFresh(input);
+    this.activeRunId = undefined;
+    this.activeEffectiveMode = undefined;
+    try {
+      return await this.startFresh(input, predecessorRunId);
+    } finally {
+      this.restoreUnsettledRecoverySlot(predecessorRunId);
+    }
+  }
+
   retry(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
     return this.serial(async () => {
       if (!parseCodingWorkbenchRuntimeStartRequest(input).ok) return this.fail("invalid-intent");
@@ -379,13 +411,7 @@ export class CodingRuntimeOrchestrator {
         return this.fail("invalid-intent");
       if (this.activeRunId !== undefined && this.activeRunId !== runId)
         return this.fail("active-run-conflict");
-      this.activeRunId = undefined;
-      this.activeEffectiveMode = undefined;
-      try {
-        return await this.startFresh(input, runId);
-      } finally {
-        this.restoreUnsettledRecoverySlot(runId);
-      }
+      return this.startFreshAgainstPredecessor(input, runId);
     });
   }
 
@@ -800,8 +826,17 @@ export class CodingRuntimeOrchestrator {
         current.state !== "recovery-required"
       )
         return this.fail("invalid-intent");
-      this.deps.snapshots.acknowledgeRecovery(current.runId, this.now().toISOString());
-      return { ok: true, snapshot: this.publicSnapshotWithDescription(this.current()) };
+      const acknowledged = this.deps.snapshots.acknowledgeRecovery(
+        current.runId,
+        this.now().toISOString(),
+      );
+      this.deps.activityLog?.write({
+        category: "process",
+        op: "coding-runtime.run.recovery-acknowledged",
+        correlationId: runtimeDiagnosticCorrelationId(acknowledged.runId),
+        extra: { runId: acknowledged.runId, revision: acknowledged.revision },
+      });
+      return { ok: true, snapshot: this.publicSnapshotWithDescription(acknowledged) };
     });
   }
 
