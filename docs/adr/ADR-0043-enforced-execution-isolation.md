@@ -295,7 +295,8 @@ the BFF's existing request/response instead of a raw socket. Production composit
 `gatewayUrl` and `toolFacadeUrl` from the ONE loopback origin
 (`productionOpenCodeActivation.ts`), never from a second, independently-bound port; nothing in the
 composition module calls `.listen()` for this bridge any more (the public bridge port exposes
-exactly `{ url, handle }`, structurally excluding a listener/socket surface). The scripted
+exactly `{ url, requestDeadlineMs, handle }` — a fixed origin, the admission gate's own deadline
+number, and the dispatch function; structurally excluding a listener/socket surface). The scripted
 functional harness's fake sidecar, which needs a real HTTP endpoint to exercise, owns its own
 tiny listener wrapping this SAME `handle` (`opencodeFunctionalHarness/_support.ts`,
 `opencodeRuntime.real.test.ts`'s `createToolFacadeHarness`) — never a second production path.
@@ -303,3 +304,16 @@ tiny listener wrapping this SAME `handle` (`opencodeFunctionalHarness/_support.t
 This does not change D11's policy shape or D14's `NetworkGatewayPolicy` contract: the invariant
 "exactly one attested loopback destination" is unchanged. What changed is that the tool facade now
 actually honours it, instead of silently assuming a second port would be reachable.
+
+**Body-ingestion deadline (2026-09-05 follow-up).** The retired listener read the request body
+itself under the admission gate's `requestDeadlineMs` timer, so a slow or stalled POST was bounded
+by that SAME deadline from the moment the connection was admitted. Routing through the BFF's
+`readJsonObject` initially lost that bound: the gate's timer only starts once `bridge.handle` is
+called, i.e. after the whole body has already arrived, leaving body-ingestion time bounded only by
+Node's generic `http.Server` defaults. The route now bounds ingestion itself
+(`readToolFacadeBody` in `coding-sidecar-tool-facade.ts`), racing `readJsonObject` against the
+SAME `bridge.requestDeadlineMs` the admission gate exposes for exactly this purpose, and responds
+`408 CODING_TOOL_FACADE_DEADLINE_EXCEEDED` (logged as `coding-sidecar.tool-facade.rejected`,
+reason `deadline`) if the body has not finished arriving in time — without destroying `ctx.req`,
+since request and response share one connection and destroying it would prevent that very 408 from
+being sent.

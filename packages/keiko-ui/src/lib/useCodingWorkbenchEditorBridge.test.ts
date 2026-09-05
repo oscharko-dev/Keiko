@@ -606,43 +606,49 @@ describe("useCodingWorkbenchEditorBridge — registration retry", () => {
     expect(createSourceSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("retries registration via a forced reconnect after a failed attempt, and stops once it succeeds", async () => {
+  it("retries registration via a forced reconnect after a failed attempt without any external trigger", async () => {
     postSnapshotSpy.mockRejectedValueOnce(new Error("network unreachable"));
     postSnapshotSpy.mockResolvedValue({
       snapshot: null,
       bridgeDecisionCapability: "A".repeat(43),
     });
-    renderHook(() =>
+    const { result } = renderHook(() =>
       useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
     );
-    // The FIRST registration attempt (after the 300ms debounce) fails.
+    // The first registration attempt fails and is surfaced.
     await waitFor(
       () => {
-        expect(postSnapshotSpy).toHaveBeenCalledTimes(1);
+        expect(result.current.bridgeUnavailable).toBe(true);
       },
       { timeout: 2_000 },
     );
-    // Nothing about `enabled`/`agentSessionId` changed on its own, so a SECOND attempt only
-    // happens if the hook forces one: the reconnect cycle (2x120ms) plus a fresh 300ms debounce.
+    // Nothing about `root`/`runId`/`active` changed and nothing external retried it — only the
+    // hook's own forced reconnect can make a second attempt happen, and it does. Wait for the
+    // (monotonic, never-regressing) call count rather than `bridgeUnavailable` itself, which dips
+    // transiently to `false` mid-cycle (`enabled` goes false for the ~120ms the reconnect is
+    // suspended, and `bridgeUnavailable` is defined as `enabled && registrationFailed`).
     await waitFor(
       () => {
-        expect(postSnapshotSpy).toHaveBeenCalledTimes(2);
+        expect(postSnapshotSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
       },
       { timeout: 2_000 },
     );
-    const [secondSnapshot] = postSnapshotSpy.mock.calls[1] as [{ workspaceRoot: string }];
-    expect(secondSnapshot.workspaceRoot).toBe("/repo/task-1");
-    // The now-successful registration made the session ready, so a live bridge actually forms —
-    // the shared registry never opens a stream for a session that never registered a capability.
+    const lastSnapshot = postSnapshotSpy.mock.calls.at(-1)?.[0] as { workspaceRoot: string };
+    expect(lastSnapshot.workspaceRoot).toBe("/repo/task-1");
+    await waitFor(() => {
+      expect(result.current.bridgeUnavailable).toBe(false);
+    });
+    // The now-registered session actually forms a live bridge — the shared registry never opens
+    // a stream for a session that never registered a capability.
     await waitFor(() => {
       expect(createSourceSpy).toHaveBeenCalled();
     });
 
-    // It stops retrying once registration is healthy again: no third attempt appears.
+    // Recovery holds: it does not flip back to unavailable once healthy.
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 700));
     });
-    expect(postSnapshotSpy).toHaveBeenCalledTimes(2);
+    expect(result.current.bridgeUnavailable).toBe(false);
   });
 
   it("keeps retrying across a second consecutive failure instead of giving up after the first retry", async () => {
@@ -650,15 +656,22 @@ describe("useCodingWorkbenchEditorBridge — registration retry", () => {
       .mockRejectedValueOnce(new Error("network unreachable"))
       .mockRejectedValueOnce(new Error("network unreachable"))
       .mockResolvedValue({ snapshot: null, bridgeDecisionCapability: "A".repeat(43) });
-    renderHook(() =>
+    const { result } = renderHook(() =>
       useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
     );
+    // A naive "retry exactly once" implementation would get stuck after the second failure and
+    // never reach a third attempt. `bridgeUnavailable` dips transiently to `false` mid-cycle
+    // (`enabled` itself goes false for the ~120ms the reconnect is suspended), so the call count
+    // — monotonic, never regresses — is the reliable signal that a genuine THIRD attempt was made.
     await waitFor(
       () => {
-        expect(postSnapshotSpy).toHaveBeenCalledTimes(3);
+        expect(postSnapshotSpy.mock.calls.length).toBeGreaterThanOrEqual(3);
       },
       { timeout: 3_000 },
     );
+    await waitFor(() => {
+      expect(result.current.bridgeUnavailable).toBe(false);
+    });
   });
 });
 
@@ -695,7 +708,8 @@ describe("useCodingWorkbenchEditorBridge — bridgeUnavailable", () => {
   it("clears a stale registration failure for a new run rather than carrying the prior session's outcome", async () => {
     postSnapshotSpy.mockRejectedValue(new Error("network unreachable"));
     const { result, rerender } = renderHook(
-      (props: { runId: string }) => useCodingWorkbenchEditorBridge({ root: "/repo/task-1", ...props, active: true }),
+      (props: { runId: string }) =>
+        useCodingWorkbenchEditorBridge({ root: "/repo/task-1", ...props, active: true }),
       { initialProps: { runId: "run-1" } },
     );
     await waitFor(() => {

@@ -853,7 +853,7 @@ describe("git-change Chat scope contract (#3400)", () => {
   it("carries the remoteDigest identity, never repositoryId (contract correction 6)", () => {
     const scope = gitChangeScope({ remoteDigest: "f".repeat(64) });
     expect(scope.remoteDigest).toBe("f".repeat(64));
-    expect((scope as Record<string, unknown>).repositoryId).toBeUndefined();
+    expect(Object.hasOwn(scope, "repositoryId")).toBe(false);
   });
 
   it("every description status is a valid ChatGitChangeDescriptionStatus", () => {

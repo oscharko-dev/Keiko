@@ -22,7 +22,8 @@ describe("onModelError HarnessCatalogError classification", () => {
     });
     // No catalog bound for this run -- captureModelToolCalls must fail closed, and that failure
     // must surface under its own HarnessCatalogError category, not a generic model error.
-    ctx.catalog = undefined;
+    // `catalog` is an optional property (exactOptionalPropertyTypes): remove it rather than assigning undefined.
+    delete ctx.catalog;
 
     const step = await handleModelCall(ctx);
 

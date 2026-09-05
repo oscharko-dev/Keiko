@@ -438,7 +438,11 @@ describe("native extensions (question/todowrite, #3414 follow-up)", () => {
     const bridge = createGatewayToolCatalogBridge(
       { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
       (): number => NOW,
-      { write: (event): void => events.push(event) },
+      {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
     );
     bridge.bind({ id: "call-1", name: "todowrite", arguments: { todos: [] } });
     expect(events.map((event) => event.op)).toEqual([
