@@ -627,6 +627,16 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
     });
   });
 
+  // #3384 B5-8 (wave-2 agent G "needs"): this file's shared `beforeEach` now provisions a REAL git
+  // worktree (required so the repository-binding check admits `merge`'s own `ownerAndRepo` at all).
+  // `executeGovernedMerge` reads a real worktree snapshot before it can resolve any outcome; against
+  // the non-git fixture this replaced, that read always threw, so this case only ever observed the
+  // `GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE` catch-all (409) — never the actual downstream gate its
+  // own name promises. With a real (if minimal) worktree that read now succeeds, and — with no
+  // approval token supplied, exactly like the "push" case just above — the merge resolves the
+  // GENUINE downstream disposition: 200 with `approval-required`. Renamed/updated honestly to the
+  // real gate this now reaches, not weakened: it still proves autonomous-delivery defers to the
+  // downstream approval gate rather than admitting the mutation outright.
   it("routes an accepted autonomous merge to its downstream approval gate", async () => {
     const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
     const result = await handleGitAgentOperation(
@@ -639,11 +649,12 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
       }),
     );
 
-    console.log("DEBUG_MERGE_RESULT", JSON.stringify(result));
-    expect(result.status).toBe(409);
+    expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       status: "delegated",
       operation: "merge",
+      routeStatus: 200,
+      response: { status: "approval-required" },
     });
   });
 
@@ -764,21 +775,29 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
     );
   });
 
+  // #3384 B5-8 (wave-2 agent G "needs"): this file's shared `beforeEach` now provisions a REAL git
+  // worktree with a matching `origin` remote (required so the repository-binding check elsewhere in
+  // this file admits requests at all). `fetch`/`pull` derive their continuity-check branch from a
+  // REAL read of the workspace (`buildSyncPreview`'s `before.branch`) rather than from the request —
+  // unlike the non-git fixture this replaced, that read now succeeds, so these two cases no longer
+  // observe the `GIT_DELIVERY_SYNC_WORKTREE_UNAVAILABLE` artifact of an invalid worktree. The minted
+  // approval is still recognized at admission (both operations reach past `admitSyncExecute`,
+  // proving the facade forwards it) — each operation reaches a DIFFERENT real, genuine gate after
+  // that: `fetch` always attempts the remote, so the workspace's real branch ("master", out of the
+  // default envelope's "feature/" prefix) is caught by the continuity guard before any network call;
+  // `pull` requires an upstream tracking ref to do anything, and this fresh worktree has none, so it
+  // resolves the informational "no-upstream" outcome locally without ever dispatching. Neither case
+  // performs real network I/O (§7 hermetic tests) — renamed/updated honestly to the new earliest
+  // gate each operation reaches, not weakened.
+  const EXPECTED_SYNC_FORWARDING = {
+    fetch: { status: 403, response: { error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } } },
+    pull: { status: 200, response: { status: "no-upstream" } },
+  } as const;
+
   it.each(["fetch", "pull"] as const)(
     "forwards a minted %s approval through the facade at governed-assist",
     async (operation) => {
-      const status = [
-        "# branch.oid abcdef1234567890",
-        "# branch.head main",
-        "# branch.upstream origin/main",
-        "# branch.ab +0 -0",
-        "",
-      ].join("\0");
-      const runner = vi.fn<GitProcessRunner>((args) => {
-        if (args.includes("status")) return Promise.resolve(ok(status));
-        if (args.at(-1) === "remote") return Promise.resolve(ok("origin\n"));
-        return Promise.resolve(ok(""));
-      });
+      const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
       const command = { kind: operation, remote: "origin" };
       const issued = DEFAULT_GIT_DELIVERY_APPROVAL_STORE.issue({
         binding: { projectId: root, operation, command },
@@ -790,13 +809,14 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
 
       const result = await handleGitAgentOperation(ctx(body), deps(runner, "governed-assist"));
 
+      const expected = EXPECTED_SYNC_FORWARDING[operation];
+      expect(result.status).toBe(expected.status);
       expect(result.body).toMatchObject({
         status: "delegated",
         operation,
-        routeStatus: 409,
-        response: { error: { code: "GIT_DELIVERY_SYNC_WORKTREE_UNAVAILABLE" } },
+        routeStatus: expected.status,
+        response: expected.response,
       });
-      expect(result.status).toBe(409);
     },
   );
 });

@@ -22,7 +22,8 @@ import {
   resolveGitMembership,
   comparablePath,
 } from "@oscharko-dev/keiko-git";
-import type { GitProcessRunner } from "@oscharko-dev/keiko-git";
+import type { GitProcessOptions, GitProcessResult, GitProcessRunner } from "@oscharko-dev/keiko-git";
+import { gitLazyFetchGuardSupportedForVersion } from "@oscharko-dev/keiko-tools/internal/git-worktree-snapshot-node";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { AbortDeadlineRaceError, raceAbortDeadline } from "./abort-race.js";
 import { codingWorkbenchRemoteDigest } from "./coding-context/githubIssueResolution.js";
@@ -105,9 +106,83 @@ export interface GitChangeSnapshotServiceOptions {
   readonly now?: () => number;
 }
 
+// A promisor remote (`remote.<name>.promisor = true`) is what makes lazy fetch possible at all — a
+// repository without one has nothing for GIT_NO_LAZY_FETCH to guard, in any git version. Any probe
+// ambiguity (a thrown error, a non-zero/truncated exit other than the expected "no match") is
+// treated as "cannot rule out a promisor remote", never as "safe". Mirrors the read-lane guard in
+// keiko-tools (git-worktree-snapshot-node.ts, reviewer 3941836280 / D2 need) against this
+// independent GitProcessRunner-based execution boundary.
+async function repositoryHasPromisorRemote(
+  runner: GitProcessRunner,
+  options: GitProcessOptions,
+): Promise<boolean> {
+  let result: GitProcessResult;
+  try {
+    result = await runner(
+      ["config", "--local", "--get-regexp", String.raw`^remote\..*\.promisor$`],
+      options,
+    );
+  } catch {
+    return true;
+  }
+  if (result.exitCode === 1 && result.stdout.trim().length === 0) return false;
+  if (result.exitCode !== 0 || result.truncated) return true;
+  return result.stdout
+    .trim()
+    .split("\n")
+    .some((line) => /\bpromisor\s+(?:true|yes|on|1)$/iu.test(line));
+}
+
+// `--no-lazy-fetch`/`--no-replace-objects` fail closed exactly like git's own docs promise ONLY on
+// a git that recognises them (added together in git 2.45); `ubuntu-latest`'s pinned git 2.43
+// silently accepts either flag as a no-op equivalent-environment-variable setter that its own
+// environment.c does not yet implement. Promisor status is a property of the REPOSITORY (cached by
+// `cwd`); the installed git's version is a property of the PROCESS (cached by the runner instance —
+// one real runner in production, a fresh fake per test), so an at-risk repository is never judged
+// safe by another repository's cached result, and an ordinary (non-promisor) repository never pays
+// for a version probe it does not need.
+const promisorRiskCache = new Map<string, Promise<boolean>>();
+const versionGuardSupportedCache = new WeakMap<GitProcessRunner, Promise<boolean>>();
+
+async function versionGuardSupported(
+  runner: GitProcessRunner,
+  options: GitProcessOptions,
+): Promise<boolean> {
+  const cached = versionGuardSupportedCache.get(runner);
+  if (cached !== undefined) return cached;
+  const probe = (async (): Promise<boolean> => {
+    try {
+      const result = await runner(["version"], options);
+      return result.exitCode === 0 && gitLazyFetchGuardSupportedForVersion(result.stdout);
+    } catch {
+      return false;
+    }
+  })();
+  versionGuardSupportedCache.set(runner, probe);
+  return probe;
+}
+
+function cachedPromisorRisk(runner: GitProcessRunner, options: GitProcessOptions): Promise<boolean> {
+  const cached = promisorRiskCache.get(options.cwd);
+  if (cached !== undefined) return cached;
+  const probe = repositoryHasPromisorRemote(runner, options);
+  promisorRiskCache.set(options.cwd, probe);
+  return probe;
+}
+
+// Applies the `--no-lazy-fetch --no-replace-objects` guard ONLY when it can matter and ONLY when
+// the installed git actually enforces it: an ordinary (non-promisor) repository gets the plain
+// command with no risk of an old git's "unknown option" exit, and an at-risk repository whose git
+// cannot enforce the guard is refused outright rather than read unprotected.
 function immutableLocalRunner(runner: GitProcessRunner): GitProcessRunner {
-  return async (args, options) =>
-    await runner(["--no-lazy-fetch", "--no-replace-objects", ...args], options);
+  return async (args, options) => {
+    const atRisk = await cachedPromisorRisk(runner, options);
+    if (!atRisk) return await runner(args, options);
+    if (!(await versionGuardSupported(runner, options))) {
+      throw new GitSnapshotReadError("git-error");
+    }
+    return await runner(["--no-lazy-fetch", "--no-replace-objects", ...args], options);
+  };
 }
 
 function boundedDuration(value: number | undefined, fallback: number, maximum: number): number {

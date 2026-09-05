@@ -247,7 +247,9 @@ describe("CodingToolAuthorityPort", () => {
       resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
     };
     const approvalProofVerifier = createCodingToolApprovalBridge();
-    const port = createCodingToolAuthorityPort(authority, runtimeContext, { approvalProofVerifier });
+    const port = createCodingToolAuthorityPort(authority, runtimeContext, {
+      approvalProofVerifier,
+    });
     const request = {
       action: "git" as const,
       operation: "ci" as const,
@@ -310,7 +312,9 @@ describe("CodingToolAuthorityPort", () => {
       resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
     };
     const approvalProofVerifier = createCodingToolApprovalBridge();
-    const port = createCodingToolAuthorityPort(authority, runtimeContext, { approvalProofVerifier });
+    const port = createCodingToolAuthorityPort(authority, runtimeContext, {
+      approvalProofVerifier,
+    });
     const request = {
       action: "connector" as const,
       actionId: "connector-redeemed",

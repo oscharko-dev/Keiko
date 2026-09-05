@@ -100,7 +100,7 @@ function mint(
     RUNTIME_NOW,
   );
   const minted = authority.mintStart(intent, trusted, confirmation, RUNTIME_NOW);
-  if (!minted.ok) throw new TypeError("Expected genuine runtime authority mint");
+  if (!minted.ok) { console.error("MINT_DEBUG", JSON.stringify(minted)); throw new TypeError("Expected genuine runtime authority mint"); }
   if (
     !authority.transition("run-1", "ready", RUNTIME_NOW) ||
     !authority.transition("run-1", "running", RUNTIME_NOW)
