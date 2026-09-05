@@ -33,6 +33,7 @@ import {
   type CommandTerminationEvidence,
 } from "./exec.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
+import { CommandCancelledError, CommandTimeoutError } from "./errors.js";
 import { isSafeGitRefName } from "./git-worktree-adapter.js";
 import { gitIndexTreeDigest, parseGitIndexEntries, type IndexEntry } from "./git-index-identity.js";
 
@@ -292,7 +293,11 @@ async function repositoryHasPromisorRemote(ctx: ReadContext): Promise<boolean> {
       "--get-regexp",
       String.raw`^remote\..*\.promisor$`,
     ]);
-  } catch {
+  } catch (error) {
+    // A cancelled/timed-out probe is not "ambiguous risk" — it is the caller's OWN signal firing,
+    // and must reach the real command's cancellation handling unchanged, not be relabelled as a
+    // guard failure.
+    if (error instanceof CommandCancelledError || error instanceof CommandTimeoutError) throw error;
     return true;
   }
   if (result.exitCode === 1 && result.stdout.trim().length === 0) return false;
@@ -307,7 +312,8 @@ async function probeGitVersionGuardSupport(ctx: ReadContext): Promise<GitLazyFet
   let result: CommandResult;
   try {
     result = await runGuardProbe(ctx, ["version"]);
-  } catch {
+  } catch (error) {
+    if (error instanceof CommandCancelledError || error instanceof CommandTimeoutError) throw error;
     return { supported: false, gitVersion: undefined };
   }
   if (result.exitCode !== 0) return { supported: false, gitVersion: undefined };
@@ -327,12 +333,17 @@ async function probeGitVersionGuardSupport(ctx: ReadContext): Promise<GitLazyFet
 const promisorRiskCache = new Map<string, Promise<boolean>>();
 const gitVersionGuardSupportCache = new WeakMap<SpawnFn, Promise<GitLazyFetchGuardSupport>>();
 
+// A rejected probe (cancellation/timeout — the only rejection either probe can now produce, per
+// the re-throws above) must NOT be memoized: caching it would replay that one operation's
+// cancellation as a permanent "guard unsupported" verdict for every later, unrelated call on the
+// same key.
 function cachedPromisorRisk(ctx: ReadContext): Promise<boolean> {
   const key = ctx.runDeps.workspace.root;
   const cached = promisorRiskCache.get(key);
   if (cached !== undefined) return cached;
   const probe = repositoryHasPromisorRemote(ctx);
   promisorRiskCache.set(key, probe);
+  probe.catch(() => promisorRiskCache.delete(key));
   return probe;
 }
 
@@ -342,6 +353,7 @@ function cachedVersionGuardSupport(ctx: ReadContext): Promise<GitLazyFetchGuardS
   if (cached !== undefined) return cached;
   const probe = probeGitVersionGuardSupport(ctx);
   gitVersionGuardSupportCache.set(spawn, probe);
+  probe.catch(() => gitVersionGuardSupportCache.delete(spawn));
   return probe;
 }
 
@@ -358,6 +370,10 @@ async function detectGitLazyFetchGuardSupport(ctx: ReadContext): Promise<GitLazy
 export async function ensureGitLazyFetchGuardSupported(
   deps: NodeGitWorktreeReaderDeps,
 ): Promise<void> {
+  // Already cancelled: let the real command's own runCommand call throw CommandCancelledError
+  // exactly as it always did, rather than spending a probe spawn on a call that cannot proceed
+  // either way.
+  if (deps.signal?.aborted === true) return;
   const guard = await detectGitLazyFetchGuardSupport(buildReadContext(deps));
   if (!guard.supported) throw new GitLazyFetchGuardUnsupportedError(guard.gitVersion);
 }
@@ -369,8 +385,10 @@ async function runRead(ctx: ReadContext, argv: readonly string[]): Promise<strin
 }
 
 async function runReadResult(ctx: ReadContext, argv: readonly string[]): Promise<CommandResult> {
-  const guard = await detectGitLazyFetchGuardSupport(ctx);
-  if (!guard.supported) throw new GitLazyFetchGuardUnsupportedError(guard.gitVersion);
+  if (!ctx.signal.aborted) {
+    const guard = await detectGitLazyFetchGuardSupport(ctx);
+    if (!guard.supported) throw new GitLazyFetchGuardUnsupportedError(guard.gitVersion);
+  }
   const runDeps: RunCommandDeps = { ...ctx.runDeps, onTerminated: ctx.runDeps.onTerminated };
   let result: CommandResult;
   try {

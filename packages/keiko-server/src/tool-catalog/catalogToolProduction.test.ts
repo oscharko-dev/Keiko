@@ -179,10 +179,73 @@ describe("catalog production authority and domain-owner composition", () => {
     expect(request).toHaveBeenCalledOnce();
     expect(consume).toHaveBeenCalledOnce();
   });
-  it("does not turn the production Ask command hard denial into an approval request", () => {
+  // Relocated pin (ADR-0138 D2 / epic #3384 contract correction 5): the production Ask for
+  // approval command is approval-required, never a hard denial. Without a redeemable approval
+  // channel there is nothing to redeem it with, so it is correctly excluded from the offer and
+  // refused if dispatched anyway -- but it must never be silently allowed either.
+  it("refuses the production Ask command without a redeemable approval channel, never silently allowing it", async () => {
     const fixture = catalogRuntimeFixture("governed-assist");
     cleanups.push(fixture.dispose);
     const request = vi.fn();
+    const binder = createCatalogToolBinder(
+      {
+        ...fixture.input,
+        handlerBindings: [registration(fixture, "keiko.command.run")],
+        approvalPort: { available: () => false, request },
+      },
+      fixture.options,
+    );
+    expect(binder.offer().toolRefs).toEqual([]);
+    // Without a redeemable channel the command is never offered, so a forced dispatch is refused
+    // structurally at the offer gate ("unoffered-tool") -- it never reaches authority admission,
+    // and is never silently allowed through either path.
+    const input = invocation(fixture, binder, "keiko.command.run");
+    const outcome = await binder.dispatch(input, ID);
+    expect(outcome.kind === "settled" && outcome.result.status).toBe("invalid");
+    expect(outcome.kind === "settled" && outcome.result.reason).toBe("unoffered-tool");
+    expect(request).not.toHaveBeenCalled();
+  });
+  // Companion half of the relocated pin above: once a real approval channel exists, the same
+  // command is offered (redeemable, not hard-denied) and admitted with a genuine proof exactly
+  // once -- mirroring the supervised-coding approval test above at the mode ADR-0138 D2 corrected.
+  it("admits the production Ask command exactly once with a real approval proof, never a hard denial", async () => {
+    const fixture = catalogRuntimeFixture("governed-assist");
+    cleanups.push(fixture.dispose);
+    const descriptor = fixture.options.catalog.descriptors.find(
+      (entry) => entry.toolRef.canonicalId === "keiko.command.run",
+    );
+    if (descriptor === undefined) throw new TypeError("Expected real catalog descriptor");
+    const consume = vi.spyOn(fixture.approval, "consume");
+    const request = vi.fn((action: CodingToolActionRequest): Promise<CodingToolActionRequest> => {
+      if (action.action !== "command") throw new TypeError("Expected command approval");
+      const proof = {
+        approvalId: action.actionId,
+        approvalDigest: codingToolApprovalBindingDigest("run-1", action),
+      };
+      expect(
+        fixture.approval.observePermission({
+          runId: "run-1",
+          requestId: "permission-2",
+          action: "command",
+          actionId: action.actionId,
+          idempotencyKey: action.idempotencyKey,
+          targetId: action.commandId,
+          proof,
+          expiresAt: fixture.trusted.expiresAt,
+          nowMs: Date.parse(RUNTIME_NOW),
+        }),
+      ).toBe(true);
+      expect(
+        fixture.approval.activatePermission({
+          runId: "run-1",
+          requestId: "permission-2",
+          approvalAuthorityDigest: "d".repeat(64),
+          expiresAtMs: Date.parse(fixture.trusted.expiresAt),
+          nowMs: Date.parse(RUNTIME_NOW),
+        }),
+      ).toBe(true);
+      return Promise.resolve({ ...action, approvalProof: proof });
+    });
     const binder = createCatalogToolBinder(
       {
         ...fixture.input,
@@ -191,8 +254,15 @@ describe("catalog production authority and domain-owner composition", () => {
       },
       fixture.options,
     );
-    expect(binder.offer().toolRefs).toEqual([]);
-    expect(request).not.toHaveBeenCalled();
+    expect(binder.offer().toolRefs).toEqual([descriptor.toolRef]);
+    const input = invocation(fixture, binder, "keiko.command.run");
+    expect(consume).not.toHaveBeenCalled();
+    const outcome = await binder.dispatch(input, ID);
+    expect(outcome.kind === "settled" && outcome.result.status).toBe("completed");
+    expect(consume).toHaveBeenCalledOnce();
+    expect((await binder.dispatch(input, ID)).kind).toBe("replayed");
+    expect(request).toHaveBeenCalledOnce();
+    expect(consume).toHaveBeenCalledOnce();
   });
   it("denies a revoked genuine authority before reaching its domain handler", async () => {
     const fixture = catalogRuntimeFixture("autonomous-delivery");

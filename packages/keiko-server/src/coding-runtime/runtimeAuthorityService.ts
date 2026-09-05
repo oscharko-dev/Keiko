@@ -401,7 +401,7 @@ export class CodingRuntimeAuthorityService {
       confirmation,
       nowIso,
     );
-    if (approvalDigest === undefined) { console.error("MINT_DEBUG_A", "consumeConfirmation undefined"); return { ok: false, reason: "authority-resolution-failed" }; }
+    if (approvalDigest === undefined) return { ok: false, reason: "authority-resolution-failed" };
     return this.mintConfirmedStartForRun(runId, intent, context, approvalDigest, nowIso);
   }
 
@@ -428,9 +428,7 @@ export class CodingRuntimeAuthorityService {
       this.newNonce(),
       approvalDigest,
     );
-    const envelopeCheck = validateCodingWorkbenchRuntimeAuthorityEnvelope(envelope);
-    if (!envelopeCheck.ok) {
-      console.error("MINT_DEBUG_B envelope invalid", JSON.stringify(envelopeCheck));
+    if (!validateCodingWorkbenchRuntimeAuthorityEnvelope(envelope).ok) {
       return { ok: false, reason: "authority-resolution-failed" };
     }
     const registered = this.registry.registerRuntime(
@@ -439,14 +437,13 @@ export class CodingRuntimeAuthorityService {
       nowIso,
       context.issueBinding?.bindingDigest,
     );
-    if (!registered.ok) { console.error("MINT_DEBUG_C registerRuntime failed", JSON.stringify(registered)); return { ok: false, reason: "authority-resolution-failed" }; }
+    if (!registered.ok) return { ok: false, reason: "authority-resolution-failed" };
     const capabilities = this.issueCapabilities(
       envelope,
       registered.authorityRef,
       context.modelProfile,
     );
     if (capabilities === undefined) {
-      console.error("MINT_DEBUG_D issueCapabilities undefined");
       return { ok: false, reason: "authority-resolution-failed" };
     }
     return this.activateMintedRuntime({

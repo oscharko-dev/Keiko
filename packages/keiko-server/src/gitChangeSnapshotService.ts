@@ -176,6 +176,10 @@ function cachedPromisorRisk(runner: GitProcessRunner, options: GitProcessOptions
 // cannot enforce the guard is refused outright rather than read unprotected.
 function immutableLocalRunner(runner: GitProcessRunner): GitProcessRunner {
   return async (args, options) => {
+    // Already cancelled: let the real call resolve on its own (aborted/timed-out CommandResult,
+    // classified downstream exactly as before) rather than spend a guard probe — whose own result
+    // would carry the identical cancellation and could otherwise be misread as "guard unsupported".
+    if (options.abortSignal?.aborted === true) return await runner(args, options);
     const atRisk = await cachedPromisorRisk(runner, options);
     if (!atRisk) return await runner(args, options);
     if (!(await versionGuardSupported(runner, options))) {

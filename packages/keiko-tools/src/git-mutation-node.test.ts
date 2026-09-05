@@ -30,17 +30,35 @@ async function continuePastUnsignedSigningPolicy(rec: SpawnRecorder): Promise<vo
   await expect.poll(() => rec.calls()).toHaveLength(2);
 }
 
+// Every mutating command's FIRST spawn against a given (fresh, per-test) workspace root is now the
+// version-gated lazy-fetch/replace-objects guard probe (`git config --local --get-regexp
+// ^remote\..*\.promisor$`, git-worktree-snapshot-node.ts, reviewer 3941836280) — cached thereafter,
+// so it never repeats within one test. Exit 1 with no stdout means "no promisor remote configured"
+// (not at risk), so the guard admits the real command without a version probe of its own.
+async function continuePastLazyFetchGuardProbe(rec: SpawnRecorder): Promise<void> {
+  const before = rec.calls().length;
+  rec.child.emit("close", 1, null);
+  await expect.poll(() => rec.calls().length).toBe(before + 1);
+}
+
 describe("node git mutation adapter — governed argv reaches the spawn boundary", () => {
   it("spawns exactly the governed literalized `git add -- <path>` and reports success on exit 0", async () => {
     const rec = recordingSpawn();
     const ad = makeAdapter(rec);
     const pending = ad.stage({ pathspecs: ["src/x.ts"] });
+    await continuePastLazyFetchGuardProbe(rec);
     rec.child.emit("close", 0, null);
     const result = await pending;
     expect(result.outcome).toBe("succeeded");
-    expect(rec.calls()).toHaveLength(1);
-    expect(rec.calls()[0]?.command).toBe("git");
+    expect(rec.calls()).toHaveLength(2);
     expect(rec.calls()[0]?.args).toEqual([
+      "config",
+      "--local",
+      "--get-regexp",
+      String.raw`^remote\..*\.promisor$`,
+    ]);
+    expect(rec.calls()[1]?.command).toBe("git");
+    expect(rec.calls()[1]?.args).toEqual([
       "-c",
       "core.fsmonitor=false",
       "-c",
@@ -62,7 +80,7 @@ describe("node git mutation adapter — governed argv reaches the spawn boundary
       ":(literal)src/x.ts",
     ]);
     // The spawn is shell-less by construction.
-    expect(rec.calls()[0]?.options.shell).toBe(false);
+    expect(rec.calls()[1]?.options.shell).toBe(false);
   });
 });
 
@@ -72,6 +90,7 @@ describe("node git mutation adapter — failure-classification branches", () => 
     const ad = makeAdapter(rec);
     const pending = ad.commit({ message: "m", allowEmpty: false });
     await continuePastUnsignedSigningPolicy(rec);
+    await continuePastLazyFetchGuardProbe(rec);
     rec.child.emit("close", 1, null);
     const result = await pending;
     expect(result.outcome).toBe("failed");
@@ -82,6 +101,7 @@ describe("node git mutation adapter — failure-classification branches", () => 
     const rec = recordingSpawn();
     const ad = makeAdapter(rec);
     const pending = ad.stage({ pathspecs: ["a"] });
+    await continuePastLazyFetchGuardProbe(rec);
     rec.child.emit("error", new Error("spawn failed"));
     const result = await pending;
     expect(result.outcome).toBe("failed");
@@ -155,9 +175,12 @@ async function identityLaneEnv(): Promise<Record<string, string>> {
   const ad = identityLaneAdapter(rec);
   const pending = ad.commit({ message: "feat: governed commit", allowEmpty: false });
   await continuePastUnsignedSigningPolicy(rec);
-  const commitEnv = rec.calls().at(-1)?.options.env ?? {};
+  await continuePastLazyFetchGuardProbe(rec);
+  // calls: [0] signing-policy check, [1] lazy-fetch guard probe, [2] the real `commit` — the one
+  // whose env this helper exists to inspect.
+  const commitEnv = rec.calls()[2]?.options.env ?? {};
   rec.child.emit("close", 0, null);
-  await expect.poll(() => rec.calls()).toHaveLength(3);
+  await expect.poll(() => rec.calls()).toHaveLength(4);
   rec.child.stdout.emit("data", Buffer.from(`${"a".repeat(40)}\n`));
   rec.child.emit("close", 0, null);
   await pending;
