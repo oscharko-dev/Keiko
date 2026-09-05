@@ -6,6 +6,7 @@ import type {
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
 import type {
   GitDeliveryDescriptionAuthorityPort,
+  GitDeliveryDescriptionAuthorityScope,
   GitDeliveryRunAuthorityPort,
 } from "../gitDelivery/runBoundAuthority.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
@@ -63,6 +64,19 @@ export interface CodingRuntimeHost {
   // description generation and the "pull-request" body-only apply outside a running Code task —
   // threaded through the exact same chain as `gitDeliveryAuthority` above.
   readonly gitDeliveryDescriptionAuthority?: GitDeliveryDescriptionAuthorityPort | undefined;
+  // #3401 (epic #3384 closeout, description-composition-closeout): the MINT half of the
+  // description authority above. Consumed by deps.ts's `attachWorkbenchDescriptionSupport` so the
+  // automatic-description dispatcher can mint a scope before checking it, exactly the way the
+  // Chat-turn admission check and the pull-request route already only READ.
+  readonly mintDescriptionAuthority?:
+    | ((scope: GitDeliveryDescriptionAuthorityScope, nowIso: string) => void)
+    | undefined;
+  // #3401 CI-repair notify: called exactly once, right after this control plane builds its
+  // orchestrator, so a per-run CI-repair controller minted deep inside the runtime resolver (long
+  // before the orchestrator exists) can still reach `CodingRuntimeOrchestrator
+  // .notifyVerifiedHeadAdvanced` once it does. Consumed internally by
+  // `createCodingRuntimeControlPlane` below -- never forwarded past this module.
+  readonly attachVerifiedHeadNotifier?: ((notify: (runId: string) => void) => void) | undefined;
   readonly openCodeGatewayReadinessRegistry?:
     | {
         readonly claim: (runId: string) => boolean;
@@ -102,6 +116,7 @@ export interface CodingRuntimeControlPlane {
   readonly runtimeCapabilityAuthenticator?: CodingRuntimeHost["runtimeCapabilityAuthenticator"];
   readonly gitDeliveryAuthority?: CodingRuntimeHost["gitDeliveryAuthority"];
   readonly gitDeliveryDescriptionAuthority?: CodingRuntimeHost["gitDeliveryDescriptionAuthority"];
+  readonly mintDescriptionAuthority?: CodingRuntimeHost["mintDescriptionAuthority"];
   readonly openCodeGatewayReadinessRegistry?: CodingRuntimeHost["openCodeGatewayReadinessRegistry"];
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
 }
@@ -137,6 +152,11 @@ export function createCodingRuntimeControlPlane(
   receiver.ingest = (event: CodingWorkbenchRuntimeEvent): void => {
     void orchestrator.ingest(event);
   };
+  // #3401: fills the runtime host's notify slot with the orchestrator's real, public
+  // `notifyVerifiedHeadAdvanced` seam now that it exists -- never a second dispatcher.
+  input.runtimeHost?.attachVerifiedHeadNotifier?.((runId) =>
+    orchestrator.notifyVerifiedHeadAdvanced(runId),
+  );
   orchestrator.startupReconcileNow();
   return {
     orchestrator,
@@ -214,6 +234,7 @@ const RUNTIME_HOST_CAPABILITY_KEYS = [
   "runtimeCapabilityAuthenticator",
   "gitDeliveryAuthority",
   "gitDeliveryDescriptionAuthority",
+  "mintDescriptionAuthority",
   "openCodeGatewayReadinessRegistry",
 ] as const;
 

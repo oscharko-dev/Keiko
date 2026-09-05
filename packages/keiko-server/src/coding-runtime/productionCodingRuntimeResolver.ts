@@ -7,6 +7,7 @@ import type {
   DraftDeliveryService,
 } from "../gitDelivery/draftDeliveryTypes.js";
 import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
+import type { GitDeliveryDescriptionAuthorityScope } from "../gitDelivery/runBoundAuthority.js";
 import { createProductionCiObservationService } from "./productionCiObservationRuntime.js";
 import { createProductionCiRepairBudget } from "./productionCiRepairRuntime.js";
 import { reservePromptWithCiRepair } from "./ciRepairPromptReservation.js";
@@ -250,6 +251,13 @@ function composeRuntime(
   // In memory only; invalidated with the run.
   const pendingResearch = createPendingResearchApprovals();
   let receiver: (event: CodingWorkbenchRuntimeEvent) => void = () => undefined;
+  // #3401 (epic #3384 closeout, description-composition-closeout): the orchestrator that owns
+  // `notifyVerifiedHeadAdvanced` is built by `codingRuntimeControlPlane.ts` AFTER this resolver
+  // (and every per-run CI-repair budget it mints) already exists, so a per-run controller cannot
+  // receive it at construction time. Mirrors the `receiver` indirection immediately above: a
+  // mutable slot a run-bound closure reads through, filled in once by
+  // `attachVerifiedHeadNotifier` right after the control plane builds its orchestrator.
+  let notifyVerifiedHeadAdvanced: (runId: string) => void = () => undefined;
   const manager = createProductionRuntimeManager(runs, authority, () => runtimeNow(input));
   const research: ResearchComposition = { grants: researchGrants, pending: pendingResearch };
   return {
@@ -257,9 +265,18 @@ function composeRuntime(
       receiver = onRuntimeEvent;
       return manager;
     },
-    mintLaunch: launchResolver(input, authority, runs, research, (event): void => {
-      receiver(event);
-    }),
+    mintLaunch: launchResolver(
+      input,
+      authority,
+      runs,
+      research,
+      (event): void => {
+        receiver(event);
+      },
+      (runId): void => {
+        notifyVerifiedHeadAdvanced(runId);
+      },
+    ),
     // The approved `research` action mints its grant here — the one seam that sees both the
     // manager's approval issuance (approval digest + expiry) and the retained approved URL.
     approvalAuthority: researchIssuingApprovalAuthority(manager, research, () => runtimeNow(input)),
@@ -287,6 +304,30 @@ function composeRuntime(
     // reachable from a live server for the Chat and post-terminal generation paths, not only from
     // a running Code task.
     gitDeliveryDescriptionAuthority: authority.gitDeliveryDescriptionAuthorityPort(),
+    // #3401 (epic #3384 closeout, description-composition-closeout): the MINT capability the
+    // comment above named as the still-missing half. `gitDeliveryDescriptionAuthority` only reads
+    // an existing record; nothing minted one, so the automatic-description dispatcher
+    // (`productionCodingRuntimePorts.ts`) admitted every scope closed in production. Clamped by
+    // the SAME deployment ceiling every other authority-minting path in this file uses -- a mint
+    // outside a live run (the terminal-dispatch and Chat-turn callers both run after the run's own
+    // envelope may already be gone) never assumes the ceiling is a widening default.
+    mintDescriptionAuthority: (
+      scope: GitDeliveryDescriptionAuthorityScope,
+      nowIso: string,
+    ): void => {
+      authority.mintGitDeliveryDescriptionAuthority({
+        scope,
+        requestedMode: input.workspaceAuthority.deploymentCeiling,
+        deploymentCeiling: input.workspaceAuthority.deploymentCeiling,
+        nowIso,
+      });
+    },
+    // #3401 CI-repair notify: the setter half of the `notifyVerifiedHeadAdvanced` slot above.
+    // Called exactly once by `codingRuntimeControlPlane.ts` right after it builds the orchestrator
+    // that owns the real method.
+    attachVerifiedHeadNotifier: (notify: (runId: string) => void): void => {
+      notifyVerifiedHeadAdvanced = notify;
+    },
     ...(input.backend.safeActivityProjection
       ? { safeActivityProjection: input.backend.safeActivityProjection }
       : {}),
@@ -311,6 +352,7 @@ function launchResolver(
   runs: Map<string, ResolverRunRecord>,
   research: ResearchComposition,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+  notifyVerifiedHeadAdvanced: (runId: string) => void,
 ): QualifiedProductionCodingRuntime["mintLaunch"] {
   const preparation = repositoryPreparationFor(input);
   return {
@@ -340,6 +382,7 @@ function launchResolver(
           authority,
           research,
           onRuntimeEvent,
+          notifyVerifiedHeadAdvanced,
         );
         runs.set(request.runId, record);
         return launchRequest(record, context, minted);
@@ -442,6 +485,7 @@ function runtimeGitServices(
   authority: CodingRuntimeAuthorityService,
   signal: AbortSignal,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+  notifyVerifiedHeadAdvanced: (runId: string) => void,
 ): RuntimeGitServices {
   const binding = {
     runId: minted.authorityRef.runId,
@@ -455,6 +499,7 @@ function runtimeGitServices(
     input,
     binding,
     onRuntimeEvent,
+    notifyVerifiedHeadAdvanced,
   );
   const runtimeGitService = createProductionRuntimeGitService(
     input.verifiedCommit,
@@ -487,11 +532,13 @@ function runtimeCiServices(
   input: ProductionCodingRuntimeResolverInput,
   binding: Parameters<typeof createProductionCiRepairBudget>[2],
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+  notifyVerifiedHeadAdvanced: (runId: string) => void,
 ): Pick<RuntimeGitServices, "ciRepairBudget" | "ciObservationService"> {
   const ciRepairBudget = createProductionCiRepairBudget(
     input.draftDelivery,
     input.verifiedCommit,
     binding,
+    notifyVerifiedHeadAdvanced,
   );
   const ciObservationService = createProductionCiObservationService(
     input.draftDelivery,
@@ -512,9 +559,18 @@ function createRunToolSurface(
   research: ResearchComposition,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
   signal: AbortSignal,
+  notifyVerifiedHeadAdvanced: (runId: string) => void,
 ): RunToolSurface {
   const invocationRegistry = createCodingToolInvocationRegistry();
-  const services = runtimeGitServices(input, context, minted, authority, signal, onRuntimeEvent);
+  const services = runtimeGitServices(
+    input,
+    context,
+    minted,
+    authority,
+    signal,
+    onRuntimeEvent,
+    notifyVerifiedHeadAdvanced,
+  );
   const { codingToolApprovals } = services;
   const leases = createLeaseCoordinator(invocationRegistry);
   const skillCatalog = createServerApprovedSkillCatalog();
@@ -555,6 +611,7 @@ function createRunRecord(
   authority: CodingRuntimeAuthorityService,
   research: ResearchComposition,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+  notifyVerifiedHeadAdvanced: (runId: string) => void,
 ): ResolverRunRecord {
   const controller = new AbortController();
   const surface = createRunToolSurface(
@@ -566,6 +623,7 @@ function createRunRecord(
     research,
     onRuntimeEvent,
     controller.signal,
+    notifyVerifiedHeadAdvanced,
   );
   const { invocationRegistry, leases, explicitSkills } = surface;
   const backend = createBackendRun({

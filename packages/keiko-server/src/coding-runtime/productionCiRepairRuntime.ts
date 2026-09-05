@@ -21,6 +21,11 @@ export function createProductionCiRepairBudget(
   deps: DraftDeliveryDependencies | undefined,
   verified: VerifiedCommitRuntimeDependencies | undefined,
   binding: VerifiedCommitRuntimeBinding,
+  // #3401 (epic #3384 closeout, description-composition-closeout): forwarded to the controller so
+  // a repaired head that reaches `technical-ready` well after the orchestrator's one-time terminal
+  // dispatch already fired regenerates the run's automatic description. Absent is a deliberate
+  // closed default -- accounting proceeds exactly as before when no caller wires a notifier.
+  notifyVerifiedHeadAdvanced?: (runId: string) => void,
 ): CiRepairExecutionBudget | undefined {
   const readiness = deps?.snapshots.ciReadiness;
   const store = deps?.snapshots.ciRepairBudget;
@@ -36,6 +41,7 @@ export function createProductionCiRepairBudget(
     readiness,
     now: deps.execution?.now ?? Date.now,
     context: (): CiRepairBudgetContext | undefined => budgetContext(deps, verified, binding),
+    ...(notifyVerifiedHeadAdvanced === undefined ? {} : { notifyVerifiedHeadAdvanced }),
   });
   return gateBudget(
     controller,

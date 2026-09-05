@@ -100,7 +100,6 @@ import type { UiHandlerDeps } from "./deps.js";
 // Read-only consumption of the existing owning module — never redefined here.
 import {
   authorizeGitDeliveryModelEgress,
-  type GitDeliveryDescriptionAuthorityPort,
   type GitDeliveryDescriptionAuthorityScope,
 } from "./gitDelivery/runBoundAuthority.js";
 // Issue #3400 (epic #3384, Frozen Product Decision 6 / issue correction 1): the apply action
@@ -2574,21 +2573,11 @@ export function validateCurrentDesktopChatSend(
 // A chat's connected git-change scope is not model-egress authority by itself (Architecture
 // Invariants: "Connecting context is not model-egress authority"). Every turn on a git-change-
 // scoped chat re-derives the server-minted description authority (#3399, contract correction 4)
-// before any snapshot content reaches the Model Gateway. Production composition (deps.ts) does
-// not yet expose the authority port (#3399's own production-wiring item), so it is read here via
-// the same optional-cast seam `relationship-handlers.ts` used for `deps.relationship` before that
-// became an official field — `undefined` means "not yet wired", and admission fails CLOSED, never
-// open: no port to consult is exactly the same as no live authority record.
-interface GitChangeDescriptionAuthorityDeps {
-  readonly gitChangeDescriptionAuthorityPort?: GitDeliveryDescriptionAuthorityPort | undefined;
-}
-
-function gitChangeDescriptionAuthorityPortFor(
-  deps: UiHandlerDeps,
-): GitDeliveryDescriptionAuthorityPort | undefined {
-  return (deps as UiHandlerDeps & GitChangeDescriptionAuthorityDeps)
-    .gitChangeDescriptionAuthorityPort;
-}
+// before any snapshot content reaches the Model Gateway. `deps.gitChangeDescriptionAuthorityPort`
+// is a direct, official `UiHandlerDeps` field (description-composition-closeout): production
+// composition threads the SAME minted port onto it and onto `gitDeliveryDescriptionAuthority`
+// (deps.test.ts pins the two are `===`) — `undefined` means "not yet wired", and admission fails
+// CLOSED, never open: no port to consult is exactly the same as no live authority record.
 
 // The scope always keys on the immutable base/head pair rather than a PR identity: `remoteDigest`
 // (correction 6) plus `baseRef`/`headRef` are present on every connected git-change scope whether
@@ -2617,7 +2606,7 @@ export function admitGitChangeDescriptionTurn(
   scope: ChatGitChangeScope,
   nowIso: string,
 ): boolean {
-  const port = gitChangeDescriptionAuthorityPortFor(deps);
+  const port = deps.gitChangeDescriptionAuthorityPort;
   if (port === undefined) return false;
   return (
     authorizeGitDeliveryModelEgress(port, gitChangeDescriptionAuthorityScopeFor(scope), nowIso) !==

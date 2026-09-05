@@ -44,7 +44,25 @@ interface V16RootSeed {
   readonly identityDigest: string;
 }
 
+// node:sqlite's DatabaseSync enforces FOREIGN KEY constraints by default (unlike the SQLite C
+// library's own off-by-default), so the real, migration-built workspace_manifest_roots row (its
+// `workspace_id` and `project_path` columns each carry a live REFERENCES clause, V15_SQL) needs a
+// matching parent row in both `projects` and `workspace_manifests` before an insert can succeed —
+// the hand-rolled stand-in this fixture replaced omitted both FKs entirely and never exercised this.
+function seedV16ManifestParents(db: DatabaseSync, workspaceId: string, projectPath: string): void {
+  db.prepare(
+    "INSERT INTO projects (path, name, favorite, created_at, last_opened_at) VALUES (?, ?, 0, 1, 1)",
+  ).run(projectPath, projectPath);
+  db.prepare(
+    `INSERT INTO workspace_manifests (
+       workspace_id, schema_version, manifest_ref, revision, manifest_digest, focused_root_ref,
+       record_json, updated_at
+     ) VALUES (?, 1, ?, 0, ?, 'root-focused', '{}', 1)`,
+  ).run(workspaceId, `manifest-${workspaceId}`, "0".repeat(64));
+}
+
 function insertV16Root(db: DatabaseSync, seed: V16RootSeed): void {
+  seedV16ManifestParents(db, seed.workspaceId, seed.canonicalRoot);
   db.prepare(
     `INSERT INTO workspace_manifest_roots (
        workspace_id, root_ref, position, project_path, canonical_root, identity_digest
@@ -113,6 +131,7 @@ describe("runMigrations", () => {
     const db = openMem();
     try {
       seedV16WorkspaceTables(db);
+      seedV16ManifestParents(db, "workspace-1", root);
       db.prepare(
         `INSERT INTO workspace_manifest_roots (
            workspace_id, root_ref, position, project_path, canonical_root, identity_digest
@@ -144,6 +163,8 @@ describe("runMigrations", () => {
     try {
       seedV16WorkspaceTables(db);
       runMigrations(db);
+      seedV16ManifestParents(db, "workspace-1", "/project-a");
+      seedV16ManifestParents(db, "workspace-2", "/project-b");
       const insert = db.prepare(
         `INSERT INTO workspace_manifest_roots (
            workspace_id, root_ref, position, project_path, canonical_root, identity_digest,

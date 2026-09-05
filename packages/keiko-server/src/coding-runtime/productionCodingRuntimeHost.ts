@@ -86,6 +86,8 @@ const OPTIONAL_RUNTIME_CAPABILITY_KEYS = [
   "runtimeCapabilityAuthenticator",
   "gitDeliveryAuthority",
   "gitDeliveryDescriptionAuthority",
+  "mintDescriptionAuthority",
+  "attachVerifiedHeadNotifier",
   "openCodeGatewayReadinessRegistry",
 ] as const;
 

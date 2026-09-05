@@ -4018,18 +4018,27 @@ function attachWorkbenchDescriptionSupport(
   const dispatcher =
     args.options.codingRuntimeDescriptionDispatcher ??
     createProductionWorkbenchDescriptionDispatcher({
-      activeWorkspaceRoot: (): string | undefined =>
-        args.bundle.workspaceLifecycle?.getActive()?.binding.activeRoot,
+      // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) yields no root
+      // instead of crashing dispatch -- the same guard `resolveProductionRuntimePorts`'s own
+      // `resolveWorkspaceRoot` accessor already applies to the identical `getActive()` call.
+      activeWorkspaceRoot: (): string | undefined => {
+        try {
+          return args.bundle.workspaceLifecycle?.getActive()?.binding.activeRoot;
+        } catch (error) {
+          if (isIdentityProofFailure(error)) return undefined;
+          throw error;
+        }
+      },
       snapshots: gitChangeSnapshotService,
       generation: createProductionPrDescriptionGeneration(args.runtimeConfig),
       descriptionAuthority: codingRuntimeControlPlane.gitDeliveryDescriptionAuthority,
-      // #3401 open item: no production caller mints the description authority yet -- threading
-      // that capability needs `productionCodingRuntimeResolver.ts` (where it is minted),
-      // `productionCodingRuntimeHost.ts`, and `codingRuntimeControlPlane.ts` (its two existing
-      // OPTIONAL_RUNTIME_CAPABILITY_KEYS / RUNTIME_HOST_CAPABILITY_KEYS lists) to forward a mint
-      // capability the SAME way `gitDeliveryDescriptionAuthority`'s READ port already is. Until
-      // that lands every scope admits closed (`model-egress-denied`), matching
-      // chat-handlers.ts's own `admitGitChangeDescriptionTurn` comment on the same gap.
+      // #3401 (epic #3384 closeout, description-composition-closeout): the mint capability
+      // threaded through `productionCodingRuntimeResolver.ts` ->
+      // `productionCodingRuntimeHost.ts` -> `codingRuntimeControlPlane.ts`, the SAME chain
+      // `gitDeliveryDescriptionAuthority`'s READ port above already uses.
+      ...(codingRuntimeControlPlane.mintDescriptionAuthority === undefined
+        ? {}
+        : { mintDescriptionAuthority: codingRuntimeControlPlane.mintDescriptionAuthority }),
       now: (): number => Date.now(),
     });
   codingRuntimeControlPlane.orchestrator.attachDescriptionSupport({ jobs, dispatcher });

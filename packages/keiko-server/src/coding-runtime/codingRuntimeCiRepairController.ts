@@ -303,7 +303,12 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
   ): void {
     const record = this.deps.store.read(context).record;
     if (record === undefined) return;
-    this.deps.store.settle(context, { attemptId, outcome, expectedRevision: record.revision });
-    if (outcome === "succeeded") this.deps.notifyVerifiedHeadAdvanced?.(context.runId);
+    const result = this.deps.store.settle(context, {
+      attemptId,
+      outcome,
+      expectedRevision: record.revision,
+    });
+    if (outcome === "succeeded" && result.status !== "blocked")
+      this.deps.notifyVerifiedHeadAdvanced?.(context.runId);
   }
 }
