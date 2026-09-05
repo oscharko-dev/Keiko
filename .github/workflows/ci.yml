@@ -17,6 +17,7 @@ on:
       - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
+      - epic/updater-reliability
       - "release/**"
   pull_request:
     # Metadata is merge-relevant evidence: the review-suppression gate reads the PR title/body, and
@@ -38,6 +39,7 @@ on:
       - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
+      - epic/updater-reliability
       - "release/**"
   # ADR-0139 D7: every required workflow also validates merge-queue groups so a human can
   # enable GitHub's merge queue without agents re-racing a moving dev branch.
@@ -89,6 +91,7 @@ jobs:
             | refs/heads/feat/epic-built-in-editor-2285-M11: \
             | refs/heads/feat/epic-memoria-viva-2538: \
             | refs/heads/epic/coding-workbench-opencode-codex: \
+            | refs/heads/epic/updater-reliability: \
             | refs/heads/release/*: \
             | *:dev \
             | *:feat/dev \
@@ -104,6 +107,7 @@ jobs:
             | *:feat/epic-built-in-editor-2285-M11 \
             | *:feat/epic-memoria-viva-2538 \
             | *:epic/coding-workbench-opencode-codex \
+            | *:epic/updater-reliability \
             | *:release/*)
               echo "Protected or integration branch gate satisfied."
               ;;

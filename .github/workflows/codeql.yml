@@ -20,6 +20,7 @@ on:
       - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
+      - epic/updater-reliability
       - "release/**"
   pull_request:
     branches:
@@ -37,6 +38,7 @@ on:
       - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
+      - epic/updater-reliability
       - "release/**"
   # ADR-0139 D7: code scanning also validates merge-queue groups.
   merge_group:
