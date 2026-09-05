@@ -48,6 +48,7 @@ import {
   type AdmittedTurnHandle,
   gatewayHistoryPrefix,
   admitDesktopChatTurn,
+  admitGitChangeScopedTurn,
   inspectDesktopChatTurn,
   parseDesktopChatSend,
   recordChatCompaction,
@@ -475,6 +476,11 @@ async function prepareDesktopChatStream(
   if ("status" in parsed) return { kind: "outcome", outcome: parsed };
   const prepared = validateDesktopChatSend(parsed, deps);
   if ("status" in prepared) return { kind: "outcome", outcome: prepared };
+  // Same fast-fail gate as the buffered /api/desktop/chat path (handleSendDesktopChat): a
+  // git-change-connected chat must re-derive its description authority before ANY diff content
+  // reaches the Model Gateway, streaming transport included.
+  const gitChangeDenial = admitGitChangeScopedTurn(deps, prepared.chat, ctx.correlationId);
+  if (gitChangeDenial !== undefined) return { kind: "outcome", outcome: gitChangeDenial };
   const inspection = inspectDesktopChatTurn(deps, prepared);
   const inspected = inspectedStreamPreparation(inspection);
   if (inspected !== undefined) return inspected;
@@ -652,6 +658,11 @@ async function runAdmittedDesktopChatStream(
 ): Promise<HandlerOutcome> {
   const prepared = validateCurrentDesktopChatSend(start.parsed, deps);
   if ("status" in prepared) return prepared;
+  // Re-derived immediately before dispatch (not only at the earlier fast-fail check in
+  // prepareDesktopChatStream): a queued turn may wait long enough for the authority to expire
+  // in between, exactly as the buffered path re-checks inside its serialized-turn callback.
+  const gitChangeDenial = admitGitChangeScopedTurn(deps, prepared.chat, ctx.correlationId);
+  if (gitChangeDenial !== undefined) return gitChangeDenial;
   const preflight = preflightDesktopChatStreamExecution(prepared, deps, ctx.correlationId);
   if ("status" in preflight) return preflight;
   const messageCountBeforeTurn = deps.store.countMessages(prepared.request.chatId);

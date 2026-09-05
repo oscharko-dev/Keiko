@@ -4,6 +4,7 @@ import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSup
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import { computeStoreFingerprint } from "../store/db.js";
 import { runMigrations } from "../store/schema.js";
+import { rewindSchemaFixture } from "../store/legacySchemaTestFixture.js";
 import {
   createCodingRuntimeSnapshotStore,
   type CodingRuntimeSnapshot,
@@ -538,9 +539,7 @@ describe("CI repair durable bounds and migration", () => {
   });
   it("migrates V25 without altering existing draft, receipt or issue truth", () => {
     const before = snapshots.get(context.runId);
-    db.exec(
-      "DROP TABLE coding_runtime_ci_repair_budgets; ALTER TABLE coding_runtime_snapshots DROP COLUMN ci_observation_revision; ALTER TABLE coding_runtime_snapshots DROP COLUMN ci_readiness_record; ALTER TABLE coding_runtime_snapshots DROP COLUMN last_successful_verified_commit; PRAGMA user_version=25;",
-    );
+    rewindSchemaFixture(db, 25);
     runMigrations(db);
     expect(snapshots.get(context.runId)).toEqual(before);
     expect(budget.read(context)).toEqual({ status: "available", record: undefined });

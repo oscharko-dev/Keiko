@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { runMigrations } from "../store/schema.js";
+import { rewindSchemaFixture } from "../store/legacySchemaTestFixture.js";
 import type {
   CodingRuntimeSnapshot,
   CodingRuntimeSnapshotStore,
@@ -559,9 +560,7 @@ describe("internal durable draft source receipt", () => {
     try {
       const store = storeWithRun(db);
       store.recordDraftDelivery(proposed, null);
-      db.exec(
-        "DROP TABLE coding_runtime_ci_repair_budgets; ALTER TABLE coding_runtime_snapshots DROP COLUMN last_successful_verified_commit; ALTER TABLE coding_runtime_snapshots DROP COLUMN ci_observation_revision; ALTER TABLE coding_runtime_snapshots DROP COLUMN ci_readiness_record; ALTER TABLE coding_runtime_snapshots DROP COLUMN draft_delivery_source_receipt; PRAGMA user_version = 24",
-      );
+      rewindSchemaFixture(db, 24);
       runMigrations(db);
       expect(retainedSource(db)).toBeNull();
       expect(createCodingRuntimeSnapshotStore(db).get("run-1")?.draftDelivery).toEqual(proposed);

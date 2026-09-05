@@ -2651,7 +2651,10 @@ function activeGitChangeScope(chat: Chat): ChatGitChangeScope | undefined {
  * when the description authority for its active scope is missing or expired. Returns `undefined`
  * (proceed) for a chat with no connected git-change scope at all.
  */
-function admitGitChangeScopedTurn(
+// Exported so the streaming send path (chat-stream-handlers.ts) re-derives the SAME admission —
+// via the SAME formula, never a restated copy — rather than only the buffered /api/desktop/chat
+// path gating a git-change-connected chat. Both are real client transports for sending a turn.
+export function admitGitChangeScopedTurn(
   deps: UiHandlerDeps,
   chat: Chat,
   correlationId: string | undefined,

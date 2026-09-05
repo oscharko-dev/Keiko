@@ -146,15 +146,22 @@ export interface GitDeliveryJourneyRouteOptions {
   readonly readiness?: JourneyObservationOptions["readiness"];
   readonly description?: JourneyObservationOptions["description"];
   /**
-   * Durable CAS projection (#3389 AC6). Production composition does not yet supply this — the
-   * SQLite-backed `createGitJourneyOutcomeStore` (journeyOutcome.ts) is implemented and unit-tested,
-   * but reaching the live `coding_runtime_snapshots` database from a route requires a small addition
-   * to `codingRuntimeSnapshotStore.ts` exposing it the same way `ciReadiness`/`ciRepairBudget` already
-   * are (out of this change's write scope; see the delivery report). Until then, an observation
-   * always records successfully and durability across a process restart is proven at the store's own
-   * unit level, not yet through this route.
+   * Durable CAS projection (#3389 AC6). Test-only override seam; production composition never sets
+   * this — it defaults to `deps.codingRuntimeSnapshotStore.journeyOutcomes`, the SQLite-backed
+   * `createGitJourneyOutcomeStore` (journeyOutcome.ts) exposed on the live, durable
+   * `coding_runtime_snapshots` database the same way `ciReadiness`/`ciRepairBudget` already are.
+   * That makes the route's CAS write durable across a process restart, not merely at the store's
+   * own unit level.
    */
   readonly outcomes?: GitJourneyOutcomeStore;
+}
+
+/** Production default: the durable projection on the live snapshot store, when one is wired. */
+function outcomesFor(
+  deps: UiHandlerDeps,
+  options: GitDeliveryJourneyRouteOptions,
+): GitJourneyOutcomeStore | undefined {
+  return options.outcomes ?? deps.codingRuntimeSnapshotStore?.journeyOutcomes;
 }
 
 // `../coding-runtime/productionDraftDeliveryDependencies.js` is loaded lazily (never as a top-level
@@ -227,8 +234,9 @@ function descriptionFor(
 /**
  * CAS write into the durable projection (#3389 AC6), body-free logged so a support timeline can
  * tell a genuinely recorded outcome from one rejected as stale without ever carrying the outcome's
- * own content. `outcomes` is absent until `codingRuntimeSnapshotStore.ts` gains a `journeyOutcomes`
- * sub-store (see `GitDeliveryJourneyRouteOptions.outcomes`); an absent store never fails the request.
+ * own content. `outcomes` is only absent when no `codingRuntimeSnapshotStore` is wired at all (see
+ * `outcomesFor`); an absent store never fails the request — the observation still reports its
+ * result, it is just not made durable.
  */
 function recordJourneyOutcome(
   deps: UiHandlerDeps,
@@ -302,7 +310,7 @@ function buildJourneyObservationOptions(
       draftDelivery.resolveJourneyCheckoutRoot,
     ),
     recordOutcome: (observeContext, outcome): boolean =>
-      recordJourneyOutcome(deps, options.outcomes, observeContext.correlationId, outcome),
+      recordJourneyOutcome(deps, outcomesFor(deps, options), observeContext.correlationId, outcome),
     ...(deps.activityLog === undefined ? {} : { activityLog: deps.activityLog }),
   };
 }

@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
+import { isDraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import {
   createDraftRun,
   readySnapshot,
@@ -28,7 +29,10 @@ function failed(): ReadinessSnapshot {
     requiredChecks: { total: 1, passed: 0, failed: 1, pending: 0, blocked: 0, unknown: 0 },
   };
 }
-function fixture(limits: Partial<CiRepairLimits> = {}): {
+function fixture(
+  limits: Partial<CiRepairLimits> = {},
+  notifyVerifiedHeadAdvanced?: (runId: string) => void,
+): {
   readonly controller: CodingRuntimeCiRepairController;
   readonly context: CiRepairBudgetContext;
   readonly store: ReturnType<typeof createCodingRuntimeCiRepairBudgetStore>;
@@ -68,6 +72,7 @@ function fixture(limits: Partial<CiRepairLimits> = {}): {
     readiness,
     context: (): CiRepairBudgetContext => context,
     now,
+    ...(notifyVerifiedHeadAdvanced === undefined ? {} : { notifyVerifiedHeadAdvanced }),
   });
   return { db, controller, context, store, readiness, clock, logs };
 }
@@ -268,5 +273,47 @@ describe("CI repair accounting around admitted model work", () => {
     expect(test.controller.chargeDelegatedRead("child-1", "read-1")).toBe(true);
     expect(test.controller.chargeDelegatedRead("child-2", "read-2")).toBe(false);
     expect(test.store.read(test.context).record).toMatchObject({ toolCalls: 2, promptTokens: 9 });
+  });
+  // #3401: a repaired head after CI repair must regenerate the run's automatic description, since
+  // the orchestrator's one-time terminal dispatch already fired for the original (failing) head.
+  it("notifies notifyVerifiedHeadAdvanced exactly once a repaired head is observed CI-green", () => {
+    const notify = vi.fn();
+    const test = fixture({}, notify);
+    expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
+    // Simulate the CI-repair loop (#3388) pushing a new commit for the SAME draft PR: the draft
+    // binding's head advances to the repaired commit, then CI reports that repaired head green.
+    // Bypasses the draft-delivery write-path's phase-transition guard with a direct row patch
+    // (irrelevant to this controller's own contract) — exactly like `readySnapshot()`/`failed()`
+    // already construct fixture state directly rather than replaying a full delivery lifecycle.
+    const repairedHeadSha = "4".repeat(40);
+    const row = test.db
+      .prepare("SELECT draft_delivery_record FROM coding_runtime_snapshots WHERE run_id = ?")
+      .get("run-1") as { draft_delivery_record: string };
+    const draft: unknown = JSON.parse(row.draft_delivery_record);
+    if (!isDraftDeliveryRecord(draft)) throw new Error("expected a valid draft delivery record");
+    test.db
+      .prepare("UPDATE coding_runtime_snapshots SET draft_delivery_record = ? WHERE run_id = ?")
+      .run(
+        JSON.stringify({
+          ...draft,
+          binding: { ...draft.binding, headSha: repairedHeadSha },
+          pullRequest:
+            draft.pullRequest === undefined
+              ? undefined
+              : { ...draft.pullRequest, headSha: repairedHeadSha },
+        }),
+        "run-1",
+      );
+    const repaired = { ...readySnapshot(), headSha: repairedHeadSha };
+    expect(test.readiness.complete(test.readiness.begin("run-1"), repaired)).toBe(true);
+    test.controller.observed(repaired);
+    expect(notify).toHaveBeenCalledExactlyOnceWith("run-1");
+    expect(test.store.read(test.context).record?.attempts[0]?.status).toBe("succeeded");
+  });
+  it("never notifies notifyVerifiedHeadAdvanced when a repair attempt settles failed", () => {
+    const notify = vi.fn();
+    const test = fixture({}, notify);
+    test.controller.admitTool(verify("verify-1"))?.settle({ status: "failed" });
+    expect(notify).not.toHaveBeenCalled();
   });
 });

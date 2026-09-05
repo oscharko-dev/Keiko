@@ -42,6 +42,7 @@ import { CodingWorkbenchCiReadiness } from "./CodingWorkbenchCiReadiness";
 import { CodingWorkbenchDraftDelivery } from "./CodingWorkbenchDraftDelivery";
 import {
   CodingWorkbenchJourneyOutcome,
+  createPrMarkReadyProposeHandler,
   type CodingWorkbenchJourneyChangedFilesSummary,
 } from "./CodingWorkbenchJourneyOutcome";
 import { CodingWorkbenchCommitResult } from "./CodingWorkbenchCommitResult";
@@ -246,6 +247,25 @@ function useCodingWorkbenchJourney(runId: string | undefined): CodingWorkbenchJo
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh is stable per runId already
   }, [runId]);
   return { outcome, onRefresh: refresh };
+}
+
+/**
+ * Builds the Coding Workbench's `onProposeReady` from the journey outcome's own exported mark-ready
+ * helper (#3389 AC3), bound to the workspace root the window already names `projectId` everywhere
+ * else in this file's family (`GovernedPullRequestCard`, `GitClientWindow`: "the active project root
+ * acts as the projectId" — AGENTS.md §5 reuse, not a second identity). Undefined whenever either the
+ * outcome or a real root is missing, so `markReadyAvailable` downstream stays exactly that same
+ * `undefined` check — the control is never offered as clickable without a handler genuinely backed
+ * by a real mint/execute request.
+ */
+function useMarkReadyPropose(
+  outcome: JourneyOutcome | undefined,
+  projectId: string | null,
+): (() => Promise<void>) | undefined {
+  return useMemo(() => {
+    if (outcome === undefined || projectId === null || projectId === "") return undefined;
+    return createPrMarkReadyProposeHandler(outcome, projectId);
+  }, [outcome, projectId]);
 }
 
 interface ResumeModeSelection {
@@ -708,6 +728,7 @@ function WorkbenchColumns({
   const repositoryRoot = runIsActive
     ? (runBoundRoot ?? activeWorkspace.activeBinding?.activeRoot ?? selectedRoot ?? null)
     : (activeWorkspace.activeInstance?.repositoryRoot ?? selectedRoot ?? null);
+  const onProposeReady = useMarkReadyPropose(journey.outcome, repositoryRoot);
   const taskComposer = (
     <TaskStartSection
       taskIntent={taskIntent}
@@ -816,6 +837,8 @@ function WorkbenchColumns({
             outcome={journey.outcome}
             onRefresh={journey.onRefresh}
             changedFiles={changedFilesSummary(journeyChanges)}
+            markReadyAvailable={onProposeReady !== undefined}
+            {...(onProposeReady === undefined ? {} : { onProposeReady })}
           />
           <CodingWorkbenchCommitResult
             result={state.run.value?.verifiedCommitResult}

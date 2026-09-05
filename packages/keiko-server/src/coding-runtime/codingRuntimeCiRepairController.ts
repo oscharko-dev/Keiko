@@ -30,6 +30,17 @@ interface Dependencies {
   readonly readiness: CodingRuntimeCiReadinessStore;
   readonly context: () => CiRepairBudgetContext | undefined;
   readonly now: () => number;
+  /**
+   * #3401: called exactly once a repair attempt is settled `succeeded` (`observed` saw the
+   * repaired head reach `technical-ready`) — the CI-repair loop (#3388) has just pushed a new
+   * verified commit for an ALREADY-succeeded run, well after the orchestrator's one-time terminal
+   * dispatch already fired for the original head. Forwards to
+   * `CodingRuntimeOrchestrator.notifyVerifiedHeadAdvanced` (a public seam, never a second
+   * dispatcher) so the SAME dedup/coalesce/supersede path reconsiders the run's description job
+   * for the repaired head. Absent is a deliberate closed default: accounting proceeds exactly as
+   * before when no owner is wired.
+   */
+  readonly notifyVerifiedHeadAdvanced?: (runId: string) => void;
 }
 function attemptKind(request: CodingToolActionRequest): CiRepairAttemptKind | undefined {
   if (request.action === "edit" || request.action === "command") return "workspace-edit";
@@ -291,7 +302,8 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
     outcome: "succeeded" | "failed",
   ): void {
     const record = this.deps.store.read(context).record;
-    if (record !== undefined)
-      this.deps.store.settle(context, { attemptId, outcome, expectedRevision: record.revision });
+    if (record === undefined) return;
+    this.deps.store.settle(context, { attemptId, outcome, expectedRevision: record.revision });
+    if (outcome === "succeeded") this.deps.notifyVerifiedHeadAdvanced?.(context.runId);
   }
 }

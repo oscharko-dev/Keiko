@@ -28,6 +28,10 @@ import {
 } from "./codingRuntimeCiReadinessStore.js";
 import { createCodingRuntimeCiRepairBudgetStore } from "./codingRuntimeCiRepairBudgetStore.js";
 import type { CodingRuntimeCiRepairBudgetStore } from "./codingRuntimeCiRepairBudgetTypes.js";
+import {
+  createGitJourneyOutcomeStore,
+  type GitJourneyOutcomeStore,
+} from "../gitDelivery/journeyOutcome.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   adoptDraftDeliveryFromPredecessor,
@@ -121,6 +125,12 @@ export interface CodingRuntimeSnapshotStore {
   /** Optional only for explicitly injected legacy/test stores; absent means CI work is unavailable. */
   readonly ciReadiness?: CodingRuntimeCiReadinessStore;
   readonly ciRepairBudget?: CodingRuntimeCiRepairBudgetStore;
+  /**
+   * Durable, run-independent JourneyOutcome CAS projection (#3389 AC6), keyed by remote digest and
+   * PR number rather than run id — reads/writes survive the originating run's termination, recovery
+   * or a process restart. Optional only for explicitly injected legacy/test stores.
+   */
+  readonly journeyOutcomes?: GitJourneyOutcomeStore;
   readonly adoptDraftDeliveryFromPredecessor: (
     record: DraftDeliveryRecord,
   ) => CodingRuntimeSnapshot;
@@ -238,6 +248,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
       snapshots: { get: one },
       activityLog: processServerLogSink(),
     }),
+    journeyOutcomes: createGitJourneyOutcomeStore(db),
     adoptDraftDeliveryFromPredecessor: (record): CodingRuntimeSnapshot =>
       adoptDraftDeliveryFromPredecessor(db, one, record),
     recordDraftDelivery: (record, expectedRevision): CodingRuntimeSnapshot =>
