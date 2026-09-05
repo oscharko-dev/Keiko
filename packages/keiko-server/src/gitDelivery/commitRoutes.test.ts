@@ -1191,6 +1191,67 @@ describe("commit approve (mints the approval execute consumes) — #3386, ADR-01
   });
 });
 
+// Final-audit F2/#3390 (ADR-0138 D2): before this fix, the coarse admission gate hard-denied both
+// commit/approve and commit/execute with "approval-required" below `autonomous-delivery` and no
+// production path ever redeemed it — a governed-assist or supervised-coding commit was permanently
+// unreachable regardless of the approval this exact describe block already proves works at
+// `autonomous-delivery`. FAILING BEFORE THE FIX: `approveHandler` returned 403
+// GIT_DELIVERY_AUTHORITY_DENIED at the `gitDeliveryAuthorityGate` call inside
+// `createHandleCommitApprove`, never reaching `store.issue()`.
+describe("commit approve + execute reachable regardless of mode — final-audit F2/#3390", () => {
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "mints and consumes a commit approval end to end at %s",
+    async (mode) => {
+      const adapter = recordingAdapter();
+      const approvalStore = createInMemoryGitDeliveryApprovalStore();
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId, () => projectId, mode),
+      });
+      const message = "feat(ui): add governed flow";
+      const approveHandler = createHandleCommitApprove({
+        execution: seams({ adapterFactory: () => adapter.adapter, approvalStore }),
+      });
+      const approveRes = await approveHandler(
+        ctxFor(EXECUTE, { schemaVersion: "1", projectId, message }),
+        modeDeps,
+      );
+      expect(approveRes.status).toBe(200);
+      const approveBody = approveRes.body as GitDeliveryCommitApproveResponseBody;
+
+      const executeHandler = createHandleCommitExecute({
+        execution: seams({ adapterFactory: () => adapter.adapter, approvalStore }),
+      });
+      const executeRes = await executeHandler(
+        ctxFor(EXECUTE, {
+          schemaVersion: "1",
+          projectId,
+          message,
+          approval: approveBody.approval,
+        }),
+        modeDeps,
+      );
+      expect((executeRes.body as { status: string }).status).toBe("succeeded");
+      expect(adapter.calls()).toEqual(["commit"]);
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "still returns approval-required (never mode-denied) at %s when execute carries no approval",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId, () => projectId, mode),
+      });
+      const executeHandler = createHandleCommitExecute({ execution: seams() });
+      const executeRes = await executeHandler(
+        ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add flow" }),
+        modeDeps,
+      );
+      expect(executeRes.status).toBe(200);
+      expect(executeRes.body).toMatchObject({ status: "approval-required", actionKind: "commit" });
+    },
+  );
+});
+
 describe("commit approval evidence — body-free activity-log lines (#3386)", () => {
   it("logs a body-free line when the mint issues a claim", async () => {
     const events: ServerLogEvent[] = [];

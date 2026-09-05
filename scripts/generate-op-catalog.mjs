@@ -125,6 +125,9 @@ const POSITIONAL_OP_HELPERS = [
   },
   // embeddingEvent(level, op, extra, status?, errorKind?) — category hardcoded "embedding".
   { name: "embeddingEvent", argIndex: 1, category: "embedding" },
+  // logGitChangeEvent(deps, op, correlationId, extra) — category hardcoded "process" in the
+  // helper body (packages/keiko-server/src/gitChangeRoutes.ts, #3400 Git-connected Chat).
+  { name: "logGitChangeEvent", argIndex: 1, category: "process" },
   // logDispatch(log, op, fields) — forwards to embeddingEvent, category "embedding".
   { name: "logDispatch", argIndex: 1, category: "embedding" },
   // logLadderStop(log, request, op, completed, outcome) — category "embedding".

@@ -2,7 +2,10 @@ import type { GitPublishExecResult, GitPrExecResult } from "@oscharko-dev/keiko-
 import type { GitDeliveryApprovalRequirement } from "@oscharko-dev/keiko-contracts";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
-import { readGitRawWorktreeSnapshot } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import {
+  readGitRawWorktreeSnapshot,
+  readGitWorktreeSnapshot,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import {
   DraftDeliveryFailure,
   type DraftDeliveryRunContext,
@@ -59,6 +62,16 @@ function snapshot(effect: EffectContext): ReturnType<typeof readGitRawWorktreeSn
     runtimeGitReadDeps(effect.context, effect.options.execution ?? {}),
   );
 }
+// `readGitRawWorktreeSnapshot` hardcodes hasUpstream/ahead/behind to disengaged values (it exists
+// for the commit-facts status/diff path in draftDeliveryFacts.ts, which never runs push preflight),
+// so it must never back a push's snapshotReader: doing so silently disables preflightPush's
+// non-fast-forward and nothing-to-push checks. The push effect reads the real tracking state
+// through `readGitWorktreeSnapshot` instead.
+function pushSnapshot(effect: EffectContext): ReturnType<typeof readGitWorktreeSnapshot> {
+  return readGitWorktreeSnapshot(
+    runtimeGitReadDeps(effect.context, effect.options.execution ?? {}),
+  );
+}
 function issueBoundPrDefault(record: DraftDeliveryRecord): GitDeliveryTrustedPolicyPacks {
   return {
     repoPack: {
@@ -105,7 +118,7 @@ async function push(effect: EffectContext): Promise<DraftDeliveryRecord> {
     options.mutationDeps,
     {
       ...seams,
-      snapshotReader: () => snapshot(effect),
+      snapshotReader: () => pushSnapshot(effect),
       beforeRemoteDispatch: () => context.stillAuthorized() && context.signal?.aborted !== true,
       publishAdapterFactory: () => ({
         publish: async (request): Promise<GitPublishExecResult> => {

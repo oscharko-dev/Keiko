@@ -1,0 +1,64 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
+import { DraftDeliveryFixture } from "./draftDeliveryServiceTestSupport.js";
+
+let fixture: DraftDeliveryFixture;
+beforeEach(async () => {
+  fixture = new DraftDeliveryFixture();
+  await fixture.recordVerifiedCommit();
+});
+afterEach(() => {
+  fixture.close();
+});
+function proposalId(value: CodingRuntimeDeliveryResult): string {
+  expect(value.status, JSON.stringify(fixture.events)).toBe("recorded");
+  if (value.status !== "recorded") throw new Error("missing record");
+  return value.record.proposalId;
+}
+async function execute(value: CodingRuntimeDeliveryResult): Promise<CodingRuntimeDeliveryResult> {
+  const id = proposalId(value);
+  expect(fixture.service.issueApproval(id)).toBeDefined();
+  const lease = fixture.service.consumeApproval(id);
+  expect(lease).toBeDefined();
+  if (lease === undefined) throw new Error("missing lease");
+  return fixture.service.executeApproved(id, lease, { check: () => true });
+}
+// Configures the pushed-to branch's upstream tracking ref one commit AHEAD of local HEAD, purely
+// through local git plumbing (no network) — the same local state `git status --porcelain=v2
+// --branch` reports for a real behind-upstream branch.
+function makeLocalBranchBehindUpstream(): void {
+  const headRef = fixture.context.headRef;
+  const localHead = fixture.git(["rev-parse", "HEAD"]);
+  fixture.git(["checkout", "-qb", "advance-scratch"]);
+  fixture.git(["commit", "-q", "--allow-empty", "-m", "advance-remote"]);
+  const advanced = fixture.git(["rev-parse", "HEAD"]);
+  fixture.git(["checkout", "-q", headRef]);
+  fixture.git(["branch", "-qD", "advance-scratch"]);
+  fixture.git(["update-ref", `refs/remotes/origin/${headRef}`, advanced]);
+  fixture.git(["config", `branch.${headRef}.remote`, "origin"]);
+  fixture.git(["config", `branch.${headRef}.merge`, `refs/heads/${headRef}`]);
+  expect(fixture.git(["rev-parse", "HEAD"])).toBe(localHead);
+}
+
+describe("push effect preflight snapshot", () => {
+  it("refuses a behind-upstream push with a non-fast-forward preflight finding instead of publishing", async () => {
+    makeLocalBranchBehindUpstream();
+    const proposal = await fixture.service.proposePush();
+    const result = await execute(proposal);
+    expect(result, JSON.stringify(fixture.events)).toMatchObject({
+      status: "recorded",
+      record: { phase: "recovery-required", reason: "preflight-failed" },
+    });
+    // The push adapter must never be reached once preflight blocks the attempt.
+    expect(fixture.pushCount).toBe(0);
+  });
+  it("still allows a clean push once the local branch is not behind its upstream", async () => {
+    const proposal = await fixture.service.proposePush();
+    const result = await execute(proposal);
+    expect(result, JSON.stringify(fixture.events)).toMatchObject({
+      status: "recorded",
+      record: { phase: "pushed" },
+    });
+    expect(fixture.pushCount).toBe(1);
+  });
+});

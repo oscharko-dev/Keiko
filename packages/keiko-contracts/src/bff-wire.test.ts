@@ -10,6 +10,7 @@ import {
   canonicalDesktopChatTurnReferenceSeed,
   CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
   classifyAttachmentMime,
+  GIT_CHANGE_BLOCKED_REASONS,
   DEFAULT_GROUNDING_LIMITS,
   DESKTOP_CHAT_SEND_ABORT_CONTRACT,
   DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES,
@@ -32,6 +33,7 @@ import {
   type Chat,
   type ChatGitChangeScope,
   type ChatLocalKnowledgeScope,
+  type GitChangeBlockedReason,
   type DesktopChatSendRequestWire,
   type DesktopChatStreamTerminalEvent,
   type FilesTreeEntry,
@@ -858,6 +860,32 @@ describe("git-change Chat scope contract (#3400)", () => {
     for (const status of CHAT_GIT_CHANGE_DESCRIPTION_STATUSES) {
       const scope = gitChangeScope({ descriptionStatus: status });
       expect(scope.descriptionStatus).toBe(status);
+    }
+  });
+
+  // F30 (epic #3384 final audit): the 11-member blocked-reason vocabulary is owned once here
+  // (keiko-contracts) rather than hand-restated in both the browser client and the server
+  // route; this pin is the single source both importers are checked against.
+  it("pins the 11-member GitChangeBlockedReason vocabulary (F30)", () => {
+    expect([...GIT_CHANGE_BLOCKED_REASONS]).toEqual([
+      "detached-head",
+      "unborn-head",
+      "missing-ref",
+      "no-pull-request",
+      "ambiguous-pull-request",
+      "reader-unauthorized",
+      "remote-unresolved",
+      "repository-unavailable",
+      "snapshot-unavailable",
+      "snapshot-failed",
+      "chat-project-unavailable",
+    ]);
+  });
+
+  it("every blocked reason is a valid GitChangeBlockedReason", () => {
+    for (const reason of GIT_CHANGE_BLOCKED_REASONS) {
+      const typed: GitChangeBlockedReason = reason;
+      expect(GIT_CHANGE_BLOCKED_REASONS as readonly string[]).toContain(typed);
     }
   });
 });

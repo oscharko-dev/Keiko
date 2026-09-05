@@ -1,3 +1,11 @@
+// Content-scoped raw status/diff reader for the commit-facts and editor-diff paths (draftDeliveryFacts.ts
+// runtime status/diff, not the mutation gateways). `readGitRawWorktreeSnapshot` below produces a
+// `GitWorktreeSnapshot` shape ONLY to satisfy that shared type; it never probes the branch's upstream
+// tracking relation, so `hasUpstream`/`aheadCount`/`behindCount` are fixed at disengaged values (false/0/0)
+// by construction. It MUST NOT be used as the snapshotReader for push preflight (`preflightPush` in
+// `git-mutation-preflight.ts`) — that would silently disable the non-fast-forward and nothing-to-push
+// checks for every push. A push effect must read the real tracking state via `readGitWorktreeSnapshot`
+// (`git-worktree-snapshot-node.ts`) instead.
 import { parseGitIndexStat, indexStatMatches, type GitIndexStat } from "./git-index-stat.js";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import { readGitStageFile } from "@oscharko-dev/keiko-workspace/internal/git-index";
@@ -134,6 +142,15 @@ async function workingStatus(
     : await inspectWorkingFile(deps, path, index.get(path), remainingBytes);
 }
 
+/**
+ * Read-only status shape for the commit-facts / editor-diff callers only.
+ *
+ * `hasUpstream`, `aheadCount` and `behindCount` are NOT derived from the repository — this reader
+ * never inspects the upstream tracking relation — and are fixed at their disengaged values so the
+ * result type-checks as a `GitWorktreeSnapshot`. Do not wire this reader in as a push effect's
+ * `snapshotReader`: `preflightPush` trusts these fields to decide non-fast-forward / nothing-to-push,
+ * and disengaged values make both checks silently no-op. Use `readGitWorktreeSnapshot` for that.
+ */
 export async function readGitRawWorktreeSnapshot(
   deps: NodeGitWorktreeReaderDeps,
 ): Promise<GitWorktreeSnapshot> {
@@ -147,6 +164,7 @@ export async function readGitRawWorktreeSnapshot(
     stagedFileCount: raw.changes.filter((file) => file.staged).length,
     unstagedFileCount: raw.changes.filter((file) => file.unstaged).length,
     untrackedFileCount: raw.changes.filter((file) => file.untracked).length,
+    // Not probed by this reader — see the header comment and the doc comment above.
     hasUpstream: false,
     aheadCount: 0,
     behindCount: 0,

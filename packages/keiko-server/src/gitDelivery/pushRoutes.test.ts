@@ -833,6 +833,61 @@ describe("push approve — mints the server-issued claim execute consumes (#3387
     expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
   });
 
+  // Final-audit F2/#3390 (ADR-0138 D2): this describe block's own header comment claims
+  // "reachable from a running accepted run regardless of mode", but before this fix every test here
+  // only ever exercised the fixture default (autonomous-delivery) — the coarse admission gate
+  // hard-denied both push/approve and push/execute with "approval-required" below it, and no
+  // production path ever redeemed it. FAILING BEFORE THE FIX: `modeDeps()`'s approve call returned
+  // 403 GIT_DELIVERY_AUTHORITY_DENIED at the `gitDeliveryAuthorityGate` call inside
+  // `createHandlePushApprove`, never reaching `store.issue()`.
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "mints and consumes a push approval end to end at %s",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+          { headRef: "feat/x", baseRef: "dev", allowDetachedHead: false, allowedPrefixes: ["feat/"] },
+        ),
+      });
+      const approvalStore = createInMemoryGitDeliveryApprovalStore();
+      const approveHandler = createHandlePushApprove({ execution: seams({ approvalStore }) });
+      const minted = await approveHandler(
+        ctxFor("/api/git-delivery/push/approve", pushBody()),
+        modeDeps,
+      );
+      expect(minted.status).toBe(200);
+      const approval = (minted.body as { approval: GitDeliveryApprovalClaim }).approval;
+
+      const adapter = recordingPublishAdapter();
+      const executeHandler = createHandlePushExecute({
+        execution: seams({ publishAdapterFactory: () => adapter.adapter, approvalStore }),
+      });
+      const res = await executeHandler(ctxFor(EXECUTE, pushBody({ approval })), modeDeps);
+      expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
+      expect(adapter.calls()).toBe(1);
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "still returns approval-required (never mode-denied) at %s when execute carries no approval",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+          { headRef: "feat/x", baseRef: "dev", allowDetachedHead: false, allowedPrefixes: ["feat/"] },
+        ),
+      });
+      const executeHandler = createHandlePushExecute({ execution: seams() });
+      const res = await executeHandler(ctxFor(EXECUTE, pushBody()), modeDeps);
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ status: "approval-required", actionKind: "push" });
+    },
+  );
+
   it("logs a body-free line when the mint issues a claim", async () => {
     const activity = captureActivityLog();
     const handler = createHandlePushApprove({

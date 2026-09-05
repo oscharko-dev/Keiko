@@ -197,6 +197,7 @@ import {
 import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
 import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
+  GIT_CHANGE_BLOCKED_REASONS,
   isDesktopChatStreamEvent,
   type DesktopChatSendRequestWire,
   type ConversationAttachmentUploadRequestWire,
@@ -204,6 +205,7 @@ import {
   type DesktopChatStreamDoneEvent,
   type DesktopChatStreamErrorEvent,
   type DesktopChatStreamEventType,
+  type GitChangeBlockedReason,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   DEFAULT_GROUNDING_LIMITS,
@@ -3633,32 +3635,12 @@ export async function updateGitHubIssueReaderAuthorization(
 
 // ─── Issue #3400 — Git-to-Chat connect/refresh (server-resolved comparison, never a browser root)
 
-const GIT_CHANGE_BLOCKED_REASONS: ReadonlySet<string> = new Set([
-  "detached-head",
-  "unborn-head",
-  "missing-ref",
-  "no-pull-request",
-  "ambiguous-pull-request",
-  "reader-unauthorized",
-  "remote-unresolved",
-  "repository-unavailable",
-  "snapshot-unavailable",
-  "snapshot-failed",
-  "chat-project-unavailable",
-]);
+// The 11-member closed reason set is owned once by keiko-contracts (bff-wire.ts) and imported
+// here rather than restated — the server route (gitChangeRoutes.ts) imports the same constant
+// (F30 in the epic #3384 final audit).
+const GIT_CHANGE_BLOCKED_REASON_SET: ReadonlySet<string> = new Set(GIT_CHANGE_BLOCKED_REASONS);
 
-export type GitChangeBlockedReason =
-  | "detached-head"
-  | "unborn-head"
-  | "missing-ref"
-  | "no-pull-request"
-  | "ambiguous-pull-request"
-  | "reader-unauthorized"
-  | "remote-unresolved"
-  | "repository-unavailable"
-  | "snapshot-unavailable"
-  | "snapshot-failed"
-  | "chat-project-unavailable";
+export type { GitChangeBlockedReason };
 
 export type GitChangeConnectResponse =
   | { readonly status: "connected"; readonly scope: ChatGitChangeScope }
@@ -3712,7 +3694,7 @@ function isChatGitChangeScope(value: unknown): value is ChatGitChangeScope {
 function validateGitChangeConnectResponse(value: unknown): GitRepositoryValidation {
   if (!isRecordValue(value)) return { ok: false, reasons: ["response must be an object"] };
   if (value.status === "blocked") {
-    return GIT_CHANGE_BLOCKED_REASONS.has(value.reason as string)
+    return GIT_CHANGE_BLOCKED_REASON_SET.has(value.reason as string)
       ? { ok: true }
       : { ok: false, reasons: ["response.reason is not a known blocked reason"] };
   }
@@ -3725,7 +3707,7 @@ function validateGitChangeConnectResponse(value: unknown): GitRepositoryValidati
 function validateGitChangeRefreshResponse(value: unknown): GitRepositoryValidation {
   if (!isRecordValue(value)) return { ok: false, reasons: ["response must be an object"] };
   if (value.status === "blocked") {
-    return GIT_CHANGE_BLOCKED_REASONS.has(value.reason as string)
+    return GIT_CHANGE_BLOCKED_REASON_SET.has(value.reason as string)
       ? { ok: true }
       : { ok: false, reasons: ["response.reason is not a known blocked reason"] };
   }
@@ -3948,6 +3930,34 @@ export async function fetchGitDeliveryPrApprove(
     body: gitDeliveryPrBody(input),
     ...(signal === undefined ? {} : { signal }),
   });
+}
+
+/**
+ * Mints then immediately redeems the one-use commit approval — the mint/execute pair a single
+ * "Commit" action performs as one governed action (epic #3384 correction 5: an unconditional
+ * approval requirement, never mode-denied). A mint failure (network, bad request, deployment-mode
+ * denial) rejects before any execute attempt is made, mirroring `proposePrMarkReady`.
+ */
+export async function proposeCommit(
+  input: Omit<GitDeliveryCommitExecuteInput, "approval">,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  const minted = await fetchGitDeliveryCommitApprove(input, signal);
+  return fetchGitDeliveryCommitExecute({ ...input, approval: minted.approval }, signal);
+}
+
+/**
+ * Mints then immediately redeems the one-use push approval — the mint/execute pair a single
+ * "Push" action performs as one governed action (epic #3384 correction 5: an unconditional
+ * approval requirement, never mode-denied). A mint failure (network, bad request, deployment-mode
+ * denial) rejects before any execute attempt is made, mirroring `proposePrMarkReady`.
+ */
+export async function proposePush(
+  input: Omit<GitDeliveryPushInput, "approval">,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPushExecuteResponse> {
+  const minted = await fetchGitDeliveryPushApprove(input, signal);
+  return fetchGitDeliveryPushExecute({ ...input, approval: minted.approval }, signal);
 }
 
 // ─── Governed PR-description application (#3399, epic #3384 correction 4, ADR-0086) ───────────────

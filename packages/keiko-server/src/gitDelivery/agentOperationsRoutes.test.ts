@@ -429,6 +429,17 @@ const WRITE_OPERATIONS = Object.keys(
   EXECUTE_PAYLOADS,
 ) as readonly (keyof typeof EXECUTE_PAYLOADS)[];
 
+// The "repository-delivery" authority class (git-repository-agent.ts): commit, fetch, pull, push,
+// pull-request, merge. `commit` is excluded here since it is always denied through its own,
+// separate `verified-commit-required` special case, never through the ladder below.
+const DELIVERY_WRITE_OPERATIONS = [
+  "fetch",
+  "pull",
+  "push",
+  "pull-request",
+  "merge",
+] as const satisfies readonly (keyof typeof EXECUTE_PAYLOADS)[];
+
 function executeRequest(
   operation: keyof typeof EXECUTE_PAYLOADS,
   idempotencyKey = `${operation}-1`,
@@ -496,27 +507,67 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
   );
 
   // The expectation is DERIVED from the production rule table: whichever operations that table puts
-  // above supervised-coding (or, since KEIKO-0227, never admit through this boolean facade at all —
-  // gitRepositoryAgentMinimumMode returns undefined for repository-delivery operations) must be
-  // denied there, and whichever it puts at or below must be admitted.
-  it.each(WRITE_OPERATIONS)("honours the ladder for %s at supervised-coding", async (operation) => {
-    const minimum = gitRepositoryAgentMinimumMode(operation);
-    const admitted =
-      minimum !== undefined &&
-      CODING_WORKBENCH_MODES.indexOf(minimum) <=
-        CODING_WORKBENCH_MODES.indexOf("supervised-coding");
-    const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
-    const result = await handleGitAgentOperation(
-      ctx(executeRequest(operation, `${operation}-supervised`)),
-      deps(runner, "supervised-coding"),
-    );
+  // above supervised-coding must be denied there, and whichever it puts at or below must be
+  // admitted. Scoped to the non-delivery write kinds only — final-audit F2/#3390 relocates the
+  // delivery-class ladder to the two cases immediately below, since `gitRepositoryAgentMinimumMode`
+  // answers a narrower, unrelated question for them (see that fix's comment there).
+  it.each(WRITE_OPERATIONS.filter((operation) => operation !== "commit" && !DELIVERY_WRITE_OPERATIONS.includes(operation)))(
+    "honours the ladder for %s at supervised-coding",
+    async (operation) => {
+      const minimum = gitRepositoryAgentMinimumMode(operation);
+      const admitted =
+        minimum !== undefined &&
+        CODING_WORKBENCH_MODES.indexOf(minimum) <=
+          CODING_WORKBENCH_MODES.indexOf("supervised-coding");
+      const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+      const result = await handleGitAgentOperation(
+        ctx(executeRequest(operation, `${operation}-supervised`)),
+        deps(runner, "supervised-coding"),
+      );
 
-    expect(result.body).toMatchObject({ status: admitted ? "delegated" : "denied" });
-    if (!admitted) {
-      expect(result.status).toBe(403);
-      expect(runner).not.toHaveBeenCalled();
-    }
-  });
+      expect(result.body).toMatchObject({ status: admitted ? "delegated" : "denied" });
+      if (!admitted) {
+        expect(result.status).toBe(403);
+        expect(runner).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  // Final-audit F2/#3390 (ADR-0138 D2, epic #3384 correction 5): before this fix, every
+  // "repository-delivery" write (fetch/pull/push/pull-request/merge) was permanently hard-denied by
+  // this facade's OWN coarse admission gate below `autonomous-delivery` — `gitRepositoryAgentMinimumMode`
+  // returns `undefined` for all of them because it deliberately treats "approval-required" as
+  // inadmissible for this boolean-only ladder (it has no approval channel of its own), which the old
+  // gate wrongly read as "so refuse it here too". The fix makes the gate defer that
+  // "approval-required" disposition to the delegated route's own mandatory downstream approval
+  // enforcement instead (exactly like `autonomous-delivery` already does — see "routes an accepted
+  // autonomous push..." above), so every delivery write now reaches delegation in EVERY mode; only
+  // `commit` keeps its own, unrelated, always-denied special case (verified-commit-required).
+  it.each(DELIVERY_WRITE_OPERATIONS)(
+    "always delegates %s at supervised-coding instead of hard-denying it",
+    async (operation) => {
+      const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+      const result = await handleGitAgentOperation(
+        ctx(executeRequest(operation, `${operation}-supervised-delivery`)),
+        deps(runner, "supervised-coding"),
+      );
+
+      expect(result.body).toMatchObject({ status: "delegated" });
+    },
+  );
+
+  it.each(DELIVERY_WRITE_OPERATIONS)(
+    "always delegates %s at governed-assist instead of hard-denying it",
+    async (operation) => {
+      const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+      const result = await handleGitAgentOperation(
+        ctx(executeRequest(operation, `${operation}-governed-delivery`)),
+        deps(runner, "governed-assist"),
+      );
+
+      expect(result.body).toMatchObject({ status: "delegated" });
+    },
+  );
 
   // #3387 (ADR-0138 D2): an accepted run's push now requires an actually consumed, server-issued
   // claim (pushRoutes.ts's runPushMutation), unconditionally, before the downstream worktree/policy

@@ -24,7 +24,10 @@
 // snapshot service itself performs internally, never a fresh browser-authored root.
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
-import type { ChatGitChangeScope } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  ChatGitChangeScope,
+  GitChangeBlockedReason,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { GitChangeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import { isGitChangeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import { defaultGitProcessRunner, resolveGitMembership } from "@oscharko-dev/keiko-git";
@@ -77,21 +80,10 @@ function errResult(status: number, code: GitChangeErrorCode): RouteResult {
   return { status, body: errorBody(code, SAFE_MESSAGES[code]) };
 }
 
-// The closed set of reasons a connect/refresh request may block on, per the issue's Baseline
-// Delta and the frozen description-status vocabulary (contract correction 3). Never a raw git
-// error string.
-type GitChangeBlockedReason =
-  | "detached-head"
-  | "unborn-head"
-  | "missing-ref"
-  | "no-pull-request"
-  | "ambiguous-pull-request"
-  | "reader-unauthorized"
-  | "remote-unresolved"
-  | "repository-unavailable"
-  | "snapshot-unavailable"
-  | "snapshot-failed"
-  | "chat-project-unavailable";
+// The closed set of reasons a connect/refresh request may block on (`GitChangeBlockedReason`,
+// keiko-contracts/bff-wire.ts) is owned once there and imported here — the browser client
+// (packages/keiko-ui/src/lib/api.ts) imports the same constant/type rather than each
+// hand-restating the same 11-member set (F30 in the epic #3384 final audit).
 
 type GitChangeConnectResult =
   | { readonly status: "connected"; readonly scope: ChatGitChangeScope }

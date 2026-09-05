@@ -192,6 +192,25 @@ export const CHAT_GIT_CHANGE_DESCRIPTION_STATUSES = [
 ] as const satisfies readonly PrDescriptionApplicationState[];
 export type ChatGitChangeDescriptionStatus = (typeof CHAT_GIT_CHANGE_DESCRIPTION_STATUSES)[number];
 
+// Issue #3400 (epic #3384) — the closed set of reasons a connect/refresh request may block on,
+// per the issue's Baseline Delta. Never a raw git error string. ONE owner: the browser
+// (`api.ts`) and the server (`gitChangeRoutes.ts`) both import this constant rather than each
+// hand-restating the same 11-member set (F30 in the epic #3384 final audit).
+export const GIT_CHANGE_BLOCKED_REASONS = [
+  "detached-head",
+  "unborn-head",
+  "missing-ref",
+  "no-pull-request",
+  "ambiguous-pull-request",
+  "reader-unauthorized",
+  "remote-unresolved",
+  "repository-unavailable",
+  "snapshot-unavailable",
+  "snapshot-failed",
+  "chat-project-unavailable",
+] as const;
+export type GitChangeBlockedReason = (typeof GIT_CHANGE_BLOCKED_REASONS)[number];
+
 // Issue #3400 (epic #3384, contract corrections 2 and 6) — a THIRD Chat scope list, sibling to
 // `connectedScopes`/`localKnowledgeScopes`, never overloading either. Every field is a
 // server-issued, content-free fact: no raw diff, no filesystem path, no provider payload, no
