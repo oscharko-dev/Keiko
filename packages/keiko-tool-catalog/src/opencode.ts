@@ -447,10 +447,9 @@ function gitPullRequestSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.git.pullrequest",
     alias: "keiko_pull_request",
     description: "Propose opening a draft pull request with the given title.",
-    inputSchema: managedObjectSchema(
-      { title: { type: "string", minLength: 1, maxLength: 256 } },
-      ["title"],
-    ),
+    inputSchema: managedObjectSchema({ title: { type: "string", minLength: 1, maxLength: 256 } }, [
+      "title",
+    ]),
     effects: ["delivery-substrate", "network-egress"],
     idempotency: "server-key-required",
     handlerId: "opencode-git-pull-request-port",

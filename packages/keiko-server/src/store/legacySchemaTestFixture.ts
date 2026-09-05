@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { SCHEMA_VERSION } from "./schema.js";
+import { runMigrations, SCHEMA_VERSION } from "./schema.js";
 
 const V13_SCHEMA_VERSION = 13;
 
@@ -159,5 +159,32 @@ export function restoreV13SchemaFixture(db: DatabaseSync): void {
   db.exec(V13_ROLLBACK_SQL);
   if (userVersion(db) !== V13_SCHEMA_VERSION) {
     throw new Error("legacy schema fixture did not reach version 13");
+  }
+}
+
+/**
+ * Rewinds a fully-migrated test database to an arbitrary older `targetVersion`, then replays the
+ * real, production `MIGRATIONS` list (via `runMigrations`'s `upTo` option) forward to exactly that
+ * version. Every migration test that needs an "already populated at version N" database should use
+ * this instead of hand-writing its own inline `DROP TABLE`/`ALTER TABLE ... DROP COLUMN` rewind:
+ * those restated drops silently stop covering new tables/columns the moment a later migration adds
+ * one (#3389 wave: three such inline rewinds started failing with "table git_journey_outcomes
+ * already exists" the moment V27 landed, because none of them knew to drop it). This fixture never
+ * restates migration DDL of its own — it rewinds through the one shared `restoreV13SchemaFixture`
+ * rollback and replays forward through the one production `MIGRATIONS` array, so a future migration
+ * is covered automatically the moment its rollback statement is added there.
+ */
+export function rewindSchemaFixture(db: DatabaseSync, targetVersion: number): void {
+  if (!Number.isInteger(targetVersion) || targetVersion < V13_SCHEMA_VERSION) {
+    throw new RangeError(
+      `rewindSchemaFixture: targetVersion must be an integer >= ${String(V13_SCHEMA_VERSION)}, received ${String(targetVersion)}`,
+    );
+  }
+  restoreV13SchemaFixture(db);
+  if (targetVersion > V13_SCHEMA_VERSION) {
+    runMigrations(db, { upTo: targetVersion });
+  }
+  if (userVersion(db) !== targetVersion) {
+    throw new Error(`rewindSchemaFixture did not reach version ${String(targetVersion)}`);
   }
 }

@@ -59,6 +59,15 @@ test("#3388 @coding-issue-ci pending failure approved repair new head and techni
   mode("pending");
   await startCiDraft(page, 42);
   const initial = await observe(page, "pending");
+  // #3388: keiko_ci_status's bounded optional forceFresh bypasses the normal poll-backoff window
+  // (the `observe` helper above waits out that 5s window before its next call) -- this proves the
+  // model-visible tool's one argument actually reaches CiObservationController.observe(forceFresh)
+  // and takes effect, not merely that the wire request is well-formed.
+  const forced = await ciControl("ci-force-fresh");
+  expect(forced).toHaveProperty("ci.status", "observed");
+  if (forced === undefined || !("ci" in forced) || forced.ci.status !== "observed")
+    throw new Error("Expected a forced fresh CI observation");
+  expect(forced.ci.snapshot.state).toBe("pending");
   await expect(page.getByText("CI checks pending", { exact: true })).toBeVisible();
   mode("failed");
   const failed = await observe(page, "failed");
@@ -123,7 +132,10 @@ test("#3388 @coding-issue-ci incomplete visibility and wrong PR or head never be
       createCiFixtureReader(stateDir).readFacts({ ...target, ...mismatch }),
     ).rejects.toThrow("ci-fixture-target-denied");
   expect(provider().rejectedTargets).toBe(3);
-  for (const operation of ["ci-invalid-pr", "ci-invalid-head", "ci-force-fresh"] as const)
+  // #3388: forceFresh is now a recognized (not rejected) field -- only the two genuinely
+  // malformed target overrides stay in this negative list; see the "pending failure approved
+  // repair" case above for the positive forceFresh proof.
+  for (const operation of ["ci-invalid-pr", "ci-invalid-head"] as const)
     expect(await ciControl(operation)).toHaveProperty("status", "invalid");
   expect(provider().reads).toBe(before);
   await stopCiRun(page);

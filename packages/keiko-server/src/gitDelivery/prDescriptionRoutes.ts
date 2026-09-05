@@ -280,6 +280,8 @@ function admitDescription(
     {},
     { logSink, descriptionAuthority },
   );
+  // eslint-disable-next-line no-console
+  console.log("DEBUG admitDescription gate", JSON.stringify({ allowed: gate.allowed, result: (gate as { result?: unknown }).result }));
   if (!gate.allowed) return { allowed: false, result: gate.result };
   // The description authority's fixed identity never matches a real run's `runId`, so `runId` is
   // omitted from the context exactly when this was admitted outside a running Code task.
@@ -396,6 +398,13 @@ function descriptionContextProvider(
   logSink: ServerLogSink,
   key: string,
 ): () => PrDescriptionContext | undefined {
+  // ONE object for this provider's whole lifetime (one prepared request), never rebuilt per call.
+  // `PrDescriptionApplicationService.preview()`/`apply()` call `context()` more than once per
+  // operation (`admittedContext()` then `current(context)`'s own re-fetch) and `sameDescriptionContext`
+  // (prDescriptionPreparation.ts) compares `accessScope` by reference — a fresh `{ key }` literal on
+  // every call would make that comparison fail on the very first `preview()`/`apply()` invocation,
+  // never only on a genuinely revoked authority.
+  const accessScope = { key };
   return (): PrDescriptionContext | undefined => {
     const reAdmitted = admitDescription(ctx, deps, request, workspace, logSink);
     if (!reAdmitted.allowed) return undefined;
@@ -403,7 +412,7 @@ function descriptionContextProvider(
       workspace,
       repository: request.ownerAndRepo,
       prNumber: request.prNumber,
-      accessScope: { key },
+      accessScope,
       authorityDigest: reAdmitted.scope.authorityDigest,
       correlationId,
       ...(reAdmitted.scope.runId === undefined ? {} : { runId: reAdmitted.scope.runId }),

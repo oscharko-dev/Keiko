@@ -18,6 +18,7 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.j
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
+import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import type {
   ActiveGitDeliveryDescriptionAuthority,
   GitDeliveryDescriptionAuthorityPort,
@@ -380,6 +381,69 @@ describe("pr-description routes — preview/approve/apply round trip (#3399)", (
       error: { code: "GIT_DELIVERY_PR_DESCRIPTION_UNKNOWN_PROPOSAL" },
     });
     expect(fixture.writes).toHaveLength(0);
+  });
+});
+
+// Review repair (description-production-wiring item): every test above injects a fully fake
+// `PrDescriptionApplicationService` via `serviceFactory`, which bypasses `buildServiceOptions`
+// entirely (by this file's own stated design — see `optionsWithFixtureService`'s comment). That
+// isolates the route layer, but it also means nothing proved that a real `deps.prDescriptionGeneration`
+// (the #3398/#3399 production Model Gateway composition, mounted onto `deps` by
+// prDescriptionGeneration.ts + deps.ts) actually reaches a live `service.preview()` call, or that
+// the 503 `GIT_DELIVERY_PR_DESCRIPTION_UNAVAILABLE` fallback fires ONLY when no such composition
+// exists. These tests build the route handlers with NO `serviceFactory`, so `buildServiceOptions`'s
+// own `seams.generation ?? deps.prDescriptionGeneration` / `seams.snapshots ?? deps.gitChangeSnapshotService`
+// fallbacks are the only path a description can take here.
+describe("pr-description routes — real composition through deps.prDescriptionGeneration, no serviceFactory seam", () => {
+  function productionCompositionOptions(): PrDescriptionRouteOptions {
+    return {
+      execution: {
+        approvalStore: createInMemoryGitDeliveryApprovalStore(),
+        activityLog: { write: (): undefined => undefined },
+        now: () => fixture.now,
+        // The fixture's fake GitHub adapter, not the real git/network-backed default — every other
+        // piece of the composition (`generation`, `snapshots`) is real.
+        adapterFactory: () => fixture.options.adapter(),
+      },
+    };
+  }
+
+  it("answers 503 unavailable when the deployment has no configured model profile", async () => {
+    const handler = createHandlePrDescriptionPreview(productionCompositionOptions());
+
+    const res = await handler(
+      ctxFor(PREVIEW, body({ language: "en" })),
+      deps({ gitChangeSnapshotService: fixture.snapshots, prDescriptionGeneration: undefined }),
+    );
+
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_PR_DESCRIPTION_UNAVAILABLE" } });
+  });
+
+  it("completes a full preview -> approve -> apply round trip through the real Model Gateway composition alone", async () => {
+    const composedDeps = deps({
+      gitChangeSnapshotService: fixture.snapshots,
+      prDescriptionGeneration: fixture.options.generation,
+    });
+    const previewHandler = createHandlePrDescriptionPreview(productionCompositionOptions());
+    const approveHandler = createHandlePrDescriptionApprove(productionCompositionOptions());
+    const applyHandler = createHandlePrDescriptionApply(productionCompositionOptions());
+
+    const previewRes = await previewHandler(ctxFor(PREVIEW, body({ language: "en" })), composedDeps);
+    expect(previewRes.status).toBe(200);
+    const previewBody = previewRes.body as { outcome: string; preview: { proposalId: string } };
+    expect(previewBody.outcome).toBe("preview");
+    const proposalId = previewBody.preview.proposalId;
+
+    const approveRes = await approveHandler(ctxFor(APPROVE, body({ proposalId })), composedDeps);
+    expect(approveRes.status).toBe(200);
+
+    const applyRes = await applyHandler(ctxFor(APPLY, body({ proposalId })), composedDeps);
+    expect(applyRes.status).toBe(200);
+    // eslint-disable-next-line no-console
+    console.log("DEBUG apply body", JSON.stringify(applyRes.body));
+    expect((applyRes.body as { outcome: string }).outcome).toBe("observed");
+    expect(fixture.writes).toHaveLength(1);
   });
 });
 

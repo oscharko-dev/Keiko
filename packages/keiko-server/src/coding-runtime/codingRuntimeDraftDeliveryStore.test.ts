@@ -137,9 +137,7 @@ describe("durable draft delivery in the owning runtime store", () => {
     const db = new DatabaseSync(":memory:");
     try {
       storeWithRun(db);
-      db.exec(
-        "DROP TABLE coding_runtime_ci_repair_budgets; ALTER TABLE coding_runtime_snapshots DROP COLUMN last_successful_verified_commit; ALTER TABLE coding_runtime_snapshots DROP COLUMN ci_observation_revision; ALTER TABLE coding_runtime_snapshots DROP COLUMN ci_readiness_record; ALTER TABLE coding_runtime_snapshots DROP COLUMN draft_delivery_source_receipt; ALTER TABLE coding_runtime_snapshots DROP COLUMN draft_delivery_record; PRAGMA user_version = 23",
-      );
+      rewindSchemaFixture(db, 23);
       runMigrations(db);
       const restored = createCodingRuntimeSnapshotStore(db).get("run-1");
       expect(restored?.verifiedCommitResult).toEqual(commit);

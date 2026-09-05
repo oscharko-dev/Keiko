@@ -1267,6 +1267,7 @@ describe("pr mark-ready routes (#3389)", () => {
     await createHandlePrMarkReadyExecute({
       approvalStore,
       activityLog,
+      now: () => 1_700_000_000_001,
       adapterFactory: () => adapter.adapter,
     })(
       {
@@ -1275,9 +1276,7 @@ describe("pr mark-ready routes (#3389)", () => {
       },
       deps(),
     );
-    const executed = activity.filter(
-      (event) => event.op === "git.delivery.pr-mark-ready.executed",
-    );
+    const executed = activity.filter((event) => event.op === "git.delivery.pr-mark-ready.executed");
     expect(executed).toHaveLength(1);
     expect(executed[0]).toMatchObject({
       correlationId: "corr-mark-ready-exec",
@@ -1294,6 +1293,7 @@ describe("pr mark-ready routes (#3389)", () => {
     await createHandlePrMarkReadyExecute({
       approvalStore,
       activityLog,
+      now: () => 1_700_000_000_002,
       adapterFactory: () => driftAdapter.adapter,
     })(
       {
