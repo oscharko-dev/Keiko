@@ -2,6 +2,8 @@ import { expect, test } from "@playwright/test";
 import {
   buildGitChangeChatFixture,
   createChatForFixture,
+  interceptGitChangePullRequestConnect,
+  interceptPrDescriptionLifecycle,
   interceptProjectList,
   removeGitChangeChatFixture,
   seedWorkspace,
@@ -76,4 +78,65 @@ test("connects the Git window's current branch to a Chat and shows the scope pil
   // Refreshing an unchanged comparison stays "Current" (no head movement to detect).
   await chatWindow.getByRole("button", { name: `Refresh ${label}` }).click();
   await expect(chatWindow.getByText("Current")).toBeVisible();
+});
+
+// #3400 final-audit F5 — "refined over multiple turns and applied through the same governed
+// service": once a Chat is connected to a PULL REQUEST (not a bare comparison), its scope pill
+// gains a Preview -> Approve -> Apply to PR affordance reusing the SAME #3399 governed
+// preview/approve/apply lifecycle GovernedPullRequestCard already proves — never a second
+// free-text composer (Frozen Decision 5) and never a second write path (Frozen Product
+// Decision 6). A real PR resolution and a real Model-Gateway-backed preview/apply both need live
+// network access this hermetic journey never has, so the connect (pull-request mode only),
+// preview, approve and apply-description calls are scripted in the real wire shape those routes
+// answer with (see support/git-change-chat-3400.ts); the click-through UI wiring itself — which
+// endpoint each button reaches, with which payload, and what it renders — is real.
+test("previews, approves and applies a refined description through the connected pull request", async ({
+  page,
+  request,
+}) => {
+  const fixture = buildGitChangeChatFixture();
+  fixtures.push(fixture);
+  const chat = await createChatForFixture(request, fixture.root);
+  await interceptProjectList(page, fixture.root);
+  await interceptGitChangePullRequestConnect(page, {
+    relationshipId: "e2e-pr-scope-1",
+    comparisonLabel: "PR #42",
+    baseRef: fixture.baseRef,
+    headRef: fixture.headRef,
+    pullRequestNumber: 42,
+  });
+  await interceptPrDescriptionLifecycle(page);
+  await seedWorkspace(page, fixture.root, chat);
+
+  await page.goto("/");
+
+  const gitWindow = page.locator('[data-window-id="issue-3400-git-window"]');
+  await expect(gitWindow).toBeVisible();
+  await gitWindow.getByRole("button", { name: "Connect to Chat" }).click();
+  const dialog = page.getByRole("dialog", { name: "Connect Git change to chat" });
+  await expect(dialog).toBeVisible();
+
+  await dialog.getByRole("button", { name: "Open pull request for this branch" }).click();
+  await dialog.getByRole("combobox", { name: "Chat" }).click();
+  await page.getByRole("option", { name: chat.title }).click();
+  await dialog.getByRole("button", { name: "Connect" }).click();
+  await expect(dialog).toBeHidden();
+
+  const chatWindow = page.locator('[data-window-id="issue-3400-chat-window"]');
+  await expect(chatWindow).toBeVisible();
+  await expect(chatWindow.getByText("PR #42")).toBeVisible();
+
+  await chatWindow.getByTestId("git-change-description-preview").click();
+  await expect(chatWindow.getByTestId("git-change-description-state")).toHaveText("Current");
+
+  await chatWindow.getByTestId("git-change-description-approve").click();
+  await chatWindow.getByTestId("git-change-description-apply").click();
+  await expect(chatWindow.getByTestId("git-change-description-state")).toHaveText("Current");
+
+  // One-use: the approved proposal was consumed by the apply above, so a second Apply click must
+  // not reach the route again (the button becomes aria-disabled once applied).
+  await expect(chatWindow.getByTestId("git-change-description-apply")).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
 });

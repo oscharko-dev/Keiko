@@ -97,6 +97,8 @@ type CodingSidecarGatewayRejectionReason =
   | "request-too-large"
   | "body-not-json"
   | "body-empty-messages"
+  | "message-shape-invalid"
+  | "content-part-unsupported"
   | "tools-not-openai-compatible"
   | "invalid-sampling"
   | "input-messages-exceeded"
@@ -104,7 +106,9 @@ type CodingSidecarGatewayRejectionReason =
   | "invalid-model"
   | "tool-contract-drift"
   | "tool-contract-missing"
-  | "tool-contract-empty";
+  | "tool-contract-empty"
+  | "origin-not-allowed"
+  | "runtime-prompt-budget-denied";
 
 /** Body-free: `reason` is closed, `runId` and every `extra` field are counts/ids, never text. */
 function logGatewayRejection(
@@ -146,6 +150,15 @@ const BAD_REQUEST_MESSAGE_REASONS: readonly {
   {
     test: (message) => message === "Request body must include a non-empty messages array.",
     reason: "body-empty-messages",
+  },
+  {
+    test: (message) => message.startsWith("Request body messages must be well-formed"),
+    reason: "message-shape-invalid",
+  },
+  {
+    test: (message) =>
+      message === "Request body message content included an unsupported content part.",
+    reason: "content-part-unsupported",
   },
   {
     test: (message) =>
@@ -346,26 +359,69 @@ function unavailableError(): RouteResult {
   };
 }
 
-function parseMessageEntry(value: unknown): CodingSidecarGatewayChatMessage | undefined {
+type ParsedMessagePiece<T> =
+  | { readonly kind: "ok"; readonly value: T }
+  | { readonly kind: "content-part-unsupported" }
+  | { readonly kind: "invalid" };
+
+/**
+ * OpenAI-compatible content part accepted from the model: `{type:"text", text}` only. A bare
+ * single-part prompt still arrives as `content: string`, but when the server sends a multi-part
+ * prompt (opencodeHttpClient.ts `promptParts`: the task text plus the issue context as a
+ * synthetic part), OpenCode's AI-SDK provider re-shapes the outgoing user message as an OpenAI
+ * content-part ARRAY instead (#3390). Every other content-part type (image_url, input_audio,
+ * file, or anything unrecognized) is rejected closed, never silently dropped.
+ */
+function isTextContentPart(
+  value: unknown,
+): value is { readonly type: "text"; readonly text: string } {
+  return isRecord(value) && value.type === "text" && typeof value.text === "string";
+}
+
+/**
+ * Collapses an accepted OpenAI content-part array to the single string the Model Gateway core
+ * consumes, joining parts with a blank line. The synthetic issue-context part is untrusted
+ * repository data, so it is kept inside the same user turn it arrived in rather than becoming a
+ * second, unaccounted-for message. Part count and total byte size ride on the existing
+ * `readJsonObject` request-body budget already enforced before this runs — no new limit is added.
+ */
+function parseMessageContent(value: unknown): ParsedMessagePiece<string> {
+  if (typeof value === "string") return { kind: "ok", value };
+  if (!Array.isArray(value) || value.length === 0) return { kind: "invalid" };
+  const texts: string[] = [];
+  for (const part of value) {
+    if (isTextContentPart(part)) {
+      texts.push(part.text);
+      continue;
+    }
+    if (isRecord(part) && typeof part.type === "string")
+      return { kind: "content-part-unsupported" };
+    return { kind: "invalid" };
+  }
+  return { kind: "ok", value: texts.join("\n\n") };
+}
+
+function parseMessageEntry(value: unknown): ParsedMessagePiece<CodingSidecarGatewayChatMessage> {
   const base = parseMessageBase(value);
-  if (base === undefined) return undefined;
-  const continuation = parseMessageContinuation(value, base.role);
-  if (continuation === undefined) return undefined;
-  return {
-    ...base,
-    ...continuation,
-  };
+  if (base.kind !== "ok") return base;
+  const continuation = parseMessageContinuation(value, base.value.role);
+  if (continuation === undefined) return { kind: "invalid" };
+  return { kind: "ok", value: { ...base.value, ...continuation } };
 }
 
 function parseMessageBase(
   value: unknown,
-): Pick<CodingSidecarGatewayChatMessage, "role" | "content"> | undefined {
-  if (!isRecord(value) || typeof value.role !== "string" || typeof value.content !== "string") {
-    return undefined;
+): ParsedMessagePiece<Pick<CodingSidecarGatewayChatMessage, "role" | "content">> {
+  if (
+    !isRecord(value) ||
+    typeof value.role !== "string" ||
+    !isCodingSidecarGatewayChatRole(value.role)
+  ) {
+    return { kind: "invalid" };
   }
-  return isCodingSidecarGatewayChatRole(value.role)
-    ? { role: value.role, content: value.content }
-    : undefined;
+  const content = parseMessageContent(value.content);
+  if (content.kind !== "ok") return content;
+  return { kind: "ok", value: { role: value.role, content: content.value } };
 }
 
 function parseMessageContinuation(
@@ -428,17 +484,31 @@ function parseContinuationToolCall(value: unknown): NormalizedToolCall | undefin
   }
 }
 
-function parseMessages(value: unknown): readonly CodingSidecarGatewayChatMessage[] | undefined {
+/**
+ * Distinguishes the two 400 reasons an unusable `messages` array can hand back (#3390): `undefined`
+ * for the array being missing/empty (`body-empty-messages`), a `RouteResult` when entries were
+ * present but at least one was unparsable — `content-part-unsupported` for a recognized-but-closed
+ * content part, `message-shape-invalid` (carrying only the total entry COUNT, never any entry's
+ * content) for every other malformed shape.
+ */
+function parseMessages(
+  value: unknown,
+): readonly CodingSidecarGatewayChatMessage[] | RouteResult | undefined {
   if (!Array.isArray(value) || value.length === 0) {
     return undefined;
   }
   const messages: CodingSidecarGatewayChatMessage[] = [];
   for (const entry of value) {
-    const message = parseMessageEntry(entry);
-    if (message === undefined) {
-      return undefined;
+    const parsed = parseMessageEntry(entry);
+    if (parsed.kind === "content-part-unsupported") {
+      return badRequest("Request body message content included an unsupported content part.");
     }
-    messages.push(message);
+    if (parsed.kind === "invalid") {
+      return badRequest(
+        `Request body messages must be well-formed chat messages (entries: ${String(value.length)}).`,
+      );
+    }
+    messages.push(parsed.value);
   }
   return messages;
 }
@@ -543,6 +613,9 @@ function parseChatRequest(
   const messages = parseMessages(body.messages);
   if (messages === undefined) {
     return undefined;
+  }
+  if (isRouteResult(messages)) {
+    return messages;
   }
   const tools = parseTools(body.tools);
   if (isRouteResult(tools)) {
@@ -1047,7 +1120,11 @@ function authenticateGatewayRequest(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): AuthenticatedGatewayRequest | RouteResult {
-  if (hasOrigin(ctx)) return forbiddenGatewayRequest();
+  if (hasOrigin(ctx)) {
+    // No runId yet — this refusal happens before capability authentication resolves one.
+    logGatewayRejection(ctx, undefined, 403, "origin-not-allowed");
+    return forbiddenGatewayRequest();
+  }
   const authenticator = runtimeCapabilityAuthenticator(deps);
   const capability = bearerCapability(ctx);
   if (authenticator === undefined || capability === undefined) return unauthorizedGatewayRequest();
@@ -1850,6 +1927,7 @@ function executeBudgetedGatewayChat(
   },
 ): Promise<RouteResult | typeof STREAMING> {
   if (!reserveGatewayPromptBudget(deps, authentication.capability, authentication.runId, parsed)) {
+    logGatewayRejection(ctx, authentication.runId, 403, "runtime-prompt-budget-denied");
     return Promise.resolve(forbiddenGatewayRequest());
   }
   return executeGatewayChat(ctx, deps, binding, parsed, authentication.runId, profile);

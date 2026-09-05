@@ -154,3 +154,134 @@ export async function interceptProjectList(page: Page, fixtureRoot: string): Pro
     });
   });
 }
+
+// ─── #3400 final-audit F5 — chat's apply action (Preview -> Approve -> Apply to PR) ─────────────
+//
+// A REAL "pull-request" mode connect needs the trusted checkout's GitHub-reader grant plus a live
+// GitHub API read (`resolvePullRequestByHead`, gitChangeRoutes.ts) to find an open PR for the
+// fixture's local branch — no such PR or network access exists in this hermetic journey. Likewise
+// a real preview/apply needs a live Model Gateway call and a real GitHub PATCH. These three routes
+// are scripted instead, each answering in the EXACT wire shape the real route does (the same
+// `ChatGitChangeScope` / `PrDescriptionApplicationStatus` contracts api.ts's own client validates
+// against) so the journey still proves the browser's real request/response wiring end to end —
+// every OTHER route in this file (connect in comparison mode, refresh, chat CRUD) stays real.
+
+export interface GitChangePullRequestScopeFixture {
+  readonly relationshipId: string;
+  readonly comparisonLabel: string;
+  readonly baseRef: string;
+  readonly headRef: string;
+  readonly pullRequestNumber: number;
+}
+
+export async function interceptGitChangePullRequestConnect(
+  page: Page,
+  scope: GitChangePullRequestScopeFixture,
+): Promise<void> {
+  await page.route("**/api/git-change/connect", async (route) => {
+    const body = route.request().postDataJSON() as { readonly mode?: string };
+    if (body.mode !== "pull-request") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "connected",
+        scope: {
+          kind: "git-change",
+          relationshipId: scope.relationshipId,
+          remoteDigest: "d".repeat(64),
+          comparisonLabel: scope.comparisonLabel,
+          baseRef: scope.baseRef,
+          headRef: scope.headRef,
+          baseSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+          mergeBaseSha: "a".repeat(40),
+          snapshotDigest: "c".repeat(64),
+          pullRequestNumber: scope.pullRequestNumber,
+          fileCount: 1,
+          totalFiles: 1,
+          omittedFiles: 0,
+          truncatedFiles: 0,
+          descriptionStatus: "current",
+          connectedAtMs: Date.now(),
+        },
+      }),
+    });
+  });
+}
+
+function prDescriptionApplicationStatusFixture(): Record<string, unknown> {
+  return {
+    schemaVersion: "1",
+    state: "current",
+    reason: "applied",
+    binding: {
+      repositoryId: "repo-1",
+      remoteDigest: "d".repeat(64),
+      repository: "keiko-e2e/git-change-chat-3400",
+      prNumber: 42,
+      prExternalId: "42",
+      baseRef: "main",
+      baseSha: "a".repeat(40),
+      headRepository: "keiko-e2e/git-change-chat-3400",
+      headRef: "feature/x",
+      headSha: "b".repeat(40),
+      isDraft: false,
+      snapshotDigest: "c".repeat(64),
+      draftDigest: "e".repeat(64),
+      renderingVersion: "1",
+      expectedBodyDigest: "f".repeat(64),
+      outsideRegionDigest: "0".repeat(64),
+      finalBodyDigest: "1".repeat(64),
+      providerUpdatedAt: new Date().toISOString(),
+    },
+    observedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 30_000).toISOString(),
+    completeness: "complete",
+    effect: "confirmed",
+    concurrency: "read-check-write-verify",
+  };
+}
+
+export async function interceptPrDescriptionLifecycle(page: Page): Promise<void> {
+  const status = prDescriptionApplicationStatusFixture();
+  await page.route("**/api/git-delivery/pr-description/preview", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        outcome: "preview",
+        preview: {
+          proposalId: "e2e-proposal-1",
+          expiresAt: new Date(Date.now() + 30_000).toISOString(),
+          status,
+          finalBody:
+            "<!-- keiko:managed:v1:start -->refined over chat<!-- keiko:managed:v1:end -->",
+          managedRegion: "refined over chat",
+          concurrencyLimitation: "GitHub cannot lock the PR body during this update.",
+        },
+      }),
+    });
+  });
+  await page.route("**/api/git-delivery/pr-description/approve", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schemaVersion: "1",
+        proposalId: "e2e-proposal-1",
+        expiresAt: new Date(Date.now() + 30_000).toISOString(),
+      }),
+    });
+  });
+  await page.route("**/api/git-change/apply-description", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ outcome: "observed", status }),
+    });
+  });
+}
