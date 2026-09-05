@@ -12,21 +12,63 @@ export interface PrDescriptionRegionParts {
   readonly finalBody: string;
   readonly outsideRegionDigest: string;
 }
+interface OpenFence {
+  readonly char: "`" | "~";
+  readonly length: number;
+}
+
+// CommonMark/GFM fence delimiters allow up to 3 leading spaces before the fence run.
+// https://github.github.com/gfm/#fenced-code-blocks
+function stripFenceIndent(line: string): string {
+  let i = 0;
+  while (i < 3 && line.charAt(i) === " ") i += 1;
+  return line.slice(i);
+}
+
+// A fence opens on a line with (after up to 3 leading spaces) a run of >=3 identical backticks or
+// tildes, optionally followed by an info string. A backtick fence's info string may not itself
+// contain a backtick (that would be ambiguous with the fence run); a tilde fence has no such
+// restriction.
+function matchOpeningFence(line: string): OpenFence | undefined {
+  const match = /^(`{3,}|~{3,})(.*)$/.exec(stripFenceIndent(line));
+  if (!match) return undefined;
+  const [, run, infoString] = match as [string, string, string];
+  const char = run.charAt(0) as "`" | "~";
+  if (char === "`" && infoString.includes("`")) return undefined;
+  return { char, length: run.length };
+}
+
+// A fence closes only on a line (after up to 3 leading spaces) consisting solely of a run of the
+// SAME delimiter character, at least as long as the opening run, followed by nothing but trailing
+// whitespace. Anything else — including a shorter or different-character run, or trailing text —
+// is ordinary fenced content, not a close.
+function isClosingFence(line: string, open: OpenFence): boolean {
+  // `open.char` is always "`" or "~", neither a regex metacharacter, so no escaping is needed.
+  const match = new RegExp(`^(${open.char}+)([ \\t]*)$`).exec(stripFenceIndent(line));
+  if (!match) return false;
+  const [, run] = match as [string, string, string];
+  return run.length >= open.length;
+}
+
 // #3384 B5-7: a maintainer's own fenced-code-block quote of the marker syntax (e.g. a README-style
 // example of the exact START/END comments) must never be mistaken for the real managed region — it
-// is documentation, not a boundary this parser owns. Tracks simple triple-backtick/tilde fence state
-// line by line and returns every byte offset that falls strictly between an opening and closing
-// fence delimiter line.
+// is documentation, not a boundary this parser owns. Tracks CommonMark fence state line by line
+// (matching the opening delimiter's character and length against every candidate close, so a
+// shorter or different-character inner fence never closes an outer one) and returns every byte
+// offset that falls strictly between an opening and closing fence delimiter line. An unterminated
+// fence runs to the end of the body.
 function fencedOffsets(body: string): ReadonlySet<number> {
   const fenced = new Set<number>();
   let offset = 0;
-  let inFence = false;
+  let open: OpenFence | undefined;
   for (const line of body.split("\n")) {
-    if (inFence) {
+    if (open === undefined) {
+      open = matchOpeningFence(line);
+    } else if (isClosingFence(line, open)) {
+      open = undefined;
+    } else {
       for (let i = 0; i <= line.length; i += 1) fenced.add(offset + i);
     }
-    const trimmed = line.trimStart();
-    if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) inFence = !inFence;
     offset += line.length + 1;
   }
   return fenced;

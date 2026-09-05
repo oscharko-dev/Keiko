@@ -92,6 +92,8 @@ export type CodingToolActionRequest =
       readonly operation: "ci";
       /** #3388: bypasses the cached readiness snapshot for one fresh provider read. */
       readonly forceFresh?: boolean;
+      /** 3941816393: redeems a Workbench-issued approval for a governed CI observation. */
+      readonly approvalProof?: CodingToolApprovalProof | undefined;
     })
   | RuntimeGitRequest
   | (CodingToolRequestIdentity & {
@@ -103,7 +105,12 @@ export type CodingToolActionRequest =
       readonly proposalId?: string;
       readonly approvalProof?: CodingToolApprovalProof | undefined;
     })
-  | (CodingToolRequestIdentity & { readonly action: "connector"; readonly scope: string })
+  | (CodingToolRequestIdentity & {
+      readonly action: "connector";
+      readonly scope: string;
+      /** 3941816393: redeems a Workbench-issued approval for a governed connector read. */
+      readonly approvalProof?: CodingToolApprovalProof | undefined;
+    })
   | (CodingToolRequestIdentity & { readonly action: "egress"; readonly target: string })
   | (CodingToolRequestIdentity & { readonly action: "skill"; readonly skillId: string })
   | (CodingToolRequestIdentity & {
@@ -484,16 +491,27 @@ function simpleNamedRequest(
   action: "connector" | "egress",
 ): CodingToolActionRequest | undefined {
   const identity = requestIdentity(value);
+  if (identity === undefined) return undefined;
+  if (action === "egress") {
+    return hasExactKeys(value, ["action", "actionId", "idempotencyKey", key]) && nonEmpty(value[key])
+      ? { ...identity, action, target: value[key] }
+      : undefined;
+  }
+  // 3941816393: `connector`, unlike `egress`, can redeem a Workbench-issued approval proof.
+  const approvalProof = optionalApprovalProof(value);
   if (
-    identity === undefined ||
-    !hasExactKeys(value, ["action", "actionId", "idempotencyKey", key]) ||
-    !nonEmpty(value[key])
+    !hasAllowedKeys(value, ["action", "actionId", "idempotencyKey", key, "approvalProof"]) ||
+    !nonEmpty(value[key]) ||
+    approvalProof.kind === "invalid"
   ) {
     return undefined;
   }
-  return action === "connector"
-    ? { ...identity, action, scope: value[key] }
-    : { ...identity, action, target: value[key] };
+  return {
+    ...identity,
+    action,
+    scope: value[key],
+    ...(approvalProof.kind === "present" ? { approvalProof: approvalProof.proof } : {}),
+  };
 }
 
 function gitRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {

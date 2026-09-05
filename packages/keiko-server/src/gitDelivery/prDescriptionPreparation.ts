@@ -209,6 +209,28 @@ function bindingFor(
     providerUpdatedAt: previous.updatedAt,
   };
 }
+/**
+ * B2-8 (wave-3 W3-4 item 3) — pins the freshly captured reference against unrelated LRU eviction
+ * for the duration of `body`, and releases it immediately if `body` throws before the resulting
+ * proposal is ever held (and therefore before anything else would release it). A `body` that
+ * resolves is expected to return a `PreparedPrDescription` carrying this same `reference`; the
+ * caller that goes on to hold that proposal (`prDescriptionService.ts`) owns releasing it from
+ * that point on.
+ */
+async function withReservedSnapshot<T>(
+  options: PrDescriptionServiceOptions,
+  context: PrDescriptionContext,
+  reference: string,
+  body: () => Promise<T>,
+): Promise<T> {
+  options.snapshots.reserve?.(reference, context.accessScope, context.correlationId);
+  try {
+    return await body();
+  } catch (error) {
+    options.snapshots.release?.(reference, context.accessScope, context.correlationId);
+    throw error;
+  }
+}
 export async function prepareDescription(
   options: PrDescriptionServiceOptions,
   context: PrDescriptionContext,
@@ -227,26 +249,29 @@ export async function prepareDescription(
     snapshot.remoteDigest !== codingWorkbenchRemoteDigest(context.repository)
   )
     throw new PrDescriptionFailure("stale-snapshot");
-  const generated = await generate(options, context, request, captured.reference, input);
-  if (generated.status === "unavailable" && generated.reason === "authority-denied") {
-    throw new PrDescriptionFailure("authority-denied");
-  }
-  // #3384 B5-12: a "failed"-outcome artifact still exists (unlike a genuine `status !== "generated"`
-  // provider unavailability) and carries the bilingual "generation did not complete — refresh or
-  // retry" guidance baked into its own markdown (render.ts's LABELS.failed). Falling through to
-  // `finishPreparation` — exactly like `prepareDescriptionArtifact` already does — surfaces that
-  // specific guidance through `review.finalBody`/`status` instead of discarding it behind a bare
-  // "provider-failed" block.
-  if (generated.status !== "generated") throw new PrDescriptionFailure("provider-failed");
-  return finishPreparation({
-    options,
-    context,
-    previous,
-    input,
-    reference: captured.reference,
-    artifact: generated.artifact,
-    expiresAt: Math.min(now + 60_000, Date.parse(snapshot.expiresAt)),
-    now,
+  const reference = captured.reference;
+  return withReservedSnapshot(options, context, reference, async () => {
+    const generated = await generate(options, context, request, reference, input);
+    if (generated.status === "unavailable" && generated.reason === "authority-denied") {
+      throw new PrDescriptionFailure("authority-denied");
+    }
+    // #3384 B5-12: a "failed"-outcome artifact still exists (unlike a genuine
+    // `status !== "generated"` provider unavailability) and carries the bilingual "generation did
+    // not complete — refresh or retry" guidance baked into its own markdown (render.ts's
+    // LABELS.failed). Falling through to `finishPreparation` — exactly like
+    // `prepareDescriptionArtifact` already does — surfaces that specific guidance through
+    // `review.finalBody`/`status` instead of discarding it behind a bare "provider-failed" block.
+    if (generated.status !== "generated") throw new PrDescriptionFailure("provider-failed");
+    return finishPreparation({
+      options,
+      context,
+      previous,
+      input,
+      reference,
+      artifact: generated.artifact,
+      expiresAt: Math.min(now + 60_000, Date.parse(snapshot.expiresAt)),
+      now,
+    });
   });
 }
 
@@ -277,16 +302,21 @@ export async function prepareDescriptionArtifact(
   ) {
     throw new PrDescriptionFailure("stale-snapshot");
   }
-  return finishPreparation({
-    options,
-    context,
-    previous,
-    input,
-    reference: captured.reference,
-    artifact,
-    expiresAt: Math.min(now + 60_000, Date.parse(snapshot.expiresAt)),
-    now,
-  });
+  const reference = captured.reference;
+  return withReservedSnapshot(options, context, reference, () =>
+    Promise.resolve(
+      finishPreparation({
+        options,
+        context,
+        previous,
+        input,
+        reference,
+        artifact,
+        expiresAt: Math.min(now + 60_000, Date.parse(snapshot.expiresAt)),
+        now,
+      }),
+    ),
+  );
 }
 interface FinishPreparationInput {
   readonly options: PrDescriptionServiceOptions;

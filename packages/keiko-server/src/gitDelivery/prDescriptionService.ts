@@ -96,6 +96,24 @@ class DescriptionService implements PrDescriptionApplicationService {
       evaluateGitPullRequestEffectivePolicy(policy, base, [], "pr-update").outcome !== "blocked"
     );
   }
+  /**
+   * B2-8 (wave-3 W3-4 item 3) — releases the reservation `prDescriptionPreparation.ts` places on
+   * an `"application"`-kind proposal's snapshot reference. Called at every point such a proposal
+   * stops being held, so a retained reference is never left pinned once nothing can apply it.
+   */
+  private releaseProposalSnapshot(proposal: PreparedPrDescription): void {
+    this.options.snapshots.release?.(
+      proposal.snapshotReference,
+      proposal.context.accessScope,
+      proposal.context.correlationId,
+    );
+  }
+  private releaseHeldSnapshot(held: HeldDescriptionProposal | undefined): void {
+    if (held?.kind === "application") this.releaseProposalSnapshot(held.proposal);
+  }
+  private releaseAllHeldSnapshots(): void {
+    for (const held of this.proposals.values()) this.releaseHeldSnapshot(held);
+  }
   private held(id: string): PreparedPrDescription | undefined {
     const held = this.proposals.get(id);
     if (held?.kind !== "application") return undefined;

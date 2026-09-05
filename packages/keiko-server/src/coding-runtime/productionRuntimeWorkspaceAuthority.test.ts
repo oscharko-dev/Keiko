@@ -17,6 +17,15 @@ import {
   CodingRuntimeLaunchResolutionError,
   type CodingRuntimeLaunchResolutionFailureReason,
 } from "./launchFailure.js";
+// Epic #3384 correction 5 / ADR-0138 D2: pins derive their expectation from the SAME producers the
+// module under test calls (AGENTS.md §7 fixture rule) instead of hand-restating the per-mode matrix,
+// so a future change to the matrix cannot silently diverge from what these pins accept.
+import {
+  codingRuntimeActionClassesForMode,
+  codingRuntimeCommandPolicyForMode,
+  codingRuntimeConnectorScopesForMode,
+  codingRuntimeNetworkPolicyForMode,
+} from "./runtimeAuthorityService.js";
 
 const roots: string[] = [];
 
@@ -394,53 +403,41 @@ describe("production runtime workspace authority", () => {
   // unapproved delivery effect below `autonomous-delivery`. Withholding the scope until
   // `autonomous-delivery` (the pre-fix shape) made `gitOperationRequirements.ts`'s
   // `LOCAL_WRITE_REQUIREMENT` unsatisfiable for `supervised-coding`, which ADR-0138 D2 marks
-  // `workspace-contained`/`allowed` — a Supervised workspace run could never stage a file.
-  it.each([
-    [
-      "governed-assist",
-      ["delivery-substrate", "connector-access"],
-      ["command-execution", "network-egress"],
-    ],
-    [
-      "supervised-coding",
-      ["command-execution", "delivery-substrate", "connector-access"],
-      ["network-egress"],
-    ],
-    [
-      "autonomous-delivery",
-      ["command-execution", "delivery-substrate", "connector-access", "network-egress"],
-      [],
-    ],
-  ] as const)("derives the production authority envelope for %s", (mode, included, excluded) => {
-    const fixture = liveFixture();
-    const context = resolveProductionRuntimeContext(
-      { ...fixture.input, deploymentCeiling: mode },
-      { ...fixture.request, requestedMode: mode },
-    );
+  // `workspace-contained`/`allowed` — a Supervised workspace run could never stage a file. The same
+  // D2 correction applies to `workspace-contained` commands themselves: `governed-assist`'s effect is
+  // `approval-required`, never a hard `deny`, so `command-execution` is minted (gated on approval)
+  // in EVERY mode, not withheld below `supervised-coding`. Expectations below are derived from the
+  // production producers rather than hand-listed, so this pin cannot drift from the matrix it guards.
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "derives the production authority envelope for %s",
+    (mode) => {
+      const fixture = liveFixture();
+      const context = resolveProductionRuntimeContext(
+        { ...fixture.input, deploymentCeiling: mode },
+        { ...fixture.request, requestedMode: mode },
+      );
 
-    for (const actionClass of included) expect(context.actionClasses).toContain(actionClass);
-    for (const actionClass of excluded) {
-      expect(context.actionClasses).not.toContain(actionClass);
-    }
-    expect(context.commandPolicy.requirePerCommandApproval).toBe(mode !== "autonomous-delivery");
-    // The delivery/source-control connector scope is granted in every mode now (never denied by the
-    // matrix); only the network policy stays mode-gated to autonomous-delivery — that dimension is
-    // #3387's territory (push/pull-request/fetch have no mint route below Full access yet).
-    expect(context.connectorScopes).toEqual(["source-control.read", "source-control.write"]);
-    if (mode === "autonomous-delivery") {
-      expect(context.networkPolicy).toEqual({
-        mode: "connector-scoped-egress",
-        allowLoopback: false,
-        connectorScopes: ["source-control.read", "source-control.write"],
-      });
-    } else {
-      expect(context.networkPolicy).toEqual({
-        mode: "deny-all",
-        allowLoopback: false,
-        connectorScopes: [],
-      });
-    }
-  });
+      expect(context.actionClasses).toEqual(codingRuntimeActionClassesForMode(mode, undefined));
+      expect(context.commandPolicy).toEqual(codingRuntimeCommandPolicyForMode(mode));
+      expect(context.networkPolicy).toEqual(codingRuntimeNetworkPolicyForMode(mode, undefined));
+      // The delivery/source-control connector scope is granted in every mode now (never denied by
+      // the matrix); only the network policy stays mode-gated to autonomous-delivery — that
+      // dimension is #3387's territory (push/pull-request/fetch have no mint route below Full
+      // access yet).
+      expect(context.connectorScopes).toEqual(["source-control.read", "source-control.write"]);
+      // Explicit floor assertion (not only implied by toEqual above): Ask for approval's command
+      // policy is approval-required — "governed" with per-command approval required — and never the
+      // hard "deny" the pre-ADR-0138-D2 matrix used to mint.
+      if (mode === "governed-assist") {
+        expect(context.commandPolicy).toMatchObject({
+          mode: "governed",
+          requirePerCommandApproval: true,
+        });
+        expect(context.commandPolicy.mode).not.toBe("deny");
+        expect(context.actionClasses).toContain("command-execution");
+      }
+    },
+  );
 
   // #3384 / #3386: every capability in the envelope is derived from the EFFECTIVE mode — the
   // fail-closed minimum of requested mode and deployment ceiling (ADR-0124 D2) — not from the
@@ -451,12 +448,9 @@ describe("production runtime workspace authority", () => {
   // source-control connector scopes are no longer part of what clamping withholds (ADR-0138 D2:
   // delivery is approval-required, not mode-gated, below Full access), so only the network
   // dimension is asserted as clamped here.
-  it.each([
-    ["supervised-coding", ["command-execution", "delivery-substrate", "connector-access"]],
-    ["governed-assist", ["delivery-substrate", "connector-access"]],
-  ] as const)(
+  it.each(["supervised-coding", "governed-assist"] as const)(
     "clamps every derived capability to the deployment ceiling %s when a higher mode is requested",
-    (ceiling, included) => {
+    (ceiling) => {
       const fixture = liveFixture();
       const context = resolveProductionRuntimeContext(
         { ...fixture.input, deploymentCeiling: ceiling },
@@ -464,19 +458,18 @@ describe("production runtime workspace authority", () => {
       );
 
       expect(context.deploymentCeiling).toBe(ceiling);
-      for (const actionClass of included) expect(context.actionClasses).toContain(actionClass);
-      if (ceiling === "governed-assist") {
-        expect(context.actionClasses).not.toContain("command-execution");
-      }
+      // Clamping derives every capability from the CEILING mode via the same producers the resolver
+      // calls — never from the requested (higher) mode.
+      expect(context.actionClasses).toEqual(codingRuntimeActionClassesForMode(ceiling, undefined));
       expect(context.actionClasses).not.toContain("network-egress");
       expect(context.connectorScopes).toEqual(["source-control.read", "source-control.write"]);
-      expect(context.networkPolicy).toEqual({
-        mode: "deny-all",
-        allowLoopback: false,
-        connectorScopes: [],
-      });
+      expect(context.networkPolicy).toEqual(codingRuntimeNetworkPolicyForMode(ceiling, undefined));
+      expect(context.commandPolicy).toEqual(codingRuntimeCommandPolicyForMode(ceiling));
+      // ADR-0138 D2: even at the lowest clamped ceiling (governed-assist), the command policy is
+      // approval-required ("governed"), never a hard "deny" — workspace-contained commands are
+      // gated by per-command approval, not withheld outright.
+      expect(context.commandPolicy.mode).toBe("governed");
       expect(context.commandPolicy.requirePerCommandApproval).toBe(true);
-      expect(context.commandPolicy.mode).toBe(ceiling === "governed-assist" ? "deny" : "governed");
     },
   );
 
@@ -484,8 +477,9 @@ describe("production runtime workspace authority", () => {
   // `governed-assist`, the lowest posture. Asserted here on the production resolver, because a
   // malformed value reaching it must yield the same envelope a real governed-assist run gets — not
   // an accidental grant, or an accidental withholding, from a comparison that silently fell through.
-  // Governed-assist's floor now carries the delivery/source-control scope (approval-required, never
-  // denied) alongside command-execution's absence and the deny-all network policy.
+  // Governed-assist's floor now carries the delivery/source-control scope AND `command-execution`
+  // (both approval-required, never denied) alongside the deny-all network policy. Expectations are
+  // derived from the production producers at the resolved lowest posture, never hand-listed.
   it.each([
     ["malformed requested mode", "AUTONOMOUS-DELIVERY", "autonomous-delivery"],
     ["empty requested mode", "", "autonomous-delivery"],
@@ -499,19 +493,20 @@ describe("production runtime workspace authority", () => {
       { ...fixture.request, requestedMode: requestedMode as never },
     );
 
-    for (const actionClass of ["command-execution", "network-egress"]) {
-      expect(context.actionClasses).not.toContain(actionClass);
-    }
-    for (const actionClass of ["delivery-substrate", "connector-access"]) {
-      expect(context.actionClasses).toContain(actionClass);
-    }
+    expect(context.actionClasses).toEqual(
+      codingRuntimeActionClassesForMode("governed-assist", undefined),
+    );
+    expect(context.actionClasses).toContain("command-execution");
+    expect(context.actionClasses).toContain("delivery-substrate");
+    expect(context.actionClasses).toContain("connector-access");
+    expect(context.actionClasses).not.toContain("network-egress");
     expect(context.connectorScopes).toEqual(["source-control.read", "source-control.write"]);
-    expect(context.networkPolicy).toEqual({
-      mode: "deny-all",
-      allowLoopback: false,
-      connectorScopes: [],
-    });
-    expect(context.commandPolicy.mode).toBe("deny");
+    expect(context.networkPolicy).toEqual(
+      codingRuntimeNetworkPolicyForMode("governed-assist", undefined),
+    );
+    expect(context.commandPolicy).toEqual(codingRuntimeCommandPolicyForMode("governed-assist"));
+    // The lowest posture's command policy is approval-required ("governed"), never a hard "deny".
+    expect(context.commandPolicy.mode).toBe("governed");
     expect(context.commandPolicy.requirePerCommandApproval).toBe(true);
   });
 
@@ -544,28 +539,22 @@ describe("production runtime workspace authority", () => {
 // derive the production shape instead of restating it (AGENTS.md §7). Pinned directly here so the
 // exported contract itself — not only the resolver that consumes it internally — has coverage.
 describe("productionGitDeliveryModeGrants", () => {
-  it.each([
-    [
-      "governed-assist",
-      ["delivery-substrate", "connector-access"],
-      ["command-execution", "network-egress"],
-    ],
-    [
-      "supervised-coding",
-      ["command-execution", "delivery-substrate", "connector-access"],
-      ["network-egress"],
-    ],
-    [
-      "autonomous-delivery",
-      ["command-execution", "delivery-substrate", "connector-access", "network-egress"],
-      [] as const,
-    ],
-  ] as const)("grants the delivery/source-control scope for %s", (mode, included, excluded) => {
-    const grants = productionGitDeliveryModeGrants(mode);
-    for (const actionClass of included) expect(grants.actionClasses).toContain(actionClass);
-    for (const actionClass of excluded) expect(grants.actionClasses).not.toContain(actionClass);
-    expect(grants.connectorScopes).toEqual(["source-control.read", "source-control.write"]);
-  });
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "grants the delivery/source-control scope for %s",
+    (mode) => {
+      const grants = productionGitDeliveryModeGrants(mode);
+      // productionGitDeliveryModeGrants mints with researchEgressEnabled held at its production
+      // default (`false`) -- see the module's own doc comment -- so the fixture matches that here
+      // rather than restating which action classes each mode grants.
+      expect(grants.actionClasses).toEqual(codingRuntimeActionClassesForMode(mode, false));
+      expect(grants.connectorScopes).toEqual(codingRuntimeConnectorScopesForMode(mode));
+      expect(grants.connectorScopes).toEqual(["source-control.read", "source-control.write"]);
+      // ADR-0138 D2: governed-assist mints command-execution too (approval-required, never denied).
+      if (mode === "governed-assist") {
+        expect(grants.actionClasses).toContain("command-execution");
+      }
+    },
+  );
 });
 
 function liveFixture() {
