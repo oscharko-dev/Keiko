@@ -136,12 +136,13 @@ async function repositoryHasPromisorRemote(
 // `--no-lazy-fetch`/`--no-replace-objects` fail closed exactly like git's own docs promise ONLY on
 // a git that recognises them (added together in git 2.45); `ubuntu-latest`'s pinned git 2.43
 // silently accepts either flag as a no-op equivalent-environment-variable setter that its own
-// environment.c does not yet implement. Promisor status is a property of the REPOSITORY (cached by
-// `cwd`); the installed git's version is a property of the PROCESS (cached by the runner instance —
-// one real runner in production, a fresh fake per test), so an at-risk repository is never judged
-// safe by another repository's cached result, and an ordinary (non-promisor) repository never pays
-// for a version probe it does not need.
-const promisorRiskCache = new Map<string, Promise<boolean>>();
+// environment.c does not yet implement. The installed git's version is a property of the PROCESS
+// (cached by the runner instance — one real runner in production, a fresh fake per test) and cannot
+// change mid-process, so it is detected once and reused. Promisor status is NOT cached the same
+// way: it is the repository's OWN config, which a long-lived server process can observe change on a
+// workspace it has already read — caching it risks replaying a stale "not at risk" verdict against
+// a repository that has since become one (a real transition this file's own fixtures exercise). It
+// is one cheap local `git config` read; re-probing it on every call is deliberate.
 const versionGuardSupportedCache = new WeakMap<GitProcessRunner, Promise<boolean>>();
 
 async function versionGuardSupported(
@@ -162,14 +163,6 @@ async function versionGuardSupported(
   return probe;
 }
 
-function cachedPromisorRisk(runner: GitProcessRunner, options: GitProcessOptions): Promise<boolean> {
-  const cached = promisorRiskCache.get(options.cwd);
-  if (cached !== undefined) return cached;
-  const probe = repositoryHasPromisorRemote(runner, options);
-  promisorRiskCache.set(options.cwd, probe);
-  return probe;
-}
-
 // `--no-replace-objects` is an ancient global option (git 1.6.6, the replace-refs feature itself)
 // that every git this product supports recognises, so it is applied UNCONDITIONALLY — an ordinary
 // `git init` repository can carry a local `refs/replace/*` object substitution with no promisor
@@ -187,7 +180,7 @@ function immutableLocalRunner(runner: GitProcessRunner): GitProcessRunner {
     if (options.abortSignal?.aborted === true) {
       return await runner(replaceObjectsGuardedArgs, options);
     }
-    const atRisk = await cachedPromisorRisk(runner, options);
+    const atRisk = await repositoryHasPromisorRemote(runner, options);
     if (!atRisk) return await runner(replaceObjectsGuardedArgs, options);
     if (!(await versionGuardSupported(runner, options))) {
       throw new GitSnapshotReadError("git-error");

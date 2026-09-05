@@ -143,6 +143,43 @@ describe("node git mutation adapter — failure-classification branches", () => 
   });
 });
 
+// Reviewer 3941836280 / wave-2 D2 need: the SAME version-gated, fail-closed lazy-fetch guard
+// (git-worktree-snapshot-node.ts) protects the write lane too, via `ensureGitLazyFetchGuardSupported`
+// inside `runOne`. These pin both halves for a mutating call against a scripted spawn.
+describe("node git mutation adapter — lazy-fetch guard, version-gated and fail-closed", () => {
+  it("refuses the mutation outright when the repository is a promisor clone and the installed git cannot enforce the guard", async () => {
+    const rec = recordingSpawn();
+    const ad = makeAdapter(rec);
+    const pending = ad.stage({ pathspecs: ["a"] });
+    rec.child.stdout.emit("data", Buffer.from("remote.origin.promisor true\n", "utf8"));
+    rec.child.emit("close", 0, null);
+    await expect.poll(() => rec.calls()).toHaveLength(2);
+    rec.child.stdout.emit("data", Buffer.from("git version 2.43.0\n", "utf8"));
+    rec.child.emit("close", 0, null);
+    const result = await pending;
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("internal-error");
+    // The real `add` never spawned — refused, not staged unprotected.
+    expect(rec.calls()).toHaveLength(2);
+  });
+
+  it("admits the mutation once the installed git is new enough to enforce the guard", async () => {
+    const rec = recordingSpawn();
+    const ad = makeAdapter(rec);
+    const pending = ad.stage({ pathspecs: ["a"] });
+    rec.child.stdout.emit("data", Buffer.from("remote.origin.promisor true\n", "utf8"));
+    rec.child.emit("close", 0, null);
+    await expect.poll(() => rec.calls()).toHaveLength(2);
+    rec.child.stdout.emit("data", Buffer.from("git version 2.45.0\n", "utf8"));
+    rec.child.emit("close", 0, null);
+    await expect.poll(() => rec.calls()).toHaveLength(3);
+    rec.child.emit("close", 0, null);
+    const result = await pending;
+    expect(result.outcome).toBe("succeeded");
+    expect(rec.calls()[2]?.args.at(-1)).toBe(":(literal)a");
+  });
+});
+
 // ─── Governed identity lane (#2843) ────────────────────────────────────────────────────────────
 // The local mutation adapter must run under the GOVERNED IDENTITY env profile, not the fully
 // isolated default. With the default profile the child gets an EMPTY HOME, so `git commit` cannot

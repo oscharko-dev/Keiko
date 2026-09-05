@@ -325,27 +325,14 @@ async function probeGitVersionGuardSupport(ctx: ReadContext): Promise<GitLazyFet
   };
 }
 
-// Promisor-remote status is a property of the REPOSITORY (keyed by workspace root); the installed
-// git's version is a property of the PROCESS (keyed by the spawn function — one real binary in
-// production, a fresh fake per test). Caching each at its own natural scope means an at-risk
-// repository is never judged safe by another workspace's cached result, while an ordinary
-// (non-promisor) workspace never pays for a version probe it does not need.
-const promisorRiskCache = new Map<string, Promise<boolean>>();
+// The installed git's version is a property of the PROCESS (keyed by the spawn function — one real
+// binary in production, a fresh fake per test) and cannot change mid-process, so it is detected
+// once and reused. Promisor-remote status is NOT cached the same way: it is a property of the
+// repository's OWN config, which a long-lived server process can observe change on a workspace it
+// has already read (`git config remote.<name>.promisor` flips after an earlier, unrelated read) —
+// caching it risks replaying a stale "not at risk" verdict against a repository that has since
+// become one. It is one cheap local `git config` read; re-probing it every call is deliberate.
 const gitVersionGuardSupportCache = new WeakMap<SpawnFn, Promise<GitLazyFetchGuardSupport>>();
-
-// A rejected probe (cancellation/timeout — the only rejection either probe can now produce, per
-// the re-throws above) must NOT be memoized: caching it would replay that one operation's
-// cancellation as a permanent "guard unsupported" verdict for every later, unrelated call on the
-// same key.
-function cachedPromisorRisk(ctx: ReadContext): Promise<boolean> {
-  const key = ctx.runDeps.workspace.root;
-  const cached = promisorRiskCache.get(key);
-  if (cached !== undefined) return cached;
-  const probe = repositoryHasPromisorRemote(ctx);
-  promisorRiskCache.set(key, probe);
-  probe.catch(() => promisorRiskCache.delete(key));
-  return probe;
-}
 
 function cachedVersionGuardSupport(ctx: ReadContext): Promise<GitLazyFetchGuardSupport> {
   const spawn = ctx.runDeps.spawn;
@@ -353,12 +340,15 @@ function cachedVersionGuardSupport(ctx: ReadContext): Promise<GitLazyFetchGuardS
   if (cached !== undefined) return cached;
   const probe = probeGitVersionGuardSupport(ctx);
   gitVersionGuardSupportCache.set(spawn, probe);
+  // A rejected probe (cancellation/timeout — the only rejection it can now produce, per the
+  // re-throw above) must NOT be memoized: caching it would replay one operation's cancellation as
+  // a permanent "guard unsupported" verdict for every later, unrelated call on the same spawn.
   probe.catch(() => gitVersionGuardSupportCache.delete(spawn));
   return probe;
 }
 
 async function detectGitLazyFetchGuardSupport(ctx: ReadContext): Promise<GitLazyFetchGuardSupport> {
-  const atRisk = await cachedPromisorRisk(ctx);
+  const atRisk = await repositoryHasPromisorRemote(ctx);
   if (!atRisk) return { supported: true, gitVersion: undefined };
   return cachedVersionGuardSupport(ctx);
 }
