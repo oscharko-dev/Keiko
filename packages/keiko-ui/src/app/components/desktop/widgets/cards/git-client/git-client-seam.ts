@@ -197,29 +197,21 @@ export interface GitActionFlowState {
   readonly error: string | null;
 }
 
-export function useGitActions(
-  client: GitClientSeam,
-  projectId: string,
-  repositoryRoot?: string,
-): {
+interface MutationFlowController {
   readonly flow: GitActionFlowState;
-  readonly preview: GitDeliveryCommitPreviewResponse | null;
-  readonly previewDraft: string | null;
-  readonly previewError: string | null;
   readonly runMutation: (op: () => Promise<GitMutationOutcome>) => void;
-  readonly runPreview: (messageDraft: string) => void;
-  readonly reset: () => void;
-} {
+  readonly resetFlow: () => void;
+}
+
+// The mutation half of useGitActions: tracks busy/outcome/error for a single in-flight mutation
+// and guards against a late (stale) response overwriting a newer one via seqRef.
+function useMutationFlow(projectId: string, repositoryRoot?: string): MutationFlowController {
   const [flow, setFlow] = useState<GitActionFlowState>({
     busy: false,
     outcome: null,
     error: null,
   });
-  const [preview, setPreview] = useState<GitDeliveryCommitPreviewResponse | null>(null);
-  const [previewDraft, setPreviewDraft] = useState<string | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
   const seqRef = useRef(0);
-  const previewSeqRef = useRef(0);
 
   const runMutation = useCallback(
     (op: () => Promise<GitMutationOutcome>): void => {
@@ -246,6 +238,30 @@ export function useGitActions(
     [projectId, repositoryRoot],
   );
 
+  const resetFlow = useCallback((): void => {
+    seqRef.current += 1;
+    setFlow({ busy: false, outcome: null, error: null });
+  }, []);
+
+  return { flow, runMutation, resetFlow };
+}
+
+interface CommitPreviewController {
+  readonly preview: GitDeliveryCommitPreviewResponse | null;
+  readonly previewDraft: string | null;
+  readonly previewError: string | null;
+  readonly runPreview: (messageDraft: string) => void;
+  readonly resetPreview: () => void;
+}
+
+// The commit-preview half of useGitActions: tracks the last previewed draft/result and guards
+// against a late (stale) preview response overwriting a newer one via previewSeqRef.
+function useCommitPreviewFlow(client: GitClientSeam, projectId: string): CommitPreviewController {
+  const [preview, setPreview] = useState<GitDeliveryCommitPreviewResponse | null>(null);
+  const [previewDraft, setPreviewDraft] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const previewSeqRef = useRef(0);
+
   const runPreview = useCallback(
     (messageDraft: string): void => {
       const seq = previewSeqRef.current + 1;
@@ -270,17 +286,49 @@ export function useGitActions(
     [client, projectId],
   );
 
-  // Invalidates any in-flight mutation (so a late response cannot write into this flow) and clears
-  // the displayed outcome/preview. Callers reset on repository switch to prevent a stale result from
-  // one repository surfacing under another.
-  const reset = useCallback((): void => {
-    seqRef.current += 1;
+  const resetPreview = useCallback((): void => {
     previewSeqRef.current += 1;
-    setFlow({ busy: false, outcome: null, error: null });
     setPreview(null);
     setPreviewDraft(null);
     setPreviewError(null);
   }, []);
 
-  return { flow, preview, previewDraft, previewError, runMutation, runPreview, reset };
+  return { preview, previewDraft, previewError, runPreview, resetPreview };
+}
+
+export function useGitActions(
+  client: GitClientSeam,
+  projectId: string,
+  repositoryRoot?: string,
+): {
+  readonly flow: GitActionFlowState;
+  readonly preview: GitDeliveryCommitPreviewResponse | null;
+  readonly previewDraft: string | null;
+  readonly previewError: string | null;
+  readonly runMutation: (op: () => Promise<GitMutationOutcome>) => void;
+  readonly runPreview: (messageDraft: string) => void;
+  readonly reset: () => void;
+} {
+  const mutationFlow = useMutationFlow(projectId, repositoryRoot);
+  const commitPreview = useCommitPreviewFlow(client, projectId);
+  const { resetFlow } = mutationFlow;
+  const { resetPreview } = commitPreview;
+
+  // Invalidates any in-flight mutation (so a late response cannot write into this flow) and clears
+  // the displayed outcome/preview. Callers reset on repository switch to prevent a stale result from
+  // one repository surfacing under another.
+  const reset = useCallback((): void => {
+    resetFlow();
+    resetPreview();
+  }, [resetFlow, resetPreview]);
+
+  return {
+    flow: mutationFlow.flow,
+    preview: commitPreview.preview,
+    previewDraft: commitPreview.previewDraft,
+    previewError: commitPreview.previewError,
+    runMutation: mutationFlow.runMutation,
+    runPreview: commitPreview.runPreview,
+    reset,
+  };
 }
