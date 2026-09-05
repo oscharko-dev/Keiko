@@ -105,13 +105,14 @@ export async function readDescriptionBody(
 function captureInput(
   context: PrDescriptionContext,
   previous: GitPrBody,
+  artifactBinding?: PreparedPrDescription["artifact"]["binding"],
 ): PreparedPrDescription["captureInput"] {
   return {
     workspace: context.workspace,
     accessScope: context.accessScope,
     correlationId: context.correlationId,
-    baseRef: previous.identity.baseSha,
-    headRef: previous.identity.headSha,
+    baseRef: artifactBinding?.baseRef ?? previous.identity.baseSha,
+    headRef: artifactBinding?.headRef ?? previous.identity.headSha,
     expectedHeadSha: previous.identity.headSha,
     ...(context.signal === undefined ? {} : { signal: context.signal }),
   };
@@ -251,7 +252,7 @@ export async function prepareDescriptionArtifact(
   now: number,
 ): Promise<PreparedPrDescription> {
   const previous = await readDescriptionBody(options, context);
-  const input = captureInput(context, previous);
+  const input = captureInput(context, previous, artifact.binding);
   const captured = await options.snapshots.capture(input);
   const snapshot = captured.snapshot;
   if (

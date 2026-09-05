@@ -39,6 +39,19 @@ describe("body-only description application", () => {
     expect(fixture.writes[0]?.body).toContain(artifact.markdown);
   });
 
+  it("retains an artifact captured from the live branch refs that produced its digest", async () => {
+    const artifact = await fixture.generateArtifact("Selected Chat intent", {
+      baseRef: "main",
+      headRef: "feature",
+    });
+
+    const result = await fixture.service.previewArtifact(artifact);
+
+    expect(result.outcome).toBe("preview");
+    if (result.outcome !== "preview") throw new Error("artifact preview absent");
+    expect(result.preview.status.binding.snapshotDigest).toBe(artifact.binding.snapshotDigest);
+  });
+
   it("holds a generic draft in the same proposal owner without granting apply authority", async () => {
     const artifact = await fixture.generateArtifact("Generic Workbench draft");
     const held = fixture.service.holdDraftArtifact(artifact, fixture.now);

@@ -52,6 +52,7 @@ export class DescriptionFixture {
     this.git(["add", "code.ts"]);
     this.git(["commit", "-m", "initial"]);
     const baseSha = this.git(["rev-parse", "HEAD"]);
+    this.git(["branch", "main", baseSha]);
     writeFileSync(join(this.root, "code.ts"), "export const value = 2;\n");
     this.git(["add", "code.ts"]);
     this.git(["commit", "-m", "change"]);
@@ -101,11 +102,12 @@ export class DescriptionFixture {
   }
   public async generateArtifact(
     refinement = "Chat-selected intent",
+    refs?: { readonly baseRef: string; readonly headRef: string },
   ): Promise<PrDescriptionArtifact> {
     const captureInput = {
       workspace: this.context.workspace,
-      baseRef: this.remote.identity.baseSha,
-      headRef: this.remote.identity.headSha,
+      baseRef: refs?.baseRef ?? this.remote.identity.baseSha,
+      headRef: refs?.headRef ?? this.remote.identity.headSha,
       expectedHeadSha: this.remote.identity.headSha,
       accessScope: this.context.accessScope,
       correlationId: this.context.correlationId,
