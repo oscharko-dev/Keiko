@@ -283,6 +283,25 @@ reconciled with the catalog's required-field schema), `edit`, `verification`, `e
 this section describes, remains open follow-up work; `git`, `delivery`, `search`, `command` and
 `connector` have no canonical catalog descriptor yet and stay uncovered until one exists.
 
+The bridge does not, however, re-derive its own exception vocabulary alongside `CatalogInvocation`'s
+(`catalogToolSettlement.ts`). It reuses the same lower-level primitives `catalogToolRuntimeAuthority.ts`
+exports for exactly this purpose, independent of the offer/dispatch negotiation the bridge cannot
+reuse: `CatalogDispatchFault` (the one exception type that carries a settled `status`/`reason` pair
+out of a dispatch) and `catalogBudgetOperation` (the wrapper that turns a throwing budget-port call
+into a `CatalogDispatchFault("failed", "budget-port-failed")` instead of an unclassified error). A
+budget denial throws `CatalogDispatchFault("denied", "budget-exhausted")` -- the identical fault a
+`CatalogInvocation.reserve()` denial raises -- so `codingToolFacade.ts` branches on one exception
+class regardless of which settlement path produced it, not on a bridge-local error type. The bridge
+also mirrors `CatalogInvocation.account()`'s discipline of accounting a reservation exactly once:
+a commit failure after a successful handler run settles as `budget-port-failed` /
+`commit-uncertain` (the same canonical `ToolBudgetDisposition` values `CatalogInvocation` emits) and
+fails the call closed, rather than additionally calling `release()` on a reservation whose true
+state the failed commit already left uncertain. What remains genuinely unshared between the two
+implementations is the offer/dispatch/cursor/idempotency-registry state machine itself -- the part
+that requires a prior `offer()` and a catalog-schema `arguments` object neither of which
+`codingToolFacade.ts`'s already-parsed `CodingToolActionRequest` carries -- not the fault-shaping or
+accounting discipline, which are shared.
+
 ### D7 — Phase-valid activity evidence
 
 The `phases` table freezes operation names for #3412's existing generator; it is not a second

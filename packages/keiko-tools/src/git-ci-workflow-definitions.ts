@@ -41,9 +41,6 @@ function invalid(): Extract<GitCiWorkflowDefinitionsResult, { status: "unknown" 
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function argv(endpoint: string, projection: string): readonly string[] {
-  return ["api", "--hostname", "github.com", "--method", "GET", endpoint, "--jq", projection];
-}
 function read(
   input: Input,
   endpoint: string,
@@ -51,7 +48,7 @@ function read(
 ): ReturnType<typeof readGitProviderValue> {
   return readGitProviderValue({
     run: input.run,
-    argv: argv(endpoint, projection),
+    argv: buildGitHubApiGetArgv(endpoint, projection),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
 }

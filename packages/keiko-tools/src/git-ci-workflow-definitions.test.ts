@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { collectGitCiRequirements } from "./git-ci-requirements.js";
 import { readGitCiWorkflowDefinitions } from "./git-ci-workflow-definitions.js";
+import { buildGitHubApiGetArgv } from "./git-provider-value.js";
 import type { CommandResult } from "./types.js";
 
 const SHA = "a".repeat(40);
@@ -85,6 +86,19 @@ describe("required workflow metadata through the bounded provider owner", () => 
     expect(test.run.mock.calls.map(([args]) => args.at(-1))).toEqual([
       "{id,repository:.full_name}",
       "{sha}",
+    ]);
+  });
+  // #3390 wave8b residual: this module used to carry a local copy of the GitHub REST GET argv
+  // envelope instead of importing the shared `buildGitHubApiGetArgv` producer. Deriving the
+  // expectation from that SAME producer (never restating the literal array) proves the two never
+  // drift apart again — a diverging local copy would fail this assertion the moment either side
+  // changed (AGENTS.md §7: a fixture must derive from the production entry point).
+  it("issues the byte-identical GitHub REST GET envelope the shared provider-value producer builds", async () => {
+    const test = fixture();
+    await readGitCiWorkflowDefinitions({ ...test.input, run: test.run });
+    expect(test.run.mock.calls.map(([args]) => args)).toEqual([
+      buildGitHubApiGetArgv("/repositories/2", "{id,repository:.full_name}"),
+      buildGitHubApiGetArgv("/repos/governance/policy/commits/refs%2Fheads%2Fdev", "{sha}"),
     ]);
   });
   it("reuses identity and ref lookups only within one observation", async () => {

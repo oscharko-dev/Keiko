@@ -228,7 +228,7 @@ function settleReservation(
   runtime: BridgeRuntime,
   reservation: CatalogFacadeBudgetReservation,
   effectStarted: boolean,
-): { readonly budgetDisposition: ToolBudgetDisposition; readonly accountingFault?: unknown } {
+): { readonly budgetDisposition: ToolBudgetDisposition; readonly accountingFault?: Error } {
   try {
     if (effectStarted) runtime.input.budget.commit(reservation);
     else runtime.input.budget.release(reservation);
@@ -236,7 +236,10 @@ function settleReservation(
   } catch (accountingFault) {
     return {
       budgetDisposition: effectStarted ? "commit-uncertain" : "release-uncertain",
-      accountingFault,
+      accountingFault:
+        accountingFault instanceof Error
+          ? accountingFault
+          : new Error("catalog-budget-accounting-failed"),
     };
   }
 }
