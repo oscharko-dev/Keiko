@@ -92,6 +92,11 @@ const TOOL_FACADE_DEFAULT_MAPPING: ToolFacadeStatusMapping = {
   message: "Coding tool facade call failed.",
 };
 
+// The 408 mapping is shared between the bridge-returned deadline (a call admitted then aborted
+// mid-execution) and the route's own body-ingestion deadline below -- one message, not two.
+const TOOL_FACADE_DEADLINE_MAPPING =
+  TOOL_FACADE_STATUS_MAPPINGS.get(408) ?? TOOL_FACADE_DEFAULT_MAPPING;
+
 /** Body-free: `reason` is closed, `status` is a number -- never the request or facade body. */
 function logToolFacadeRejection(
   ctx: RouteContext,
@@ -157,6 +162,62 @@ function bindRouteDisconnect(ctx: RouteContext): {
   };
 }
 
+function bodyReadRejectionReason(status: number): CodingSidecarToolFacadeRejectionReason {
+  if (status === 413) return "body-too-large";
+  if (status === 408) return "deadline";
+  return "body-invalid";
+}
+
+/**
+ * Bounds body ingestion by the SAME per-run deadline the admission gate applies to execution
+ * (`bridge.requestDeadlineMs`) -- previously a slow/partial POST buffered for as long as Node's
+ * generic socket defaults allowed, because the gate's own deadline timer only starts once
+ * `bridge.handle` is called, i.e. after the whole body has already arrived (#3390 follow-up).
+ * On timeout this settles 408 WITHOUT touching `ctx.req` (unlike the other route handlers'
+ * `req.resume()`-to-drain convention, `req.destroy()` here would tear down the socket the 408
+ * response itself needs to go out on, since request and response share one connection) -- the
+ * abandoned `readJsonObject` read is left to finish or error on its own; whichever settles this
+ * promise first (body finishes, or the deadline fires) wins, and the loser is a no-op.
+ */
+function readToolFacadeBody(
+  ctx: RouteContext,
+  deadlineMs: number,
+): Promise<Record<string, unknown> | RouteResult> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve({
+        status: 408,
+        body: errorBody(
+          TOOL_FACADE_DEADLINE_MAPPING.code,
+          TOOL_FACADE_DEADLINE_MAPPING.message,
+          ctx.correlationId,
+        ),
+      });
+    }, deadlineMs);
+    timer.unref();
+    void readJsonObject(ctx.req, CODING_TOOL_MAX_BODY_BYTES).then(
+      (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({
+          status: 400,
+          body: errorBody("BAD_REQUEST", "Request body could not be read.", ctx.correlationId),
+        });
+      },
+    );
+  });
+}
+
 function toolFacadeRouteResult(
   ctx: RouteContext,
   result: { readonly status: number; readonly body: string },
@@ -193,13 +254,9 @@ export async function handleCodingSidecarToolFacade(
   if (bridge === undefined) {
     return unavailableToolFacadeRequest(ctx);
   }
-  const parsed = await readJsonObject(ctx.req, CODING_TOOL_MAX_BODY_BYTES);
+  const parsed = await readToolFacadeBody(ctx, bridge.requestDeadlineMs);
   if (isRouteResult(parsed)) {
-    logToolFacadeRejection(
-      ctx,
-      parsed.status,
-      parsed.status === 413 ? "body-too-large" : "body-invalid",
-    );
+    logToolFacadeRejection(ctx, parsed.status, bodyReadRejectionReason(parsed.status));
     return parsed;
   }
   const disconnect = bindRouteDisconnect(ctx);

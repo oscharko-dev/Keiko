@@ -5,6 +5,9 @@
 // request to the active run's tool bridge (`OpenCodeRuntimeComposition.toolBridge.handle`, exposed
 // here as `deps.toolFacadeBridge`), which already authenticates the bearer capability
 // (`preflightToolRequest` in opencodeRuntimeComposition.ts) and enforces its own admission gate.
+import { Readable } from "node:stream";
+import type { IncomingMessage } from "node:http";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { UiHandlerDeps } from "./deps.js";
@@ -54,14 +57,39 @@ function toolFacadeContext(
   };
 }
 
-function bridge(handle: CodingRuntimeToolFacadeBridge["handle"]): {
+function bridge(
+  handle: CodingRuntimeToolFacadeBridge["handle"],
+  requestDeadlineMs = 30_000,
+): {
   readonly resolve: () => CodingRuntimeToolFacadeBridge | undefined;
 } {
-  return { resolve: (): CodingRuntimeToolFacadeBridge => ({ handle }) };
+  return { resolve: (): CodingRuntimeToolFacadeBridge => ({ handle, requestDeadlineMs }) };
 }
 
 function depsWith(toolFacadeBridge: UiHandlerDeps["toolFacadeBridge"] | undefined): UiHandlerDeps {
   return { toolFacadeBridge } as unknown as UiHandlerDeps;
+}
+
+/**
+ * A request whose body never finishes -- unlike {@link mockRequest} (which reads from a fixed,
+ * already-buffered chunk list and always emits `"end"`), this stream deliberately withholds
+ * `push(null)` so `readJsonObject`'s underlying `readBody` never resolves on its own. Used to prove
+ * `readToolFacadeBody` bounds ingestion by `bridge.requestDeadlineMs` instead of waiting forever.
+ */
+function neverEndingRequestBody(headers: Record<string, string>, bearer: string): IncomingMessage {
+  const readable = new Readable({
+    read(): void {
+      // Never pushes data or null -- the client is mid-upload and stalls indefinitely.
+    },
+  }) as unknown as IncomingMessage & {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+  };
+  readable.method = "POST";
+  readable.url = "/api/coding-sidecar/tool";
+  readable.headers = { ...headers, authorization: `Bearer ${bearer}` };
+  return readable;
 }
 
 describe("coding-sidecar tool facade route", () => {
@@ -257,5 +285,38 @@ describe("coding-sidecar tool facade route", () => {
       expect(observedSignal?.aborted).toBe(true);
     });
     await expect(handled).resolves.toMatchObject({ status: 502 });
+  });
+
+  // Major finding, #3390 follow-up: before this test existed, a slow/partial POST body was bounded
+  // ONLY by Node's generic http.Server defaults, because the bridge's own `requestDeadlineMs` timer
+  // (`createToolBridgeAdmissionGate`) only starts once `bridge.handle` is called -- i.e. after the
+  // whole body has already arrived. `readToolFacadeBody` now races body-ingestion against the SAME
+  // `bridge.requestDeadlineMs` the admission gate uses for execution, so this pin fails before the
+  // fix (the request would hang until the test's own timeout) and passes after.
+  it("bounds body ingestion by the bridge's requestDeadlineMs, before ever calling handle", async () => {
+    const log = captureServerLog();
+    const handle = vi.fn(() => Promise.resolve({ status: 200, body: "{}" }));
+    const deps = depsWith(bridge(handle, 20));
+    const ctx: RouteContext = {
+      correlationId: "run-tool-facade-deadline-test",
+      req: neverEndingRequestBody({}, "tool-capability"),
+      res: mockResponse().res,
+      params: {},
+      url: new URL("http://127.0.0.1/api/coding-sidecar/tool"),
+    };
+    const result = await handleCodingSidecarToolFacade(ctx, deps);
+    expect(result).toMatchObject({
+      status: 408,
+      body: { error: { code: "CODING_TOOL_FACADE_DEADLINE_EXCEEDED" } },
+    });
+    expect(handle).not.toHaveBeenCalled();
+    expect(log.events).toEqual([
+      expect.objectContaining({
+        op: "coding-sidecar.tool-facade.rejected",
+        correlationId: "run-tool-facade-deadline-test",
+        status: 408,
+        extra: { reason: "deadline" },
+      }),
+    ]);
   });
 });

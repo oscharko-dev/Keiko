@@ -162,6 +162,14 @@ type SafeToolSettlement = NonNullable<
 
 export interface OpenCodeToolBridge {
   readonly url: string;
+  /**
+   * The SAME per-run deadline (ms) the admission gate applies to an in-flight facade call
+   * (`createToolBridgeAdmissionGate`'s `limits.requestDeadlineMs`), exposed so the BFF route can
+   * bound body-ingestion time with the identical number instead of a second, restated constant —
+   * closing the gap where a slow/partial POST could otherwise buffer for as long as Node's generic
+   * socket defaults allow before the gate's own timer ever starts (#3390 follow-up).
+   */
+  readonly requestDeadlineMs: number;
   handle(input: {
     readonly method: "POST";
     readonly headers: Headers;
@@ -1327,6 +1335,7 @@ function createToolBridge(
     get url(): string {
       return toolFacadeOrigin;
     },
+    requestDeadlineMs: limits.requestDeadlineMs,
     handle,
   };
   return {

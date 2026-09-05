@@ -34,11 +34,14 @@ export function createProductionVerifiedCommitDependencies(
     execution: { processEnv: deps.env, activityLog: deps.activityLog ?? processServerLogSink() },
     resolveWorkspace: (root) => resolveProjectWorkspace(deps, root),
     buffersClean: (root, runId) => verifiedCommitBuffersClean(deps, root, runId),
-    messageAllowed: async (message, workspace): Promise<boolean> =>
+    // #3390: return the full validation (not just `.ok`) so a "blocked"/"message-policy" result
+    // carries the closed violation codes end to end into the live OpenCode/sidecar commit-proposal
+    // path — see VerifiedCommitServiceOptions["messageAllowed"] and VerifiedCommitResult["violations"].
+    messageAllowed: async (message, workspace) =>
       validateGitCommitMessage(
         message,
         await resolveGovernedCommitMessagePolicy(deps, workspace.root),
-      ).ok,
+      ),
   };
 }
 

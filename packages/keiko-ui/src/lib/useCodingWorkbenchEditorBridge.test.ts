@@ -583,60 +583,82 @@ describe("useCodingWorkbenchEditorBridge — run-bound root", () => {
   });
 });
 
-// Epic #3384 cascade, end-to-end run 2026-09-05: after a stop, the same long-lived Workbench
-// window never re-registered a bridge for a run it observed becoming active again (a status poll
-// or stream catching up, or a run started from another paired client) — `keiko_changeset_edit`
-// was refused NO_ACTIVE_SESSION until the operator reloaded the page. These tests hold the hook to
-// forcing a genuinely fresh subscribe on every activation AFTER its first, while proving the very
-// first (ordinary) activation pays none of that extra cost.
-describe("useCodingWorkbenchEditorBridge — reconnect on a newly observed run", () => {
-  it("does not force an extra reconnect cycle on the hook's very first activation", async () => {
+// Epic #3384 cascade, end-to-end run 2026-09-05: a run this window observed as active whose
+// headless bridge session could not be registered used to stay that way forever — nothing in the
+// ordinary prop-driven (re)subscribe (keyed on `enabled`/`agentSessionId`, neither of which changes
+// merely because a registration attempt failed) ever retried it, so every `keiko_changeset_edit`
+// kept being refused NO_ACTIVE_SESSION until the operator reloaded the page. These tests hold the
+// hook to actually retrying via the existing `forceReconnect` lever for as long as the run stays
+// active and registration keeps failing — including a SECOND consecutive failure, which a naive
+// "retry once on failure" implementation would miss.
+describe("useCodingWorkbenchEditorBridge — registration retry", () => {
+  it("does not force a reconnect cycle while registration keeps succeeding", async () => {
     renderHook(() =>
       useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
     );
     await flushMicrotasks();
     expect(createSourceSpy).toHaveBeenCalledTimes(1);
-    // Give any (wrongly triggered) forced-reconnect cycle every chance to run — it must not.
+    // Give any (wrongly triggered) retry cycle every chance to run — it must not, since nothing
+    // ever failed.
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await new Promise((resolve) => setTimeout(resolve, 700));
     });
     expect(createSourceSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("forces a fresh reconnect when a running run is observed again after this window went inactive", async () => {
-    const { rerender } = renderHook(
-      (props: { runId: string; active: boolean }) =>
-        useCodingWorkbenchEditorBridge({ root: "/repo/task-1", ...props }),
-      { initialProps: { runId: "run-1", active: true } },
+  it("retries registration via a forced reconnect after a failed attempt, and stops once it succeeds", async () => {
+    postSnapshotSpy.mockRejectedValueOnce(new Error("network unreachable"));
+    postSnapshotSpy.mockResolvedValue({
+      snapshot: null,
+      bridgeDecisionCapability: "A".repeat(43),
+    });
+    renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
     );
-    await flushMicrotasks();
-    expect(createSourceSpy).toHaveBeenCalledTimes(1);
-
-    // The run stops; this window goes inactive without unmounting the hook.
-    rerender({ runId: "run-1", active: false });
-    await flushMicrotasks();
-
-    // A DIFFERENT run is observed active — this hook instance's SECOND activation. The plain
-    // sessionId-driven subscribe fires once; the forced reconnect then tears it down and
-    // re-establishes it, so at least one MORE EventSource is opened than the ordinary path alone
-    // would produce.
-    rerender({ runId: "run-2", active: true });
+    // The FIRST registration attempt (after the 300ms debounce) fails.
     await waitFor(
       () => {
-        expect(createSourceSpy.mock.calls.length).toBeGreaterThanOrEqual(3);
+        expect(postSnapshotSpy).toHaveBeenCalledTimes(1);
       },
       { timeout: 2_000 },
     );
-    const latestUrl = (createSourceSpy.mock.results.at(-1)?.value as { url: string }).url;
-    expect(new URL(latestUrl, "https://example.test").searchParams.get("sessionId")).toBe(
-      "coding-workbench-edit-run-2",
+    // Nothing about `enabled`/`agentSessionId` changed on its own, so a SECOND attempt only
+    // happens if the hook forces one: the reconnect cycle (2x120ms) plus a fresh 300ms debounce.
+    await waitFor(
+      () => {
+        expect(postSnapshotSpy).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2_000 },
     );
-
-    // The re-established session still registers the run's own workspace root.
+    const [secondSnapshot] = postSnapshotSpy.mock.calls[1] as [{ workspaceRoot: string }];
+    expect(secondSnapshot.workspaceRoot).toBe("/repo/task-1");
+    // The now-successful registration made the session ready, so a live bridge actually forms —
+    // the shared registry never opens a stream for a session that never registered a capability.
     await waitFor(() => {
-      const [latestSnapshot] = postSnapshotSpy.mock.calls.at(-1) as [{ workspaceRoot: string }];
-      expect(latestSnapshot.workspaceRoot).toBe("/repo/task-1");
+      expect(createSourceSpy).toHaveBeenCalled();
     });
+
+    // It stops retrying once registration is healthy again: no third attempt appears.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    });
+    expect(postSnapshotSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps retrying across a second consecutive failure instead of giving up after the first retry", async () => {
+    postSnapshotSpy
+      .mockRejectedValueOnce(new Error("network unreachable"))
+      .mockRejectedValueOnce(new Error("network unreachable"))
+      .mockResolvedValue({ snapshot: null, bridgeDecisionCapability: "A".repeat(43) });
+    renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
+    );
+    await waitFor(
+      () => {
+        expect(postSnapshotSpy).toHaveBeenCalledTimes(3);
+      },
+      { timeout: 3_000 },
+    );
   });
 });
 

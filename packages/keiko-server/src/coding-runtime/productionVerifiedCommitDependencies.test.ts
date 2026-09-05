@@ -2,16 +2,42 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { EditorAgentSessionSnapshot } from "@oscharko-dev/keiko-contracts";
+import type { EditorAgentSessionSnapshot, WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import { createNodeEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { editorAgentRegistry } from "../editor/agentSessionRegistry.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { createInMemoryUiStore } from "../store/index.js";
+import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import {
   createProductionVerifiedCommitDependencies,
   verifiedCommitBuffersClean,
   type VerifiedCommitCompositionDeps,
 } from "./productionVerifiedCommitDependencies.js";
+
+function workspaceInfo(workspaceRoot: string): WorkspaceInfo {
+  return {
+    root: workspaceRoot,
+    selectedRoot: workspaceRoot,
+    name: "fixture",
+    version: undefined,
+    testFramework: "vitest",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
+}
+
+const noopSnapshots: Pick<
+  CodingRuntimeSnapshotStore,
+  "get" | "recordVerifiedCommit" | "getLastSuccessfulVerifiedCommit"
+> = {
+  get: () => undefined,
+  recordVerifiedCommit: () => {
+    throw new Error("not exercised by this test");
+  },
+  getLastSuccessfulVerifiedCommit: () => undefined,
+};
 
 let root: string;
 let scratch: string;
@@ -90,6 +116,25 @@ describe("production verified commit dependencies", () => {
     expect(verifiedCommitBuffersClean(deps, root, "run-2")).toBe(true);
     editorAgentRegistry.registerSnapshot({ ...dirtySnapshot(root), sessionId: "session-target" });
     expect(verifiedCommitBuffersClean(deps, root, "run-2")).toBe(false);
+  });
+
+  it("carries closed message-policy violation codes through the real production composition (#3390)", async () => {
+    const composed = createProductionVerifiedCommitDependencies(deps, noopSnapshots);
+    expect(composed).toBeDefined();
+    const result = await composed?.messageAllowed(
+      "not a conventional commit message",
+      workspaceInfo(root),
+    );
+    expect(result).toStrictEqual({
+      ok: false,
+      violations: ["missing-conventional-prefix"],
+    });
+  });
+
+  it("still resolves ok:true through the real production composition for a compliant message", async () => {
+    const composed = createProductionVerifiedCommitDependencies(deps, noopSnapshots);
+    const result = await composed?.messageAllowed("feat: add widget (#1)", workspaceInfo(root));
+    expect(result).toStrictEqual({ ok: true });
   });
 
   it("refuses dirty buffers in a nested workspace because it overlaps the target tree", () => {

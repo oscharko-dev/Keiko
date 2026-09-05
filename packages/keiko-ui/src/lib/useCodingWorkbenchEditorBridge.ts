@@ -289,6 +289,12 @@ export function useCodingWorkbenchEditorBridge(
   // edits cannot land even though the run is active (epic #3384 cascade, end-to-end run
   // 2026-09-05).
   const [registrationFailed, setRegistrationFailed] = useState(false);
+  // Increments on EVERY failed registration attempt, including a second failure in a row where
+  // `registrationFailed` itself would otherwise stay `true` and never re-trigger the retry effect
+  // below (React skips a state update that sets a boolean to the value it already holds). The
+  // retry effect keys off this counter instead, so a persistently failing backend keeps getting
+  // retried rather than being retried exactly once.
+  const [registrationFailureEpoch, setRegistrationFailureEpoch] = useState(0);
 
   const handleApplyChangeset = useCallback((action: EditorAgentAction): void => {
     if (action.requiresReview === false) {
@@ -328,6 +334,7 @@ export function useCodingWorkbenchEditorBridge(
         return response;
       } catch (error) {
         setRegistrationFailed(true);
+        setRegistrationFailureEpoch((value) => value + 1);
         // The underlying bridge's own registration effect (editorAgentBridge.ts) already treats a
         // rejected `registerSnapshot` as availability-only and continues without a lease; this
         // hook re-throws only so THAT existing handling is unchanged, after recording the
@@ -353,31 +360,28 @@ export function useCodingWorkbenchEditorBridge(
     await wait(FORCE_RECONNECT_SETTLE_MS);
   }, []);
 
-  // Epic #3384 cascade: a run this long-lived window only just observed as active — a status poll
-  // or stream catching up after a stop, or a run started from another paired client — must always
-  // get a genuinely live bridge, never one that merely LOOKS enabled because `shouldBeEnabled`
-  // flipped true. The shared bridge registry has no signal of its own for "connected but no longer
-  // actually live" (see `forceReconnect` above), so every eligibility transition AFTER this hook
-  // instance's very first one forces one clean unsubscribe/resubscribe cycle instead of trusting
-  // the ordinary prop-driven (re)subscribe alone. The very first transition is deliberately exempt
-  // — a hook instance that has never registered anything yet has no stale connection to clear, and
-  // forcing the extra ~240ms suspend/resume cycle on every ordinary run start would only delay the
-  // common case for no benefit. Keyed per `sessionId` so a given run is reconnected at most once.
-  const everEnabledRef = useRef(false);
-  const reconnectedSessionRef = useRef<string | null>(null);
+  // Epic #3384 cascade, end-to-end run 2026-09-05: a run this window observes as active but whose
+  // headless bridge session could not be registered used to stay that way silently forever — the
+  // ordinary prop-driven (re)subscribe in `useEditorAgentBridge` only re-fires on an `enabled` or
+  // `agentSessionId` CHANGE, and neither changes merely because a registration attempt failed while
+  // the run stays active. `registerSnapshot` above bumps `registrationFailureEpoch` on every such
+  // failure; this effect is what actually DOES something about it: force one clean
+  // unsubscribe/resubscribe cycle (the same lever `decide()` below already uses after a failed
+  // decision), which schedules a fresh, debounced registration attempt. Keyed on the epoch — never
+  // on the `registrationFailed` boolean alone, which would stay `true` across a second consecutive
+  // failure and never re-trigger this effect — and guarded so `forceReconnect`'s OWN
+  // suspend/resume cycle (which also flips `enabled`) never schedules a second retry for the SAME
+  // failure. Net effect: for as long as the run stays active and registration keeps failing, the
+  // bridge keeps retrying roughly every reconnect-cycle-plus-debounce interval instead of every
+  // `keiko_changeset_edit` being refused NO_ACTIVE_SESSION until the operator reloads the page.
+  const retriedEpochRef = useRef(0);
   useEffect(() => {
-    if (!shouldBeEnabled) {
-      reconnectedSessionRef.current = null;
-      return;
-    }
-    if (reconnectedSessionRef.current === sessionId) return;
-    reconnectedSessionRef.current = sessionId;
-    if (everEnabledRef.current) {
-      void forceReconnect();
-    } else {
-      everEnabledRef.current = true;
-    }
-  }, [shouldBeEnabled, sessionId, forceReconnect]);
+    if (!enabled || registrationFailureEpoch === 0) return undefined;
+    if (retriedEpochRef.current === registrationFailureEpoch) return undefined;
+    retriedEpochRef.current = registrationFailureEpoch;
+    const timer = setTimeout(() => void forceReconnect(), FORCE_RECONNECT_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [enabled, registrationFailureEpoch, forceReconnect]);
 
   // `lastDecisionRef` remembers which decision to retry: a failed Approve must resurface as a
   // retryable Approve, never silently as a Deny (or vice versa).

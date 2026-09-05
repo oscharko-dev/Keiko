@@ -210,6 +210,7 @@ interface OpenCodeRuntimeComposition {
   };
   readonly toolBridge: {
     readonly url: string;
+    readonly requestDeadlineMs: number;
     handle(input: {
       readonly method: "POST";
       readonly headers: Headers;
@@ -1645,14 +1646,24 @@ describe("private OpenCode tool bridge", () => {
 
   // #3390 (ADR-0043 D11-D14): a negative proof that no production path re-opens a second loopback
   // listener for this bridge. The public port's OWN shape is the guard: it exposes exactly `url`
-  // (a fixed string, never a self-issued port) and `handle` -- no `listen`/`close`/socket accessor
-  // a caller could use to stand up an HTTP server, which is exactly what made the retired listener
-  // reachable from a Seatbelt-denied second port in the first place.
-  it("exposes exactly {url, handle} on the public bridge port -- no listener surface to reopen", async () => {
+  // (a fixed string, never a self-issued port), `requestDeadlineMs` (a plain number the route
+  // reads to bound body-ingestion by the SAME deadline the admission gate uses for execution) and
+  // `handle` -- no `listen`/`close`/socket accessor a caller could use to stand up an HTTP server,
+  // which is exactly what made the retired listener reachable from a Seatbelt-denied second port
+  // in the first place.
+  it("exposes exactly {url, requestDeadlineMs, handle} on the public bridge port -- no listener surface to reopen", async () => {
     const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
     const fixture = await startBridgeFixture(facade);
     try {
-      expect(Object.keys(fixture.runtime.toolBridge).sort()).toEqual(["handle", "url"]);
+      expect(Object.keys(fixture.runtime.toolBridge).sort()).toEqual([
+        "handle",
+        "requestDeadlineMs",
+        "url",
+      ]);
+      // Pins to the SAME configured value `startBridgeFixture`'s default `toolBridge` input uses
+      // (`requestDeadlineMs: 50`) -- not just "some positive number" -- so a future change that
+      // decouples the exposed value from the admission gate's own limit is caught here.
+      expect(fixture.runtime.toolBridge.requestDeadlineMs).toBe(50);
     } finally {
       await fixture.stop();
     }

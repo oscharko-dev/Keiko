@@ -96,11 +96,14 @@ export interface CodingRuntimeHost {
 }
 
 /**
- * The dispatch surface a run's tool bridge exposes to the route -- deliberately just `handle`
- * (never the bridge's internal admission/limits state), matching `OpenCodeToolBridge["handle"]`'s
- * shape without importing the OpenCode-specific type into this transport-agnostic control plane.
+ * The dispatch surface a run's tool bridge exposes to the route -- `handle` plus the single
+ * timing number the route needs to bound body-ingestion by the SAME deadline the admission gate
+ * applies to execution (`requestDeadlineMs`), never the gate's internal admission state (in-flight
+ * count, controllers). Matches `OpenCodeToolBridge`'s shape without importing the OpenCode-specific
+ * type into this transport-agnostic control plane.
  */
 export interface CodingRuntimeToolFacadeBridge {
+  readonly requestDeadlineMs: number;
   handle(input: {
     readonly method: "POST";
     readonly headers: Headers;
