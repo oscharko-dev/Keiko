@@ -291,6 +291,15 @@ const GIT_CI_STATUS_SCHEMA = {
 // The four write-class proposals (stage/commit/push/pull-request) share one redemption tool: once
 // the Workbench approval channel admits a proposal, the model redeems it by kind + proposalId
 // rather than each proposal type growing its own execute-phase tool.
+// The proposalId prefix bound below must accept every shape the server actually mints for the
+// four redeemable kinds: "stage" (packages/keiko-server/src/gitDelivery/runtimeGitService.ts,
+// `stage-${...}`), "commit" (packages/keiko-server/src/gitDelivery/verifiedCommitService.ts's
+// VerifiedCommitService.propose(), `commit-${...}`), and "push"/"pull-request" (both minted via
+// draftDeliveryId("delivery") in packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts,
+// `delivery-${...}`) -- three prefixes for four kinds, not two. gitDelivery/** does not export a
+// single shared prefix constant these three call sites and this schema could all import (each
+// mints its id inline); until one exists, this pattern is the schema's own bound projection of
+// those three shapes and must be kept in exact sync with them by hand.
 const GIT_EXECUTE_SCHEMA = {
   type: "object",
   properties: {
@@ -299,7 +308,7 @@ const GIT_EXECUTE_SCHEMA = {
       type: "string",
       minLength: 1,
       maxLength: 64,
-      pattern: "^(?:stage|delivery)-[0-9]{1,39}$",
+      pattern: "^(?:stage|delivery|commit)-[0-9]{1,39}$",
       description: "The proposalId returned by the matching propose-phase tool call.",
     },
   },

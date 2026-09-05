@@ -109,7 +109,7 @@ describe("OpenCode visible tool contract", () => {
     expect(paths.maxItems).toBe(50);
   });
 
-  it("requires kind and proposalId for keiko_git_execute, bounding proposalId to the two server-issued prefixes", () => {
+  it("requires kind and proposalId for keiko_git_execute, bounding proposalId to the three server-issued prefixes", () => {
     const execute = OPENCODE_MODEL_VISIBLE_TOOLS.find((tool) => tool.name === "keiko_git_execute");
     const pattern = execute?.parameters.properties.proposalId.pattern;
     if (pattern === undefined) throw new TypeError("Expected keiko_git_execute proposalId schema.");
@@ -121,8 +121,14 @@ describe("OpenCode visible tool contract", () => {
       "pull-request",
     ]);
     const accepted = new RegExp(pattern, "u");
+    // stage-* (runtimeGitService.ts), delivery-* (draftDeliveryFacts.ts, push/pull-request), and
+    // commit-* (verifiedCommitService.ts's VerifiedCommitService.propose()) are the three shapes
+    // the server actually mints; a real minted commit proposal id must be redeemable through this
+    // tool (regression: the pattern previously omitted "commit", making #3386's commit-redemption
+    // path unreachable through the model-visible schema even though "commit" is a valid `kind`).
     expect(accepted.test("stage-1")).toBe(true);
     expect(accepted.test("delivery-1")).toBe(true);
+    expect(accepted.test("commit-1")).toBe(true);
     expect(accepted.test("other-1")).toBe(false);
   });
 

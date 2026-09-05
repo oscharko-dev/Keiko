@@ -80,6 +80,7 @@ interface JourneyRefreshResponse {
         readonly repository: string;
         readonly headSha: string;
         readonly baseSha: string;
+        readonly baseRef: string;
         readonly isDraft: boolean;
       };
     } | null;
@@ -188,8 +189,22 @@ interface MarkReadyBody {
   readonly prExternalId: string;
   readonly headSha: string;
   readonly baseSha: string;
+  readonly baseRef: string;
   readonly readinessDigest: string;
 }
+
+// #3389 repair (review finding, correction 2): the execute route now independently re-derives the
+// live requirements digest (assessGitCiFacts's requirementsDigest) and refuses on a mismatch — a
+// digest with no relationship to any live read (this constant used to be the literal "e".repeat(64))
+// can never be redeemed any more. This is the REAL value `assessGitCiFacts` produces for the exact
+// "unprotected branch, no required-status-check rules, no workflow-requirement definitions" facts
+// coding-issue-handoff-transport.mts's CI-facts fixture answers for every PR in this suite — that
+// digest depends only on the (empty) requirements configuration, never on PR/repo identity, so one
+// constant serves every test below. Recomputed by calling the real producer against that exact
+// fixture shape (`collectGitCiRequirements({protection:{outcome:"unprotected"}, rules: emptyPage})`
+// then `assessGitCiFacts`), never hand-derived.
+const HANDOFF_CLEAN_READINESS_DIGEST =
+  "0cca7086fc8519a84fbfceee46195028f2af59a14e0d69fb8eab21ec4a328e02";
 
 interface MarkReadyApproveResponse {
   readonly approval: unknown;
@@ -237,7 +252,8 @@ test("#3389 @coding-issue-handoff pr-mark-ready: the ready-approval race — two
     prExternalId: String(identity.number),
     headSha: identity.headSha,
     baseSha: identity.baseSha,
-    readinessDigest: "e".repeat(64),
+    baseRef: identity.baseRef,
+    readinessDigest: HANDOFF_CLEAN_READINESS_DIGEST,
   };
 
   // Two independently minted proposals ("two proposals") for the identical draft->ready
@@ -288,7 +304,8 @@ test("#3389 @coding-issue-handoff pr-mark-ready: execute refuses without a consu
     prExternalId: String(identity.number),
     headSha: identity.headSha,
     baseSha: identity.baseSha,
-    readinessDigest: "e".repeat(64),
+    baseRef: identity.baseRef,
+    readinessDigest: HANDOFF_CLEAN_READINESS_DIGEST,
   };
 
   // No approval attached at all: refused as approval-required, nothing executes.

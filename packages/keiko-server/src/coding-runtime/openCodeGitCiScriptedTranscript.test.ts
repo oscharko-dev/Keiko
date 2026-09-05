@@ -23,6 +23,7 @@ import { createVerifiedCommitService } from "../gitDelivery/verifiedCommitServic
 import { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
 import { commitFacadeFixture } from "../gitDelivery/verifiedCommitFacadeTestSupport.js";
 import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
+import { createDraftRun } from "../gitDelivery/ciObservationTest/_support.js";
 import type { VerifiedCommitRunContext } from "../gitDelivery/verifiedCommitTypes.js";
 import {
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
@@ -351,28 +352,10 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-ci-repair-transcript-")));
     roots.push(root);
     const db = new DatabaseSync(":memory:");
-    runMigrations(db);
-    const snapshots = createCodingRuntimeSnapshotStore(db);
-    snapshots.create({
-      schemaVersion: "1",
-      runId: "run-1",
-      state: "running",
-      revision: 0,
-      requestedMode: "autonomous-delivery",
-      runtimeSource: "keiko-sidecar",
-      modelSource: "keiko-model-gateway",
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
-      taskDigest: DIGEST,
-      workspaceDigest: DIGEST,
-      operatorDigest: DIGEST,
-      authorityDigest: DIGEST,
-      bindingDigest: DIGEST,
-      provenanceDigest: DIGEST,
-      toolCallCount: 0,
-      patchByteCount: 0,
-      modelRequestCount: 0,
-    });
+    // #3388 CI observation requires a live confirmed draft delivery to observe against -- reuses
+    // the existing gitDelivery test-support fixture (a verified commit + a completed push/PR
+    // draft delivery record for run-1) instead of re-deriving that precondition by hand.
+    const snapshots = createDraftRun(db);
     let nowMs = 1_000_000;
     const repairController = new CodingRuntimeCiRepairController({
       store: snapshots.ciRepairBudget,
@@ -380,7 +363,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       context: () => ({
         runId: "run-1",
         remoteDigest: DIGEST,
-        prNumber: 1,
+        prNumber: 17,
         correlationId: "scripted-ci-repair-3388",
         limits: { maxRuntimeMs: 600_000, maxToolCalls: 100, maxPromptTokens: 100_000 },
         stillAuthorized: () => true,
@@ -397,11 +380,11 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
           runId: "run-1",
           remoteDigest: DIGEST,
           repository: "owner/repository",
-          prNumber: 1,
+          prNumber: 17,
           baseRef: "dev",
           baseSha: "1".repeat(40),
-          headRef: "codex/task",
-          headSha: "2".repeat(40),
+          headRef: "feature/issue-1",
+          headSha: "3".repeat(40),
           requirementsVersion: "1",
           requirementsDigest: DIGEST,
           strictBaseRequired: false,
@@ -420,7 +403,12 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
             conflict: "clear" as const,
             baseCurrency: "current" as const,
           },
-          humanReview: { visibility: "complete" as const, requiredCount: 0, approvedCount: 0 },
+          humanReview: {
+            visibility: "complete" as const,
+            requiredCount: 0,
+            approvedCount: 0,
+            changesRequestedCount: 0,
+          },
         };
         const ticket = snapshots.ciReadiness.begin("run-1");
         snapshots.ciReadiness.complete(ticket, snapshot);
@@ -482,6 +470,8 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
         body: String(init.body ?? ""),
         capability: "scripted-fixture-capability",
       });
+      // eslint-disable-next-line no-console
+      console.log("DEBUG ci facade result", JSON.stringify(result));
       return new Response(JSON.stringify(result));
     };
     const tools = new ScriptedGovernedTools({

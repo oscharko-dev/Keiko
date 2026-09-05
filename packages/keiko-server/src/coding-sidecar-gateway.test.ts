@@ -493,6 +493,10 @@ const GIT_CI_STATUS_SCHEMA = {
   },
   required: ["forceFresh"],
 } as const;
+// Kept in exact sync with opencodeToolSchemas.ts's own GIT_EXECUTE_SCHEMA by hand (this file pins
+// the real wire schema independently of that module's export, on purpose, as its own regression
+// check) -- stage-/delivery-/commit- are the three prefixes the server actually mints; see that
+// module's GIT_EXECUTE_SCHEMA comment for the exact minting call sites.
 const GIT_EXECUTE_SCHEMA = {
   type: "object",
   properties: {
@@ -501,7 +505,7 @@ const GIT_EXECUTE_SCHEMA = {
       type: "string",
       minLength: 1,
       maxLength: 64,
-      pattern: "^(?:stage|delivery)-[0-9]{1,39}$",
+      pattern: "^(?:stage|delivery|commit)-[0-9]{1,39}$",
       description: "The proposalId returned by the matching propose-phase tool call.",
     },
   },
@@ -920,7 +924,11 @@ describe("coding-sidecar gateway", () => {
       ["keiko_git_commit", "2df8d578416a283a3a72f8c71c4102264305107ae7c4e7b0e5d1806c3b066112"],
       ["keiko_git_push", "c8a1ac469a826ea3547ac220c7bbfdcd6b58080d4ec596ff2a0149c5ccb9b699"],
       ["keiko_pull_request", "459ee94f01b4f6fe7581ea0d365a6adfc702c298d8eec915c51c4da311967c0a"],
-      ["keiko_git_execute", "28eccc61103a21bde0f696517ae6158b165665c689c6735d78384f3ce138e18b"],
+      // Digest recomputed: proposalId.pattern gained the "commit" prefix alongside stage/delivery
+      // (fixed the commit-proposal-id pattern gap -- the prior pattern rejected every real
+      // commit-* proposal id VerifiedCommitService.propose() mints, making #3386's commit
+      // redemption unreachable through this tool's own schema).
+      ["keiko_git_execute", "e86d3180571a32cdb281eead6c9ee58e9864e6d915a3cbeea14630c8a2c735cf"],
       ["keiko_ci_status", "ffc444855e40f3ea3f6f091de97e0f552480d929ff020bc9dc15c88c14199a80"],
       ["todowrite", "0adc662a3338db20587ec0eb8dc2c057847f940e2cd2e4e6b160abd6a68173d6"],
     ]);
