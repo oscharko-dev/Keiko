@@ -5,7 +5,18 @@ import {
   approvalHelpKey,
   isDeliveryPermission,
 } from "./CodingWorkbenchDeliveryReview";
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
+import { fetchCodingWorkbenchJourneyRefresh } from "@/lib/api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchApprovalRisk,
@@ -29,6 +40,7 @@ import { isCodingWorkbenchModel } from "@oscharko-dev/keiko-contracts/runtime/ga
 import { useTranslate } from "@/lib/i18n";
 import { CodingWorkbenchCiReadiness } from "./CodingWorkbenchCiReadiness";
 import { CodingWorkbenchDraftDelivery } from "./CodingWorkbenchDraftDelivery";
+import { CodingWorkbenchJourneyOutcome } from "./CodingWorkbenchJourneyOutcome";
 import { CodingWorkbenchCommitResult } from "./CodingWorkbenchCommitResult";
 import {
   CodingWorkbenchCommitReview,
@@ -89,6 +101,7 @@ import {
   RetryMessage,
   type RetryMessageProps,
 } from "./CodingWorkbenchChanges";
+import { useCodingWorkbenchChanges } from "@/lib/useCodingWorkbenchChanges";
 import { CodexSubscriptionAuthCard } from "./CodingWorkbenchModelCards";
 import {
   useCodingWorkbenchRunWorkspace,
@@ -184,6 +197,40 @@ function latestChangesSignal(events: readonly CodingWorkbenchRuntimeSseEvent[]):
     if (event?.kind === "status" || event?.eventKind === "diff-summarized") return event.cursor;
   }
   return null;
+}
+
+interface CodingWorkbenchJourneyState {
+  readonly outcome: JourneyOutcome | undefined;
+  readonly onRefresh: () => Promise<void>;
+}
+
+/**
+ * Read-only journey observation/reconciliation (#3389 AC1/AC5/AC6). Admitted server-side by the
+ * per-checkout GitHub-reader grant, never the run-bound mutation gate, so a manual refresh keeps
+ * working after the run has terminated. Never mints, requests or implies merge/issue-close
+ * authority — this only reads what the server already observed.
+ */
+function useCodingWorkbenchJourney(runId: string | undefined): CodingWorkbenchJourneyState {
+  const [outcome, setOutcome] = useState<JourneyOutcome | undefined>(undefined);
+  const generation = useRef(0);
+  const refresh = useCallback(async (): Promise<void> => {
+    if (runId === undefined) return;
+    const requestId = (generation.current += 1);
+    const result = await fetchCodingWorkbenchJourneyRefresh({ runId });
+    if (generation.current !== requestId) return;
+    setOutcome(result.status === "observed" ? result.outcome : undefined);
+  }, [runId]);
+  useEffect(() => {
+    setOutcome(undefined);
+    if (runId === undefined) return;
+    refresh().catch(() => {
+      reportClientDiagnostic("[keiko] journey initial refresh failed", { correlationId: runId });
+    });
+    // The manual "Refresh observed status" control surfaces a failed retry through the card's own
+    // action feedback; this initial load only needs a body-free diagnostic, not a second UI path.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh is stable per runId already
+  }, [runId]);
+  return { outcome, onRefresh: refresh };
 }
 
 interface ResumeModeSelection {
@@ -617,6 +664,14 @@ function WorkbenchColumns({
   useEffect(() => {
     if (runId !== undefined) followNewest();
   }, [followNewest, runId]);
+  const journey = useCodingWorkbenchJourney(state.run.value?.draftDelivery?.pullRequest !== undefined ? runId : undefined);
+  const journeyChanges = useCodingWorkbenchChanges({
+    root: liveWorkspaceRoot,
+    runId: state.run.value?.runId,
+    changeSignal: latestChangesSignal(state.events),
+    bindingPending: workspaceBindingPending,
+    submittedRoot: runBoundRoot,
+  });
   const pausedRun = state.run.value?.state === "paused" ? state.run.value : undefined;
   const resumeMode = selectedResumeMode(
     resumeSelection,

@@ -83,9 +83,13 @@ function parseToolCall(raw: unknown): NormalizedToolCall {
   return { id, name, arguments: parsed };
 }
 
-function parseToolCalls(message: Record<string, unknown>): readonly NormalizedToolCall[] {
-  const raw = message.tool_calls;
+/** Reused by the streaming adapter to assemble tool calls from accumulated SSE deltas. */
+export function parseNormalizedToolCalls(raw: unknown): readonly NormalizedToolCall[] {
   return Array.isArray(raw) ? raw.map(parseToolCall) : [];
+}
+
+function parseToolCalls(message: Record<string, unknown>): readonly NormalizedToolCall[] {
+  return parseNormalizedToolCalls(message.tool_calls);
 }
 
 function parseStructuredOutput(content: string): Record<string, unknown> | null {

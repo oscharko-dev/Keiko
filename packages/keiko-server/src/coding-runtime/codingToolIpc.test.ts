@@ -108,7 +108,13 @@ describe("coding tool IPC repository search (#3386 H1)", () => {
     action: "search",
     actionId: "search-2",
     idempotencyKey: "search-key-2",
-    repositoryRequest: { kind: "read", path: "src/a.ts", startLine: 1, endLine: 10, maxBytes: 4096 },
+    repositoryRequest: {
+      kind: "read",
+      path: "src/a.ts",
+      startLine: 1,
+      endLine: 10,
+      maxBytes: 4096,
+    },
   };
 
   it("admits an exact search request and an exact ranged-read handoff, never restating the contract's limits", () => {
@@ -127,9 +133,18 @@ describe("coding tool IPC repository search (#3386 H1)", () => {
   it.each([
     ["an unknown envelope key", { workspaceRoot: "/private" }],
     ["a missing repositoryRequest", { repositoryRequest: undefined }],
-    ["an unknown nested repository-request key", { repositoryRequest: { ...search.repositoryRequest, untrusted: "x" } }],
-    ["a non-relative read path", { repositoryRequest: { ...read.repositoryRequest, path: "/etc/passwd" } }],
-    ["an oversized maxResults beyond the contract's returned-hits limit", { repositoryRequest: { ...search.repositoryRequest, maxResults: 51 } }],
+    [
+      "an unknown nested repository-request key",
+      { repositoryRequest: { ...search.repositoryRequest, untrusted: "x" } },
+    ],
+    [
+      "a non-relative read path",
+      { repositoryRequest: { ...read.repositoryRequest, path: "/etc/passwd" } },
+    ],
+    [
+      "an oversized maxResults beyond the contract's returned-hits limit",
+      { repositoryRequest: { ...search.repositoryRequest, maxResults: 51 } },
+    ],
   ])("rejects %s before a search request exists", (_name, extra) => {
     expect(
       parseCodingToolRequest(JSON.stringify({ ...search, ...extra }), 262_144),

@@ -1,7 +1,10 @@
 import type {
+  ActiveGitDeliveryDescriptionAuthority,
   ActiveGitDeliveryRunAuthority,
   GitDeliveryAuthorityDenial,
   GitDeliveryAuthorityRequest,
+  GitDeliveryDescriptionAuthorityPort,
+  GitDeliveryDescriptionAuthorityScope,
   GitDeliveryRunAuthorityPort,
 } from "./runBoundAuthority.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
@@ -9,7 +12,7 @@ import type { ServerLogEvent } from "../observability/index.js";
 import { describe, expect, it } from "vitest";
 import { CORRELATION_RESPONSE_HEADER, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { gitDeliveryAuthorityDenial, gitDeliveryAuthorityGate } from "./requestPreparation.js";
-import { authorizeGitDelivery } from "./runBoundAuthority.js";
+import { authorizeGitDelivery, authorizeGitDeliveryModelEgress } from "./runBoundAuthority.js";
 import {
   permittedGitDeliveryAuthority,
   productionScopedGitDeliveryAuthority,
@@ -600,5 +603,139 @@ describe("authorizeGitDelivery", () => {
         extra: { operation: "push", phase: "admission", reason: "approval-required" },
       }),
     ]);
+  });
+});
+
+// #3399 (epic #3384 correction 4): the description authority admits exactly two effects outside a
+// running Code task — model egress and the "pull-request" body-only apply. It never widens what a
+// running run already decides, and every other operation keeps requiring one.
+describe("authorizeGitDelivery — description authority (#3399)", () => {
+  const SCOPE: GitDeliveryDescriptionAuthorityScope = {
+    remoteDigest: "d".repeat(64),
+    pr: { ownerAndRepo: "oscharko-dev/Keiko", prNumber: 3399 },
+    snapshotDigest: "e".repeat(64),
+  };
+
+  function descriptionPort(
+    active: ActiveGitDeliveryDescriptionAuthority | undefined,
+  ): GitDeliveryDescriptionAuthorityPort {
+    return { current: () => active };
+  }
+
+  it("admits the pull-request apply from the description authority when no run is active", () => {
+    const decision = authorizeGitDelivery(
+      undefined,
+      { ...REQUEST, operation: "pull-request" },
+      NOW,
+      undefined,
+      {
+        port: descriptionPort({ scope: SCOPE, effectiveMode: "supervised-coding", expiresAt: NOW }),
+        scope: SCOPE,
+      },
+    );
+    expect(decision.allowed).toBe(true);
+    expect(decision.allowed && decision.runId).toBe("description-authority");
+    expect(decision.allowed && /^[0-9a-f]{64}$/u.test(decision.envelopeDigest)).toBe(true);
+  });
+
+  it("falls back to accepted-run-unavailable when the description authority has no live record", () => {
+    const decision = authorizeGitDelivery(
+      undefined,
+      { ...REQUEST, operation: "pull-request" },
+      NOW,
+      undefined,
+      { port: descriptionPort(undefined), scope: SCOPE },
+    );
+    expect(decision).toEqual({ allowed: false, reason: "accepted-run-unavailable" });
+  });
+
+  it("never admits any operation other than pull-request through the description authority", () => {
+    const decision = authorizeGitDelivery(
+      undefined,
+      { ...REQUEST, operation: "push" },
+      NOW,
+      undefined,
+      {
+        port: descriptionPort({
+          scope: SCOPE,
+          effectiveMode: "autonomous-delivery",
+          expiresAt: NOW,
+        }),
+        scope: SCOPE,
+      },
+    );
+    expect(decision).toEqual({ allowed: false, reason: "accepted-run-unavailable" });
+  });
+
+  it("prefers a running accepted run over the description authority when both are present", () => {
+    const decision = authorizeGitDelivery(
+      permittedGitDeliveryAuthority(
+        () => PROJECT_ID,
+        () => WORKSPACE_ROOT,
+      ),
+      { ...REQUEST, operation: "pull-request" },
+      NOW,
+      undefined,
+      {
+        port: descriptionPort({ scope: SCOPE, effectiveMode: "governed-assist", expiresAt: NOW }),
+        scope: SCOPE,
+      },
+    );
+    // The real run's own runId ("test-run"), never the description authority's fixed identity.
+    expect(decision).toEqual({ allowed: true, runId: "test-run", envelopeDigest: "c".repeat(64) });
+  });
+
+  it("mints a byte-identical envelopeDigest for the identical scope, so a stale-scope claim never matches", () => {
+    const first = authorizeGitDelivery(
+      undefined,
+      { ...REQUEST, operation: "pull-request" },
+      NOW,
+      undefined,
+      {
+        port: descriptionPort({
+          scope: SCOPE,
+          effectiveMode: "autonomous-delivery",
+          expiresAt: NOW,
+        }),
+        scope: SCOPE,
+      },
+    );
+    const second = authorizeGitDelivery(
+      undefined,
+      { ...REQUEST, operation: "pull-request" },
+      NOW,
+      undefined,
+      {
+        port: descriptionPort({
+          scope: SCOPE,
+          effectiveMode: "autonomous-delivery",
+          expiresAt: NOW,
+        }),
+        scope: { ...SCOPE, snapshotDigest: "f".repeat(64) },
+      },
+    );
+    expect(first.allowed && second.allowed && first.envelopeDigest !== second.envelopeDigest).toBe(
+      true,
+    );
+  });
+});
+
+describe("authorizeGitDeliveryModelEgress (#3399)", () => {
+  const SCOPE: GitDeliveryDescriptionAuthorityScope = {
+    remoteDigest: "d".repeat(64),
+    pr: { baseRef: "dev", headRef: "feat/x" },
+    snapshotDigest: "e".repeat(64),
+  };
+
+  it("admits when the description authority holds a live record for the exact scope", () => {
+    const port: GitDeliveryDescriptionAuthorityPort = {
+      current: () => ({ scope: SCOPE, effectiveMode: "supervised-coding", expiresAt: NOW }),
+    };
+    expect(authorizeGitDeliveryModelEgress(port, SCOPE, NOW)).toBe("supervised-coding");
+  });
+
+  it("denies (undefined) when no live record matches", () => {
+    const port: GitDeliveryDescriptionAuthorityPort = { current: () => undefined };
+    expect(authorizeGitDeliveryModelEgress(port, SCOPE, NOW)).toBeUndefined();
   });
 });

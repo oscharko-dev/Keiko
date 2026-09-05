@@ -252,12 +252,18 @@ describe("CodingToolGovernedDelegate", () => {
 
   it("carries a search port's CodingRepositoryResult through to the outcome unchanged (#3386 H1)", async () => {
     const ports = governedPorts();
-    const search = { ok: true as const, kind: "search" as const, hits: [], metrics: {
-      candidatesDiscovered: 0,
-      filesScanned: 0,
-      skippedFiles: 0,
-      durationMs: 1,
-    }, truncationReasons: [] };
+    const search = {
+      ok: true as const,
+      kind: "search" as const,
+      hits: [],
+      metrics: {
+        candidatesDiscovered: 0,
+        filesScanned: 0,
+        skippedFiles: 0,
+        durationMs: 1,
+      },
+      truncationReasons: [],
+    };
     ports.repositorySearch = {
       execute: vi.fn(() => Promise.resolve({ status: "completed" as const, search })),
     };

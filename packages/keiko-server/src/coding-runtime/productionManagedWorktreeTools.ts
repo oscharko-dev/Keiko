@@ -352,7 +352,7 @@ function buildRepositorySearchPort(
         return { status: "failed", reasonCode: "search-authority-revoked" };
       }
       const handler = repositorySearchHandler(input, guard, signal);
-      if (handler === undefined || handler.readiness() !== "ready") {
+      if (handler?.readiness() !== "ready") {
         return { status: "failed", reasonCode: "capability-backend-unavailable" };
       }
       const result = await handler.invoke(request.repositoryRequest, {

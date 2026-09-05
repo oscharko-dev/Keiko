@@ -32,7 +32,10 @@ import {
   OPENCODE_RUNTIME_MODEL_ALIAS,
   OPENCODE_RUNTIME_READINESS_PROMPT,
 } from "./coding-runtime/opencodeLaunchProfile.js";
-import { hasExactOpenCodeVisibleToolContract } from "./coding-runtime/opencodeToolSchemas.js";
+import {
+  createOpenCodeGatewayToolCatalogAdvertisement,
+  hasExactOpenCodeVisibleToolContract,
+} from "./coding-runtime/opencodeToolSchemas.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
@@ -395,6 +398,22 @@ function isMatchingModelAlias(
     : model === undefined || model === modelAlias;
 }
 
+/**
+ * The exact managed set is advertised through the catalog, never forwarded raw: the model-gateway
+ * bridge (packages/keiko-model-gateway/src/toolCatalogBridge.ts) derives its actual `tools` from a
+ * `toolCatalog` projection and rejects any request that also carries a handwritten `tools` field
+ * alongside a "bound" advertisement. `isExactManagedToolSet` is the same trust-boundary check
+ * `runtimeGatewayAdmissionResponse` already applies to the incoming sidecar request below, so the
+ * advertisement and the admission gate are provably the same source (ADR-0175 D1/D4).
+ */
+function toolCatalogFor(
+  tools: readonly ToolDefinition[] | undefined,
+): GatewayCallRequest["toolCatalog"] {
+  return isExactManagedToolSet(tools)
+    ? createOpenCodeGatewayToolCatalogAdvertisement(Date.now())
+    : undefined;
+}
+
 function buildChatRequest(
   parsed: CodingSidecarGatewayChatCompletionRequest,
   modelAlias: string,
@@ -403,10 +422,15 @@ function buildChatRequest(
   correlationId: string | undefined,
   reasoningEffort: ModelReasoningEffort | undefined,
 ): GatewayCallRequest {
+  const toolCatalog = toolCatalogFor(parsed.tools);
   return {
     modelId: modelAlias,
     messages: parsed.messages,
-    ...(parsed.tools === undefined ? {} : { tools: parsed.tools }),
+    ...(toolCatalog !== undefined
+      ? { toolCatalog }
+      : parsed.tools === undefined
+        ? {}
+        : { tools: parsed.tools }),
     ...(parsed.temperature === undefined ? {} : { temperature: parsed.temperature }),
     ...(parsed.top_p === undefined ? {} : { topP: parsed.top_p }),
     cancellationSignal,

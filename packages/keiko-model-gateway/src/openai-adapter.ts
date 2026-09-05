@@ -27,7 +27,7 @@ import {
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
 import { createGatewayToolCatalogBridge } from "./toolCatalogBridge.js";
-import { bindNormalizedToolCalls } from "./normalize.js";
+import { bindNormalizedToolCalls, parseNormalizedToolCalls } from "./normalize.js";
 import { normalizeChatResponse, textFromContent } from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import { assertValidGatewaySamplingParameters } from "./types.js";
@@ -319,6 +319,53 @@ function usageFromChunk(chunk: unknown): { prompt: number; completion: number } 
   };
 }
 
+interface ToolCallDeltaEntry {
+  readonly id: string;
+  readonly name: string;
+  readonly argumentsText: string;
+}
+type ToolCallAccumulator = Map<number, ToolCallDeltaEntry>;
+
+// Standard OpenAI-compatible streaming shape: `delta.tool_calls` carries one fragment per call,
+// indexed by `index`, with `id`/`function.name` arriving once and `function.arguments` arriving as
+// concatenated JSON-text fragments across chunks.
+function toolCallDeltasFromChunk(chunk: unknown): readonly unknown[] | undefined {
+  const choice = firstStreamChoice(chunk);
+  const delta = choice !== undefined && isRecord(choice.delta) ? choice.delta : undefined;
+  const raw = delta?.tool_calls;
+  return Array.isArray(raw) ? raw : undefined;
+}
+
+function applyToolCallDelta(accumulator: ToolCallAccumulator, chunk: unknown): void {
+  const deltas = toolCallDeltasFromChunk(chunk);
+  if (deltas === undefined) return;
+  for (const raw of deltas) {
+    if (!isRecord(raw) || typeof raw.index !== "number") continue;
+    const existing = accumulator.get(raw.index);
+    const fn = isRecord(raw.function) ? raw.function : undefined;
+    accumulator.set(raw.index, {
+      id: typeof raw.id === "string" && raw.id.length > 0 ? raw.id : (existing?.id ?? ""),
+      name:
+        typeof fn?.name === "string" && fn.name.length > 0 ? fn.name : (existing?.name ?? ""),
+      argumentsText:
+        (existing?.argumentsText ?? "") + (typeof fn?.arguments === "string" ? fn.arguments : ""),
+    });
+  }
+}
+
+// Reuses the same normalizer the buffered (non-streaming) path uses (normalize.ts
+// `parseNormalizedToolCalls`) instead of a second argument-parsing implementation.
+function assembledToolCalls(accumulator: ToolCallAccumulator): readonly NormalizedToolCall[] {
+  const ordered = [...accumulator.entries()].sort(([left], [right]) => left - right);
+  return parseNormalizedToolCalls(
+    ordered.map(([, entry]) => ({
+      id: entry.id,
+      type: "function",
+      function: { name: entry.name, arguments: entry.argumentsText },
+    })),
+  );
+}
+
 function retryAfterMs(response: Response): number | null {
   const header = response.headers.get("retry-after");
   if (header === null) {
@@ -500,12 +547,17 @@ function* emitRedactedDelta(
   yield redact(emitNow, secrets);
 }
 
-// Records the finish-reason/usage carried on a streaming chunk onto the
+interface StreamAccumulator {
+  content: string;
+  finishReason: FinishReason;
+  prompt: number;
+  completion: number;
+  readonly toolCalls: ToolCallAccumulator;
+}
+
+// Records the finish-reason/usage/tool-call deltas carried on a streaming chunk onto the
 // in-flight response accumulator, when present.
-function applyChunkMetadata(
-  chunk: unknown,
-  acc: { finishReason: FinishReason; prompt: number; completion: number },
-): void {
+function applyChunkMetadata(chunk: unknown, acc: StreamAccumulator): void {
   const finish = finishReasonFromChunk(chunk);
   if (finish !== undefined) acc.finishReason = finish;
   const usage = usageFromChunk(chunk);
@@ -513,6 +565,7 @@ function applyChunkMetadata(
     acc.prompt = usage.prompt;
     acc.completion = usage.completion;
   }
+  applyToolCallDelta(acc.toolCalls, chunk);
 }
 
 // Emits whatever content is still held in the buffer once the stream ends —
@@ -619,7 +672,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     response: Response,
     config: ModelProviderConfig,
     secrets: readonly string[],
-    acc: { content: string; finishReason: FinishReason; prompt: number; completion: number },
+    acc: StreamAccumulator,
   ): AsyncGenerator<string> {
     const buffer = { pending: "" };
     const activeSecrets = configuredSecrets(secrets);
@@ -656,7 +709,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   private assembleResponse(
     config: ModelProviderConfig,
     start: number,
-    acc: { content: string; finishReason: FinishReason; prompt: number; completion: number },
+    acc: StreamAccumulator,
   ): NormalizedResponse {
     const usage: UsageMetadata = {
       requestId: this.deps.requestId,
@@ -669,7 +722,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       modelId: config.modelId,
       content: acc.content,
       finishReason: acc.finishReason,
-      toolCalls: [],
+      toolCalls: assembledToolCalls(acc.toolCalls),
       structuredOutput: null,
       usage,
     };

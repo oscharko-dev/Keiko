@@ -1192,3 +1192,83 @@ describe("CodingRuntimeAuthorityService fail-closed mint and release guards", ()
 
   const authority = service();
 });
+
+// #3399 (epic #3384 correction 4): the server-minted, bounded description authority that admits
+// description generation and the "pull-request" body-only apply outside a running Code task.
+describe("CodingRuntimeAuthorityService description authority", () => {
+  const SCOPE = {
+    remoteDigest: "d".repeat(64),
+    pr: { ownerAndRepo: "oscharko-dev/Keiko", prNumber: 3399 },
+    snapshotDigest: "e".repeat(64),
+  };
+
+  it("mints an effective mode clamped by the deployment ceiling, never the requested mode alone", () => {
+    const authority = service();
+    const minted = authority.mintGitDeliveryDescriptionAuthority({
+      scope: SCOPE,
+      requestedMode: "autonomous-delivery",
+      deploymentCeiling: "supervised-coding",
+      nowIso: NOW,
+    });
+    expect(minted.effectiveMode).toBe("supervised-coding");
+    expect(minted.scope).toEqual(SCOPE);
+  });
+
+  it("the port returns the live record for the exact scope and nothing for a different one", () => {
+    const authority = service();
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: SCOPE,
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      nowIso: NOW,
+    });
+    const port = authority.gitDeliveryDescriptionAuthorityPort();
+    expect(port.current(SCOPE, NOW)?.effectiveMode).toBe("governed-assist");
+    expect(port.current({ ...SCOPE, snapshotDigest: "f".repeat(64) }, NOW)).toBeUndefined();
+  });
+
+  it("expires the record after its TTL", () => {
+    const authority = service();
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: SCOPE,
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      nowIso: NOW,
+      ttlMs: 1_000,
+    });
+    const port = authority.gitDeliveryDescriptionAuthorityPort();
+    expect(port.current(SCOPE, "2026-07-11T12:00:00.500Z")).toBeDefined();
+    expect(port.current(SCOPE, "2026-07-11T12:00:01.500Z")).toBeUndefined();
+  });
+
+  it("revokes the record explicitly on a scope change or stale re-check the caller detected", () => {
+    const authority = service();
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: SCOPE,
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      nowIso: NOW,
+    });
+    authority.revokeGitDeliveryDescriptionAuthority(SCOPE);
+    expect(authority.gitDeliveryDescriptionAuthorityPort().current(SCOPE, NOW)).toBeUndefined();
+  });
+
+  it("re-minting the same scope replaces the prior grant rather than accumulating records", () => {
+    const authority = service();
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: SCOPE,
+      requestedMode: "autonomous-delivery",
+      deploymentCeiling: "autonomous-delivery",
+      nowIso: NOW,
+    });
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: SCOPE,
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      nowIso: NOW,
+    });
+    expect(authority.gitDeliveryDescriptionAuthorityPort().current(SCOPE, NOW)?.effectiveMode).toBe(
+      "governed-assist",
+    );
+  });
+});

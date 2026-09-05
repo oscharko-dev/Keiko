@@ -2471,6 +2471,8 @@ export type {
   BffErrorCode,
   BffError,
   GroundingLimits,
+  ChatGitChangeScope,
+  ChatGitChangeDescriptionStatus,
 } from "./bff-wire.js";
 export type {
   buildGroundedAnswerContextPackSummary,
@@ -2492,6 +2494,7 @@ export type {
   normalizeAttachmentMime,
   UI_HOST,
   DEFAULT_UI_PORT,
+  CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
 } from "./bff-wire.js";
 
 // ─── Shared text-safety primitive (Epic #177/#189 grounding hardening, GRD-001) ──

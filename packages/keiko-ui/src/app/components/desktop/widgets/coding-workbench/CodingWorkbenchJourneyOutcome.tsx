@@ -16,12 +16,20 @@ import { useJourneyClock } from "./_useJourneyClock";
 import common from "./CodingWorkbenchWindow.module.css";
 import styles from "./CodingWorkbenchJourneyOutcome.module.css";
 
+/** A bounded, content-free join of `CodingWorkbenchChanges`' own live data (AC2) — a count and a
+ * truncation flag only, never a path or diff body. */
+export interface CodingWorkbenchJourneyChangedFilesSummary {
+  readonly status: "loading" | "ready" | "unavailable";
+  readonly fileCount: number;
+  readonly truncated: boolean;
+}
 export interface CodingWorkbenchJourneyOutcomeProps {
   readonly snapshot: CodingWorkbenchRuntimeSnapshot | undefined;
   readonly outcome: JourneyOutcome | undefined;
   readonly onRefresh?: () => void | Promise<void>;
   readonly onProposeReady?: () => void | Promise<void>;
   readonly busy?: boolean;
+  readonly changedFiles?: CodingWorkbenchJourneyChangedFilesSummary;
   /**
    * The narrow `pr-mark-ready` approval/execute path (#3389 AC3) is a separate slice landing in a
    * later wave; this route/UI change wires observation only. Until a caller passes `true` — meaning
@@ -71,8 +79,23 @@ function JourneyCard(
         <p className={common.helpText}>{t("codingWorkbench.journey.staleHelp")}</p>
       )}
       <JourneyDetails outcome={outcome} now={now} />
+      <ChangedFilesSummary summary={props.changedFiles} />
       <JourneyControls {...props} ready={canProposeJourneyReady(outcome, snapshot?.state, now)} />
     </section>
+  );
+}
+function ChangedFilesSummary({
+  summary,
+}: {
+  readonly summary: CodingWorkbenchJourneyChangedFilesSummary | undefined;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  if (summary === undefined || summary.status !== "ready") return null;
+  return (
+    <p className={common.helpText}>
+      {t("codingWorkbench.journey.changedFiles", { count: summary.fileCount })}
+      {summary.truncated ? ` ${t("codingWorkbench.journey.changedFilesTruncated")}` : ""}
+    </p>
   );
 }
 function JourneyControls(

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  createOpenCodeGatewayToolCatalogAdvertisement,
   hasExactOpenCodeVisibleToolContract,
   OPENCODE_MODEL_VISIBLE_TOOLS,
 } from "./opencodeToolSchemas.js";
@@ -93,4 +94,33 @@ describe("OpenCode visible tool contract", () => {
       expect(hasExactOpenCodeVisibleToolContract(tools)).toBe(false);
     },
   );
+});
+
+describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
+  it("binds the seven catalog-representable governed tools, no native extensions", () => {
+    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0);
+    expect(advertisement.kind).toBe("bound");
+    expect(advertisement.projection.nativeExtensions).toEqual([]);
+    expect(advertisement.projection.tools.map((tool) => tool.alias).sort()).toEqual(
+      [
+        "keiko_changeset_edit",
+        "keiko_child_agent",
+        "keiko_research_fetch",
+        "keiko_skill",
+        "keiko_verification",
+        "keiko_workspace_discover",
+        "keiko_workspace_read",
+      ].sort(),
+    );
+    expect(advertisement.offered.toolRefs).toHaveLength(7);
+    expect(advertisement.offered.binding.readiness).toBe("ready");
+  });
+
+  it("issues a distinct offer identity and expiry per call", () => {
+    const first = createOpenCodeGatewayToolCatalogAdvertisement(1_000);
+    const second = createOpenCodeGatewayToolCatalogAdvertisement(1_000);
+    expect(first.offered.offerId).not.toBe(second.offered.offerId);
+    expect(first.projection.projectionDigest).toBe(second.projection.projectionDigest);
+    expect(first.offered.expiresAt).toBe(new Date(31_000).toISOString());
+  });
 });

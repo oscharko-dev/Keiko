@@ -242,6 +242,37 @@ function resolveModeDecision(
   return { allowed: false, reason: decision.reason };
 }
 
+// #3399: the caller-supplied admission the description authority offers ONLY for the
+// "pull-request" body-only apply, consulted exclusively when no running accepted run exists (a
+// run, when present, remains the sole authority for every operation — the description authority
+// never widens what an active run already decides). Bound to the exact scope the caller re-derives
+// immediately before the effect; a stale re-check, a different PR, or a moved base/head simply
+// finds no live record at the port, which falls through to the SAME `accepted-run-unavailable`
+// closed reason a missing run produces — this admission source never introduces a new "reason".
+export interface GitDeliveryDescriptionAuthorityAdmission {
+  readonly port: GitDeliveryDescriptionAuthorityPort;
+  readonly scope: GitDeliveryDescriptionAuthorityScope;
+}
+
+function descriptionAuthorityEnvelopeDigest(scope: GitDeliveryDescriptionAuthorityScope): string {
+  return sha256Hex(canonicalise(scope));
+}
+
+function admitByDescriptionAuthority(
+  request: GitDeliveryAuthorityRequest,
+  admission: GitDeliveryDescriptionAuthorityAdmission | undefined,
+  nowIso: string,
+): GitDeliveryAuthorityDecision | undefined {
+  if (admission === undefined || request.operation !== "pull-request") return undefined;
+  const active = admission.port.current(admission.scope, nowIso);
+  if (active === undefined) return undefined;
+  return {
+    allowed: true,
+    runId: DESCRIPTION_AUTHORITY_RUN_ID,
+    envelopeDigest: descriptionAuthorityEnvelopeDigest(admission.scope),
+  };
+}
+
 /**
  * Single server-owned admission decision for every state-changing Git delivery operation. It is
  * deliberately pure over a server-private active-run port, so a browser checkbox, CSRF header, or
@@ -250,15 +281,28 @@ function resolveModeDecision(
  * `redeemApproval`, when supplied, is consulted only when the mode/resource-scope/risk matrix
  * resolves "approval-required" for a lower mode: it lets the caller admit the operation over a
  * one-use claim bound to this exact accepted run instead of failing closed outright.
+ *
+ * `descriptionAuthority`, when supplied, is consulted only when no running accepted run exists AND
+ * `request.operation === "pull-request"` — the body-only description apply's admission outside a
+ * Code task (#3399, epic #3384 correction 4). Every other operation keeps requiring a running
+ * accepted run; this parameter has no effect on any other operation.
  */
 export function authorizeGitDelivery(
   authorityPort: GitDeliveryRunAuthorityPort | undefined,
   request: GitDeliveryAuthorityRequest,
   nowIso: string,
   redeemApproval?: GitDeliveryApprovalRedemption,
+  descriptionAuthority?: GitDeliveryDescriptionAuthorityAdmission,
 ): GitDeliveryAuthorityDecision {
   const active = authorityPort?.current(nowIso);
-  if (active === undefined) return { allowed: false, reason: "accepted-run-unavailable" };
+  if (active === undefined) {
+    return (
+      admitByDescriptionAuthority(request, descriptionAuthority, nowIso) ?? {
+        allowed: false,
+        reason: "accepted-run-unavailable",
+      }
+    );
+  }
   if (expired(nowIso, active.authority.expiresAt))
     return { allowed: false, reason: "authority-expired" };
   if (active.projectId !== request.projectId || active.workspaceRoot !== request.workspaceRoot) {
@@ -273,4 +317,19 @@ export function authorizeGitDelivery(
   if (!withinBranchEnvelope(request, active))
     return { allowed: false, reason: "branch-out-of-envelope" };
   return resolveModeDecision(active, request, requirement, redeemApproval);
+}
+
+/**
+ * #3399: the description authority's second admitted effect — model egress of snapshot content
+ * through the Model Gateway for description generation. Not a Git operation (no argv, adapter, or
+ * branch target), so it is a sibling check rather than a `GitDeliveryAuthorityRequest.operation`
+ * value. Returns the admitted effective mode (never workspace-write or command capable) or
+ * `undefined` when no live record matches the exact scope.
+ */
+export function authorizeGitDeliveryModelEgress(
+  port: GitDeliveryDescriptionAuthorityPort,
+  scope: GitDeliveryDescriptionAuthorityScope,
+  nowIso: string,
+): CodingWorkbenchMode | undefined {
+  return port.current(scope, nowIso)?.effectiveMode;
 }

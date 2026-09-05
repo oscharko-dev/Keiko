@@ -984,7 +984,9 @@ describe("H1 repository search mounted into production composition (#3386)", () 
       body: searchBody({ query: "truncationProbe", maxResults: 2 }),
     });
 
-    const search = result as { search: { ok: true; hits: readonly unknown[]; truncationReasons: readonly string[] } };
+    const search = result as {
+      search: { ok: true; hits: readonly unknown[]; truncationReasons: readonly string[] };
+    };
     expect(search.search.ok).toBe(true);
     expect(search.search.hits).toHaveLength(2);
     expect(search.search.truncationReasons).toContain("result-limit");
@@ -997,7 +999,12 @@ describe("H1 repository search mounted into production composition (#3386)", () 
       resolveWorkspaceRootAccess: (): WorkspaceRootAccess | undefined => {
         calls += 1;
         return calls === 1
-          ? { kind: "managed-task" as const, canonicalRoot: root, fs: nodeWorkspaceFs, repositoryRoot: root }
+          ? {
+              kind: "managed-task" as const,
+              canonicalRoot: root,
+              fs: nodeWorkspaceFs,
+              repositoryRoot: root,
+            }
           : undefined;
       },
     });

@@ -170,6 +170,51 @@ export type ChatLocalKnowledgeScope =
       readonly connectedAtMs: number;
     };
 
+// Issue #3400 (epic #3384) — the FROZEN description-status vocabulary (contract correction 3).
+// `current`: the artifact is complete/partial/fallback AND the snapshot re-check found no drift.
+// `stale`: the re-check found the repository has moved (a different base, head, merge base or
+// snapshot digest) or the snapshot expired — regardless of the underlying artifact outcome.
+// `partial`/`fallback`/`failed`: the artifact outcome itself, on an otherwise-current snapshot.
+// `blocked`: a prerequisite is missing (no resolved PR, no admissible description authority, an
+// unmet approval) — never a `GitChangeSnapshotOutcome` and never persisted on the snapshot itself.
+export const CHAT_GIT_CHANGE_DESCRIPTION_STATUSES = [
+  "current",
+  "stale",
+  "partial",
+  "fallback",
+  "blocked",
+  "failed",
+] as const;
+export type ChatGitChangeDescriptionStatus = (typeof CHAT_GIT_CHANGE_DESCRIPTION_STATUSES)[number];
+
+// Issue #3400 (epic #3384, contract corrections 2 and 6) — a THIRD Chat scope list, sibling to
+// `connectedScopes`/`localKnowledgeScopes`, never overloading either. Every field is a
+// server-issued, content-free fact: no raw diff, no filesystem path, no provider payload, no
+// browser-authored repository identity. `remoteDigest` (not `repositoryId`) is the "same
+// repository" key (correction 6). `relationshipId` names the immutable, archive-only
+// `reads-context` edge (relationships.ts) this scope entry projects; a refresh archives it and
+// creates a new one (correction 4) rather than mutating this record in place.
+export interface ChatGitChangeScope {
+  readonly kind: "git-change";
+  readonly relationshipId: string;
+  readonly remoteDigest: string;
+  /** Server-rendered, safe label for display only — e.g. a branch comparison or "PR #123". */
+  readonly comparisonLabel: string;
+  readonly baseRef: string;
+  readonly headRef: string;
+  readonly baseSha: string;
+  readonly headSha: string;
+  readonly mergeBaseSha: string;
+  readonly snapshotDigest: string;
+  readonly pullRequestNumber?: number;
+  readonly fileCount: number;
+  readonly totalFiles: number;
+  readonly omittedFiles: number;
+  readonly truncatedFiles: number;
+  readonly descriptionStatus: ChatGitChangeDescriptionStatus;
+  readonly connectedAtMs: number;
+}
+
 export interface Chat {
   readonly id: string;
   readonly projectPath: string;
@@ -193,6 +238,10 @@ export interface Chat {
   // When both are present, `localKnowledgeScope` equals `localKnowledgeScopes[0]`.
   readonly localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[];
   readonly localKnowledgeScope: ChatLocalKnowledgeScope | undefined;
+  // Issue #3400 (epic #3384) — a THIRD, sibling scope list carrying only server-issued Git-change
+  // facts (contract correction 2). Unlike `connectedScopes`/`localKnowledgeScopes` there is no
+  // single-source legacy field: this scope kind was never overloaded onto an earlier shape.
+  readonly gitChangeScopes?: readonly ChatGitChangeScope[];
   // Path-free server-issued concurrency token for the canonical retrieval-semantic grounding
   // scope. Voice queues echo it back so a final captured under one source set cannot later
   // retrieve under another; lifecycle metadata does not alter the token.
@@ -267,6 +316,11 @@ export interface UpdateChatPatch {
   // (absent) leaves the binding untouched while `null` explicitly clears it.
   readonly localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[] | null;
   readonly localKnowledgeScope?: ChatLocalKnowledgeScope | null;
+  // Issue #3400 — set `gitChangeScopes` to bind a list of Git-change scope entries (null clears
+  // ALL). No legacy single-source field exists for this scope kind. `undefined` (absent) leaves
+  // the binding untouched; every entry is server-issued (git-change route handlers only — never
+  // accepted verbatim from an arbitrary PATCH caller without server-side re-validation).
+  readonly gitChangeScopes?: readonly ChatGitChangeScope[] | null;
 }
 
 export interface NewChatMessage {

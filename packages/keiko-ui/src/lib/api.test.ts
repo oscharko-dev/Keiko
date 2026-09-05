@@ -94,6 +94,7 @@ import {
   previewCodingWorkbenchIssue,
   fetchGitHubIssueReaderAuthorization,
   updateGitHubIssueReaderAuthorization,
+  fetchCodingWorkbenchJourneyRefresh,
   type GitHubIssuePreviewResponseWire,
 } from "./api";
 import {
@@ -101,6 +102,7 @@ import {
   managedLspTestConfigurationDefaults,
 } from "@/test-utils/managed-lsp-settings-fixture";
 import { CORRELATION_HEADER } from "./bff-correlation";
+import { journeyFixture } from "@/app/components/desktop/widgets/coding-workbench/_journeyOutcomeTestSupport";
 
 const API_SOURCE = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "api.ts"), "utf8");
 const MANAGED_LSP_VALIDATORS_SOURCE = readFileSync(
@@ -3455,5 +3457,78 @@ describe("Coding Workbench issue intake API (#3385)", () => {
         expectedRevision: 0,
       }),
     ).rejects.toMatchObject({ code: "CONFLICT", status: 409, correlationId: "corr-409" });
+  });
+});
+
+// #3389 — the read-only journey observation/refresh client, admitted by the per-checkout
+// GitHub-reader grant rather than a run-bound mutation gate. The client validates the observed
+// outcome through the shared contract guard and never restates its vocabulary.
+describe("Coding Workbench journey observation API (#3389)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonOk(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  it("posts the exact-key refresh request and returns the validated observed outcome", async () => {
+    const { outcome } = journeyFixture();
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ status: "observed", outcome }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const result = await fetchCodingWorkbenchJourneyRefresh(
+      { runId: outcome.binding.runId },
+      controller.signal,
+    );
+
+    expect(result).toEqual({ status: "observed", outcome });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/git-delivery/journey/refresh");
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      schemaVersion: "1",
+      runId: outcome.binding.runId,
+    });
+    expect(init.signal).toBe(controller.signal);
+  });
+
+  it("returns the closed unavailable reason without treating it as an observed outcome", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ status: "unavailable", reason: "draft-unavailable" })),
+    );
+
+    const result = await fetchCodingWorkbenchJourneyRefresh({ runId: "run-1" });
+
+    expect(result).toEqual({ status: "unavailable", reason: "draft-unavailable" });
+  });
+
+  it("rejects a response claiming an invalid JourneyOutcome rather than rendering it", async () => {
+    const { outcome } = journeyFixture();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonOk({ status: "observed", outcome: { ...outcome, state: "fabricated-current" } }),
+      ),
+    );
+
+    await expect(fetchCodingWorkbenchJourneyRefresh({ runId: "run-1" })).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+    });
+  });
+
+  it("rejects a runId that is not a bounded, non-empty string before any request is sent", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchCodingWorkbenchJourneyRefresh({ runId: "" })).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -22,6 +22,7 @@ import {
   handleCodingSidecarGatewayProfile,
 } from "./coding-sidecar-gateway.js";
 import { mockRequest, mockResponse, probeVerifiedGatewayConfig } from "./_support.js";
+import { createOpenCodeGatewayToolCatalogAdvertisement } from "./coding-runtime/opencodeToolSchemas.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
@@ -596,6 +597,53 @@ describe("coding-sidecar gateway", () => {
       }
     },
   );
+
+  it("produces a GatewayRequest whose toolCatalog projection canonically equals the forwarded managed tools and reaches fetch", async () => {
+    resetGatewayInstanceCacheForTests();
+    let requestBody: { tools?: readonly { function: { name: string; parameters: unknown } }[] } | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        requestBody = JSON.parse(String(init?.body)) as typeof requestBody;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }),
+    );
+    const deps = runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-real" } }));
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "continue" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+      assertRouteResult(result);
+      expect(result.status).toBe(200);
+      expect(requestBody?.tools).toBeDefined();
+      const sentTools = requestBody?.tools ?? [];
+      const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(Date.now());
+      const projectedByAlias = new Map(
+        advertisement.projection.tools.map((tool) => [tool.alias, tool]),
+      );
+      // Native extensions (question/todowrite) are not yet part of this advertisement -- see
+      // opencodeToolSchemas.ts's createOpenCodeGatewayToolCatalogAdvertisement doc comment.
+      expect(new Set(sentTools.map((tool) => tool.function.name))).toEqual(
+        new Set(projectedByAlias.keys()),
+      );
+      for (const tool of sentTools) {
+        expect(tool.function.parameters).toEqual(projectedByAlias.get(tool.function.name)?.inputSchema);
+      }
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
 
   it("keeps circuit-breaker failures across separate production gateway requests", async () => {
     resetGatewayInstanceCacheForTests();

@@ -181,6 +181,8 @@ import {
   GITHUB_ISSUE_REFERENCE_MAX_CHARS as CONTRACT_GITHUB_ISSUE_REFERENCE_MAX_CHARS,
   isGitHubOwnerAndRepo,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
+import { isJourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-validation";
 import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
 import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
@@ -3285,6 +3287,63 @@ export async function fetchGitDeliveryMergeExecute(
     body: gitDeliveryMergeBody(input),
     ...(signal === undefined ? {} : { signal }),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Coding Workbench journey observation (#3389) — read-only refresh/reconciliation of the accepted
+// draft delivery run's confirmed PR and bound issue. Admitted by the server's per-checkout
+// GitHub-reader grant, never the run-bound mutation gate, so it works after the run has terminated.
+// ---------------------------------------------------------------------------
+
+const RUN_ID_MAX_CHARS = 128;
+
+export type CodingWorkbenchJourneyRefreshResult =
+  | { readonly status: "observed"; readonly outcome: JourneyOutcome }
+  | { readonly status: "unavailable"; readonly reason: string };
+
+/**
+ * The outcome itself is fully validated against the shared contract (`isJourneyOutcome`): its state,
+ * reason and binding vocabularies are never restated here. The "unavailable" envelope has no
+ * contracts-level type of its own (it is this route's own closed reason set, journeyRoutes.ts
+ * `JourneyObservationResult`), so this checks only its structural shape — a non-empty reason string
+ * — rather than duplicating that server-owned enum on the client.
+ */
+export function validateCodingWorkbenchJourneyRefreshResponse(
+  value: unknown,
+): GitRepositoryValidation {
+  if (!isRecordValue(value)) {
+    return { ok: false, reasons: ["journey refresh response must be an object"] };
+  }
+  if (value.status === "observed") {
+    return isJourneyOutcome(value.outcome)
+      ? { ok: true }
+      : { ok: false, reasons: ["journey refresh response.outcome must be a valid JourneyOutcome"] };
+  }
+  if (value.status === "unavailable") {
+    return isBoundedText(value.reason, 64)
+      ? { ok: true }
+      : { ok: false, reasons: ["journey refresh response.reason must be a bounded, non-empty string"] };
+  }
+  return { ok: false, reasons: ["journey refresh response.status must be observed or unavailable"] };
+}
+
+/** Reads/refreshes the bounded journey observation for one accepted draft-delivery run (#3389). */
+export async function fetchCodingWorkbenchJourneyRefresh(
+  input: { readonly runId: string },
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchJourneyRefreshResult> {
+  if (!isBoundedText(input.runId, RUN_ID_MAX_CHARS)) {
+    throw new ApiError("CONTRACT_VALIDATION_FAILED", "runId must be a bounded, non-empty string", 400);
+  }
+  return fetchJson(
+    "/api/git-delivery/journey/refresh",
+    {
+      method: "POST",
+      body: JSON.stringify({ schemaVersion: "1", runId: input.runId }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    validateCodingWorkbenchJourneyRefreshResponse,
+  );
 }
 
 // ---------------------------------------------------------------------------

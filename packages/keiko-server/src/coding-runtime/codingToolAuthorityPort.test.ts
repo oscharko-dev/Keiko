@@ -95,6 +95,7 @@ function governedPorts(
   return {
     repositoryRead: { execute: failed },
     repositoryDiscover: { execute: failed },
+    repositorySearch: { execute: failed },
     editorChangeset: { execute: () => Promise.resolve({ status: editorOutcome }) },
     commandRunner: { execute: failed },
     verificationRunner: { execute: failed },
@@ -784,4 +785,59 @@ describe("CodingToolAuthorityPort", () => {
       expect(port.admit("runtime-capability-secret", request).ok).toBe(false);
     },
   );
+
+  describe("search admission is read-class, exactly like read and discover (#3386 H1)", () => {
+    const searchRequest = {
+      action: "search" as const,
+      actionId: "search-1",
+      idempotencyKey: "search-1",
+      repositoryRequest: {
+        kind: "search" as const,
+        mode: "literal" as const,
+        query: "safeActivity",
+        caseSensitive: false,
+        includeGlobs: [],
+        excludeGlobs: [],
+        maxResults: 20,
+      },
+    };
+
+    it("admits a search with only workspace-read and consumes no approval", () => {
+      const envelope = restrictedEnvelope({ actionClasses: ["workspace-read"] });
+      const authority = {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+      };
+      const port = createCodingToolAuthorityPort(authority, runtimeContext);
+
+      expect(port.admit("capability", searchRequest).ok).toBe(true);
+    });
+
+    it("denies a search when workspace-read is missing, the same class read/discover require", () => {
+      const envelope = restrictedEnvelope({ actionClasses: ["workspace-write"] });
+      const authority = {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+      };
+      const port = createCodingToolAuthorityPort(authority, runtimeContext);
+
+      expect(port.admit("capability", searchRequest)).toEqual({
+        ok: false,
+        reason: "action-not-authorized",
+      });
+    });
+
+    it("previews search availability without reserving delegation or consuming an approval", () => {
+      const envelope = restrictedEnvelope({ actionClasses: ["workspace-read"] });
+      const resolveCapabilityForDelegation = vi.fn(() => ({ ok: true as const, envelope }));
+      const revalidateCapabilityForMutation = vi.fn(() => ({ ok: true as const, envelope }));
+      const preview = createCodingToolAuthorityPreview(
+        { resolveCapabilityForDelegation, revalidateCapabilityForMutation },
+        runtimeContext,
+      );
+
+      expect(preview("capability", searchRequest)).toEqual({ ok: true });
+      expect(resolveCapabilityForDelegation).not.toHaveBeenCalled();
+    });
+  });
 });

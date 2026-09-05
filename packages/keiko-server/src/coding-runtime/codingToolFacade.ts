@@ -271,12 +271,8 @@ function project(request: CodingToolActionRequest, input: unknown): CodingToolRe
   const editFailure = projectEditFailure(request, value);
   if (editFailure !== undefined) return editFailure;
   if (value.outcome === "failed") return projectGovernedFailure(value);
-  const git = projectRuntimeGit(request, value);
-  if (git !== undefined) return git;
-  const commit = projectVerifiedCommit(request, value);
-  if (commit !== undefined) return commit;
-  const search = projectSearch(request, value);
-  if (search !== undefined) return search;
+  const domain = projectDomainResult(request, value);
+  if (domain !== undefined) return domain;
   const auxiliary = projectAuxiliary(request, value.auxiliary);
   if (auxiliary !== undefined) {
     return {
@@ -290,6 +286,20 @@ function project(request: CodingToolActionRequest, input: unknown): CodingToolRe
   return read === undefined
     ? projected(value.outcome)
     : { status: "completed", evidence: [{ kind: "governed-delegate", code: "completed" }], read };
+}
+
+// The three closed, already-typed domain payloads a governed delegate outcome may carry, tried in
+// a fixed order so `project()` itself stays a single flat dispatch instead of inlining every
+// action's own branching (each helper already returns `undefined` for an action it does not own).
+function projectDomainResult(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult | undefined {
+  return (
+    projectRuntimeGit(request, value) ??
+    projectVerifiedCommit(request, value) ??
+    projectSearch(request, value)
+  );
 }
 
 function projectRuntimeGit(

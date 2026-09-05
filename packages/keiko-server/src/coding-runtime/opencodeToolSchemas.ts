@@ -383,3 +383,50 @@ export function hasExactOpenCodeVisibleToolContract(
     )
   );
 }
+
+const OPENCODE_GATEWAY_PROFILE = { id: "opencode", version: 1 } as const;
+const OPENCODE_GATEWAY_OFFER_LIFETIME_MS = 30_000;
+
+/**
+ * The catalog used to build the sidecar gateway's OUTGOING `toolCatalog` advertisement (the
+ * function-calling schema shown to the underlying model). This composes the same seven governed
+ * entries `@oscharko-dev/keiko-tool-catalog`'s `opencodeRegistrationSet()` declares, with
+ * `nativeExtensions` cleared: `packages/keiko-model-gateway/src/toolCatalogBridge.ts`'s
+ * `normalizerFor` and `@oscharko-dev/keiko-tool-catalog`'s `invocation.ts` (`selectedTools`) do
+ * not yet merge native extensions into a bound tool list, so a profile that declares them cannot
+ * bind here today. Until that bridge support lands, `question`/`todowrite` are not part of this
+ * outgoing advertisement (#3414 report) -- unaffected: this catalog is never used to validate
+ * incoming sidecar requests, which stays `hasExactOpenCodeVisibleToolContract` above, pinned to
+ * the real OpenCode 1.17.17 runtime's own generated tool source.
+ */
+const OPENCODE_GATEWAY_CATALOG = createKeikoToolCatalog([
+  { ...opencodeRegistrationSet(), nativeExtensions: [] },
+]);
+
+/**
+ * Builds the "bound" `toolCatalog` advertisement for one outgoing coding-sidecar-gateway request.
+ * The model-gateway bridge derives the actual forwarded `tools` from this projection; the caller
+ * must never also forward a raw `tools` field alongside it (ADR-0175 D1/D4).
+ */
+export function createOpenCodeGatewayToolCatalogAdvertisement(
+  now: number,
+): GatewayToolCatalogAdvertisement {
+  const projection = compileToolProjection(OPENCODE_GATEWAY_CATALOG, OPENCODE_GATEWAY_PROFILE);
+  return {
+    kind: "bound",
+    catalog: OPENCODE_GATEWAY_CATALOG,
+    projection,
+    offered: {
+      binding: {
+        catalogRevision: projection.catalogRevision,
+        profile: projection.profile,
+        projectionDigest: projection.projectionDigest,
+        handlerSetDigest: projection.projectionDigest,
+        readiness: "ready",
+      },
+      offerId: `opencode-gateway-${randomUUID()}`,
+      toolRefs: projection.tools.map((tool) => tool.toolRef),
+      expiresAt: new Date(now + OPENCODE_GATEWAY_OFFER_LIFETIME_MS).toISOString(),
+    },
+  };
+}

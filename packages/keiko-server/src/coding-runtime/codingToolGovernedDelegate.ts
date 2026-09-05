@@ -153,9 +153,6 @@ function governedOutcome(
   if (result.status !== "completed") return { outcome: result.status };
   const git = gitOutcome(action, result);
   if (git !== undefined) return git;
-  if (action === "search" && result.search !== undefined) {
-    return { outcome: "completed", search: result.search };
-  }
   if (READ_BEARING_ACTIONS.has(action) && result.read !== undefined) {
     return { outcome: "completed", read: result.read };
   }
@@ -169,6 +166,13 @@ function gitOutcome(
   action: CodingToolActionRequest["action"],
   result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
 ): unknown {
+  return deliveryOutcome(action, result) ?? searchOutcome(action, result);
+}
+
+function deliveryOutcome(
+  action: CodingToolActionRequest["action"],
+  result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
+): unknown {
   if (action === "git" && result.ci !== undefined) return { outcome: "completed", ci: result.ci };
   if (action === "git" && result.git !== undefined)
     return { outcome: "completed", git: result.git };
@@ -177,6 +181,15 @@ function gitOutcome(
   if (action === "delivery" && result.verifiedCommit !== undefined)
     return { outcome: "completed", verifiedCommit: result.verifiedCommit };
   return undefined;
+}
+
+function searchOutcome(
+  action: CodingToolActionRequest["action"],
+  result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
+): unknown {
+  return action === "search" && result.search !== undefined
+    ? { outcome: "completed", search: result.search }
+    : undefined;
 }
 
 // One exhaustive line per governed action class: the switch IS the routing table and the compiler
