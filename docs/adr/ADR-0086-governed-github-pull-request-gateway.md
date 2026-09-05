@@ -269,27 +269,46 @@ reachable only through `POST /api/git-delivery/pr/mark-ready/{approve,execute}`.
 (ready->draft) is unaffected; it remains a legitimate `pr-update` field.
 
 The mint (`/mark-ready/approve`) performs no IO: it binds the caller-supplied `ownerAndRepo`, PR
-number, base/head SHA and a readiness digest (the CI-readiness `requirementsDigest` the caller's
-most recent read produced) into the claim, plus a server-computed `remoteDigest`
-(`codingWorkbenchRemoteDigest`, epic #3384 correction 6 — every same-repository match keys on the
-canonical remote identity, never the per-checkout `repositoryId`) and a `transitionPayloadDigest`
-scoping the claim to this exact PR's fixed transition shape. The execute route
-(`GitPullRequestMarkReadyAdapter.markPullRequestReady`, `git-pr-node.ts`) is a NEW, narrower port —
-deliberately separate from `GitPullRequestAdapter` — that never PATCHes title, body or base: it
-re-reads the live `GitPullRequestIdentity` (the same canonical read D2's `readPullRequest` already
-performs) IMMEDIATELY BEFORE the mutation and refuses with `precondition-failed` (no spawn beyond
-the read) unless the observed head/base SHA match the claim and the PR is still a draft; runs ONLY
-the existing `buildPrMarkReadyGraphqlArgv` mutation; then re-reads the identity again and reports
-`succeeded` only when the read-back confirms `isDraft === false` on the same head. A `gh` exit code
-of `0` alone never proves the transition — only the read-back does. Any mismatch at either read
-revokes the claim's effect and performs nothing further; the claim itself remains exactly one-use
-via the existing approval-store `consume()` regardless of the adapter outcome, so a claim that hits
-drift can never be retried against the same or a different PR revision.
+number, base/head SHA, base branch NAME (`baseRef` — carried alongside `baseSha` purely so the live
+requirements/conflict re-read below can address GitHub's branch-keyed endpoints) and a readiness
+digest (the CI-readiness `requirementsDigest` the caller's most recent read produced) into the
+claim, plus a server-computed `remoteDigest` (`codingWorkbenchRemoteDigest`, epic #3384 correction 6
+— every same-repository match keys on the canonical remote identity, never the per-checkout
+`repositoryId`) and a `transitionPayloadDigest` scoping the claim to this exact PR's fixed transition
+shape. The execute route re-verifies BOTH halves of AC3's "re-read head/base/requirements/conflict
+immediately before execution" immediately before dispatching the mutation:
+
+1. **Identity** — `GitPullRequestMarkReadyAdapter.markPullRequestReady` (`git-pr-node.ts`), a NEW,
+   narrower port deliberately separate from `GitPullRequestAdapter`, never PATCHes title, body or
+   base. It re-reads the live `GitPullRequestIdentity` (the same canonical read D2's
+   `readPullRequest` already performs, now with `exactOutput: true` so a secret-redacted read is
+   never trusted the same way `readPullRequestBody` already treats a comparable governed read)
+   IMMEDIATELY BEFORE the mutation and refuses with `precondition-failed` (no spawn beyond the read)
+   unless the observed head/base SHA match the claim and the PR is still a draft; runs ONLY the
+   existing `buildPrMarkReadyGraphqlArgv` mutation; then re-reads the identity again and reports
+   `succeeded` only when the read-back confirms `isDraft === false` on the same head. A `gh` exit
+   code of `0` alone never proves the transition — only the read-back does.
+2. **Requirements/conflict** — `prMarkReadyExecution.ts` independently re-derives the live
+   requirements/conflict facts through `createNodeGitCiReader`/`assessGitCiFacts` (the SAME
+   read-only port the CI observation service and the journey read already use — no second formula)
+   and refuses the same way on an incomplete read, a live merge conflict, or a `requirementsDigest`
+   that no longer matches the claim's bound `readinessDigest`. The digest is never merely trusted
+   from the client, at mint or execute: a claim minted against a digest with no relationship to any
+   live read fails here the first time it is redeemed, and a claim minted against a real reading
+   that has since gone stale (required checks changed, a conflict appeared) fails here too.
+
+Any mismatch at any of these reads revokes the claim's effect and performs nothing further; the
+claim itself remains exactly one-use via the existing approval-store `consume()` regardless of the
+adapter outcome, so a claim that hits drift can never be retried against the same or a different PR
+revision.
 
 The coding runtime exposes neither merge, auto-merge scheduling, nor issue-close mutations through
-this or any other route: the mark-ready adapter's only possible spawns are the canonical PR-identity
-read and the fixed `markPullRequestReadyForReview` mutation, both pinned structurally in
-`git-pr-node.test.ts`.
+this or any other route: the mark-ready path's only possible spawns are the canonical PR-identity
+read, the bounded read-only CI-facts read, and the fixed `markPullRequestReadyForReview` mutation —
+the mutation adapter's own three fixed shapes are pinned structurally in `git-pr-node.test.ts`. The
+two route definitions live once, in `prMarkReadyExecution.ts`'s own
+`createGitDeliveryPrMarkReadyRouteGroup`; `prRoutes.ts` spreads that group into the mounted PR route
+table rather than re-listing the patterns, so the two can never drift apart.
 
 ## Consequences
 

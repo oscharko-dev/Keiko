@@ -145,10 +145,31 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
   function fixture(root: string): {
     readonly tools: ScriptedGovernedTools;
     readonly bridge: ReturnType<typeof commitFacadeFixture>["bridge"];
+    readonly service: ReturnType<typeof createVerifiedCommitService>;
   } {
     const db = new DatabaseSync(":memory:");
     runMigrations(db);
     const snapshots = createCodingRuntimeSnapshotStore(db);
+    snapshots.create({
+      schemaVersion: "1",
+      runId: "run-1",
+      state: "running",
+      revision: 0,
+      requestedMode: "autonomous-delivery",
+      runtimeSource: "keiko-sidecar",
+      modelSource: "keiko-model-gateway",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      taskDigest: DIGEST,
+      workspaceDigest: DIGEST,
+      operatorDigest: DIGEST,
+      authorityDigest: DIGEST,
+      bindingDigest: DIGEST,
+      provenanceDigest: DIGEST,
+      toolCallCount: 0,
+      patchByteCount: 0,
+      modelRequestCount: 0,
+    });
     const context = (): VerifiedCommitRunContext => ({
       runId: "run-1",
       envelopeDigest: "b".repeat(64),
@@ -216,6 +237,8 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       report: () => passingReport(root),
     });
     const fetch = async (_url: unknown, init: { readonly body?: unknown }): Promise<Response> => {
+      // eslint-disable-next-line no-console
+      console.log("DEBUG request body", String(init.body ?? ""));
       const result = await facade.execute({
         body: String(init.body ?? ""),
         capability: "scripted-fixture-capability",
@@ -233,12 +256,12 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       broadcast: (): void => undefined,
       fetch: fetch as typeof globalThis.fetch,
     });
-    return { tools, bridge };
+    return { tools, bridge, service };
   }
 
   it("routes status, diff, a stage propose/approve/execute cycle and a real commit through the production facade", async () => {
     const root = repo();
-    const { tools, bridge } = fixture(root);
+    const { tools, bridge, service } = fixture(root);
 
     const status = await jsonResult(tools, "keiko_git_status", {}, "call-status");
     expect(status.status).toBe("completed");
@@ -260,20 +283,12 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       "call-stage-propose",
     );
     const stage = stagePropose.git as { readonly status: string; readonly proposalId: string };
-    expect(stage.status).toBe("approval-required");
+    // Staging a workspace-contained change is routine, contained authority in autonomous-delivery
+    // (ADR-0129/ADR-0138): the propose call is immediately "ready", with no approval hold -- only
+    // the higher-risk commit below requires the approval channel. `keiko_git_stage` still only
+    // PROPOSES; keiko_git_execute is the only tool that reaches the write outcome.
+    expect(stage.status).toBe("ready");
     expect(stage.proposalId).toMatch(/^stage-\d+$/u);
-    // The unapproved id must never redeem: fail closed until the approval channel is exercised.
-    const beforeApproval = await jsonResult(
-      tools,
-      "keiko_git_execute",
-      { kind: "stage", proposalId: stage.proposalId },
-      "call-stage-execute-denied",
-    );
-    expect(beforeApproval.status).not.toBe("completed");
-
-    // The approval channel: the same bridge call the orchestrator's decideApproval makes once a
-    // human approves a pending "git-stage" permission request raised by requestStageApproval.
-    expect(bridge.issueStage?.("run-1", stage.proposalId)).toBeDefined();
 
     const stageExecute = await jsonResult(
       tools,
@@ -284,6 +299,10 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     const staged = stageExecute.git as { readonly status: string };
     expect(staged.status).toBe("succeeded");
     expect(git(root, ["diff", "--cached", "--name-only"])).toBe("code.js");
+    // eslint-disable-next-line no-console
+    console.log("DEBUG git status --porcelain", JSON.stringify(git(root, ["status", "--porcelain"])));
+    // eslint-disable-next-line no-console
+    console.log("DEBUG beginVerification", JSON.stringify(await service.beginVerification()));
 
     const verification = await jsonResult(
       tools,
@@ -299,6 +318,8 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       { message: "feat: authorized scripted-transcript change" },
       "call-commit-propose",
     );
+    // eslint-disable-next-line no-console
+    console.log("DEBUG commitPropose", JSON.stringify(commitPropose));
     const commit = commitPropose.verifiedCommit as {
       readonly status: string;
       readonly proposalId: string;

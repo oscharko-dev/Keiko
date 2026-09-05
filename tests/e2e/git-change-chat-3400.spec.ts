@@ -45,7 +45,9 @@ test("connects the Git window's current branch to a Chat and shows the scope pil
 
   await page.goto("/");
 
-  const gitWindow = page.getByRole("region", { name: "Git" });
+  // Mirrors git-changes-view-1575.spec.ts: locate the seeded window by its stable
+  // data-window-id rather than guessing WindowFrame's title/subtitle composition.
+  const gitWindow = page.locator('[data-window-id="issue-3400-git-window"]');
   await expect(gitWindow).toBeVisible();
   await expect(gitWindow.getByRole("button", { name: "Connect to Chat" })).toBeVisible();
 
@@ -60,7 +62,7 @@ test("connects the Git window's current branch to a Chat and shows the scope pil
 
   await expect(dialog).toBeHidden();
 
-  const chatWindow = page.getByRole("region", { name: `Chat — ${chat.title}` });
+  const chatWindow = page.locator('[data-window-id="issue-3400-chat-window"]');
   await expect(chatWindow).toBeVisible();
   const label = `${fixture.baseRef}...${fixture.headRef}`;
   await expect(chatWindow.getByText(label)).toBeVisible();

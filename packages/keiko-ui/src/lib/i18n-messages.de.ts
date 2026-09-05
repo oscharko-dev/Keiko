@@ -1428,7 +1428,8 @@ export const DE_MESSAGES = {
   "gitChangeScope.connect.cancel": "Abbrechen",
   "gitChangeScope.connect.openButton": "Mit Chat verbinden",
   "gitChangeScope.connect.noChats": "Für dieses Repository sind noch keine Chats geöffnet.",
-  "gitChangeScope.connect.chatLoadError": "Die Chats für dieses Repository konnten nicht geladen werden.",
+  "gitChangeScope.connect.chatLoadError":
+    "Die Chats für dieses Repository konnten nicht geladen werden.",
   "gitChangeScope.connect.error": "Diese Git-Änderung konnte nicht mit dem Chat verbunden werden.",
   "scope.budget.pressure.low": "Niedrig",
   "scope.budget.pressure.moderate": "Mittel",

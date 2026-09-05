@@ -458,10 +458,13 @@ describe("node PR adapter — markPullRequestReady (#3389)", () => {
     expect(spawn.calls()).toHaveLength(1);
   });
 
-  // #3389 repair (review finding): readPrIdentity backs BOTH the pre- and post-mutation drift
-  // gate, so an altered (secret-redacted) read must fail closed the same way readPullRequestBody's
-  // exact-body read already does for a comparable governed read — never gate (or report) a mutation
-  // on a read the spawn boundary rewrote.
+  // #3389 repair (review finding): a secret-redacted pre-mutation identity read must never gate the
+  // mutation as safe. On this narrow, field-format-validated identity shape, the redactor's literal
+  // "[REDACTED]" marker already fails isGitPullRequestIdentity's own format check independently of
+  // readPrIdentity's `exactOutput: true` flag — both guards agree, belt-and-suspenders, and this pin
+  // holds either way. `exactOutput: true` is kept for the structural invariant ("never trust an
+  // altered read"), matching readPullRequestBody's established convention for a comparable read,
+  // rather than relying only on incidental field-format strictness to keep this true.
   it("fails closed (precondition-failed, no further spawn) when the pre-mutation identity read comes back redacted", async () => {
     const credential = "1234567890";
     const spawn = scriptedSpawn([
