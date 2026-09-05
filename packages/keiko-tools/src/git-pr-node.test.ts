@@ -115,9 +115,7 @@ describe("node PR adapter — canonical reconciliation reads", () => {
 
     expect(result).toEqual({ ok: true, value: [PR_IDENTITY] });
     const args = spawn.calls()[0]?.args ?? [];
-    expect(args.some((arg) => arg.includes("state=open") && arg.includes("per_page=2"))).toBe(
-      true,
-    );
+    expect(args.some((arg) => arg.includes("state=open") && arg.includes("per_page=2"))).toBe(true);
     expect(args.some((arg) => arg.includes("state=all"))).toBe(false);
     expect(args).not.toContain("--paginate");
     expect(args.at(-1)).not.toMatch(/title|body|user|email/u);

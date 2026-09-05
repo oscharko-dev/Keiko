@@ -392,29 +392,30 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     expect(relationship.target.kind).toBe("git-change");
   });
 
-  it("rejects a ninth scope before snapshot capture or relationship creation", async () => {
-    const snapshot = fixtureSnapshot();
-    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [snapshot] });
-    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
-    await connectHandler(makeCtx(connectRequestBody(chat.id)), deps);
-    const first = requireDefined(
-      chatStore.findChatById(chat.id)?.gitChangeScopes?.[0],
-      "first scope",
+  // Owner audit b3-9 — `persistConnectedScope` used to append the 9th scope without checking the
+  // store's cap, and the call sat outside the handler's blocked-outcome `try`, so
+  // `validatePatchGitChangeScopes` (store/chats.ts) threw a `UiStoreError` straight out of the
+  // route instead of a closed result. Failing-before: `connectHandler` rejected with an uncaught
+  // "gitChangeScopes must contain at most 8 entries." error instead of resolving to a 409 result.
+  it("rejects a 9th connect with a closed error instead of an uncaught store exception (b3-9)", async () => {
+    const snapshots = Array.from({ length: 9 }, (_, index) =>
+      fixtureSnapshot({ snapshotDigest: String(index).repeat(64) }),
     );
-    chatStore.updateChat(chat.id, {
-      gitChangeScopes: Array.from({ length: 8 }, (_, index) => ({
-        ...first,
-        relationshipId: `rel-cap-${String(index)}`,
-      })),
-    });
+    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
 
-    const result = asRouteResult(await connectHandler(makeCtx(connectRequestBody(chat.id)), deps));
+    for (let index = 0; index < 8; index += 1) {
+      const result = asRouteResult(
+        await connectHandler(makeCtx(connectRequestBody(chat.id)), deps),
+      );
+      expect((result.body as GitChangeScopeBody).status).toBe("connected");
+    }
+    expect(chatStore.findChatById(chat.id)?.gitChangeScopes ?? []).toHaveLength(8);
 
-    expect(result).toMatchObject({
-      status: 409,
-      body: { error: { code: "GIT_CHANGE_SCOPE_LIMIT_REACHED" } },
-    });
-    expect(chatStore.findChatById(chat.id)?.gitChangeScopes).toHaveLength(8);
+    const ninth = asRouteResult(await connectHandler(makeCtx(connectRequestBody(chat.id)), deps));
+    expect(ninth.status).toBe(409);
+    expect(ninth.body).toMatchObject({ error: { code: "GIT_CHANGE_SCOPE_LIMIT_REACHED" } });
+    expect(chatStore.findChatById(chat.id)?.gitChangeScopes ?? []).toHaveLength(8);
   });
 });
 
@@ -575,7 +576,12 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
     );
   });
 
-  it("keeps the old relationship active when replacement creation throws", async () => {
+  // Owner audit b3-8 — `persistStaleScope` used to archive the old relationship, THEN create the
+  // replacement; a failing create (a store-level conflict) left the chat pointing at a relationship
+  // that had already been archived out from under it. Failing-before: with the old
+  // archive-then-create order, `oldRelationship.lifecycleState` below was "archived" even though
+  // the refresh that was supposed to replace it never produced a replacement.
+  it("keeps the old relationship active when the replacement create fails (b3-8)", async () => {
     const original = fixtureSnapshot();
     const moved = fixtureSnapshot({ headSha: "f".repeat(40), snapshotDigest: "9".repeat(64) });
     const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [original, moved] });
@@ -583,27 +589,46 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
     const connected = asRouteResult(
       await connectHandler(makeCtx(connectRequestBody(chat.id)), deps),
     );
-    const oldScope = requireDefined((connected.body as GitChangeScopeBody).scope, "original scope");
-    const relationshipStore = requireDefined(deps.relationship, "relationship deps").store;
-    vi.spyOn(relationshipStore, "createRelationship").mockImplementationOnce(() => {
-      throw new Error("replacement creation failed");
-    });
+    const oldRelationshipId = requireDefined(
+      (connected.body as GitChangeScopeBody).scope,
+      "connect response scope",
+    ).relationshipId;
 
-    await expect(
-      refreshHandler(
-        makeCtx({
-          schemaVersion: "1",
-          chatId: chat.id,
-          relationshipId: oldScope.relationshipId,
-        }),
-        deps,
-      ),
-    ).rejects.toThrow("replacement creation failed");
-    expect(relationshipStore.getRelationship("ws-1", oldScope.relationshipId)?.lifecycleState).toBe(
-      "active",
+    const relationship = requireDefined(deps.relationship, "relationship deps");
+    const realStore = relationship.store;
+    let createCalls = 0;
+    const failingStore: typeof realStore = {
+      ...realStore,
+      createRelationship: (input, audit) => {
+        createCalls += 1;
+        if (createCalls === 1) throw new Error("simulated store-level create conflict");
+        return realStore.createRelationship(input, audit);
+      },
+    };
+    const wiredDeps: UiHandlerDeps = {
+      ...deps,
+      relationship: { ...relationship, store: failingStore },
+    };
+
+    const refreshCtx = makeCtx({
+      schemaVersion: "1",
+      chatId: chat.id,
+      relationshipId: oldRelationshipId,
+    });
+    await expect(refreshHandler(refreshCtx, wiredDeps)).rejects.toThrow(
+      "simulated store-level create conflict",
     );
-    expect(chatStore.findChatById(chat.id)?.gitChangeScopes?.[0]?.relationshipId).toBe(
-      oldScope.relationshipId,
+
+    const oldRelationship = requireDefined(
+      realStore.getRelationship("ws-1", oldRelationshipId),
+      "old relationship",
+    );
+    expect(oldRelationship.lifecycleState).toBe("active");
+
+    const scopes = chatStore.findChatById(chat.id)?.gitChangeScopes ?? [];
+    expect(scopes).toHaveLength(1);
+    expect(requireDefined(scopes[0], "unchanged persisted scope").relationshipId).toBe(
+      oldRelationshipId,
     );
   });
 });

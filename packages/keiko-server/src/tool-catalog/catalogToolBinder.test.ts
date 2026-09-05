@@ -5,8 +5,10 @@ import {
   catalogBoundToolSet,
   createCatalogBinding,
   createCatalogOffer,
+  lifecycleIdentity,
 } from "./catalogToolBinder.js";
 import { catalogToolFixture } from "./__fixtures__/catalogToolFixture.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 
 describe("catalog handler binding and offered projection", () => {
   it("offers only the bound ready handler and keeps all server material out of the wire shape", () => {
@@ -146,5 +148,30 @@ describe("catalog handler binding and offered projection", () => {
     expect(readiness).toHaveBeenCalledOnce();
     expect(offer.binding.readiness).toBe("ready");
     expect(offer.toolRefs).toEqual([fixture.pure.descriptor.toolRef]);
+  });
+  it("falls back an invalid correlation id to the unknown sentinel and drops an invalid parent id (b3-17)", () => {
+    const fixture = catalogToolFixture();
+    const state = createCatalogBinding(fixture.input, fixture.options);
+    // "bad id!" fails SAFE_CORRELATION_ID (space and "!" are not allowed) -- exactly the shape
+    // `bindingFailure` in this same file already guards, and what `emitToolLifecycleEvent`'s own
+    // validation would otherwise throw on further downstream.
+    const invalid = lifecycleIdentity(state, {
+      ...fixture.context,
+      correlationId: "bad id!",
+      parentCorrelationId: "also bad!",
+    });
+    expect(invalid.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(invalid).not.toHaveProperty("parentCorrelationId");
+  });
+  it("passes a well-formed correlation and parent correlation id through unchanged", () => {
+    const fixture = catalogToolFixture();
+    const state = createCatalogBinding(fixture.input, fixture.options);
+    const valid = lifecycleIdentity(state, {
+      ...fixture.context,
+      correlationId: "correlation-1",
+      parentCorrelationId: "parent-correlation-1",
+    });
+    expect(valid.correlationId).toBe("correlation-1");
+    expect(valid.parentCorrelationId).toBe("parent-correlation-1");
   });
 });

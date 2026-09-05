@@ -148,21 +148,29 @@ function acceptPage(
   return { done: state.values.length === state.total };
 }
 
+// Owner audit finding b2-17: `classifyGitProviderReadFailure` routes every `Error` through
+// `localFailure`, which is total over `Error` (its final branch is an unconditional
+// "provider-unavailable", never `undefined` — the same shape `git-provider-value.ts`'s own
+// classifier has). Calling `localFailure` directly here — the same call
+// `classifyGitProviderReadFailure` itself makes for an `Error` — narrows `result` to
+// `CommandResult` for the rest of the function AND keeps the "always defined" fact visible in the
+// type (`localFailure` returns a bare reason, never `| undefined`), instead of re-testing
+// `instanceof Error` a second time only to fall through a branch that could never run (deleted
+// dead code, AGENTS.md §6).
 function evaluateResponse(
   input: GitProviderPageInput,
   state: PageState,
   result: CommandResult | Error,
 ): { readonly done: boolean; readonly failure?: GitDeliveryObservationFailure } {
-  if (!(result instanceof Error)) {
-    state.bytes +=
-      Buffer.byteLength(result.stdout, "utf8") + Buffer.byteLength(result.stderr, "utf8");
-    if (state.bytes > input.maxBytes)
-      return { done: true, failure: gitDeliveryObservationFailure("output-truncated") };
+  if (result instanceof Error) {
+    return { done: true, failure: gitDeliveryObservationFailure(localFailure(result)) };
   }
+  state.bytes +=
+    Buffer.byteLength(result.stdout, "utf8") + Buffer.byteLength(result.stderr, "utf8");
+  if (state.bytes > input.maxBytes)
+    return { done: true, failure: gitDeliveryObservationFailure("output-truncated") };
   const failure = classifyGitProviderReadFailure(result);
   if (failure !== undefined) return { done: true, failure };
-  if (result instanceof Error)
-    return { done: true, failure: gitDeliveryObservationFailure("provider-unavailable") };
   return acceptPage(input, state, result);
 }
 

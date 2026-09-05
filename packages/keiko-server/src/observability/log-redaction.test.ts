@@ -731,6 +731,27 @@ describe("issue intake client diagnostic redaction", () => {
   });
 });
 
+// Owner audit b3-21 — GitClientWindow.tsx's repository-dialog handoff note matched none of the
+// BODY_FREE_CLIENT_NOTE_PATTERNS before this fix, so the server collapsed it to the generic shape
+// marker. Failing-before: `redactLogFields({ clientNote })` returned `{ clientNote: "[redacted:shape]" }`
+// instead of preserving the closed "clone"/"open" note.
+describe("git repository dialog handoff client diagnostic redaction (b3-21)", () => {
+  it.each([
+    "[keiko] git repository dialog handoff: clone",
+    "[keiko] git repository dialog handoff: open",
+  ])("preserves the closed dialog-handoff note %s", (clientNote) => {
+    expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+  });
+
+  it.each([
+    "[keiko] git repository dialog handoff: /private/customer.txt",
+    "[keiko] git repository dialog handoff: token=fixture-secret",
+    "[keiko] git repository dialog handoff: rename",
+  ])("refuses foreign content in dialog-handoff-shaped messages %s", (clientNote) => {
+    expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
+  });
+});
+
 describe("verified commit review client diagnostic redaction", () => {
   it.each(["idle", "loading", "ready", "unavailable"])(
     "preserves closed stage review %s",

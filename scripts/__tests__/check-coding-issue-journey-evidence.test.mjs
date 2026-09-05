@@ -1,9 +1,14 @@
+import { spawnSync } from "node:child_process";
 import { fileURLToPath, URL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
 import { checkCodingIssueJourneyEvidence } from "../check-coding-issue-journey-evidence.mjs";
 import { deriveGateVerdict, platformKeyFor } from "../lib/coding-issue-journey-evidence.mjs";
+
+const GATE_PATH = fileURLToPath(
+  new URL("../check-coding-issue-journey-evidence.mjs", import.meta.url),
+);
 
 const COMMIT_SHA = "a".repeat(40);
 const TREE_SHA = "b".repeat(40);
@@ -194,5 +199,33 @@ describe("deriveGateVerdict", () => {
         },
       }),
     ).toBe("blocked");
+  });
+});
+
+describe("CLI entry point", () => {
+  it("reports a FAIL line instead of an uncaught raw stack when the manifest is missing", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        GATE_PATH,
+        "--manifest",
+        "/tmp/keiko-does-not-exist-manifest.json",
+        "--receipts",
+        "/tmp/keiko-does-not-exist-receipts",
+        "--epic",
+        "3384",
+        "--child",
+        "3390",
+        "--registered",
+        "issue-to-pr-full-access",
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("FAIL");
+    expect(result.stderr).toContain("keiko-does-not-exist-manifest.json");
+    expect(result.stderr).not.toContain("node:fs");
+    expect(result.stderr).not.toContain("at readFileSync");
   });
 });

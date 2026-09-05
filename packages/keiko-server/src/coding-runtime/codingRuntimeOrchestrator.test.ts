@@ -734,6 +734,27 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(observedDuringDispatch).toBe("running");
   });
 
+  // Epic #3384 (productive-question functional regression): every OTHER guarded mutation
+  // (follow-up dispatch, question answer/reject) advances the live revision in the SAME call
+  // that commits its per-run production guard reservation -- the guard depends on that invariant,
+  // admitting only a STRICTLY newer revision after a commit (see the #2386 guard pin below: "the
+  // mutation consumed revision 3: stale reads and stale mutations both stay rejected"). The
+  // initial turn's own dispatch is a guarded mutation exactly like those, but used to return the
+  // unchanged "running" snapshot on acceptance instead of advancing past it. That left the FIRST
+  // read (question listing) or write (answer/reject) issued at the run's own still-current
+  // revision permanently rejected as authority-resolution-failed from the moment the initial turn
+  // was accepted onward -- reproduced end to end by productionOpenCodeBackend.functional.test.ts's
+  // "drives the managed OpenCode composition end to end" scenario, whose very first question-list
+  // poll never admitted past the guard once the reorder in #3390 above landed.
+  it("advances the revision once the initial turn's dispatch is accepted (#3384)", async () => {
+    const f = fixture();
+
+    const started = await f.orchestrator.start(start);
+
+    expect(successfulSnapshot(started)).toMatchObject({ state: "running", revision: 4 });
+    expect(f.orchestrator.status().revision).toBe(4);
+  });
+
   it("serializes follow-ups by run, revision, and one-use request id", async () => {
     const f = fixture();
     await f.orchestrator.start(start);

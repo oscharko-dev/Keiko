@@ -16,7 +16,7 @@
         "readiness": "contract-only",
         "runtimeOwnerIssue": 3413,
         "source": "docs/architecture/governed-tool-contract.v1.json",
-        "sourceDigest": "b2131ec071e5935f4c84bdd41fc8f19e20a564d01e9d6c09c376382e1847deb8"
+        "sourceDigest": "09f2df4efa97e456efe1a913c496ca3d4bb3c1411b1cba77f3df87898cfa38bf"
       },
       "requiredFields": [
         "correlationId",
@@ -36,7 +36,7 @@
         "readiness": "contract-only",
         "runtimeOwnerIssue": 3413,
         "source": "docs/architecture/governed-tool-contract.v1.json",
-        "sourceDigest": "b2131ec071e5935f4c84bdd41fc8f19e20a564d01e9d6c09c376382e1847deb8"
+        "sourceDigest": "09f2df4efa97e456efe1a913c496ca3d4bb3c1411b1cba77f3df87898cfa38bf"
       },
       "requiredFields": [
         "correlationId",
@@ -57,7 +57,7 @@
         "readiness": "contract-only",
         "runtimeOwnerIssue": 3413,
         "source": "docs/architecture/governed-tool-contract.v1.json",
-        "sourceDigest": "b2131ec071e5935f4c84bdd41fc8f19e20a564d01e9d6c09c376382e1847deb8"
+        "sourceDigest": "09f2df4efa97e456efe1a913c496ca3d4bb3c1411b1cba77f3df87898cfa38bf"
       },
       "requiredFields": [
         "correlationId",
@@ -78,7 +78,7 @@
         "readiness": "contract-only",
         "runtimeOwnerIssue": 3413,
         "source": "docs/architecture/governed-tool-contract.v1.json",
-        "sourceDigest": "b2131ec071e5935f4c84bdd41fc8f19e20a564d01e9d6c09c376382e1847deb8"
+        "sourceDigest": "09f2df4efa97e456efe1a913c496ca3d4bb3c1411b1cba77f3df87898cfa38bf"
       },
       "requiredFields": [
         "correlationId",
@@ -102,7 +102,7 @@
         "readiness": "contract-only",
         "runtimeOwnerIssue": 3413,
         "source": "docs/architecture/governed-tool-contract.v1.json",
-        "sourceDigest": "b2131ec071e5935f4c84bdd41fc8f19e20a564d01e9d6c09c376382e1847deb8"
+        "sourceDigest": "09f2df4efa97e456efe1a913c496ca3d4bb3c1411b1cba77f3df87898cfa38bf"
       },
       "requiredFields": [
         "correlationId",
@@ -130,7 +130,7 @@
         "readiness": "contract-only",
         "runtimeOwnerIssue": 3413,
         "source": "docs/architecture/governed-tool-contract.v1.json",
-        "sourceDigest": "b2131ec071e5935f4c84bdd41fc8f19e20a564d01e9d6c09c376382e1847deb8"
+        "sourceDigest": "09f2df4efa97e456efe1a913c496ca3d4bb3c1411b1cba77f3df87898cfa38bf"
       },
       "requiredFields": [
         "correlationId",

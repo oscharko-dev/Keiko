@@ -112,6 +112,16 @@ attached, or when the policy's `runId`/`treeBindingId`
 does not match the launch request, before any process exists (fail-closed, consistent with D5's
 kill-switch precedence).
 
+The profile is asymmetric by design: outbound is a single pinned allowance (the caller-attested
+gateway host/port), but inbound is not port-pinned at all — the compiled rule is
+`(allow network-inbound (local <family> "localhost:*"))`
+(`packages/keiko-sandbox/src/backends.ts`'s `buildGatewaySeatbeltCommand`), so the confined process
+may itself accept a connection on any local port, as long as the peer is loopback-sourced (`deny
+network*` still blocks every route to a non-loopback peer in either direction). This is what lets
+the sidecar's own HTTP server bind and answer `/health` and other local callers without a second,
+narrower carve-out; it does not weaken the egress boundary this ADR closes, since an inbound-only
+allowance grants no ability to reach out to a network destination the outbound rule denies.
+
 This closes the network side of the dev lane's confinement for macOS only. It does **not** extend to
 the Windows dev lane or to `nativeRuntimeProcessBackend.ts` (the backend this ADR also names in its
 title and D3 for Windows process-group supervision): neither carries an OS-level network policy

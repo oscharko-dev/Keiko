@@ -1,14 +1,42 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+import type {
+  CatalogDigest,
+  CompiledCatalogTool,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 import {
   createOpenCodeGatewayToolCatalogAdvertisement,
+  deriveGatewayCatalogReadiness,
   hasExactOpenCodeVisibleToolContract,
   OPENCODE_MODEL_VISIBLE_TOOLS,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   projectedGatewaySchema,
 } from "./opencodeToolSchemas.js";
 import { mintProposalId, proposalIdPattern } from "../gitDelivery/proposalId.js";
+
+/** Minimal, independently-constructed `CompiledCatalogTool` fixture -- built here, not through
+ * `createToolDescriptor`, since the point of this test is to exercise `handlerRequirement` shapes
+ * (an empty id, a shared id) that the real descriptor builder's own validation already rejects
+ * before a malformed catalog can ever compile. */
+function compiledTool(canonicalId: string, handlerId: string): CompiledCatalogTool {
+  return {
+    toolRef: createToolRef(canonicalId, 1),
+    alias: canonicalId,
+    description: "fixture",
+    inputSchema: { type: "object", properties: {}, required: [] },
+    resultSchema: { type: "string" },
+    effects: ["workspace-read"],
+    actionMapping: [{ action: canonicalId, effects: ["workspace-read"] }],
+    policyReferences: ["workspace-read"],
+    handlerRequirement: { id: handlerId, contractVersion: 1 },
+    bounds: { maxArgumentBytes: 1, maxResultBytes: 1, maxResultCount: 1, maxDurationMs: 1 },
+    idempotency: "read-only",
+    cancellation: "before-effect",
+    descriptorDigest: "fixture-digest" as CatalogDigest,
+  };
+}
 
 function projectedTools(): readonly {
   readonly name: string;
@@ -220,6 +248,44 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
     expect(first.offered.offerId).not.toBe(second.offered.offerId);
     expect(first.projection.projectionDigest).toBe(second.projection.projectionDigest);
     expect(first.offered.expiresAt).toBe(new Date(31_000).toISOString());
+  });
+});
+
+// #3413 F8 review, finding b1-2: before this, `createOpenCodeGatewayToolCatalogAdvertisement`
+// wrote a bare `"ready"` literal with no handler-binding check at all, so a descriptor whose
+// handler id was emptied or accidentally duplicated across two tools would still be advertised as
+// ready to the model. These pin the real check in isolation from the fixed sixteen-tool catalog
+// (which can never itself produce either malformed shape -- `createToolDescriptor`'s own
+// validation already rejects an empty or duplicate handler id before a catalog can compile).
+describe("deriveGatewayCatalogReadiness", () => {
+  it("is ready when every tool declares its own distinct handler id", () => {
+    const tools = [
+      compiledTool("keiko.fixture.one", "handler-one"),
+      compiledTool("keiko.fixture.two", "handler-two"),
+    ];
+    expect(deriveGatewayCatalogReadiness(tools)).toBe("ready");
+  });
+
+  it("is ready for the empty catalog (vacuously -- no tool is unready)", () => {
+    expect(deriveGatewayCatalogReadiness([])).toBe("ready");
+  });
+
+  it("is unavailable when a handler id is empty", () => {
+    const tools = [compiledTool("keiko.fixture.one", "")];
+    expect(deriveGatewayCatalogReadiness(tools)).toBe("unavailable");
+  });
+
+  it("is unavailable when two tools share the same handler id", () => {
+    const tools = [
+      compiledTool("keiko.fixture.one", "shared-handler"),
+      compiledTool("keiko.fixture.two", "shared-handler"),
+    ];
+    expect(deriveGatewayCatalogReadiness(tools)).toBe("unavailable");
+  });
+
+  it("advertises the real sixteen-tool production catalog as ready", () => {
+    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0);
+    expect(deriveGatewayCatalogReadiness(advertisement.projection.tools)).toBe("ready");
   });
 });
 

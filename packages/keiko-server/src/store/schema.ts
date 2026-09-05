@@ -923,12 +923,17 @@ CREATE TABLE coding_runtime_description_jobs (
 ) STRICT;
 `;
 
-// KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
-// array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
-// change.
-// V30 (#3390): persist issue-context-unavailable through the same closed failure-code
-// constraint as the runtime contract. Rebuild preserves every V22–V26 receipt/identity column,
-// its inline CHECK, and the three lifecycle indexes; existing databases migrate forward.
+// V30 (owner audit finding b2-2, PR #3394) — widens the `coding_runtime_snapshots.failure_code`
+// table-level CHECK to admit two literals `CODING_WORKBENCH_RUNTIME_FAILURE_CODES` already declares
+// but the V20 constraint (frozen at 19 members) rejects: `issue-context-unavailable` (#3390, added
+// after V20 shipped) and `question-answer-rejected` (a rejected free-text answer to a non-custom
+// question, distinct from the authority code `authority-resolution-failed`). Exactly the V20
+// precedent: SQLite cannot ALTER a table-level CHECK, so the table is rebuilt. No column is added or
+// removed and no other CHECK clause changes, so — like V20 — this migration needs no
+// `legacySchemaTestFixture.ts` rollback fragment (see that file's header comment) and no
+// `coding_runtime_ci_repair_budgets`/`git_journey_outcomes`/`coding_runtime_description_jobs`
+// sibling table is touched. `coding_runtime_snapshots` has no live foreign-key child (unlike
+// `relationships` in V28), so the direct create/copy/drop/rename sequence V20 used is safe here too.
 const V30_SQL = `
 CREATE TABLE coding_runtime_snapshots_v30 (
   run_id TEXT NOT NULL PRIMARY KEY,
@@ -975,38 +980,38 @@ CREATE TABLE coding_runtime_snapshots_v30 (
   stderr_truncated INTEGER
     CHECK (stderr_truncated IS NULL OR stderr_truncated IN (0,1)),
   issue_repository_id TEXT
-  CHECK (issue_repository_id IS NULL OR length(issue_repository_id) BETWEEN 1 AND 128),
+    CHECK (issue_repository_id IS NULL OR length(issue_repository_id) BETWEEN 1 AND 128),
   issue_remote_digest TEXT
-  CHECK (issue_remote_digest IS NULL OR length(issue_remote_digest) = 64),
+    CHECK (issue_remote_digest IS NULL OR length(issue_remote_digest) = 64),
   issue_number INTEGER
-  CHECK (issue_number IS NULL OR issue_number BETWEEN 1 AND 1000000000),
+    CHECK (issue_number IS NULL OR issue_number BETWEEN 1 AND 1000000000),
   issue_id_digest TEXT
-  CHECK (issue_id_digest IS NULL OR length(issue_id_digest) = 64),
+    CHECK (issue_id_digest IS NULL OR length(issue_id_digest) = 64),
   issue_default_base_ref TEXT
-  CHECK (issue_default_base_ref IS NULL OR length(issue_default_base_ref) BETWEEN 1 AND 255),
+    CHECK (issue_default_base_ref IS NULL OR length(issue_default_base_ref) BETWEEN 1 AND 255),
   issue_content_revision_digest TEXT
-  CHECK (issue_content_revision_digest IS NULL OR length(issue_content_revision_digest) = 64),
+    CHECK (issue_content_revision_digest IS NULL OR length(issue_content_revision_digest) = 64),
   issue_binding_digest TEXT
-  CHECK (issue_binding_digest IS NULL OR length(issue_binding_digest) = 64),
+    CHECK (issue_binding_digest IS NULL OR length(issue_binding_digest) = 64),
   verified_commit_result TEXT
-  CHECK (verified_commit_result IS NULL OR (length(verified_commit_result) <= 8192 AND json_valid(verified_commit_result))),
+    CHECK (verified_commit_result IS NULL OR (length(verified_commit_result) <= 8192 AND json_valid(verified_commit_result))),
   draft_delivery_record TEXT
-  CHECK (draft_delivery_record IS NULL OR (length(draft_delivery_record) <= 8192 AND json_valid(draft_delivery_record))),
+    CHECK (draft_delivery_record IS NULL OR (length(draft_delivery_record) <= 8192 AND json_valid(draft_delivery_record))),
   draft_delivery_source_receipt TEXT
-  CHECK (draft_delivery_source_receipt IS NULL OR (length(draft_delivery_source_receipt) <= 8192 AND json_valid(draft_delivery_source_receipt))),
+    CHECK (draft_delivery_source_receipt IS NULL OR (length(draft_delivery_source_receipt) <= 8192 AND json_valid(draft_delivery_source_receipt))),
   last_successful_verified_commit TEXT
-  CHECK (last_successful_verified_commit IS NULL OR (length(last_successful_verified_commit) <= 8192 AND json_valid(last_successful_verified_commit))),
+    CHECK (last_successful_verified_commit IS NULL OR (length(last_successful_verified_commit) <= 8192 AND json_valid(last_successful_verified_commit))),
   ci_observation_revision INTEGER NOT NULL DEFAULT 0
-  CHECK (ci_observation_revision BETWEEN 0 AND 1000000),
+    CHECK (ci_observation_revision BETWEEN 0 AND 1000000),
   ci_readiness_record TEXT
-  CHECK (ci_readiness_record IS NULL OR (length(ci_readiness_record) <= 8192 AND json_valid(ci_readiness_record))),
+    CHECK (ci_readiness_record IS NULL OR (length(ci_readiness_record) <= 8192 AND json_valid(ci_readiness_record))),
   CHECK (
     schema_version = '1'
     AND state IN ('starting','ready','running','paused','awaiting-approval','stopping','succeeded','failed','cancelled','taken-over','recovery-required')
     AND requested_mode IN ('governed-assist','supervised-coding','autonomous-delivery')
     AND runtime_source IN ('keiko-sidecar','codex-cli-adapter','delivery-runner')
     AND model_source IN ('keiko-model-gateway','openai-api-key-through-gateway','chatgpt-codex-subscription-profile')
-    AND (failure_code IS NULL OR failure_code IN ('runtime-unavailable','active-run-conflict','invalid-intent','approval-activation-failed','authority-resolution-failed','authority-expired','authority-replayed','task-drift','workspace-drift','project-drift','branch-drift','scope-drift','budget-drift','authority-budget-exceeded','source-drift','runtime-failed','revoked','recovery-required','replay-cap-exhausted','issue-context-unavailable'))
+    AND (failure_code IS NULL OR failure_code IN ('runtime-unavailable','active-run-conflict','invalid-intent','approval-activation-failed','authority-resolution-failed','authority-expired','authority-replayed','task-drift','workspace-drift','project-drift','branch-drift','scope-drift','budget-drift','authority-budget-exceeded','source-drift','runtime-failed','revoked','recovery-required','replay-cap-exhausted','issue-context-unavailable','question-answer-rejected'))
     AND revision >= 0
     AND tool_call_count BETWEEN 0 AND 1000000
     AND patch_byte_count BETWEEN 0 AND 1073741824
@@ -1029,7 +1034,10 @@ INSERT INTO coding_runtime_snapshots_v30 (
   binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count,
   recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count,
   stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256,
-  stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest, issue_default_base_ref, issue_content_revision_digest, issue_binding_digest, verified_commit_result, draft_delivery_record, draft_delivery_source_receipt, last_successful_verified_commit, ci_observation_revision, ci_readiness_record
+  stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest,
+  issue_default_base_ref, issue_content_revision_digest, issue_binding_digest,
+  verified_commit_result, draft_delivery_record, draft_delivery_source_receipt,
+  last_successful_verified_commit, ci_observation_revision, ci_readiness_record
 )
 SELECT
   run_id, schema_version, state, revision, requested_mode, runtime_source, model_source,
@@ -1038,7 +1046,10 @@ SELECT
   binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count,
   recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count,
   stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256,
-  stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest, issue_default_base_ref, issue_content_revision_digest, issue_binding_digest, verified_commit_result, draft_delivery_record, draft_delivery_source_receipt, last_successful_verified_commit, ci_observation_revision, ci_readiness_record
+  stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest,
+  issue_default_base_ref, issue_content_revision_digest, issue_binding_digest,
+  verified_commit_result, draft_delivery_record, draft_delivery_source_receipt,
+  last_successful_verified_commit, ci_observation_revision, ci_readiness_record
 FROM coding_runtime_snapshots;
 
 DROP TABLE coding_runtime_snapshots;
@@ -1065,6 +1076,9 @@ UPDATE coding_runtime_description_jobs
   WHERE status_json IS NOT NULL AND json_extract(status_json, '$.state') IN ('current', 'partial', 'fallback');
 `;
 
+// KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
+// array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
+// change.
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },

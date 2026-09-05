@@ -23,13 +23,30 @@ import { emitToolLifecycleEvent, type CatalogLifecycleLogPort } from "./catalogT
 import { CatalogDispatchFault, catalogBudgetOperation } from "./catalogToolRuntimeAuthority.js";
 
 /**
- * Confidently-matched facade actions this bridge routes through the real catalog lifecycle and
- * settlement primitives (#3413, F8). Every canonical id below is an unambiguous mapping from the
- * IPC action shape (as `opencodeRuntimeAdapter.ts`'s `wireRequestFor`/`parseDraftToolRequest`
- * actually produce it for a model tool call) to a real production catalog canonical tool id
- * (OPENCODE_GATEWAY_CATALOG, opencodeToolSchemas.ts / opencode.ts). A request shape absent from
- * `catalogIdFor` is uncovered: `dispatch` below runs the existing handler unchanged and records one
- * body-free `tool-catalog.dispatch-unbound` line instead of a lifecycle pair -- never zero evidence.
+ * Confidently-matched facade actions this bridge routes through the real catalog LIFECYCLE
+ * emission (catalogToolLifecycle.ts's `emitToolLifecycleEvent`, the same op vocabulary and receipt
+ * shape #3413's own settlement uses) and the shared fault-shaping primitives
+ * (catalogToolRuntimeAuthority.ts's `CatalogDispatchFault`/`catalogBudgetOperation`) (#3413, F8).
+ * It does NOT route through `createCatalogToolBinder`/`CatalogInvocation`
+ * (catalogToolDispatch.ts/catalogToolSettlement.ts): that pair is shaped for a prior `offer()`
+ * negotiating a catalog-schema `{toolRef, projectionDigest, offerId, arguments}` invocation, which
+ * `codingToolFacade.ts`'s already-parsed `CodingToolActionRequest` never carries (ADR-0175 D6
+ * "Production mounting" explains the shape mismatch in full) -- as of this file, that binder pair
+ * has no OTHER production caller either, so #3413's readiness-rejection acceptance criteria
+ * (missing/orphaned/duplicate handlers) are exercised only by that pipeline's own tests, not by
+ * this bridge or anything reachable from a real request (#3413 F8 review, finding b1-1; tracked as
+ * outOfScopeNeeds against `codingToolAuthorityPort.ts`'s composition wiring, which this file's
+ * write scope may not touch). This bridge instead reimplements its own compact
+ * reserve/settle/account bookkeeping below (`dispatchCovered`/`runReserved`/`settleSuccess`/
+ * `settleFailure`), sharing only the fault vocabulary and accounting discipline with
+ * `CatalogInvocation`, never its offer/dispatch/cursor state machine.
+ *
+ * Every canonical id below is an unambiguous mapping from the IPC action shape (as
+ * `opencodeRuntimeAdapter.ts`'s `wireRequestFor`/`parseDraftToolRequest` actually produce it for a
+ * model tool call) to a real production catalog canonical tool id (OPENCODE_GATEWAY_CATALOG,
+ * opencodeToolSchemas.ts / opencode.ts). A request shape absent from `catalogIdFor` is uncovered:
+ * `dispatch` below runs the existing handler unchanged and records one body-free
+ * `tool-catalog.dispatch-unbound` line instead of a lifecycle pair -- never zero evidence.
  *
  * `read` is the one action with a real 1:1 catalog tool (`keiko.workspace.read`) that is
  * deliberately left OUT of `catalogIdFor`: the catalog's model-facing schema requires `startLine`

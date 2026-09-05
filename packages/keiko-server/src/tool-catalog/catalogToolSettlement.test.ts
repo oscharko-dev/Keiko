@@ -1,12 +1,35 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCatalogToolBinder } from "./catalogToolDispatch.js";
 import { catalogToolFixture } from "./__fixtures__/catalogToolFixture.js";
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type {
   CatalogHandlerContext,
   CatalogHandlerResult,
   CatalogToolBinderInput,
   CatalogTrustedContext,
 } from "./catalogToolPorts.js";
+
+// b3-10: `CatalogInvocation.finish()` must resolve its dispatch promise even when the lifecycle
+// emit itself throws (an invalid event shape reaching `emitToolLifecycleEvent`, e.g. item 17's
+// unvalidated correlation id). Only the terminal "invocation-settled" emit is made to throw here,
+// so every other test in this file keeps exercising the real lifecycle producer.
+let failSettledEmit = false;
+vi.mock("./catalogToolLifecycle.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./catalogToolLifecycle.js")>();
+  return {
+    ...actual,
+    emitToolLifecycleEvent: (
+      port: Parameters<typeof actual.emitToolLifecycleEvent>[0],
+      source: unknown,
+    ): void => {
+      const event = source as { op?: string };
+      if (failSettledEmit && event.op === "tool-catalog.invocation-settled") {
+        throw new TypeError("Invalid tool lifecycle evidence");
+      }
+      actual.emitToolLifecycleEvent(port, source);
+    },
+  };
+});
 
 const ID = { actionId: "action-1", idempotencyKey: "key-1" };
 function deferred<T>(): {
@@ -353,4 +376,37 @@ describe("catalog invocation settlement races", () => {
       });
     },
   );
+});
+
+describe("catalog invocation settlement lifecycle-emit failure (b3-10)", () => {
+  afterEach(() => {
+    failSettledEmit = false;
+  });
+  it("still resolves the dispatch promise and records a diagnostic instead of hanging forever", async () => {
+    const fixture = catalogToolFixture();
+    const diagnosticsRecord = vi.fn<ServerDiagnosticSink["record"]>();
+    const binder = createCatalogToolBinder(
+      {
+        ...fixture.input,
+        logPort: { primary: fixture.primary, diagnostics: { record: diagnosticsRecord } },
+      },
+      fixture.options,
+    );
+    const offer = binder.offer();
+    failSettledEmit = true;
+    const result = await binder.dispatch(
+      {
+        kind: "bound",
+        toolRef: fixture.handler.toolRef,
+        offerId: offer.offerId,
+        projectionDigest: offer.binding.projectionDigest,
+        arguments: { path: "fixture.ts" },
+      },
+      ID,
+    );
+    expect(result.kind).toBe("settled");
+    expect(diagnosticsRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "tool-catalog.settlement-emit-failed" }),
+    );
+  });
 });

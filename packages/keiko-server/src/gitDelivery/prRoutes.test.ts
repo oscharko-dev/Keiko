@@ -43,7 +43,7 @@ import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
-import type { RouteContext } from "../routes.js";
+import { matchRoute, type RouteContext } from "../routes.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 
 // Spies on the default PR-adapter factory the F1 fix threads runCommand termination-evidence
@@ -1617,6 +1617,35 @@ describe("pr mark-ready routes (#3389)", () => {
     );
     for (const pattern of patterns) {
       expect(pattern.toLowerCase()).not.toMatch(/merge|close/u);
+    }
+  });
+
+  // Owner audit of PR #3394, finding b2-19: every test above resolves a route group's own factory
+  // output (`createGitDeliveryPrRouteGroup()`, called fresh) rather than the real, module-level
+  // `API_ROUTES`/`matchRoute` `routes.ts` actually serves requests through. Three earlier review
+  // threads found the pr-description, journey, and mark-ready groups unmounted at intermediate
+  // checkpoints (imported into `routes.ts` but never spread into `API_ROUTES`) — a defect this
+  // group's own factory-output tests could never catch, since a group that is never wired in still
+  // returns a perfectly well-formed array from its own factory. Resolving through `matchRoute` is
+  // the only way to prove these patterns are actually reachable by an inbound request.
+  it("resolves the pr-description, journey, and mark-ready patterns through the real API_ROUTES (b2-19)", () => {
+    const postOnly = [
+      "/api/git-delivery/pr-description/preview",
+      "/api/git-delivery/pr-description/approve",
+      "/api/git-delivery/pr-description/apply",
+      "/api/git-delivery/pr-description/status",
+      "/api/git-delivery/journey/refresh",
+      "/api/git-delivery/pr/mark-ready/approve",
+      "/api/git-delivery/pr/mark-ready/execute",
+    ];
+    for (const pattern of postOnly) {
+      const match = matchRoute("POST", pattern);
+      if (match === undefined || match === "method-not-allowed") {
+        throw new Error(`expected ${pattern} to resolve through the real API_ROUTES`);
+      }
+      expect(match.definition.pattern).toBe(pattern);
+      // Every one of these is a mutation/refresh surface — never reachable by GET.
+      expect(matchRoute("GET", pattern)).toBe("method-not-allowed");
     }
   });
 });

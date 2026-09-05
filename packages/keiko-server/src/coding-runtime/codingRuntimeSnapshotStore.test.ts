@@ -84,12 +84,14 @@ describe("CodingRuntimeSnapshotStore", () => {
     const before = db.prepare("SELECT * FROM coding_runtime_snapshots").get();
     runMigrations(db);
     expect(db.prepare("SELECT * FROM coding_runtime_snapshots").get()).toEqual(before);
-    expect(() => { db.exec(`UPDATE coding_runtime_snapshots
-      SET failure_code = 'issue-context-unavailable'`); },
-    ).not.toThrow();
-    expect(() => { db.exec(`UPDATE coding_runtime_snapshots
-      SET failure_code = 'unknown-failure'`); },
-    ).toThrow(/CHECK/u);
+    expect(() => {
+      db.exec(`UPDATE coding_runtime_snapshots
+      SET failure_code = 'issue-context-unavailable'`);
+    }).not.toThrow();
+    expect(() => {
+      db.exec(`UPDATE coding_runtime_snapshots
+      SET failure_code = 'unknown-failure'`);
+    }).toThrow(/CHECK/u);
     expect(() => createCodingRuntimeSnapshotStore(db).create(snapshot("run-2"))).toThrow();
     db.close();
   });

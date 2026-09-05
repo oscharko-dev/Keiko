@@ -692,16 +692,7 @@ function createRunToolSurface(args: RunToolSurfaceInput): RunToolSurface {
 }
 
 function createRunRecord(args: Omit<RunToolSurfaceInput, "signal">): ResolverRunRecord {
-  const {
-    input,
-    request,
-    context,
-    minted,
-    authority,
-    research,
-    onRuntimeEvent,
-    notifyVerifiedHeadAdvanced,
-  } = args;
+  const { input, request, context, minted, authority, research, onRuntimeEvent } = args;
   const controller = new AbortController();
   const surface = createRunToolSurface({ ...args, signal: controller.signal });
   const backend = createBackendRun({

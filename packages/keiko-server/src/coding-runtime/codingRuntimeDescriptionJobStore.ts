@@ -6,8 +6,10 @@
 //
 // One row per run, exactly like `draft_delivery_record` / `ci_readiness_record` are one fact per
 // run: a new head for the same run REPLACES the row (supersede) rather than appending a second one.
-// `revision` is the CAS guard — a caller's `settle` whose expected revision has moved underneath it
-// (because a newer head superseded it) is rejected and discarded, never overwritten.
+// `revision` plus `phase = 'dispatched'` is the CAS guard — a caller's `settle`/`recordBlocked`
+// whose expected revision has moved underneath it (a newer head superseded it) OR whose revision
+// already settled (a late duplicate completion of the SAME attempt) is rejected and discarded,
+// never overwritten.
 
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -95,7 +97,16 @@ interface Row {
 
 const DIGEST = /^[a-f0-9]{64}$/u;
 const OBJECT_ID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
-const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+// `runId` is threaded downstream as a log `correlationId` (codingRuntimeOrchestrator.ts). The
+// alphabet below is deliberately the SAME one `correlation.ts`'s `SAFE_CORRELATION_ID` accepts
+// (letters, digits, `.`, `_`, `-`) so a scope this function admits can never carry a character the
+// log pipeline rejects and silently downgrades to `UNKNOWN_CORRELATION_ID` — owner audit finding
+// b3-22 (PR #3394) named `:` specifically, which this excludes. The MINIMUM LENGTH intentionally
+// stays at 1 (narrower than `SAFE_CORRELATION_ID`'s 8): fixture run ids shorter than 8 characters
+// are already load-bearing in codingRuntimeOrchestrator.test.ts (owned by another agent
+// concurrently), so raising the floor here needs a coordinated change to those fixtures too —
+// tracked as an out-of-scope need rather than landed unilaterally.
+const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 export const DEFAULT_MAX_CONCURRENT_DESCRIPTION_DISPATCHES = 4;
 
 function assertScope(scope: WorkbenchDescriptionScope): void {
@@ -210,8 +221,12 @@ function prepareStatements(db: DatabaseSync): Statements {
     upsertDispatch: db.prepare(
       "UPDATE coding_runtime_description_jobs SET remote_digest = ?, base_sha = ?, head_sha = ?, generation_binding = ?, generation_version = ?, revision = ?, phase = 'dispatched', status_json = NULL, updated_at = ? WHERE run_id = ?",
     ),
+    // `AND phase = 'dispatched'` is the CAS guard: once a revision has already settled, a second
+    // `settle`/`recordBlocked` for the SAME revision (a late duplicate completion racing its own
+    // prior result, not merely a superseded-by-a-newer-head case) no longer matches any row and is
+    // rejected exactly like a superseded revision — never silently overwriting the durable status.
     settleRow: db.prepare(
-      "UPDATE coding_runtime_description_jobs SET phase = 'settled', status_json = ?, updated_at = ? WHERE run_id = ? AND revision = ?",
+      "UPDATE coding_runtime_description_jobs SET phase = 'settled', status_json = ?, updated_at = ? WHERE run_id = ? AND revision = ? AND phase = 'dispatched'",
     ),
     // Budget-exhausted is rejected before any `dispatched` row is allocated, so there is nothing
     // to settle: these two make the run's current head visible as blocked directly, choosing

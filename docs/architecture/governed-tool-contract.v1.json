@@ -916,7 +916,7 @@
       "probe": "decideAutonomousDeliveryOperation",
       "disposition": "retain owner",
       "ownerIssue": 3413,
-      "scope": "full access and mode-independent hard denials"
+      "scope": "full access and mode-independent hard denials -- this exact source was removed in #2958 (commit f60e7bc230e06cd0e58fde0e89904e330b97cf05); ownership of the concern is retained, not the file, verified below through inventoryMigrations' three replacement probes"
     }
   ],
   "examples": {

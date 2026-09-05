@@ -79,7 +79,13 @@ export type CodingWorkbenchRuntimeFailureCode =
   // so the Workbench can render a specific, actionable message instead of a generic rejection when
   // that re-resolution itself fails (authorization revoked, issue gone, provider failure) — the
   // start never proceeds context-free.
-  | "issue-context-unavailable";
+  | "issue-context-unavailable"
+  // Owner audit finding F-question-answer-rejected (PR #3394): a free-text answer to a question
+  // whose options carry no `custom` flag is refused by the runtime reply itself (not by authority
+  // resolution). Distinct from "authority-resolution-failed" so the coordinator can tell a runtime
+  // rejection of the answer's shape apart from a real authority failure, and the Workbench can show
+  // an actionable "pick one of the listed options" message instead of a generic authority error.
+  | "question-answer-rejected";
 
 export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
   Object.freeze([
@@ -103,4 +109,5 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "recovery-required",
     "replay-cap-exhausted",
     "issue-context-unavailable",
+    "question-answer-rejected",
   ] as const);

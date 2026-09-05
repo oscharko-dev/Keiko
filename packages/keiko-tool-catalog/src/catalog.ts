@@ -132,16 +132,46 @@ function snapshot(
   return deepFreeze(catalog);
 }
 
+// A republished profile's binding identity: which canonical tool each alias resolves to, plus
+// every other axis a run pins (ADR-0175 D2 -- "a change to any relevant axis invalidates bound
+// sets"). `toolRef.contractVersion` is deliberately excluded: bumping the descriptor a stable
+// alias resolves to, under an unchanged profile version, is exactly what a `compatibility` entry
+// exists to license (compatibility.ts, `catalog.test.ts`'s "binds exact source, destination..."
+// case) and stays gated by descriptor.ts's own version-monotonic checks -- this key only closes
+// the gap the finding names: rebinding an alias to a DIFFERENT canonical tool identity.
+function profileBindingKey(entry: CatalogProfileDeclaration): string {
+  return canonicalise({
+    profile: entry.profile,
+    toolRefs: entry.toolRefs
+      .map((ref) => ({ alias: ref.alias, canonicalId: ref.toolRef.canonicalId }))
+      .sort((left, right) => compareStrings(left.alias, right.alias)),
+    nativeExtensions: entry.nativeExtensions,
+    adapterDialect: entry.adapterDialect,
+    adapterRuntime: entry.adapterRuntime,
+  });
+}
+
 function assertProfileProgression(
   declarations: readonly CatalogProfileDeclaration[],
   previous: readonly CatalogProfile[],
 ): void {
   for (const declaration of declarations) {
-    const versions = previous
-      .filter((entry) => entry.profile.id === declaration.profile.id)
-      .map((entry) => entry.profile.version);
-    // Retaining an explicitly published historical profile is not latest rebinding.
-    if (versions.includes(declaration.profile.version)) continue;
+    const matches = previous.filter((entry) => entry.profile.id === declaration.profile.id);
+    const versions = matches.map((entry) => entry.profile.version);
+    const republished = matches.find(
+      (entry) => entry.profile.version === declaration.profile.version,
+    );
+    // A reused profile version, like a same-contractVersion descriptor (descriptor.ts), must keep
+    // every alias resolved to the same canonical tool -- retaining an explicitly published
+    // historical profile is not latest rebinding, but rebinding an alias to a different tool
+    // under the same version is.
+    if (republished !== undefined) {
+      requireCatalog(
+        profileBindingKey(republished) === profileBindingKey(declaration),
+        "incompatible-version",
+      );
+      continue;
+    }
     requireCatalog(declaration.profile.version >= Math.max(0, ...versions), "incompatible-version");
   }
 }

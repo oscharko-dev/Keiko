@@ -30,6 +30,8 @@
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { PrDescription } from "@oscharko-dev/keiko-model-gateway";
 import { PR_DESCRIPTION_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
+import { GITHUB_ISSUE_NUMBER_MAX } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { GitPullRequestBodyAdapter } from "@oscharko-dev/keiko-tools";
 import { createNodeGitPullRequestAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
@@ -99,7 +101,12 @@ function isOwnerAndRepo(value: unknown): value is string {
   return typeof value === "string" && OWNER_REPO_RE.test(value);
 }
 function isPrNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= GITHUB_ISSUE_NUMBER_MAX
+  );
 }
 function isSnapshotDigest(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
@@ -331,8 +338,21 @@ export function admitDescriptionModelEgress(
 let serviceCaches = new WeakMap<UiHandlerDeps, Map<string, PrDescriptionApplicationService>>();
 const MAX_CACHED_SERVICES = 512;
 
+// Owner audit finding b3-13 (PR #3394): a NUL-separated template literal made this file
+// binary-detected by `grep`/`rg` without `-a`, hiding its own symbols from searches. A digest of
+// the canonicalised binding is printable and unambiguous. Snapshot and authority identity are
+// part of that binding so a refreshed Chat scope cannot inherit the first request's context
+// provider or held proposal.
 function cacheKey(request: BaseFields, authorityIdentity: string): string {
-  return `${request.projectId}\u0000${request.ownerAndRepo.toLowerCase()}\u0000${String(request.prNumber)}\u0000${request.snapshotDigest ?? "run-bound"}\u0000${authorityIdentity}`;
+  return sha256Hex(
+    canonicalise([
+      request.projectId,
+      request.ownerAndRepo.toLowerCase(),
+      request.prNumber,
+      request.snapshotDigest ?? "run-bound",
+      authorityIdentity,
+    ]),
+  );
 }
 
 function serviceCacheFor(deps: UiHandlerDeps): Map<string, PrDescriptionApplicationService> {
@@ -616,19 +636,52 @@ async function prepare<V extends BaseFields>(
 
 type ApplyLifecyclePhase = "started" | "succeeded" | "blocked" | "failed";
 
+// Owner audit finding b2-12 (PR #3394): a template-literal `op` is invisible to
+// `generate-op-catalog.mjs` (recorded as `<dynamic>`), so none of the four concrete ops below could
+// be looked up by `keiko support analyze` (AGENTS.md §8). One literal `activityLog.write` call per
+// phase instead, matching the catalog generator's Tier-1 object-literal-property shape.
 function logApplyLifecycle(
   activityLog: ServerLogSink,
   correlationId: string,
   phase: ApplyLifecyclePhase,
   extra?: Record<string, unknown>,
 ): void {
-  activityLog.write({
-    category: "process",
-    op: `pr-description.apply.${phase}`,
-    correlationId,
-    ...(phase === "failed" ? { level: "warn", errorKind: "internal" } : {}),
-    extra,
-  });
+  switch (phase) {
+    case "started":
+      activityLog.write({
+        category: "process",
+        op: "pr-description.apply.started",
+        correlationId,
+        extra,
+      });
+      return;
+    case "succeeded":
+      activityLog.write({
+        category: "process",
+        op: "pr-description.apply.succeeded",
+        correlationId,
+        extra,
+      });
+      return;
+    case "blocked":
+      activityLog.write({
+        category: "process",
+        op: "pr-description.apply.blocked",
+        correlationId,
+        extra,
+      });
+      return;
+    case "failed":
+      activityLog.write({
+        category: "process",
+        op: "pr-description.apply.failed",
+        correlationId,
+        level: "warn",
+        errorKind: "internal",
+        extra,
+      });
+      return;
+  }
 }
 
 // #3399 (epic #3384 correction 4): the description authority's model-egress denial is a security

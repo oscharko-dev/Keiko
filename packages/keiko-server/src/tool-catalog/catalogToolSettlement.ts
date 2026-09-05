@@ -17,6 +17,8 @@ import {
 import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
 import { errorKindOf } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import {
   lifecycleIdentity,
   type CatalogBindingState,
@@ -269,14 +271,24 @@ export class CatalogInvocation {
     this.continuation?.discardUnless(terminal.page?.cursor ?? null);
     const receipt = this.receipt(terminal.status);
     this.outcome = { kind: "settled", result: terminal, receipt };
+    const outcome = this.outcome;
     if (this.claimed)
       this.state.options.invocationRegistry.settle(
         { ...this.identity, runId: this.context.runId },
         receipt,
       );
     this.controller.abort();
-    this.emitSettlement(terminal, receipt, error);
-    this.resolve(this.outcome);
+    // The dispatch promise resolves in `finally` no matter what: a shape failure inside
+    // `emitSettlement` (an unvalidated correlation id, item 17) must not leave the caller waiting
+    // on a promise that never settles (b3-10). The failure itself still gets a body-free
+    // diagnostic instead of vanishing as an unhandled rejection.
+    try {
+      this.emitSettlement(terminal, receipt, error);
+    } catch (emitFailure) {
+      this.settlementEmitFailure(emitFailure);
+    } finally {
+      this.resolve(outcome);
+    }
   }
   private account(): void {
     if (this.reservation === undefined) return;
@@ -320,6 +332,18 @@ export class CatalogInvocation {
           }
         : {}),
     });
+  }
+  private settlementEmitFailure(error: unknown): void {
+    emitServerDiagnostic(
+      this.state.input.logPort.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: correlationIdOrUnknown(this.context.correlationId),
+        operation: "tool-catalog.settlement-emit-failed",
+        source: "tool-catalog-settlement",
+        error,
+        redact: () => "server-operation-failed",
+      }),
+    );
   }
   private stopWatching(): void {
     if (this.timer !== undefined) clearTimeout(this.timer);

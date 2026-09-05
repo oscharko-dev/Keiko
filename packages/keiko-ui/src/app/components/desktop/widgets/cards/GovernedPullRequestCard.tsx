@@ -666,8 +666,13 @@ function isValidDescriptionPrNumber(value: string): boolean {
   return /^\d+$/u.test(value);
 }
 
+// Owner audit b1-15 — `prNumber` arrives here as either the raw form string (which may carry
+// leading zeros the user typed, e.g. "007") or `String(async.target.prNumber)`, a reconstruction of
+// the server-issued number that never has any. Normalising through `Number` here means both sides
+// of every previewedKey/targetKey comparison agree on the same PR regardless of which shape the
+// caller had, instead of "007" silently failing to match its own already-completed preview "7".
 function descriptionTargetKeyOf(ownerAndRepo: string, prNumber: string): string {
-  return `${ownerAndRepo} ${prNumber}`;
+  return `${ownerAndRepo} ${String(Number(prNumber))}`;
 }
 
 interface DescriptionAsyncState {

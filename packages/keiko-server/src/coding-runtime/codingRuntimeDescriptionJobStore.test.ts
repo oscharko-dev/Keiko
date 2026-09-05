@@ -29,7 +29,13 @@ function openStore(
 }
 
 function scope(overrides: Partial<WorkbenchDescriptionScope> = {}): WorkbenchDescriptionScope {
-  return { runId: "run-1", remoteDigest: REMOTE, baseSha: BASE, headSha: HEAD_1, ...overrides };
+  return {
+    runId: "run-00000001",
+    remoteDigest: REMOTE,
+    baseSha: BASE,
+    headSha: HEAD_1,
+    ...overrides,
+  };
 }
 
 function generatedStatus(
@@ -107,7 +113,7 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
       revision: 0,
       supersededPriorAttempt: false,
     });
-    expect(store.current("run-1")).toBeUndefined();
+    expect(store.current("run-00000001")).toBeUndefined();
   });
 
   it("coalesces a repeated identical signal while the attempt is still in flight (no new dispatch)", () => {
@@ -157,24 +163,24 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
       LATER,
     );
     expect(accepted).toBe(false);
-    expect(store.current("run-1")).toBeUndefined();
+    expect(store.current("run-00000001")).toBeUndefined();
   });
 
   it("rejects a budget-exhausted trigger without creating a row, and admits it once capacity frees", () => {
     const store = openStore(1);
-    const first = store.beginDispatch(scope({ runId: "run-1" }), NOW);
+    const first = store.beginDispatch(scope({ runId: "run-00000001" }), NOW);
     if (first.kind !== "dispatch") throw new Error("expected a dispatch decision");
-    const blocked = store.beginDispatch(scope({ runId: "run-2" }), NOW);
+    const blocked = store.beginDispatch(scope({ runId: "run-00000002" }), NOW);
     expect(blocked).toEqual({ kind: "budget-exhausted" });
-    expect(store.current("run-2")).toBeUndefined();
+    expect(store.current("run-00000002")).toBeUndefined();
     store.settle(
-      scope({ runId: "run-1" }),
+      scope({ runId: "run-00000001" }),
       first.generationVersion,
       first.revision,
-      generatedStatus(scope({ runId: "run-1" }), first.generationVersion),
+      generatedStatus(scope({ runId: "run-00000001" }), first.generationVersion),
       NOW,
     );
-    const admitted = store.beginDispatch(scope({ runId: "run-2" }), LATER);
+    const admitted = store.beginDispatch(scope({ runId: "run-00000002" }), LATER);
     expect(admitted).toMatchObject({ kind: "dispatch" });
   });
 
@@ -183,15 +189,15 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
   // not exist on the store at all — this call would fail to compile / throw "not a function".
   it("makes a budget-exhausted decision visible as a blocked status", () => {
     const store = openStore(1);
-    store.beginDispatch(scope({ runId: "run-1" }), NOW);
-    const blocked = store.beginDispatch(scope({ runId: "run-2" }), NOW);
+    store.beginDispatch(scope({ runId: "run-00000001" }), NOW);
+    const blocked = store.beginDispatch(scope({ runId: "run-00000002" }), NOW);
     expect(blocked).toEqual({ kind: "budget-exhausted" });
 
-    store.recordBudgetExhausted(scope({ runId: "run-2" }), NOW);
+    store.recordBudgetExhausted(scope({ runId: "run-00000002" }), NOW);
 
-    expect(store.current("run-2")).toEqual({
+    expect(store.current("run-00000002")).toEqual({
       schemaVersion: "1",
-      runId: "run-2",
+      runId: "run-00000002",
       remoteDigest: REMOTE,
       baseSha: BASE,
       headSha: HEAD_1,
@@ -208,24 +214,24 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
   // #3401 review finding 2: the budget cap applied only to a brand-new run (`row === undefined`),
   // so a repaired-head regeneration for an already-settled run bypassed it entirely. Before the
   // fix this second `beginDispatch` returned `{ kind: "dispatch" }` even though the sole
-  // concurrent slot was already occupied by "run-2".
+  // concurrent slot was already occupied by "run-00000002".
   it("still applies the budget cap to a repaired head on an already-settled run", () => {
     const store = openStore(1);
-    const first = store.beginDispatch(scope({ runId: "run-1" }), NOW);
+    const first = store.beginDispatch(scope({ runId: "run-00000001" }), NOW);
     if (first.kind !== "dispatch") throw new Error("expected a dispatch decision");
     store.settle(
-      scope({ runId: "run-1" }),
+      scope({ runId: "run-00000001" }),
       first.generationVersion,
       first.revision,
-      generatedStatus(scope({ runId: "run-1" }), first.generationVersion),
+      generatedStatus(scope({ runId: "run-00000001" }), first.generationVersion),
       NOW,
     );
-    // "run-2" now occupies the sole concurrent slot.
-    const second = store.beginDispatch(scope({ runId: "run-2" }), NOW);
+    // "run-00000002" now occupies the sole concurrent slot.
+    const second = store.beginDispatch(scope({ runId: "run-00000002" }), NOW);
     expect(second).toMatchObject({ kind: "dispatch" });
 
-    // "run-1" is settled (not in flight), so its repaired head must still respect the cap.
-    const repaired = store.beginDispatch(scope({ runId: "run-1", headSha: HEAD_2 }), LATER);
+    // "run-00000001" is settled (not in flight), so its repaired head must still respect the cap.
+    const repaired = store.beginDispatch(scope({ runId: "run-00000001", headSha: HEAD_2 }), LATER);
     expect(repaired).toEqual({ kind: "budget-exhausted" });
   });
 
@@ -241,7 +247,10 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
       NOW,
     );
     expect(accepted).toBe(true);
-    expect(store.current("run-1")).toMatchObject({ state: "blocked", reason: "authority-expired" });
+    expect(store.current("run-00000001")).toMatchObject({
+      state: "blocked",
+      reason: "authority-expired",
+    });
   });
 
   // #3401 review finding 15: the orchestrator's async provider-failure branch must be able to tell
@@ -265,7 +274,7 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
 
     expect(accepted).toBe(false);
     // The superseding head's own in-flight attempt must be left untouched by the stale write.
-    expect(store.current("run-1")).toBeUndefined();
+    expect(store.current("run-00000001")).toBeUndefined();
   });
 
   // #3401 review finding F6: `recordBlocked` was the only public write path that skipped
@@ -290,10 +299,13 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
   it("reconciles an attempt still in flight at restart to a closed blocked status, never silently resumed", () => {
     const store = openStore();
     store.beginDispatch(scope(), NOW);
-    expect(store.current("run-1")).toBeUndefined();
+    expect(store.current("run-00000001")).toBeUndefined();
     const recovered = store.reconcileInterrupted(LATER);
-    expect(recovered).toEqual(["run-1"]);
-    expect(store.current("run-1")).toMatchObject({ state: "blocked", reason: "interrupted" });
+    expect(recovered).toEqual(["run-00000001"]);
+    expect(store.current("run-00000001")).toMatchObject({
+      state: "blocked",
+      reason: "interrupted",
+    });
   });
 
   it("never loses or re-dispatches a reconciled job on a later identical signal", () => {
@@ -312,5 +324,58 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
     expect(() =>
       store.settle(scope(), decision.generationVersion, decision.revision, mismatched, NOW),
     ).toThrow(TypeError);
+  });
+
+  // Owner audit of PR #3394, finding b1-18: `settleRow` guarded only on `revision`, so a SECOND
+  // `settle` for the same revision (a late duplicate completion racing its own prior result, not a
+  // supersede by a newer head) silently overwrote the already-durable status instead of being
+  // rejected as stale. Before the `AND phase = 'dispatched'` guard, the second `settle` below
+  // returned `true` and `store.current` reflected the duplicate's payload, not the first's.
+  it("rejects a second settle for the same revision instead of overwriting the durable status", () => {
+    const store = openStore();
+    const decision = store.beginDispatch(scope(), NOW);
+    if (decision.kind !== "dispatch") throw new Error("expected a dispatch decision");
+    const first = generatedStatus(scope(), decision.generationVersion);
+    expect(store.settle(scope(), decision.generationVersion, decision.revision, first, NOW)).toBe(
+      true,
+    );
+    const duplicate = generatedStatus(scope(), decision.generationVersion);
+    const accepted = store.settle(
+      scope(),
+      decision.generationVersion,
+      decision.revision,
+      duplicate,
+      LATER,
+    );
+    expect(accepted).toBe(false);
+    expect(store.current("run-00000001")).toEqual(first);
+  });
+
+  // Same b1-18 guard, exercised through `recordBlocked` — the sibling settle path.
+  it("rejects a duplicate recordBlocked for a revision that has already settled", () => {
+    const store = openStore();
+    const decision = store.beginDispatch(scope(), NOW);
+    if (decision.kind !== "dispatch") throw new Error("expected a dispatch decision");
+    const settled = generatedStatus(scope(), decision.generationVersion);
+    store.settle(scope(), decision.generationVersion, decision.revision, settled, NOW);
+    const accepted = store.recordBlocked(
+      scope(),
+      "provider-failed",
+      decision.generationVersion,
+      decision.revision,
+      LATER,
+    );
+    expect(accepted).toBe(false);
+    expect(store.current("run-00000001")).toEqual(settled);
+  });
+
+  // Owner audit of PR #3394, finding b3-22: `runId` is threaded downstream as a log
+  // `correlationId`, but the old `RUN_ID` pattern admitted colons that `correlation.ts`'s
+  // `SAFE_CORRELATION_ID` rejects — a persisted scope could carry a run id the log pipeline
+  // silently downgrades to `UNKNOWN_CORRELATION_ID`. This id was accepted by the old pattern;
+  // `assertScope` now rejects it at the trust boundary instead.
+  it("rejects a run id containing a colon, which the correlation-id log pipeline also rejects", () => {
+    const store = openStore();
+    expect(() => store.beginDispatch(scope({ runId: "run:0000001" }), NOW)).toThrow(TypeError);
   });
 });

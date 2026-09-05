@@ -22,7 +22,7 @@ import type {
 export interface RunContext {
   readonly model: ModelPort;
   readonly tools: ToolPort;
-  catalog?: HarnessCatalogRuntime;
+  catalog?: HarnessCatalogRuntime | undefined;
   readonly emitter: Emitter;
   readonly clock: Clock;
   readonly signal: AbortSignal;

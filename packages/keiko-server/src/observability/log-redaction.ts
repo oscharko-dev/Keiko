@@ -651,6 +651,10 @@ const BODY_FREE_CLIENT_NOTE_PATTERNS: readonly RegExp[] = [
   /^\[keiko\] coding workbench issue preview ready: issue [1-9]\d{0,9}$/u,
   /^\[keiko\] coding workbench issue accepted: issue [1-9]\d{0,9} binding [0-9a-f]{12}$/u,
   /^\[keiko\] coding workbench issue preview failed: (?:invalid-reference|repository-mismatch|auth-required|issue-unavailable|clone-failed|authority-denied|cancelled|unknown|unavailable-runtime)$/u,
+  // Owner audit b3-21 — GitClientWindow.tsx's repository-dialog handoff note (a closed
+  // "clone"/"open" mode, never browser-authored text); without this it matched no pattern above
+  // and collapsed to the generic shape marker, losing which dialog mode was handed off.
+  /^\[keiko\] git repository dialog handoff: (?:clone|open)$/u,
 ];
 
 // Mirrors `redactGuardedArrayField`'s depth/name gate for the scalar hatch. `undefined` means

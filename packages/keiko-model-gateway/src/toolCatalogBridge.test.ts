@@ -5,6 +5,7 @@ import {
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
   opencodeRegistrationSet,
 } from "@oscharko-dev/keiko-tool-catalog";
+import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   gatewayCatalogAdvertisement,
   openCodeGatewayCatalogAdvertisement,
@@ -16,6 +17,7 @@ import type {
   LegacyNativeToolSession,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type { ModelGatewayLogEvent } from "./observability.js";
+import { withCorrelationId } from "./observability.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import type { GatewayRequest, GatewayStreamChunk, ModelProviderConfig } from "./types.js";
@@ -458,6 +460,61 @@ describe("native extensions (question/todowrite, #3414 follow-up)", () => {
       (): number => NOW,
     );
     expect(() => bridge.bind({ id: "call-1", name: "not_a_real_tool", arguments: {} })).toThrow();
+  });
+
+  // b1-16: native-extension passthrough shares `captureCall`'s structural check with every bound
+  // call (composer.ts calls `captureCatalogJson` on the whole `{id, name, arguments}` object
+  // before branching on the alias), so the same byte-budget, string-length and unsafe-key guards
+  // already apply here -- these two cases prove that instead of asserting only the op name.
+  it("rejects an oversized native extension argument payload before it ever passes through", () => {
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      (): number => NOW,
+    );
+    const oversized = "x".repeat(TOOL_CATALOG_LIMITS.maxStringBytes + 1);
+    expect(() =>
+      bridge.bind({ id: "call-1", name: "todowrite", arguments: { todos: [oversized] } }),
+    ).toThrow(GatewayToolCatalogError);
+  });
+
+  it("rejects a native extension argument payload carrying an unsafe prototype key", () => {
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      (): number => NOW,
+    );
+    // JSON.parse (unlike an object literal) creates "__proto__" as a real own enumerable key.
+    const hostile = JSON.parse('{"__proto__":{"injected":true},"questions":[]}') as Record<
+      string,
+      unknown
+    >;
+    expect(() => bridge.bind({ id: "call-1", name: "question", arguments: hostile })).toThrow(
+      GatewayToolCatalogError,
+    );
+  });
+
+  it("threads the caller's correlation id onto a native extension passthrough event", () => {
+    // Production wires every adapter's log sink through `withCorrelationId` before it ever
+    // reaches this bridge (see OpenAiAdapter's constructor) -- exercising that same wrapper here
+    // is what proves the id is threaded, rather than merely asserting the op name.
+    const events: ModelGatewayLogEvent[] = [];
+    const sink = withCorrelationId(
+      {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      "correlation-1",
+    );
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      (): number => NOW,
+      sink,
+    );
+    bridge.bind({ id: "call-1", name: "todowrite", arguments: { todos: [] } });
+    const passthrough = events.find(
+      (event) => event.op === "gateway.tool-catalog.native-passthrough",
+    );
+    expect(passthrough?.correlationId).toBe("correlation-1");
   });
 });
 

@@ -17,6 +17,7 @@ import {
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import { fetchCodingWorkbenchJourneyRefresh } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { correlationIdOf } from "@/lib/client-error-summary";
 import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchApprovalRisk,
@@ -240,8 +241,13 @@ function useCodingWorkbenchJourney(runId: string | undefined): CodingWorkbenchJo
   useEffect(() => {
     setOutcome(undefined);
     if (runId === undefined) return;
-    refresh().catch(() => {
-      reportClientDiagnostic("[keiko] journey initial refresh failed", { correlationId: runId });
+    refresh().catch((error: unknown) => {
+      // Owner audit b1-14 — mirror _useJourneyActions.ts's own failure report: prefer the failed
+      // request's own ApiError.correlationId so this diagnostic joins server.log, falling back to
+      // runId only when the error carries none.
+      reportClientDiagnostic("[keiko] journey initial refresh failed", {
+        correlationId: correlationIdOf(error) ?? runId,
+      });
     });
     // The manual "Refresh observed status" control surfaces a failed retry through the card's own
     // action feedback; this initial load only needs a body-free diagnostic, not a second UI path.

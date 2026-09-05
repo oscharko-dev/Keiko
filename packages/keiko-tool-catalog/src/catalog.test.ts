@@ -104,6 +104,24 @@ describe("profile compilation", () => {
       "incompatible-version",
     );
   });
+  it("rejects republishing an unchanged profile version with a different alias-to-tool binding (b1-5)", () => {
+    const readTool = createToolDescriptor(declaration());
+    const otherTool = createToolDescriptor({
+      ...declaration(),
+      toolRef: createToolRef("keiko.fixture.other", 1),
+    });
+    const previous = createToolCatalog(
+      { descriptors: [readTool], profiles: [profile(readTool)], compatibility: [] },
+      { referenceTimeMs: 0 },
+    );
+    // Same profile id and version ("fixture"@1) as `previous`, but its one alias ("fixture_read")
+    // now resolves to a different tool -- ADR-0175 D2 and #3406 require identical content once a
+    // profile version is published.
+    const rebound = { descriptors: [otherTool], profiles: [profile(otherTool)], compatibility: [] };
+    expect(() => createToolCatalog(rebound, { referenceTimeMs: 0, previous })).toThrow(
+      "incompatible-version",
+    );
+  });
   it.each(CATALOG_DIALECTS)("compiles one descriptor losslessly for %s", (dialect) => {
     const { descriptor, catalog, projection } = fixture(dialect);
     expect(projection.tools[0]?.inputSchema.properties).toEqual(descriptor.inputSchema.properties);

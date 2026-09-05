@@ -2,6 +2,8 @@ import { Buffer } from "node:buffer";
 import { catalogJsonBytes } from "@oscharko-dev/keiko-tool-catalog";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import type { CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   catalogBoundToolSet,
   createCatalogBinding,
@@ -30,6 +32,7 @@ import type {
   CatalogToolBinderInput,
   CatalogToolBinderOptions,
   CatalogToolDispatchOutcome,
+  CatalogTrustedContext,
 } from "./catalogToolPorts.js";
 
 function claimInvocation(
@@ -132,13 +135,38 @@ async function executeInvocation(
     invocation.fail(error);
   }
 }
+// `catalogDispatchContext` runs before a `CatalogInvocation` exists to route a failure through
+// (`state.options.context()` is a caller-supplied callback and can throw). Without this guard the
+// throw reached no lifecycle event and no diagnostic (b3-18); this mirrors `bindingFailure` in
+// `catalogToolBinder.ts` -- correlation id unknown by construction, since establishing it is
+// exactly what failed.
+function dispatchContextFailure(state: CatalogBindingState, error: unknown): void {
+  emitServerDiagnostic(
+    state.input.logPort.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: UNKNOWN_CORRELATION_ID,
+      operation: "tool-catalog.dispatch-context-failed",
+      source: "tool-catalog-dispatch",
+      error,
+      redact: () => "server-operation-failed",
+    }),
+  );
+}
 function dispatchCatalogInvocation(
   state: CatalogBindingState,
   source: unknown,
   identity: CatalogActionIdentity,
   cursor?: string,
 ): Promise<CatalogToolDispatchOutcome> {
-  const context = catalogDispatchContext(state);
+  let context: CatalogTrustedContext;
+  try {
+    context = catalogDispatchContext(state);
+  } catch (error) {
+    dispatchContextFailure(state, error);
+    // Matches `createCatalogBinding`/`createCatalogOffer` in `catalogToolBinder.ts`: an unknown
+    // caught value never leaves this module unwrapped.
+    return Promise.reject(new TypeError("Invalid catalog dispatch context", { cause: error }));
+  }
   const invocation = new CatalogInvocation(state, context, Object.freeze({ ...identity }));
   try {
     requireDispatch(

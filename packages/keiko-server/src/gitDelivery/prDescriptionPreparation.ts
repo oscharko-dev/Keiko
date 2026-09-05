@@ -9,7 +9,10 @@ import {
 import { PR_DESCRIPTION_CONCURRENCY_LIMITATION } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import type { PrDescriptionApplicationBinding } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { isGitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
-import { isGitHubOwnerAndRepo } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import {
+  GITHUB_ISSUE_NUMBER_MAX,
+  isGitHubOwnerAndRepo,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { validGitPrBodyText, type GitPrBody } from "@oscharko-dev/keiko-tools";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
 import { reconcilePrDescriptionRegion } from "./prDescriptionRegion.js";
@@ -54,7 +57,7 @@ export function validDescriptionContext(context: PrDescriptionContext): boolean 
     isGitHubOwnerAndRepo(context.repository) &&
     Number.isSafeInteger(context.prNumber) &&
     context.prNumber > 0 &&
-    context.prNumber <= 2_147_483_647 &&
+    context.prNumber <= GITHUB_ISSUE_NUMBER_MAX &&
     /^[a-f0-9]{64}$/u.test(context.authorityDigest) &&
     context.stillAuthorized() &&
     context.signal?.aborted !== true

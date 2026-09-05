@@ -9,6 +9,7 @@ import { createToolRef } from "./identity.js";
 import { createToolDescriptor } from "./descriptor.js";
 import type { ToolCatalog } from "./catalog.js";
 import { createKeikoToolCatalog, type CatalogRegistrationSet } from "./composer.js";
+import { NATIVE_TOOL_CATALOG_RUNTIME } from "./dialect.js";
 
 interface LegacyRegistration {
   readonly alias: string;
@@ -136,7 +137,7 @@ export function legacyNativeRegistrationSet(): CatalogRegistrationSet {
   return {
     profile: { id: "legacy-native", version: 1 },
     adapterDialect: { id: "legacy-json-schema", version: 1 },
-    adapterRuntime: { id: "keiko", version: "0.3.17" },
+    adapterRuntime: NATIVE_TOOL_CATALOG_RUNTIME,
     nativeExtensions: [],
     compatibility: [],
     entries,

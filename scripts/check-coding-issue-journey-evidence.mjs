@@ -155,8 +155,8 @@ function parseArgs(argv) {
   };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { manifestPath, receiptsDir, binding } = parseArgs(process.argv.slice(2));
+async function runCli(argv) {
+  const { manifestPath, receiptsDir, binding } = parseArgs(argv);
   const { verdict, failures } = await checkCodingIssueJourneyEvidence({
     manifestPath,
     receiptsDir,
@@ -170,5 +170,14 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     process.exitCode = 1;
   } else {
     console.log(`Coding-issue journey evidence check passed. Verdict: ${verdict}.`);
+  }
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    await runCli(process.argv.slice(2));
+  } catch (error) {
+    console.error(`FAIL ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
   }
 }

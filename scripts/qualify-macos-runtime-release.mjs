@@ -9,6 +9,9 @@ import {
   RUNTIME_QUALIFICATION_SUITE,
 } from "./runtime-activation-manifest.mjs";
 import { sha256File } from "./lib/digest.mjs";
+import { writeQualificationEvidenceReceipt } from "./lib/qualification-evidence-receipt.mjs";
+
+export { writeQualificationEvidenceReceipt };
 
 const COMMIT = /^[a-f0-9]{40}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
@@ -237,36 +240,9 @@ export function executionAppRoot(options, lstat = lstatSync) {
 // manifest's `receiptDigest` binds to. While #2198 remains open this mode is simply never invoked
 // for the packaged-reference scenario; its manifest row instead carries the descriptor's own
 // closed `blocked` reason (docs/acceptance/coding-issue-journey-3390.json) -- a qualification
-// receipt is never fabricated in its place.
-export function writeQualificationEvidenceReceipt({
-  receiptsDir,
-  scenarioId,
-  receipt,
-  recordedAt,
-  provenance = "real-model",
-}) {
-  writeFileSync(
-    join(receiptsDir, `${scenarioId}.artifact`),
-    `${JSON.stringify(receipt, null, 2)}\n`,
-    { mode: 0o600 },
-  );
-  writeFileSync(
-    join(receiptsDir, `${scenarioId}.receipt.json`),
-    `${JSON.stringify(
-      {
-        scenarioId,
-        commitSha: receipt.sourceCommitSha,
-        platform: receipt.platformTarget,
-        testStatus: receipt.result === "passed" ? "passed" : "failed",
-        recordedAt,
-        provenance,
-      },
-      null,
-      2,
-    )}\n`,
-    { mode: 0o600 },
-  );
-}
+// receipt is never fabricated in its place. The writer itself is shared with
+// qualify-windows-runtime-release.mjs via scripts/lib/qualification-evidence-receipt.mjs; see the
+// `import`/`export` above.
 
 function maybeWriteQualificationEvidence(options, receipt) {
   const receiptsDir = options["qualification-receipts"];

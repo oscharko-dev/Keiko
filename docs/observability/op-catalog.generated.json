@@ -1010,13 +1010,7 @@
     {
       "op": "<dynamic>",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:375",
-      "package": "keiko-server"
-    },
-    {
-      "op": "<dynamic>",
-      "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:627",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:377",
       "package": "keiko-server"
     },
     {
@@ -1388,7 +1382,7 @@
     {
       "op": "coding-runtime.description",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1722",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1738",
       "package": "keiko-server"
     },
     {
@@ -1501,7 +1495,7 @@
     {
       "op": "coding-runtime.run.issue-context-attached",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1192",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1196",
       "package": "keiko-server"
     },
     {
@@ -1902,31 +1896,31 @@
     {
       "op": "git-change.chat.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:574",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:589",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:605",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:620",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.connected",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:511",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:526",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.refreshed",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:706",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:726",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.stale",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:655",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:675",
       "package": "keiko-server"
     },
     {
@@ -2132,6 +2126,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "git.journey-observation",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:367",
+      "package": "keiko-server"
+    },
+    {
       "op": "git.journey-outcome.recorded",
       "category": "process",
       "site": "packages/keiko-server/src/gitDelivery/journeyRoutes.ts:251",
@@ -2140,7 +2140,7 @@
     {
       "op": "git.pr-description",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionProjection.ts:50",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionProjection.ts:51",
       "package": "keiko-server"
     },
     {
@@ -2528,6 +2528,30 @@
       "package": "keiko-server"
     },
     {
+      "op": "pr-description.apply.blocked",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:671",
+      "package": "keiko-server"
+    },
+    {
+      "op": "pr-description.apply.failed",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:679",
+      "package": "keiko-server"
+    },
+    {
+      "op": "pr-description.apply.started",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:655",
+      "package": "keiko-server"
+    },
+    {
+      "op": "pr-description.apply.succeeded",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:663",
+      "package": "keiko-server"
+    },
+    {
       "op": "pr-description.chat.turn.admitted",
       "category": "security",
       "site": "packages/keiko-server/src/chat-handlers.ts:2885",
@@ -2542,7 +2566,7 @@
     {
       "op": "pr-description.model-egress.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:641",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:696",
       "package": "keiko-server"
     },
     {
@@ -2729,7 +2753,7 @@
     {
       "op": "tool-catalog.bind-ready",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:270",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:283",
       "package": "keiko-server"
     },
     {
@@ -2741,7 +2765,7 @@
     {
       "op": "tool-catalog.bind-unavailable",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:277",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:290",
       "package": "keiko-server"
     },
     {
@@ -2753,7 +2777,7 @@
     {
       "op": "tool-catalog.binding-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:149",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:153",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2766,19 +2790,26 @@
     {
       "op": "tool-catalog.completion-discarded",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:334",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:358",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.dispatch-context-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolDispatch.ts:148",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.dispatch-unbound",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:219",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:236",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.invocation-settled",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:248",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:265",
       "package": "keiko-server"
     },
     {
@@ -2790,13 +2821,13 @@
     {
       "op": "tool-catalog.invocation-settled",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:309",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:321",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.invocation-started",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:274",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:291",
       "package": "keiko-server"
     },
     {
@@ -2808,13 +2839,13 @@
     {
       "op": "tool-catalog.invocation-started",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:152",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:154",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.lifecycle-sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:228",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:245",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2828,13 +2859,20 @@
     {
       "op": "tool-catalog.projection",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:283",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:296",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.projection",
       "category": "security",
       "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:242",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.settlement-emit-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:341",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
@@ -3259,6 +3297,10 @@
     "native-file-dialog.selection.projected",
     "portable.windows-alert.spawn-failed",
     "portable.windows-authenticode.system-binary-refused",
+    "pr-description.apply.blocked",
+    "pr-description.apply.failed",
+    "pr-description.apply.started",
+    "pr-description.apply.succeeded",
     "pr-description.chat.turn.admitted",
     "pr-description.chat.turn.denied",
     "pr-description.generation.completed",
@@ -3329,11 +3371,13 @@
     "tool-catalog.bind-unavailable",
     "tool-catalog.binding-failed",
     "tool-catalog.completion-discarded",
+    "tool-catalog.dispatch-context-failed",
     "tool-catalog.dispatch-unbound",
     "tool-catalog.invocation-settled",
     "tool-catalog.invocation-started",
     "tool-catalog.lifecycle-sink-failed",
     "tool-catalog.projection",
+    "tool-catalog.settlement-emit-failed",
     "update-session.lock-quarantine-prune",
     "update.preflight.bundled-catalog.read",
     "update.remediation.execute",

@@ -971,6 +971,17 @@ describe("GitClientWindow — add-repository dialog", () => {
     expect(client.reconnectRepository).toHaveBeenCalledWith(REPO_A.path);
   });
 
+  // Owner audit b3-21 — this exact string must stay in sync with the
+  // `BODY_FREE_CLIENT_NOTE_PATTERNS` entry log-redaction.ts added for it, or the server collapses
+  // it to the generic shape marker (`[redacted:shape]`) and the dialog mode is lost.
+  it("reports a body-free client diagnostic naming the handed-off dialog mode", async () => {
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+    render(<GitClientWindow client={makeClient()} initialRepositoryDialog="clone" />);
+    await screen.findByRole("dialog", { name: "Add repository" });
+    expect(diagnostics).toContain("[keiko] git repository dialog handoff: clone");
+  });
+
   it("cancelling a handed-off clone never returns a project or calls the clone route", async () => {
     const user = userEvent.setup();
     const client = makeClient();

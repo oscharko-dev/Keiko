@@ -6,6 +6,7 @@ import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/gover
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { createToolRef } from "./identity.js";
 import { createToolDescriptor } from "./descriptor.js";
+import { NATIVE_TOOL_CATALOG_RUNTIME } from "./dialect.js";
 import type { CatalogRegistrationSet } from "./composer.js";
 
 const CHILD_WORKSPACE_READ_ALIAS = "keiko_child_workspace_read";
@@ -15,7 +16,7 @@ export function childRegistrationSet(): CatalogRegistrationSet {
   return {
     profile: { id: "child", version: 1 },
     adapterDialect: { id: "child-agent-json-schema", version: 1 },
-    adapterRuntime: { id: "keiko", version: "0.3.17" },
+    adapterRuntime: NATIVE_TOOL_CATALOG_RUNTIME,
     nativeExtensions: [],
     compatibility: [],
     entries: [

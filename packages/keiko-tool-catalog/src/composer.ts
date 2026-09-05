@@ -11,7 +11,7 @@ import type {
   CatalogVersionRef,
   ToolDescriptor,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { createToolCatalog, type ToolCatalog } from "./catalog.js";
+import { createToolCatalog, type CatalogCompilationContext, type ToolCatalog } from "./catalog.js";
 
 export interface CatalogSetEntry {
   readonly alias: string;
@@ -36,10 +36,20 @@ export interface CatalogRegistrationSet {
  * A caller that needs several sets together (e.g. `keiko-harness`'s editor-agent-catalog.ts, or a
  * future OpenCode set) passes its own explicit list; adding an unused zero-arg convenience here
  * would be exactly the speculative generality AGENTS.md §7 asks agents not to add.
+ *
+ * `context` defaults to the wall clock and no comparison snapshot, matching every current caller
+ * (each composes a first, compatibility-free catalog). A caller publishing a version-bump
+ * `compatibility` entry against a prior snapshot supplies both explicitly: `catalog.ts`'s
+ * `assertCompatibilityEntries` resolves a `from` endpoint against `context.previous?.descriptors`,
+ * and `assertCompatibilityTime` measures the entry's remaining lifetime against
+ * `context.referenceTimeMs` -- a hardcoded epoch-zero clock would put every real `expiresAt` far
+ * outside `TOOL_CATALOG_LIMITS.maxCompatibilityLifetimeMs`, so a stale default would silently
+ * defeat the parameter as completely as an omitted `previous` does.
  */
 export function createKeikoToolCatalog(
   sets: readonly CatalogRegistrationSet[],
   compatibility: readonly CatalogCompatibility[] = [],
+  context: CatalogCompilationContext = { referenceTimeMs: Date.now() },
 ): ToolCatalog {
   const descriptors = sets.flatMap((set) => set.entries.map((entry) => entry.descriptor));
   const profiles = sets.map((set) => ({
@@ -53,5 +63,5 @@ export function createKeikoToolCatalog(
     adapterRuntime: set.adapterRuntime,
     compatibility: set.compatibility ?? [],
   }));
-  return createToolCatalog({ descriptors, profiles, compatibility }, { referenceTimeMs: 0 });
+  return createToolCatalog({ descriptors, profiles, compatibility }, context);
 }

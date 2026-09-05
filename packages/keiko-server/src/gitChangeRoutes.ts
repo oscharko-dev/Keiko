@@ -64,6 +64,7 @@ import type {
 import type { StoredRelationship } from "./store/relationships.js";
 import { resolveChatRepository } from "./gitChangeRepository.js";
 import { MAX_GIT_CHANGE_SCOPES } from "./store/chats.js";
+import { UiStoreError } from "./store/errors.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -80,8 +81,9 @@ const SAFE_MESSAGES: Readonly<Record<GitChangeErrorCode, string>> = {
   GIT_CHANGE_PAYLOAD_TOO_LARGE: "The git-change request exceeds the maximum size.",
   GIT_CHANGE_CHAT_NOT_FOUND: "The chat does not exist.",
   GIT_CHANGE_SCOPE_NOT_FOUND: "No connected git-change scope matches this relationship.",
-  GIT_CHANGE_SCOPE_LIMIT_REACHED: "This chat already has the maximum Git change scopes.",
   GIT_CHANGE_ENGINE_UNAVAILABLE: "The relationship engine is not available.",
+  GIT_CHANGE_SCOPE_LIMIT_REACHED:
+    "This chat already has the maximum number of connected git-change scopes.",
 };
 
 function errResult(status: number, code: GitChangeErrorCode): RouteResult {
@@ -481,6 +483,11 @@ class GitChangeBlocked extends Error {
   }
 }
 
+// Owner audit b3-9 — check the store-owned `MAX_GIT_CHANGE_SCOPES` cap before capture so a chat
+// already at the cap is rejected with a closed error BEFORE a relationship is created for a scope
+// the store would then refuse to persist, leaving no orphaned relationship behind. The store's own
+// `validatePatchGitChangeScopes` stays the authoritative enforcement — the catch around
+// `updateChat` below is a fail-closed backstop if the two limits are ever allowed to drift.
 function persistConnectedScope(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -507,7 +514,15 @@ function persistConnectedScope(
     now,
   );
   const minted = mintGitChangeDescriptionAuthority(deps, scope, now);
-  deps.store.updateChat(chatId, { gitChangeScopes: [...existingScopes, scope] });
+  try {
+    deps.store.updateChat(chatId, { gitChangeScopes: [...existingScopes, scope] });
+  } catch (error) {
+    if (error instanceof UiStoreError) {
+      archiveGitChangeRelationship(deps, workspaceId, scope.relationshipId);
+      return errResult(409, "GIT_CHANGE_SCOPE_LIMIT_REACHED");
+    }
+    throw error;
+  }
   logGitChangeEvent(deps, "git-change.chat.connected", correlationId, {
     relationshipId: scope.relationshipId,
     remoteDigestPrefix: scope.remoteDigest.slice(0, 8),
@@ -622,6 +637,11 @@ function persistStaleScope(
 ): RouteResult {
   const workspaceId = deps.relationship?.scopeResolver(ctx.req)?.workspaceId;
   if (workspaceId === undefined) return errResult(503, "GIT_CHANGE_ENGINE_UNAVAILABLE");
+  // Owner audit b3-8 — create the replacement relationship BEFORE archiving the one it replaces.
+  // `reads-context` is immutable/non-reconnectable (correction 4 above), so a drifted comparison
+  // still needs two edges (archive old, create new); creating first means a failing create (e.g. a
+  // store-level conflict) leaves the chat pointing at the still-active OLD relationship instead of
+  // one that was just archived out from under it.
   const mutation = createGitChangeRelationship(
     deps,
     workspaceId,

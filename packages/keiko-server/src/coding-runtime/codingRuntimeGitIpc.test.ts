@@ -34,6 +34,9 @@ describe("semantic runtime Git IPC", () => {
     { operation: "ci", forceFresh: true, prNumber: 99 },
     { operation: "ci", forceFresh: true, headSha: "a".repeat(40) },
     { operation: "ci", forceFresh: "true" },
+    // forceFresh is the documented optional flag of the ci observation (#3388); only a non-boolean
+    // value is scope widening.
+    { operation: "ci", forceFresh: "yes" },
     { operation: "ci", prNumber: 99 },
     { operation: "ci", headSha: "a".repeat(40) },
     { operation: "status", argv: ["status"] },

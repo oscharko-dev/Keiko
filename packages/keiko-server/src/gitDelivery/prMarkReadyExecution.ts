@@ -598,6 +598,3 @@ export const createGitDeliveryPrMarkReadyRouteGroup = (
     handler: createHandlePrMarkReadyExecute(options),
   },
 ];
-
-export const GIT_DELIVERY_PR_MARK_READY_ROUTE_GROUP: readonly RouteDefinition[] =
-  createGitDeliveryPrMarkReadyRouteGroup();

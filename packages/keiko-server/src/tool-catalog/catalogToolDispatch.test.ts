@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { catalogToolFixture } from "./__fixtures__/catalogToolFixture.js";
 import { createCatalogToolBinder } from "./catalogToolDispatch.js";
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { CatalogHandlerContext, CatalogHandlerResult } from "./catalogToolPorts.js";
 
 function setup(): ReturnType<typeof catalogToolFixture> & {
@@ -154,5 +155,47 @@ describe("bound catalog dispatch", () => {
       fixture.primary.events.filter((event) => event.op === "tool-catalog.invocation-settled"),
     ).toHaveLength(1);
     expect(JSON.stringify(fixture.primary.events)).not.toContain("late-secret");
+  });
+  it("rejects with a diagnostic instead of throwing uncaught when the context callback itself fails (b3-18)", async () => {
+    const fixture = catalogToolFixture();
+    let contextShouldThrow = false;
+    const contextFailure = new Error("context-source-unavailable");
+    const diagnosticsRecord = vi.fn<ServerDiagnosticSink["record"]>();
+    const binder = createCatalogToolBinder(
+      {
+        ...fixture.input,
+        logPort: { primary: fixture.primary, diagnostics: { record: diagnosticsRecord } },
+      },
+      {
+        ...fixture.options,
+        context: () => {
+          if (contextShouldThrow) throw contextFailure;
+          return fixture.context;
+        },
+      },
+    );
+    // Establishing the offer succeeds first (the context callback works fine here) -- only the
+    // later dispatch call observes the callback failing.
+    const offer = binder.offer();
+    contextShouldThrow = true;
+    await expect(
+      binder.dispatch(
+        {
+          kind: "bound",
+          toolRef: fixture.pure.descriptor.toolRef,
+          projectionDigest: offer.binding.projectionDigest,
+          offerId: offer.offerId,
+          arguments: { path: "fixture.ts" },
+        },
+        identity,
+      ),
+    ).rejects.toMatchObject({
+      name: "TypeError",
+      message: "Invalid catalog dispatch context",
+      cause: contextFailure,
+    });
+    expect(diagnosticsRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "tool-catalog.dispatch-context-failed" }),
+    );
   });
 });

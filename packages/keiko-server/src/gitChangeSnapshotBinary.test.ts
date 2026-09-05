@@ -32,6 +32,10 @@ function ok(stdout: string): GitProcessResult {
   return { exitCode: 0, signal: null, stdout, stderr: "", truncated: false };
 }
 
+function truncatedOk(stdout: string): GitProcessResult {
+  return { exitCode: 0, signal: null, stdout, stderr: "", truncated: true };
+}
+
 function reader(runner: GitProcessRunner): GitSnapshotReader {
   return { cwd: "/repo", runner, signal: new AbortController().signal, timeoutMs: 5_000 };
 }
@@ -139,6 +143,59 @@ describe("resolveSnapshotBinaryFiles: malformed statistics-repair lane", () => {
   });
 
   it("fails closed when the repair patch's own header cannot be parsed", async () => {
+    const runner: GitProcessRunner = (args) => {
+      if (args[0] === "cat-file") return Promise.resolve(ok("plain text, no NUL byte here\n"));
+      if (args.includes("diff"))
+        return Promise.resolve(ok("diff --git badheader\n@@ -0,0 +1,1 @@\n+x"));
+      throw new Error(`unexpected invocation: ${args.join(" ")}`);
+    };
+    const entry = meta({ binary: true });
+    await expect(
+      resolveSnapshotBinaryFiles(reader(runner), [entry], 10, REVISIONS),
+    ).rejects.toThrow("Git snapshot read failed");
+  });
+});
+
+// Owner audit b2-14 — the repair lane used to re-read the whole `--patch --unified=0` diff at the
+// fixed 8 MB non-truncating bound: a comparison whose repair patch exceeded it threw
+// "metadata-truncated" out of `resolveSnapshotBinaryFiles` and failed the ENTIRE capture, even
+// though the caller's own (possibly larger) `maxTotalBytes` budget would have accepted it.
+describe("resolveSnapshotBinaryFiles: b2-14 — an oversized repair read degrades, not fails", () => {
+  // Failing-before: with the old non-truncating read, this rejected with "Git snapshot read
+  // failed" (metadata-truncated) instead of resolving to a binary-omitted entry.
+  it("falls back to the original binary classification when the repair read is truncated before reaching its section", async () => {
+    const runner: GitProcessRunner = (args) => {
+      if (args[0] === "cat-file") return Promise.resolve(ok("plain text, no NUL byte here\n"));
+      if (args.includes("diff")) return Promise.resolve(truncatedOk(""));
+      throw new Error(`unexpected invocation: ${args.join(" ")}`);
+    };
+    const entry = meta({ additions: 4, deletions: 1, binary: true });
+    const [result] = await resolveSnapshotBinaryFiles(reader(runner), [entry], 10, REVISIONS);
+    expect(result?.binary).toBe(true);
+    expect(result?.additions).toBe(0);
+    expect(result?.deletions).toBe(0);
+  });
+
+  it("still repairs exact statistics for an entry whose section arrived before the truncation cut", async () => {
+    const patch = [
+      "diff --git a/file.bin b/file.bin",
+      "@@ -0,0 +1,2 @@",
+      "+line one",
+      "+line two",
+    ].join("\n");
+    const runner: GitProcessRunner = (args) => {
+      if (args[0] === "cat-file") return Promise.resolve(ok("plain text, no NUL byte here\n"));
+      if (args.includes("diff")) return Promise.resolve(truncatedOk(patch));
+      throw new Error(`unexpected invocation: ${args.join(" ")}`);
+    };
+    const entry = meta({ additions: 0, deletions: 0, binary: true });
+    const [result] = await resolveSnapshotBinaryFiles(reader(runner), [entry], 10, REVISIONS);
+    expect(result?.binary).toBe(false);
+    expect(result?.additions).toBe(2);
+    expect(result?.deletions).toBe(0);
+  });
+
+  it("still fails closed on a malformed header when the read completed (not merely truncated)", async () => {
     const runner: GitProcessRunner = (args) => {
       if (args[0] === "cat-file") return Promise.resolve(ok("plain text, no NUL byte here\n"));
       if (args.includes("diff"))

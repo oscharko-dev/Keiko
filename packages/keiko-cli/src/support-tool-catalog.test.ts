@@ -324,7 +324,7 @@ describe("existing CLI lazy lifecycle analysis dispatch", () => {
     },
   );
 
-  it("does not load the lifecycle graph for ordinary HTTP logs or clusters", async () => {
+  it("does not load the lifecycle graph for ordinary HTTP logs, with or without --clusters", async () => {
     const load = vi.spyOn(lazyModules, "loadToolLifecycle");
     const http = formatServerLogLine(
       { category: "http", op: "request", correlationId: "request-1", status: 204 },
@@ -333,11 +333,40 @@ describe("existing CLI lazy lifecycle analysis dispatch", () => {
     const ordinary = await analyzeThroughCli(http, ["--json"]);
     expect(ordinary.code).toBe(0);
     expect(ordinary.output).toMatch(/"status":\s*204/u);
-    const { text } = await emittedLog();
+    const httpClusters = await analyzeThroughCli(http, ["--clusters", "--json"]);
+    expect(httpClusters.code).toBe(0);
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  // #3413 F8 review, finding b1-10: `--clusters` used to project straight off the pre-validator
+  // `basic` analysis, so every `tool-catalog.*` outcome collapsed into one cluster with no
+  // `errorKind` and no warning that the validator was never consulted -- reproduced here with a
+  // real binder failure line (`emitSettlement`'s own `commit-uncertain` path), not a hand-typed
+  // JSON fixture. Before the fix this failed on both assertions: `load` was never called, and the
+  // failed settlement's `errorKind` was silently dropped from its cluster.
+  it("loads the actual validator for --clusters when the log carries tool-catalog evidence, keeping a failed settlement's errorKind out of the successful cluster", async () => {
+    const load = vi.spyOn(lazyModules, "loadToolLifecycle");
+    const { text } = await emittedLog((fixture) => ({
+      ...fixture.input,
+      budgetPort: {
+        ...fixture.input.budgetPort,
+        commit: (): never => {
+          throw new Error("secret-ack");
+        },
+      },
+      handlerBindings: [fixture.handler],
+    }));
     const clusters = await analyzeThroughCli(text, ["--clusters", "--json"]);
     expect(clusters.code).toBe(0);
-    expect(clusters.output).toContain("tool-catalog.invocation-settled");
-    expect(load).not.toHaveBeenCalled();
+    expect(load).toHaveBeenCalledOnce();
+    const parsed = JSON.parse(clusters.output) as {
+      readonly op: string;
+      readonly errorKind: string | null;
+    }[];
+    const settled = parsed.filter((cluster) => cluster.op === "tool-catalog.invocation-settled");
+    expect(settled).toHaveLength(1);
+    expect(settled[0]?.errorKind).not.toBeNull();
+    expect(clusters.output).not.toMatch(/secret-ack/u);
   });
 
   it("keeps unavailable lifecycle validation explicit and body-free", async () => {

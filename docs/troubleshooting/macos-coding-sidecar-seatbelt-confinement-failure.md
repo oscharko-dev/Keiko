@@ -10,11 +10,11 @@ the [troubleshooting entry template](./_template.md).
 
 ## The coding sidecar never becomes ready on macOS, or exits immediately after launch
 
-| Field             | Value                                                                                                     |
-| ----------------- | --------------------------------------------------------------------------------------------------------- |
-| Severity          | High                                                                                                      |
-| Surface           | Local UI / Workspace                                                                                      |
-| Stable identifier | `runtime.confinement.failed`, `runtime-gateway-confinement-required`, `runtime-gateway-confinement-drift` |
+| Field             | Value                                                                                                                                                |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Severity          | High                                                                                                                                                 |
+| Surface           | Local UI / Workspace                                                                                                                                 |
+| Stable identifier | `runtime.confinement.failed`, `runtime-gateway-confinement-required`, `runtime-gateway-confinement-drift`, `runtime-gateway-confinement-unavailable` |
 
 **Symptom**
 
@@ -47,11 +47,20 @@ unconfined launch — in three cases:
    object being reused to spawn a different run's identity; it should not occur through ordinary
    restart or relaunch, since each activation constructs a fresh backend bound to the run it is
    launching.
-3. **The Seatbelt wrapper itself could not run** — `/usr/bin/sandbox-exec` is missing, blocked by
-   endpoint-security or MDM software that intercepts sandbox invocations, or the kernel rejects the
-   compiled profile. The child process backend surfaces this the same way it surfaces any other
-   spawn failure: through the child's `error` event, recorded as `runtime.confinement.failed` and
-   re-thrown to the caller — the sidecar never starts unconfined as a fallback.
+3. **The Seatbelt wrapper itself could not run**, in either of two distinct places:
+   - **Pre-spawn: the availability probe already knows it cannot** (`runtime-gateway-confinement-unavailable`,
+     `devLaneRuntimeProcessBackend.ts`'s `spawnConfinedTree`). The shared `planIsolatedRun` planner
+     (`@oscharko-dev/keiko-sandbox`) selects a gateway-confinement backend before any process is
+     created; on macOS that selection requires `sandbox-exec` to be present and usable
+     (`BackendAvailability.seatbelt`). When it is not, the planner returns a `fail-closed` decision
+     and the backend throws synchronously — **zero** spawn attempts, no child process ever exists.
+   - **At spawn: an already-selected `sandbox-exec` fails unexpectedly anyway** — missing,
+     blocked by endpoint-security or MDM software that intercepts sandbox invocations, or the
+     kernel rejects the compiled profile at invocation time. The child process backend surfaces
+     this the same way it surfaces any other spawn failure: through the child's `error` event,
+     recorded as `runtime.confinement.failed` and re-thrown to the caller.
+
+   Either way the sidecar never starts unconfined as a fallback.
 
 **Diagnostic Steps**
 
@@ -71,7 +80,9 @@ unconfined launch — in three cases:
 3. If the log instead shows `runtime-gateway-confinement-required` or
    `runtime-gateway-confinement-drift` with **zero** spawn attempts, the failure occurred before
    any process existed; this points at the composition that constructed the backend, not at the
-   host's Seatbelt support.
+   host's Seatbelt support. `runtime-gateway-confinement-unavailable` also shows zero spawn
+   attempts, but points the other way: it is the pre-spawn form of case 3 — the availability probe
+   already found `sandbox-exec` unusable before a child was ever created; step 2 above confirms it.
 
 **Resolution**
 
