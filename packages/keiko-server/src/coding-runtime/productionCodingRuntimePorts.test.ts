@@ -1057,7 +1057,12 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
         mintDescriptionAuthority: mint,
       }),
     );
-    const { acceptedMode: _acceptedMode, ...unknownModeScope } = SCOPE;
+    const unknownModeScope: WorkbenchDescriptionScope = {
+      runId: SCOPE.runId,
+      remoteDigest: SCOPE.remoteDigest,
+      baseSha: SCOPE.baseSha,
+      headSha: SCOPE.headSha,
+    };
 
     await expect(
       dispatcher.generate(unknownModeScope, new AbortController().signal),
@@ -1066,7 +1071,10 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
     expect(generatePrDescriptionMock).not.toHaveBeenCalled();
   });
 
-  function generatedDescription(): PrDescription.PrDescriptionGenerationResult {
+  function generatedDescription(): Extract<
+    PrDescription.PrDescriptionGenerationResult,
+    { readonly status: "generated" }
+  > {
     const artifact: PrDescriptionArtifact = {
       schemaVersion: "1",
       renderingVersion: "1",
@@ -1124,6 +1132,66 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
         reason: state === "stale" ? "stale-snapshot" : "authority-expired",
       });
       expect(generatePrDescriptionMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["stale-snapshot", "authority-expired"] as const)(
+    "stops additional model calls when a per-call recheck reports %s",
+    async (reason) => {
+      const gatewayChat = vi.fn(() => Promise.resolve({} as never));
+      let recheckCount = 0;
+      let authorityReadCount = 0;
+      generatePrDescriptionMock.mockImplementationOnce(
+        async (
+          request: PrDescription.PrDescriptionRequest,
+          generation: PrDescription.PrDescriptionDeps,
+        ): Promise<PrDescription.PrDescriptionGenerationResult> => {
+          const signal = request.signal ?? new AbortController().signal;
+          const gatewayRequest = {} as Parameters<typeof generation.gateway.chat>[0];
+          for (let remainingCalls = 2; remainingCalls > 0; remainingCalls -= 1) {
+            if (!(await generation.revalidateAuthority(request.authority, signal))) {
+              return { status: "unavailable", reason: "authority-denied" };
+            }
+            await generation.gateway.chat(gatewayRequest);
+          }
+          return generatedDescription();
+        },
+      );
+      const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+        fakeDeps({
+          snapshots: {
+            ...fakeSnapshots(() =>
+              Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+            ),
+            recheck: () => {
+              recheckCount += 1;
+              const state = reason === "stale-snapshot" && recheckCount === 2 ? "stale" : "current";
+              return Promise.resolve({ state, snapshot: snapshotFixture() });
+            },
+          },
+          descriptionAuthority:
+            reason === "authority-expired"
+              ? {
+                  current: (...args) => {
+                    authorityReadCount += 1;
+                    return authorityReadCount < 3 ? admittingPort().current(...args) : undefined;
+                  },
+                  expired: () => authorityReadCount >= 3,
+                }
+              : admittingPort(),
+          generation: {
+            gateway: { chat: gatewayChat },
+            config: {} as PrDescription.PrDescriptionDeps["config"],
+            log: { write: () => undefined },
+          },
+        }),
+      );
+
+      await expect(dispatcher.generate(SCOPE, new AbortController().signal)).resolves.toEqual({
+        reason,
+      });
+      expect(gatewayChat).toHaveBeenCalledOnce();
+      expect(recheckCount).toBe(2);
     },
   );
 

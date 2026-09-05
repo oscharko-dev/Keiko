@@ -60,6 +60,7 @@ export const PR_DESCRIPTION_REASONS = [
   "snapshot-unavailable",
   "invalid-snapshot",
   "invalid-request",
+  "authority-denied",
 ] as const;
 export type PrDescriptionReason = (typeof PR_DESCRIPTION_REASONS)[number];
 

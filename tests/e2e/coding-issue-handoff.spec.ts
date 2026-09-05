@@ -27,6 +27,10 @@ import {
   startHandoffDraft,
   handoffControl,
 } from "./support/coding-issue-handoff-journey.js";
+import { assessGitCiFacts } from "../../packages/keiko-tools/src/git-ci-assessment.js";
+import { collectGitCiRequirements } from "../../packages/keiko-tools/src/git-ci-requirements.js";
+import type { GitCiProviderFacts } from "../../packages/keiko-tools/src/git-ci-facts.js";
+import type { GitProviderPageResult } from "../../packages/keiko-tools/src/git-provider-observation.js";
 
 test.describe.configure({ mode: "serial" });
 const stateDir = handoffStateDir();
@@ -193,18 +197,54 @@ interface MarkReadyBody {
   readonly readinessDigest: string;
 }
 
-// #3389 repair (review finding, correction 2): the execute route now independently re-derives the
+// #3389 repair (review finding, correction 2): the execute route independently re-derives the
 // live requirements digest (assessGitCiFacts's requirementsDigest) and refuses on a mismatch — a
-// digest with no relationship to any live read (this constant used to be the literal "e".repeat(64))
-// can never be redeemed any more. This is the REAL value `assessGitCiFacts` produces for the exact
-// "unprotected branch, no required-status-check rules, no workflow-requirement definitions" facts
-// coding-issue-handoff-transport.mts's CI-facts fixture answers for every PR in this suite — that
-// digest depends only on the (empty) requirements configuration, never on PR/repo identity, so one
-// constant serves every test below. Recomputed by calling the real producer against that exact
-// fixture shape (`collectGitCiRequirements({protection:{outcome:"unprotected"}, rules: emptyPage})`
-// then `assessGitCiFacts`), never hand-derived.
-const HANDOFF_CLEAN_READINESS_DIGEST =
-  "0cca7086fc8519a84fbfceee46195028f2af59a14e0d69fb8eab21ec4a328e02";
+// digest with no relationship to any live read can never be redeemed. Derive the value below from
+// the same producer and empty fixture pages the hermetic transport answers, rather than pinning a
+// copied hash that could silently outlive the production formula.
+function emptyPage(): GitProviderPageResult {
+  return { values: [], completeness: { complete: true, pages: 1, entries: 0, bytes: 0 } };
+}
+function handoffCleanReadinessDigest(): string {
+  const requirements = collectGitCiRequirements({
+    protection: { outcome: "unprotected" },
+    rules: emptyPage(),
+  });
+  const facts: GitCiProviderFacts = {
+    status: "observed",
+    identity: {
+      number: 17,
+      externalId: "PR_fixture_17",
+      url: "https://github.com/fixture/Keiko/pull/17",
+      repository: "fixture/Keiko",
+      headRepository: "fixture/Keiko",
+      headRef: "feature/issue-1",
+      headSha: "3".repeat(40),
+      baseRef: "dev",
+      baseSha: "1".repeat(40),
+      state: "open",
+      isDraft: true,
+    },
+    repositoryId: 4139,
+    mergeable: true,
+    mergeState: "clean",
+    merged: false,
+    protection: { outcome: "unprotected" },
+    requirements,
+    workflowDefinitions: { status: "observed", definitions: [] },
+    lists: {
+      "branch-rules": emptyPage(),
+      "check-runs": emptyPage(),
+      "commit-statuses": emptyPage(),
+      "workflow-runs": emptyPage(),
+      reviews: emptyPage(),
+    },
+  };
+  const digest = assessGitCiFacts(facts).requirementsDigest;
+  if (digest === null) throw new Error("Expected complete handoff CI requirements");
+  return digest;
+}
+const HANDOFF_CLEAN_READINESS_DIGEST = handoffCleanReadinessDigest();
 
 interface MarkReadyApproveResponse {
   readonly approval: unknown;

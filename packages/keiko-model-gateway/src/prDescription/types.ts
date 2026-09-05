@@ -52,6 +52,11 @@ export interface PrDescriptionDeps {
     reference: string,
     signal: AbortSignal,
   ) => Promise<PrDescriptionResolvedSnapshot | undefined>;
+  /** Revalidates the caller's exact authority immediately around every provider call. */
+  readonly revalidateAuthority: (
+    authority: PrDescriptionRequest["authority"],
+    signal: AbortSignal,
+  ) => boolean | Promise<boolean>;
   readonly gateway: Pick<Gateway, "chat">;
   readonly config: GatewayConfig;
   readonly log: ModelGatewayLogSink;

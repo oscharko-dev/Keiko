@@ -48,7 +48,10 @@ export type PrDescriptionApplicationResult =
 export interface PrDescriptionServiceOptions {
   readonly context: () => PrDescriptionContext | undefined;
   readonly snapshots: GitChangeSnapshotService;
-  readonly generation: Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot">;
+  readonly generation: Omit<
+    PrDescription.PrDescriptionDeps,
+    "resolveSnapshot" | "revalidateAuthority"
+  >;
   readonly adapter: (context: PrDescriptionContext) => GitPullRequestBodyAdapter | undefined;
   readonly mutationDeps: GitDeliveryMutationDeps;
   readonly execution: GitDeliveryPullRequestSeams;

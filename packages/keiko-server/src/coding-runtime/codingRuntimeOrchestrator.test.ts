@@ -2766,7 +2766,9 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     verifiedCommits.set("run-1", verifiedCommit());
     resolveCompletion?.("succeeded");
 
-    await vi.waitFor(() => expect(dispatcher.generate).toHaveBeenCalledOnce());
+    await vi.waitFor(() => {
+      expect(dispatcher.generate).toHaveBeenCalledOnce();
+    });
     expect(dispatcher.generate).toHaveBeenCalledWith(
       expect.objectContaining({ acceptedMode: "governed-assist" }),
       expect.any(AbortSignal),

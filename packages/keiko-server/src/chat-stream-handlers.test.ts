@@ -3392,9 +3392,12 @@ describe("git-change description-authority admission on the streaming send path 
         yield { type: "done", response: normalizedResponse("streamed description turn") };
       },
     };
+    const mintDescriptionAuthority = vi.fn();
     const admittingDeps = {
       ...deps(model),
       ...description.deps,
+      codingRuntimeDeploymentCeiling: "autonomous-delivery",
+      mintDescriptionAuthority,
       gitChangeDescriptionAuthorityPort: {
         current: (): { readonly effectiveMode: string } => ({ effectiveMode: "governed-assist" }),
       },
@@ -3409,6 +3412,12 @@ describe("git-change description-authority admission on the streaming send path 
             projectPath: projectDir,
             modelId: CHAT_MODEL,
             content: "refine the description",
+            memory: {
+              enabled: false,
+              budgetTokens: 0,
+              mode: "supervised-coding",
+              context: {},
+            },
           }),
           captured.res,
         ),
@@ -3420,6 +3429,12 @@ describe("git-change description-authority admission on the streaming send path 
     expect(result).toBe(STREAMING);
     expect(streamCalls).toBe(0);
     expect(captured.writes.join("\n")).toContain("Update the exported value.");
+    expect(mintDescriptionAuthority).toHaveBeenCalledWith({
+      scope: expect.objectContaining({ snapshotDigest: description.scope.snapshotDigest }),
+      requestedMode: "supervised-coding",
+      nowIso: expect.any(String),
+      correlationId: "corr-stream-git-change-2",
+    });
     expect(sink.events).toContainEqual(
       expect.objectContaining({
         category: "security",

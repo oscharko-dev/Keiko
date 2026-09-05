@@ -630,7 +630,8 @@ export interface ProductionWorkbenchDescriptionDeps {
   readonly activeWorkspaceRoot: () => string | undefined;
   readonly snapshots: GitChangeSnapshotService;
   /** `undefined` -- no configured model profile for this deployment (#3399's own closed reason). */
-  readonly generation: Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot"> | undefined;
+  readonly generation:
+    Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot" | "revalidateAuthority"> | undefined;
   readonly descriptionAuthority: GitDeliveryDescriptionAuthorityPort | undefined;
   readonly mintDescriptionAuthority?: (request: GitDeliveryDescriptionAuthorityMintRequest) => void;
   readonly now: () => number;
@@ -724,6 +725,76 @@ async function dispatchWorkbenchDescription(
   return admitAndGenerate(deps, scope, captured, capture.reference, captureInput, signal);
 }
 
+function mintWorkbenchDescriptionAuthority(
+  deps: ProductionWorkbenchDescriptionDeps,
+  scope: WorkbenchDescriptionScope,
+  authorityScope: GitDeliveryDescriptionAuthorityScope,
+  nowIso: string,
+): void {
+  if (scope.acceptedMode === undefined) return;
+  deps.mintDescriptionAuthority?.({
+    scope: authorityScope,
+    requestedMode: scope.acceptedMode,
+    nowIso,
+    correlationId: scope.runId,
+  });
+}
+
+type WorkbenchGenerationInvalidation = Extract<
+  WorkbenchDescriptionReason,
+  "authority-expired" | "model-egress-denied" | "stale-snapshot"
+>;
+
+interface GuardedWorkbenchGeneration {
+  readonly generation: Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot">;
+  readonly invalidation: () => WorkbenchGenerationInvalidation | undefined;
+}
+
+async function currentWorkbenchGenerationInvalidation(
+  deps: ProductionWorkbenchDescriptionDeps,
+  input: GitChangeSnapshotCaptureInput,
+  reference: string,
+  authorityScope: GitDeliveryDescriptionAuthorityScope,
+): Promise<WorkbenchGenerationInvalidation | undefined> {
+  const current = await deps.snapshots.recheck(reference, input);
+  if (!workbenchSnapshotStillCurrent(deps, input, current.state)) return "stale-snapshot";
+  return modelEgressDenialReason(
+    deps.descriptionAuthority,
+    authorityScope,
+    new Date(deps.now()).toISOString(),
+  );
+}
+
+function guardedWorkbenchGeneration(
+  deps: ProductionWorkbenchDescriptionDeps,
+  scope: WorkbenchDescriptionScope,
+  input: GitChangeSnapshotCaptureInput,
+  reference: string,
+  authorityScope: GitDeliveryDescriptionAuthorityScope,
+): GuardedWorkbenchGeneration | undefined {
+  const generation = deps.generation;
+  if (generation === undefined) return undefined;
+  let invalidation: WorkbenchGenerationInvalidation | undefined;
+  return {
+    generation: {
+      ...generation,
+      revalidateAuthority: async (): Promise<boolean> => {
+        invalidation = await currentWorkbenchGenerationInvalidation(
+          deps,
+          input,
+          reference,
+          authorityScope,
+        );
+        if (invalidation !== undefined && invalidation !== "stale-snapshot") {
+          logWorkbenchModelEgressDenied(scope.runId, invalidation);
+        }
+        return invalidation === undefined;
+      },
+    },
+    invalidation: (): WorkbenchGenerationInvalidation | undefined => invalidation,
+  };
+}
+
 async function admitAndGenerate(
   deps: ProductionWorkbenchDescriptionDeps,
   scope: WorkbenchDescriptionScope,
@@ -738,20 +809,14 @@ async function admitAndGenerate(
     snapshotDigest: captured.snapshotDigest,
   };
   const nowIso = new Date(deps.now()).toISOString();
-  if (scope.acceptedMode !== undefined) {
-    deps.mintDescriptionAuthority?.({
-      scope: authorityScope,
-      requestedMode: scope.acceptedMode,
-      nowIso,
-      correlationId: scope.runId,
-    });
-  }
+  mintWorkbenchDescriptionAuthority(deps, scope, authorityScope, nowIso);
   const denialReason = modelEgressDenialReason(deps.descriptionAuthority, authorityScope, nowIso);
   if (denialReason !== undefined) {
     logWorkbenchModelEgressDenied(scope.runId, denialReason);
     return { reason: denialReason };
   }
-  if (deps.generation === undefined) return { reason: "generation-unavailable" };
+  const guarded = guardedWorkbenchGeneration(deps, scope, captureInput, reference, authorityScope);
+  if (guarded === undefined) return { reason: "generation-unavailable" };
   const result = await PrDescription.generatePrDescription(
     {
       snapshotReference: reference,
@@ -763,7 +828,7 @@ async function admitAndGenerate(
       signal,
     },
     {
-      ...deps.generation,
+      ...guarded.generation,
       resolveSnapshot: (supplied, sig) =>
         resolveWorkbenchSnapshot(
           deps.snapshots,
@@ -775,6 +840,8 @@ async function admitAndGenerate(
         ),
     },
   );
+  const invalidation = guarded.invalidation();
+  if (invalidation !== undefined) return { reason: invalidation };
   return recheckWorkbenchDescription(deps, scope, captureInput, reference, authorityScope, result);
 }
 

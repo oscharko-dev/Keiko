@@ -799,7 +799,7 @@ export interface UiHandlerDeps {
   // profile — means PR-description generation is unavailable, never a fabricated or unvalidated
   // description.
   readonly prDescriptionGeneration?:
-    Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot"> | undefined;
+    Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot" | "revalidateAuthority"> | undefined;
   // Final-audit F7 (#3399/#3400 production-wiring): the SAME #3399 application service composed
   // from the description-generation/receipt-store pieces above, exposed as a typed field so
   // chat-handlers.ts's Chat-driven description apply (#3400) can reach a real `executeApproved`
@@ -4049,7 +4049,8 @@ function attachWorkbenchDescriptionSupport(
   args: UiHandlerDepsAssemblyArgs,
   codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
   gitChangeSnapshotService: GitChangeSnapshotService,
-  generation: Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot"> | undefined,
+  generation:
+    Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot" | "revalidateAuthority"> | undefined,
   deps: UiHandlerDeps,
 ): void {
   const jobs = args.bundle.codingRuntimeDescriptionJobStore;

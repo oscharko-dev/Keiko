@@ -2913,13 +2913,14 @@ export function admitGitChangeScopedTurn(
   deps: UiHandlerDeps,
   chat: Chat,
   acceptedMode: CodingWorkbenchMode | undefined,
-  correlationId: string,
+  correlationId: string | undefined,
 ): RouteResult | undefined {
   const scope = activeGitChangeScope(chat);
   if (scope === undefined) return undefined;
+  const effectiveCorrelationId = correlationId ?? UNKNOWN_CORRELATION_ID;
   if (acceptedMode === undefined || deps.mintDescriptionAuthority === undefined) {
     const admission = { admitted: false, reason: "model-egress-denied" } as const;
-    logGitChangeTurnAuthority(correlationId, admission, scope.relationshipId);
+    logGitChangeTurnAuthority(effectiveCorrelationId, admission, scope.relationshipId);
     return {
       status: 409,
       body: errorBody(
@@ -2933,10 +2934,10 @@ export function admitGitChangeScopedTurn(
     scope: gitChangeDescriptionAuthorityScopeFor(scope),
     requestedMode: acceptedMode,
     nowIso,
-    correlationId,
+    correlationId: effectiveCorrelationId,
   });
   const admission = admitGitChangeDescriptionTurn(deps, scope, nowIso);
-  logGitChangeTurnAuthority(correlationId, admission, scope.relationshipId);
+  logGitChangeTurnAuthority(effectiveCorrelationId, admission, scope.relationshipId);
   if (admission.admitted) return undefined;
   return {
     status: 409,

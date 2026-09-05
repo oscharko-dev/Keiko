@@ -154,6 +154,23 @@ async function executeCall(
       generation.deps.gateway.chat(call),
       generation.cancellation.signal,
     );
+    if (!(await authorityStillCurrent(generation))) {
+      generation.usages.push(response.usage);
+      generation.modelId = call.modelId;
+      generation.outputBytes += Buffer.byteLength(response.content, "utf8");
+      generation.candidates.length = 0;
+      generation.log.write({
+        category: "gateway",
+        op: "pr-description.model.completed",
+        extra: {
+          callCount: generation.calls,
+          accepted: false,
+          reason: generation.reason,
+          outputBytes: generation.outputBytes,
+        },
+      });
+      return false;
+    }
     return acceptResponse(generation, call, response, evidenceIds);
   } catch (error) {
     generation.reason = generation.cancellation.signal.aborted
@@ -171,6 +188,38 @@ async function executeCall(
       },
     });
     generation.candidates.length = 0;
+    return false;
+  }
+}
+
+async function authorityStillCurrent(generation: Generation): Promise<boolean> {
+  if (generation.cancellation.signal.aborted) {
+    generation.reason = cancellationReason(generation);
+    return false;
+  }
+  try {
+    const authorized = await abortable(
+      Promise.resolve(
+        generation.deps.revalidateAuthority(
+          generation.request.authority,
+          generation.cancellation.signal,
+        ),
+      ),
+      generation.cancellation.signal,
+    );
+    if (!authorized) generation.reason = "authority-denied";
+    return authorized;
+  } catch (error) {
+    generation.reason = generation.cancellation.signal.aborted
+      ? cancellationReason(generation)
+      : "authority-denied";
+    generation.log.write({
+      level: "warn",
+      category: "gateway",
+      op: "pr-description.authority.revalidation.failed",
+      errorKind: logErrorKind(error),
+      extra: { reason: generation.reason, callCount: generation.calls },
+    });
     return false;
   }
 }
@@ -268,6 +317,7 @@ async function generateCandidates(generation: Generation): Promise<void> {
       outputTokens,
       generation.cancellation.signal,
     );
+    if (!(await authorityStillCurrent(generation))) break;
     if (!reserveCall(generation, call, capability)) break;
     if (
       !(await executeCall(
@@ -373,6 +423,9 @@ async function resolveAndGenerate(
     },
   });
   await generateCandidates(generation);
+  if (generation.reason === "authority-denied") {
+    return { status: "unavailable", reason: generation.reason };
+  }
   return completeGeneration(generation);
 }
 

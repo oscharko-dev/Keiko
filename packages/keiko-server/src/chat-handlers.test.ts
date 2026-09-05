@@ -205,6 +205,7 @@ async function sendBreakerChat(
   fixture: GatewayBreakerFixture,
   content: string,
   correlationId?: string,
+  memoryMode?: "governed-assist" | "supervised-coding" | "autonomous-delivery",
 ): Promise<Awaited<ReturnType<typeof handleSendDesktopChat>>> {
   return handleSendDesktopChat(
     requestContext(
@@ -213,6 +214,9 @@ async function sendBreakerChat(
         projectPath: fixture.projectPath,
         modelId: "breaker-chat",
         content,
+        ...(memoryMode === undefined
+          ? {}
+          : { memory: { enabled: false, budgetTokens: 0, mode: memoryMode, context: {} } }),
       },
       correlationId,
     ),
@@ -767,7 +771,12 @@ describe("git-change description-authority admission (#3400)", () => {
     vi.stubGlobal("fetch", fetchSpy);
     try {
       attachGitChangeScope(fixture.deps, fixture.chatId);
-      const result = await sendBreakerChat(fixture, "refine the description", "corr-git-change-1");
+      const result = await sendBreakerChat(
+        fixture,
+        "refine the description",
+        "corr-git-change-1",
+        "supervised-coding",
+      );
 
       expect(result.status).toBe(409);
       expect(result.body).toMatchObject({
@@ -807,6 +816,7 @@ describe("git-change description-authority admission (#3400)", () => {
       attachGitChangeScope(fixture.deps, fixture.chatId);
       const expiredDeps = {
         ...fixture.deps,
+        mintDescriptionAuthority: vi.fn(),
         gitChangeDescriptionAuthorityPort: {
           current: (): undefined => undefined,
           expired: (): boolean => true,
@@ -819,6 +829,12 @@ describe("git-change description-authority admission (#3400)", () => {
             projectPath: fixture.projectPath,
             modelId: "breaker-chat",
             content: "refine the description",
+            memory: {
+              enabled: false,
+              budgetTokens: 0,
+              mode: "supervised-coding",
+              context: {},
+            },
           },
           "corr-git-change-expired",
         ),
@@ -853,9 +869,12 @@ describe("git-change description-authority admission (#3400)", () => {
     try {
       const description = await initializeGitChangeDescriptionFixture(fixture.projectPath);
       fixture.deps.store.updateChat(fixture.chatId, { gitChangeScopes: [description.scope] });
+      const mintDescriptionAuthority = vi.fn();
       const admittingDeps = {
         ...fixture.deps,
         ...description.deps,
+        codingRuntimeDeploymentCeiling: "autonomous-delivery",
+        mintDescriptionAuthority,
         gitChangeDescriptionAuthorityPort: {
           current: (): { readonly effectiveMode: string } => ({ effectiveMode: "governed-assist" }),
         },
@@ -877,6 +896,12 @@ describe("git-change description-authority admission (#3400)", () => {
             projectPath: fixture.projectPath,
             modelId: "breaker-chat",
             content: "refine the description",
+            memory: {
+              enabled: false,
+              budgetTokens: 0,
+              mode: "supervised-coding",
+              context: {},
+            },
           },
           "corr-git-change-2",
         ),
@@ -886,6 +911,12 @@ describe("git-change description-authority admission (#3400)", () => {
       expect(result.status).toBe(200);
       expect(JSON.stringify(result.body)).toContain("Update the exported value.");
       expect(fetchSpy).not.toHaveBeenCalled();
+      expect(mintDescriptionAuthority).toHaveBeenCalledWith({
+        scope: expect.objectContaining({ snapshotDigest: description.scope.snapshotDigest }),
+        requestedMode: "supervised-coding",
+        nowIso: expect.any(String),
+        correlationId: "corr-git-change-2",
+      });
       expect(sink.events).toContainEqual(
         expect.objectContaining({
           category: "security",
@@ -897,6 +928,41 @@ describe("git-change description-authority admission (#3400)", () => {
     } finally {
       vi.unstubAllGlobals();
       resetServerLogger();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
+  it("denies an unmodeled connected turn even when an older authority record remains", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    try {
+      attachGitChangeScope(fixture.deps, fixture.chatId);
+      const mintDescriptionAuthority = vi.fn();
+      const result = await handleSendDesktopChat(
+        requestContext(
+          {
+            chatId: fixture.chatId,
+            projectPath: fixture.projectPath,
+            modelId: "breaker-chat",
+            content: "refine the description",
+          },
+          "corr-git-change-unmodeled",
+        ),
+        {
+          ...fixture.deps,
+          mintDescriptionAuthority,
+          gitChangeDescriptionAuthorityPort: {
+            current: (scope) => ({
+              scope,
+              effectiveMode: "autonomous-delivery",
+              expiresAt: "9999-12-31T23:59:59.999Z",
+            }),
+          },
+        } as UiHandlerDeps,
+      );
+
+      expect(result.status).toBe(409);
+      expect(mintDescriptionAuthority).not.toHaveBeenCalled();
+    } finally {
       await disposeGatewayBreakerFixture(fixture);
     }
   });
@@ -1135,8 +1201,9 @@ describe("createHandleGitChangeApplyDescription — the real handler Chat reache
     const deps = {
       ...fixtureDeps(),
       activityLog: {
-        write: (event: { op: string; correlationId?: string; errorKind?: string }): void =>
-          events.push(event),
+        write: (event: { op: string; correlationId?: string; errorKind?: string }): void => {
+          events.push(event);
+        },
       },
     } as UiHandlerDeps;
     const chat = store.createChat(projectId, "t", "m");

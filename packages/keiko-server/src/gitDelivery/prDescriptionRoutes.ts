@@ -229,7 +229,9 @@ export interface PrDescriptionRouteExecutionSeams {
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly adapterFactory?: ((workspace: WorkspaceInfo) => GitPullRequestBodyAdapter) | undefined;
-  readonly generation?: Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot"> | undefined;
+  readonly generation?:
+    | Omit<PrDescription.PrDescriptionDeps, "resolveSnapshot" | "revalidateAuthority">
+    | undefined;
   readonly snapshots?: GitChangeSnapshotService | undefined;
   readonly recordStatus?: PrDescriptionServiceOptions["recordStatus"] | undefined;
   readonly readStatus?: PrDescriptionServiceOptions["readStatus"] | undefined;
