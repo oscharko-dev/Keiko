@@ -44,7 +44,11 @@ class FakeHelper extends EventEmitter implements NativeRuntimeHelperProcess {
   }
 }
 
-function fixture(): { readonly helper: string; readonly runtime: string; readonly workspace: string } {
+function fixture(): {
+  readonly helper: string;
+  readonly runtime: string;
+  readonly workspace: string;
+} {
   const root = mkdtempSync(join(tmpdir(), "keiko-native-backend-gateway-log-"));
   roots.push(root);
   const runtimeRoot = join(root, "runtime");

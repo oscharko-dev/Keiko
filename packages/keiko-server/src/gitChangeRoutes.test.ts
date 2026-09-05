@@ -13,7 +13,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import type { GitProcessOptions, GitProcessResult, GitProcessRunner } from "@oscharko-dev/keiko-git";
+import type {
+  GitProcessOptions,
+  GitProcessResult,
+  GitProcessRunner,
+} from "@oscharko-dev/keiko-git";
 import type {
   GitChangeSnapshot,
   GitChangeSnapshotResult,
@@ -23,11 +27,27 @@ import { createRelationshipStorePort } from "./relationship-handlers.js";
 import type { RelationshipHandlerDeps } from "./relationship-handlers.js";
 import { runMigrations } from "./store/schema.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
-import { GIT_CHANGE_ROUTE_GROUP } from "./gitChangeRoutes.js";
+import {
+  GIT_CHANGE_ROUTE_GROUP,
+  handleGitChangeConnect,
+  handleGitChangeRefresh,
+} from "./gitChangeRoutes.js";
 import type { UiHandlerDeps } from "./deps.js";
-import type { RouteContext } from "./routes.js";
+import type { RouteContext, RouteResult } from "./routes.js";
+import { STREAMING } from "./routes.js";
 
-const [{ handler: connectHandler }, { handler: refreshHandler }] = GIT_CHANGE_ROUTE_GROUP;
+const connectHandler = handleGitChangeConnect;
+const refreshHandler = handleGitChangeRefresh;
+
+function asRouteResult(outcome: RouteResult | typeof STREAMING): RouteResult {
+  if (outcome === STREAMING) throw new Error("expected a route result, got STREAMING");
+  return outcome;
+}
+
+function requireDefined<T>(value: T | undefined, label: string): T {
+  if (value === undefined) throw new Error(`expected ${label} to be defined`);
+  return value;
+}
 
 interface FakeReq extends EventEmitter {
   headers: Record<string, string>;
@@ -41,7 +61,7 @@ function makeReq(body: unknown): FakeReq {
   req.headers = { "content-type": "application/json" };
   req.url = "/";
   req.method = "POST";
-  req.resume = (): void => {};
+  req.resume = (): void => undefined;
   queueMicrotask(() => {
     req.emit("data", Buffer.from(JSON.stringify(body)));
     req.emit("end");
@@ -67,32 +87,35 @@ interface RunnerScript {
   readonly repositoryRoot?: string;
 }
 
+function fakeRunnerResult(
+  args: readonly string[],
+  script: RunnerScript,
+  repositoryRoot: string,
+): GitProcessResult {
+  const base = (stdout: string, exitCode = 0): GitProcessResult => ({
+    exitCode,
+    signal: null,
+    stdout,
+    stderr: "",
+    truncated: false,
+  });
+  if (args.includes("--show-toplevel")) {
+    return base(`${repositoryRoot}\n\n`);
+  }
+  if (args.includes("--verify")) {
+    return base("", script.unborn === true ? 1 : 0);
+  }
+  if (args.includes("status")) {
+    const header = script.detached === true ? "# branch.head (detached)\n" : "# branch.head main\n";
+    return base(header);
+  }
+  throw new Error(`unexpected git invocation: ${args.join(" ")}`);
+}
+
 function fakeRunner(script: RunnerScript): GitProcessRunner {
   const repositoryRoot = script.repositoryRoot ?? "/repo";
-  return async (
-    args: readonly string[],
-    _options: GitProcessOptions,
-  ): Promise<GitProcessResult> => {
-    void _options;
-    const base = (stdout: string, exitCode = 0): GitProcessResult => ({
-      exitCode,
-      signal: null,
-      stdout,
-      stderr: "",
-      truncated: false,
-    });
-    if (args.includes("--show-toplevel")) {
-      return base(`${repositoryRoot}\n\n`);
-    }
-    if (args.includes("--verify")) {
-      return base("", script.unborn === true ? 1 : 0);
-    }
-    if (args.includes("status")) {
-      const header = script.detached === true ? "# branch.head (detached)\n" : "# branch.head main\n";
-      return base(header);
-    }
-    throw new Error(`unexpected git invocation: ${args.join(" ")}`);
-  };
+  return (args: readonly string[], _options: GitProcessOptions): Promise<GitProcessResult> =>
+    Promise.resolve(fakeRunnerResult(args, script, repositoryRoot));
 }
 
 // ─── Fake GitChangeSnapshotService ──────────────────────────────────────────────────────────────
@@ -119,7 +142,16 @@ function fixtureSnapshot(overrides: Partial<GitChangeSnapshot> = {}): GitChangeS
       omittedFiles: 0,
       omittedHunks: 0,
       truncatedFiles: 0,
-      kinds: { add: 1, modify: 2, delete: 0, rename: 0, copy: 0, "mode-change": 0, binary: 0, submodule: 0 },
+      kinds: {
+        add: 1,
+        modify: 2,
+        delete: 0,
+        rename: 0,
+        copy: 0,
+        "mode-change": 0,
+        binary: 0,
+        submodule: 0,
+      },
       omissions: [],
     },
     entries: [],
@@ -143,7 +175,7 @@ function fakeSnapshotService(
     recheck: (): Promise<never> => {
       throw new Error("recheck is not used by gitChangeRoutes.ts");
     },
-    close: (): void => {},
+    close: (): void => undefined,
   };
 }
 
@@ -235,6 +267,27 @@ function projectPath(chatStore: UiStore): string {
   return repoRoot;
 }
 
+interface GitChangeScopeBody {
+  readonly status: string;
+  readonly reason?: string;
+  readonly scope?: {
+    readonly relationshipId: string;
+    readonly remoteDigest: string;
+    readonly snapshotDigest: string;
+    readonly descriptionStatus: string;
+  };
+}
+
+function connectRequestBody(chatId: string): Record<string, unknown> {
+  return {
+    schemaVersion: "1",
+    chatId,
+    mode: "comparison",
+    headRef: "feature/x",
+    baseRef: "main",
+  };
+}
+
 describe("POST /api/git-change/connect (Issue #3400)", () => {
   it("blocks with detached-head before any relationship or scope is created", async () => {
     const { deps, chatStore } = buildHarness({
@@ -242,17 +295,8 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
       snapshots: [],
     });
     const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
-    const ctx = makeCtx({
-      schemaVersion: "1",
-      chatId: chat.id,
-      mode: "comparison",
-      headRef: "feature/x",
-      baseRef: "main",
-    });
-    const result = await connectHandler(ctx, deps);
-    if (typeof result !== "object" || result === null || !("body" in result)) {
-      throw new Error("expected a route result");
-    }
+    const ctx = makeCtx(connectRequestBody(chat.id));
+    const result = asRouteResult(await connectHandler(ctx, deps));
     expect(result.body).toEqual({ status: "blocked", reason: "detached-head" });
     expect(chatStore.findChatById(chat.id)?.gitChangeScopes ?? []).toHaveLength(0);
   });
@@ -260,17 +304,8 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
   it("blocks with unborn-head before capture runs", async () => {
     const { deps, chatStore } = buildHarness({ runnerScript: { unborn: true }, snapshots: [] });
     const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
-    const ctx = makeCtx({
-      schemaVersion: "1",
-      chatId: chat.id,
-      mode: "comparison",
-      headRef: "feature/x",
-      baseRef: "main",
-    });
-    const result = await connectHandler(ctx, deps);
-    if (typeof result !== "object" || result === null || !("body" in result)) {
-      throw new Error("expected a route result");
-    }
+    const ctx = makeCtx(connectRequestBody(chat.id));
+    const result = asRouteResult(await connectHandler(ctx, deps));
     expect(result.body).toEqual({ status: "blocked", reason: "unborn-head" });
   });
 
@@ -278,33 +313,26 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     const snapshot = fixtureSnapshot();
     const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [snapshot] });
     const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
-    const ctx = makeCtx({
-      schemaVersion: "1",
-      chatId: chat.id,
-      mode: "comparison",
-      headRef: "feature/x",
-      baseRef: "main",
-    });
-    const result = await connectHandler(ctx, deps);
-    if (typeof result !== "object" || result === null || !("body" in result)) {
-      throw new Error("expected a route result");
-    }
-    const body = result.body as { readonly status: string; readonly scope?: { readonly relationshipId: string } };
+    const ctx = makeCtx(connectRequestBody(chat.id));
+    const result = asRouteResult(await connectHandler(ctx, deps));
+    const body = result.body as GitChangeScopeBody;
     expect(body.status).toBe("connected");
-    expect(body.scope?.relationshipId).toBeDefined();
+    const relationshipId = requireDefined(body.scope, "connect response scope").relationshipId;
 
-    const fetched = chatStore.findChatById(chat.id);
-    expect(fetched?.gitChangeScopes).toHaveLength(1);
-    expect(fetched?.gitChangeScopes?.[0]?.remoteDigest).toBe(snapshot.remoteDigest);
-    expect(fetched?.gitChangeScopes?.[0]?.descriptionStatus).toBe("current");
+    const scopes = chatStore.findChatById(chat.id)?.gitChangeScopes ?? [];
+    expect(scopes).toHaveLength(1);
+    const persisted = requireDefined(scopes[0], "persisted git-change scope");
+    expect(persisted.remoteDigest).toBe(snapshot.remoteDigest);
+    expect(persisted.descriptionStatus).toBe("current");
 
-    const relationship = deps.relationship?.store.getRelationship(
-      "ws-1",
-      fetched?.gitChangeScopes?.[0]?.relationshipId ?? "",
+    const store = requireDefined(deps.relationship, "relationship deps").store;
+    const relationship = requireDefined(
+      store.getRelationship("ws-1", relationshipId),
+      "created relationship",
     );
-    expect(relationship?.type).toBe("reads-context");
-    expect(relationship?.source).toMatchObject({ kind: "chat", id: chat.id });
-    expect(relationship?.target.kind).toBe("git-change");
+    expect(relationship.type).toBe("reads-context");
+    expect(relationship.source).toMatchObject({ kind: "chat", id: chat.id });
+    expect(relationship.target.kind).toBe("git-change");
   });
 });
 
@@ -313,25 +341,13 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
     const snapshot = fixtureSnapshot();
     const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [snapshot, snapshot] });
     const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
-    const connectCtx = makeCtx({
-      schemaVersion: "1",
-      chatId: chat.id,
-      mode: "comparison",
-      headRef: "feature/x",
-      baseRef: "main",
-    });
-    const connected = await connectHandler(connectCtx, deps);
-    if (typeof connected !== "object" || connected === null || !("body" in connected)) {
-      throw new Error("expected a route result");
-    }
-    const relationshipId = (connected.body as { readonly scope: { readonly relationshipId: string } })
-      .scope.relationshipId;
+    const connected = asRouteResult(
+      await connectHandler(makeCtx(connectRequestBody(chat.id)), deps),
+    );
+    const relationshipId = (connected.body as GitChangeScopeBody).scope?.relationshipId ?? "";
 
     const refreshCtx = makeCtx({ schemaVersion: "1", chatId: chat.id, relationshipId });
-    const refreshed = await refreshHandler(refreshCtx, deps);
-    if (typeof refreshed !== "object" || refreshed === null || !("body" in refreshed)) {
-      throw new Error("expected a route result");
-    }
+    const refreshed = asRouteResult(await refreshHandler(refreshCtx, deps));
     expect(refreshed.body).toMatchObject({ status: "current" });
   });
 
@@ -343,45 +359,66 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
     });
     const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [original, moved] });
     const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
-    const connectCtx = makeCtx({
-      schemaVersion: "1",
-      chatId: chat.id,
-      mode: "comparison",
-      headRef: "feature/x",
-      baseRef: "main",
-    });
-    const connected = await connectHandler(connectCtx, deps);
-    if (typeof connected !== "object" || connected === null || !("body" in connected)) {
-      throw new Error("expected a route result");
-    }
-    const oldRelationshipId = (
-      connected.body as { readonly scope: { readonly relationshipId: string } }
-    ).scope.relationshipId;
+    const connected = asRouteResult(
+      await connectHandler(makeCtx(connectRequestBody(chat.id)), deps),
+    );
+    const oldRelationshipId = requireDefined(
+      (connected.body as GitChangeScopeBody).scope,
+      "connect response scope",
+    ).relationshipId;
 
     const refreshCtx = makeCtx({
       schemaVersion: "1",
       chatId: chat.id,
       relationshipId: oldRelationshipId,
     });
-    const refreshed = await refreshHandler(refreshCtx, deps);
-    if (typeof refreshed !== "object" || refreshed === null || !("body" in refreshed)) {
-      throw new Error("expected a route result");
-    }
-    const body = refreshed.body as {
-      readonly status: string;
-      readonly scope: { readonly relationshipId: string; readonly snapshotDigest: string; readonly descriptionStatus: string };
-    };
+    const refreshed = asRouteResult(await refreshHandler(refreshCtx, deps));
+    const body = refreshed.body as GitChangeScopeBody;
     expect(body.status).toBe("stale");
-    expect(body.scope.relationshipId).not.toBe(oldRelationshipId);
-    expect(body.scope.snapshotDigest).toBe(moved.snapshotDigest);
-    expect(body.scope.descriptionStatus).toBe("stale");
+    const staleScope = requireDefined(body.scope, "refresh response scope");
+    expect(staleScope.relationshipId).not.toBe(oldRelationshipId);
+    expect(staleScope.snapshotDigest).toBe(moved.snapshotDigest);
+    expect(staleScope.descriptionStatus).toBe("stale");
 
     // Correction 4: the OLD relationship is archived, never mutated or deleted.
-    const oldRelationship = deps.relationship?.store.getRelationship("ws-1", oldRelationshipId);
-    expect(oldRelationship?.lifecycleState).toBe("archived");
+    const store = requireDefined(deps.relationship, "relationship deps").store;
+    const oldRelationship = requireDefined(
+      store.getRelationship("ws-1", oldRelationshipId),
+      "archived relationship",
+    );
+    expect(oldRelationship.lifecycleState).toBe("archived");
 
-    const fetched = chatStore.findChatById(chat.id);
-    expect(fetched?.gitChangeScopes).toHaveLength(1);
-    expect(fetched?.gitChangeScopes?.[0]?.relationshipId).toBe(body.scope.relationshipId);
+    const scopes = chatStore.findChatById(chat.id)?.gitChangeScopes ?? [];
+    expect(scopes).toHaveLength(1);
+    expect(requireDefined(scopes[0], "refreshed persisted scope").relationshipId).toBe(
+      staleScope.relationshipId,
+    );
+  });
+});
+
+// Frozen Product Decision 6 / DoD bullet 6 — Chat exposes only draft, refine and preview/apply
+// PR-description behavior; no generic Git or GitHub operation. This module is the SOLE surface
+// #3400 adds, so the negative proof is structural: exactly two routes, no other verb/pattern.
+describe("git-change route surface (Frozen Product Decision 6)", () => {
+  it("exposes exactly connect and refresh — no branch/fetch/pull/push/PR-create/merge/close route", () => {
+    expect(GIT_CHANGE_ROUTE_GROUP).toHaveLength(2);
+    const surface = GIT_CHANGE_ROUTE_GROUP.map((route) => `${route.method} ${route.pattern}`);
+    expect(surface.sort()).toEqual([
+      "POST /api/git-change/connect",
+      "POST /api/git-change/refresh",
+    ]);
+    for (const forbidden of [
+      "branch",
+      "fetch",
+      "pull",
+      "push",
+      "create",
+      "merge",
+      "close",
+      "checkout",
+      "commit",
+    ]) {
+      expect(surface.some((entry) => entry.toLowerCase().includes(forbidden))).toBe(false);
+    }
   });
 });

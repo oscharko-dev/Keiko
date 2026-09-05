@@ -217,28 +217,45 @@ platform (macOS) that has a production long-lived sidecar activation path (ADR-0
 ### D14 — The gateway-allowlist shape moves into `keiko-contracts`, and macOS reuses one Seatbelt formula
 
 `packages/keiko-contracts/src/tools.ts` now carries `NetworkGatewayPolicy` (`{ mode: "gateway",
-host: "127.0.0.1" | "::1", port }`) as a third `NetworkPolicy` variant alongside `"inherit"`/`"none"`,
-guarded by `isValidNetworkGatewayPolicy` — deliberately not a general allowlist: one loopback host,
-one in-range port, nothing else. `IsolatedRunPlan.network` accepts it directly, so
-`planIsolatedRun`/`selectGatewayBackend` (new in `keiko-sandbox`) can plan a gateway-confined run
-through the SAME `buildWrappedCommand` dispatch every other backend goes through. The macOS Seatbelt
-profile string itself now lives in exactly one place, `backends.ts`'s `buildGatewaySeatbeltCommand`;
-D11's `buildRuntimeGatewaySeatbeltCommand` is now a thin thirteen-line wrapper over that same
-function (its exported name and observable behaviour are unchanged, so existing callers and D11's
-own description above still hold). There is no longer a second, independently-maintained copy of the
-"(deny network*) plus one port-specific allow" formula.
+host: "127.0.0.1" | "::1", port }`), guarded by `isValidNetworkGatewayPolicy` — deliberately not a
+general allowlist: one loopback host, one in-range port, nothing else. It is just as deliberately
+**not** folded into `NetworkPolicy` (`"inherit" | "none"`, the general keiko-tools spawn-boundary
+type every disposable command run's `runCommand` reads): a first attempt at that fold-in was
+reverted during review, because widening `NetworkPolicy` to include the gateway object would make
+the boundary's existing `!== "none"` check true for a gateway policy too and route it onto the
+INHERITED, unconfined path — exactly the fail-open hole `runCommand` must never contain (see that
+file's `resolveSpawnTarget`, now an exhaustive `switch` with a fail-closed default for this reason).
+The gateway shape instead composes into its own, separate union — `IsolatedRunNetworkPolicy =
+NetworkPolicy | NetworkGatewayPolicy` in `keiko-sandbox`'s planning layer only — so
+`IsolatedRunPlan.network` accepts it there without widening the general-purpose type every other
+`runCommand` caller reads. `planIsolatedRun`/`selectGatewayBackend` (new in `keiko-sandbox`) plan a
+gateway-confined run through the SAME `buildWrappedCommand` dispatch every other backend goes
+through. The macOS Seatbelt profile string itself now lives in exactly one place, `backends.ts`'s
+`buildGatewaySeatbeltCommand`; D11's `buildRuntimeGatewaySeatbeltCommand` is now a thin
+thirteen-line wrapper over that same function (its exported name and observable behaviour are
+unchanged, so existing callers and D11's own description above still hold). There is no longer a
+second, independently-maintained copy of the "(deny network*) plus one port-specific allow" formula.
 
 Linux and Windows remain fail-closed for this policy, and D12's stated gap is now a *reasoned*
 refusal rather than silent non-enforcement: `selectGatewayBackend` never selects bubblewrap, unshare,
 or a container runtime for a gateway policy, because each of those isolates the child into its own
 network namespace with no route back to the *parent's* loopback socket — reachability a general
-`network:"none"` deny-all run never needed and a `network:"inherit"` run never isolated either. `nativeRuntimeProcessBackend.ts` (the Windows/native-release backend) now accepts an optional
-`gatewayConfinement` and, when one is attached, refuses the launch outright with the identical
-`GATEWAY_UNSUPPORTED_ON_HOST_REASON` string `planIsolatedRun` would produce, rather than a silent
-unconfined spawn — its native launch-packet protocol has no field for a network policy and cannot
-enforce one. Production composition (`productionOpenCodeBackend.ts`) does not yet attach a
-confinement to its native/Windows launches, so this closes the *expressibility and refusal* gap, not
-D12's platform-coverage gap itself: a Windows sidecar launched today still runs with no OS-enforced
-egress boundary, honestly, because nothing yet asks the backend to confine it. Building the actual
-Linux network-namespace bridge, a Windows-native equivalent, and wiring production composition to
-request gateway confinement on every platform all remain out of scope and tracked as before.
+`network:"none"` deny-all run never needed and a `network:"inherit"` run never isolated either.
+`nativeRuntimeProcessBackend.ts` (the backend used for the Windows dev lane and every
+release-qualified platform) now accepts an optional `gatewayConfinement` and, when one is attached,
+refuses the launch outright with the identical `GATEWAY_UNSUPPORTED_ON_HOST_REASON` string
+`planIsolatedRun` would produce, rather than a silent unconfined spawn — its native launch-packet
+protocol has no field for a network policy and cannot enforce one; the refusal is also recorded as a
+body-free `runtime.confinement.failed` activity-log line, matching the macOS dev-lane path, so a
+Windows refusal leaves the same evidence a support bundle can reconstruct. Production composition
+(`productionOpenCodeBackend.ts`) now attaches a confinement to every native launch this function
+resolves EXCEPT the Windows dev lane — release-qualified Windows/macOS/Linux and Windows-evaluation
+launches all request it and, since no platform behind this backend can enforce it yet, all fail
+closed rather than spawn unconfined; the Windows dev lane keeps its existing, already-accepted
+best-effort posture (ADR-0140 D3) unconfined, matching the reduced-assurance bar it already accepts
+elsewhere. This closes the *expressibility, refusal, and production-wiring* gap for every native
+launch that requests it, not D12's platform-coverage gap itself: no release-qualified sidecar can
+run unconfined and silent any more, but none can run confined either, because the OS-level
+enforcement this backend would need still does not exist. Building the actual Linux
+network-namespace bridge and a Windows-native enforcement equivalent remain out of scope and
+tracked as before.

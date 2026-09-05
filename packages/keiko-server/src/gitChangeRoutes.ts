@@ -524,7 +524,7 @@ function persistConnectedScope(
   return { status: 200, body: result };
 }
 
-async function handleGitChangeConnect(
+export async function handleGitChangeConnect(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
@@ -650,7 +650,7 @@ function isCurrentComparison(captured: CapturedComparison, found: FoundGitChange
   );
 }
 
-async function handleGitChangeRefresh(
+export async function handleGitChangeRefresh(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
