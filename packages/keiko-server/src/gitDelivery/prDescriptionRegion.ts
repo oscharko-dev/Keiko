@@ -62,9 +62,13 @@ function fencedOffsets(body: string): ReadonlySet<number> {
   let offset = 0;
   let open: OpenFence | undefined;
   for (const line of body.split("\n")) {
+    // A CRLF body still splits on "\n" alone, leaving a trailing "\r" as part of `line`. That "\r"
+    // is line-terminator noise, not fence content, so match against it stripped while still
+    // advancing `offset` by the original (untouched) line length.
+    const logical = line.endsWith("\r") ? line.slice(0, -1) : line;
     if (open === undefined) {
-      open = matchOpeningFence(line);
-    } else if (isClosingFence(line, open)) {
+      open = matchOpeningFence(logical);
+    } else if (isClosingFence(logical, open)) {
       open = undefined;
     } else {
       for (let i = 0; i <= line.length; i += 1) fenced.add(offset + i);

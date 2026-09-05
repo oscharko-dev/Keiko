@@ -23,6 +23,28 @@ async function approved(): Promise<{ review: PrDescriptionPreview; lease: object
   if (lease === undefined) throw new TypeError("Approval absent");
   return { review, lease };
 }
+// Wave-3 W3-4 item 3 — wraps the real registry-backed reserve/release with recording spies so the
+// tests below can assert the pairing is balanced (every reserve released exactly once on the drop
+// paths, none leaked on error paths) without reimplementing the registry.
+function instrumentSnapshotReservations(): { reserved: string[]; released: string[] } {
+  const reserved: string[] = [];
+  const released: string[] = [];
+  const original = fixture.options.snapshots;
+  Object.assign(fixture.options, {
+    snapshots: {
+      ...original,
+      reserve: (reference: string, scope: object, correlationId: string): boolean => {
+        reserved.push(reference);
+        return original.reserve?.(reference, scope, correlationId) ?? true;
+      },
+      release: (reference: string, scope: object, correlationId: string): void => {
+        released.push(reference);
+        original.release?.(reference, scope, correlationId);
+      },
+    },
+  });
+  return { reserved, released };
+}
 describe("body-only description application", () => {
   it("holds and applies the exact pre-generated artifact without a second generation", async () => {
     const artifact = await fixture.generateArtifact("Selected Chat intent");
@@ -433,4 +455,58 @@ it("admits only one in-flight generation per service", async () => {
   release?.();
   expect(await competing).toEqual({ outcome: "blocked", reason: "authority-denied" });
   expect(await first).toMatchObject({ outcome: "preview" });
+});
+
+describe("snapshot reservation lifecycle (wave-3 W3-4 item 3)", () => {
+  it("reserves the captured reference while held, and releases it when a fresh preview replaces it", async () => {
+    const { reserved, released } = instrumentSnapshotReservations();
+    const first = await preview();
+    expect(reserved).toHaveLength(1);
+    expect(released).toHaveLength(0);
+    const second = await preview();
+    expect(second.proposalId).not.toBe(first.proposalId);
+    expect(reserved).toHaveLength(2);
+    expect(released).toEqual([reserved[0]]);
+  });
+
+  it("releases a held application proposal's reservation when a draft artifact replaces it", async () => {
+    const { reserved, released } = instrumentSnapshotReservations();
+    await preview();
+    expect(reserved).toHaveLength(1);
+    const artifact = await fixture.generateArtifact("Generic Workbench draft");
+    fixture.service.holdDraftArtifact(artifact, fixture.now);
+    expect(released).toEqual(reserved);
+  });
+
+  it("releases the held reservation on invalidate", async () => {
+    const { reserved, released } = instrumentSnapshotReservations();
+    await preview();
+    expect(reserved).toHaveLength(1);
+    fixture.service.invalidate();
+    expect(released).toEqual(reserved);
+  });
+
+  it("releases the reservation once a proposal is approved and executed", async () => {
+    const { reserved, released } = instrumentSnapshotReservations();
+    const { review, lease } = await approved();
+    expect(reserved).toHaveLength(1);
+    expect(released).toHaveLength(0);
+    await fixture.service.executeApproved(review.proposalId, lease);
+    expect(released).toEqual(reserved);
+  });
+
+  it("releases the reservation when a prepared proposal is discarded before ever being held", async () => {
+    const { reserved, released } = instrumentSnapshotReservations();
+    // Bumps the service generation right after the snapshot capture that produces the reservation
+    // (and therefore before the outer preview flow validates the proposal it prepared), so
+    // `previewPrepared` discards the proposal without ever storing it in `this.proposals` — the
+    // one path that never gets a release from the drop-site instrumentation above.
+    fixture.afterCapture = (): void => {
+      fixture.service.invalidate();
+    };
+    const result = await fixture.service.preview({ language: "en" });
+    expect(result).toMatchObject({ outcome: "blocked", reason: "authority-denied" });
+    expect(reserved).toHaveLength(1);
+    expect(released).toEqual(reserved);
+  });
 });

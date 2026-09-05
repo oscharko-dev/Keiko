@@ -4056,3 +4056,99 @@ describe("coding-sidecar gateway spend budget", () => {
     );
   });
 });
+
+// ─── #3384 wave-3 W3-3 "needs": runtime prompt-token settlement wiring ──────────
+// `settleRuntimePromptTokens` (agentAuthorityRegistry.ts) had zero production callers before this
+// change — the gateway reserved the pre-call ESTIMATE before dispatch but never reconciled it
+// against the provider's real reported usage, so a run's retained authority-level prompt budget
+// permanently over-counted by (estimate - actual) on every single call.
+describe("coding-sidecar gateway runtime prompt-token settlement", () => {
+  function promptSettlementRequest(): RouteContext {
+    return authenticatedContext({
+      model: "azure-coding-model",
+      messages: [{ role: "user", content: "continue the coding task, please, thank you" }],
+      tools: [],
+    });
+  }
+
+  it(
+    "settles the runtime prompt-token reservation with the provider's real reported usage " +
+      "across repeated calls, never the pre-call estimate reused as if it were the actual",
+    async () => {
+      const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+      const reservedEstimates: number[] = [];
+      const settlements: { reservedPromptTokens: number; actualPromptTokens: number }[] = [];
+      const deps: UiHandlerDeps = {
+        ...depsValue(configValue(provider(), capability()), () => chat),
+        runtimeCapabilityAuthenticator: {
+          authenticate: (authCapability: string, audience: "model-gateway" | "tool-facade") =>
+            authCapability === "gateway-capability-material-0000000001" &&
+            audience === "model-gateway"
+              ? { ok: true, binding: { runId: "run-gateway-test" } }
+              : { ok: false },
+          reservePromptTokens: (_authCapability: string, promptTokens: number): unknown => {
+            reservedEstimates.push(promptTokens);
+            return { ok: true, runId: "run-gateway-test" };
+          },
+          settlePromptTokens: (
+            _authCapability: string,
+            reservedPromptTokens: number,
+            actualPromptTokens: number,
+          ): unknown => {
+            settlements.push({ reservedPromptTokens, actualPromptTokens });
+            return { ok: true, runId: "run-gateway-test" };
+          },
+        },
+      };
+
+      const first = await handleCodingSidecarGatewayChatCompletions(promptSettlementRequest(), deps);
+      const second = await handleCodingSidecarGatewayChatCompletions(
+        promptSettlementRequest(),
+        deps,
+      );
+
+      expect(first).toMatchObject({ status: 200 });
+      expect(second).toMatchObject({ status: 200 });
+      expect(chat).toHaveBeenCalledTimes(2);
+      expect(reservedEstimates).toHaveLength(2);
+      expect(settlements).toHaveLength(2);
+      // Guard the fixture itself: the estimate must differ from the provider's real usage or the
+      // assertions below could pass even with the old bug (settling the estimate as the actual).
+      expect(reservedEstimates[0]).not.toBe(assistantResponse("x").usage.promptTokens);
+      for (const [index, settlement] of settlements.entries()) {
+        expect(settlement.reservedPromptTokens).toBe(reservedEstimates[index]);
+        // assistantResponse's real usage.promptTokens is 12 on every call.
+        expect(settlement.actualPromptTokens).toBe(12);
+      }
+      const totalSettledActual = settlements.reduce((sum, s) => sum + s.actualPromptTokens, 0);
+      const totalEstimate = reservedEstimates.reduce((sum, value) => sum + value, 0);
+      expect(totalSettledActual).toBe(24);
+      expect(totalSettledActual).not.toBe(totalEstimate);
+    },
+  );
+
+  it("settles conservatively (the full reserved estimate) when the provider call fails before usage is observed", async () => {
+    const chat = vi.fn(() => Promise.reject(new Error("provider unavailable")));
+    const settlements: { reservedPromptTokens: number; actualPromptTokens: number }[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsValue(configValue(provider(), capability()), () => chat),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-gateway-test" } }),
+        reservePromptTokens: () => ({ ok: true, runId: "run-gateway-test" }),
+        settlePromptTokens: (
+          _authCapability: string,
+          reservedPromptTokens: number,
+          actualPromptTokens: number,
+        ): unknown => {
+          settlements.push({ reservedPromptTokens, actualPromptTokens });
+          return { ok: true, runId: "run-gateway-test" };
+        },
+      },
+    };
+
+    await handleCodingSidecarGatewayChatCompletions(promptSettlementRequest(), deps);
+
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]?.actualPromptTokens).toBe(settlements[0]?.reservedPromptTokens);
+  });
+});

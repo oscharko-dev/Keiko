@@ -35,7 +35,10 @@ import {
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { createRuntimeCodingToolFacade } from "./codingToolAuthorityPort.js";
+import {
+  createRuntimeCodingToolFacade,
+  type CommitExecutionApproval,
+} from "./codingToolAuthorityPort.js";
 import type { GovernedVerificationReasonCode } from "./codingToolFacade.js";
 import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
 import type { CodingToolFacade, CodingToolMutationGuard } from "./codingToolFacadePorts.js";
@@ -349,15 +352,17 @@ function runCommitRequest(
   >,
   guard: import("./codingToolFacadePorts.js").CodingToolMutationGuard,
   signal: AbortSignal | undefined,
-): ReturnType<VerifiedCommitService["executeApproved"]> {
+): ReturnType<VerifiedCommitService["execute"]> {
   if (request.phase === "propose" && request.message !== undefined)
     return service.propose(request.message);
-  return request.proposalId === undefined || guard.deliveryApproval === undefined
-    ? Promise.resolve(undefined)
-    : service.executeApproved(request.proposalId, guard.deliveryApproval, {
-        check: guard.check,
-        signal,
-      });
+  if (request.proposalId === undefined || guard.deliveryApproval === undefined)
+    return Promise.resolve(undefined);
+  // #3384 F4: `deliveryApproval` carries the un-consumed commit claim built by
+  // codingToolAuthorityPort.ts's finishAdmission (never a pre-consumed lease) — execute()'s own
+  // preflightBlock -> consumeApproval -> executeConsumed order decides whether it gets spent,
+  // only after every legitimate pre-commit block has had a chance to fire.
+  const { claim } = guard.deliveryApproval as CommitExecutionApproval;
+  return service.execute(request.proposalId, claim, { check: guard.check, signal });
 }
 
 function buildCommandRunner(

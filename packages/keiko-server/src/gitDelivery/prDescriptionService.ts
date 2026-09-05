@@ -148,6 +148,7 @@ class DescriptionService implements PrDescriptionApplicationService {
       expiresAt: new Date(now + PR_DESCRIPTION_APPLICATION_MAX_AGE_MS).toISOString(),
       artifact: structuredClone(artifact),
     };
+    this.releaseAllHeldSnapshots();
     this.proposals.clear();
     this.approvals.clear();
     this.proposals.set(preview.proposalId, { kind: "draft", preview });
@@ -185,21 +186,28 @@ class DescriptionService implements PrDescriptionApplicationService {
       return { outcome: "blocked", reason: "authority-denied" };
     const generation = ++this.generation;
     this.busy = true;
+    // Tracks a proposal once `prepare` has returned it: `prDescriptionPreparation.ts` has already
+    // reserved its snapshot reference by that point, so a validation failure below — after
+    // preparation succeeded but before this proposal is ever stored in `this.proposals` — must
+    // release that reservation itself; nothing else will (wave-3 W3-4 item 3).
+    let proposal: PreparedPrDescription | undefined;
     try {
       if (!this.current(context)) throw new PrDescriptionFailure("authority-denied");
-      const proposal = await prepare(context, this.time());
+      proposal = await prepare(context, this.time());
       if (!this.generationCurrent(generation, context))
         throw new PrDescriptionFailure("authority-denied");
       if (!this.allowed(proposal)) throw new PrDescriptionFailure("policy-blocked");
       await assertDescriptionUnchanged(this.options, proposal, () => this.current(context));
       if (generation !== this.generation || Date.parse(proposal.review.expiresAt) <= this.time())
         throw new PrDescriptionFailure("expired");
+      this.releaseAllHeldSnapshots();
       this.proposals.clear();
       this.approvals.clear();
       this.proposals.set(proposal.review.proposalId, { kind: "application", proposal });
       logDescription(this.options, context, "preview", "approval-required", proposal.review.status);
       return { outcome: "preview", preview: structuredClone(proposal.review) };
     } catch (error) {
+      if (proposal !== undefined) this.releaseProposalSnapshot(proposal);
       return this.failure(context, "preview", error);
     } finally {
       this.busy = false;
@@ -238,6 +246,7 @@ class DescriptionService implements PrDescriptionApplicationService {
       return { outcome: "blocked", reason: "approval-invalid" };
     const requirement = this.approvals.redeem(proposal, lease);
     if (requirement === undefined) return { outcome: "blocked", reason: "approval-invalid" };
+    this.releaseProposalSnapshot(proposal);
     this.proposals.delete(id);
     this.busy = true;
     const generation = this.generation;
@@ -320,6 +329,7 @@ class DescriptionService implements PrDescriptionApplicationService {
   }
   public invalidate(): void {
     this.generation += 1;
+    this.releaseAllHeldSnapshots();
     this.proposals.clear();
     this.approvals.clear();
   }

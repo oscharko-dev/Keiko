@@ -76,9 +76,15 @@ export interface VerifiedCommitService {
   approve(proposalId: string): Promise<GitDeliveryApprovalClaim | undefined>;
   /** Synchronous human-decision surface; execution still rechecks every live candidate fact. */
   issueApproval(proposalId: string): GitDeliveryIssuedApproval | undefined;
+  // #3384 F4: `approval` accepts `undefined` (a binding-matched, un-tokened redemption is a
+  // legitimate call shape — see `consumeApproval`'s own optional `approval`) and `guard` mirrors
+  // `executeApproved`'s optional revalidation seam, so a claim-based caller (the tool-authority
+  // admission path) gets this method's already-correct preflightBlock -> consumeApproval ->
+  // executeConsumed order without needing the lease pre-consumed at admission time.
   execute(
     proposalId: string,
-    approval: GitDeliveryApprovalClaim,
+    approval: GitDeliveryApprovalClaim | undefined,
+    guard?: { readonly check: () => boolean; readonly signal?: AbortSignal | undefined },
   ): Promise<VerifiedCommitResult | undefined>;
   matchesApproval(proposalId: string, approval?: GitDeliveryApprovalClaim): boolean;
   /** One-use, server-held execution lease. Its identity is not serializable authority. */

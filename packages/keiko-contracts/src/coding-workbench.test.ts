@@ -190,6 +190,8 @@ describe("coding-workbench constants", () => {
       "file-edit",
       "git-stage",
       "verification-command",
+      "ci-observe",
+      "connector-read",
       "research",
       "commit",
       "push",
@@ -641,6 +643,8 @@ describe("supervised coding action authority", () => {
   it("requires approval only for delivery, connector, external, and system mutations", () => {
     expect(supervisedCodingActionRequiresApproval("file-edit")).toBe(false);
     expect(supervisedCodingActionRequiresApproval("verification-command")).toBe(false);
+    expect(supervisedCodingActionRequiresApproval("ci-observe")).toBe(true);
+    expect(supervisedCodingActionRequiresApproval("connector-read")).toBe(true);
     expect(supervisedCodingActionRequiresApproval("commit")).toBe(true);
     expect(supervisedCodingActionRequiresApproval("push")).toBe(true);
     expect(supervisedCodingActionRequiresApproval("pull-request")).toBe(true);
@@ -661,6 +665,8 @@ describe("supervised coding action authority", () => {
       "command-execution",
     );
     expect(permissionKindForSupervisedCodingAction("research")).toBe("network-egress");
+    expect(permissionKindForSupervisedCodingAction("ci-observe")).toBe("network-egress");
+    expect(permissionKindForSupervisedCodingAction("connector-read")).toBe("connector-access");
     expect(permissionKindForSupervisedCodingAction("connector-write")).toBe("connector-access");
     expect(permissionKindForSupervisedCodingAction("external-write")).toBe("connector-access");
     expect(permissionKindForSupervisedCodingAction("commit")).toBe("delivery-substrate");

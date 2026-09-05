@@ -136,4 +136,77 @@ describe("managed PR region byte preservation", () => {
     expect(result.finalBody).toBe(updatedRegion + example);
     expect(result.suffix).toBe(example);
   });
+
+  // Reviewer 3941916909: fence detection must match the OPENING delimiter's character and length,
+  // not merely toggle on any backtick/tilde prefix. A four-backtick outer fence containing a
+  // three-backtick inner example must stay open across that shorter inner "```" run — otherwise
+  // the inner opening is mistaken for the outer's close and the marker pair inside is treated as
+  // the real managed region, silently overwriting the human documentation on the first update.
+  it("keeps a four-backtick fence open across a nested three-backtick example, preserving the marker pair as documentation", () => {
+    const body = [
+      "# Human template",
+      "",
+      "Example of nested fences Keiko must not misparse:",
+      "````markdown",
+      "some prose",
+      "```html",
+      START,
+      "old content",
+      END,
+      "```",
+      "more prose",
+      "````",
+      "",
+      "Closes #42",
+    ].join("\n");
+    const region = framePrDescriptionRegion("new");
+    const result = reconcilePrDescriptionRegion(body, region);
+    expect(result.finalBody).toBe(body + "\n\n" + region);
+    expect(result.finalBody).toContain("old content");
+    expect(result.prefix).toBe(body);
+    expect(result.suffix).toBe("");
+  });
+
+  // Same defect, tilde fence variant: an outer ~~~ fence containing inner backticks must not close
+  // early on the inner run either.
+  it("keeps a tilde fence open across a nested backtick example, preserving the marker pair as documentation", () => {
+    const body = [
+      "# Human template",
+      "",
+      "~~~markdown",
+      "prose",
+      "```html",
+      START,
+      "old content",
+      END,
+      "```",
+      "~~~",
+      "",
+      "Closes #1",
+    ].join("\n");
+    const region = framePrDescriptionRegion("new");
+    const result = reconcilePrDescriptionRegion(body, region);
+    expect(result.finalBody).toBe(body + "\n\n" + region);
+    expect(result.finalBody).toContain("old content");
+    expect(result.prefix).toBe(body);
+    expect(result.suffix).toBe("");
+  });
+
+  // An unterminated fence runs to the end of the body: a marker pair after an opening delimiter
+  // that never closes is documentation-in-progress, not the real managed region.
+  it("treats an unterminated fence as running to the end of the body, preserving the marker pair inside it", () => {
+    const body = [
+      "# Human template",
+      "",
+      "```markdown",
+      START,
+      "content",
+      END,
+    ].join("\n");
+    const region = framePrDescriptionRegion("new");
+    const result = reconcilePrDescriptionRegion(body, region);
+    expect(result.finalBody).toBe(body + "\n\n" + region);
+    expect(result.prefix).toBe(body);
+    expect(result.suffix).toBe("");
+  });
 });

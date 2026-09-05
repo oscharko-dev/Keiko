@@ -227,7 +227,11 @@ function matchingCommit(
     service.review(request.proposalId ?? "")?.binding.runId === runId
   );
 }
-function commitClaim(request: CommitToolRequest): GitDeliveryApprovalClaim | undefined {
+// #3384 F4: exported so the admission path (codingToolAuthorityPort.ts) can build the same raw,
+// un-consumed claim it used to obtain only via the eager `consumeCommit` mutation below, and thread
+// it through to VerifiedCommitService.execute() instead — that method's own preflightBlock ->
+// consumeApproval -> executeConsumed order is what must decide whether the claim gets spent.
+export function commitClaim(request: CommitToolRequest): GitDeliveryApprovalClaim | undefined {
   const proof = request.approvalProof;
   return proof === undefined
     ? undefined

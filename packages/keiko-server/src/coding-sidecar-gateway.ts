@@ -141,6 +141,42 @@ interface SpendReservation {
   settled: boolean;
 }
 
+/**
+ * One outstanding runtime prompt-token reservation (#3384 wave-3 W3-3 "needs"). Mirrors
+ * `SpendReservation`'s exactly-once settlement guard: `reserveGatewayPromptBudget` books the
+ * pre-call ESTIMATE against the run's real authority-level prompt budget
+ * (`agentAuthorityRegistry.ts`'s ledger, via `runtimeAuthorityService.ts`), and this reservation
+ * must be settled exactly once against the provider's REAL reported usage once known, so the
+ * envelope reflects N calls' worth of real usage instead of N estimates.
+ */
+interface PromptTokenReservation {
+  readonly capability: string;
+  readonly reservedPromptTokens: number;
+  settled: boolean;
+}
+
+/**
+ * Settles a runtime prompt-token reservation. `actualPromptTokens` is the provider's real reported
+ * usage when known; when the outcome is uncertain (dispatched but no usage was ever observed — a
+ * mid-flight failure or cancellation) the full reserved estimate is kept as spent, matching
+ * `settleSpendReservation`'s conservative-accounting rule. A no-op past the first call, so callers
+ * may settle defensively from more than one exit path. Absent `settlePromptTokens` on the injected
+ * authenticator (not every deployment wires it) is a silent no-op, never a failure.
+ */
+function settlePromptTokenReservation(
+  deps: UiHandlerDeps,
+  reservation: PromptTokenReservation,
+  actualPromptTokens?: number,
+): void {
+  if (reservation.settled) return;
+  reservation.settled = true;
+  runtimeCapabilityAuthenticator(deps)?.settlePromptTokens?.(
+    reservation.capability,
+    reservation.reservedPromptTokens,
+    actualPromptTokens ?? reservation.reservedPromptTokens,
+  );
+}
+
 /** Releases a reservation that never reached the provider: no cost is booked, ever. */
 function releaseSpendReservation(reservation: SpendReservation): void {
   if (reservation.settled) return;
@@ -1087,6 +1123,9 @@ interface RuntimeCapabilityAuthenticator {
   readonly authenticate: (capability: string, audience: "model-gateway" | "tool-facade") => unknown;
   readonly reservePromptTokens?:
     ((capability: string, promptTokens: number) => unknown) | undefined;
+  readonly settlePromptTokens?:
+    | ((capability: string, reservedPromptTokens: number, actualPromptTokens: number) => unknown)
+    | undefined;
 }
 
 type RuntimeAdapterKind = "model-gateway-sidecar" | "codex-cli-adapter";
@@ -1338,12 +1377,15 @@ function reserveGatewayPromptBudget(
   capability: string,
   runId: string,
   parsed: CodingSidecarGatewayChatCompletionRequest,
-): boolean {
+): PromptTokenReservation | undefined {
+  const reservedPromptTokens = promptTokenEstimate(parsed);
   const reserved = runtimeCapabilityAuthenticator(deps)?.reservePromptTokens?.(
     capability,
-    promptTokenEstimate(parsed),
+    reservedPromptTokens,
   );
-  return promptReservationRunId(reserved) === runId;
+  return promptReservationRunId(reserved) === runId
+    ? { capability, reservedPromptTokens, settled: false }
+    : undefined;
 }
 
 function isAvailableGatewayProfile(
@@ -1455,6 +1497,7 @@ interface GatewayChatDelivery {
   readonly upstreamStreamingSupported: boolean;
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
   readonly spendReservation: SpendReservation;
+  readonly promptTokenReservation: PromptTokenReservation;
 }
 
 interface PinnedGatewayBinding {
@@ -1486,7 +1529,8 @@ async function executeGatewayChat(
   runId: string,
   delivery: GatewayChatDelivery,
 ): Promise<RouteResult | typeof STREAMING> {
-  const { modelAlias, upstreamStreamingSupported, spendReservation } = delivery;
+  const { modelAlias, upstreamStreamingSupported, spendReservation, promptTokenReservation } =
+    delivery;
   const cancellation = gatewayRequestCancellation(ctx, deps, binding.config, modelAlias, runId);
   const request = requestForGatewayDelivery(ctx, parsed, delivery, cancellation.signal);
   let bufferedStream: BufferedOpenAiStreamSession | undefined;
@@ -1501,6 +1545,7 @@ async function executeGatewayChat(
         runId,
         cancellation.signal,
         spendReservation,
+        promptTokenReservation,
       );
     }
     if (parsed.stream) bufferedStream = beginBufferedOpenAiStream(ctx, modelAlias);
@@ -1513,6 +1558,7 @@ async function executeGatewayChat(
       cancellation.signal,
       bufferedStream,
       spendReservation,
+      promptTokenReservation,
     );
   } catch (error) {
     recordGatewayOutcome(deps, runId, cancellation.signal.aborted ? "cancelled" : "failed", 0, 0);
@@ -1520,6 +1566,7 @@ async function executeGatewayChat(
     // The call may or may not have reached the provider before throwing; settle conservatively
     // (idempotent — a no-op if the reservation was already settled with real usage below).
     settleSpendReservation(spendReservation);
+    settlePromptTokenReservation(deps, promptTokenReservation);
     return bufferedStream === undefined
       ? unavailableError()
       : settleBufferedOpenAiStreamError(bufferedStream, "error");
@@ -1537,12 +1584,14 @@ async function executeBufferedGatewayChat(
   cancellationSignal: AbortSignal,
   stream: BufferedOpenAiStreamSession | undefined,
   spendReservation: SpendReservation,
+  promptTokenReservation: PromptTokenReservation,
 ): Promise<RouteResult | typeof STREAMING> {
   const response = await chatFactoryFor(deps, binding.gateway)(binding.config, modelAlias)(request);
   settleSpendReservation(
     spendReservation,
     actualCostUsdFor(binding.config, modelAlias, response.usage),
   );
+  settlePromptTokenReservation(deps, promptTokenReservation, response.usage.promptTokens);
   const metrics = outputMetrics(response);
   if (cancellationSignal.aborted) {
     recordGatewayOutcome(deps, runId, "cancelled", metrics.completionTokens, metrics.outputBytes);
@@ -1578,6 +1627,7 @@ async function streamGatewayChat(
   runId: string,
   cancellationSignal: AbortSignal,
   spendReservation: SpendReservation,
+  promptTokenReservation: PromptTokenReservation,
 ): Promise<RouteResult | typeof STREAMING> {
   let iterator: AsyncIterator<GatewayStreamChunk>;
   try {
@@ -1589,6 +1639,7 @@ async function streamGatewayChat(
     recordGatewayOutcome(deps, runId, "failed", 0, 0);
     emitGatewayFailureDiagnostic(ctx, deps, error);
     settleSpendReservation(spendReservation);
+    settlePromptTokenReservation(deps, promptTokenReservation);
     return unavailableError();
   }
   const session = createGatewayStreamSession(
@@ -1601,6 +1652,7 @@ async function streamGatewayChat(
     cancellationSignal,
     iterator,
     spendReservation,
+    promptTokenReservation,
   );
   try {
     if (beginGatewayStream(session)) await pumpGatewayStreamWithCancellation(ctx, deps, session);
@@ -1610,6 +1662,7 @@ async function streamGatewayChat(
     // (cancelled before the first chunk, mid-stream failure, or budget/cancellation cutoff).
     // Idempotent: a no-op once `streamGatewayResponse` has already settled with real usage.
     settleSpendReservation(session.spendReservation);
+    settlePromptTokenReservation(session.deps, session.promptTokenReservation);
   }
 }
 
@@ -1646,6 +1699,7 @@ interface GatewayStreamSession {
   readonly cancellationSignal: AbortSignal;
   readonly iterator: AsyncIterator<GatewayStreamChunk>;
   readonly spendReservation: SpendReservation;
+  readonly promptTokenReservation: PromptTokenReservation;
   readonly metrics: {
     completionTokens: number;
     promptTokens: number;
@@ -1664,6 +1718,7 @@ function createGatewayStreamSession(
   cancellationSignal: AbortSignal,
   iterator: AsyncIterator<GatewayStreamChunk>,
   spendReservation: SpendReservation,
+  promptTokenReservation: PromptTokenReservation,
 ): GatewayStreamSession {
   return {
     ctx,
@@ -1677,6 +1732,7 @@ function createGatewayStreamSession(
     cancellationSignal,
     iterator,
     spendReservation,
+    promptTokenReservation,
     metrics: {
       completionTokens: 0,
       promptTokens: 0,
@@ -1779,13 +1835,24 @@ async function streamGatewayResponse(
   session: GatewayStreamSession,
   response: NormalizedResponse,
 ): Promise<void> {
-  const { ctx, id, created, modelId, config, request, iterator, metrics, spendReservation } =
-    session;
+  const {
+    ctx,
+    id,
+    created,
+    modelId,
+    config,
+    request,
+    iterator,
+    metrics,
+    spendReservation,
+    promptTokenReservation,
+  } = session;
   const outcome = outputMetrics(response);
   metrics.completionTokens = outcome.completionTokens;
   metrics.outputBytes = outcome.outputBytes;
   metrics.promptTokens = response.usage.promptTokens;
   settleSpendReservation(spendReservation, actualCostUsdFor(config, modelId, response.usage));
+  settlePromptTokenReservation(session.deps, promptTokenReservation, response.usage.promptTokens);
   if (exceedsOutputBudget(outcome, request.maxOutputTokens ?? 1)) {
     await iterator.return?.();
     recordSessionOutcome(session, "output-limit");
@@ -2183,7 +2250,13 @@ function executeBudgetedGatewayChat(
     logGatewayRejection(ctx, authentication.runId, 403, spendBudget.reason);
     return Promise.resolve(forbiddenGatewayRequest());
   }
-  if (!reserveGatewayPromptBudget(deps, authentication.capability, authentication.runId, parsed)) {
+  const promptTokenReservation = reserveGatewayPromptBudget(
+    deps,
+    authentication.capability,
+    authentication.runId,
+    parsed,
+  );
+  if (promptTokenReservation === undefined) {
     // The dollar reservation above was never dispatched to a provider: release it without
     // booking any cost, rather than settling it as spent.
     releaseSpendReservation(spendBudget.reservation);
@@ -2193,6 +2266,7 @@ function executeBudgetedGatewayChat(
   return executeGatewayChat(ctx, deps, binding, parsed, authentication.runId, {
     ...profile,
     spendReservation: spendBudget.reservation,
+    promptTokenReservation,
   });
 }
 

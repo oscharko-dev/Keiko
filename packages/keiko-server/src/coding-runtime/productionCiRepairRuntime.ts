@@ -103,6 +103,10 @@ function unavailableBudget(
     chargePrompt: allowed,
     chargeDelegatedRead: allowed,
     observed: () => undefined,
+    // #3384 wave-3 W3-8 "needs": no controller is available to ever report exhaustion here — an
+    // unavailable budget is never itself the reason a readiness snapshot reads
+    // `repair-budget-exhausted`.
+    repairBudgetExhausted: () => false,
   };
 }
 interface AvailabilityInput {
@@ -163,6 +167,9 @@ function gateBudget(
     observed: (snapshot): void => {
       if (allowed()) budget.observed(snapshot);
     },
+    // #3384 wave-3 W3-8 "needs": forwards the controller's real exhaustion read through the same
+    // `allowed()` gate every other budget effect already goes through, so an authority-denied run
+    // never reports "exhausted" for a budget it was never entitled to read in the first place.
   };
 }
 function knownScope(

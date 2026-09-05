@@ -147,6 +147,8 @@ export type CodingWorkbenchSupervisedActionKind =
   | "file-edit"
   | "git-stage"
   | "verification-command"
+  | "ci-observe"
+  | "connector-read"
   | "research"
   | "commit"
   | "push"
@@ -161,6 +163,8 @@ export const CODING_WORKBENCH_SUPERVISED_ACTION_KINDS: readonly CodingWorkbenchS
     "file-edit",
     "git-stage",
     "verification-command",
+    "ci-observe",
+    "connector-read",
     "research",
     "commit",
     "push",
@@ -762,8 +766,12 @@ export function permissionKindForSupervisedCodingAction(
 ): CodingWorkbenchPermissionRequestKind {
   if (actionKind === "file-edit" || actionKind === "git-stage") return "workspace-write";
   if (actionKind === "verification-command") return "command-execution";
-  if (actionKind === "research") return "network-egress";
-  if (actionKind === "connector-write" || actionKind === "external-write") {
+  if (actionKind === "research" || actionKind === "ci-observe") return "network-egress";
+  if (
+    actionKind === "connector-write" ||
+    actionKind === "external-write" ||
+    actionKind === "connector-read"
+  ) {
     return "connector-access";
   }
   return "delivery-substrate";

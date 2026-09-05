@@ -454,4 +454,36 @@ describe("production CI repair accounting availability", () => {
     budget?.observed(repaired);
     expect(notify).toHaveBeenCalledExactlyOnceWith("run-1");
   });
+
+  // #3384 wave-3 W3-8 "needs": `CodingRuntimeCiRepairController.repairBudgetExhausted()` (the
+  // primitive) had zero production callers -- `gateBudget`/`unavailableBudget` built their
+  // `CiRepairExecutionBudget` without ever forwarding it, so a real production budget always read
+  // as "never exhausted" regardless of the controller's actual state.
+  describe("repairBudgetExhausted production wiring (#3384 wave-3 W3-8)", () => {
+    it("forwards the controller's real tool-budget exhaustion instead of reading as never-exhausted", () => {
+      // fixture(false)'s own setup already charges run-1 past its tool-call ceiling
+      // (`tool-budget-exhausted`) before returning.
+      const test = fixture(false);
+      const budget = createProductionCiRepairBudget(test.deps, test.verified, test.current);
+      expect(budget?.repairBudgetExhausted?.()).toBe(true);
+    });
+
+    it("never reports exhaustion when the accounting store is unavailable", () => {
+      const test = fixture(false);
+      const snapshots = { ...test.snapshots };
+      delete snapshots.ciRepairBudget;
+      const budget = createProductionCiRepairBudget({ ...test.deps, snapshots }, test.verified, test.current);
+      expect(budget?.repairBudgetExhausted?.()).toBe(false);
+    });
+
+    it("gates exhaustion behind the same authority check as every other budget effect", () => {
+      // Same exhausted run-1 as the first case, but authority is now denied -- proves
+      // `repairBudgetExhausted` reads `allowed() && ...`, not the controller alone, so a
+      // no-longer-authorized run cannot report a stale-but-true exhaustion fact.
+      const test = fixture(false);
+      const denied = { ...test.current, stillAuthorized: (): boolean => false };
+      const budget = createProductionCiRepairBudget(test.deps, test.verified, denied);
+      expect(budget?.repairBudgetExhausted?.()).toBe(false);
+    });
+  });
 });

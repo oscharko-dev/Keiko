@@ -190,6 +190,10 @@ describe("coding tool IPC approval proofs", () => {
   it.each([
     { action: "command", commandId: "typecheck" },
     { action: "verification", verifierId: "typecheck" },
+    // 3941816393: a "git ci" observation and a generic "connector" read redeem a Workbench-issued
+    // approval through the exact same wire shape as command/verification.
+    { action: "git", operation: "ci" },
+    { action: "connector", scope: "issue-tracker.write" },
   ] as const)("admits an exact $action proof and preserves its action binding", (action) => {
     const request = {
       ...action,
@@ -198,6 +202,46 @@ describe("coding tool IPC approval proofs", () => {
       approvalProof: proof,
     };
     expect(parseCodingToolRequest(JSON.stringify(request), 262_144)).toEqual(request);
+  });
+
+  it("rejects an invalid proof on a git ci observation before the request exists", () => {
+    expect(
+      parseCodingToolRequest(
+        JSON.stringify({
+          action: "git",
+          operation: "ci",
+          actionId: "call-1",
+          idempotencyKey: "call-1",
+          approvalProof: { ...proof, approvalDigest: "not-a-digest" },
+        }),
+        262_144,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("rejects an invalid proof on a connector request before the request exists", () => {
+    expect(
+      parseCodingToolRequest(
+        JSON.stringify({
+          action: "connector",
+          scope: "issue-tracker.write",
+          actionId: "call-1",
+          idempotencyKey: "call-1",
+          approvalProof: { ...proof, approvalId: "" },
+        }),
+        262_144,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("still admits an egress request with no approvalProof field defined", () => {
+    // #3941816393: egress deliberately never gained an approvalProof (only connector did) --
+    // pinned so a future shared refactor of simpleNamedRequest cannot silently widen it.
+    const request = { action: "egress", target: "https://example.test", actionId: "e-1", idempotencyKey: "e-1" };
+    expect(parseCodingToolRequest(JSON.stringify(request), 262_144)).toEqual(request);
+    expect(
+      parseCodingToolRequest(JSON.stringify({ ...request, approvalProof: proof }), 262_144),
+    ).toBeUndefined();
   });
 
   it.each([
@@ -300,6 +344,18 @@ describe("coding tool IPC CI observation (#3388)", () => {
       actionId: "ci-1",
       idempotencyKey: "ci-key",
       forceFresh,
+    });
+  });
+
+  it("admits forceFresh alongside an approvalProof (3941816393)", () => {
+    const proof = { approvalId: "ci-1", approvalDigest: "b".repeat(64) };
+    expect(parseCodingToolRequest(ciBody({ forceFresh: true, approvalProof: proof }), 262_144)).toEqual({
+      action: "git",
+      operation: "ci",
+      actionId: "ci-1",
+      idempotencyKey: "ci-key",
+      forceFresh: true,
+      approvalProof: proof,
     });
   });
 

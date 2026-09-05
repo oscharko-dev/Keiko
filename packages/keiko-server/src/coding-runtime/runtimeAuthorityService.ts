@@ -708,6 +708,41 @@ export class CodingRuntimeAuthorityService {
     return reserved.ok ? { ok: true, runId: reference.runId } : reserved;
   }
 
+  /**
+   * Authenticates and reconciles a prompt-token reservation against the provider's real reported
+   * usage for the same call, mirroring {@link reservePromptTokens}'s authentication and binding
+   * checks so a settlement can only ever land against the same run whose capability reserved it.
+   */
+  public settlePromptTokens(
+    capability: string,
+    reservedPromptTokens: number,
+    actualPromptTokens: number,
+    nowMs = Date.now(),
+  ):
+    | { readonly ok: true; readonly runId: string }
+    | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
+    const authenticated = this.capabilities.authenticate(capability, nowMs);
+    const reference = this.activeAuthorityRef;
+    if (!authenticated.ok) return capabilityFailure(authenticated.reason);
+    if (
+      authenticated.binding.audience !== "model-gateway" ||
+      reference === undefined ||
+      !PROMPT_RESERVATION_ADMISSIBLE_STATES.has(this.runtimeState.state) ||
+      this.runtimeState.runId !== authenticated.binding.runId ||
+      reference.runId !== authenticated.binding.runId ||
+      reference.envelopeDigest !== authenticated.binding.envelopeDigest
+    ) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    const settled = this.registry.settleRuntimePromptTokens(
+      reference,
+      reservedPromptTokens,
+      actualPromptTokens,
+      new Date(nowMs).toISOString(),
+    );
+    return settled.ok ? { ok: true, runId: reference.runId } : settled;
+  }
+
   public pause(runId: string, nowIso: string): CodingRuntimeAuthorityBoundaryResult {
     const reference = this.activeAuthorityRef;
     if (

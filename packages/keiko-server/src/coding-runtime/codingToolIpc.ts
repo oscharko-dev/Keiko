@@ -532,13 +532,28 @@ function ciRequest(
   value: Record<string, unknown>,
   identity: CodingToolRequestIdentity,
 ): CodingToolActionRequest | undefined {
-  const base = { ...identity, action: "git" as const, operation: "ci" as const };
+  // 3941816393: a "git ci" observation can redeem a Workbench-issued approval proof, same as
+  // command/verification (see codingToolApprovalBridge.ts's ApprovableCiObservationRequest).
+  const approvalProof = optionalApprovalProof(value);
+  if (approvalProof.kind === "invalid") return undefined;
+  const base = {
+    ...identity,
+    action: "git" as const,
+    operation: "ci" as const,
+    ...(approvalProof.kind === "present" ? { approvalProof: approvalProof.proof } : {}),
+  };
   if (!Object.hasOwn(value, "forceFresh"))
-    return hasExactKeys(value, ["action", "actionId", "idempotencyKey", "operation"])
+    return hasAllowedKeys(value, ["action", "actionId", "idempotencyKey", "operation", "approvalProof"])
       ? base
       : undefined;
-  return hasExactKeys(value, ["action", "actionId", "idempotencyKey", "operation", "forceFresh"]) &&
-    typeof value.forceFresh === "boolean"
+  return hasAllowedKeys(value, [
+    "action",
+    "actionId",
+    "idempotencyKey",
+    "operation",
+    "forceFresh",
+    "approvalProof",
+  ]) && typeof value.forceFresh === "boolean"
     ? { ...base, forceFresh: value.forceFresh }
     : undefined;
 }

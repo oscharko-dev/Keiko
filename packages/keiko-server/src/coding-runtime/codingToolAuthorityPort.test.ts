@@ -530,8 +530,14 @@ describe("CodingToolAuthorityPort", () => {
         proposalId: "commit-proposal",
       };
 
-      expect(port.admit("capability", request).ok).toBe(true);
-      expect(approvalProofVerifier.consumeCommit).toHaveBeenCalledWith("run-authority-a", request);
+      const admitted = port.admit("capability", request);
+      expect(admitted.ok).toBe(true);
+      // #3384 F4: admission must not consume the one-use commit approval here -- doing so would
+      // burn it on any later legitimate preflight block inside VerifiedCommitService.execute()
+      // (staged-tree drift, unresolved conflict markers). The un-consumed claim is threaded
+      // through the guard instead; execute() alone decides whether to spend it.
+      expect(approvalProofVerifier.consumeCommit).not.toHaveBeenCalled();
+      expect(admitted.ok && admitted.mutationGuard.deliveryApproval).toEqual({ claim: undefined });
     },
   );
   it("previews live authority without reserving delegation or returning mutation authority", () => {

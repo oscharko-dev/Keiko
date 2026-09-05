@@ -7,6 +7,7 @@ import type {
   CodingWorkbenchRuntimeAuthorityFacts,
   CodingWorkbenchRuntimeAuthorityEnvelope,
   CodingWorkbenchRuntimeDelegationUsage,
+  GitDeliveryApprovalClaim,
 } from "@oscharko-dev/keiko-contracts";
 import { codingWorkbenchPolicyEffectFor } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
@@ -24,6 +25,7 @@ import {
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
 import {
   isApprovableToolRequest,
+  commitClaim,
   type CodingToolApprovalProofVerifier,
 } from "./codingToolApprovalBridge.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
@@ -234,6 +236,17 @@ function admit(
   });
 }
 
+// #3384 F4: the commit-execute branch of `finishAdmission` no longer consumes the one-use commit
+// approval at admission — see the comment there. It instead threads the un-consumed claim through
+// `mutationGuard.deliveryApproval` wrapped in this shape (never `undefined` itself, so it stays
+// distinguishable from "no delivery approval applies to this request"); `claim` itself legitimately
+// stays `undefined` for a binding-matched, un-tokened redemption. productionManagedWorktreeTools.ts
+// unwraps it and passes `.claim` to `VerifiedCommitService.execute()`, which alone decides — after
+// its own preflight — whether the claim is spent.
+export interface CommitExecutionApproval {
+  readonly claim: GitDeliveryApprovalClaim | undefined;
+}
+
 interface FinishAdmissionInput {
   readonly authority: Pick<
     CodingRuntimeAuthorityService,
@@ -261,12 +274,22 @@ function finishAdmission(
     approvalProofVerifier,
   } = input;
   if (request.action === "delivery" && request.phase === "execute") {
-    const lease =
-      trusted.runId === undefined
-        ? undefined
-        : consumeDeliveryLease(approvalProofVerifier, trusted.runId, request);
-    if (lease === undefined) return { ok: false, reason: "action-not-authorized" };
-    return guarded(authority, context, capability, request, binding, true, lease);
+    if (trusted.runId === undefined) return { ok: false, reason: "action-not-authorized" };
+    if (isDraftToolRequest(request)) {
+      const lease = approvalProofVerifier?.consumeDelivery?.(trusted.runId, request);
+      if (lease === undefined) return { ok: false, reason: "action-not-authorized" };
+      return guarded(authority, context, capability, request, binding, true, lease);
+    }
+    // #3384 F4 (executeApproved consumes before preflight): the one-use commit approval must
+    // NOT be consumed here. `admissionPreflight`'s `approved()` already confirmed a matching,
+    // unconsumed approval exists (non-mutating `matchesCommit` check) moments ago, so consuming
+    // it now would burn it on every legitimate pre-commit block (staged-tree drift, unresolved
+    // conflict markers) that VerifiedCommitService.execute()'s own preflight runs strictly
+    // AFTER admission. Pass the un-consumed claim through the guard instead; execute() alone
+    // decides whether to spend it, only once that preflight has cleared (mirrors executeOne's
+    // HTTP-route parity comment in verifiedCommitService.ts).
+    const approval: CommitExecutionApproval = { claim: commitClaim(request) };
+    return guarded(authority, context, capability, request, binding, true, approval);
   }
   const stage = finishStageAdmission(input);
   if (stage !== undefined) return stage;
@@ -817,16 +840,6 @@ function delegationUsage(request: CodingToolActionRequest): CodingWorkbenchRunti
     patchBytes: request.action === "edit" ? Buffer.byteLength(request.changeset.patch, "utf8") : 0,
     promptTokens: 0,
   };
-}
-
-function consumeDeliveryLease(
-  verifier: CodingToolApprovalProofVerifier | undefined,
-  runId: string,
-  request: Extract<CodingToolActionRequest, { readonly action: "delivery" }>,
-): object | undefined {
-  return isDraftToolRequest(request)
-    ? verifier?.consumeDelivery?.(runId, request)
-    : verifier?.consumeCommit?.(runId, request);
 }
 
 function deliveryHasScopedApproval(

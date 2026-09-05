@@ -357,10 +357,22 @@ function composedMintLaunch(
   );
 }
 
+// #3384 wave-3 W3-3 "needs": `settlePromptTokens` (agentAuthorityRegistry.ts) had zero production
+// callers -- this is the wiring. `CodingRuntimeHost["runtimeCapabilityAuthenticator"]` (the
+// interface the return type below is checked against) does not itself declare `settlePromptTokens`
+// yet, so the return type is widened with an explicit intersection instead of touching that shared
+// interface: the object literal below satisfies both the narrower contract every existing consumer
+// still reads and the wider one `coding-sidecar-gateway.ts`'s settlement call site expects.
 function runtimeCapabilityAuthenticatorFor(
   authority: CodingRuntimeAuthorityService,
   runs: Map<string, ResolverRunRecord>,
-): NonNullable<QualifiedProductionCodingRuntime["runtimeCapabilityAuthenticator"]> {
+): NonNullable<QualifiedProductionCodingRuntime["runtimeCapabilityAuthenticator"]> & {
+  readonly settlePromptTokens: (
+    capability: string,
+    reservedPromptTokens: number,
+    actualPromptTokens: number,
+  ) => unknown;
+} {
   return {
     authenticate: (capability, audience) => authority.authenticateCapability(capability, audience),
     reservePromptTokens: (capability, promptTokens) =>
@@ -370,6 +382,8 @@ function runtimeCapabilityAuthenticatorFor(
         capability,
         promptTokens,
       ),
+    settlePromptTokens: (capability, reservedPromptTokens, actualPromptTokens) =>
+      authority.settlePromptTokens(capability, reservedPromptTokens, actualPromptTokens),
   };
 }
 

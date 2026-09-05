@@ -120,6 +120,11 @@ export const APPROVED_EVIDENCE_SEGMENTS = new Set<string>([
   "browser",
   "busy",
   "chatgpt",
+  // 3941816393: the `ci-observe` supervised-action-kind label splits into ["ci", "observe"];
+  // neither segment can compose into a secret, URL, path, or command fragment, and the label
+  // still passes every detector in `isCodingWorkbenchEvidenceSafeText` regardless of approval.
+  "ci",
+  "observe",
   "cli",
   "codex",
   "coding",

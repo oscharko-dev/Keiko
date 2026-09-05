@@ -3030,29 +3030,70 @@ function supervisedMutationEvent(
   return supervisedFailureEvent(active, sequence, decision);
 }
 
+/**
+ * 3941816393: the tool-approval bridge redeems a "git ci" observation and a generic "connector"
+ * read through the exact same observe/activate pair as a verification command -- the same
+ * bounded-action risk, never a second mechanism (see codingToolApprovalBridge.ts's
+ * ApprovableCiObservationRequest / ApprovableConnectorRequest). A Set, not repeated `===`
+ * branches, so a future addition to CodingWorkbenchSupervisedActionKind cannot silently fall
+ * through this gate the way "ci-observe"/"connector-read" previously did.
+ */
+const TOOL_APPROVAL_BRIDGE_ACTION_KINDS: ReadonlySet<CodingWorkbenchSupervisedActionKind> = new Set([
+  "verification-command",
+  "ci-observe",
+  "connector-read",
+]);
+
+// Duplicates codingToolApprovalBridge.ts's private CI_OBSERVATION_TARGET_ID: that file is owned by
+// another concurrent change and does not export it. Needs: export the constant there so this
+// literal stops being a second copy of the same value.
+const CODING_TOOL_CI_OBSERVATION_TARGET_ID = "ci";
+
+function toolApprovalBridgeAction(
+  actionKind: CodingWorkbenchSupervisedActionKind,
+): "verification" | "git" | "connector" {
+  if (actionKind === "ci-observe") return "git";
+  if (actionKind === "connector-read") return "connector";
+  return "verification";
+}
+
+function toolApprovalTargetId(
+  actionKind: CodingWorkbenchSupervisedActionKind,
+  commandLabel: string | undefined,
+): string | undefined {
+  return actionKind === "ci-observe" ? CODING_TOOL_CI_OBSERVATION_TARGET_ID : commandLabel;
+}
+
 function observeCodingToolApproval(
   active: ActiveRuntime,
   event: SidecarPermissionEvent,
   actionKind: CodingWorkbenchSupervisedActionKind | undefined,
 ): boolean {
   const bridge = active.codingToolApprovals;
-  if (bridge === undefined || actionKind !== "verification-command") return true;
+  if (
+    bridge === undefined ||
+    actionKind === undefined ||
+    !TOOL_APPROVAL_BRIDGE_ACTION_KINDS.has(actionKind)
+  ) {
+    return true;
+  }
+  const targetId = toolApprovalTargetId(actionKind, event.commandLabel);
   if (
     event.approvalId === undefined ||
     event.approvalDigest === undefined ||
     event.actionId === undefined ||
     event.idempotencyKey === undefined ||
-    event.commandLabel === undefined
+    targetId === undefined
   ) {
     return false;
   }
   return bridge.observePermission({
     runId: active.context.runId,
     requestId: event.requestId,
-    action: "verification",
+    action: toolApprovalBridgeAction(actionKind),
     actionId: event.actionId,
     idempotencyKey: event.idempotencyKey,
-    targetId: event.commandLabel,
+    targetId,
     proof: { approvalId: event.approvalId, approvalDigest: event.approvalDigest },
     expiresAt: event.expiresAt,
     nowMs: active.nowMs(),
@@ -3093,7 +3134,9 @@ function activateIssuedToolApproval(
   request: CodingRuntimeApprovalIssueRequest,
   issued: SupervisedCodingIssuedApproval,
 ): boolean {
-  if (request.actionKind !== "verification-command" || bridge === undefined) return true;
+  if (bridge === undefined || !TOOL_APPROVAL_BRIDGE_ACTION_KINDS.has(request.actionKind)) {
+    return true;
+  }
   return bridge.activatePermission({
     runId: request.runId,
     requestId: request.requestId,

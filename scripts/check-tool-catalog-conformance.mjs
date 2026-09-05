@@ -188,8 +188,11 @@ export async function checkToolCatalogMigrationCloseout(root = process.cwd()) {
 // has no such landing on this head, so nothing here fabricates one (AGENTS.md §7). What this DOES
 // provide now is the fail-closed RECHECK: if `pendingH1.landedDevCommit`/`landedTreeDigest` are
 // ever populated, this record must exist, pass shape validation, agree with them, be reachable
-// from `dev`, and agree with the real current producer's own identity — anything missing, stale,
-// or mismatched fails qualification rather than passing silently.
+// from `dev`, resolve `sourceHead` against real Git and rebind its declared `treeDigest` to the
+// real owned-source content at both `sourceHead` and the consuming `currentHead` commit, and agree
+// with the real current producer's own identity — anything missing, stale, unresolvable, or
+// mismatched fails qualification rather than passing silently (review 3941891302: a caller could
+// otherwise declare a nonexistent `sourceHead` and a fabricated `treeDigest` and pass unchecked).
 export const H1_PROVENANCE_PATH = "docs/architecture/h1-provenance.v1.json";
 const HEX_64 = /^[a-f0-9]{64}$/u;
 const HEX_40 = /^[a-f0-9]{40}$/u;
@@ -206,6 +209,18 @@ function isCatalogProfileRef(value) {
     Number.isSafeInteger(value.version)
   );
 }
+
+// The real, single source of "H1's owned source paths": every currently-registered row of this
+// file's own migration inventory (GOVERNED_TOOL_CONTRACT_PINS.inventory) whose ownerIssue matches
+// pendingH1.owner (#3386's H1 local repository-search handler). Never a second, hand-authored path
+// list — extending or narrowing H1's real ownership means editing that one inventory, and this
+// derives from it automatically (AGENTS.md §5).
+export const H1_OWNED_SOURCE_PATHS = Object.freeze(
+  GOVERNED_TOOL_CONTRACT_PINS.inventory
+    .filter((row) => row.ownerIssue === GOVERNED_TOOL_CONTRACT_PINS.pendingH1.owner)
+    .map((row) => row.path)
+    .sort(),
+);
 
 // One row per H1Provenance field: `test` reads the whole record so a check can span more than one
 // field (e.g. sourceHead/currentHead share a message) without growing this table's own branching.
@@ -309,6 +324,103 @@ export async function realProducerIdentityFailures(root, record) {
       "H1 handoff evidence identity mismatch: durable record's profile cannot be compiled by the current producer",
     ];
   }
+}
+
+// Resolves a caller-declared commit against real Git, never trusting the string alone: the commit
+// object must exist (`git cat-file -e <sha>^{commit}`) AND resolve a real tree (`git rev-parse
+// <sha>^{tree}`). Returns `null` for anything unresolvable — a nonexistent, malformed, or
+// non-commit object.
+function resolveCommitTreeId(commit, root, execute) {
+  try {
+    execute(resolveHostExecutable("git"), ["cat-file", "-e", `${commit}^{commit}`], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    const treeId = String(
+      execute(resolveHostExecutable("git"), ["rev-parse", `${commit}^{tree}`], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    ).trim();
+    return HEX_40.test(treeId) ? treeId : null;
+  } catch {
+    return null;
+  }
+}
+
+// The one digest formula for "owned source content at a commit", reused by both the producer side
+// (once #3414 lands real H1Provenance) and this recheck — never restated. Reads each owned path's
+// exact byte content at `commit` via `git show <commit>:<path>` (fails closed if any path is
+// absent from that commit's tree) and hashes the sorted {path, content} pairs with this file's own
+// canonical digest primitive (`canonicalise`/`sha256Hex`, keiko-security — this file's own
+// `digest-primitives` inventory owner), so the result is bound to real Git object content, never a
+// caller-declared string.
+export function ownedSourceDigestAt(commit, root, execute, ownedPaths = H1_OWNED_SOURCE_PATHS) {
+  const files = ownedPaths.map((path) => ({
+    path,
+    content: execute(resolveHostExecutable("git"), ["show", `${commit}:${path}`], {
+      cwd: root,
+      encoding: "utf8",
+    }),
+  }));
+  return sha256Hex(canonicalise(files));
+}
+
+/**
+ * Review 3941891302 (H1 handoff recheck gap): the recheck previously compared only the two
+ * caller-declared tree digests (`record.treeDigest` vs `pendingH1.landedTreeDigest`) and never
+ * resolved `sourceHead` against Git or bound its content to the consuming commit — a nonexistent
+ * `sourceHead` with a fabricated `treeDigest` repeated in both records passed with no failures.
+ * This independently: (1) resolves `sourceHead` as a real, existing Git commit; (2) recomputes the
+ * H1-owned-source digest at `sourceHead` and requires it to equal the declared `treeDigest`; (3)
+ * resolves `currentHead` (the consuming commit) the same way and requires ITS owned-source digest
+ * to equal the same `treeDigest` — binding the reviewed producer content to what actually landed,
+ * not merely to another caller-declared string. Fails closed with a precise reason on any
+ * unresolvable commit, missing owned path, or digest mismatch.
+ */
+export async function realSourceHeadFailures(
+  root,
+  record,
+  execute,
+  ownedPaths = H1_OWNED_SOURCE_PATHS,
+) {
+  if (resolveCommitTreeId(record.sourceHead, root, execute) === null) {
+    return [
+      `H1 handoff evidence unverifiable: sourceHead ${record.sourceHead} is not a resolvable Git commit`,
+    ];
+  }
+  let sourceDigest;
+  try {
+    sourceDigest = ownedSourceDigestAt(record.sourceHead, root, execute, ownedPaths);
+  } catch {
+    return [
+      `H1 handoff evidence unverifiable: an H1-owned source path is missing from sourceHead ${record.sourceHead}`,
+    ];
+  }
+  if (sourceDigest !== record.treeDigest) {
+    return [
+      "H1 handoff evidence identity mismatch: treeDigest does not match the real owned source content at sourceHead",
+    ];
+  }
+  if (resolveCommitTreeId(record.currentHead, root, execute) === null) {
+    return [
+      `H1 handoff evidence unverifiable: currentHead ${record.currentHead} is not a resolvable Git commit`,
+    ];
+  }
+  let currentDigest;
+  try {
+    currentDigest = ownedSourceDigestAt(record.currentHead, root, execute, ownedPaths);
+  } catch {
+    return [
+      `H1 handoff evidence unverifiable: an H1-owned source path is missing from currentHead ${record.currentHead}`,
+    ];
+  }
+  if (currentDigest !== record.treeDigest) {
+    return [
+      "H1 handoff evidence identity mismatch: the consuming commit's owned source content does not match the reviewed treeDigest",
+    ];
+  }
+  return [];
 }
 
 /**

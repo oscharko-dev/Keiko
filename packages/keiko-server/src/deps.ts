@@ -578,6 +578,11 @@ export interface UiHandlerDeps {
         ) => unknown;
         readonly reservePromptTokens?:
           ((capability: string, promptTokens: number) => unknown) | undefined;
+        // #3384 wave-3 W3-3 "needs": reconciles a prompt-token reservation above against the
+        // provider's real reported usage once known, mirroring `reservePromptTokens`.
+        readonly settlePromptTokens?:
+          | ((capability: string, reservedPromptTokens: number, actualPromptTokens: number) => unknown)
+          | undefined;
       }
     | undefined;
   /** Current server-owned delivery authority; absent means Git delivery executes fail closed. */

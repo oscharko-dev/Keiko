@@ -40,6 +40,10 @@ export function createProductionCiObservationService(
       repairBudget?.observed(snapshot);
       publishCiObservation(snapshot, onEvent);
     },
+    // #3384 wave-3 W3-8 "needs": closes the production wiring — without this the primitive
+    // (`repairBudgetExhausted` on the controller/budget) is real but every production readiness
+    // snapshot still reads `repairBudgetExhausted?.() ?? false` as an unconditional `false`.
+    repairBudgetExhausted: () => repairBudget?.repairBudgetExhausted?.() ?? false,
   });
 }
 export function publishCiObservation(

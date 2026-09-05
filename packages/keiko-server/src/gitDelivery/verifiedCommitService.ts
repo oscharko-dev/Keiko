@@ -463,15 +463,17 @@ class VerifiedCommitController implements VerifiedCommitService {
 
   public async execute(
     proposalId: string,
-    approval: GitDeliveryApprovalClaim,
+    approval: GitDeliveryApprovalClaim | undefined,
+    guard?: { readonly check: () => boolean; readonly signal?: AbortSignal | undefined },
   ): Promise<VerifiedCommitResult | undefined> {
     const proposal = this.review(proposalId);
     if (proposal === undefined || this.executing) return undefined;
     this.executing = true;
+    const governed = guardedProposal(proposal, guard);
     try {
-      return await this.executeOne(proposal, approval);
+      return await this.executeOne(governed, approval);
     } catch (error) {
-      return this.admissionFailure(proposal, error);
+      return this.admissionFailure(governed, error);
     } finally {
       this.executing = false;
     }
@@ -509,7 +511,7 @@ class VerifiedCommitController implements VerifiedCommitService {
 
   private async executeOne(
     proposal: VerifiedCommitProposal,
-    approval: GitDeliveryApprovalClaim,
+    approval: GitDeliveryApprovalClaim | undefined,
   ): Promise<VerifiedCommitResult> {
     const { context, binding } = proposal;
     const blocked = await this.preflightBlock(proposal);
