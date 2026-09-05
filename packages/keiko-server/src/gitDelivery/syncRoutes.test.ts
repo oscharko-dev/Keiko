@@ -757,7 +757,11 @@ describe("sync execute — admission redemption below autonomous-delivery", () =
       execution: { runner: scripted.runner, now: () => 1_700_000_000_000, approvalStore },
     });
     const modeDeps = deps({
-      gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId, () => projectId, mode),
+      gitDeliveryAuthority: permittedGitDeliveryAuthority(
+        () => projectId,
+        () => projectId,
+        mode,
+      ),
     });
     const res = await handler(
       ctxFor(pathFor(operation), syncBody({ approval: issued.approval })),
@@ -772,16 +776,32 @@ describe("sync execute — admission redemption below autonomous-delivery", () =
     "still returns approval-required (never mode-denied) at %s for %s when execute carries no approval",
     async (mode, operation) => {
       const scripted = scriptedRunner({});
+      const activity = captureActivityLog();
       const handler = createHandleSyncExecute(operation, {
-        execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+        execution: {
+          runner: scripted.runner,
+          now: () => 1_700_000_000_000,
+          activityLog: activity.sink,
+        },
       });
       const modeDeps = deps({
-        gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId, () => projectId, mode),
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+        ),
       });
       const res = await handler(ctxFor(pathFor(operation), syncBody()), modeDeps);
       expect(res.status).toBe(403);
       expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
       expect(scripted.calls()).toEqual([]);
+      // Distinguishes this from a hard, non-redeemable "mode-denied" — the activity log line is the
+      // only place the two 403s (identical response body) differ.
+      const denials = activity.events.filter(
+        (event) => event.op === "git.delivery.authority.denied",
+      );
+      expect(denials).toHaveLength(1);
+      expect(denials[0]).toMatchObject({ extra: { reason: "approval-required", operation } });
     },
   );
 

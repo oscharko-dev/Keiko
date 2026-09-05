@@ -224,12 +224,19 @@ is:
    layer defer to that enforcement for every one of those operations — so this network-policy leg
    no longer determines the outcome for `push`/`pull-request`/`merge`/`commit` below
    `autonomous-delivery` either (`deliveryScopeCheckDeferredToModeDecision` already skips it, and
-   the mode/approval matrix resolves before this leg would matter). `fetch`/`pull` remain the
-   exception: no HTTP mint route exists for either, and their execute path carries no approval
-   enforcement, so a lower mode's `accepted-run-unavailable`/`approval-required` disposition for
-   them is not yet redeemable by any production caller — a real, tracked gap (final-audit
-   out-of-scope note), not a silent allow: nothing in this record, `runBoundAuthority.ts`, #3386,
-   #3387, or #3390 admits an unapproved delivery effect in any mode, including Full access. The
+   the mode/approval matrix resolves before this leg would matter). `fetch`/`pull` have no
+   `GitDeliveryActionKind` / kernel policy pack of their own and no dedicated HTTP mint route
+   (`syncRoutes.ts`'s header comment), so they cannot use `deliveryApprovalDeferred` either; the
+   final-audit F2 repair redeems their lower-mode `approval-required` disposition the SAME way
+   `local-mutation` is redeemed instead — a non-consuming peek (`GitDeliveryApprovalStore.matches`)
+   against a claim bound to `{projectId, operation, command}` with no run identity, minted directly
+   through the approval store (there is no `/approve` route for either, exactly like local
+   mutations), with the real single-use consumption happening once, immediately after admission
+   passes, and the continuity re-check right before the actual network dispatch deferring
+   (`deliveryApprovalDeferred: true`) to that already-verified consumption rather than peeking the
+   now-emptied record a second time. Nothing in this record, `runBoundAuthority.ts`, #3386, #3387,
+   or #3390 admits an unapproved delivery effect in any mode, including Full access — `autonomous-
+   delivery` itself never consults redemption at all, since `modeDecision` resolves it outright. The
    coding-runtime tool port (`codingToolAuthorityPort.ts`) is
    the second enforcement point named by epic #3384 correction 5 and reads the same matrix for its
    `workspace-contained`/medium path already; its `git`/`delivery` branches converging onto the

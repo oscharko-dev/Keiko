@@ -354,13 +354,21 @@ function syncAuthorityGate(
   seams: GitDeliverySyncSeams,
   nowIso: string,
 ): GitDeliveryAuthorityGateResult {
-  return gitDeliveryAuthorityGate(ctx, deps, binding.projectId, workspace, operation, {}, {
-    logSink: seams.activityLog,
-    nowIso,
-    approval,
-    approvalStore: seams.approvalStore,
-    approvalBinding: { operation: binding.operation, command: binding.command },
-  });
+  return gitDeliveryAuthorityGate(
+    ctx,
+    deps,
+    binding.projectId,
+    workspace,
+    operation,
+    {},
+    {
+      logSink: seams.activityLog,
+      nowIso,
+      approval,
+      approvalStore: seams.approvalStore,
+      approvalBinding: { operation: binding.operation, command: binding.command },
+    },
+  );
 }
 
 // The single real, single-use consumption of the claim the admission gate above only peeked at —
@@ -380,6 +388,40 @@ function resolveSyncApproval(
   });
 }
 
+type SyncAdmission =
+  | { readonly ok: true; readonly authority: GitDeliveryAuthorityIdentity }
+  | { readonly ok: false; readonly result: RouteResult };
+
+// Extracted purely to keep `handleSyncExecute` under the repo's max-lines-per-function bar
+// (AGENTS.md §6) — no behavioral seam of its own. Runs the admission gate (peek), then the single
+// real consumption, in that order.
+function admitSyncExecute(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  workspace: WorkspaceInfo,
+  operation: GitSyncOperation,
+  binding: GitDeliveryApprovalBinding,
+  approval: ParsedGitDeliveryApprovalRequest,
+  seams: GitDeliverySyncSeams,
+  nowMs: number,
+): SyncAdmission {
+  const authority = syncAuthorityGate(
+    ctx,
+    deps,
+    workspace,
+    operation,
+    binding,
+    approval,
+    seams,
+    new Date(nowMs).toISOString(),
+  );
+  if (!authority.allowed) return { ok: false, result: authority.result };
+  if (resolveSyncApproval(approval, binding, seams, nowMs) === undefined) {
+    return { ok: false, result: errResult(400, "GIT_DELIVERY_SYNC_BAD_REQUEST") };
+  }
+  return { ok: true, authority };
+}
+
 async function handleSyncExecute(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -392,7 +434,7 @@ async function handleSyncExecute(
   const { projectId, remote, approval } = prepared.value;
   const nowMs = (seams.now ?? Date.now)();
   const binding = syncApprovalBinding(projectId, operation, remote);
-  const authority = syncAuthorityGate(
+  const admission = admitSyncExecute(
     ctx,
     deps,
     workspace,
@@ -400,12 +442,9 @@ async function handleSyncExecute(
     binding,
     approval,
     seams,
-    new Date(nowMs).toISOString(),
+    nowMs,
   );
-  if (!authority.allowed) return authority.result;
-  if (resolveSyncApproval(approval, binding, seams, nowMs) === undefined) {
-    return errResult(400, "GIT_DELIVERY_SYNC_BAD_REQUEST");
-  }
+  if (!admission.ok) return admission.result;
   let before: GitSyncPreview;
   try {
     before = await buildSyncPreview(operation, workspace.root, remote, seams);
@@ -421,7 +460,7 @@ async function handleSyncExecute(
     workspace,
     before,
     remote,
-    authority,
+    authority: admission.authority,
   });
   return syncResponse(
     deps,
