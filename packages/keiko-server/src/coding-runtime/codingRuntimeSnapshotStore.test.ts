@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import type { CodingWorkbenchIssueBinding } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_RUNTIME_FAILURE_CODES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { restoreV13SchemaFixture } from "../store/legacySchemaTestFixture.js";
@@ -439,13 +439,13 @@ describe("verified commit persistence (#3386, schema v23)", () => {
     const originalPrepare: DatabaseSync["prepare"] = db.prepare.bind(db);
     const isVerifiedCommitUpdate = (sql: string): boolean =>
       sql.includes("SET verified_commit_result = ?") && sql.includes("revision = revision + 1");
-    db.prepare = ((sql: string) => {
+    db.prepare = (sql: string): StatementSync => {
       if (isVerifiedCommitUpdate(sql))
         originalPrepare(
           "UPDATE coding_runtime_snapshots SET verified_commit_result = ? WHERE run_id = ?",
         ).run(JSON.stringify({ ...commitReceipt(), proposalId: "commit-raced" }), "run-1");
       return originalPrepare(sql);
-    }) as DatabaseSync["prepare"];
+    };
     try {
       expect(() => s.recordVerifiedCommit({ ...commitReceipt(), proposalId: "commit-2" })).toThrow(
         "concurrent verified commit update",

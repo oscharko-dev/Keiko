@@ -2676,6 +2676,20 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
   const BASE_SHA = "1".repeat(40);
   const HEAD_SHA = "2".repeat(40);
 
+  // #3384 batch-1 B3-22: this suite is the one path in this file that reaches the real
+  // codingRuntimeDescriptionJobStore (every other describe block stubs the snapshot store), so
+  // it is the one place a run id must satisfy correlation.ts's SAFE_CORRELATION_ID floor that
+  // assertScope now enforces via isValidCorrelationId. A fresh counter per fixture() call keeps
+  // each test's ids stable and predictable ("run-00000001", "run-00000002", ...) without
+  // touching the shorter "run-1"/"run-2" convention every other describe block still relies on.
+  function nextGuardedRunId(): () => string {
+    let ordinal = 0;
+    return (): string => {
+      ordinal += 1;
+      return `run-${String(ordinal).padStart(8, "0")}`;
+    };
+  }
+
   function verifiedCommit(overrides: Partial<VerifiedCommitResult> = {}): VerifiedCommitResult {
     return {
       schemaVersion: "1",
@@ -2683,7 +2697,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       reason: "completed",
       recordedAt: "2026-01-01T00:00:00.000Z",
       proposalId: "proposal-1",
-      runId: "run-1",
+      runId: "run-00000001",
       envelopeDigest: "e".repeat(64),
       runtimeAuthorityDigest: "f".repeat(64),
       workspaceDigest: "w".repeat(64),
@@ -2731,10 +2745,10 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       }),
     });
     expect(successfulSnapshot(await f.orchestrator.start(start)).state).toBe("running");
-    verifiedCommits.set("run-1", verifiedCommit());
+    verifiedCommits.set("run-00000001", verifiedCommit());
     resolveCompletion?.("succeeded");
     await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+      expect(f.orchestrator.getSnapshot("run-00000001")?.state).toBe("succeeded");
     });
   }
 
@@ -2756,6 +2770,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       undefined,
       { jobs, dispatcher },
       verifiedCommits,
+      nextGuardedRunId(),
     );
 
     await settleRun(f, verifiedCommits);
@@ -2764,7 +2779,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     });
     expect(dispatcher.generate).toHaveBeenCalledWith(
       {
-        runId: "run-1",
+        runId: "run-00000001",
         remoteDigest: REMOTE,
         baseSha: BASE_SHA,
         headSha: HEAD_SHA,
@@ -2772,9 +2787,9 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
         baseRef: "dev",
         headRef: HEAD_SHA,
         generationBinding: {
-          taskDigest: f.rows.get("run-1")?.taskDigest,
-          authorityDigest: f.rows.get("run-1")?.authorityDigest,
-          runtimeBindingDigest: f.rows.get("run-1")?.bindingDigest,
+          taskDigest: f.rows.get("run-00000001")?.taskDigest,
+          authorityDigest: f.rows.get("run-00000001")?.authorityDigest,
+          runtimeBindingDigest: f.rows.get("run-00000001")?.bindingDigest,
           deliveryBindingDigest: null,
         },
       },
@@ -2800,6 +2815,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       undefined,
       { jobs, dispatcher },
       verifiedCommits,
+      nextGuardedRunId(),
     );
     let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
     f.taskDispatcher.dispatch.mockResolvedValueOnce({
@@ -2815,12 +2831,12 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     });
 
     await f.orchestrator.start(start);
-    await f.orchestrator.pause("run-1", { requestId: "run-1" });
-    await f.orchestrator.resume("run-1", {
-      requestId: "run-1",
+    await f.orchestrator.pause("run-00000001", { requestId: "run-00000001" });
+    await f.orchestrator.resume("run-00000001", {
+      requestId: "run-00000001",
       requestedMode: "governed-assist",
     });
-    verifiedCommits.set("run-1", verifiedCommit());
+    verifiedCommits.set("run-00000001", verifiedCommit());
     resolveCompletion?.("succeeded");
 
     await vi.waitFor(() => {
@@ -2856,6 +2872,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       undefined,
       { jobs: jobStore(), dispatcher },
       verifiedCommits,
+      nextGuardedRunId(),
     );
     await settleRun(f, verifiedCommits);
     await vi.waitFor(() => {
@@ -2902,11 +2919,12 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       undefined,
       { jobs: jobStore(), dispatcher },
       commits,
+      nextGuardedRunId(),
     );
     await settleRun(f, commits);
-    const current = f.rows.get("run-1");
+    const current = f.rows.get("run-00000001");
     if (current === undefined || finish === undefined) throw new Error("expected in-flight draft");
-    f.rows.set("run-1", { ...current, authorityDigest: "9".repeat(64) });
+    f.rows.set("run-00000001", { ...current, authorityDigest: "9".repeat(64) });
     finish({
       reason: "generated",
       snapshotDigest: "a".repeat(64),
@@ -2921,18 +2939,28 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     });
     const event = captured.records.find((entry) => entry.extra?.event === "stale");
     expect(event?.op).toBe("coding-runtime.description");
-    expect(event?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
-    expect(event?.extra).toMatchObject({ runId: "run-1", reason: "stale-snapshot" });
+    expect(event?.correlationId).toBe("run-00000001");
+    expect(event?.extra).toMatchObject({ runId: "run-00000001", reason: "stale-snapshot" });
     expect(event?.extra?.generationBindingDigest).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   it("produces no draft and calls no dispatcher when the succeeded run has no verified commit", async () => {
     const jobs = jobStore();
     const dispatcher = fakeDispatcher({ reason: "generated" });
-    const f = fixture(undefined, undefined, [], undefined, undefined, undefined, {
-      jobs,
-      dispatcher,
-    });
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      {
+        jobs,
+        dispatcher,
+      },
+      undefined,
+      nextGuardedRunId(),
+    );
 
     let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
     f.taskDispatcher.dispatch.mockResolvedValueOnce({
@@ -2944,7 +2972,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     await f.orchestrator.start(start);
     resolveCompletion?.("succeeded");
     await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+      expect(f.orchestrator.getSnapshot("run-00000001")?.state).toBe("succeeded");
     });
 
     expect(dispatcher.generate).not.toHaveBeenCalled();
@@ -2955,7 +2983,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     const jobs = jobStore();
     const dispatcher = fakeDispatcher({ reason: "generated" });
     const verifiedCommits = new Map<string, VerifiedCommitResult>();
-    verifiedCommits.set("run-1", verifiedCommit());
+    verifiedCommits.set("run-00000001", verifiedCommit());
     const f = fixture(
       undefined,
       undefined,
@@ -2965,6 +2993,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       undefined,
       { jobs, dispatcher },
       verifiedCommits,
+      nextGuardedRunId(),
     );
 
     f.taskDispatcher.dispatch.mockResolvedValueOnce({
@@ -2972,7 +3001,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       completion: new Promise<"succeeded">(() => undefined),
     });
     await f.orchestrator.start(start);
-    await f.orchestrator.stop("run-1", { requestId: "run-1" });
+    await f.orchestrator.stop("run-00000001", { requestId: "run-00000001" });
 
     expect(dispatcher.generate).not.toHaveBeenCalled();
   });
@@ -3001,6 +3030,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       undefined,
       { jobs, dispatcher },
       verifiedCommits,
+      nextGuardedRunId(),
     );
 
     await settleRun(f, verifiedCommits);
@@ -3009,8 +3039,8 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     });
     expect(signals[0]?.aborted).toBe(false);
 
-    verifiedCommits.set("run-1", verifiedCommit({ headSha: "3".repeat(40) }));
-    f.orchestrator.notifyVerifiedHeadAdvanced("run-1");
+    verifiedCommits.set("run-00000001", verifiedCommit({ headSha: "3".repeat(40) }));
+    f.orchestrator.notifyVerifiedHeadAdvanced("run-00000001");
 
     await vi.waitFor(() => {
       expect(dispatcher.generate).toHaveBeenCalledTimes(2);
@@ -3042,6 +3072,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       undefined,
       { jobs, dispatcher },
       verifiedCommits,
+      nextGuardedRunId(),
     );
 
     await settleRun(f, verifiedCommits);
@@ -3050,7 +3081,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     });
     expect(signals[0]?.aborted).toBe(false);
 
-    f.listPrunableSettled.mockReturnValueOnce(["run-1"]);
+    f.listPrunableSettled.mockReturnValueOnce(["run-00000001"]);
     f.orchestrator.startupReconcileNow();
 
     expect(signals[0]?.aborted).toBe(true);
@@ -3069,6 +3100,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       undefined,
       { jobs, dispatcher },
       verifiedCommits,
+      nextGuardedRunId(),
     );
 
     await settleRun(f, verifiedCommits);
@@ -3091,6 +3123,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       undefined,
       { jobs },
       verifiedCommits,
+      nextGuardedRunId(),
     );
 
     await settleRun(f, verifiedCommits);
@@ -3102,8 +3135,8 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
   // #3401 review finding 1: a budget-exhausted dispatch decision was never persisted, so the run
   // permanently showed no `descriptionStatus` at all for that head instead of the required
   // visible `blocked` state. Reproduced at the orchestrator/snapshot boundary (not only the store):
-  // "run-1"'s generation attempt never resolves, holding the sole concurrent slot open, while
-  // "run-2" also succeeds and must be visibly blocked rather than silently absent.
+  // "run-00000001"'s generation attempt never resolves, holding the sole concurrent slot open, while
+  // "run-00000002" also succeeds and must be visibly blocked rather than silently absent.
   it("makes a budget-exhausted dispatch visible as a blocked descriptionStatus on the snapshot", async () => {
     const jobs = jobStore(1);
     const dispatcher: WorkbenchDescriptionDispatcher = {
@@ -3119,6 +3152,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       undefined,
       { jobs, dispatcher },
       verifiedCommits,
+      nextGuardedRunId(),
     );
 
     await settleRun(f, verifiedCommits);
@@ -3135,17 +3169,17 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     });
     expect(
       successfulSnapshot(await f.orchestrator.start({ ...start, requestId: "request-2" })),
-    ).toMatchObject({ state: "running", runId: "run-2" });
-    verifiedCommits.set("run-2", verifiedCommit({ runId: "run-2" }));
+    ).toMatchObject({ state: "running", runId: "run-00000002" });
+    verifiedCommits.set("run-00000002", verifiedCommit({ runId: "run-00000002" }));
     resolveCompletion?.("succeeded");
     await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot("run-2")?.state).toBe("succeeded");
+      expect(f.orchestrator.getSnapshot("run-00000002")?.state).toBe("succeeded");
     });
 
-    // The sole concurrent slot is still occupied by "run-1"'s never-resolving attempt, so "run-2"
+    // The sole concurrent slot is still occupied by "run-00000001"'s never-resolving attempt, so "run-00000002"
     // must never reach the dispatcher and must instead be visibly blocked.
     expect(dispatcher.generate).toHaveBeenCalledTimes(1);
-    expect(f.orchestrator.getSnapshot("run-2")).toMatchObject({
+    expect(f.orchestrator.getSnapshot("run-00000002")).toMatchObject({
       descriptionStatus: { state: "blocked", reason: "budget-exhausted" },
     });
   });
@@ -3171,6 +3205,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       undefined,
       { jobs, dispatcher },
       verifiedCommits,
+      nextGuardedRunId(),
     );
 
     await settleRun(f, verifiedCommits);
@@ -3188,11 +3223,12 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     const dispatched = captured.records.find(
       (event) => event.op === "coding-runtime.description" && event.extra?.event === "dispatched",
     );
-    // Fixture run ids ("run-1") are too short for `SAFE_CORRELATION_ID`; the safe fallback is the
-    // same one `recordRuntimeRunSettled` already produces for this file's other ops.
+    // #3384 B3-22: the fixture run id is now long enough to satisfy correlation.ts's
+    // SAFE_CORRELATION_ID floor, so it threads through as the real correlation id here rather
+    // than falling back to the unknown marker.
     expect(dispatched).toMatchObject({
-      correlationId: UNKNOWN_CORRELATION_ID,
-      extra: { runId: "run-1", event: "dispatched" },
+      correlationId: "run-00000001",
+      extra: { runId: "run-00000001", event: "dispatched" },
     });
     // #3401 review finding F2: the settle line must carry the precise generation `reason`
     // (`partial-generated`), not only the coarse `generated` op-event bucket, so the epic's
@@ -3201,7 +3237,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       (event) => event.op === "coding-runtime.description" && event.extra?.event === "generated",
     );
     expect(settled).toMatchObject({
-      extra: { runId: "run-1", event: "generated", reason: "partial-generated" },
+      extra: { runId: "run-00000001", event: "generated", reason: "partial-generated" },
     });
     expect(
       captured.records.every((event) => event.op !== "coding-runtime.description.dispatched"),
@@ -3231,6 +3267,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       undefined,
       { jobs, dispatcher },
       verifiedCommits,
+      nextGuardedRunId(),
     );
 
     await settleRun(f, verifiedCommits);
@@ -3248,9 +3285,9 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       (event) => event.op === "coding-runtime.description" && event.extra?.event === "blocked",
     );
     expect(blocked).toMatchObject({
-      correlationId: UNKNOWN_CORRELATION_ID,
+      correlationId: "run-00000001",
       errorKind: "Error",
-      extra: { runId: "run-1", reason: "provider-failed" },
+      extra: { runId: "run-00000001", reason: "provider-failed" },
     });
     expect(f.orchestrator.status()).toMatchObject({
       descriptionStatus: { state: "failed", reason: "provider-failed" },
@@ -3281,6 +3318,7 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
         undefined,
         undefined,
         verifiedCommits,
+        nextGuardedRunId(),
       );
 
       f.orchestrator.attachDescriptionSupport({ jobs, dispatcher });
@@ -3294,20 +3332,33 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     it("reconciles a job left `dispatched` by a prior process even though support arrives after startupReconcileNow already ran", () => {
       const jobs = jobStore();
       jobs.beginDispatch(
-        { runId: "run-1", remoteDigest: REMOTE, baseSha: BASE_SHA, headSha: HEAD_SHA },
+        { runId: "run-00000001", remoteDigest: REMOTE, baseSha: BASE_SHA, headSha: HEAD_SHA },
         "2026-01-01T00:00:00.000Z",
       );
       const dispatcher = fakeDispatcher({ reason: "generated" });
-      const f = fixture();
+      const f = fixture(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        nextGuardedRunId(),
+      );
 
       // Mirrors production ordering: the control plane runs startup reconciliation BEFORE the real
       // description support exists.
       f.orchestrator.startupReconcileNow();
-      expect(jobs.current("run-1")).toBeUndefined();
+      expect(jobs.current("run-00000001")).toBeUndefined();
 
       f.orchestrator.attachDescriptionSupport({ jobs, dispatcher });
 
-      expect(jobs.current("run-1")).toMatchObject({ state: "blocked", reason: "interrupted" });
+      expect(jobs.current("run-00000001")).toMatchObject({
+        state: "blocked",
+        reason: "interrupted",
+      });
     });
   });
 });
