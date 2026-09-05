@@ -32,7 +32,6 @@ function missingObservedAt(): Record<string, unknown> {
   return status;
 }
 
-
 describe("isWorkbenchDescriptionStatus", () => {
   it("accepts a well-formed status for every closed reason and its paired state", () => {
     for (const [reason, state] of Object.entries(WORKBENCH_DESCRIPTION_REASON_STATES)) {

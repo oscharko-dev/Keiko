@@ -311,13 +311,11 @@ export function admitDescriptionModelEgress(
   if (deps.gitDeliveryDescriptionAuthority === undefined || request.snapshotDigest === undefined) {
     return false;
   }
-  return (
-    authorizeGitDeliveryModelEgress(
-      deps.gitDeliveryDescriptionAuthority,
-      descriptionScopeFor(request.ownerAndRepo, request.prNumber, request.snapshotDigest),
-      nowIso,
-    ) !== undefined
-  );
+  return authorizeGitDeliveryModelEgress(
+    deps.gitDeliveryDescriptionAuthority,
+    descriptionScopeFor(request.ownerAndRepo, request.prNumber, request.snapshotDigest),
+    nowIso,
+  ).allowed;
 }
 
 // ─── Service cache ──────────────────────────────────────────────────────────────────────────────
