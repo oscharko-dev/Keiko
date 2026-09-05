@@ -4,11 +4,11 @@ import { createOpenCodeGatewayToolCatalogAdvertisement } from "../coding-runtime
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { createBufferedServerLogSink } from "../observability/server-log.js";
 import {
-  CatalogFacadeDeniedError,
   createCatalogFacadeBridge,
   createInMemoryCatalogFacadeBudgetPort,
   type CatalogFacadeBudgetPort,
 } from "./catalogToolFacadeBridge.js";
+import { CatalogDispatchFault } from "./catalogToolRuntimeAuthority.js";
 import type { CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
 
 const discoverRequest: CodingToolActionRequest = {
@@ -98,9 +98,12 @@ describe("CatalogFacadeBridge (#3413 F8)", () => {
     const { bridge, log } = bridgeFixture(budget);
     const run = vi.fn(() => Promise.resolve({ status: "completed" as const }));
 
-    await expect(bridge.dispatch(discoverRequest, run)).rejects.toBeInstanceOf(
-      CatalogFacadeDeniedError,
-    );
+    const rejection: unknown = await bridge
+      .dispatch(discoverRequest, run)
+      .catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(CatalogDispatchFault);
+    expect((rejection as CatalogDispatchFault).status).toBe("denied");
+    expect((rejection as CatalogDispatchFault).reason).toBe("budget-exhausted");
 
     expect(run).not.toHaveBeenCalled();
     expect(log.events).toHaveLength(1);
@@ -137,5 +140,40 @@ describe("CatalogFacadeBridge (#3413 F8)", () => {
     expect(settled.budgetDisposition).toBe("released");
     expect(settled.reservationId).toBe("reservation-1");
     expect(JSON.stringify(settled)).not.toContain("handler exploded");
+  });
+
+  // Review finding on #3413 F8: the bridge must never call both `commit()` and `release()` for the
+  // same reservation when accounting itself fails partway through -- mirroring
+  // `CatalogInvocation.account()` (catalogToolSettlement.ts) rather than re-deriving a thinner,
+  // divergent accounting rule. Fails before this change (a throwing `commit()` fell into the
+  // generic catch, which called `release()` on the same reservation and mis-reported the outcome
+  // as "handler-failed" instead of the canonical "budget-port-failed").
+  it("fails closed as budget-port-failed without also releasing when commit itself throws", async () => {
+    const release = vi.fn();
+    const commitFailure = new Error("ledger unavailable");
+    const budget: CatalogFacadeBudgetPort = {
+      available: () => true,
+      reserve: () => ({ reservationId: "reservation-2" }),
+      commit: () => {
+        throw commitFailure;
+      },
+      release,
+    };
+    const { bridge, log } = bridgeFixture(budget);
+    const run = vi.fn(() => Promise.resolve({ status: "completed" as const }));
+
+    const rejection: unknown = await bridge
+      .dispatch(discoverRequest, run)
+      .catch((error: unknown) => error);
+
+    expect(rejection).toBe(commitFailure);
+    expect(run).toHaveBeenCalledOnce();
+    expect(release).not.toHaveBeenCalled();
+    const settled = log.events[1]?.extra as Record<string, unknown>;
+    expect(settled.status).toBe("failed");
+    expect(settled.reason).toBe("budget-port-failed");
+    expect(settled.budgetDisposition).toBe("commit-uncertain");
+    expect(settled.effectStarted).toBe(true);
+    expect(JSON.stringify(settled)).not.toContain("ledger unavailable");
   });
 });

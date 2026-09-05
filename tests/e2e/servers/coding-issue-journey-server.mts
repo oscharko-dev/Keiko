@@ -14,14 +14,34 @@
 // model and a real repository, or the lane does not start at all.
 
 import { resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
 import { runUiCli, type CliIo } from "@oscharko-dev/keiko-cli";
 
 import { resolveCodingIssueJourneyQualificationConfig } from "../support/coding-issue-journey-config.js";
 
-const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..", "..");
 const PORT = Number(process.env.KEIKO_E2E_UI_PORT ?? "4390");
+
+/**
+ * Live-run bug (#3390 harness gap): the compiled entrypoint runs from
+ * `tests/e2e/servers/dist/tests/e2e/servers/coding-issue-journey-server.mjs`, so resolving the
+ * repository root from `import.meta.url` walked four segments up from THAT compiled path and
+ * landed on `tests/e2e/servers/dist` -- `KEIKO_UI_STATIC_ROOT` then defaulted to
+ * `.../dist/dist/ui/static` and `keiko ui` refused to start ("UI assets not found"). The sibling
+ * harnesses (`coding-runtime-server-shared.mts`'s `runCodingRuntimeJourneyServer`) never derive
+ * the repo root from the compiled file's own location at all -- they resolve `dist/ui/static`
+ * from `process.cwd()`, because `playwright.coding-issue-*.config.ts`'s `webServer.cwd` is always
+ * the repository root. This does the same: `repoRoot` is a parameter (not `process.cwd()`
+ * resolved inline) so a unit test can prove the resolved path without depending on the actual
+ * process cwd.
+ */
+export function defaultUiStaticRoot(repoRoot: string): string {
+  return resolve(repoRoot, "dist", "ui", "static");
+}
+
+function defaultStateDir(repoRoot: string): string {
+  return resolve(repoRoot, ".keiko-coding-issue-journey-e2e");
+}
 
 function processIo(): CliIo {
   return {
@@ -64,10 +84,11 @@ async function main(): Promise<number> {
 
   // Real UI assets: `keiko ui`'s static root defaults relative to the compiled CLI module, so a
   // harness invocation (never installed as a package) must point it at this checkout's own build.
-  process.env.KEIKO_UI_STATIC_ROOT ??= resolve(REPO_ROOT, "dist", "ui", "static");
+  // `process.cwd()` is the repository root here (Playwright's `webServer.cwd`), never the
+  // compiled file's own directory -- see `defaultUiStaticRoot` above.
+  process.env.KEIKO_UI_STATIC_ROOT ??= defaultUiStaticRoot(process.cwd());
 
-  const stateDir =
-    process.env.KEIKO_E2E_STATE_DIR ?? resolve(REPO_ROOT, ".keiko-coding-issue-journey-e2e");
+  const stateDir = process.env.KEIKO_E2E_STATE_DIR ?? defaultStateDir(process.cwd());
 
   const args = [
     "--port",

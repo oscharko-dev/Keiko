@@ -120,10 +120,8 @@ import type {
   CodingToolInvocationRegistry,
   CodingToolInvocationTakeResult,
 } from "./codingToolInvocationRegistry.js";
-import {
-  CatalogFacadeDeniedError,
-  type CatalogFacadeBridge,
-} from "../tool-catalog/catalogToolFacadeBridge.js";
+import type { CatalogFacadeBridge } from "../tool-catalog/catalogToolFacadeBridge.js";
+import { CatalogDispatchFault } from "../tool-catalog/catalogToolRuntimeAuthority.js";
 
 // F8 (#3413): an optional, additive extension of CodingToolFacadeOptions. `codingToolFacadePorts.ts`
 // stays the single owner of the base shape; this widens only the LOCAL parameter type accepted by
@@ -227,7 +225,7 @@ async function executePlainAction(
         : await catalogBridge.dispatch(request, runDelegate);
     return project(request, outcome);
   } catch (error) {
-    if (error instanceof CatalogFacadeDeniedError) return empty("denied");
+    if (error instanceof CatalogDispatchFault && error.status === "denied") return empty("denied");
     return projected("failed");
   }
 }

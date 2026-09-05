@@ -9,7 +9,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import type { GitCiRequirementsResult, GitCiWorkflowRequirement } from "./git-ci-requirements.js";
 import type { GitProviderReadRunner } from "./git-provider-observation.js";
-import { readGitProviderValue } from "./git-provider-value.js";
+import { buildGitHubApiGetArgv, readGitProviderValue } from "./git-provider-value.js";
 
 export interface GitCiWorkflowDefinition {
   readonly repositoryId: number;

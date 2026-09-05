@@ -644,7 +644,7 @@
       "probe": "OPENCODE_TOOL_SOURCE_DEFINITIONS",
       "disposition": "derive projection",
       "ownerIssue": 3414,
-      "scope": "seven Keiko tools and native question/todowrite; canonical repo search pending H1"
+      "scope": "sixteen Keiko tools and native question/todowrite; canonical repo search (keiko.repo.search@1, H1 #3386) implemented and projected, tracked non-authorizing via GOVERNED_TOOL_CONTRACT_PINS.pendingH1 until #3414 removes it"
     },
     {
       "id": "opencode-launch",

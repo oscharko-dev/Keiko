@@ -14,8 +14,14 @@ import { captureToolInvocationReceipt } from "@oscharko-dev/keiko-contracts/runt
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { errorKindOf } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import type {
+  ToolResultReason,
+  ToolResultStatus,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type { ToolBudgetDisposition } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import type { CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
 import { emitToolLifecycleEvent, type CatalogLifecycleLogPort } from "./catalogToolLifecycle.js";
+import { CatalogDispatchFault, catalogBudgetOperation } from "./catalogToolRuntimeAuthority.js";
 
 /**
  * Confidently-matched facade actions this bridge routes through the real catalog lifecycle and
@@ -35,14 +41,6 @@ const CATALOG_FACADE_TOOL_IDS: Partial<Record<CodingToolActionRequest["action"],
   Object.freeze({
     discover: "keiko.workspace.discover",
   });
-
-/** Thrown before the wrapped handler ever runs; the facade maps this to its own "denied" status. */
-export class CatalogFacadeDeniedError extends Error {
-  public constructor(public readonly reason: "budget-exhausted") {
-    super("Catalog tool dispatch denied");
-    this.name = "CatalogFacadeDeniedError";
-  }
-}
 
 export interface CatalogFacadeBudgetReservation {
   readonly reservationId: string;
@@ -103,13 +101,12 @@ interface InvocationMeta {
   readonly settlementId: string;
   readonly startedAt: number;
 }
-type TerminalStatus = "completed" | "denied" | "failed";
 interface TerminalFields extends InvocationMeta {
-  readonly status: TerminalStatus;
-  readonly reason: string;
+  readonly status: ToolResultStatus;
+  readonly reason: ToolResultReason;
   readonly reservationId: string | null;
   readonly effectStarted: boolean;
-  readonly budgetDisposition: "not-reserved" | "committed" | "released";
+  readonly budgetDisposition: ToolBudgetDisposition;
   readonly error?: unknown;
 }
 
@@ -191,7 +188,14 @@ function emitStarted(
   });
 }
 
-/** Settles a "denied" outcome and throws before the wrapped handler ever runs (fail closed). */
+/**
+ * Settles a "denied" outcome and throws before the wrapped handler ever runs (fail closed). Throws
+ * the shared `CatalogDispatchFault` -- the exact exception-shaping primitive
+ * `CatalogInvocation.reserve()`/`.fail()` (catalogToolSettlement.ts) uses for every rejection --
+ * rather than a second, bridge-local error type, so both settlement implementations attach the
+ * same `status`/`reason` vocabulary to a fault and a caller can branch on one exception class
+ * regardless of which path produced it.
+ */
 function denyBudgetExhausted(runtime: BridgeRuntime, meta: InvocationMeta): never {
   emitSettlement(runtime, {
     ...meta,
@@ -201,7 +205,84 @@ function denyBudgetExhausted(runtime: BridgeRuntime, meta: InvocationMeta): neve
     effectStarted: false,
     budgetDisposition: "not-reserved",
   });
-  throw new CatalogFacadeDeniedError("budget-exhausted");
+  throw new CatalogDispatchFault("denied", "budget-exhausted");
+}
+
+/**
+ * Classifies a rejection exactly the way `CatalogInvocation.fail()` does: a `CatalogDispatchFault`
+ * carries its own settled `status`/`reason` (e.g. a budget port failure surfaced through
+ * `catalogBudgetOperation`); anything else is an opaque handler rejection.
+ */
+function classifyFailure(error: unknown): { status: ToolResultStatus; reason: ToolResultReason } {
+  if (error instanceof CatalogDispatchFault) return { status: error.status, reason: error.reason };
+  return { status: "failed", reason: "handler-failed" };
+}
+
+/**
+ * Commits or releases a settled reservation, mirroring `CatalogInvocation.account()`
+ * (catalogToolSettlement.ts): exactly one accounting call per reservation, never both. A failing
+ * accounting call settles as the canonical `budget-port-failed`/`*-uncertain` pair instead of the
+ * caller's own error, because the reservation's true state is now unknown.
+ */
+function settleReservation(
+  runtime: BridgeRuntime,
+  reservation: CatalogFacadeBudgetReservation,
+  effectStarted: boolean,
+): { readonly budgetDisposition: ToolBudgetDisposition; readonly accountingFault?: unknown } {
+  try {
+    if (effectStarted) runtime.input.budget.commit(reservation);
+    else runtime.input.budget.release(reservation);
+    return { budgetDisposition: effectStarted ? "committed" : "released" };
+  } catch (accountingFault) {
+    return {
+      budgetDisposition: effectStarted ? "commit-uncertain" : "release-uncertain",
+      accountingFault,
+    };
+  }
+}
+
+/** Settles the success path: commits the reservation once and fails closed if that commit itself
+ * fails, instead of falling through to a second, unpaired `release()` on the same reservation. */
+function settleSuccess<T>(
+  runtime: BridgeRuntime,
+  meta: InvocationMeta,
+  reservation: CatalogFacadeBudgetReservation,
+  result: T,
+): T {
+  const accounting = settleReservation(runtime, reservation, true);
+  emitSettlement(runtime, {
+    ...meta,
+    status: accounting.accountingFault === undefined ? "completed" : "failed",
+    reason: accounting.accountingFault === undefined ? "none" : "budget-port-failed",
+    reservationId: reservation.reservationId,
+    effectStarted: true,
+    budgetDisposition: accounting.budgetDisposition,
+    error: accounting.accountingFault,
+  });
+  if (accounting.accountingFault !== undefined) throw accounting.accountingFault;
+  return result;
+}
+
+/** Settles the failure path: releases the reservation once and reports the original rejection
+ * (classified through the shared `CatalogDispatchFault` vocabulary), never the handler's own
+ * error masked by an unrelated accounting failure. */
+function settleFailure(
+  runtime: BridgeRuntime,
+  meta: InvocationMeta,
+  reservation: CatalogFacadeBudgetReservation,
+  error: unknown,
+): void {
+  const accounting = settleReservation(runtime, reservation, false);
+  const classified = classifyFailure(error);
+  emitSettlement(runtime, {
+    ...meta,
+    status: accounting.accountingFault === undefined ? classified.status : "failed",
+    reason: accounting.accountingFault === undefined ? classified.reason : "budget-port-failed",
+    reservationId: reservation.reservationId,
+    effectStarted: false,
+    budgetDisposition: accounting.budgetDisposition,
+    error: accounting.accountingFault ?? error,
+  });
 }
 
 async function runReserved<T>(
@@ -210,31 +291,14 @@ async function runReserved<T>(
   reservation: CatalogFacadeBudgetReservation,
   run: () => Promise<T>,
 ): Promise<T> {
+  let result: T;
   try {
-    const result = await run();
-    runtime.input.budget.commit(reservation);
-    emitSettlement(runtime, {
-      ...meta,
-      status: "completed",
-      reason: "none",
-      reservationId: reservation.reservationId,
-      effectStarted: true,
-      budgetDisposition: "committed",
-    });
-    return result;
+    result = await run();
   } catch (error) {
-    runtime.input.budget.release(reservation);
-    emitSettlement(runtime, {
-      ...meta,
-      status: "failed",
-      reason: "handler-failed",
-      reservationId: reservation.reservationId,
-      effectStarted: false,
-      budgetDisposition: "released",
-      error,
-    });
+    settleFailure(runtime, meta, reservation, error);
     throw error;
   }
+  return settleSuccess(runtime, meta, reservation, result);
 }
 
 async function dispatchCovered<T>(
@@ -248,8 +312,9 @@ async function dispatchCovered<T>(
     settlementId: runtime.mintId(),
     startedAt: runtime.now(),
   };
-  if (!runtime.input.budget.available()) denyBudgetExhausted(runtime, meta);
-  const reservation = runtime.input.budget.reserve();
+  const available = catalogBudgetOperation(() => runtime.input.budget.available());
+  if (!available) denyBudgetExhausted(runtime, meta);
+  const reservation = catalogBudgetOperation(() => runtime.input.budget.reserve());
   emitStarted(runtime, meta, reservation);
   return runReserved(runtime, meta, reservation, run);
 }
