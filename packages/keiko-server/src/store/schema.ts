@@ -968,32 +968,13 @@ function setUserVersion(db: DatabaseSync, v: number): void {
   db.exec(`PRAGMA user_version = ${String(v)}`);
 }
 
-export interface RunMigrationsOptions {
-  /**
-   * Stop after applying this version instead of the binary's full `SCHEMA_VERSION`. Test-only
-   * seam (e.g. `legacySchemaTestFixture.ts`'s `rewindSchemaFixture`) for replaying the real,
-   * production `MIGRATIONS` list forward to a known older version — never a second, restated copy
-   * of any migration's DDL. Production call sites never pass this.
-   */
-  readonly upTo?: number;
-}
-
-function resolvedUpTo(options: RunMigrationsOptions | undefined): number {
-  const upTo = options?.upTo ?? SCHEMA_VERSION;
-  if (!Number.isInteger(upTo) || upTo < 1 || upTo > SCHEMA_VERSION) {
-    throw new RangeError(`runMigrations: invalid upTo target ${String(upTo)}`);
-  }
-  return upTo;
-}
-
 // Applies pending migrations inside a single transaction. Throws (and rolls back) on any failure.
-export function runMigrations(db: DatabaseSync, options?: RunMigrationsOptions): void {
+export function runMigrations(db: DatabaseSync): void {
   const start = currentUserVersion(db);
   if (start > SCHEMA_VERSION) {
     throw new UiStoreSchemaVersionError(start, SCHEMA_VERSION);
   }
-  const upTo = resolvedUpTo(options);
-  const pending = MIGRATIONS.filter((m) => m.version > start && m.version <= upTo);
+  const pending = MIGRATIONS.filter((m) => m.version > start);
   if (pending.length === 0) return;
   db.exec("BEGIN");
   try {

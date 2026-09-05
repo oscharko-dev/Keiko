@@ -280,8 +280,6 @@ function admitDescription(
     {},
     { logSink, descriptionAuthority },
   );
-  // eslint-disable-next-line no-console
-  console.log("DEBUG admitDescription gate", JSON.stringify({ allowed: gate.allowed, result: (gate as { result?: unknown }).result }));
   if (!gate.allowed) return { allowed: false, result: gate.result };
   // The description authority's fixed identity never matches a real run's `runId`, so `runId` is
   // omitted from the context exactly when this was admitted outside a running Code task.

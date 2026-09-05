@@ -2664,4 +2664,47 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     const serialized = JSON.stringify(captured.records);
     expect(serialized).not.toContain(start.taskIntent);
   });
+
+  // #3401 composition gap: `createCodingRuntimeOrchestrator` is constructed inside
+  // `codingRuntimeControlPlane.ts` before deps.ts can compose the real snapshot-capture +
+  // description-authority + Model Gateway dispatcher, so production wiring cannot pass
+  // `description` at construction time. `attachDescriptionSupport` is the seam deps.ts uses to
+  // supply it afterward — this proves it (a) actually enables dispatch and (b) still performs the
+  // SAME interrupted-job reconciliation `startupReconcileNow` would have performed had support
+  // been present at construction, so a job left `dispatched` by a prior process is never silently
+  // resumed just because the real dispatcher was composed after the control plane.
+  describe("attachDescriptionSupport (late composition seam)", () => {
+    it("enables dispatch for a run that succeeds after support is attached post-construction", async () => {
+      const jobs = jobStore();
+      const dispatcher = fakeDispatcher({ reason: "generated" });
+      const verifiedCommits = new Map<string, VerifiedCommitResult>();
+      const f = fixture(undefined, undefined, [], undefined, undefined, undefined, undefined, verifiedCommits);
+
+      f.orchestrator.attachDescriptionSupport({ jobs, dispatcher });
+
+      await settleRun(f, verifiedCommits);
+      await vi.waitFor(() => {
+        expect(dispatcher.calls).toBe(1);
+      });
+    });
+
+    it("reconciles a job left `dispatched` by a prior process even though support arrives after startupReconcileNow already ran", () => {
+      const jobs = jobStore();
+      jobs.beginDispatch(
+        { runId: "run-1", remoteDigest: REMOTE, baseSha: BASE_SHA, headSha: HEAD_SHA },
+        "2026-01-01T00:00:00.000Z",
+      );
+      const dispatcher = fakeDispatcher({ reason: "generated" });
+      const f = fixture();
+
+      // Mirrors production ordering: the control plane runs startup reconciliation BEFORE the real
+      // description support exists.
+      f.orchestrator.startupReconcileNow();
+      expect(jobs.current("run-1")).toBeUndefined();
+
+      f.orchestrator.attachDescriptionSupport({ jobs, dispatcher });
+
+      expect(jobs.current("run-1")).toMatchObject({ state: "blocked", reason: "interrupted" });
+    });
+  });
 });

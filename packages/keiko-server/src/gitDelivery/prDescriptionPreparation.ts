@@ -58,15 +58,6 @@ export function validDescriptionContext(context: PrDescriptionContext): boolean 
   );
 }
 export function sameDescriptionContext(a: PrDescriptionContext, b: PrDescriptionContext): boolean {
-  // eslint-disable-next-line no-console
-  console.log("DEBUG sameDescriptionContext", {
-    accessScopeEq: a.accessScope === b.accessScope,
-    authorityDigestEq: a.authorityDigest === b.authorityDigest, aAd: a.authorityDigest, bAd: b.authorityDigest,
-    repoEq: a.repository === b.repository,
-    prEq: a.prNumber === b.prNumber,
-    workspaceEq: a.workspace.root === b.workspace.root,
-    runIdEq: a.runId === b.runId, aRunId: a.runId, bRunId: b.runId,
-  });
   return (
     a.accessScope === b.accessScope &&
     a.authorityDigest === b.authorityDigest &&

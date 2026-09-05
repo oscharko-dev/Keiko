@@ -328,7 +328,7 @@ export class CodingRuntimeOrchestrator {
 
   constructor(
     private readonly deps: CodingRuntimeOrchestratorDeps,
-    private readonly description?: CodingRuntimeDescriptionSupport,
+    private description?: CodingRuntimeDescriptionSupport,
   ) {
     this.now = deps.now ?? ((): Date => new Date());
     // The run id becomes `authority.runId` inside the minted Authority Envelope, whose contract
@@ -970,10 +970,7 @@ export class CodingRuntimeOrchestrator {
     this.deps.snapshots.markNonterminalRecoveryRequired(this.now().toISOString());
     // #3401: a description attempt still `dispatched` from a prior process has no live promise to
     // resume — it is reconciled to a closed blocked status, never silently re-run or lost.
-    for (const runId of this.description?.jobs.reconcileInterrupted(this.now().toISOString()) ??
-      []) {
-      this.logDescriptionEvent({ runId }, "blocked", { reason: "interrupted" });
-    }
+    this.reconcileInterruptedDescriptionJobs(this.description);
     for (const snapshot of this.deps.snapshots
       .listRecentActive(1)
       .filter(({ state }) => state === "recovery-required")) {
@@ -1456,6 +1453,27 @@ export class CodingRuntimeOrchestrator {
   notifyVerifiedHeadAdvanced(runId: string): void {
     const snapshot = this.deps.snapshots.get(runId);
     if (snapshot !== undefined) this.dispatchDescriptionIfEligible(snapshot);
+  }
+
+  /**
+   * #3401 composition seam: `createCodingRuntimeOrchestrator`'s constructor is called from
+   * `codingRuntimeControlPlane.ts` before the real dispatcher (deps.ts's snapshot capture +
+   * description authority + Model Gateway generation chain) can be composed, so production wiring
+   * cannot pass `description` at construction time. This lets deps.ts attach it immediately after
+   * control-plane construction instead. Runs the SAME startup reconciliation
+   * `startupReconcileNow` already ran with `description` absent, so an attempt left `dispatched` by
+   * a prior process is still closed to `blocked`/`interrupted` exactly once, never resumed or lost
+   * regardless of how late in composition the real support arrives.
+   */
+  attachDescriptionSupport(support: CodingRuntimeDescriptionSupport): void {
+    this.description = support;
+    this.reconcileInterruptedDescriptionJobs(support);
+  }
+
+  private reconcileInterruptedDescriptionJobs(support: CodingRuntimeDescriptionSupport | undefined): void {
+    for (const runId of support?.jobs.reconcileInterrupted(this.now().toISOString()) ?? []) {
+      this.logDescriptionEvent({ runId }, "blocked", { reason: "interrupted" });
+    }
   }
 
   // #3401: fires only for a stable succeeded head with a persisted VerifiedCommitResult (correction
