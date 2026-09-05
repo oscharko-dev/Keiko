@@ -54,15 +54,13 @@ function toolFacadeContext(
   };
 }
 
-function bridge(
-  handle: CodingRuntimeToolFacadeBridge["handle"],
-): { readonly resolve: () => CodingRuntimeToolFacadeBridge | undefined } {
+function bridge(handle: CodingRuntimeToolFacadeBridge["handle"]): {
+  readonly resolve: () => CodingRuntimeToolFacadeBridge | undefined;
+} {
   return { resolve: (): CodingRuntimeToolFacadeBridge => ({ handle }) };
 }
 
-function depsWith(
-  toolFacadeBridge: UiHandlerDeps["toolFacadeBridge"] | undefined,
-): UiHandlerDeps {
+function depsWith(toolFacadeBridge: UiHandlerDeps["toolFacadeBridge"] | undefined): UiHandlerDeps {
   return { toolFacadeBridge } as unknown as UiHandlerDeps;
 }
 
@@ -82,7 +80,9 @@ describe("coding-sidecar tool facade route", () => {
 
   it("dispatches an authorized JSON body through the real route dispatcher to the run's bridge and returns its 200", async () => {
     const handle = vi.fn(
-      (): Promise<{ readonly status: number; readonly body: string }> =>
+      (
+        _request: Parameters<CodingRuntimeToolFacadeBridge["handle"]>[0],
+      ): ReturnType<CodingRuntimeToolFacadeBridge["handle"]> =>
         Promise.resolve({ status: 200, body: JSON.stringify({ status: "completed" }) }),
     );
     const deps = depsWith(bridge(handle));
@@ -234,7 +234,9 @@ describe("coding-sidecar tool facade route", () => {
         return new Promise((resolve) => {
           input.signal?.addEventListener(
             "abort",
-            () => resolve({ status: 502, body: "" }),
+            () => {
+              resolve({ status: 502, body: "" });
+            },
             { once: true },
           );
         });

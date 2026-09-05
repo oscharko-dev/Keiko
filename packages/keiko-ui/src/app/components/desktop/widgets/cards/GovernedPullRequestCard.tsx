@@ -419,6 +419,7 @@ function PrUpdatePrNumberField({
 }
 
 function PrUpdateDraftStateField({ form, busy, onChange }: FieldsProps): ReactNode {
+  const t = useTranslate();
   return (
     <label style={{ ...LABEL_STYLE, flex: 1 }}>
       Draft state{" "}
@@ -436,8 +437,7 @@ function PrUpdateDraftStateField({ form, busy, onChange }: FieldsProps): ReactNo
         style={{ font: "var(--text-caption)", color: "var(--fg-muted)" }}
         data-testid="gpr-mark-ready-hint"
       >
-        To mark this pull request ready for review, use Propose ready on the Coding Workbench
-        journey outcome — it binds the exact revision and re-verifies it before executing.
+        {t("governedPullRequestCard.markReadyHint")}
       </span>
     </label>
   );

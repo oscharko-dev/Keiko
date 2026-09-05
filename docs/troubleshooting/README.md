@@ -39,11 +39,12 @@ MemoriaViva mode-aware capture issues are covered in the dedicated
 for "capture did not run in mode X", Journal-visibility questions, and the autonomy control not
 persisting across a reload.
 
-macOS coding-sidecar confinement issues (a managed OpenCode sidecar that never becomes ready or
-exits immediately once the gateway-only Seatbelt confinement wraps its launch, ADR-0043 D11–D13 /
-ADR-0140 D6) are covered in the dedicated
+macOS coding-sidecar confinement issues — a managed OpenCode sidecar that never becomes ready or
+exits immediately once the gateway-only Seatbelt confinement wraps its launch (ADR-0043 D11–D13 /
+ADR-0140 D6), or one that starts fine but whose governed `keiko_*` tool calls are denied by that
+same confinement (ADR-0043 D15) — are covered in the dedicated
 [macOS Coding Sidecar Seatbelt Confinement Troubleshooting](macos-coding-sidecar-seatbelt-confinement-failure.md)
-entry.
+entries.
 
 LiteLLM production-gateway issues are covered in the dedicated
 [LiteLLM Production Gateway](litellm-production-gateway.md) entry. Use that page for

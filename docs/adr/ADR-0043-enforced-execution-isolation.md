@@ -266,3 +266,40 @@ coding runtime on every release platform rather than confine it. That gap is rec
 enforcement equivalent exist; it is not a containment claim. The refusal path and its
 `runtime.confinement.failed` evidence apply to any lane that does request a confinement on a host
 that cannot enforce it.
+
+## Addendum — the governed tool facade rides the ONE attested loopback destination, never a second (2026-09-05)
+
+### D15 — A second ephemeral loopback listener was a defect, not a second attested destination
+
+A live real-model run under the macOS `keiko-gateway` Seatbelt profile (#3390) showed EVERY
+`keiko_*` tool call failing with Bun's `ConnectionRefused` ("Was there a typo in the url or
+port?") while OpenCode-native tools (`todowrite`, `question`) kept working. Root cause: D11's
+profile allows network-outbound to exactly ONE loopback destination — the attested gateway/BFF
+port, per the `NetworkGatewayPolicy` contract this ADR and `packages/keiko-contracts/src/tools.ts`
+both describe as "one loopback host, one in-range port, nothing else" — but the OpenCode tool
+facade bridge (`packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts`) opened
+its OWN ephemeral `createServer().listen(0, "127.0.0.1")` listener and handed the sidecar a
+SECOND `KEIKO_TOOL_FACADE_URL` on a different port. That second port was never part of any
+attested policy, so the Seatbelt profile correctly denied it — the profile was not the defect; the
+second listener was. Because the functional and scripted harnesses never ran under
+`sandbox-exec`, this was invisible until the live run.
+
+The fix removes the second listener rather than widening the policy to admit it (D13: this
+confinement is additive and stays narrow). The tool facade now rides the SAME single attested
+loopback BFF port `/api/coding-sidecar/gateway/*` already uses, at a sibling route,
+`POST /api/coding-sidecar/tool` (`packages/keiko-server/src/coding-sidecar-tool-facade.ts`),
+dispatching directly to the active run's bridge (`OpenCodeRuntimeComposition.toolBridge.handle`)
+— the SAME bearer-capability authentication and admission gate
+(`maxInFlight`/`requestDeadlineMs`/abort-on-close) the retired listener enforced, reached through
+the BFF's existing request/response instead of a raw socket. Production composition derives both
+`gatewayUrl` and `toolFacadeUrl` from the ONE loopback origin
+(`productionOpenCodeActivation.ts`), never from a second, independently-bound port; nothing in the
+composition module calls `.listen()` for this bridge any more (the public bridge port exposes
+exactly `{ url, handle }`, structurally excluding a listener/socket surface). The scripted
+functional harness's fake sidecar, which needs a real HTTP endpoint to exercise, owns its own
+tiny listener wrapping this SAME `handle` (`opencodeFunctionalHarness/_support.ts`,
+`opencodeRuntime.real.test.ts`'s `createToolFacadeHarness`) — never a second production path.
+
+This does not change D11's policy shape or D14's `NetworkGatewayPolicy` contract: the invariant
+"exactly one attested loopback destination" is unchanged. What changed is that the tool facade now
+actually honours it, instead of silently assuming a second port would be reachable.

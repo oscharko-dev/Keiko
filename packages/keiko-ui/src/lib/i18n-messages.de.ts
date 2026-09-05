@@ -2504,6 +2504,8 @@ export const DE_MESSAGES = {
   "governedPullRequestCard.description.state.fallback": "Übernommen — ohne Modell generiert",
   "governedPullRequestCard.description.state.blocked": "Blockiert — nicht übernommen",
   "governedPullRequestCard.description.state.failed": "Fehlgeschlagen — nicht übernommen",
+  "governedPullRequestCard.markReadyHint":
+    "Um diesen Pull Request zur Review freizugeben, verwende „Bereit vorschlagen“ im Journey-Ergebnis der Coding Workbench — es bindet die exakte Revision und verifiziert sie vor der Ausführung erneut.",
   "governedPullRequestCard.description.previewCaption":
     "Vorschau — Repository-Vorlage und von Menschen verfasster Text außerhalb des verwalteten Bereichs bleiben erhalten",
   "governedPullRequestCard.description.field.repositoryAria":

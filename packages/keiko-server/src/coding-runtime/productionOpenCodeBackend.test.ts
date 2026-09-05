@@ -30,8 +30,8 @@ describe("production OpenCode backend composition", () => {
         portable: scriptedFunctionalPortable(root),
         runtimeStateRoot: root,
         gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
-    // ADR-0043 D11-D14 (#3390): the SAME single attested loopback origin as `gatewayUrl` above.
-    toolFacadeUrl: "http://127.0.0.1:1983/api/coding-sidecar/tool",
+        // ADR-0043 D11-D14 (#3390): the SAME single attested loopback origin as `gatewayUrl` above.
+        toolFacadeUrl: "http://127.0.0.1:1983/api/coding-sidecar/tool",
         runtimeEvidence: { observe: (): void => undefined },
         gatewayReadiness: createOpenCodeGatewayReadinessRegistry(),
       });

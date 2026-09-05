@@ -424,10 +424,9 @@ describe("createProductionAuxiliaryPorts", () => {
       );
 
       expect(reads).toBe(0);
-      expect(result).toMatchObject({ status: "completed" });
-      expect(result?.auxiliary).toMatchObject({
-        status: "unavailable",
-        reasonCode: "child-runner-error",
+      expect(result).toMatchObject({
+        status: "completed",
+        auxiliary: { status: "unavailable", reasonCode: "child-runner-error" },
       });
     } finally {
       vi.useRealTimers();

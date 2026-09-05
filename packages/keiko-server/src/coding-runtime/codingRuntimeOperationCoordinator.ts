@@ -3,6 +3,7 @@ import type {
   CodingWorkbenchRuntimeQuestionsResponse,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import type { CodingWorkbenchRuntimeQuestionAnswerRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import { parseCodingWorkbenchRuntimeQuestionAnswerRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
@@ -52,6 +53,19 @@ type PreparedRuntimeOperation =
     }
   // KEIKO-0722: distinguish the replay-cap exhaustion path from every other invalid-intent
   // rejection so callers can emit a dedicated failureCode instead of the generic "invalid-intent".
+  | { readonly ok: false; readonly reason?: "replay-cap-exhausted" | undefined };
+
+// The answer path admits the WHOLE body through parseCodingWorkbenchRuntimeQuestionAnswerRequest
+// (KEIKO-0411 / epic #3384 defect A) instead of a second, hand-maintained key list: `value` is
+// therefore the fully contract-validated request, not the generic unknown-field record every other
+// operation kind carries.
+type PreparedAnswerOperation =
+  | {
+      readonly ok: true;
+      readonly current: CodingRuntimeSnapshot;
+      readonly reservation: RuntimeOperationReservation;
+      readonly value: CodingWorkbenchRuntimeQuestionAnswerRequest;
+    }
   | { readonly ok: false; readonly reason?: "replay-cap-exhausted" | undefined };
 
 type QuestionMutationOutcome =
@@ -138,11 +152,42 @@ export class CodingRuntimeOperationCoordinator {
   }
 
   public answerQuestion(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    return this.mutateQuestion(runId, input, "answer");
+    return this.deps.serial(async () => {
+      const operation = this.prepareAnswer(runId, input);
+      if (!operation.ok) {
+        return failure(
+          operation.reason === "replay-cap-exhausted" ? "replay-cap-exhausted" : "invalid-intent",
+        );
+      }
+      const outcome = await this.applyAnswer(runId, operation);
+      if (!outcome.ok) {
+        operation.reservation.release();
+        return failure(outcome.reason);
+      }
+      operation.reservation.commit();
+      return this.deps.advanceRevision(operation.current);
+    });
   }
 
   public rejectQuestion(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    return this.mutateQuestion(runId, input, "reject");
+    return this.deps.serial(async () => {
+      const operation = this.prepare(runId, input, ["requestId", "expectedRevision", "questionId"]);
+      if (!operation.ok || !validQuestionId(operation.value.questionId)) {
+        if (operation.ok) operation.reservation.release();
+        return failure(
+          !operation.ok && operation.reason === "replay-cap-exhausted"
+            ? "replay-cap-exhausted"
+            : "invalid-intent",
+        );
+      }
+      const outcome = await this.applyReject(runId, operation, operation.value.questionId);
+      if (!outcome.ok) {
+        operation.reservation.release();
+        return failure(outcome.reason);
+      }
+      operation.reservation.commit();
+      return this.deps.advanceRevision(operation.current);
+    });
   }
 
   public async startInitialTurn(
@@ -193,83 +238,68 @@ export class CodingRuntimeOperationCoordinator {
     );
   }
 
-  private mutateQuestion(
+  // Issues the answer port call for an already-admitted, contract-validated answer operation.
+  private async applyAnswer(
     runId: string,
-    input: unknown,
-    action: "answer" | "reject",
-  ): Promise<CodingRuntimeOrchestratorResult> {
-    return this.deps.serial(async () => {
-      const keys =
-        action === "answer"
-          ? ["requestId", "expectedRevision", "questionId", "answers"]
-          : ["requestId", "expectedRevision", "questionId"];
-      const operation = this.prepare(runId, input, keys);
-      if (!operation.ok || !validQuestionId(operation.value.questionId)) {
-        if (operation.ok) operation.reservation.release();
-        return failure(
-          !operation.ok && operation.reason === "replay-cap-exhausted"
-            ? "replay-cap-exhausted"
-            : "invalid-intent",
-        );
-      }
-      const outcome = await this.applyQuestionMutation(
-        runId,
-        action,
-        operation,
-        operation.value.questionId,
-      );
-      if (!outcome.ok) {
-        operation.reservation.release();
-        return failure(outcome.reason);
-      }
-      operation.reservation.commit();
-      return this.deps.advanceRevision(operation.current);
-    });
-  }
-
-  // Issues the answer/reject port call for an already-admitted question operation. Split out of
-  // mutateQuestion() so that method stays under the line/complexity ceiling; behaviour (including
-  // which failureCode each path maps to) is unchanged from the inline version it replaced.
-  private async applyQuestionMutation(
-    runId: string,
-    action: "answer" | "reject",
-    operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
-    // Already validated by validQuestionId(operation.value.questionId) at the mutateQuestion()
-    // call site: `operation.value` types every field but requestId/expectedRevision as unknown
-    // (it is shared across every operation kind, not just answer/reject), so that narrowing
-    // cannot survive the call into this method and questionId is threaded through explicitly.
-    questionId: string,
+    operation: Extract<PreparedAnswerOperation, { readonly ok: true }>,
   ): Promise<QuestionMutationOutcome> {
     try {
-      if (action !== "answer") {
-        const accepted = await this.deps.questionPort.reject({
-          ...operationRequest(runId, operation),
-          questionId,
-        });
-        return accepted ? { ok: true } : { ok: false, reason: "authority-resolution-failed" };
-      }
-      // requestId/expectedRevision are already bound and verified by prepare() above
-      // (isExactRecord + expectedRevision-vs-current.revision + the one-use requestId replay
-      // reservation) — this is a consolidation of that existing binding into the shared contract
-      // type (KEIKO-0411), not a new check at this call site. The values are already known-valid;
-      // the aggregate answers byte budget below is the one genuinely new protection this parse
-      // call adds here.
-      const answers = parseCodingWorkbenchRuntimeQuestionAnswerRequest({
-        requestId: operation.value.requestId,
-        expectedRevision: operation.value.expectedRevision,
-        questionRequestId: questionId,
-        answers: operation.value.answers,
-      });
-      if (!answers.ok) return { ok: false, reason: "invalid-intent" };
       const accepted = await this.deps.questionPort.answer({
-        ...operationRequest(runId, operation),
-        questionId,
-        answers: answers.value.answers,
+        runId,
+        requestId: operation.value.requestId,
+        expectedRevision: operation.current.revision,
+        questionId: operation.value.questionId,
+        answers: operation.value.answers,
       });
       return accepted ? { ok: true } : { ok: false, reason: "authority-resolution-failed" };
     } catch {
       return { ok: false, reason: "authority-resolution-failed" };
     }
+  }
+
+  // Issues the reject port call for an already-admitted question operation. `questionId` is
+  // already validated by validQuestionId(operation.value.questionId) at the rejectQuestion() call
+  // site: `operation.value` types every field but requestId/expectedRevision as unknown (it is
+  // shared across every generic keyed operation, not just reject), so that narrowing cannot
+  // survive the call into this method and questionId is threaded through explicitly.
+  private async applyReject(
+    runId: string,
+    operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
+    questionId: string,
+  ): Promise<QuestionMutationOutcome> {
+    try {
+      const accepted = await this.deps.questionPort.reject({
+        ...operationRequest(runId, operation),
+        questionId,
+      });
+      return accepted ? { ok: true } : { ok: false, reason: "authority-resolution-failed" };
+    } catch {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+  }
+
+  // The answer body has exactly one shape definition: parseCodingWorkbenchRuntimeQuestionAnswerRequest
+  // owns the field list (requestId, expectedRevision, questionId, answers) and their bounds — this
+  // no longer re-states that shape as a local key array (epic #3384 defect A). Only the run-state,
+  // revision-match and replay-reservation checks below are this coordinator's own concern.
+  private prepareAnswer(runId: string, input: unknown): PreparedAnswerOperation {
+    const parsed = parseCodingWorkbenchRuntimeQuestionAnswerRequest(input);
+    if (!parsed.ok) return { ok: false };
+    const current = this.deps.current();
+    if (
+      current?.runId !== runId ||
+      !(current.state === "running" || current.state === "paused") ||
+      parsed.value.expectedRevision !== current.revision
+    ) {
+      return { ok: false };
+    }
+    const reserveOutcome = this.replay.reserve(runId, parsed.value.requestId, current.revision);
+    if ("rejection" in reserveOutcome) {
+      return reserveOutcome.rejection === "cap-exhausted"
+        ? { ok: false, reason: "replay-cap-exhausted" }
+        : { ok: false };
+    }
+    return { ok: true, current, reservation: reserveOutcome.reservation, value: parsed.value };
   }
 
   private prepare(

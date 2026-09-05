@@ -1,5 +1,10 @@
 import { isGitDeliveryBlockReason, type GitDeliveryBlockReason } from "./git-delivery.js";
 import { isGitPreflightFindingCode, type GitPreflightFinding } from "./git-preflight.js";
+import {
+  GIT_COMMIT_MESSAGE_VIOLATION_CODES,
+  isGitCommitMessageViolationCode,
+  type GitCommitMessageViolationCode,
+} from "./git-commit-policy.js";
 
 /** Body-free receipt for one exact verified Code-task commit. No approval token is serializable. */
 export const VERIFIED_COMMIT_SCHEMA_VERSION = "1" as const;
@@ -61,6 +66,9 @@ export interface VerifiedCommitResult extends VerifiedCommitBinding {
   readonly committedTreeDigest?: string;
   readonly blockReason?: GitDeliveryBlockReason;
   readonly preflightFindings?: readonly GitPreflightFinding[];
+  // Present only when reason === "message-policy": the closed, content-free violation codes the
+  // pure git-commit-policy validator computed for the rejected draft (never the message itself).
+  readonly violations?: readonly GitCommitMessageViolationCode[];
 }
 
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -87,6 +95,7 @@ const KEYS = new Set([
   "committedTreeDigest",
   "blockReason",
   "preflightFindings",
+  "violations",
 ]);
 const STATUSES = new Set<string>(VERIFIED_COMMIT_STATUSES);
 const REASONS = new Set<string>(VERIFIED_COMMIT_REASONS);

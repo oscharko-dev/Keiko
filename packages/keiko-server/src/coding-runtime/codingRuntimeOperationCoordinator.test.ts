@@ -220,11 +220,10 @@ describe("CodingRuntimeOperationCoordinator", () => {
   });
 
   it("answers a question with the requestId/expectedRevision/questionId binding folded into the contract parse (KEIKO-0411)", async () => {
-    // prepare() already validated requestId/expectedRevision/questionId out of band before this
-    // point (isExactRecord + expectedRevision-vs-current.revision + validQuestionId); this proves
-    // the call site now also passes them through parseCodingWorkbenchRuntimeQuestionAnswerRequest
-    // (as questionRequestId) without breaking the happy path, and that the port still receives
-    // exactly the answers the contract validated.
+    // prepareAnswer() admits the WHOLE body through parseCodingWorkbenchRuntimeQuestionAnswerRequest
+    // -- the one shape definition for requestId/expectedRevision/questionId/answers (epic #3384
+    // defect A) -- then only checks run-state, revision-match, and reserves the replay slot. This
+    // proves the happy path still calls the port with exactly the fields the contract validated.
     const port = questionPort();
     const subject = coordinator({ port });
     await expect(

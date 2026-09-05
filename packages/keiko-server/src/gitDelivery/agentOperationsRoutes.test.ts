@@ -436,13 +436,17 @@ const WRITE_OPERATIONS = Object.keys(
 // The "repository-delivery" authority class (git-repository-agent.ts): commit, fetch, pull, push,
 // pull-request, merge. `commit` is excluded here since it is always denied through its own,
 // separate `verified-commit-required` special case, never through the ladder below.
-const DELIVERY_WRITE_OPERATIONS = [
+// Typed as the wider `keyof typeof EXECUTE_PAYLOADS` element type (not a literal tuple) so
+// `.includes(operation)` below type-checks against the broader `WRITE_OPERATIONS` union it is
+// filtered against — `Array<T>.includes` is invariant in `T`, and a five-member literal union
+// element type would reject any wider caller even though every value stays a valid delivery kind.
+const DELIVERY_WRITE_OPERATIONS: readonly (keyof typeof EXECUTE_PAYLOADS)[] = [
   "fetch",
   "pull",
   "push",
   "pull-request",
   "merge",
-] as const satisfies readonly (keyof typeof EXECUTE_PAYLOADS)[];
+];
 
 function executeRequest(
   operation: keyof typeof EXECUTE_PAYLOADS,

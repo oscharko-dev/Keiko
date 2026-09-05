@@ -65,7 +65,7 @@ function harness(): Harness {
         events.push(event);
       },
     },
-  } as UiHandlerDeps;
+  } as unknown as UiHandlerDeps;
   return {
     deps,
     events,
@@ -248,7 +248,7 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
         codingRuntimeSnapshotStore: snapshots,
         evidenceStore: createNodeEvidenceStore(evidenceDir),
         redactor: (value: string): string => value,
-      } as UiHandlerDeps;
+      } as unknown as UiHandlerDeps;
       // No `outcomes` override: exercises the same default wiring the mounted production route
       // group (`GIT_DELIVERY_JOURNEY_ROUTE_GROUP`) uses.
       const group = createGitDeliveryJourneyRouteGroup({

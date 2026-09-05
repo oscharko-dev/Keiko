@@ -268,6 +268,14 @@ describe("git delivery approval store — pr-description-apply (#3399)", () => {
       },
     },
   };
+  // GitDeliveryApprovalBinding.proposalId is `string?` (no explicit `| undefined`) under
+  // exactOptionalPropertyTypes, so reading it back off DESCRIPTION_BINDING (typed as the interface)
+  // widens to `string | undefined` even though the fixture above always sets it. Narrow once here
+  // instead of writing an explicit `proposalId: undefined` into any binding built below.
+  const DESCRIPTION_PROPOSAL_ID = DESCRIPTION_BINDING.proposalId;
+  if (DESCRIPTION_PROPOSAL_ID === undefined) {
+    throw new Error("expected DESCRIPTION_BINDING.proposalId to be set");
+  }
 
   it("mints a claim redeemable exactly once for the exact bound proposal", () => {
     const store = createInMemoryGitDeliveryApprovalStore();
@@ -304,7 +312,7 @@ describe("git delivery approval store — pr-description-apply (#3399)", () => {
         operation,
         runId: DESCRIPTION_BINDING.runId,
         envelopeDigest: DESCRIPTION_BINDING.envelopeDigest,
-        proposalId: DESCRIPTION_BINDING.proposalId,
+        proposalId: DESCRIPTION_PROPOSAL_ID,
         command: DESCRIPTION_BINDING.command,
       };
       const issued = store.issue({
@@ -332,7 +340,7 @@ describe("git delivery approval store — pr-description-apply (#3399)", () => {
       envelopeDigest: DESCRIPTION_BINDING.envelopeDigest,
       operation: DESCRIPTION_BINDING.operation,
       projectId: DESCRIPTION_BINDING.projectId,
-      proposalId: DESCRIPTION_BINDING.proposalId,
+      proposalId: DESCRIPTION_PROPOSAL_ID,
       runId: DESCRIPTION_BINDING.runId,
     };
     // canonicalise() is key-order-independent: reordering the same fields must still match.

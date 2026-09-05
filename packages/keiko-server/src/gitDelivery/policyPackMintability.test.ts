@@ -1,7 +1,9 @@
 // Unit coverage for the KEIKO-0526 mintability guard (#3386/#3387, ADR-0138 D2): a policy pack may
 // only name `approval-gated` for an action kind whose route group actually exposes an `/approve`
-// mint route. `merge`, `commit`, `push`, `pr-create`, and `pr-update` are mintable; `fetch`/`pull`
-// and any other unwired kind are not.
+// mint route. `merge`, `commit`, `push`, `pr-create`, `pr-update`, `pr-description-apply`, and
+// `pr-mark-ready` are mintable; `branch-switch`, `stage`, `unstage`, and any other unwired kind are
+// not. (`fetch`/`pull` are no longer members of `GitDeliveryActionKind` at all — that action-kind
+// taxonomy is closed at thirteen members, pinned in keiko-contracts/src/index.test.ts.)
 
 import { describe, expect, it } from "vitest";
 import type {
@@ -66,7 +68,7 @@ describe("assertPolicyPackMintable", () => {
     }).not.toThrow();
   });
 
-  it.each(["fetch", "pull", "branch-create"] as const)(
+  it.each(["branch-switch", "stage", "unstage"] as const)(
     "still throws for approval-gated %s: no mint route exists for it yet",
     (actionKind) => {
       expect(() => {

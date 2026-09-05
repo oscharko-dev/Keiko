@@ -232,6 +232,7 @@ function ports(run: () => Promise<{ readonly status: "completed" }>): CodingTool
   return {
     repositoryRead: port,
     repositoryDiscover: port,
+    repositorySearch: port,
     editorChangeset: port,
     commandRunner: port,
     verificationRunner: port,
@@ -394,7 +395,11 @@ describe("production CI repair accounting availability", () => {
       db,
       snapshots: rawSnapshots,
       now: () => nowMs,
-      activityLog: { write: (event): void => events.push(event) },
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
     });
     const snapshots: CodingRuntimeSnapshotStore = {
       ...rawSnapshots,

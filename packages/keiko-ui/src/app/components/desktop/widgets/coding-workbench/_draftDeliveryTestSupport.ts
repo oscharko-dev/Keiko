@@ -90,7 +90,7 @@ export function draftDeliveryReview(
         ? { record }
         : {
             record,
-            title: "fix: exact reviewed delivery <script>",
+            title: "fix: exact reviewed delivery <script>", // i18n-exempt: test fixture literal, never rendered to an end user
             body: "Original template <img src=x>\n\nCloses #42\n\nTrusted region",
           },
   };

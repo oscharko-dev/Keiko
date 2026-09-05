@@ -2,8 +2,9 @@
 
 Operator guidance for a managed OpenCode sidecar (macOS dev lane or app-sandbox evaluation lane,
 ADR-0140 D6 / ADR-0043 D11–D13) that never starts, or exits immediately, once the gateway-only
-network confinement wraps its launch. The entry follows the
-[troubleshooting entry template](./_template.md).
+network confinement wraps its launch — and for a sidecar that starts fine but whose governed
+`keiko_*` tool calls are denied by the same confinement (ADR-0043 D15). The entries below follow
+the [troubleshooting entry template](./_template.md).
 
 ---
 
@@ -86,3 +87,63 @@ For cases 1 and 2: these indicate the sidecar was launched through something oth
 production activation path (ADR-0140), or a defect in that composition. Capture the activity-log
 line and open a finding; do not work around it by constructing a backend without a confinement
 policy — that would launch the sidecar with no enforced network boundary at all.
+
+---
+
+## Every `keiko_*` tool call fails while OpenCode-native tools keep working
+
+| Field             | Value                                                                             |
+| ----------------- | --------------------------------------------------------------------------------- |
+| Severity          | Blocker                                                                           |
+| Surface           | Run engine / Workspace                                                            |
+| Stable identifier | `keiko-tool-denied`, `ConnectionRefused` ("Was there a typo in the url or port?") |
+
+**Symptom**
+
+The coding run reaches `runtime ready` and the model can call `todowrite`, `question`, and other
+OpenCode-native tools normally, but **every** governed Keiko tool call — `keiko_workspace_discover`,
+`keiko_git_status`, `keiko_changeset_edit`, and every other `keiko_*` tool — fails within a couple
+of milliseconds of being invoked. The model can never discover the workspace, read a file, propose
+an edit, run verification, or commit; the run is effectively stuck making no forward progress even
+though the sidecar itself looks healthy.
+
+**Root Cause**
+
+This is ADR-0043 D15 (#3390): the macOS `keiko-gateway` Seatbelt confinement (D11) allows
+network-outbound to exactly ONE attested loopback destination. Before the D15 fix, the OpenCode
+tool facade bridge opened a SECOND, self-issued ephemeral loopback listener and handed the sidecar
+a `KEIKO_TOOL_FACADE_URL` pointing at it — a destination the profile correctly had never attested
+and therefore correctly denied. Every `keiko_*` tool call reached the OS network layer, was refused
+before a single byte reached Keiko, and surfaced to the model as a generic connection failure. A
+build that still exhibits this symptom predates the D15 fix, which moved the tool facade onto the
+SAME attested loopback BFF port `/api/coding-sidecar/gateway/*` already uses (at the sibling route
+`POST /api/coding-sidecar/tool`) instead of a second listener.
+
+**Diagnostic Steps**
+
+1. Export and reconstruct the run's timeline:
+
+   ```bash
+   keiko support export --out bundle.jsonl
+   keiko support analyze bundle.jsonl --correlation-id <runCorrelationId> --json
+   ```
+
+2. Look for `op: "gateway.tool-catalog.call-bound"` lines showing the model successfully binding
+   the governed tool catalog, immediately followed by **no** corresponding request line for
+   `/api/coding-sidecar/tool` and **no** `op: "coding-sidecar.tool-facade.rejected"` line either.
+   That combination — the model bound the tools, but the server recorded no attempt to serve one,
+   rejected or otherwise — confirms the call never reached Keiko at all; it was denied at the OS
+   network layer before the request could be logged.
+3. Confirm the sidecar's own OpenCode-native tools (`todowrite`, `question`) succeed in the same
+   timeline. Native tools succeeding alongside every `keiko_*` call failing, with no server-side
+   evidence of the failed calls, rules out a facade authentication or admission-gate rejection
+   (both of which DO log a body-free `coding-sidecar.tool-facade.rejected` line) and points at the
+   network layer instead.
+
+**Resolution**
+
+Update to a Keiko build that includes the ADR-0043 D15 fix; there is no local workaround, because
+the correct action for the older behavior is exactly what the Seatbelt profile already does —
+deny the second, unattested destination. Do not widen the Seatbelt profile to allow a second
+loopback port to "fix" this locally: that would recreate the exact defect D15 closes, weakening the
+gateway-only egress boundary the profile exists to enforce.

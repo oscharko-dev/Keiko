@@ -130,11 +130,14 @@ function ciRepairEnvelope(): never {
 }
 
 function failingReport(root: string): VerificationReport {
+  const report = passingReport(root);
+  const firstResult = report.results[0];
+  if (firstResult === undefined) throw new Error("expected at least one verification result");
   return {
-    ...passingReport(root),
+    ...report,
     overallStatus: "failed",
-    counts: { ...passingReport(root).counts, passed: 0, failed: 1 },
-    results: [{ ...passingReport(root).results[0], status: "failed", exitCode: 1 }],
+    counts: { ...report.counts, passed: 0, failed: 1 },
+    results: [{ ...firstResult, status: "failed", exitCode: 1 }],
   };
 }
 
@@ -345,12 +348,9 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       live: () => true,
       report: () => passingReport(root),
     });
-    const facadeFetch = async (
-      _url: unknown,
-      init: { readonly body?: unknown },
-    ): Promise<Response> => {
+    const facadeFetch: typeof globalThis.fetch = async (_input, init) => {
       const result = await facade.execute({
-        body: requestBodyText(init.body),
+        body: requestBodyText(init?.body),
         capability: "scripted-fixture-capability",
       });
       return new Response(JSON.stringify(result));
@@ -615,12 +615,9 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
         events.push(event);
       },
     });
-    const facadeFetch = async (
-      _url: unknown,
-      init: { readonly body?: unknown },
-    ): Promise<Response> => {
+    const facadeFetch: typeof globalThis.fetch = async (_input, init) => {
       const result = await facade.execute({
-        body: requestBodyText(init.body),
+        body: requestBodyText(init?.body),
         capability: "scripted-fixture-capability",
       });
       return new Response(JSON.stringify(result));
@@ -1022,12 +1019,9 @@ describe("scripted OpenCode transcript reaches DraftDeliveryController for push/
         report: () => passingReport(draft.root),
         draftDeliveryService: draft.service,
       });
-      const facadeFetch = async (
-        _url: unknown,
-        init: { readonly body?: unknown },
-      ): Promise<Response> => {
+      const facadeFetch: typeof globalThis.fetch = async (_input, init) => {
         const result = await facade.execute({
-          body: requestBodyText(init.body),
+          body: requestBodyText(init?.body),
           capability: "scripted-fixture-capability",
         });
         return new Response(JSON.stringify(result));

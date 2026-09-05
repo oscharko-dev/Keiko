@@ -2426,6 +2426,8 @@ export const EN_MESSAGES = {
   "governedPullRequestCard.description.state.fallback": "Applied — generated without the model",
   "governedPullRequestCard.description.state.blocked": "Blocked — not applied",
   "governedPullRequestCard.description.state.failed": "Failed — not applied",
+  "governedPullRequestCard.markReadyHint":
+    "To mark this pull request ready for review, use Propose ready on the Coding Workbench journey outcome — it binds the exact revision and re-verifies it before executing.",
   "governedPullRequestCard.description.previewCaption":
     "Preview — repository template and human text preserved outside the managed region",
   "governedPullRequestCard.description.field.repositoryAria": "Description repository (owner/repo)",

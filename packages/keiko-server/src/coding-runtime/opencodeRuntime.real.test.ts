@@ -964,7 +964,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
           releaseRuntimeAfterReap: () => true,
         },
       });
-      toolFacade.bind(runtime.toolBridge.handle);
+      toolFacade.bind((request) => runtime.toolBridge.handle(request));
       const runRoot = join(stateBaseRoot, RUN_ID);
       try {
         const started = await Promise.resolve(

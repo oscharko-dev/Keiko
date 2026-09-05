@@ -251,7 +251,6 @@ describe("CodingToolGovernedDelegate", () => {
   });
 
   it("carries a search port's CodingRepositoryResult through to the outcome unchanged (#3386 H1)", async () => {
-    const ports = governedPorts();
     const search = {
       ok: true as const,
       kind: "search" as const,
@@ -264,8 +263,11 @@ describe("CodingToolGovernedDelegate", () => {
       },
       truncationReasons: [],
     };
-    ports.repositorySearch = {
-      execute: vi.fn(() => Promise.resolve({ status: "completed" as const, search })),
+    const ports = {
+      ...governedPorts(),
+      repositorySearch: {
+        execute: vi.fn(() => Promise.resolve({ status: "completed" as const, search })),
+      },
     };
     const delegate = createCodingToolGovernedDelegate(ports);
 
