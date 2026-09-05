@@ -158,7 +158,9 @@ function assertProfileProgression(
   for (const declaration of declarations) {
     const matches = previous.filter((entry) => entry.profile.id === declaration.profile.id);
     const versions = matches.map((entry) => entry.profile.version);
-    const republished = matches.find((entry) => entry.profile.version === declaration.profile.version);
+    const republished = matches.find(
+      (entry) => entry.profile.version === declaration.profile.version,
+    );
     // A reused profile version, like a same-contractVersion descriptor (descriptor.ts), must keep
     // every alias resolved to the same canonical tool -- retaining an explicitly published
     // historical profile is not latest rebinding, but rebinding an alias to a different tool

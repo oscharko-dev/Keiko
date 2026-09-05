@@ -172,6 +172,90 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
     }
   });
 
+  // Owner audit finding b3-20: a request that never reaches the controller (an unbound run) still
+  // ran an operation and must leave a body-free activity-log line on the observation op, never a
+  // silent early return.
+  it("logs a body-free unavailable line for the draft-unavailable early return", async () => {
+    const h = harness();
+    try {
+      const group = createGitDeliveryJourneyRouteGroup({
+        reader: (): never => {
+          throw new Error("must not be called for an unbound run");
+        },
+      });
+      await group[0]?.handler(ctxFor({ schemaVersion: "1", runId: "unbound-run" }), h.deps);
+      const line = h.events.find((event) => event.op === "git.journey-observation");
+      expect(line).toMatchObject({
+        op: "git.journey-observation",
+        correlationId: "journey-refresh-1",
+        level: "warn",
+        extra: { phase: "unavailable", runId: "unbound-run", reason: "draft-unavailable" },
+      });
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  // Owner audit finding b2-9: `JourneyObservationController` is constructed fresh per request, so
+  // its own `this.active` in-flight guard never sees two concurrent calls for the same run on the
+  // real (per-request) path. A double-click or a retried refresh must still be refused rather than
+  // dispatching two concurrent provider observations for the same run.
+  it("fails closed with observation-in-flight instead of dispatching a second concurrent observation for the same run", async () => {
+    const h = harness();
+    try {
+      let readerCalls = 0;
+      let signalEntered: (() => void) | undefined;
+      const entered = new Promise<void>((resolve) => {
+        signalEntered = resolve;
+      });
+      let releaseFirst: (() => void) | undefined;
+      const gate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const group = createGitDeliveryJourneyRouteGroup({
+        reader: (): GitJourneyReader => ({
+          readJourney: async (): Promise<GitJourneyFactsResult> => {
+            readerCalls += 1;
+            signalEntered?.();
+            await gate;
+            return OBSERVED_FACTS;
+          },
+        }),
+        readiness: () => Promise.resolve(readySnapshot()),
+        description: () => Promise.resolve(null),
+        outcomes: { get: () => undefined, record: () => true },
+      });
+      const first = group[0]?.handler(
+        ctxFor({ schemaVersion: "1", runId: "run-1" }),
+        h.deps,
+      ) as Promise<RouteResult>;
+      // Waits until the first call's observation has actually reached the provider read — by then
+      // the per-run guard is armed, since it is set synchronously before that read is ever awaited.
+      await entered;
+
+      const second = (await group[0]?.handler(
+        ctxFor({ schemaVersion: "1", runId: "run-1" }),
+        h.deps,
+      )) as RouteResult;
+      expect(second).toEqual({
+        status: 200,
+        body: { status: "unavailable", reason: "observation-in-flight" },
+      });
+      const line = h.events.find(
+        (event) => event.op === "git.journey-observation" && event.extra?.reason === "observation-in-flight",
+      );
+      expect(line).toMatchObject({ level: "warn", extra: { runId: "run-1" } });
+
+      releaseFirst?.();
+      const resolvedFirst = await first;
+      expect(resolvedFirst.status).toBe(200);
+      expect(resolvedFirst.body).toMatchObject({ status: "observed" });
+      expect(readerCalls).toBe(2); // before/after drift-check reads within the ONE surviving observation
+    } finally {
+      h.cleanup();
+    }
+  });
+
   it("produces a JourneyOutcome from a fake GitJourneyReader through the real route handler", async () => {
     const h = harness();
     try {

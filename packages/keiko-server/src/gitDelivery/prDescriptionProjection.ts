@@ -9,6 +9,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { errorKindOf } from "../observability/server-log.js";
 import {
   PrDescriptionFailure,
   type PrDescriptionContext,
@@ -49,7 +50,7 @@ export function logDescription(
     category: "process",
     op: "git.pr-description",
     correlationId: context.correlationId,
-    ...(error === undefined ? {} : { level: "warn", errorKind: "internal" }),
+    ...(error === undefined ? {} : { level: "warn", errorKind: errorKindOf(error) }),
     extra: {
       phase,
       reason,

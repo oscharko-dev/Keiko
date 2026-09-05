@@ -67,10 +67,20 @@ not a claim that all tests passed against the final published combined commit.
   journey runs passed, including a second verified commit/push on the same PR.
 - UI checkpoint: 437 suites, 7,710 passing tests and one existing skip;
   89.98% statements, 82.49% branches, 91.57% functions, 92.86% lines.
-- PR description core: 284 tests passed. The latest standalone receipt store passed
-  twelve tests; this does not establish complete service CAS integration.
-- Journey observation/core: 34 tests passed. Latest adjacent journey UI run:
-  177 tests across seven suites passed.
+- PR description core: 284 tests passed. The latest standalone receipt store
+  (`packages/keiko-server/src/gitDelivery/prDescriptionReceiptStore.test.ts`) passed
+  twelve tests at recording time; this does not establish complete service CAS
+  integration. Counts below drift as work continues in a multi-agent tree, so treat
+  every number here as a snapshot, not a current fact: re-run the named test file(s)
+  for the true current count. The owner's independent audit of PR #3394 (posted
+  2026-09-05 against head `25a7b7c9`) already found this file at seventeen tests;
+  a later re-check on this handoff's own working tree found it still at seventeen.
+- Journey observation/core (`journeyObservationService.test.ts` +
+  `journeyOutcome.test.ts`, both under `packages/keiko-server/src/gitDelivery/`):
+  34 tests passed at recording time. The same owner audit found this pair at
+  forty-two tests on head `25a7b7c9`; a later re-check on this handoff's own
+  working tree found it still at forty-two (11 + 31). Latest adjacent journey UI
+  run: 177 tests across seven suites passed.
 - Native migration checkpoint: 204 tests across thirteen suites passed. An earlier
   broader tools/harness/SDK run had 1,824 passes and one unresolved failure in
   `editor-agent-tool-host.integration.test.ts` (`editor_list_sessions`).

@@ -512,6 +512,14 @@ class GitChangeBlocked extends Error {
   }
 }
 
+// Owner audit b3-9 — mirrors store/chats.ts's own `MAX_GIT_CHANGE_SCOPES` cap (that module is
+// outside this change's write scope to import the constant from directly). Checked here so a chat
+// already at the cap is rejected with a closed error BEFORE a relationship is created for a scope
+// the store would then refuse to persist, leaving no orphaned relationship behind. The store's own
+// `validatePatchGitChangeScopes` stays the authoritative enforcement — the catch around
+// `updateChat` below is a fail-closed backstop if the two limits are ever allowed to drift.
+const GIT_CHANGE_SCOPE_SOFT_CAP = 8;
+
 function persistConnectedScope(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -520,6 +528,9 @@ function persistConnectedScope(
   captured: CapturedComparison & { readonly prNumber: number | undefined },
   correlationId: string,
 ): RouteResult {
+  if (existingScopes.length >= GIT_CHANGE_SCOPE_SOFT_CAP) {
+    return errResult(409, "GIT_CHANGE_SCOPE_LIMIT_REACHED");
+  }
   const workspaceId = deps.relationship?.scopeResolver(ctx.req)?.workspaceId;
   if (workspaceId === undefined) return errResult(503, "GIT_CHANGE_ENGINE_UNAVAILABLE");
   const mutation = createGitChangeRelationship(
@@ -538,7 +549,12 @@ function persistConnectedScope(
     now,
   );
   const minted = mintGitChangeDescriptionAuthority(deps, scope, now);
-  deps.store.updateChat(chatId, { gitChangeScopes: [...existingScopes, scope] });
+  try {
+    deps.store.updateChat(chatId, { gitChangeScopes: [...existingScopes, scope] });
+  } catch (error) {
+    if (error instanceof UiStoreError) return errResult(409, "GIT_CHANGE_SCOPE_LIMIT_REACHED");
+    throw error;
+  }
   logGitChangeEvent(deps, "git-change.chat.connected", correlationId, {
     relationshipId: scope.relationshipId,
     remoteDigestPrefix: scope.remoteDigest.slice(0, 8),

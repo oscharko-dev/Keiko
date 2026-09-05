@@ -3,6 +3,7 @@ import type {
   CatalogRuntimeRef,
   CatalogVersionRef,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import { catalogArray, catalogObject } from "./json.js";
 import { compileCatalogSchema } from "./schema.js";
 import { requireCatalog } from "./errors.js";
@@ -16,6 +17,15 @@ export const CATALOG_DIALECTS = Object.freeze([
 ] as const);
 const DIALECT_IDS: ReadonlySet<string> = new Set(CATALOG_DIALECTS);
 
+// The native ("keiko") adapter runtime identity every non-OpenCode dialect pins against. Derived
+// from the one product version (keiko-contracts' KEIKO_PRODUCT_VERSION) rather than a hand-copied
+// literal, so `legacy.ts` and `child.ts` (the other two registration sets binding this identity)
+// share the exact value instead of drifting on the next version bump (b3-25).
+export const NATIVE_TOOL_CATALOG_RUNTIME: CatalogRuntimeRef = Object.freeze({
+  id: "keiko",
+  version: KEIKO_PRODUCT_VERSION,
+});
+
 export function assertCatalogDialect(dialect: CatalogVersionRef, runtime: CatalogRuntimeRef): void {
   requireCatalog(dialect.version === 1 && DIALECT_IDS.has(dialect.id), "unsupported-dialect");
   if (dialect.id === "managed-runtime-json-schema") {
@@ -24,7 +34,11 @@ export function assertCatalogDialect(dialect: CatalogVersionRef, runtime: Catalo
       "unsupported-dialect",
     );
   } else {
-    requireCatalog(runtime.id === "keiko" && runtime.version === "0.3.17", "unsupported-dialect");
+    requireCatalog(
+      runtime.id === NATIVE_TOOL_CATALOG_RUNTIME.id &&
+        runtime.version === NATIVE_TOOL_CATALOG_RUNTIME.version,
+      "unsupported-dialect",
+    );
   }
 }
 

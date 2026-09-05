@@ -6,6 +6,18 @@
 // its live probe, and the retired mapping is recorded in the row's `scope` text. See
 // "harness-executor": moved from executor.ts RUN_COMMAND_TOOL to catalog-budget.ts
 // descriptorRunsCommand (#3409/#3411); documented in docs/architecture/governed-tool-migration.md.
+//
+// A row whose file WAS fully deleted (not refactored) keeps its retired `id`/`path`/`probe`
+// exactly as they stood at removal and an `inventoryMigrations[id]` entry alongside it —
+// `checkActiveInventoryProbe` routes any row whose `id` matches an `inventoryMigrations` key
+// through that branch instead of probing the row's own (now-absent) source, asserting the retired
+// path stays absent and verifying every listed replacement probe instead. This is the ONLY way an
+// `inventoryMigrations` entry's replacements are actually checked (nothing else in
+// `checkInventoryProbes` walks the migrations map by itself), so removing the row to "clean up" a
+// deleted file's stale-looking entry silently stops verifying its replacements — the row's `scope`
+// text must instead state the retirement (removal commit/issue) so a reader does not mistake the
+// literal `path`/`probe`/`disposition` fields for a still-current owner (#3413 F8 review, finding
+// b1-9: "coding-delivery-policy" is the worked example, tracked below).
 export const GOVERNED_TOOL_CONTRACT_PINS = {
   // #3406: the non-authorizing pending-H1 handoff record for #3386's H1 local repository-search
   // handler (docs/architecture/governed-tool-migration.md). `owner` and `canonicalTool` name who

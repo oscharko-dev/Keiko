@@ -11,11 +11,7 @@ import type {
   CatalogVersionRef,
   ToolDescriptor,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import {
-  createToolCatalog,
-  type CatalogCompilationContext,
-  type ToolCatalog,
-} from "./catalog.js";
+import { createToolCatalog, type CatalogCompilationContext, type ToolCatalog } from "./catalog.js";
 
 export interface CatalogSetEntry {
   readonly alias: string;

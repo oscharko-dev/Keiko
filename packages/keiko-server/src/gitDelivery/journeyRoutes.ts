@@ -341,6 +341,63 @@ function confirmedJourneySubject(
   };
 }
 
+// Owner audit finding b2-9: `JourneyObservationController` is built fresh per request (its
+// per-request `correlationId`/CI-readiness snapshot legitimately differ call to call, so a single
+// long-lived instance with frozen `options` cannot serve every request correctly), so the
+// controller's own `this.active` in-flight guard can never see two overlapping calls for the same
+// run and never fires in production. This module-scoped set is the per-run mutex
+// `productionCiObservationRuntime.ts` gets from binding one persistent object per accepted run
+// (there, the CI observation service itself IS long-lived); enforced here at the route layer,
+// keyed by the same runId the controller's draft binding is scoped to, a double-click or retried
+// refresh for one run never dispatches two concurrent provider observations.
+const activeJourneyRefreshRuns = new Set<string>();
+
+// Owner audit finding b3-20: a request that never reaches the controller (an unbound run, or a
+// refresh already in flight for this run) still ran an operation and must leave a body-free
+// activity-log line, on the observation op the controller itself uses for every other terminal
+// phase — never a silent early return.
+function logJourneyRefreshUnavailable(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  runId: string,
+  reason: "draft-unavailable" | "observation-in-flight",
+): void {
+  (deps.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "git.journey-observation",
+    correlationId,
+    level: "warn",
+    extra: { phase: "unavailable", runId, reason },
+  });
+}
+
+async function observeJourney(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  options: GitDeliveryJourneyRouteOptions,
+  runId: string,
+  correlationId: string,
+  subject: ConfirmedJourneySubject,
+): Promise<RouteResult> {
+  activeJourneyRefreshRuns.add(runId);
+  try {
+    const draftDelivery = await loadDraftDeliveryReaderModule();
+    const observationOptions = buildJourneyObservationOptions(
+      deps,
+      options,
+      subject.repositoryId,
+      subject.draft,
+      subject.ciReadiness,
+      correlationId,
+      draftDelivery,
+    );
+    const result = await new JourneyObservationController(observationOptions).observe();
+    return { status: 200, body: result };
+  } finally {
+    activeJourneyRefreshRuns.delete(runId);
+  }
+}
+
 async function handleJourneyRefresh(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -354,23 +411,18 @@ async function handleJourneyRefresh(
   if (!parsed.ok) return parsed.result;
   const runId = parseRunId(parsed.value);
   if (runId === undefined) return errResult(400, "GIT_DELIVERY_JOURNEY_BAD_REQUEST");
-
-  const subject = confirmedJourneySubject(deps, runId);
-  if (subject === undefined) return unavailableResult("draft-unavailable");
-
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-  const draftDelivery = await loadDraftDeliveryReaderModule();
-  const observationOptions = buildJourneyObservationOptions(
-    deps,
-    options,
-    subject.repositoryId,
-    subject.draft,
-    subject.ciReadiness,
-    correlationId,
-    draftDelivery,
-  );
-  const result = await new JourneyObservationController(observationOptions).observe();
-  return { status: 200, body: result };
+
+  if (activeJourneyRefreshRuns.has(runId)) {
+    logJourneyRefreshUnavailable(deps, correlationId, runId, "observation-in-flight");
+    return unavailableResult("observation-in-flight");
+  }
+  const subject = confirmedJourneySubject(deps, runId);
+  if (subject === undefined) {
+    logJourneyRefreshUnavailable(deps, correlationId, runId, "draft-unavailable");
+    return unavailableResult("draft-unavailable");
+  }
+  return observeJourney(ctx, deps, options, runId, correlationId, subject);
 }
 
 // ─── Route group ────────────────────────────────────────────────────────────────────────────────

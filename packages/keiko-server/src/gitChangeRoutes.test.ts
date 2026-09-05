@@ -391,6 +391,32 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     expect(relationship.source).toMatchObject({ kind: "chat", id: chat.id });
     expect(relationship.target.kind).toBe("git-change");
   });
+
+  // Owner audit b3-9 — `persistConnectedScope` used to append the 9th scope without checking the
+  // store's cap, and the call sat outside the handler's blocked-outcome `try`, so
+  // `validatePatchGitChangeScopes` (store/chats.ts) threw a `UiStoreError` straight out of the
+  // route instead of a closed result. Failing-before: `connectHandler` rejected with an uncaught
+  // "gitChangeScopes must contain at most 8 entries." error instead of resolving to a 409 result.
+  it("rejects a 9th connect with a closed error instead of an uncaught store exception (b3-9)", async () => {
+    const snapshots = Array.from({ length: 9 }, (_, index) =>
+      fixtureSnapshot({ snapshotDigest: String(index).repeat(64) }),
+    );
+    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+
+    for (let index = 0; index < 8; index += 1) {
+      const result = asRouteResult(
+        await connectHandler(makeCtx(connectRequestBody(chat.id)), deps),
+      );
+      expect((result.body as GitChangeScopeBody).status).toBe("connected");
+    }
+    expect(chatStore.findChatById(chat.id)?.gitChangeScopes ?? []).toHaveLength(8);
+
+    const ninth = asRouteResult(await connectHandler(makeCtx(connectRequestBody(chat.id)), deps));
+    expect(ninth.status).toBe(409);
+    expect(ninth.body).toMatchObject({ error: { code: "GIT_CHANGE_SCOPE_LIMIT_REACHED" } });
+    expect(chatStore.findChatById(chat.id)?.gitChangeScopes ?? []).toHaveLength(8);
+  });
 });
 
 function pullRequestIdentity(

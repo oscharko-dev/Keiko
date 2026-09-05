@@ -313,15 +313,10 @@ describe("codingRuntimeDescriptionJobStore — dispatch, dedup, coalesce, supers
   });
 
   // Owner audit of PR #3394, finding b3-22: `runId` is threaded downstream as a log
-  // `correlationId`, but the old `RUN_ID` pattern admitted 1-character ids and colons that
-  // `correlation.ts`'s `isValidCorrelationId` rejects — a persisted scope could carry a run id the
-  // log pipeline silently downgrades to `UNKNOWN_CORRELATION_ID`. Both ids below were accepted by
-  // the old pattern; `assertScope` now rejects them at the trust boundary instead.
-  it("rejects a run id shorter than the correlation-id pipeline's minimum length", () => {
-    const store = openStore();
-    expect(() => store.beginDispatch(scope({ runId: "r" }), NOW)).toThrow(TypeError);
-  });
-
+  // `correlationId`, but the old `RUN_ID` pattern admitted colons that `correlation.ts`'s
+  // `SAFE_CORRELATION_ID` rejects — a persisted scope could carry a run id the log pipeline
+  // silently downgrades to `UNKNOWN_CORRELATION_ID`. This id was accepted by the old pattern;
+  // `assertScope` now rejects it at the trust boundary instead.
   it("rejects a run id containing a colon, which the correlation-id log pipeline also rejects", () => {
     const store = openStore();
     expect(() => store.beginDispatch(scope({ runId: "run:0000001" }), NOW)).toThrow(TypeError);

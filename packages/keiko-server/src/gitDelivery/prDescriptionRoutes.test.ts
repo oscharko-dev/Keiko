@@ -13,9 +13,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createDefaultChatCapability } from "@oscharko-dev/keiko-model-gateway";
 import type { GitPullRequestBodyAdapter } from "@oscharko-dev/keiko-tools";
 import type { ServerLogEvent } from "../observability/index.js";
@@ -347,6 +348,23 @@ describe("pr-description routes — validation (#3399)", () => {
       (await handler(ctxFor(PREVIEW, body({ prNumber: 0, language: "en" })), deps())).status,
     ).toBe(400);
     expect((await handler(ctxFor(PREVIEW, body({ language: "fr" })), deps())).status).toBe(400);
+  });
+
+  // Owner audit of PR #3394, finding b2-13: three different PR-number ceilings existed across this
+  // feature (route: unbounded; context: 2_147_483_647; binding contract: GITHUB_ISSUE_NUMBER_MAX =
+  // 1_000_000_000), so a value strictly between the last two used to pass preview and only fail
+  // once it reached the binding contract at apply time. This value sat in exactly that gap before
+  // the route was bounded by the same GITHUB_ISSUE_NUMBER_MAX constant every other layer uses.
+  it("400s a PR number above GITHUB_ISSUE_NUMBER_MAX instead of admitting it into preview", async () => {
+    const handler = createHandlePrDescriptionPreview(optionsWithFixtureService());
+    const res = await handler(
+      ctxFor(PREVIEW, body({ prNumber: 1_500_000_000, language: "en" })),
+      deps(),
+    );
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_PR_DESCRIPTION_BAD_REQUEST" },
+    });
   });
 
   it("404s for an unknown project", async () => {
@@ -715,5 +733,18 @@ describe("pr-description routes — apply-lifecycle activity log (AGENTS.md §8 
     expect(denial).toBeDefined();
     expect(denial?.correlationId).toBe("corr-model-egress-1");
     expect(JSON.stringify(events)).not.toContain("owner/repo");
+  });
+});
+
+// Owner audit of PR #3394, finding b3-13: the source file embedded two raw NUL bytes in the
+// `cacheKey` template literal, which makes `grep`/`rg` (without `-a`) and `file` treat it as
+// binary data instead of TypeScript — several audit agents' own symbol searches against this file
+// silently returned nothing. This pins the source file's own byte content, not just the cache
+// key's runtime behavior, so a future NUL-separated join can never reintroduce the same blind spot.
+describe("pr-description routes — source file stays text, never binary (#3394 finding b3-13)", () => {
+  it("contains no raw NUL byte anywhere in prDescriptionRoutes.ts", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(join(here, "prDescriptionRoutes.ts"));
+    expect(source.includes(0)).toBe(false);
   });
 });

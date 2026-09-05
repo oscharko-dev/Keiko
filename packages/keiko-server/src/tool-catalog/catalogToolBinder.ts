@@ -21,7 +21,11 @@ import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { emitToolLifecycleEvent } from "./catalogToolLifecycle.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
-import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  correlationIdOrUnknown,
+  isValidCorrelationId,
+  UNKNOWN_CORRELATION_ID,
+} from "../correlation.js";
 import { codingToolRequiredActionClasses } from "../coding-runtime/codingToolAuthorityPort.js";
 import type {
   BoundToolSet,
@@ -210,14 +214,23 @@ export function lifecycleIdentity(
   readonly projectionDigest: CatalogDigest;
   readonly parentCorrelationId?: string;
 } {
+  // Guarded exactly like `bindingFailure` below (and `server-log.ts`'s own `parentCorrelationId`
+  // shape guard): `context` is server-composed but its correlation ids are plain strings, not a
+  // branded shape, so a caller that has not validated them yet must not reach
+  // `emitToolLifecycleEvent` unguarded -- its own shape check (validateToolLifecycleEvent) throws
+  // on an invalid id, which turns a malformed identity into an unhandled rejection instead of a
+  // body-free diagnostic (b3-17/b3-10).
+  const correlationId = correlationIdOrUnknown(context.correlationId);
+  const parentCorrelationId =
+    context.parentCorrelationId !== undefined && isValidCorrelationId(context.parentCorrelationId)
+      ? context.parentCorrelationId
+      : undefined;
   return {
-    correlationId: context.correlationId,
+    correlationId,
     catalogRevision: state.projection.catalogRevision,
     profile: state.projection.profile,
     projectionDigest: state.projection.projectionDigest,
-    ...(context.parentCorrelationId === undefined
-      ? {}
-      : { parentCorrelationId: context.parentCorrelationId }),
+    ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
   };
 }
 function canOffer(
