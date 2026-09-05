@@ -9,8 +9,16 @@ import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
 import type { CodingToolResult } from "../../../packages/keiko-server/src/coding-runtime/codingToolIpc.js";
 import { openCodingIssueWorkbench, selectCodingIssueMode } from "./coding-issue-browser.js";
-import { commitControlPath, commitObservationPath, type CommitFixtureOperation } from "./coding-issue-commit.js";
-import { DELIVERY_LAUNCHER_SECRET, deliveryRepository, type DeliveryFixtureOperation } from "./coding-issue-delivery.js";
+import {
+  commitControlPath,
+  commitObservationPath,
+  type CommitFixtureOperation,
+} from "./coding-issue-commit.js";
+import {
+  DELIVERY_LAUNCHER_SECRET,
+  deliveryRepository,
+  type DeliveryFixtureOperation,
+} from "./coding-issue-delivery.js";
 import { handoffStateDir } from "./coding-issue-handoff.js";
 
 export const HANDOFF_WINDOW_ID = "issue-handoff-proof";
@@ -33,7 +41,9 @@ export async function handoffControl(
   writeFileSync(`${path}.next`, JSON.stringify({ id, operation }));
   renameSync(`${path}.next`, path);
   await expect
-    .poll(() => ({ id: observation().lastControl, phase: observation().phase }), { timeout: 60_000 })
+    .poll(() => ({ id: observation().lastControl, phase: observation().phase }), {
+      timeout: 60_000,
+    })
     .toEqual({ id, phase: operation });
   return observation().result;
 }

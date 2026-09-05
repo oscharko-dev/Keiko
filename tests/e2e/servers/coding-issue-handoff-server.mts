@@ -7,10 +7,17 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { runIssueDeliveryServer } from "./coding-issue-delivery-server.mjs";
 import { installHandoffTransport } from "./coding-issue-handoff-transport.mjs";
-import { HANDOFF_PORT, handoffProviderPath, handoffStateDir } from "../support/coding-issue-handoff.js";
+import {
+  HANDOFF_PORT,
+  handoffProviderPath,
+  handoffStateDir,
+} from "../support/coding-issue-handoff.js";
 
 const stateDir = handoffStateDir();
 mkdirSync(stateDir, { recursive: true });
-writeFileSync(handoffProviderPath(stateDir), JSON.stringify({ mode: "open", reads: 0, deniedCalls: 0 }));
+writeFileSync(
+  handoffProviderPath(stateDir),
+  JSON.stringify({ mode: "open", reads: 0, deniedCalls: 0 }),
+);
 await runIssueDeliveryServer({ port: HANDOFF_PORT });
 installHandoffTransport(stateDir);

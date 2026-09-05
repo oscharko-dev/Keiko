@@ -11,6 +11,9 @@ import {
   type RuntimeGatewayConfinement,
 } from "@oscharko-dev/keiko-sandbox";
 
+import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import { encodeLaunchPacket, validateLaunchPacketRequest } from "./nativeRuntimeProcessProtocol.js";
 import {
   invalidRequest,
@@ -57,6 +60,8 @@ export interface NativeRuntimeProcessBackendOptions {
    * spawn; it does not (yet) enforce anything at the OS level.
    */
   readonly gatewayConfinement?: RuntimeGatewayConfinement | undefined;
+  /** Activity-log port for the closed gateway-confinement refusal below; defaults to the process sink. */
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 export interface NativeRuntimeRecoveryPort {
@@ -71,6 +76,7 @@ interface ValidatedBackendOptions {
   readonly identity: Pick<LongLivedRuntimeQualification, "platform" | "arch" | "backend">;
   readonly spawnHelper: NativeRuntimeHelperSpawn;
   readonly gatewayConfinement?: RuntimeGatewayConfinement | undefined;
+  readonly activityLog: ServerLogSink;
 }
 
 export function createNativeRuntimeProcessBackend(
@@ -108,7 +114,12 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
   }
 
   public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
-    assertGatewayConfinementUnsupported(this.options.gatewayConfinement, request);
+    try {
+      assertGatewayConfinementUnsupported(this.options.gatewayConfinement, request);
+    } catch (error) {
+      recordNativeConfinementFailure(this.options.activityLog, request.runId, error);
+      throw error;
+    }
     const paths = validateLaunchPacketRequest(request, {
       ...this.options,
       safeRealFile,
@@ -169,8 +180,27 @@ function validateBackendOptions(
         backend: "windows-job-object" as const,
       }),
     spawnHelper: options.spawnHelper ?? spawnNativeHelper,
+    activityLog: options.activityLog ?? processServerLogSink(),
     ...(gatewayConfinement === undefined ? {} : { gatewayConfinement }),
   };
+}
+
+/**
+ * Body-free evidence for the closed native-lane gateway-confinement refusal (ADR-0043 D14, #2951):
+ * the macOS dev-lane path already records `runtime.confinement.failed` for the same class of
+ * refusal (`devLaneRuntimeProcessBackend.ts`'s `recordConfinementFailure`); this backend must not
+ * fail silently just because its refusal is synchronous and pre-spawn. Same op, same shape, same
+ * correlation id — a support bundle reconstructs either lane's refusal identically.
+ */
+function recordNativeConfinementFailure(sink: ServerLogSink, runId: string, error: unknown): void {
+  sink.write({
+    category: "process",
+    level: "error",
+    op: "runtime.confinement.failed",
+    correlationId: runId,
+    errorKind: errorKindOf(error),
+    extra: { frames: keikoStackFrames(error), causeChain: causeChain(error) },
+  });
 }
 
 function validGatewayConfinement(

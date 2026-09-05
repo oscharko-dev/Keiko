@@ -3,6 +3,7 @@
 import { useEffect, type ReactNode } from "react";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import type { WorkbenchDescriptionStatus } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
 import { validateCodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
@@ -17,16 +18,38 @@ export function CodingWorkbenchDraftDelivery({
 }: {
   readonly snapshot: CodingWorkbenchRuntimeSnapshot | undefined;
 }): ReactNode {
-  const t = useCodingWorkbenchTranslate();
   const parsed = validateCodingWorkbenchRuntimeSnapshot(snapshot);
   const delivery = parsed.ok ? parsed.value.draftDelivery : undefined;
+  const descriptionStatus = parsed.ok ? parsed.value.descriptionStatus : undefined;
+  useDraftDeliveryDiagnostic(delivery, snapshot?.runId);
+  if (delivery === undefined && descriptionStatus === undefined) return null;
+  return (
+    <>
+      <DraftDeliveryCard delivery={delivery} />
+      <WorkbenchDescriptionCard status={descriptionStatus} />
+    </>
+  );
+}
+
+function useDraftDeliveryDiagnostic(
+  delivery: DraftDeliveryRecord | undefined,
+  runId: string | undefined,
+): void {
   const note =
     delivery === undefined
       ? null
       : `[keiko] draft delivery displayed: ${delivery.phase} reason ${delivery.reason} head ${delivery.binding.headSha.slice(0, 12)}`;
   useEffect(() => {
     if (note !== null) reportClientDiagnostic(note);
-  }, [note, snapshot?.runId]);
+  }, [note, runId]);
+}
+
+function DraftDeliveryCard({
+  delivery,
+}: {
+  readonly delivery: DraftDeliveryRecord | undefined;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
   if (delivery === undefined) return null;
   return (
     <section className={styles.card} aria-label={t("codingWorkbench.draftDelivery.title")}>
@@ -37,6 +60,44 @@ export function CodingWorkbenchDraftDelivery({
       </p>
       <ObservedPullRequest delivery={delivery} t={t} />
       <DeliveryBinding delivery={delivery} t={t} />
+    </section>
+  );
+}
+
+// #3401: read-only status/preview for the automatically generated description draft. No apply
+// affordance exists here (epic correction 1) — applying a draft stays #3399's existing PR preview,
+// policy and one-use approval once that surface consumes this status.
+function WorkbenchDescriptionCard({
+  status,
+}: {
+  readonly status: WorkbenchDescriptionStatus | undefined;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  if (status === undefined) return null;
+  return (
+    <section
+      className={styles.card}
+      aria-label={t("codingWorkbench.descriptionStatus.title")}
+    >
+      <h3 className={styles.approvalResearchTitle}>
+        {t("codingWorkbench.descriptionStatus.title")}
+      </h3>
+      <output>{t(`codingWorkbench.descriptionStatus.state.${status.state}`)}</output>
+      <p className={styles.helpText}>
+        {t(`codingWorkbench.descriptionStatus.reason.${status.reason}`)}
+      </p>
+      <DeliveryFacts
+        facts={[
+          {
+            label: t("codingWorkbench.descriptionStatus.head"),
+            value: status.headSha,
+          },
+          {
+            label: t("codingWorkbench.descriptionStatus.generation"),
+            value: String(status.generationVersion),
+          },
+        ]}
+      />
     </section>
   );
 }

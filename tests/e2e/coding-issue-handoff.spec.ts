@@ -49,7 +49,10 @@ interface JourneyRefreshResponse {
   readonly outcome?: {
     readonly state: string;
     readonly reason: string;
-    readonly remote: { readonly mergedAt: string | null; readonly issue: { readonly state: string } } | null;
+    readonly remote: {
+      readonly mergedAt: string | null;
+      readonly issue: { readonly state: string };
+    } | null;
   };
   readonly reason?: string;
 }
@@ -92,7 +95,10 @@ test("#3389 @coding-issue-handoff observes a human merge distinctly from the bou
   mode("merged-closed");
   const completed = await refresh(page, runId);
   expect(completed.status).toBe("observed");
-  expect(completed.outcome).toMatchObject({ state: "completed", reason: "merge-and-closure-observed" });
+  expect(completed.outcome).toMatchObject({
+    state: "completed",
+    reason: "merge-and-closure-observed",
+  });
   expect(completed.outcome?.remote?.issue.state).toBe("closed");
   await expect(page.getByText("Issue journey completed", { exact: true })).toBeVisible();
 

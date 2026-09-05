@@ -257,37 +257,40 @@ function fixture(
   const safeActivityProjection = activityProjection ?? fakeSafeActivityProjection();
   const researchGrants = createResearchGrantRegistry();
   const pendingResearchApprovals = createPendingResearchApprovals();
-  const orchestrator = createCodingRuntimeOrchestrator({
-    manager: manager,
-    approvalAuthority,
-    eventHub: eventHub as never,
-    snapshots: store,
-    evidence,
-    workspaceLifecycle: {
-      getActive: () => ({
-        instance: {
-          workspaceId: "workspace-1",
-          repositoryId: ACTIVE_REPOSITORY_ID,
-          repositoryRoot: "/repo",
-          baseBranch: "dev",
-        },
-        binding: { activeRoot: "/workspace" },
-      }),
-    } as never,
-    launchResolver,
-    taskDispatcher,
-    questionPort,
-    permissionPort,
-    safeActivityProjection,
-    serverPrincipal: () => "server",
-    researchGrants,
-    pendingResearchApprovals,
-    ...(diagnostics ? { diagnostics } : {}),
-    ...(activityLog ? { activityLog } : {}),
-    ...(issueIntake ? { issueIntake } : {}),
-    now: clock ?? ((): Date => new Date("2026-01-01T00:00:00.000Z")),
-    newRunId: () => `run-${String(rows.size + 1)}`,
-  }, descriptionSupport);
+  const orchestrator = createCodingRuntimeOrchestrator(
+    {
+      manager: manager,
+      approvalAuthority,
+      eventHub: eventHub as never,
+      snapshots: store,
+      evidence,
+      workspaceLifecycle: {
+        getActive: () => ({
+          instance: {
+            workspaceId: "workspace-1",
+            repositoryId: ACTIVE_REPOSITORY_ID,
+            repositoryRoot: "/repo",
+            baseBranch: "dev",
+          },
+          binding: { activeRoot: "/workspace" },
+        }),
+      } as never,
+      launchResolver,
+      taskDispatcher,
+      questionPort,
+      permissionPort,
+      safeActivityProjection,
+      serverPrincipal: () => "server",
+      researchGrants,
+      pendingResearchApprovals,
+      ...(diagnostics ? { diagnostics } : {}),
+      ...(activityLog ? { activityLog } : {}),
+      ...(issueIntake ? { issueIntake } : {}),
+      now: clock ?? ((): Date => new Date("2026-01-01T00:00:00.000Z")),
+      newRunId: () => `run-${String(rows.size + 1)}`,
+    },
+    descriptionSupport,
+  );
   return {
     orchestrator,
     manager,
@@ -2466,7 +2469,16 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       artifactOutcome: "complete",
     });
     const verifiedCommits = new Map<string, VerifiedCommitResult>();
-    const f = fixture(undefined, undefined, [], undefined, undefined, undefined, { jobs, dispatcher }, verifiedCommits);
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      { jobs, dispatcher },
+      verifiedCommits,
+    );
 
     await settleRun(f, verifiedCommits);
     await vi.waitFor(() => {
@@ -2486,7 +2498,10 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
   it("produces no draft and calls no dispatcher when the succeeded run has no verified commit", async () => {
     const jobs = jobStore();
     const dispatcher = fakeDispatcher({ reason: "generated" });
-    const f = fixture(undefined, undefined, [], undefined, undefined, undefined, { jobs, dispatcher });
+    const f = fixture(undefined, undefined, [], undefined, undefined, undefined, {
+      jobs,
+      dispatcher,
+    });
 
     let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
     f.taskDispatcher.dispatch.mockResolvedValueOnce({
@@ -2510,7 +2525,16 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     const dispatcher = fakeDispatcher({ reason: "generated" });
     const verifiedCommits = new Map<string, VerifiedCommitResult>();
     verifiedCommits.set("run-1", verifiedCommit());
-    const f = fixture(undefined, undefined, [], undefined, undefined, undefined, { jobs, dispatcher }, verifiedCommits);
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      { jobs, dispatcher },
+      verifiedCommits,
+    );
 
     f.taskDispatcher.dispatch.mockResolvedValueOnce({
       ok: true,
@@ -2526,7 +2550,16 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     const jobs = jobStore();
     const dispatcher = fakeDispatcher({ reason: "authority-expired" });
     const verifiedCommits = new Map<string, VerifiedCommitResult>();
-    const f = fixture(undefined, undefined, [], undefined, undefined, undefined, { jobs, dispatcher }, verifiedCommits);
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      { jobs, dispatcher },
+      verifiedCommits,
+    );
 
     await settleRun(f, verifiedCommits);
     await vi.waitFor(() => {
@@ -2539,7 +2572,16 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
   it("records a closed blocked status and calls no model when no dispatcher is wired", async () => {
     const jobs = jobStore();
     const verifiedCommits = new Map<string, VerifiedCommitResult>();
-    const f = fixture(undefined, undefined, [], undefined, undefined, undefined, { jobs }, verifiedCommits);
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      { jobs },
+      verifiedCommits,
+    );
 
     await settleRun(f, verifiedCommits);
     expect(f.orchestrator.status()).toMatchObject({
@@ -2565,14 +2607,19 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
 
     await settleRun(f, verifiedCommits);
     await vi.waitFor(() => {
-      expect(captured.records.some((event) => event.op === "coding-runtime.description.generated")).toBe(
-        true,
-      );
+      expect(
+        captured.records.some((event) => event.op === "coding-runtime.description.generated"),
+      ).toBe(true);
     });
     const dispatched = captured.records.find(
       (event) => event.op === "coding-runtime.description.dispatched",
     );
-    expect(dispatched).toMatchObject({ correlationId: "run-1", extra: { runId: "run-1" } });
+    // Fixture run ids ("run-1") are too short for `SAFE_CORRELATION_ID`; the safe fallback is the
+    // same one `recordRuntimeRunSettled` already produces for this file's other ops.
+    expect(dispatched).toMatchObject({
+      correlationId: UNKNOWN_CORRELATION_ID,
+      extra: { runId: "run-1" },
+    });
     const serialized = JSON.stringify(captured.records);
     expect(serialized).not.toContain(start.taskIntent);
   });

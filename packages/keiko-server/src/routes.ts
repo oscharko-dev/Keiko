@@ -383,6 +383,7 @@ import { GIT_DELIVERY_MERGE_ROUTE_GROUP } from "./gitDelivery/mergeRoutes.js";
 import { GIT_DELIVERY_SYNC_ROUTE_GROUP } from "./gitDelivery/syncRoutes.js";
 import { GIT_AGENT_OPERATION_ROUTE_GROUP } from "./gitDelivery/agentOperationsRoutes.js";
 import { GIT_DELIVERY_JOURNEY_ROUTE_GROUP } from "./gitDelivery/journeyRoutes.js";
+import { GIT_CHANGE_ROUTE_GROUP } from "./gitChangeRoutes.js";
 import { handleClientDiagnosticIngest } from "./client-diagnostics-routes.js";
 
 export interface ApiError {
@@ -1523,6 +1524,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // grant alone, never gitDeliveryAuthorityGate, so refresh keeps working after the originating run
   // has terminated. Never mints merge or issue-close authority.
   ...GIT_DELIVERY_JOURNEY_ROUTE_GROUP,
+  // #3400 Git-to-Chat connect/refresh: resolves an exact base/head comparison or one existing
+  // same-repository PR, captures its immutable snapshot and records the reads-context
+  // relationship. CSRF + JSON content-type enforced centrally for POST; the per-checkout
+  // GitHub-reader grant gates the PR-by-head read, never a fetch or silent remote adoption.
+  ...GIT_CHANGE_ROUTE_GROUP,
   // #2256 left the browser-owned Authority Envelope confirmation/execution routes unmounted;
   // #2958 (KEIKO-0115/KEIKO-0135) deleted them outright, together with the policy and approval
   // store behind them, so there is no second front door left to mount by accident. The one

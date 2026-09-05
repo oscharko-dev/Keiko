@@ -10,10 +10,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { installDeliveryTransport } from "./coding-issue-delivery-transport.mjs";
-import {
-  DELIVERY_REPOSITORY,
-  deliveryProviderState,
-} from "../support/coding-issue-delivery.js";
+import { DELIVERY_REPOSITORY, deliveryProviderState } from "../support/coding-issue-delivery.js";
 import type { DeliveryProviderState } from "./coding-issue-delivery-transport.mjs";
 import {
   handoffProviderPath,
@@ -63,10 +60,40 @@ function isJourneyQuery(args: readonly string[]): boolean {
   );
 }
 
-function journeyResponse(mode: HandoffFixtureMode, pr: DeliveryProviderState["pullRequests"][number]): unknown {
+function journeyPullRequest(
+  mode: HandoffFixtureMode,
+  pr: DeliveryProviderState["pullRequests"][number],
+): unknown {
   const merged = mode === "merged-open" || mode === "merged-closed";
-  const issueClosed = mode === "merged-closed";
   const blockedReview = mode === "blocked-review";
+  return {
+    id: pr.externalId,
+    number: pr.number,
+    url: pr.url,
+    state: merged ? "MERGED" : mode === "closed-unmerged" ? "CLOSED" : "OPEN",
+    isDraft: mode === "open",
+    baseRefName: pr.baseRef,
+    baseRefOid: pr.baseSha,
+    headRefName: pr.headRef,
+    headRefOid: pr.headSha,
+    mergedAt: merged ? "2026-09-05T00:04:00Z" : null,
+    mergeCommit: merged ? { oid: "f".repeat(40) } : null,
+    reviewDecision: blockedReview ? "CHANGES_REQUESTED" : "REVIEW_REQUIRED",
+    repository: { nameWithOwner: DELIVERY_REPOSITORY },
+    headRepository: { nameWithOwner: DELIVERY_REPOSITORY },
+    reviewThreads: {
+      totalCount: blockedReview ? 1 : 0,
+      nodes: blockedReview ? [{ id: "PRRT_fixture_1", isResolved: false }] : [],
+      pageInfo: { hasNextPage: false, endCursor: null },
+    },
+  };
+}
+
+function journeyResponse(
+  mode: HandoffFixtureMode,
+  pr: DeliveryProviderState["pullRequests"][number],
+): unknown {
+  const issueClosed = mode === "merged-closed";
   return {
     data: {
       repository: {
@@ -80,27 +107,7 @@ function journeyResponse(mode: HandoffFixtureMode, pr: DeliveryProviderState["pu
           closedAt: issueClosed ? "2026-09-05T00:05:00Z" : null,
           repository: { nameWithOwner: DELIVERY_REPOSITORY },
         },
-        pullRequest: {
-          id: pr.externalId,
-          number: pr.number,
-          url: pr.url,
-          state: merged ? "MERGED" : mode === "closed-unmerged" ? "CLOSED" : "OPEN",
-          isDraft: mode === "open",
-          baseRefName: pr.baseRef,
-          baseRefOid: pr.baseSha,
-          headRefName: pr.headRef,
-          headRefOid: pr.headSha,
-          mergedAt: merged ? "2026-09-05T00:04:00Z" : null,
-          mergeCommit: merged ? { oid: "f".repeat(40) } : null,
-          reviewDecision: blockedReview ? "CHANGES_REQUESTED" : "REVIEW_REQUIRED",
-          repository: { nameWithOwner: DELIVERY_REPOSITORY },
-          headRepository: { nameWithOwner: DELIVERY_REPOSITORY },
-          reviewThreads: {
-            totalCount: blockedReview ? 1 : 0,
-            nodes: blockedReview ? [{ id: "PRRT_fixture_1", isResolved: false }] : [],
-            pageInfo: { hasNextPage: false, endCursor: null },
-          },
-        },
+        pullRequest: journeyPullRequest(mode, pr),
       },
     },
   };
@@ -116,7 +123,10 @@ function answerJourneyQuery(stateDir: string): never {
   process.exit(0);
 }
 
-export function runHandoffGh(input: { readonly stateDir: string; readonly fallbackGh: string }): void {
+export function runHandoffGh(input: {
+  readonly stateDir: string;
+  readonly fallbackGh: string;
+}): void {
   const args = process.argv.slice(2);
   if (isJourneyQuery(args)) {
     answerJourneyQuery(input.stateDir);

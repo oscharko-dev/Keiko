@@ -92,10 +92,10 @@ export interface WorkbenchDescriptionDispatchOutcome {
  * for the full chain without this file depending on the model gateway or #3399's routes.
  */
 export interface WorkbenchDescriptionDispatcher {
-  generate(
+  readonly generate: (
     scope: WorkbenchDescriptionScope,
     signal: AbortSignal,
-  ): Promise<WorkbenchDescriptionDispatchOutcome>;
+  ) => Promise<WorkbenchDescriptionDispatchOutcome>;
 }
 
 /** Optional support the terminal-run hook consumes; absent means the feature is not yet wired. */
@@ -970,7 +970,8 @@ export class CodingRuntimeOrchestrator {
     this.deps.snapshots.markNonterminalRecoveryRequired(this.now().toISOString());
     // #3401: a description attempt still `dispatched` from a prior process has no live promise to
     // resume — it is reconciled to a closed blocked status, never silently re-run or lost.
-    for (const runId of this.description?.jobs.reconcileInterrupted(this.now().toISOString()) ?? []) {
+    for (const runId of this.description?.jobs.reconcileInterrupted(this.now().toISOString()) ??
+      []) {
       this.logDescriptionEvent({ runId }, "blocked", { reason: "interrupted" });
     }
     for (const snapshot of this.deps.snapshots
@@ -1436,9 +1437,12 @@ export class CodingRuntimeOrchestrator {
    * `CodingRuntimeSnapshot`), so a status written by an in-flight dispatch after `next`/`current`
    * was captured is still visible on the very next poll or transition response.
    */
-  private publicSnapshotWithDescription(snapshot: CodingRuntimeSnapshot | undefined): PublicSnapshot {
+  private publicSnapshotWithDescription(
+    snapshot: CodingRuntimeSnapshot | undefined,
+  ): PublicSnapshot {
     const base = this.projection.publicSnapshot(snapshot);
-    const status = snapshot === undefined ? undefined : this.description?.jobs.current(snapshot.runId);
+    const status =
+      snapshot === undefined ? undefined : this.description?.jobs.current(snapshot.runId);
     return status === undefined ? base : { ...base, descriptionStatus: status };
   }
 
@@ -1472,7 +1476,9 @@ export class CodingRuntimeOrchestrator {
     const nowIso = this.now().toISOString();
     const decision = support.jobs.beginDispatch(scope, nowIso);
     if (decision.kind === "coalesced") {
-      this.logDescriptionEvent(scope, "coalesced", { generationVersion: decision.status?.generationVersion });
+      this.logDescriptionEvent(scope, "coalesced", {
+        generationVersion: decision.status?.generationVersion,
+      });
       return;
     }
     if (decision.kind === "budget-exhausted") {
@@ -1480,7 +1486,13 @@ export class CodingRuntimeOrchestrator {
       return;
     }
     if (decision.supersededPriorAttempt) this.logDescriptionEvent(scope, "superseded", {});
-    this.runDescriptionDispatch(support, scope, decision.generationVersion, decision.revision, nowIso);
+    this.runDescriptionDispatch(
+      support,
+      scope,
+      decision.generationVersion,
+      decision.revision,
+      nowIso,
+    );
   }
 
   private runDescriptionDispatch(
@@ -1492,7 +1504,13 @@ export class CodingRuntimeOrchestrator {
   ): void {
     this.logDescriptionEvent(scope, "dispatched", { generationVersion });
     if (support.dispatcher === undefined) {
-      support.jobs.recordBlocked(scope, "generation-unavailable", generationVersion, revision, nowIso);
+      support.jobs.recordBlocked(
+        scope,
+        "generation-unavailable",
+        generationVersion,
+        revision,
+        nowIso,
+      );
       this.logDescriptionEvent(scope, "blocked", { reason: "generation-unavailable" as const });
       return;
     }
